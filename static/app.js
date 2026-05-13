@@ -55,6 +55,9 @@ const closeModelModal = document.querySelector("#closeModelModal");
 const modelModalContent = document.querySelector("#modelModalContent");
 const startSplash = document.querySelector("#startSplash");
 const startSplashLog = document.querySelector("#startSplashLog");
+const startSplashHeartbeat = document.querySelector("#startSplashHeartbeat");
+const startSplashHeartbeatTitle = document.querySelector("#startSplashHeartbeatTitle");
+const startSplashHeartbeatText = document.querySelector("#startSplashHeartbeatText");
 const startSplashDraft = document.querySelector("#startSplashDraft");
 
 let state = null;
@@ -68,6 +71,8 @@ let aiBusy = false;
 let aiQueue = Promise.resolve();
 let setupRandomizeLockDepth = 0;
 let startSplashTimers = [];
+let startSplashHeartbeatTimer = null;
+let turnWaitTimer = null;
 let turnStreamTimer = null;
 let historyPage = 0;
 
@@ -75,6 +80,34 @@ const DEFAULT_GGUF_MODEL = "";
 const SETUP_SETTINGS_FORMAT = "ai-rpg-setup-settings-v1";
 const HISTORY_PAGE_SIZE = 6;
 const HISTORY_OPEN_STATE_KEY = "ai-rpg-history-open-v1";
+const START_SPLASH_REASSURANCE = [
+  "Waiting for the first model response; the request is still open.",
+  "Large GGUF models can spend a while loading before text appears.",
+  "The backend is still holding the start request; this page has not frozen.",
+  "The model may be drafting the opening scene or warming GPU memory.",
+  "If the verifier is running, it may be checking references and state changes.",
+  "Long local generations are normal; keep this tab open while it finishes.",
+];
+const TURN_WAIT_REASSURANCE = {
+  turn: [
+    "The turn request is still open; the model has not stopped.",
+    "Local models can pause before the first token, especially after a big context packet.",
+    "The draft or verifier may still be checking references and state changes.",
+    "Keep this tab open while the RPG finishes the response.",
+  ],
+  continue: [
+    "The scene is still advancing; the model has not stopped.",
+    "A continue turn may still draft, verify, and update world state.",
+    "Long local waits usually mean model load, context reading, or verification.",
+    "The app is still waiting on the server response.",
+  ],
+  regenerate: [
+    "Regeneration is still running from the saved snapshot.",
+    "The model may be rewriting the draft before the verifier checks it.",
+    "World state is being restored and replayed for this response.",
+    "Keep this tab open; the request is still alive.",
+  ],
+};
 
 const PREFIX = {
   npc: "@",
@@ -592,6 +625,25 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
+function clipText(value, maxLength = 360) {
+  const text = String(value ?? "").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength).trim()}...`;
+}
+
+function fallbackNoticeText(reason) {
+  const text = String(reason || "").trim();
+  const lower = text.toLowerCase();
+  if (lower.includes("without narration text") || lower.includes("no usable narration") || lower.includes("did not include usable narration")) {
+    return "The text above is deterministic fallback narration. The local model's JSON was rejected because it did not include usable narration text.";
+  }
+  if (lower.includes("connection refused") || lower.includes("no model response was generated")) {
+    return "The text above is deterministic fallback narration. The local model server did not produce a usable response for this turn.";
+  }
+  if (text) return `The text above is deterministic fallback narration. The local model response could not be used: ${clipText(text, 260)}`;
+  return "The text above is deterministic fallback narration because the local model response could not be used.";
+}
+
 function helpTextLabel(text) {
   return String(text || "help").replace(/\s+/g, " ").trim().slice(0, 70);
 }
@@ -823,9 +875,63 @@ function turnNarrationHtml(turn) {
   return `<article class="turnNarration">${paragraphs(turnNarrationText(turn) || "The world hesitates.")}</article>`;
 }
 
+function elapsedLabel(startedAt) {
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const minutes = Math.floor(elapsedSeconds / 60);
+  const seconds = String(elapsedSeconds % 60).padStart(2, "0");
+  return `${minutes}:${seconds}`;
+}
+
+function updateStartSplashHeartbeat(startedAt) {
+  if (!startSplashHeartbeatText) return;
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const message = START_SPLASH_REASSURANCE[Math.floor(elapsedSeconds / 12) % START_SPLASH_REASSURANCE.length];
+  if (startSplashHeartbeatTitle) startSplashHeartbeatTitle.textContent = elapsedSeconds >= 60 ? "Still working" : "Local model is working";
+  startSplashHeartbeatText.textContent = `Elapsed ${elapsedLabel(startedAt)} - ${message}`;
+}
+
+function clearTurnWaitTimer() {
+  if (turnWaitTimer) {
+    window.clearInterval(turnWaitTimer);
+    turnWaitTimer = null;
+  }
+}
+
+function updateTurnWaitPanel(startedAt, kind) {
+  const elapsed = document.querySelector("#turnWaitElapsed");
+  const text = document.querySelector("#turnWaitText");
+  if (!elapsed || !text) return;
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+  const messages = TURN_WAIT_REASSURANCE[kind] || TURN_WAIT_REASSURANCE.turn;
+  elapsed.textContent = `Elapsed ${elapsedLabel(startedAt)}`;
+  text.textContent = messages[Math.floor(elapsedSeconds / 10) % messages.length];
+}
+
+function showTurnWaitPanel(title, kind = "turn") {
+  clearTurnWaitTimer();
+  if (!latestOutput) return;
+  const startedAt = Date.now();
+  latestOutput.innerHTML = `
+    <div class="turnWaitPanel" role="status" aria-live="polite">
+      <div class="turnWaitPulse" aria-hidden="true"><span></span><span></span><span></span></div>
+      <div class="turnWaitCopy">
+        <strong>${escapeHtml(title)}</strong>
+        <span id="turnWaitElapsed">Elapsed 0:00</span>
+        <p id="turnWaitText"></p>
+      </div>
+    </div>
+  `;
+  updateTurnWaitPanel(startedAt, kind);
+  turnWaitTimer = window.setInterval(() => updateTurnWaitPanel(startedAt, kind), 1000);
+}
+
 function clearStartSplashTimers() {
   startSplashTimers.forEach((timer) => window.clearTimeout(timer));
   startSplashTimers = [];
+  if (startSplashHeartbeatTimer) {
+    window.clearInterval(startSplashHeartbeatTimer);
+    startSplashHeartbeatTimer = null;
+  }
 }
 
 function addStartSplashLine(text) {
@@ -840,8 +946,12 @@ function addStartSplashLine(text) {
 function showStartSplash() {
   if (!startSplash) return;
   clearStartSplashTimers();
+  const startedAt = Date.now();
   startSplash.classList.remove("hidden");
   if (startSplashLog) startSplashLog.innerHTML = "";
+  startSplashHeartbeat?.classList.remove("hidden");
+  updateStartSplashHeartbeat(startedAt);
+  startSplashHeartbeatTimer = window.setInterval(() => updateStartSplashHeartbeat(startedAt), 1000);
   if (startSplashDraft) {
     startSplashDraft.textContent = "";
     startSplashDraft.classList.remove("startSplashCursor");
@@ -864,6 +974,8 @@ function showStartSplash() {
   ].forEach((line, index) => {
     startSplashTimers.push(window.setTimeout(() => addStartSplashLine(line), 9000 + index * 16000));
   });
+  startSplashTimers.push(window.setTimeout(() => addStartSplashLine("Still running; the elapsed timer below updates until the server responds."), 73000));
+  startSplashTimers.push(window.setTimeout(() => addStartSplashLine("Long waits usually mean model load, first-token delay, or verifier work rather than a frozen page."), 113000));
 }
 
 function hideStartSplash() {
@@ -1000,6 +1112,7 @@ function setField(name, value) {
 
 function setAiBusy(nextBusy, label = "AI is thinking...") {
   aiBusy = nextBusy;
+  if (!nextBusy) clearTurnWaitTimer();
   document.body.classList.toggle("aiBusy", nextBusy);
   document.body.dataset.aiBusyLabel = nextBusy ? label : "";
   if (turnInput) turnInput.disabled = nextBusy;
@@ -2739,11 +2852,16 @@ function renderSearch() {
 
 function renderModelForm() {
   const config = modelConfig || {};
+  const provider = config.provider || "llama_cpp";
   return `
     <form id="modelForm" class="modelForm">
-      <input type="hidden" name="provider" value="llama_cpp" />
-      <input type="hidden" name="ollama_model" value="${escapeHtml(config.ollama_model || "llama3.1")}" />
-      <input type="hidden" name="ollama_base_url" value="${escapeHtml(config.ollama_base_url || "http://localhost:11434")}" />
+      <label>
+        <span>Provider</span>
+        <select name="provider">
+          <option value="llama_cpp" ${provider === "llama_cpp" ? "selected" : ""}>llama.cpp / GGUF</option>
+          <option value="ollama" ${provider === "ollama" ? "selected" : ""}>Ollama</option>
+        </select>
+      </label>
       <label>
         <span>Model Path</span>
         <div class="pathPickerRow">
@@ -2755,13 +2873,21 @@ function renderModelForm() {
         <span>LLM Server URL</span>
         <input name="llama_cpp_base_url" value="${escapeHtml(config.llama_cpp_base_url || "http://localhost:8080")}" maxlength="300" />
       </label>
+      <label>
+        <span>Ollama URL</span>
+        <input name="ollama_base_url" value="${escapeHtml(config.ollama_base_url || "http://localhost:11434")}" maxlength="300" />
+      </label>
+      <label>
+        <span>Ollama Model</span>
+        <input name="ollama_model" value="${escapeHtml(config.ollama_model || "llama3.1")}" maxlength="200" />
+      </label>
       <div class="modelTokenGrid">
         <label>
-          <span>Response Cap</span>
+          <span>Soft Token Target</span>
           <input name="response_token_cap" type="number" min="64" max="100000" step="1" value="${escapeHtml(config.response_token_cap ?? 1500)}" />
         </label>
         <label>
-          <span>Hard Cap</span>
+          <span>Hard Token Cap</span>
           <input name="response_token_hard_cap" type="number" min="64" max="100000" step="1" value="${escapeHtml(config.response_token_hard_cap ?? 2000)}" />
         </label>
       </div>
@@ -2824,16 +2950,7 @@ async function openModelModal() {
 }
 
 async function saveModelConfig(form) {
-  const formData = new FormData(form);
-  const payload = {
-    provider: formData.get("provider") || "llama_cpp",
-    gguf_model_path: formData.get("gguf_model_path"),
-    llama_cpp_base_url: formData.get("llama_cpp_base_url"),
-    ollama_model: formData.get("ollama_model") || "llama3.1",
-    ollama_base_url: formData.get("ollama_base_url") || "http://localhost:11434",
-    response_token_cap: Math.round(finiteNumber(formData.get("response_token_cap"), 1500)),
-    response_token_hard_cap: Math.round(finiteNumber(formData.get("response_token_hard_cap"), 2000)),
-  };
+  const payload = modelPayloadFromForm(form);
   const response = await fetch("/api/model-config", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2849,6 +2966,19 @@ async function saveModelConfig(form) {
   latestOutput.innerHTML = paragraphs("Model settings saved.");
 }
 
+function modelPayloadFromForm(form) {
+  const formData = new FormData(form);
+  return {
+    provider: formData.get("provider") || "llama_cpp",
+    gguf_model_path: formData.get("gguf_model_path"),
+    llama_cpp_base_url: formData.get("llama_cpp_base_url"),
+    ollama_model: formData.get("ollama_model") || "llama3.1",
+    ollama_base_url: formData.get("ollama_base_url") || "http://localhost:11434",
+    response_token_cap: Math.round(finiteNumber(formData.get("response_token_cap"), 1500)),
+    response_token_hard_cap: Math.round(finiteNumber(formData.get("response_token_hard_cap"), 2000)),
+  };
+}
+
 async function selectModelFile(form) {
   const response = await fetch("/api/select-model-file", { method: "POST" });
   if (!response.ok) throw new Error(await response.text());
@@ -2858,16 +2988,30 @@ async function selectModelFile(form) {
 
 async function testModelConnection(container) {
   const status = container.querySelector("[data-model-status]");
-  if (status) status.innerHTML = `<p class="empty">Checking LLM server...</p>`;
+  const form = container.querySelector("#modelForm") || container.closest(".modalPanel")?.querySelector("#modelForm") || document.querySelector("#modelForm");
+  if (status) status.innerHTML = `<p class="empty">Saving settings and checking LLM server...</p>`;
+  if (form) {
+    const saveResponse = await fetch("/api/model-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(modelPayloadFromForm(form)),
+    });
+    if (!saveResponse.ok) throw new Error(await saveResponse.text());
+    modelConfig = await saveResponse.json();
+  }
+  if (status) status.innerHTML = `<p class="empty">Checking LLM server. If llama.cpp is not running, this may start it from the selected GGUF model...</p>`;
   const response = await fetch("/api/model-status");
   if (!response.ok) throw new Error(await response.text());
   const payload = await response.json();
   if (!status) return;
   if (payload.ok) {
     const models = (payload.models || []).length ? ` Models: ${(payload.models || []).map(escapeHtml).join(", ")}` : "";
-    status.innerHTML = `<p class="good">Connection OK. ${escapeHtml(payload.url || "")}${models}</p>`;
+    const start = payload.managed_start?.started ? " Started managed llama.cpp server." : "";
+    status.innerHTML = `<p class="good">Connection OK. ${escapeHtml(payload.url || "")}${escapeHtml(start)}${models}</p>`;
   } else {
-    status.innerHTML = `<p class="bad">Connection failed at ${escapeHtml(payload.url || "")}: ${escapeHtml(payload.error || "unknown error")}</p>`;
+    const logs = payload.managed_start?.logs;
+    const logText = logs?.stderr_tail || logs?.stdout_tail || "";
+    status.innerHTML = `<p class="bad">Connection failed at ${escapeHtml(payload.url || "")}: ${escapeHtml(payload.error || "unknown error")}</p>${logText ? `<pre class="modelLogTail">${escapeHtml(logText)}</pre>` : ""}`;
   }
 }
 
@@ -2932,7 +3076,22 @@ function appendTurnMeta(payload) {
   }
   if (payload.used_fallback) {
     const reason = payload.fallback_reason || payload.turn.llm_error || "No detailed error returned.";
-    latestOutput.innerHTML += `<p class="bad">Local LLM fallback was used: ${escapeHtml(reason)}</p>`;
+    const notice = payload.fallback_notice || fallbackNoticeText(reason);
+    latestOutput.innerHTML += `
+      <section class="fallbackNotice">
+        <strong>Fallback narration generated.</strong>
+        <p>${escapeHtml(notice)}</p>
+        <small>Model issue: ${escapeHtml(clipText(reason, 420))}</small>
+      </section>
+    `;
+  }
+  if (payload.debug_trace_path) {
+    latestOutput.innerHTML += `
+      <section class="debugTraceNotice">
+        <strong>Debug trace</strong>
+        <p>${escapeHtml(payload.debug_trace_path)}</p>
+      </section>
+    `;
   }
 }
 
@@ -2978,6 +3137,7 @@ function turnRewardsHtml(payload) {
 }
 
 function displayTurnPayload(payload, options = {}) {
+  clearTurnWaitTimer();
   if (!payload?.state || !payload?.turn) return false;
   clearSuggestions();
   renderShell(payload.state);
@@ -3014,20 +3174,25 @@ async function requestTurn(text, options = {}) {
   const isContinue = !cleanText;
   const displayText = options.displayText || (isContinue ? "Continue" : cleanText);
   latestInput.innerHTML = paragraphs(displayText);
-  latestOutput.innerHTML = paragraphs(isContinue ? "Continuing..." : "Writing...");
+  showTurnWaitPanel(isContinue ? "Continuing scene" : "Writing response", isContinue ? "continue" : "turn");
   clearSuggestions();
   if (turnInput) {
     turnInput.value = "";
     updateComposerState();
   }
 
-  const response = await fetch(isContinue ? "/api/continue" : "/api/turn", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: isContinue ? undefined : JSON.stringify({ text: cleanText }),
-  });
-  if (!response.ok) throw new Error(await response.text());
-  const payload = await response.json();
+  let payload = null;
+  try {
+    const response = await fetch(isContinue ? "/api/continue" : "/api/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: isContinue ? undefined : JSON.stringify({ text: cleanText }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    payload = await response.json();
+  } finally {
+    clearTurnWaitTimer();
+  }
   if (!displayTurnPayload(payload, { animateNarration: true })) throw new Error("Turn response did not include narration.");
 }
 
@@ -3218,11 +3383,16 @@ async function rewindTurn(snapshotId = null) {
 
 async function regenerateTurn() {
   latestInput.innerHTML = paragraphs("Regenerate last response");
-  latestOutput.innerHTML = paragraphs("Regenerating...");
+  showTurnWaitPanel("Regenerating response", "regenerate");
   clearSuggestions();
-  const response = await fetch("/api/regenerate", { method: "POST" });
-  if (!response.ok) throw new Error(await response.text());
-  const payload = await response.json();
+  let payload = null;
+  try {
+    const response = await fetch("/api/regenerate", { method: "POST" });
+    if (!response.ok) throw new Error(await response.text());
+    payload = await response.json();
+  } finally {
+    clearTurnWaitTimer();
+  }
   if (!displayTurnPayload(payload, { animateNarration: true })) throw new Error("Regenerated response did not include narration.");
 }
 

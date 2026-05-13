@@ -1,11 +1,42 @@
 __pycache__/
 *.py[cod]
 .venv/
+
+# Local runtime world/save data
 data/
+model_traces/
+source_index/
+*.db
+*.sqlite
+*.sqlite3
+*.db-wal
+*.db-shm
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
+*.jsonl
+*.sav
+*.save
+*.world
+
+# Local configuration and secrets
 .env
+.env.*
+!.env.example
+*.local
+*.local.*
+
+# Local model files
+models/
+*.gguf
+*.ggml
+
+# Temporary local diagnostics
 temp_*/
 temp_*.db
 temp_*.jsonl
 tmp_*.ps1
+*.log
 *_check.txt
 diff_*.txt

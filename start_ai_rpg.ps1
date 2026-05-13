@@ -110,6 +110,48 @@ function Start-PythonProcess {
     return Start-Process @startArgs
 }
 
+function Get-SavedModelConfig {
+    param(
+        [hashtable] $PythonCommand
+    )
+
+    $script = @'
+import json
+import os
+import sqlite3
+from pathlib import Path
+
+db_path = Path(os.getenv("AI_RPG_DB", "data/world.db"))
+result = {}
+if db_path.exists():
+    try:
+        with sqlite3.connect(db_path) as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'model_config'").fetchone()
+        if row:
+            raw = json.loads(row[0])
+            if isinstance(raw, dict):
+                result = {
+                    "provider": str(raw.get("provider") or ""),
+                    "gguf_model_path": str(raw.get("gguf_model_path") or ""),
+                    "llama_cpp_base_url": str(raw.get("llama_cpp_base_url") or ""),
+                    "ollama_base_url": str(raw.get("ollama_base_url") or ""),
+                }
+    except Exception:
+        result = {}
+print(json.dumps(result, ensure_ascii=True))
+'@
+
+    try {
+        $output = & $PythonCommand.FilePath @($PythonCommand.BaseArgs) -c $script 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $output) {
+            return $null
+        }
+        return ($output | Select-Object -Last 1) | ConvertFrom-Json
+    } catch {
+        return $null
+    }
+}
+
 function Get-LanIPv4Candidates {
     function Get-AddressScore {
         param(
@@ -224,7 +266,9 @@ if ($LASTEXITCODE -ne 0) {
     Write-Host ""
 }
 
-$modelPath = if ($env:AI_RPG_GGUF_MODEL) { $env:AI_RPG_GGUF_MODEL } else { "" }
+$savedModelConfig = Get-SavedModelConfig -PythonCommand $pythonCommand
+$savedModelPath = if ($savedModelConfig -and $savedModelConfig.gguf_model_path) { [string]$savedModelConfig.gguf_model_path } else { "" }
+$modelPath = if ($env:AI_RPG_GGUF_MODEL) { $env:AI_RPG_GGUF_MODEL } elseif ($savedModelPath) { $savedModelPath } else { "" }
 $llmHost = if ($env:AI_RPG_LLM_HOST) { $env:AI_RPG_LLM_HOST } else { "127.0.0.1" }
 $llmPort = if ($env:AI_RPG_LLM_PORT) { [int]$env:AI_RPG_LLM_PORT } else { 8080 }
 $ctxTokens = if ($env:AI_RPG_LLAMA_CPP_CONTEXT) { [int]$env:AI_RPG_LLAMA_CPP_CONTEXT } else { 8192 }
@@ -301,8 +345,20 @@ if ($appHost -eq "0.0.0.0") {
 Write-Host "Close this terminal to stop the app and managed LLM server."
 Write-Host ""
 
-$env:AI_RPG_MODEL_PROVIDER = "llama_cpp"
-$env:AI_RPG_GGUF_MODEL = $modelPath
+$explicitProvider = if ($env:AI_RPG_MODEL_PROVIDER) { $env:AI_RPG_MODEL_PROVIDER.Trim().ToLowerInvariant() } else { "" }
+if ($modelPath -and -not $env:AI_RPG_GGUF_MODEL -and $savedModelPath) {
+    Write-Host "Using saved GGUF model path from Model Settings."
+}
+if ($explicitProvider) {
+    $env:AI_RPG_MODEL_PROVIDER = $explicitProvider
+} else {
+    $env:AI_RPG_MODEL_PROVIDER = "llama_cpp"
+}
+if ($modelPath) {
+    $env:AI_RPG_GGUF_MODEL = $modelPath
+} else {
+    Remove-Item Env:AI_RPG_GGUF_MODEL -ErrorAction SilentlyContinue
+}
 $env:LLAMA_CPP_BASE_URL = $baseUrl
 $env:OLLAMA_CONTEXT_TOKENS = "$ctxTokens"
 
@@ -313,10 +369,10 @@ $appProcess = $null
 try {
     if (-not $modelPath) {
         Write-Host "No GGUF model path is configured."
-        Write-Host "The app will still start, but set AI_RPG_GGUF_MODEL or select a model in LLM Settings before testing generation."
+        Write-Host "No managed llama.cpp server will start. Start Ollama/llama.cpp yourself or set AI_RPG_GGUF_MODEL before generation; otherwise turns use deterministic fallback."
     } elseif (-not (Test-Path -LiteralPath $modelPath)) {
         Write-Host "Model file not found: $modelPath"
-        Write-Host "The app will still start, but set AI_RPG_GGUF_MODEL or select a valid model in LLM Settings before testing generation."
+        Write-Host "No managed llama.cpp server will start until the path is fixed. Update AI_RPG_GGUF_MODEL or save a valid model path in LLM Settings and restart."
     } elseif (Test-PortOpen -HostName $llmHost -Port $llmPort) {
         Write-Host "LLM server already appears to be running at $baseUrl."
         Wait-LlmServerReady -BaseUrl $baseUrl -TimeoutSeconds $llmStartupTimeout

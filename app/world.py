@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -16,6 +17,7 @@ from app.llm import LlmError, context_window_tokens, fallback_turn, generate_inp
 HISTORY_SUMMARY_PATH = Path(os.getenv("AI_RPG_HISTORY_SUMMARY", "data/history_summaries.jsonl"))
 SOURCE_INDEX_DIR = Path(os.getenv("AI_RPG_SOURCE_INDEX", "data/source_index"))
 SOURCE_INDEX_MANIFEST = SOURCE_INDEX_DIR / "manifest.json"
+MODEL_TRACE_DIR = Path(os.getenv("AI_RPG_MODEL_TRACE_DIR", "data/model_traces"))
 WORLD_TABLES = [
     "locations",
     "player",
@@ -3080,6 +3082,76 @@ def _write_model_usage(conn, turn: int, result: dict[str, Any]) -> None:
         )
 
 
+def _public_path(path: Path) -> str:
+    return str(path).replace("\\", "/")
+
+
+def _safe_trace_kind(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value or "turn").strip().lower()).strip("-")
+    return cleaned or "turn"
+
+
+def _turn_without_private_trace(result: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in result.items() if key not in {"_model_trace", "_model_usage"}}
+
+
+def _prune_model_trace_files() -> None:
+    keep = max(1, min(500, int(_float(os.getenv("AI_RPG_MODEL_TRACE_KEEP"), 50))))
+    files = sorted(MODEL_TRACE_DIR.glob("turn-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    for old_path in files[keep:]:
+        try:
+            old_path.unlink()
+        except OSError:
+            pass
+
+
+def _write_model_trace_file(
+    turn: int,
+    input_kind: str,
+    player_input: str,
+    model_input: str,
+    prompt_context: dict[str, Any],
+    result: dict[str, Any],
+    used_fallback: bool,
+    fallback_reason: str,
+) -> str:
+    MODEL_TRACE_DIR.mkdir(parents=True, exist_ok=True)
+    fallback_notice = _fallback_notice(fallback_reason) if used_fallback else ""
+    payload = {
+        "format": "ai-rpg-model-trace-v1",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "turn": turn,
+        "input_kind": input_kind,
+        "handoff_model": [
+            "world.get_state include_hidden=True",
+            "world.build_prompt_context deterministic planner",
+            "llm deterministic context cleanup before draft",
+            "llm.generate_turn draft JSON call",
+            "llm deterministic draft payload cleanup before verifier",
+            "llm JSON repair/retry paths as needed",
+            "llm verifier JSON call",
+            "llm deterministic verified payload cleanup before world application",
+            "llm narration depth retry as needed",
+            "world.apply_turn SQLite state application or deterministic fallback",
+        ],
+        "trace_note": "This file contains observable prompts, raw model output, parsed JSON, deterministic handoff cleanup decisions, verifier self_check, app decisions, errors, and fallback data. It cannot include private hidden chain-of-thought that the model did not return.",
+        "player_input": player_input,
+        "model_input": model_input,
+        "used_fallback": used_fallback,
+        "fallback_reason": fallback_reason,
+        "fallback_notice": fallback_notice,
+        "prompt_context": prompt_context,
+        "final_turn": _turn_without_private_trace(result),
+        "model_usage": result.get("_model_usage") or [],
+        "model_trace": result.get("_model_trace") or [],
+    }
+    suffix = "-fallback" if used_fallback else ""
+    path = MODEL_TRACE_DIR / f"turn-{turn:06d}-{_safe_trace_kind(input_kind)}{suffix}.json"
+    path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, default=str), encoding="utf-8")
+    _prune_model_trace_files()
+    return _public_path(path)
+
+
 def _narration_text(result: dict[str, Any]) -> str:
     segments = result.get("narration_segments")
     if isinstance(segments, list) and segments:
@@ -3346,6 +3418,18 @@ def _turn_reward_summary(before_state: dict[str, Any], after_state: dict[str, An
     }
 
 
+def _fallback_notice(reason: str) -> str:
+    clean_reason = str(reason or "").strip()
+    lower_reason = clean_reason.lower()
+    if "without narration text" in lower_reason or "no usable narration" in lower_reason or "did not include usable narration" in lower_reason:
+        return "The visible prose is deterministic fallback narration. The local model response was rejected because its JSON did not include usable narration text."
+    if "no model response was generated" in lower_reason or "connection refused" in lower_reason:
+        return "The visible prose is deterministic fallback narration. The local model server did not produce a usable response for this turn."
+    if clean_reason:
+        return f"The visible prose is deterministic fallback narration. The local model response could not be used: {clean_reason}"[:900]
+    return "The visible prose is deterministic fallback narration because the local model response could not be used."
+
+
 def play_turn(player_input: str, input_kind: str = "player", journal_input: str | None = None) -> dict[str, Any]:
     context = get_state(include_hidden=True)
     used_fallback = False
@@ -3361,15 +3445,37 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         model_usage = getattr(exc, "model_usage", None)
         if model_usage:
             result["_model_usage"] = model_usage
+        model_trace = list(getattr(exc, "model_trace", None) or [])
+        model_trace.append(
+            {
+                "phase": "world_fallback",
+                "event": "deterministic_fallback",
+                "reason": fallback_reason,
+                "fallback_narration_chars": len(str(result.get("narration") or "")),
+            }
+        )
+        result["_model_trace"] = model_trace
         used_fallback = True
 
+    actual_player_input = journal_input if journal_input is not None else player_input
     state = apply_turn(
         result,
-        journal_input if journal_input is not None else player_input,
+        actual_player_input,
         used_fallback=used_fallback,
         fallback_reason=fallback_reason,
         input_kind=input_kind,
     )
+    debug_trace_path = _write_model_trace_file(
+        _current_turn_number(),
+        input_kind,
+        actual_player_input,
+        model_input,
+        prompt_context,
+        result,
+        used_fallback,
+        fallback_reason,
+    )
+    result.pop("_model_trace", None)
     rewards = _turn_reward_summary(context, state, result)
     return {
         "turn": result,
@@ -3377,6 +3483,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         "rewards": rewards,
         "used_fallback": used_fallback,
         "fallback_reason": fallback_reason,
+        "fallback_notice": _fallback_notice(fallback_reason) if used_fallback else "",
+        "debug_trace_path": debug_trace_path,
         "input_kind": input_kind,
     }
 

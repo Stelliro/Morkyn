@@ -60,6 +60,7 @@ description: "AI RPG implementation standards - security, compatibility, code qu
 ## Performance
 
 - Keep prompt context bounded; avoid unbounded history, source-index, or relationship scans in hot turn paths.
+- Preserve deterministic LLM handoff cleanup stages between planner context, draft JSON, verifier JSON, and world application; new turn-generation paths should either reuse those cleanup helpers or document why they bypass them.
 - Prefer targeted SQLite queries over loading and filtering large tables when data grows.
 - Avoid blocking or long-running browser operations on the main interaction path.
 - Document performance-sensitive paths in `CODEBASE_INDEX.md` when adding them.

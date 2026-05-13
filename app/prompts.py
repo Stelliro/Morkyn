@@ -73,8 +73,8 @@ Continuity rules:
 - Setup abilities have immutable base_description. Do not contradict or rewrite it. You may propose ability_updates that add discovered details, prerequisites, limitations, or costs as play reveals them.
 - If an ability cost was left empty or says the model should decide, choose a balanced cost during the early playthrough when enough context exists, then store it with ability_updates. If cost is "no cost", respect that unless later consequences are explicitly established.
 - If turn_summaries or setup context contain an initialization phase note, spend the first turn establishing base assumptions quietly inside structured state updates and focused narration appropriate to narration_detail. Do not dump a rules essay to the player.
-- Use playthrough_options.narration_detail to choose prose fullness. Concise means 1-2 useful scene beats; balanced means 2-3; rich means 3-4; expansive means 4-5 when the scene warrants it.
-- Write narration as one continuous scene made of natural paragraphs, not labeled parts. It should feel like the prose keeps writing until the scene reaches a choice point, then continues from that point if more detail is needed. Aim for 220-550 total words for rich/expansive detail and stay under 700 words.
+- Use playthrough_options.narration_detail to choose prose fullness, but keep every playable response deep enough to use. Aim for about 1500 visible characters of narration, never stop below 1000 visible characters, and stay under 2400 visible characters / 700 words. Concise uses fewer beats; balanced, rich, and expansive add more sensory detail, NPC reaction, consequence, and choice context.
+- Write narration as one continuous scene made of natural paragraphs, not labeled parts. It should feel like the prose keeps writing until the scene reaches a choice point, then continues from that point if more detail is needed.
 - narration_segments may contain paragraph chunks for compatibility, but labels should be plain paragraph markers and the text must read as continuous prose when joined. Do not use labels like scene/result/check as visible structure.
 - Before finalizing, self-check references, causality, NPC knowledge, player inventory/stat changes, and index updates. Put the result in self_check.
 - Use index_updates to partially edit existing indexed entities when a new fact is learned about a specific NPC, location, item, or event. Do not rewrite whole records when a short append/update is enough.
@@ -260,7 +260,7 @@ Your task:
 - Verify narration reads as continuous prose when narration_segments are joined and stays within the same scene.
 - Verify scene_plan has 1-6 high-level focus_points and that event persistence metadata fits the described situation.
 - Verify gm_events are hidden future-facing notes and not revealed directly in narration unless already visible through scene facts.
-- Keep total narration under 700 words. Trim only if bloated, repetitive, or inconsistent with narration_detail.
+- Keep total narration at least 1000 visible characters, target about 1500 visible characters, and stay under 2400 visible characters / 700 words. Trim only if bloated, repetitive, or inconsistent with narration_detail, and do not trim below the minimum depth.
 - Prefer small targeted index_updates over broad rewrites.
 - Preserve valid creative content; only correct contradictions, unsupported claims, broken references, and overlarge output.
 
@@ -295,7 +295,7 @@ Rules:
 - Use turn_plan as the focused scout packet: primary_intent tells you what kind of turn this is, explicit_references are hard refs, and verification_checks list the risky surfaces.
 - Use action_context as the read order for the scout packet. For normal turns, inspect only priority_segments and their source_slices plus hard references before adding consequences. Movement reads environment/carry limits and derived stats/abilities, combat reads player-vs-target matchup from effective_stats/skills/abilities, and ability use reads ability costs/locks plus target/environment limits.
 - Include mundane scene texture. Do not only gossip or lore.
-- Use playthrough_options.narration_detail for length. Concise can be 120-220 words; balanced 220-360; rich 300-520; expansive 450-700 when the scene warrants it.
+- Use playthrough_options.narration_detail for fullness, but keep playable narration between 1000 and 2400 visible characters, with about 1500 characters as the normal target. Concise uses fewer focused beats; balanced/rich/expansive add more sensory detail, NPC reaction, consequence, and choice context.
 - Build scene_plan first with 1-6 player-visible focus_points, then write narration as continuous paragraphs guided by that plan. Do not put private lifecycle labels, hidden GM events, or secret outcomes in scene_plan text. narration_segments are compatibility paragraph chunks, not visible labeled sections. Mark known refs as [[A]], [[L1]], [[I1]], [[E1]].
 - Always include self_check and turn_summary.
 - Be structured, not terse: omit unchanged keys, but give the scene enough prose to be playable and atmospheric.
@@ -332,7 +332,7 @@ Check draft_turn against world_state and player_input:
 - claim checks produce response_drafts when unsupported
 - scene_plan has 1-6 high-level focus_points; event persistence metadata is plausible
 - gm_events are private future-facing notes, not exposed player-visible text
-- narration fits playthrough_options.narration_detail, reads as continuous prose, stays under 700 words, and does not contradict state
+- narration fits playthrough_options.narration_detail, reads as continuous prose, stays between 1000 and 2400 visible characters when possible, remains under 700 words, and does not contradict state
 - self_check explains the result
 
 Do not return only self_check, notes, or corrections. Use world_state.turn_plan.verification_checks as the checklist. Preserve or correct draft_turn.scene_plan and draft_turn.narration_segments and return them in the final object. narration_segments must contain non-empty text and read as continuous prose when joined.
@@ -385,7 +385,7 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
             "world_state": compact_context,
             "turn_kind": turn_kind,
             "player_input": player_input,
-            "instruction": "Continue one turn. First read world_state.action_context.priority_segments as the action-specific checklist, then create scene_plan with 1-6 focus_points, then write one continuous scene as natural paragraphs. If turn_kind is opening_scene, write the first scene before the player acts. If turn_kind is continue_scene, advance the current situation without inventing a player action. Use playthrough_options.narration_detail for prose fullness, and include enough sensory detail, NPC reaction, consequence, and choice context for the player to respond. Check indexed facts before validating claims. Use existing codes where possible. Use event_lifecycle for temporary/recurring/traveling event persistence. You may create hidden gm_events for future consequences, but do not reveal them directly.",
+            "instruction": "Continue one turn. First read world_state.action_context.priority_segments as the action-specific checklist, then create scene_plan with 1-6 focus_points, then write one continuous scene as natural paragraphs. If turn_kind is opening_scene, write the first scene before the player acts. If turn_kind is continue_scene, advance the current situation without inventing a player action. Use playthrough_options.narration_detail for prose fullness, include enough sensory detail, NPC reaction, consequence, and choice context for the player to respond, and keep narration at least 1000 visible characters with about 1500 as the normal target. Check indexed facts before validating claims. Use existing codes where possible. Use event_lifecycle for temporary/recurring/traveling event persistence. You may create hidden gm_events for future consequences, but do not reveal them directly.",
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -415,6 +415,7 @@ def build_verify_prompt(context: dict[str, Any], player_input: str, draft: dict[
                 "event_lifecycle": context.get("event_lifecycle"),
                 "gm_events": context.get("gm_events", [])[:8],
                 "skills": context.get("skills"),
+                "abilities": context.get("abilities"),
                 "inventory": context.get("inventory"),
                 "equipment_slots": context.get("equipment_slots"),
                 "equipment_effects": context.get("equipment_effects"),
@@ -433,7 +434,7 @@ def build_verify_prompt(context: dict[str, Any], player_input: str, draft: dict[
             "turn_kind": turn_kind,
             "player_input": player_input,
             "draft_turn": draft,
-            "instruction": "Return a corrected, checked full turn JSON. Prioritize world_state.turn_plan.verification_checks and world_state.action_context.priority_segments when checking the draft. If turn_kind is opening_scene or continue_scene, do not invent a player action. Preserve useful continuous narration detail unless it contradicts state or exceeds the configured narration_detail. Keep scene_plan high-level with 1-6 focus_points, event persistence metadata plausible, and gm_events hidden. Do not add unsupported facts.",
+            "instruction": "Return a corrected, checked full turn JSON. Prioritize world_state.turn_plan.verification_checks and world_state.action_context.priority_segments when checking the draft. If turn_kind is opening_scene or continue_scene, do not invent a player action. Preserve or expand useful continuous narration detail unless it contradicts state or exceeds the configured narration_detail; final narration should be at least 1000 visible characters and normally about 1500. Keep scene_plan high-level with 1-6 focus_points, event persistence metadata plausible, and gm_events hidden. Do not add unsupported facts.",
         },
         ensure_ascii=True,
         separators=(",", ":"),

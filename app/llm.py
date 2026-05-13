@@ -2,8 +2,15 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import random
+import re
+import subprocess
+import sys
+import tempfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -22,10 +29,27 @@ class LlmError(RuntimeError):
     pass
 
 
+class MalformedJsonError(LlmError):
+    def __init__(self, message: str, content: str = "", repair_error: str = "") -> None:
+        super().__init__(message)
+        self.content = content
+        self.repair_error = repair_error
+
+
+_managed_llama_process: subprocess.Popen | None = None
+_managed_llama_base_url = ""
+_managed_llama_logs: dict[str, str] = {}
+
+
 DEFAULT_GGUF_MODEL = ""
 DEFAULT_CONTEXT_TOKENS = 8192
 DEFAULT_RESPONSE_TOKEN_CAP = 1500
 DEFAULT_RESPONSE_HARD_CAP = 2000
+MIN_TURN_NARRATION_CHARS = 1000
+TARGET_TURN_NARRATION_CHARS = 1500
+MAX_TURN_NARRATION_CHARS = 2400
+SUGGESTION_TARGET_CHARS = 100
+SUGGESTION_MAX_CHARS = 120
 OPTIONAL_IDENTITY_FIELDS = {"player_public_name", "player_title"}
 TURN_WRAPPER_KEYS = ("turn", "result", "response", "output")
 TURN_NARRATION_KEYS = ("narration", "narrative", "story", "scene_text", "scene", "response", "text", "content", "message", "description", "prose")
@@ -56,7 +80,111 @@ TURN_SHAPE_KEYS = {
     "gm_events",
     "journal",
 }
-MISSING_NARRATION_MESSAGE = "Model returned a turn without narration text."
+TURN_SHAPE_ORDER = (
+    "scene_plan",
+    "narration_segments",
+    "narration",
+    "player",
+    "self_check",
+    "turn_summary",
+    "scene_focus",
+    "skill_changes",
+    "inventory_changes",
+    "equipment_slots",
+    "equipment_changes",
+    "inventory_capacity_modifiers",
+    "locations",
+    "npcs",
+    "relationships",
+    "events",
+    "conversations",
+    "response_drafts",
+    "index_updates",
+    "ability_updates",
+    "gm_events",
+    "journal",
+)
+HANDOFF_BASE_CONTEXT_KEYS = {
+    "settings",
+    "gm_notes",
+    "player",
+    "current_location",
+    "turn_plan",
+    "action_context",
+    "working_set",
+    "event_lifecycle",
+    "equipment_effects",
+    "inventory_summary",
+    "active_player_alias",
+    "relevant_sources",
+    "retrieval",
+}
+HANDOFF_OPTIONAL_CONTEXT_KEYS = {
+    "gm_events",
+    "skills",
+    "abilities",
+    "player_aliases",
+    "inventory",
+    "equipment_slots",
+    "inventory_capacity_modifiers",
+    "locations",
+    "recognition",
+    "relationships",
+    "events",
+    "conversations",
+    "response_drafts",
+    "karma_history",
+    "turn_summaries",
+}
+HANDOFF_CONTEXT_LIST_LIMITS = {
+    "gm_events": 8,
+    "skills": 12,
+    "abilities": 12,
+    "player_aliases": 6,
+    "inventory": 18,
+    "equipment_slots": 16,
+    "inventory_capacity_modifiers": 10,
+    "locations": 6,
+    "recognition": 4,
+    "relationships": 12,
+    "events": 10,
+    "conversations": 10,
+    "response_drafts": 6,
+    "karma_history": 4,
+    "relevant_sources": 8,
+    "turn_summaries": 8,
+}
+HANDOFF_TURN_LIST_LIMITS = {
+    "narration_segments": 8,
+    "skill_changes": 8,
+    "inventory_changes": 12,
+    "equipment_slots": 8,
+    "equipment_changes": 12,
+    "inventory_capacity_modifiers": 8,
+    "locations": 6,
+    "npcs": 10,
+    "relationships": 12,
+    "events": 12,
+    "conversations": 8,
+    "response_drafts": 8,
+    "index_updates": 12,
+    "ability_updates": 8,
+    "gm_events": 8,
+    "journal": 8,
+}
+HANDOFF_PLAYER_FIELDS = {
+    "health_delta",
+    "max_health_delta",
+    "xp_delta",
+    "gold_delta",
+    "level_delta",
+    "move_to_location",
+    "move_to_location_code",
+    "karma_delta",
+    "karma_reason",
+    "karma_visibility",
+}
+MISSING_NARRATION_MESSAGE = "Model JSON did not include usable narration text."
 PREVIOUS_LIFE_IDENTITY_FIELDS = {"previous_life_age", "previous_life_sex"}
 SETUP_RANDOMIZER_FIELD_GROUPS = {
     "character": [
@@ -333,14 +461,69 @@ def _is_timeout_error(exc: Exception) -> bool:
     return "timed out" in text or "timeout" in text
 
 
+def _is_connection_refused_error(exc: Any) -> bool:
+    text = str(exc).lower()
+    reason = getattr(exc, "reason", None)
+    if reason is not None:
+        text = f"{text} {reason}".lower()
+    markers = (
+        "winerror 10061",
+        "errno 111",
+        "connection refused",
+        "refused connection",
+        "refused the connection",
+        "actively refused",
+        "no connection could be made",
+        "failed to establish a new connection",
+    )
+    return any(marker in text for marker in markers)
+
+
 def _transport_error_message(exc: Exception, timeout: int) -> str:
     if _is_timeout_error(exc):
         return f"timed out after {timeout}s"
+    if _is_connection_refused_error(exc):
+        text = str(exc) or exc.__class__.__name__
+        if " server refused connection at " in text:
+            return text
+        return "model server refused the connection; start the configured local LLM server or update the model server URL"
     return str(exc) or exc.__class__.__name__
 
 
-def _attach_model_usage(exc: LlmError, usage: list[dict[str, Any]]) -> LlmError:
+def _connection_refused_message(provider: str, url: str) -> str:
+    return f"{provider} server refused connection at {url}; start that server or update Model settings to a running local LLM endpoint"
+
+
+def _prompt_size_message(total_prompt: str, label: str = "prompt") -> str:
+    return f"{label} estimate ~{estimated_tokens(total_prompt)} tokens from {len(total_prompt)} chars"
+
+
+def _chat_error_message(phase: str, reason: str, total_prompt: str, response_cap: int, hard_cap: int) -> str:
+    if _is_connection_refused_error(reason):
+        return f"{phase} {reason} ({_prompt_size_message(total_prompt)}; no model response was generated, so no token cap was hit)"
+    return f"{phase} {reason} ({_prompt_size_message(total_prompt)}, configured soft response target {response_cap}, configured hard cap {hard_cap})"
+
+
+def _repair_error_message(phase: str, reason: str, total_prompt: str, repair_cap: int, hard_cap: int) -> str:
+    if _is_connection_refused_error(reason):
+        return f"{phase}_repair {reason} after malformed JSON ({_prompt_size_message(total_prompt, 'repair prompt')}; no repair response was generated, so no token cap was hit)"
+    return f"{phase}_repair {reason} after malformed JSON ({_prompt_size_message(total_prompt, 'repair prompt')}, configured repair cap {repair_cap}, configured hard cap {hard_cap})"
+
+
+def _trace_limit() -> int:
+    return max(1000, _env_int("AI_RPG_TRACE_VALUE_LIMIT", 200_000))
+
+
+def _append_trace(trace: list[dict[str, Any]] | None, entry: dict[str, Any]) -> None:
+    if trace is None:
+        return
+    trace.append(_trim_strings({"recorded_at": round(time.time(), 3), **entry}, _trace_limit()))
+
+
+def _attach_model_usage(exc: LlmError, usage: list[dict[str, Any]], trace: list[dict[str, Any]] | None = None) -> LlmError:
     exc.model_usage = list(usage)
+    if trace is not None:
+        exc.model_trace = list(trace)
     return exc
 
 
@@ -359,6 +542,133 @@ def _trim_strings(value: Any, limit: int) -> Any:
     if isinstance(value, dict):
         return {key: _trim_strings(item, limit) for key, item in value.items()}
     return value
+
+
+def _decode_jsonish_string(raw: str) -> str:
+    candidate = str(raw or "").replace("\r", "\\r").replace("\n", "\\n")
+    try:
+        return str(json.loads(f'"{candidate}"'))
+    except json.JSONDecodeError:
+        return str(raw or "").replace("\\n", "\n").replace("\\r", "\r").replace('\\"', '"')
+
+
+def _jsonish_strings_for_key(text: str, key: str, limit: int = 6) -> list[str]:
+    matches: list[str] = []
+    pattern = re.compile(rf'"{re.escape(key)}"\s*:\s*"', re.IGNORECASE)
+    for match in pattern.finditer(str(text or "")):
+        start = match.end()
+        escaped = False
+        chars: list[str] = []
+        for char in text[start:]:
+            if escaped:
+                chars.append(f"\\{char}")
+                escaped = False
+                continue
+            if char == "\\":
+                escaped = True
+                continue
+            if char == '"':
+                break
+            chars.append(char)
+        value = _decode_jsonish_string("".join(chars)).strip()
+        if value:
+            matches.append(value)
+        if len(matches) >= limit:
+            break
+    return matches
+
+
+def _salvage_narration_from_text(content: str) -> str:
+    text = str(content or "").strip()
+    if not text:
+        return ""
+    candidates: list[str] = []
+    for key in TURN_NARRATION_KEYS:
+        candidates.extend(_jsonish_strings_for_key(text, key, 2))
+    if not candidates:
+        for key in ("text", "prose", "body", "scene"):
+            candidates.extend(_jsonish_strings_for_key(text, key, 6))
+            if candidates:
+                break
+    if not candidates and not text.startswith(("{", "[")):
+        candidates.append(text)
+
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        value = candidate.strip().strip("`").strip()
+        if value.lower().startswith("json"):
+            value = value[4:].strip()
+        value = re.sub(r"[ \t]+", " ", value)
+        value = re.sub(r"\n{3,}", "\n\n", value).strip()
+        key = value.lower()
+        if len(value) < 40 or key in seen:
+            continue
+        if value.count("{") + value.count("}") > max(4, len(value) // 90):
+            continue
+        seen.add(key)
+        cleaned.append(value)
+        if len(cleaned) >= 5:
+            break
+    return "\n\n".join(cleaned).strip()[:5600]
+
+
+def _narration_only_turn_from_text(content: str, context: dict[str, Any], reason: str) -> dict[str, Any]:
+    narration = _salvage_narration_from_text(content)
+    if not narration:
+        raise LlmError("Malformed draft JSON did not contain readable narration to salvage.")
+    location = str((context.get("current_location") or {}).get("name") or "the current location")
+    return {
+        "scene_plan": {
+            "goal": "Keep the current scene playable without committing unverified world changes.",
+            "focus_points": [
+                {
+                    "kind": "scene",
+                    "summary": f"Hold the immediate scene around {location} while preserving only visible narration.",
+                    "event_worthy": False,
+                    "persistence": "temporary",
+                }
+            ],
+        },
+        "narration_segments": [{"label": "paragraph", "text": narration}],
+        "narration": narration,
+        "player": {
+            "health_delta": 0,
+            "max_health_delta": 0,
+            "xp_delta": 0,
+            "gold_delta": 0,
+            "level_delta": 0,
+            "move_to_location": None,
+            "move_to_location_code": None,
+            "karma_delta": 0,
+            "karma_reason": "",
+            "karma_visibility": "private",
+        },
+        "inventory_changes": [],
+        "skill_changes": [],
+        "locations": [],
+        "npcs": [],
+        "relationships": [],
+        "events": [],
+        "conversations": [],
+        "response_drafts": [],
+        "index_updates": [],
+        "ability_updates": [],
+        "gm_events": [],
+        "self_check": {
+            "passed": False,
+            "issues_found": [
+                "Draft JSON was malformed; recovered narration only.",
+                _trim_text(reason, 220),
+            ],
+            "corrections_made": ["Ignored unparseable model-proposed state changes."],
+            "reference_check": "not verified",
+            "consistency_check": "not verified",
+        },
+        "turn_summary": f"Recovered readable draft narration at {location}; no unparseable state changes were applied."[:700],
+        "journal": [],
+        "scene_focus": "filler",
+    }
 
 
 def _comma_separated_phrases(value: Any, limit: int = 800) -> str:
@@ -441,6 +751,119 @@ def _compact_turn_context(context: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _json_size(value: Any) -> tuple[int, int]:
+    try:
+        text = json.dumps(value, ensure_ascii=True, default=str, separators=(",", ":"))
+    except (TypeError, ValueError):
+        text = str(value)
+    return len(text), estimated_tokens(text)
+
+
+def _handoff_source_slices(context: dict[str, Any]) -> list[str]:
+    action_context = context.get("action_context") or {}
+    slices: list[str] = []
+    for segment in action_context.get("priority_segments") or []:
+        if not isinstance(segment, dict):
+            continue
+        for source_slice in segment.get("source_slices") or []:
+            value = str(source_slice or "").strip()
+            if value and value not in slices:
+                slices.append(value)
+    return slices
+
+
+def _handoff_context_roots(context: dict[str, Any]) -> set[str]:
+    roots = set(HANDOFF_BASE_CONTEXT_KEYS)
+    for source_slice in _handoff_source_slices(context):
+        root = source_slice.split(".", 1)[0]
+        if root == "explicit_references":
+            roots.add("turn_plan")
+        elif root in HANDOFF_OPTIONAL_CONTEXT_KEYS or root in HANDOFF_BASE_CONTEXT_KEYS:
+            roots.add(root)
+    turn_plan = context.get("turn_plan") or {}
+    refs = turn_plan.get("explicit_references") or {}
+    if refs.get("items"):
+        roots.update({"inventory", "equipment_slots", "inventory_capacity_modifiers", "inventory_summary", "equipment_effects"})
+    if refs.get("npcs"):
+        roots.update({"locations", "relationships", "conversations", "recognition", "response_drafts"})
+    if refs.get("events"):
+        roots.update({"events", "locations", "gm_events", "turn_summaries"})
+    if refs.get("locations"):
+        roots.update({"locations", "events", "turn_summaries"})
+    return roots
+
+
+def _clean_context_locations(value: Any, limit: int) -> list[dict[str, Any]]:
+    locations: list[dict[str, Any]] = []
+    if not isinstance(value, list):
+        return locations
+    for location in value[:limit]:
+        if not isinstance(location, dict):
+            continue
+        cleaned_location = dict(location)
+        cleaned_location["npcs"] = _compact_list(location.get("npcs"), 8, 420)
+        cleaned_location["events"] = _compact_list(location.get("events"), 6, 420)
+        locations.append(_trim_strings(cleaned_location, 700))
+    return locations
+
+
+def _clean_context_value_for_handoff(key: str, value: Any, broad_context: bool) -> Any:
+    if key == "history":
+        return []
+    if key == "locations":
+        return _clean_context_locations(value, 8 if broad_context else HANDOFF_CONTEXT_LIST_LIMITS["locations"])
+    if isinstance(value, list):
+        limit = HANDOFF_CONTEXT_LIST_LIMITS.get(key, 8)
+        if broad_context and key in {"inventory", "events", "conversations", "turn_summaries", "locations"}:
+            limit = min(limit + 4, 24)
+        return _compact_list(value, limit, 520 if broad_context else 420)
+    string_limit = 900 if key in {"settings", "gm_notes", "player", "current_location", "turn_plan", "action_context"} else 620
+    return _trim_strings(value, string_limit)
+
+
+def _clean_context_for_handoff(context: dict[str, Any], phase: str, trace: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    if not isinstance(context, dict):
+        return {}
+    turn_plan = context.get("turn_plan") or {}
+    action_context = context.get("action_context") or {}
+    broad_context = bool(action_context.get("broad_context_allowed")) or str(turn_plan.get("turn_kind") or "") == "opening_scene"
+    kept_keys = _handoff_context_roots(context)
+    if broad_context:
+        kept_keys.update(HANDOFF_OPTIONAL_CONTEXT_KEYS)
+    cleaned: dict[str, Any] = {}
+    for key in sorted(kept_keys):
+        if key in context:
+            cleaned[key] = _clean_context_value_for_handoff(key, context.get(key), broad_context)
+    cleaned["history"] = []
+    retrieval = dict(cleaned.get("retrieval") or {})
+    retrieval["handoff_cleanup"] = {
+        "phase": phase,
+        "mode": "broad" if broad_context else "focused",
+        "kept_keys": sorted(key for key in kept_keys if key in context),
+        "dropped_keys": sorted(key for key in context.keys() if key not in kept_keys and key != "history"),
+    }
+    cleaned["retrieval"] = retrieval
+    before_chars, before_tokens = _json_size(context)
+    after_chars, after_tokens = _json_size(cleaned)
+    _append_trace(
+        trace,
+        {
+            "phase": phase,
+            "event": "handoff_context_cleanup",
+            "cleanup_agent": "deterministic_context_steward",
+            "mode": "broad" if broad_context else "focused",
+            "source_slices": _handoff_source_slices(context),
+            "kept_keys": retrieval["handoff_cleanup"]["kept_keys"],
+            "dropped_keys": retrieval["handoff_cleanup"]["dropped_keys"],
+            "before_chars": before_chars,
+            "after_chars": after_chars,
+            "before_estimated_tokens": before_tokens,
+            "after_estimated_tokens": after_tokens,
+        },
+    )
+    return cleaned
+
+
 def _turn_max_tokens(context: dict[str, Any], phase: str, compact: bool = False) -> int:
     env_name = "AI_RPG_TURN_VERIFY_TOKENS" if phase == "verify" else "AI_RPG_TURN_DRAFT_TOKENS"
     requested_tokens = _env_int(env_name, _turn_token_default(context, phase))
@@ -463,7 +886,7 @@ def _model_timeout(default_ollama: int, default_llama_cpp: int, env_name: str = 
 
 def get_model_config() -> dict[str, Any]:
     default = {
-        "provider": os.getenv("AI_RPG_MODEL_PROVIDER", "ollama"),
+        "provider": os.getenv("AI_RPG_MODEL_PROVIDER", "llama_cpp"),
         "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
         "ollama_model": os.getenv("OLLAMA_MODEL", "llama3.1"),
         "llama_cpp_base_url": os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:8080"),
@@ -482,7 +905,23 @@ def get_model_config() -> dict[str, Any]:
         stored = json.loads(row["value"])
     except json.JSONDecodeError:
         return default
-    return {**default, **stored}
+    merged = {**default, **stored}
+    explicit_env = {
+        "provider": "AI_RPG_MODEL_PROVIDER",
+        "ollama_base_url": "OLLAMA_BASE_URL",
+        "ollama_model": "OLLAMA_MODEL",
+        "llama_cpp_base_url": "LLAMA_CPP_BASE_URL",
+        "gguf_model_path": "AI_RPG_GGUF_MODEL",
+    }
+    for key, env_name in explicit_env.items():
+        value = os.getenv(env_name)
+        if value is not None and str(value).strip():
+            merged[key] = str(value).strip()
+    if os.getenv("AI_RPG_MAX_RESPONSE_TOKENS"):
+        merged["response_token_cap"] = _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP)
+    if os.getenv("AI_RPG_RESPONSE_HARD_CAP_TOKENS") or os.getenv("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS"):
+        merged["response_token_hard_cap"] = _env_int("AI_RPG_RESPONSE_HARD_CAP_TOKENS", _env_int("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS", DEFAULT_RESPONSE_HARD_CAP))
+    return merged
 
 
 def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
@@ -506,7 +945,7 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     next_config["response_token_cap"] = soft_cap
     next_config["response_token_hard_cap"] = hard_cap
     if next_config["provider"] not in {"ollama", "llama_cpp"}:
-        next_config["provider"] = "ollama"
+        next_config["provider"] = "llama_cpp"
     with connect() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -515,29 +954,250 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     return next_config
 
 
+def _read_models_url(url: str, timeout: int = 5) -> dict[str, Any]:
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, list):
+        return {"data": payload}
+    return {"data": []}
+
+
+def _tail_text(path: str, limit: int = 1600) -> str:
+    if not path:
+        return ""
+    try:
+        file_path = Path(path)
+        if not file_path.is_file():
+            return ""
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    return text[-limit:].strip()
+
+
+def _managed_log_tail() -> dict[str, str]:
+    _ensure_managed_llama_state()
+    return {
+        "stdout_tail": _tail_text(_managed_llama_logs.get("stdout", "")),
+        "stderr_tail": _tail_text(_managed_llama_logs.get("stderr", "")),
+    }
+
+
+def _llama_cpp_host_port(base_url: str) -> tuple[str, int]:
+    parsed = urllib.parse.urlparse(base_url if "://" in base_url else f"http://{base_url}")
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 8080
+    if host.lower() == "localhost":
+        host = "127.0.0.1"
+    return host, port
+
+
+def _llama_cpp_gpu_layers() -> int:
+    requested = _env_int("AI_RPG_LLAMA_CPP_GPU_LAYERS", -1)
+    if requested == 0:
+        return 0
+    try:
+        from llama_cpp import llama_cpp as llama_cpp_bindings
+
+        if not llama_cpp_bindings.llama_supports_gpu_offload():
+            return 0
+    except Exception:
+        return requested
+    return requested
+
+
+def _managed_process_running(base_url: str) -> bool:
+    _ensure_managed_llama_state()
+    return bool(
+        _managed_llama_process
+        and _managed_llama_base_url == base_url
+        and _managed_llama_process.poll() is None
+    )
+
+
+def _ensure_managed_llama_state() -> None:
+    global _managed_llama_base_url, _managed_llama_logs, _managed_llama_process
+    if "_managed_llama_process" not in globals():
+        _managed_llama_process = None
+    if "_managed_llama_base_url" not in globals():
+        _managed_llama_base_url = ""
+    if "_managed_llama_logs" not in globals() or not isinstance(_managed_llama_logs, dict):
+        _managed_llama_logs = {}
+
+
+def _start_managed_llama_cpp(config: dict[str, Any], base_url: str) -> dict[str, Any]:
+    global _managed_llama_base_url, _managed_llama_logs, _managed_llama_process
+
+    if _managed_process_running(base_url):
+        return {"started": False, "managed": True, "message": "Managed llama.cpp server is already starting or running.", "logs": _managed_llama_logs}
+
+    model_path = str(config.get("gguf_model_path") or "").strip()
+    if not model_path:
+        return {"started": False, "managed": False, "error": "No GGUF model path is saved. Select a GGUF model file, save the model settings, then test again."}
+    if not Path(model_path).is_file():
+        return {"started": False, "managed": False, "error": f"Saved GGUF model file was not found: {model_path}"}
+
+    host, port = _llama_cpp_host_port(base_url)
+    context_tokens = _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
+    gpu_layers = _llama_cpp_gpu_layers()
+    flash_attention = os.getenv("AI_RPG_LLAMA_CPP_FLASH_ATTN", "True")
+    log_mode = os.getenv("AI_RPG_LLM_LOG_MODE", "quiet").strip().lower()
+    stdout_handle = None
+    stderr_handle = None
+    stdout_path = ""
+    stderr_path = ""
+    if log_mode != "console":
+        log_dir = Path(tempfile.gettempdir()) / "ai-rpg-logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        stdout_path = str(log_dir / f"llama-ui-{stamp}.out.log")
+        stderr_path = str(log_dir / f"llama-ui-{stamp}.err.log")
+        stdout_handle = open(stdout_path, "a", encoding="utf-8")
+        stderr_handle = open(stderr_path, "a", encoding="utf-8")
+
+    args = [
+        sys.executable,
+        "-m",
+        "llama_cpp.server",
+        "--model",
+        model_path,
+        "--model_alias",
+        "ai-rpg-local",
+        "--host",
+        host,
+        "--port",
+        str(port),
+        "--n_ctx",
+        str(context_tokens),
+        "--n_gpu_layers",
+        str(gpu_layers),
+        "--flash_attn",
+        flash_attention,
+        "--verbose",
+        "False",
+    ]
+    try:
+        _managed_llama_process = subprocess.Popen(args, stdout=stdout_handle or subprocess.DEVNULL, stderr=stderr_handle or subprocess.DEVNULL)
+    except Exception as exc:
+        if stdout_handle:
+            stdout_handle.close()
+        if stderr_handle:
+            stderr_handle.close()
+        return {"started": False, "managed": False, "error": f"Could not start llama.cpp server: {exc}"}
+
+    if stdout_handle:
+        stdout_handle.close()
+    if stderr_handle:
+        stderr_handle.close()
+    _managed_llama_base_url = base_url
+    _managed_llama_logs = {"stdout": stdout_path, "stderr": stderr_path}
+    return {
+        "started": True,
+        "managed": True,
+        "message": "Started managed llama.cpp server from saved GGUF model path.",
+        "pid": _managed_llama_process.pid,
+        "logs": _managed_llama_logs,
+    }
+
+
+def _wait_for_models(url: str, process: subprocess.Popen | None, timeout_seconds: int) -> tuple[dict[str, Any] | None, str]:
+    deadline = time.monotonic() + max(1, timeout_seconds)
+    last_error = ""
+    while time.monotonic() < deadline:
+        if process is not None and process.poll() is not None:
+            tails = _managed_log_tail()
+            detail = tails.get("stderr_tail") or tails.get("stdout_tail")
+            suffix = f" Log tail: {detail}" if detail else ""
+            return None, f"Managed llama.cpp server stopped before it became ready.{suffix}"
+        try:
+            return _read_models_url(url, timeout=2), ""
+        except Exception as exc:
+            last_error = str(exc)
+            time.sleep(1)
+    return None, f"Timed out waiting {timeout_seconds}s for llama.cpp server readiness at {url}. Last error: {last_error}"
+
+
+def _ensure_llama_cpp_ready_for_generation(config: dict[str, Any], base_url: str) -> None:
+    models_url = f"{base_url.rstrip('/')}/v1/models"
+    start_result = _start_managed_llama_cpp(config, base_url.rstrip("/"))
+    if not (start_result.get("started") or start_result.get("managed")):
+        raise LlmError(str(start_result.get("error") or "Could not start managed llama.cpp server."))
+    payload, wait_error = _wait_for_models(models_url, _managed_llama_process, _env_int("AI_RPG_LLM_STARTUP_TIMEOUT", 180))
+    if payload is None:
+        raise LlmError(wait_error)
+
+
+def _urlopen_json(req: urllib.request.Request, timeout: int) -> dict[str, Any]:
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
 def test_model_connection() -> dict[str, Any]:
     config = get_model_config()
     provider = str(config.get("provider") or "llama_cpp")
-    if provider == "llama_cpp":
-        base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
-        url = f"{base_url}/v1/models"
-    else:
-        base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
-        url = f"{base_url}/api/tags"
-
+    base_url = ""
+    url = ""
     try:
-        with urllib.request.urlopen(url, timeout=5) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        if provider == "llama_cpp":
+            base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
+            url = f"{base_url}/v1/models"
+        else:
+            base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
+            url = f"{base_url}/api/tags"
+
+        try:
+            payload = _read_models_url(url, timeout=5)
+        except Exception as exc:
+            start_result: dict[str, Any] | None = None
+            if provider == "llama_cpp" and _is_connection_refused_error(exc):
+                start_result = _start_managed_llama_cpp(config, base_url)
+                if start_result.get("started") or start_result.get("managed"):
+                    payload, wait_error = _wait_for_models(url, _managed_llama_process, _env_int("AI_RPG_LLM_STARTUP_TIMEOUT", 180))
+                    if payload is not None:
+                        return _model_status_payload(provider, url, payload, config, start_result)
+                    return {
+                        "ok": False,
+                        "provider": provider,
+                        "url": url,
+                        "error": wait_error,
+                        "config": config,
+                        "managed_start": start_result,
+                    }
+            provider_name = "llama.cpp" if provider == "llama_cpp" else "Ollama"
+            error = _connection_refused_message(provider_name, url) if _is_connection_refused_error(exc) else str(exc)
+            if start_result and start_result.get("error"):
+                error = f"{error}. {start_result['error']}"
+            return {
+                "ok": False,
+                "provider": provider,
+                "url": url,
+                "error": error,
+                "config": config,
+                "managed_start": start_result,
+            }
+
+        return _model_status_payload(provider, url, payload, config)
+    except Exception as exc:
         return {
             "ok": False,
             "provider": provider,
-            "url": url,
-            "error": str(exc),
+            "url": url or base_url,
+            "error": f"Model status check failed: {exc}",
             "config": config,
+            "managed_start": None,
         }
 
+
+def _model_status_payload(provider: str, url: str, payload: dict[str, Any], config: dict[str, Any], managed_start: dict[str, Any] | None = None) -> dict[str, Any]:
+
+    if not isinstance(payload, dict):
+        payload = {"data": payload if isinstance(payload, list) else []}
     models = payload.get("data") or payload.get("models") or []
+    if not isinstance(models, list):
+        models = []
     model_names = []
     for model in models[:8]:
         if isinstance(model, dict):
@@ -550,6 +1210,7 @@ def test_model_connection() -> dict[str, Any]:
         "url": url,
         "models": model_names,
         "config": config,
+        "managed_start": managed_start,
     }
 
 
@@ -1332,7 +1993,13 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         narration = (
             f"{location} comes into focus without waiting for a command. Damp air gathers at the edges of the street, "
             "voices move behind closed doors, and something nearby is just unresolved enough to invite a first choice. "
-            "The world offers a modest opening instead of a grand revelation: listen, approach, investigate, or move on."
+            "The first details are practical rather than grand: where the ground is slick, where the nearest shelter or exit might be, "
+            "who seems busy enough to ignore trouble, and which small sound keeps tugging attention back toward the center of the scene. "
+            "Nothing forces your hand yet, but the place has enough pressure to make standing still feel like a decision.\n\n"
+            "A few possible openings sit close together. You could listen before anyone notices you listening, approach the nearest sign of activity, "
+            "inspect the odd detail that does not quite belong, ask a passerby for the local shape of things, or move on before the moment chooses a shape for you. "
+            "The world offers a modest opening instead of a grand revelation, with room for caution, curiosity, conversation, or immediate motion. "
+            "Whatever you choose first will give the scene its sharper edge."
         )
         event_summary = f"The opening scene settled around {location} before the player acted."
         event_title = "Opening scene"
@@ -1341,17 +2008,29 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     elif is_continue_scene:
         narration = (
             f"The moment in {location} keeps moving. A nearby sound sharpens, someone shifts where they thought they were hidden, "
-            "and the scene offers a little more shape without forcing your hand. You still have room to approach, wait, speak, investigate, or walk away."
+            "and the scene offers a little more shape without forcing your hand. The air has the patient tension of a place deciding whether it is ordinary or dangerous: "
+            "a pause in conversation, a scrape of movement, a glance that lingers too long, or a route that suddenly seems more important than it did a breath ago. "
+            "None of it declares an answer by itself, but together it gives the current situation more weight.\n\n"
+            "You still have room to approach, wait, speak, investigate, prepare, or walk away. Waiting may reveal who is involved, acting may seize the initiative, "
+            "and leaving may avoid a problem before it grows teeth. The scene advances only a step, enough to keep the world alive while preserving your next choice. "
+            "There is still useful information in the texture around you: where attention gathers, where the safest retreat might be, who benefits if no one interferes, "
+            "and which detail feels newly urgent now that the silence has had time to stretch."
         )
         event_summary = f"The scene at {location} advanced slightly while the player waited for more context."
         event_title = "Scene pressure"
         turn_summary = f"continue: advanced the current scene around {location} without a player action."
         journal_content = event_summary
     else:
+        intent = _trim_text(player_input, 260)
         narration = (
             f"You take a careful moment in {location}. The world does not leap to answer all at once: "
-            "someone coughs behind a shutter, damp air clings to your sleeves, and your last choice hangs in the street.\n\n"
-            f"Your intent was clear: {player_input}. For now, the place gives you a small opening rather than a grand revelation."
+            "someone coughs behind a shutter, damp air clings to your sleeves, and your last choice hangs in the street. "
+            "The immediate surroundings answer with small, grounded details rather than a perfect result: a shift in posture, a sound from the side, "
+            "a hint of opportunity, and the quiet cost of being observed while you decide what comes next.\n\n"
+            f"Your intent was clear: {intent}. The place gives you a response that is playable but cautious. If you press forward, you can turn that intent into a direct confrontation, "
+            "a careful investigation, a practical search for tools or exits, or a conversation that tests who here is willing to help. If you hold back, the scene still has texture: "
+            "weather, distance, witnesses, and uncertainty all matter. For now, the world leaves the next move in your hands instead of inventing one for you. "
+            "The safest next step is not obvious, but several playable paths are close enough to reach."
         )
         event_summary = f"The player paused to act deliberately: {player_input}"
         event_title = "A cautious pause"
@@ -1450,7 +2129,7 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "") -
             "If user_instruction is present, use it to steer the suggestions while staying consistent with the scene.",
             "Use the current scene and known indexed facts; do not reveal hidden information or future outcomes.",
             "Do not continue the story, narrate results, or decide that the player already chose an option.",
-            "Keep each suggestion concise, specific, and playable, usually 4-18 words.",
+            f"Keep each suggestion concise, specific, and playable. Aim for about {SUGGESTION_TARGET_CHARS} visible characters and never exceed {SUGGESTION_MAX_CHARS} characters.",
             "Offer meaningfully different approaches such as cautious, social, investigative, practical, risky, or evasive when they fit.",
         ],
     }
@@ -1459,7 +2138,7 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "") -
         json.dumps(prompt, ensure_ascii=True),
         timeout=_model_timeout(45, 240, "AI_RPG_SUGGESTION_TIMEOUT"),
         phase="input_suggestions",
-        max_tokens=_env_int("AI_RPG_SUGGESTION_TOKENS", 220),
+        max_tokens=_env_int("AI_RPG_SUGGESTION_TOKENS", 180),
     )
     raw_suggestions = result.get("suggestions") or result.get("options") or []
     suggestions: list[str] = []
@@ -1469,7 +2148,7 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "") -
                 text = str(item.get("text") or item.get("input") or item.get("suggestion") or "").strip()
             else:
                 text = str(item or "").strip()
-            text = text.strip("-0123456789. )\t")[:180]
+            text = _clip_suggestion_text(text)
             if text and text not in suggestions:
                 suggestions.append(text)
             if len(suggestions) == 3:
@@ -1477,6 +2156,14 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "") -
     if len(suggestions) != 3:
         raise LlmError("Model did not return exactly 3 usable input suggestions.")
     return {"suggestions": suggestions}
+
+
+def _clip_suggestion_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", str(text or "").strip("-0123456789. )\t"))
+    if len(cleaned) <= SUGGESTION_MAX_CHARS:
+        return cleaned
+    clipped = cleaned[:SUGGESTION_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:-")
+    return clipped or cleaned[:SUGGESTION_MAX_CHARS].rstrip()
 
 
 def estimated_tokens(text: str) -> int:
@@ -1509,28 +2196,100 @@ def _chat_json(
     usage: list[dict[str, Any]] | None = None,
     phase: str = "draft",
     max_tokens: int | None = None,
+    trace: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    started_at = time.time()
+    total = f"{system_prompt}\n{user_prompt}"
     if usage is not None:
-        total = f"{system_prompt}\n{user_prompt}"
         usage.append({"phase": phase, "chars": len(total), "estimated_tokens": estimated_tokens(total)})
+    config = get_model_config()
+    _append_trace(
+        trace,
+        {
+            "phase": phase,
+            "event": "request",
+            "provider": config.get("provider"),
+            "timeout_seconds": timeout,
+            "requested_max_tokens": max_tokens,
+            "prompt_chars": len(total),
+            "prompt_estimated_tokens": estimated_tokens(total),
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        },
+    )
     try:
         content = _chat_content(system_prompt, user_prompt, timeout=timeout, max_tokens=max_tokens)
     except LlmError as exc:
-        total = f"{system_prompt}\n{user_prompt}"
-        config = get_model_config()
         response_cap = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
         _, hard_cap = _response_token_settings(config)
         reason = _transport_error_message(exc, timeout)
-        raise LlmError(f"{phase} {reason} (prompt ~{estimated_tokens(total)} tokens, response cap {response_cap}, hard cap {hard_cap})") from exc
+        _append_trace(
+            trace,
+            {
+                "phase": phase,
+                "event": "transport_error",
+                "duration_seconds": round(time.time() - started_at, 3),
+                "error": reason,
+                "soft_response_target": response_cap,
+                "hard_cap": hard_cap,
+            },
+        )
+        raise LlmError(_chat_error_message(phase, reason, total, response_cap, hard_cap)) from exc
+    _append_trace(
+        trace,
+        {
+            "phase": phase,
+            "event": "raw_response",
+            "duration_seconds": round(time.time() - started_at, 3),
+            "response_chars": len(content),
+            "raw_content": content,
+        },
+    )
     try:
-        return _extract_json(content)
-    except json.JSONDecodeError:
-        config = get_model_config()
+        parsed = _extract_json(content)
+        _append_trace(
+            trace,
+            {
+                "phase": phase,
+                "event": "parsed_json",
+                "keys": sorted(parsed.keys()) if isinstance(parsed, dict) else [],
+                "parsed_json": parsed,
+            },
+        )
+        return parsed
+    except json.JSONDecodeError as parse_exc:
+        _append_trace(
+            trace,
+            {
+                "phase": phase,
+                "event": "json_parse_error",
+                "error": str(parse_exc),
+                "raw_content": content,
+            },
+        )
         repair_tokens = _json_repair_token_cap(config, max_tokens)
         _, hard_cap = _response_token_settings(config)
         repair_system_prompt = "Return valid JSON only. Repair the malformed JSON without adding new content."
         repair_user_prompt = json.dumps({"malformed": content}, ensure_ascii=True)
         repair_timeout = _model_timeout(45, 120, "AI_RPG_JSON_REPAIR_TIMEOUT")
+        repair_total = f"{repair_system_prompt}\n{repair_user_prompt}"
+        if usage is not None:
+            usage.append({"phase": f"{phase}_repair", "chars": len(repair_total), "estimated_tokens": estimated_tokens(repair_total)})
+        repair_started_at = time.time()
+        _append_trace(
+            trace,
+            {
+                "phase": f"{phase}_repair",
+                "event": "request",
+                "provider": config.get("provider"),
+                "timeout_seconds": repair_timeout,
+                "requested_max_tokens": repair_tokens,
+                "prompt_chars": len(repair_total),
+                "prompt_estimated_tokens": estimated_tokens(repair_total),
+                "system_prompt": repair_system_prompt,
+                "user_prompt": repair_user_prompt,
+            },
+        )
         try:
             repaired = _chat_content(
                 repair_system_prompt,
@@ -1540,15 +2299,60 @@ def _chat_json(
                 max_tokens=repair_tokens,
             )
         except LlmError as repair_exc:
-            total = f"{repair_system_prompt}\n{repair_user_prompt}"
-            raise LlmError(f"{phase}_repair {_transport_error_message(repair_exc, repair_timeout)} (prompt ~{estimated_tokens(total)} tokens, response cap {repair_tokens}, hard cap {hard_cap})") from repair_exc
-        if usage is not None:
-            total = f"Return valid JSON only. Repair the malformed JSON without adding new content.\n{content}"
-            usage.append({"phase": f"{phase}_repair", "chars": len(total), "estimated_tokens": estimated_tokens(total)})
+            reason = _transport_error_message(repair_exc, repair_timeout)
+            _append_trace(
+                trace,
+                {
+                    "phase": f"{phase}_repair",
+                    "event": "transport_error",
+                    "duration_seconds": round(time.time() - repair_started_at, 3),
+                    "error": reason,
+                    "repair_cap": repair_tokens,
+                    "hard_cap": hard_cap,
+                },
+            )
+            raise MalformedJsonError(
+                _repair_error_message(phase, reason, repair_total, repair_tokens, hard_cap),
+                content=content,
+                repair_error=str(repair_exc),
+            ) from repair_exc
+        _append_trace(
+            trace,
+            {
+                "phase": f"{phase}_repair",
+                "event": "raw_response",
+                "duration_seconds": round(time.time() - repair_started_at, 3),
+                "response_chars": len(repaired),
+                "raw_content": repaired,
+            },
+        )
         try:
-            return _extract_json(repaired)
+            parsed = _extract_json(repaired)
+            _append_trace(
+                trace,
+                {
+                    "phase": f"{phase}_repair",
+                    "event": "parsed_json",
+                    "keys": sorted(parsed.keys()) if isinstance(parsed, dict) else [],
+                    "parsed_json": parsed,
+                },
+            )
+            return parsed
         except json.JSONDecodeError as exc:
-            raise LlmError(f"Could not parse or repair model JSON: {exc}") from exc
+            _append_trace(
+                trace,
+                {
+                    "phase": f"{phase}_repair",
+                    "event": "json_parse_error",
+                    "error": str(exc),
+                    "raw_content": repaired,
+                },
+            )
+            raise MalformedJsonError(
+                f"{phase}_repair returned invalid JSON after malformed JSON: {exc}",
+                content=content,
+                repair_error=str(exc),
+            ) from exc
 
 
 def _chat_content(
@@ -1595,6 +2399,8 @@ def _chat_content(
         detail = exc.read().decode("utf-8", errors="replace")
         raise LlmError(f"HTTP {exc.code}: {detail}") from exc
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        if _is_connection_refused_error(exc):
+            raise LlmError(_connection_refused_message("Ollama", f"{base_url}/api/chat")) from exc
         raise LlmError(_transport_error_message(exc, timeout)) from exc
 
     content = payload.get("message", {}).get("content", "")
@@ -1613,6 +2419,37 @@ def _chat_content_openai_compatible(
 ) -> str:
     base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
     model = str(config.get("model") or "ai-rpg-local")
+
+    def post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
+        url = f"{base_url}{path}"
+
+        def make_request() -> urllib.request.Request:
+            return urllib.request.Request(
+                url,
+                data=json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+
+        try:
+            return _urlopen_json(make_request(), timeout)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise LlmError(f"HTTP {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            if not _is_connection_refused_error(exc):
+                raise LlmError(_transport_error_message(exc, timeout)) from exc
+            _ensure_llama_cpp_ready_for_generation(config, base_url)
+            try:
+                return _urlopen_json(make_request(), timeout)
+            except urllib.error.HTTPError as retry_http_exc:
+                detail = retry_http_exc.read().decode("utf-8", errors="replace")
+                raise LlmError(f"HTTP {retry_http_exc.code}: {detail}") from retry_http_exc
+            except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as retry_exc:
+                if _is_connection_refused_error(retry_exc):
+                    raise LlmError(_connection_refused_message("llama.cpp", url)) from retry_exc
+                raise LlmError(_transport_error_message(retry_exc, timeout)) from retry_exc
+
     if os.getenv("AI_RPG_LLAMA_CPP_CHAT_COMPLETIONS", "1").strip().lower() not in {"1", "true", "yes"}:
         prompt = (
             "System:\n"
@@ -1631,20 +2468,7 @@ def _chat_content_openai_compatible(
             "stream": False,
             "stop": ["<|im_end|>"],
         }
-        req = urllib.request.Request(
-            f"{base_url}/v1/completions",
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(req, timeout=timeout) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise LlmError(f"HTTP {exc.code}: {detail}") from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise LlmError(_transport_error_message(exc, timeout)) from exc
+        payload = post_json("/v1/completions", body)
         content = payload.get("choices", [{}])[0].get("text", "")
         if not content:
             raise LlmError("llama.cpp compatible server returned an empty response.")
@@ -1664,20 +2488,7 @@ def _chat_content_openai_compatible(
     }
     if os.getenv("AI_RPG_LLAMA_CPP_RESPONSE_FORMAT", "1").strip().lower() in {"1", "true", "yes"}:
         body["response_format"] = {"type": "json_object"}
-    req = urllib.request.Request(
-        f"{base_url}/v1/chat/completions",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise LlmError(f"HTTP {exc.code}: {detail}") from exc
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        raise LlmError(_transport_error_message(exc, timeout)) from exc
+    payload = post_json("/v1/chat/completions", body)
 
     content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
     if not content:
@@ -1785,6 +2596,149 @@ def _normalize_turn(result: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _clean_scene_plan_for_handoff(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        text = _narration_value_text(value)
+        return {"goal": _trim_text(text, 300), "focus_points": []} if text else {"goal": "", "focus_points": []}
+    focus_points: list[dict[str, Any]] = []
+    raw_focus_points = value.get("focus_points") or value.get("beats") or []
+    if isinstance(raw_focus_points, dict):
+        raw_focus_points = list(raw_focus_points.values())
+    if isinstance(raw_focus_points, list):
+        for point in raw_focus_points[:6]:
+            if isinstance(point, dict):
+                cleaned_point = {
+                    "kind": _trim_text(str(point.get("kind") or point.get("type") or "scene"), 40),
+                    "summary": _trim_text(str(point.get("summary") or point.get("text") or point.get("description") or ""), 320),
+                    "event_worthy": bool(point.get("event_worthy")),
+                    "persistence": _trim_text(str(point.get("persistence") or ""), 40),
+                }
+            else:
+                cleaned_point = {
+                    "kind": "scene",
+                    "summary": _trim_text(str(point or ""), 320),
+                    "event_worthy": False,
+                    "persistence": "",
+                }
+            if cleaned_point["summary"]:
+                focus_points.append(cleaned_point)
+    return {
+        "goal": _trim_text(str(value.get("goal") or value.get("summary") or ""), 360),
+        "focus_points": focus_points,
+    }
+
+
+def _clean_narration_segments_for_handoff(value: Any) -> list[dict[str, str]]:
+    segments = _coerce_segments(value)
+    cleaned: list[dict[str, str]] = []
+    for index, segment in enumerate(segments[: HANDOFF_TURN_LIST_LIMITS["narration_segments"]]):
+        if isinstance(segment, dict):
+            label = _segment_label(segment, "paragraph")
+            text = _segment_text(segment)
+        else:
+            label = "paragraph"
+            text = _narration_value_text(segment)
+        text = re.sub(r"\n{3,}", "\n\n", str(text or "")).strip()
+        if text:
+            cleaned.append({"label": _trim_text(label or f"paragraph {index + 1}", 40), "text": _trim_text(text, 2800)})
+    joined = "\n\n".join(segment["text"] for segment in cleaned).strip()
+    if len(joined) > 5600:
+        joined = _trim_text(joined, 5600)
+        return [{"label": "paragraph", "text": joined}]
+    return cleaned
+
+
+def _clean_player_delta_for_handoff(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    cleaned: dict[str, Any] = {}
+    for key in HANDOFF_PLAYER_FIELDS:
+        if key not in value:
+            continue
+        item = value.get(key)
+        cleaned[key] = _trim_text(str(item), 260) if isinstance(item, str) else item
+    return cleaned
+
+
+def _clean_self_check_for_handoff(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {
+            "passed": False,
+            "issues_found": ["Cleanup stage received a non-object self_check."],
+            "corrections_made": [],
+            "reference_check": "unknown",
+            "consistency_check": "unknown",
+        }
+    issues = value.get("issues_found") if isinstance(value.get("issues_found"), list) else []
+    corrections = value.get("corrections_made") if isinstance(value.get("corrections_made"), list) else []
+    return {
+        "passed": bool(value.get("passed")),
+        "issues_found": [_trim_text(str(item), 260) for item in issues[:8]],
+        "corrections_made": [_trim_text(str(item), 260) for item in corrections[:8]],
+        "reference_check": _trim_text(str(value.get("reference_check") or "unknown"), 500),
+        "consistency_check": _trim_text(str(value.get("consistency_check") or "unknown"), 500),
+    }
+
+
+def _clean_turn_list_for_handoff(value: Any, limit: int) -> list[Any]:
+    if not isinstance(value, list):
+        return []
+    cleaned: list[Any] = []
+    for item in value[:limit]:
+        if isinstance(item, dict):
+            cleaned.append(_trim_strings(item, 520))
+        elif isinstance(item, str):
+            text = _trim_text(item, 520)
+            if text:
+                cleaned.append(text)
+    return cleaned
+
+
+def _keep_cleaned_turn_value(key: str, value: Any) -> bool:
+    if key in {"scene_plan", "narration_segments", "narration", "player", "self_check", "turn_summary", "scene_focus"}:
+        return True
+    return key in TURN_SHAPE_KEYS and value not in (None, [], {})
+
+
+def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    normalized = _normalize_turn(turn)
+    before_chars, before_tokens = _json_size(normalized)
+    cleaned: dict[str, Any] = {}
+    cleaned["scene_plan"] = _clean_scene_plan_for_handoff(normalized.get("scene_plan"))
+    cleaned["narration_segments"] = _clean_narration_segments_for_handoff(normalized.get("narration_segments"))
+    narration = "\n\n".join(segment["text"] for segment in cleaned["narration_segments"]).strip()
+    cleaned["narration"] = narration or _trim_text(str(normalized.get("narration") or ""), 5600)
+    cleaned["player"] = _clean_player_delta_for_handoff(normalized.get("player"))
+    cleaned["self_check"] = _clean_self_check_for_handoff(normalized.get("self_check"))
+    cleaned["turn_summary"] = _trim_text(str(normalized.get("turn_summary") or ""), 700)
+    cleaned["scene_focus"] = _trim_text(str(normalized.get("scene_focus") or "filler"), 80)
+    for key in TURN_SHAPE_ORDER:
+        if key in cleaned or key not in normalized:
+            continue
+        if key in HANDOFF_TURN_LIST_LIMITS:
+            cleaned[key] = _clean_turn_list_for_handoff(normalized.get(key), HANDOFF_TURN_LIST_LIMITS[key])
+        else:
+            cleaned[key] = _trim_strings(normalized.get(key), 520)
+    cleaned = {key: value for key, value in cleaned.items() if _keep_cleaned_turn_value(key, value)}
+    after_chars, after_tokens = _json_size(cleaned)
+    _append_trace(
+        trace,
+        {
+            "phase": phase,
+            "event": "handoff_turn_cleanup",
+            "cleanup_agent": "deterministic_payload_steward",
+            "before_chars": before_chars,
+            "after_chars": after_chars,
+            "before_estimated_tokens": before_tokens,
+            "after_estimated_tokens": after_tokens,
+            "removed_keys": sorted(key for key in normalized.keys() if key not in cleaned),
+            "narration_chars": _narration_char_count(cleaned),
+            "list_counts": {key: len(value) for key, value in cleaned.items() if isinstance(value, list)},
+        },
+    )
+    return cleaned
+
+
 def _merge_verified_with_draft_narration(verified: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
     merged = {**draft, **_turn_payload(verified)}
     merged["narration_segments"] = draft.get("narration_segments") or []
@@ -1794,6 +2748,83 @@ def _merge_verified_with_draft_narration(verified: dict[str, Any], draft: dict[s
     return _normalize_turn(merged)
 
 
+def _turn_for_depth_retry(turn: dict[str, Any]) -> dict[str, Any]:
+    return _trim_strings({key: turn.get(key) for key in TURN_SHAPE_KEYS if key in turn}, MAX_TURN_NARRATION_CHARS)
+
+
+def _narration_char_count(turn: dict[str, Any]) -> int:
+    return len(str(turn.get("narration") or ""))
+
+
+def _retry_short_narration(
+    context: dict[str, Any],
+    player_input: str,
+    turn: dict[str, Any],
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    cleaned_context = _clean_context_for_handoff(_compact_turn_context(context), f"{phase}_context_cleanup", trace)
+    prompt = {
+        "repair_task": "The previous turn JSON was valid but the player-visible narration was too short. Return a complete full turn JSON with deeper narration while preserving the same facts and state changes.",
+        "current_narration_chars": _narration_char_count(turn),
+        "minimum_narration_chars": MIN_TURN_NARRATION_CHARS,
+        "target_narration_chars": TARGET_TURN_NARRATION_CHARS,
+        "maximum_narration_chars": MAX_TURN_NARRATION_CHARS,
+        "world_turn_prompt": json.loads(build_user_prompt(cleaned_context, player_input)),
+        "previous_turn": _turn_for_depth_retry(_clean_turn_for_handoff(turn, f"{phase}_previous_turn_cleanup", trace)),
+        "rules": [
+            "Return JSON only.",
+            "Preserve scene_plan intent, existing entity references, player changes, inventory changes, events, gm_events, and turn_summary unless a contradiction must be corrected.",
+            f"Expand narration_segments and narration to at least {MIN_TURN_NARRATION_CHARS} visible characters, normally around {TARGET_TURN_NARRATION_CHARS}, and under {MAX_TURN_NARRATION_CHARS}.",
+            "Add sensory detail, NPC reaction, immediate consequence, environmental pressure, and concrete choice context instead of padding or repeating text.",
+            "For opening_scene or continue_scene, do not invent a player action.",
+        ],
+    }
+    return _chat_json(
+        system_prompt,
+        json.dumps(prompt, ensure_ascii=True, separators=(",", ":")),
+        timeout=timeout,
+        usage=usage,
+        phase=phase,
+        max_tokens=max(_turn_max_tokens(context, "draft"), DEFAULT_RESPONSE_TOKEN_CAP),
+        trace=trace,
+    )
+
+
+def _ensure_narration_depth(
+    turn: dict[str, Any],
+    context: dict[str, Any],
+    player_input: str,
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized = _normalize_turn(turn)
+    original_chars = _narration_char_count(normalized)
+    if original_chars >= MIN_TURN_NARRATION_CHARS:
+        return normalized
+    try:
+        expanded = _normalize_turn(_retry_short_narration(context, player_input, normalized, system_prompt, timeout, usage, phase, trace))
+        if _narration_char_count(expanded) >= MIN_TURN_NARRATION_CHARS or _narration_char_count(expanded) > original_chars:
+            return expanded
+    except LlmError as exc:
+        usage.append({"phase": f"{phase}_failed", "error": _trim_text(str(exc), 500)})
+        _append_trace(trace, {"phase": phase, "event": "depth_retry_failed", "error": str(exc)})
+    self_check = normalized.get("self_check")
+    if not isinstance(self_check, dict):
+        self_check = {}
+        normalized["self_check"] = self_check
+    issues = self_check.setdefault("issues_found", [])
+    if isinstance(issues, list):
+        issues.append(f"Narration was shorter than {MIN_TURN_NARRATION_CHARS} characters after depth retry.")
+    return normalized
+
+
 def _retry_missing_narration(
     context: dict[str, Any],
     player_input: str,
@@ -1801,10 +2832,12 @@ def _retry_missing_narration(
     timeout: int,
     usage: list[dict[str, Any]],
     phase: str,
+    trace: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    cleaned_context = _clean_context_for_handoff(_compact_turn_context(context), f"{phase}_context_cleanup", trace)
     prompt = {
         "repair_task": "The previous turn JSON had no usable narration. Return a complete turn JSON with narration_segments containing playable prose.",
-        "world_turn_prompt": json.loads(build_user_prompt(_compact_turn_context(context), player_input)),
+        "world_turn_prompt": json.loads(build_user_prompt(cleaned_context, player_input)),
         "rules": [
             "Return JSON only.",
             "Include narration_segments with at least one object whose text is non-empty.",
@@ -1819,17 +2852,41 @@ def _retry_missing_narration(
         usage=usage,
         phase=phase,
         max_tokens=_turn_max_tokens(context, "draft", compact=True),
+        trace=trace,
     )
 
 
 def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     usage: list[dict[str, Any]] = []
+    trace: list[dict[str, Any]] = []
     timeout = _model_timeout(90, 900, "AI_RPG_TURN_DRAFT_TIMEOUT")
     verify_timeout = _model_timeout(45, 480, "AI_RPG_TURN_VERIFY_TIMEOUT")
     config = get_model_config()
     system_prompt = COMPACT_SYSTEM_PROMPT if config.get("provider") == "llama_cpp" else SYSTEM_PROMPT
     verify_prompt = COMPACT_VERIFY_PROMPT if config.get("provider") == "llama_cpp" else VERIFY_PROMPT
-    active_context = context
+    _append_trace(
+        trace,
+        {
+            "phase": "pipeline",
+            "event": "start",
+            "handoff_model": [
+                "world.build_prompt_context planner packet",
+                "deterministic context cleanup before draft",
+                "draft JSON model call",
+                "deterministic draft payload cleanup before verifier",
+                "malformed JSON repair or retry when needed",
+                "verifier JSON model call",
+                "deterministic verified payload cleanup before world application",
+                "narration depth retry when needed",
+                "world.apply_turn SQLite state application or deterministic fallback",
+            ],
+            "note": "Trace contains observable prompts, raw model outputs, parsed JSON, handoff cleanup decisions, verifier self_check, errors, and fallback decisions. It cannot include private hidden chain-of-thought that the model did not return.",
+            "provider": config.get("provider"),
+            "draft_timeout_seconds": timeout,
+            "verify_timeout_seconds": verify_timeout,
+        },
+    )
+    active_context = _clean_context_for_handoff(context, "planner_to_draft", trace)
     draft_prompt = build_user_prompt(active_context, player_input)
     try:
         draft = _chat_json(
@@ -1839,12 +2896,37 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             usage=usage,
             phase="draft",
             max_tokens=_turn_max_tokens(active_context, "draft"),
+            trace=trace,
         )
+    except MalformedJsonError as exc:
+        try:
+            draft = _narration_only_turn_from_text(exc.content, active_context, str(exc))
+            usage.append({"phase": "draft_salvage", "chars": len(exc.content), "estimated_tokens": estimated_tokens(exc.content)})
+            _append_trace(trace, {"phase": "draft_salvage", "event": "narration_only_salvage", "reason": str(exc), "raw_content": exc.content})
+        except LlmError:
+            try:
+                compact_context = _clean_context_for_handoff(_compact_turn_context(context), "planner_to_draft_parse_retry", trace)
+                retry_prompt = build_user_prompt(compact_context, player_input)
+                retry_system_prompt = f"{system_prompt}\n\nThe previous draft was malformed JSON and could not be repaired in time. Return one valid compact JSON object only."
+                active_context = compact_context
+                draft = _chat_json(
+                    retry_system_prompt,
+                    retry_prompt,
+                    timeout=timeout,
+                    usage=usage,
+                    phase="draft_parse_retry",
+                    max_tokens=_turn_max_tokens(active_context, "draft", compact=True),
+                    trace=trace,
+                )
+            except LlmError as retry_exc:
+                raise _attach_model_usage(retry_exc, usage, trace)
     except LlmError as exc:
+        if _is_connection_refused_error(exc):
+            raise _attach_model_usage(exc, usage, trace)
         if _is_timeout_error(exc):
-            raise _attach_model_usage(exc, usage)
+            raise _attach_model_usage(exc, usage, trace)
         if _is_context_length_error(exc):
-            active_context = _compact_turn_context(context)
+            active_context = _clean_context_for_handoff(_compact_turn_context(context), "planner_to_draft_compact_retry", trace)
             try:
                 draft = _chat_json(
                     system_prompt,
@@ -1853,9 +2935,10 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     usage=usage,
                     phase="draft_compact_retry",
                     max_tokens=_turn_max_tokens(active_context, "draft", compact=True),
+                    trace=trace,
                 )
             except LlmError as retry_exc:
-                    raise _attach_model_usage(retry_exc, usage)
+                raise _attach_model_usage(retry_exc, usage, trace)
         else:
             try:
                 draft = _chat_json(
@@ -1865,16 +2948,20 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     usage=usage,
                     phase="draft_retry",
                     max_tokens=_turn_max_tokens(active_context, "draft"),
+                    trace=trace,
                 )
             except LlmError as retry_exc:
-                    raise _attach_model_usage(retry_exc, usage)
+                    raise _attach_model_usage(retry_exc, usage, trace)
     try:
-        draft = _normalize_turn(draft)
+        draft = _clean_turn_for_handoff(_normalize_turn(draft), "draft_to_verify", trace)
+        _append_trace(trace, {"phase": "draft_normalize", "event": "normalized", "narration_chars": _narration_char_count(draft), "keys": sorted(draft.keys())})
     except LlmError as exc:
         if not _is_missing_narration_error(exc):
-            raise _attach_model_usage(exc, usage)
+            _append_trace(trace, {"phase": "draft_normalize", "event": "error", "error": str(exc)})
+            raise _attach_model_usage(exc, usage, trace)
         try:
-            draft = _normalize_turn(
+            _append_trace(trace, {"phase": "draft_normalize", "event": "missing_narration_retry", "error": str(exc)})
+            draft = _clean_turn_for_handoff(_normalize_turn(
                 _retry_missing_narration(
                     active_context,
                     player_input,
@@ -1882,10 +2969,12 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     timeout,
                     usage,
                     "draft_missing_narration_retry",
+                    trace,
                 )
-            )
+            ), "draft_missing_narration_to_verify", trace)
+            _append_trace(trace, {"phase": "draft_missing_narration_retry", "event": "normalized", "narration_chars": _narration_char_count(draft), "keys": sorted(draft.keys())})
         except LlmError as retry_exc:
-            raise _attach_model_usage(retry_exc, usage)
+            raise _attach_model_usage(retry_exc, usage, trace)
     try:
         verified = _chat_json(
             verify_prompt,
@@ -1894,6 +2983,7 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             usage=usage,
             phase="verify",
             max_tokens=_turn_max_tokens(active_context, "verify"),
+            trace=trace,
         )
         try:
             result = _normalize_turn(verified)
@@ -1901,12 +2991,16 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             if not _is_missing_narration_error(exc):
                 raise
             result = _merge_verified_with_draft_narration(verified, draft)
+        result = _ensure_narration_depth(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace)
+        result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
+        _append_trace(trace, {"phase": "pipeline", "event": "success", "narration_chars": _narration_char_count(result), "used_fallback": False})
         result["_model_usage"] = usage
+        result["_model_trace"] = trace
         return result
     except LlmError as exc:
         if _is_context_length_error(exc):
             try:
-                compact_context = _compact_turn_context(active_context)
+                compact_context = _clean_context_for_handoff(_compact_turn_context(active_context), "planner_to_verify_compact_retry", trace)
                 verified = _chat_json(
                     verify_prompt,
                     build_verify_prompt(compact_context, player_input, draft),
@@ -1914,6 +3008,7 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     usage=usage,
                     phase="verify_compact_retry",
                     max_tokens=_turn_max_tokens(compact_context, "verify", compact=True),
+                    trace=trace,
                 )
                 try:
                     result = _normalize_turn(verified)
@@ -1921,7 +3016,11 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     if not _is_missing_narration_error(verify_exc):
                         raise
                     result = _merge_verified_with_draft_narration(verified, draft)
+                result = _ensure_narration_depth(result, compact_context, player_input, system_prompt, timeout, usage, "narration_depth_compact_retry", trace)
+                result = _clean_turn_for_handoff(result, "verifier_compact_retry_to_world", trace)
+                _append_trace(trace, {"phase": "pipeline", "event": "success", "narration_chars": _narration_char_count(result), "used_fallback": False})
                 result["_model_usage"] = usage
+                result["_model_trace"] = trace
                 return result
             except LlmError:
                 pass
@@ -1933,5 +3032,9 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             "reference_check": "not verified",
             "consistency_check": "not verified",
         }
+        draft = _ensure_narration_depth(draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace)
+        draft = _clean_turn_for_handoff(draft, "draft_to_world_unverified", trace)
+        _append_trace(trace, {"phase": "pipeline", "event": "using_unverified_draft", "verifier_error": str(exc), "narration_chars": _narration_char_count(draft)})
         draft["_model_usage"] = usage
+        draft["_model_trace"] = trace
         return draft

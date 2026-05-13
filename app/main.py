@@ -327,7 +327,7 @@ class RewindRequest(BaseModel):
 
 
 class ModelConfigRequest(BaseModel):
-    provider: str = Field(default="ollama", max_length=40)
+    provider: str = Field(default="llama_cpp", max_length=40)
     ollama_base_url: str = Field(default="http://localhost:11434", max_length=300)
     ollama_model: str = Field(default="llama3.1", max_length=200)
     llama_cpp_base_url: str = Field(default="http://localhost:8080", max_length=300)
@@ -381,7 +381,20 @@ def api_update_model_config(request: ModelConfigRequest):
 
 @app.get("/api/model-status")
 def api_model_status():
-    return test_model_connection()
+    try:
+        return test_model_connection()
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": False,
+                "provider": "unknown",
+                "url": "",
+                "error": f"Model status check failed: {exc}",
+                "config": {},
+                "managed_start": None,
+            },
+        )
 
 
 @app.post("/api/select-model-file")

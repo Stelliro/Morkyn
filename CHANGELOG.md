@@ -21,6 +21,30 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > Future changes after `0.6.0` live here.
 
+### Fixed
+- [LLM] Fixed draft repair timeouts so salvageable model narration can continue through verification instead of immediately using deterministic fallback - turn generation
+- [FE] Fixed fallback notices so generated fallback prose is not described like the visible response has no narration - browser UI
+- [LLM] Fixed refused model-server connections being reported like token-cap generation failures or generic draft retries - model adapter
+- [BILD] Fixed launcher startup so saved GGUF model paths can start a managed llama.cpp server on the next launch - startup
+- [LLM] Fixed default model provider alignment so fresh launcher/UI flows use llama.cpp unless Ollama is explicitly selected - model settings
+- [LLM] Fixed managed llama.cpp startup crashing when status globals were not initialized at module scope - model adapter
+- [LLM] Fixed setup and turn generation falling back before llama.cpp was started by auto-starting and retrying the managed GGUF server on refused llama.cpp requests - turn generation
+
+### Changed
+- [SEC] Changed repository ignore rules to exclude local world saves, SQLite sidecars, JSONL traces, env variants, and model binaries - repository hygiene
+- [FE] Exposed model provider, Ollama URL, and Ollama model fields in Model Settings instead of hiding provider selection - browser UI
+- [LLM] Changed turn generation to run deterministic handoff cleanup between planner, draft, verifier, and world application - turn generation
+- [LLM] Changed turn generation to target 1000-1500 character narration and retry valid-but-shallow outputs once - turn generation
+- [LLM] Changed input suggestions to stay near 100 characters for faster, more versatile player options - suggestions
+- [FE] Renamed the editable response token setting to Soft Token Target to distinguish it from the hard cap - model settings
+
+### Added
+- [LLM] Added managed llama.cpp startup from the Model Settings test flow when a saved GGUF path exists and no server is listening - model adapter
+- [LLM] Added per-turn JSON model trace exports with prompts, raw outputs, parsed JSON, verifier data, errors, and fallback decisions - turn diagnostics
+- [FE] Changed Test Connection to save current model form fields before checking or starting the local LLM server - model settings
+- [FE] Added a live startup heartbeat with elapsed time and rotating reassurance text during long local-model playthrough starts - setup flow
+- [FE] Added an elapsed-time reassurance panel for normal turn, continue, and regenerate waits - browser UI
+
 ---
 
 ## [0.6.0] - 2026-05-13

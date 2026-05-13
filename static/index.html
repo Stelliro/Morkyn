@@ -14,6 +14,13 @@
           <p class="startSplashEyebrow">local model</p>
           <h1>Starting playthrough</h1>
           <div id="startSplashLog" class="startSplashLog"></div>
+          <div id="startSplashHeartbeat" class="startSplashHeartbeat" role="status" aria-live="polite">
+            <div class="startSplashPulse" aria-hidden="true"><span></span><span></span><span></span></div>
+            <div>
+              <strong id="startSplashHeartbeatTitle">Local model is working</strong>
+              <p id="startSplashHeartbeatText">Elapsed 0:00 - waiting for the first model response.</p>
+            </div>
+          </div>
           <div id="startSplashDraft" class="startSplashDraft" aria-label="Opening scene preview"></div>
         </div>
       </section>
@@ -567,9 +574,13 @@
           </header>
           <div id="modelModalContent">
             <form id="modelForm" class="modelForm">
-              <input type="hidden" name="provider" value="llama_cpp" />
-              <input type="hidden" name="ollama_model" value="llama3.1" />
-              <input type="hidden" name="ollama_base_url" value="http://localhost:11434" />
+              <label>
+                <span>Provider</span>
+                <select name="provider">
+                  <option value="llama_cpp" selected>llama.cpp / GGUF</option>
+                  <option value="ollama">Ollama</option>
+                </select>
+              </label>
               <label>
                 <span>Model Path</span>
                 <div class="pathPickerRow">
@@ -581,13 +592,21 @@
                 <span>LLM Server URL</span>
                 <input name="llama_cpp_base_url" value="http://localhost:8080" maxlength="300" />
               </label>
+              <label>
+                <span>Ollama URL</span>
+                <input name="ollama_base_url" value="http://localhost:11434" maxlength="300" />
+              </label>
+              <label>
+                <span>Ollama Model</span>
+                <input name="ollama_model" value="llama3.1" maxlength="200" />
+              </label>
               <div class="modelTokenGrid">
                 <label>
-                  <span>Response Cap</span>
+                  <span>Soft Token Target</span>
                   <input name="response_token_cap" type="number" min="64" max="100000" step="1" value="1500" />
                 </label>
                 <label>
-                  <span>Hard Cap</span>
+                  <span>Hard Token Cap</span>
                   <input name="response_token_hard_cap" type="number" min="64" max="100000" step="1" value="2000" />
                 </label>
               </div>
