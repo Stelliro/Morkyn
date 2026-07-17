@@ -20,11 +20,11 @@ Screenshots from a live local Mørkyn session (this app, not another project):
 
 | Setup | Play | Model / context health |
 | --- | --- | --- |
-| <img src="Media/ui-setup.png" alt="Mørkyn setup character screen" width="100%"> | <img src="Media/ui-play.png" alt="Mørkyn play view" width="100%"> | <img src="Media/ui-play-model.png" alt="Mørkyn model tab" width="100%"> |
+| <img src="Media/ui-setup.png?v=2" alt="Mørkyn setup character screen" width="100%"> | <img src="Media/ui-play.png?v=2" alt="Mørkyn play view" width="100%"> | <img src="Media/ui-play-model.png?v=2" alt="Mørkyn model tab" width="100%"> |
 
 | World setup | LLM settings | Compact mode |
 | --- | --- | --- |
-| <img src="Media/ui-setup-world.png" alt="Mørkyn world setup" width="100%"> | <img src="Media/ui-model-settings.png" alt="Mørkyn LLM settings" width="100%"> | <img src="Media/ui-play-compact.png" alt="Mørkyn compact mode" width="100%"> |
+| <img src="Media/ui-setup-world.png?v=2" alt="Mørkyn world setup" width="100%"> | <img src="Media/ui-model-settings.png?v=2" alt="Mørkyn LLM settings" width="100%"> | <img src="Media/ui-play-compact.png?v=2" alt="Mørkyn compact mode" width="100%"> |
 
 Brand art and interface captures live under [`Media/`](Media/).
 
