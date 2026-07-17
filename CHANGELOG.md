@@ -21,6 +21,17 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > Future changes after `0.7.0` live here.
 
+### Added
+- [LLM] NAR+OPS draft language (`app/turn_dsl.py`) with closed opcodes and deterministic transcoder into `apply_turn` JSON
+- [LLM] Plain-text draft path (`_chat_text`) and default `AI_RPG_DRAFT_MODE=dsl` with JSON fallback
+- [LLM] Ollama `think: false` by default (`OLLAMA_THINK`) so Qwen3 fills `message.content`
+- [LLM] Soft token-budget pass when system prompt alone still fits the context window
+- [TOOLS] Timed multi-turn playtest and open+turn smoke scripts under `tools/`
+- [DOCS] `docs/TurnDsl.md` for opcode table and escape policy
+
+### Changed
+- [LLM] `generate_turn` prefers DSL draft then optional verify; depth retries only when narration is short
+
 ---
 
 ## [0.7.0] - 2026-07-17

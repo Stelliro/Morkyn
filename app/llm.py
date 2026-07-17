@@ -23,6 +23,13 @@ from app.prompts import (
     build_user_prompt,
     build_verify_prompt,
 )
+from app.turn_dsl import (
+    DSL_SYSTEM_PROMPT,
+    TurnDslError,
+    build_dsl_user_prompt,
+    draft_mode_enabled,
+    parse_dsl_turn,
+)
 
 
 class LlmError(RuntimeError):
@@ -2223,11 +2230,21 @@ def enforce_token_budget(
     config = get_model_config()
     context_window = int(config.get("context_window") or context_window_tokens() or DEFAULT_CONTEXT_TOKENS)
     soft_cap, hard_cap = _response_token_settings(config)
-    reserve = int(reserve_output_tokens if reserve_output_tokens is not None else (hard_cap or soft_cap or DEFAULT_RESPONSE_HARD_CAP))
-    budget = int(max_input_tokens if max_input_tokens is not None else max(1024, context_window - reserve))
+    requested_reserve = int(
+        reserve_output_tokens if reserve_output_tokens is not None else (hard_cap or soft_cap or DEFAULT_RESPONSE_HARD_CAP)
+    )
+    # Never reserve so much that the system prompt alone cannot fit.
     system = str(system_prompt or "")
     user = str(user_prompt or "")
-    total = estimated_tokens(system) + estimated_tokens(user)
+    system_tokens = estimated_tokens(system)
+    # Keep at least ~20% of context for output, but leave headroom for system + a usable user packet.
+    reserve = min(requested_reserve, max(256, context_window // 5))
+    budget = int(max_input_tokens if max_input_tokens is not None else max(1024, context_window - reserve))
+    if system_tokens + 512 > budget:
+        # Expand effective input budget when the fixed system contract is large (common for this game).
+        budget = min(context_window - 256, system_tokens + max(1500, context_window // 3))
+        reserve = max(0, context_window - budget)
+    total = system_tokens + estimated_tokens(user)
     diagnostics: dict[str, Any] = {
         "enabled": True,
         "context_window": context_window,
@@ -2236,6 +2253,7 @@ def enforce_token_budget(
         "before_estimated_tokens": total,
         "pruned": False,
         "truncated_chars": 0,
+        "soft_pass": False,
     }
     if total <= budget:
         diagnostics["after_estimated_tokens"] = total
@@ -2243,37 +2261,39 @@ def enforce_token_budget(
         return system, user, diagnostics
 
     # Keep system intact; shrink user prompt from the middle until under budget.
-    system_tokens = estimated_tokens(system)
-    allowed_user = max(128, budget - system_tokens - 8)
-    # Convert token budget to approximate chars with a safety margin.
-    max_user_chars = max(400, allowed_user * 4 - 64)
+    allowed_user = max(256, budget - system_tokens - 16)
+    max_user_chars = max(600, allowed_user * 4 - 96)
     original_user_len = len(user)
     attempts = 0
-    while estimated_tokens(system) + estimated_tokens(user) > budget and attempts < 6:
+    while estimated_tokens(system) + estimated_tokens(user) > budget and attempts < 8:
         attempts += 1
-        if len(user) <= 400:
+        if len(user) <= 500:
             break
-        target_chars = min(len(user) - 200, max_user_chars)
-        target_chars = max(400, target_chars)
+        target_chars = min(len(user) - 250, max_user_chars)
+        target_chars = max(500, target_chars)
         head = int(target_chars * 0.55)
-        tail = max(120, target_chars - head - 64)
+        tail = max(160, target_chars - head - 80)
         user = (
             user[:head]
             + "\n…[truncated by enforce_token_budget for input token limit]…\n"
             + user[-tail:]
         )
-        max_user_chars = max(400, int(max_user_chars * 0.85))
+        max_user_chars = max(500, int(max_user_chars * 0.8))
         diagnostics["pruned"] = True
     diagnostics["truncated_chars"] = max(0, original_user_len - len(user))
     total_after = estimated_tokens(system) + estimated_tokens(user)
     diagnostics["after_estimated_tokens"] = total_after
     diagnostics["within_budget"] = total_after <= budget
     if not diagnostics["within_budget"]:
-        # Hard fail: still over budget after truncation.
-        raise LlmError(
-            f"Token budget exceeded after pruning: estimated {total_after} > budget {budget} "
-            f"(context_window={context_window}, reserve_output={reserve})."
-        )
+        # Soft-pass rather than killing the turn: still send the pruned packet.
+        # Hard-fail only if the system prompt alone cannot fit the context window.
+        if system_tokens >= context_window - 128:
+            raise LlmError(
+                f"Token budget exceeded: system prompt alone is ~{system_tokens} tokens "
+                f"for context_window={context_window}."
+            )
+        diagnostics["soft_pass"] = True
+        diagnostics["within_budget"] = False
     return system, user, diagnostics
 
 
@@ -2294,6 +2314,75 @@ def _turn_token_default(context: dict[str, Any], phase: str) -> int:
     }
     defaults = verify_defaults if phase == "verify" else draft_defaults
     return defaults.get(detail, defaults["rich"])
+
+
+def _chat_text(
+    system_prompt: str,
+    user_prompt: str,
+    timeout: int = 90,
+    usage: list[dict[str, Any]] | None = None,
+    phase: str = "draft_dsl",
+    max_tokens: int | None = None,
+    trace: list[dict[str, Any]] | None = None,
+    temperature: float = 0.7,
+) -> str:
+    """Plain-text model call (no JSON response_format). Used for NAR+OPS drafts."""
+    started_at = time.time()
+    system_prompt, user_prompt, budget_diag = enforce_token_budget(system_prompt, user_prompt)
+    total = f"{system_prompt}\n{user_prompt}"
+    if usage is not None:
+        entry = {"phase": phase, "chars": len(total), "estimated_tokens": estimated_tokens(total)}
+        if budget_diag.get("pruned"):
+            entry["token_budget"] = budget_diag
+        usage.append(entry)
+    config = get_model_config()
+    _append_trace(
+        trace,
+        {
+            "phase": phase,
+            "event": "request",
+            "provider": config.get("provider"),
+            "timeout_seconds": timeout,
+            "requested_max_tokens": max_tokens,
+            "prompt_chars": len(total),
+            "prompt_estimated_tokens": estimated_tokens(total),
+            "token_budget": budget_diag,
+            "response_format": "text",
+            "system_prompt": system_prompt,
+            "user_prompt": user_prompt,
+        },
+    )
+    try:
+        content = _chat_content(
+            system_prompt,
+            user_prompt,
+            timeout=timeout,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=None,
+        )
+    except LlmError as exc:
+        _append_trace(
+            trace,
+            {
+                "phase": phase,
+                "event": "transport_error",
+                "duration_seconds": round(time.time() - started_at, 3),
+                "error": str(exc),
+            },
+        )
+        raise
+    _append_trace(
+        trace,
+        {
+            "phase": phase,
+            "event": "response",
+            "duration_seconds": round(time.time() - started_at, 3),
+            "response_chars": len(content),
+            "raw_content": content,
+        },
+    )
+    return content
 
 
 def _chat_json(
@@ -2473,22 +2562,34 @@ def _chat_content(
     timeout: int = 90,
     temperature: float = 0.75,
     max_tokens: int | None = None,
+    response_format: str | None = "json",
 ) -> str:
     config = get_model_config()
     response_tokens = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
     if config.get("provider") == "llama_cpp":
-        return _chat_content_openai_compatible(config, system_prompt, user_prompt, timeout, temperature, response_tokens)
+        return _chat_content_openai_compatible(
+            config,
+            system_prompt,
+            user_prompt,
+            timeout,
+            temperature,
+            response_tokens,
+            response_format=response_format,
+        )
 
     base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
     model = str(config.get("ollama_model") or "llama3.1")
-    body = {
+    # Qwen3 and similar "thinking" models spend num_predict on message.thinking and leave
+    # message.content empty unless thinking is disabled. Default off for playable JSON turns.
+    ollama_think = os.getenv("OLLAMA_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
+    body: dict[str, Any] = {
         "model": model,
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
         "stream": False,
-        "format": "json",
+        "think": ollama_think,
         "options": {
             "temperature": temperature,
             "top_p": 0.9,
@@ -2496,6 +2597,8 @@ def _chat_content(
             "num_predict": response_tokens,
         },
     }
+    if response_format == "json":
+        body["format"] = "json"
 
     req = urllib.request.Request(
         f"{base_url}/api/chat",
@@ -2515,7 +2618,13 @@ def _chat_content(
             raise LlmError(_connection_refused_message("Ollama", f"{base_url}/api/chat")) from exc
         raise LlmError(_transport_error_message(exc, timeout)) from exc
 
-    content = payload.get("message", {}).get("content", "")
+    message = payload.get("message") or {}
+    content = str(message.get("content") or "").strip()
+    # Last-resort salvage if a model still emitted usable JSON only in thinking.
+    if not content:
+        thinking = str(message.get("thinking") or "").strip()
+        if thinking:
+            content = thinking
     if not content:
         raise LlmError("Ollama returned an empty response.")
     return content
@@ -2528,6 +2637,7 @@ def _chat_content_openai_compatible(
     timeout: int,
     temperature: float,
     max_tokens: int | None = None,
+    response_format: str | None = "json",
 ) -> str:
     base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
     model = str(config.get("model") or "ai-rpg-local")
@@ -2598,7 +2708,10 @@ def _chat_content_openai_compatible(
         "stream": False,
         "stop": ["<|im_end|>"],
     }
-    if os.getenv("AI_RPG_LLAMA_CPP_RESPONSE_FORMAT", "1").strip().lower() in {"1", "true", "yes"}:
+    if (
+        response_format == "json"
+        and os.getenv("AI_RPG_LLAMA_CPP_RESPONSE_FORMAT", "1").strip().lower() in {"1", "true", "yes"}
+    ):
         body["response_format"] = {"type": "json_object"}
     payload = post_json("/v1/chat/completions", body)
 
@@ -3248,6 +3361,70 @@ def _retry_missing_narration(
     )
 
 
+def _try_dsl_draft(
+    context: dict[str, Any],
+    player_input: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    trace: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Attempt NAR+OPS draft. Returns turn dict or None to fall back to JSON draft."""
+    if not draft_mode_enabled():
+        return None
+    active_context = _clean_context_for_handoff(context, "planner_to_dsl_draft", trace)
+    dsl_prompt = build_dsl_user_prompt(active_context, player_input)
+    max_tokens = min(_turn_max_tokens(active_context, "draft"), 1400)
+    try:
+        raw = _chat_text(
+            DSL_SYSTEM_PROMPT,
+            dsl_prompt,
+            timeout=timeout,
+            usage=usage,
+            phase="draft_dsl",
+            max_tokens=max_tokens,
+            trace=trace,
+        )
+    except LlmError as exc:
+        _append_trace(trace, {"phase": "draft_dsl", "event": "failed", "error": str(exc)})
+        return None
+    try:
+        turn = parse_dsl_turn(raw, player_input=player_input)
+        turn = _clean_turn_for_handoff(_normalize_turn(turn), "dsl_to_verify", trace)
+        _append_trace(
+            trace,
+            {
+                "phase": "draft_dsl",
+                "event": "transcoded",
+                "narration_chars": _narration_char_count(turn),
+                "ops_count": (turn.get("_dsl") or {}).get("ops_count"),
+            },
+        )
+        return turn
+    except (TurnDslError, LlmError, ValueError) as exc:
+        _append_trace(
+            trace,
+            {
+                "phase": "draft_dsl",
+                "event": "parse_failed",
+                "error": str(exc),
+                "raw_preview": str(raw)[:800],
+            },
+        )
+        # If model emitted usable prose without valid ops, salvage narration-only turn.
+        try:
+            from app.turn_dsl import split_nar_ops
+
+            narration, _ops = split_nar_ops(raw)
+            if len(narration.strip()) >= 200:
+                salvaged = _narration_only_turn_from_text(narration, active_context, f"dsl_ops_failed: {exc}")
+                salvaged = _clean_turn_for_handoff(_normalize_turn(salvaged), "dsl_salvage_to_verify", trace)
+                usage.append({"phase": "draft_dsl_salvage", "chars": len(raw), "estimated_tokens": estimated_tokens(raw)})
+                return salvaged
+        except Exception:
+            pass
+        return None
+
+
 def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     usage: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []
@@ -3261,10 +3438,12 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         {
             "phase": "pipeline",
             "event": "start",
+            "draft_mode": "dsl" if draft_mode_enabled() else "json",
             "handoff_model": [
                 "world.build_prompt_context planner packet",
                 "deterministic context cleanup before draft",
-                "draft JSON model call",
+                "draft NAR+OPS model call (default) with deterministic transcoder",
+                "JSON draft fallback when DSL parse fails",
                 "deterministic draft payload cleanup before verifier",
                 "certainty-based verification policy scoring",
                 "malformed JSON repair or retry when needed",
@@ -3280,6 +3459,106 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         },
     )
     active_context = _clean_context_for_handoff(context, "planner_to_draft", trace)
+    dsl_draft = _try_dsl_draft(context, player_input, timeout, usage, trace)
+    if dsl_draft is not None:
+        draft = dsl_draft
+        # Jump to verification path with DSL-produced JSON-compatible turn.
+        verification_policy = _verification_policy(context, player_input, draft)
+        active_context = {**active_context, "verification_policy": verification_policy}
+        _append_trace(trace, {"phase": "verification_policy", "event": "scored", **verification_policy})
+        # Prefer skip-verify for low-risk DSL turns; still allow model verify when needed.
+        if verification_policy.get("mode") == "skip_model_verifier" or os.getenv(
+            "AI_RPG_DSL_SKIP_VERIFY", "0"
+        ).strip().lower() in {"1", "true", "yes", "on"}:
+            usage.append({"phase": "verify_skipped_dsl", "chars": 0, "estimated_tokens": 0})
+            result = _mark_draft_verified_by_policy(draft, verification_policy)
+            # Only expand narration if clearly short; avoid expensive depth retries when DSL already wrote prose.
+            if _narration_char_count(result) < MIN_TURN_NARRATION_CHARS:
+                result = _ensure_narration_depth(
+                    result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_dsl_retry", trace
+                )
+            result = _clean_turn_for_handoff(result, "dsl_to_world", trace)
+            result["_verification_policy"] = verification_policy
+            result["_draft_mode"] = "dsl"
+            _append_trace(
+                trace,
+                {
+                    "phase": "pipeline",
+                    "event": "success",
+                    "draft_mode": "dsl",
+                    "narration_chars": _narration_char_count(result),
+                    "used_fallback": False,
+                    "verifier_skipped": True,
+                },
+            )
+            result["_model_usage"] = usage
+            result["_model_trace"] = trace
+            return result
+        try:
+            verified = _chat_json(
+                verify_prompt,
+                build_verify_prompt(active_context, player_input, draft),
+                timeout=verify_timeout,
+                usage=usage,
+                phase="verify",
+                max_tokens=_turn_max_tokens(active_context, "verify"),
+                trace=trace,
+            )
+            try:
+                result = _normalize_turn(verified)
+            except LlmError as exc:
+                if not _is_missing_narration_error(exc):
+                    raise
+                result = _merge_verified_with_draft_narration(verified, draft)
+            if _narration_char_count(result) < MIN_TURN_NARRATION_CHARS:
+                result = _ensure_narration_depth(
+                    result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace
+                )
+            result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
+            result["_verification_policy"] = verification_policy
+            result["_draft_mode"] = "dsl"
+            _append_trace(
+                trace,
+                {
+                    "phase": "pipeline",
+                    "event": "success",
+                    "draft_mode": "dsl",
+                    "narration_chars": _narration_char_count(result),
+                    "used_fallback": False,
+                },
+            )
+            result["_model_usage"] = usage
+            result["_model_trace"] = trace
+            return result
+        except LlmError as exc:
+            draft = _normalize_turn(draft)
+            draft["self_check"] = {
+                "passed": False,
+                "issues_found": [f"Verifier pass failed after DSL draft; using DSL draft. {exc}"],
+                "corrections_made": ["dsl_unverified"],
+                "reference_check": "not verified",
+                "consistency_check": "not verified",
+            }
+            if _narration_char_count(draft) < MIN_TURN_NARRATION_CHARS:
+                draft = _ensure_narration_depth(
+                    draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace
+                )
+            draft = _clean_turn_for_handoff(draft, "dsl_to_world_unverified", trace)
+            draft["_verification_policy"] = verification_policy
+            draft["_draft_mode"] = "dsl"
+            _append_trace(
+                trace,
+                {
+                    "phase": "pipeline",
+                    "event": "using_unverified_dsl_draft",
+                    "verifier_error": str(exc),
+                    "narration_chars": _narration_char_count(draft),
+                },
+            )
+            draft["_model_usage"] = usage
+            draft["_model_trace"] = trace
+            return draft
+
     draft_prompt = build_user_prompt(active_context, player_input)
     try:
         draft = _chat_json(
