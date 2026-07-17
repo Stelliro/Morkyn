@@ -1,28 +1,33 @@
-# Mørkyn
+from pathlib import Path
+
+NAME = "Mørkyn"
+ROOT = Path(__file__).resolve().parent.parent
+
+readme = f"""# {NAME}
 
 <p align="center">
-  <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
+  <img src="Media/morkyn-logo.png" alt="{NAME} logo" width="68%" />
 </p>
 
 **Version `0.7.0`**
 
-**Mørkyn** is a local-first browser RPG. A local LLM narrates turns and proposes structured world changes, while SQLite remains the source of truth for the player, inventory, NPCs, events, summaries, and long-running continuity.
+**{NAME}** is a local-first browser RPG. A local LLM narrates turns and proposes structured world changes, while SQLite remains the source of truth for the player, inventory, NPCs, events, summaries, and long-running continuity.
 
 It is still pre-1.0 software, but it has enough systems to be a playable prototype and a solid base for long playthroughs.
 
 <p align="center">
-  <img src="Media/morkyn-key-art.png" alt="Mørkyn key art" width="86%" />
+  <img src="Media/morkyn-key-art.png" alt="{NAME} key art" width="86%" />
 </p>
 
 ## Interface
 
 | Setup | Play | Model / context health |
 | --- | --- | --- |
-| <img src="Media/screen-setup.png" alt="Mørkyn setup" width="100%"> | <img src="Media/screen-play.png" alt="Mørkyn play" width="100%"> | <img src="Media/screen-play-model.png" alt="Mørkyn model tab" width="100%"> |
+| <img src="Media/screen-setup.png" alt="{NAME} setup" width="100%"> | <img src="Media/screen-play.png" alt="{NAME} play" width="100%"> | <img src="Media/screen-play-model.png" alt="{NAME} model tab" width="100%"> |
 
 | World setup | LLM settings | Compact mode |
 | --- | --- | --- |
-| <img src="Media/screen-setup-world.png" alt="Mørkyn world setup" width="100%"> | <img src="Media/screen-model-settings.png" alt="Mørkyn LLM settings" width="100%"> | <img src="Media/screen-play-compact.png" alt="Mørkyn compact mode" width="100%"> |
+| <img src="Media/screen-setup-world.png" alt="{NAME} world setup" width="100%"> | <img src="Media/screen-model-settings.png" alt="{NAME} LLM settings" width="100%"> | <img src="Media/screen-play-compact.png" alt="{NAME} compact mode" width="100%"> |
 
 Assets: [`Media/`](Media/).
 
@@ -80,7 +85,7 @@ start_ai_rpg.bat vpn 8088
 ## Model Setup
 
 ```powershell
-$env:AI_RPG_GGUF_MODEL="D:\path\to\model.gguf"
+$env:AI_RPG_GGUF_MODEL="D:\\path\\to\\model.gguf"
 ```
 
 You can also choose a GGUF path in **LLM Settings**. Soft Token Target and Hard Token Cap control response generation.
@@ -129,8 +134,18 @@ License: [LICENSE.md](LICENSE.md) (PolyForm Noncommercial)
 
 | Field | Value |
 | --- | --- |
-| Product | **Mørkyn** |
+| Product | **{NAME}** |
 | Version | **0.7.0** |
 | GitHub | https://github.com/Stelliro/Morkyn |
 
 Formerly published as AI RPG Consistency Prototype (`ai-rpg-consistency-prototype`).
+"""
+
+(ROOT / "README.md").write_text(readme, encoding="utf-8", newline="\n")
+text = (ROOT / "README.md").read_text(encoding="utf-8")
+assert NAME in text
+assert "not another project" not in text
+assert "ui-play.png" not in text
+assert "screen-play.png" in text
+print("README written with", NAME)
+print("Media files:", sorted(p.name for p in (ROOT / "Media").glob("*.png")))
