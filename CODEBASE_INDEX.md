@@ -1,7 +1,7 @@
-# CODEBASE INDEX - AI RPG Consistency Prototype
+# CODEBASE INDEX - Mørkyn
 
 > Single source of truth for project structure, conventions, and architecture.
-> Last updated: 2026-05-13 (visible model provider settings, llama.cpp default provider alignment, 0.6.0 public pre-1.0 release metadata, non-commercial license, public-safe model defaults, equipped-item derived stat/ability effects, reward gain banners, configurable soft/hard token targets, 1000-1500 character narration depth, turn wait timers, per-turn model trace exports, VPN launcher mode, setup identity age/sex fields, setup payload normalization, LAN URL candidate selection, LLM timeout diagnostics, responsive mobile layout, hidden GM events, visual-only paged history, start splash, continuous narration, event lifecycle metadata, and quiet managed llama logs)
+> Last updated: 2026-07-17 (Mørkyn rebrand, hierarchical memory consolidation, token budget guard, campaign slots, context-health UI, Media/ brand assets, 0.7.0)
 
 > Use this file before making architecture, schema, API, prompt-contract, launcher, or major UI changes. Update it whenever those facts change.
 
@@ -9,14 +9,15 @@
 
 ## 1. Project Overview
 
-**AI RPG Consistency Prototype** - an endless local-browser RPG prototype where a local LLM narrates turns and proposes structured world changes while SQLite remains the source of truth.
+**Mørkyn** (formerly AI RPG Consistency Prototype) - an endless local-browser RPG where a local LLM narrates turns and proposes structured world changes while SQLite remains the source of truth.
 
 - **Type:** Local web app / game prototype
 - **Primary Languages:** Python, JavaScript, HTML, CSS
 - **Key Frameworks / Libraries:** FastAPI, Pydantic, SQLite, Uvicorn, llama-cpp-python server, Ollama-compatible APIs
 - **Target Platforms:** Windows local development, browser UI at localhost or trusted local-network phone/tablet browsers
-- **Current Version:** 0.6.0
+- **Current Version:** 0.7.0
 - **Status:** Active development / prototype
+- **Brand assets:** `Media/` (logo + key art)
 
 ### Goals
 - Keep long-running RPG state consistent through durable SQLite records, stable entity codes, journal entries, summaries, and source indexing.
@@ -33,36 +34,32 @@
 ## 2. Repository Structure
 
 ```text
-AI RPG/
+Mørkyn/  (repo folder may still be named "AI RPG" locally)
 |-- .github/
-|   |-- copilot-instructions.md      # Workspace-wide AI instructions for this project
-|   `-- instructions/                # Focused instruction files for docs, routing, features, standards
+|   |-- copilot-instructions.md
+|   `-- instructions/
 |-- app/
-|   |-- __init__.py                  # Python package marker
-|   |-- db.py                        # SQLite connection, schema creation, additive migrations
-|   |-- llm.py                       # Local LLM configuration, JSON chat calls, retries, fallback turns
-|   |-- main.py                      # FastAPI app, Pydantic request models, API route surface
-|   |-- prompts.py                   # System and verifier prompts plus structured JSON contract
-|   `-- world.py                     # World state, turn application, indexing, aliases, import/export, rewind
-|-- data/
-|   |-- history_summaries.jsonl      # Runtime long-term turn summaries; ignored by git through data/
-|   |-- model_traces/                # Runtime per-turn model diagnostic traces; ignored by git through data/
-|   `-- world.db                     # Runtime SQLite world database; ignored by git through data/
+|   |-- __init__.py
+|   |-- db.py                        # SQLite connection, schema, migrations
+|   |-- llm.py                       # Model config, JSON chat, token budget, traces, fallbacks
+|   |-- main.py                      # FastAPI routes (turns, slots, diagnostics, model)
+|   |-- prompts.py                   # System/verifier prompts + agentic CoD steps
+|   `-- world.py                     # State, planner, memory consolidation, slots, index
+|-- data/                            # Runtime only (gitignored): world.db, source_index, slots, traces
+|-- Media/                           # Brand assets (logo, key art)
 |-- static/
-|   |-- app.js                       # Browser UI state, API calls, rendering, setup wizard, entity panels
-|   |-- index.html                   # Single-page app shell served from /
-|   `-- styles.css                   # Plain CSS for setup and game views
-|-- tools/                           # Reserved for utility scripts; currently empty
-|-- .env.example                     # Optional local environment defaults
-|-- .gitignore                       # Ignores Python cache, virtualenv, local configs, runtime data, local model files, and save/world DB artifacts
-|-- behavior_test.py                 # Legacy/experimental behavior probe, not a reliable current suite
-|-- README.md                        # User-facing overview, run instructions, and design notes
-|-- LICENSE.md                       # PolyForm Noncommercial License reference and plain-language summary
-|-- requirements.txt                 # Python dependencies, including CUDA llama-cpp-python wheel index
-|-- start_ai_rpg.bat                 # Windows launcher wrapper
-|-- start_ai_rpg.ps1                 # Windows launcher: dependencies, managed llama.cpp server, FastAPI app
-|-- CODEBASE_INDEX.md                # This file
-`-- CHANGELOG.md                     # Keep a Changelog project history
+|   |-- app.js
+|   |-- index.html
+|   `-- styles.css
+|-- tools/
+|-- behavior_test.py                 # Regression suite for memory/token/slots scoring
+|-- README.md
+|-- LICENSE.md
+|-- requirements.txt
+|-- start_ai_rpg.bat
+|-- start_ai_rpg.ps1
+|-- CODEBASE_INDEX.md
+`-- CHANGELOG.md
 ```
 
 ### Key Modules
@@ -89,10 +86,10 @@ AI RPG/
 
 - **Files:** `app/world.py`
 - **Purpose:** Owns persistent RPG state, playthrough setup, turn application, entity indexing, aliases, search, World Bible data, import/export, and rewind snapshots.
-- **Key API:** `get_state()`, `start_playthrough_with_opening()`, `play_turn()`, `play_continue_turn()`, `regenerate_last_turn()`, `get_world_bible()`, `search_world()`, `export_world()`, `import_world()`, `rewind_last_turn()`
+- **Key API:** `get_state()`, `start_playthrough_with_opening()`, `play_turn()`, `play_continue_turn()`, `regenerate_last_turn()`, `get_world_bible()`, `search_world()`, `export_world()`, `import_world()`, `rewind_last_turn()`, `consolidate_memory()`, `search_source_index()`, `list_campaign_slots()`, `save_campaign_slot()`, `load_campaign_slot()`, `get_context_health()`
 - **Consumers:** `app.main` routes and indirectly the browser UI.
 - **Dependencies:** `app.db`, `app.llm`, SQLite, JSONL summary files, source-index runtime files.
-- **Design Notes:** The model proposes changes, but world logic applies them conservatively. Entity references use stable codes: NPCs `A` through `Z` then `AA`, locations `L1`, items `I1`, and events `E1`. `build_prompt_context()` builds a deterministic planner packet with version `V0.1.0` that classifies turn intent, chooses verifier checks, filters context slices, exposes a focused working set, and adds `action_context` priority segments such as movement limits, environment pressure, combat opposition, ability constraints, item handling, NPC knowledge, and rest safety. Inventory items may store `stat_modifiers` and `granted_abilities`; `get_state()` folds those into `equipment_effects`, `player.effective_stats`, and derived `abilities` only while the item has an equipped slot, so unequipping automatically removes those player capabilities from prompt context and UI. The planner passes focused inventory/equipment slices only for item handling, trade, equip/unequip, or hard item references; combat and ability turns use derived stats/abilities rather than raw equipment. Hidden GM events and current-location event lifecycle guidance are included before LLM drafting. New playthroughs persist setup identity including current age/sex and previous-life age/sex, and start with no default player skills; skills are recorded through play, training, discovery, or explicit custom proficiency rules. Location events persist with `persistence`, `disappear_chance`, `respawn_chance`, and `last_seen_turn`; temporary, traveling, and recurring events remain stable while the player stays in the area, may fade after departure, and may reactivate on return when appropriate. Raw journal history is player-visible only and is not passed into turn prompts or source-index retrieval. Export format is `ai-rpg-world-v1`; rewind snapshots use `ai-rpg-delta-v1`. Regeneration restores the latest pre-turn snapshot and replays the saved opening, continue, or player input.
+- **Design Notes:** The model proposes changes, but world logic applies them conservatively. Entity references use stable codes: NPCs `A` through `Z` then `AA`, locations `L1`, items `I1`, and events `E1`. `build_prompt_context()` builds a deterministic planner packet with version `V0.1.0` that classifies turn intent, chooses verifier checks, filters context slices, exposes a focused working set, attaches matching `verification_memory` hits for already-cleared checks, and adds `action_context` priority segments such as movement limits, environment pressure, combat opposition, ability constraints, item handling, NPC knowledge, and rest safety. Combat turns also receive a deterministic mechanics packet with version `V0.1.0`: NPC combat health/attack/defense/dodge are derived and persisted from player level, difficulty, NPC rank/stat_profile, and equipment-derived player stats before generation when a combat target is known; direct player attacks get a resolved weapon/equipment source, damage result, and target health delta for the model to narrate rather than recalculate. Inventory items may store `stat_modifiers` and `granted_abilities`; `get_state()` folds those into `equipment_effects`, `player.effective_stats`, and derived `abilities` only while the item has an equipped slot, so unequipping automatically removes those player capabilities from prompt context and UI. The planner passes focused inventory/equipment slices only for item handling, trade, equip/unequip, or hard item references; combat and ability turns use derived stats/abilities rather than raw equipment. Hidden GM events and current-location event lifecycle guidance are included before LLM drafting. New playthroughs persist setup identity including current age/sex and previous-life age/sex, and start with no default player skills; skills are recorded through play, training, discovery, or explicit custom proficiency rules. Location events persist with `persistence`, `disappear_chance`, `respawn_chance`, and `last_seen_turn`; temporary, traveling, and recurring events remain stable while the player stays in the area, may fade after departure, and may reactivate on return when appropriate. Raw journal history is player-visible only and is not passed into turn prompts or source-index retrieval. Export format is `ai-rpg-world-v1`; rewind snapshots use `ai-rpg-delta-v1`. Regeneration restores the latest pre-turn snapshot and replays the saved opening, continue, or player input.
 
 #### LLM Adapter
 
@@ -101,7 +98,7 @@ AI RPG/
 - **Key API:** `get_model_config()`, `update_model_config()`, `test_model_connection()`, `generate_setup_randomization()`, `generate_turn()`, `generate_input_suggestions()`, `fallback_turn()`
 - **Consumers:** `app.main` model endpoints and `app.world` turn flow.
 - **Dependencies:** `app.prompts`, `urllib`, environment variables, local llama.cpp or Ollama-compatible services.
-- **Design Notes:** LLM output is JSON-first. Turn generation consumes the focused turn planner packet, runs deterministic handoff cleanup before the draft, performs a draft pass, cleans the draft payload before verification, validates usable narration, then runs a verifier pass for references, causality, NPC knowledge, abilities, and justified state changes; verified payloads are cleaned again before world application, and valid turns below the 1000-character narration floor get one depth retry before returning. Normal turn narration targets about 1500 visible characters and stays below 2400 characters / 700 words; deterministic fallback turns follow the same depth expectation. Context-overflow failures trigger compact turn-context retries before deterministic fallback narration. llama.cpp turn draft/verify timeouts are phase-specific through `AI_RPG_TURN_DRAFT_TIMEOUT` and `AI_RPG_TURN_VERIFY_TIMEOUT`, with longer local defaults for slow first-scene generation; setup randomization and suggestions use `AI_RPG_SETUP_RANDOMIZER_TIMEOUT` and `AI_RPG_SUGGESTION_TIMEOUT`. Input suggestions are clipped near 100 visible characters, with a 120-character maximum. Each turn writes a JSON trace file under `AI_RPG_MODEL_TRACE_DIR` (default `data/model_traces`) containing focused prompt context, deterministic handoff cleanup records, prompts, raw model outputs, parsed JSON, verifier/self-check data, timing/error records, fallback decisions, and the final turn payload; `AI_RPG_MODEL_TRACE_KEEP` limits retained files and `AI_RPG_TRACE_VALUE_LIMIT` caps individual string values. These traces capture observable model artifacts, not hidden chain-of-thought the model never returned. Model settings default to the llama.cpp-compatible provider unless `AI_RPG_MODEL_PROVIDER=ollama` or the UI explicitly selects Ollama. They store a soft response token target (`response_token_cap`, default 1500) and a hard response token cap (`response_token_hard_cap`, default 2000); repair calls use at least the soft target while all response requests are clamped by the hard cap and remaining context. No machine-specific GGUF path is embedded in defaults; set `AI_RPG_GGUF_MODEL` or use the Model settings UI to choose a local model. `/api/model-status` checks the configured provider and, for llama.cpp with a saved GGUF path, starts a managed `llama_cpp.server` process when the configured `/v1/models` endpoint is refused. Generation requests to llama.cpp also start the managed server and retry once when `/v1/chat/completions` or `/v1/completions` is refused, so setup/opening generation does not depend on pressing Test first. Timeout errors include the failed phase, timeout seconds, approximate prompt tokens, configured soft response target, configured repair cap, and configured hard cap so caps are not mistaken for actual token usage. Refused model-server connections are classified as transport failures, skip generic draft retry, and state that no model response was generated and no token cap was hit. When deterministic fallback is used, any collected model usage rows are still written to `model_logs` for later diagnosis. Turn normalization accepts common narration/segment aliases, hidden `gm_events`, and reuses valid draft narration when the verifier omits it. Malformed JSON repair uses a larger repair token budget so full turn objects are less likely to fall through to deterministic fallback; if draft JSON repair still times out but the raw draft contains readable narration, the adapter recovers narration only, ignores unparseable state changes, and continues through verification instead of immediately using deterministic fallback. Setup randomization includes current age/sex and previous-life age/sex, normalizes `custom_skills` into comma-separated phrases so AI-filled Custom Proficiencies match the setup UI contract, and falls back to deterministic backend values when model output is unavailable or invalid.
+- **Design Notes:** LLM output is JSON-first. Turn generation consumes the focused turn planner packet, runs deterministic handoff cleanup before the draft, performs a draft pass, cleans the draft payload before verification, validates usable narration, scores a selective verification policy, then either skips the model verifier for high-certainty low-risk drafts or runs the verifier focused on remaining checks. The policy treats matching `verification_memory` rows as already-cleared checks when their confidence meets `AI_RPG_VERIFY_MEMORY_CERTAINTY` (default 0.86), so repeated verified facts can make later matching turns draft-only when no risky state changes are present. The policy only skips when the draft has enough narration, valid entity references, a sane scene-plan shape, a passing self-check, no high-risk state changes, and all planner verification checks have been deterministically or previously cleared; `AI_RPG_FAST_VERIFICATION` toggles this path and `AI_RPG_VERIFY_SKIP_CERTAINTY` sets the default 0.88 skip threshold. Verified payloads are cleaned again before world application, and valid turns below the 1000-character narration floor get one depth retry before returning. Normal turn narration targets about 1500 visible characters and stays below 2400 characters / 700 words; deterministic fallback turns follow the same depth expectation. Context-overflow failures trigger compact turn-context retries before deterministic fallback narration. llama.cpp turn draft/verify timeouts are phase-specific through `AI_RPG_TURN_DRAFT_TIMEOUT` and `AI_RPG_TURN_VERIFY_TIMEOUT`, with longer local defaults for slow first-scene generation; setup randomization and suggestions use `AI_RPG_SETUP_RANDOMIZER_TIMEOUT` and `AI_RPG_SUGGESTION_TIMEOUT`. Input suggestions are clipped near 100 visible characters, with a 120-character maximum. Each turn writes a JSON trace file under `AI_RPG_MODEL_TRACE_DIR` (default `data/model_traces`) containing focused prompt context, deterministic handoff cleanup records, prompts, raw model outputs, parsed JSON, verification-memory hits, verification-policy scores, verifier/self-check data, timing/error records, fallback decisions, and the final turn payload; `AI_RPG_MODEL_TRACE_KEEP` limits retained files and `AI_RPG_TRACE_VALUE_LIMIT` caps individual string values. These traces capture observable model artifacts, not hidden chain-of-thought the model never returned. Model settings default to the llama.cpp-compatible provider unless `AI_RPG_MODEL_PROVIDER=ollama` or the UI explicitly selects Ollama. They store a soft response token target (`response_token_cap`, default 1500) and a hard response token cap (`response_token_hard_cap`, default 2000); repair calls use at least the soft target while all response requests are clamped by the hard cap and remaining context. No machine-specific GGUF path is embedded in defaults; set `AI_RPG_GGUF_MODEL` or use the Model settings UI to choose a local model. `/api/model-status` checks the configured provider and, for llama.cpp with a saved GGUF path, starts a managed `llama_cpp.server` process when the configured `/v1/models` endpoint is refused. Generation requests to llama.cpp also start the managed server and retry once when `/v1/chat/completions` or `/v1/completions` is refused, so setup/opening generation does not depend on pressing Test first. Timeout errors include the failed phase, timeout seconds, approximate prompt tokens, configured soft response target, configured repair cap, and configured hard cap so caps are not mistaken for actual token usage. Refused model-server connections are classified as transport failures, skip generic draft retry, and state that no model response was generated and no token cap was hit. When deterministic fallback is used, any collected model usage rows are still written to `model_logs` for later diagnosis. Turn normalization accepts common narration/segment aliases, hidden `gm_events`, and reuses valid draft narration when the verifier omits it. Malformed JSON repair uses a larger repair token budget so full turn objects are less likely to fall through to deterministic fallback; if draft JSON repair still times out but the raw draft contains readable narration, the adapter recovers narration only, ignores unparseable state changes, and continues through verification instead of immediately using deterministic fallback. Setup randomization includes current age/sex and previous-life age/sex, normalizes `custom_skills` into comma-separated phrases so AI-filled Custom Proficiencies match the setup UI contract, and falls back to deterministic backend values when model output is unavailable or invalid.
 
 #### Prompt Contracts
 
@@ -110,7 +107,7 @@ AI RPG/
 - **Key API:** Prompt constants imported by `app.llm`.
 - **Consumers:** `app.llm`.
 - **Dependencies:** None beyond Python string handling.
-- **Design Notes:** Keep prompt schema changes synchronized with `app.world` application logic and `static/app.js` rendering expectations. Turn prompts include player identity fields such as current age/sex and previous-life age/sex as descriptive facts, not behavior stereotypes. Turn prompts tell the model to read `world_state.action_context.priority_segments` first and avoid scanning every included player/world field equally after the opening. Equipment bonuses are represented through `player.effective_stats`, `equipment_effects`, and derived `abilities` while equipped; prompts tell the model to inspect raw inventory/equipment only for item handling, trade, loot, equip/unequip, or hard item references. Movement focuses on environment, carry limits, and derived stats/abilities; combat focuses on player-vs-target effective stats, skills, abilities, and terrain; ability use focuses on lock state, costs, prerequisites, race/magic rules, target resistance, and environmental limits. Turn prompts ask for a player-visible high-level `scene_plan` with 1-6 focus points, then continuous prose in paragraph-like `narration_segments` rather than visible labeled scene/result blocks; normal playable narration should be at least 1000 visible characters and target about 1500. Event items may include lifecycle fields: `persistence`, `disappear_chance`, and `respawn_chance`; those private lifecycle labels are not shown in the scene-plan UI. Prompt output may also include hidden `gm_events` for future consequences and off-screen reactions.
+- **Design Notes:** Keep prompt schema changes synchronized with `app.world` application logic and `static/app.js` rendering expectations. Turn prompts include player identity fields such as current age/sex and previous-life age/sex as descriptive facts, not behavior stereotypes. Turn prompts tell the model to read `world_state.action_context.priority_segments` first and avoid scanning every included player/world field equally after the opening. Verifier prompts may receive `world_state.verification_policy`; when present, they treat `deterministically_verified` checks as already cleared by app logic and focus on `remaining_checks` plus blockers. When `world_state.mechanics_context.combat.status` is `resolved_player_attack`, the model and verifier must treat the listed weapon/equipment, damage, and target health result as authoritative app math while keeping special abilities, tactics, morale, death/capture, witnesses, and prose consequences as narrative work. Equipment bonuses are represented through `player.effective_stats`, `equipment_effects`, and derived `abilities` while equipped; prompts tell the model to inspect raw inventory/equipment only for item handling, trade, loot, equip/unequip, or hard item references. Movement focuses on environment, carry limits, and derived stats/abilities; combat focuses on deterministic mechanics context plus player-vs-target effective stats, skills, abilities, and terrain; ability use focuses on lock state, costs, prerequisites, race/magic rules, target resistance, and environmental limits. Turn prompts ask for a player-visible high-level `scene_plan` with 1-6 focus points, then continuous prose in paragraph-like `narration_segments` rather than visible labeled scene/result blocks; normal playable narration should be at least 1000 visible characters and target about 1500. Event items may include lifecycle fields: `persistence`, `disappear_chance`, and `respawn_chance`; those private lifecycle labels are not shown in the scene-plan UI. Prompt output may also include hidden `gm_events` for future consequences and off-screen reactions.
 
 #### Browser UI
 
@@ -119,7 +116,7 @@ AI RPG/
 - **Key API:** Fetches the FastAPI routes listed below; core functions include `loadState()`, `renderShell()`, `requestTurn()`, `startGame()`, `collectSetupSettings()`, `restoreSetupSettings()`, `saveSetupSettings()`, `loadSetupSettings()`, `renderIndex()`, and `displayTurnPayload()`.
 - **Consumers:** End users in a browser.
 - **Dependencies:** Browser DOM APIs and the FastAPI JSON route contract.
-- **Design Notes:** There is no frontend build step. Keep user-provided or model-provided text escaped before inserting into HTML. Setup settings export/import is frontend-only and uses `ai-rpg-setup-settings-v1` JSON for form controls, custom text, gain controls, locks, and ability cards; it is separate from world export/import. Character setup includes current age/sex and conditionally shows previous-life age/sex when backstory or memory settings imply reincarnation, transmigration, rebirth, or former-life memory. Custom Proficiencies are displayed, saved, loaded, randomized, and submitted as comma-separated phrases where each comma separates a proficiency or training-rule phrase. Setup submit sanitizes text and numeric form values before JSON serialization so mobile number-field quirks cannot stringify `NaN` as `null`. Starting a playthrough shows a full-page transition splash with progress lines, a live heartbeat/elapsed timer with rotating reassurance text for long local-model waits, and a slower typewriter reveal of the opening narration. Normal Send, Continue, and Regenerate waits show an elapsed-time reassurance panel in the Output box until the server responds. Current-turn narration is rendered as continuous prose while preserving clickable entity references after the reveal completes. If deterministic fallback is used, the UI shows a warning panel explaining that the visible prose is fallback narration and separates that from the rejected model issue. Every turn also shows the local debug trace JSON path returned by the API. The Player pane shows effective equipment-derived stats/abilities, and Inventory item rows show stored stat modifiers and granted abilities. Turn responses render a high-contrast reward banner when applied XP or positive inventory gains are present. Model settings include provider selection, llama.cpp/GGUF path and URL fields, Ollama URL/model fields, editable Soft Token Target and Hard Token Cap controls; Test Connection saves the current form before checking status so selected model files are used immediately. The History pane renders raw journal rows as paged, collapsed visual history and remembers user expansion choices; it is not AI prompt context. The visible GM tab was removed; hidden GM notes/events remain backend-only. CSS media queries stack the game panes on tablets/small monitors, make composer and tool buttons touch-friendly on phones, and keep landscape phone layouts compact.
+- **Design Notes:** There is no frontend build step. Keep user-provided or model-provided text escaped before inserting into HTML. Setup settings export/import is frontend-only and uses `ai-rpg-setup-settings-v1` JSON for form controls, custom text, gain controls, locks, and ability cards; it is separate from world export/import. Character setup includes current age/sex and conditionally shows previous-life age/sex when backstory or memory settings imply reincarnation, transmigration, rebirth, or former-life memory. Custom Proficiencies are displayed, saved, loaded, randomized, and submitted as comma-separated phrases where each comma separates a proficiency or training-rule phrase. Setup submit sanitizes text and numeric form values before JSON serialization so mobile number-field quirks cannot stringify `NaN` as `null`. Starting a playthrough shows a full-page transition splash with progress lines, a live heartbeat/elapsed timer with rotating reassurance text for long local-model waits, and a slower typewriter reveal of the opening narration. Normal Send, Continue, and Regenerate waits show an elapsed-time reassurance panel in the Output box until the server responds. Current-turn narration is rendered as continuous prose while preserving clickable entity references after the reveal completes. If deterministic fallback is used, the UI shows a warning panel explaining that the visible prose is fallback narration and separates that from the rejected model issue. Every turn also shows the local debug trace JSON path returned by the API. The Player pane shows effective equipment-derived stats/abilities, Inventory item rows show stored stat modifiers and granted abilities, and NPC cards/details show initialized combat HP, attack range, defense, and dodge. Turn responses render a high-contrast reward banner when applied XP or positive inventory gains are present. Model settings include provider selection, llama.cpp/GGUF path and URL fields, Ollama URL/model fields, editable Soft Token Target and Hard Token Cap controls; Test Connection saves the current form before checking status so selected model files are used immediately. The History pane renders raw journal rows as paged, collapsed visual history and remembers user expansion choices; it is not AI prompt context. The visible GM tab was removed; hidden GM notes/events remain backend-only. CSS media queries stack the game panes on tablets/small monitors, make composer and tool buttons touch-friendly on phones, and keep landscape phone layouts compact.
 
 #### Launchers
 
@@ -310,7 +307,7 @@ There is no production build step. This is a local prototype served directly by 
 |---|---|---|
 | GET | `/` | Serve `static/index.html` |
 | GET | `/api/state` | Return current visible world state |
-| GET | `/api/version` | Return local app and planner version metadata |
+| GET | `/api/version` | Return local app, planner, and mechanics version metadata |
 | GET | `/api/model-config` | Return local model configuration |
 | POST | `/api/model-config` | Update local model configuration |
 | GET | `/api/model-status` | Test local LLM connection |
@@ -357,6 +354,7 @@ The current world export table set is defined in `app/world.py` as `WORLD_TABLES
 - `karma_history`
 - `turn_summaries`
 - `model_logs`
+- `verification_memory`
 - `journal`
 - `pacing`
 - `settings`
@@ -372,6 +370,10 @@ The current world export table set is defined in `app/world.py` as `WORLD_TABLES
 `gm_events` stores hidden between-turn consequences, off-screen reactions, clocks, and secrets proposed by verified turn JSON. Normal `GET /api/state` responses do not include these rows; turn generation receives a bounded hidden slice only through `get_state(include_hidden=True)`.
 
 The `player` table stores setup identity fields including `public_name`, `title`, `age`, `sex`, `previous_life_age`, `previous_life_sex`, `backstory_mode`, `backstory`, and `memory_policy`. Previous-life fields are intended for reincarnated/transmigrated starts and remain blank for ordinary starts unless explicitly supplied.
+
+The `npcs` table stores durable combat columns `health`, `max_health`, `attack_min`, `attack_max`, `defense`, and `dodge`. These are additive fields initialized lazily for combat-relevant NPCs from player level, playthrough difficulty/scaling, NPC rank/stat_profile, and equipment-derived player stats; deterministic player-attack damage updates NPC health directly in SQLite and writes a `mechanics` journal row.
+
+`verification_memory` stores scoped verifier wins by check name, intent, turn kind, entity codes, confidence, source, and context signature. It is included in export/import and rewind snapshots, cleared on new playthroughs, and used only when the current planner scope matches so cached checks do not make unrelated risky turns skip verification.
 
 ### Event Lifecycle Columns
 
@@ -402,14 +404,16 @@ These columns are additive migrations. The engine treats the LLM's event metadat
 
 1. Browser submits setup, turn text, continue, or suggestion request through `static/app.js`.
 2. FastAPI validates the request with Pydantic models in `app/main.py`.
-3. `app.world` loads current SQLite state and refreshes or searches source-index context where relevant. Raw journal history stays visual-only; structured summaries, entities, events, conversations, source-index records, and hidden GM events provide model memory.
-4. `app.llm` builds a JSON-only draft prompt from `app.prompts` and the current world context.
-5. The draft response is checked by a second verifier prompt when possible.
-6. JSON is parsed, repaired through a JSON-only repair pass if necessary, and normalized.
-7. Context-overflow errors are retried with compact prompt context and smaller completion caps before deterministic fallback is used.
-8. `app.world` applies allowed state changes, clamps risky values, writes journal entries, summaries, hidden GM events, model logs, and rewind snapshots.
-9. The API returns updated state plus the turn object to the browser; the UI renders narration as continuous prose even when the model returned compatibility paragraph chunks.
-10. If model generation fails in a recoverable way, fallback narration can be returned and marked in the payload.
+3. `app.world` loads current SQLite state and refreshes or searches source-index context where relevant. Raw journal history stays visual-only; structured summaries, entities, events, conversations, source-index records, hidden GM events, and scoped verification memory provide model/runtime continuity.
+4. For combat actions with known targets, `app.world` initializes missing NPC combat profiles and builds `mechanics_context`; direct player attacks include deterministic weapon/equipment, damage, and target-health resolution for the model to narrate instead of recalculate.
+5. `app.llm` builds a JSON-only draft prompt from `app.prompts` and the current world context without reducing narration-depth targets.
+6. The cleaned draft is scored by the verification policy; deterministic checks and matching `verification_memory` rows can skip or narrow the second verifier pass.
+7. The draft response is checked by a second verifier prompt when remaining checks or blockers require it.
+8. JSON is parsed, repaired through a JSON-only repair pass if necessary, and normalized.
+9. Context-overflow errors are retried with compact prompt context and smaller completion caps before deterministic fallback is used.
+10. `app.world` applies allowed state changes, deterministic combat damage, clamps risky values, writes journal entries, summaries, hidden GM events, model logs, verification-memory rows, and rewind snapshots.
+11. The API returns updated state plus the turn object to the browser; the UI renders narration as continuous prose even when the model returned compatibility paragraph chunks.
+12. If model generation fails in a recoverable way, fallback narration can be returned and marked in the payload.
 
 ---
 
@@ -417,6 +421,8 @@ These columns are additive migrations. The engine treats the LLM's event metadat
 
 | Date | Change | Migration |
 |---|---|---|
+| 2026-05-16 | Added `verification_memory` table for scoped verifier-check caching | Additive table/index creation through `init_db()`; old saves start with an empty verifier memory cache |
+| 2026-05-16 | Added lazy deterministic NPC combat profile columns and mechanics-context combat resolution | Additive `npcs` columns through `init_db()`; old saves import with default zero values until combat initializes them |
 | 2026-05-13 | Added backend-only `gm_events` table and removed raw journal rows from generated source-index context | Additive table creation through `init_db()`; source index is regenerated without `memory/journal.jsonl` |
 | 2026-05-13 | Created project-specific `CODEBASE_INDEX.md` and `CHANGELOG.md` from starter documentation | No code or data migration required |
 
@@ -430,4 +436,4 @@ These columns are additive migrations. The engine treats the LLM's event metadat
 | No formal CI or test runner | Medium | Add focused temp-DB backend tests before large schema or turn-application changes |
 | Default GGUF model path is machine-specific | Low | Override with `AI_RPG_GGUF_MODEL` or choose a model in the UI |
 | Runtime data is local-only | Low | `data/` is ignored by git; export/import JSON is the current portability path |
-| Combat, quest, faction, and item-tag systems are still broad | Low | README notes these as likely future schema layers |
+| Quest, faction, and item-tag systems are still broad | Low | README notes these as likely future schema layers; combat now has a first deterministic health/damage layer but not a full tactical engine |

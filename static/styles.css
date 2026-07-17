@@ -2250,3 +2250,55 @@ textarea:focus {
     min-height: 64px;
   }
 }
+
+/* Context health + compact mode */
+.contextHealthCard .contextHealthActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.contextHealthCard #contextHealthStatus {
+  margin-top: 6px;
+  min-height: 1.2em;
+}
+
+body.compact-mode .topbar {
+  padding-block: 8px;
+}
+
+body.compact-mode .topActions {
+  gap: 6px;
+}
+
+body.compact-mode .topActions button {
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+
+body.compact-mode .currentTurn {
+  gap: 8px;
+  padding-block: 10px;
+}
+
+body.compact-mode .singleBox {
+  padding: 8px 10px;
+}
+
+body.compact-mode .composer {
+  padding: 8px;
+}
+
+body.compact-mode #turnInput {
+  min-height: 56px;
+}
+
+body.compact-mode .card {
+  padding: 10px;
+}
+
+body.compact-mode .historyList,
+body.compact-mode .indexContent {
+  font-size: 0.92rem;
+}

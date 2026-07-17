@@ -48,9 +48,30 @@ DEFAULT_RESPONSE_HARD_CAP = 2000
 MIN_TURN_NARRATION_CHARS = 1000
 TARGET_TURN_NARRATION_CHARS = 1500
 MAX_TURN_NARRATION_CHARS = 2400
+VERIFICATION_POLICY_VERSION = "V0.1.0"
+DEFAULT_VERIFY_SKIP_CERTAINTY = 0.88
+DEFAULT_VERIFY_MEMORY_CERTAINTY = 0.86
 SUGGESTION_TARGET_CHARS = 100
 SUGGESTION_MAX_CHARS = 120
 OPTIONAL_IDENTITY_FIELDS = {"player_public_name", "player_title"}
+REFERENCE_CODE_PATTERN = re.compile(r"\[\[([A-Z]{1,3}|L\d+|I\d+|E\d+)\]\]", re.IGNORECASE)
+HIGH_RISK_TURN_CHANGE_KEYS = {
+    "skill_changes",
+    "inventory_changes",
+    "equipment_slots",
+    "equipment_changes",
+    "inventory_capacity_modifiers",
+    "locations",
+    "npcs",
+    "relationships",
+    "events",
+    "conversations",
+    "response_drafts",
+    "index_updates",
+    "ability_updates",
+}
+VERIFY_REQUIRED_INTENTS = {"opening_scene", "continue_scene", "conversation", "claim_check", "inventory", "trade", "ability", "training"}
+LOW_RISK_SKIP_INTENTS = {"general", "investigation", "rest", "travel", "combat"}
 TURN_WRAPPER_KEYS = ("turn", "result", "response", "output")
 TURN_NARRATION_KEYS = ("narration", "narrative", "story", "scene_text", "scene", "response", "text", "content", "message", "description", "prose")
 TURN_SEGMENT_KEYS = ("narration_segments", "segments", "scene_segments", "response_segments")
@@ -109,6 +130,8 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "gm_notes",
     "player",
     "current_location",
+    "mechanics_context",
+    "verification_policy",
     "turn_plan",
     "action_context",
     "working_set",
@@ -391,6 +414,20 @@ def _env_int(name: str, default: int) -> int:
         return int(os.getenv(name, str(default)))
     except ValueError:
         return default
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool = True) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _int_value(value: Any, default: int) -> int:
@@ -728,6 +765,8 @@ def _compact_turn_context(context: dict[str, Any]) -> dict[str, Any]:
     compact["gm_events"] = _compact_list(context.get("gm_events"), 8, 360)
     compact["player"] = _trim_strings(context.get("player"), 500)
     compact["current_location"] = _trim_strings(context.get("current_location"), 500)
+    compact["mechanics_context"] = _trim_strings(context.get("mechanics_context"), 900)
+    compact["verification_policy"] = _trim_strings(context.get("verification_policy"), 900)
     compact["action_context"] = _trim_strings(context.get("action_context"), 700)
     compact["skills"] = _compact_list(context.get("skills"), 12, 360)
     compact["abilities"] = _compact_list(context.get("abilities"), 10, 420)
@@ -817,7 +856,7 @@ def _clean_context_value_for_handoff(key: str, value: Any, broad_context: bool) 
         if broad_context and key in {"inventory", "events", "conversations", "turn_summaries", "locations"}:
             limit = min(limit + 4, 24)
         return _compact_list(value, limit, 520 if broad_context else 420)
-    string_limit = 900 if key in {"settings", "gm_notes", "player", "current_location", "turn_plan", "action_context"} else 620
+    string_limit = 900 if key in {"settings", "gm_notes", "player", "current_location", "mechanics_context", "verification_policy", "turn_plan", "action_context"} else 620
     return _trim_strings(value, string_limit)
 
 
@@ -2170,6 +2209,74 @@ def estimated_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
+def enforce_token_budget(
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    max_input_tokens: int | None = None,
+    reserve_output_tokens: int | None = None,
+) -> tuple[str, str, dict[str, Any]]:
+    """
+    Pre-call estimation and pruning so prompt input stays under a safe budget.
+    Prefer truncating the user prompt body (world packet) while preserving the system prompt.
+    """
+    config = get_model_config()
+    context_window = int(config.get("context_window") or context_window_tokens() or DEFAULT_CONTEXT_TOKENS)
+    soft_cap, hard_cap = _response_token_settings(config)
+    reserve = int(reserve_output_tokens if reserve_output_tokens is not None else (hard_cap or soft_cap or DEFAULT_RESPONSE_HARD_CAP))
+    budget = int(max_input_tokens if max_input_tokens is not None else max(1024, context_window - reserve))
+    system = str(system_prompt or "")
+    user = str(user_prompt or "")
+    total = estimated_tokens(system) + estimated_tokens(user)
+    diagnostics: dict[str, Any] = {
+        "enabled": True,
+        "context_window": context_window,
+        "reserve_output_tokens": reserve,
+        "effective_input_budget": budget,
+        "before_estimated_tokens": total,
+        "pruned": False,
+        "truncated_chars": 0,
+    }
+    if total <= budget:
+        diagnostics["after_estimated_tokens"] = total
+        diagnostics["within_budget"] = True
+        return system, user, diagnostics
+
+    # Keep system intact; shrink user prompt from the middle until under budget.
+    system_tokens = estimated_tokens(system)
+    allowed_user = max(128, budget - system_tokens - 8)
+    # Convert token budget to approximate chars with a safety margin.
+    max_user_chars = max(400, allowed_user * 4 - 64)
+    original_user_len = len(user)
+    attempts = 0
+    while estimated_tokens(system) + estimated_tokens(user) > budget and attempts < 6:
+        attempts += 1
+        if len(user) <= 400:
+            break
+        target_chars = min(len(user) - 200, max_user_chars)
+        target_chars = max(400, target_chars)
+        head = int(target_chars * 0.55)
+        tail = max(120, target_chars - head - 64)
+        user = (
+            user[:head]
+            + "\n…[truncated by enforce_token_budget for input token limit]…\n"
+            + user[-tail:]
+        )
+        max_user_chars = max(400, int(max_user_chars * 0.85))
+        diagnostics["pruned"] = True
+    diagnostics["truncated_chars"] = max(0, original_user_len - len(user))
+    total_after = estimated_tokens(system) + estimated_tokens(user)
+    diagnostics["after_estimated_tokens"] = total_after
+    diagnostics["within_budget"] = total_after <= budget
+    if not diagnostics["within_budget"]:
+        # Hard fail: still over budget after truncation.
+        raise LlmError(
+            f"Token budget exceeded after pruning: estimated {total_after} > budget {budget} "
+            f"(context_window={context_window}, reserve_output={reserve})."
+        )
+    return system, user, diagnostics
+
+
 def _turn_token_default(context: dict[str, Any], phase: str) -> int:
     options = (context.get("settings") or {}).get("playthrough_options") or {}
     detail = str(options.get("narration_detail") or "rich").strip().lower()
@@ -2199,9 +2306,13 @@ def _chat_json(
     trace: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     started_at = time.time()
+    system_prompt, user_prompt, budget_diag = enforce_token_budget(system_prompt, user_prompt)
     total = f"{system_prompt}\n{user_prompt}"
     if usage is not None:
-        usage.append({"phase": phase, "chars": len(total), "estimated_tokens": estimated_tokens(total)})
+        entry = {"phase": phase, "chars": len(total), "estimated_tokens": estimated_tokens(total)}
+        if budget_diag.get("pruned"):
+            entry["token_budget"] = budget_diag
+        usage.append(entry)
     config = get_model_config()
     _append_trace(
         trace,
@@ -2213,6 +2324,7 @@ def _chat_json(
             "requested_max_tokens": max_tokens,
             "prompt_chars": len(total),
             "prompt_estimated_tokens": estimated_tokens(total),
+            "token_budget": budget_diag,
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
         },
@@ -2756,6 +2868,286 @@ def _narration_char_count(turn: dict[str, Any]) -> int:
     return len(str(turn.get("narration") or ""))
 
 
+def _turn_kind_from_player_input(player_input: str) -> str:
+    if str(player_input).startswith("__opening_scene_request__"):
+        return "opening_scene"
+    if str(player_input).startswith("__continue_scene_request__"):
+        return "continue_scene"
+    return "player_action"
+
+
+def _primary_intent(context: dict[str, Any], player_input: str) -> str:
+    turn_plan = context.get("turn_plan") or {}
+    intent = str(turn_plan.get("primary_intent") or "").strip()
+    if intent:
+        return intent
+    return _turn_kind_from_player_input(player_input)
+
+
+def _known_context_codes(context: dict[str, Any]) -> set[str]:
+    codes: set[str] = set()
+    for key in ("current_location",):
+        value = context.get(key)
+        if isinstance(value, dict) and value.get("code"):
+            codes.add(str(value["code"]).upper())
+    for location in context.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        if location.get("code"):
+            codes.add(str(location["code"]).upper())
+        for npc in location.get("npcs") or []:
+            if isinstance(npc, dict) and npc.get("code"):
+                codes.add(str(npc["code"]).upper())
+        for event in location.get("events") or []:
+            if isinstance(event, dict) and event.get("code"):
+                codes.add(str(event["code"]).upper())
+    for root in ("inventory", "events", "conversations", "relationships"):
+        for item in context.get(root) or []:
+            if not isinstance(item, dict):
+                continue
+            for key in ("code", "npc_code", "location_code", "source_code", "target_code", "event_code", "item_code"):
+                if item.get(key):
+                    codes.add(str(item[key]).upper())
+    mechanics = context.get("mechanics_context") or {}
+    combat = mechanics.get("combat") if isinstance(mechanics, dict) else {}
+    if isinstance(combat, dict):
+        for target_key in ("target",):
+            target = combat.get(target_key)
+            if isinstance(target, dict) and target.get("code"):
+                codes.add(str(target["code"]).upper())
+        for target in combat.get("target_candidates") or []:
+            if isinstance(target, dict) and target.get("code"):
+                codes.add(str(target["code"]).upper())
+    return codes
+
+
+def _created_draft_codes(turn: dict[str, Any]) -> set[str]:
+    codes: set[str] = set()
+    for key in ("locations", "npcs", "events", "index_updates"):
+        for item in turn.get(key) or []:
+            if isinstance(item, dict) and item.get("code"):
+                codes.add(str(item["code"]).upper())
+    return codes
+
+
+def _referenced_turn_codes(turn: dict[str, Any]) -> set[str]:
+    text = "\n".join(
+        str(value or "")
+        for value in (
+            turn.get("narration"),
+            turn.get("turn_summary"),
+            json.dumps(turn.get("scene_plan") or {}, ensure_ascii=True, default=str),
+        )
+    )
+    return {match.group(1).upper() for match in REFERENCE_CODE_PATTERN.finditer(text)}
+
+
+def _scene_plan_is_valid(turn: dict[str, Any]) -> bool:
+    plan = turn.get("scene_plan")
+    if not isinstance(plan, dict):
+        return False
+    points = plan.get("focus_points") or []
+    return isinstance(points, list) and 1 <= len(points) <= 6
+
+
+def _has_meaningful_player_delta(turn: dict[str, Any]) -> bool:
+    player = turn.get("player") or {}
+    if not isinstance(player, dict):
+        return False
+    numeric_fields = ("health_delta", "max_health_delta", "xp_delta", "gold_delta", "level_delta", "karma_delta")
+    if any(_int_value(player.get(field), 0) != 0 for field in numeric_fields):
+        return True
+    return bool(player.get("move_to_location") or player.get("move_to_location_code"))
+
+
+def _nonempty_turn_keys(turn: dict[str, Any], keys: set[str]) -> list[str]:
+    changed: list[str] = []
+    for key in sorted(keys):
+        value = turn.get(key)
+        if value not in (None, [], {}, ""):
+            changed.append(key)
+    return changed
+
+
+def _verification_memory_covered_checks(context: dict[str, Any], checks: list[str]) -> tuple[list[str], list[dict[str, Any]]]:
+    memory = context.get("verification_memory") or {}
+    entries = memory.get("entries") if isinstance(memory, dict) else []
+    if not isinstance(entries, list):
+        return [], []
+    threshold = max(0.0, min(1.0, _env_float("AI_RPG_VERIFY_MEMORY_CERTAINTY", DEFAULT_VERIFY_MEMORY_CERTAINTY)))
+    planned_checks = {str(check) for check in checks}
+    covered: list[str] = []
+    hits: list[dict[str, Any]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        check_name = str(entry.get("check_name") or "")
+        if check_name not in planned_checks:
+            continue
+        try:
+            confidence = float(entry.get("confidence") or 0)
+        except (TypeError, ValueError):
+            confidence = 0
+        if confidence < threshold:
+            continue
+        if check_name not in covered:
+            covered.append(check_name)
+        hits.append(
+            {
+                "check_name": check_name,
+                "confidence": round(confidence, 3),
+                "last_verified_turn": entry.get("last_verified_turn"),
+                "source": entry.get("source"),
+            }
+        )
+    return covered, hits[:12]
+
+
+def _verification_policy(context: dict[str, Any], player_input: str, draft: dict[str, Any]) -> dict[str, Any]:
+    turn_plan = context.get("turn_plan") or {}
+    checks = [str(check) for check in turn_plan.get("verification_checks") or [] if str(check).strip()]
+    intent = _primary_intent(context, player_input)
+    turn_kind = str(turn_plan.get("turn_kind") or _turn_kind_from_player_input(player_input))
+    deterministic: list[str] = []
+    remaining: list[str] = []
+    blockers: list[str] = []
+    reasons: list[str] = []
+    certainty = 0.45
+    memory_verified, memory_hits = _verification_memory_covered_checks(context, checks)
+    if memory_verified:
+        deterministic.extend(memory_verified)
+        certainty += min(0.18, 0.04 * len(memory_verified))
+        reasons.append(f"Verification memory covered: {', '.join(memory_verified[:8])}")
+
+    referenced = _referenced_turn_codes(draft)
+    allowed_codes = _known_context_codes(context) | _created_draft_codes(draft)
+    unresolved = sorted(code for code in referenced if code not in allowed_codes)
+    if unresolved:
+        blockers.append("unresolved_entity_references")
+        remaining.append("entity_references")
+        reasons.append(f"Unresolved refs: {', '.join(unresolved[:8])}")
+        certainty -= 0.25
+    else:
+        deterministic.append("entity_references")
+        deterministic.append("explicit_reference_resolution")
+        certainty += 0.12
+
+    if _scene_plan_is_valid(draft):
+        deterministic.append("scene_plan_shape")
+        certainty += 0.08
+    else:
+        blockers.append("scene_plan_shape")
+        remaining.append("scene_plan")
+        certainty -= 0.12
+
+    if _narration_char_count(draft) >= MIN_TURN_NARRATION_CHARS:
+        deterministic.append("narration_depth")
+        certainty += 0.12
+    else:
+        blockers.append("short_narration")
+        remaining.append("narration_depth")
+        certainty -= 0.15
+
+    self_check = draft.get("self_check") if isinstance(draft.get("self_check"), dict) else {}
+    if self_check.get("passed") is True:
+        deterministic.append("draft_self_check")
+        certainty += 0.1
+    else:
+        blockers.append("draft_self_check_not_passed")
+        remaining.append("self_check")
+        certainty -= 0.12
+
+    high_risk_keys = _nonempty_turn_keys(draft, HIGH_RISK_TURN_CHANGE_KEYS)
+    if high_risk_keys:
+        blockers.append("high_risk_state_changes")
+        reasons.append(f"Draft changes require model verification: {', '.join(high_risk_keys[:12])}")
+        remaining.extend(["state_delta_justification", "persistence_changes"])
+        certainty -= min(0.35, 0.08 * len(high_risk_keys))
+    elif _has_meaningful_player_delta(draft):
+        blockers.append("player_state_delta")
+        remaining.append("state_delta_justification")
+        certainty -= 0.18
+    else:
+        deterministic.append("no_high_risk_state_delta")
+        deterministic.append("state_delta_justification")
+        deterministic.append("karma_visibility")
+        certainty += 0.18
+
+    mechanics = context.get("mechanics_context") or {}
+    combat = mechanics.get("combat") if isinstance(mechanics, dict) else {}
+    if isinstance(combat, dict) and combat.get("status") == "resolved_player_attack":
+        deterministic.append("mechanics_combat_resolution")
+        deterministic.append("damage_scale")
+        deterministic.append("npc_stats")
+        certainty += 0.08
+
+    if turn_kind in {"opening_scene", "continue_scene"}:
+        blockers.append("intent_requires_model_verifier")
+        remaining.extend(checks or ["intent_specific_consistency"])
+        certainty -= 0.2
+    elif intent in VERIFY_REQUIRED_INTENTS:
+        required_remaining = [check for check in checks if check not in deterministic]
+        if required_remaining:
+            blockers.append("intent_requires_model_verifier")
+            remaining.extend(required_remaining or ["intent_specific_consistency"])
+            certainty -= 0.2
+        else:
+            deterministic.append("verification_memory_covers_required_intent")
+            certainty += 0.06
+    elif intent in LOW_RISK_SKIP_INTENTS:
+        deterministic.append("low_risk_intent")
+        certainty += 0.08
+
+    if referenced:
+        reasons.append(f"Referenced codes checked: {', '.join(sorted(referenced)[:10])}")
+    if not reasons:
+        reasons.append("Draft has stable shape, no risky state deltas, and only deterministic checks remain.")
+
+    deterministic = list(dict.fromkeys(deterministic))
+    remaining_checks = list(dict.fromkeys([check for check in [*checks, *remaining] if check not in deterministic]))
+    blockers = list(dict.fromkeys(blockers))
+    threshold = max(0.0, min(1.0, _env_float("AI_RPG_VERIFY_SKIP_CERTAINTY", DEFAULT_VERIFY_SKIP_CERTAINTY)))
+    certainty = max(0.0, min(1.0, round(certainty, 3)))
+    fast_enabled = _env_bool("AI_RPG_FAST_VERIFICATION", True)
+    mode = "full_model_verifier"
+    if fast_enabled and not blockers and not remaining_checks and certainty >= threshold:
+        mode = "skip_model_verifier"
+    elif deterministic:
+        mode = "targeted_model_verifier"
+    return {
+        "version": VERIFICATION_POLICY_VERSION,
+        "mode": mode,
+        "certainty": certainty,
+        "skip_threshold": threshold,
+        "fast_verification_enabled": fast_enabled,
+        "turn_kind": turn_kind,
+        "primary_intent": intent,
+        "deterministically_verified": deterministic,
+        "memory_verified": memory_verified,
+        "memory_hits": memory_hits,
+        "remaining_checks": remaining_checks,
+        "blockers": blockers,
+        "reasons": reasons[:8],
+    }
+
+
+def _mark_draft_verified_by_policy(draft: dict[str, Any], policy: dict[str, Any]) -> dict[str, Any]:
+    result = dict(draft)
+    self_check = result.get("self_check") if isinstance(result.get("self_check"), dict) else {}
+    issues = self_check.get("issues_found") if isinstance(self_check.get("issues_found"), list) else []
+    corrections = self_check.get("corrections_made") if isinstance(self_check.get("corrections_made"), list) else []
+    corrections = [*corrections, f"Skipped model verifier at certainty {policy.get('certainty')} after deterministic checks."]
+    result["self_check"] = {
+        "passed": True,
+        "issues_found": issues,
+        "corrections_made": corrections[:8],
+        "reference_check": "Deterministic verification policy cleared entity references.",
+        "consistency_check": "High-certainty draft accepted without model verifier; no risky state deltas were present.",
+    }
+    result["_verification_policy"] = policy
+    return result
+
+
 def _retry_short_narration(
     context: dict[str, Any],
     player_input: str,
@@ -2874,8 +3266,9 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 "deterministic context cleanup before draft",
                 "draft JSON model call",
                 "deterministic draft payload cleanup before verifier",
+                "certainty-based verification policy scoring",
                 "malformed JSON repair or retry when needed",
-                "verifier JSON model call",
+                "verifier JSON model call when remaining checks require it",
                 "deterministic verified payload cleanup before world application",
                 "narration depth retry when needed",
                 "world.apply_turn SQLite state application or deterministic fallback",
@@ -2975,6 +3368,29 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             _append_trace(trace, {"phase": "draft_missing_narration_retry", "event": "normalized", "narration_chars": _narration_char_count(draft), "keys": sorted(draft.keys())})
         except LlmError as retry_exc:
             raise _attach_model_usage(retry_exc, usage, trace)
+    verification_policy = _verification_policy(context, player_input, draft)
+    active_context = {**active_context, "verification_policy": verification_policy}
+    _append_trace(trace, {"phase": "verification_policy", "event": "scored", **verification_policy})
+    if verification_policy.get("mode") == "skip_model_verifier":
+        usage.append({"phase": "verify_skipped_certainty", "chars": 0, "estimated_tokens": 0})
+        result = _mark_draft_verified_by_policy(draft, verification_policy)
+        result = _ensure_narration_depth(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_certainty_retry", trace)
+        result = _clean_turn_for_handoff(result, "draft_certainty_to_world", trace)
+        result["_verification_policy"] = verification_policy
+        _append_trace(
+            trace,
+            {
+                "phase": "pipeline",
+                "event": "success",
+                "narration_chars": _narration_char_count(result),
+                "used_fallback": False,
+                "verifier_skipped": True,
+                "verification_certainty": verification_policy.get("certainty"),
+            },
+        )
+        result["_model_usage"] = usage
+        result["_model_trace"] = trace
+        return result
     try:
         verified = _chat_json(
             verify_prompt,
@@ -2993,6 +3409,7 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             result = _merge_verified_with_draft_narration(verified, draft)
         result = _ensure_narration_depth(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace)
         result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
+        result["_verification_policy"] = verification_policy
         _append_trace(trace, {"phase": "pipeline", "event": "success", "narration_chars": _narration_char_count(result), "used_fallback": False})
         result["_model_usage"] = usage
         result["_model_trace"] = trace
@@ -3018,6 +3435,7 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     result = _merge_verified_with_draft_narration(verified, draft)
                 result = _ensure_narration_depth(result, compact_context, player_input, system_prompt, timeout, usage, "narration_depth_compact_retry", trace)
                 result = _clean_turn_for_handoff(result, "verifier_compact_retry_to_world", trace)
+                result["_verification_policy"] = verification_policy
                 _append_trace(trace, {"phase": "pipeline", "event": "success", "narration_chars": _narration_char_count(result), "used_fallback": False})
                 result["_model_usage"] = usage
                 result["_model_trace"] = trace
@@ -3034,6 +3452,7 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         }
         draft = _ensure_narration_depth(draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace)
         draft = _clean_turn_for_handoff(draft, "draft_to_world_unverified", trace)
+        draft["_verification_policy"] = verification_policy
         _append_trace(trace, {"phase": "pipeline", "event": "using_unverified_draft", "verifier_error": str(exc), "narration_chars": _narration_char_count(draft)})
         draft["_model_usage"] = usage
         draft["_model_trace"] = trace

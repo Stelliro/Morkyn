@@ -302,7 +302,7 @@ $appUrl = if ($env:AI_RPG_PUBLIC_URL) { $env:AI_RPG_PUBLIC_URL } else { "http://
 $localAppUrl = "http://127.0.0.1:$($appPort)"
 $browserUrl = if ($env:AI_RPG_BROWSER_URL) { $env:AI_RPG_BROWSER_URL } elseif ($appHost -eq "0.0.0.0") { $localAppUrl } else { $appUrl }
 
-Write-Host "Starting AI RPG..."
+Write-Host "Starting Mørkyn..."
 Write-Host "Launch mode: $(if ($vpnMode) { 'VPN / virtual network' } elseif ($appHost -eq '0.0.0.0') { 'local network / phone' } else { 'this machine only' })"
 if ($appHost -eq "0.0.0.0") {
     Write-Host "Local PC URL: $localAppUrl"

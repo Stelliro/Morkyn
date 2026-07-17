@@ -12,18 +12,25 @@ from pydantic import BaseModel, Field, model_validator
 from app.db import init_db
 from app.llm import LlmError, fallback_setup_randomization, generate_setup_randomization, get_model_config, test_model_connection, update_model_config
 from app.world import (
+    MECHANICS_CONTEXT_VERSION,
     TURN_CONTEXT_PLANNER_VERSION,
     add_alias,
+    consolidate_memory,
     create_player_alias,
+    delete_campaign_slot,
     export_world,
+    get_context_health,
     get_input_suggestions,
     get_state,
     get_world_bible,
     import_world,
+    list_campaign_slots,
+    load_campaign_slot,
     play_continue_turn,
     play_turn,
     regenerate_last_turn,
     rewind_last_turn,
+    save_campaign_slot,
     search_world,
     start_playthrough_with_opening,
     update_player_alias_state,
@@ -33,9 +40,9 @@ from app.world import (
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
-APP_VERSION = "V0.6.0"
+APP_VERSION = "V0.7.0"
 
-app = FastAPI(title="AI RPG Consistency Prototype")
+app = FastAPI(title="Mørkyn")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
@@ -363,9 +370,10 @@ def api_state():
 @app.get("/api/version")
 def api_version():
     return {
-        "app": "AI RPG Consistency Prototype",
+        "app": "Mørkyn",
         "version": APP_VERSION,
         "planner_version": TURN_CONTEXT_PLANNER_VERSION,
+        "mechanics_version": MECHANICS_CONTEXT_VERSION,
     }
 
 
@@ -498,6 +506,52 @@ def api_export():
 def api_import(data: dict):
     try:
         return import_world(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class CampaignSlotRequest(BaseModel):
+    slot: str = Field(default="", max_length=64)
+
+
+@app.get("/api/campaign-slots")
+def api_list_campaign_slots():
+    return {"slots": list_campaign_slots()}
+
+
+@app.post("/api/campaign-slots/save")
+def api_save_campaign_slot(request: CampaignSlotRequest):
+    try:
+        return save_campaign_slot(request.slot)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/campaign-slots/load")
+def api_load_campaign_slot(request: CampaignSlotRequest):
+    try:
+        return load_campaign_slot(request.slot)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/campaign-slots/delete")
+def api_delete_campaign_slot(request: CampaignSlotRequest):
+    try:
+        return delete_campaign_slot(request.slot)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/diagnostics/context")
+def api_context_health():
+    return get_context_health()
+
+
+@app.post("/api/memory/consolidate")
+def api_memory_consolidate():
+    try:
+        return consolidate_memory()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 import os
@@ -18,6 +19,11 @@ HISTORY_SUMMARY_PATH = Path(os.getenv("AI_RPG_HISTORY_SUMMARY", "data/history_su
 SOURCE_INDEX_DIR = Path(os.getenv("AI_RPG_SOURCE_INDEX", "data/source_index"))
 SOURCE_INDEX_MANIFEST = SOURCE_INDEX_DIR / "manifest.json"
 MODEL_TRACE_DIR = Path(os.getenv("AI_RPG_MODEL_TRACE_DIR", "data/model_traces"))
+CONSOLIDATED_FACTS_PATH = Path(os.getenv("AI_RPG_CONSOLIDATED_FACTS", "data/consolidated_facts.jsonl"))
+CAMPAIGN_SLOTS_DIR = Path(os.getenv("AI_RPG_CAMPAIGN_SLOTS", "data/campaign_slots"))
+MEMORY_CONSOLIDATE_KEEP_SUMMARIES = max(4, int(os.getenv("AI_RPG_MEMORY_KEEP_SUMMARIES", "12")))
+MEMORY_CONSOLIDATE_MAX_FACTS = max(20, int(os.getenv("AI_RPG_MEMORY_MAX_FACTS", "200")))
+GM_OFFSCREEN_INTERVAL = max(2, int(os.getenv("AI_RPG_GM_OFFSCREEN_INTERVAL", "8")))
 WORLD_TABLES = [
     "locations",
     "player",
@@ -36,6 +42,7 @@ WORLD_TABLES = [
     "karma_history",
     "turn_summaries",
     "model_logs",
+    "verification_memory",
     "journal",
     "pacing",
     "settings",
@@ -69,6 +76,7 @@ AUTOINC_TABLES = [
     "karma_history",
     "turn_summaries",
     "model_logs",
+    "verification_memory",
     "journal",
     "gm_events",
 ]
@@ -76,6 +84,7 @@ RESTORE_ORDER = [
     "turn_snapshots",
     "response_drafts",
     "model_logs",
+    "verification_memory",
     "aliases",
     "equipment_slots",
     "inventory_capacity_modifiers",
@@ -123,8 +132,31 @@ DEFAULT_EQUIPMENT_SLOTS = [
 ]
 
 TURN_CONTEXT_PLANNER_VERSION = "V0.1.0"
+MECHANICS_CONTEXT_VERSION = "V0.1.0"
+VERIFICATION_MEMORY_VERSION = "V0.1.0"
+VERIFICATION_MEMORY_CONFIDENCE_MIN = 0.86
+VERIFICATION_MEMORY_LIMIT = 24
 EVENT_PERSISTENCE_VALUES = {"persistent", "temporary", "recurring", "traveling", "background"}
 TURN_REFERENCE_PATTERN = re.compile(r"(?:@([A-Z]{1,3})|#(L\d+)|!(I\d+)|&(E\d+)|\[\[([A-Z]{1,3}|L\d+|I\d+|E\d+)\]\])", re.IGNORECASE)
+COMBAT_ATTACK_KEYWORDS = {
+    "attack", "fight", "punch", "kick", "stab", "slash", "shoot", "strike", "hit", "swing", "thrust", "jab", "smash", "bash", "club", "slice", "cut", "fire", "throw",
+}
+UNARMED_ATTACK_KEYWORDS = {"punch", "kick", "headbutt", "grapple", "shove", "tackle", "elbow", "knee"}
+STAT_ALIASES = {
+    "strength": {"strength", "str", "power", "might", "attack", "melee", "force"},
+    "defense": {"defense", "defence", "armor", "armour", "endurance", "toughness", "resilience", "guard"},
+    "dodge": {"dodge", "evasion", "agility", "speed", "reflex", "reflexes", "mobility"},
+    "damage": {"damage", "weapon_damage", "attack_damage", "power", "impact"},
+}
+RARITY_ATTACK_BONUS = {
+    "common": 0,
+    "mundane": 0,
+    "uncommon": 1,
+    "rare": 2,
+    "epic": 4,
+    "legendary": 7,
+    "unique": 3,
+}
 TURN_INTENT_KEYWORDS = {
     "conversation": {
         "ask", "talk", "tell", "say", "speak", "question", "answer", "convince", "persuade", "negotiate", "threaten", "lie", "deceive", "bribe", "argue",
@@ -167,8 +199,8 @@ ACTION_SEGMENT_RULES = {
         ("environment_pressure", "Consider hazards, visibility, witnesses, local rules, and whether temporary events should persist or fade when leaving.", ["hazard", "visibility", "event", "witness", "departure"]),
     ],
     "combat": [
-        ("combat_opposition", "Compare player health, effective_stats, relevant skills, and abilities against target NPC rank, stat_profile, skill_profile, allies, and terrain; equipment effects are already folded into those player fields.", ["rank", "stat_profile", "skill_profile", "effective_stats", "abilities", "terrain"]),
-        ("damage_and_consequence", "Scale harm, stamina, karma visibility, noise, witnesses, loot, and escape routes from the focused facts only.", ["damage", "stamina", "karma", "witness", "noise", "escape"]),
+        ("combat_opposition", "Use mechanics_context first when present, then compare player health, effective_stats, relevant skills, and abilities against target NPC rank, stat_profile, skill_profile, combat_profile, allies, and terrain; equipment effects are already folded into those player fields.", ["mechanics_context", "rank", "stat_profile", "skill_profile", "combat_profile", "effective_stats", "abilities", "terrain"]),
+        ("damage_and_consequence", "Use deterministic damage/health resolution from mechanics_context when present, then scale stamina, karma visibility, noise, witnesses, loot, and escape routes from the focused facts only.", ["mechanics_context", "damage", "health", "stamina", "karma", "witness", "noise", "escape"]),
     ],
     "ability": [
         ("ability_constraints", "Read the named/relevant ability, lock state, base_description, prerequisites, cost, player health/effective_stats, race/magic rules, and target resistance; equipment-granted abilities are already in abilities while equipped.", ["ability", "cost", "prerequisite", "locked", "magic", "target"]),
@@ -271,6 +303,413 @@ def _float(value: Any, fallback: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return fallback
+
+
+def _int_from_any(value: Any, fallback: int = 0) -> int:
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _playthrough_options(state: dict[str, Any]) -> dict[str, Any]:
+    return ((state.get("settings") or {}).get("playthrough_options") or {})
+
+
+def _rank_labels(options: dict[str, Any]) -> list[str]:
+    raw = str(options.get("rank_scale") or "F,E,D,C,B,A,S,SS,SSS")
+    labels = [part.strip().upper() for part in raw.split(",") if part.strip()]
+    return labels or ["F", "E", "D", "C", "B", "A", "S", "SS", "SSS"]
+
+
+def _rank_index_from_text(value: Any, labels: list[str]) -> int | None:
+    text = str(value or "").strip().upper()
+    if not text:
+        return None
+    by_label = {label: index for index, label in enumerate(labels)}
+    if text in by_label:
+        return by_label[text]
+    for label in sorted(labels, key=len, reverse=True):
+        if re.search(rf"(?<![A-Z0-9]){re.escape(label)}(?![A-Z0-9])", text):
+            return by_label[label]
+    return None
+
+
+def _rank_index(value: Any, options: dict[str, Any]) -> int:
+    labels = _rank_labels(options)
+    found = _rank_index_from_text(value, labels)
+    return clamp(found if found is not None else 0, 0, max(0, len(labels) - 1))
+
+
+def _stat_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+
+
+def _numeric_stat_total(profile: dict[str, Any], aliases: set[str]) -> int:
+    total = 0.0
+    for key, value in profile.items():
+        normalized = _stat_key(key)
+        if normalized not in aliases and not any(alias in normalized for alias in aliases):
+            continue
+        if isinstance(value, list):
+            values = value
+        else:
+            values = [value]
+        for item in values:
+            if isinstance(item, (int, float)) and not isinstance(item, bool):
+                total += float(item)
+            elif isinstance(item, str) and re.fullmatch(r"[-+]?\d+(?:\.\d+)?", item.strip()):
+                total += float(item)
+    return int(round(total))
+
+
+def _profile_rank_adjustment(profile: dict[str, Any], aliases: set[str], labels: list[str], base_rank_index: int) -> int:
+    parts: list[str] = []
+    for key, value in profile.items():
+        normalized = _stat_key(key)
+        if normalized in aliases or any(alias in normalized for alias in aliases):
+            parts.append(str(value or ""))
+    text = " ".join(parts).lower()
+    if not text:
+        return 0
+    ranked = _rank_index_from_text(text, labels)
+    if ranked is not None:
+        return clamp((ranked - base_rank_index) * 2, -8, 12)
+    adjustment = 0
+    if any(marker in text for marker in ("very high", "elite", "exceptional", "overwhelming")):
+        adjustment += 4
+    elif any(marker in text for marker in ("high", "strong", "fast", "tough", "above")):
+        adjustment += 2
+    if any(marker in text for marker in ("very low", "weak", "poor", "frail", "slow")):
+        adjustment -= 3
+    elif any(marker in text for marker in ("low", "below")):
+        adjustment -= 2
+    return adjustment
+
+
+def _difficulty_combat_bias(options: dict[str, Any]) -> int:
+    difficulty = str(options.get("difficulty") or "normal").lower()
+    scaling = str(options.get("npc_stat_scaling") or "relative ranks").lower()
+    bias = 0
+    if "easy" in difficulty:
+        bias -= 1
+    elif "hard" in difficulty:
+        bias += 1
+    elif "brutal" in difficulty or "deadly" in difficulty:
+        bias += 2
+    if "mostly weaker" in scaling:
+        bias -= 1
+    elif "near player" in scaling:
+        bias += 0
+    elif "elite" in scaling:
+        bias += 2
+    return bias
+
+
+def _all_npcs_from_state(state: dict[str, Any]) -> list[dict[str, Any]]:
+    return [npc for location in state.get("locations", []) for npc in location.get("npcs", [])]
+
+
+def _local_npcs_from_state(state: dict[str, Any]) -> list[dict[str, Any]]:
+    current_code = (state.get("current_location") or {}).get("code")
+    return [npc for location in state.get("locations", []) if location.get("code") == current_code for npc in location.get("npcs", [])]
+
+
+def _combat_profile_from_npc(npc: dict[str, Any]) -> dict[str, Any]:
+    max_health = _int_from_any(npc.get("max_health"), 0)
+    health = clamp(_int_from_any(npc.get("health"), max_health), 0, max(0, max_health)) if max_health else 0
+    return {
+        "initialized": max_health > 0,
+        "health": health,
+        "max_health": max_health,
+        "attack_min": _int_from_any(npc.get("attack_min"), 0),
+        "attack_max": _int_from_any(npc.get("attack_max"), 0),
+        "defense": _int_from_any(npc.get("defense"), 0),
+        "dodge": _int_from_any(npc.get("dodge"), 0),
+    }
+
+
+def _derive_npc_combat_profile(npc: dict[str, Any], state: dict[str, Any]) -> dict[str, int]:
+    options = _playthrough_options(state)
+    labels = _rank_labels(options)
+    player = state.get("player") or {}
+    player_level = clamp(_int_from_any(player.get("level"), 1), 1, 100)
+    base_rank_index = _rank_index(npc.get("rank"), options)
+    profile = npc.get("stat_profile") or {}
+    if not isinstance(profile, dict):
+        profile = _json(profile, {}) if isinstance(profile, str) else {}
+    bias = _difficulty_combat_bias(options)
+    rank_pressure = max(0, base_rank_index + bias)
+    level_basis = max(1, player_level + bias)
+    strength = clamp(
+        4 + level_basis * 2 + rank_pressure * 3 + _profile_rank_adjustment(profile, STAT_ALIASES["strength"], labels, base_rank_index),
+        1,
+        999,
+    )
+    defense = clamp(
+        2 + level_basis + rank_pressure * 2 + _profile_rank_adjustment(profile, STAT_ALIASES["defense"], labels, base_rank_index),
+        0,
+        999,
+    )
+    dodge = clamp(
+        2 + level_basis + rank_pressure * 2 + _profile_rank_adjustment(profile, STAT_ALIASES["dodge"], labels, base_rank_index),
+        0,
+        999,
+    )
+    max_health = clamp(10 + level_basis * 5 + rank_pressure * 8 + defense * 2, 1, 9999)
+    attack_min = clamp(1 + strength // 5 + rank_pressure // 2, 1, 999)
+    attack_max = clamp(max(attack_min + 1, attack_min + 2 + strength // 3 + rank_pressure), attack_min, 999)
+    existing = _combat_profile_from_npc(npc)
+    if existing["max_health"] > 0:
+        max_health = existing["max_health"]
+        health = clamp(existing["health"], 0, max_health)
+    else:
+        health = max_health
+    return {
+        "health": health,
+        "max_health": max_health,
+        "attack_min": existing["attack_min"] or attack_min,
+        "attack_max": existing["attack_max"] or attack_max,
+        "defense": existing["defense"] or defense,
+        "dodge": existing["dodge"] or dodge,
+    }
+
+
+def _combat_action_kind(player_input: str) -> str:
+    tokens = _tokens(player_input)
+    if tokens & COMBAT_ATTACK_KEYWORDS:
+        return "player_attack"
+    return "combat_positioning"
+
+
+def _combat_target_candidates(state: dict[str, Any], player_input: str, refs: dict[str, list[str]]) -> list[dict[str, Any]]:
+    all_npcs = _all_npcs_from_state(state)
+    if refs.get("npcs"):
+        referenced = {code.upper() for code in refs.get("npcs", [])}
+        return [npc for npc in all_npcs if str(npc.get("code") or "").upper() in referenced]
+    query = _tokens(player_input)
+    local_npcs = _local_npcs_from_state(state)
+    scored = [(_score_text(query, npc.get("code"), npc.get("name"), npc.get("summary"), npc.get("role")), index, npc) for index, npc in enumerate(local_npcs)]
+    if any(score for score, _index, _npc in scored):
+        scored.sort(key=lambda item: (item[0], -item[1]), reverse=True)
+        return [npc for score, _index, npc in scored if score > 0]
+    return local_npcs
+
+
+def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[str, list[str]]) -> dict[str, Any] | None:
+    candidates = _combat_target_candidates(state, player_input, refs)
+    if not candidates:
+        return None
+    if refs.get("npcs"):
+        return candidates[0]
+    query = _tokens(player_input)
+    scored = [(_score_text(query, npc.get("code"), npc.get("name"), npc.get("summary"), npc.get("role")), npc) for npc in candidates]
+    scored = [item for item in scored if item[0] > 0]
+    if scored:
+        scored.sort(key=lambda item: item[0], reverse=True)
+        if len(scored) == 1 or scored[0][0] > scored[1][0]:
+            return scored[0][1]
+    if len(candidates) == 1:
+        return candidates[0]
+    hostile = [npc for npc in candidates if str(npc.get("attitude") or "").lower() in {"hostile", "aggressive", "violent"}]
+    return hostile[0] if len(hostile) == 1 else None
+
+
+def _ensure_combat_profiles_for_input(state: dict[str, Any], player_input: str) -> bool:
+    intent, _secondary = _turn_intent(player_input)
+    if intent != "combat":
+        return False
+    refs = _explicit_turn_references(player_input)
+    candidates = _combat_target_candidates(state, player_input, refs)[:4]
+    if not candidates:
+        return False
+    changed = False
+    with connect() as conn:
+        for npc in candidates:
+            combat = _combat_profile_from_npc(npc)
+            if combat["max_health"] > 0 and combat["attack_max"] > 0:
+                continue
+            derived = _derive_npc_combat_profile(npc, state)
+            conn.execute(
+                """
+                UPDATE npcs
+                SET health = ?, max_health = ?, attack_min = ?, attack_max = ?, defense = ?, dodge = ?
+                WHERE code = ?
+                """,
+                (
+                    derived["health"],
+                    derived["max_health"],
+                    derived["attack_min"],
+                    derived["attack_max"],
+                    derived["defense"],
+                    derived["dodge"],
+                    npc.get("code"),
+                ),
+            )
+            changed = True
+    return changed
+
+
+def _equipped_items_by_slot(inventory: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    equipped: dict[str, list[dict[str, Any]]] = {}
+    for item in inventory:
+        slot = str(item.get("equipped_slot") or "").strip().upper()
+        if slot:
+            equipped.setdefault(slot, []).append(item)
+    return equipped
+
+
+def _selected_attack_weapon(state: dict[str, Any], player_input: str, refs: dict[str, list[str]]) -> dict[str, Any] | None:
+    inventory = state.get("inventory") or []
+    tokens = _tokens(player_input)
+    if tokens & UNARMED_ATTACK_KEYWORDS:
+        return None
+    referenced_items = {code.upper() for code in refs.get("items", [])}
+    for item in inventory:
+        if str(item.get("code") or "").upper() in referenced_items:
+            return item
+    equipped = _equipped_items_by_slot(inventory)
+    for slot in ("MAIN", "OFF"):
+        for item in equipped.get(slot, []):
+            item_type = str(item.get("item_type") or "").lower()
+            if item_type in {"weapon", "tool", "focus"}:
+                return item
+    return None
+
+
+def _item_attack_bonus(item: dict[str, Any] | None) -> int:
+    if not item:
+        return 0
+    modifiers = _normalize_stat_modifiers(item.get("stat_modifiers"))
+    bonus = _numeric_stat_total(modifiers, STAT_ALIASES["damage"] | STAT_ALIASES["strength"])
+    rarity = str(item.get("rarity") or "common").lower()
+    bonus += RARITY_ATTACK_BONUS.get(rarity, 0)
+    if bonus <= 0 and str(item.get("item_type") or "").lower() == "weapon":
+        bonus += max(1, min(6, int(round(_float(item.get("weight"), 1.0)))))
+    return clamp(bonus, 0, 999)
+
+
+def _player_combat_stats(state: dict[str, Any]) -> dict[str, int]:
+    player = state.get("player") or {}
+    effective_stats = player.get("effective_stats") or (state.get("equipment_effects") or {}).get("stat_modifiers") or {}
+    if not isinstance(effective_stats, dict):
+        effective_stats = {}
+    level = clamp(_int_from_any(player.get("level"), 1), 1, 100)
+    return {
+        "strength": clamp(5 + level * 2 + _numeric_stat_total(effective_stats, STAT_ALIASES["strength"]), 1, 999),
+        "defense": clamp(3 + level + _numeric_stat_total(effective_stats, STAT_ALIASES["defense"]), 0, 999),
+        "dodge": clamp(3 + level + _numeric_stat_total(effective_stats, STAT_ALIASES["dodge"]), 0, 999),
+    }
+
+
+def _player_attack_profile(state: dict[str, Any], player_input: str, refs: dict[str, list[str]]) -> dict[str, Any]:
+    stats = _player_combat_stats(state)
+    weapon = _selected_attack_weapon(state, player_input, refs)
+    weapon_bonus = _item_attack_bonus(weapon)
+    if weapon:
+        attack_min = clamp(1 + stats["strength"] // 4 + weapon_bonus // 2, 1, 999)
+        attack_max = clamp(max(attack_min + 1, 3 + stats["strength"] // 2 + weapon_bonus), attack_min, 999)
+        weapon_name = str(weapon.get("name") or "equipped weapon")
+        weapon_code = str(weapon.get("code") or "")
+        equipment_used = {str(weapon.get("equipped_slot") or "held"): [weapon_code or weapon_name]}
+    else:
+        attack_min = clamp(1 + stats["strength"] // 5, 1, 999)
+        attack_max = clamp(max(attack_min + 1, 2 + stats["strength"] // 3), attack_min, 999)
+        weapon_name = "unarmed"
+        weapon_code = ""
+        equipment_used = {}
+    return {
+        "weapon": weapon_name,
+        "weapon_code": weapon_code,
+        "equipment": equipment_used,
+        "strength": stats["strength"],
+        "defense": stats["defense"],
+        "dodge": stats["dodge"],
+        "attack_min": attack_min,
+        "attack_max": attack_max,
+    }
+
+
+def _resolve_player_attack(state: dict[str, Any], player_input: str, target: dict[str, Any], attack: dict[str, Any]) -> dict[str, Any]:
+    target_combat = _combat_profile_from_npc(target)
+    if target_combat["max_health"] <= 0:
+        target_combat.update(_derive_npc_combat_profile(target, state))
+    seed = f"{_current_turn_number() + 1}|{player_input}|{target.get('code')}|{target_combat.get('health')}"
+    roller = random.Random(seed)
+    attack_roll = roller.randint(1, 20)
+    raw_damage = roller.randint(max(1, int(attack.get("attack_min") or 1)), max(1, int(attack.get("attack_max") or 1)))
+    attack_total = attack_roll + max(0, int(attack.get("strength") or 0) // 3)
+    evasion_target = 8 + max(0, int(target_combat.get("dodge") or 0))
+    if attack_total < evasion_target - 4:
+        outcome = "miss"
+        damage = 0
+    else:
+        defense_absorb = max(0, int(target_combat.get("defense") or 0) // 4)
+        damage = max(1, raw_damage - defense_absorb)
+        if attack_total < evasion_target:
+            outcome = "glancing_hit"
+            damage = max(1, damage // 2)
+        else:
+            outcome = "hit"
+    health_value = target_combat.get("health")
+    health_before = max(0, int(health_value if health_value is not None else target_combat.get("max_health") or 0))
+    health_after = clamp(health_before - damage, 0, max(health_before, int(target_combat.get("max_health") or health_before)))
+    return {
+        "outcome": outcome,
+        "attack_roll": attack_roll,
+        "attack_total": attack_total,
+        "evasion_target": evasion_target,
+        "raw_damage_roll": raw_damage,
+        "damage": damage,
+        "target_health_before": health_before,
+        "target_health_after": health_after,
+        "target_defeated": health_after == 0 and health_before > 0,
+    }
+
+
+def _combat_target_summary(npc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "code": npc.get("code"),
+        "name": npc.get("name"),
+        "rank": npc.get("rank"),
+        "attitude": npc.get("attitude"),
+        "combat_profile": _combat_profile_from_npc(npc),
+    }
+
+
+def _build_mechanics_context(state: dict[str, Any], player_input: str) -> dict[str, Any]:
+    intent, _secondary = _turn_intent(player_input)
+    mechanics = {
+        "version": MECHANICS_CONTEXT_VERSION,
+        "purpose": "Deterministic mechanics facts reduce LLM stat math. The model narrates and chooses special abilities/consequences; SQLite applies resolved core combat math.",
+    }
+    if intent != "combat":
+        mechanics["combat"] = {"status": "not_combat"}
+        return mechanics
+    refs = _explicit_turn_references(player_input)
+    action_kind = _combat_action_kind(player_input)
+    candidates = _combat_target_candidates(state, player_input, refs)[:6]
+    target = _clear_combat_target(state, player_input, refs)
+    attack = _player_attack_profile(state, player_input, refs)
+    combat_context: dict[str, Any] = {
+        "status": "needs_target" if target is None else action_kind,
+        "action_kind": action_kind,
+        "player_attack": attack,
+        "target_candidates": [_combat_target_summary(npc) for npc in candidates],
+        "rules": [
+            "Use player_attack.weapon and player_attack.equipment as the mechanical attack source.",
+            "Do not recalculate core damage or NPC health when resolution is present; narrate the listed result and immediate consequences.",
+            "Special abilities, enemy tactics, surrender, death, capture, noise, witnesses, and morale remain narrative/model decisions when justified.",
+            "NPC health 0 means unable to keep fighting, not automatically dead unless narration and context justify it.",
+        ],
+    }
+    if target is not None:
+        combat_context["target"] = _combat_target_summary(target)
+    if target is not None and action_kind == "player_attack":
+        combat_context["resolution"] = _resolve_player_attack(state, player_input, target, attack)
+        combat_context["status"] = "resolved_player_attack"
+    mechanics["combat"] = combat_context
+    return mechanics
 
 
 def _inventory_summary(settings: dict[str, Any], inventory: list[dict[str, Any]], equipment_slots: list[dict[str, Any]], capacity_modifiers: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -564,7 +1003,7 @@ def _write_source_index(state: dict[str, Any]) -> None:
                 _index_record(
                     "npc",
                     npc.get("name"),
-                    " | ".join(str(npc.get(key) or "") for key in ("race", "role", "summary", "attitude", "personality", "likes", "principles", "dislikes", "known_facts")),
+                    " | ".join(str(npc.get(key) or "") for key in ("race", "role", "summary", "attitude", "personality", "likes", "principles", "dislikes", "known_facts", "combat_profile")),
                     npc.get("code"),
                     extra={"location_code": location.get("code")},
                 )
@@ -633,6 +1072,7 @@ def _write_source_index(state: dict[str, Any]) -> None:
         _index_record("turn_summary", f"Turn {summary.get('turn')}", summary.get("summary"), f"T{summary.get('turn')}", int(summary.get("turn") or 0))
         for summary in state.get("turn_summaries", [])
     ]
+    consolidated_rows = _load_consolidated_fact_records()
     files = {
         "identity/player.jsonl": identity_rows,
         "identity/player_aliases.jsonl": alias_rows,
@@ -647,6 +1087,7 @@ def _write_source_index(state: dict[str, Any]) -> None:
         "inventory/summary.jsonl": inventory_rows,
         "memory/conversations.jsonl": conversation_rows,
         "memory/turn_summaries.jsonl": summary_rows,
+        "memory/consolidated_facts.jsonl": consolidated_rows,
     }
     for relative, rows in files.items():
         _write_jsonl(SOURCE_INDEX_DIR / relative, rows)
@@ -658,7 +1099,58 @@ def _write_source_index(state: dict[str, Any]) -> None:
     SOURCE_INDEX_MANIFEST.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
-def search_source_index(query: str, limit: int = 16) -> list[dict[str, Any]]:
+def _source_importance(record: dict[str, Any]) -> float:
+    """Heuristic importance weight for source_index ranking."""
+    if record.get("importance") is not None:
+        try:
+            value = float(record.get("importance") or 0)
+            return max(0.0, min(1.0, value))
+        except (TypeError, ValueError):
+            pass
+    kind = str(record.get("kind") or "").lower()
+    kind_base = {
+        "consolidated_fact": 0.72,
+        "event": 0.62,
+        "turn_summary": 0.5,
+        "npc": 0.48,
+        "conversation": 0.45,
+        "item": 0.42,
+        "location": 0.4,
+        "player": 0.55,
+    }.get(kind, 0.4)
+    text = f"{record.get('title') or ''} {record.get('text') or ''}".lower()
+    boost = 0.0
+    for term in (
+        "killed", "died", "death", "quest", "betray", "secret", "attack", "battle",
+        "oath", "alliance", "enemy", "artifact", "prophecy", "stole", "murder", "crowned",
+    ):
+        if term in text:
+            boost += 0.04
+    return max(0.0, min(1.0, kind_base + boost))
+
+
+def _score_source_record(query_tokens: set[str], record: dict[str, Any], current_turn: int = 0) -> float:
+    """Combined keyword overlap + recency + importance for relevant_sources selection."""
+    keyword_hits = _score_text(query_tokens, record.get("code"), record.get("title"), record.get("text"))
+    if keyword_hits <= 0 and str(record.get("kind") or "") != "consolidated_fact":
+        return 0.0
+    importance = _source_importance(record)
+    turn = _int_from_any(record.get("turn"), 0)
+    if turn > 0 and current_turn > 0:
+        age = max(0, current_turn - turn)
+        recency = math.exp(-age / 80.0)
+    else:
+        recency = 0.45
+    keyword_strength = min(1.0, keyword_hits / max(1, min(6, len(query_tokens) or 1)))
+    # Weights: keyword gate + recency + importance
+    score = (0.45 * keyword_strength) + (0.30 * recency) + (0.25 * importance)
+    if str(record.get("kind") or "") == "consolidated_fact" and keyword_hits <= 0:
+        # Allow high-importance consolidated facts to surface weakly without exact keyword hits.
+        score = 0.15 * recency + 0.35 * importance
+    return score
+
+
+def search_source_index(query: str, limit: int = 16, current_turn: int = 0) -> list[dict[str, Any]]:
     query_tokens = _tokens(query)
     if not query_tokens or not SOURCE_INDEX_DIR.exists():
         return []
@@ -673,8 +1165,8 @@ def search_source_index(query: str, limit: int = 16) -> list[dict[str, Any]]:
                         record = json.loads(line)
                     except json.JSONDecodeError:
                         continue
-                    score = _score_text(query_tokens, record.get("code"), record.get("title"), record.get("text"))
-                    if score:
+                    score = _score_source_record(query_tokens, record, current_turn=current_turn)
+                    if score > 0:
                         results.append(
                             {
                                 "kind": record.get("kind"),
@@ -682,14 +1174,293 @@ def search_source_index(query: str, limit: int = 16) -> list[dict[str, Any]]:
                                 "title": record.get("title", ""),
                                 "text": record.get("text", ""),
                                 "turn": record.get("turn"),
+                                "importance": _source_importance(record),
                                 "source": str(path.relative_to(SOURCE_INDEX_DIR)).replace("\\", "/"),
                                 "line": line_number,
-                                "score": score,
+                                "score": round(score, 4),
                             }
                         )
         except OSError:
             continue
-    return sorted(results, key=lambda item: item["score"], reverse=True)[:limit]
+    return sorted(results, key=lambda item: (item["score"], item.get("importance") or 0), reverse=True)[:limit]
+
+
+def _load_consolidated_facts() -> list[dict[str, Any]]:
+    if not CONSOLIDATED_FACTS_PATH.exists():
+        return []
+    facts: list[dict[str, Any]] = []
+    try:
+        with CONSOLIDATED_FACTS_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid consolidated fact JSON: {exc}") from exc
+                if not isinstance(row, dict) or not str(row.get("fact") or "").strip():
+                    raise ValueError("Consolidated fact rows must include fact text.")
+                facts.append(row)
+    except OSError as exc:
+        raise ValueError(f"Failed to read consolidated facts: {exc}") from exc
+    return facts
+
+
+def _load_consolidated_fact_records() -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for fact in _load_consolidated_facts():
+        records.append(
+            _index_record(
+                "consolidated_fact",
+                str(fact.get("title") or "Memory fact")[:160],
+                str(fact.get("fact") or "")[:1600],
+                str(fact.get("id") or fact.get("code") or ""),
+                _int_from_any(fact.get("turn"), 0) or None,
+                {
+                    "importance": _source_importance({"kind": "consolidated_fact", "importance": fact.get("importance"), "title": fact.get("title"), "text": fact.get("fact")}),
+                },
+            )
+        )
+    return records
+
+
+def _write_consolidated_facts(facts: list[dict[str, Any]]) -> None:
+    CONSOLIDATED_FACTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    trimmed = facts[-MEMORY_CONSOLIDATE_MAX_FACTS:]
+    _write_jsonl(CONSOLIDATED_FACTS_PATH, trimmed)
+
+
+def consolidate_memory(keep_recent_summaries: int | None = None, max_facts: int | None = None) -> dict[str, Any]:
+    """
+    Hierarchical memory consolidation: roll older turn summaries into durable source_index facts
+    and prune bloated summary files so prompt context stays lean.
+    """
+    keep = keep_recent_summaries if keep_recent_summaries is not None else MEMORY_CONSOLIDATE_KEEP_SUMMARIES
+    keep = max(4, int(keep))
+    fact_cap = max_facts if max_facts is not None else MEMORY_CONSOLIDATE_MAX_FACTS
+    fact_cap = max(20, int(fact_cap))
+
+    with connect() as conn:
+        summaries = rows_to_dicts(conn.execute("SELECT turn, summary FROM turn_summaries ORDER BY turn ASC").fetchall())
+        turn_row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+        current_turn = int(turn_row["value"]) if turn_row else 0
+
+    if len(summaries) <= keep:
+        return {
+            "skipped": True,
+            "reason": "not_enough_summaries",
+            "summary_count": len(summaries),
+            "facts_total": len(_load_consolidated_facts()),
+            "current_turn": current_turn,
+        }
+
+    to_roll = summaries[:-keep]
+    existing = _load_consolidated_facts()
+    existing_keys = {str(item.get("source_turn")) for item in existing if item.get("source_turn") is not None}
+    added = 0
+    for row in to_roll:
+        turn = _int_from_any(row.get("turn"), 0)
+        key = str(turn)
+        if key in existing_keys:
+            continue
+        text = str(row.get("summary") or "").strip()
+        if len(text) < 12:
+            continue
+        importance = _source_importance({"kind": "turn_summary", "title": f"Turn {turn}", "text": text})
+        existing.append(
+            {
+                "id": f"CF{turn}",
+                "code": f"CF{turn}",
+                "title": f"Turn {turn} fact",
+                "fact": text[:700],
+                "turn": turn,
+                "source_turn": turn,
+                "importance": importance,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+        existing_keys.add(key)
+        added += 1
+
+    # Prefer higher importance, then newer turns when trimming.
+    existing.sort(key=lambda item: (float(item.get("importance") or 0), _int_from_any(item.get("turn"), 0)), reverse=True)
+    existing = existing[:fact_cap]
+    _write_consolidated_facts(existing)
+
+    # Keep JSONL history summaries from ballooning: retain only recent lines.
+    if HISTORY_SUMMARY_PATH.exists():
+        try:
+            lines = [line for line in HISTORY_SUMMARY_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+            if len(lines) > keep:
+                HISTORY_SUMMARY_PATH.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
+        except OSError as exc:
+            raise ValueError(f"Failed to prune history summaries: {exc}") from exc
+
+    # Refresh source index so consolidated facts are searchable.
+    state = get_state(include_hidden=True)
+    _write_source_index(state)
+
+    return {
+        "skipped": False,
+        "facts_added": added,
+        "facts_total": len(existing),
+        "rolled_summaries": len(to_roll),
+        "kept_recent_summaries": keep,
+        "current_turn": current_turn,
+    }
+
+
+def _safe_slot_name(name: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", str(name or "").strip())
+    cleaned = cleaned.strip("._-")
+    if not cleaned:
+        raise ValueError("Campaign slot name is required.")
+    if len(cleaned) > 64:
+        raise ValueError("Campaign slot name is too long.")
+    return cleaned
+
+
+def list_campaign_slots() -> list[dict[str, Any]]:
+    CAMPAIGN_SLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    slots: list[dict[str, Any]] = []
+    for path in sorted(CAMPAIGN_SLOTS_DIR.glob("*/world.json")):
+        slot_name = path.parent.name
+        meta_path = path.parent / "metadata.json"
+        metadata: dict[str, Any] = {"slot": slot_name}
+        if meta_path.exists():
+            try:
+                metadata.update(json.loads(meta_path.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError):
+                pass
+        metadata["path"] = str(path.parent).replace("\\", "/")
+        metadata["modified"] = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+        slots.append(metadata)
+    slots.sort(key=lambda item: str(item.get("modified") or ""), reverse=True)
+    return slots
+
+
+def save_campaign_slot(slot_name: str) -> dict[str, Any]:
+    safe = _safe_slot_name(slot_name)
+    payload = export_world()
+    slot_dir = CAMPAIGN_SLOTS_DIR / safe
+    slot_dir.mkdir(parents=True, exist_ok=True)
+    world_path = slot_dir / "world.json"
+    world_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    state = get_state(include_hidden=False)
+    player = state.get("player") or {}
+    location = state.get("current_location") or {}
+    metadata = {
+        "slot": safe,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+        "player_name": player.get("name"),
+        "player_level": player.get("level"),
+        "location": location.get("name"),
+        "turn": next((int(item.get("turn") or 0) for item in state.get("turn_summaries", [])[::-1]), 0),
+        "format": payload.get("format"),
+    }
+    (slot_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
+    return metadata
+
+
+def load_campaign_slot(slot_name: str) -> dict[str, Any]:
+    safe = _safe_slot_name(slot_name)
+    world_path = CAMPAIGN_SLOTS_DIR / safe / "world.json"
+    if not world_path.exists():
+        raise ValueError(f"Campaign slot '{safe}' was not found.")
+    try:
+        data = json.loads(world_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Failed to read campaign slot '{safe}': {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError(f"Campaign slot '{safe}' is not a valid world export object.")
+    return import_world(data)
+
+
+def delete_campaign_slot(slot_name: str) -> dict[str, Any]:
+    safe = _safe_slot_name(slot_name)
+    slot_dir = CAMPAIGN_SLOTS_DIR / safe
+    if not slot_dir.exists():
+        raise ValueError(f"Campaign slot '{safe}' was not found.")
+    shutil.rmtree(slot_dir)
+    return {"deleted": safe}
+
+
+def get_context_health() -> dict[str, Any]:
+    state = get_state(include_hidden=True)
+    budget = state.get("model_budget") or {}
+    facts = _load_consolidated_facts()
+    summaries = state.get("turn_summaries") or []
+    gm_events = state.get("gm_events") or []
+    pending_gm = [event for event in gm_events if str(event.get("status") or "pending") in {"pending", "active", "background", ""}]
+    return {
+        "model_budget": budget,
+        "memory": {
+            "turn_summaries": len(summaries),
+            "consolidated_facts": len(facts),
+            "keep_recent_summaries": MEMORY_CONSOLIDATE_KEEP_SUMMARIES,
+            "max_facts": MEMORY_CONSOLIDATE_MAX_FACTS,
+            "health": (
+                "needs_consolidation"
+                if len(summaries) > MEMORY_CONSOLIDATE_KEEP_SUMMARIES + 8 and len(facts) < 3
+                else "heavy"
+                if len(facts) > MEMORY_CONSOLIDATE_MAX_FACTS * 0.85
+                else "ok"
+            ),
+        },
+        "gm_events": {
+            "total": len(gm_events),
+            "pending": len(pending_gm),
+            "interval_turns": GM_OFFSCREEN_INTERVAL,
+        },
+        "campaign_slots": list_campaign_slots(),
+        "setup_complete": bool(state.get("setup_complete")),
+    }
+
+
+def _maybe_spawn_offscreen_gm_event(conn, turn: int) -> None:
+    """Lightweight proactive off-screen pressure without an extra LLM call."""
+    if turn <= 0 or turn % GM_OFFSCREEN_INTERVAL != 0:
+        return
+    pending = conn.execute(
+        "SELECT COUNT(*) AS count FROM gm_events WHERE status IN ('pending', 'active', 'background', 'seeded', '')"
+    ).fetchone()
+    if pending and int(pending["count"] or 0) >= 12:
+        return
+    player = row_to_dict(conn.execute("SELECT * FROM player WHERE id = 1").fetchone()) or {}
+    location_id = player.get("current_location_id")
+    location = row_to_dict(
+        conn.execute("SELECT * FROM locations WHERE id = ?", (location_id,)).fetchone()
+    ) or {}
+    npc = row_to_dict(
+        conn.execute(
+            "SELECT * FROM npcs WHERE location_id = ? ORDER BY RANDOM() LIMIT 1",
+            (location_id,),
+        ).fetchone()
+    ) if location_id else None
+    templates = [
+        "Rumors thicken away from the player; loyalties may shift before the next meeting.",
+        "A delayed consequence of recent public actions continues off-screen.",
+        "Local pressure builds quietly: supply, suspicion, or opportunity moves without the player present.",
+    ]
+    if npc:
+        templates.append(f"{npc.get('name') or 'An NPC'} pursues private business that may matter later.")
+    if location.get("name"):
+        templates.append(f"Off-screen movement continues around {location.get('name')}.")
+    summary = random.choice(templates)
+    conn.execute(
+        """
+        INSERT INTO gm_events (turn, trigger, summary, status, priority, location_id, npc_id, event_id)
+        VALUES (?, ?, ?, 'pending', ?, ?, ?, NULL)
+        """,
+        (
+            turn,
+            "offscreen_tick",
+            summary[:700],
+            2,
+            location_id,
+            npc.get("id") if npc else None,
+        ),
+    )
 
 
 def get_state(include_hidden: bool = False) -> dict[str, Any]:
@@ -788,6 +1559,9 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         model_logs = rows_to_dicts(
             conn.execute("SELECT * FROM model_logs ORDER BY id DESC LIMIT 30").fetchall()
         )
+        verification_memory = rows_to_dicts(
+            conn.execute("SELECT * FROM verification_memory ORDER BY updated_at DESC, id DESC LIMIT 120").fetchall()
+        ) if include_hidden else []
         rewind_points = rows_to_dicts(
             conn.execute("SELECT id, turn, created_at FROM turn_snapshots ORDER BY id DESC LIMIT 5").fetchall()
         )
@@ -813,6 +1587,7 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         npc["known_facts"] = _json(npc.get("known_facts"), [])
         npc["stat_profile"] = _json(npc.get("stat_profile"), {})
         npc["skill_profile"] = _json(npc.get("skill_profile"), {})
+        npc["combat_profile"] = _combat_profile_from_npc(npc)
     for convo in conversations:
         convo["player_claims"] = _json(convo.get("player_claims"), [])
     for item in inventory:
@@ -821,6 +1596,8 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         item["granted_abilities"] = _normalize_granted_abilities(item.get("granted_abilities"), item)
     for slot in equipment_slots:
         slot["accepts"] = _json(slot.get("accepts"), [])
+    for entry in verification_memory:
+        entry["entity_codes"] = _json(entry.get("entity_codes"), [])
 
     equipment_effects = _equipment_effects(inventory)
     state_abilities = [*abilities, *equipment_effects["granted_abilities"]]
@@ -871,6 +1648,8 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             "warning_threshold": int(context_window * 0.75),
             "latest_estimated_tokens": latest_budget,
             "warning": latest_budget >= int(context_window * 0.75),
+            "consolidated_facts": len(_load_consolidated_facts()) if CONSOLIDATED_FACTS_PATH.exists() else 0,
+            "turn_summaries": len(turn_summaries),
         },
         "rewind_points": rewind_points,
         "history": journal,
@@ -878,6 +1657,7 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
     if include_hidden:
         state["gm_notes"] = gm_notes or {"id": 1, "content": ""}
         state["gm_events"] = gm_events
+        state["verification_memory"] = verification_memory
     return state
 
 
@@ -897,6 +1677,7 @@ def _clear_playthrough(conn) -> None:
         "karma_history",
         "turn_summaries",
         "model_logs",
+        "verification_memory",
         "gm_events",
         "turn_snapshots",
         "conversations",
@@ -916,7 +1697,7 @@ def _clear_playthrough(conn) -> None:
     conn.execute(
         """
         DELETE FROM sqlite_sequence
-        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'gm_events', 'turn_snapshots', 'journal')
+        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal')
         """
     )
     conn.execute("DELETE FROM pacing")
@@ -1243,6 +2024,7 @@ def _save_snapshot(conn, turn: int, result: dict[str, Any]) -> None:
     _snapshot_row(conn, "player_aliases", "id >= 0", (), rows)
     _snapshot_row(conn, "equipment_slots", "id >= 0", (), rows)
     _snapshot_row(conn, "inventory_capacity_modifiers", "id >= 0", (), rows)
+    _snapshot_row(conn, "verification_memory", "id >= 0", (), rows)
     _snapshot_row(conn, "pacing", "key = 'turn'", (), rows)
 
     for location in result.get("locations") or []:
@@ -1314,6 +2096,11 @@ def _save_snapshot(conn, turn: int, result: dict[str, Any]) -> None:
         table = {"npc": "npcs", "location": "locations", "item": "inventory", "event": "events"}.get(entity_type)
         if table and code:
             _snapshot_row(conn, table, "code = ?", (code,), rows)
+
+    deterministic_combat = result.get("_deterministic_combat") or {}
+    target_code = str((deterministic_combat.get("target") or {}).get("code") or "").strip()
+    if target_code:
+        _snapshot_row(conn, "npcs", "code = ?", (target_code,), rows)
 
     max_ids = {table: _max_id(conn, table) for table in AUTOINC_TABLES}
     snapshot = {
@@ -1431,6 +2218,179 @@ def _turn_risk_checks(intent: str, state: dict[str, Any], refs: dict[str, list[s
         if check not in unique_checks:
             unique_checks.append(check)
     return unique_checks
+
+
+def _stable_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=True, sort_keys=True, default=str, separators=(",", ":"))
+
+
+def _short_hash(value: Any) -> str:
+    return hashlib.sha256(_stable_json(value).encode("utf-8")).hexdigest()[:20]
+
+
+def _verification_entity_codes(context: dict[str, Any]) -> list[str]:
+    turn_plan = context.get("turn_plan") or {}
+    refs = turn_plan.get("explicit_references") or {}
+    codes = {str(code or "").upper() for code in refs.get("all", []) if str(code or "").strip()}
+    working_set = context.get("working_set") or {}
+    for key in ("current_location_code", "nearby_npc_codes", "nearby_event_codes", "source_hits"):
+        value = working_set.get(key)
+        if isinstance(value, list):
+            codes.update(str(item or "").upper() for item in value if str(item or "").strip())
+        elif value:
+            codes.add(str(value).upper())
+    mechanics = context.get("mechanics_context") or {}
+    combat = mechanics.get("combat") if isinstance(mechanics, dict) else {}
+    if isinstance(combat, dict):
+        target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+        if target.get("code"):
+            codes.add(str(target["code"]).upper())
+        weapon_code = (combat.get("player_attack") or {}).get("weapon_code") if isinstance(combat.get("player_attack"), dict) else ""
+        if weapon_code:
+            codes.add(str(weapon_code).upper())
+    return sorted(codes)[:24]
+
+
+def _verification_mechanics_signature(context: dict[str, Any]) -> dict[str, Any]:
+    mechanics = context.get("mechanics_context") or {}
+    combat = mechanics.get("combat") if isinstance(mechanics, dict) else {}
+    if not isinstance(combat, dict):
+        return {}
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+    attack = combat.get("player_attack") if isinstance(combat.get("player_attack"), dict) else {}
+    resolution = combat.get("resolution") if isinstance(combat.get("resolution"), dict) else {}
+    return {
+        "status": combat.get("status"),
+        "action_kind": combat.get("action_kind"),
+        "target_code": target.get("code"),
+        "weapon": attack.get("weapon"),
+        "weapon_code": attack.get("weapon_code"),
+        "damage": resolution.get("damage"),
+        "target_health_before": resolution.get("target_health_before"),
+        "target_health_after": resolution.get("target_health_after"),
+        "outcome": resolution.get("outcome"),
+    }
+
+
+def _verification_scope_basis(context: dict[str, Any], check_name: str) -> dict[str, Any]:
+    turn_plan = context.get("turn_plan") or {}
+    refs = turn_plan.get("explicit_references") or {}
+    current_location = context.get("current_location") or {}
+    player = context.get("player") or {}
+    options = ((context.get("settings") or {}).get("playthrough_options") or {})
+    active_alias = context.get("active_player_alias") or {}
+    equipment_effects = context.get("equipment_effects") or {}
+    inventory_summary = context.get("inventory_summary") or {}
+    basis: dict[str, Any] = {
+        "version": VERIFICATION_MEMORY_VERSION,
+        "check_name": check_name,
+        "turn_kind": turn_plan.get("turn_kind"),
+        "primary_intent": turn_plan.get("primary_intent"),
+        "secondary_intents": turn_plan.get("secondary_intents") or [],
+        "current_location_code": current_location.get("code"),
+        "refs": refs.get("all", []),
+        "focus_terms": turn_plan.get("focus_terms") or [],
+    }
+    if check_name in {"entity_references", "explicit_reference_resolution"}:
+        basis["working_set"] = context.get("working_set") or {}
+    elif check_name in {"npc_stats", "damage_scale"}:
+        basis["mechanics"] = _verification_mechanics_signature(context)
+        basis["player_level"] = player.get("level")
+        basis["effective_stats"] = player.get("effective_stats") or {}
+    elif check_name == "karma_visibility":
+        basis["active_alias"] = {
+            "id": active_alias.get("id"),
+            "active": active_alias.get("active"),
+            "disguised": active_alias.get("disguised"),
+        }
+        basis["recognition_codes"] = [item.get("event_code") for item in context.get("recognition") or [] if isinstance(item, dict)][:12]
+        basis["player_karma"] = player.get("karma")
+    elif check_name in {"location_continuity", "movement_plausibility"}:
+        basis["working_set"] = context.get("working_set") or {}
+        basis["inventory_summary"] = {
+            "over_weight": inventory_summary.get("over_weight"),
+            "over_slots": inventory_summary.get("over_slots"),
+        }
+    elif check_name in {"npc_knowledge", "relationship_consistency", "conversation_claims", "event_evidence", "response_drafts"}:
+        basis["npc_refs"] = refs.get("npcs", [])
+        basis["conversation_ids"] = [item.get("id") for item in context.get("conversations") or [] if isinstance(item, dict)][:16]
+        basis["relationship_ids"] = [item.get("id") for item in context.get("relationships") or [] if isinstance(item, dict)][:16]
+        basis["event_codes"] = [item.get("code") for item in context.get("events") or [] if isinstance(item, dict)][:16]
+    elif check_name in {"inventory_capacity", "equipment_state"}:
+        basis["item_refs"] = refs.get("items", [])
+        basis["inventory_summary"] = inventory_summary
+        basis["active_item_codes"] = equipment_effects.get("active_item_codes") or []
+    elif check_name in {"skill_growth_rules", "ability_constraints"}:
+        basis["skill_names"] = [item.get("name") for item in context.get("skills") or [] if isinstance(item, dict)][:16]
+        basis["ability_names"] = [item.get("name") for item in context.get("abilities") or [] if isinstance(item, dict)][:16]
+        basis["progression"] = {
+            "skill_style": options.get("skill_style"),
+            "skill_growth_speed": options.get("skill_growth_speed"),
+            "proficiency_growth_speed": options.get("proficiency_growth_speed"),
+        }
+    elif check_name == "race_rules":
+        basis["race_rules"] = {
+            "world_races": options.get("world_races"),
+            "magic_level": options.get("magic_level"),
+            "race_magic_rules": options.get("race_magic_rules"),
+            "race_ability_rules": options.get("race_ability_rules"),
+        }
+    else:
+        basis["working_set"] = context.get("working_set") or {}
+    return basis
+
+
+def _verification_memory_scopes(context: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    turn_plan = context.get("turn_plan") or {}
+    scopes: dict[str, dict[str, Any]] = {}
+    for check_name in turn_plan.get("verification_checks") or []:
+        check = str(check_name or "").strip()
+        if not check:
+            continue
+        basis = _verification_scope_basis(context, check)
+        context_signature = _short_hash(basis)
+        scopes[check] = {
+            "check_name": check,
+            "scope_key": f"{check}:{context_signature}",
+            "context_signature": context_signature,
+            "basis": basis,
+        }
+    return scopes
+
+
+def _verification_memory_context(context: dict[str, Any]) -> dict[str, Any]:
+    scopes = _verification_memory_scopes(context)
+    if not scopes:
+        return {"version": VERIFICATION_MEMORY_VERSION, "entries": [], "covered_checks": []}
+    scope_keys = [scope["scope_key"] for scope in scopes.values()]
+    placeholders = ", ".join("?" for _ in scope_keys)
+    params: list[Any] = [*scope_keys, VERIFICATION_MEMORY_CONFIDENCE_MIN, VERIFICATION_MEMORY_LIMIT]
+    with connect() as conn:
+        entries = rows_to_dicts(
+            conn.execute(
+                f"""
+                SELECT *
+                FROM verification_memory
+                WHERE scope_key IN ({placeholders}) AND confidence >= ?
+                ORDER BY updated_at DESC, confidence DESC
+                LIMIT ?
+                """,
+                params,
+            ).fetchall()
+        )
+    for entry in entries:
+        entry["entity_codes"] = _json(entry.get("entity_codes"), [])
+    covered_checks = sorted({str(entry.get("check_name") or "") for entry in entries if entry.get("check_name")})
+    return {
+        "version": VERIFICATION_MEMORY_VERSION,
+        "confidence_min": VERIFICATION_MEMORY_CONFIDENCE_MIN,
+        "covered_checks": covered_checks,
+        "entries": entries,
+        "scopes": [
+            {"check_name": scope["check_name"], "scope_key": scope["scope_key"], "context_signature": scope["context_signature"]}
+            for scope in scopes.values()
+        ],
+    }
 
 
 def _score_row(query: set[str], row: dict[str, Any], fields: tuple[str, ...], refs: dict[str, list[str]], current_codes: set[str] | None = None) -> int:
@@ -1576,8 +2536,8 @@ def _segment_source_slices(segment_name: str) -> list[str]:
         "immediate_pressure": ["current_location", "locations", "events", "gm_events", "turn_summaries"],
         "movement_limits": ["player", "equipment_effects", "current_location", "locations", "events", "inventory_summary", "inventory_capacity_modifiers"],
         "environment_pressure": ["current_location", "locations", "events", "event_lifecycle", "gm_events"],
-        "combat_opposition": ["player", "equipment_effects", "skills", "abilities", "locations.npcs", "relationships", "events"],
-        "damage_and_consequence": ["player", "inventory_summary", "events", "recognition", "relationships", "settings.playthrough_options"],
+        "combat_opposition": ["mechanics_context", "player", "equipment_effects", "skills", "abilities", "locations.npcs", "relationships", "events"],
+        "damage_and_consequence": ["mechanics_context", "player", "inventory_summary", "events", "recognition", "relationships", "settings.playthrough_options"],
         "ability_constraints": ["abilities", "player", "equipment_effects", "locations.npcs", "settings.playthrough_options"],
         "effect_scope": ["abilities", "skills", "events", "turn_summaries", "settings.playthrough_options"],
         "item_handling": ["inventory", "inventory_summary", "equipment_slots", "inventory_capacity_modifiers"],
@@ -1829,7 +2789,12 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             " ".join(refs["all"]),
         ]
     ).strip()
-    relevant_sources = search_source_index(search_query or player_input, limits["sources"])
+    current_turn = _int_from_any((state.get("player") or {}).get("turn"), 0)
+    if not current_turn:
+        summaries = state.get("turn_summaries") or []
+        if summaries:
+            current_turn = max(_int_from_any(item.get("turn"), 0) for item in summaries)
+    relevant_sources = search_source_index(search_query or player_input, limits["sources"], current_turn=current_turn)
     equipment_effects = state.get("equipment_effects") or _equipment_effects(state.get("inventory", []))
     state_abilities = state.get("abilities", [])
     if not state.get("equipment_effects"):
@@ -1870,13 +2835,14 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "skills": len(skills),
         "abilities": len(abilities),
         "inventory_capacity_modifiers": len(inventory_capacity_modifiers),
+        "mechanics_context": 1 if state.get("mechanics_context") else 0,
         "hidden_gm_events": len(gm_events),
         "source_hits": len(relevant_sources),
         "recognition": min(len(recognition), limits["recognition"]),
     }
     event_lifecycle = _event_lifecycle_context(state)
 
-    return {
+    prompt_context = {
         **state,
         "player": context_player,
         "locations": locations,
@@ -1902,7 +2868,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "working_set": _working_set(current_code, locations, relevant_sources),
         "event_lifecycle": event_lifecycle,
         "retrieval": {
-            "method": "sequential deterministic context planner plus action-specific player slices, active-location scoring, and source_index JSONL search",
+            "method": "sequential deterministic context planner plus mechanics context, action-specific player slices, active-location scoring, and source_index JSONL search",
             "planner": TURN_CONTEXT_PLANNER_VERSION,
             "primary_intent": turn_plan["primary_intent"],
             "action_segments": turn_plan["action_segments"],
@@ -1913,6 +2879,12 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             "source_hits": len(relevant_sources),
         },
     }
+    verification_memory = _verification_memory_context(prompt_context)
+    prompt_context["verification_memory"] = verification_memory
+    prompt_context["turn_plan"]["included_counts"]["verification_memory_hits"] = len(verification_memory.get("entries") or [])
+    prompt_context["retrieval"]["verification_memory_hits"] = len(verification_memory.get("entries") or [])
+    prompt_context["retrieval"]["verification_memory_covered_checks"] = verification_memory.get("covered_checks") or []
+    return prompt_context
 
 
 def _recognition_candidates(state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1970,6 +2942,7 @@ def _restore_snapshot_rows(conn, rows: dict[str, list[dict[str, Any]]]) -> None:
     delete_order = [
         "response_drafts",
         "model_logs",
+        "verification_memory",
         "karma_history",
         "turn_summaries",
         "gm_events",
@@ -2009,6 +2982,7 @@ def _restore_snapshot_rows(conn, rows: dict[str, list[dict[str, Any]]]) -> None:
         "karma_history",
         "turn_summaries",
         "model_logs",
+        "verification_memory",
         "journal",
         "conversations",
         "response_drafts",
@@ -3082,6 +4056,122 @@ def _write_model_usage(conn, turn: int, result: dict[str, Any]) -> None:
         )
 
 
+def _verified_memory_source(result: dict[str, Any]) -> str:
+    phases = {str(entry.get("phase") or "") for entry in result.get("_model_usage") or [] if isinstance(entry, dict)}
+    if "verify_skipped_certainty" in phases:
+        return "deterministic_policy"
+    if any(phase.startswith("verify") for phase in phases):
+        return "model_verifier"
+    return ""
+
+
+def _write_verification_memory(
+    conn,
+    turn: int,
+    result: dict[str, Any],
+    prompt_context: dict[str, Any] | None,
+    used_fallback: bool,
+) -> None:
+    if used_fallback or not isinstance(prompt_context, dict):
+        return
+    self_check = result.get("self_check") if isinstance(result.get("self_check"), dict) else {}
+    if self_check.get("passed") is not True:
+        return
+    source = _verified_memory_source(result)
+    if not source:
+        return
+    turn_plan = prompt_context.get("turn_plan") or {}
+    if turn_plan.get("turn_kind") in {"opening_scene", "continue_scene"}:
+        return
+    checks = [str(check or "").strip() for check in turn_plan.get("verification_checks") or [] if str(check or "").strip()]
+    if not checks:
+        return
+    scopes = _verification_memory_scopes(prompt_context)
+    policy = result.get("_verification_policy") if isinstance(result.get("_verification_policy"), dict) else {}
+    try:
+        policy_certainty = float(policy.get("certainty") or 0)
+    except (TypeError, ValueError):
+        policy_certainty = 0
+    confidence = max(VERIFICATION_MEMORY_CONFIDENCE_MIN, policy_certainty, 0.92 if source == "model_verifier" else 0.88)
+    confidence = min(1.0, round(confidence, 3))
+    evidence = json.dumps(
+        {
+            "reference_check": self_check.get("reference_check"),
+            "consistency_check": self_check.get("consistency_check"),
+            "turn_summary": result.get("turn_summary"),
+            "policy_mode": policy.get("mode"),
+        },
+        ensure_ascii=True,
+    )[:1400]
+    entity_codes = json.dumps(_verification_entity_codes(prompt_context), ensure_ascii=True)
+    for check in checks:
+        scope = scopes.get(check)
+        if not scope:
+            continue
+        conn.execute(
+            """
+            INSERT INTO verification_memory (
+                scope_key, check_name, intent, turn_kind, entity_codes, confidence, source,
+                last_verified_turn, hit_count, evidence, context_signature
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(scope_key, check_name) DO UPDATE SET
+                confidence = MAX(verification_memory.confidence, excluded.confidence),
+                source = excluded.source,
+                last_verified_turn = excluded.last_verified_turn,
+                hit_count = verification_memory.hit_count + 1,
+                evidence = excluded.evidence,
+                context_signature = excluded.context_signature,
+                entity_codes = excluded.entity_codes,
+                intent = excluded.intent,
+                turn_kind = excluded.turn_kind,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                scope["scope_key"],
+                check,
+                str(turn_plan.get("primary_intent") or "")[:80],
+                str(turn_plan.get("turn_kind") or "")[:80],
+                entity_codes,
+                confidence,
+                source,
+                turn,
+                evidence,
+                scope["context_signature"],
+            ),
+        )
+
+
+def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None:
+    if not isinstance(combat, dict) or combat.get("status") != "resolved_player_attack":
+        return
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+    resolution = combat.get("resolution") if isinstance(combat.get("resolution"), dict) else {}
+    target_code = norm_name(str(target.get("code") or ""))
+    damage = max(0, _int_from_any(resolution.get("damage"), 0))
+    if not target_code:
+        return
+    row = conn.execute("SELECT id, name, health, max_health FROM npcs WHERE code = ?", (target_code,)).fetchone()
+    if row is None:
+        return
+    max_health = max(0, int(row["max_health"] or 0))
+    current_health = int(row["health"] if row["health"] is not None else max_health)
+    if max_health <= 0:
+        return
+    next_health = clamp(current_health - damage, 0, max_health)
+    conn.execute("UPDATE npcs SET health = ? WHERE id = ?", (next_health, row["id"]))
+    weapon = str((combat.get("player_attack") or {}).get("weapon") or "unarmed")[:120]
+    outcome = str(resolution.get("outcome") or "resolved")[:80]
+    conn.execute(
+        "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+        (
+            turn,
+            "mechanics",
+            f"Deterministic combat: {weapon} vs {target_code} {row['name']} resolved as {outcome}; damage {damage}; health {current_health}->{next_health}/{max_health}."[:1400],
+        ),
+    )
+
+
 def _public_path(path: Path) -> str:
     return str(path).replace("\\", "/")
 
@@ -3125,11 +4215,13 @@ def _write_model_trace_file(
         "handoff_model": [
             "world.get_state include_hidden=True",
             "world.build_prompt_context deterministic planner",
+            "world.verification_memory matching for already-cleared checks",
             "llm deterministic context cleanup before draft",
             "llm.generate_turn draft JSON call",
             "llm deterministic draft payload cleanup before verifier",
+            "llm certainty policy uses deterministic and cached checks",
             "llm JSON repair/retry paths as needed",
-            "llm verifier JSON call",
+            "llm verifier JSON call when remaining checks require it",
             "llm deterministic verified payload cleanup before world application",
             "llm narration depth retry as needed",
             "world.apply_turn SQLite state application or deterministic fallback",
@@ -3336,6 +4428,7 @@ def apply_turn(
     used_fallback: bool = False,
     fallback_reason: str = "",
     input_kind: str = "player",
+    prompt_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     with connect() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
@@ -3363,8 +4456,11 @@ def apply_turn(
         _apply_response_drafts(conn, result.get("response_drafts") or [], turn)
         _apply_index_updates(conn, result.get("index_updates") or [])
         _apply_ability_updates(conn, result.get("ability_updates") or [])
+        _apply_deterministic_combat(conn, result.get("_deterministic_combat") or {}, turn)
         _write_turn_summary(conn, turn, result, player_input)
         _write_model_usage(conn, turn, result)
+        _write_verification_memory(conn, turn, result, prompt_context, used_fallback)
+        _maybe_spawn_offscreen_gm_event(conn, turn)
 
         conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (turn, input_kind[:40] or "player", player_input[:2000]))
         conn.execute(
@@ -3388,6 +4484,16 @@ def apply_turn(
                 (turn, str(entry.get("kind") or "fact")[:40], str(entry.get("content") or "")[:1400]),
             )
 
+    # Hierarchical memory: roll older summaries into durable facts after enough history accumulates.
+    try:
+        with connect() as conn:
+            summary_count = conn.execute("SELECT COUNT(*) AS count FROM turn_summaries").fetchone()
+            count = int(summary_count["count"] or 0) if summary_count else 0
+        if count > MEMORY_CONSOLIDATE_KEEP_SUMMARIES + 2:
+            consolidate_memory()
+    except Exception:
+        # Consolidation must not block turn application; use /api/memory/consolidate to force and surface errors.
+        pass
     return _state_with_refreshed_source_index()
 
 
@@ -3435,6 +4541,11 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     used_fallback = False
     fallback_reason = ""
     model_input = _expand_input_references(context, player_input)
+    if _ensure_combat_profiles_for_input(context, model_input):
+        context = get_state(include_hidden=True)
+        model_input = _expand_input_references(context, player_input)
+    mechanics_context = _build_mechanics_context(context, model_input)
+    context["mechanics_context"] = mechanics_context
     prompt_context = build_prompt_context(context, model_input)
     try:
         result = generate_turn(prompt_context, model_input)
@@ -3457,6 +4568,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         result["_model_trace"] = model_trace
         used_fallback = True
 
+    result["_deterministic_combat"] = mechanics_context.get("combat") or {}
+
     actual_player_input = journal_input if journal_input is not None else player_input
     state = apply_turn(
         result,
@@ -3464,6 +4577,7 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         used_fallback=used_fallback,
         fallback_reason=fallback_reason,
         input_kind=input_kind,
+        prompt_context=prompt_context,
     )
     debug_trace_path = _write_model_trace_file(
         _current_turn_number(),

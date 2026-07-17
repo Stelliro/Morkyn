@@ -80,6 +80,12 @@ def init_db() -> None:
                 rank TEXT NOT NULL DEFAULT 'F',
                 stat_profile TEXT NOT NULL DEFAULT '{}',
                 skill_profile TEXT NOT NULL DEFAULT '{}',
+                health INTEGER NOT NULL DEFAULT 0,
+                max_health INTEGER NOT NULL DEFAULT 0,
+                attack_min INTEGER NOT NULL DEFAULT 0,
+                attack_max INTEGER NOT NULL DEFAULT 0,
+                defense INTEGER NOT NULL DEFAULT 0,
+                dodge INTEGER NOT NULL DEFAULT 0,
                 mentioned_by TEXT,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(location_id, name),
@@ -284,6 +290,27 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
 
+            CREATE TABLE IF NOT EXISTS verification_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope_key TEXT NOT NULL,
+                check_name TEXT NOT NULL,
+                intent TEXT NOT NULL DEFAULT '',
+                turn_kind TEXT NOT NULL DEFAULT '',
+                entity_codes TEXT NOT NULL DEFAULT '[]',
+                confidence REAL NOT NULL DEFAULT 0,
+                source TEXT NOT NULL DEFAULT '',
+                last_verified_turn INTEGER NOT NULL DEFAULT 0,
+                hit_count INTEGER NOT NULL DEFAULT 1,
+                evidence TEXT NOT NULL DEFAULT '',
+                context_signature TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(scope_key, check_name)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_verification_memory_scope
+            ON verification_memory(scope_key, check_name);
+
             CREATE TABLE IF NOT EXISTS journal (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 turn INTEGER NOT NULL,
@@ -366,6 +393,17 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} TEXT NOT NULL DEFAULT {default}" if column != "trust" else "ALTER TABLE npcs ADD COLUMN trust INTEGER NOT NULL DEFAULT 0")
+
+    for column, definition in (
+        ("health", "INTEGER NOT NULL DEFAULT 0"),
+        ("max_health", "INTEGER NOT NULL DEFAULT 0"),
+        ("attack_min", "INTEGER NOT NULL DEFAULT 0"),
+        ("attack_max", "INTEGER NOT NULL DEFAULT 0"),
+        ("defense", "INTEGER NOT NULL DEFAULT 0"),
+        ("dodge", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if column not in npc_columns:
+            conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
 
     player_columns = table_columns["player"]
     if "karma" not in player_columns:

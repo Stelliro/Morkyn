@@ -3,15 +3,15 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI RPG</title>
-    <link rel="stylesheet" href="/static/styles.css?v=v0-6-0" />
+    <title>Mørkyn</title>
+    <link rel="stylesheet" href="/static/styles.css?v=v0-7-0" />
   </head>
   <body>
     <main class="app">
       <input id="modelModalToggle" class="modalToggle" type="checkbox" aria-hidden="true" />
       <section id="startSplash" class="startSplash hidden" aria-live="polite" aria-busy="true">
         <div class="startSplashPanel">
-          <p class="startSplashEyebrow">local model</p>
+          <p class="startSplashEyebrow">Mørkyn · local model</p>
           <h1>Starting playthrough</h1>
           <div id="startSplashLog" class="startSplashLog"></div>
           <div id="startSplashHeartbeat" class="startSplashHeartbeat" role="status" aria-live="polite">
@@ -28,8 +28,8 @@
         <form id="setupForm" class="setupPanel">
           <header class="setupHeader">
             <div>
-              <h1>AI RPG</h1>
-              <p>Build the parts you care about, or roll a playable start.</p>
+              <h1>Mørkyn</h1>
+              <p>Build the world you care about, or roll a playable start.</p>
             </div>
             <div class="setupActions">
               <label id="setupModelButton" class="buttonLike secondaryButton" for="modelModalToggle">LLM Settings</label>
@@ -625,7 +625,7 @@
         <section class="playPane">
           <header class="topbar">
             <div>
-              <h1>AI RPG</h1>
+              <h1>Mørkyn</h1>
               <p id="locationLine">Loading</p>
             </div>
             <div class="topActions">
@@ -634,6 +634,9 @@
               <button id="rewindButton" type="button">Rewind</button>
               <button id="exportButton" type="button">Export</button>
               <button id="importButton" type="button">Import</button>
+              <button id="saveSlotButton" type="button" title="Save named campaign slot">Save Slot</button>
+              <button id="loadSlotButton" type="button" title="Load named campaign slot">Load Slot</button>
+              <button id="compactModeButton" type="button" title="Toggle compact UI">Compact</button>
               <button id="modelButton" type="button">LLM</button>
               <button id="refreshButton" type="button">Refresh</button>
               <input id="importFile" class="hidden" type="file" accept="application/json,.json" />

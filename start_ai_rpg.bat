@@ -20,7 +20,7 @@ if not defined AI_RPG_LAUNCH_MODE if defined AI_RPG_APP_HOST set "AI_RPG_LAUNCH_
 
 if not defined AI_RPG_LAUNCH_MODE (
     echo.
-    echo AI RPG launch mode:
+    echo Morkyn launch mode:
     echo   1. This machine only  ^(http://127.0.0.1:8000^)
     echo   2. Local network / phone  ^(same Wi-Fi/LAN^)
     echo   3. VPN / virtual network  ^(Tailscale/WireGuard/ZeroTier/etc.^)

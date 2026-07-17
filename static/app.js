@@ -26,8 +26,12 @@ const regenerateButton = document.querySelector("#regenerateButton");
 const rewindButton = document.querySelector("#rewindButton");
 const exportButton = document.querySelector("#exportButton");
 const importButton = document.querySelector("#importButton");
+const saveSlotButton = document.querySelector("#saveSlotButton");
+const loadSlotButton = document.querySelector("#loadSlotButton");
+const compactModeButton = document.querySelector("#compactModeButton");
 const modelButton = document.querySelector("#modelButton");
 const importFile = document.querySelector("#importFile");
+const COMPACT_STORAGE_KEY = "ai_rpg_compact_mode";
 const locationLine = document.querySelector("#locationLine");
 const latestInput = document.querySelector("#latestInput");
 const latestOutput = document.querySelector("#latestOutput");
@@ -2408,6 +2412,18 @@ function profileLine(profile) {
     .join(", ");
 }
 
+function npcCombatLine(npc) {
+  const profile = npc?.combat_profile || {};
+  const maxHealth = Number(profile.max_health ?? npc?.max_health ?? 0) || 0;
+  if (!maxHealth) return "";
+  const health = Number(profile.health ?? npc?.health ?? maxHealth) || 0;
+  const attackMin = Number(profile.attack_min ?? npc?.attack_min ?? 0) || 0;
+  const attackMax = Number(profile.attack_max ?? npc?.attack_max ?? 0) || 0;
+  const defense = Number(profile.defense ?? npc?.defense ?? 0) || 0;
+  const dodge = Number(profile.dodge ?? npc?.dodge ?? 0) || 0;
+  return `HP ${health}/${maxHealth} · ATK ${attackMin}-${attackMax} · DEF ${defense} · Dodge ${dodge}`;
+}
+
 function abilityNameList(abilities) {
   if (!Array.isArray(abilities)) return "";
   return abilities
@@ -2468,14 +2484,94 @@ function renderBudgetCard() {
   const warning = budget.warning
     ? `<p class="budgetWarning">Prompt budget warning: latest call is ~${escapeHtml(budget.latest_estimated_tokens)} / ${escapeHtml(budget.context_window)} tokens.</p>`
     : "";
+  const memoryLine = `summaries ${escapeHtml(budget.turn_summaries ?? "?")} | consolidated facts ${escapeHtml(budget.consolidated_facts ?? 0)}`;
   return `
-    <article class="card">
-      <strong>Model Budget</strong>
-      <div class="meta">warning at ~${escapeHtml(budget.warning_threshold || "?")} tokens</div>
+    <article class="card contextHealthCard">
+      <strong>Context Health</strong>
+      <div class="meta">window ${escapeHtml(budget.context_window || "?")} · warn @ ${escapeHtml(budget.warning_threshold || "?")} · latest ~${escapeHtml(budget.latest_estimated_tokens || 0)}</div>
+      <p>${escapeHtml(memoryLine)}</p>
       <p>${escapeHtml(body)}</p>
       ${warning}
+      <div class="contextHealthActions">
+        <button id="consolidateMemoryButton" class="secondaryButton" type="button">Consolidate Memory</button>
+        <button id="refreshHealthButton" class="secondaryButton" type="button">Refresh Health</button>
+      </div>
+      <div id="contextHealthStatus" class="meta"></div>
     </article>
   `;
+}
+
+function applyCompactMode(enabled) {
+  document.body.classList.toggle("compact-mode", Boolean(enabled));
+  try {
+    window.localStorage.setItem(COMPACT_STORAGE_KEY, enabled ? "1" : "0");
+  } catch (_) {
+    /* ignore */
+  }
+  if (compactModeButton) {
+    compactModeButton.textContent = enabled ? "Comfort" : "Compact";
+  }
+}
+
+function isCompactModeEnabled() {
+  try {
+    return window.localStorage.getItem(COMPACT_STORAGE_KEY) === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+async function saveCampaignSlotPrompt() {
+  const slot = window.prompt("Campaign slot name (overwrites that slot):", "main");
+  if (slot == null) return;
+  const trimmed = String(slot).trim();
+  if (!trimmed) throw new Error("Slot name is required.");
+  const response = await fetch("/api/campaign-slots/save", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slot: trimmed }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+  latestOutput.innerHTML = paragraphs(`Saved campaign slot: ${data.slot || trimmed}`);
+}
+
+async function loadCampaignSlotPrompt() {
+  const listResponse = await fetch("/api/campaign-slots");
+  const listData = await listResponse.json().catch(() => ({}));
+  if (!listResponse.ok) throw new Error(listData.detail || `HTTP ${listResponse.status}`);
+  const slots = Array.isArray(listData.slots) ? listData.slots : [];
+  const hint = slots.length
+    ? slots.map((item) => item.slot).filter(Boolean).slice(0, 12).join(", ")
+    : "(no slots yet)";
+  const slot = window.prompt(`Load campaign slot name.\nAvailable: ${hint}`, slots[0]?.slot || "main");
+  if (slot == null) return;
+  const trimmed = String(slot).trim();
+  if (!trimmed) throw new Error("Slot name is required.");
+  const response = await fetch("/api/campaign-slots/load", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slot: trimmed }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+  }
+  await loadState();
+  latestOutput.innerHTML = paragraphs(`Loaded campaign slot: ${trimmed}`);
+}
+
+async function consolidateMemoryNow(statusEl) {
+  if (statusEl) statusEl.textContent = "Consolidating...";
+  const response = await fetch("/api/memory/consolidate", { method: "POST" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+  if (statusEl) {
+    statusEl.textContent = data.skipped
+      ? `Skipped: ${data.reason || "not needed"} (facts ${data.facts_total ?? "?"})`
+      : `Added ${data.facts_added ?? 0} facts · total ${data.facts_total ?? "?"}`;
+  }
+  await loadState();
 }
 
 function renderRewindCard() {
@@ -2731,14 +2827,14 @@ function renderNpcs() {
   );
   return npcs.length
     ? npcs
-        .map((npc) =>
-          entityCard(
-            "npc",
-            npc,
-            npc.summary || "No notes.",
+        .map((npc) => {
+          const combat = npcCombatLine(npc);
+          const meta = [
             `${escapeHtml(npc.race || "human")} · ${escapeHtml(npc.role)} · rank ${escapeHtml(npc.rank || "F")} · ${escapeHtml(npc.attitude)} · trust ${escapeHtml(npc.trust ?? 0)} · ${escapeHtml(npc.place)}`,
-          ),
-        )
+            combat ? escapeHtml(combat) : "",
+          ].filter(Boolean).join(" · ");
+          return entityCard("npc", npc, npc.summary || "No notes.", meta);
+        })
         .join("")
     : `<p class="empty">No NPCs indexed.</p>`;
 }
@@ -3028,9 +3124,11 @@ function showEntity(code) {
     const talks = (state.conversations || []).filter((talk) => talk.npc_code === entity.code);
     const statText = profileLine(entity.stat_profile);
     const skillText = profileLine(entity.skill_profile);
+    const combatText = npcCombatLine(entity);
     body = `
       <p>${escapeHtml(entity.summary || "No summary.")}</p>
       <p><strong>Race:</strong> ${escapeHtml(entity.race || "human")} · <strong>Role:</strong> ${escapeHtml(entity.role)} · <strong>Rank:</strong> ${escapeHtml(entity.rank || "F")} · <strong>Attitude:</strong> ${escapeHtml(entity.attitude)} · <strong>Trust:</strong> ${escapeHtml(entity.trust ?? 0)}</p>
+      ${combatText ? `<p><strong>Combat:</strong> ${escapeHtml(combatText)}</p>` : ""}
       <p><strong>Stats:</strong> ${escapeHtml(statText || "Not observed yet.")}</p>
       <p><strong>Skills:</strong> ${escapeHtml(skillText || "No notable skills indexed.")}</p>
       <p><strong>Personality:</strong> ${escapeHtml(entity.personality || "Unknown")}</p>
@@ -3707,6 +3805,30 @@ regenerateButton?.addEventListener("click", () => {
 rewindButton.addEventListener("click", () => rewindTurn().catch((error) => (latestOutput.innerHTML = paragraphs(error.message))));
 exportButton.addEventListener("click", () => exportWorld().catch((error) => (latestOutput.innerHTML = paragraphs(error.message))));
 importButton.addEventListener("click", () => importFile.click());
+saveSlotButton?.addEventListener("click", () => {
+  saveCampaignSlotPrompt().catch((error) => (latestOutput.innerHTML = paragraphs(error.message || String(error))));
+});
+loadSlotButton?.addEventListener("click", () => {
+  loadCampaignSlotPrompt().catch((error) => (latestOutput.innerHTML = paragraphs(error.message || String(error))));
+});
+compactModeButton?.addEventListener("click", () => {
+  applyCompactMode(!document.body.classList.contains("compact-mode"));
+});
+document.addEventListener("click", (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) return;
+  if (target.id === "consolidateMemoryButton") {
+    const statusEl = document.querySelector("#contextHealthStatus");
+    consolidateMemoryNow(statusEl).catch((error) => {
+      if (statusEl) statusEl.textContent = error.message || String(error);
+      latestOutput.innerHTML = paragraphs(error.message || String(error));
+    });
+  }
+  if (target.id === "refreshHealthButton") {
+    loadState().catch((error) => (latestOutput.innerHTML = paragraphs(error.message || String(error))));
+  }
+});
+applyCompactMode(isCompactModeEnabled());
 setupModelButton?.addEventListener("click", () => {
   window.setTimeout(() => {
     if (!modelModalToggle?.checked) return;

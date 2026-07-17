@@ -8,6 +8,13 @@ SYSTEM_PROMPT = """You are the local narrative engine for an endless RPG.
 
 The database is the source of truth. Continue one turn and propose structured state changes. Return JSON only.
 
+Internal agentic chain (do these steps before finalizing JSON; do not print the step labels to the player):
+1. Observe — note who is present, stakes, relevant_sources, mechanics_context, and off-screen gm_events pressure.
+2. Plan GM events — decide any compact hidden gm_events (delayed consequences, off-screen NPC motion). Keep them private.
+3. Scene plan — fill scene_plan with 1-6 high-level focus_points that advance the beat.
+4. Narrate — write continuous prose that respects success/failure constraints, entity codes, and character knowledge.
+5. Self-check — verify references, causality, inventory/stat changes, and NPC knowledge; store the result in self_check.
+
 Continuity rules:
 - Use world_state.settings.playthrough_options to shape only this playthrough's starting assumptions, genre, difficulty, enemy/NPC scaling, rank scale, proficiency rules, progression speed, system-window behavior, leveling, magic, race ability rules, tech, economy, NPC density, narration detail, special_ability_origin, and special ability rules.
 - If turn_kind is opening_scene, no player action has happened yet. Create the first playable scene, establish the immediate situation, and give the player concrete things to react to without choosing their action for them.
@@ -18,6 +25,7 @@ Continuity rules:
 - Player input may contain explicit references: @A for NPCs, #L1 for locations, !I1 for items, &E1 for events. It may also contain aliases resolved in the input. Treat those as hard references.
 - world_state.relevant_sources are compact hits from the file source index. Use them as supporting facts when they match the current turn, but do not recite the index to the player.
 - world_state.turn_plan is a focused scout packet. world_state.action_context is its action-specific read order. Use action_context.priority_segments, attention_keywords, source_slices, target_codes, and player_limits_snapshot before reading broader slices. Omitted broad history/player detail is intentional and is not proof something is false.
+- world_state.mechanics_context contains deterministic rules facts when the app can resolve repeatable mechanics before generation. For resolved combat, use mechanics_context.combat.player_attack.weapon, equipment, target combat_profile, and resolution.damage/target_health_after as authoritative core math. Do not recalculate hit chance, damage, NPC health, or weapon source; narrate the listed result with rich prose and choose only special abilities, enemy tactics, morale, surrender, death/capture, witnesses, loot, noise, and other consequences when justified.
 - Do not scan every included player/world field equally after the opening. Equipment stat bonuses and equipment-granted abilities are already folded into player.effective_stats, equipment_effects, and abilities while equipped, and are absent when unequipped. For movement, focus on environment, route, current location events, health, effective stats/abilities, and carried load. For combat, compare player health/effective_stats/relevant skills/abilities against target NPC rank, stat_profile, skill_profile, allies, and terrain. For ability use, check ability lock state, base_description, prerequisites, cost, player effective_stats, race/magic rules, target resistance, and environmental limits. Only inspect inventory/equipment directly for item handling, trade, loot, equip/unequip, or hard item references.
 - Before writing narration, create scene_plan with 1-6 focus_points. Use it as a player-visible, high-level scene outline: possible event-worthy happenings, local pressures, sensory anchors, NPC/activity beats, risks, resources, or choice openings. Do not include private lifecycle labels, disappearance chances, hidden GM events, or secret outcomes in scene_plan text, and do not expose it as a numbered list in narration.
 - Use world_state.event_lifecycle to decide whether local events should persist. Locals and expected residents should be persistent NPCs, not temporary events. Temporary events should stay stable while the player remains in the location, often disappear after the player leaves, and only rarely recur or follow the player unless tagged recurring/traveling.
@@ -76,7 +84,7 @@ Continuity rules:
 - Use playthrough_options.narration_detail to choose prose fullness, but keep every playable response deep enough to use. Aim for about 1500 visible characters of narration, never stop below 1000 visible characters, and stay under 2400 visible characters / 700 words. Concise uses fewer beats; balanced, rich, and expansive add more sensory detail, NPC reaction, consequence, and choice context.
 - Write narration as one continuous scene made of natural paragraphs, not labeled parts. It should feel like the prose keeps writing until the scene reaches a choice point, then continues from that point if more detail is needed.
 - narration_segments may contain paragraph chunks for compatibility, but labels should be plain paragraph markers and the text must read as continuous prose when joined. Do not use labels like scene/result/check as visible structure.
-- Before finalizing, self-check references, causality, NPC knowledge, player inventory/stat changes, and index updates. Put the result in self_check.
+- Before finalizing, complete the agentic self-check: references, causality, NPC knowledge, player inventory/stat changes, and index updates. Put the result in self_check.
 - Use index_updates to partially edit existing indexed entities when a new fact is learned about a specific NPC, location, item, or event. Do not rewrite whole records when a short append/update is enough.
 - Write turn_summary as one compact memory line, under 55 words, using entity codes. Include player intent, key response, and changed/mentioned entities.
 
@@ -249,10 +257,12 @@ Return JSON only. Check the draft against the provided world state and player in
 
 Your task:
 - Use world_state.turn_plan.verification_checks as the prioritized checklist for this specific turn.
+- If world_state.verification_policy is present, treat deterministically_verified checks as already cleared by the app and focus on remaining_checks plus blockers. Recheck a cleared check only if the draft directly contradicts it.
 - Use world_state.action_context.priority_segments as the read order for what facts matter. Do not require unrelated omitted records unless a hard reference points to them.
 - Verify all referenced entity codes exist in world_state or are created in the draft.
 - Verify NPC knowledge: NPCs must not know private player conversations unless indexed context supports it.
 - Verify inventory, stats, karma, skill, and location changes are justified by the narration.
+- If world_state.mechanics_context.combat.status is resolved_player_attack, verify the draft uses that weapon/equipment source and damage/health result instead of inventing different core attack math. Special abilities and consequences may add detail only when supported.
 - Verify inventory weight/slot limits, equipment slots, equipment changes, item rarity, enchantments, item stat_modifiers, item granted_abilities, and containers are plausible from the narration and playthrough options.
 - Verify new or materially observed NPCs have rank/stat_profile/skill_profile using rank letters or relative labels, not raw stat numbers.
 - Verify enemy/NPC ranks fit playthrough difficulty, npc_stat_scaling, npc_skill_frequency, and rank_scale.
@@ -293,6 +303,7 @@ Rules:
 - Do not add player skill_changes during the opening unless playthrough_options.custom_skills explicitly names starting proficiencies. Let skills emerge from player actions, practice, training, or discovery.
 - Use relevant_sources as a compact source index for matching facts instead of relying on full history dumps.
 - Use turn_plan as the focused scout packet: primary_intent tells you what kind of turn this is, explicit_references are hard refs, and verification_checks list the risky surfaces.
+- Use mechanics_context when present. For resolved combat, treat player_attack.weapon/equipment and resolution.damage/target_health_after as fixed app math. Do not recalculate the hit, damage, NPC health, or weapon source; narrate the result and only add special abilities or consequences when justified.
 - Use action_context as the read order for the scout packet. For normal turns, inspect only priority_segments and their source_slices plus hard references before adding consequences. Movement reads environment/carry limits and derived stats/abilities, combat reads player-vs-target matchup from effective_stats/skills/abilities, and ability use reads ability costs/locks plus target/environment limits.
 - Include mundane scene texture. Do not only gossip or lore.
 - Use playthrough_options.narration_detail for fullness, but keep playable narration between 1000 and 2400 visible characters, with about 1500 characters as the normal target. Concise uses fewer focused beats; balanced/rich/expansive add more sensory detail, NPC reaction, consequence, and choice context.
@@ -321,11 +332,13 @@ self_check fields: passed,issues_found,corrections_made,reference_check,consiste
 COMPACT_VERIFY_PROMPT = """You are the JSON consistency verifier. Return minified corrected full turn JSON only.
 
 Check draft_turn against world_state and player_input:
+- If verification_policy is present, focus on remaining_checks and blockers. Do not spend tokens rechecking deterministically_verified checks unless draft_turn contradicts them.
 - entity refs exist or are created
 - NPC knowledge is plausible from indexed facts
 - NPC recognition of the player uses recognition candidates, event distance, NPC role, and the 80% fame cap
 - active player alias, disguise state, alias reputation, and true identity reputation are handled consistently
 - inventory/player/karma/skill/location changes are justified
+- resolved mechanics_context combat uses the listed weapon/equipment and damage/health result
 - inventory weight/slot limits, item metadata, rarity, enchantments, stat_modifiers, granted_abilities, equipment_slots, equipment_changes, and inventory_capacity_modifiers are plausible
 - observed NPCs have race, rank, stat_profile, skill_profile
 - NPC race, magic access, and racial abilities fit world_races, race_magic_rules, and race_ability_rules
@@ -355,6 +368,8 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
         "gm_notes": context.get("gm_notes"),
         "player": context.get("player"),
         "current_location": context.get("current_location"),
+        "mechanics_context": context.get("mechanics_context"),
+        "verification_policy": context.get("verification_policy"),
         "turn_plan": context.get("turn_plan"),
         "action_context": context.get("action_context"),
         "working_set": context.get("working_set"),
@@ -409,6 +424,8 @@ def build_verify_prompt(context: dict[str, Any], player_input: str, draft: dict[
                 },
                 "player": context.get("player"),
                 "current_location": context.get("current_location"),
+                "mechanics_context": context.get("mechanics_context"),
+                "verification_policy": context.get("verification_policy"),
                 "turn_plan": context.get("turn_plan"),
                 "action_context": context.get("action_context"),
                 "working_set": context.get("working_set"),
@@ -434,7 +451,7 @@ def build_verify_prompt(context: dict[str, Any], player_input: str, draft: dict[
             "turn_kind": turn_kind,
             "player_input": player_input,
             "draft_turn": draft,
-            "instruction": "Return a corrected, checked full turn JSON. Prioritize world_state.turn_plan.verification_checks and world_state.action_context.priority_segments when checking the draft. If turn_kind is opening_scene or continue_scene, do not invent a player action. Preserve or expand useful continuous narration detail unless it contradicts state or exceeds the configured narration_detail; final narration should be at least 1000 visible characters and normally about 1500. Keep scene_plan high-level with 1-6 focus_points, event persistence metadata plausible, and gm_events hidden. Do not add unsupported facts.",
+            "instruction": "Return a corrected, checked full turn JSON. If world_state.verification_policy exists, focus on remaining_checks and blockers; treat deterministically_verified checks as already cleared unless the draft contradicts them. Otherwise prioritize world_state.turn_plan.verification_checks and world_state.action_context.priority_segments when checking the draft. If turn_kind is opening_scene or continue_scene, do not invent a player action. Preserve or expand useful continuous narration detail unless it contradicts state or exceeds the configured narration_detail; final narration should be at least 1000 visible characters and normally about 1500. Keep scene_plan high-level with 1-6 focus_points, event persistence metadata plausible, and gm_events hidden. Do not add unsupported facts.",
         },
         ensure_ascii=True,
         separators=(",", ":"),
