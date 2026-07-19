@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -10,7 +12,46 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
 from app.db import init_db
-from app.llm import LlmError, fallback_setup_randomization, generate_setup_randomization, get_model_config, test_model_connection, update_model_config
+from app.image_backends import (
+    build_portrait_prompt,
+    generate_image,
+    get_image_config,
+    probe_image_backend,
+    public_image_config,
+    update_image_config,
+)
+from app.tile_world import (
+    add_tile_image,
+    ascii_preview,
+    clear_run_disables,
+    delete_tile_images,
+    disable_tile_images_for_run,
+    generate_map,
+    get_map,
+    list_maps,
+    list_tile_states,
+    list_world_presets,
+    search_tile_images,
+    set_tile_images_disabled_forever,
+    suggest_tile_prompt,
+)
+from app.llm import (
+    LlmError,
+    fallback_setup_randomization,
+    generate_setup_randomization,
+    get_model_config,
+    public_model_config,
+    test_model_connection,
+    update_model_config,
+)
+from app.skill_checks import (
+    catalog_public,
+    register_or_adjust_skill,
+    resolve_check,
+    set_skill_enabled,
+    settings_from_setup,
+)
+from app.updates import apply_update, check_for_updates, current_status as update_status, rollback
 from app.world import (
     MECHANICS_CONTEXT_VERSION,
     TURN_CONTEXT_PLANNER_VERSION,
@@ -40,7 +81,7 @@ from app.world import (
 
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
-APP_VERSION = "V0.7.0"
+APP_VERSION = "V0.8.0"
 
 app = FastAPI(title="Mørkyn")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -118,6 +159,10 @@ SETUP_STRING_DEFAULTS = {
     "npc_density": "moderate",
     "quest_style": "emergent",
     "faction_pressure": "local disputes",
+    "check_difficulty": "normal",
+    "event_check_frequency": "normal",
+    "encounter_check_frequency": "normal",
+    "custom_check_notes": "",
 }
 
 SETUP_TEXT_LIMITS = {
@@ -167,6 +212,10 @@ SETUP_TEXT_LIMITS = {
     "npc_density": 80,
     "quest_style": 80,
     "faction_pressure": 100,
+    "check_difficulty": 40,
+    "event_check_frequency": 40,
+    "encounter_check_frequency": 40,
+    "custom_check_notes": 1200,
 }
 
 SETUP_BOOL_DEFAULTS = {
@@ -177,11 +226,20 @@ SETUP_BOOL_DEFAULTS = {
     "skill_levels_enabled": True,
     "proficiency_system": True,
     "race_magic_enabled": False,
+    "dice_checks_enabled": False,
+    "partial_on_specialized_skill": True,
+    "negative_outcomes": True,
+    "show_rolls_in_ui": True,
+    "crit_on_natural_max": True,
+    "fumble_on_natural_1": True,
 }
 
 SETUP_INT_DEFAULTS = {
     "inventory_weight_limit": 60,
     "inventory_slot_limit": 24,
+    "dice_sides": 20,
+    "attribute_floor_for_partial": 6,
+    "specialized_skill_partial_threshold": 2,
 }
 
 SETUP_FLOAT_FIELDS = {"skill_growth_multiplier", "proficiency_growth_multiplier", "xp_growth_multiplier"}
@@ -281,6 +339,20 @@ class SetupRequest(BaseModel):
     npc_density: str = Field(default="moderate", max_length=80)
     quest_style: str = Field(default="emergent", max_length=80)
     faction_pressure: str = Field(default="local disputes", max_length=100)
+    # Dice / skill checks (setup tab 5)
+    dice_checks_enabled: bool = False
+    dice_sides: int = Field(default=20)
+    check_difficulty: str = Field(default="normal", max_length=40)
+    event_check_frequency: str = Field(default="normal", max_length=40)
+    encounter_check_frequency: str = Field(default="normal", max_length=40)
+    partial_on_specialized_skill: bool = True
+    negative_outcomes: bool = True
+    show_rolls_in_ui: bool = True
+    crit_on_natural_max: bool = True
+    fumble_on_natural_1: bool = True
+    attribute_floor_for_partial: int = Field(default=6)
+    specialized_skill_partial_threshold: int = Field(default=2)
+    custom_check_notes: str = Field(default="", max_length=1200)
 
     @model_validator(mode="before")
     @classmethod
@@ -339,8 +411,109 @@ class ModelConfigRequest(BaseModel):
     ollama_model: str = Field(default="llama3.1", max_length=200)
     llama_cpp_base_url: str = Field(default="http://localhost:8080", max_length=300)
     gguf_model_path: str = Field(default="", max_length=1000)
+    api_base_url: str = Field(default="https://api.x.ai/v1", max_length=400)
+    api_model: str = Field(default="grok-4.5", max_length=200)
+    api_key: str = Field(default="", max_length=500)
+    api_preset: str = Field(default="xai", max_length=40)
     response_token_cap: int = Field(default=1500, ge=64, le=100000)
     response_token_hard_cap: int = Field(default=2000, ge=64, le=100000)
+
+
+class ImageConfigRequest(BaseModel):
+    provider: str = Field(default="off", max_length=40)
+    forge_base_url: str = Field(default="http://127.0.0.1:7860", max_length=400)
+    comfy_base_url: str = Field(default="http://127.0.0.1:8188", max_length=400)
+    comfy_checkpoint: str = Field(default="", max_length=300)
+    comfy_workflow: str = Field(default="txt2img_api.json", max_length=200)
+    negative_prompt: str = Field(default="", max_length=2000)
+    portrait_style: str = Field(default="", max_length=800)
+    default_width: int = Field(default=512, ge=64, le=2048)
+    default_height: int = Field(default=512, ge=64, le=2048)
+    default_steps: int = Field(default=20, ge=1, le=150)
+    default_cfg: float = Field(default=7.0, ge=1.0, le=30.0)
+    timeout_seconds: int = Field(default=180, ge=10, le=900)
+
+
+class ImageGenerateRequest(BaseModel):
+    prompt: str = Field(default="", max_length=4000)
+    negative_prompt: str | None = Field(default=None, max_length=2000)
+    width: int | None = Field(default=None, ge=64, le=2048)
+    height: int | None = Field(default=None, ge=64, le=2048)
+    steps: int | None = Field(default=None, ge=1, le=150)
+    cfg_scale: float | None = Field(default=None, ge=1.0, le=30.0)
+    seed: int | None = Field(default=None)
+    purpose: str = Field(default="generic", max_length=80)
+
+
+class PortraitRequest(BaseModel):
+    name: str = Field(default="", max_length=120)
+    title: str = Field(default="", max_length=120)
+    known_as: str = Field(default="", max_length=120)
+    backstory: str = Field(default="", max_length=2000)
+    world_style: str = Field(default="", max_length=300)
+    extra: str = Field(default="", max_length=400)
+    width: int | None = Field(default=None, ge=64, le=2048)
+    height: int | None = Field(default=None, ge=64, le=2048)
+    steps: int | None = Field(default=None, ge=1, le=150)
+    seed: int | None = Field(default=None)
+
+
+class MapGenerateRequest(BaseModel):
+    preset_id: str = Field(default="forest_march", max_length=80)
+    seed: int | None = None
+    width: int | None = Field(default=None, ge=8, le=96)
+    height: int | None = Field(default=None, ge=8, le=96)
+    assign_images: bool = True
+
+
+class TileImageSearchRequest(BaseModel):
+    query: str = Field(default="", max_length=200)
+    state_id: str = Field(default="", max_length=80)
+    include_disabled: bool = False
+    run_id: str = Field(default="", max_length=120)
+    limit: int = Field(default=80, ge=1, le=500)
+
+
+class TileImageAddRequest(BaseModel):
+    state_id: str = Field(min_length=1, max_length=80)
+    path: str = Field(default="", max_length=1000)
+    data_url: str = Field(default="", max_length=2_500_000)
+    source: str = Field(default="user", max_length=40)
+    prompt: str = Field(default="", max_length=2000)
+    tags: str = Field(default="", max_length=500)
+    quality: str = Field(default="8bit", max_length=40)
+
+
+class TileImageBulkRequest(BaseModel):
+    image_ids: list[int] = Field(default_factory=list)
+    run_id: str = Field(default="", max_length=120)
+    disabled: bool = True
+
+
+class TileImageGenerateRequest(BaseModel):
+    state_id: str = Field(min_length=1, max_length=80)
+    preset_id: str = Field(default="", max_length=80)
+    quality: str = Field(default="8bit", max_length=40)
+    prompt: str = Field(default="", max_length=2000)
+    tags: str = Field(default="", max_length=500)
+    width: int | None = Field(default=64, ge=32, le=1024)
+    height: int | None = Field(default=64, ge=32, le=1024)
+    steps: int | None = Field(default=None, ge=1, le=150)
+
+
+class AgentTurnRequest(BaseModel):
+    text: str = Field(default="", max_length=4000)
+    token: str = Field(default="", max_length=200)
+
+
+class UpdateApplyRequest(BaseModel):
+    target: str = Field(default="", max_length=200)
+    confirm: bool = False
+
+
+class RollbackRequest(BaseModel):
+    target: str = Field(default="", max_length=200)
+    confirm: bool = False
 
 
 class RandomizeSetupRequest(BaseModel):
@@ -362,6 +535,55 @@ def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
 
 
+@app.get("/privacy")
+def privacy_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "privacy.html")
+
+
+@app.get("/api/privacy")
+def api_privacy():
+    path = ROOT / "PRIVACY_POLICY.md"
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Privacy policy missing")
+    return {
+        "title": "Mørkyn Privacy Policy",
+        "markdown": path.read_text(encoding="utf-8"),
+        "path": "PRIVACY_POLICY.md",
+    }
+
+
+@app.get("/api/updates/status")
+def api_updates_status():
+    """Local git status only — does not contact the network."""
+    return update_status()
+
+
+@app.post("/api/updates/check")
+def api_updates_check():
+    """User-initiated: git fetch + GitHub latest release. Only outbound contact for updates."""
+    return check_for_updates()
+
+
+@app.post("/api/updates/apply")
+def api_updates_apply(request: UpdateApplyRequest):
+    if not request.confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true to apply an update.")
+    result = apply_update(request.target or "")
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Update failed")
+    return result
+
+
+@app.post("/api/updates/rollback")
+def api_updates_rollback(request: RollbackRequest):
+    if not request.confirm:
+        raise HTTPException(status_code=400, detail="Set confirm=true to roll back.")
+    result = rollback(request.target or "")
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Rollback failed")
+    return result
+
+
 @app.get("/api/state")
 def api_state():
     return get_state()
@@ -369,22 +591,276 @@ def api_state():
 
 @app.get("/api/version")
 def api_version():
+    git = update_status()
     return {
         "app": "Mørkyn",
         "version": APP_VERSION,
         "planner_version": TURN_CONTEXT_PLANNER_VERSION,
         "mechanics_version": MECHANICS_CONTEXT_VERSION,
+        "git_describe": git.get("describe") if git.get("ok") else None,
+        "git_head": git.get("head") if git.get("ok") else None,
     }
 
 
 @app.get("/api/model-config")
 def api_model_config():
-    return get_model_config()
+    return public_model_config()
 
 
 @app.post("/api/model-config")
 def api_update_model_config(request: ModelConfigRequest):
     return update_model_config(request.model_dump())
+
+
+@app.get("/api/image-config")
+def api_image_config():
+    """Local image backend settings (Forge / ComfyUI). Default provider is off."""
+    return public_image_config()
+
+
+@app.post("/api/image-config")
+def api_update_image_config(request: ImageConfigRequest):
+    return update_image_config(request.model_dump())
+
+
+@app.post("/api/image-status")
+def api_image_status():
+    """Probe the configured local image server (no generation)."""
+    return probe_image_backend()
+
+
+@app.post("/api/image/generate")
+def api_image_generate(request: ImageGenerateRequest):
+    result = generate_image(
+        prompt=request.prompt,
+        negative_prompt=request.negative_prompt,
+        width=request.width,
+        height=request.height,
+        steps=request.steps,
+        cfg_scale=request.cfg_scale,
+        seed=request.seed,
+        purpose=request.purpose or "generic",
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Image generation failed")
+    # Avoid huge accidental double payloads in logs — still return data_url for UI.
+    return result
+
+
+@app.post("/api/image/portrait")
+def api_image_portrait(request: PortraitRequest):
+    prompt = build_portrait_prompt(
+        name=request.name,
+        title=request.title,
+        known_as=request.known_as,
+        backstory=request.backstory,
+        world_style=request.world_style,
+        extra=request.extra,
+    )
+    result = generate_image(
+        prompt=prompt,
+        width=request.width,
+        height=request.height,
+        steps=request.steps,
+        seed=request.seed,
+        purpose="portrait",
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Portrait generation failed")
+    result["built_prompt"] = prompt
+    return result
+
+
+# --- Tile world / map presets / image archive ---------------------------------
+
+
+@app.get("/api/tiles/states")
+def api_tile_states():
+    return {"states": list_tile_states()}
+
+
+@app.get("/api/tiles/presets")
+def api_tile_presets():
+    return {"presets": list_world_presets()}
+
+
+@app.get("/api/tiles/maps")
+def api_tile_maps():
+    return {"maps": list_maps()}
+
+
+@app.get("/api/tiles/map")
+def api_tile_map(map_id: str = ""):
+    data = get_map(map_id or None)
+    if not data:
+        # Soft empty payload so the UI can boot without a hard 404.
+        return {"id": None, "tiles": [], "ascii": "", "empty": True}
+    data["ascii"] = ascii_preview(data)
+    data["empty"] = False
+    # Drop heavy nested grid duplicate if client only needs tiles
+    return data
+
+
+@app.post("/api/tiles/generate")
+def api_tiles_generate(request: MapGenerateRequest):
+    try:
+        data = generate_map(
+            preset_id=request.preset_id or "forest_march",
+            seed=request.seed,
+            width=request.width,
+            height=request.height,
+            assign_images=request.assign_images,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    data["ascii"] = ascii_preview(data)
+    # Response size: omit nested grid if large; keep flat tiles
+    data.pop("grid", None)
+    return data
+
+
+@app.post("/api/tiles/images/search")
+def api_tile_images_search(request: TileImageSearchRequest):
+    items = search_tile_images(
+        query=request.query,
+        state_id=request.state_id,
+        include_disabled=request.include_disabled,
+        run_id=request.run_id,
+        limit=request.limit,
+    )
+    return {"images": items, "count": len(items)}
+
+
+@app.post("/api/tiles/images")
+def api_tile_images_add(request: TileImageAddRequest):
+    try:
+        item = add_tile_image(
+            state_id=request.state_id,
+            path=request.path,
+            data_url=request.data_url,
+            source=request.source,
+            prompt=request.prompt,
+            tags=request.tags,
+            quality=request.quality,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return item
+
+
+@app.post("/api/tiles/images/disable-forever")
+def api_tile_images_disable_forever(request: TileImageBulkRequest):
+    n = set_tile_images_disabled_forever(request.image_ids, disabled=request.disabled)
+    return {"updated": n, "disabled": request.disabled}
+
+
+@app.post("/api/tiles/images/disable-run")
+def api_tile_images_disable_run(request: TileImageBulkRequest):
+    if not request.run_id:
+        raise HTTPException(status_code=400, detail="run_id required")
+    n = disable_tile_images_for_run(request.image_ids, request.run_id)
+    return {"updated": n, "run_id": request.run_id}
+
+
+@app.post("/api/tiles/images/clear-run-disables")
+def api_tile_images_clear_run(request: TileImageBulkRequest):
+    if not request.run_id:
+        raise HTTPException(status_code=400, detail="run_id required")
+    clear_run_disables(request.run_id)
+    return {"ok": True, "run_id": request.run_id}
+
+
+@app.post("/api/tiles/images/delete")
+def api_tile_images_delete(request: TileImageBulkRequest):
+    n = delete_tile_images(request.image_ids, delete_files=True)
+    return {"deleted": n}
+
+
+@app.post("/api/tiles/images/generate")
+def api_tile_images_generate(request: TileImageGenerateRequest):
+    """Create tile art via Forge/Comfy and archive it under the state."""
+    prompt = request.prompt.strip() or suggest_tile_prompt(
+        request.state_id,
+        quality=request.quality or "8bit",
+        preset_id=request.preset_id or "",
+    )
+    result = generate_image(
+        prompt=prompt,
+        width=request.width or 64,
+        height=request.height or 64,
+        steps=request.steps,
+        purpose=f"tile-{request.state_id}",
+    )
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Tile image generation failed")
+    try:
+        item = add_tile_image(
+            state_id=request.state_id,
+            path=str(result.get("path") or ""),
+            data_url=str(result.get("data_url") or ""),
+            source="generated",
+            prompt=prompt,
+            tags=request.tags or request.state_id,
+            quality=request.quality or "8bit",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"image": item, "generation": {k: result.get(k) for k in ("ok", "provider", "seed", "elapsed_ms", "path")}}
+
+
+def _agent_authorized(token: str = "") -> bool:
+    """Optional shared secret for external agents. Empty AI_RPG_AGENT_TOKEN = open local trust."""
+    expected = str(os.getenv("AI_RPG_AGENT_TOKEN") or "").strip()
+    if not expected:
+        return True
+    return str(token or "").strip() == expected
+
+
+@app.get("/api/agent/health")
+def api_agent_health():
+    cfg = public_model_config()
+    return {
+        "ok": True,
+        "app": "Morkyn",
+        "agent_bridge": True,
+        "auth_required": bool(str(os.getenv("AI_RPG_AGENT_TOKEN") or "").strip()),
+        "provider": cfg.get("provider"),
+        "api_model": cfg.get("api_model"),
+        "api_key_set": cfg.get("api_key_set"),
+    }
+
+
+@app.get("/api/agent/state")
+def api_agent_state(token: str = ""):
+    if not _agent_authorized(token):
+        raise HTTPException(status_code=401, detail="Invalid agent token")
+    return get_state()
+
+
+@app.post("/api/agent/turn")
+def api_agent_turn(request: AgentTurnRequest):
+    """External agents (Grok, scripts, tools) submit player actions here."""
+    if not _agent_authorized(request.token):
+        raise HTTPException(status_code=401, detail="Invalid agent token")
+    text = (request.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is required")
+    try:
+        return play_turn(text)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/agent/opening")
+def api_agent_opening(token: str = ""):
+    if not _agent_authorized(token):
+        raise HTTPException(status_code=401, detail="Invalid agent token")
+    try:
+        from app.world import play_opening_turn
+
+        return play_opening_turn()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.get("/api/model-status")
@@ -403,6 +879,143 @@ def api_model_status():
                 "managed_start": None,
             },
         )
+
+
+class SkillCheckRequest(BaseModel):
+    skill_code: str = Field(default="general", max_length=80)
+    difficulty: str = Field(default="", max_length=40)
+    dc: int | None = None
+    context_note: str = Field(default="", max_length=400)
+    player_stats: dict[str, Any] = Field(default_factory=dict)
+    player_skills: list[dict[str, Any]] = Field(default_factory=list)
+    settings: dict[str, Any] = Field(default_factory=dict)
+
+
+class SkillRegisterRequest(BaseModel):
+    name: str = Field(default="", max_length=80)
+    code: str = Field(default="", max_length=64)
+    category: str = Field(default="general", max_length=40)
+    attribute: str = Field(default="intelligence", max_length=40)
+    secondary: str = Field(default="wisdom", max_length=40)
+    description: str = Field(default="", max_length=400)
+    tags: list[str] = Field(default_factory=list)
+    base_dc: int = 12
+    source: str = Field(default="user", max_length=40)
+
+
+class SkillEnableRequest(BaseModel):
+    code: str = Field(..., max_length=64)
+    enabled: bool = True
+
+
+@app.get("/api/skill-checks/catalog")
+def api_skill_check_catalog():
+    return catalog_public()
+
+
+@app.post("/api/skill-checks/resolve")
+def api_skill_check_resolve(request: SkillCheckRequest):
+    try:
+        state = get_state()
+        options = ((state.get("settings") or {}).get("playthrough_options") or {}) if isinstance(state, dict) else {}
+        settings = request.settings or options.get("skill_check_settings") or options
+        player = (state.get("player") or {}) if isinstance(state, dict) else {}
+        stats = request.player_stats or player.get("effective_stats") or player.get("stats") or {}
+        skills = request.player_skills or (state.get("skills") if isinstance(state, dict) else []) or []
+        return resolve_check(
+            skill_code=request.skill_code or "general",
+            difficulty=request.difficulty or None,
+            dc=request.dc,
+            player_stats=stats if isinstance(stats, dict) else {},
+            player_skills=skills if isinstance(skills, list) else [],
+            settings=settings if isinstance(settings, dict) else {},
+            context_note=request.context_note,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/skill-checks/register")
+def api_skill_check_register(request: SkillRegisterRequest):
+    name = (request.name or request.code or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    try:
+        return register_or_adjust_skill(request.model_dump())
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/skill-checks/enable")
+def api_skill_check_enable(request: SkillEnableRequest):
+    row = set_skill_enabled(request.code, request.enabled)
+    if not row:
+        raise HTTPException(status_code=404, detail="Skill not found")
+    return {"skill": row}
+
+
+@app.get("/api/generation-progress")
+def api_generation_progress():
+    """Live phase + partial narration while a turn/opening is generating."""
+    try:
+        from app.generation_progress import snapshot
+
+        return snapshot()
+    except Exception as exc:
+        return {
+            "active": False,
+            "phase": "error",
+            "detail": str(exc),
+            "lines": [],
+            "preview": "",
+            "step": 0,
+            "total_steps": 0,
+            "elapsed_seconds": 0,
+        }
+
+
+@app.get("/api/debug-trace")
+def api_debug_trace(name: str = ""):
+    """
+    Read a model-trace file for the per-turn Debug panel.
+    Only basenames under the model-trace directory are allowed.
+    """
+    from app.world import MODEL_TRACE_DIR
+
+    clean = Path(str(name or "").strip()).name
+    if not clean or clean in {".", ".."} or not clean.endswith(".json"):
+        raise HTTPException(status_code=400, detail="Provide a .json trace file name.")
+    if any(ch in clean for ch in ("/", "\\")):
+        raise HTTPException(status_code=400, detail="Invalid trace name.")
+    path = (MODEL_TRACE_DIR / clean).resolve()
+    root = MODEL_TRACE_DIR.resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Trace path escapes model-trace directory.") from exc
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"Trace not found: {clean}")
+    try:
+        raw = path.read_text(encoding="utf-8")
+        # Cap response size for the browser panel (~2 MB).
+        if len(raw) > 2_000_000:
+            raw = raw[:2_000_000] + "\n/* truncated for browser view */\n"
+        try:
+            data = json.loads(raw) if not raw.endswith("/* truncated for browser view */\n") else None
+        except Exception:
+            data = None
+        return {
+            "ok": True,
+            "name": clean,
+            "path": str(path).replace("\\", "/"),
+            "bytes": path.stat().st_size,
+            "json": data,
+            "text": raw if data is None else None,
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/api/select-model-file")

@@ -1,0 +1,83 @@
+{
+  "benchmark": "benchmarks dual-role (GM + player, no local LLM)",
+  "finished_at": "2026-07-19T22:05:29",
+  "summary": {
+    "completed_turns": 100,
+    "target_turns": 100,
+    "errors": 0,
+    "elapsed_seconds": 4.889,
+    "mean_apply_ms": 45.16,
+    "unique_locations": [
+      "Ashcut Alley",
+      "Mosswake Gate",
+      "Outer Clearing",
+      "Quiet Yard",
+      "River Toll Shed"
+    ],
+    "final_state": {
+      "name": "Ashen Courier",
+      "health": 19,
+      "max_health": 20,
+      "level": 1,
+      "xp": 135,
+      "gold": 25,
+      "location": "Outer Clearing",
+      "inventory_count": 6,
+      "event_count": 7,
+      "location_count": 6,
+      "turn_summaries": 80
+    },
+    "llm_used": false,
+    "roles": [
+      "player",
+      "gm"
+    ],
+    "backend": "apply_turn/SQLite",
+    "ok": true
+  },
+  "opening_preview": "Mosswake Gate wakes under a thin frontier sky. Damp stone holds the night's cold, and cart ruts shine where lantern smoke still clings. Ashen Courier stands just inside the gate with a satchel that never quite sits light: a sealed letter presses against older cloth, and older debts press harder than the leather.\n\nMarket voices rise and fall without offering safety. A warden's gaze tracks satchels ",
+  "sample_turns": [
+    {
+      "turn": 1,
+      "kind": "survey",
+      "player": "I survey Mosswake Gate, note exits, cover, and watchers.",
+      "location": "Mosswake Gate",
+      "narration_preview": "You survey Mosswake Gate with courier patience. Exits resolve first: the gate road, the market lane, a darker alley that holds smoke and boot-scrape. Cover is imperfect\u2014crates, a cart wheel, a doorway recess\u2014but better than open mud.\n\nWatchers exist. One is obvious (Eldrin or som"
+    },
+    {
+      "turn": 10,
+      "kind": "work",
+      "player": "I look for courier work: messages, package runs, or quiet deliveries.",
+      "location": "Quiet Yard",
+      "narration_preview": "You look for courier work in Quiet Yard: short runs, sealed tags, quiet packages. One offer is honest. One is bait. You can tell them apart by who avoids looking at your satchel.\n\nYou take a small legitimate run that pays poorly and costs little trust. Better than standing still "
+    },
+    {
+      "turn": 25,
+      "kind": "listen",
+      "player": "I listen for talk of bandits, debt collectors, or sealed letters.",
+      "location": "Outer Clearing",
+      "narration_preview": "You listen without standing like a listener. In Outer Clearing, talk drifts: sealed packets, unpaid favors, a name spoken once and then not again.\n\nSomeone mentions Warden Brask in the same breath as debt. That is not proof. It is a direction."
+    },
+    {
+      "turn": 50,
+      "kind": "work",
+      "player": "I look for courier work: messages, package runs, or quiet deliveries.",
+      "location": "Quiet Yard",
+      "narration_preview": "You look for courier work in Quiet Yard: short runs, sealed tags, quiet packages. One offer is honest. One is bait. You can tell them apart by who avoids looking at your satchel.\n\nYou take a small legitimate run that pays poorly and costs little trust. Better than standing still "
+    },
+    {
+      "turn": 75,
+      "kind": "use_item",
+      "player": "I use what gear I have carefully to stay fed or unnoticed.",
+      "location": "Mosswake Gate",
+      "narration_preview": "You use what you have without ceremony: a ration if hungry, a strap if the satchel slips, shadow if eyes linger too long on Mosswake Gate.\n\nGear is a sentence written in advance. You read it carefully."
+    },
+    {
+      "turn": 100,
+      "kind": "shift",
+      "player": "I move if the scene has gone cold, or dig one layer deeper if it has not.",
+      "location": "Outer Clearing",
+      "narration_preview": "The scene at Mosswake Gate cools or thickens\u2014either way, standing still pays poorly. You shift pressure toward Outer Clearing.\n\nCycle 5 of the long road continues. The letter is still sealed. The debts are still patient. You are still moving."
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 """
 Regression tests for hierarchical memory, token budget, and source scoring.
-Run: python behavior_test.py
+Run: python tests/behavior_test.py
 """
 from __future__ import annotations
 
@@ -10,6 +10,11 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+
+# Repo root on path when run as python tests/behavior_test.py
+_ROOT = Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 temp_dir = tempfile.mkdtemp(prefix="airpg_behavior_")
 db_path = os.path.join(temp_dir, "test_world.db")

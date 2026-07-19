@@ -7,10 +7,17 @@ const setupPrevButton = document.querySelector("#setupPrev");
 const setupNextButton = document.querySelector("#setupNext");
 const setupStepStatus = document.querySelector("#setupStepStatus");
 const setupModelButton = document.querySelector("#setupModelButton");
+const privacyButton = document.querySelector("#privacyButton");
+const updatesButton = document.querySelector("#updatesButton");
 const setupStartButton = document.querySelector("#setupStart");
 const saveSetupSettingsButton = document.querySelector("#saveSetupSettings");
 const setupSettingsFile = document.querySelector("#setupSettingsFile");
 const randomizeSetup = document.querySelector("#randomizeSetup");
+const legalModal = document.querySelector("#legalModal");
+const legalModalTitle = document.querySelector("#legalModalTitle");
+const legalModalSubtitle = document.querySelector("#legalModalSubtitle");
+const legalModalContent = document.querySelector("#legalModalContent");
+const closeLegalModal = document.querySelector("#closeLegalModal");
 const turnForm = document.querySelector("#turnForm");
 const turnInput = document.querySelector("#turnInput");
 const sendButton = document.querySelector("#sendButton");
@@ -62,6 +69,7 @@ const startSplashLog = document.querySelector("#startSplashLog");
 const startSplashHeartbeat = document.querySelector("#startSplashHeartbeat");
 const startSplashHeartbeatTitle = document.querySelector("#startSplashHeartbeatTitle");
 const startSplashHeartbeatText = document.querySelector("#startSplashHeartbeatText");
+const startSplashPhase = document.querySelector("#startSplashPhase");
 const startSplashDraft = document.querySelector("#startSplashDraft");
 
 let state = null;
@@ -76,6 +84,9 @@ let aiQueue = Promise.resolve();
 let setupRandomizeLockDepth = 0;
 let startSplashTimers = [];
 let startSplashHeartbeatTimer = null;
+let generationProgressTimer = null;
+let generationProgressSeenLines = 0;
+let generationProgressLastPreview = "";
 let turnWaitTimer = null;
 let turnStreamTimer = null;
 let historyPage = 0;
@@ -260,9 +271,10 @@ const RANDOM_GROUPS = {
   world: ["world_style", "magic_level", "world_races", "race_magic_enabled", "race_magic_rarity", "tech_level", "tone", "economy", "start_location", "custom_style", "race_magic_rules", "race_ability_rules"],
   people: ["npc_density", "quest_style", "faction_pressure", "npc_stat_scaling", "npc_skill_frequency", "rank_scale"],
   rules: ["difficulty", "death_rules", "narration_detail", "loot_rarity", "inventory_weight_limit", "inventory_slot_limit", "inventory_rules", "leveling_system", "game_system", "proficiency_system", "skill_levels_enabled", "skill_style", "proficiency_access", "new_skill_frequency", "xp_growth_speed", "skill_growth_speed", "proficiency_growth_speed", "system_style", "custom_skills"],
+  checks: ["dice_checks_enabled", "dice_sides", "check_difficulty", "event_check_frequency", "encounter_check_frequency", "partial_on_specialized_skill", "negative_outcomes", "show_rolls_in_ui", "attribute_floor_for_partial", "specialized_skill_partial_threshold", "custom_check_notes"],
 };
 
-const RANDOM_GROUP_ORDER = ["character", "world", "people", "rules"];
+const RANDOM_GROUP_ORDER = ["character", "world", "people", "rules", "checks"];
 const RANDOM_FIELD_ORDER = [
   "backstory_mode",
   "world_style",
@@ -894,11 +906,81 @@ function updateStartSplashHeartbeat(startedAt) {
   startSplashHeartbeatText.textContent = `Elapsed ${elapsedLabel(startedAt)} - ${message}`;
 }
 
+function stopGenerationProgressPolling() {
+  if (generationProgressTimer) {
+    window.clearInterval(generationProgressTimer);
+    generationProgressTimer = null;
+  }
+  generationProgressSeenLines = 0;
+  generationProgressLastPreview = "";
+}
+
+async function pollGenerationProgress(options = {}) {
+  try {
+    const response = await fetch("/api/generation-progress", { cache: "no-store" });
+    if (!response.ok) return;
+    const data = await response.json();
+    applyGenerationProgress(data, options);
+  } catch {
+    /* ignore poll errors while waiting */
+  }
+}
+
+function applyGenerationProgress(data, options = {}) {
+  if (!data || typeof data !== "object") return;
+  const phase = String(data.phase || "").trim();
+  const detail = String(data.detail || "").trim();
+  const step = Number(data.step || 0);
+  const total = Number(data.total_steps || 0);
+  const phaseLabel = [phase, detail].filter(Boolean).join(" — ");
+  if (startSplashPhase && phaseLabel) {
+    const stepBit = total > 0 ? ` (${Math.min(step, total)}/${total})` : "";
+    startSplashPhase.textContent = `${phaseLabel}${stepBit}`;
+  }
+  const lines = Array.isArray(data.lines) ? data.lines : [];
+  if (options.logToSplash !== false && startSplashLog && lines.length > generationProgressSeenLines) {
+    for (let i = generationProgressSeenLines; i < lines.length; i += 1) {
+      addStartSplashLine(lines[i]);
+    }
+    generationProgressSeenLines = lines.length;
+  }
+  const waitText = document.querySelector("#turnWaitText");
+  const waitPhase = document.querySelector("#turnWaitPhase");
+  if (waitText && detail) {
+    waitText.textContent = detail;
+    waitText.dataset.livePhase = "1";
+  }
+  if (waitPhase && phaseLabel) waitPhase.textContent = phaseLabel;
+  const preview = String(data.preview || "").trim();
+  if (preview && preview !== generationProgressLastPreview) {
+    generationProgressLastPreview = preview;
+    if (startSplashDraft && options.updateSplashDraft !== false) {
+      startSplashDraft.textContent = preview;
+      startSplashDraft.classList.add("startSplashCursor");
+      startSplashDraft.scrollTop = startSplashDraft.scrollHeight;
+    }
+    const waitPreview = document.querySelector("#turnWaitPreview");
+    if (waitPreview) {
+      waitPreview.textContent = preview;
+      waitPreview.classList.remove("hidden");
+    }
+  }
+}
+
+function startGenerationProgressPolling(options = {}) {
+  stopGenerationProgressPolling();
+  generationProgressSeenLines = 0;
+  generationProgressLastPreview = "";
+  pollGenerationProgress(options);
+  generationProgressTimer = window.setInterval(() => pollGenerationProgress(options), 900);
+}
+
 function clearTurnWaitTimer() {
   if (turnWaitTimer) {
     window.clearInterval(turnWaitTimer);
     turnWaitTimer = null;
   }
+  stopGenerationProgressPolling();
 }
 
 function updateTurnWaitPanel(startedAt, kind) {
@@ -908,7 +990,10 @@ function updateTurnWaitPanel(startedAt, kind) {
   const elapsedSeconds = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
   const messages = TURN_WAIT_REASSURANCE[kind] || TURN_WAIT_REASSURANCE.turn;
   elapsed.textContent = `Elapsed ${elapsedLabel(startedAt)}`;
-  text.textContent = messages[Math.floor(elapsedSeconds / 10) % messages.length];
+  // Only use rotating reassurance when server has not posted a real phase yet.
+  if (!text.dataset.livePhase) {
+    text.textContent = messages[Math.floor(elapsedSeconds / 10) % messages.length];
+  }
 }
 
 function showTurnWaitPanel(title, kind = "turn") {
@@ -921,12 +1006,15 @@ function showTurnWaitPanel(title, kind = "turn") {
       <div class="turnWaitCopy">
         <strong>${escapeHtml(title)}</strong>
         <span id="turnWaitElapsed">Elapsed 0:00</span>
+        <p id="turnWaitPhase" class="turnWaitPhase">Preparing…</p>
         <p id="turnWaitText"></p>
+        <pre id="turnWaitPreview" class="turnWaitPreview hidden" aria-label="Live narration preview"></pre>
       </div>
     </div>
   `;
   updateTurnWaitPanel(startedAt, kind);
   turnWaitTimer = window.setInterval(() => updateTurnWaitPanel(startedAt, kind), 1000);
+  startGenerationProgressPolling({ logToSplash: false, updateSplashDraft: false });
 }
 
 function clearStartSplashTimers() {
@@ -936,6 +1024,7 @@ function clearStartSplashTimers() {
     window.clearInterval(startSplashHeartbeatTimer);
     startSplashHeartbeatTimer = null;
   }
+  stopGenerationProgressPolling();
 }
 
 function addStartSplashLine(text) {
@@ -954,32 +1043,22 @@ function showStartSplash() {
   startSplash.classList.remove("hidden");
   if (startSplashLog) startSplashLog.innerHTML = "";
   startSplashHeartbeat?.classList.remove("hidden");
+  if (startSplashPhase) startSplashPhase.textContent = "Preparing…";
   updateStartSplashHeartbeat(startedAt);
   startSplashHeartbeatTimer = window.setInterval(() => updateStartSplashHeartbeat(startedAt), 1000);
   if (startSplashDraft) {
     startSplashDraft.textContent = "";
     startSplashDraft.classList.remove("startSplashCursor");
   }
+  // Seed a few local lines; server progress replaces/extends them as soon as the request runs.
   const lines = [
     "Collecting setup rules and locked choices.",
     "Preparing the opening-scene context packet.",
-    "Selecting event-worthy focus points for the starting location.",
-    "Asking the local model for one continuous opening scene.",
-    "Verifier will check references, continuity, and state changes.",
   ];
   lines.forEach((line, index) => {
-    startSplashTimers.push(window.setTimeout(() => addStartSplashLine(line), index * 850));
+    startSplashTimers.push(window.setTimeout(() => addStartSplashLine(line), index * 400));
   });
-  [
-    "Local generation can take a minute on larger models.",
-    "Still waiting for the draft; the page is alive.",
-    "Verifier pass may be checking the draft now.",
-    "Finishing the opening scene and preparing state updates.",
-  ].forEach((line, index) => {
-    startSplashTimers.push(window.setTimeout(() => addStartSplashLine(line), 9000 + index * 16000));
-  });
-  startSplashTimers.push(window.setTimeout(() => addStartSplashLine("Still running; the elapsed timer below updates until the server responds."), 73000));
-  startSplashTimers.push(window.setTimeout(() => addStartSplashLine("Long waits usually mean model load, first-token delay, or verifier work rather than a frozen page."), 113000));
+  startGenerationProgressPolling({ logToSplash: true, updateSplashDraft: true });
 }
 
 function hideStartSplash() {
@@ -2081,6 +2160,28 @@ function ensureSettingControls(container, name) {
     <button class="miniButton" data-randomize-field="${escapeHtml(name)}" type="button">Randomize</button>
     <label class="settingLock"><input type="checkbox" data-lock-setting="${escapeHtml(name)}" /> Lock</label>
   `;
+
+  // Labels: put Randomize/Lock on the title row so free-text fields stay easy to roll one-by-one.
+  if (container.matches("label")) {
+    const title = Array.from(container.children).find((child) => child.tagName === "SPAN");
+    if (title) {
+      const header = document.createElement("div");
+      header.className = "settingFieldHeader";
+      title.replaceWith(header);
+      header.append(title, controls);
+      return;
+    }
+  }
+
+  // Fieldsets: keep controls visible under the legend, before option rows when possible.
+  if (container.matches("fieldset")) {
+    const legend = container.querySelector(":scope > legend");
+    if (legend) {
+      legend.insertAdjacentElement("afterend", controls);
+      return;
+    }
+  }
+
   container.append(controls);
 }
 
@@ -2946,27 +3047,121 @@ function renderSearch() {
   `;
 }
 
+let imageConfig = null;
+
+function renderImageForm() {
+  const config = imageConfig || {};
+  const provider = config.provider || "off";
+  return `
+    <form id="imageForm" class="modelForm imageForm">
+      <h3 class="settingsSubhead">Local image backend (optional)</h3>
+      <p class="empty">Tie in <strong>Forge / A1111</strong> or <strong>ComfyUI</strong> for portraits. Default is off — nothing leaves your machine.</p>
+      <label>
+        <span>Image provider</span>
+        <select name="provider">
+          <option value="off" ${provider === "off" ? "selected" : ""}>Off</option>
+          <option value="forge" ${provider === "forge" ? "selected" : ""}>Forge / A1111 (sdapi)</option>
+          <option value="comfyui" ${provider === "comfyui" ? "selected" : ""}>ComfyUI</option>
+        </select>
+      </label>
+      <label>
+        <span>Forge / A1111 URL</span>
+        <input name="forge_base_url" value="${escapeHtml(config.forge_base_url || "http://127.0.0.1:7860")}" maxlength="400" placeholder="http://127.0.0.1:7860" />
+      </label>
+      <label>
+        <span>ComfyUI URL</span>
+        <input name="comfy_base_url" value="${escapeHtml(config.comfy_base_url || "http://127.0.0.1:8188")}" maxlength="400" placeholder="http://127.0.0.1:8188" />
+      </label>
+      <label>
+        <span>Comfy checkpoint filename</span>
+        <input name="comfy_checkpoint" value="${escapeHtml(config.comfy_checkpoint || "")}" maxlength="300" placeholder="must match models/checkpoints/… on disk" />
+      </label>
+      <label>
+        <span>Comfy workflow (API JSON)</span>
+        <input name="comfy_workflow" value="${escapeHtml(config.comfy_workflow || "txt2img_api.json")}" maxlength="200" placeholder="txt2img_api.json" />
+      </label>
+      <label>
+        <span>Portrait style prompt</span>
+        <textarea name="portrait_style" rows="2" maxlength="800">${escapeHtml(config.portrait_style || "pixel art portrait, 8-bit style, limited palette, front view, bust")}</textarea>
+      </label>
+      <label>
+        <span>Negative prompt</span>
+        <textarea name="negative_prompt" rows="2" maxlength="2000">${escapeHtml(config.negative_prompt || "lowres, blurry, deformed, bad anatomy, watermark, text")}</textarea>
+      </label>
+      <div class="modelTokenGrid">
+        <label>
+          <span>Width</span>
+          <input name="default_width" type="number" min="64" max="2048" step="8" value="${escapeHtml(config.default_width ?? 512)}" />
+        </label>
+        <label>
+          <span>Height</span>
+          <input name="default_height" type="number" min="64" max="2048" step="8" value="${escapeHtml(config.default_height ?? 512)}" />
+        </label>
+        <label>
+          <span>Steps</span>
+          <input name="default_steps" type="number" min="1" max="150" step="1" value="${escapeHtml(config.default_steps ?? 20)}" />
+        </label>
+        <label>
+          <span>CFG</span>
+          <input name="default_cfg" type="number" min="1" max="30" step="0.5" value="${escapeHtml(config.default_cfg ?? 7)}" />
+        </label>
+      </div>
+      <div class="modelButtonRow">
+        <button type="submit">Save image settings</button>
+        <button class="secondaryButton testImageConnection" type="button">Test image backend</button>
+      </div>
+    </form>
+    <div class="modelStatus" data-image-status></div>
+    <p class="empty">Docs: <code>docs/ConnectImages.md</code>. Custom Comfy graphs go in <code>app/comfy_workflows/</code>.</p>
+  `;
+}
+
 function renderModelForm() {
   const config = modelConfig || {};
   const provider = config.provider || "llama_cpp";
+  const preset = config.api_preset || "xai";
+  const keyHint = config.api_key_set
+    ? `Key set${config.api_key_hint ? ` (${escapeHtml(config.api_key_hint)})` : ""} — leave blank to keep`
+    : "Paste key or set XAI_API_KEY / OPENAI_API_KEY / AI_RPG_API_KEY";
   return `
     <form id="modelForm" class="modelForm">
       <label>
         <span>Provider</span>
         <select name="provider">
-          <option value="llama_cpp" ${provider === "llama_cpp" ? "selected" : ""}>llama.cpp / GGUF</option>
-          <option value="ollama" ${provider === "ollama" ? "selected" : ""}>Ollama</option>
+          <option value="llama_cpp" ${provider === "llama_cpp" ? "selected" : ""}>llama.cpp / GGUF (local)</option>
+          <option value="ollama" ${provider === "ollama" ? "selected" : ""}>Ollama (local)</option>
+          <option value="openai" ${provider === "openai" ? "selected" : ""}>Cloud / agent API (OpenAI-compatible)</option>
         </select>
       </label>
       <label>
-        <span>Model Path</span>
+        <span>API preset (cloud)</span>
+        <select name="api_preset">
+          <option value="xai" ${preset === "xai" ? "selected" : ""}>xAI / Grok</option>
+          <option value="openai" ${preset === "openai" ? "selected" : ""}>OpenAI</option>
+          <option value="custom" ${preset === "custom" ? "selected" : ""}>Custom OpenAI-compatible</option>
+        </select>
+      </label>
+      <label>
+        <span>API base URL</span>
+        <input name="api_base_url" value="${escapeHtml(config.api_base_url || "https://api.x.ai/v1")}" maxlength="400" placeholder="https://api.x.ai/v1" />
+      </label>
+      <label>
+        <span>API model</span>
+        <input name="api_model" value="${escapeHtml(config.api_model || "grok-4.5")}" maxlength="200" placeholder="grok-4.5" />
+      </label>
+      <label>
+        <span>API key</span>
+        <input name="api_key" type="password" value="" maxlength="500" autocomplete="off" placeholder="${escapeHtml(keyHint)}" />
+      </label>
+      <label>
+        <span>Model Path (GGUF)</span>
         <div class="pathPickerRow">
           <input name="gguf_model_path" value="${escapeHtml(config.gguf_model_path || DEFAULT_GGUF_MODEL)}" maxlength="1000" placeholder="D:\\path\\to\\model.gguf" />
           <button class="secondaryButton selectModelFile" type="button">Select File</button>
         </div>
       </label>
       <label>
-        <span>LLM Server URL</span>
+        <span>llama.cpp Server URL</span>
         <input name="llama_cpp_base_url" value="${escapeHtml(config.llama_cpp_base_url || "http://localhost:8080")}" maxlength="300" />
       </label>
       <label>
@@ -2993,7 +3188,9 @@ function renderModelForm() {
       </div>
     </form>
     <div class="modelStatus" data-model-status></div>
-    <p class="empty">Select the local model file and the URL of the compatible LLM server that will run it.</p>
+    <p class="empty">Local: llama.cpp / Ollama. Cloud or agents: pick OpenAI-compatible (xAI Grok default). External agents can POST to <code>/api/agent/turn</code>.</p>
+    <hr class="settingsDivider" />
+    ${renderImageForm()}
   `;
 }
 
@@ -3035,12 +3232,25 @@ async function loadModelConfig() {
   renderIndex();
 }
 
+async function loadImageConfig() {
+  const response = await fetch("/api/image-config");
+  if (!response.ok) throw new Error(await response.text());
+  imageConfig = await response.json();
+  syncPortraitControls();
+  return imageConfig;
+}
+
 async function openModelModal() {
   if (!modelModal || !modelModalContent) return;
   modelModalContent.innerHTML = paragraphs("Loading model settings...");
   const response = await fetch("/api/model-config");
   if (!response.ok) throw new Error(await response.text());
   modelConfig = await response.json();
+  try {
+    await loadImageConfig();
+  } catch (_) {
+    imageConfig = imageConfig || { provider: "off" };
+  }
   modelModalContent.innerHTML = renderModelForm();
   decorateFunctionHelp(modelModalContent);
 }
@@ -3064,15 +3274,148 @@ async function saveModelConfig(form) {
 
 function modelPayloadFromForm(form) {
   const formData = new FormData(form);
+  const preset = String(formData.get("api_preset") || "xai");
+  const presetDefaults = {
+    xai: { api_base_url: "https://api.x.ai/v1", api_model: "grok-4.5" },
+    openai: { api_base_url: "https://api.openai.com/v1", api_model: "gpt-4.1-mini" },
+    custom: { api_base_url: "http://127.0.0.1:4000/v1", api_model: "local-agent" },
+  };
+  const defaults = presetDefaults[preset] || presetDefaults.xai;
+  let apiBase = String(formData.get("api_base_url") || "").trim();
+  let apiModel = String(formData.get("api_model") || "").trim();
+  // When user switches preset, empty-ish fields can adopt preset defaults client-side.
+  if (!apiBase) apiBase = defaults.api_base_url;
+  if (!apiModel) apiModel = defaults.api_model;
   return {
     provider: formData.get("provider") || "llama_cpp",
     gguf_model_path: formData.get("gguf_model_path"),
     llama_cpp_base_url: formData.get("llama_cpp_base_url"),
     ollama_model: formData.get("ollama_model") || "llama3.1",
     ollama_base_url: formData.get("ollama_base_url") || "http://localhost:11434",
+    api_preset: preset,
+    api_base_url: apiBase,
+    api_model: apiModel,
+    api_key: String(formData.get("api_key") || "").trim(),
     response_token_cap: Math.round(finiteNumber(formData.get("response_token_cap"), 1500)),
     response_token_hard_cap: Math.round(finiteNumber(formData.get("response_token_hard_cap"), 2000)),
   };
+}
+
+function imagePayloadFromForm(form) {
+  const formData = new FormData(form);
+  return {
+    provider: String(formData.get("provider") || "off"),
+    forge_base_url: String(formData.get("forge_base_url") || "http://127.0.0.1:7860").trim(),
+    comfy_base_url: String(formData.get("comfy_base_url") || "http://127.0.0.1:8188").trim(),
+    comfy_checkpoint: String(formData.get("comfy_checkpoint") || "").trim(),
+    comfy_workflow: String(formData.get("comfy_workflow") || "txt2img_api.json").trim(),
+    portrait_style: String(formData.get("portrait_style") || "").trim(),
+    negative_prompt: String(formData.get("negative_prompt") || "").trim(),
+    default_width: Math.round(finiteNumber(formData.get("default_width"), 512)),
+    default_height: Math.round(finiteNumber(formData.get("default_height"), 512)),
+    default_steps: Math.round(finiteNumber(formData.get("default_steps"), 20)),
+    default_cfg: finiteNumber(formData.get("default_cfg"), 7),
+    timeout_seconds: Math.round(finiteNumber(formData.get("timeout_seconds"), 180)),
+  };
+}
+
+async function saveImageConfig(form) {
+  const response = await fetch("/api/image-config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(imagePayloadFromForm(form)),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  imageConfig = await response.json();
+  syncPortraitControls();
+  if (modelModalContent && modelModalToggle?.checked) {
+    modelModalContent.innerHTML = `${renderModelForm()}<p class="good">Image settings saved.</p>`;
+    decorateFunctionHelp(modelModalContent);
+  }
+  return imageConfig;
+}
+
+async function testImageConnection(container) {
+  const status = container.querySelector("[data-image-status]");
+  const form = container.querySelector("#imageForm") || document.querySelector("#imageForm");
+  if (status) status.innerHTML = `<p class="empty">Saving image settings and probing backend…</p>`;
+  if (form) {
+    await saveImageConfig(form);
+  }
+  const response = await fetch("/api/image-status", { method: "POST" });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok && !payload.message) throw new Error(await response.text());
+  const ok = !!payload.ok;
+  const msg = escapeHtml(payload.message || (ok ? "OK" : "Failed"));
+  if (status) {
+    status.innerHTML = ok
+      ? `<p class="good">${msg}</p>`
+      : `<p class="bad">${msg}</p>`;
+  }
+  return payload;
+}
+
+function syncPortraitControls() {
+  const enabled = !!(imageConfig && imageConfig.enabled);
+  const preview = document.querySelector("#portraitPreviewBtn");
+  if (preview) {
+    preview.disabled = !enabled;
+    preview.title = enabled
+      ? "Generate a portrait via your local Forge/ComfyUI backend"
+      : "Enable Forge or ComfyUI under LLM Settings → Image backend";
+  }
+}
+
+function setupPortraitPayloadFromForm() {
+  const form = document.querySelector("#setupForm");
+  if (!form) return {};
+  const fd = new FormData(form);
+  const worldStyles = [...form.querySelectorAll('input[name="world_style"]:checked')]
+    .map((el) => el.value)
+    .filter((v) => v && v !== "custom");
+  return {
+    name: String(fd.get("player_name") || "").trim(),
+    title: String(fd.get("player_title") || "").trim(),
+    known_as: String(fd.get("player_public_name") || "").trim(),
+    backstory: String(fd.get("character_backstory") || "").trim(),
+    world_style: worldStyles.join(", "),
+  };
+}
+
+async function generateSetupPortrait() {
+  const frame = document.querySelector("#characterPortraitCard .portraitFrame");
+  const preview = document.querySelector("#portraitPreviewBtn");
+  if (preview) preview.disabled = true;
+  if (frame) {
+    frame.innerHTML = `<span class="visionBadge">generating…</span><div class="visionPlaceholder"><strong>Calling image backend</strong>This can take a minute on local GPUs.</div>`;
+  }
+  try {
+    if (!imageConfig) await loadImageConfig();
+    const response = await fetch("/api/image/portrait", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(setupPortraitPayloadFromForm()),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const detail = payload.detail || payload.error || (await response.text());
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    if (frame && payload.data_url) {
+      frame.innerHTML = `
+        <span class="visionBadge">${escapeHtml(payload.provider || "img")}</span>
+        <img class="portraitImage" src="${payload.data_url}" alt="Character portrait" />
+      `;
+    }
+    return payload;
+  } catch (error) {
+    if (frame) {
+      frame.innerHTML = `<span class="visionBadge">error</span><div class="visionPlaceholder"><strong>Portrait failed</strong>${escapeHtml(error.message || String(error))}</div>`;
+    }
+    throw error;
+  } finally {
+    syncPortraitControls();
+  }
 }
 
 async function selectModelFile(form) {
@@ -3163,17 +3506,221 @@ async function loadState() {
   renderShell(await response.json());
 }
 
+function buildTurnDebugBundle(payload) {
+  const turn = payload?.turn || {};
+  const existing = payload?.debug && typeof payload.debug === "object" ? { ...payload.debug } : {};
+  const selfCheck = existing.self_check || turn.self_check || {};
+  const passed = selfCheck.passed === true || selfCheck.ok === true;
+  const path = String(existing.trace_path || payload?.debug_trace_path || "").trim();
+  const name = String(existing.trace_name || (path ? path.split(/[/\\]/).pop() : "")).trim();
+  return {
+    turn: existing.turn ?? null,
+    input_kind: existing.input_kind || payload?.input_kind || "",
+    used_fallback: Boolean(existing.used_fallback ?? payload?.used_fallback),
+    fallback_reason: existing.fallback_reason || payload?.fallback_reason || "",
+    self_check: selfCheck,
+    self_check_passed: passed,
+    model_usage: Array.isArray(existing.model_usage) ? existing.model_usage : [],
+    pipeline_phases: Array.isArray(existing.pipeline_phases) ? existing.pipeline_phases : [],
+    narration_pipeline: existing.narration_pipeline || turn._narration_pipeline || null,
+    narration_chars: existing.narration_chars ?? String(turnNarrationText(turn) || "").length,
+    trace_path: path,
+    trace_name: name,
+  };
+}
+
+function turnDebugSummaryText(bundle) {
+  const check = bundle.self_check || {};
+  const status = bundle.self_check_passed ? "passed" : "needs review";
+  const usage = (bundle.model_usage || [])
+    .slice(-8)
+    .map((row) => {
+      const phase = row?.phase || "phase";
+      const chars = row?.chars != null ? `${row.chars}c` : "";
+      const err = row?.error ? ` err=${clipText(String(row.error), 80)}` : "";
+      return `${phase}${chars ? ` ${chars}` : ""}${err}`;
+    })
+    .filter(Boolean);
+  const phases = (bundle.pipeline_phases || [])
+    .slice(-6)
+    .map((row) => [row?.phase, row?.event].filter(Boolean).join("/"))
+    .filter(Boolean);
+  return [
+    `Check: ${status}${check.consistency_check ? ` · ${check.consistency_check}` : ""}`,
+    bundle.input_kind ? `Kind: ${bundle.input_kind}` : "",
+    bundle.narration_chars != null ? `Narration: ${bundle.narration_chars} chars` : "",
+    bundle.used_fallback ? `Fallback: ${clipText(bundle.fallback_reason || "yes", 160)}` : "Fallback: no",
+    usage.length ? `Usage: ${usage.join(" · ")}` : "",
+    phases.length ? `Phases: ${phases.join(" → ")}` : "",
+    bundle.trace_name ? `Trace file: ${bundle.trace_name}` : "",
+    bundle.trace_path ? `Path: ${bundle.trace_path}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+function turnDebugPanelHtml(payload) {
+  const bundle = buildTurnDebugBundle(payload);
+  const jsonText = JSON.stringify(bundle, null, 2);
+  const summary = turnDebugSummaryText(bundle);
+  const statusClass = bundle.self_check_passed ? "passed" : "failed";
+  const statusLabel = bundle.self_check_passed ? "ok" : "review";
+  const id = `turn-debug-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e4)}`;
+  return `
+    <section class="turnDebugPanel" data-turn-debug>
+      <button type="button" class="turnDebugToggle" data-debug-toggle aria-expanded="false" aria-controls="${id}">
+        <span class="turnDebugChevron" aria-hidden="true">▸</span>
+        <strong>Debug</strong>
+        <span class="turnDebugStatus ${statusClass}">${escapeHtml(statusLabel)}</span>
+        ${bundle.trace_name ? `<span class="turnDebugFile">${escapeHtml(bundle.trace_name)}</span>` : ""}
+      </button>
+      <div id="${id}" class="turnDebugBody hidden" hidden>
+        <div class="turnDebugActions">
+          <button type="button" class="secondaryButton compactButton" data-debug-copy="summary">Copy summary</button>
+          <button type="button" class="secondaryButton compactButton" data-debug-copy="json">Copy JSON</button>
+          ${bundle.trace_path ? `<button type="button" class="secondaryButton compactButton" data-debug-copy="path">Copy path</button>` : ""}
+          ${bundle.trace_name ? `<button type="button" class="secondaryButton compactButton" data-debug-view-file>View file</button>` : ""}
+        </div>
+        <pre class="turnDebugSummary" data-debug-summary>${escapeHtml(summary)}</pre>
+        <pre class="turnDebugJson hidden" data-debug-json hidden>${escapeHtml(jsonText)}</pre>
+        <pre class="turnDebugFileView hidden" data-debug-file-view hidden></pre>
+        <p class="turnDebugHint">Trace files live under <code>data/model_traces/</code> on the server machine. Expand only when you need them.</p>
+      </div>
+    </section>
+  `;
+}
+
+async function copyTextToClipboard(text) {
+  const value = String(text || "");
+  if (!value) return false;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = value;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.left = "-9999px";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    area.remove();
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function bindTurnDebugPanel(root = latestOutput) {
+  if (!root) return;
+  root.querySelectorAll("[data-turn-debug]").forEach((panel) => {
+    if (panel.dataset.bound === "1") return;
+    panel.dataset.bound = "1";
+    const toggle = panel.querySelector("[data-debug-toggle]");
+    const body = panel.querySelector(".turnDebugBody");
+    const summaryEl = panel.querySelector("[data-debug-summary]");
+    const jsonEl = panel.querySelector("[data-debug-json]");
+    const fileView = panel.querySelector("[data-debug-file-view]");
+    const chevron = panel.querySelector(".turnDebugChevron");
+
+    toggle?.addEventListener("click", () => {
+      const open = body && !body.classList.contains("hidden");
+      if (!body) return;
+      if (open) {
+        body.classList.add("hidden");
+        body.hidden = true;
+        toggle.setAttribute("aria-expanded", "false");
+        if (chevron) chevron.textContent = "▸";
+      } else {
+        body.classList.remove("hidden");
+        body.hidden = false;
+        toggle.setAttribute("aria-expanded", "true");
+        if (chevron) chevron.textContent = "▾";
+      }
+    });
+
+    panel.querySelectorAll("[data-debug-copy]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const mode = btn.getAttribute("data-debug-copy");
+        let text = "";
+        if (mode === "summary") text = summaryEl?.textContent || "";
+        else if (mode === "json") text = jsonEl?.textContent || "";
+        else if (mode === "path") {
+          text = "";
+          try {
+            const parsed = JSON.parse(jsonEl?.textContent || "{}");
+            text = parsed.trace_path || "";
+          } catch {
+            /* ignore */
+          }
+          if (!text) {
+            const match = (summaryEl?.textContent || "").match(/^Path:\s*(.+)$/m);
+            text = match ? match[1].trim() : "";
+          }
+        }
+        const ok = await copyTextToClipboard(text);
+        const prev = btn.textContent;
+        btn.textContent = ok ? "Copied" : "Copy failed";
+        window.setTimeout(() => {
+          btn.textContent = prev;
+        }, 1200);
+      });
+    });
+
+    panel.querySelector("[data-debug-view-file]")?.addEventListener("click", async (event) => {
+      const btn = event.currentTarget;
+      let name = "";
+      try {
+        const parsed = JSON.parse(jsonEl?.textContent || "{}");
+        name = parsed.trace_name || "";
+      } catch {
+        name = "";
+      }
+      if (!name && summaryEl?.textContent) {
+        const m = summaryEl.textContent.match(/^Trace file:\s*(.+)$/m);
+        name = m ? m[1].trim() : "";
+      }
+      if (!name || !fileView) return;
+      const prev = btn.textContent;
+      btn.textContent = "Loading…";
+      btn.disabled = true;
+      try {
+        const response = await fetch(`/api/debug-trace?name=${encodeURIComponent(name)}`, { cache: "no-store" });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+        const pretty = data.json
+          ? JSON.stringify(data.json, null, 2)
+          : String(data.text || "");
+        fileView.textContent = pretty || "(empty file)";
+        fileView.classList.remove("hidden");
+        fileView.hidden = false;
+        btn.textContent = "File loaded";
+      } catch (error) {
+        fileView.textContent = `Could not load trace: ${error.message || error}`;
+        fileView.classList.remove("hidden");
+        fileView.hidden = false;
+        btn.textContent = "Load failed";
+      } finally {
+        window.setTimeout(() => {
+          btn.textContent = prev;
+          btn.disabled = false;
+        }, 1400);
+      }
+    });
+  });
+}
+
 function appendTurnMeta(payload) {
   const rewardsHtml = turnRewardsHtml(payload);
   if (rewardsHtml) latestOutput.innerHTML += rewardsHtml;
-  const planHtml = scenePlanHtml(payload.turn.scene_plan);
+  const planHtml = scenePlanHtml(payload.turn?.scene_plan);
   if (planHtml) latestOutput.innerHTML += planHtml;
-  if (payload.turn.self_check) {
-    const check = payload.turn.self_check;
-    latestOutput.innerHTML += `<section class="selfCheck ${check.passed ? "passed" : "failed"}"><strong>Check:</strong> ${escapeHtml(check.passed ? "passed" : "needs review")} · ${escapeHtml(check.consistency_check || "")}</section>`;
-  }
   if (payload.used_fallback) {
-    const reason = payload.fallback_reason || payload.turn.llm_error || "No detailed error returned.";
+    const reason = payload.fallback_reason || payload.turn?.llm_error || "No detailed error returned.";
     const notice = payload.fallback_notice || fallbackNoticeText(reason);
     latestOutput.innerHTML += `
       <section class="fallbackNotice">
@@ -3183,14 +3730,9 @@ function appendTurnMeta(payload) {
       </section>
     `;
   }
-  if (payload.debug_trace_path) {
-    latestOutput.innerHTML += `
-      <section class="debugTraceNotice">
-        <strong>Debug trace</strong>
-        <p>${escapeHtml(payload.debug_trace_path)}</p>
-      </section>
-    `;
-  }
+  // Collapsed by default — expand to copy summary/JSON or view the trace file.
+  latestOutput.innerHTML += turnDebugPanelHtml(payload);
+  bindTurnDebugPanel(latestOutput);
 }
 
 function turnRewardsHtml(payload) {
@@ -4021,11 +4563,20 @@ indexContent.addEventListener("click", (event) => {
 
 modelModalContent?.addEventListener("submit", (event) => {
   const modelForm = event.target.closest("#modelForm");
-  if (!modelForm) return;
-  event.preventDefault();
-  saveModelConfig(modelForm).catch((error) => {
-    modelModalContent.innerHTML += `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
-  });
+  if (modelForm) {
+    event.preventDefault();
+    saveModelConfig(modelForm).catch((error) => {
+      modelModalContent.innerHTML += `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+    });
+    return;
+  }
+  const imageForm = event.target.closest("#imageForm");
+  if (imageForm) {
+    event.preventDefault();
+    saveImageConfig(imageForm).catch((error) => {
+      modelModalContent.innerHTML += `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+    });
+  }
 });
 
 modelModalContent?.addEventListener("click", (event) => {
@@ -4041,6 +4592,18 @@ modelModalContent?.addEventListener("click", (event) => {
       });
     return;
   }
+  const testImage = event.target.closest(".testImageConnection");
+  if (testImage) {
+    testImage.disabled = true;
+    testImageConnection(modelModalContent)
+      .catch((error) => {
+        modelModalContent.innerHTML += `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+      })
+      .finally(() => {
+        testImage.disabled = false;
+      });
+    return;
+  }
   const selectFile = event.target.closest(".selectModelFile");
   if (!selectFile) return;
   const form = selectFile.closest("#modelForm");
@@ -4053,6 +4616,15 @@ modelModalContent?.addEventListener("click", (event) => {
     .finally(() => {
       selectFile.disabled = false;
     });
+});
+
+document.addEventListener("click", (event) => {
+  const portraitBtn = event.target.closest("#portraitPreviewBtn");
+  if (!portraitBtn) return;
+  event.preventDefault();
+  generateSetupPortrait().catch(() => {
+    /* errors shown in frame */
+  });
 });
 
 indexContent.addEventListener("dragstart", (event) => {
@@ -4071,12 +4643,584 @@ turnInput.addEventListener("drop", (event) => {
   turnInput.focus();
 });
 
+function hideScriptGate() {
+  if (typeof window.__MORKYN_HIDE_GATE__ === "function") {
+    window.__MORKYN_HIDE_GATE__();
+  } else {
+    window.__MORKYN_BOOTED__ = true;
+    document.querySelector("#scriptGate")?.classList.add("hiddenGate");
+    document.querySelector("main.app")?.classList.remove("jsPending");
+    document.querySelector("main.app")?.classList.add("jsReady");
+  }
+}
+
+/** UI theme: dusk | ember | tide | bloom | ash */
+const THEME_KEY = "morkyn-ui-theme";
+const THEME_DEFAULT = "dusk";
+
+function applyUiTheme(theme) {
+  const allowed = new Set(["dusk", "ember", "tide", "bloom", "ash"]);
+  const next = allowed.has(theme) ? theme : THEME_DEFAULT;
+  if (next === "dusk") document.documentElement.removeAttribute("data-theme");
+  else document.documentElement.setAttribute("data-theme", next);
+  try {
+    localStorage.setItem(THEME_KEY, next);
+  } catch (_) {
+    /* ignore */
+  }
+  const sel = document.querySelector("#themeSelect");
+  if (sel && sel.value !== next) sel.value = next;
+}
+
+function initUiTheme() {
+  let saved = THEME_DEFAULT;
+  try {
+    saved = localStorage.getItem(THEME_KEY) || THEME_DEFAULT;
+  } catch (_) {
+    saved = THEME_DEFAULT;
+  }
+  applyUiTheme(saved);
+  const sel = document.querySelector("#themeSelect");
+  if (sel) {
+    sel.value = saved;
+    sel.addEventListener("change", () => applyUiTheme(sel.value));
+  }
+}
+
+function openLegalModal(title, subtitle, html) {
+  if (!legalModal || !legalModalContent) return;
+  if (legalModalTitle) legalModalTitle.textContent = title;
+  if (legalModalSubtitle) legalModalSubtitle.textContent = subtitle || "";
+  legalModalContent.innerHTML = html;
+  legalModal.classList.remove("hidden");
+}
+
+function closeLegal() {
+  legalModal?.classList.add("hidden");
+}
+
+async function showPrivacyModal() {
+  openLegalModal("Privacy", "Local-first. No tracking.", `<p class="empty">Loading privacy policy…</p>`);
+  try {
+    const response = await fetch("/api/privacy");
+    if (!response.ok) throw new Error(await response.text());
+    const data = await response.json();
+    const md = String(data.markdown || "");
+    legalModalContent.innerHTML = `
+      <p class="empty">Also available at <a href="/privacy" target="_blank" rel="noopener">/privacy</a> and <code>PRIVACY_POLICY.md</code>.</p>
+      <pre class="legalPre">${escapeHtml(md)}</pre>
+    `;
+  } catch (error) {
+    legalModalContent.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+  }
+}
+
+async function showUpdatesModal() {
+  openLegalModal("Updates & rollback", "Only contacts GitHub when you ask.", `<p class="empty">Loading local version…</p>`);
+  try {
+    const statusRes = await fetch("/api/updates/status");
+    const status = await statusRes.json();
+    legalModalContent.innerHTML = renderUpdatesPanel(status, null);
+    wireUpdatesPanel();
+  } catch (error) {
+    legalModalContent.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+  }
+}
+
+function renderUpdatesPanel(status, check) {
+  const s = status || {};
+  const c = check || {};
+  const events = Array.isArray(s.recent_events) ? s.recent_events : [];
+  const lkg = s.last_known_good || null;
+  return `
+    <div class="updatesPanel">
+      <p class="empty">Mørkyn does not phone home for analytics. Update check/apply only talks to <strong>GitHub</strong> when you press a button below.</p>
+      <div class="updatesGrid">
+        <div><span class="muted">Version</span><strong>${escapeHtml(s.describe || "unknown")}</strong></div>
+        <div><span class="muted">Branch</span><strong>${escapeHtml(s.branch || "—")}</strong></div>
+        <div><span class="muted">HEAD</span><strong>${escapeHtml(s.head || "—")}</strong></div>
+        <div><span class="muted">Dirty tree</span><strong>${s.dirty ? "yes (clean before update)" : "no"}</strong></div>
+      </div>
+      ${s.error && !s.ok ? `<p class="bad">${escapeHtml(s.error)}</p>` : ""}
+      ${c.message ? `<p class="${c.update_available ? "good" : "empty"}">${escapeHtml(c.message)}</p>` : ""}
+      ${c.latest_release?.tag ? `<p class="empty">Latest GitHub release: <strong>${escapeHtml(c.latest_release.tag)}</strong> ${c.latest_release.url ? `<a href="${escapeHtml(c.latest_release.url)}" target="_blank" rel="noopener">view</a>` : ""}</p>` : ""}
+      ${lkg ? `<p class="empty">Last known good before update: <code>${escapeHtml(lkg.head || "")}</code> (${escapeHtml(lkg.describe || "")})</p>` : `<p class="empty">No rollback snapshot yet — created automatically when you apply an update.</p>`}
+      <div class="modelButtonRow">
+        <button type="button" class="secondaryButton" data-update-check>Check for updates</button>
+        <button type="button" data-update-apply>Apply update</button>
+        <button type="button" class="secondaryButton" data-update-rollback>Rollback</button>
+      </div>
+      <p class="empty">Apply uses fast-forward merge to <code>origin/main</code> (or master). Rollback restores the last-known-good commit from before an apply. Restart the launcher after either.</p>
+      <div data-update-log class="updateLog"></div>
+      ${events.length ? `<h3>Recent update events</h3><pre class="legalPre">${escapeHtml(events.map((e) => JSON.stringify(e)).join("\n"))}</pre>` : ""}
+    </div>
+  `;
+}
+
+function wireUpdatesPanel() {
+  const root = legalModalContent;
+  if (!root) return;
+  const log = root.querySelector("[data-update-log]");
+  const setLog = (html) => {
+    if (log) log.innerHTML = html;
+  };
+  root.querySelector("[data-update-check]")?.addEventListener("click", async () => {
+    setLog(`<p class="empty">Contacting GitHub / git remote…</p>`);
+    try {
+      const response = await fetch("/api/updates/check", { method: "POST" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || data.error || "Check failed");
+      const statusRes = await fetch("/api/updates/status");
+      const status = await statusRes.json();
+      legalModalContent.innerHTML = renderUpdatesPanel(status, data);
+      wireUpdatesPanel();
+    } catch (error) {
+      setLog(`<p class="bad">${escapeHtml(error.message || String(error))}</p>`);
+    }
+  });
+  root.querySelector("[data-update-apply]")?.addEventListener("click", async () => {
+    if (!window.confirm("Apply update from the git remote? This only runs if your working tree is clean. Restart after.")) return;
+    setLog(`<p class="empty">Applying update…</p>`);
+    try {
+      const response = await fetch("/api/updates/apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true, target: "" }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || data.error || "Apply failed");
+      setLog(`<p class="good">${escapeHtml(data.message || "Updated.")} HEAD ${escapeHtml(data.to || "")}</p>`);
+    } catch (error) {
+      setLog(`<p class="bad">${escapeHtml(error.message || String(error))}</p>`);
+    }
+  });
+  root.querySelector("[data-update-rollback]")?.addEventListener("click", async () => {
+    if (!window.confirm("Roll back to last known good (or fail if none)? Restart after.")) return;
+    setLog(`<p class="empty">Rolling back…</p>`);
+    try {
+      const response = await fetch("/api/updates/rollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm: true, target: "" }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || data.error || "Rollback failed");
+      setLog(`<p class="good">${escapeHtml(data.message || "Rolled back.")} HEAD ${escapeHtml(data.to || "")}</p>`);
+    } catch (error) {
+      setLog(`<p class="bad">${escapeHtml(error.message || String(error))}</p>`);
+    }
+  });
+}
+
+function bindPrivacyClick(el) {
+  el?.addEventListener("click", () => {
+    showPrivacyModal().catch((error) => {
+      openLegalModal("Privacy", "", `<p class="bad">${escapeHtml(error.message || String(error))}</p>`);
+    });
+  });
+}
+function bindUpdatesClick(el) {
+  el?.addEventListener("click", () => {
+    showUpdatesModal().catch((error) => {
+      openLegalModal("Updates", "", `<p class="bad">${escapeHtml(error.message || String(error))}</p>`);
+    });
+  });
+}
+bindPrivacyClick(privacyButton);
+bindPrivacyClick(document.querySelector("#playPrivacyButton"));
+bindUpdatesClick(updatesButton);
+bindUpdatesClick(document.querySelector("#playUpdatesButton"));
+closeLegalModal?.addEventListener("click", closeLegal);
+legalModal?.addEventListener("click", (event) => {
+  if (event.target === legalModal) closeLegal();
+});
+
+initUiTheme();
+loadImageConfig().catch(() => {
+  imageConfig = { provider: "off", enabled: false };
+  syncPortraitControls();
+});
+initWorldMapUi().catch(() => {});
+hideScriptGate();
+
+// --- World map presets + tile image archive ---------------------------------
+
+let worldPresets = [];
+let tileStates = [];
+let activeMap = null;
+let tileLibSelection = new Set();
+
+async function initWorldMapUi() {
+  const presetSel = document.querySelector("#mapPresetSelect");
+  const stateSel = document.querySelector("#tileLibState");
+  try {
+    const [pRes, sRes] = await Promise.all([
+      fetch("/api/tiles/presets"),
+      fetch("/api/tiles/states"),
+    ]);
+    if (pRes.ok) {
+      const data = await pRes.json();
+      worldPresets = data.presets || [];
+    }
+    if (sRes.ok) {
+      const data = await sRes.json();
+      tileStates = data.states || [];
+    }
+  } catch (_) {
+    worldPresets = [];
+    tileStates = [];
+  }
+  if (presetSel) {
+    presetSel.innerHTML = worldPresets
+      .map(
+        (p) =>
+          `<option value="${escapeHtml(p.id)}">${escapeHtml(p.label)} · ${escapeHtml(p.age)} / ${escapeHtml(p.environment)}</option>`
+      )
+      .join("");
+    if (!presetSel.value && worldPresets[0]) presetSel.value = worldPresets[0].id;
+  }
+  if (stateSel) {
+    stateSel.innerHTML =
+      `<option value="">All states</option>` +
+      tileStates
+        .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)} (${escapeHtml(s.id)})</option>`)
+        .join("");
+  }
+  // Restore last map if any (empty payload when none generated yet).
+  try {
+    const res = await fetch("/api/tiles/map");
+    if (res.ok) {
+      const data = await res.json();
+      if (data && !data.empty && data.id) {
+        activeMap = data;
+        renderMapPreview(activeMap);
+      }
+    }
+  } catch (_) {
+    /* none yet */
+  }
+}
+
+function renderMapPreview(mapData) {
+  const asciiEl = document.querySelector("#mapAscii");
+  const metaEl = document.querySelector("#mapMeta");
+  const badge = document.querySelector("#mapFrame .visionBadge");
+  if (!mapData) return;
+  activeMap = mapData;
+  if (asciiEl) {
+    asciiEl.textContent = mapData.ascii || "(no preview)";
+  }
+  if (badge) {
+    badge.textContent = `${mapData.preset_id || "map"} · seed ${mapData.seed}`;
+  }
+  if (metaEl) {
+    const stats = mapData.stats || {};
+    const counts = stats.state_counts || {};
+    const top = Object.entries(counts)
+      .slice(0, 10)
+      .map(([k, v]) => `<span>${escapeHtml(k)} ${v}</span>`)
+      .join("");
+    const missing = (stats.missing_art_states || []).slice(0, 8).join(", ");
+    metaEl.innerHTML = `
+      <p><strong>${escapeHtml(mapData.age || "")}</strong> · ${escapeHtml(mapData.environment || "")}
+      · ${mapData.width}×${mapData.height}
+      · start (${mapData.player?.x}, ${mapData.player?.y})
+      · art ${stats.image_assigned || 0}/${stats.cells || 0}</p>
+      <div class="mapStats">${top}</div>
+      ${missing ? `<p class="empty">No art yet for: ${escapeHtml(missing)}. Use Tile library → Generate.</p>` : ""}
+    `;
+  }
+}
+
+async function generateWorldMap() {
+  const preset = document.querySelector("#mapPresetSelect")?.value || "forest_march";
+  const seedRaw = document.querySelector("#mapSeedInput")?.value;
+  const seed = seedRaw === "" || seedRaw == null ? null : Number(seedRaw);
+  const asciiEl = document.querySelector("#mapAscii");
+  if (asciiEl) asciiEl.textContent = "Generating…";
+  const response = await fetch("/api/tiles/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      preset_id: preset,
+      seed: Number.isFinite(seed) ? seed : null,
+      assign_images: true,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || "Map generation failed");
+  renderMapPreview(data);
+  return data;
+}
+
+function openTileLibrary() {
+  document.querySelector("#tileLibraryPanel")?.classList.remove("hidden");
+  searchTileLibrary().catch(() => {});
+}
+
+function closeTileLibrary() {
+  document.querySelector("#tileLibraryPanel")?.classList.add("hidden");
+}
+
+async function searchTileLibrary() {
+  const query = document.querySelector("#tileLibQuery")?.value || "";
+  const state_id = document.querySelector("#tileLibState")?.value || "";
+  const include_disabled = !!document.querySelector("#tileLibShowDisabled")?.checked;
+  const run_id = activeMap?.run_id || activeMap?.id || "";
+  const response = await fetch("/api/tiles/images/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, state_id, include_disabled, run_id, limit: 120 }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || "Search failed");
+  renderTileLibrary(data.images || []);
+}
+
+function renderTileLibrary(images) {
+  const grid = document.querySelector("#tileLibraryGrid");
+  if (!grid) return;
+  tileLibSelection = new Set();
+  if (!images.length) {
+    grid.innerHTML = `<p class="empty">No images yet. Generate art for a state or add your own later.</p>`;
+    return;
+  }
+  grid.innerHTML = images
+    .map((img) => {
+      const disabled = !!img.disabled_forever;
+      const src = img.data_url || "";
+      const thumb = src
+        ? `<img class="tileLibThumb" src="${src}" alt="" />`
+        : `<div class="tileLibThumb placeholder">${escapeHtml(img.state_id || "?")}</div>`;
+      return `
+        <article class="tileLibCard ${disabled ? "disabled" : ""}" data-image-id="${img.id}">
+          <label><input type="checkbox" data-tile-select value="${img.id}" /> ${escapeHtml(img.state_id)}</label>
+          ${thumb}
+          <div>${escapeHtml(img.source || "")} · ${escapeHtml(img.quality || "")}</div>
+        </article>
+      `;
+    })
+    .join("");
+  grid.querySelectorAll("[data-tile-select]").forEach((box) => {
+    box.addEventListener("change", () => {
+      const id = Number(box.value);
+      if (box.checked) tileLibSelection.add(id);
+      else tileLibSelection.delete(id);
+    });
+  });
+}
+
+function selectedTileImageIds() {
+  return [...tileLibSelection];
+}
+
+async function bulkTileImages(action) {
+  const ids = selectedTileImageIds();
+  if (!ids.length) {
+    window.alert("Select one or more tile images first.");
+    return;
+  }
+  const run_id = activeMap?.run_id || activeMap?.id || "";
+  let url = "";
+  let body = { image_ids: ids, run_id, disabled: true };
+  if (action === "disable-forever") url = "/api/tiles/images/disable-forever";
+  else if (action === "enable") {
+    url = "/api/tiles/images/disable-forever";
+    body.disabled = false;
+  } else if (action === "disable-run") {
+    if (!run_id) {
+      window.alert("Generate a map first so we have a run id.");
+      return;
+    }
+    url = "/api/tiles/images/disable-run";
+  } else if (action === "delete") {
+    if (!window.confirm(`Delete ${ids.length} image(s) permanently?`)) return;
+    url = "/api/tiles/images/delete";
+  } else return;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || "Bulk action failed");
+  }
+  await searchTileLibrary();
+}
+
+async function generateTileArtForSelectedState() {
+  const state_id = document.querySelector("#tileLibState")?.value || "";
+  if (!state_id) {
+    window.alert("Pick a tile state in the library filter first.");
+    return;
+  }
+  const preset_id = document.querySelector("#mapPresetSelect")?.value || "";
+  const response = await fetch("/api/tiles/images/generate", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      state_id,
+      preset_id,
+      quality: "8bit",
+      width: 64,
+      height: 64,
+    }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || "Tile generate failed");
+  await searchTileLibrary();
+  return data;
+}
+
+document.querySelector("#mapRegenBtn")?.addEventListener("click", () => {
+  generateWorldMap().catch((error) => {
+    const asciiEl = document.querySelector("#mapAscii");
+    if (asciiEl) asciiEl.textContent = `Error: ${error.message || error}`;
+  });
+});
+document.querySelector("#mapLibraryBtn")?.addEventListener("click", () => openTileLibrary());
+document.querySelector("#tileLibraryClose")?.addEventListener("click", () => closeTileLibrary());
+document.querySelector("#tileLibSearch")?.addEventListener("click", () => {
+  searchTileLibrary().catch((e) => window.alert(e.message || e));
+});
+document.querySelector("#tileLibGenerate")?.addEventListener("click", () => {
+  generateTileArtForSelectedState().catch((e) => window.alert(e.message || e));
+});
+document.querySelectorAll("[data-tile-bulk]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    bulkTileImages(btn.getAttribute("data-tile-bulk")).catch((e) => window.alert(e.message || e));
+  });
+});
+// --- Skill check catalog (setup tab 5) ------------------------------------
+let skillCatalogCache = { categories: [], skills: [], filter: "all" };
+
+function renderCheckCategoryFilters() {
+  const filters = document.querySelector("#checkCategoryFilters");
+  if (!filters) return;
+  const cats = [{ id: "all", label: "All" }, ...(skillCatalogCache.categories || [])];
+  filters.innerHTML = cats
+    .map(
+      (c) =>
+        `<button type="button" class="secondaryButton compactButton ${skillCatalogCache.filter === c.id ? "activeFilter" : ""}" data-check-cat="${escapeHtml(c.id)}">${escapeHtml(c.label || c.id)}</button>`
+    )
+    .join("");
+  filters.querySelectorAll("[data-check-cat]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      skillCatalogCache.filter = btn.getAttribute("data-check-cat") || "all";
+      renderCheckCategoryFilters();
+      renderSkillCatalog();
+    });
+  });
+}
+
+function renderSkillCatalog() {
+  const grid = document.querySelector("#skillCatalogGrid");
+  if (!grid) return;
+  const filter = skillCatalogCache.filter || "all";
+  const skills = (skillCatalogCache.skills || []).filter(
+    (s) => filter === "all" || s.category === filter
+  );
+  if (!skills.length) {
+    grid.innerHTML = `<p class="empty">No skills in this category.</p>`;
+    return;
+  }
+  grid.innerHTML = skills
+    .map((s) => {
+      const on = s.enabled !== false;
+      return `
+      <article class="skillCatalogCard ${on ? "" : "disabledSkill"}" data-skill-code="${escapeHtml(s.code)}">
+        <header>
+          <strong>${escapeHtml(s.name)}</strong>
+          <span class="skillCatPill">${escapeHtml(s.category || "general")}</span>
+        </header>
+        <p class="skillMeta">${escapeHtml(s.attribute || "?")} · DC ${escapeHtml(s.base_dc ?? 12)} · ${escapeHtml(s.source || "")}${s.times_seen ? ` · seen ${s.times_seen}` : ""}</p>
+        <p class="skillDesc">${escapeHtml(s.description || "—")}</p>
+        <label class="settingLock"><input type="checkbox" data-skill-enable="${escapeHtml(s.code)}" ${on ? "checked" : ""} /> Enabled for play</label>
+      </article>`;
+    })
+    .join("");
+  grid.querySelectorAll("[data-skill-enable]").forEach((input) => {
+    input.addEventListener("change", async () => {
+      const code = input.getAttribute("data-skill-enable");
+      try {
+        const res = await fetch("/api/skill-checks/enable", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code, enabled: Boolean(input.checked) }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.detail || "Enable failed");
+        const skill = skillCatalogCache.skills.find((s) => s.code === code);
+        if (skill) skill.enabled = Boolean(input.checked);
+        renderSkillCatalog();
+      } catch (error) {
+        window.alert(error.message || String(error));
+        input.checked = !input.checked;
+      }
+    });
+  });
+}
+
+async function loadSkillCatalog() {
+  const grid = document.querySelector("#skillCatalogGrid");
+  try {
+    const res = await fetch("/api/skill-checks/catalog", { cache: "no-store" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "Catalog failed");
+    skillCatalogCache.categories = data.categories || [];
+    skillCatalogCache.skills = data.skills || [];
+    renderCheckCategoryFilters();
+    renderSkillCatalog();
+  } catch (error) {
+    if (grid) grid.innerHTML = `<p class="empty">Could not load skills: ${escapeHtml(error.message || String(error))}</p>`;
+  }
+}
+
+document.querySelector("#skillCatalogRefresh")?.addEventListener("click", () => loadSkillCatalog());
+document.querySelector("#skillCatalogAdd")?.addEventListener("click", () => {
+  document.querySelector("#skillAddRow")?.classList.toggle("hidden");
+});
+document.querySelector("#newSkillSave")?.addEventListener("click", async () => {
+  const name = document.querySelector("#newSkillName")?.value?.trim() || "";
+  if (!name) {
+    window.alert("Name is required");
+    return;
+  }
+  try {
+    const res = await fetch("/api/skill-checks/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name,
+        category: document.querySelector("#newSkillCategory")?.value || "general",
+        attribute: document.querySelector("#newSkillAttribute")?.value || "intelligence",
+        description: document.querySelector("#newSkillDesc")?.value || "",
+        source: "user",
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || "Register failed");
+    const similar = (data.similar || []).map((s) => s.name).filter(Boolean).slice(0, 3);
+    if (similar.length) {
+      window.alert(`Saved. Adjusted against similar: ${similar.join(", ")}`);
+    }
+    if (document.querySelector("#newSkillName")) document.querySelector("#newSkillName").value = "";
+    if (document.querySelector("#newSkillDesc")) document.querySelector("#newSkillDesc").value = "";
+    document.querySelector("#skillAddRow")?.classList.add("hidden");
+    await loadSkillCatalog();
+  } catch (error) {
+    window.alert(error.message || String(error));
+  }
+});
+
 decorateSetupFields();
 ensureTextAiControls();
 decorateFunctionHelp();
 setSetupStep(0);
 updateConditionalSetup();
 updateComposerState();
+loadSkillCatalog().catch(() => {});
 loadState().catch((error) => {
   setupView.classList.remove("hidden");
   latestOutput.innerHTML = paragraphs(error.message || String(error));

@@ -30,6 +30,12 @@ from app.turn_dsl import (
     draft_mode_enabled,
     parse_dsl_turn,
 )
+from app.narration_pipeline import (
+    ops_summary_from_turn,
+    parse_consolidated_paragraphs,
+    pipeline_enabled,
+    run_narration_pipeline,
+)
 
 
 class LlmError(RuntimeError):
@@ -930,6 +936,78 @@ def _model_timeout(default_ollama: int, default_llama_cpp: int, env_name: str = 
     return _env_int("AI_RPG_OLLAMA_TIMEOUT", default_ollama)
 
 
+# OpenAI-compatible cloud / agent backends (xAI Grok, OpenAI, custom gateways).
+API_PROVIDER_ALIASES = {
+    "openai": "openai",
+    "openai_compat": "openai",
+    "api": "openai",
+    "xai": "openai",
+    "grok": "openai",
+    "spacexai": "openai",
+}
+API_PRESETS = {
+    "xai": {
+        "api_base_url": "https://api.x.ai/v1",
+        "api_model": "grok-4.5",
+        "label": "xAI / Grok",
+        "key_env": "XAI_API_KEY",
+    },
+    "openai": {
+        "api_base_url": "https://api.openai.com/v1",
+        "api_model": "gpt-4.1-mini",
+        "label": "OpenAI",
+        "key_env": "OPENAI_API_KEY",
+    },
+    "custom": {
+        "api_base_url": "http://127.0.0.1:4000/v1",
+        "api_model": "local-agent",
+        "label": "Custom OpenAI-compatible",
+        "key_env": "AI_RPG_API_KEY",
+    },
+}
+
+
+def _normalize_provider(name: str) -> str:
+    raw = str(name or "").strip().lower()
+    if raw in API_PROVIDER_ALIASES:
+        return API_PROVIDER_ALIASES[raw]
+    if raw in {"ollama", "llama_cpp", "openai"}:
+        return raw
+    return "llama_cpp"
+
+
+def resolve_api_key(config: dict[str, Any] | None = None) -> str:
+    """API key from config, then common env vars. Never log this value."""
+    cfg = config or get_model_config()
+    stored = str(cfg.get("api_key") or "").strip()
+    if stored:
+        return stored
+    for env_name in (
+        "AI_RPG_API_KEY",
+        "XAI_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENROUTER_API_KEY",
+    ):
+        value = os.getenv(env_name)
+        if value and str(value).strip():
+            return str(value).strip()
+    return ""
+
+
+def public_model_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Safe config for UI/API responses — never includes raw secrets."""
+    cfg = dict(config or get_model_config())
+    key = resolve_api_key(cfg)
+    cfg["api_key"] = ""
+    cfg["api_key_set"] = bool(key)
+    cfg["api_key_hint"] = ("••••" + key[-4:]) if len(key) >= 4 else ("" if not key else "••••")
+    cfg["api_presets"] = {
+        name: {"api_base_url": meta["api_base_url"], "api_model": meta["api_model"], "label": meta["label"], "key_env": meta["key_env"]}
+        for name, meta in API_PRESETS.items()
+    }
+    return cfg
+
+
 def get_model_config() -> dict[str, Any]:
     default = {
         "provider": os.getenv("AI_RPG_MODEL_PROVIDER", "llama_cpp"),
@@ -937,6 +1015,10 @@ def get_model_config() -> dict[str, Any]:
         "ollama_model": os.getenv("OLLAMA_MODEL", "llama3.1"),
         "llama_cpp_base_url": os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:8080"),
         "gguf_model_path": os.getenv("AI_RPG_GGUF_MODEL", DEFAULT_GGUF_MODEL),
+        "api_base_url": os.getenv("AI_RPG_API_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://api.x.ai/v1")),
+        "api_model": os.getenv("AI_RPG_API_MODEL", os.getenv("OPENAI_MODEL", "grok-4.5")),
+        "api_key": os.getenv("AI_RPG_API_KEY", ""),
+        "api_preset": os.getenv("AI_RPG_API_PRESET", "xai"),
         "response_token_cap": _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP),
         "response_token_hard_cap": _env_int("AI_RPG_RESPONSE_HARD_CAP_TOKENS", _env_int("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS", DEFAULT_RESPONSE_HARD_CAP)),
     }
@@ -944,12 +1026,15 @@ def get_model_config() -> dict[str, Any]:
         with connect() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'model_config'").fetchone()
     except Exception:
+        default["provider"] = _normalize_provider(default["provider"])
         return default
     if not row:
+        default["provider"] = _normalize_provider(default["provider"])
         return default
     try:
         stored = json.loads(row["value"])
     except json.JSONDecodeError:
+        default["provider"] = _normalize_provider(default["provider"])
         return default
     merged = {**default, **stored}
     explicit_env = {
@@ -958,15 +1043,27 @@ def get_model_config() -> dict[str, Any]:
         "ollama_model": "OLLAMA_MODEL",
         "llama_cpp_base_url": "LLAMA_CPP_BASE_URL",
         "gguf_model_path": "AI_RPG_GGUF_MODEL",
+        "api_base_url": "AI_RPG_API_BASE_URL",
+        "api_model": "AI_RPG_API_MODEL",
+        "api_key": "AI_RPG_API_KEY",
+        "api_preset": "AI_RPG_API_PRESET",
     }
     for key, env_name in explicit_env.items():
         value = os.getenv(env_name)
         if value is not None and str(value).strip():
             merged[key] = str(value).strip()
+    # Prefer dedicated cloud keys when api_key empty
+    if not str(merged.get("api_key") or "").strip():
+        for env_name in ("XAI_API_KEY", "OPENAI_API_KEY", "OPENROUTER_API_KEY"):
+            value = os.getenv(env_name)
+            if value and str(value).strip():
+                merged["api_key"] = str(value).strip()
+                break
     if os.getenv("AI_RPG_MAX_RESPONSE_TOKENS"):
         merged["response_token_cap"] = _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP)
     if os.getenv("AI_RPG_RESPONSE_HARD_CAP_TOKENS") or os.getenv("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS"):
         merged["response_token_hard_cap"] = _env_int("AI_RPG_RESPONSE_HARD_CAP_TOKENS", _env_int("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS", DEFAULT_RESPONSE_HARD_CAP))
+    merged["provider"] = _normalize_provider(merged.get("provider"))
     return merged
 
 
@@ -978,11 +1075,19 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
         "ollama_model",
         "llama_cpp_base_url",
         "gguf_model_path",
+        "api_base_url",
+        "api_model",
+        "api_key",
+        "api_preset",
     }
     next_config = {**current}
     for key in allowed:
-        if key in config:
-            next_config[key] = str(config.get(key) or "").strip()
+        if key not in config:
+            continue
+        # Empty api_key in POST means "keep existing" so the UI never has to re-send secrets.
+        if key == "api_key" and not str(config.get(key) or "").strip():
+            continue
+        next_config[key] = str(config.get(key) or "").strip()
     if "response_token_cap" in config:
         next_config["response_token_cap"] = max(64, min(100_000, _int_value(config.get("response_token_cap"), DEFAULT_RESPONSE_TOKEN_CAP)))
     if "response_token_hard_cap" in config:
@@ -990,14 +1095,21 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     soft_cap, hard_cap = _response_token_settings(next_config)
     next_config["response_token_cap"] = soft_cap
     next_config["response_token_hard_cap"] = hard_cap
-    if next_config["provider"] not in {"ollama", "llama_cpp"}:
-        next_config["provider"] = "llama_cpp"
+    next_config["provider"] = _normalize_provider(next_config.get("provider"))
+    # Apply preset defaults when switching to openai without custom URL
+    preset_name = str(next_config.get("api_preset") or "xai").strip().lower()
+    if next_config["provider"] == "openai" and preset_name in API_PRESETS:
+        preset = API_PRESETS[preset_name]
+        if not next_config.get("api_base_url"):
+            next_config["api_base_url"] = preset["api_base_url"]
+        if not next_config.get("api_model"):
+            next_config["api_model"] = preset["api_model"]
     with connect() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             ("model_config", json.dumps(next_config, ensure_ascii=True)),
         )
-    return next_config
+    return public_model_config(next_config)
 
 
 def _read_models_url(url: str, timeout: int = 5) -> dict[str, Any]:
@@ -1181,15 +1293,66 @@ def _urlopen_json(req: urllib.request.Request, timeout: int) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _read_models_url_auth(url: str, api_key: str = "", timeout: int = 8) -> dict[str, Any]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    if isinstance(payload, dict):
+        return payload
+    if isinstance(payload, list):
+        return {"data": payload}
+    return {"data": []}
+
+
 def test_model_connection() -> dict[str, Any]:
     config = get_model_config()
-    provider = str(config.get("provider") or "llama_cpp")
+    provider = _normalize_provider(config.get("provider") or "llama_cpp")
     base_url = ""
     url = ""
     try:
         if provider == "llama_cpp":
             base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
             url = f"{base_url}/v1/models"
+        elif provider == "openai":
+            base_url = str(config.get("api_base_url") or "https://api.x.ai/v1").rstrip("/")
+            url = f"{base_url}/models"
+            api_key = resolve_api_key(config)
+            if not api_key:
+                return {
+                    "ok": False,
+                    "provider": provider,
+                    "url": url,
+                    "error": "No API key set. Use XAI_API_KEY / OPENAI_API_KEY / AI_RPG_API_KEY or LLM Settings.",
+                    "config": public_model_config(config),
+                    "managed_start": None,
+                }
+            try:
+                payload = _read_models_url_auth(url, api_key=api_key, timeout=10)
+            except Exception as exc:
+                # Some gateways only expose chat; treat key+base as ok if models list fails with 404.
+                err = str(exc)
+                if "404" in err:
+                    return {
+                        "ok": True,
+                        "provider": provider,
+                        "url": url,
+                        "models": [str(config.get("api_model") or "configured-model")],
+                        "config": public_model_config(config),
+                        "managed_start": None,
+                        "note": "Models list unavailable; using configured api_model.",
+                    }
+                return {
+                    "ok": False,
+                    "provider": provider,
+                    "url": url,
+                    "error": err,
+                    "config": public_model_config(config),
+                    "managed_start": None,
+                }
+            return _model_status_payload(provider, url, payload, config)
         else:
             base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
             url = f"{base_url}/api/tags"
@@ -1209,7 +1372,7 @@ def test_model_connection() -> dict[str, Any]:
                         "provider": provider,
                         "url": url,
                         "error": wait_error,
-                        "config": config,
+                        "config": public_model_config(config),
                         "managed_start": start_result,
                     }
             provider_name = "llama.cpp" if provider == "llama_cpp" else "Ollama"
@@ -1221,7 +1384,7 @@ def test_model_connection() -> dict[str, Any]:
                 "provider": provider,
                 "url": url,
                 "error": error,
-                "config": config,
+                "config": public_model_config(config),
                 "managed_start": start_result,
             }
 
@@ -1232,7 +1395,7 @@ def test_model_connection() -> dict[str, Any]:
             "provider": provider,
             "url": url or base_url,
             "error": f"Model status check failed: {exc}",
-            "config": config,
+            "config": public_model_config(config),
             "managed_start": None,
         }
 
@@ -1255,7 +1418,7 @@ def _model_status_payload(provider: str, url: str, payload: dict[str, Any], conf
         "provider": provider,
         "url": url,
         "models": model_names,
-        "config": config,
+        "config": public_model_config(config),
         "managed_start": managed_start,
     }
 
@@ -2566,7 +2729,8 @@ def _chat_content(
 ) -> str:
     config = get_model_config()
     response_tokens = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
-    if config.get("provider") == "llama_cpp":
+    provider = _normalize_provider(config.get("provider"))
+    if provider in {"llama_cpp", "openai"}:
         return _chat_content_openai_compatible(
             config,
             system_prompt,
@@ -2575,6 +2739,7 @@ def _chat_content(
             temperature,
             response_tokens,
             response_format=response_format,
+            managed_llama=(provider == "llama_cpp"),
         )
 
     base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
@@ -2638,18 +2803,31 @@ def _chat_content_openai_compatible(
     temperature: float,
     max_tokens: int | None = None,
     response_format: str | None = "json",
+    managed_llama: bool = True,
 ) -> str:
-    base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
-    model = str(config.get("model") or "ai-rpg-local")
+    provider = _normalize_provider(config.get("provider"))
+    if provider == "openai" or not managed_llama:
+        base_url = str(config.get("api_base_url") or "https://api.x.ai/v1").rstrip("/")
+        model = str(config.get("api_model") or config.get("model") or "grok-4.5")
+        api_key = resolve_api_key(config)
+        label = "OpenAI-compatible API"
+    else:
+        base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
+        model = str(config.get("model") or "ai-rpg-local")
+        api_key = ""
+        label = "llama.cpp"
 
     def post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
         url = f"{base_url}{path}"
 
         def make_request() -> urllib.request.Request:
+            headers = {"Content-Type": "application/json"}
+            if api_key:
+                headers["Authorization"] = f"Bearer {api_key}"
             return urllib.request.Request(
                 url,
                 data=json.dumps(body).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
+                headers=headers,
                 method="POST",
             )
 
@@ -2661,6 +2839,8 @@ def _chat_content_openai_compatible(
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
             if not _is_connection_refused_error(exc):
                 raise LlmError(_transport_error_message(exc, timeout)) from exc
+            if not managed_llama or provider == "openai":
+                raise LlmError(_connection_refused_message(label, url)) from exc
             _ensure_llama_cpp_ready_for_generation(config, base_url)
             try:
                 return _urlopen_json(make_request(), timeout)
@@ -2672,7 +2852,11 @@ def _chat_content_openai_compatible(
                     raise LlmError(_connection_refused_message("llama.cpp", url)) from retry_exc
                 raise LlmError(_transport_error_message(retry_exc, timeout)) from retry_exc
 
-    if os.getenv("AI_RPG_LLAMA_CPP_CHAT_COMPLETIONS", "1").strip().lower() not in {"1", "true", "yes"}:
+    if (
+        managed_llama
+        and provider != "openai"
+        and os.getenv("AI_RPG_LLAMA_CPP_CHAT_COMPLETIONS", "1").strip().lower() not in {"1", "true", "yes"}
+    ):
         prompt = (
             "System:\n"
             f"{system_prompt.strip()}\n\n"
@@ -2696,6 +2880,12 @@ def _chat_content_openai_compatible(
             raise LlmError("llama.cpp compatible server returned an empty response.")
         return content
 
+    if provider == "openai" and not api_key:
+        raise LlmError(
+            "OpenAI-compatible provider needs an API key. Set XAI_API_KEY / OPENAI_API_KEY / AI_RPG_API_KEY "
+            "or paste a key in LLM Settings (stored locally)."
+        )
+
     body = {
         "model": model,
         "messages": [
@@ -2706,18 +2896,34 @@ def _chat_content_openai_compatible(
         "top_p": 0.9,
         "max_tokens": max_tokens or _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP),
         "stream": False,
-        "stop": ["<|im_end|>"],
     }
-    if (
-        response_format == "json"
-        and os.getenv("AI_RPG_LLAMA_CPP_RESPONSE_FORMAT", "1").strip().lower() in {"1", "true", "yes"}
-    ):
+    # Local llama often wants stop tokens; cloud APIs usually do not.
+    if managed_llama and provider != "openai":
+        body["stop"] = ["<|im_end|>"]
+    use_json_format = response_format == "json" and (
+        (provider == "openai" and os.getenv("AI_RPG_API_RESPONSE_FORMAT", "1").strip().lower() in {"1", "true", "yes", "on"})
+        or (
+            provider != "openai"
+            and os.getenv("AI_RPG_LLAMA_CPP_RESPONSE_FORMAT", "1").strip().lower() in {"1", "true", "yes"}
+        )
+    )
+    if use_json_format:
         body["response_format"] = {"type": "json_object"}
     payload = post_json("/v1/chat/completions", body)
 
     content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
+    if isinstance(content, list):
+        # Some OpenAI-compat APIs return content parts
+        parts = []
+        for part in content:
+            if isinstance(part, dict):
+                parts.append(str(part.get("text") or part.get("content") or ""))
+            else:
+                parts.append(str(part))
+        content = "".join(parts)
+    content = str(content or "").strip()
     if not content:
-        raise LlmError("llama.cpp compatible server returned an empty response.")
+        raise LlmError(f"{label} returned an empty chat completion.")
     return content
 
 
@@ -2926,6 +3132,8 @@ def _keep_cleaned_turn_value(key: str, value: Any) -> bool:
 
 
 def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    # Preserve pipeline debug meta across normalize/cleanup (not part of world schema).
+    pipeline_meta = turn.get("_narration_pipeline") if isinstance(turn, dict) else None
     normalized = _normalize_turn(turn)
     before_chars, before_tokens = _json_size(normalized)
     cleaned: dict[str, Any] = {}
@@ -2945,6 +3153,8 @@ def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[s
         else:
             cleaned[key] = _trim_strings(normalized.get(key), 520)
     cleaned = {key: value for key, value in cleaned.items() if _keep_cleaned_turn_value(key, value)}
+    if pipeline_meta:
+        cleaned["_narration_pipeline"] = pipeline_meta
     after_chars, after_tokens = _json_size(cleaned)
     _append_trace(
         trace,
@@ -2959,6 +3169,7 @@ def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[s
             "removed_keys": sorted(key for key in normalized.keys() if key not in cleaned),
             "narration_chars": _narration_char_count(cleaned),
             "list_counts": {key: len(value) for key, value in cleaned.items() if isinstance(value, list)},
+            "narration_pipeline_preserved": bool(pipeline_meta),
         },
     )
     return cleaned
@@ -3330,6 +3541,256 @@ def _ensure_narration_depth(
     return normalized
 
 
+def _turn_number_hint(context: dict[str, Any]) -> int:
+    from app.narration_pipeline import infer_turn_number
+
+    return infer_turn_number(context)
+
+
+def _pipeline_config_snapshot() -> dict[str, Any]:
+    config = get_model_config()
+    return {
+        **config,
+        "context_window": context_window_tokens(config),
+        "response_token_cap": config.get("response_token_cap"),
+        "response_token_hard_cap": config.get("response_token_hard_cap"),
+        "ollama_model": config.get("ollama_model"),
+        "gguf_model_path": config.get("gguf_model_path"),
+    }
+
+
+def _make_pipeline_paragraph_writer(
+    usage: list[dict[str, Any]],
+    trace: list[dict[str, Any]] | None,
+    timeout: int,
+):
+    from app.narration_pipeline import polish_paragraph
+
+    system = (
+        "You write ONE playable RPG narration paragraph only. "
+        "No headings, no bullet lists, no JSON, no OPS lines. "
+        "Use [[codes]] only when the brief lists them. "
+        "Do not repeat facts listed under forbidden_repeat. "
+        "Continue from previous_paragraph_tail without restarting the scene. "
+        "Always finish every sentence completely — never stop mid-word or mid-clause."
+    )
+
+    def writer(brief: dict[str, Any], previous_paragraph: str, ledger: Any) -> str:
+        limits = brief.get("model_limits") if isinstance(brief.get("model_limits"), dict) else {}
+        # Give small models headroom so max_tokens does not cut mid-sentence.
+        max_tokens = max(160, min(520, int(limits.get("max_tokens") or 200) + 80))
+        max_chars = max(120, min(800, int(limits.get("max_chars") or 420)))
+        rules = [
+            f"Target about {limits.get('min_chars', 200)}-{max_chars} visible characters.",
+            "One paragraph only.",
+            "Do not restate the whole prior scene.",
+            "If dual actions appear, sequence them with then/after/before.",
+            "End on a complete sentence with . ! or ?",
+        ]
+        for extra in brief.get("rules_extra") or []:
+            if extra and str(extra) not in rules:
+                rules.append(str(extra))
+        payload = {
+            "task": "Write exactly one paragraph for this beat.",
+            "brief": brief,
+            "previous_paragraph_tail": (previous_paragraph or "")[-400:],
+            "already_said": list(ledger.forbidden_repeats())[:12],
+            "rejected_attempts": list(ledger.previously_attempted_texts(int(brief.get("beat_index") or 1) - 1))[:3],
+            "rules": rules,
+        }
+        raw = _chat_text(
+            system,
+            json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+            timeout=max(30, min(timeout, 180)),
+            usage=usage,
+            phase=f"narration_para_{brief.get('beat_index', 0)}",
+            max_tokens=max_tokens,
+            trace=trace,
+            temperature=0.7,
+        )
+        # Strip accidental multi-paragraph / fences
+        text = raw.strip()
+        if text.startswith("```"):
+            text = re.sub(r"^```(?:\w+)?\s*", "", text)
+            text = re.sub(r"\s*```$", "", text)
+        # Keep first paragraph block if model spilled
+        parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+        text = parts[0] if parts else text
+        text = re.sub(r"\s+", " ", text).strip()
+        # Never hard-slice mid-word; polish to last complete sentence.
+        return polish_paragraph(text, max_chars=max_chars)
+
+    return writer
+
+
+def _make_pipeline_consolidator(
+    usage: list[dict[str, Any]],
+    trace: list[dict[str, Any]] | None,
+    timeout: int,
+):
+    system = (
+        "You are the scene consolidator. Read all paragraphs together. "
+        "Fix doubling, contradictions, and simultaneous dual intents. "
+        "Prefer surgical rewrites of later paragraphs. "
+        "Return the full scene only as labeled blocks, no commentary."
+    )
+
+    def consolidator(paragraphs: list[str], ledger: Any) -> list[str]:
+        if len(paragraphs) <= 1:
+            return paragraphs
+        labeled = "\n".join(f"===P{i + 1}===\n{p}" for i, p in enumerate(paragraphs))
+        payload = {
+            "task": "Return cleaned paragraphs with the same count when possible.",
+            "said_facts": [f.text for f in getattr(ledger, "said_facts", [])][:20],
+            "issues_to_watch": [
+                "same fact twice",
+                "entity present after removed",
+                "two incompatible actions without sequence",
+            ],
+            "input": labeled,
+            "output_format": "===P1===\\nparagraph\\n===P2===\\nparagraph",
+        }
+        try:
+            raw = _chat_text(
+                system,
+                json.dumps(payload, ensure_ascii=True, separators=(",", ":")),
+                timeout=max(30, min(timeout, 180)),
+                usage=usage,
+                phase="narration_consolidate",
+                max_tokens=min(1200, max(300, sum(len(p) for p in paragraphs) // 3 + 200)),
+                trace=trace,
+                temperature=0.4,
+            )
+        except LlmError as exc:
+            usage.append({"phase": "narration_consolidate_failed", "error": _trim_text(str(exc), 400)})
+            return paragraphs
+        parsed = parse_consolidated_paragraphs(raw, expected=len(paragraphs))
+        if not parsed:
+            return paragraphs
+        # Preserve count when possible; allow drop of pure duplicates only.
+        if len(parsed) < max(1, len(paragraphs) - 1):
+            return paragraphs
+        return parsed
+
+    return consolidator
+
+
+def _apply_narration_pipeline(
+    turn: dict[str, Any],
+    context: dict[str, Any],
+    player_input: str,
+    usage: list[dict[str, Any]],
+    trace: list[dict[str, Any]] | None,
+    timeout: int,
+) -> dict[str, Any]:
+    """Replace turn narration via adaptive paragraph pipeline. Keeps OPS/state fields."""
+    if not pipeline_enabled():
+        return turn
+    try:
+        from app.generation_progress import update as progress_update
+    except Exception:
+        def progress_update(*_a: Any, **_k: Any) -> None:
+            return None
+
+    result = dict(turn)
+    config = _pipeline_config_snapshot()
+    ops_summary = ops_summary_from_turn(result)
+    turn_number = _turn_number_hint(context)
+    progress_update(
+        "narration",
+        "Adaptive narration pipeline rewriting the scene…",
+        step=4,
+        line="Paragraph pipeline: drafting beats (progress updates as each is accepted).",
+    )
+    # Consolidator callback is provided; pipeline still skips it on lean 2-para low-density
+    # turns via budget["skip_consolidator"] (see should_skip_consolidator).
+    consolidator_fn = None
+    if _env_bool("AI_RPG_NARRATION_PIPELINE_CONSOLIDATE", True):
+        consolidator_fn = _make_pipeline_consolidator(usage, trace, timeout)
+    try:
+        pipeline_out = run_narration_pipeline(
+            context,
+            player_input,
+            config=config,
+            ops_summary=ops_summary,
+            turn_number=turn_number,
+            writer=_make_pipeline_paragraph_writer(usage, trace, timeout),
+            consolidator=consolidator_fn,
+        )
+    except Exception as exc:
+        usage.append({"phase": "narration_pipeline_failed", "error": _trim_text(str(exc), 500)})
+        _append_trace(trace, {"phase": "narration_pipeline", "event": "failed", "error": str(exc)})
+        return result
+
+    segments = pipeline_out.get("narration_segments") or []
+    narration = str(pipeline_out.get("narration") or "").strip()
+    if not narration and segments:
+        narration = "\n\n".join(str(s.get("text") or "") for s in segments if isinstance(s, dict)).strip()
+    if not narration:
+        usage.append({"phase": "narration_pipeline_empty", "chars": 0, "estimated_tokens": 0})
+        return result
+
+    result["narration_segments"] = segments
+    result["narration"] = narration
+    result["_narration_pipeline"] = {
+        "budget": pipeline_out.get("budget"),
+        "ledger_path": pipeline_out.get("ledger_path"),
+        "pipeline_version": pipeline_out.get("pipeline_version"),
+        "chars": len(narration),
+        "consolidator_skipped": bool(pipeline_out.get("consolidator_skipped")),
+        "turn": turn_number,
+    }
+    usage.append(
+        {
+            "phase": "narration_pipeline",
+            "chars": len(narration),
+            "estimated_tokens": estimated_tokens(narration),
+            "paragraphs": len(segments),
+            "tier": (pipeline_out.get("budget") or {}).get("tier"),
+            "consolidator_skipped": bool(pipeline_out.get("consolidator_skipped")),
+            "density": ((pipeline_out.get("budget") or {}).get("density") or {}).get("score"),
+        }
+    )
+    _append_trace(
+        trace,
+        {
+            "phase": "narration_pipeline",
+            "event": "applied",
+            "paragraphs": len(segments),
+            "chars": len(narration),
+            "budget": pipeline_out.get("budget"),
+            "ledger_path": pipeline_out.get("ledger_path"),
+        },
+    )
+    return result
+
+
+def _ensure_narration_quality(
+    turn: dict[str, Any],
+    context: dict[str, Any],
+    player_input: str,
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    When AI_RPG_NARRATION_PIPELINE is on: paragraph pipeline (packed, tier-aware).
+    Otherwise: legacy whole-turn depth retry when under MIN_TURN_NARRATION_CHARS.
+    """
+    if pipeline_enabled():
+        refined = _apply_narration_pipeline(turn, context, player_input, usage, trace, timeout)
+        budget = (refined.get("_narration_pipeline") or {}).get("budget") or {}
+        soft_target = int(budget.get("soft_total_chars") or MIN_TURN_NARRATION_CHARS)
+        # Small models aim lower; only fall back to whole-turn depth retry if still very short.
+        floor = max(400, min(MIN_TURN_NARRATION_CHARS, int(soft_target * 0.65)))
+        if _narration_char_count(refined) >= floor:
+            return refined
+        return _ensure_narration_depth(refined, context, player_input, system_prompt, timeout, usage, phase, trace)
+    return _ensure_narration_depth(turn, context, player_input, system_prompt, timeout, usage, phase, trace)
+
+
 def _retry_missing_narration(
     context: dict[str, Any],
     player_input: str,
@@ -3426,6 +3887,12 @@ def _try_dsl_draft(
 
 
 def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
+    from app.generation_progress import begin as progress_begin
+    from app.generation_progress import end as progress_end
+    from app.generation_progress import fail as progress_fail
+    from app.generation_progress import set_preview as progress_preview
+    from app.generation_progress import update as progress_update
+
     usage: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []
     timeout = _model_timeout(90, 900, "AI_RPG_TURN_DRAFT_TIMEOUT")
@@ -3433,6 +3900,18 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     config = get_model_config()
     system_prompt = COMPACT_SYSTEM_PROMPT if config.get("provider") == "llama_cpp" else SYSTEM_PROMPT
     verify_prompt = COMPACT_VERIFY_PROMPT if config.get("provider") == "llama_cpp" else VERIFY_PROMPT
+    is_opening = str(player_input or "").startswith("__opening_scene_request__")
+    progress_begin(
+        "opening" if is_opening else "turn",
+        total_steps=6,
+        detail="Preparing context for the local model…",
+    )
+    progress_update(
+        "start",
+        "Building the turn context packet…",
+        step=1,
+        line="Collecting world state and planner packet.",
+    )
     _append_trace(
         trace,
         {
@@ -3449,19 +3928,90 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 "malformed JSON repair or retry when needed",
                 "verifier JSON model call when remaining checks require it",
                 "deterministic verified payload cleanup before world application",
-                "narration depth retry when needed",
+                "optional adaptive paragraph narration pipeline when AI_RPG_NARRATION_PIPELINE is on",
+                "narration depth retry when needed (or after pipeline floor miss)",
                 "world.apply_turn SQLite state application or deterministic fallback",
             ],
+            "narration_pipeline_enabled": pipeline_enabled(),
             "note": "Trace contains observable prompts, raw model outputs, parsed JSON, handoff cleanup decisions, verifier self_check, errors, and fallback decisions. It cannot include private hidden chain-of-thought that the model did not return.",
             "provider": config.get("provider"),
             "draft_timeout_seconds": timeout,
             "verify_timeout_seconds": verify_timeout,
         },
     )
+    try:
+        result = _generate_turn_body(
+            context,
+            player_input,
+            usage=usage,
+            trace=trace,
+            timeout=timeout,
+            verify_timeout=verify_timeout,
+            config=config,
+            system_prompt=system_prompt,
+            verify_prompt=verify_prompt,
+            progress_update=progress_update,
+            progress_preview=progress_preview,
+            progress_end=progress_end,
+            progress_fail=progress_fail,
+        )
+        narr = ""
+        if isinstance(result, dict):
+            narr = str(result.get("narration") or "")
+            if not narr:
+                segs = result.get("narration_segments") or []
+                narr = "\n\n".join(
+                    str(s.get("text") or "") for s in segs if isinstance(s, dict)
+                )
+            if narr.strip():
+                progress_preview(narr.strip(), append_paragraph=False)
+        progress_update(
+            "done",
+            "Scene ready.",
+            step=6,
+            line=f"Finished ({len(narr)} characters).",
+        )
+        progress_end(detail="Scene ready.")
+        return result
+    except Exception as exc:
+        progress_fail(str(exc)[:240])
+        raise
+
+
+def _generate_turn_body(
+    context: dict[str, Any],
+    player_input: str,
+    *,
+    usage: list[dict[str, Any]],
+    trace: list[dict[str, Any]],
+    timeout: int,
+    verify_timeout: int,
+    config: dict[str, Any],
+    system_prompt: str,
+    verify_prompt: str,
+    progress_update: Any,
+    progress_preview: Any,
+    progress_end: Any,
+    progress_fail: Any,
+) -> dict[str, Any]:
     active_context = _clean_context_for_handoff(context, "planner_to_draft", trace)
+    progress_update(
+        "draft",
+        "Asking the local model for the scene draft…",
+        step=2,
+        line="Model draft call in progress (this is usually the longest step).",
+    )
     dsl_draft = _try_dsl_draft(context, player_input, timeout, usage, trace)
     if dsl_draft is not None:
         draft = dsl_draft
+        progress_update(
+            "draft_ready",
+            "Draft received; scoring verification…",
+            step=3,
+            line="DSL draft complete.",
+        )
+        if str(draft.get("narration") or "").strip():
+            progress_preview(str(draft.get("narration") or "").strip(), append_paragraph=False)
         # Jump to verification path with DSL-produced JSON-compatible turn.
         verification_policy = _verification_policy(context, player_input, draft)
         active_context = {**active_context, "verification_policy": verification_policy}
@@ -3471,12 +4021,17 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             "AI_RPG_DSL_SKIP_VERIFY", "0"
         ).strip().lower() in {"1", "true", "yes", "on"}:
             usage.append({"phase": "verify_skipped_dsl", "chars": 0, "estimated_tokens": 0})
+            progress_update(
+                "verify_skip",
+                "Verifier skipped; polishing narration…",
+                step=4,
+                line="Low-risk draft — skipping model verifier.",
+            )
             result = _mark_draft_verified_by_policy(draft, verification_policy)
             # Only expand narration if clearly short; avoid expensive depth retries when DSL already wrote prose.
-            if _narration_char_count(result) < MIN_TURN_NARRATION_CHARS:
-                result = _ensure_narration_depth(
-                    result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_dsl_retry", trace
-                )
+            result = _ensure_narration_quality(
+                result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_dsl_retry", trace
+            )
             result = _clean_turn_for_handoff(result, "dsl_to_world", trace)
             result["_verification_policy"] = verification_policy
             result["_draft_mode"] = "dsl"
@@ -3489,12 +4044,19 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     "narration_chars": _narration_char_count(result),
                     "used_fallback": False,
                     "verifier_skipped": True,
+                    "narration_pipeline": bool(result.get("_narration_pipeline")),
                 },
             )
             result["_model_usage"] = usage
             result["_model_trace"] = trace
             return result
         try:
+            progress_update(
+                "verify",
+                "Verifier is checking continuity and state changes…",
+                step=3,
+                line="Model verifier pass in progress.",
+            )
             verified = _chat_json(
                 verify_prompt,
                 build_verify_prompt(active_context, player_input, draft),
@@ -3510,10 +4072,15 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 if not _is_missing_narration_error(exc):
                     raise
                 result = _merge_verified_with_draft_narration(verified, draft)
-            if _narration_char_count(result) < MIN_TURN_NARRATION_CHARS:
-                result = _ensure_narration_depth(
-                    result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace
-                )
+            progress_update(
+                "narration",
+                "Polishing narration quality…",
+                step=4,
+                line="Narration quality / pipeline pass.",
+            )
+            result = _ensure_narration_quality(
+                result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace
+            )
             result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
             result["_verification_policy"] = verification_policy
             result["_draft_mode"] = "dsl"
@@ -3525,6 +4092,7 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     "draft_mode": "dsl",
                     "narration_chars": _narration_char_count(result),
                     "used_fallback": False,
+                    "narration_pipeline": bool(result.get("_narration_pipeline")),
                 },
             )
             result["_model_usage"] = usage
@@ -3539,10 +4107,9 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 "reference_check": "not verified",
                 "consistency_check": "not verified",
             }
-            if _narration_char_count(draft) < MIN_TURN_NARRATION_CHARS:
-                draft = _ensure_narration_depth(
-                    draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace
-                )
+            draft = _ensure_narration_quality(
+                draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace
+            )
             draft = _clean_turn_for_handoff(draft, "dsl_to_world_unverified", trace)
             draft["_verification_policy"] = verification_policy
             draft["_draft_mode"] = "dsl"
@@ -3560,6 +4127,12 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             return draft
 
     draft_prompt = build_user_prompt(active_context, player_input)
+    progress_update(
+        "draft_json",
+        "Asking the local model for a full scene draft…",
+        step=2,
+        line="JSON draft call in progress.",
+    )
     try:
         draft = _chat_json(
             system_prompt,
@@ -3647,13 +4220,27 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             _append_trace(trace, {"phase": "draft_missing_narration_retry", "event": "normalized", "narration_chars": _narration_char_count(draft), "keys": sorted(draft.keys())})
         except LlmError as retry_exc:
             raise _attach_model_usage(retry_exc, usage, trace)
+    progress_update(
+        "draft_ready",
+        "Draft received; scoring verification…",
+        step=3,
+        line="Draft normalized.",
+    )
+    if isinstance(draft, dict) and str(draft.get("narration") or "").strip():
+        progress_preview(str(draft.get("narration") or "").strip(), append_paragraph=False)
     verification_policy = _verification_policy(context, player_input, draft)
     active_context = {**active_context, "verification_policy": verification_policy}
     _append_trace(trace, {"phase": "verification_policy", "event": "scored", **verification_policy})
     if verification_policy.get("mode") == "skip_model_verifier":
         usage.append({"phase": "verify_skipped_certainty", "chars": 0, "estimated_tokens": 0})
+        progress_update(
+            "verify_skip",
+            "Verifier skipped; polishing narration…",
+            step=4,
+            line="Certainty policy skipped model verifier.",
+        )
         result = _mark_draft_verified_by_policy(draft, verification_policy)
-        result = _ensure_narration_depth(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_certainty_retry", trace)
+        result = _ensure_narration_quality(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_certainty_retry", trace)
         result = _clean_turn_for_handoff(result, "draft_certainty_to_world", trace)
         result["_verification_policy"] = verification_policy
         _append_trace(
@@ -3665,12 +4252,19 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 "used_fallback": False,
                 "verifier_skipped": True,
                 "verification_certainty": verification_policy.get("certainty"),
+                "narration_pipeline": bool(result.get("_narration_pipeline")),
             },
         )
         result["_model_usage"] = usage
         result["_model_trace"] = trace
         return result
     try:
+        progress_update(
+            "verify",
+            "Verifier is checking continuity and state changes…",
+            step=3,
+            line="Model verifier pass in progress.",
+        )
         verified = _chat_json(
             verify_prompt,
             build_verify_prompt(active_context, player_input, draft),
@@ -3686,10 +4280,25 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             if not _is_missing_narration_error(exc):
                 raise
             result = _merge_verified_with_draft_narration(verified, draft)
-        result = _ensure_narration_depth(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace)
+        progress_update(
+            "narration",
+            "Polishing narration quality…",
+            step=4,
+            line="Narration quality / pipeline pass.",
+        )
+        result = _ensure_narration_quality(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace)
         result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
         result["_verification_policy"] = verification_policy
-        _append_trace(trace, {"phase": "pipeline", "event": "success", "narration_chars": _narration_char_count(result), "used_fallback": False})
+        _append_trace(
+            trace,
+            {
+                "phase": "pipeline",
+                "event": "success",
+                "narration_chars": _narration_char_count(result),
+                "used_fallback": False,
+                "narration_pipeline": bool(result.get("_narration_pipeline")),
+            },
+        )
         result["_model_usage"] = usage
         result["_model_trace"] = trace
         return result
@@ -3712,10 +4321,19 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                     if not _is_missing_narration_error(verify_exc):
                         raise
                     result = _merge_verified_with_draft_narration(verified, draft)
-                result = _ensure_narration_depth(result, compact_context, player_input, system_prompt, timeout, usage, "narration_depth_compact_retry", trace)
+                result = _ensure_narration_quality(result, compact_context, player_input, system_prompt, timeout, usage, "narration_depth_compact_retry", trace)
                 result = _clean_turn_for_handoff(result, "verifier_compact_retry_to_world", trace)
                 result["_verification_policy"] = verification_policy
-                _append_trace(trace, {"phase": "pipeline", "event": "success", "narration_chars": _narration_char_count(result), "used_fallback": False})
+                _append_trace(
+                    trace,
+                    {
+                        "phase": "pipeline",
+                        "event": "success",
+                        "narration_chars": _narration_char_count(result),
+                        "used_fallback": False,
+                        "narration_pipeline": bool(result.get("_narration_pipeline")),
+                    },
+                )
                 result["_model_usage"] = usage
                 result["_model_trace"] = trace
                 return result
@@ -3729,10 +4347,19 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             "reference_check": "not verified",
             "consistency_check": "not verified",
         }
-        draft = _ensure_narration_depth(draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace)
+        draft = _ensure_narration_quality(draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace)
         draft = _clean_turn_for_handoff(draft, "draft_to_world_unverified", trace)
         draft["_verification_policy"] = verification_policy
-        _append_trace(trace, {"phase": "pipeline", "event": "using_unverified_draft", "verifier_error": str(exc), "narration_chars": _narration_char_count(draft)})
+        _append_trace(
+            trace,
+            {
+                "phase": "pipeline",
+                "event": "using_unverified_draft",
+                "verifier_error": str(exc),
+                "narration_chars": _narration_char_count(draft),
+                "narration_pipeline": bool(draft.get("_narration_pipeline")),
+            },
+        )
         draft["_model_usage"] = usage
         draft["_model_trace"] = trace
         return draft

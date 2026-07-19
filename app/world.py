@@ -1864,6 +1864,15 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "special_ability_locked": special_abilities[0]["locked"] if special_abilities else False,
             "special_ability_name": special_abilities[0]["name"] if special_abilities else "",
         }
+        try:
+            from app.skill_checks import gm_context_block, settings_from_setup
+
+            check_settings = settings_from_setup(options)
+            stored_options["skill_check_settings"] = check_settings
+            stored_options["dice_checks_enabled"] = bool(check_settings.get("dice_checks_enabled"))
+            stored_options["skill_check_context"] = gm_context_block(check_settings)
+        except Exception:
+            stored_options["dice_checks_enabled"] = bool(options.get("dice_checks_enabled"))
         _set_setting(conn, "setup_complete", "true")
         _set_setting(conn, "playthrough_options", stored_options)
         conn.execute(
@@ -2879,6 +2888,14 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             "source_hits": len(relevant_sources),
         },
     }
+    try:
+        from app.skill_checks import gm_context_block, merge_check_settings
+
+        opts = ((state.get("settings") or {}).get("playthrough_options") or {})
+        check_cfg = merge_check_settings(opts.get("skill_check_settings") if isinstance(opts.get("skill_check_settings"), dict) else opts)
+        prompt_context["skill_check_context"] = gm_context_block(check_cfg)
+    except Exception:
+        prompt_context["skill_check_context"] = {"dice_checks_enabled": False}
     verification_memory = _verification_memory_context(prompt_context)
     prompt_context["verification_memory"] = verification_memory
     prompt_context["turn_plan"]["included_counts"]["verification_memory_hits"] = len(verification_memory.get("entries") or [])
@@ -4195,6 +4212,17 @@ def _prune_model_trace_files() -> None:
             pass
 
 
+def debug_mode_enabled() -> bool:
+    """
+    Extra-verbose server debug. Trace files are always written for per-turn UI toggles;
+    this flag only forces richer on-disk retention defaults if set.
+    """
+    raw = os.getenv("AI_RPG_DEBUG")
+    if raw is None or not str(raw).strip():
+        return False
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _write_model_trace_file(
     turn: int,
     input_kind: str,
@@ -4205,6 +4233,7 @@ def _write_model_trace_file(
     used_fallback: bool,
     fallback_reason: str,
 ) -> str:
+    # Always write: the play UI offers a per-turn Debug toggle to view/copy the file.
     MODEL_TRACE_DIR.mkdir(parents=True, exist_ok=True)
     fallback_notice = _fallback_notice(fallback_reason) if used_fallback else ""
     payload = {
@@ -4589,8 +4618,37 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         used_fallback,
         fallback_reason,
     )
+    model_usage = list(result.get("_model_usage") or [])
+    model_trace_steps = result.get("_model_trace") or []
+    pipeline_meta = result.get("_narration_pipeline") if isinstance(result.get("_narration_pipeline"), dict) else None
     result.pop("_model_trace", None)
+    # Keep turn payload lean for the client; full dump lives in the trace file.
+    result.pop("_model_usage", None)
+    result.pop("_narration_pipeline", None)
     rewards = _turn_reward_summary(context, state, result)
+    narration_chars = len(_narration_text(result) or str(result.get("narration") or ""))
+    trace_name = Path(debug_trace_path).name if debug_trace_path else ""
+    debug_bundle = {
+        "turn": _current_turn_number(),
+        "input_kind": input_kind,
+        "used_fallback": used_fallback,
+        "fallback_reason": fallback_reason or "",
+        "self_check": result.get("self_check") if isinstance(result.get("self_check"), dict) else {},
+        "model_usage": model_usage,
+        "pipeline_phases": [
+            {
+                "phase": step.get("phase"),
+                "event": step.get("event"),
+                "error": step.get("error"),
+            }
+            for step in model_trace_steps
+            if isinstance(step, dict)
+        ][-40:],
+        "narration_pipeline": pipeline_meta,
+        "narration_chars": narration_chars,
+        "trace_path": debug_trace_path or "",
+        "trace_name": trace_name,
+    }
     return {
         "turn": result,
         "state": state,
@@ -4598,8 +4656,9 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         "used_fallback": used_fallback,
         "fallback_reason": fallback_reason,
         "fallback_notice": _fallback_notice(fallback_reason) if used_fallback else "",
-        "debug_trace_path": debug_trace_path,
         "input_kind": input_kind,
+        "debug_trace_path": debug_trace_path or "",
+        "debug": debug_bundle,
     }
 
 

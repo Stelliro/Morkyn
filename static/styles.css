@@ -1,16 +1,113 @@
+/* --------------------------------------------------------------------------
+   Mørkyn design system — calm dark UI
+   Themes set on <html data-theme="...">. Default = dusk (quiet forest slate).
+   -------------------------------------------------------------------------- */
 :root {
   color-scheme: dark;
-  --bg: #0f1214;
-  --surface: #171b1f;
-  --surface-2: #20262b;
-  --surface-3: #111518;
-  --line: #303940;
-  --text: #edf0ee;
-  --muted: #aab2ae;
-  --accent: #8fca9d;
-  --accent-2: #91b8d8;
-  --warn: #d7b06f;
-  --bad: #d98778;
+
+  /* Surfaces — low contrast so panels recede */
+  --bg: #0c0f12;
+  --bg-glow: rgba(110, 150, 170, 0.07);
+  --bg-glow-2: rgba(90, 140, 110, 0.05);
+  --surface: rgba(20, 24, 28, 0.88);
+  --surface-solid: #14181c;
+  --surface-2: rgba(28, 33, 38, 0.72);
+  --surface-3: rgba(14, 17, 20, 0.65);
+  --surface-inset: rgba(8, 10, 12, 0.55);
+
+  /* Lines / text */
+  --line: rgba(255, 255, 255, 0.07);
+  --line-strong: rgba(255, 255, 255, 0.12);
+  --text: #e4e8e6;
+  --muted: #8b9490;
+  --muted-2: #6a7370;
+
+  /* Accents — desaturated so chrome doesn't scream */
+  --accent: #7aaf8a;
+  --accent-soft: rgba(122, 175, 138, 0.14);
+  --accent-2: #7a9fb8;
+  --accent-2-soft: rgba(122, 159, 184, 0.12);
+  --warn: #c4a46a;
+  --bad: #c48478;
+  --on-accent: #0c1210;
+
+  /* Shape / depth */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-pill: 999px;
+  --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.35);
+  --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.22);
+  --font: "Segoe UI", Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --btn-bg: rgba(255, 255, 255, 0.035);
+  --btn-bg-hover: rgba(255, 255, 255, 0.06);
+  --btn-border: rgba(255, 255, 255, 0.08);
+  --btn-text: rgba(228, 232, 230, 0.82);
+  --field-bg: rgba(0, 0, 0, 0.22);
+  --decal-opacity: 0.45;
+}
+
+/* Playstyle themes — same structure, different mood */
+html[data-theme="ember"] {
+  --bg: #120e0c;
+  --bg-glow: rgba(180, 90, 50, 0.08);
+  --bg-glow-2: rgba(120, 50, 30, 0.06);
+  --surface: rgba(28, 20, 18, 0.9);
+  --surface-solid: #1c1412;
+  --surface-2: rgba(40, 28, 24, 0.75);
+  --surface-3: rgba(18, 12, 11, 0.7);
+  --accent: #d0895c;
+  --accent-soft: rgba(208, 137, 92, 0.16);
+  --accent-2: #c9a06a;
+  --accent-2-soft: rgba(201, 160, 106, 0.12);
+  --on-accent: #1a100c;
+}
+
+html[data-theme="tide"] {
+  --bg: #0a1014;
+  --bg-glow: rgba(60, 120, 170, 0.1);
+  --bg-glow-2: rgba(40, 90, 130, 0.06);
+  --surface: rgba(16, 24, 32, 0.9);
+  --surface-solid: #101820;
+  --surface-2: rgba(24, 36, 48, 0.75);
+  --surface-3: rgba(10, 16, 22, 0.7);
+  --accent: #6eb0c8;
+  --accent-soft: rgba(110, 176, 200, 0.14);
+  --accent-2: #7a9ec4;
+  --accent-2-soft: rgba(122, 158, 196, 0.12);
+  --on-accent: #071016;
+}
+
+html[data-theme="bloom"] {
+  --bg: #100e14;
+  --bg-glow: rgba(140, 90, 170, 0.09);
+  --bg-glow-2: rgba(80, 50, 120, 0.06);
+  --surface: rgba(24, 20, 32, 0.9);
+  --surface-solid: #181420;
+  --surface-2: rgba(36, 30, 48, 0.75);
+  --surface-3: rgba(14, 12, 20, 0.7);
+  --accent: #b08ec8;
+  --accent-soft: rgba(176, 142, 200, 0.15);
+  --accent-2: #8ea0c8;
+  --accent-2-soft: rgba(142, 160, 200, 0.12);
+  --on-accent: #120e18;
+}
+
+html[data-theme="ash"] {
+  --bg: #0e0e0e;
+  --bg-glow: rgba(140, 140, 140, 0.06);
+  --bg-glow-2: rgba(90, 90, 90, 0.05);
+  --surface: rgba(22, 22, 22, 0.92);
+  --surface-solid: #161616;
+  --surface-2: rgba(32, 32, 32, 0.78);
+  --surface-3: rgba(14, 14, 14, 0.72);
+  --accent: #b0b0b0;
+  --accent-soft: rgba(176, 176, 176, 0.12);
+  --accent-2: #9a9a9a;
+  --accent-2-soft: rgba(154, 154, 154, 0.1);
+  --on-accent: #101010;
+  --muted: #8a8a8a;
 }
 
 * {
@@ -21,10 +118,33 @@ body {
   margin: 0;
   min-height: 100vh;
   overflow-x: hidden;
-  background: var(--bg);
+  background:
+    radial-gradient(1200px 600px at 12% -10%, var(--bg-glow), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, var(--bg-glow-2), transparent 50%),
+    radial-gradient(700px 400px at 50% 100%, var(--accent-soft), transparent 60%),
+    var(--bg);
   color: var(--text);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: var(--font);
   -webkit-text-size-adjust: 100%;
+}
+
+/* Soft vignette / grain decal (CSS only — no image assets) */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  opacity: var(--decal-opacity);
+  background-image:
+    radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.03) 0 1px, transparent 1.5px),
+    radial-gradient(circle at 70% 60%, rgba(255, 255, 255, 0.025) 0 1px, transparent 1.5px);
+  background-size: 48px 48px, 72px 72px;
+}
+
+body > * {
+  position: relative;
+  z-index: 1;
 }
 
 body.aiBusy #turnForm {
@@ -159,13 +279,24 @@ body.aiBusy::after {
   animation-delay: 0.36s;
 }
 
+.startSplashPhase {
+  margin: 4px 0 0;
+  color: var(--accent-2);
+  font-size: 0.92rem;
+  opacity: 0.92;
+}
+
 .startSplashDraft {
   min-height: 0;
+  max-height: min(42vh, 360px);
   overflow: auto;
   color: var(--text);
   font-size: clamp(15px, 2vw, 18px);
   line-height: 1.72;
   white-space: pre-wrap;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  padding-top: 10px;
+  margin-top: 4px;
 }
 
 .startSplashCursor::after,
@@ -330,23 +461,38 @@ textarea {
 
 button,
 .buttonLike {
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-2);
-  color: var(--text);
-  min-height: 36px;
-  padding: 0 12px;
+  border: 1px solid var(--btn-border);
+  border-radius: var(--radius-pill);
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  min-height: 34px;
+  padding: 0 13px;
   cursor: pointer;
+  font-weight: 550;
+  letter-spacing: 0.01em;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.12s ease;
 }
 
 button:hover,
 .buttonLike:hover {
-  border-color: var(--accent);
+  border-color: var(--line-strong);
+  background: var(--btn-bg-hover);
+  color: var(--text);
+}
+
+button:active,
+.buttonLike:active {
+  transform: translateY(1px);
 }
 
 button:disabled {
   cursor: wait;
-  opacity: 0.6;
+  opacity: 0.5;
 }
 
 h1,
@@ -375,26 +521,118 @@ label span {
   display: none !important;
 }
 
+.legalModalPanel {
+  width: min(820px, 96vw);
+  max-height: min(88vh, 900px);
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.legalModalContent {
+  overflow: auto;
+  padding: 0 4px 8px;
+}
+
+.legalPre {
+  white-space: pre-wrap;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface-3);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  margin: 0;
+}
+
+.updatesPanel .updatesGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 16px;
+}
+
+.updatesPanel .updatesGrid span.muted,
+.updatesPanel .updatesGrid .muted {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 2px;
+}
+
+.updatesPanel .updatesGrid strong {
+  font-size: 13px;
+}
+
+.updateLog {
+  margin-top: 12px;
+  min-height: 1.5em;
+}
+
+.app.jsPending {
+  visibility: hidden;
+}
+
+.app.jsReady {
+  visibility: visible;
+}
+
 .app {
   min-height: 100vh;
 }
 
 .setupView {
   min-height: 100vh;
+  min-height: 100svh;
   display: grid;
   place-items: center;
-  padding: 32px 20px;
+  padding: clamp(12px, 2.5vw, 28px);
 }
 
 .setupPanel {
-  width: min(980px, 100%);
-  max-height: calc(100vh - 64px);
+  width: min(1120px, 100%);
+  max-height: calc(100vh - 40px);
+  max-height: calc(100svh - 40px);
   overflow: auto;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  padding: 22px;
+  border-radius: var(--radius-lg);
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.03), transparent 42%),
+    var(--surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: clamp(14px, 2vw, 22px);
   position: relative;
+  box-shadow: var(--shadow-soft);
+}
+
+/* Corner decal ticks */
+.setupPanel::before,
+.setupPanel::after {
+  content: "";
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  pointer-events: none;
+  opacity: 0.35;
+  border: 1px solid var(--accent-2);
+}
+.setupPanel::before {
+  top: 12px;
+  left: 12px;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 8px 0 0 0;
+}
+.setupPanel::after {
+  right: 12px;
+  bottom: 12px;
+  border-left: none;
+  border-top: none;
+  border-radius: 0 0 8px 0;
 }
 
 .setupPanel.setupRandomizing {
@@ -432,22 +670,72 @@ label span {
 
 .setupHeader {
   align-items: start;
+  gap: 16px;
+}
+
+.setupHeader h1 {
+  font-size: clamp(1.35rem, 2.4vw, 1.7rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  background: linear-gradient(120deg, var(--text), var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 .setupHeader p,
 .sectionHeader p {
-  margin-top: 5px;
+  margin-top: 6px;
   color: var(--muted);
-  font-size: 14px;
-  line-height: 1.45;
+  font-size: 13.5px;
+  line-height: 1.5;
+  max-width: 42ch;
 }
 
 .setupActions {
   display: flex;
   flex-wrap: wrap;
   justify-content: end;
-  gap: 8px;
+  align-items: center;
+  gap: 6px;
   flex: 0 0 auto;
+  max-width: min(640px, 100%);
+}
+
+.themePicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  padding: 3px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--line);
+  background: var(--surface-inset);
+}
+
+.themePicker label {
+  display: none;
+}
+
+.themePicker select {
+  width: auto;
+  min-width: 7.5rem;
+  height: 30px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.themePicker select:focus {
+  border: none;
+  box-shadow: none;
+  outline: none;
+  color: var(--text);
 }
 
 .buttonLike {
@@ -510,6 +798,11 @@ label span {
   display: grid;
 }
 
+#legalModal:not(.hidden) {
+  display: grid;
+  z-index: 30;
+}
+
 .modalPanel {
   width: min(680px, 100%);
   max-height: calc(100vh - 40px);
@@ -539,23 +832,38 @@ label span {
 .setupSteps {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 22px;
+  gap: 6px;
+  margin-top: 20px;
+  padding: 5px;
+  border-radius: var(--radius-md);
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
 }
 
 .setupSteps button {
-  justify-content: start;
-  min-height: 42px;
-  text-align: left;
-  color: var(--muted);
-  background: var(--surface-3);
+  justify-content: center;
+  min-height: 38px;
+  text-align: center;
+  color: var(--muted-2);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.setupSteps button:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.04);
+  border-color: transparent;
 }
 
 .setupSteps button.active {
-  color: #0e1418;
-  background: var(--accent-2);
+  color: var(--text);
+  background: var(--accent-2-soft);
   border-color: transparent;
-  font-weight: 800;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  font-weight: 700;
 }
 
 .setupSections {
@@ -575,10 +883,10 @@ label span {
   align-items: start;
   justify-content: space-between;
   gap: 16px;
-  padding: 16px;
+  padding: 14px 16px;
   border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface-3);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent), var(--surface-3);
 }
 
 .setupGrid {
@@ -608,15 +916,28 @@ label {
 }
 
 .setupGrid > label.settingField {
-  grid-template-rows: 16px 44px minmax(38px, auto) 24px auto;
+  grid-template-rows: auto 44px minmax(38px, auto) auto;
 }
 
 .setupGrid > label.settingField:not(.hasCustomInput) {
-  grid-template-rows: 16px 44px minmax(38px, auto) 24px;
+  grid-template-rows: auto 44px minmax(38px, auto);
 }
 
 .conditional > label.settingField {
-  grid-template-rows: 16px 44px minmax(34px, auto) 24px auto;
+  grid-template-rows: auto 44px minmax(34px, auto) auto;
+}
+
+.settingFieldHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 22px;
+}
+
+.settingFieldHeader > span {
+  min-width: 0;
+  line-height: 1.2;
 }
 
 .settingDescription {
@@ -630,8 +951,19 @@ label {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-end;
   gap: 8px;
-  margin-top: 2px;
+  margin-top: 0;
+  flex-shrink: 0;
+}
+
+.settingFieldHeader .settingControls {
+  margin-top: 0;
+}
+
+fieldset.settingField > .settingControls {
+  margin: 4px 0 2px;
+  justify-content: flex-start;
 }
 
 .textAiWrap {
@@ -648,14 +980,23 @@ label {
   position: absolute;
   top: 7px;
   right: 7px;
-  min-height: 28px;
-  height: 28px;
+  min-height: 26px;
+  height: 26px;
   padding: 0 8px;
-  border-color: rgba(145, 184, 216, 0.55);
-  background: rgba(32, 38, 43, 0.94);
+  border-color: transparent;
+  background: var(--accent-2-soft);
   color: var(--accent-2);
-  font-size: 11px;
-  font-weight: 850;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  opacity: 0.75;
+}
+
+.textAiButton:hover {
+  opacity: 1;
+  border-color: transparent;
+  background: var(--accent-2-soft);
+  color: var(--text);
 }
 
 .textAiPanel {
@@ -700,10 +1041,33 @@ label {
 }
 
 .miniButton {
-  min-height: 28px;
+  min-height: 26px;
   padding: 0 9px;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  background: transparent;
+  border-color: transparent;
+  border-radius: var(--radius-pill);
+  opacity: 0.72;
+}
+
+.miniButton:hover {
+  opacity: 1;
   color: var(--accent-2);
+  background: var(--accent-2-soft);
+  border-color: transparent;
+}
+
+.settingFieldHeader .miniButton,
+.settingControls .miniButton {
+  opacity: 0.55;
+}
+
+.settingFieldHeader:hover .miniButton,
+.settingField:focus-within .miniButton,
+.settingControls:hover .miniButton {
+  opacity: 0.9;
 }
 
 .settingLock {
@@ -858,7 +1222,7 @@ label {
 }
 
 .setupGrid > label.gainControl.settingField {
-  grid-template-rows: 16px 44px minmax(38px, auto) 26px auto auto;
+  grid-template-rows: auto 44px minmax(38px, auto) 26px auto auto;
 }
 
 .customGainToggle {
@@ -914,27 +1278,36 @@ select,
 textarea {
   width: 100%;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface-3);
+  border-radius: var(--radius-sm);
+  background: var(--field-bg);
   color: var(--text);
-  padding: 10px;
+  padding: 10px 12px;
   outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
 
 input,
 select {
-  height: 44px;
+  height: 42px;
 }
 
 textarea {
   resize: vertical;
-  min-height: 44px;
+  min-height: 42px;
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--line-strong);
 }
 
 input:focus,
 select:focus,
 textarea:focus {
-  border-color: var(--accent);
+  border-color: rgba(122, 159, 184, 0.45);
+  box-shadow: 0 0 0 3px var(--accent-2-soft);
+  background: rgba(0, 0, 0, 0.28);
 }
 
 .toggleSet {
@@ -993,7 +1366,7 @@ textarea:focus {
 }
 
 .wide.settingField {
-  grid-template-rows: 16px minmax(64px, auto) auto;
+  grid-template-rows: auto minmax(64px, auto) auto;
 }
 
 .conditional .wide {
@@ -1003,21 +1376,29 @@ textarea:focus {
 
 .gameView {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 480px;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 26vw);
   min-height: 100vh;
+  min-height: 100svh;
+  max-width: 100vw;
+  overflow: hidden;
 }
 
 .playPane {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: 100vh;
+  min-height: 0;
+  height: 100%;
+  max-height: 100svh;
   border-right: 1px solid var(--line);
+  overflow: hidden;
 }
 
 .topbar {
-  padding: 16px 18px;
+  padding: 12px 16px;
   border-bottom: 1px solid var(--line);
   background: var(--surface);
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 #locationLine {
@@ -1036,9 +1417,10 @@ textarea:focus {
 .currentTurn {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  gap: 14px;
+  gap: 12px;
   min-height: 0;
-  padding: 18px;
+  padding: 14px 16px;
+  overflow: hidden;
 }
 
 .turnBlock {
@@ -1115,6 +1497,30 @@ textarea:focus {
   min-width: 0;
 }
 
+.turnWaitPhase {
+  margin: 0;
+  color: var(--accent-2);
+  font-size: 0.9rem;
+}
+
+.turnWaitPreview {
+  margin: 8px 0 0;
+  max-height: 220px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font: inherit;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--text-muted, var(--text));
+  opacity: 0.9;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  padding-left: 10px;
+}
+
+.turnWaitPreview.hidden {
+  display: none;
+}
+
 .turnWaitCopy strong {
   font-size: 0.98rem;
 }
@@ -1183,6 +1589,210 @@ textarea:focus {
 .fallbackNotice small {
   color: var(--muted);
   line-height: 1.35;
+}
+
+.checkCatalogCard {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 90%, transparent);
+}
+
+.checkCategoryFilters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0 12px;
+}
+
+.checkCategoryFilters .activeFilter {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.skillCatalogGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.skillCatalogCard {
+  border: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+  border-radius: 10px;
+  padding: 10px;
+  background: color-mix(in srgb, var(--surface-1) 92%, transparent);
+  display: grid;
+  gap: 6px;
+}
+
+.skillCatalogCard.disabledSkill {
+  opacity: 0.55;
+}
+
+.skillCatalogCard header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.skillCatPill {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  opacity: 0.85;
+}
+
+.skillMeta {
+  margin: 0;
+  font-size: 0.78rem;
+  opacity: 0.75;
+}
+
+.skillDesc {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  color: var(--text-muted, var(--text));
+}
+
+.skillAddRow {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.skillAddRow.hidden {
+  display: none;
+}
+
+.turnDebugPanel {
+  margin-top: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface-2) 88%, transparent);
+  overflow: hidden;
+}
+
+.turnDebugToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, var(--text));
+  font: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  cursor: pointer;
+}
+
+.turnDebugToggle:hover {
+  background: color-mix(in srgb, var(--surface-3) 70%, transparent);
+  color: var(--text);
+}
+
+.turnDebugChevron {
+  width: 1em;
+  opacity: 0.7;
+}
+
+.turnDebugToggle strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.turnDebugStatus {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.turnDebugStatus.passed {
+  color: color-mix(in srgb, #7dcea0 90%, var(--text));
+  border-color: color-mix(in srgb, #7dcea0 35%, transparent);
+  background: color-mix(in srgb, #7dcea0 12%, transparent);
+}
+
+.turnDebugStatus.failed {
+  color: color-mix(in srgb, #e8a87c 90%, var(--text));
+  border-color: color-mix(in srgb, #e8a87c 35%, transparent);
+  background: color-mix(in srgb, #e8a87c 12%, transparent);
+}
+
+.turnDebugFile {
+  margin-left: auto;
+  font-size: 0.78rem;
+  opacity: 0.72;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.turnDebugBody {
+  padding: 0 12px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.turnDebugActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 0 8px;
+}
+
+.turnDebugActions .compactButton,
+button.compactButton {
+  padding: 4px 10px;
+  font-size: 0.82rem;
+  min-height: 0;
+}
+
+.turnDebugSummary,
+.turnDebugJson,
+.turnDebugFileView {
+  margin: 0;
+  max-height: 280px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-1) 92%, #000);
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.turnDebugFileView {
+  margin-top: 8px;
+  max-height: 420px;
+  border-left: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+.turnDebugHint {
+  margin: 8px 0 0;
+  font-size: 0.78rem;
+  opacity: 0.72;
+}
+
+.turnDebugHint code {
+  font-size: 0.85em;
 }
 
 .debugTraceNotice {
@@ -1310,21 +1920,51 @@ textarea:focus {
   padding: 8px 4px;
 }
 
-#sendButton,
-.setupHeader button,
-#setupNext {
-  background: var(--accent);
-  color: #101510;
-  border-color: transparent;
-  font-weight: 800;
+/* Quiet secondary chrome — most header actions should recede */
+.secondaryButton,
+.setupHeader .secondaryButton,
+.setupHeader .buttonLike.secondaryButton {
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border-color: var(--btn-border);
+  font-weight: 550;
+  font-size: 12.5px;
+  min-height: 32px;
+  padding: 0 11px;
 }
 
-.secondaryButton,
-.setupHeader .secondaryButton {
-  background: var(--surface-2);
+.secondaryButton:hover,
+.setupHeader .secondaryButton:hover {
+  background: var(--btn-bg-hover);
   color: var(--text);
-  border-color: var(--line);
+  border-color: var(--line-strong);
+}
+
+/* Only true primary actions stay filled */
+#sendButton,
+#setupStart,
+#setupNext {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, white), var(--accent));
+  color: var(--on-accent);
+  border-color: transparent;
   font-weight: 700;
+  box-shadow: 0 6px 18px var(--accent-soft);
+}
+
+#sendButton:hover,
+#setupStart:hover,
+#setupNext:hover {
+  filter: brightness(1.06);
+  border-color: transparent;
+  color: var(--on-accent);
+}
+
+/* Undo old rule that painted every setup header button as primary */
+.setupHeader button:not(#setupStart):not(.primaryButton) {
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  border-color: var(--btn-border);
+  font-weight: 550;
 }
 
 .setupFooter {
@@ -1345,9 +1985,12 @@ textarea:focus {
 
 .sidePane {
   display: grid;
-  grid-template-rows: 36vh minmax(0, 1fr);
-  min-height: 100vh;
+  grid-template-rows: minmax(160px, 32%) minmax(0, 1fr);
+  min-height: 0;
+  height: 100%;
+  max-height: 100svh;
   background: var(--surface-3);
+  overflow: hidden;
 }
 
 .historyPane,
@@ -1970,38 +2613,267 @@ textarea:focus {
   margin-top: 10px;
 }
 
-@media (max-width: 1100px) {
+/* ==========================================================================
+   Responsive layouts
+   - phone  ≤720px   stacked, full-bleed, fat touch targets
+   - tablet 721–1199 two-column setup, stacked or tight play
+   - desktop 1200+   side-by-side play + index
+   - wide   ≥1500    dashboard setup + input|output side-by-side play
+   ========================================================================== */
+
+/* --- Wide desktop: use the space, less empty margin --- */
+@media (min-width: 1500px) {
+  .setupView {
+    place-items: stretch;
+    padding: 0;
+  }
+
+  .setupPanel {
+    width: 100%;
+    max-width: none;
+    max-height: 100svh;
+    height: 100svh;
+    border-radius: 0;
+    border: none;
+    border-right: 1px solid var(--line);
+    box-shadow: none;
+    display: grid;
+    grid-template-columns: minmax(200px, 240px) minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    gap: 0 18px;
+    padding: 18px 22px 14px;
+    overflow: hidden;
+  }
+
+  .setupPanel::before,
+  .setupPanel::after {
+    display: none;
+  }
+
+  .setupHeader {
+    grid-column: 1 / -1;
+    padding-bottom: 12px;
+    margin-bottom: 4px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .setupActions {
+    max-width: none;
+  }
+
+  /* Vertical step rail on the left */
+  .setupSteps {
+    grid-column: 1;
+    grid-row: 2;
+    align-self: start;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
+    padding: 8px;
+    position: sticky;
+    top: 0;
+    max-height: calc(100svh - 160px);
+    overflow: auto;
+  }
+
+  .setupSteps button {
+    justify-content: flex-start;
+    text-align: left;
+    min-height: 44px;
+    width: 100%;
+    padding-inline: 12px;
+  }
+
+  .setupSections {
+    grid-column: 2;
+    grid-row: 2;
+    margin-top: 12px;
+    min-height: 0;
+    overflow: auto;
+    padding-right: 6px;
+  }
+
+  .setupFooter {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    margin-top: 12px;
+  }
+
+  .setupGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px 14px;
+  }
+
+  .visionCard {
+    grid-template-columns: minmax(160px, 200px) minmax(0, 1fr) auto;
+  }
+
+  .visionCard > .visionActions {
+    grid-column: auto;
+    grid-row: 2;
+    align-self: end;
+    flex-direction: column;
+  }
+
+  /* Play: story left, side rail; input + output share a row */
+  .gameView {
+    grid-template-columns: minmax(0, 1fr) minmax(380px, 24vw);
+    height: 100svh;
+  }
+
+  .currentTurn {
+    grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.28fr);
+    grid-template-rows: minmax(0, 1fr);
+    gap: 14px;
+  }
+
+  .currentTurn .turnBlock {
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .outputBlock .singleBox,
+  .turnBlock .singleBox {
+    height: 100%;
+    max-height: none;
+  }
+
+  .composer {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+  }
+
+  .composerActions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+}
+
+/* --- Standard desktop --- */
+@media (min-width: 1200px) and (max-width: 1499.98px) {
+  .setupPanel {
+    width: min(1200px, calc(100vw - 48px));
+  }
+
+  .setupGrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .gameView {
+    grid-template-columns: minmax(0, 1fr) minmax(340px, 28vw);
+    height: 100svh;
+  }
+
+  .currentTurn {
+    grid-template-columns: minmax(200px, 0.85fr) minmax(0, 1.15fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .currentTurn .turnBlock {
+    min-height: 0;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+}
+
+/* --- Tablet / small laptop: keep play usable, tighten side --- */
+@media (min-width: 900px) and (max-width: 1199.98px) {
+  .setupView {
+    padding: 16px;
+  }
+
+  .setupPanel {
+    width: min(960px, 100%);
+    max-height: calc(100svh - 32px);
+  }
+
   .setupGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .gameView {
-    grid-template-columns: 1fr;
+  .setupHeader {
+    flex-wrap: wrap;
   }
 
-  .playPane,
+  .setupActions {
+    max-width: 100%;
+    justify-content: flex-start;
+  }
+
+  .gameView {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 34vw);
+    height: 100svh;
+  }
+
   .sidePane {
-    min-height: auto;
+    grid-template-rows: minmax(140px, 30%) minmax(0, 1fr);
+  }
+
+  .topActions {
+    gap: 6px;
+  }
+
+  .topActions button {
+    min-height: 32px;
+    padding-inline: 9px;
+    font-size: 12px;
+  }
+
+  .tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .tabs button {
+    flex: 0 0 auto;
+  }
+}
+
+/* --- Narrow tablet / large phone landscape: stack play above world --- */
+@media (max-width: 899.98px) {
+  .setupGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .setupPanel {
+    width: 100%;
+  }
+
+  .setupHeader {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .setupActions {
+    max-width: none;
+    justify-content: flex-start;
+  }
+
+  .gameView {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto;
+    height: auto;
+    min-height: 100svh;
+    overflow: auto;
   }
 
   .playPane {
     border-right: 0;
     border-bottom: 1px solid var(--line);
+    max-height: none;
+    min-height: min(100svh, 900px);
+    height: auto;
   }
 
   .sidePane {
-    grid-template-rows: minmax(260px, 34svh) minmax(420px, 56svh);
-  }
-
-  .historyList,
-  .indexContent {
-    min-height: 0;
-  }
-}
-
-@media (max-width: 900px) {
-  .setupPanel {
-    width: 100%;
+    max-height: none;
+    height: auto;
+    min-height: 70svh;
+    grid-template-rows: minmax(220px, 36svh) minmax(360px, 1fr);
   }
 
   .topbar {
@@ -2015,21 +2887,19 @@ textarea:focus {
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     width: 100%;
+    gap: 6px;
   }
 
   .topActions button {
     width: 100%;
     min-height: 38px;
-    padding-inline: 8px;
+    padding-inline: 6px;
+    font-size: 12px;
   }
 
   .currentTurn {
-    grid-template-rows: auto minmax(320px, 1fr);
-    padding: 12px;
-    gap: 10px;
-  }
-
-  .singleBox {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(280px, 1fr);
     padding: 12px;
   }
 
@@ -2039,19 +2909,22 @@ textarea:focus {
     bottom: 0;
     z-index: 14;
     padding: 10px;
+    background: var(--surface-solid);
+    border-top: 1px solid var(--line);
   }
 
   .composerActions {
+    display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .composerActions button {
-    min-height: 40px;
-    padding-inline: 8px;
+    min-height: 42px;
   }
 
   #turnInput {
-    min-height: 96px;
+    min-height: 88px;
   }
 
   .tabs {
@@ -2064,77 +2937,108 @@ textarea:focus {
   .tabs button {
     flex: 0 0 auto;
   }
+
+  .historyList,
+  .indexContent {
+    min-height: 0;
+  }
 }
 
-@media (max-width: 640px) {
-  .setupGrid,
-  .conditional,
-  .composer {
-    grid-template-columns: 1fr;
-  }
-
-  .suggestionPanel {
-    left: 10px;
-    right: 10px;
-    width: auto;
-  }
-
-  .suggestionRegenRow {
-    grid-template-columns: 1fr;
-  }
-
+/* --- Phone --- */
+@media (max-width: 720px) {
   .setupView {
-    padding: 8px;
+    padding: 0;
+    place-items: stretch;
   }
 
   .setupPanel {
-    max-height: calc(100svh - 16px);
-    padding: 12px;
+    width: 100%;
+    max-height: none;
+    min-height: 100svh;
+    border-radius: 0;
+    border: none;
+    padding: 12px 12px calc(12px + env(safe-area-inset-bottom, 0px));
+    box-shadow: none;
   }
 
-  .startSplash {
-    padding: 10px;
+  .setupPanel::before,
+  .setupPanel::after {
+    display: none;
   }
 
-  .startSplashPanel {
-    min-height: calc(100svh - 20px);
-    padding: 16px;
-  }
-
-  .startSplashPanel h1 {
-    font-size: clamp(26px, 9vw, 40px);
-  }
-
-  .setupHeader,
-  .sectionHeader,
-  .subsectionHeader,
-  .abilityCardHeader,
-  .abilityCardGrid {
-    display: grid;
+  .setupGrid,
+  .conditional {
     grid-template-columns: 1fr;
+    gap: 14px;
   }
 
-  .setupActions,
-  .subsectionActions,
-  .setupFooter {
-    grid-template-columns: 1fr;
+  .setupSteps {
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    margin-top: 14px;
+  }
+
+  .setupSteps button {
+    min-height: 40px;
+    font-size: 12px;
+    padding-inline: 8px;
+  }
+
+  .setupHeader h1 {
+    font-size: 1.35rem;
+  }
+
+  .setupHeader p {
+    font-size: 13px;
   }
 
   .setupActions,
   .subsectionActions {
     display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    max-width: none;
   }
 
-  .setupSteps {
-    grid-template-columns: 1fr 1fr;
+  .setupActions .themePicker {
+    grid-column: 1 / -1;
+  }
+
+  .setupActions #setupStart {
+    grid-column: 1 / -1;
+    min-height: 44px;
+  }
+
+  .setupFooter {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(180deg, transparent, var(--surface-solid) 28%);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    z-index: 5;
+  }
+
+  .setupFooter .stepStatus {
+    order: -1;
+  }
+
+  .sectionHeader,
+  .subsectionHeader,
+  .abilityCardHeader,
+  .abilityCardGrid,
+  .visionCard {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .visionCard > .visionActions {
+    grid-column: 1;
+    flex-direction: row;
   }
 
   .topActions {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .gameView {
-    min-height: auto;
   }
 
   .playPane {
@@ -2142,12 +3046,13 @@ textarea:focus {
   }
 
   .currentTurn {
-    grid-template-rows: auto minmax(280px, 1fr);
+    grid-template-rows: auto minmax(240px, 1fr);
     padding: 10px;
   }
 
   .sidePane {
-    grid-template-rows: minmax(260px, 40svh) minmax(440px, 60svh);
+    min-height: 80svh;
+    grid-template-rows: minmax(200px, 34svh) minmax(400px, 1fr);
   }
 
   .historyPane,
@@ -2161,7 +3066,8 @@ textarea:focus {
   .playerAliasStateForm,
   .rewardItems li,
   .suggestionItem,
-  .suggestionRegenRow {
+  .suggestionRegenRow,
+  .updatesPanel .updatesGrid {
     grid-template-columns: 1fr;
   }
 
@@ -2174,30 +3080,66 @@ textarea:focus {
   .statGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-}
 
-@media (orientation: landscape) and (max-height: 620px) and (min-width: 720px) {
-  .gameView {
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 38vw);
-    min-height: 100svh;
+  .suggestionPanel {
+    left: 8px;
+    right: 8px;
+    width: auto;
   }
 
-  .playPane,
-  .sidePane {
-    min-height: 100svh;
+  .startSplash {
+    padding: 8px;
+  }
+
+  .startSplashPanel {
+    min-height: calc(100svh - 16px);
+    padding: 16px;
+    border-radius: var(--radius-md);
+  }
+
+  .startSplashPanel h1 {
+    font-size: clamp(26px, 8vw, 40px);
+  }
+
+  .modalPanel,
+  .legalModalPanel {
+    width: 100%;
+    max-height: 100svh;
+    border-radius: 0;
+  }
+
+  .modalBackdrop {
+    padding: 0;
+    align-items: stretch;
+  }
+}
+
+/* Phone landscape: keep side-by-side play if short height */
+@media (orientation: landscape) and (max-height: 520px) and (max-width: 960px) {
+  .gameView {
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 40vw);
+    grid-template-rows: 1fr;
+    height: 100svh;
+    overflow: hidden;
   }
 
   .playPane {
     border-right: 1px solid var(--line);
     border-bottom: 0;
+    min-height: 0;
+    height: 100svh;
+    max-height: 100svh;
   }
 
   .sidePane {
-    grid-template-rows: minmax(180px, 42svh) minmax(0, 1fr);
+    height: 100svh;
+    min-height: 0;
+    max-height: 100svh;
+    grid-template-rows: minmax(100px, 38%) minmax(0, 1fr);
   }
 
   .topbar {
-    padding: 8px 10px;
+    padding: 6px 8px;
   }
 
   .topActions {
@@ -2205,49 +3147,43 @@ textarea:focus {
   }
 
   .topActions button {
-    min-height: 32px;
+    min-height: 30px;
+    font-size: 11px;
   }
 
   .currentTurn {
+    grid-template-columns: 1fr;
     grid-template-rows: auto minmax(0, 1fr);
-    gap: 8px;
-    padding: 10px;
-  }
-
-  .singleBox {
-    padding: 10px;
+    padding: 8px;
+    gap: 6px;
   }
 
   .composer {
     position: relative;
-    grid-template-columns: minmax(0, 1fr) 96px;
-    padding: 8px;
-  }
-
-  .composerActions {
-    grid-template-columns: 1fr;
+    padding: 6px;
   }
 
   #turnInput {
-    min-height: 64px;
+    min-height: 52px;
   }
 }
 
-@media (max-height: 720px) and (min-width: 901px) {
+/* Short desktop windows */
+@media (max-height: 720px) and (min-width: 1200px) {
   .topbar {
-    padding-block: 10px;
+    padding-block: 8px;
   }
 
   .currentTurn {
-    padding-block: 12px;
-  }
-
-  .composer {
     padding-block: 10px;
   }
 
+  .composer {
+    padding-block: 8px;
+  }
+
   #turnInput {
-    min-height: 64px;
+    min-height: 56px;
   }
 }
 
@@ -2301,4 +3237,377 @@ body.compact-mode .card {
 body.compact-mode .historyList,
 body.compact-mode .indexContent {
   font-size: 0.92rem;
+}
+
+/* ---- Vision systems (portrait + map scaffolding) ---- */
+.visionRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px;
+  gap: 14px;
+  margin-top: 16px;
+  align-items: stretch;
+}
+
+.visionCard {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: linear-gradient(165deg, rgba(255,255,255,0.03), transparent 50%), var(--surface-3);
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
+  gap: 12px 16px;
+  align-items: center;
+  min-height: 0;
+}
+
+.visionCard h3 {
+  grid-column: 1 / -1;
+}
+
+.visionCard > .portraitFrame,
+.visionCard > .mapFrame {
+  grid-row: 2;
+}
+
+.visionCard > p {
+  grid-row: 2;
+  align-self: center;
+}
+
+.visionCard > .visionActions {
+  grid-column: 1 / -1;
+}
+
+.visionCard h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.visionCard p {
+  margin: 0;
+  color: var(--muted-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.portraitFrame,
+.mapFrame {
+  position: relative;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 7px,
+      rgba(255,255,255,0.02) 7px,
+      rgba(255,255,255,0.02) 8px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent,
+      transparent 7px,
+      rgba(255,255,255,0.02) 7px,
+      rgba(255,255,255,0.02) 8px
+    ),
+    var(--surface-inset);
+  overflow: hidden;
+  image-rendering: pixelated;
+}
+
+.portraitFrame {
+  aspect-ratio: 1 / 1;
+  display: grid;
+  place-items: center;
+}
+
+.mapFrame {
+  aspect-ratio: 16 / 10;
+  min-height: 160px;
+  display: grid;
+  place-items: center;
+}
+
+.portraitFrame .visionPlaceholder,
+.mapFrame .visionPlaceholder {
+  text-align: center;
+  padding: 12px;
+  color: var(--muted-2);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.portraitFrame .visionPlaceholder strong,
+.mapFrame .visionPlaceholder strong {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  margin-bottom: 4px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.visionBadge {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  background: rgba(0,0,0,0.45);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 3px 8px;
+}
+
+.visionActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.visionActions button {
+  font-size: 11.5px;
+  min-height: 30px;
+}
+
+@media (max-width: 820px) {
+  .visionRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Softer option / gain / ability cards */
+.optionSet,
+.gainControl,
+.abilitySetupCard,
+.subsectionHeader,
+.toggleSet {
+  border-radius: var(--radius-md);
+  border-color: var(--line);
+  background: var(--surface-3);
+}
+
+.modalPanel {
+  border-radius: var(--radius-lg);
+  border-color: var(--line);
+  box-shadow: var(--shadow-soft);
+  background: var(--surface-solid);
+}
+
+.turnNarration {
+  border-radius: var(--radius-md);
+  border-color: var(--line);
+  background: var(--surface);
+}
+
+.gameView .topbar {
+  border-bottom: 1px solid var(--line);
+  background: rgba(12, 15, 18, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.startSplashPanel {
+  border-radius: var(--radius-lg);
+  border-color: var(--line);
+}
+
+.settingsSubhead {
+  margin: 4px 0 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.settingsDivider {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 18px 0 14px;
+}
+
+.imageForm {
+  margin-top: 4px;
+}
+
+.portraitImage {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  image-rendering: pixelated;
+  display: block;
+}
+
+/* ---- World map + tile library ---- */
+.worldMapCard {
+  grid-template-columns: 1fr !important;
+}
+
+.worldMapCard .mapTools {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(100px, 0.6fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.mapToolField {
+  display: grid;
+  gap: 4px;
+}
+
+.mapToolField span {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.mapToolActions {
+  justify-content: flex-end;
+}
+
+.mapFrame {
+  min-height: 180px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.mapAscii {
+  margin: 0;
+  padding: 10px 12px;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 1.15;
+  letter-spacing: 0.02em;
+  color: var(--muted);
+  white-space: pre;
+  background: transparent;
+  border: 0;
+}
+
+.mapMeta p {
+  margin: 0;
+}
+
+.mapMeta .mapStats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.mapStats span {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  padding: 3px 8px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--surface-inset);
+}
+
+.tileLibraryPanel {
+  margin-top: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-3);
+  padding: 12px 14px 14px;
+}
+
+.tileLibraryHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: start;
+  margin-bottom: 10px;
+}
+
+.tileLibraryHeader h3 {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.tileLibraryFilters {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(120px, 0.8fr) auto auto auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.tileLibraryBulk {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.tileLibraryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.tileLibCard {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-inset);
+  padding: 6px;
+  display: grid;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tileLibCard.disabled {
+  opacity: 0.45;
+}
+
+.tileLibCard label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  text-transform: none;
+  color: var(--text);
+}
+
+.tileLibThumb {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: cover;
+  border-radius: 6px;
+  image-rendering: pixelated;
+  background: #0a0c0e;
+  border: 1px solid var(--line);
+}
+
+.tileLibThumb.placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--muted-2);
+  font-size: 10px;
+}
+
+@media (max-width: 900px) {
+  .worldMapCard .mapTools,
+  .tileLibraryFilters {
+    grid-template-columns: 1fr;
+  }
 }

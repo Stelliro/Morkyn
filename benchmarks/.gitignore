@@ -1,0 +1,7 @@
+# Local benchmark artifacts (keep the harness; ignore run output)
+reports/*
+!reports/.gitkeep
+*.db
+*.db-wal
+*.db-shm
+__pycache__/

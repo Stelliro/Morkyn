@@ -1,11 +1,26 @@
+# Python
 __pycache__/
 *.py[cod]
+*$py.class
 .venv/
+venv/
+.env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+.tox/
+.nox/
 
-# Local runtime world/save data
+# Local runtime world / saves / traces / skill library
 data/
 model_traces/
 source_index/
+# (skill_library.json lives under data/ when AI_RPG_SKILL_LIBRARY is unset)
 *.db
 *.sqlite
 *.sqlite3
@@ -27,16 +42,44 @@ source_index/
 *.local
 *.local.*
 
-# Local model files
+# Local model weights
 models/
 *.gguf
 *.ggml
+*.bin
+!requirements.txt
 
 # Temporary local diagnostics
 temp_*/
 temp_*.db
 temp_*.jsonl
 tmp_*.ps1
+tmp_*/
 *.log
 *_check.txt
 diff_*.txt
+data/mouse_debug.log
+
+# Benchmark raw run output (keep structure + curated showcase)
+benchmarks/reports/*
+!benchmarks/reports/.gitkeep
+!benchmarks/reports/README.md
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Generated image archives outside data/ (if tools dump here)
+generated_images/
+tile_images/
+portraits/
+
+# Node (not used, but keep clean if experiments appear)
+node_modules/
+package-lock.json

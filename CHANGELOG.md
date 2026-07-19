@@ -19,19 +19,59 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
-> Future changes after `0.7.0` live here.
+> Future changes after `0.8.0` live here.
 
 ### Added
-- [LLM] NAR+OPS draft language (`app/turn_dsl.py`) with closed opcodes and deterministic transcoder into `apply_turn` JSON
-- [LLM] Plain-text draft path (`_chat_text`) and default `AI_RPG_DRAFT_MODE=dsl` with JSON fallback
-- [LLM] Ollama `think: false` by default (`OLLAMA_THINK`) so Qwen3 fills `message.content`
-- [LLM] Soft token-budget pass when system prompt alone still fits the context window
-- [TOOLS] Timed multi-turn playtest and open+turn smoke scripts under `tools/`
-- [DOCS] `docs/TurnDsl.md` for opcode table and escape policy
-- [DOCS] Published local 8B turn metrics under `docs/turn-metrics/` and README section
+- [FE] Per-turn collapsed **Debug** panel (expand, copy summary/JSON/path, view full trace file via `GET /api/debug-trace`)
+- [BE] Always write model traces under `data/model_traces/`; each turn response includes compact `debug` bundle + `debug_trace_path`
+- [RULES] Optional **dice / skill checks** system: setup tab **5 Checks**, d6–d100, events/encounters, specialized-skill partial salvage, negative outcomes
+- [RULES] Durable skill library (`data/skill_library.json`) with similarity adjust on new skills; catalog enable/disable
+- [API] `/api/skill-checks/catalog|resolve|register|enable` + GM `skill_check_context` in prompt packet
+- [DOCS] `docs/SkillChecks.md`
+
+---
+
+## [0.8.0] - 2026-07-19
+
+### Added
+- [FE] Calmer setup UI remodel — softer surfaces, pill controls, dim secondary buttons, corner decals, ambient background; playstyle themes (Dusk / Ember / Tide / Bloom / Ash)
+- [FE] Responsive layouts: phone / tablet / desktop / wide (≥1500px step rail + side-by-side play)
+- [MAP] Flat tile world v1: multi-age presets, elev 0/1 mountains, tile image archive + Forge/Comfy generate
+- [IMG] Optional Forge/A1111 + ComfyUI image backends; portrait preview API
+- [BILD] `Morkyn.bat` / `Morkyn.ps1` launcher (simple menu + Advanced Gatehouse); console mouse/keyboard polish
+- [LLM] Cloud/agent OpenAI-compatible provider; agent bridge routes; narration pipeline quality hardens (no mid-word shreds)
+- [BE] Live `GET /api/generation-progress` for splash/turn wait (phase lines + partial narration)
+- [PRIV] Local-only privacy policy + optional GitHub-only updates/rollback
+- [DOCS] Showcase: dual-role **100-turn** Mosswake lore teaser (`docs/showcase/`)
+- [TOOLS] `benchmarks/run_dual_role_playtest.py` regenerates showcase metrics/markdown
+- [FE] Release UI hides self-check / debug-trace panels (opt-in `?debug=1` or `AI_RPG_DEBUG=1`)
+
+### Changed
+- [BE] Model trace files and `debug_trace_path` are **off** unless `AI_RPG_DEBUG=1`
+- [REPO] Housekeeping: root launchers/docs, `tests/`, `benchmarks/`, expanded `.gitignore`
+- [VER] App version **0.8.0**
+
+### Fixed
+- [LLM] Narration pipeline no longer accepts truncated mid-word paragraphs or delete-span garbage fragments
+- [BILD] Advanced menu click coordinate / jitter issues (raw INPUT_RECORD + no-scroll window size)
+
+---
+
+## Earlier (0.7.x summary)
+
+Notes from the 0.7 line retained for history:
+
+- [LLM] NAR+OPS draft DSL, adaptive narration pipeline design, Ollama `think: false`
+- [DOCS] Turn metrics, ConnectAPIs, pipeline docs
 
 ### Changed
 - [LLM] `generate_turn` prefers DSL draft then optional verify; depth retries only when narration is short
+- [DOCS] Repository layout housekeeping: start scripts and project docs stay at root; tests → `tests/`; harnesses → `benchmarks/`; LICENSE copyright updated to Mørkyn / Stelliro
+- [BILD] Launcher interactive input hardened so keyboard always works; mouse click path is best-effort without killing the menu
+
+### Removed
+- [DOCS] Transient local diagnostics (`temp_*`, empty `*_check.txt`, one-off `tools/write_readme.py` / branding fix scripts)
+- [TOOLS] Renamed/removed `GROK BENCHMARK/` space-named folder in favor of `benchmarks/`
 
 ---
 

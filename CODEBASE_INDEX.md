@@ -1,7 +1,7 @@
 # CODEBASE INDEX - Mørkyn
 
 > Single source of truth for project structure, conventions, and architecture.
-> Last updated: 2026-07-17 (Mørkyn rebrand, hierarchical memory consolidation, token budget guard, campaign slots, context-health UI, Media/ brand assets, 0.7.0)
+> Last updated: 2026-07-19 (repo layout: root launchers/docs, tests/, benchmarks/, privacy/updates, narration pipeline)
 
 > Use this file before making architecture, schema, API, prompt-contract, launcher, or major UI changes. Update it whenever those facts change.
 
@@ -34,7 +34,7 @@
 ## 2. Repository Structure
 
 ```text
-Mørkyn/  (repo folder may still be named "AI RPG" locally)
+Morkyn/
 |-- .github/
 |   |-- copilot-instructions.md
 |   `-- instructions/
@@ -43,23 +43,24 @@ Mørkyn/  (repo folder may still be named "AI RPG" locally)
 |   |-- db.py                        # SQLite connection, schema, migrations
 |   |-- llm.py                       # Model config, JSON chat, token budget, traces, fallbacks
 |   |-- main.py                      # FastAPI routes (turns, slots, diagnostics, model)
+|   |-- narration_pipeline.py        # Adaptive paragraph quality pipeline
 |   |-- prompts.py                   # System/verifier prompts + agentic CoD steps
+|   |-- turn_dsl.py                  # NAR+OPS draft language
+|   |-- updates.py                   # Optional GitHub update/rollback
 |   `-- world.py                     # State, planner, memory consolidation, slots, index
+|-- static/                          # Browser UI (no build step)
+|-- Media/                           # Brand assets (logo, key art, screenshots)
+|-- docs/                            # Design notes + docs/README.md index
+|-- tools/                           # Smokes, screenshots, timed playtests
+|-- tests/                           # behavior_test, narration pipeline unit tests
+|-- benchmarks/                      # Dual-role / long-run harnesses (reports/ gitignored)
 |-- data/                            # Runtime only (gitignored): world.db, source_index, slots, traces
-|-- Media/                           # Brand assets (logo, key art)
-|-- static/
-|   |-- app.js
-|   |-- index.html
-|   `-- styles.css
-|-- tools/
-|-- behavior_test.py                 # Regression suite for memory/token/slots scoring
-|-- README.md
-|-- LICENSE.md
-|-- requirements.txt
-|-- start_ai_rpg.bat
-|-- start_ai_rpg.ps1
+|-- Morkyn.bat / Morkyn.ps1          # Primary launcher (root)
+|-- start_ai_rpg.bat / .ps1          # Compatibility shims -> Morkyn.*
+|-- README.md / CHANGELOG.md / LICENSE.md / PRIVACY_POLICY.md
 |-- CODEBASE_INDEX.md
-`-- CHANGELOG.md
+|-- requirements.txt
+`-- .env.example
 ```
 
 ### Key Modules
@@ -120,12 +121,12 @@ Mørkyn/  (repo folder may still be named "AI RPG" locally)
 
 #### Launchers
 
-- **Files:** `start_ai_rpg.ps1`, `start_ai_rpg.bat`
-- **Purpose:** Start the local app, install missing Python dependencies, optionally start a managed llama.cpp server, and open the browser.
-- **Key API:** Environment overrides documented in `README.md`.
+- **Files:** `Morkyn.ps1`, `Morkyn.bat` (primary); `start_ai_rpg.ps1`, `start_ai_rpg.bat` (compatibility shims)
+- **Purpose:** Interactive pre-play menu (simple + Advanced Gatehouse), install missing Python dependencies, optionally start a managed llama.cpp server, and open the browser.
+- **Key API:** Environment overrides documented in `README.md`; prefs in `data/launcher_prefs.json`.
 - **Consumers:** Windows local users.
-- **Dependencies:** Python, requirements from `requirements.txt`, optional local GGUF model.
-- **Design Notes:** The launcher uses `AI_RPG_GGUF_MODEL` when a managed llama.cpp server should start, and when that env var is absent it reuses a saved `model_config.gguf_model_path` from SQLite on the next launch. Without a configured GGUF path, it still starts the browser app but warns that no managed llama.cpp server will start; the user must start Ollama/llama.cpp separately or generation will use deterministic fallback. The batch launcher prompts for this-machine-only mode, local-network/phone mode, or VPN/private-overlay mode. The PowerShell launcher binds FastAPI to `AI_RPG_APP_HOST`/`AI_RPG_APP_PORT`, defaulting to `127.0.0.1:8000`; local-network mode sets `AI_RPG_APP_HOST=0.0.0.0`, prints the local PC URL, prefers a Wi-Fi/Ethernet RFC1918 IPv4 URL for phones, and lists other detected local URLs when VPN or virtual adapters are present. VPN mode also binds FastAPI to `0.0.0.0`, prompts for an app port from the batch launcher when one is not set, and prefers adapter URLs whose interface names look like Tailscale, WireGuard, ZeroTier, ProtonVPN, OpenVPN, TAP/TUN, Hamachi, or Radmin. The managed llama.cpp server remains loopback by default through `AI_RPG_LLM_HOST=127.0.0.1`. The PowerShell launcher waits for the configured llama.cpp server to answer `/v1/models` before starting the browser app; `AI_RPG_LLM_STARTUP_TIMEOUT` controls the wait limit. Managed llama.cpp stdout/stderr are written to temp log files by default so compatibility probes such as `/api/version` do not clutter the app terminal; set `AI_RPG_LLM_LOG_MODE=console` to show raw llama.cpp logs.
+- **Dependencies:** Python, requirements from `requirements.txt`, optional local GGUF model or Ollama/cloud API.
+- **Design Notes:** Simple menu is the default (where / engine / pipeline / Play); Advanced (`9`) exposes the full board. Keyboard always works; mouse clicks are best-effort in a normal Windows console. The launcher uses `AI_RPG_GGUF_MODEL` when a managed llama.cpp server should start, and when that env var is absent it reuses a saved `model_config.gguf_model_path` from SQLite on the next launch. Without a configured GGUF path, it still starts the browser app but warns that no managed llama.cpp server will start unless Ollama/cloud is configured. Local-network mode sets `AI_RPG_APP_HOST=0.0.0.0` for phone access; VPN mode prefers overlay adapters. Managed llama.cpp remains loopback by default (`AI_RPG_LLM_HOST=127.0.0.1`). Startup wait: `AI_RPG_LLM_STARTUP_TIMEOUT`. LLM logs: temp files by default, or `AI_RPG_LLM_LOG_MODE=console`.
 
 ---
 
@@ -143,7 +144,7 @@ Mørkyn/  (repo folder may still be named "AI RPG" locally)
 | LLM Server | llama-cpp-python[server] | 0.3.22 | Managed local GGUF server path in launcher |
 | LLM Alternative | Ollama-compatible API | Configurable | Used when provider is not `llama_cpp` |
 | Numeric Library | NumPy | >=1.22,<2.4 | Dependency in requirements |
-| Test Runner | Ad hoc Python script | `behavior_test.py` | Currently stale/experimental; prefer focused temp-DB tests |
+| Test Runner | Ad hoc Python script | `tests/behavior_test.py` | Memory/token/slots regressions; also `tests/test_narration_pipeline.py` |
 | Build Tool | None | N/A | No frontend or backend build step |
 | CI/CD | None | N/A | Local prototype |
 
@@ -191,7 +192,7 @@ Mørkyn/  (repo folder may still be named "AI RPG" locally)
 - For isolated tests, set `AI_RPG_DB`, `AI_RPG_SOURCE_INDEX`, and `AI_RPG_HISTORY_SUMMARY` before importing `app.db` or `app.world`.
 - Patch or mock LLM calls for deterministic tests; do not require a real model for normal automated checks.
 - Avoid touching `data/world.db` or `data/history_summaries.jsonl` during tests.
-- `behavior_test.py` appears to reference older names such as `gameState`, `call_llm_structured`, and `apply_karma_change`; update or replace it before relying on it as a regression suite.
+- Prefer `tests/behavior_test.py` and `tests/test_narration_pipeline.py` over ad-hoc root scripts.
 
 ### Commit Style
 - Prefer Conventional Commits where practical: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
@@ -203,10 +204,13 @@ Mørkyn/  (repo folder may still be named "AI RPG" locally)
 
 | Document | Location | Description |
 |---|---|---|
-| README | `README.md` | User-facing overview, launch instructions, environment overrides, and design notes |
-| Codebase Index | `CODEBASE_INDEX.md` | Project structure, conventions, API surface, data model, and known limitations |
+| README | `README.md` | User-facing overview, launch instructions, environment overrides |
+| Codebase Index | `CODEBASE_INDEX.md` | Project structure, conventions, API surface, data model |
 | Changelog | `CHANGELOG.md` | Keep a Changelog history for releases and unreleased changes |
-| Environment Example | `.env.example` | Optional local defaults for model and database settings |
+| License | `LICENSE.md` | PolyForm Noncommercial 1.0.0 |
+| Privacy | `PRIVACY_POLICY.md` | Local-first privacy (also `/privacy`) |
+| Docs index | `docs/README.md` | Links to design notes under `docs/` |
+| Environment Example | `.env.example` | Optional local defaults for model, API, and agent settings |
 | Copilot Workspace Instructions | `.github/copilot-instructions.md` | Required AI workflow, project boundaries, and agent ID table |
 | Documentation Instructions | `.github/instructions/documentation.instructions.md` | Rules for CODEBASE_INDEX, CHANGELOG, README, and instruction docs |
 | Agent Routing Instructions | `.github/instructions/agent-routing.instructions.md` | Agent ID selection and changelog attribution examples |
@@ -218,7 +222,7 @@ Mørkyn/  (repo folder may still be named "AI RPG" locally)
 ## 6. Build & Run Instructions
 
 ### Prerequisites
-- Python available as `python`, `py -3`, or the local Python 3.12 path checked by `start_ai_rpg.ps1`.
+- Python available as `python`, `py -3`, or the path resolved by `Morkyn.ps1` / `start_ai_rpg.ps1`.
 - Windows PowerShell for the provided launcher.
 - Optional local GGUF model for the managed llama.cpp server. Override the default with `AI_RPG_GGUF_MODEL` when needed.
 
@@ -239,20 +243,20 @@ Copy-Item .env.example .env
 Recommended Windows launcher:
 
 ```powershell
-.\start_ai_rpg.ps1
+.\Morkyn.ps1
 ```
 
 Batch wrapper:
 
 ```text
-start_ai_rpg.bat
+Morkyn.bat
 ```
 
 The batch wrapper prompts for local-only or local-network/phone mode. It also accepts quick arguments:
 
 ```text
-start_ai_rpg.bat local
-start_ai_rpg.bat lan
+Morkyn.bat local
+Morkyn.bat lan
 ```
 
 Manual FastAPI server, useful when an LLM server is already running:
@@ -293,7 +297,7 @@ $env:AI_RPG_SOURCE_INDEX="$env:TEMP\ai-rpg-source-index"
 python -m unittest discover
 ```
 
-`behavior_test.py` exists, but it should be treated as legacy until updated against the current schema and function names.
+Run `python tests/behavior_test.py` for memory/token/slots regressions and `python tests/test_narration_pipeline.py` for pipeline unit checks.
 
 ### Production Build
 
@@ -432,7 +436,7 @@ These columns are additive migrations. The engine treats the LLM's event metadat
 
 | Issue | Severity | Notes |
 |---|---|---|
-| `behavior_test.py` appears stale | Medium | It references older schema/function names and should be rewritten before relying on automated behavior coverage |
+| Long local-LLM turns on 8B | Medium | Expect multi-minute turns; use dual-role benchmarks or cloud/agent provider for faster iteration |
 | No formal CI or test runner | Medium | Add focused temp-DB backend tests before large schema or turn-application changes |
 | Default GGUF model path is machine-specific | Low | Override with `AI_RPG_GGUF_MODEL` or choose a model in the UI |
 | Runtime data is local-only | Low | `data/` is ignored by git; export/import JSON is the current portability path |

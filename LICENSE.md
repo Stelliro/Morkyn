@@ -1,6 +1,6 @@
 # License
 
-Copyright (c) 2026 AI RPG Consistency Prototype contributors.
+Copyright (c) 2026 Stelliro / Mørkyn contributors.
 
 This project is licensed under the PolyForm Noncommercial License 1.0.0.
 

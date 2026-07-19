@@ -4,10 +4,124 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mørkyn</title>
-    <link rel="stylesheet" href="/static/styles.css?v=v0-7-0" />
+    <link rel="stylesheet" href="/static/styles.css?v=v0-8-7" />
+    <style id="scriptGateStyles">
+      /* Inline so this screen works even when app.js / external CSS is blocked */
+      .scriptGate {
+        position: fixed;
+        inset: 0;
+        z-index: 99999;
+        display: grid;
+        place-items: center;
+        padding: 24px;
+        background: #0f1214;
+        color: #edf0ee;
+        font-family: ui-sans-serif, system-ui, Segoe UI, sans-serif;
+      }
+      .scriptGate.hiddenGate { display: none !important; }
+      .scriptGatePanel {
+        width: min(560px, 100%);
+        border: 1px solid #303940;
+        border-radius: 12px;
+        background: #171b1f;
+        padding: 22px 22px 18px;
+        box-shadow: 0 18px 60px rgba(0,0,0,.45);
+      }
+      .scriptGatePanel h1 { margin: 0 0 8px; font-size: 1.35rem; }
+      .scriptGatePanel p { margin: 0 0 12px; color: #a7b0aa; line-height: 1.5; font-size: 0.95rem; }
+      .scriptGatePanel .ok { color: #8fd49a; }
+      .scriptGatePanel .warn { color: #e0b35a; }
+      .scriptGateActions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+      .scriptGateActions a, .scriptGateActions button {
+        appearance: none;
+        border: 1px solid #3a464e;
+        background: #20262b;
+        color: #edf0ee;
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-weight: 700;
+        cursor: pointer;
+        text-decoration: none;
+        font-size: 0.9rem;
+      }
+      .scriptGateActions .primary {
+        background: #9ec4d8;
+        color: #0e1418;
+        border-color: transparent;
+      }
+      .scriptGateDetails {
+        margin-top: 14px;
+        padding: 12px;
+        border-radius: 8px;
+        background: #111518;
+        border: 1px solid #303940;
+        color: #c5cdc7;
+        font-size: 0.86rem;
+        line-height: 1.45;
+      }
+      .scriptGateDetails code { color: #b8d4e6; }
+      .app.jsPending { visibility: hidden; }
+      .app.jsReady { visibility: visible; }
+    </style>
   </head>
   <body>
-    <main class="app">
+    <!-- Visible until app.js boots. Works when uBlock blocks /static/app.js. -->
+    <div id="scriptGate" class="scriptGate" role="alertdialog" aria-labelledby="scriptGateTitle" aria-live="polite">
+      <div class="scriptGatePanel">
+        <p class="ok" id="scriptGateEyebrow">Mørkyn · local app</p>
+        <h1 id="scriptGateTitle">Starting interface…</h1>
+        <p id="scriptGateBody">
+          Loading the local UI. This app does <strong>not</strong> track you and does not phone home for analytics.
+        </p>
+        <div id="scriptGateBlocked" class="scriptGateDetails" hidden>
+          <strong class="warn">The main script did not load.</strong>
+          <p style="margin:8px 0 0">
+            Extensions such as <strong>uBlock Origin</strong>, privacy blockers, or strict browser shields sometimes block
+            local files like <code>/static/app.js</code>. That breaks Randomize controls and setup — not because we track you,
+            but because the blocker stopped our own UI code.
+          </p>
+          <p style="margin:10px 0 0">
+            <strong>Fix:</strong> allow <code>127.0.0.1</code> / <code>localhost</code> for this tab, or disable the blocker
+            on this page, then reload.
+          </p>
+        </div>
+        <div class="scriptGateActions">
+          <button type="button" class="primary" id="scriptGateReload">Reload</button>
+          <a href="/privacy" target="_blank" rel="noopener">Privacy policy</a>
+          <button type="button" id="scriptGateContinue" hidden>Continue anyway</button>
+        </div>
+      </div>
+    </div>
+    <script>
+      (function () {
+        var gate = document.getElementById("scriptGate");
+        var blocked = document.getElementById("scriptGateBlocked");
+        var title = document.getElementById("scriptGateTitle");
+        var body = document.getElementById("scriptGateBody");
+        var cont = document.getElementById("scriptGateContinue");
+        document.getElementById("scriptGateReload").onclick = function () { location.reload(); };
+        document.getElementById("scriptGateContinue").onclick = function () {
+          if (gate) gate.classList.add("hiddenGate");
+          var app = document.querySelector("main.app");
+          if (app) { app.classList.remove("jsPending"); app.classList.add("jsReady"); }
+        };
+        window.__MORKYN_HIDE_GATE__ = function () {
+          window.__MORKYN_BOOTED__ = true;
+          if (gate) gate.classList.add("hiddenGate");
+          var app = document.querySelector("main.app");
+          if (app) { app.classList.remove("jsPending"); app.classList.add("jsReady"); }
+        };
+        setTimeout(function () {
+          if (window.__MORKYN_BOOTED__) return;
+          if (title) title.textContent = "Script blocked or failed to load";
+          if (body) body.innerHTML = "Mørkyn is still local and private. A browser extension likely blocked <code>/static/app.js</code>.";
+          if (blocked) blocked.hidden = false;
+          if (cont) cont.hidden = false;
+        }, 1800);
+      })();
+    </script>
+
+    <main class="app jsPending">
       <input id="modelModalToggle" class="modalToggle" type="checkbox" aria-hidden="true" />
       <section id="startSplash" class="startSplash hidden" aria-live="polite" aria-busy="true">
         <div class="startSplashPanel">
@@ -19,6 +133,7 @@
             <div>
               <strong id="startSplashHeartbeatTitle">Local model is working</strong>
               <p id="startSplashHeartbeatText">Elapsed 0:00 - waiting for the first model response.</p>
+              <p id="startSplashPhase" class="startSplashPhase">Preparing…</p>
             </div>
           </div>
           <div id="startSplashDraft" class="startSplashDraft" aria-label="Opening scene preview"></div>
@@ -32,7 +147,19 @@
               <p>Build the world you care about, or roll a playable start.</p>
             </div>
             <div class="setupActions">
+              <div class="themePicker" title="Visual theme">
+                <label for="themeSelect">Theme</label>
+                <select id="themeSelect" aria-label="UI theme">
+                  <option value="dusk">Dusk</option>
+                  <option value="ember">Ember</option>
+                  <option value="tide">Tide</option>
+                  <option value="bloom">Bloom</option>
+                  <option value="ash">Ash</option>
+                </select>
+              </div>
               <label id="setupModelButton" class="buttonLike secondaryButton" for="modelModalToggle">LLM Settings</label>
+              <button id="privacyButton" class="secondaryButton" type="button">Privacy</button>
+              <button id="updatesButton" class="secondaryButton" type="button">Updates</button>
               <button id="saveSetupSettings" class="secondaryButton" type="button">Save Settings</button>
               <label id="loadSetupSettingsButton" class="buttonLike secondaryButton" for="setupSettingsFile">Load Settings</label>
               <input id="setupSettingsFile" class="hidden" type="file" accept="application/json,.json" />
@@ -46,6 +173,7 @@
             <button data-setup-step="1" type="button">2 World</button>
             <button data-setup-step="2" type="button">3 People</button>
             <button data-setup-step="3" type="button">4 Rules</button>
+            <button data-setup-step="4" type="button">5 Checks</button>
           </nav>
 
           <div class="setupSections">
@@ -57,6 +185,21 @@
                 </div>
                 <button class="secondaryButton" data-randomize-group="character" type="button">Randomize Character</button>
               </header>
+              <aside class="visionCard" id="characterPortraitCard" aria-label="Character portrait">
+                <h3>Portrait</h3>
+                <div class="portraitFrame">
+                  <span class="visionBadge">8-bit</span>
+                  <div class="visionPlaceholder">
+                    <strong>Coming online</strong>
+                    Trait-driven portrait will grow here as the character develops.
+                  </div>
+                </div>
+                <p>Generated from name, title, backstory, and play events. Starts simple; can be stepped up later.</p>
+                <div class="visionActions">
+                  <button type="button" class="secondaryButton" id="portraitPreviewBtn" disabled title="Enable Forge or ComfyUI under LLM Settings → Image backend">Preview</button>
+                  <button type="button" class="secondaryButton" id="portraitQualityBtn" disabled title="Quality presets: 8-bit style prompt vs hi-res (later)">Quality</button>
+                </div>
+              </aside>
               <div class="setupGrid">
                 <label>
                   <span>Name</span>
@@ -178,6 +321,55 @@
                 </div>
                 <button class="secondaryButton" data-randomize-group="world" type="button">Randomize World</button>
               </header>
+              <aside class="visionCard worldMapCard" id="worldMapCard" aria-label="World map">
+                <h3>World map</h3>
+                <div class="mapTools">
+                  <label class="mapToolField">
+                    <span>Preset</span>
+                    <select id="mapPresetSelect" aria-label="World preset"></select>
+                  </label>
+                  <label class="mapToolField">
+                    <span>Seed</span>
+                    <input id="mapSeedInput" type="number" placeholder="random" />
+                  </label>
+                  <div class="visionActions mapToolActions">
+                    <button type="button" class="secondaryButton" id="mapRegenBtn">Generate</button>
+                    <button type="button" class="secondaryButton" id="mapLibraryBtn">Tile library</button>
+                  </div>
+                </div>
+                <div class="mapFrame" id="mapFrame">
+                  <span class="visionBadge">flat · 2 elevations</span>
+                  <pre class="mapAscii" id="mapAscii">Pick a preset and generate.
+Mountains are multi-tile blobs on elevation 1.
+Water / void block travel. States drive art.</pre>
+                </div>
+                <div class="mapMeta" id="mapMeta">
+                  <p>States are abstract tags (city, waterfall, monolith…). Art is pulled at random from your tile archive — generate or upload more anytime.</p>
+                </div>
+              </aside>
+              <div id="tileLibraryPanel" class="tileLibraryPanel hidden" aria-label="Tile image library">
+                <header class="tileLibraryHeader">
+                  <div>
+                    <h3>Tile image archive</h3>
+                    <p class="empty">Search by state or tags. Bulk: disable forever, disable this run, or delete.</p>
+                  </div>
+                  <button type="button" class="secondaryButton" id="tileLibraryClose">Close</button>
+                </header>
+                <div class="tileLibraryFilters">
+                  <input id="tileLibQuery" type="search" placeholder="Search state, tags, prompt…" />
+                  <select id="tileLibState"></select>
+                  <label class="settingLock"><input id="tileLibShowDisabled" type="checkbox" /> Show disabled</label>
+                  <button type="button" class="secondaryButton" id="tileLibSearch">Search</button>
+                  <button type="button" class="secondaryButton" id="tileLibGenerate">Generate for state</button>
+                </div>
+                <div class="tileLibraryBulk">
+                  <button type="button" class="secondaryButton" data-tile-bulk="disable-forever">Disable forever</button>
+                  <button type="button" class="secondaryButton" data-tile-bulk="disable-run">Disable this run</button>
+                  <button type="button" class="secondaryButton" data-tile-bulk="enable">Re-enable</button>
+                  <button type="button" class="secondaryButton" data-tile-bulk="delete">Delete</button>
+                </div>
+                <div id="tileLibraryGrid" class="tileLibraryGrid"></div>
+              </div>
               <div class="setupGrid">
                 <fieldset class="optionSet" data-list-setting="world_style">
                   <legend>World</legend>
@@ -553,11 +745,146 @@
                 </label>
               </div>
             </section>
+
+            <section class="setupSection" data-step="4">
+              <header class="sectionHeader">
+                <div>
+                  <h2>Checks &amp; Dice</h2>
+                  <p>Optional dice rolls for speech, strength, lore, events, and encounters. Specialized skills can still yield partial info when attributes are low.</p>
+                </div>
+                <button class="secondaryButton" data-randomize-group="checks" type="button">Randomize Checks</button>
+              </header>
+              <div class="setupGrid">
+                <fieldset class="toggleSet wide">
+                  <legend>Dice checks</legend>
+                  <label><input type="radio" name="dice_checks_enabled" value="false" checked /> Off (pure narrative)</label>
+                  <label><input type="radio" name="dice_checks_enabled" value="true" /> On</label>
+                </fieldset>
+
+                <label>
+                  <span>Dice</span>
+                  <select name="dice_sides">
+                    <option value="6">d6</option>
+                    <option value="10">d10</option>
+                    <option value="12">d12</option>
+                    <option value="20" selected>d20</option>
+                    <option value="100">d100</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Check difficulty</span>
+                  <select name="check_difficulty">
+                    <option value="easy">Easy</option>
+                    <option value="normal" selected>Normal</option>
+                    <option value="hard">Hard</option>
+                    <option value="brutal">Brutal</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Event checks</span>
+                  <select name="event_check_frequency">
+                    <option value="off">Off</option>
+                    <option value="rare">Rare</option>
+                    <option value="normal" selected>Normal</option>
+                    <option value="frequent">Frequent</option>
+                  </select>
+                </label>
+
+                <label>
+                  <span>Encounter checks</span>
+                  <select name="encounter_check_frequency">
+                    <option value="off">Off</option>
+                    <option value="rare">Rare</option>
+                    <option value="normal" selected>Normal</option>
+                    <option value="frequent">Frequent</option>
+                  </select>
+                </label>
+
+                <fieldset class="toggleSet">
+                  <legend>Specialized skill salvage</legend>
+                  <label><input type="radio" name="partial_on_specialized_skill" value="true" checked /> On</label>
+                  <label><input type="radio" name="partial_on_specialized_skill" value="false" /> Off</label>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Negative outcomes on fail</legend>
+                  <label><input type="radio" name="negative_outcomes" value="true" checked /> On</label>
+                  <label><input type="radio" name="negative_outcomes" value="false" /> Off</label>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Show rolls in UI</legend>
+                  <label><input type="radio" name="show_rolls_in_ui" value="true" checked /> On</label>
+                  <label><input type="radio" name="show_rolls_in_ui" value="false" /> Off</label>
+                </fieldset>
+
+                <label>
+                  <span>Attr floor for partial salvage</span>
+                  <input name="attribute_floor_for_partial" type="number" min="1" max="20" value="6" />
+                </label>
+
+                <label>
+                  <span>Min skill rank for partial</span>
+                  <input name="specialized_skill_partial_threshold" type="number" min="1" max="20" value="2" />
+                </label>
+
+                <label class="wide">
+                  <span>Custom check notes</span>
+                  <textarea name="custom_check_notes" rows="2" maxlength="1200" placeholder="Optional house rules: e.g. symbol lore always risks a wrong reading on partial; speech fails burn favors."></textarea>
+                </label>
+              </div>
+
+              <section class="checkCatalogCard" aria-label="Skill check catalog">
+                <header class="subsectionHeader">
+                  <div>
+                    <h2>Skill catalog</h2>
+                    <p>Built-in checks plus skills learned over playthroughs. New skills are compared to similar ones and saved for later runs.</p>
+                  </div>
+                  <div class="subsectionActions">
+                    <button type="button" class="secondaryButton" id="skillCatalogRefresh">Refresh</button>
+                    <button type="button" class="secondaryButton" id="skillCatalogAdd">Add skill</button>
+                  </div>
+                </header>
+                <div class="checkCategoryFilters" id="checkCategoryFilters"></div>
+                <div class="skillCatalogGrid" id="skillCatalogGrid">
+                  <p class="empty">Loading skill catalog…</p>
+                </div>
+                <div class="skillAddRow hidden" id="skillAddRow">
+                  <label><span>Name</span><input id="newSkillName" maxlength="80" placeholder="Symbol etching" /></label>
+                  <label><span>Category</span>
+                    <select id="newSkillCategory">
+                      <option value="mental">Mental</option>
+                      <option value="physical">Physical</option>
+                      <option value="social">Social</option>
+                      <option value="craft">Craft</option>
+                      <option value="combat">Combat</option>
+                      <option value="event">Event</option>
+                      <option value="encounter">Encounter</option>
+                      <option value="general">General</option>
+                    </select>
+                  </label>
+                  <label><span>Attribute</span>
+                    <select id="newSkillAttribute">
+                      <option value="intelligence">Intelligence</option>
+                      <option value="wisdom">Wisdom</option>
+                      <option value="strength">Strength</option>
+                      <option value="dexterity">Dexterity</option>
+                      <option value="constitution">Constitution</option>
+                      <option value="charisma">Charisma</option>
+                    </select>
+                  </label>
+                  <label class="wide"><span>Description</span><input id="newSkillDesc" maxlength="400" placeholder="Optional" /></label>
+                  <button type="button" class="secondaryButton" id="newSkillSave">Save to library</button>
+                </div>
+              </section>
+            </section>
           </div>
 
           <footer class="setupFooter">
             <button id="setupPrev" class="secondaryButton" type="button">Back</button>
-            <div class="stepStatus" id="setupStepStatus">Step 1 of 4</div>
+            <div class="stepStatus" id="setupStepStatus">Step 1 of 5</div>
             <button id="setupNext" type="button">Next</button>
           </footer>
         </form>
@@ -568,7 +895,7 @@
           <header class="modalHeader">
             <div>
               <h2 id="modelModalTitle">LLM Settings</h2>
-              <p>Choose the local model connection used for setup randomization and gameplay turns.</p>
+              <p>Local models, cloud APIs (xAI/Grok, OpenAI), or any OpenAI-compatible agent gateway.</p>
             </div>
             <label id="closeModelModal" class="buttonLike secondaryButton" for="modelModalToggle">Close</label>
           </header>
@@ -577,9 +904,30 @@
               <label>
                 <span>Provider</span>
                 <select name="provider">
-                  <option value="llama_cpp" selected>llama.cpp / GGUF</option>
-                  <option value="ollama">Ollama</option>
+                  <option value="llama_cpp" selected>llama.cpp / GGUF (local)</option>
+                  <option value="ollama">Ollama (local)</option>
+                  <option value="openai">Cloud / agent API (OpenAI-compatible)</option>
                 </select>
+              </label>
+              <label>
+                <span>API preset</span>
+                <select name="api_preset">
+                  <option value="xai" selected>xAI / Grok</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <label>
+                <span>API base URL</span>
+                <input name="api_base_url" value="https://api.x.ai/v1" maxlength="400" />
+              </label>
+              <label>
+                <span>API model</span>
+                <input name="api_model" value="grok-4.5" maxlength="200" />
+              </label>
+              <label>
+                <span>API key</span>
+                <input name="api_key" type="password" value="" maxlength="500" autocomplete="off" placeholder="XAI_API_KEY / OPENAI_API_KEY / AI_RPG_API_KEY" />
               </label>
               <label>
                 <span>Model Path</span>
@@ -638,6 +986,8 @@
               <button id="loadSlotButton" type="button" title="Load named campaign slot">Load Slot</button>
               <button id="compactModeButton" type="button" title="Toggle compact UI">Compact</button>
               <button id="modelButton" type="button">LLM</button>
+              <button id="playPrivacyButton" type="button" title="Privacy policy">Privacy</button>
+              <button id="playUpdatesButton" type="button" title="Updates and rollback">Updates</button>
               <button id="refreshButton" type="button">Refresh</button>
               <input id="importFile" class="hidden" type="file" accept="application/json,.json" />
             </div>
@@ -717,6 +1067,22 @@
       </div>
     </main>
 
-    <script src="/static/app.js?v=v0-6-0"></script>
+    <div id="legalModal" class="modalBackdrop hidden" role="dialog" aria-modal="true" aria-labelledby="legalModalTitle">
+      <section class="modalPanel legalModalPanel">
+        <header class="modalHeader">
+          <div>
+            <h2 id="legalModalTitle">Privacy</h2>
+            <p id="legalModalSubtitle">Local-first. No tracking.</p>
+          </div>
+          <button id="closeLegalModal" class="secondaryButton" type="button">Close</button>
+        </header>
+        <div id="legalModalContent" class="legalModalContent"></div>
+      </section>
+    </div>
+
+    <script src="/static/app.js?v=v0-8-7"></script>
+    <script>
+      // Fallback if app.js 404s without setting boot flag — already handled by timeout above.
+    </script>
   </body>
 </html>
