@@ -48,6 +48,8 @@ WORLD_TABLES = [
     "settings",
     "gm_notes",
     "gm_events",
+    # Tile overworld (not FK-linked to locations); must round-trip with Continue/load.
+    "world_maps",
 ]
 OPENING_SCENE_INPUT = (
     "__opening_scene_request__: Begin the playthrough before the player acts. "
@@ -105,6 +107,7 @@ RESTORE_ORDER = [
     "settings",
     "gm_notes",
     "gm_events",
+    "world_maps",
 ]
 
 
@@ -203,8 +206,8 @@ ACTION_SEGMENT_RULES = {
         ("damage_and_consequence", "Use deterministic damage/health resolution from mechanics_context when present, then scale stamina, karma visibility, noise, witnesses, loot, and escape routes from the focused facts only.", ["mechanics_context", "damage", "health", "stamina", "karma", "witness", "noise", "escape"]),
     ],
     "ability": [
-        ("ability_constraints", "Read the named/relevant ability, lock state, base_description, prerequisites, cost, player health/effective_stats, race/magic rules, and target resistance; equipment-granted abilities are already in abilities while equipped.", ["ability", "cost", "prerequisite", "locked", "magic", "target"]),
-        ("effect_scope", "Keep the effect inside stored limits and update ability details only when play reveals a justified cost, limit, or unlock path.", ["scope", "cooldown", "resource", "unlock", "limitation"]),
+        ("ability_constraints", "Read the named/relevant ability, lock state, base_description, prerequisites, cost, growth_math, player health/effective_stats, race/magic rules, and target resistance; equipment-granted abilities are already in abilities while equipped. Apply growth_math numbers when awarding progress.", ["ability", "cost", "prerequisite", "growth_math", "locked", "magic", "target"]),
+        ("effect_scope", "Keep the effect inside stored limits and update ability details only when play reveals a justified cost, limit, unlock path, or clearer growth_math.", ["scope", "cooldown", "resource", "unlock", "limitation", "growth_math"]),
     ],
     "inventory": [
         ("item_handling", "Use focused inventory, equipped slots, containers, carry capacity, item metadata, and whether the action adds, removes, equips, crafts, or stores an item.", ["item", "equip", "container", "weight", "slots", "craft"]),
@@ -1339,6 +1342,9 @@ def list_campaign_slots() -> list[dict[str, Any]]:
     return slots
 
 
+AUTOSAVE_SLOT = "last"
+
+
 def save_campaign_slot(slot_name: str) -> dict[str, Any]:
     safe = _safe_slot_name(slot_name)
     payload = export_world()
@@ -1349,17 +1355,148 @@ def save_campaign_slot(slot_name: str) -> dict[str, Any]:
     state = get_state(include_hidden=False)
     player = state.get("player") or {}
     location = state.get("current_location") or {}
+    turn = 0
+    for item in state.get("turn_summaries") or []:
+        try:
+            turn = max(turn, int(item.get("turn") or 0))
+        except (TypeError, ValueError):
+            pass
+    try:
+        with connect() as conn:
+            row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+            if row:
+                turn = max(turn, int(row["value"] or 0))
+    except Exception:
+        pass
+    snap = resume_snapshot(state)
     metadata = {
         "slot": safe,
         "saved_at": datetime.now(timezone.utc).isoformat(),
         "player_name": player.get("name"),
         "player_level": player.get("level"),
         "location": location.get("name"),
-        "turn": next((int(item.get("turn") or 0) for item in state.get("turn_summaries", [])[::-1]), 0),
+        "turn": turn or snap.get("turn") or 0,
         "format": payload.get("format"),
+        "setup_complete": bool(state.get("setup_complete")),
+        "autosave": safe == AUTOSAVE_SLOT,
+        "history_count": snap.get("history_count") or 0,
+        "has_map": bool(snap.get("has_map")),
+        "active_world_map_id": snap.get("active_world_map_id") or "",
     }
     (slot_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
     return metadata
+
+
+def autosave_campaign() -> dict[str, Any] | None:
+    """Persist current world to the continue-game slot. Safe to call after every turn."""
+    try:
+        state = get_state(include_hidden=False)
+        if not state.get("setup_complete"):
+            return None
+        return save_campaign_slot(AUTOSAVE_SLOT)
+    except Exception:
+        return None
+
+
+def resume_snapshot(state: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Last narration/input + counts for Continue UI rehydration."""
+    state = state if isinstance(state, dict) else get_state(include_hidden=False)
+    history = list(state.get("history") or [])
+    # journal/history is newest-first from get_state
+    narration = next((h for h in history if str(h.get("kind") or "") == "narration"), None)
+    last_input = next(
+        (
+            h
+            for h in history
+            if str(h.get("kind") or "") in {"player", "opening", "continue", "regenerate"}
+        ),
+        None,
+    )
+    summaries = list(state.get("turn_summaries") or [])
+    summary_text = ""
+    if summaries:
+        summary_text = str(summaries[0].get("summary") or "").strip()
+    settings = state.get("settings") or {}
+    map_id = str(settings.get("active_world_map_id") or "").strip()
+    has_map = False
+    if map_id:
+        try:
+            with connect() as conn:
+                row = conn.execute("SELECT id FROM world_maps WHERE id = ?", (map_id,)).fetchone()
+                has_map = row is not None
+                if not has_map:
+                    # Fall back: any map exists
+                    any_map = conn.execute("SELECT id FROM world_maps LIMIT 1").fetchone()
+                    has_map = any_map is not None
+                    if has_map and not map_id:
+                        map_id = str(any_map["id"])
+        except Exception:
+            has_map = False
+    return {
+        "last_narration": str((narration or {}).get("content") or "").strip(),
+        "last_input": str((last_input or {}).get("content") or "").strip(),
+        "last_input_kind": str((last_input or {}).get("kind") or "").strip(),
+        "last_summary": summary_text,
+        "history_count": len(history),
+        "summary_count": len(summaries),
+        "has_map": has_map,
+        "active_world_map_id": map_id,
+        "turn": int((narration or last_input or {}).get("turn") or 0) if (narration or last_input) else 0,
+    }
+
+
+def has_continuable_save() -> dict[str, Any]:
+    """Whether Continue can load a previous playthrough."""
+    # Live DB first
+    try:
+        state = get_state(include_hidden=False)
+        if state.get("setup_complete"):
+            loc = (state.get("current_location") or {}).get("name") or ""
+            player = (state.get("player") or {}).get("name") or ""
+            turn = 0
+            try:
+                with connect() as conn:
+                    row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+                    if row:
+                        turn = int(row["value"] or 0)
+            except Exception:
+                pass
+            snap = resume_snapshot(state)
+            if snap.get("turn"):
+                turn = max(turn, int(snap["turn"] or 0))
+            return {
+                "ok": True,
+                "source": "live",
+                "slot": AUTOSAVE_SLOT,
+                "player_name": player,
+                "location": loc,
+                "turn": turn,
+                "history_count": snap.get("history_count") or 0,
+                "has_map": bool(snap.get("has_map")),
+            }
+    except Exception:
+        pass
+    # Disk autosave
+    meta_path = CAMPAIGN_SLOTS_DIR / AUTOSAVE_SLOT / "metadata.json"
+    world_path = CAMPAIGN_SLOTS_DIR / AUTOSAVE_SLOT / "world.json"
+    if world_path.exists():
+        meta: dict[str, Any] = {}
+        if meta_path.exists():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            except Exception:
+                meta = {}
+        return {
+            "ok": True,
+            "source": "slot",
+            "slot": AUTOSAVE_SLOT,
+            "player_name": meta.get("player_name") or "",
+            "location": meta.get("location") or "",
+            "turn": meta.get("turn") or 0,
+            "saved_at": meta.get("saved_at") or "",
+            "has_map": bool(meta.get("has_map")),
+        }
+    return {"ok": False, "source": "none", "slot": AUTOSAVE_SLOT}
 
 
 def load_campaign_slot(slot_name: str) -> dict[str, Any]:
@@ -1654,6 +1791,41 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         "rewind_points": rewind_points,
         "history": journal,
     }
+    raw_conditions = settings.get("player_conditions")
+    if isinstance(raw_conditions, list):
+        state["conditions"] = raw_conditions
+    elif isinstance(raw_conditions, str) and raw_conditions.strip():
+        try:
+            state["conditions"] = json.loads(raw_conditions)
+        except Exception:
+            state["conditions"] = []
+    else:
+        state["conditions"] = []
+    tr = settings.get("travel_ready")
+    if isinstance(tr, bool):
+        state["travel_ready"] = tr
+    else:
+        state["travel_ready"] = str(tr).lower() in {"1", "true", "yes", "on"} if tr is not None else True
+    portrait = settings.get("player_portrait")
+    if isinstance(portrait, dict):
+        state["player_portrait"] = portrait
+    elif isinstance(portrait, str) and portrait.strip().startswith("{"):
+        try:
+            state["player_portrait"] = json.loads(portrait)
+        except Exception:
+            state["player_portrait"] = None
+    else:
+        state["player_portrait"] = None
+    fullbody = settings.get("player_fullbody")
+    if isinstance(fullbody, dict):
+        state["player_fullbody"] = fullbody
+    elif isinstance(fullbody, str) and fullbody.strip().startswith("{"):
+        try:
+            state["player_fullbody"] = json.loads(fullbody)
+        except Exception:
+            state["player_fullbody"] = None
+    else:
+        state["player_fullbody"] = None
     if include_hidden:
         state["gm_notes"] = gm_notes or {"id": 1, "content": ""}
         state["gm_events"] = gm_events
@@ -1667,6 +1839,55 @@ def _set_setting(conn, key: str, value: Any) -> None:
         "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
         (key, encoded),
     )
+
+
+def get_session_theme() -> dict[str, Any]:
+    """Current playthrough session_theme (empty if setup not complete / no theme)."""
+    state = get_state()
+    options = ((state.get("settings") or {}).get("playthrough_options") or {})
+    theme = options.get("session_theme") if isinstance(options, dict) else None
+    return dict(theme) if isinstance(theme, dict) else {}
+
+
+def update_session_theme(patch: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Merge fields into playthrough_options.session_theme (mid-run override).
+    Supports theme_model (model routing) and light metadata fields.
+    """
+    if not isinstance(patch, dict):
+        patch = {}
+    with connect() as conn:
+        raw = conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()
+        options: dict[str, Any] = {}
+        if raw and raw["value"]:
+            try:
+                loaded = json.loads(raw["value"])
+                if isinstance(loaded, dict):
+                    options = loaded
+            except json.JSONDecodeError:
+                options = {}
+        theme = options.get("session_theme") if isinstance(options.get("session_theme"), dict) else {}
+        theme = dict(theme)
+        if "theme_model" in patch:
+            theme["theme_model"] = str(patch.get("theme_model") or "")[:120]
+        for key, limit in (
+            ("adapter_hint", 80),
+            ("genre", 120),
+            ("tone", 120),
+            ("edge", 200),
+            ("dm_stance", 240),
+            ("style_notes", 400),
+        ):
+            if key in patch and patch[key] is not None:
+                theme[key] = str(patch.get(key) or "")[:limit]
+        if "isekai" in patch:
+            theme["isekai"] = bool(patch.get("isekai"))
+        if "power_fantasy" in patch and isinstance(patch.get("power_fantasy"), dict):
+            existing_pf = theme.get("power_fantasy") if isinstance(theme.get("power_fantasy"), dict) else {}
+            theme["power_fantasy"] = {**existing_pf, **patch["power_fantasy"]}
+        options["session_theme"] = theme
+        _set_setting(conn, "playthrough_options", options)
+    return theme
 
 
 def _clear_playthrough(conn) -> None:
@@ -1751,6 +1972,7 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                     "locked": bool(ability.get("locked")),
                     "prerequisites": str(ability.get("prerequisites") or "")[:500],
                     "cost": str(ability.get("cost") or "")[:300],
+                    "growth_math": str(ability.get("growth_math") or "")[:800],
                 }
             )
     has_special = special_ability_origin != "none" and (bool(options.get("special_ability")) or bool(special_abilities))
@@ -1763,6 +1985,7 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 "locked": special_locked,
                 "prerequisites": "",
                 "cost": "",
+                "growth_math": "",
             }
         )
 
@@ -1792,8 +2015,8 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         for ability in special_abilities:
             conn.execute(
                 """
-                INSERT INTO abilities (name, description, locked, base_description, cost, prerequisites, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO abilities (name, description, locked, base_description, cost, prerequisites, growth_math, source)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ability["name"],
@@ -1802,7 +2025,104 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                     ability["description"],
                     ability["cost"],
                     ability["prerequisites"],
+                    ability.get("growth_math") or "",
                     special_ability_origin,
+                ),
+            )
+
+        # Seed starter gear only after arrival fact-check (isekai ≠ free shield).
+        starter_raw = str(options.get("starter_equipment") or "").strip()
+        appearance_raw = str(options.get("appearance") or "").strip()
+        starter_logic_report: dict[str, Any] = {}
+        try:
+            from app.starter_logic import fact_check_starter_loadout
+
+            theme = options.get("session_theme") if isinstance(options.get("session_theme"), dict) else {}
+            intent_hint = {
+                "isekai": bool(theme.get("isekai")),
+                "genre": theme.get("genre") or options.get("world_style"),
+                "portal_or_rebirth": theme.get("portal_or_rebirth") or "",
+                "adapter_hint": theme.get("adapter_hint") or "",
+            }
+            starter_logic_report = fact_check_starter_loadout(
+                starter_equipment=starter_raw,
+                appearance=appearance_raw,
+                backstory_mode=backstory_mode,
+                memory_policy=memory_policy,
+                character_backstory=character_backstory,
+                intent=intent_hint,
+                world_style=world_style,
+                tech_level=str(options.get("tech_level") or ""),
+                apply_fixes=True,
+            )
+            starter_raw = str(starter_logic_report.get("starter_equipment") or starter_raw)[:500]
+            if starter_logic_report.get("appearance"):
+                appearance_raw = str(starter_logic_report.get("appearance") or appearance_raw)[:400]
+        except Exception:
+            starter_logic_report = {}
+
+        starter_items: list[str] = []
+        if starter_raw:
+            for part in re.split(r"[,;|]+", starter_raw):
+                name_item = re.sub(r"\s+", " ", part).strip(" .")
+                if name_item and name_item.lower() not in {s.lower() for s in starter_items}:
+                    starter_items.append(name_item[:100])
+        for index, item_name in enumerate(starter_items[:12]):
+            low = item_name.lower()
+            weight = 0.4
+            slot_size = 1
+            item_type = "misc"
+            if any(w in low for w in ("coat", "cloak", "robe", "jacket", "armor", "tunic", "dress", "clothes")):
+                item_type = "clothing"
+                weight = 1.2
+            elif any(w in low for w in ("boot", "shoe", "sandal")):
+                item_type = "clothing"
+                weight = 0.8
+            elif any(w in low for w in ("knife", "blade", "sword", "axe", "dagger")):
+                item_type = "weapon"
+                weight = 0.6
+            elif any(w in low for w in ("rope", "coil")):
+                item_type = "tool"
+                weight = 1.5
+            elif any(w in low for w in ("ration", "bread", "food")):
+                item_type = "consumable"
+                weight = 0.5
+            elif any(w in low for w in ("water", "flask", "skin")):
+                item_type = "consumable"
+                weight = 0.8
+            elif any(w in low for w in ("bag", "satchel", "pack", "pouch")):
+                item_type = "container"
+                weight = 0.5
+                slot_size = 1
+            # Provenance note from fact-check when available
+            provenance = "setup"
+            for row in starter_logic_report.get("kept") or []:
+                if isinstance(row, dict) and str(row.get("name") or "").lower() == low:
+                    provenance = str(row.get("provenance") or "setup")
+                    break
+            code = f"I{index + 1}"
+            conn.execute(
+                """
+                INSERT INTO inventory (code, name, description, quantity, weight, slot_size, item_type, rarity, enchantments, stat_modifiers, granted_abilities, stack_limit, carry_modifier, container_bonus_weight, container_bonus_slots, dimensional_space)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    code,
+                    item_name,
+                    f"Starting gear ({provenance}): {item_name}.",
+                    1,
+                    weight,
+                    slot_size,
+                    item_type,
+                    "common",
+                    "[]",
+                    "{}",
+                    "[]",
+                    20,
+                    1.0,
+                    0.0,
+                    0,
+                    0,
                 ),
             )
 
@@ -1826,6 +2146,28 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "inventory_weight_limit": inventory_weight_limit,
             "inventory_slot_limit": inventory_slot_limit,
             "inventory_rules": inventory_rules,
+            "hair": str(options.get("hair") or "")[:120],
+            "facial_features": str(options.get("facial_features") or "")[:300],
+            "appearance": appearance_raw[:400] if appearance_raw else str(options.get("appearance") or "")[:400],
+            "starter_equipment": starter_raw[:500],
+            "starter_logic": {
+                "arrival": (starter_logic_report.get("arrival") or {}),
+                "summary": str(starter_logic_report.get("summary") or "")[:300],
+                "gm_brief": str(starter_logic_report.get("gm_brief") or "")[:1200],
+                "deferred": [
+                    str(d.get("name") or "")
+                    for d in (starter_logic_report.get("deferred") or [])
+                    if isinstance(d, dict)
+                ][:12],
+                "stripped": [
+                    str(s.get("name") or "")
+                    for s in (starter_logic_report.get("stripped") or [])
+                    if isinstance(s, dict)
+                ][:12],
+                "notes": list(starter_logic_report.get("notes") or [])[:8],
+            }
+            if starter_logic_report
+            else {},
             "tech_level": options.get("tech_level") or "iron age",
             "tone": options.get("tone") or "grounded adventure",
             "npc_density": options.get("npc_density") or "moderate",
@@ -1864,6 +2206,25 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "special_ability_locked": special_abilities[0]["locked"] if special_abilities else False,
             "special_ability_name": special_abilities[0]["name"] if special_abilities else "",
         }
+        # Durable session theme bias (intent composer / Randomize idea → DM+genre lean).
+        raw_theme = options.get("session_theme")
+        if isinstance(raw_theme, dict) and raw_theme:
+            stored_options["session_theme"] = {
+                "adapter_hint": str(raw_theme.get("adapter_hint") or "default")[:80],
+                "genre": str(raw_theme.get("genre") or "")[:120],
+                "isekai": bool(raw_theme.get("isekai")),
+                "dm_stance": str(raw_theme.get("dm_stance") or "fair pressure, player agency, no chosen-one autopilot")[:240],
+                "power_fantasy": raw_theme.get("power_fantasy")
+                if isinstance(raw_theme.get("power_fantasy"), dict)
+                else {},
+                "tone": str(raw_theme.get("tone") or "")[:120],
+                "edge": str(raw_theme.get("edge") or "")[:200],
+                "keywords": [str(k)[:40] for k in (raw_theme.get("keywords") or []) if k][:12]
+                if isinstance(raw_theme.get("keywords"), list)
+                else [],
+                "style_notes": str(raw_theme.get("style_notes") or "")[:400],
+                "theme_model": str(raw_theme.get("theme_model") or "")[:120],
+            }
         try:
             from app.skill_checks import gm_context_block, settings_from_setup
 
@@ -1873,18 +2234,46 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             stored_options["skill_check_context"] = gm_context_block(check_settings)
         except Exception:
             stored_options["dice_checks_enabled"] = bool(options.get("dice_checks_enabled"))
+        # Optional weak skill seed (isekai / compounding / near_useless) — one seed only, not a toolkit.
+        try:
+            from app.setup_composer import weak_skill_seed_spec
+
+            seed = weak_skill_seed_spec(stored_options, stored_options.get("session_theme"))
+            if seed and seed.get("name"):
+                conn.execute(
+                    "INSERT OR IGNORE INTO player_skills (name, value, notes) VALUES (?, ?, ?)",
+                    (
+                        str(seed["name"])[:80],
+                        int(seed.get("value") or 1),
+                        str(seed.get("notes") or "")[:700],
+                    ),
+                )
+                stored_options["weak_skill_seed"] = {
+                    "name": str(seed["name"])[:80],
+                    "value": int(seed.get("value") or 1),
+                }
+        except Exception:
+            pass
         _set_setting(conn, "setup_complete", "true")
         _set_setting(conn, "playthrough_options", stored_options)
         conn.execute(
             "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
             (0, "setup", f"Playthrough started: {json.dumps(stored_options, ensure_ascii=True)}"),
         )
+        seed_note = ""
+        if isinstance(stored_options.get("weak_skill_seed"), dict):
+            seed_note = (
+                f" Weak skill seed already recorded: {stored_options['weak_skill_seed'].get('name')} "
+                f"(value {stored_options['weak_skill_seed'].get('value')}); make it visible once in the opening if game_system allows."
+            )
         conn.execute(
             "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
             (
                 0,
                 "system",
-                "Initialization phase pending: on the first model turn, establish base play assumptions, respect immutable ability base descriptions, do not seed default player skills, and set any model-decided ability costs or prerequisites through ability_updates.",
+                "Initialization phase pending: on the first model turn, establish base play assumptions, respect immutable ability base descriptions, "
+                "do not seed default player skills beyond any recorded weak skill seed, and set any model-decided ability costs or prerequisites through ability_updates."
+                + seed_note,
             ),
         )
         if character_backstory:
@@ -1911,16 +2300,36 @@ def export_world() -> dict[str, Any]:
 
 def _restore_world(data: dict[str, Any]) -> None:
     tables = data.get("tables") or {}
+    # Older campaign slots predate world_maps in WORLD_TABLES. Only replace maps
+    # when the export explicitly includes that key (even if the list is empty).
+    restore_maps = isinstance(tables, dict) and "world_maps" in tables
     with connect() as conn:
         conn.execute("PRAGMA foreign_keys = OFF")
         try:
             for table in RESTORE_ORDER:
+                if table == "world_maps" and not restore_maps:
+                    continue
                 if table in WORLD_TABLES or table == "turn_snapshots":
-                    conn.execute(f"DELETE FROM {table}")
+                    try:
+                        conn.execute(f"DELETE FROM {table}")
+                    except Exception:
+                        pass
             for table in WORLD_TABLES:
+                if table == "world_maps" and not restore_maps:
+                    continue
                 rows = tables.get(table) or []
+                if not rows:
+                    continue
+                try:
+                    conn.execute(f"SELECT 1 FROM {table} LIMIT 1")
+                except Exception:
+                    continue
                 for row in rows:
+                    if not isinstance(row, dict):
+                        continue
                     columns = list(row.keys())
+                    if not columns:
+                        continue
                     placeholders = ", ".join("?" for _ in columns)
                     names = ", ".join(columns)
                     conn.execute(
@@ -4030,15 +4439,17 @@ def _apply_ability_updates(conn, updates: list[dict[str, Any]]) -> None:
         additions = _merge_text(ability["additions"] or "", str(update.get("addition") or update.get("additions") or ""), 1200)
         cost = str(update.get("cost") or "")[:300]
         prerequisites = str(update.get("prerequisites") or "")[:500]
+        growth_math = str(update.get("growth_math") or "")[:800]
         conn.execute(
             """
             UPDATE abilities
             SET additions = ?,
                 cost = COALESCE(NULLIF(?, ''), cost),
-                prerequisites = COALESCE(NULLIF(?, ''), prerequisites)
+                prerequisites = COALESCE(NULLIF(?, ''), prerequisites),
+                growth_math = COALESCE(NULLIF(?, ''), growth_math)
             WHERE id = ?
             """,
-            (additions, cost, prerequisites, ability["id"]),
+            (additions, cost, prerequisites, growth_math, ability["id"]),
         )
 
 
@@ -4599,6 +5010,60 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
 
     result["_deterministic_combat"] = mechanics_context.get("combat") or {}
 
+    # Optional dice/skill checks (server-resolved so UI shows real odds).
+    skill_check_results: list[dict[str, Any]] = []
+    try:
+        from app.skill_checks import (
+            apply_check_to_turn,
+            infer_check_from_action,
+            merge_check_settings,
+            resolve_check,
+        )
+
+        opts = ((context.get("settings") or {}).get("playthrough_options") or {})
+        check_cfg = merge_check_settings(
+            opts.get("skill_check_settings") if isinstance(opts.get("skill_check_settings"), dict) else opts
+        )
+        if check_cfg.get("dice_checks_enabled") and input_kind in {"player", "continue", "opening"}:
+            player = context.get("player") or {}
+            stats = player.get("effective_stats") or player.get("stats") or {}
+            skills = context.get("skills") or []
+            pending = list(result.get("skill_checks") or [])
+            # Model may propose checks; otherwise auto-infer risky actions.
+            if not pending and check_cfg.get("auto_check_on_risky_actions") and input_kind == "player":
+                inferred = infer_check_from_action(model_input, context)
+                if inferred:
+                    pending = [inferred]
+            for item in pending[:4]:
+                if not isinstance(item, dict):
+                    continue
+                # Already resolved?
+                if item.get("enabled") and item.get("natural") is not None:
+                    skill_check_results.append(item)
+                    continue
+                resolved = resolve_check(
+                    skill_code=str(item.get("skill_code") or item.get("code") or item.get("skill") or "general"),
+                    difficulty=item.get("difficulty"),
+                    dc=item.get("dc"),
+                    player_stats=stats if isinstance(stats, dict) else {},
+                    player_skills=skills if isinstance(skills, list) else [],
+                    opposition=item.get("opposition"),
+                    settings=check_cfg,
+                    context_note=str(item.get("context_note") or item.get("note") or model_input)[:400],
+                    weapon_or_tool=str(item.get("weapon_or_tool") or item.get("weapon") or ""),
+                )
+                skill_check_results.append(resolved)
+                result = apply_check_to_turn(result, resolved)
+            if skill_check_results:
+                result["skill_checks"] = skill_check_results
+                # Persist conditions into settings via journal already; also stash on turn.
+                result["_skill_check_ui"] = {
+                    "show": bool(check_cfg.get("show_rolls_in_ui", True)),
+                    "checks": skill_check_results,
+                }
+    except Exception:
+        skill_check_results = []
+
     actual_player_input = journal_input if journal_input is not None else player_input
     state = apply_turn(
         result,
@@ -4608,6 +5073,41 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         input_kind=input_kind,
         prompt_context=prompt_context,
     )
+    # Store lasting conditions on player via settings when injuries fired.
+    try:
+        if skill_check_results:
+            from app.db import connect as _db_connect
+
+            injuries = [c.get("injury") for c in skill_check_results if isinstance(c.get("injury"), dict)]
+            if injuries:
+                with _db_connect() as conn:
+                    row = conn.execute("SELECT value FROM settings WHERE key = 'player_conditions'").fetchone()
+                    existing = []
+                    if row:
+                        try:
+                            existing = json.loads(row["value"] or "[]")
+                        except Exception:
+                            existing = []
+                    if not isinstance(existing, list):
+                        existing = []
+                    for inj in injuries:
+                        existing.append(
+                            {
+                                "id": f"inj_{inj.get('limb')}_{_current_turn_number()}",
+                                "name": f"Injured {inj.get('limb')}",
+                                "summary": inj.get("summary"),
+                                "penalties": inj.get("combat_penalty") or {},
+                                "severe": bool(inj.get("severe")),
+                                "turn": _current_turn_number(),
+                            }
+                        )
+                    conn.execute(
+                        "INSERT OR REPLACE INTO settings (key, value) VALUES ('player_conditions', ?)",
+                        (json.dumps(existing[-40:], ensure_ascii=True),),
+                    )
+                state = get_state(include_hidden=False)
+    except Exception:
+        pass
     debug_trace_path = _write_model_trace_file(
         _current_turn_number(),
         input_kind,
@@ -4649,7 +5149,45 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         "trace_path": debug_trace_path or "",
         "trace_name": trace_name,
     }
-    return {
+    # Travel gate: AI may set travel.ready / travel_ready; else auto-heuristic.
+    travel_ready = True
+    try:
+        travel_block = result.get("travel") if isinstance(result.get("travel"), dict) else {}
+        if "ready" in travel_block:
+            travel_ready = bool(travel_block.get("ready"))
+        elif "travel_ready" in result:
+            travel_ready = bool(result.get("travel_ready"))
+        else:
+            # Auto: lock during active combat resolution; unlock when scene looks resolved.
+            combat = (result.get("_deterministic_combat") or mechanics_context.get("combat") or {}) if isinstance(mechanics_context, dict) else {}
+            status = str((combat.get("status") if isinstance(combat, dict) else "") or "").lower()
+            if status in {"active", "ongoing", "engaged"}:
+                travel_ready = False
+            # Player move this turn implies they already walked.
+            player_patch = result.get("player") if isinstance(result.get("player"), dict) else {}
+            if player_patch.get("move_to_location"):
+                travel_ready = False
+            # Explicit scene_plan goal "resolve" / "leave" unlocks
+            plan = result.get("scene_plan") if isinstance(result.get("scene_plan"), dict) else {}
+            goal = str(plan.get("goal") or "").lower()
+            if any(token in goal for token in ("leave", "travel", "depart", "move on", "open road")):
+                travel_ready = True
+            # Opening locks travel until player acts once
+            if input_kind == "opening":
+                travel_ready = False
+        with connect() as conn:
+            _set_setting(conn, "travel_ready", bool(travel_ready))
+    except Exception:
+        travel_ready = True
+
+    # Always persist after a choice so Continue / Load last works.
+    autosave_meta = None
+    try:
+        autosave_meta = autosave_campaign()
+    except Exception:
+        autosave_meta = None
+
+    payload = {
         "turn": result,
         "state": state,
         "rewards": rewards,
@@ -4659,7 +5197,19 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         "input_kind": input_kind,
         "debug_trace_path": debug_trace_path or "",
         "debug": debug_bundle,
+        "skill_checks": skill_check_results or result.get("skill_checks") or [],
+        "travel_ready": bool(travel_ready),
+        "travel": {
+            "ready": bool(travel_ready),
+            "hint": (
+                "You may choose a destination on the Map."
+                if travel_ready
+                else "Finish the current scene/event before traveling."
+            ),
+        },
+        "autosave": autosave_meta,
     }
+    return payload
 
 
 def play_opening_turn() -> dict[str, Any]:

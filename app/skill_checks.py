@@ -128,6 +128,16 @@ def default_check_settings() -> dict[str, Any]:
         "enabled_categories": [c["id"] for c in CATEGORIES],
         "enabled_skill_codes": [s["code"] for s in BUILTIN_SKILLS],
         "custom_check_notes": "",
+        # Contested / power curve
+        "contested_checks": True,
+        "power_rng": True,
+        "power_variance": 3,
+        "unskilled_mishaps": True,
+        "unskilled_rank_threshold": 1,
+        "severe_mishap_on_crit_fail": True,
+        "auto_check_on_risky_actions": True,
+        "degree_flavor": True,
+        "append_roll_to_narration": False,
     }
 
 
@@ -137,7 +147,7 @@ def merge_check_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         return base
     out = dict(base)
     for key, value in raw.items():
-        if key in out or key in {
+        if key in base or key in {
             "dice_checks_enabled",
             "dice_sides",
             "check_difficulty",
@@ -153,6 +163,15 @@ def merge_check_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
             "enabled_categories",
             "enabled_skill_codes",
             "custom_check_notes",
+            "contested_checks",
+            "power_rng",
+            "power_variance",
+            "unskilled_mishaps",
+            "unskilled_rank_threshold",
+            "severe_mishap_on_crit_fail",
+            "auto_check_on_risky_actions",
+            "degree_flavor",
+            "append_roll_to_narration",
         }:
             out[key] = value
     # normalize types
@@ -164,11 +183,21 @@ def merge_check_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
     out["check_difficulty"] = str(out.get("check_difficulty") or "normal").lower()
     if out["check_difficulty"] not in DIFFICULTY_DC_SHIFT:
         out["check_difficulty"] = "normal"
-    out["show_rolls_in_ui"] = bool(out.get("show_rolls_in_ui", True))
-    out["partial_on_specialized_skill"] = bool(out.get("partial_on_specialized_skill", True))
-    out["negative_outcomes"] = bool(out.get("negative_outcomes", True))
-    out["crit_on_natural_max"] = bool(out.get("crit_on_natural_max", True))
-    out["fumble_on_natural_1"] = bool(out.get("fumble_on_natural_1", True))
+    for bkey in (
+        "show_rolls_in_ui",
+        "partial_on_specialized_skill",
+        "negative_outcomes",
+        "crit_on_natural_max",
+        "fumble_on_natural_1",
+        "contested_checks",
+        "power_rng",
+        "unskilled_mishaps",
+        "severe_mishap_on_crit_fail",
+        "auto_check_on_risky_actions",
+        "degree_flavor",
+        "append_roll_to_narration",
+    ):
+        out[bkey] = bool(out.get(bkey, base.get(bkey)))
     try:
         out["attribute_floor_for_partial"] = max(1, min(20, int(out.get("attribute_floor_for_partial") or 6)))
     except (TypeError, ValueError):
@@ -177,6 +206,14 @@ def merge_check_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         out["specialized_skill_partial_threshold"] = max(1, min(20, int(out.get("specialized_skill_partial_threshold") or 2)))
     except (TypeError, ValueError):
         out["specialized_skill_partial_threshold"] = 2
+    try:
+        out["power_variance"] = max(0, min(10, int(out.get("power_variance") or 3)))
+    except (TypeError, ValueError):
+        out["power_variance"] = 3
+    try:
+        out["unskilled_rank_threshold"] = max(0, min(10, int(out.get("unskilled_rank_threshold") or 1)))
+    except (TypeError, ValueError):
+        out["unskilled_rank_threshold"] = 1
     freq_ok = {"rare", "normal", "frequent", "off"}
     for fk in ("event_check_frequency", "encounter_check_frequency"):
         val = str(out.get(fk) or "normal").lower()
@@ -212,13 +249,37 @@ def settings_from_setup(options: dict[str, Any] | None) -> dict[str, Any]:
             return str(val).strip().lower() in {"1", "true", "yes", "on"}
         return default
 
-    raw["dice_checks_enabled"] = _bool("dice_checks_enabled", False)
+    # System / isekai playthroughs default dice on unless the user explicitly left them off.
+    theme = opts.get("session_theme") if isinstance(opts.get("session_theme"), dict) else {}
+    systemish = bool(opts.get("game_system")) or bool(theme.get("isekai")) or str(theme.get("adapter_hint") or "") in {
+        "isekai_rpg",
+        "system_rpg",
+    }
+    dice_default = True if systemish and "dice_checks_enabled" not in opts and "dice_checks_enabled" not in raw else False
+    raw["dice_checks_enabled"] = _bool("dice_checks_enabled", dice_default)
+    # Align check difficulty with playthrough difficulty when not set.
+    if "check_difficulty" not in raw and "check_difficulty" not in opts:
+        play_diff = str(opts.get("difficulty") or "normal").lower()
+        if play_diff in DIFFICULTY_DC_SHIFT:
+            raw["check_difficulty"] = play_diff
+    if systemish and raw.get("dice_checks_enabled"):
+        raw.setdefault("unskilled_mishaps", True)
+        raw.setdefault("auto_check_on_risky_actions", True)
+        raw.setdefault("show_rolls_in_ui", True)
+        if str(opts.get("difficulty") or "").lower() in ("hard", "brutal"):
+            raw.setdefault("event_check_frequency", "frequent")
     for key in (
         "show_rolls_in_ui",
         "partial_on_specialized_skill",
         "negative_outcomes",
         "crit_on_natural_max",
         "fumble_on_natural_1",
+        "contested_checks",
+        "power_rng",
+        "unskilled_mishaps",
+        "severe_mishap_on_crit_fail",
+        "auto_check_on_risky_actions",
+        "degree_flavor",
     ):
         if key in opts or key in raw:
             raw[key] = _bool(key, bool(default_check_settings().get(key)))
@@ -230,6 +291,8 @@ def settings_from_setup(options: dict[str, Any] | None) -> dict[str, Any]:
         "event_check_frequency",
         "encounter_check_frequency",
         "custom_check_notes",
+        "power_variance",
+        "unskilled_rank_threshold",
     ):
         if key in opts and key not in raw:
             raw[key] = opts[key]
@@ -463,6 +526,91 @@ def attribute_modifier(score: int) -> int:
     return max(-5, min(10, (int(score) - 10) // 2))
 
 
+def opposition_power(
+    opposition: dict[str, Any] | None,
+    *,
+    attr_key: str = "strength",
+    rng: random.Random | None = None,
+    power_rng: bool = True,
+    power_variance: int = 3,
+) -> dict[str, Any]:
+    """
+    How hard is this? Derived from enemy/object stats + optional RNG sway
+    so 'how powerful' something feels is not a fixed constant.
+    """
+    opp = opposition if isinstance(opposition, dict) else {}
+    stats = opp.get("stats") if isinstance(opp.get("stats"), dict) else opp
+    score = _attr_score(stats, attr_key)
+    # Rank letter bump (F..SSS)
+    rank = str(opp.get("rank") or "").strip().upper()
+    rank_bonus = {
+        "F": 0, "E": 1, "D": 2, "C": 3, "B": 4, "A": 5, "S": 7, "SS": 9, "SSS": 12,
+    }.get(rank, 0)
+    # Explicit power score / level / defense if present
+    for key in ("power", "threat", "dc_bonus", "defense", "level"):
+        try:
+            if opp.get(key) is not None:
+                score = max(score, int(opp.get(key)))
+        except (TypeError, ValueError):
+            pass
+    base = 8 + attribute_modifier(score) + rank_bonus
+    sway = 0
+    if power_rng and power_variance > 0:
+        roller = rng or random.Random()
+        sway = roller.randint(-int(power_variance), int(power_variance))
+    total = max(5, min(30, base + sway))
+    return {
+        "name": str(opp.get("name") or opp.get("label") or "opposition")[:80],
+        "attribute": attr_key,
+        "stat_score": score,
+        "rank": rank or None,
+        "base_power": base,
+        "power_sway": sway,
+        "power_total": total,
+    }
+
+
+DEGREE_FLAVOR = {
+    "critical_success": [
+        "You make it look effortless — clean, complete, and then some.",
+        "Outstanding. The result exceeds what you were aiming for.",
+    ],
+    "success": [
+        "You succeed cleanly.",
+        "It works as intended.",
+    ],
+    "barely": [
+        "You just barely scrape through.",
+        "It almost fails — then holds at the last breath.",
+    ],
+    "partial": [
+        "You get something, but not everything you wanted.",
+        "A fragment of the truth, a half-open door, a costly glimpse.",
+    ],
+    "failure": [
+        "You fail. The moment offers nothing useful.",
+        "It does not work; you spend effort and get air.",
+    ],
+    "bad_nothing": [
+        "You do so poorly it is almost as if you had done nothing at all.",
+        "Wasted motion. The world does not even bother to answer.",
+    ],
+    "critical_failure": [
+        "Disaster. The attempt turns against you.",
+        "A brutal miss — something breaks, bleeds, or betrays you.",
+    ],
+    "unskilled_mishap": [
+        "You are unskilled at wielding this; the tool punishes the hand that holds it wrong.",
+        "Without training, the weapon/tool does as much harm to you as to the world.",
+    ],
+}
+
+
+def _pick_flavor(key: str, rng: random.Random) -> str:
+    options = DEGREE_FLAVOR.get(key) or DEGREE_FLAVOR["failure"]
+    return options[rng.randrange(len(options))]
+
+
 def resolve_check(
     *,
     skill_code: str = "general",
@@ -470,13 +618,18 @@ def resolve_check(
     dc: int | None = None,
     player_stats: dict[str, Any] | None = None,
     player_skills: list[dict[str, Any]] | None = None,
+    opposition: dict[str, Any] | None = None,
     settings: dict[str, Any] | None = None,
     context_note: str = "",
+    weapon_or_tool: str = "",
     rng: random.Random | None = None,
 ) -> dict[str, Any]:
     """
-    Roll a check. Specialized skills can salvage partial success when the linked
-    attribute is low but skill rank is enough.
+    Roll a check with:
+      - attribute base + skill modifier
+      - DC from skill base, global difficulty, and optional contested opposition power
+      - degree bands (barely / bad nothing / unskilled mishap)
+      - optional lasting injury suggestions for severe fails
     """
     cfg = merge_check_settings(settings)
     if not cfg.get("dice_checks_enabled"):
@@ -490,30 +643,53 @@ def resolve_check(
     library = {s["code"]: s for s in load_skill_library()}
     skill = library.get(skill_code) or library.get(_codeify(skill_code))
     if not skill:
-        # ad-hoc skill: register lightly
         reg = register_or_adjust_skill({"name": skill_code, "source": "playthrough"})
         skill = reg["skill"]
 
     sides = int(cfg["dice_sides"])
     diff = (difficulty or cfg.get("check_difficulty") or "normal").lower()
     shift = DIFFICULTY_DC_SHIFT.get(diff, 0)
-    target_dc = int(dc) if dc is not None else int(skill.get("base_dc") or 12) + shift
+    roller = rng or random.Random()
 
     attr_key = str(skill.get("attribute") or "intelligence")
     attr_score = _attr_score(player_stats, attr_key)
     attr_mod = attribute_modifier(attr_score)
     skill_rank = _skill_rank(player_skills, skill.get("code") or skill.get("name") or "")
-    skill_mod = skill_rank  # 1:1 rank for v1 simplicity
+    skill_mod = skill_rank
     total_mod = attr_mod + skill_mod
+    unskilled = skill_rank < int(cfg.get("unskilled_rank_threshold") or 1)
 
-    roller = rng or random.Random()
+    # Contested DC: base skill DC + difficulty + opposition power (stats + RNG)
+    base_dc = int(skill.get("base_dc") or 12) + shift
+    opp_info: dict[str, Any] | None = None
+    if dc is not None:
+        target_dc = int(dc)
+        dc_source = "explicit"
+    elif cfg.get("contested_checks") and opposition:
+        opp_info = opposition_power(
+            opposition,
+            attr_key=str(opposition.get("contest_attribute") or attr_key),
+            rng=roller,
+            power_rng=bool(cfg.get("power_rng")),
+            power_variance=int(cfg.get("power_variance") or 3),
+        )
+        # Blend skill floor with how powerful the other side is.
+        target_dc = max(base_dc, int(round((base_dc + opp_info["power_total"]) / 1.15)))
+        dc_source = "contested"
+    else:
+        target_dc = base_dc
+        dc_source = "static"
+        if cfg.get("power_rng"):
+            sway = roller.randint(-2, 2)
+            target_dc = max(5, target_dc + sway)
+
     natural = roller.randint(1, sides)
     total = natural + total_mod
+    margin = total - target_dc
 
     crit = bool(cfg.get("crit_on_natural_max")) and natural == sides
     fumble = bool(cfg.get("fumble_on_natural_1")) and natural == 1
 
-    # Specialized salvage: low attribute, enough skill → partial instead of hard fail
     specialized_partial = False
     if (
         cfg.get("partial_on_specialized_skill")
@@ -524,29 +700,81 @@ def resolve_check(
     ):
         specialized_partial = True
 
+    degree = "failure"
     if fumble:
+        degree = "critical_failure"
         outcome = "critical_failure"
     elif crit and total >= target_dc:
+        degree = "critical_success"
         outcome = "critical_success"
     elif specialized_partial:
+        degree = "partial"
         outcome = "partial"
-    elif total >= target_dc + max(4, sides // 5):
-        outcome = "critical_success" if crit else "success"
-    elif total >= target_dc:
+    elif margin >= max(5, sides // 4):
+        degree = "critical_success" if crit else "success"
+        outcome = "success" if not crit else "critical_success"
+    elif margin >= 0:
+        degree = "barely" if margin <= 2 else "success"
         outcome = "success"
-    elif total >= target_dc - 3:
-        outcome = "partial" if cfg.get("partial_on_specialized_skill") else "failure"
+    elif margin >= -3:
+        degree = "partial" if cfg.get("partial_on_specialized_skill") else "failure"
+        outcome = "partial" if degree == "partial" else "failure"
+    elif margin >= -6:
+        degree = "failure"
+        outcome = "failure"
     else:
+        degree = "bad_nothing"
         outcome = "failure"
 
+    mishap = False
+    injury: dict[str, Any] | None = None
+    tool = (weapon_or_tool or "").strip() or str((opposition or {}).get("weapon") or "")
+    if (
+        cfg.get("unskilled_mishaps")
+        and unskilled
+        and outcome in {"failure", "critical_failure"}
+        and (fumble or degree in {"critical_failure", "bad_nothing"} or margin <= -4)
+    ):
+        mishap = True
+        degree = "unskilled_mishap" if not fumble else "critical_failure"
+        outcome = "critical_failure" if fumble or cfg.get("severe_mishap_on_crit_fail") else outcome
+        # Suggest lasting harm — apply_turn can consume this.
+        limb = roller.choice(["leg", "arm", "hand", "side", "eye", "ribs"])
+        if fumble or cfg.get("severe_mishap_on_crit_fail"):
+            injury = {
+                "severity": True,
+                "kind": "self_injury",
+                "limb": limb,
+                "severity": bool(fumble or degree == "critical_failure"),
+                "health_delta": -roller.randint(2, 6) if fumble else -roller.randint(1, 3),
+                "summary": (
+                    f"Unskilled with {tool or skill.get('name')}: you injure your own {limb}."
+                    if tool or skill.get("category") == "combat"
+                    else f"Botched {skill.get('name')}: you hurt your {limb}."
+                ),
+                "combat_penalty": {
+                    "mobility": -2 if limb in {"leg"} else 0,
+                    "attack": -2 if limb in {"arm", "hand"} else -1,
+                    "defense": -1,
+                },
+            }
+
     negative = bool(cfg.get("negative_outcomes")) and outcome in {"failure", "critical_failure"}
-    guidance = {
-        "critical_success": "Full clear success; extra useful detail or a clean advantage is appropriate.",
-        "success": "The check works as intended; grant the requested info or effect.",
-        "partial": "Incomplete result: specialized skill or near-miss yields something useful but incomplete, delayed, risky, or costly.",
-        "failure": "The attempt fails. If negative outcomes are on, apply a setback appropriate to context.",
-        "critical_failure": "Bad break: complication, wrong reading, injury risk, alarm, or lost opportunity.",
-    }
+    flavor = _pick_flavor(degree if cfg.get("degree_flavor") else outcome, roller)
+    if mishap and injury:
+        flavor = (
+            f"{flavor} You are unskilled at wielding {tool or 'this'} — "
+            f"you end up taking your own {injury['limb']} into the mess. "
+            f"{injury['summary']}"
+        )
+
+    display_lines = [
+        f"You rolled {natural} with your base of {attr_score} ({attr_key}) and a modifier of {total_mod:+d} (attr {attr_mod:+d} + skill {skill_mod:+d}).",
+        f"Total: {total}  ·  Base success (DC): {target_dc}"
+        + (f"  ·  vs {opp_info['name']} power {opp_info['power_total']}" if opp_info else ""),
+        f"Result: {outcome.replace('_', ' ')} ({degree.replace('_', ' ')})  ·  margin {margin:+d}",
+        flavor,
+    ]
 
     return {
         "enabled": True,
@@ -558,6 +786,7 @@ def resolve_check(
         },
         "dice": f"d{sides}",
         "natural": natural,
+        "base": attr_score,
         "modifier": total_mod,
         "attribute_score": attr_score,
         "attribute_mod": attr_mod,
@@ -565,17 +794,134 @@ def resolve_check(
         "skill_mod": skill_mod,
         "total": total,
         "dc": target_dc,
+        "base_success": target_dc,
+        "dc_source": dc_source,
         "difficulty": diff,
+        "opposition": opp_info,
         "outcome": outcome,
-        "margin": total - target_dc,
+        "degree": degree,
+        "margin": margin,
         "specialized_partial": specialized_partial,
+        "unskilled": unskilled,
+        "mishap": mishap,
+        "injury": injury,
         "negative_outcome_suggested": negative,
         "crit": crit,
         "fumble": fumble,
-        "guidance": guidance.get(outcome, ""),
+        "flavor": flavor,
+        "lines": display_lines,
+        "guidance": flavor,
         "context_note": str(context_note or "")[:400],
-        "display": f"[{skill.get('name')}] d{sides}:{natural}{total_mod:+d} = {total} vs DC {target_dc} → {outcome.replace('_', ' ')}",
+        "weapon_or_tool": tool[:80],
+        "display": " | ".join(display_lines[:3]),
+        "display_block": "\n".join(display_lines),
     }
+
+
+def infer_check_from_action(player_input: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """Pick a skill code + optional opposition for auto-checks on risky actions."""
+    text = (player_input or "").lower()
+    if not text or text.startswith("__"):
+        return None
+    pairs = [
+        (r"\b(attack|strike|slash|stab|swing|fight|melee)\b", "melee"),
+        (r"\b(shoot|fire|bow|gun|throw)\b", "ranged"),
+        (r"\b(sneak|hide|stealth|creep)\b", "stealth"),
+        (r"\b(persuade|convince|speech|talk down|negotiate)\b", "persuasion"),
+        (r"\b(lie|bluff|deceive|con)\b", "deception"),
+        (r"\b(intimidate|threaten|scare)\b", "intimidation"),
+        (r"\b(symbol|rune|glyph|sigil|etch)\b", "symbol_lore"),
+        (r"\b(read|inspect|examine|study|analyze)\b", "investigation"),
+        (r"\b(search|look for|scan)\b", "perception"),
+        (r"\b(climb|jump|swim|lift|force|break|bash)\b", "athletics"),
+        (r"\b(lock|pick the|unlock)\b", "lockpicking"),
+        (r"\b(heal|bandage|medicine|first aid)\b", "medicine"),
+        (r"\b(hack|console|terminal|decrypt)\b", "hacking"),
+        (r"\b(track|forage|camp|survive)\b", "survival"),
+    ]
+    skill = None
+    for pattern, code in pairs:
+        if re.search(pattern, text):
+            skill = code
+            break
+    if not skill:
+        return None
+    opposition: dict[str, Any] = {}
+    ctx = context or {}
+    # Prefer combat target / local NPC as opposition when present.
+    mech = ctx.get("mechanics_context") if isinstance(ctx.get("mechanics_context"), dict) else {}
+    combat = mech.get("combat") if isinstance(mech.get("combat"), dict) else {}
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else None
+    if target:
+        opposition = {
+            "name": target.get("name") or "foe",
+            "rank": target.get("rank"),
+            "stats": target.get("stat_profile") or target.get("stats") or {},
+            "defense": target.get("defense") or (target.get("combat_profile") or {}).get("defense"),
+            "level": target.get("level"),
+            "power": target.get("attack_max") or target.get("power"),
+        }
+    else:
+        for npc in (ctx.get("npcs") or [])[:6]:
+            if isinstance(npc, dict) and npc.get("name") and str(npc.get("name")).lower() in text:
+                opposition = {
+                    "name": npc.get("name"),
+                    "rank": npc.get("rank"),
+                    "stats": npc.get("stat_profile") or {},
+                    "defense": npc.get("defense"),
+                }
+                break
+    weapon = ""
+    for w in ("sword", "axe", "spear", "dagger", "bow", "rifle", "hammer", "staff", "blade"):
+        if w in text:
+            weapon = w
+            break
+    return {"skill_code": skill, "opposition": opposition or None, "weapon_or_tool": weapon}
+
+
+def apply_check_to_turn(turn: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
+    """Merge a resolved check into turn JSON for apply_turn (injuries, journal, self_check)."""
+    result = dict(turn or {})
+    checks = list(result.get("skill_checks") or [])
+    checks.append(check)
+    result["skill_checks"] = checks[-8:]
+
+    injury = check.get("injury") if isinstance(check.get("injury"), dict) else None
+    player = dict(result.get("player") or {})
+    if injury and injury.get("health_delta"):
+        try:
+            player["health_delta"] = int(player.get("health_delta") or 0) + int(injury["health_delta"])
+        except (TypeError, ValueError):
+            pass
+        result["player"] = player
+
+    journal = list(result.get("journal") or [])
+    journal.append(
+        {
+            "kind": "skill_check",
+            "content": check.get("display_block") or check.get("display") or "",
+        }
+    )
+    if injury:
+        journal.append(
+            {
+                "kind": "injury",
+                "content": json.dumps(injury, ensure_ascii=True)[:900],
+            }
+        )
+        conditions = list(result.get("condition_changes") or [])
+        conditions.append(
+            {
+                "id": f"inj_{injury.get('limb') or 'wound'}",
+                "name": f"Injured {injury.get('limb') or 'body'}",
+                "summary": injury.get("summary") or "",
+                "penalties": injury.get("combat_penalty") or {},
+                "severe": bool(injury.get("severe")),
+            }
+        )
+        result["condition_changes"] = conditions
+    result["journal"] = journal
+    return result
 
 
 def catalog_public() -> dict[str, Any]:

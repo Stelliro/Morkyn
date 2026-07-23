@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mørkyn</title>
-    <link rel="stylesheet" href="/static/styles.css?v=v0-8-7" />
+    <link rel="stylesheet" href="/static/styles.css?v=v0-9-43" />
     <style id="scriptGateStyles">
       /* Inline so this screen works even when app.js / external CSS is blocked */
       .scriptGate {
@@ -87,7 +87,7 @@
         </div>
         <div class="scriptGateActions">
           <button type="button" class="primary" id="scriptGateReload">Reload</button>
-          <a href="/privacy" target="_blank" rel="noopener">Privacy policy</a>
+
           <button type="button" id="scriptGateContinue" hidden>Continue anyway</button>
         </div>
       </div>
@@ -139,14 +139,202 @@
           <div id="startSplashDraft" class="startSplashDraft" aria-label="Opening scene preview"></div>
         </div>
       </section>
-      <section id="setupView" class="setupView">
+
+      <!-- Setup / randomize LLM busy modal (logo + pulse) -->
+      <div id="setupLlmBusyModal" class="setupLlmBusyModal hidden" role="alertdialog" aria-modal="true" aria-labelledby="setupLlmBusyTitle" aria-live="polite" hidden>
+        <div class="setupLlmBusyCard">
+          <div class="setupLlmBusyBrand" aria-hidden="true">
+            <img class="setupLlmBusyLogo" src="/media/morkyn-logo.png" alt="" width="72" height="72" onerror="this.style.display='none'" />
+            <div class="setupLlmBusyRing"></div>
+          </div>
+          <p class="setupLlmBusyEyebrow">Mørkyn · local model</p>
+          <h2 id="setupLlmBusyTitle">Working with the model…</h2>
+          <p id="setupLlmBusyText" class="setupLlmBusyText">Randomizing setup. This can take a bit on local LLMs — nothing is frozen.</p>
+          <p id="setupLlmBusyElapsed" class="setupLlmBusyElapsed">Elapsed 0:00</p>
+          <div class="setupLlmBusyPulse" aria-hidden="true"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+      <!-- Main menu — entry screen -->
+      <section id="mainMenuView" class="mainMenuView">
+        <div class="mainMenuPanel">
+          <div class="mainMenuBrand">
+            <p class="mainMenuEyebrow">Local-first · AI RPG</p>
+            <h1 class="neonTitle mainMenuTitle">Mørkyn</h1>
+            <p class="mainMenuTagline">A living world in your browser. Map, scene, and story — no cloud required.</p>
+          </div>
+          <nav class="mainMenuActions" aria-label="Main menu">
+            <button type="button" class="mainMenuPrimary" id="menuNewGame">Start new game</button>
+            <button type="button" class="mainMenuSecondary" id="menuLoadGame">Load</button>
+            <button type="button" class="mainMenuSecondary" id="menuSettings">Settings</button>
+            <a class="mainMenuGhost mainMenuLink" id="menuGithub" href="https://github.com/Stelliro/Morkyn" target="_blank" rel="noopener noreferrer">GitHub</a>
+            <button type="button" class="mainMenuGhost mainMenuDisabled" id="menuContinue" disabled aria-disabled="true">Continue playthrough</button>
+          </nav>
+          <p class="mainMenuFoot" id="mainMenuStatus">Ready.</p>
+        </div>
+      </section>
+
+      <!-- App settings (replaces most terminal Gatehouse options) -->
+      <div id="appSettingsModal" class="modalBackdrop hidden" role="dialog" aria-modal="true" aria-labelledby="appSettingsTitle">
+        <section class="modalPanel appSettingsPanel">
+          <header class="modalHeader">
+            <div>
+              <h2 id="appSettingsTitle">Settings</h2>
+              <p>Engine, reach, pipeline, and UI. Saved to <code>data/launcher_prefs.json</code>.</p>
+            </div>
+            <button type="button" class="secondaryButton chipBtn" id="closeAppSettings">Close</button>
+          </header>
+          <form id="appSettingsForm" class="appSettingsForm">
+            <label>
+              <span>Where (reach)</span>
+              <select name="launch_mode">
+                <option value="local">Local (this PC)</option>
+                <option value="lan">LAN</option>
+                <option value="vpn">VPN / tunnel</option>
+              </select>
+            </label>
+            <label>
+              <span>Port</span>
+              <input name="app_port" type="number" min="1" max="65535" value="8000" />
+            </label>
+            <label>
+              <span>Engine</span>
+              <select name="model_provider">
+                <option value="ollama">Ollama</option>
+                <option value="llama_cpp">llama.cpp / GGUF</option>
+                <option value="openai">Cloud / agent API</option>
+              </select>
+            </label>
+            <label>
+              <span>Ollama model</span>
+              <input name="ollama_model" value="qwen3:8b" maxlength="200" />
+            </label>
+            <label>
+              <span>Ollama URL</span>
+              <input name="ollama_base_url" value="http://127.0.0.1:11434" maxlength="300" />
+            </label>
+            <label>
+              <span>GGUF path</span>
+              <input name="gguf_model_path" value="" maxlength="1000" placeholder="D:\models\....gguf" />
+            </label>
+            <label>
+              <span>API base URL</span>
+              <input name="api_base_url" value="https://api.x.ai/v1" maxlength="400" />
+            </label>
+            <label>
+              <span>API model</span>
+              <input name="api_model" value="grok-4.5" maxlength="200" />
+            </label>
+            <label>
+              <span>Theme</span>
+              <select name="ui_theme" id="settingsThemeSelect">
+                <option value="dusk">Dusk</option>
+                <option value="ember">Ember</option>
+                <option value="tide">Tide</option>
+                <option value="bloom">Bloom</option>
+                <option value="ash">Ash</option>
+              </select>
+            </label>
+            <fieldset class="toggleSet">
+              <legend>Narration pipeline</legend>
+              <label><input type="radio" name="narration_pipeline" value="true" checked /> On</label>
+              <label><input type="radio" name="narration_pipeline" value="false" /> Off</label>
+            </fieldset>
+            <fieldset class="toggleSet">
+              <legend>Pipeline consolidator</legend>
+              <label><input type="radio" name="narration_consolidate" value="true" checked /> On</label>
+              <label><input type="radio" name="narration_consolidate" value="false" /> Off</label>
+            </fieldset>
+            <fieldset class="toggleSet">
+              <legend>Fast verification</legend>
+              <label><input type="radio" name="fast_verification" value="true" checked /> On</label>
+              <label><input type="radio" name="fast_verification" value="false" /> Off</label>
+            </fieldset>
+            <fieldset class="toggleSet appSettingsTutorialBox">
+              <legend>Setup tutorial</legend>
+              <p class="empty" style="margin:0 0 8px">
+                The first-time New Game walkthrough. Reset if you want to see it again.
+              </p>
+              <button type="button" class="secondaryButton" id="settingsResetTutorial">Reset setup tutorial</button>
+            </fieldset>
+            <div class="appSettingsActions">
+              <button type="submit">Save &amp; apply</button>
+              <button type="button" class="secondaryButton" id="settingsOpenLlm">LLM details…</button>
+              <button type="button" class="secondaryButton" id="settingsReloadUi">Reload UI</button>
+            </div>
+            <p class="empty" id="appSettingsStatus">Changes apply to this running app where possible. Port/reach need a launcher restart.</p>
+          </form>
+        </section>
+      </div>
+
+      <section id="setupView" class="setupView hidden">
+        <!-- First-time setup tutorial + spotlight tour -->
+        <div id="setupTutorial" class="setupTutorial hidden" role="dialog" aria-modal="true" aria-labelledby="setupTutorialTitle">
+          <div id="setupTutorialIntro" class="setupTutorialCard">
+            <p class="setupTutorialEyebrow">Welcome · first run</p>
+            <h2 id="setupTutorialTitle">Before you build a world</h2>
+            <div class="setupTutorialBody">
+              <p>
+                The settings can look a little confronting at first — lots of knobs, locks, and options.
+                We designed them for <strong>simple controls</strong>: change what you care about, leave the rest alone,
+                or hit Randomize and then only edit what bothers you.
+              </p>
+              <p>
+                That said: <strong>these settings matter</strong>. Genre, tone, death rules, how NPCs behave, magic, and checks
+                all teach the model what kind of story this is. You’re not filling paperwork for its own sake —
+                you’re shaping how the world will play.
+              </p>
+              <p>
+                The next screens walk each important control with a spotlight. Take your time — use Back anytime.
+              </p>
+            </div>
+            <div class="setupTutorialActions">
+              <button type="button" class="mainMenuPrimary" id="setupTutorialContinue">Start the tour</button>
+              <label class="setupTutorialCheck">
+                <input type="checkbox" id="setupTutorialDontShow" checked />
+                Don’t show again
+              </label>
+            </div>
+          </div>
+
+          <!-- Spotlight layer (dim + hole + arrow + tip) -->
+          <div id="setupTourLayer" class="setupTourLayer hidden" aria-live="polite">
+            <div id="setupTourHole" class="setupTourHole" aria-hidden="true"></div>
+            <div id="setupTourArrow" class="setupTourArrow" aria-hidden="true">
+              <svg viewBox="0 0 48 72" width="48" height="72" focusable="false">
+                <path d="M24 4 L24 52" stroke="currentColor" stroke-width="4" stroke-linecap="round" fill="none"/>
+                <path d="M10 40 L24 58 L38 40" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              </svg>
+            </div>
+            <div id="setupTourTip" class="setupTourTip">
+              <p class="setupTourStepMeta" id="setupTourStepMeta">Step 1 of 8</p>
+              <strong id="setupTourTipTitle">Title</strong>
+              <p id="setupTourTipText">…</p>
+              <div class="setupTourTipActions">
+                <button type="button" class="secondaryButton chipBtn" id="setupTourBack" disabled>Back</button>
+                <button type="button" class="secondaryButton chipBtn" id="setupTourSkip">Skip</button>
+                <button type="button" class="mainMenuPrimary" id="setupTourNext">Next</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <form id="setupForm" class="setupPanel">
           <header class="setupHeader">
-            <div>
-              <h1>Mørkyn</h1>
-              <p>Build the world you care about, or roll a playable start.</p>
+            <div class="setupHeaderTop">
+              <div class="setupHeaderLead">
+                <button type="button" class="secondaryButton chipBtn" id="setupBackMenu">← Menu</button>
+                <div class="setupHeaderTitleBlock">
+                  <h1>New game</h1>
+                  <p class="setupHeaderTagline">Build the world you care about, or roll a playable start.</p>
+                </div>
+              </div>
+              <div class="setupHeaderPrimary">
+                <label id="setupModelButton" class="buttonLike secondaryButton setupPrimarySettings" for="modelModalToggle">Settings</label>
+                <button type="button" class="secondaryButton chipBtn setupMoreToggle" id="setupMoreToggle" aria-expanded="false" aria-controls="setupActionsMore" title="Theme, save/load, randomize">More</button>
+                <button id="setupStart" class="setupStartDesktop" type="submit">Start</button>
+              </div>
             </div>
-            <div class="setupActions">
+            <div class="setupActions setupActionsMore" id="setupActionsMore" hidden>
               <div class="themePicker" title="Visual theme">
                 <label for="themeSelect">Theme</label>
                 <select id="themeSelect" aria-label="UI theme">
@@ -157,47 +345,194 @@
                   <option value="ash">Ash</option>
                 </select>
               </div>
-              <label id="setupModelButton" class="buttonLike secondaryButton" for="modelModalToggle">LLM Settings</label>
-              <button id="privacyButton" class="secondaryButton" type="button">Privacy</button>
               <button id="updatesButton" class="secondaryButton" type="button">Updates</button>
               <button id="saveSetupSettings" class="secondaryButton" type="button">Save Settings</button>
               <label id="loadSetupSettingsButton" class="buttonLike secondaryButton" for="setupSettingsFile">Load Settings</label>
               <input id="setupSettingsFile" class="hidden" type="file" accept="application/json,.json" />
-              <button id="randomizeSetup" class="secondaryButton" type="button">Randomize</button>
-              <button id="setupStart" type="submit">Start</button>
+              <div class="setupRandomizeAll" title="Optional idea steers full Randomize">
+                <input
+                  id="randomizeSetupPrompt"
+                  type="text"
+                  maxlength="400"
+                  placeholder="Optional idea for Randomize…"
+                  aria-label="Optional idea for Randomize all"
+                />
+                <button id="randomizeSetup" class="secondaryButton" type="button">Randomize</button>
+              </div>
             </div>
           </header>
 
-          <nav class="setupSteps" aria-label="Setup steps">
-            <button class="active" data-setup-step="0" type="button">1 Character</button>
-            <button data-setup-step="1" type="button">2 World</button>
-            <button data-setup-step="2" type="button">3 People</button>
-            <button data-setup-step="3" type="button">4 Rules</button>
-            <button data-setup-step="4" type="button">5 Checks</button>
+          <nav class="setupSteps isFlyout" id="setupSteps" aria-label="Setup steps">
+            <button type="button" class="setupNavTrigger" id="setupNavToggle" aria-expanded="false" aria-controls="setupStepFlyout" title="Open setup steps">
+              <span class="setupNavTriggerMeta">Steps</span>
+              <span class="setupNavTriggerLabel" id="setupNavTriggerLabel">1 · Identity</span>
+              <span class="setupNavChevron" aria-hidden="true">▾</span>
+            </button>
+            <button type="button" class="chipBtn secondaryButton setupNavPin" id="setupNavPin" title="Pin steps to the side (desktop)">Pin</button>
+            <div class="setupStepFlyout" id="setupStepFlyout" hidden>
+              <div class="setupStepGroups" id="setupStepGroups">
+                <p class="setupStepGroupLabel">You</p>
+                <button class="active" data-setup-step="0" type="button"><span class="setupStepNum">1</span><span class="setupStepName">Identity</span></button>
+                <button data-setup-step="1" type="button"><span class="setupStepNum">2</span><span class="setupStepName">Powers</span></button>
+                <p class="setupStepGroupLabel">Setting</p>
+                <button data-setup-step="2" type="button"><span class="setupStepNum">3</span><span class="setupStepName">World</span></button>
+                <button data-setup-step="3" type="button"><span class="setupStepNum">4</span><span class="setupStepName">People</span></button>
+                <p class="setupStepGroupLabel">System</p>
+                <button data-setup-step="4" type="button"><span class="setupStepNum">5</span><span class="setupStepName">Rules</span></button>
+                <button data-setup-step="5" type="button"><span class="setupStepNum">6</span><span class="setupStepName">Checks</span></button>
+              </div>
+            </div>
           </nav>
 
           <div class="setupSections">
             <section class="setupSection active" data-step="0">
               <header class="sectionHeader">
-                <div>
-                  <h2>Character</h2>
-                  <p>Name and optional starting abilities.</p>
+                <div class="sectionHeaderNav" data-setup-step-nav-host></div>
+                <div class="sectionHeaderText">
+                  <h2 class="sectionHeaderTitle">Identity</h2>
+                  <p>Who you are on paper — name, look, and story roots.</p>
                 </div>
-                <button class="secondaryButton" data-randomize-group="character" type="button">Randomize Character</button>
+                <button class="secondaryButton sectionHeaderAction" data-randomize-group="character" type="button">Randomize Identity</button>
               </header>
-              <aside class="visionCard" id="characterPortraitCard" aria-label="Character portrait">
-                <h3>Portrait</h3>
-                <div class="portraitFrame">
-                  <span class="visionBadge">8-bit</span>
-                  <div class="visionPlaceholder">
-                    <strong>Coming online</strong>
-                    Trait-driven portrait will grow here as the character develops.
+              <aside class="characterArtCard isCollapsed" id="characterPortraitCard" aria-label="Character art">
+                <div class="characterArtHead">
+                  <button type="button" class="characterArtToggle" id="setupArtCollapseBtn" aria-expanded="false" aria-controls="setupArtBody" title="Show or hide character art tools">
+                    <span class="characterArtTitle">Character art</span>
+                    <span class="characterArtToggleMeta" id="setupArtCollapseMeta">Collapsed · optional local Forge images</span>
+                    <span class="characterArtChevron" aria-hidden="true">▸</span>
+                  </button>
+                  <button type="button" class="secondaryButton chipBtn" id="setupArtOpenImageSettings" title="Open LLM Settings → Images (Forge / Comfy paths and installables)">
+                    Set or install ForgeSD
+                  </button>
+                </div>
+                <div class="characterArtBody" id="setupArtBody" hidden>
+                <div class="setupArtGuide" id="setupArtGuide" hidden>
+                  <div class="setupArtGuideHead">
+                    <strong>Character art — what’s what</strong>
+                    <button type="button" class="chipBtn secondaryButton" id="setupArtGuideDismiss" title="Dismiss">Got it</button>
+                  </div>
+                  <ul class="setupArtGuideList">
+                    <li><b>Set or install ForgeSD</b> — connect your local image server (required first).</li>
+                    <li><b>Face / Full body frames</b> — the pictures for this character (drop or generate).</li>
+                    <li><b>Hair / face / clothing fields</b> — identity look tags that feed the image prompt.</li>
+                    <li><b>Generate selected</b> — ask Forge to paint the active Face or Body tab.</li>
+                    <li><b>Studio / Image Library</b> — only after Forge is online: refine gens, browse, pick, delete.</li>
+                  </ul>
+                  <p class="empty setupArtGuideStatus" id="setupArtForgeStatus">ForgeSD: not checked yet.</p>
+                </div>
+                <div class="artBackendTabs" role="tablist" aria-label="Image backend for character art">
+                  <button type="button" class="chipBtn secondaryButton artBackendTab active" data-art-backend="forge" role="tab" aria-selected="true" title="Forge / A1111 API">ForgeSD</button>
+                  <button type="button" class="chipBtn secondaryButton artBackendTab" data-art-backend="comfyui" role="tab" aria-selected="false" title="ComfyUI (less verified)">ComfyUI</button>
+                  <span class="artBackendTabHint muted" id="setupArtBackendHint">Forge catalog · primary path</span>
+                </div>
+                <div class="setupArtLayout">
+                  <div class="setupArtPair">
+                    <div class="portraitFrame artDropZone" data-setup-face data-art-slot="face" draggable="false" title="Drop an image or generate">
+                      <span class="visionBadge">face</span>
+                      <div class="visionPlaceholder">
+                        <strong>Face</strong>
+                        Bust · drop image or generate
+                      </div>
+                    </div>
+                    <div class="portraitFrame portraitFrameTall artDropZone" data-setup-fullbody data-art-slot="fullbody" draggable="false" title="Drop an image or generate">
+                      <span class="visionBadge">body · 3:4</span>
+                      <div class="visionPlaceholder">
+                        <strong>Full body</strong>
+                        Drop image or generate (face ref when available)
+                      </div>
+                    </div>
+                  </div>
+                  <div class="setupArtControls">
+                    <div class="artEngineHeader">
+                      <p class="empty artEngineNote">
+                        <strong>Engine prompts</strong> — simple comma tags, same skeleton for face and body:
+                        subject → setting (location) → pose → hair? → clothes? (≤3 words) → image type → LoRAs last.
+                        Only pose + framing differ. <kbd>Ctrl</kbd>+<kbd>↑</kbd>/<kbd>↓</kbd> weights the tag under the cursor by ±0.1
+                        (works on multi-word tags between commas). Auto update off: only Randomize finish or Rebuild fills these.
+                      </p>
+                      <label class="inlineCheck artAutoUpdateLabel" title="When on, rebuild prompts as identity changes (skips hand-edited fields)">
+                        <input type="checkbox" id="setupArtAutoUpdate" />
+                        <span>Auto update</span>
+                      </label>
+                    </div>
+                    <div class="artPromptTabs" role="tablist" aria-label="Which image prompts to edit">
+                      <button type="button" class="chipBtn secondaryButton artPromptTab active" data-art-prompt-tab="face" role="tab" aria-selected="true">Face</button>
+                      <button type="button" class="chipBtn secondaryButton artPromptTab" data-art-prompt-tab="fullbody" role="tab" aria-selected="false">Full body</button>
+                    </div>
+                    <div class="artPromptPanel open" data-art-prompt-panel="face" role="tabpanel">
+                      <label class="wide">
+                        <span>Face positive</span>
+                        <textarea id="setupArtFacePrompt" class="enginePromptField" rows="4" maxlength="8000" placeholder="Rebuild from identity to fill…" data-engine-prompt="face"></textarea>
+                      </label>
+                      <label class="wide">
+                        <span>Face negative</span>
+                        <textarea id="setupArtFaceNegative" class="enginePromptField" rows="3" maxlength="4000" placeholder="Rebuild from identity to fill…" data-engine-prompt="face_negative"></textarea>
+                      </label>
+                    </div>
+                    <div class="artPromptPanel" data-art-prompt-panel="fullbody" role="tabpanel" hidden>
+                      <label class="wide">
+                        <span>Full-body positive</span>
+                        <textarea id="setupArtBodyPrompt" class="enginePromptField" rows="4" maxlength="8000" placeholder="Rebuild from identity to fill…" data-engine-prompt="fullbody"></textarea>
+                      </label>
+                      <label class="wide">
+                        <span>Full-body negative</span>
+                        <textarea id="setupArtBodyNegative" class="enginePromptField" rows="3" maxlength="4000" placeholder="Rebuild from identity to fill…" data-engine-prompt="fullbody_negative"></textarea>
+                      </label>
+                    </div>
+                    <details class="artExtraDetails">
+                      <summary>Optional: add cues into rebuild (not identity fields)</summary>
+                      <label class="wide">
+                        <span>Extra look notes <em class="muted">(merged on Rebuild)</em></span>
+                        <textarea id="setupArtExtra" name="setup_art_extra" rows="2" maxlength="600" placeholder="e.g. red cloak, scar over left eye…"></textarea>
+                      </label>
+                    </details>
+                    <div class="setupArtControlsRow">
+                      <label class="wide">
+                        <span>Checkpoint</span>
+                        <select id="setupArtCheckpoint" name="setup_art_checkpoint">
+                          <option value="">Default / current</option>
+                        </select>
+                      </label>
+                    </div>
+                    <label class="inlineCheck">
+                      <input type="checkbox" id="setupArtUseFaceRef" checked />
+                      <span>Use the other image as identity ref when it already exists</span>
+                    </label>
+                    <p class="empty" style="margin:4px 0 0;font-size:11px">
+                      Face lock mode &amp; hardware warnings: <strong>LLM Settings → Images → Face lock</strong>
+                      (default Light — extra GPU pass; use Off if your PC struggles).
+                    </p>
+                    <p class="empty" id="portraitArtStatus" hidden></p>
+                    <p class="empty" id="setupArtLockStatus" hidden></p>
+                    <div class="artKindActions">
+                      <button type="button" class="secondaryButton" id="setupArtRebuildBtn" title="Rebuild engine prompts from identity + settings">Rebuild prompts</button>
+                      <button type="button" class="secondaryButton" id="portraitPreviewBtn" data-art-generate title="Generate the selected Face or Full body tab only">Generate selected</button>
+                      <button type="button" class="secondaryButton" id="setupArtLockTestBtn" title="Probe Forge InstantID / FaceID / ReActor">Test face-lock</button>
+                      <button type="button" class="secondaryButton" id="openImageStudioBtn" data-requires-forge-image data-open-image-studio title="Image Studio (after Forge is connected)">Studio…</button>
+                      <button type="button" class="secondaryButton" id="openImageBrowserBtn" data-requires-forge-image data-open-image-browser title="Image Library (after Forge is connected)">Image Library ⧉</button>
+                      <button type="button" class="secondaryButton chipBtn" id="setupArtGuideShow" title="Show what’s what">?</button>
+                    </div>
+                    <p class="empty artDropHint" id="setupArtForgeGateHint">
+                      Connect ForgeSD via <strong>Set or install ForgeSD</strong> first. Studio and Image Library unlock when the API is online.
+                      You can still drop existing images onto the frames anytime.
+                    </p>
                   </div>
                 </div>
-                <p>Generated from name, title, backstory, and play events. Starts simple; can be stepped up later.</p>
-                <div class="visionActions">
-                  <button type="button" class="secondaryButton" id="portraitPreviewBtn" disabled title="Enable Forge or ComfyUI under LLM Settings → Image backend">Preview</button>
-                  <button type="button" class="secondaryButton" id="portraitQualityBtn" disabled title="Quality presets: 8-bit style prompt vs hi-res (later)">Quality</button>
+
+                <details class="artLoraDropdown" id="setupArtLoraDropdown">
+                  <summary class="artLoraSummary">
+                    <span class="artLoraSummaryTitle">LoRAs</span>
+                    <span class="artLoraSummaryMeta" id="setupArtLoraSummary">None selected · click to browse</span>
+                    <span class="artLoraSummaryChevron" aria-hidden="true">▾</span>
+                  </summary>
+                  <div class="artLoraDropdownBody">
+                    <div class="artLoraToolbar">
+                      <input id="setupArtLoraFilter" type="search" placeholder="Filter LoRAs…" autocomplete="off" aria-label="Filter LoRAs" />
+                      <span class="muted artLoraHint" id="setupArtLoraHint">Forge style — check to enable, set weight like A1111</span>
+                    </div>
+                    <div id="setupArtLoraList" class="loraPickList" role="group" aria-label="LoRA selection"></div>
+                  </div>
+                </details>
                 </div>
               </aside>
               <div class="setupGrid">
@@ -232,6 +567,26 @@
                     <option value="varies by form">Varies by form</option>
                     <option value="custom">Custom</option>
                   </select>
+                </label>
+
+                <label class="wide">
+                  <span>Hair</span>
+                  <input name="hair" value="" maxlength="120" placeholder="e.g. short brown hair, long silver braid, messy black hair" />
+                </label>
+
+                <label class="wide">
+                  <span>Facial features</span>
+                  <textarea name="facial_features" rows="2" maxlength="300" placeholder="Face for portraits: green eyes, freckles, thin scar on cheek, soft jaw… (not clothes)."></textarea>
+                </label>
+
+                <label class="wide">
+                  <span>Clothing / look</span>
+                  <textarea name="appearance" rows="2" maxlength="400" placeholder="Clothes by body zone for art crops. e.g. torso: travel coat; feet: dusty boots — portraits skip feet/legs."></textarea>
+                </label>
+
+                <label class="wide">
+                  <span>Starter Equipment</span>
+                  <textarea name="starter_equipment" rows="2" maxlength="500" placeholder="Comma-separated items, e.g. worn coat, coiled rope, pocket knife, dusty boots, 3 days rations. Only body-visible zones enter each art frame."></textarea>
                 </label>
 
                 <label>
@@ -288,12 +643,22 @@
                 <span>Backstory</span>
                 <textarea name="character_backstory" rows="4" maxlength="1600" placeholder="Optional: birthplace or original world, family/upbringing, former work or role, how they lived before the RPG starts, and any death/reincarnation details if relevant."></textarea>
               </label>
+            </section>
 
+            <section class="setupSection" data-step="1">
+              <header class="sectionHeader">
+                <div class="sectionHeaderNav" data-setup-step-nav-host></div>
+                <div class="sectionHeaderText">
+                  <h2 class="sectionHeaderTitle">Powers</h2>
+                  <p>Optional starting abilities. Base text is locked once play begins.</p>
+                </div>
+                <button class="secondaryButton sectionHeaderAction" data-randomize-group="powers" type="button">Randomize Powers</button>
+              </header>
               <section id="abilityOptions" class="abilityBuilder">
                 <header class="subsectionHeader">
                   <div>
                     <h2>Special Abilities</h2>
-                    <p>Add none, one, or several starting abilities. Base descriptions are locked once the game starts; the model may only add discovered details later.</p>
+                    <p>Add none, one, or several. The model may discover details later, but should not rewrite these foundations.</p>
                   </div>
                   <div class="subsectionActions">
                     <button id="randomAbilityButton" class="secondaryButton" type="button">Randomize Abilities</button>
@@ -310,16 +675,16 @@
                 </fieldset>
                 <div id="abilityList" class="abilityList"></div>
               </section>
-
             </section>
 
-            <section class="setupSection" data-step="1">
+            <section class="setupSection" data-step="2">
               <header class="sectionHeader">
-                <div>
-                  <h2>World</h2>
-                  <p>The genre, opening place, tone, and physical rules of the setting.</p>
+                <div class="sectionHeaderNav" data-setup-step-nav-host></div>
+                <div class="sectionHeaderText">
+                  <h2 class="sectionHeaderTitle">World</h2>
+                  <p>Genre, map, opening place, tone, and physical rules of the setting.</p>
                 </div>
-                <button class="secondaryButton" data-randomize-group="world" type="button">Randomize World</button>
+                <button class="secondaryButton sectionHeaderAction" data-randomize-group="world" type="button">Randomize World</button>
               </header>
               <aside class="visionCard worldMapCard" id="worldMapCard" aria-label="World map">
                 <h3>World map</h3>
@@ -339,12 +704,11 @@
                 </div>
                 <div class="mapFrame" id="mapFrame">
                   <span class="visionBadge">flat · 2 elevations</span>
-                  <pre class="mapAscii" id="mapAscii">Pick a preset and generate.
-Mountains are multi-tile blobs on elevation 1.
-Water / void block travel. States drive art.</pre>
+                  <canvas id="mapCanvas" class="mapCanvas" width="320" height="200" aria-label="Color map preview"></canvas>
+                  <pre class="mapAscii" id="mapAscii">Loading map…</pre>
                 </div>
                 <div class="mapMeta" id="mapMeta">
-                  <p>States are abstract tags (city, waterfall, monolith…). Art is pulled at random from your tile archive — generate or upload more anytime.</p>
+                  <p>Color blocks = terrain. Red = you. Generate a board, then use Tile library for art later.</p>
                 </div>
               </aside>
               <div id="tileLibraryPanel" class="tileLibraryPanel hidden" aria-label="Tile image library">
@@ -478,13 +842,14 @@ Water / void block travel. States drive art.</pre>
               </label>
             </section>
 
-            <section class="setupSection" data-step="2">
+            <section class="setupSection" data-step="3">
               <header class="sectionHeader">
-                <div>
-                  <h2>People</h2>
+                <div class="sectionHeaderNav" data-setup-step-nav-host></div>
+                <div class="sectionHeaderText">
+                  <h2 class="sectionHeaderTitle">People</h2>
                   <p>How dense the social world is, and what kind of conflicts drive it.</p>
                 </div>
-                <button class="secondaryButton" data-randomize-group="people" type="button">Randomize People</button>
+                <button class="secondaryButton sectionHeaderAction" data-randomize-group="people" type="button">Randomize People</button>
               </header>
               <div class="setupGrid">
                 <label>
@@ -552,13 +917,14 @@ Water / void block travel. States drive art.</pre>
               </div>
             </section>
 
-            <section class="setupSection" data-step="3">
+            <section class="setupSection" data-step="4">
               <header class="sectionHeader">
-                <div>
-                  <h2>Rules</h2>
+                <div class="sectionHeaderNav" data-setup-step-nav-host></div>
+                <div class="sectionHeaderText">
+                  <h2 class="sectionHeaderTitle">Rules</h2>
                   <p>Risk level, progression systems, and game-like interfaces inside the world.</p>
                 </div>
-                <button class="secondaryButton" data-randomize-group="rules" type="button">Randomize Rules</button>
+                <button class="secondaryButton sectionHeaderAction" data-randomize-group="rules" type="button">Randomize Rules</button>
               </header>
               <div class="setupGrid">
                 <label>
@@ -653,7 +1019,7 @@ Water / void block travel. States drive art.</pre>
 
                 <label>
                   <span>Custom Proficiencies</span>
-                  <textarea name="custom_skills" rows="2" maxlength="800" placeholder="Comma-separated: lockpicking, first aid, urban navigation. Use commas between each proficiency or rule phrase."></textarea>
+                  <textarea name="custom_skills" rows="3" maxlength="1200" placeholder="Comma-separated skill rules &amp; names. For one-skill runs: seed skill, tracking style, hard limits. Put XP/rank formulas on the ability Growth Math box."></textarea>
                 </label>
 
                 <label>
@@ -746,13 +1112,14 @@ Water / void block travel. States drive art.</pre>
               </div>
             </section>
 
-            <section class="setupSection" data-step="4">
+            <section class="setupSection" data-step="5">
               <header class="sectionHeader">
-                <div>
-                  <h2>Checks &amp; Dice</h2>
+                <div class="sectionHeaderNav" data-setup-step-nav-host></div>
+                <div class="sectionHeaderText">
+                  <h2 class="sectionHeaderTitle">Checks &amp; Dice</h2>
                   <p>Optional dice rolls for speech, strength, lore, events, and encounters. Specialized skills can still yield partial info when attributes are low.</p>
                 </div>
-                <button class="secondaryButton" data-randomize-group="checks" type="button">Randomize Checks</button>
+                <button class="secondaryButton sectionHeaderAction" data-randomize-group="checks" type="button">Randomize Checks</button>
               </header>
               <div class="setupGrid">
                 <fieldset class="toggleSet wide">
@@ -820,6 +1187,47 @@ Water / void block travel. States drive art.</pre>
                   <label><input type="radio" name="show_rolls_in_ui" value="false" /> Off</label>
                 </fieldset>
 
+                <fieldset class="toggleSet">
+                  <legend>Contested vs enemy/object power</legend>
+                  <label><input type="radio" name="contested_checks" value="true" checked /> On</label>
+                  <label><input type="radio" name="contested_checks" value="false" /> Off</label>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Power RNG (how strong something feels)</legend>
+                  <label><input type="radio" name="power_rng" value="true" checked /> On</label>
+                  <label><input type="radio" name="power_rng" value="false" /> Off</label>
+                </fieldset>
+
+                <label>
+                  <span>Power variance</span>
+                  <input name="power_variance" type="number" min="0" max="10" value="3" />
+                </label>
+
+                <fieldset class="toggleSet">
+                  <legend>Unskilled mishaps (self-harm risk)</legend>
+                  <label><input type="radio" name="unskilled_mishaps" value="true" checked /> On</label>
+                  <label><input type="radio" name="unskilled_mishaps" value="false" /> Off</label>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Severe mishap on crit fail</legend>
+                  <label><input type="radio" name="severe_mishap_on_crit_fail" value="true" checked /> On</label>
+                  <label><input type="radio" name="severe_mishap_on_crit_fail" value="false" /> Off</label>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Auto-check risky actions</legend>
+                  <label><input type="radio" name="auto_check_on_risky_actions" value="true" checked /> On</label>
+                  <label><input type="radio" name="auto_check_on_risky_actions" value="false" /> Off</label>
+                </fieldset>
+
+                <fieldset class="toggleSet">
+                  <legend>Degree flavor (“just barely…”)</legend>
+                  <label><input type="radio" name="degree_flavor" value="true" checked /> On</label>
+                  <label><input type="radio" name="degree_flavor" value="false" /> Off</label>
+                </fieldset>
+
                 <label>
                   <span>Attr floor for partial salvage</span>
                   <input name="attribute_floor_for_partial" type="number" min="1" max="20" value="6" />
@@ -828,6 +1236,11 @@ Water / void block travel. States drive art.</pre>
                 <label>
                   <span>Min skill rank for partial</span>
                   <input name="specialized_skill_partial_threshold" type="number" min="1" max="20" value="2" />
+                </label>
+
+                <label>
+                  <span>Unskilled if rank below</span>
+                  <input name="unskilled_rank_threshold" type="number" min="0" max="10" value="1" />
                 </label>
 
                 <label class="wide">
@@ -882,15 +1295,24 @@ Water / void block travel. States drive art.</pre>
             </section>
           </div>
 
-          <footer class="setupFooter">
-            <button id="setupPrev" class="secondaryButton" type="button">Back</button>
-            <div class="stepStatus" id="setupStepStatus">Step 1 of 5</div>
-            <button id="setupNext" type="button">Next</button>
-          </footer>
+          <div class="setupDirectorBar" aria-label="Director presets and step navigation">
+            <div class="directorPresetsRow">
+              <button id="setupPrev" class="secondaryButton chipBtn" type="button">Back</button>
+              <span class="muted directorPresetsLabel">Director seeds</span>
+              <div id="directorPresets" class="directorPresets"></div>
+              <div class="setupDirectorNav">
+                <div class="stepStatus" id="setupStepStatus">Step 1 of 6</div>
+                <button id="setupNext" type="button">Next</button>
+                <button id="setupStartMobile" class="setupStartMobile" type="submit" form="setupForm">Start</button>
+              </div>
+            </div>
+            <div id="setupIntentSummary" class="setupIntentSummary" hidden></div>
+          </div>
+          <footer class="setupFooter setupFooterSlim" aria-hidden="true" hidden></footer>
         </form>
       </section>
 
-      <div id="modelModal" class="modalBackdrop" role="dialog" aria-modal="true" aria-labelledby="modelModalTitle">
+      <div id="modelModal" class="modalBackdrop hidden" role="dialog" aria-modal="true" aria-labelledby="modelModalTitle">
         <section class="modalPanel">
           <header class="modalHeader">
             <div>
@@ -969,84 +1391,282 @@ Water / void block travel. States drive art.</pre>
         </section>
       </div>
 
-      <section id="gameView" class="gameView hidden">
-        <section class="playPane">
-          <header class="topbar">
-            <div>
-              <h1>Mørkyn</h1>
-              <p id="locationLine">Loading</p>
-            </div>
-            <div class="topActions">
-              <button id="newGameButton" type="button">New</button>
-              <button id="regenerateButton" type="button">Regenerate</button>
-              <button id="rewindButton" type="button">Rewind</button>
-              <button id="exportButton" type="button">Export</button>
-              <button id="importButton" type="button">Import</button>
-              <button id="saveSlotButton" type="button" title="Save named campaign slot">Save Slot</button>
-              <button id="loadSlotButton" type="button" title="Load named campaign slot">Load Slot</button>
-              <button id="compactModeButton" type="button" title="Toggle compact UI">Compact</button>
-              <button id="modelButton" type="button">LLM</button>
-              <button id="playPrivacyButton" type="button" title="Privacy policy">Privacy</button>
-              <button id="playUpdatesButton" type="button" title="Updates and rollback">Updates</button>
-              <button id="refreshButton" type="button">Refresh</button>
-              <input id="importFile" class="hidden" type="file" accept="application/json,.json" />
-            </div>
-          </header>
+      <section id="gameView" class="gameView mapPrimary hidden">
+        <header class="topbar topbarCompact">
+          <div class="topbarBrand">
+            <h1 class="neonTitle">Mørkyn</h1>
+            <p id="locationLine">Loading</p>
+            <p id="travelStatusLine" class="travelStatusLine">Travel: …</p>
+          </div>
+          <div class="topActions topActionsCompact">
+            <button id="openMapOverlayBtn" type="button" class="chipBtn" title="Expand map tools">Map+</button>
+            <button id="newGameButton" type="button" class="chipBtn">New</button>
+            <button id="regenerateButton" type="button" class="chipBtn">Regen</button>
+            <button id="rewindButton" type="button" class="chipBtn">Rewind</button>
+            <button id="exportButton" type="button" class="chipBtn">Export</button>
+            <button id="importButton" type="button" class="chipBtn">Import</button>
+            <button id="saveSlotButton" type="button" class="chipBtn" title="Save campaign slot">Save</button>
+            <button id="loadSlotButton" type="button" class="chipBtn" title="Load campaign slot">Load</button>
+            <button id="compactModeButton" type="button" class="chipBtn" title="Compact UI">Compact</button>
+            <button id="resetPlayLayoutBtn" type="button" class="chipBtn" title="Reset custom panel layout (drag headers to reorder, drag edges to resize)">Layout</button>
+            <button id="modelButton" type="button" class="chipBtn">LLM</button>
+            <button id="playUpdatesButton" type="button" class="chipBtn" title="Updates">Upd</button>
+            <button id="refreshButton" type="button" class="chipBtn">↻</button>
+            <input id="importFile" class="hidden" type="file" accept="application/json,.json" />
+          </div>
+        </header>
 
-          <article class="currentTurn">
-            <div class="turnBlock">
-              <h2>Input</h2>
+        <div class="playGrid" id="playGrid">
+          <!-- Left: chat / scene -->
+          <section class="chatColumn playPanel" id="chatColumn" data-play-panel="chat" aria-label="Scene chat">
+            <div class="chatColumnHeader playPanelHeader" data-play-drag="chat" title="Drag to reorder panels">
+              <span class="playDragGrip" aria-hidden="true">⋮⋮</span>
+              <strong>Scene</strong>
+              <span class="chatIdleHint" id="chatIdleHint">Map is main while idle</span>
+              <button type="button" class="chipBtn secondaryButton" id="sceneFocusMapBtn" title="Make map the main view">Map</button>
+            </div>
+            <div class="turnBlock chatInputBlock">
+              <h2>Last input</h2>
               <div id="latestInput" class="singleBox mutedBox"></div>
             </div>
-            <div class="turnBlock outputBlock">
-              <h2>Output</h2>
-              <div id="latestOutput" class="singleBox"></div>
+            <div class="turnBlock outputBlock chatOutputBlock">
+              <h2>Narration</h2>
+              <div id="chatThinkingBanner" class="chatThinkingBanner hidden" role="status" aria-live="polite" hidden>
+                <div class="chatThinkingBrand" aria-hidden="true">
+                  <img class="chatThinkingLogo" src="/media/morkyn-logo.png" alt="" width="36" height="36" onerror="this.style.display='none'" />
+                  <div class="chatThinkingPulse"><span></span><span></span><span></span></div>
+                </div>
+                <div class="chatThinkingCopy">
+                  <strong id="chatThinkingTitle">Model is thinking…</strong>
+                  <p id="chatThinkingText">Local LLM is generating a reply. The interface is fine — please wait.</p>
+                  <p id="chatThinkingElapsed" class="chatThinkingElapsed">Elapsed 0:00</p>
+                </div>
+              </div>
+              <div id="latestOutput" class="singleBox sceneBox"></div>
             </div>
-          </article>
+            <form id="turnForm" class="composer chatComposer">
+              <textarea id="turnInput" placeholder="What do you do?" rows="2" maxlength="2000"></textarea>
+              <div class="composerActions">
+                <button id="sendButton" type="submit">Send</button>
+                <button id="continueButton" class="secondaryButton chipBtn" type="button">…</button>
+                <button id="suggestButton" class="secondaryButton chipBtn" type="button">Ideas</button>
+              </div>
+              <div id="suggestionPanel" class="suggestionPanel hidden" aria-live="polite">
+                <div id="suggestionList" class="suggestionList"></div>
+                <div class="suggestionRegenRow">
+                  <input id="suggestionInstruction" maxlength="500" placeholder="Regen instructions…" />
+                  <button id="regenSuggestionsButton" class="secondaryButton chipBtn" type="button">regen</button>
+                </div>
+              </div>
+            </form>
+          </section>
 
-          <form id="turnForm" class="composer">
-            <textarea id="turnInput" placeholder="What do you do?" rows="3" maxlength="2000"></textarea>
-            <div class="composerActions">
-              <button id="sendButton" type="submit">Continue</button>
-              <button id="continueButton" class="secondaryButton" type="button">Continue</button>
-              <button id="suggestButton" class="secondaryButton" type="button">Suggest</button>
+          <!-- Center: map is the main view when idle -->
+          <section class="mapMain playPanel" id="mapMain" data-play-panel="map" aria-label="World map">
+            <header class="mapMainHeader playPanelHeader" data-play-drag="map" title="Drag to reorder panels">
+              <div class="mapMainHeaderTitle">
+                <span class="playDragGrip" aria-hidden="true">⋮⋮</span>
+                <h2>Map</h2>
+                <span id="playMapMeta" class="playMapMeta">No map yet</span>
+              </div>
+              <div class="mapMainHeaderActions">
+                <button type="button" class="chipBtn secondaryButton" id="sideOpenMapBtn">Details</button>
+                <button type="button" class="chipBtn secondaryButton" id="mapFocusChatBtn" title="Make narration the main view">Scene</button>
+              </div>
+            </header>
+            <div class="mapMainStage">
+              <canvas id="playMapCanvas" class="mapCanvas playMapCanvas mapMainCanvas" width="480" height="480" aria-label="Main map"></canvas>
+              <div id="mapHoverTip" class="mapHoverTip hidden"></div>
             </div>
-            <div id="suggestionPanel" class="suggestionPanel hidden" aria-live="polite">
-              <div id="suggestionList" class="suggestionList"></div>
-              <div class="suggestionRegenRow">
-                <input id="suggestionInstruction" maxlength="500" placeholder="(Optional) Idea regen instructions." />
-                <button id="regenSuggestionsButton" class="secondaryButton" type="button">regen</button>
+            <div class="mapMainFooter">
+              <div class="mapAvatarTools">
+                <label class="mapTilePx">
+                  <span>Tile</span>
+                  <select id="mapTilePxSelect" aria-label="Tile pixel size">
+                    <option value="16">16</option>
+                    <option value="32" selected>32</option>
+                  </select>
+                </label>
+                <div class="mapAvatarPreviewWrap" title="Map head token">
+                  <img id="mapAvatarPreview" class="mapAvatarPreview hidden" alt="Map head" />
+                  <span id="mapAvatarPlaceholder" class="mapAvatarPlaceholder">Head</span>
+                </div>
+                <button type="button" class="secondaryButton chipBtn" id="mapAvatarFromPortrait">Portrait head</button>
+                <label class="secondaryButton chipBtn mapUploadLabel">
+                  Upload
+                  <input id="mapAvatarUpload" type="file" accept="image/*" class="hidden" />
+                </label>
+                <button type="button" class="secondaryButton chipBtn" id="mapAvatarClear">Clear</button>
+              </div>
+              <p id="mapTravelBanner" class="mapTravelBanner">Travel locked</p>
+            </div>
+            <!-- Compact settlement strip (also in map details overlay) -->
+            <div class="mapSettlementStrip">
+              <div id="settlementList" class="settlementList settlementListHorizontal"></div>
+              <div id="settlementDetail" class="settlementDetail hidden">
+                <header>
+                  <strong id="settlementDetailName">—</strong>
+                  <button type="button" class="secondaryButton chipBtn" id="settlementDetailClose">×</button>
+                </header>
+                <p id="settlementDetailMeta"></p>
+                <p id="settlementDetailSummary"></p>
+                <button type="button" id="settlementWalkBtn" class="secondaryButton chipBtn">Walk here</button>
               </div>
             </div>
-          </form>
+          </section>
+
+          <!-- Present NPCs — independent from tabs -->
+          <aside class="presentPanel playPanel" id="presentPanel" data-play-panel="present" aria-label="Present NPCs">
+            <aside class="npcStage npcStageTop" id="npcStage" aria-label="Active NPCs">
+              <header class="npcStageHeader playPanelHeader" data-play-drag="present" title="Drag to reorder panels">
+                <span class="playDragGrip" aria-hidden="true">⋮⋮</span>
+                <strong>Present</strong>
+                <select id="npcStageSelect" aria-label="Select NPC"></select>
+              </header>
+              <div class="npcPortraitFrame" id="npcPortraitFrame">
+                <div class="npcPortraitPlaceholder">
+                  <span>No one in focus</span>
+                </div>
+              </div>
+              <div class="npcStageMeta">
+                <strong id="npcStageName">—</strong>
+                <p id="npcStageRole"></p>
+                <p id="npcStageSummary" class="npcStageSummary"></p>
+              </div>
+              <div class="npcStageActions">
+                <button type="button" class="secondaryButton chipBtn" id="npcPortraitBtn">Art</button>
+                <button type="button" class="secondaryButton chipBtn" id="npcTalkBtn">Talk</button>
+                <button type="button" class="secondaryButton chipBtn" id="npcRosterBtn">All</button>
+              </div>
+            </aside>
+          </aside>
+
+          <!-- Index tabs (Player / Inv / …) — separate from Present -->
+          <section class="tabsPanel playPanel" id="tabsPanel" data-play-panel="tabs" aria-label="Character and world tabs">
+            <header class="tabsPanelHeader playPanelHeader" data-play-drag="tabs" title="Drag to reorder panels">
+              <span class="playDragGrip" aria-hidden="true">⋮⋮</span>
+              <strong>Tabs</strong>
+              <span class="tabsPanelHint">⧉ float · hover expands</span>
+            </header>
+            <div class="indexPane indexPaneCompact indexPaneCategorized">
+              <aside class="tabCategoryRail" id="tabCategoryRail" aria-label="Tab categories">
+                <div class="tabCategoryRailTop">
+                  <button type="button" class="chipBtn secondaryButton" id="tabNavModeToggle" title="Switch between side categories and dropdown">Side</button>
+                </div>
+                <label class="tabCategoryJump">
+                  <span class="srOnly">Category</span>
+                  <select id="tabCategorySelect" aria-label="Tab category">
+                    <option value="you">You</option>
+                    <option value="world">World</option>
+                    <option value="people">People</option>
+                    <option value="tools">Tools</option>
+                  </select>
+                </label>
+                <nav class="tabCategoryList" id="tabCategoryList">
+                  <button type="button" class="tabCategoryBtn active" data-tab-category="you"><span>You</span><small>Self</small></button>
+                  <button type="button" class="tabCategoryBtn" data-tab-category="world"><span>World</span><small>Lore</small></button>
+                  <button type="button" class="tabCategoryBtn" data-tab-category="people"><span>People</span><small>Social</small></button>
+                  <button type="button" class="tabCategoryBtn" data-tab-category="tools"><span>Tools</span><small>Meta</small></button>
+                </nav>
+              </aside>
+              <div class="tabMainColumn">
+                <header class="tabs tabsCompact tabsCategorized" id="indexTabs">
+                  <!-- Filled by JS from TAB_CATEGORIES -->
+                </header>
+                <div id="indexContent" class="indexContent"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- History — independent panel -->
+          <section class="historyPanel playPanel" id="historyPanel" data-play-panel="history" aria-label="Turn history">
+            <header class="historyPanelHeader playPanelHeader" data-play-drag="history" title="Drag to reorder panels">
+              <span class="playDragGrip" aria-hidden="true">⋮⋮</span>
+              <strong>History</strong>
+            </header>
+            <div class="historyPane historyPaneCompact">
+              <div id="history" class="historyList"></div>
+            </div>
+          </section>
+        </div>
+        <p id="playLayoutHint" class="playLayoutHint hidden" role="status">
+          <span id="playLayoutHintText">Custom layout — drag ⋮⋮ onto top/bottom to stack, left/right to place beside.</span>
+          <button type="button" class="chipBtn secondaryButton" id="playLayoutHintReset">Reset layout</button>
+        </p>
+
+        <!-- In-page floating / collapsible tab windows -->
+        <div id="floatLayer" class="floatLayer" aria-label="Floating tab windows"></div>
+        <div id="floatDock" class="floatDock" aria-label="Collapsed float windows dock"></div>
+
+        <!-- Optional expanded map tools overlay -->
+        <section id="mapOverlay" class="mapOverlay hidden" aria-label="Full map tools" aria-hidden="true">
+          <header class="mapOverlayHeader">
+            <div>
+              <h2>World map</h2>
+              <p id="mapOverlaySub">Fog of war · settlements · walk when travel is open. × returns to the main map view.</p>
+            </div>
+            <button type="button" id="closeMapOverlayBtn" class="mapCloseBtn" title="Close" aria-label="Close">×</button>
+          </header>
+          <div class="mapOverlayBody">
+            <div class="mapOverlayCanvasWrap">
+              <canvas id="fullMapCanvas" class="fullMapCanvas" width="640" height="400" aria-label="Full map"></canvas>
+            </div>
+            <aside class="mapOverlaySide">
+              <p class="empty">Tip: float Inventory / Player with ⧉ so they stay over the map on one monitor.</p>
+            </aside>
+          </div>
         </section>
-
-        <aside class="sidePane">
-          <section class="historyPane">
-            <header>
-              <h2>History</h2>
-            </header>
-            <div id="history" class="historyList"></div>
-          </section>
-
-          <section class="indexPane">
-            <header class="tabs" id="indexTabs">
-              <button data-tab="player" class="active" type="button">Player</button>
-              <button data-tab="inventory" type="button">Inventory</button>
-              <button data-tab="bible" type="button">Bible</button>
-              <button data-tab="search" type="button">Search</button>
-              <button data-tab="model" type="button">Model</button>
-              <button data-tab="npcs" type="button">NPCs</button>
-              <button data-tab="items" type="button">Items</button>
-              <button data-tab="places" type="button">Places</button>
-              <button data-tab="events" type="button">Events</button>
-              <button data-tab="talk" type="button">Talk</button>
-              <button data-tab="drafts" type="button">Checks</button>
-            </header>
-            <div id="indexContent" class="indexContent"></div>
-          </section>
-        </aside>
       </section>
+
+      <div id="npcRosterModal" class="modalBackdrop hidden" role="dialog" aria-modal="true" aria-labelledby="npcRosterTitle">
+        <section class="modalPanel npcRosterPanel">
+          <header class="modalHeader">
+            <div>
+              <h2 id="npcRosterTitle">Characters here</h2>
+              <p>Switch focus or generate a portrait.</p>
+            </div>
+            <button id="closeNpcRoster" class="secondaryButton" type="button">Close</button>
+          </header>
+          <div id="npcRosterList" class="npcRosterList"></div>
+        </section>
+      </div>
+
+      <!-- Campaign save browser (Load / Save) -->
+      <div id="saveBrowserModal" class="modalBackdrop hidden" role="dialog" aria-modal="true" aria-labelledby="saveBrowserTitle">
+        <section class="modalPanel saveBrowserPanel">
+          <header class="modalHeader">
+            <div>
+              <h2 id="saveBrowserTitle">Load game</h2>
+              <p id="saveBrowserSubtitle">Choose a character, then a save.</p>
+            </div>
+            <div class="saveBrowserHeaderActions">
+              <button type="button" class="secondaryButton chipBtn hidden" id="saveBrowserBack">← Characters</button>
+              <button id="closeSaveBrowser" class="secondaryButton" type="button">Close</button>
+            </div>
+          </header>
+          <div id="saveBrowserBody" class="saveBrowserBody">
+            <p class="empty" id="saveBrowserEmpty">Loading saves…</p>
+            <div id="saveBrowserList" class="saveBrowserList" hidden></div>
+            <nav id="saveBrowserPager" class="saveBrowserPager hidden" aria-label="Save pages">
+              <button type="button" class="secondaryButton chipBtn" id="saveBrowserPagePrev" data-save-page="prev">Prev</button>
+              <span id="saveBrowserPageLabel">Page 1 / 1</span>
+              <button type="button" class="secondaryButton chipBtn" id="saveBrowserPageNext" data-save-page="next">Next</button>
+              <label class="saveBrowserPageJump">
+                <span>Go</span>
+                <input id="saveBrowserPageInput" type="number" min="1" step="1" value="1" aria-label="Page number" />
+              </label>
+            </nav>
+          </div>
+          <footer class="saveBrowserFooter" id="saveBrowserFooter" hidden>
+            <label class="saveBrowserNameField">
+              <span>Slot name</span>
+              <input id="saveBrowserNameInput" type="text" maxlength="64" placeholder="e.g. main, chapter-2" autocomplete="off" />
+            </label>
+            <button type="button" class="mainMenuPrimary" id="saveBrowserConfirmSave">Save here</button>
+          </footer>
+          <p id="saveBrowserStatus" class="saveBrowserStatus" role="status"></p>
+        </section>
+      </div>
 
       <div id="entityMenu" class="entityMenu hidden" role="dialog" aria-modal="false">
         <header>
@@ -1065,14 +1685,17 @@ Water / void block travel. States drive art.</pre>
           </form>
         </div>
       </div>
+
+      <!-- Global float host (setup + play): free move / collapse / pin / resize -->
+      <div id="globalFloatLayer" class="floatLayer floatLayerGlobal" aria-label="Floating panels"></div>
     </main>
 
     <div id="legalModal" class="modalBackdrop hidden" role="dialog" aria-modal="true" aria-labelledby="legalModalTitle">
       <section class="modalPanel legalModalPanel">
         <header class="modalHeader">
           <div>
-            <h2 id="legalModalTitle">Privacy</h2>
-            <p id="legalModalSubtitle">Local-first. No tracking.</p>
+            <h2 id="legalModalTitle">Updates</h2>
+            <p id="legalModalSubtitle">Only contacts GitHub when you ask.</p>
           </div>
           <button id="closeLegalModal" class="secondaryButton" type="button">Close</button>
         </header>
@@ -1080,7 +1703,7 @@ Water / void block travel. States drive art.</pre>
       </section>
     </div>
 
-    <script src="/static/app.js?v=v0-8-7"></script>
+    <script src="/static/app.js?v=v0-9-43"></script>
     <script>
       // Fallback if app.js 404s without setting boot flag — already handled by timeout above.
     </script>

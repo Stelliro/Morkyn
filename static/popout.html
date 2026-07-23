@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mørkyn — Popout</title>
+    <link rel="stylesheet" href="/static/styles.css?v=v0-9-0" />
+    <style>
+      html, body { min-height: 100%; }
+      body.popoutBody {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(900px 420px at 10% -10%, var(--neon-2-dim), transparent 55%),
+          radial-gradient(700px 360px at 100% 0%, var(--neon-dim), transparent 50%),
+          var(--bg);
+      }
+      .popoutShell {
+        max-width: 920px;
+        margin: 0 auto;
+        padding: 18px 18px 28px;
+        display: grid;
+        gap: 14px;
+      }
+      .popoutHeader {
+        display: flex;
+        justify-content: space-between;
+        align-items: start;
+        gap: 12px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid color-mix(in srgb, var(--neon) 28%, var(--line));
+      }
+      .popoutHeader h1 {
+        margin: 0;
+        font-size: 1.35rem;
+        letter-spacing: 0.04em;
+        color: var(--neon);
+        text-shadow: 0 0 16px var(--neon-dim);
+      }
+      .popoutHeader p {
+        margin: 4px 0 0;
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      .popoutBodyContent {
+        display: grid;
+        gap: 12px;
+      }
+      .popoutBodyContent .statGrid {
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+      }
+      .popoutBodyContent .card,
+      .popoutBodyContent article {
+        border: 1px solid color-mix(in srgb, var(--neon-2) 18%, var(--line));
+        box-shadow: 0 0 18px rgba(0,0,0,0.2);
+      }
+      .popoutStatus {
+        font-size: 0.78rem;
+        color: var(--muted);
+      }
+      .popoutStatus.live { color: var(--neon-2); }
+    </style>
+  </head>
+  <body class="popoutBody">
+    <div class="popoutShell">
+      <header class="popoutHeader">
+        <div>
+          <h1 id="popoutTitle">Panel</h1>
+          <p id="popoutSub">Detached reference window</p>
+        </div>
+        <div>
+          <span id="popoutLive" class="popoutStatus">Connecting…</span>
+          <button type="button" class="secondaryButton" id="popoutRefresh">Refresh</button>
+          <button type="button" class="secondaryButton" id="popoutClose">Close</button>
+        </div>
+      </header>
+      <main id="popoutContent" class="popoutBodyContent">
+        <p class="empty">Loading…</p>
+      </main>
+    </div>
+    <script>
+      (function () {
+        const params = new URLSearchParams(location.search);
+        const tab = (params.get("tab") || "player").toLowerCase();
+        const titles = {
+          player: "Player",
+          inventory: "Inventory",
+          bible: "World Bible",
+          search: "Search",
+          model: "Model",
+          npcs: "NPCs",
+          items: "Items",
+          places: "Places",
+          events: "Events",
+          talk: "Talk",
+          drafts: "Checks",
+        };
+        document.title = "Mørkyn — " + (titles[tab] || tab);
+        document.getElementById("popoutTitle").textContent = titles[tab] || tab;
+        document.getElementById("popoutSub").textContent = "Popped out · stays in sync with the main window when possible";
+
+        const content = document.getElementById("popoutContent");
+        const live = document.getElementById("popoutLive");
+        let lastHtml = "";
+
+        function setLive(text, ok) {
+          live.textContent = text;
+          live.classList.toggle("live", Boolean(ok));
+        }
+
+        function applyTheme(theme) {
+          if (theme) document.documentElement.setAttribute("data-theme", theme);
+        }
+
+        function renderFromParent() {
+          try {
+            const opener = window.opener;
+            if (!opener || opener.closed) return false;
+            if (typeof opener.renderTabHtmlForPopout === "function") {
+              const html = opener.renderTabHtmlForPopout(tab);
+              if (html && html !== lastHtml) {
+                content.innerHTML = html;
+                lastHtml = html;
+              }
+              if (typeof opener.getUiTheme === "function") applyTheme(opener.getUiTheme());
+              setLive("Live · linked to main window", true);
+              return true;
+            }
+          } catch (e) {
+            /* cross-origin or closed */
+          }
+          return false;
+        }
+
+        async function renderFromApi() {
+          try {
+            const res = await fetch("/api/state", { cache: "no-store" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const state = await res.json();
+            // Minimal standalone render for when opener is gone
+            const player = state.player || {};
+            const loc = state.current_location || {};
+            if (tab === "player") {
+              content.innerHTML =
+                '<div class="statGrid">' +
+                cardStat("Health", (player.health ?? 0) + "/" + (player.max_health ?? 0)) +
+                cardStat("Level", player.level ?? 1) +
+                cardStat("XP", player.xp ?? 0) +
+                cardStat("Gold", player.gold ?? 0) +
+                cardStat("Karma", player.karma ?? 0) +
+                "</div>" +
+                section("Location", (loc.name || "?") + " — " + (loc.summary || "")) +
+                section("Identity", [player.name, player.title, player.public_name].filter(Boolean).join(" · ") || "—") +
+                section("Backstory", player.backstory || "—");
+            } else if (tab === "inventory") {
+              const items = state.inventory || [];
+              content.innerHTML = items.length
+                ? items.map((i) => section(i.name || "item", "qty " + (i.quantity ?? 0) + " · " + (i.rarity || "common") + (i.equipped_slot ? " · " + i.equipped_slot : ""))).join("")
+                : '<p class="empty">Empty pack.</p>';
+            } else if (tab === "npcs") {
+              const rows = [];
+              (state.locations || []).forEach((place) => {
+                (place.npcs || []).forEach((n) => rows.push(section(n.name || "NPC", (place.name || "") + " · " + (n.role || "") + " — " + (n.summary || ""))));
+              });
+              content.innerHTML = rows.join("") || '<p class="empty">No NPCs.</p>';
+            } else if (tab === "places") {
+              content.innerHTML = (state.locations || []).map((p) => section(p.name || p.code, p.summary || "")).join("") || '<p class="empty">No places.</p>';
+            } else if (tab === "events") {
+              content.innerHTML = (state.events || []).map((e) => section(e.title || e.code || "Event", e.summary || e.status || "")).join("") || '<p class="empty">No events.</p>';
+            } else {
+              content.innerHTML = section("State snapshot", "Tab <code>" + tab + "</code> — open from main window for full interactive view, or keep this as a live mirror when linked.");
+            }
+            setLive("API snapshot · " + new Date().toLocaleTimeString(), true);
+          } catch (e) {
+            content.innerHTML = '<p class="empty">Could not load: ' + String(e.message || e) + "</p>";
+            setLive("Disconnected", false);
+          }
+        }
+
+        function cardStat(label, value) {
+          return '<div class="statCard"><span>' + esc(label) + "</span><strong>" + esc(value) + "</strong></div>";
+        }
+        function section(title, body) {
+          return '<article class="card"><header><strong>' + esc(title) + "</strong></header><p>" + esc(body) + "</p></article>";
+        }
+        function esc(s) {
+          return String(s ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;");
+        }
+
+        function tick() {
+          if (!renderFromParent()) renderFromApi();
+        }
+        tick();
+        setInterval(tick, 1500);
+        document.getElementById("popoutRefresh").onclick = tick;
+        document.getElementById("popoutClose").onclick = () => window.close();
+        window.addEventListener("message", (ev) => {
+          if (!ev.data || ev.data.type !== "morkyn-popout") return;
+          if (ev.data.theme) applyTheme(ev.data.theme);
+          if (ev.data.tab === tab && ev.data.html) {
+            content.innerHTML = ev.data.html;
+            lastHtml = ev.data.html;
+            setLive("Live · push", true);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

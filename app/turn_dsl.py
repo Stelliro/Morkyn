@@ -13,6 +13,8 @@ import re
 from typing import Any
 from urllib.parse import quote, unquote
 
+from app.prompts import PROSE_VOICE
+
 # Closed opcode set (case-insensitive). Unknown ops fail loud.
 OPCODES = {
     "SUMMARY",
@@ -48,9 +50,11 @@ DSL_SYSTEM_PROMPT = """You are the local narrative engine for an endless RPG.
 Return ONLY the fixed form below. Do not return JSON. Do not invent new section headers.
 Do not percent-encode or HTML-escape text. Write normal readable characters; the app encodes storage later.
 
+""" + PROSE_VOICE + """
+
 Form:
 ===NAR===
-<continuous playable prose, about 1000-1800 characters, natural paragraphs>
+<continuous playable prose, about 1000-1800 characters, natural paragraphs in clear English>
 Use [[CODE]] after entity names when known (e.g. Sarah [[A]], Mosswake Gate [[L1]]).
 
 ===OPS===
@@ -87,6 +91,7 @@ Rules:
 - Opening/continue: establish or advance scene; do not invent player commands.
 - Keep rewards small. Empty ===OPS=== is allowed when nothing structured changes.
 - Never put private GM text in ===NAR===.
+- ===NAR=== must be easy to follow: direct sentences, varied but plain vocabulary, no inverted poetic templates.
 """
 
 

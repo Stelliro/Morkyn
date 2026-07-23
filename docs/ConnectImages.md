@@ -3,6 +3,18 @@
 Mørkyn can optionally call a **local** image server for portraits (and later map art).  
 Nothing runs until you set a provider — default is **off**.
 
+## Verification status
+
+| Backend | Status |
+| --- | --- |
+| **Forge / ForgeSD** | **Primary / tested** — use this for character art today. |
+| **ComfyUI** | **Not fully verified** — settings, roots, launch helpers, and a default workflow inject exist, but the project owner has not finished end-to-end Comfy validation yet (focus is ForgeSD). Once verified by the owner or a contributor, this note will be cleared in the README and here. |
+
+Repos:
+
+- Forge: https://github.com/lllyasviel/stable-diffusion-webui-forge  
+- ComfyUI: https://github.com/comfyanonymous/ComfyUI  
+
 ## Supported
 
 | Provider | Typical URL | API used |
@@ -13,16 +25,61 @@ Nothing runs until you set a provider — default is **off**.
 
 Forge and Automatic1111 both expose the same **sdapi** surface when started with API enabled.
 
+## Installs tab (face lock extras)
+
+**LLM Settings → Images → Installs** lists path-aware packages:
+
+- Forge root presence, ControlNet folder, InstantID weights (Hugging Face InstantX/InstantID), FaceID adapters, InsightFace wheel into Forge’s Python  
+- Comfy root presence, `ComfyUI_IPAdapter_plus`, `ComfyUI_InstantID` (git clone into `custom_nodes`)
+
+Rules:
+
+1. Set **Forge install root** and/or **Comfy install root** and **Save** first.  
+   - **Browse…** opens a native folder picker (any folder you choose).  
+   - **Allow search** scans common locations (optional).  
+   - Or paste a path by hand.  
+2. Until that root is set, every Install button for that backend is **blocked**.  
+3. If files/nodes already exist on disk, the row shows **Installed**.  
+4. Large ControlNet downloads can take several minutes.
+
+API: `GET /api/image-installables`, `POST /api/image-installables/install` with `{ "id": "forge_instantid_ipadapter" }`, `POST /api/select-folder` for the folder picker.
+
+## Character art (face + full body)
+
+One **Generate both** button (setup Identity or play Player tab) runs:
+
+1. Face bust (small chip on Player)  
+2. Full-body standing figure  
+
+Presets live in **`data/image_presets.json`** (defaults: `config/image_presets.default.json`).  
+Edit sizes/steps/styles without code changes.
+
 ## Quick setup
 
 ### Forge / A1111
 
-1. Launch Forge (or A1111) with API on (Forge usually enables it; A1111 may need `--api`).
-2. In Mørkyn → **LLM Settings** → **Image backend**:
-   - Provider: **Forge / A1111**
-   - URL: `http://127.0.0.1:7860`
-3. **Test image backend**, then **Save**.
-4. On setup → Character → **Preview** (portrait).
+**Prefer a Forge portable pack** (e.g. `D:\ForgeSD`) that ships **Python 3.10.6**.  
+Stock AUTOMATIC1111 on system Python **3.14 will fail** installing `torch==2.1.2` — that is a Python version problem, not Morkyn.
+
+**Morkyn does not modify your Forge/Comfy install.** Launch uses Morkyn-owned scripts only:
+
+- `tools/morkyn_forge_api.bat` — sets `--api --nowebui` and optional `--ckpt-dir` in the **process environment**, then calls the install’s `webui.bat`  
+- `tools/morkyn_comfy_api.bat` — same idea for Comfy  
+
+Your `webui-user.bat` / Gradio preferences stay as you set them for normal use.
+
+1. Install / update Forge yourself (`update.bat` / git pull).  
+2. In Morkyn, set **Forge root** to the pack (e.g. `D:\ForgeSD`) → **Launch backend** (headless API).  
+3. Checkpoints: scanned from disk + API; generation uses the selected checkpoint name.  
+3. In Mørkyn → **LLM Settings** → **Images** (three tabs):
+   - **General** — active provider, shared defaults, auto-launch  
+   - **Forge / A1111** — URL `http://127.0.0.1:7860`, install root = pack root (`D:\ForgeSD`) or `…\webui`  
+   - **ComfyUI** — URL, root, checkpoint, workflow, sampler, scheduler  
+4. Start Forge, then **Refresh catalog** to pull live models/samplers into dropdowns.  
+5. **Test connection** / **Check readiness**, then **Save**.  
+6. Setup → Identity → **Generate both**, or in play → Player → **Generate both**.
+
+**If you see `Couldn't install torch` / Python 3.14:** stop using that WebUI venv. Point Morkyn at Forge with bundled 3.10, or install Python 3.10.6 and recreate the venv — do not chase torch wheels on 3.14 for classic A1111.
 
 ### ComfyUI
 
@@ -76,12 +133,25 @@ $env:AI_RPG_PORTRAIT_STYLE = "pixel art portrait, 8-bit style, bust"
 ```text
 GET  /api/image-config
 POST /api/image-config
-POST /api/image-status          # probe backend
-POST /api/image/generate        # { prompt, purpose?, width?, height?, ... }
-POST /api/image/portrait        # builds prompt from name/title/backstory
+POST /api/image-status              # probe backend
+GET/POST /api/image-readiness       # checklist + optional launch wait
+GET/POST /api/image-catalog         # live models/samplers/VAEs/workflows
+POST /api/image-path-search         # { kind: "forge"|"comfyui" } consented scan
+POST /api/image-launch              # start from install root
+GET/POST /api/image-presets         # face/fullbody cfg file
+POST /api/image/character-set       # face + fullbody dual gen
+POST /api/image/generate            # raw prompt
+POST /api/image/portrait            # legacy single bust
 ```
 
-Generated files (when successful) land under `data/portraits/` (gitignored via `data/`).
+### Settings applied on generate
+
+| Backend | Applied from Mørkyn config |
+|---------|----------------------------|
+| Forge | checkpoint, VAE, sampler, scheduler, CLIP skip, restore faces, tiling, hires fix (scale/upscaler/denoising) via `txt2img` + `override_settings` |
+| Comfy | checkpoint, workflow JSON, sampler_name, scheduler injected into KSampler / CheckpointLoader nodes |
+
+Generated files land under `data/portraits/` (gitignored via `data/`).
 
 ## Why not force one stack?
 

@@ -28,6 +28,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - [RULES] Durable skill library (`data/skill_library.json`) with similarity adjust on new skills; catalog enable/disable
 - [API] `/api/skill-checks/catalog|resolve|register|enable` + GM `skill_check_context` in prompt packet
 - [DOCS] `docs/SkillChecks.md`
+- [RULES] Contested DCs from enemy/object power + power RNG; degree flavor (“just barely”, “as if you did nothing”); unskilled weapon mishaps with lasting injuries
+- [FE] Roll banners under narration; color map canvas + auto-generate; play-side mini-map
+- [MAP] Fix empty ASCII preview when grid omitted from stored tiles
 
 ---
 

@@ -165,6 +165,7 @@ def init_db() -> None:
                 base_description TEXT NOT NULL DEFAULT '',
                 cost TEXT NOT NULL DEFAULT '',
                 prerequisites TEXT NOT NULL DEFAULT '',
+                growth_math TEXT NOT NULL DEFAULT '',
                 additions TEXT NOT NULL DEFAULT '',
                 source TEXT NOT NULL DEFAULT 'setup'
             );
@@ -505,7 +506,7 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE events ADD COLUMN {column} {definition}")
 
     ability_columns = table_columns["abilities"]
-    for column in ("base_description", "cost", "prerequisites", "additions"):
+    for column in ("base_description", "cost", "prerequisites", "growth_math", "additions"):
         if column not in ability_columns:
             conn.execute(f"ALTER TABLE abilities ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
 

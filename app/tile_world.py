@@ -581,6 +581,7 @@ def generate_map(
                         "landmarks": placed,
                         "stats": payload["stats"],
                         "features": features,
+                        "visited": [f"{start[0]},{start[1]}"],
                     },
                     ensure_ascii=True,
                 ),
@@ -590,6 +591,11 @@ def generate_map(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_world_map_id', ?)",
             (map_id,),
         )
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)",
+            (json.dumps(True),),
+        )
+    payload["visited"] = [f"{start[0]},{start[1]}"]
     return payload
 
 
@@ -663,6 +669,8 @@ def get_map(map_id: str | None = None) -> dict[str, Any] | None:
         "grid": grid,
         "landmarks": meta.get("landmarks") or [],
         "stats": meta.get("stats") or {},
+        "visited": meta.get("visited") or [],
+        "features": meta.get("features") or {},
         "run_id": item.get("id"),
         "created_at": item.get("created_at"),
     }
@@ -725,20 +733,320 @@ def ascii_preview(map_data: dict[str, Any]) -> str:
         "mesa": "M",
     }
     grid = map_data.get("grid") or []
+    # Rebuild grid from flat tiles when API responses drop nested grid.
     if not grid:
-        return ""
+        tiles = map_data.get("tiles") or []
+        width = int(map_data.get("width") or 0)
+        height = int(map_data.get("height") or 0)
+        if width and height and len(tiles) == width * height:
+            grid = [tiles[y * width : (y + 1) * width] for y in range(height)]
+        elif tiles and isinstance(tiles[0], dict) and "x" in tiles[0]:
+            max_x = max(int(t.get("x") or 0) for t in tiles) + 1
+            max_y = max(int(t.get("y") or 0) for t in tiles) + 1
+            grid = [[{"state": "?", "x": x, "y": y} for x in range(max_x)] for y in range(max_y)]
+            for t in tiles:
+                try:
+                    grid[int(t.get("y") or 0)][int(t.get("x") or 0)] = t
+                except (IndexError, TypeError, ValueError):
+                    pass
+    if not grid:
+        return "(empty map — press Generate)"
     px = (map_data.get("player") or {}).get("x")
     py = (map_data.get("player") or {}).get("y")
+    try:
+        px = int(px) if px is not None else None
+        py = int(py) if py is not None else None
+    except (TypeError, ValueError):
+        px, py = None, None
     lines = []
     for y, row in enumerate(grid):
         chars = []
         for x, cell in enumerate(row):
-            if x == px and y == py:
+            if not isinstance(cell, dict):
+                chars.append("?")
+                continue
+            if px is not None and py is not None and x == px and y == py:
                 chars.append("@")
             else:
-                chars.append(glyphs.get(cell.get("state"), "?"))
+                chars.append(glyphs.get(str(cell.get("state") or ""), "?"))
         lines.append("".join(chars))
     return "\n".join(lines)
+
+
+SETTLEMENT_STATES = {
+    "city",
+    "town",
+    "village",
+    "station",
+    "colony",
+    "harbor",
+    "ruins",
+    "dungeon",
+    "shipyard",
+    "gate",
+}
+
+
+def _rebuild_grid(map_data: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    grid = map_data.get("grid") or []
+    if grid:
+        return grid
+    tiles = map_data.get("tiles") or []
+    width = int(map_data.get("width") or 0)
+    height = int(map_data.get("height") or 0)
+    if width and height and len(tiles) == width * height:
+        return [tiles[y * width : (y + 1) * width] for y in range(height)]
+    if tiles and isinstance(tiles[0], dict) and "x" in tiles[0]:
+        max_x = max(int(t.get("x") or 0) for t in tiles) + 1
+        max_y = max(int(t.get("y") or 0) for t in tiles) + 1
+        grid = [[{"state": "?", "x": x, "y": y, "walkable": True} for x in range(max_x)] for y in range(max_y)]
+        for t in tiles:
+            try:
+                grid[int(t.get("y") or 0)][int(t.get("x") or 0)] = t
+            except (IndexError, TypeError, ValueError):
+                pass
+        return grid
+    return []
+
+
+def _save_map_payload(map_data: dict[str, Any]) -> None:
+    """Persist player position, visited, tiles back to world_maps."""
+    map_id = str(map_data.get("id") or "")
+    if not map_id:
+        return
+    width = int(map_data.get("width") or 0)
+    height = int(map_data.get("height") or 0)
+    tiles = map_data.get("tiles") or []
+    if not tiles:
+        grid = _rebuild_grid(map_data)
+        tiles = [cell for row in grid for cell in row]
+    player = map_data.get("player") or {}
+    meta = {
+        "landmarks": map_data.get("landmarks") or [],
+        "stats": map_data.get("stats") or {},
+        "visited": map_data.get("visited") or [],
+        "features": (map_data.get("features") or {}),
+    }
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE world_maps
+            SET tiles_json = ?, player_x = ?, player_y = ?, meta_json = ?
+            WHERE id = ?
+            """,
+            (
+                json.dumps(tiles, ensure_ascii=True),
+                int(player.get("x") or 0),
+                int(player.get("y") or 0),
+                json.dumps(meta, ensure_ascii=True),
+                map_id,
+            ),
+        )
+
+
+def mark_visited(map_data: dict[str, Any], x: int, y: int, radius: int = 1) -> list[str]:
+    visited = set(str(v) for v in (map_data.get("visited") or []))
+    width = int(map_data.get("width") or 0)
+    height = int(map_data.get("height") or 0)
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            nx, ny = x + dx, y + dy
+            if 0 <= nx < width and 0 <= ny < height:
+                visited.add(f"{nx},{ny}")
+    map_data["visited"] = sorted(visited)
+    return map_data["visited"]
+
+
+def list_settlements(map_data: dict[str, Any]) -> list[dict[str, Any]]:
+    grid = _rebuild_grid(map_data)
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    # landmarks first
+    for lm in map_data.get("landmarks") or []:
+        if not isinstance(lm, dict):
+            continue
+        key = f"{lm.get('x')},{lm.get('y')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            {
+                "x": lm.get("x"),
+                "y": lm.get("y"),
+                "state": lm.get("state") or lm.get("kind") or "landmark",
+                "name": lm.get("name") or lm.get("label") or lm.get("state") or "Landmark",
+                "summary": lm.get("summary") or lm.get("description") or "",
+                "kind": "landmark",
+            }
+        )
+    for row in grid:
+        for cell in row:
+            if not isinstance(cell, dict):
+                continue
+            state = str(cell.get("state") or "")
+            if state not in SETTLEMENT_STATES:
+                continue
+            key = f"{cell.get('x')},{cell.get('y')}"
+            if key in seen:
+                continue
+            seen.add(key)
+            label = state.replace("_", " ").title()
+            out.append(
+                {
+                    "x": cell.get("x"),
+                    "y": cell.get("y"),
+                    "state": state,
+                    "name": label,
+                    "summary": f"{label} on the map.",
+                    "kind": "settlement",
+                    "walkable": bool(cell.get("walkable", True)),
+                    "elevation": cell.get("elevation"),
+                }
+            )
+    return out
+
+
+def local_map_view(map_data: dict[str, Any], *, radius: int = 4) -> dict[str, Any]:
+    """Relative viewport around the player for the mini-map."""
+    grid = _rebuild_grid(map_data)
+    if not grid:
+        return {"empty": True, "tiles": [], "radius": radius}
+    width = len(grid[0])
+    height = len(grid)
+    px = int((map_data.get("player") or {}).get("x") or 0)
+    py = int((map_data.get("player") or {}).get("y") or 0)
+    radius = max(2, min(12, int(radius or 4)))
+    visited = set(str(v) for v in (map_data.get("visited") or []))
+    # Ensure current neighborhood is visited
+    mark_visited(map_data, px, py, radius=1)
+    visited = set(str(v) for v in (map_data.get("visited") or []))
+
+    local: list[dict[str, Any]] = []
+    for y in range(max(0, py - radius), min(height, py + radius + 1)):
+        for x in range(max(0, px - radius), min(width, px + radius + 1)):
+            cell = dict(grid[y][x] if isinstance(grid[y][x], dict) else {})
+            key = f"{x},{y}"
+            cell["x"] = x
+            cell["y"] = y
+            cell["rel_x"] = x - px
+            cell["rel_y"] = y - py
+            cell["visited"] = key in visited
+            cell["is_player"] = x == px and y == py
+            cell["is_settlement"] = str(cell.get("state") or "") in SETTLEMENT_STATES
+            # Ensure image fields exist for 16/32-bit sprite painting in the UI.
+            if not cell.get("image_data_url") and not cell.get("image_path"):
+                try:
+                    img = pick_image_for_state(str(cell.get("state") or ""), run_id=str(map_data.get("run_id") or map_data.get("id") or ""))
+                    if img:
+                        cell["image_id"] = img.get("id")
+                        cell["image_path"] = img.get("path") or ""
+                        cell["image_data_url"] = img.get("data_url") or ""
+                except Exception:
+                    pass
+            local.append(cell)
+    return {
+        "empty": False,
+        "radius": radius,
+        "player": {"x": px, "y": py},
+        "width": width,
+        "height": height,
+        "tiles": local,
+        "visited_count": len(visited),
+        "tile_style": "pixel-16-32",
+        "settlements_nearby": [
+            s
+            for s in list_settlements(map_data)
+            if abs(int(s.get("x") or 0) - px) <= radius and abs(int(s.get("y") or 0) - py) <= radius
+        ],
+    }
+
+
+def full_map_view(map_data: dict[str, Any]) -> dict[str, Any]:
+    """Full map for the overlay: fog unvisited, highlight settlements."""
+    grid = _rebuild_grid(map_data)
+    width = int(map_data.get("width") or (len(grid[0]) if grid else 0))
+    height = int(map_data.get("height") or len(grid))
+    px = int((map_data.get("player") or {}).get("x") or 0)
+    py = int((map_data.get("player") or {}).get("y") or 0)
+    visited = set(str(v) for v in (map_data.get("visited") or []))
+    if f"{px},{py}" not in visited:
+        mark_visited(map_data, px, py, radius=1)
+        visited = set(str(v) for v in (map_data.get("visited") or []))
+        _save_map_payload(map_data)
+    tiles: list[dict[str, Any]] = []
+    for y, row in enumerate(grid):
+        for x, cell in enumerate(row):
+            c = dict(cell) if isinstance(cell, dict) else {"state": "?", "x": x, "y": y}
+            key = f"{x},{y}"
+            c["x"] = x
+            c["y"] = y
+            c["visited"] = key in visited
+            c["is_player"] = x == px and y == py
+            c["is_settlement"] = str(c.get("state") or "") in SETTLEMENT_STATES
+            c["fog"] = key not in visited and not c["is_player"]
+            tiles.append(c)
+    return {
+        "empty": False,
+        "id": map_data.get("id"),
+        "preset_id": map_data.get("preset_id"),
+        "seed": map_data.get("seed"),
+        "width": width,
+        "height": height,
+        "age": map_data.get("age"),
+        "environment": map_data.get("environment"),
+        "player": {"x": px, "y": py},
+        "tiles": tiles,
+        "settlements": list_settlements(map_data),
+        "visited": sorted(visited),
+        "stats": map_data.get("stats") or {},
+        "ascii": ascii_preview(map_data),
+    }
+
+
+def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
+    data = get_map(map_id)
+    if not data:
+        raise ValueError("No active map.")
+    # restore visited from meta
+    meta_visited = []
+    try:
+        # get_map already folds some meta; ensure visited list
+        meta_visited = list(data.get("visited") or [])
+    except Exception:
+        meta_visited = []
+    # reload meta from DB for visited if missing
+    if not meta_visited:
+        with connect() as conn:
+            row = conn.execute("SELECT meta_json FROM world_maps WHERE id = ?", (data["id"],)).fetchone()
+        if row:
+            try:
+                meta = json.loads(row["meta_json"] or "{}")
+                meta_visited = list(meta.get("visited") or [])
+            except Exception:
+                meta_visited = []
+    data["visited"] = meta_visited
+
+    grid = _rebuild_grid(data)
+    width = len(grid[0]) if grid else 0
+    height = len(grid)
+    x, y = int(x), int(y)
+    if not (0 <= x < width and 0 <= y < height):
+        raise ValueError("Destination out of bounds.")
+    cell = grid[y][x]
+    if not bool(cell.get("walkable", True)) or str(cell.get("state") or "") in {"void", "water", "lava", "cliff"}:
+        raise ValueError("That tile is not walkable.")
+    px = int((data.get("player") or {}).get("x") or 0)
+    py = int((data.get("player") or {}).get("y") or 0)
+    dist = abs(x - px) + abs(y - py)
+    if dist > 8:
+        raise ValueError("Too far for a single walk — pick a closer tile.")
+    data["player"] = {"x": x, "y": y}
+    mark_visited(data, x, y, radius=1)
+    flat = [c for row in grid for c in row]
+    data["tiles"] = flat
+    data["grid"] = grid
+    _save_map_payload(data)
+    return full_map_view(data)
 
 
 def suggest_tile_prompt(state_id: str, *, quality: str = "8bit", preset_id: str = "") -> str:

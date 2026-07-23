@@ -107,6 +107,20 @@ Morkyn/
 - Context health panel, compact mode, entity codes, visual history, World Bible, rewind.
 - Local-only, LAN/phone, and trusted VPN launch modes.
 - Optional adaptive narration pipeline and agent bridge endpoints.
+- Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
+
+## Local images (ForgeSD / ComfyUI)
+
+Optional portraits and full-body art use a **local** image backend. Nothing runs until you set a provider in **LLM Settings → Images**.
+
+| Backend | Status in Mørkyn |
+| --- | --- |
+| **Forge / ForgeSD** | **Supported path** — actively used and tested |
+| **ComfyUI** | **Wired but unverified** — config tabs + launch/helpers exist; end-to-end generation has **not** been fully signed off by the project owner yet. It will be marked verified once the owner or a contributor confirms it. |
+
+Docs: [docs/ConnectImages.md](docs/ConnectImages.md) · [docs/CharacterPortrait.md](docs/CharacterPortrait.md)
+
+Repos / face-lock extras (InstantID, FaceID, IPAdapter Plus, InsightFace wheel) are listed under **LLM Settings → Images → Installs**. Install buttons stay **blocked** until the matching Forge or Comfy install root is set; already-present pieces show **Installed**.
 
 ## Privacy
 

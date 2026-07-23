@@ -34,6 +34,33 @@ Seeded in SQLite `world_presets` (idempotent):
 
 Each preset has **weights** per state and **features** (`mountain_blob_*`, `water_bodies`, `landmark_count`, `space`).
 
+## Play UI map (v2)
+
+| Piece | Behavior |
+| --- | --- |
+| **Nearby mini-map** | Player + few tiles around them (radius ~4) |
+| **Map overlay** | Opens over the scene/chat; close with **×** |
+| **Fog / visited** | Unvisited tiles dimmed; settlements highlighted |
+| **Hover / click** | Settlement hover tip; click for detail panel |
+| **Walk** | When `travel_ready`, click tile or **Walk here** |
+| **Travel lock** | After walking (or during active scene), travel locks until the turn pipeline sets `travel_ready` again |
+
+### Travel signal
+
+Hard problem: the GM/model should set when an event is “done.” Supported paths:
+
+1. Turn payload `travel.ready` / `travel_ready` (preferred when model cooperates)  
+2. Heuristic: combat active → lock; opening → lock; scene goal mentions leave/travel → open  
+3. UI reads `GET /api/travel-status` and banners
+
+### APIs
+
+- `GET /api/tiles/map/local?radius=4`  
+- `GET /api/tiles/map/full`  
+- `POST /api/tiles/map/move` `{x,y}`  
+- `GET /api/tiles/map/settlements`  
+- `GET /api/travel-status`
+
 ## Generation pipeline
 
 1. Value-noise fields bias weights (coherent regions).  

@@ -1,0 +1,255 @@
+{
+  "model": "qwen3:8b",
+  "summary": {
+    "mean_overall_10": 8.1,
+    "mean_growth_math_10": 8.6,
+    "engine_all_ok": true,
+    "by_id": {
+      "isekai_compound": 8.8,
+      "system_apoc": 8.7,
+      "grim_harbor": 8.3,
+      "cozy_river": 7.2,
+      "wuxia_sect": 7.6
+    }
+  },
+  "packages": [
+    {
+      "id": "isekai_compound",
+      "overall": 8.8,
+      "avg_math": 8.3,
+      "engine_ok": true,
+      "dc_shift_ok": true,
+      "theme_score": 9.0,
+      "intent": {
+        "genre": "Fate of a Forgotten Seed",
+        "difficulty": "easy",
+        "power_fantasy": {
+          "start_power": "near_useless",
+          "growth": "compounding",
+          "system_ui": true,
+          "skill_summary": "the seed grows stronger with each failure, granting passive bonuses"
+        },
+        "adapter": "isekai_rpg"
+      },
+      "fields": {
+        "difficulty": "easy",
+        "skill_style": "training-heavy",
+        "skill_growth_speed": "very fast",
+        "rank_scale": "F,E,D,C,B,A,S,SS,SSS",
+        "custom_skills": "ONE_SKILL_FRAME: exactly one weak seed skill/ability domain (domain chosen later; never default weather/observation); starts near-useless (rank F / level 1); compounds only through use, training, and risk; track ranks via subtle system UI when on, else DM notes; XP from practice, mentors, and high-risk successes; put calculable XP/rank formulas on the ability Growth Math field; soft caps until breakthroughs; no second combat/speech toolkit at start"
+      },
+      "abilities": [
+        {
+          "name": "ONE_SKILL_FRAME: Seed Growth - a weak seed skill that compounds through use, training, and risk. XP ",
+          "score": 8.3,
+          "calc": true,
+          "template": true,
+          "growth_math": "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success \u00d72; soft cap at L6 (XP \u00d70.6 until setback recovery); effect magnitude +8% per level",
+          "desc": "ONE_SKILL_FRAME: Seed Growth - a weak seed skill that compounds through use, training, and risk. XP from practice, mentors, and high-risk su"
+        }
+      ],
+      "engine_sample": {
+        "total": 9,
+        "natural": 4,
+        "attr_mod": 2,
+        "skill_rank": 3,
+        "dc": 12,
+        "degree": "partial",
+        "easy_dc": 10,
+        "hard_dc": 14
+      }
+    },
+    {
+      "id": "system_apoc",
+      "overall": 8.7,
+      "avg_math": 8.3,
+      "engine_ok": true,
+      "dc_shift_ok": true,
+      "theme_score": 8.5,
+      "intent": {
+        "genre": "Post-Apocalyptic Tech Ruins",
+        "difficulty": "hard",
+        "power_fantasy": {
+          "start_power": "near_useless",
+          "growth": "compounding",
+          "system_ui": true,
+          "skill_summary": "Survival, hacking, and system manipulation"
+        },
+        "adapter": "system_rpg"
+      },
+      "fields": {
+        "difficulty": "hard",
+        "skill_style": "training-heavy",
+        "skill_growth_speed": "very fast",
+        "rank_scale": null,
+        "custom_skills": "ONE_SKILL_FRAME: exactly one weak seed skill/ability domain (domain chosen later; never default weather/observation); starts near-useless (rank F / level 1); compounds only through use, training, and risk; track ranks via subtle system UI when on, else DM notes; XP from practice, mentors, and high-risk successes; put calculable XP/rank formulas on the ability Growth Math field; soft caps until breakthroughs; no second combat/speech toolkit at start"
+      },
+      "abilities": [
+        {
+          "name": "System Overload: A weak seed skill in system manipulation. Rank F / Level 1. Compounds through use, ",
+          "score": 8.3,
+          "calc": true,
+          "template": true,
+          "growth_math": "rank F\u2192E@80 E\u2192D@200 D\u2192C@450 C\u2192B@900; domain use 5-12 skill XP \u00d7 risk (1 safe/2 contested/3 life-risk); XP_to_next = 50 * rank_index^1.4; after C practice XP \u00d70.5 until mentor breakthrough; +1 domain check per rank above F",
+          "desc": "System Overload: A weak seed skill in system manipulation. Rank F / Level 1. Compounds through use, training, and risk. XP from practice, me"
+        }
+      ],
+      "engine_sample": {
+        "total": 9,
+        "natural": 4,
+        "attr_mod": 2,
+        "skill_rank": 3,
+        "dc": 16,
+        "degree": "bad_nothing",
+        "easy_dc": 10,
+        "hard_dc": 14
+      }
+    },
+    {
+      "id": "grim_harbor",
+      "overall": 8.3,
+      "avg_math": 8.3,
+      "engine_ok": true,
+      "dc_shift_ok": true,
+      "theme_score": 7.0,
+      "intent": {
+        "genre": "grim harbor dystopia",
+        "difficulty": "hard",
+        "power_fantasy": {
+          "start_power": "near_useless",
+          "growth": "compounding",
+          "system_ui": false,
+          "skill_summary": "file-based luck compounding"
+        },
+        "adapter": "grimdark"
+      },
+      "fields": {
+        "difficulty": "hard",
+        "skill_style": "training-heavy",
+        "skill_growth_speed": "very fast",
+        "rank_scale": null,
+        "custom_skills": "ONE_SKILL_FRAME: exactly one weak seed skill/ability domain (domain chosen later; never default weather/observation); starts near-useless (rank F / level 1); compounds only through use, training, and risk; track ranks via subtle system UI when on, else DM notes; XP from practice, mentors, and high-risk successes; put calculable XP/rank formulas on the ability Growth Math field; soft caps until breakthroughs; no second combat/speech toolkit at start"
+      },
+      "abilities": [
+        {
+          "name": "ONE_SKILL_FRAME: File Compounding - A weak skill that allows the player to gain small advantages by ",
+          "score": 8.3,
+          "calc": true,
+          "template": true,
+          "growth_math": "XP_to_next = 40 * rank_index^1.5 (F=1); use grants 4-10 XP \u00d7 risk (1/2/3); soft cap after rank C practice \u00d70.5; each rank above F: +1 domain check",
+          "desc": "ONE_SKILL_FRAME: File Compounding - A weak skill that allows the player to gain small advantages by organizing documents, but only through r"
+        }
+      ],
+      "engine_sample": {
+        "total": 9,
+        "natural": 4,
+        "attr_mod": 2,
+        "skill_rank": 3,
+        "dc": 16,
+        "degree": "bad_nothing",
+        "easy_dc": 10,
+        "hard_dc": 14
+      }
+    },
+    {
+      "id": "cozy_river",
+      "overall": 7.2,
+      "avg_math": 8.3,
+      "engine_ok": true,
+      "dc_shift_ok": true,
+      "theme_score": 7.0,
+      "intent": {
+        "genre": "Pastoral River Village Mystery",
+        "difficulty": "easy",
+        "power_fantasy": {
+          "start_power": "ordinary",
+          "growth": "steady",
+          "system_ui": false,
+          "skill_summary": "Basic crafting and community interaction skills"
+        },
+        "adapter": "system_rpg"
+      },
+      "fields": {
+        "difficulty": "easy",
+        "skill_style": null,
+        "skill_growth_speed": null,
+        "rank_scale": null,
+        "custom_skills": null
+      },
+      "abilities": [
+        {
+          "name": "River Craftsmanship, Community Harmony",
+          "score": 8.3,
+          "calc": true,
+          "template": true,
+          "growth_math": "rank F\u2192E@80 E\u2192D@200 D\u2192C@450 C\u2192B@900; domain use 5-12 skill XP \u00d7 risk (1 safe/2 contested/3 life-risk); XP_to_next = 50 * rank_index^1.4; after C practice XP \u00d70.5 until mentor breakthrough; +1 domain check per rank above F",
+          "desc": "River Craftsmanship, Community Harmony"
+        }
+      ],
+      "engine_sample": {
+        "total": 9,
+        "natural": 4,
+        "attr_mod": 2,
+        "skill_rank": 3,
+        "dc": 12,
+        "degree": "partial",
+        "easy_dc": 10,
+        "hard_dc": 14
+      }
+    },
+    {
+      "id": "wuxia_sect",
+      "overall": 7.6,
+      "avg_math": 10.0,
+      "engine_ok": true,
+      "dc_shift_ok": true,
+      "theme_score": 7.0,
+      "intent": {
+        "genre": "Wuxia Sect Politics",
+        "difficulty": "normal",
+        "power_fantasy": {
+          "start_power": "ordinary",
+          "growth": "steady",
+          "system_ui": false,
+          "skill_summary": "Cultivation stages and faction reputation determine access to resources and influence"
+        },
+        "adapter": "system_rpg"
+      },
+      "fields": {
+        "difficulty": "normal",
+        "skill_style": null,
+        "skill_growth_speed": null,
+        "rank_scale": null,
+        "custom_skills": null
+      },
+      "abilities": [
+        {
+          "name": "Shadow Step",
+          "score": 10.0,
+          "calc": true,
+          "template": false,
+          "growth_math": "XP_to_next = 50 * rank_index^1.4 (F=1); use grants 5-12 XP \u00d7 risk (1/2/3); soft cap after rank C practice \u00d70.6; each rank above F: +1 domain check",
+          "desc": "Shadow Step"
+        },
+        {
+          "name": "Ink of Secrets",
+          "score": 10.0,
+          "calc": true,
+          "template": false,
+          "growth_math": "levels 1-10; XP_to_next = 35 + 15*level; successful use grants 4-9 XP; crit success \u00d72; soft cap at L7 (XP \u00d70.7 until setback recovery); effect magnitude +10% per level",
+          "desc": "Ink of Secrets"
+        }
+      ],
+      "engine_sample": {
+        "total": 9,
+        "natural": 4,
+        "attr_mod": 2,
+        "skill_rank": 3,
+        "dc": 14,
+        "degree": "failure",
+        "easy_dc": 10,
+        "hard_dc": 14
+      }
+    }
+  ]
+}
