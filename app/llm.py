@@ -23,14 +23,18 @@ from app.setup_composer import (
     OVERUSED_SEED_DOMAINS,
     SEED_SKILL_DOMAIN_POOL,
     apply_keyword_intent,
+    coerce_setup_bool,
+    coerce_typed_setup_fields,
     empty_intent,
     field_contamination_reasons,
     field_contract,
     field_is_contaminated,
     intent_slice_for_field,
+    is_instruction_echo,
     is_overused_seed_domain,
     merge_intent_plans,
     normalize_look_fields,
+    normalize_magic_level,
     opening_feel_prompt_block,
     pick_seed_skill_domain,
     sanitize_setup_fields,
@@ -7033,24 +7037,15 @@ def _validate_setup_randomization(
 
 
 def _sanitize_setup_randomization_values(result: dict[str, Any]) -> dict[str, Any]:
-    """Clamp 8B slop: bools-as-strings, instruction echoes, growth slogans in structure fields."""
+    """Clamp 8B slop: bools-as-strings, enums, instruction echoes, growth slogans in structure fields."""
     if not isinstance(result, dict):
         return result
     out = dict(result)
 
-    def _as_bool(val: Any, default: bool = False) -> bool:
-        if isinstance(val, bool):
-            return val
-        s = str(val or "").strip().lower()
-        if s in {"true", "1", "yes", "on", "enabled"}:
-            return True
-        if s in {"false", "0", "no", "off", "disabled", "none"}:
-            return False
-        # Model returned a UI label instead of a boolean
-        if "system" in s or "window" in s or "compound" in s:
-            return default
-        return default
+    # Shared type coercion (bools, magic_level, difficulty, growth speeds, instruction echoes).
+    out, _typed = coerce_typed_setup_fields(out)
 
+    # Extra bool defaults if coercion saw UI labels without a contract hit.
     for bkey in (
         "leveling_system",
         "game_system",
@@ -7058,71 +7053,32 @@ def _sanitize_setup_randomization_values(result: dict[str, Any]) -> dict[str, An
         "skill_levels_enabled",
         "race_magic_enabled",
     ):
-        if bkey in out:
-            out[bkey] = _as_bool(out[bkey], default=bool(out[bkey]) if isinstance(out[bkey], bool) else False)
+        if bkey in out and not isinstance(out[bkey], bool):
+            out[bkey] = coerce_setup_bool(out[bkey], default=False)
 
-    # Instruction-echo / forbidden fragments → fall back to safe labels
-    slogan_markers = (
-        "prevalence only",
-        "return only",
-        "forbidden",
-        "one-skill",
-        "one skill",
-        "near-useless",
-        "near useless",
-        "compounding",
-        "seed frame",
-        "growth",
-        "level delay",
-        "cooldown",
-    )
-    structure_defaults = {
-        "magic_level": "rare",
-        "proficiency_access": "only expert tasks require training",
-        "quest_style": "emergent local work",
-        "faction_pressure": "local disputes",
-        "economy": "scarce",
-        "npc_density": "moderate",
-        "npc_stat_scaling": "relative ranks",
-        "npc_skill_frequency": "some trained NPCs",
-        "death_rules": "downed, not deleted",
-        "loot_rarity": "earned and uncommon",
-    }
-    for key, default in structure_defaults.items():
-        if key not in out:
-            continue
-        raw = str(out[key] or "").strip()
-        low = raw.lower()
-        if not raw or any(m in low for m in slogan_markers) or len(raw) > 120 and key != "economy":
-            # memory_policy sometimes dumps all options — not in this map
-            out[key] = default
-        elif key == "magic_level" and low in {"magic prevalence only", "prevalence only"}:
-            out[key] = default
+    if "magic_level" in out:
+        out["magic_level"] = normalize_magic_level(out.get("magic_level"), default="rare")
 
     # memory_policy: one phrase, not a menu dump
     if "memory_policy" in out:
         mp = str(out["memory_policy"] or "").strip()
-        if mp.count(",") >= 3 or mp.count(";") >= 2 or len(mp) > 100:
+        if is_instruction_echo(mp) or mp.count(",") >= 3 or mp.count(";") >= 2 or len(mp) > 100:
             out["memory_policy"] = "known"
 
-    # death_rules slogans
+    # death_rules slogans / instruction echo
     if "death_rules" in out:
-        dr = str(out["death_rules"] or "").lower()
-        if "scar economy" in dr or "compound" in dr:
+        dr = str(out["death_rules"] or "")
+        low = dr.lower()
+        if is_instruction_echo(dr) or "scar economy" in low or "compound" in low:
             out["death_rules"] = "downed, not deleted"
 
-    # system_style when game_system false-ish labels
-    if "system_style" in out and str(out.get("system_style") or "").lower() in {
-        "subtle blue-window system",
-        "true",
-        "false",
-    }:
-        pass  # fine
-    if out.get("game_system") is False:
-        # leave style alone
-        pass
+    # system_style: bool echoes or slogan paste
+    if "system_style" in out:
+        ss = str(out.get("system_style") or "").strip()
+        if is_instruction_echo(ss) or ss.lower() in {"true", "false", "yes", "no", "on", "off"}:
+            out["system_style"] = "subtle blue-window system" if out.get("game_system") else ""
 
-    # special abilities: acquired → prefer locked
+    # special abilities: acquired → prefer locked (g15)
     origin = str(out.get("special_ability_origin") or "").lower()
     if isinstance(out.get("special_abilities"), list):
         cleaned = []
@@ -7137,12 +7093,16 @@ def _sanitize_setup_randomization_values(result: dict[str, Any]) -> dict[str, An
             cleaned.append(ab)
         out["special_abilities"] = cleaned
 
-    # Align custom_skills weakly with first ability name if empty/slogan
+    # Align custom_skills weakly with first ability name if empty/slogan (g14 soft)
     if isinstance(out.get("special_abilities"), list) and out["special_abilities"]:
         first = out["special_abilities"][0]
         aname = str(first.get("name") or "").strip()
         cs = str(out.get("custom_skills") or "").strip()
-        if aname and (not cs or any(m in cs.lower() for m in ("one-skill", "compounding", "seed frame"))):
+        if aname and (
+            not cs
+            or is_instruction_echo(cs)
+            or any(m in cs.lower() for m in ("one-skill", "compounding", "seed frame"))
+        ):
             out["custom_skills"] = f"{aname} practice, modest seed, ranks through use"[:200]
 
     return out

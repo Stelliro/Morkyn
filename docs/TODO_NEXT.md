@@ -70,7 +70,7 @@ Go top-down. Send one item at a time (“send him in” = implement that id).
 | 10 | **g10** | Area rep / faction heat visible UI | S | Stored in settings; not shown as chip near location/weather. |
 | 11 | **g11** | Association reverse fully via events | M | `apply_event_help_reputation` exists; association penalty exists; **event help not hooked**; no “settlement liked-outcast” meter. |
 | 12 | **g12** | NPC tier enforcement on LLM apply path | M | Shells created by server; apply_turn may still promote throwaways to full stats if model dumps rich NPC updates. |
-| 13 | **g13** | Randomize bool/enum sanitation after 8B rolls | M | Playtest: `magic_level` instruction echo, booleans as strings, slogan leaks in proficiency fields. Needs post-validate clamp. |
+| ~~13~~ | ~~**g13**~~ | ~~Randomize bool/enum sanitation after 8B rolls~~ | M | Done: `coerce_typed_setup_fields` + enum `magic_level`, wired through sanitize / LLM / crosscheck + `tests/test_setup_sanitation.py` |
 | 14 | **g14** | custom_skills ↔ special_abilities alignment | M | Still can diverge (rope seed vs Footprint Echo). Coherence pass soft only. |
 | 15 | **g15** | Acquired origin → abilities locked by default in LLM path | S | FE `applyOriginToAbility` does; model can still return unlocked acquired. |
 | 16 | **g16** | Simple depth scoring → user-visible Start splash score | S | Logs `console.info` only. |

@@ -4,7 +4,7 @@
   <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
 </p>
 
-**Version `0.8.0`**
+**Version `0.9.0-beta`**
 
 **Mørkyn** is a local-first browser RPG. A local LLM narrates turns and proposes structured world changes, while SQLite remains the source of truth for the player, inventory, NPCs, events, summaries, and long-running continuity.
 

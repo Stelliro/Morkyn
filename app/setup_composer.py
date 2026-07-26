@@ -34,9 +34,13 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
         "forbidden": "Return tech era only.",
     },
     "magic_level": {
-        "kind": "short_phrase",
+        "kind": "enum",
+        "allowed_values": ["rare", "forbidden", "common utility", "cultivation", "none"],
         "intent_keys": ["genre", "power_fantasy", "keywords"],
-        "forbidden": "Return magic prevalence only.",
+        "forbidden": (
+            "Return only one of: rare, forbidden, common utility, cultivation, none. "
+            "Never echo instructions like 'magic prevalence only'."
+        ),
     },
     "custom_style": {
         "kind": "prose",
@@ -1941,10 +1945,366 @@ def looks_like_slogan_paste(field: str, value: Any, idea: str = "") -> bool:
     return bool(field_contamination_reasons(field, value, idea))
 
 
+# Canonical UI / randomizer enum for magic prevalence.
+MAGIC_LEVEL_VALUES = ("rare", "forbidden", "common utility", "cultivation", "none")
+
+# Loose 8B / free-text aliases → canonical magic_level.
+MAGIC_LEVEL_ALIASES: dict[str, str] = {
+    "rare": "rare",
+    "low": "rare",
+    "low magic": "rare",
+    "low-magic": "rare",
+    "low and dangerous": "rare",
+    "scarce": "rare",
+    "scarce magic": "rare",
+    "uncommon": "rare",
+    "limited": "rare",
+    "sparse": "rare",
+    "dangerous": "rare",
+    "forbidden": "forbidden",
+    "banned": "forbidden",
+    "illegal": "forbidden",
+    "taboo": "forbidden",
+    "suppressed": "forbidden",
+    "hidden": "forbidden",
+    "common utility": "common utility",
+    "common": "common utility",
+    "utility": "common utility",
+    "utility magic": "common utility",
+    "everyday": "common utility",
+    "ubiquitous": "common utility",
+    "high": "common utility",
+    "high magic": "common utility",
+    "widespread": "common utility",
+    "abundant": "common utility",
+    "cultivation": "cultivation",
+    "cultivation world": "cultivation",
+    "xianxia": "cultivation",
+    "wuxia": "cultivation",
+    "qi": "cultivation",
+    "none": "none",
+    "no magic": "none",
+    "magicless": "none",
+    "absent": "none",
+    "off": "none",
+    "zero": "none",
+    "disabled": "none",
+    "no": "none",
+}
+
+# Prompt/instruction fragments 8B models echo into values.
+INSTRUCTION_ECHO_MARKERS = (
+    "prevalence only",
+    "return only",
+    "return magic",
+    "return a",
+    "return the",
+    "do not paste",
+    "never paste",
+    "never a slogan",
+    "field contract",
+    "allowed values",
+    "allowed_values",
+    "short_phrase",
+    "one of easy",
+    "must be one of",
+    "not abilities",
+    "not a slogan",
+    "comma-separated skill",
+    "numeric weight limit only",
+    "numeric slot limit only",
+    "growth speed label only",
+    "frequency label only",
+    "prose detail preference only",
+    "access rule only",
+    "death/injury policy only",
+    "loot frequency policy only",
+    "tech era only",
+    "setting/genre phrase only",
+    "mood/tone, not",
+    "peoples/species list only",
+    "rarity phrase only",
+    "boolean",
+    "string or comma",
+    "immutable base",
+)
+
+# Short structure-ish fields that must not hold growth / idea slogans.
+STRUCTURE_SLOGAN_FIELDS = STRUCTURE_FIELDS | frozenset(
+    {
+        "proficiency_access",
+        "skill_style",
+        "race_magic_rarity",
+        "system_style",
+        "death_rules",
+        "loot_rarity",
+        "npc_density",
+        "npc_stat_scaling",
+        "npc_skill_frequency",
+    }
+)
+
+STRUCTURE_FIELD_DEFAULTS: dict[str, str] = {
+    "magic_level": "rare",
+    "proficiency_access": "only expert tasks require training",
+    "skill_style": "standard",
+    "quest_style": "emergent local work",
+    "faction_pressure": "local disputes",
+    "economy": "scarce",
+    "npc_density": "moderate",
+    "npc_stat_scaling": "relative ranks",
+    "npc_skill_frequency": "some trained NPCs",
+    "death_rules": "downed, not deleted",
+    "loot_rarity": "earned and uncommon",
+    "system_style": "subtle blue-window system",
+    "race_magic_rarity": "same as world magic",
+    "difficulty": "normal",
+    "narration_detail": "balanced",
+    "xp_growth_speed": "normal",
+    "skill_growth_speed": "normal",
+    "proficiency_growth_speed": "normal",
+    "new_skill_frequency": "normal",
+    "special_ability_origin": "none",
+    "tone": "grounded adventure",
+    "tech_level": "medieval",
+}
+
+
+def is_instruction_echo(text: Any) -> bool:
+    """True when a model echoed prompt instructions instead of a playable value."""
+    raw = _value_text(text)
+    if not raw:
+        return False
+    low = raw.lower().strip()
+    # Exact instruction-y phrases for magic_level / enum labels
+    if low in {
+        "magic prevalence only",
+        "prevalence only",
+        "return magic prevalence only",
+        "return only",
+        "forbidden:",
+        "string",
+        "boolean",
+        "true/false",
+        "yes/no",
+    }:
+        return True
+    if any(m in low for m in INSTRUCTION_ECHO_MARKERS):
+        # "forbidden" alone is a valid magic_level — only flag multi-word echoes.
+        if low == "forbidden":
+            return False
+        return True
+    # Looks like a bullet / schema line
+    if low.startswith(("return ", "never ", "do not ", "must ", "only return")):
+        return True
+    return False
+
+
+def coerce_setup_bool(value: Any, *, default: bool = False) -> bool:
+    """Coerce 8B bool slop (strings, UI labels) to real booleans."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+    s = str(value or "").strip().lower()
+    if s in {"true", "1", "yes", "on", "enabled", "enable", "y"}:
+        return True
+    if s in {"false", "0", "no", "off", "disabled", "disable", "none", "n", ""}:
+        return False
+    # Model returned a system-style / UI label instead of a boolean.
+    if any(
+        tok in s
+        for tok in (
+            "system",
+            "window",
+            "compound",
+            "subtle",
+            "quest-log",
+            "cultivation status",
+            "diegetic",
+            "blue-window",
+            "status pane",
+        )
+    ):
+        return default
+    # Unknown prose → default
+    return default
+
+
+def normalize_magic_level(value: Any, *, default: str = "rare") -> str:
+    """Map free text / instruction echo to a UI magic_level option."""
+    raw = _value_text(value)
+    if not raw or is_instruction_echo(raw):
+        return default
+    low = re.sub(r"\s+", " ", raw.strip().lower())
+    if low in MAGIC_LEVEL_VALUES:
+        return low
+    if low in MAGIC_LEVEL_ALIASES:
+        return MAGIC_LEVEL_ALIASES[low]
+    # Substring / token heuristics
+    if any(x in low for x in ("no magic", "magicless", "absent", "disabled", "zero magic")):
+        return "none"
+    if any(x in low for x in ("cultivat", "xianxia", "qi realm", "wuxia sect")):
+        return "cultivation"
+    if any(x in low for x in ("forbidden", "banned", "illegal", "taboo", "suppressed")):
+        return "forbidden"
+    if any(x in low for x in ("common utility", "utility magic", "everyday magic", "widespread", "ubiquitous", "high magic")):
+        return "common utility"
+    if any(x in low for x in ("low magic", "low and dangerous", "scarce", "rare magic", "uncommon magic")):
+        return "rare"
+    if "common" in low and "uncommon" not in low:
+        return "common utility"
+    if "none" in low or low in {"off", "no"}:
+        return "none"
+    if "rare" in low or "low" in low:
+        return "rare"
+    # Unrecognized long dump → safe default
+    if len(low) > 40 or has_growth_slogan(low):
+        return default
+    return default
+
+
+def clamp_setup_enum(
+    field: str,
+    value: Any,
+    *,
+    allowed: list[str] | tuple[str, ...] | None = None,
+    default: str | None = None,
+) -> tuple[Any, list[str]]:
+    """Clamp an enum-ish field to allowed values; return (value, reasons)."""
+    contract = field_contract(field)
+    allowed_list = [str(a) for a in (allowed if allowed is not None else (contract.get("allowed_values") or []))]
+    if not allowed_list:
+        return value, []
+    allowed_l = [a.lower() for a in allowed_list]
+    default_val = default if default is not None else (
+        STRUCTURE_FIELD_DEFAULTS.get(field) or allowed_list[0]
+    )
+    text = _value_text(value)
+    if not text:
+        return default_val, ["empty_enum"]
+    if is_instruction_echo(text):
+        return default_val, ["instruction_echo"]
+    low = re.sub(r"\s+", " ", text.strip().lower())
+    if field == "magic_level":
+        canon = normalize_magic_level(text, default=str(default_val))
+        if canon != low or low not in allowed_l:
+            return canon, (["magic_level_normalized"] if canon != low else [])
+        return canon, []
+    if low in allowed_l:
+        # Preserve canonical casing from allowed list
+        return allowed_list[allowed_l.index(low)], []
+    # Prefix / contains match (e.g. "very slow growth" → "very slow")
+    for idx, a in enumerate(allowed_l):
+        if low == a or low.startswith(a) or a.startswith(low):
+            return allowed_list[idx], ["enum_fuzzy_match"]
+    for idx, a in enumerate(allowed_l):
+        if a in low or low in a:
+            return allowed_list[idx], ["enum_fuzzy_match"]
+    # special_ability_origin aliases handled elsewhere; still clamp
+    if field == "special_ability_origin":
+        aliases = {
+            "no abilities": "none",
+            "no special abilities": "none",
+            "gained": "acquired",
+            "learned": "acquired",
+            "earned": "acquired",
+            "unlocked": "acquired",
+            "born with": "innate",
+            "inborn": "innate",
+            "inherent": "innate",
+            "natural": "innate",
+            "mixed": "both",
+            "mix": "both",
+            "acquired and innate": "both",
+            "innate and acquired": "both",
+        }
+        if low in aliases:
+            return aliases[low], ["enum_alias"]
+    return default_val, ["not_an_allowed_enum"]
+
+
+def coerce_typed_setup_value(field: str, value: Any) -> tuple[Any, list[str]]:
+    """
+    Coerce booleans / enums / instruction echoes for a single field.
+    Returns (coerced_value, reasons). Empty reasons means no type fix needed
+    (value may still be contaminated by slogan rules).
+    """
+    contract = field_contract(field)
+    kind = contract.get("kind")
+    reasons: list[str] = []
+
+    if kind == "boolean":
+        if isinstance(value, bool):
+            return value, []
+        coerced = coerce_setup_bool(value, default=False)
+        return coerced, ["bool_coerced"]
+
+    if kind == "enum" or field == "magic_level":
+        clean, enum_reasons = clamp_setup_enum(field, value)
+        return clean, enum_reasons
+
+    if kind == "number":
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value, []
+        raw = _value_text(value)
+        if is_instruction_echo(raw):
+            return value, ["instruction_echo"]
+        try:
+            if "." in raw:
+                return float(raw), ["number_coerced"]
+            return int(raw), ["number_coerced"]
+        except (TypeError, ValueError):
+            return value, ["not_a_number"]
+
+    # short_phrase / prose: strip instruction echoes for structure-ish fields
+    text = _value_text(value)
+    if text and is_instruction_echo(text) and (
+        field in STRUCTURE_SLOGAN_FIELDS or field in STRUCTURE_FIELD_DEFAULTS
+    ):
+        fb = STRUCTURE_FIELD_DEFAULTS.get(field)
+        if fb is not None:
+            return fb, ["instruction_echo"]
+        return value, ["instruction_echo"]
+
+    # proficiency / skill style: slogan dumps → defaults
+    if field in ("proficiency_access", "skill_style") and text:
+        low = text.lower()
+        if (
+            has_growth_slogan(text)
+            or is_instruction_echo(text)
+            or len(text) > 100
+            or any(m in low for m in ("one-skill", "near-useless", "seed frame", "compounding edge"))
+        ):
+            fb = STRUCTURE_FIELD_DEFAULTS.get(field) or ("standard" if field == "skill_style" else "only expert tasks require training")
+            return fb, ["structure_slogan_or_paste"]
+
+    return value, reasons
+
+
+def coerce_typed_setup_fields(fields: dict[str, Any]) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    """Coerce bools/enums/instruction echoes across a setup dict."""
+    out = dict(fields)
+    dirty: dict[str, list[str]] = {}
+    for field, value in list(out.items()):
+        if str(field).startswith("_") or field in ("notes", "special_abilities"):
+            continue
+        clean, reasons = coerce_typed_setup_value(field, value)
+        if reasons:
+            dirty[field] = reasons
+            out[field] = clean
+        elif clean is not value and clean != value:
+            out[field] = clean
+    return out, dirty
+
+
 def field_contamination_reasons(field: str, value: Any, idea: str = "") -> list[str]:
     """Return reasons a value is invalid for this field (empty = clean)."""
     text = _value_text(value)
-    if not text:
+    if not text and not isinstance(value, bool):
         return []
     reasons: list[str] = []
     contract = field_contract(field)
@@ -1952,14 +2312,33 @@ def field_contamination_reasons(field: str, value: Any, idea: str = "") -> list[
     idea_l = str(idea or "").strip().lower()
     text_l = text.lower()
 
-    if kind in ("boolean", "number"):
+    if kind == "boolean":
+        # Non-bool after coercion path is still flagged for sanitize_field_value
+        if not isinstance(value, bool) and str(value).strip().lower() not in {
+            "true", "false", "1", "0", "yes", "no", "on", "off", "enabled", "disabled",
+        }:
+            if is_instruction_echo(value) or any(
+                tok in text_l for tok in ("system", "window", "compound", "subtle blue")
+            ):
+                reasons.append("bool_label_not_boolean")
+        return reasons
+
+    if kind == "number":
         return []
 
-    if kind == "enum":
-        allowed = [str(a).lower() for a in (contract.get("allowed_values") or [])]
+    if is_instruction_echo(text) and kind in ("enum", "short_phrase", "prose"):
+        reasons.append("instruction_echo")
+
+    if kind == "enum" or field == "magic_level":
+        allowed = [str(a).lower() for a in (contract.get("allowed_values") or list(MAGIC_LEVEL_VALUES if field == "magic_level" else []))]
+        if field == "magic_level":
+            allowed = list(MAGIC_LEVEL_VALUES)
         if allowed and text_l not in allowed:
-            # Allow close matches for multi-word enums already handled upstream
-            if not any(text_l == a or text_l.startswith(a) for a in allowed):
+            if field == "magic_level":
+                # Aliases are normalized by coerce; still flag raw free-text until then.
+                if normalize_magic_level(text) != text_l or text_l not in allowed:
+                    reasons.append("not_an_allowed_enum")
+            elif not any(text_l == a or text_l.startswith(a) for a in allowed):
                 reasons.append("not_an_allowed_enum")
         return reasons
 
@@ -1983,6 +2362,9 @@ def field_contamination_reasons(field: str, value: Any, idea: str = "") -> list[
             reasons.append("growth_slogan_in_wrong_field")
         if ban_timers and has_growth_timer(text):
             reasons.append("growth_timer_in_wrong_field")
+
+    if field in ("proficiency_access",) and (has_growth_slogan(text) or len(text) > 100):
+        reasons.append("structure_slogan_or_paste")
 
     if field == "world_races" and POWER_LABEL_RACE_RE.search(text):
         reasons.append("power_label_as_race")
@@ -3383,6 +3765,19 @@ def structural_fallback(field: str, context: dict[str, Any] | None = None) -> An
             and intent["power_fantasy"].get("growth") == "compounding"
             else "standard"
         ),
+        "proficiency_access": "only expert tasks require training",
+        "race_magic_rarity": "same as world magic",
+        "narration_detail": "balanced",
+        "xp_growth_speed": "normal",
+        "skill_growth_speed": "normal",
+        "proficiency_growth_speed": "normal",
+        "new_skill_frequency": "normal",
+        "special_ability_origin": "none",
+        "leveling_system": True,
+        "game_system": bool(isekai),
+        "proficiency_system": False,
+        "skill_levels_enabled": True,
+        "race_magic_enabled": False,
         "world_style": (intent.get("genre") or "frontier dark fantasy")[:120] if intent.get("genre") else "frontier dark fantasy",
         "custom_style": _clean_custom_style_fallback(intent, ctx),
         "race_magic_rules": (
@@ -3396,7 +3791,12 @@ def structural_fallback(field: str, context: dict[str, Any] | None = None) -> An
     }
     if field in table:
         return table[field]
-    # Enums / booleans fall back via SETUP_RANDOMIZER elsewhere
+    if field in STRUCTURE_FIELD_DEFAULTS:
+        return STRUCTURE_FIELD_DEFAULTS[field]
+    # Enums: first allowed value
+    allowed = field_contract(field).get("allowed_values") or []
+    if allowed:
+        return allowed[0]
     examples = field_contract(field).get("examples") or []
     if examples:
         return examples[0]
@@ -3428,13 +3828,32 @@ def sanitize_field_value(
     context: dict[str, Any] | None = None,
 ) -> tuple[Any, list[str]]:
     """Return (clean_value, reasons). If clean, reasons is empty and value unchanged."""
-    reasons = field_contamination_reasons(field, value, idea)
-    if not reasons:
-        return value, []
+    # Pass 1: type coercion (bool strings, enum clamps, instruction echoes).
+    coerced, type_reasons = coerce_typed_setup_value(field, value)
+    working = coerced
+    reasons = list(type_reasons)
+
+    # Pass 2: slogan / paste contamination on the coerced value.
+    contam = field_contamination_reasons(field, working, idea)
+    # Skip enum re-flagging if we already clamped successfully to an allowed value.
+    if type_reasons and field_contract(field).get("kind") == "enum":
+        contam = [r for r in contam if r not in {"not_an_allowed_enum", "instruction_echo"}]
+    if field == "magic_level" and type_reasons:
+        contam = [r for r in contam if r not in {"not_an_allowed_enum", "instruction_echo"}]
+    if isinstance(working, bool) and type_reasons:
+        contam = [r for r in contam if r not in {"bool_label_not_boolean", "instruction_echo"}]
+
+    reasons.extend(contam)
+    if not contam:
+        return working, reasons
+
     clean = structural_fallback(field, {**(context or {}), "field": field})
     if clean is None:
-        return value, reasons
-    return clean, reasons
+        # Keep type-coerced value even if we cannot fully clean slogans.
+        return working, reasons
+    # Prefer type-correct fallbacks (bool/enum) over prose fallbacks when kinds differ.
+    fb_coerced, _ = coerce_typed_setup_value(field, clean)
+    return fb_coerced, reasons
 
 
 def sanitize_setup_fields(
@@ -3446,13 +3865,22 @@ def sanitize_setup_fields(
     """Sanitize a randomizer result dict; returns (fields, {field: reasons})."""
     out = dict(fields)
     dirty: dict[str, list[str]] = {}
+    # Zeroeth pass: board-wide type coercion so later lints see real bools/enums.
+    out, typed = coerce_typed_setup_fields(out)
+    for field, reasons in typed.items():
+        dirty.setdefault(field, []).extend(reasons)
     ctx = {**(context or {}), **{k: v for k, v in out.items() if not str(k).startswith("_")}}
     for field, value in list(out.items()):
         if str(field).startswith("_") or field in ("notes",):
             continue
         clean, reasons = sanitize_field_value(field, value, idea=idea, context=ctx)
         if reasons:
-            dirty[field] = reasons
+            # Avoid double-counting pure type coercions already recorded.
+            new_reasons = [r for r in reasons if r not in (dirty.get(field) or [])]
+            if new_reasons or clean != value:
+                dirty.setdefault(field, []).extend(new_reasons)
+                out[field] = clean
+        elif clean != value:
             out[field] = clean
     # Second pass: cross-field consistency (races ↔ race rules; memory ↔ backstory).
     ctx = {**ctx, "idea": idea or ctx.get("idea") or "", "_randomize_idea": idea or ctx.get("_randomize_idea") or ""}

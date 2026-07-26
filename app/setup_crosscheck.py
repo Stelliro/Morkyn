@@ -350,19 +350,55 @@ def check_ability_duplicates(fields: dict[str, Any]) -> tuple[dict[str, Any], li
     return out, findings
 
 
+def check_typed_fields(fields: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Coerce booleans / clamp enums / strip instruction echoes (g13)."""
+    out = dict(fields)
+    findings: list[dict[str, Any]] = []
+    try:
+        from app.setup_composer import coerce_typed_setup_fields
+
+        cleaned, dirty = coerce_typed_setup_fields(out)
+        for field, reasons in dirty.items():
+            # Repaired deterministically — pattern (not hard bug) so ok stays true after clamp.
+            findings.append(
+                _finding(
+                    sev="pattern",
+                    code="typed_field_sanitized",
+                    fields=[field],
+                    detail=f"{field}: {', '.join(reasons)} → {cleaned.get(field)!r}"[:160],
+                    repair="coerce_typed_setup_fields",
+                )
+            )
+            out[field] = cleaned[field]
+    except Exception:
+        pass
+    return out, findings
+
+
 def check_slogan_patterns(fields: dict[str, Any], *, idea: str = "") -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Structure fields must not carry power-fantasy / idea slogans."""
     out = dict(fields)
     findings: list[dict[str, Any]] = []
     idea_l = _norm(idea)
-    for field in _STRUCTURE_FIELDS:
+    try:
+        from app.setup_composer import is_instruction_echo
+    except Exception:
+        def is_instruction_echo(_t: Any) -> bool:  # type: ignore
+            return False
+
+    for field in _STRUCTURE_FIELDS | {"proficiency_access", "skill_style"}:
         if field not in out:
+            continue
+        # Booleans already coerced; skip non-string
+        if isinstance(out.get(field), bool):
             continue
         val = str(out.get(field) or "").strip()
         if not val:
             continue
         low = val.lower()
         bad = [m for m in _SLOGAN_MARKERS if m in low]
+        if is_instruction_echo(val):
+            bad.append("instruction_echo")
         # idea paste into short structure fields
         if idea_l and len(idea_l) > 24 and idea_l[:40] in low:
             bad.append("idea_paste")
@@ -782,6 +818,8 @@ def crosscheck_setup_fields(
     out = dict(base)
 
     if repair:
+        out, f = check_typed_fields(out)
+        all_findings.extend(f)
         out, f = check_list_duplicates(out)
         all_findings.extend(f)
         out, f = check_slogan_patterns(out, idea=idea_s)
@@ -803,12 +841,23 @@ def crosscheck_setup_fields(
             "race_ability_rules",
             "world_style",
             "tone",
+            "magic_level",
+            "game_system",
+            "leveling_system",
+            "proficiency_system",
+            "skill_levels_enabled",
+            "difficulty",
         ]:
             if k in probe:
                 out[k] = probe[k]
         out, f = check_ability_duplicates(out)
         all_findings.extend(f)
+        # Final type pass after other repairs may have reintroduced strings
+        out, f = check_typed_fields(out)
+        all_findings.extend(f)
     else:
+        _, f = check_typed_fields(out)
+        all_findings.extend(f)
         _, f = check_list_duplicates(out)
         all_findings.extend(f)
         _, f = check_slogan_patterns(out, idea=idea_s)

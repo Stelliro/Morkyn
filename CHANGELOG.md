@@ -19,18 +19,36 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
-> Future changes after `0.8.0` live here.
+> Changes after `0.9.0-beta` live here.
+
+---
+
+## [0.9.0-beta] - 2026-07-26
+
+> **Beta** from branch `test/morkyn-0.9-wip`. Playable preview of the 0.9 line — expect rough edges and save-format evolution before a stable 0.9.0.
 
 ### Added
-- [FE] Per-turn collapsed **Debug** panel (expand, copy summary/JSON/path, view full trace file via `GET /api/debug-trace`)
-- [BE] Always write model traces under `data/model_traces/`; each turn response includes compact `debug` bundle + `debug_trace_path`
-- [RULES] Optional **dice / skill checks** system: setup tab **5 Checks**, d6–d100, events/encounters, specialized-skill partial salvage, negative outcomes
-- [RULES] Durable skill library (`data/skill_library.json`) with similarity adjust on new skills; catalog enable/disable
-- [API] `/api/skill-checks/catalog|resolve|register|enable` + GM `skill_check_context` in prompt packet
-- [DOCS] `docs/SkillChecks.md`
-- [RULES] Contested DCs from enemy/object power + power RNG; degree flavor (“just barely”, “as if you did nothing”); unskilled weapon mishaps with lasting injuries
-- [FE] Roll banners under narration; color map canvas + auto-generate; play-side mini-map
-- [MAP] Fix empty ASCII preview when grid omitted from stored tiles
+- [RULES] Player **mana / energy (stamina) / fatigue** pools: turn- and terrain-based drains, wait/meditate/sleep recovery, life-force–scaled fatigue cap, hard gates on power spend
+- [RULES] Structured power **resource costs**, cost/prereq diversification, pure min–max **ability count RNG**, lock-after-create by strength with fair prereqs
+- [FE] Resources UI + wait kinds; art path: Forge **LoRAs + hires** always visible (not Advanced-only), persist `forge_active_loras`
+- [SETUP] Composer tree, starter-logic, idea bank seeds, setup crosscheck matrix
+- [SETUP] **g13 sanitation**: post-randomize bool coercion, `magic_level` enum + aliases, instruction-echo strip, structure slogan clamps (`coerce_typed_setup_fields` + tests)
+- [FE] Play layout stacks; Forge art gate polish
+
+### Fixed
+- [SETUP] Backstory self-contradictions (magic-as-tool vs not-wizardry) repaired by `magic_level`
+- [WORLD] Entity name spam / scenery “Sky-crack first window” + button HTML strip
+- [LLM] Ability cost/prereq clones and always-max count / all-locked defaults
+- [FE] Missing LoRAs in simple art bar
+
+### Changed
+- [VER] App version **0.9.0-beta**
+- [DOCS] `docs/TODO_NEXT.md` tracks remaining 0.9 backlog (g9/g10/g12 polish items, etc.)
+
+### Note from 0.8.x Unreleased (still shipping in this beta line)
+- [FE] Per-turn collapsed **Debug** panel; model traces under `data/model_traces/`
+- [RULES] Optional **dice / skill checks** system + durable skill library
+- [FE] Roll banners; color map canvas + mini-map
 
 ---
 
