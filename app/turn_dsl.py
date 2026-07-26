@@ -55,7 +55,7 @@ Do not percent-encode or HTML-escape text. Write normal readable characters; the
 Form:
 ===NAR===
 <continuous playable prose, about 1000-1800 characters, natural paragraphs in clear English>
-Use [[CODE]] after entity names when known (e.g. Sarah [[A]], Mosswake Gate [[L1]]).
+Use [[CODE]] after entity names when known (name [[A]], place [[L1]]).
 
 ===OPS===
 <zero or more opcode lines from the closed list below>

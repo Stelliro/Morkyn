@@ -144,6 +144,15 @@
               content.innerHTML =
                 '<div class="statGrid">' +
                 cardStat("Health", (player.health ?? 0) + "/" + (player.max_health ?? 0)) +
+                (player.energy != null || (state.resources && state.resources.energy != null)
+                  ? cardStat("Energy", (player.energy ?? state.resources?.energy ?? 0) + "/" + (player.max_energy ?? state.resources?.max_energy ?? 0))
+                  : "") +
+                ((player.max_mana > 0) || (state.resources && state.resources.max_mana > 0)
+                  ? cardStat("Mana", (player.mana ?? state.resources?.mana ?? 0) + "/" + (player.max_mana ?? state.resources?.max_mana ?? 0))
+                  : "") +
+                (player.fatigue != null || (state.resources && state.resources.fatigue != null)
+                  ? cardStat("Fatigue", (player.fatigue ?? state.resources?.fatigue ?? 0) + "/" + (player.max_fatigue ?? state.resources?.max_fatigue ?? 0))
+                  : "") +
                 cardStat("Level", player.level ?? 1) +
                 cardStat("XP", player.xp ?? 0) +
                 cardStat("Gold", player.gold ?? 0) +

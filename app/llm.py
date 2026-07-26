@@ -20,14 +20,19 @@ from app.db import connect
 from app.idea_bank import idea_sparks_for_prompt
 from app.setup_composer import (
     COMPOSER_FIELD_ORDER,
+    OVERUSED_SEED_DOMAINS,
+    SEED_SKILL_DOMAIN_POOL,
     apply_keyword_intent,
     empty_intent,
     field_contamination_reasons,
     field_contract,
     field_is_contaminated,
     intent_slice_for_field,
+    is_overused_seed_domain,
     merge_intent_plans,
+    normalize_look_fields,
     opening_feel_prompt_block,
+    pick_seed_skill_domain,
     sanitize_setup_fields,
     session_theme_from_intent,
     structural_fallback,
@@ -38,6 +43,7 @@ from app.prompts import (
     COMPACT_VERIFY_PROMPT,
     SYSTEM_PROMPT,
     VERIFY_PROMPT,
+    anti_repetition_block,
     build_user_prompt,
     build_verify_prompt,
 )
@@ -70,6 +76,21 @@ class MalformedJsonError(LlmError):
 _managed_llama_process: subprocess.Popen | None = None
 _managed_llama_base_url = ""
 _managed_llama_logs: dict[str, str] = {}
+# Set after successful start; used to detect base-model / LoRA swaps.
+_managed_llama_signature = ""
+# LLM-only lifecycle (web app never restarts for LoRA/theme swaps).
+_llm_runtime: dict[str, Any] = {
+    "phase": "offline",  # offline | starting | switching | ready | error
+    "method": "none",  # none | hot_swap | soft_recycle | already_ready
+    "message": "LLM not started yet.",
+    "detail": "",
+    "signature": "",
+    "lora_path": "",
+    "base_model": "",
+    "updated_at": 0.0,
+    "error": "",
+}
+_llm_runtime_lock = __import__("threading").Lock()
 
 
 DEFAULT_GGUF_MODEL = ""
@@ -307,38 +328,72 @@ SETUP_RANDOMIZER_FALLBACKS = {
     "player_sex": ["female", "male", "", "intersex", "sexless or constructed", "varies by form"],
     "previous_life_age": ["19", "27", "34", "46", "elderly", "unknown"],
     "previous_life_sex": ["female", "male", "", "intersex", "sexless or constructed", "varies by form"],
-    "special_ability_origin": ["none", "acquired", "innate"],
+    "special_ability_origin": ["none", "acquired", "innate", "both"],
     "backstory_mode": ["known", "hidden", "fragmented memories", "reincarnated", "transmigrated", "nameless drifter"],
     "memory_policy": ["known", "ordinary memory", "details emerge through choices", "rumors may be wrong", "private details stay private", "remembers former life"],
     "hair": [
         "short brown hair",
-        "long silver braid",
-        "messy black hair",
-        "cropped sandy hair",
+        "long black braid",
+        "messy copper curls",
+        "cropped black hair",
+        "shoulder-length ash blonde",
+        "tight cornrows",
+        "bald with stubble shadow",
+        "white undercut",
         "wavy auburn hair",
+        "chin-length dark hair",
+        "high ponytail, black",
+        "salt-and-pepper buzz cut",
+        "long red waves",
+        "short green-dyed tips",
+        "neat side part, brown",
+        "messy silver fringe",
     ],
     "facial_features": [
         "green eyes, light freckles, soft jaw",
         "dark brown eyes, thin scar on left cheek",
-        "grey eyes, tired lids, square jaw",
+        "amber eyes, high cheekbones, crooked smile",
+        "blue-grey eyes, deep-set, narrow nose",
+        "black eyes, round face, small burn near temple",
         "hazel eyes, faint laugh lines, straight nose",
+        "pale blue eyes, freckled bridge, soft mouth",
+        "gold-flecked brown eyes, thick brows, cleft chin",
+        "one cloudy eye, sharp cheekbones, thin lips",
+        "warm brown eyes, full cheeks, broken nose healed",
+        "violet contacts, painted freckles, pointed chin",
+        "green-brown eyes, deep laugh creases, strong brow",
     ],
     "appearance": [
         "torso: travel-stained coat; feet: dusty boots; waist: rope coil",
-        "torso: plain work tunic; torso: leather apron; hands: work gloves; feet: practical boots",
+        "torso: plain work tunic; hands: work gloves; feet: practical boots",
         "torso: frayed cloak; legs: patched trousers; bag: worn satchel",
         "torso: simple street clothes; feet: cheap shoes; bag: thin travel bag",
+        "torso: secondhand hoodie; feet: scuffed sneakers; bag: messenger bag",
+        "torso: canvas jacket; waist: tool belt; feet: steel-toe boots",
+        "torso: rain cloak; legs: oilcloth trousers; bag: waterproof pack",
+        "torso: formal vest over shirt; feet: polished but cracked shoes",
+        "torso: hospital scrubs under coat; feet: soft shoes; bag: medical pouch",
+        "torso: quilted work vest; hands: fingerless gloves; feet: trail boots",
     ],
     "starter_equipment": [
         "worn coat, coiled rope, pocket knife, dusty boots, water skin, 3 days rations",
         "plain clothes, work gloves, small tool pouch, practical boots, copper coins",
         "travel cloak, empty satchel, wooden charm, heel of bread",
         "secondhand jacket, notebook stub, stub of chalk, water flask",
+        "canvas bag, multi-tool, duct tape roll, cheap flashlight, snacks",
+        "rain cloak, fishing line, tin cup, flint kit, dried fish",
     ],
     "character_backstory": [
         "Born in a canal district where freight crews raised children as extra hands, they grew up reading cargo marks, weather signs, and people's excuses. Before the story begins, they worked as a route clerk who kept small settlements supplied, and they reached the starting area carrying one delayed delivery, two unpaid favors, and a fear that their last ledger was altered.",
         "Born in a hill village that treated old ruins as common landmarks, they spent most of their life repairing tools, copying maps, and guiding travelers through roads locals considered ordinary. They left after a winter landslide exposed sealed stonework under the village shrine, bringing practical skills, a few local contacts, and one question their elders refused to answer.",
-        "In their former life, they died in a hospital stairwell during a citywide blackout after spending years as an overworked emergency technician. They woke in this world with most memories intact but no proof of who they had been, carrying modern habits of triage, suspicion of official silence, and a need to learn which rules of the new world can still kill them.",
+        # Pure isekai arrival (truck / desk → dirt road)
+        "In their former life they worked night shifts at a logistics warehouse until a truck accident killed them. They woke on a dirt road beside a river compound in another world with city-work habits intact, empty pockets, and no free hero kit — only the need to learn which local rules can still kill them.",
+        # Body transmigration
+        "They remember dying as a tired office clerk, then waking inside the body of a debt-ridden compound ledger-hand already known to local gate crews. The body's calluses and unpaid favors are real; their old-world memories arrive in fragments between work shifts.",
+        # Reincarnated childhood
+        "Reborn into a canal village as a child years ago, they grew up hauling water and copying notice-board marks while half-remembering glass towers and night traffic from a life that no longer has a body. Locals know them only as a quiet apprentice, not as anyone from another world.",
+        # Ritual summon
+        "A failed outer-court ritual yanked them out of a rainy city street and into a sect compound still wearing street clothes. They remember the summon circle, the smell of burnt paper, and the awkward silence of disciples who expected a legendary spirit instead of a confused outsider.",
     ],
     "skill_style": ["standard", "generous", "training-heavy", "strict"],
     "proficiency_access": ["learned", "familiar actions free", "only expert tasks require training"],
@@ -372,7 +427,9 @@ SETUP_RANDOMIZER_FALLBACKS = {
         "Do not seed starting skills; discover skill names only after repeated use, training, or clear milestones.",
         "Specialized proficiencies require mentors or manuals, ordinary attempts are allowed, mastery needs downtime.",
         "Combat, social, craft, and survival skills appear only after the player actually practices or earns them in play.",
-        "Seed skill Ropework rank F; XP_to_next = 50 * rank_index^1.4; use grants 5-12 skill XP × risk (1/2/3); after C practice XP ×0.5 until mentor breakthrough; +1 domain check per rank above F; no second combat toolkit",
+        "Seed skill Digging rank F; track ranks in subtle system UI; practice/risk/mentor XP in prose; no free second combat toolkit at Start",
+        "Seed skill Coin Ring rank F; compounds via careful market work; passives OK later; opening kit thin",
+        "Seed skill Residue Glow rank F; unreliable magic sense; ranks through risky attunement; more powers unlock later",
     ],
     "tech_level": ["iron age", "medieval", "early industrial", "near future", "spacefaring salvage"],
     "custom_style": ["", "Keep the opening local and personal before revealing larger threats.", "Every settlement should have at least one practical reason to exist.", "Avoid chosen-one framing; make reputation earned through visible choices."],
@@ -398,16 +455,16 @@ SETUP_RANDOMIZER_BOOLEAN_FALLBACKS = {
     "skill_levels_enabled": [True, False],
 }
 GROWTH_MATH_SAMPLES = [
-    "rank F→E@80 E→D@200 D→C@450 C→B@900; domain use 5-12 skill XP × risk (1 safe/2 contested/3 life-risk); XP_to_next = 50 * rank_index^1.4; after C practice XP ×0.5 until mentor breakthrough; +1 domain check per rank above F",
+    "OP seed: F→E@60 E→D@140 D→C@320 C→B@700 B→A@1500 A→S@3200 S→SS@7000 SS→SSS@15000; use 6-14 XP × risk (1/2/3/5); XP_to_next = 40 * rank_index^1.55; soft caps after each band ×0.55 until contested breakthrough; effect mult ≈ 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
     "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success ×2; soft cap at L6 (XP ×0.6 until setback recovery); effect magnitude +8% per level",
-    "thresholds F0 E100 D250 C500 B1000 A2000 S4000; practice 4 XP, contested 10, mentor drill 15; rank bonus +1 check / +5% effect; breakthrough needed after B",
-    "XP_to_next = 40 * rank_index^1.5 (F=1); use grants 4-10 XP × risk (1/2/3); soft cap after rank C practice ×0.5; each rank above F: +1 domain check",
+    "thresholds F0 E100 D250 C500 B1000 A2000 S4000 SS9000 SSS20000; practice 5 XP, contested 12, mentor 18, life-risk 25; rank +1 check / +12–20% compound; breakthrough after B and A before S-tier; passives at C/A/S",
+    "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP × risk (1/2/3/4); soft cap after C ×0.55 until breakthrough; ladder F…S/SS/SSS; each rank +1 check / +14–22% effect",
 ]
 
 SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
     {
         "name": "Echo Step",
-        "description": "A short burst of impossible movement, useful for escapes or sudden positioning.",
+        "description": "A short burst of awkward repositioning — half a pace that should not fit, useful only for clumsy escapes.",
         "locked": False,
         "prerequisites": "",
         "cost": "brief fatigue after repeated use",
@@ -415,27 +472,11 @@ SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
     },
     {
         "name": "Ashen Oath",
-        "description": "Can sense when someone nearby is hiding a binding promise or unpaid debt.",
+        "description": "Can sense when someone nearby is hiding a binding promise or unpaid debt — a pressure, not a transcript.",
         "locked": True,
         "prerequisites": "Awakens after witnessing a broken oath with real consequences.",
         "cost": "mental strain when pushed",
         "growth_math": GROWTH_MATH_SAMPLES[1],
-    },
-    {
-        "name": "Thread Sense",
-        "description": "Briefly notices the emotional weight attached to an object or place.",
-        "locked": False,
-        "prerequisites": "",
-        "cost": "sensory overload after repeated use",
-        "growth_math": GROWTH_MATH_SAMPLES[2],
-    },
-    {
-        "name": "Quiet Ledger",
-        "description": "Keeps an instinctive count of small favors, debts, and who last broke a deal nearby.",
-        "locked": False,
-        "prerequisites": "",
-        "cost": "distraction when overloaded with social noise",
-        "growth_math": GROWTH_MATH_SAMPLES[3],
     },
     {
         "name": "Rust Touch",
@@ -467,6 +508,70 @@ SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
         "locked": True,
         "prerequisites": "Unlocks after a failed escape that cost something real.",
         "cost": "muscle cramps",
+        "growth_math": GROWTH_MATH_SAMPLES[3],
+    },
+    {
+        "name": "Coin Ring",
+        "description": "Tap-tests cheap coin forgeries; misses good fakes and cannot price goods.",
+        "locked": False,
+        "prerequisites": "",
+        "cost": "sore fingers after long market days",
+        "growth_math": GROWTH_MATH_SAMPLES[0],
+    },
+    {
+        "name": "Camp Ash",
+        "description": "Judges roughly how old a cold fire is — hours vs days, not exact times.",
+        "locked": False,
+        "prerequisites": "",
+        "cost": "soot in the lungs if sniffed too close",
+        "growth_math": GROWTH_MATH_SAMPLES[1],
+    },
+    {
+        "name": "Draft Feel",
+        "description": "Skin prickles near air leaks, open flues, or poorly sealed doors.",
+        "locked": True,
+        "prerequisites": "Unlocks after sleeping in a drafty ruin without a fire.",
+        "cost": "chills and distraction in wind",
+        "growth_math": GROWTH_MATH_SAMPLES[2],
+    },
+    {
+        "name": "Residue Glow",
+        "description": "Faint unreliable sense of spent magic on objects — often wrong at F rank.",
+        "locked": True,
+        "prerequisites": "Awakens after touching a spent ward or failed charm.",
+        "cost": "migraine after forced use",
+        "growth_math": GROWTH_MATH_SAMPLES[3],
+    },
+    {
+        "name": "Hauling",
+        "description": "Awkward loads ride a little better — fewer dropped crates, not superhuman strength.",
+        "locked": False,
+        "prerequisites": "",
+        "cost": "back ache that lingers",
+        "growth_math": GROWTH_MATH_SAMPLES[0],
+    },
+    {
+        "name": "Ward Itch",
+        "description": "Skin itches near crude wards and hex-lines; sophisticated magic feels like nothing yet.",
+        "locked": True,
+        "prerequisites": "Needs a night sleeping against a marked threshold.",
+        "cost": "rash if pushed",
+        "growth_math": GROWTH_MATH_SAMPLES[1],
+    },
+    {
+        "name": "Throw Line",
+        "description": "Lobs a small object closer to the intended mark — stones, keys, bottles; not weapons mastery.",
+        "locked": False,
+        "prerequisites": "",
+        "cost": "shoulder strain after repeats",
+        "growth_math": GROWTH_MATH_SAMPLES[2],
+    },
+    {
+        "name": "Spoilage Nose",
+        "description": "Smells food going bad a day early; cannot identify poison reliably.",
+        "locked": False,
+        "prerequisites": "",
+        "cost": "nausea in crowded kitchens",
         "growth_math": GROWTH_MATH_SAMPLES[3],
     },
 ]
@@ -1045,7 +1150,13 @@ def resolve_api_key(config: dict[str, Any] | None = None) -> str:
 
 
 # Known session_theme.adapter_hint values from setup_composer. Empty map values = use base model.
-THEME_ADAPTER_HINTS: tuple[str, ...] = ("isekai_rpg", "system_rpg", "grimdark", "default")
+THEME_ADAPTER_HINTS: tuple[str, ...] = (
+    "isekai_rpg",
+    "system_rpg",
+    "grimdark",
+    "mundane",
+    "default",
+)
 
 # Per-request model config override (theme routing during generate_turn).
 _model_config_override: ContextVar[dict[str, Any] | None] = ContextVar("model_config_override", default=None)
@@ -1065,6 +1176,41 @@ def normalize_theme_adapter_map(raw: Any) -> dict[str, str]:
         if not hint:
             continue
         out[hint] = str(value or "").strip()[:200]
+    return out
+
+
+def default_theme_llm_lora_map() -> dict[str, dict[str, Any]]:
+    """Per-theme LLM LoRA (GGUF adapter) paths for llama.cpp. Empty path = base model only."""
+    return {hint: {"path": "", "scale": 1.0, "note": ""} for hint in THEME_ADAPTER_HINTS}
+
+
+def normalize_theme_llm_lora_map(raw: Any) -> dict[str, dict[str, Any]]:
+    """
+    Normalize theme → LLM LoRA map.
+    Accepts:
+      { "isekai_rpg": "D:/loras/isekai.gguf" }
+      { "isekai_rpg": { "path": "...", "scale": 0.8, "note": "..." } }
+    Multiple simultaneous LoRAs are not supported by llama-cpp-python server (one lora_path);
+    use one adapter per theme, or Ollama models that already bake ADAPTER weights.
+    """
+    out = default_theme_llm_lora_map()
+    if not isinstance(raw, dict):
+        return out
+    for key, value in raw.items():
+        hint = str(key or "").strip()[:80]
+        if not hint:
+            continue
+        entry: dict[str, Any] = {"path": "", "scale": 1.0, "note": ""}
+        if isinstance(value, str):
+            entry["path"] = value.strip()[:1000]
+        elif isinstance(value, dict):
+            entry["path"] = str(value.get("path") or value.get("lora_path") or "").strip()[:1000]
+            try:
+                entry["scale"] = max(0.0, min(2.0, float(value.get("scale") if value.get("scale") is not None else 1.0)))
+            except (TypeError, ValueError):
+                entry["scale"] = 1.0
+            entry["note"] = str(value.get("note") or value.get("label") or "").strip()[:120]
+        out[hint] = entry
     return out
 
 
@@ -1090,37 +1236,99 @@ def resolve_theme_model_override(
     return "", ""
 
 
+def resolve_theme_llm_lora(
+    session_theme: dict[str, Any] | None,
+    lora_map: dict[str, Any] | None = None,
+) -> tuple[str, str, float]:
+    """
+    Pick LLM LoRA path for this session theme.
+    Priority: session_theme.theme_lora_path → theme_llm_lora_map[adapter_hint] → map[default].
+    Returns (source_label, path, scale).
+    """
+    lmap = normalize_theme_llm_lora_map(lora_map)
+    if isinstance(session_theme, dict) and session_theme:
+        explicit = str(session_theme.get("theme_lora_path") or session_theme.get("llm_lora_path") or "").strip()
+        if explicit:
+            try:
+                scale = float(session_theme.get("theme_lora_scale") if session_theme.get("theme_lora_scale") is not None else 1.0)
+            except (TypeError, ValueError):
+                scale = 1.0
+            return "session_theme.theme_lora_path", explicit[:1000], max(0.0, min(2.0, scale))
+        hint = str(session_theme.get("adapter_hint") or "default").strip() or "default"
+        entry = lmap.get(hint) or {}
+        path = str(entry.get("path") or "").strip()
+        if path:
+            try:
+                scale = float(entry.get("scale") if entry.get("scale") is not None else 1.0)
+            except (TypeError, ValueError):
+                scale = 1.0
+            return f"theme_llm_lora_map[{hint}]", path[:1000], max(0.0, min(2.0, scale))
+    # Fallback default pack even without a session theme (optional base style LoRA).
+    default_entry = lmap.get("default") or {}
+    path = str(default_entry.get("path") or "").strip()
+    if path:
+        try:
+            scale = float(default_entry.get("scale") if default_entry.get("scale") is not None else 1.0)
+        except (TypeError, ValueError):
+            scale = 1.0
+        return "theme_llm_lora_map[default]", path[:1000], max(0.0, min(2.0, scale))
+    return "", "", 1.0
+
+
 def apply_theme_model_routing(
     config: dict[str, Any],
     session_theme: dict[str, Any] | None,
 ) -> dict[str, Any]:
     """
-    Return a copy of model config with theme-based model swap applied (turn-time only).
+    Return a copy of model config with theme-based model + LLM LoRA applied (turn-time only).
     Ollama → ollama_model; OpenAI-compatible → api_model; llama.cpp path-like → gguf_model_path.
+    LLM LoRA (GGUF adapter) → lora_path for managed llama.cpp server.
     """
     out = dict(config or {})
     adapter_map = normalize_theme_adapter_map(out.get("theme_adapter_map"))
+    lora_map = normalize_theme_llm_lora_map(out.get("theme_llm_lora_map"))
     out["theme_adapter_map"] = adapter_map
+    out["theme_llm_lora_map"] = lora_map
     source, model = resolve_theme_model_override(
         session_theme if isinstance(session_theme, dict) else None,
         adapter_map,
     )
     out["theme_model_source"] = source
     out["theme_model_active"] = model
-    if not model:
-        return out
+    lora_source, lora_path, lora_scale = resolve_theme_llm_lora(
+        session_theme if isinstance(session_theme, dict) else None,
+        lora_map,
+    )
+    out["theme_lora_source"] = lora_source
+    out["theme_lora_active"] = lora_path
     provider = _normalize_provider(out.get("provider"))
-    if provider == "ollama":
-        out["ollama_model"] = model
-    elif provider == "openai":
-        out["api_model"] = model
+    # Theme-resolved LoRA wins; otherwise keep always-on lora_path from model settings.
+    if lora_path:
+        out["lora_path"] = lora_path
+        out["lora_scale"] = lora_scale
     else:
-        # llama.cpp: path-like values swap the managed GGUF; otherwise label only
-        # (server may already host a themed merge — Morkyn still records the intent).
-        lowered = model.lower()
-        if ".gguf" in lowered or "/" in model or "\\" in model:
-            out["gguf_model_path"] = model
-        out["model"] = model
+        out["lora_path"] = str(out.get("lora_path") or "").strip()
+        try:
+            out["lora_scale"] = max(0.0, min(2.0, float(out.get("lora_scale") if out.get("lora_scale") is not None else 1.0)))
+        except (TypeError, ValueError):
+            out["lora_scale"] = 1.0
+    # Ollama cannot load GGUF LoRA files mid-request — theme_adapter_map should point at
+    # Ollama models that already include the ADAPTER (or full fine-tunes).
+    if provider != "llama_cpp":
+        # Still record intent for UI/traces, but do not force a GGUF path onto non-llama providers.
+        pass
+    if model:
+        if provider == "ollama":
+            out["ollama_model"] = model
+        elif provider == "openai":
+            out["api_model"] = model
+        else:
+            # llama.cpp: path-like values swap the managed GGUF; otherwise label only
+            # (server may already host a themed merge — Morkyn still records the intent).
+            lowered = model.lower()
+            if ".gguf" in lowered or "/" in model or "\\" in model:
+                out["gguf_model_path"] = model
+            out["model"] = model
     return out
 
 
@@ -1141,6 +1349,14 @@ def public_model_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg["api_key"] = ""
     cfg["api_key_set"] = bool(key)
     cfg["api_key_hint"] = ("••••" + key[-4:]) if len(key) >= 4 else ("" if not key else "••••")
+    cfg["theme_adapter_map"] = normalize_theme_adapter_map(cfg.get("theme_adapter_map"))
+    cfg["theme_llm_lora_map"] = normalize_theme_llm_lora_map(cfg.get("theme_llm_lora_map"))
+    cfg["theme_adapter_hints"] = list(THEME_ADAPTER_HINTS)
+    cfg["lora_path"] = str(cfg.get("lora_path") or "").strip()
+    try:
+        cfg["lora_scale"] = max(0.0, min(2.0, float(cfg.get("lora_scale") if cfg.get("lora_scale") is not None else 1.0)))
+    except (TypeError, ValueError):
+        cfg["lora_scale"] = 1.0
     cfg["api_presets"] = {
         name: {"api_base_url": meta["api_base_url"], "api_model": meta["api_model"], "label": meta["label"], "key_env": meta["key_env"]}
         for name, meta in API_PRESETS.items()
@@ -1171,6 +1387,10 @@ def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
         "response_token_cap": _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP),
         "response_token_hard_cap": _env_int("AI_RPG_RESPONSE_HARD_CAP_TOKENS", _env_int("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS", DEFAULT_RESPONSE_HARD_CAP)),
         "theme_adapter_map": default_theme_adapter_map(),
+        "theme_llm_lora_map": default_theme_llm_lora_map(),
+        # Optional always-on LLM LoRA (overridden by theme map when a theme path resolves).
+        "lora_path": os.getenv("AI_RPG_LLM_LORA_PATH", ""),
+        "lora_scale": 1.0,
     }
     try:
         with connect() as conn:
@@ -1178,16 +1398,19 @@ def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
     except Exception:
         default["provider"] = _normalize_provider(default["provider"])
         default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
+        default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
         return default
     if not row:
         default["provider"] = _normalize_provider(default["provider"])
         default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
+        default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
         return default
     try:
         stored = json.loads(row["value"])
     except json.JSONDecodeError:
         default["provider"] = _normalize_provider(default["provider"])
         default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
+        default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
         return default
     merged = {**default, **stored}
     explicit_env = {
@@ -1218,6 +1441,14 @@ def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
         merged["response_token_hard_cap"] = _env_int("AI_RPG_RESPONSE_HARD_CAP_TOKENS", _env_int("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS", DEFAULT_RESPONSE_HARD_CAP))
     merged["provider"] = _normalize_provider(merged.get("provider"))
     merged["theme_adapter_map"] = normalize_theme_adapter_map(merged.get("theme_adapter_map"))
+    merged["theme_llm_lora_map"] = normalize_theme_llm_lora_map(merged.get("theme_llm_lora_map"))
+    merged["lora_path"] = str(merged.get("lora_path") or "").strip()
+    try:
+        merged["lora_scale"] = max(0.0, min(2.0, float(merged.get("lora_scale") if merged.get("lora_scale") is not None else 1.0)))
+    except (TypeError, ValueError):
+        merged["lora_scale"] = 1.0
+    if os.getenv("AI_RPG_LLM_LORA_PATH"):
+        merged["lora_path"] = str(os.getenv("AI_RPG_LLM_LORA_PATH") or "").strip()
     return merged
 
 
@@ -1233,6 +1464,7 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
         "api_model",
         "api_key",
         "api_preset",
+        "lora_path",
     }
     next_config = {**current}
     for key in allowed:
@@ -1244,6 +1476,13 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
         next_config[key] = str(config.get(key) or "").strip()
     if "theme_adapter_map" in config:
         next_config["theme_adapter_map"] = normalize_theme_adapter_map(config.get("theme_adapter_map"))
+    if "theme_llm_lora_map" in config:
+        next_config["theme_llm_lora_map"] = normalize_theme_llm_lora_map(config.get("theme_llm_lora_map"))
+    if "lora_scale" in config:
+        try:
+            next_config["lora_scale"] = max(0.0, min(2.0, float(config.get("lora_scale"))))
+        except (TypeError, ValueError):
+            next_config["lora_scale"] = 1.0
     if "response_token_cap" in config:
         next_config["response_token_cap"] = max(64, min(100_000, _int_value(config.get("response_token_cap"), DEFAULT_RESPONSE_TOKEN_CAP)))
     if "response_token_hard_cap" in config:
@@ -1253,6 +1492,8 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     next_config["response_token_hard_cap"] = hard_cap
     next_config["provider"] = _normalize_provider(next_config.get("provider"))
     next_config["theme_adapter_map"] = normalize_theme_adapter_map(next_config.get("theme_adapter_map"))
+    next_config["theme_llm_lora_map"] = normalize_theme_llm_lora_map(next_config.get("theme_llm_lora_map"))
+    next_config["lora_path"] = str(next_config.get("lora_path") or "").strip()
     # Apply preset defaults when switching to openai without custom URL
     preset_name = str(next_config.get("api_preset") or "xai").strip().lower()
     if next_config["provider"] == "openai" and preset_name in API_PRESETS:
@@ -1345,17 +1586,353 @@ def _ensure_managed_llama_state() -> None:
         _managed_llama_logs = {}
 
 
-def _start_managed_llama_cpp(config: dict[str, Any], base_url: str) -> dict[str, Any]:
-    global _managed_llama_base_url, _managed_llama_logs, _managed_llama_process
+def _managed_llama_config_signature(config: dict[str, Any]) -> str:
+    """Identity of the loaded base GGUF + optional LLM LoRA."""
+    model_path = str(config.get("gguf_model_path") or "").strip()
+    lora_path = str(config.get("lora_path") or "").strip()
+    return f"{model_path}||{lora_path}"
 
+
+def _set_llm_runtime(**kwargs: Any) -> dict[str, Any]:
+    """Update LLM runtime phase for UI polling (web app stays up during switches)."""
+    with _llm_runtime_lock:
+        _llm_runtime.update(kwargs)
+        _llm_runtime["updated_at"] = time.time()
+        return dict(_llm_runtime)
+
+
+def get_llm_runtime() -> dict[str, Any]:
+    """Public snapshot: website always works; phase describes LLM backend only."""
+    with _llm_runtime_lock:
+        snap = dict(_llm_runtime)
+    snap["web_ok"] = True
+    snap["llm_ok"] = snap.get("phase") == "ready"
+    snap["busy"] = snap.get("phase") in {"starting", "switching"}
+    # Friendly copy for banner
+    phase = str(snap.get("phase") or "offline")
+    if phase == "switching":
+        snap.setdefault(
+            "user_message",
+            "Website stays online — swapping LLM adapter. Wait a moment before the next turn.",
+        )
+    elif phase == "starting":
+        snap.setdefault(
+            "user_message",
+            "Website stays online — starting the local LLM. Generation waits until it is ready.",
+        )
+    elif phase == "ready":
+        snap.setdefault("user_message", "LLM ready.")
+    elif phase == "error":
+        snap.setdefault("user_message", snap.get("error") or "LLM backend error.")
+    else:
+        snap.setdefault("user_message", "LLM offline (site still works).")
+    return snap
+
+
+def _list_native_lora_adapters(base_url: str, timeout: int = 3) -> list[dict[str, Any]] | None:
+    """
+    Native llama-server exposes GET /lora-adapters for multi-LoRA hot-swap.
+    llama-cpp-python's OpenAI server does not — returns None when unavailable.
+    """
+    url = f"{base_url.rstrip('/')}/lora-adapters"
+    try:
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+    if isinstance(payload, list):
+        return [row for row in payload if isinstance(row, dict)]
+    if isinstance(payload, dict) and isinstance(payload.get("data"), list):
+        return [row for row in payload["data"] if isinstance(row, dict)]
+    return None
+
+
+def try_hot_swap_llm_lora(
+    base_url: str,
+    *,
+    lora_path: str = "",
+    scale: float = 1.0,
+) -> dict[str, Any]:
+    """
+    Prefer true hot-swap when the LLM server already loaded adapters (native llama-server).
+    Does not restart the web app or the LLM process.
+    """
+    adapters = _list_native_lora_adapters(base_url)
+    if adapters is None:
+        return {
+            "ok": False,
+            "method": "hot_swap",
+            "error": "Server has no /lora-adapters endpoint (typical for llama-cpp-python). Soft-recycle will be used instead.",
+        }
+    wanted = str(lora_path or "").strip()
+    wanted_name = Path(wanted).name.lower() if wanted else ""
+    body: list[dict[str, Any]] = []
+    matched = False
+    for row in adapters:
+        aid = row.get("id")
+        if aid is None:
+            continue
+        path = str(row.get("path") or row.get("name") or "")
+        name = Path(path).name.lower() if path else ""
+        if not wanted:
+            # Clear all adapters
+            body.append({"id": aid, "scale": 0.0})
+            continue
+        if path == wanted or name == wanted_name or wanted.lower() in path.lower():
+            body.append({"id": aid, "scale": max(0.0, min(2.0, float(scale)))})
+            matched = True
+        else:
+            body.append({"id": aid, "scale": 0.0})
+    if wanted and not matched:
+        return {
+            "ok": False,
+            "method": "hot_swap",
+            "error": (
+                f"LoRA not preloaded on server: {wanted_name or wanted}. "
+                "Start native llama-server with --lora for each theme adapter and --lora-init-without-apply, "
+                "or use soft-recycle (managed llama-cpp-python)."
+            ),
+            "adapters": adapters,
+        }
+    if not body and not wanted:
+        return {"ok": True, "method": "hot_swap", "message": "No adapters to clear.", "adapters": adapters}
+    url = f"{base_url.rstrip('/')}/lora-adapters"
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=30) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+        try:
+            result = json.loads(raw) if raw.strip() else {"ok": True}
+        except json.JSONDecodeError:
+            result = {"ok": True, "raw": raw[:200]}
+        return {
+            "ok": True,
+            "method": "hot_swap",
+            "message": f"Hot-swapped LLM LoRA scales ({len(body)} adapter slot(s)).",
+            "applied": body,
+            "server": result,
+            "adapters": adapters,
+        }
+    except Exception as exc:
+        return {"ok": False, "method": "hot_swap", "error": f"Hot-swap POST failed: {exc}", "adapters": adapters}
+
+
+def _stop_managed_llama_cpp() -> None:
+    """Stop only the managed LLM process. Web/API process is untouched."""
+    global _managed_llama_process, _managed_llama_base_url, _managed_llama_signature
+    proc = _managed_llama_process
+    if proc is not None and proc.poll() is None:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=8)
+            except Exception:
+                proc.kill()
+        except Exception:
+            pass
+    _managed_llama_process = None
+    _managed_llama_base_url = ""
+    _managed_llama_signature = ""
+
+
+def soft_recycle_llm_backend(config: dict[str, Any], base_url: str) -> dict[str, Any]:
+    """
+    Soft-recycle: stop and restart only the managed LLM process.
+    The Mørkyn web frontend/backend keep running; the user waits for LLM ready.
+    """
+    model_path = str(config.get("gguf_model_path") or "").strip()
+    lora_path = str(config.get("lora_path") or "").strip()
+    wanted = _managed_llama_config_signature(config)
+    _set_llm_runtime(
+        phase="switching",
+        method="soft_recycle",
+        message="Recycling LLM process for new base model / LoRA…",
+        detail="Web UI stays online. Turns wait until the local model is ready.",
+        signature=wanted,
+        lora_path=lora_path,
+        base_model=model_path,
+        error="",
+    )
     if _managed_process_running(base_url):
-        return {"started": False, "managed": True, "message": "Managed llama.cpp server is already starting or running.", "logs": _managed_llama_logs}
+        _stop_managed_llama_cpp()
+        # Brief pause so the port is released before rebind.
+        time.sleep(0.6)
+    result = _start_managed_llama_cpp(config, base_url, force_new=True)
+    if result.get("error"):
+        _set_llm_runtime(
+            phase="error",
+            method="soft_recycle",
+            message="LLM recycle failed.",
+            error=str(result.get("error") or "unknown"),
+            signature="",
+            lora_path=lora_path,
+            base_model=model_path,
+        )
+        return result
+    models_url = f"{base_url.rstrip('/')}/v1/models"
+    payload, wait_error = _wait_for_models(
+        models_url,
+        _managed_llama_process,
+        _env_int("AI_RPG_LLM_STARTUP_TIMEOUT", 180),
+    )
+    if payload is None:
+        _set_llm_runtime(
+            phase="error",
+            method="soft_recycle",
+            message="LLM did not become ready after recycle.",
+            error=wait_error,
+            signature="",
+            lora_path=lora_path,
+            base_model=model_path,
+        )
+        result["error"] = wait_error
+        result["ok"] = False
+        return result
+    _set_llm_runtime(
+        phase="ready",
+        method="soft_recycle",
+        message=result.get("message") or "LLM ready after soft recycle.",
+        detail="Adapter/base loaded. Website never stopped.",
+        signature=wanted,
+        lora_path=lora_path,
+        base_model=model_path,
+        error="",
+    )
+    result["ok"] = True
+    result["method"] = "soft_recycle"
+    result["runtime"] = get_llm_runtime()
+    return result
+
+
+def ensure_llm_adapter_ready(config: dict[str, Any]) -> dict[str, Any]:
+    """
+    Make sure the running LLM matches config's base + LoRA.
+    Order: already ready → native hot-swap → soft-recycle managed process.
+    Never restarts the FastAPI/web process.
+    """
+    global _managed_llama_signature
+
+    provider = _normalize_provider(config.get("provider"))
+    if provider != "llama_cpp":
+        _set_llm_runtime(
+            phase="ready",
+            method="none",
+            message=f"Provider {provider} — no GGUF LoRA process to manage.",
+            error="",
+        )
+        return {"ok": True, "method": "none", "provider": provider, "runtime": get_llm_runtime()}
+
+    base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
+    wanted = _managed_llama_config_signature(config)
+    lora_path = str(config.get("lora_path") or "").strip()
+    scale = 1.0
+    try:
+        scale = float(config.get("lora_scale") if config.get("lora_scale") is not None else 1.0)
+    except (TypeError, ValueError):
+        scale = 1.0
+
+    # Already on the right signature with our managed process.
+    if _managed_process_running(base_url) and _managed_llama_signature == wanted:
+        _set_llm_runtime(
+            phase="ready",
+            method="already_ready",
+            message="LLM already running with the requested base/LoRA.",
+            signature=wanted,
+            lora_path=lora_path,
+            base_model=str(config.get("gguf_model_path") or ""),
+            error="",
+        )
+        return {"ok": True, "method": "already_ready", "runtime": get_llm_runtime()}
+
+    # Same base model already up: try hot-swap first (native llama-server multi-LoRA).
+    models_alive = False
+    try:
+        _read_models_url(f"{base_url}/v1/models", timeout=2)
+        models_alive = True
+    except Exception:
+        models_alive = False
+
+    if models_alive:
+        hot = try_hot_swap_llm_lora(base_url, lora_path=lora_path, scale=scale)
+        if hot.get("ok"):
+            # Hot-swap only changes adapter scales; track signature if we own process or trust external.
+            if _managed_process_running(base_url) or not _managed_llama_process:
+                _managed_llama_signature = wanted
+            _set_llm_runtime(
+                phase="ready",
+                method="hot_swap",
+                message=str(hot.get("message") or "Hot-swapped LLM LoRA."),
+                signature=wanted,
+                lora_path=lora_path,
+                base_model=str(config.get("gguf_model_path") or ""),
+                error="",
+            )
+            return {**hot, "runtime": get_llm_runtime()}
+
+    # Soft-recycle managed LLM only (or start fresh).
+    return soft_recycle_llm_backend(config, base_url)
+
+
+def _start_managed_llama_cpp(
+    config: dict[str, Any],
+    base_url: str,
+    *,
+    force_new: bool = False,
+) -> dict[str, Any]:
+    global _managed_llama_base_url, _managed_llama_logs, _managed_llama_process, _managed_llama_signature
 
     model_path = str(config.get("gguf_model_path") or "").strip()
     if not model_path:
         return {"started": False, "managed": False, "error": "No GGUF model path is saved. Select a GGUF model file, save the model settings, then test again."}
     if not Path(model_path).is_file():
         return {"started": False, "managed": False, "error": f"Saved GGUF model file was not found: {model_path}"}
+
+    lora_path = str(config.get("lora_path") or "").strip()
+    if lora_path and not Path(lora_path).is_file():
+        return {
+            "started": False,
+            "managed": False,
+            "error": f"LLM LoRA adapter file was not found: {lora_path}",
+        }
+
+    wanted = _managed_llama_config_signature(config)
+    if not force_new and _managed_process_running(base_url):
+        if _managed_llama_signature == wanted or (not _managed_llama_signature and not lora_path):
+            _set_llm_runtime(
+                phase="ready",
+                method="already_ready",
+                message="Managed llama.cpp already running.",
+                signature=_managed_llama_signature or wanted,
+                lora_path=lora_path,
+                base_model=model_path,
+                error="",
+            )
+            return {
+                "started": False,
+                "managed": True,
+                "message": "Managed llama.cpp server is already starting or running.",
+                "logs": _managed_llama_logs,
+                "signature": _managed_llama_signature or wanted,
+            }
+        # Theme/base LoRA changed — soft-recycle LLM only (web stays up).
+        return soft_recycle_llm_backend(config, base_url)
+
+    _set_llm_runtime(
+        phase="starting",
+        method="soft_recycle" if force_new else "none",
+        message="Starting managed LLM process…",
+        detail="Web UI stays online.",
+        signature=wanted,
+        lora_path=lora_path,
+        base_model=model_path,
+        error="",
+    )
 
     host, port = _llama_cpp_host_port(base_url)
     context_tokens = _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
@@ -1396,6 +1973,10 @@ def _start_managed_llama_cpp(config: dict[str, Any], base_url: str) -> dict[str,
         "--verbose",
         "False",
     ]
+    # llama-cpp-python server: single LoRA adapter (GGUF LoRA from convert_lora_to_gguf / GGUF-my-LoRA).
+    # Multi-theme: soft-recycle with a different --lora_path, or use native llama-server + hot-swap.
+    if lora_path:
+        args.extend(["--lora_path", lora_path])
     try:
         _managed_llama_process = subprocess.Popen(args, stdout=stdout_handle or subprocess.DEVNULL, stderr=stderr_handle or subprocess.DEVNULL)
     except Exception as exc:
@@ -1403,6 +1984,7 @@ def _start_managed_llama_cpp(config: dict[str, Any], base_url: str) -> dict[str,
             stdout_handle.close()
         if stderr_handle:
             stderr_handle.close()
+        _set_llm_runtime(phase="error", message="Could not start LLM.", error=str(exc))
         return {"started": False, "managed": False, "error": f"Could not start llama.cpp server: {exc}"}
 
     if stdout_handle:
@@ -1410,13 +1992,18 @@ def _start_managed_llama_cpp(config: dict[str, Any], base_url: str) -> dict[str,
     if stderr_handle:
         stderr_handle.close()
     _managed_llama_base_url = base_url
+    _managed_llama_signature = wanted
     _managed_llama_logs = {"stdout": stdout_path, "stderr": stderr_path}
+    lora_note = f" + LoRA {Path(lora_path).name}" if lora_path else ""
     return {
         "started": True,
         "managed": True,
-        "message": "Started managed llama.cpp server from saved GGUF model path.",
+        "message": f"Started managed llama.cpp server from saved GGUF model path{lora_note}.",
         "pid": _managed_llama_process.pid,
         "logs": _managed_llama_logs,
+        "signature": wanted,
+        "lora_path": lora_path,
+        "web_unaffected": True,
     }
 
 
@@ -1438,13 +2025,61 @@ def _wait_for_models(url: str, process: subprocess.Popen | None, timeout_seconds
 
 
 def _ensure_llama_cpp_ready_for_generation(config: dict[str, Any], base_url: str) -> None:
+    """
+    Ensure the LLM process matches this config's base + LoRA.
+    Prefer hot-swap; otherwise soft-recycle only the LLM (website stays up).
+    """
+    ensure = ensure_llm_adapter_ready(config)
+    if ensure.get("ok") is False and ensure.get("error"):
+        raise LlmError(str(ensure.get("error")))
+    if ensure.get("method") in {"hot_swap", "already_ready", "none"}:
+        # Confirm /v1/models still answers
+        try:
+            _read_models_url(f"{base_url.rstrip('/')}/v1/models", timeout=4)
+            return
+        except Exception:
+            pass
+    # Soft-recycle path already waited, but double-check if process just started without wait.
+    if ensure.get("method") == "soft_recycle" and ensure.get("ok"):
+        return
     models_url = f"{base_url.rstrip('/')}/v1/models"
+    if _managed_process_running(base_url.rstrip("/")):
+        payload, wait_error = _wait_for_models(
+            models_url,
+            _managed_llama_process,
+            _env_int("AI_RPG_LLM_STARTUP_TIMEOUT", 180),
+        )
+        if payload is None:
+            raise LlmError(wait_error)
+        _set_llm_runtime(
+            phase="ready",
+            method=str(ensure.get("method") or "soft_recycle"),
+            message="LLM ready.",
+            signature=_managed_llama_signature,
+            error="",
+        )
+        return
+    # Cold start
     start_result = _start_managed_llama_cpp(config, base_url.rstrip("/"))
     if not (start_result.get("started") or start_result.get("managed")):
         raise LlmError(str(start_result.get("error") or "Could not start managed llama.cpp server."))
-    payload, wait_error = _wait_for_models(models_url, _managed_llama_process, _env_int("AI_RPG_LLM_STARTUP_TIMEOUT", 180))
+    payload, wait_error = _wait_for_models(
+        models_url,
+        _managed_llama_process,
+        _env_int("AI_RPG_LLM_STARTUP_TIMEOUT", 180),
+    )
     if payload is None:
+        _set_llm_runtime(phase="error", error=wait_error, message="LLM failed to start.")
         raise LlmError(wait_error)
+    _set_llm_runtime(
+        phase="ready",
+        method="soft_recycle",
+        message=str(start_result.get("message") or "LLM ready."),
+        signature=_managed_llama_signature,
+        lora_path=str(config.get("lora_path") or ""),
+        base_model=str(config.get("gguf_model_path") or ""),
+        error="",
+    )
 
 
 def _urlopen_json(req: urllib.request.Request, timeout: int) -> dict[str, Any]:
@@ -1591,8 +2226,22 @@ def _setup_randomizer_return_fields(group: str, current_setup: dict[str, Any], t
         return_fields = [group.split(":", 1)[1]]
     elif group == "all":
         return_fields = SETUP_RANDOMIZER_ALL_FIELD_ORDER
+    elif group == "special_abilities":
+        # Critical: must be ONLY special_abilities. Defaulting to the character group
+        # silently skips the ability quality gate and ships name=description junk from 8B models.
+        return_fields = ["special_abilities"]
+    elif group in SETUP_RANDOMIZER_FIELD_GROUPS:
+        return_fields = SETUP_RANDOMIZER_FIELD_GROUPS[group]
+    elif group in SETUP_RANDOMIZER_ALL_FIELD_ORDER or group in {
+        "special_abilities",
+        "custom_skills",
+        "special_ability_origin",
+    }:
+        # Single known field name (not a group key)
+        return_fields = [group]
     else:
-        return_fields = SETUP_RANDOMIZER_FIELD_GROUPS.get(group, SETUP_RANDOMIZER_FIELD_GROUPS["character"])
+        # Unknown group — do NOT default to the entire character block (that was a real bug).
+        return_fields = SETUP_RANDOMIZER_FIELD_GROUPS.get(group, [])
     return [field for field in return_fields if field not in locked_fields]
 
 
@@ -1684,6 +2333,242 @@ def _ability_fingerprint(ability: dict[str, Any] | None) -> str:
     return f"{name}||{desc}"
 
 
+# Near-duplicate ability cross-check (batch + vs existing).
+ABILITY_DEDUPE_MAX_ROUNDS = 4
+ABILITY_NEAR_DUP_THRESHOLD = 0.45
+
+# Fiction synonym clusters (shared cluster ⇒ near-dup signal).
+_ABILITY_NAME_SYNONYM_CLUSTERS: tuple[frozenset[str], ...] = (
+    frozenset({"veil", "shroud", "cloak", "mantle", "curtain", "cover", "mask"}),
+    frozenset({"echo", "mimic", "copy", "recall", "resound", "reverberate"}),
+    frozenset({"ward", "barrier", "shield", "aegis", "bulwark", "guard"}),
+    frozenset({"bolt", "blast", "strike", "slash", "shot", "lance"}),
+    frozenset({"whisper", "murmur", "listen", "hear", "eavesdrop"}),
+    frozenset({"mend", "heal", "salve", "knit", "restore"}),
+    frozenset({"summon", "call", "conjure", "manifest", "spawn"}),
+    frozenset({"boost", "enhance", "overclock", "empower", "amplify", "synergy"}),
+)
+
+_ABILITY_STOPWORDS = frozenset(
+    """
+    a an the and or but if to of in on at by for with from as is are was were be been being
+    you your yours they their them he she it its this that these those can may might will
+    would should could into onto over under after before while when where which who whom
+    not no nor only just also more most less least very into across through during
+    ability power skill effect use used using once per day hour scene rest week rank
+    level xp small brief briefly minor slightly short long temporary
+    """.split()
+)
+
+# Coarse mechanical lanes — shared lane + high token overlap ⇒ near-duplicate.
+_ABILITY_EFFECT_LANES: dict[str, tuple[str, ...]] = {
+    "summon": ("summon", "construct", "create a", "spawn", "call forth", "manifest a creature"),
+    "shield": ("shield", "barrier", "deflect", "block attack", "ward", "aegis", "protect"),
+    "heal": ("heal", "mend", "restore health", "regenerat", "salve", "cure wound"),
+    "sense": ("sense", "detect", "perceive", "read emotion", "read intent", "scry", "hear whisper"),
+    "distract": ("distract", "mimic", "echo sound", "noise", "disrupt focus", "feint"),
+    "stealth": ("veil", "obscure", "hide", "invisible", "cloak", "shadow", "silent"),
+    "time": ("time", "chrono", "rewind", "duplicate of yourself", "past action", "echo of yourself"),
+    "buff": ("boost", "enhance", "synergy", "overclock", "empower", "amplify", "strengthen"),
+    "strike": ("strike", "slash", "blast", "damage", "kill", "sever", "impale", "burn"),
+    "control": ("control", "bind", "root", "stun", "paralyze", "dominate", "charm", "fear"),
+    "craft": ("craft", "repair", "forge", "tool", "build", "solder", "stitch"),
+    "social": ("persuade", "lie", "bargain", "intimidate", "face", "reputation", "rumor"),
+}
+
+
+def _ability_content_tokens(ability: dict[str, Any] | None) -> set[str]:
+    if not isinstance(ability, dict):
+        return set()
+    blob = " ".join(
+        [
+            str(ability.get("name") or ""),
+            str(ability.get("description") or ""),
+            str(ability.get("power_type") or ""),
+        ]
+    ).lower()
+    words = re.findall(r"[a-z][a-z0-9'-]{2,}", blob)
+    return {w for w in words if w not in _ABILITY_STOPWORDS and len(w) > 2}
+
+
+def _ability_effect_lanes(ability: dict[str, Any] | None) -> set[str]:
+    if not isinstance(ability, dict):
+        return set()
+    blob = f"{ability.get('name') or ''} {ability.get('description') or ''}".lower()
+    hits: set[str] = set()
+    for lane, markers in _ABILITY_EFFECT_LANES.items():
+        if any(m in blob for m in markers):
+            hits.add(lane)
+    return hits
+
+
+def _ability_synonym_cluster_hits(text: str) -> set[int]:
+    words = set(re.findall(r"[a-z][a-z0-9'-]{2,}", (text or "").lower()))
+    hits: set[int] = set()
+    for idx, cluster in enumerate(_ABILITY_NAME_SYNONYM_CLUSTERS):
+        if words & cluster:
+            hits.add(idx)
+    return hits
+
+
+def ability_similarity_score(a: dict[str, Any] | None, b: dict[str, Any] | None) -> float:
+    """0..1 similarity. High means near-duplicate fiction/mechanics."""
+    if not isinstance(a, dict) or not isinstance(b, dict):
+        return 0.0
+    na = re.sub(r"\s+", " ", str(a.get("name") or "").strip().lower())
+    nb = re.sub(r"\s+", " ", str(b.get("name") or "").strip().lower())
+    if not na or not nb:
+        return 0.0
+    if na == nb:
+        return 1.0
+    # Substring / shared multiword name stem
+    if na in nb or nb in na:
+        name_score = 0.92
+    else:
+        ta = set(na.replace("-", " ").split())
+        tb = set(nb.replace("-", " ").split())
+        if ta and tb:
+            name_score = len(ta & tb) / max(1, len(ta | tb))
+        else:
+            name_score = 0.0
+        # Soft stem: first token match (Veil of X / Veil of Y)
+        if ta and tb and next(iter(sorted(ta))) == next(iter(sorted(tb))):
+            name_score = max(name_score, 0.55)
+        # Synonym clusters in names (Veil vs Shroud)
+        ca = _ability_synonym_cluster_hits(na)
+        cb = _ability_synonym_cluster_hits(nb)
+        if ca and cb and ca & cb:
+            name_score = max(name_score, 0.72)
+
+    da = re.sub(r"\s+", " ", str(a.get("description") or "").strip().lower())[:400]
+    db = re.sub(r"\s+", " ", str(b.get("description") or "").strip().lower())[:400]
+    if da and db and da == db:
+        return 1.0
+    if da and db and (da[:60] == db[:60] and len(da) > 40):
+        desc_prefix = 0.85
+    else:
+        desc_prefix = 0.0
+
+    tok_a = _ability_content_tokens(a)
+    tok_b = _ability_content_tokens(b)
+    if tok_a and tok_b:
+        jacc = len(tok_a & tok_b) / max(1, len(tok_a | tok_b))
+    else:
+        jacc = 0.0
+
+    # Expand jaccard with synonym clusters present in full text
+    full_a = f"{na} {da}"
+    full_b = f"{nb} {db}"
+    syn_a = _ability_synonym_cluster_hits(full_a)
+    syn_b = _ability_synonym_cluster_hits(full_b)
+    syn_overlap = 0.0
+    if syn_a and syn_b:
+        syn_overlap = len(syn_a & syn_b) / max(1, len(syn_a | syn_b))
+
+    lanes_a = _ability_effect_lanes(a)
+    lanes_b = _ability_effect_lanes(b)
+    if lanes_a and lanes_b:
+        lane_overlap = len(lanes_a & lanes_b) / max(1, len(lanes_a | lanes_b))
+    else:
+        lane_overlap = 0.0
+
+    # Weighted blend
+    score = (
+        0.30 * name_score
+        + 0.24 * jacc
+        + 0.24 * lane_overlap
+        + 0.12 * syn_overlap
+        + 0.10 * desc_prefix
+    )
+    # Shared stealth/shield/etc + overlapping fiction words
+    shared_lanes = lanes_a & lanes_b
+    if shared_lanes and (jacc >= 0.18 or syn_overlap >= 0.34 or name_score >= 0.5):
+        score = max(score, 0.50)
+    # Same lanes exactly
+    if lanes_a and lanes_a == lanes_b and (jacc >= 0.2 or syn_overlap >= 0.3):
+        score = max(score, 0.58)
+    if name_score >= 0.7 and (jacc >= 0.18 or syn_overlap >= 0.3):
+        score = max(score, 0.62)
+    # Synonym names in same mechanical story (veil/shroud hide/obscure)
+    if syn_overlap >= 0.5 and (lane_overlap >= 0.34 or jacc >= 0.15):
+        score = max(score, 0.56)
+    return round(min(1.0, score), 3)
+
+
+def find_near_duplicate_pairs(
+    abilities: list[Any],
+    *,
+    existing: list[Any] | None = None,
+    threshold: float = ABILITY_NEAR_DUP_THRESHOLD,
+) -> list[dict[str, Any]]:
+    """Return near-dup pairs: {i, j, score, weaker_index, stronger_index, against_existing?}."""
+    items = [a for a in abilities if isinstance(a, dict)]
+    pairs: list[dict[str, Any]] = []
+    for i in range(len(items)):
+        for j in range(i + 1, len(items)):
+            sc = ability_similarity_score(items[i], items[j])
+            if sc >= threshold:
+                weaker = pick_weaker_ability_index(items, i, j)
+                stronger = j if weaker == i else i
+                pairs.append(
+                    {
+                        "i": i,
+                        "j": j,
+                        "score": sc,
+                        "weaker_index": weaker,
+                        "stronger_index": stronger,
+                        "against_existing": False,
+                        "names": [
+                            str(items[i].get("name") or ""),
+                            str(items[j].get("name") or ""),
+                        ],
+                    }
+                )
+    # Also vs existing form abilities
+    for ei, ex in enumerate(existing or []):
+        if not isinstance(ex, dict):
+            continue
+        for i, ab in enumerate(items):
+            sc = ability_similarity_score(ab, ex)
+            if sc >= threshold:
+                pairs.append(
+                    {
+                        "i": i,
+                        "j": None,
+                        "existing_index": ei,
+                        "score": sc,
+                        "weaker_index": i,  # always rework the new one
+                        "stronger_index": None,
+                        "against_existing": True,
+                        "names": [str(ab.get("name") or ""), str(ex.get("name") or "")],
+                    }
+                )
+    # Highest similarity first
+    pairs.sort(key=lambda p: float(p.get("score") or 0), reverse=True)
+    return pairs
+
+
+def pick_weaker_ability_index(items: list[dict[str, Any]], i: int, j: int) -> int:
+    """Prefer reworking the thinner / milder / lower-quality entry."""
+    a, b = items[i], items[j]
+    ra = evaluate_ability_quality(a, require_strong_math=False, one_skillish=False)
+    rb = evaluate_ability_quality(b, require_strong_math=False, one_skillish=False)
+    sa, sb = int(ra.get("score") or 0), int(rb.get("score") or 0)
+    if sa != sb:
+        return i if sa < sb else j
+    la = len(str(a.get("description") or ""))
+    lb = len(str(b.get("description") or ""))
+    if la != lb:
+        return i if la < lb else j
+    # Mild utility loses to a more distinct combat fantasy when scores tie
+    strength_rank = {"mild": 0, "moderate": 1, "strong": 2}
+    sta = strength_rank.get(estimate_ability_opening_strength(a), 1)
+    stb = strength_rank.get(estimate_ability_opening_strength(b), 1)
+    if sta != stb:
+        return i if sta < stb else j
+    return j  # default: rework the later card
+
+
 def _abilities_match_existing(new_list: list[Any], existing: list[Any]) -> bool:
     """True if the new roll is effectively the same set as what the player already has."""
     if not isinstance(new_list, list) or not isinstance(existing, list):
@@ -1700,40 +2585,129 @@ def _abilities_match_existing(new_list: list[Any], existing: list[Any]) -> bool:
     return new_fps == old_fps
 
 
-def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str, Any]]:
-    field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
-    origin = str(field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "none").strip().lower()
-    if origin == "none":
-        return []
+def _ability_count_bounds(field_context: dict[str, Any]) -> tuple[int, int]:
+    """Shared 1–4 ability count range for Simple + Advanced randomize."""
+    try:
+        count_min = int(field_context.get("count_min") if field_context.get("count_min") is not None else 1)
+    except (TypeError, ValueError):
+        count_min = 1
+    try:
+        count_max = int(field_context.get("count_max") if field_context.get("count_max") is not None else 4)
+    except (TypeError, ValueError):
+        count_max = 4
+    count_min = max(1, min(4, count_min))
+    count_max = max(1, min(4, count_max))
+    if count_min > count_max:
+        count_min, count_max = count_max, count_min
+    return count_min, count_max
+
+
+def _roll_ability_count(field_context: dict[str, Any], *, one_skillish: bool = False) -> int:
+    """
+    Ability slot count for this randomize.
+
+    - Quantity locked → fixed slot count (existing cards or min).
+    - Otherwise pure RNG: uniform random integer in [count_min, count_max].
+    - If the client already rolled (`count_rolled` + `requested_count`/`target_count`), honor that roll.
+    """
+    _ = one_skillish  # kept for call-site compat; count is no longer biased by OP-MC intent
     quantity_locked = bool(field_context.get("quantity_locked"))
+    count_min, count_max = _ability_count_bounds(field_context)
     try:
         requested_count = max(
             0,
             min(
-                5,
+                4,
                 int(
-                    field_context.get("requested_count")
+                    field_context.get("target_count")
+                    if field_context.get("target_count") is not None
+                    else field_context.get("requested_count")
                     if field_context.get("requested_count") is not None
-                    else field_context.get("existing_count")
-                    or 0
+                    else 0
                 ),
             ),
         )
     except (TypeError, ValueError):
         requested_count = 0
-    # One-skill / near-useless intents → single seed ability
+
+    if quantity_locked:
+        if requested_count:
+            return max(1, min(4, requested_count))
+        try:
+            existing = max(0, min(4, int(field_context.get("existing_count") or 0)))
+        except (TypeError, ValueError):
+            existing = 0
+        if existing:
+            return max(1, existing)
+        return count_min
+
+    # Client already rolled once for this request — do not re-roll.
+    if field_context.get("count_rolled") and requested_count:
+        return max(count_min, min(count_max, requested_count))
+
+    # Pure RNG between the user's min and max (inclusive).
+    return random.randint(count_min, count_max)
+
+
+def _enforce_ability_count(
+    abilities: list[Any] | None,
+    target: int,
+    *,
+    current_setup: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Slice or pad the ability list to exactly `target` entries."""
+    target = max(0, min(4, int(target or 0)))
+    clean = [dict(a) for a in (abilities or []) if isinstance(a, dict)]
+    if target <= 0:
+        return []
+    if len(clean) > target:
+        return clean[:target]
+    if len(clean) < target:
+        # Pad from fallback seeds so the rolled count is honored even if the model shorted
+        try:
+            setup = dict(current_setup or {})
+            fc = setup.get("_field_context") if isinstance(setup.get("_field_context"), dict) else {}
+            fc = dict(fc)
+            fc["target_count"] = target
+            fc["requested_count"] = target
+            fc["count_rolled"] = True
+            fc["quantity_locked"] = True  # force exact fill from roll
+            setup["_field_context"] = fc
+            pad = _fallback_special_abilities(setup)
+            names = {str(a.get("name") or "").lower() for a in clean}
+            for ab in pad:
+                if len(clean) >= target:
+                    break
+                if not isinstance(ab, dict):
+                    continue
+                n = str(ab.get("name") or "").lower()
+                if n and n in names:
+                    continue
+                clean.append(dict(ab))
+                names.add(n)
+        except Exception:
+            pass
+        # Last resort: duplicate last with a variant name (rare)
+        while len(clean) < target and clean:
+            extra = dict(clean[-1])
+            extra["name"] = f"{extra.get('name') or 'Power'} ({len(clean) + 1})"
+            clean.append(extra)
+    return clean[:target]
+
+
+def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str, Any]]:
+    field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
+    origin = str(field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "none").strip().lower()
+    if origin == "none":
+        return []
+    # One-skill / near-useless intents → single seed ability when range allows
     intent = _resolve_setup_intent(current_setup)
     pf = intent.get("power_fantasy") if isinstance(intent.get("power_fantasy"), dict) else {}
     one_skillish = str(pf.get("growth") or "").lower() == "compounding" or str(pf.get("start_power") or "").lower() in {
         "near_useless",
         "weak",
     }
-    if quantity_locked and requested_count:
-        count = requested_count
-    elif one_skillish:
-        count = 1
-    else:
-        count = random.randint(1, 3)
+    count = _roll_ability_count(field_context, one_skillish=one_skillish)
     pool = list(SETUP_RANDOMIZER_ABILITY_FALLBACKS)
     random.shuffle(pool)
     # Avoid reusing whatever is already on the form when possible
@@ -1742,23 +2716,83 @@ def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str,
     ordered = [a for a in pool if _ability_fingerprint(a) not in existing_fps] + [
         a for a in pool if _ability_fingerprint(a) in existing_fps
     ]
+    # Inject fresh domain-driven seeds (quality-gate fallback after LLM denials).
+    from app.setup_composer import player_facing_domain_description
+
+    cost_options = [
+        "A brief headache and ringing in the ears",
+        "One point of fatigue until you rest or eat",
+        "Numb fingers / shaky hands for a few minutes",
+        "A nosebleed or iron taste if pushed twice in a row",
+        "Drains a small personal focus (candle, salt, named tool) when used",
+        "Leaves you socially flat — harder to charm for a short while",
+    ]
+    prereq_options = list(ABILITY_PREREQ_VARIETY_POOL)
+    for _ in range(min(4, max(1, count + 1))):
+        dom = pick_seed_skill_domain(
+            avoid=[str(a.get("name") or "") for a in ordered if isinstance(a, dict)],
+            world_style=str(current_setup.get("world_style") or ""),
+            salt=f"fallback|{time.time_ns()}|{random.randint(1, 1_000_000)}",
+        )
+        ordered.insert(
+            0,
+            {
+                "name": dom["name"],
+                "description": player_facing_domain_description(dom),
+                "locked": True,
+                "prerequisites": random.choice(prereq_options),
+                "cost": random.choice(cost_options),
+                "growth_math": random.choice(GROWTH_MATH_SAMPLES),
+                "power_type": "compounding",
+                "_fallback_source": "seed_domain_pool",
+            },
+        )
+    power_types = ["compounding", "passive", "linear", "soft_cap", "breakthrough", "flat", "item_bound"]
     abilities: list[dict[str, Any]] = []
     for index in range(count):
         ability = dict(ordered[index % len(ordered)])
         if origin == "acquired":
-            ability["locked"] = True
-            ability["prerequisites"] = ability.get("prerequisites") or (
-                "Unlocks through training, a mentor, or a costly field discovery."
-            )
+            # Vary locks with pure RNG — seed templates often force locked=true.
+            ability["locked"] = random.random() < 0.45
+            if ability["locked"] and not str(ability.get("prerequisites") or "").strip():
+                ability["prerequisites"] = pick_default_prereq(
+                    ability, index=index, strength="moderate", origin=origin
+                )
+            if not ability["locked"]:
+                ability["prerequisites"] = ""
+        elif origin == "innate":
+            ability["locked"] = False
+            ability["prerequisites"] = ""
+        elif origin == "both":
+            ability["locked"] = random.random() < 0.45
+            if ability["locked"] and not str(ability.get("prerequisites") or "").strip():
+                ability["prerequisites"] = pick_default_prereq(
+                    ability, index=index, strength="moderate", origin=origin
+                )
+            if not ability["locked"]:
+                ability["prerequisites"] = ""
         if one_skillish:
-            # Keep seed modest; compounding happens in play
-            ability["locked"] = origin == "acquired" or bool(ability.get("locked"))
-            if not str(ability.get("prerequisites") or "").strip() and ability["locked"]:
-                ability["prerequisites"] = "Barely usable seed; deepens only through repeated risky practice."
+            # Opening kit: first entry is OP-compounding seed; later slots prefer passive
+            if origin == "acquired":
+                ability["locked"] = True
+            if not str(ability.get("prerequisites") or "").strip() and ability.get("locked"):
+                ability["prerequisites"] = pick_default_prereq(
+                    ability, index=index, strength="moderate", origin=origin
+                )
+            if index == 0:
+                ability["power_type"] = "compounding"
+            else:
+                ability["power_type"] = ability.get("power_type") if ability.get("power_type") == "passive" else "passive"
+                ability["locked"] = True
+                ability["prerequisites"] = ability.get("prerequisites") or (
+                    "Passive domain expression; unlocks after seed ranks up or a breakthrough."
+                )
+        if not ability.get("power_type"):
+            ability["power_type"] = random.choice(power_types)
         if not str(ability.get("growth_math") or "").strip():
             ability["growth_math"] = random.choice(GROWTH_MATH_SAMPLES)
         elif one_skillish:
-            # Always ensure one-skill fallbacks carry concrete math
+            # Always ensure OP-MC fallbacks carry concrete late-game math
             ability["growth_math"] = str(ability.get("growth_math") or random.choice(GROWTH_MATH_SAMPLES))[:800]
         abilities.append(ability)
     return abilities
@@ -1792,6 +2826,1931 @@ def _ability_has_calculable_math(text: str) -> bool:
     )
     digit = any(ch.isdigit() for ch in raw)
     return digit and any(marker in raw for marker in markers)
+
+
+# Vague / unusable ability prose the quality gate rejects.
+_ABILITY_VAGUE_DESC = re.compile(
+    r"\b("
+    r"mysterious power|unknown force|special ability|does something cool|"
+    r"to be determined|tbd|as the dm decides|whatever feels right|"
+    r"grows stronger somehow|vaguely powerful|ultimate power|"
+    r"chosen one|destiny itself"
+    r")\b",
+    re.I,
+)
+# Design-meta that must never appear on a player-facing ability card.
+_ABILITY_META_LEAK = re.compile(
+    r"("
+    r"compounds toward\s*:|"
+    r"\b(?:advanced|simple)\s+tier\b|"
+    r"\b(?:arcane|mundane|tool|weapon|support|summon|necro|hybrid|tech)\s+lane\b|"
+    r"\bdesign tier\b|\bdesign lane\b|"
+    r"when you try,\s*|"
+    r"prompt_hint"
+    r")",
+    re.I,
+)
+_ABILITY_ACTION_HINT = re.compile(
+    r"\b("
+    r"can |may |when |once |briefly |slightly |touch|speak|hold|draw|strike|"
+    r"sense|see|hear|smell|call|summon|heal|bind|cut|block|read|write|brew|"
+    r"require|needs |with a |using |costs? |until |after |before |if |"
+    r"generat|knock|blast|push|pull|create|release|fire|cast|channel|"
+    r"shield|slash|dash|cloak|veil|wave|force|project|emit|throw|hurl"
+    r")\b",
+    re.I,
+)
+_ABILITY_FREE_GOD = re.compile(
+    r"\b("
+    r"unlimited|no limit|infinite|instantly win|auto[- ]?win|always succeed|"
+    r"omnipotent|invincible|no cost ever|free forever"
+    r")\b",
+    re.I,
+)
+# Model collapse: every power costs "1 hour each day/dawn in [biome] to maintain".
+_ABILITY_MAINTENANCE_HOUR_TEMPLATE = re.compile(
+    r"\b("
+    r"spend\s+\d+\s*hours?\s+each\s+(?:day|dawn|dusk|night|morning)|"
+    r"must\s+spend\s+\d+\s*hours?\s+each\s+(?:day|dawn|dusk|night|morning)|"
+    r"\d+\s*hours?\s+(?:each|every)\s+(?:day|dawn|dusk|night)\s+(?:in|near|at)\b|"
+    r"to\s+maintain\s+this\s+ability|"
+    r"maintain\s+this\s+(?:ability|power|gift)"
+    r")\b",
+    re.I,
+)
+
+
+def _cost_structure_fingerprint(text: str) -> str:
+    """Normalize cost prose so copy-paste recharge/maintenance clones collide.
+
+    Important: classify *before* stripping digits/punctuation. A prior bug lowercased
+    then deleted 'N' placeholders, so "1 hour of meditation to recharge" never
+    collapsed to one fingerprint — every ability could ship the same cost.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    low = re.sub(r"\s+", " ", raw.lower())
+
+    # High-signal templates first (match original text shapes).
+    if _ABILITY_MAINTENANCE_HOUR_TEMPLATE.search(raw):
+        return "MAINTAIN_HOUR_ENV_DAILY"
+    if re.search(r"\b\d+\s*hours?\b.*\b(meditat|recharge|recover)\b", low) or re.search(
+        r"\b(meditat|recharge|recover)\b.*\b\d+\s*hours?\b", low
+    ):
+        # "Once per rank/day; 1 hour of meditation to recharge after use"
+        if re.search(r"\bonce per (day|rank|scene|hour|use|rest|week)\b", low):
+            return "ONCE_PER_X_PLUS_HOUR_MEDITATION_RECHARGE"
+        return "HOUR_MEDITATION_RECHARGE"
+    if re.search(r"\bhour of meditation\b", low) or re.search(r"\bmeditation to recharge\b", low):
+        return "HOUR_MEDITATION_RECHARGE"
+    if re.search(r"\bonce per day\b", low) and re.search(r"\bhour\b", low):
+        return "ONCE_DAY_PLUS_HOUR"
+    if re.search(r"\bonce per rank\b", low):
+        if re.search(r"\b(breath\s*control|stamina\s*drain|\d+%\s*stamina)\b", low):
+            return "ONCE_PER_RANK_BREATH_STAMINA"
+        if re.search(r"\b\d+[-–]?\s*(minute|second)s?\s+cooldown\b", low):
+            return "ONCE_PER_RANK_PLUS_SHORT_CD"
+        return "ONCE_PER_RANK"
+    if re.search(r"\b\d+\s*(minute|second)s?\s+of\s+breath\s*control\b", low) or re.search(
+        r"\bbreath\s*control\b.*\b\d+%\s*stamina", low
+    ):
+        return "BREATH_CONTROL_STAMINA_DRAIN"
+    if re.search(r"\bonce per (day|scene|encounter|rest|week|hour)\b", low) and len(low) < 48:
+        return "ONCE_PER_" + re.search(r"\bonce per (day|scene|encounter|rest|week|hour)\b", low).group(1).upper()
+
+    # Drop biome/place nouns so only the cost *shape* remains.
+    shaped = re.sub(
+        r"\b(with|in|near|at|under|inside|within)\s+[a-z0-9 ,/+\-]{3,80}?(?=\s+to\s+maintain|\s*$|[.])",
+        " in ENV",
+        low,
+    )
+    shaped = re.sub(r"\b\d+\b", "n", shaped)
+    shaped = re.sub(
+        r"\b(natural light|heavy ash|smoke|dust|water|swamp|forest|mountain|cave|city|desert|snow|blood|salt|fire)\b",
+        "env",
+        shaped,
+    )
+    shaped = re.sub(r"[^a-z ]+", " ", shaped)
+    shaped = re.sub(r"\s+", " ", shaped).strip()
+    if re.search(r"\bn hour\b.*\b(recharge|recover|meditat)", shaped):
+        return "HOUR_MEDITATION_RECHARGE"
+    return shaped[:90]
+_VALID_POWER_TYPES = frozenset(
+    {
+        "compounding",
+        "passive",
+        "linear",
+        "soft_cap",
+        "breakthrough",
+        "flat",
+        "item_bound",
+    }
+)
+# Max quality-denied rolls before seed-pool fallback (initial + retries).
+ABILITY_QUALITY_MAX_ATTEMPTS = 3
+
+# Duration / recharge units → minutes for cross-field fact-check.
+_TIME_UNIT_MINUTES = {
+    "sec": 1 / 60,
+    "secs": 1 / 60,
+    "second": 1 / 60,
+    "seconds": 1 / 60,
+    "min": 1.0,
+    "mins": 1.0,
+    "minute": 1.0,
+    "minutes": 1.0,
+    "hr": 60.0,
+    "hrs": 60.0,
+    "hour": 60.0,
+    "hours": 60.0,
+    "day": 24 * 60.0,
+    "days": 24 * 60.0,
+    "week": 7 * 24 * 60.0,
+    "weeks": 7 * 24 * 60.0,
+}
+
+
+def _parse_time_to_minutes(num: str | float, unit: str) -> float | None:
+    try:
+        n = float(num)
+    except (TypeError, ValueError):
+        return None
+    u = (unit or "").strip().lower()
+    mult = _TIME_UNIT_MINUTES.get(u)
+    if mult is None:
+        return None
+    return n * mult
+
+
+def extract_ability_timing_facts(text: str) -> dict[str, Any]:
+    """Pull use frequency, recharge, and duration numbers from free text."""
+    raw = str(text or "")
+    low = raw.lower()
+    facts: dict[str, Any] = {
+        "use_period_minutes": None,  # minimum gap between uses implied by "once per X"
+        "uses_per_period": None,
+        "recharge_minutes": None,
+        "duration_minutes": None,
+        "uses_per_day": None,
+        "once_per_rank": False,
+        "stamina_pct": None,
+        "has_usage_limit_language": False,
+        "raw_hits": [],
+    }
+    # once per day / scene / rest / hour / long rest / rank
+    m = re.search(
+        r"\b(?:once|1\s*time|one\s+time)\s+per\s+(day|daily|hour|hr|scene|encounter|rest|long\s+rest|short\s+rest|week|rank|level|use)\b",
+        low,
+    )
+    if m:
+        period = m.group(1).replace(" ", "_")
+        period_map = {
+            "day": 24 * 60.0,
+            "daily": 24 * 60.0,
+            "hour": 60.0,
+            "hr": 60.0,
+            "scene": 30.0,  # soft tabletop scene ≈ half hour for compare
+            "encounter": 15.0,
+            "rest": 8 * 60.0,
+            "long_rest": 8 * 60.0,
+            "short_rest": 60.0,
+            "week": 7 * 24 * 60.0,
+            # Rank/level caps are not pure time; mark separately (no period minutes)
+            "rank": None,
+            "level": None,
+            "use": None,
+        }
+        if period in {"rank", "level"}:
+            facts["once_per_rank"] = True
+            facts["has_usage_limit_language"] = True
+            facts["raw_hits"].append("once_per_rank")
+        elif period == "use":
+            facts["has_usage_limit_language"] = True
+            facts["raw_hits"].append("once_per_use")
+        else:
+            facts["use_period_minutes"] = period_map.get(period)
+            facts["uses_per_period"] = 1
+            if period in {"day", "daily"}:
+                facts["uses_per_day"] = 1
+            facts["has_usage_limit_language"] = True
+            facts["raw_hits"].append(f"once_per_{period}")
+
+    m = re.search(r"\b(\d+)\s*times?\s+per\s+(day|hour|scene|encounter|rank)\b", low)
+    if m:
+        n = int(m.group(1))
+        period = m.group(2)
+        facts["uses_per_period"] = n
+        facts["has_usage_limit_language"] = True
+        if period == "day":
+            facts["uses_per_day"] = n
+            facts["use_period_minutes"] = (24 * 60.0) / max(1, n)
+        elif period == "hour":
+            facts["use_period_minutes"] = 60.0 / max(1, n)
+        elif period == "rank":
+            facts["once_per_rank"] = True
+        facts["raw_hits"].append(f"{n}_per_{period}")
+
+    # daily / each day without "once"
+    if facts["uses_per_day"] is None and re.search(r"\b(once\s+a\s+day|daily\s+use|per\s+day)\b", low):
+        facts["uses_per_day"] = 1
+        facts["use_period_minutes"] = facts["use_period_minutes"] or 24 * 60.0
+        facts["has_usage_limit_language"] = True
+        facts["raw_hits"].append("daily_use")
+
+    # "with a 1-minute cooldown after each use" / "1-minute cooldown"
+    for m in re.finditer(
+        r"\b(\d+(?:\.\d+)?)\s*[-–]?\s*(seconds?|secs?|s|minutes?|mins?|m|hours?|hrs?|h)\s+"
+        r"(?:cooldown|cool\s*down)\b",
+        low,
+    ):
+        unit = m.group(2)
+        unit_norm = {
+            "s": "seconds",
+            "sec": "seconds",
+            "secs": "seconds",
+            "m": "minutes",
+            "min": "minutes",
+            "mins": "minutes",
+            "h": "hours",
+            "hr": "hours",
+            "hrs": "hours",
+        }.get(unit, unit)
+        mins = _parse_time_to_minutes(m.group(1), unit_norm)
+        if mins is not None:
+            facts["recharge_minutes"] = mins
+            facts["has_usage_limit_language"] = True
+            facts["raw_hits"].append(f"cooldown_{mins}m")
+            break
+    if facts["recharge_minutes"] is None:
+        for m in re.finditer(
+            r"\b(?:a\s+)?(\d+(?:\.\d+)?)\s*[-–]?\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?)\s+"
+            r"cooldown\s+after\b",
+            low,
+        ):
+            mins = _parse_time_to_minutes(m.group(1), m.group(2))
+            if mins is not None:
+                facts["recharge_minutes"] = mins
+                facts["has_usage_limit_language"] = True
+                facts["raw_hits"].append(f"cooldown_after_{mins}m")
+                break
+
+    # recharge / recover / cooldown: "1 hour of meditation to recharge"
+    if facts["recharge_minutes"] is None:
+        for m in re.finditer(
+            r"\b(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b"
+            r"[^.\n]{0,40}\b(recharge|recover|recovery|cooldown|cool\s*down|rest\s+to|to\s+recharge|to\s+recover|before\s+(?:you\s+)?(?:can\s+)?use\s+again)\b",
+            low,
+        ):
+            mins = _parse_time_to_minutes(m.group(1), m.group(2))
+            if mins is not None:
+                facts["recharge_minutes"] = mins
+                facts["has_usage_limit_language"] = True
+                facts["raw_hits"].append(f"recharge_{mins}m")
+                break
+    if facts["recharge_minutes"] is None:
+        for m in re.finditer(
+            r"\b(recharge|recover|recovery|cooldown|cool\s*down)\b[^.\n]{0,40}"
+            r"\b(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?|weeks?)\b",
+            low,
+        ):
+            mins = _parse_time_to_minutes(m.group(2), m.group(3))
+            if mins is not None:
+                facts["recharge_minutes"] = mins
+                facts["has_usage_limit_language"] = True
+                facts["raw_hits"].append(f"recharge_{mins}m")
+                break
+    # "1 hour of meditation" / "1 minute of breath control" (cost fields often omit "recharge")
+    if facts["recharge_minutes"] is None and re.search(
+        r"\b(meditat|breath\s*control|breathing|rest|sleep|pray|ritual|channel)\b", low
+    ):
+        m = re.search(
+            r"\b(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)\b",
+            low,
+        )
+        if m:
+            mins = _parse_time_to_minutes(m.group(1), m.group(2))
+            if mins is not None and mins >= 1:
+                facts["recharge_minutes"] = mins
+                facts["has_usage_limit_language"] = True
+                facts["raw_hits"].append(f"implied_recharge_{mins}m")
+
+    # Stamina / energy percent drains (cost side)
+    m = re.search(r"\b(\d{1,3})\s*%\s*(stamina|energy|fatigue)\b", low)
+    if m:
+        facts["stamina_pct"] = max(0, min(100, int(m.group(1))))
+        facts["raw_hits"].append(f"stamina_pct_{facts['stamina_pct']}")
+    elif re.search(r"\b(stamina|energy)\s+drain\b", low):
+        facts["stamina_pct"] = facts["stamina_pct"] or 10
+        facts["raw_hits"].append("stamina_drain")
+
+    # duration: lasts for 10 seconds
+    m = re.search(
+        r"\b(?:lasts?(?:\s+for)?|duration(?:\s+of)?|for\s+up\s+to)\s+(\d+(?:\.\d+)?)\s*"
+        r"(seconds?|secs?|minutes?|mins?|hours?|hrs?)\b",
+        low,
+    )
+    if m:
+        mins = _parse_time_to_minutes(m.group(1), m.group(2))
+        if mins is not None:
+            facts["duration_minutes"] = mins
+            facts["raw_hits"].append(f"duration_{mins}m")
+    # math-side max duration 25s
+    if facts["duration_minutes"] is None:
+        m = re.search(r"\bmax\s+duration\s+(\d+(?:\.\d+)?)\s*(s|sec|secs|seconds?|m|min|minutes?|h|hours?)?\b", low)
+        if m:
+            unit = m.group(2) or "s"
+            unit_map = {"s": "seconds", "sec": "seconds", "secs": "seconds", "m": "minutes", "min": "minutes", "h": "hours"}
+            u = unit_map.get(unit, unit)
+            mins = _parse_time_to_minutes(m.group(1), u if u.endswith("s") or u in _TIME_UNIT_MINUTES else "seconds")
+            if mins is not None:
+                facts["duration_minutes"] = mins
+                facts["raw_hits"].append(f"max_duration_{mins}m")
+
+    if re.search(
+        r"\b(once\s+per|times?\s+per|cooldown|cool\s*down|can\s+be\s+used\s+once|recharge\s+after)\b",
+        low,
+    ):
+        facts["has_usage_limit_language"] = True
+
+    return facts
+
+
+def ability_cross_field_fact_check(ability: dict[str, Any]) -> dict[str, Any]:
+    """Fact-check description vs cost vs growth_math for timing contradictions.
+
+    Classic fail: description 'once per day' + cost '1 hour meditation to recharge'.
+    """
+    if not isinstance(ability, dict):
+        return {"ok": False, "hard_fail": ["not_an_object"], "soft": [], "details": {}}
+
+    desc = str(ability.get("description") or "")
+    cost = str(ability.get("cost") or "")
+    math_text = str(ability.get("growth_math") or "")
+    prereq = str(ability.get("prerequisites") or "")
+
+    d_facts = extract_ability_timing_facts(desc)
+    c_facts = extract_ability_timing_facts(cost)
+    m_facts = extract_ability_timing_facts(math_text)
+    p_facts = extract_ability_timing_facts(prereq)
+
+    hard: list[str] = []
+    soft: list[str] = []
+    details: dict[str, Any] = {
+        "description": d_facts,
+        "cost": c_facts,
+        "growth_math": m_facts,
+        "prerequisites": p_facts,
+    }
+
+    def _period(facts: dict[str, Any]) -> float | None:
+        if facts.get("use_period_minutes") is not None:
+            return float(facts["use_period_minutes"])
+        if facts.get("uses_per_day") is not None:
+            return (24 * 60.0) / max(1, int(facts["uses_per_day"]))
+        return None
+
+    # Description once/day vs cost short recharge (e.g. 1 hour)
+    d_period = _period(d_facts)
+    c_recharge = c_facts.get("recharge_minutes")
+    c_period = _period(c_facts)
+    if d_period is not None and c_recharge is not None:
+        # Conflict if cost recharge is meaningfully shorter than stated use period
+        # and cost does not also state the same period.
+        if c_period is None and c_recharge < d_period * 0.5:
+            hard.append("use_limit_vs_recharge_mismatch")
+        elif c_period is not None and abs(c_period - d_period) / max(d_period, 1) > 0.35:
+            # once per day in desc, once per hour in cost
+            hard.append("use_period_conflict_desc_vs_cost")
+
+    # Two different use periods stated in desc vs cost
+    if d_period is not None and c_period is not None:
+        ratio = max(d_period, c_period) / max(min(d_period, c_period), 1e-6)
+        if ratio >= 2.0:
+            hard.append("conflicting_use_frequency_desc_vs_cost")
+
+    # Duration contradiction: desc 10s vs math max duration 25s is OK (growth).
+    # But desc "lasts 1 hour" vs math "max duration 10s" is a problem at F rank.
+    d_dur = d_facts.get("duration_minutes")
+    m_dur = m_facts.get("duration_minutes")
+    if d_dur is not None and m_dur is not None:
+        # If math max is far below starting description duration
+        if m_dur < d_dur * 0.5 and d_dur >= (10 / 60):  # ignore tiny noise
+            soft.append("duration_desc_exceeds_math_max")
+        # If description duration wildly longer than cost recharge (effect outlasts recharge)
+        if c_recharge is not None and d_dur > c_recharge * 1.05:
+            hard.append("duration_longer_than_recharge")
+
+    # Cost says once/day but description says once/hour (or vice versa) already handled.
+    # Description packs frequency into effect while cost packs different frequency.
+    if d_facts.get("uses_per_day") and c_facts.get("uses_per_day"):
+        if int(d_facts["uses_per_day"]) != int(c_facts["uses_per_day"]):
+            hard.append("uses_per_day_conflict")
+
+    # Recharge stated in both desc and cost with different values
+    d_rech = d_facts.get("recharge_minutes")
+    if d_rech is not None and c_recharge is not None:
+        ratio = max(d_rech, c_recharge) / max(min(d_rech, c_recharge), 1e-6)
+        if ratio >= 1.5:
+            hard.append("recharge_conflict_desc_vs_cost")
+
+    # Description embeds use-frequency / cooldown while cost carries a different strain story.
+    # Classic fail: desc "once per rank + 1-minute cooldown" vs cost "breath control; 10% stamina".
+    if d_facts.get("has_usage_limit_language") and (
+        d_facts.get("once_per_rank")
+        or d_facts.get("use_period_minutes") is not None
+        or d_facts.get("recharge_minutes") is not None
+        or d_facts.get("uses_per_day") is not None
+    ):
+        # Always prefer limits in cost only — hard fail so repair runs.
+        hard.append("usage_limits_embedded_in_description")
+
+    # once per rank in desc but cost never mentions rank/limit
+    if d_facts.get("once_per_rank") and not c_facts.get("once_per_rank"):
+        if not re.search(r"\bonce per rank\b", cost, re.I):
+            hard.append("once_per_rank_missing_from_cost")
+
+    # Desc cooldown vs cost breath-control recharge mismatch already partially covered;
+    # if desc has short CD and cost has different recharge, flag when both present and diverge.
+    if d_rech is not None and c_recharge is not None and abs(float(d_rech) - float(c_recharge)) >= 0.5:
+        if "recharge_conflict_desc_vs_cost" not in hard:
+            # Same axis, different numbers (e.g. 1m CD vs 1m breath is OK if equal)
+            ratio = max(d_rech, c_recharge) / max(min(d_rech, c_recharge), 1e-6)
+            if ratio >= 1.5:
+                hard.append("recharge_conflict_desc_vs_cost")
+
+    return {
+        "ok": not hard,
+        "hard_fail": hard,
+        "soft": soft,
+        "details": details,
+    }
+
+
+# Fair unlock lines — rotated so multi-ability batches are not clones.
+ABILITY_PREREQ_VARIETY_POOL: tuple[str, ...] = (
+    "Unlocks after deliberate practice under real risk — not safe drills alone.",
+    "Unlocks when a mentor names the limit once, then leaves you to hold it alone.",
+    "Unlocks after a costly field discovery tied to this aptitude (tool, scar, or debt).",
+    "Unlocks after you fail a related check publicly and recover without quitting.",
+    "Unlocks after a night of focused practice with no audience and no shortcuts.",
+    "Unlocks when a rival or ally forces the half-formed version into play once.",
+    "Unlocks after studying a worn manual, mural, or scrap that matches the domain.",
+    "Unlocks after paying a real price (time, favor, or coin) to learn the first form.",
+    "Unlocks after surviving a setback that would have been easier with this already known.",
+    "Unlocks after you teach someone the outline — and realize what you still lack.",
+    "Unlocks at a marked place of practice (range, shrine, yard, workshop) after repeated visits.",
+    "Unlocks after a witnessed oath or contract about using this carefully.",
+    "Unlocks after you trade a comfort or privilege for focused training time.",
+    "Unlocks after a near-miss where instinct almost fires this power untrained.",
+    "Held until a campaign scene makes the unlock feel earned (mentor, trial, or discovery).",
+)
+
+_GENERIC_PREREQ_NORMALIZED: frozenset[str] = frozenset(
+    {
+        "unlocks through training, a mentor, or a costly field discovery.",
+        "unlocks through training, a mentor, or a costly field discovery",
+        "barely usable seed; deepens only through repeated risky practice.",
+        "barely usable seed; deepens only through repeated risky practice",
+        "held for later: the dm may unlock this when the fiction supports it (mid/late campaign event, mentor, or costly breakthrough) — not free at start.",
+        "held for later: unlocks through a hard-earned breakthrough, mentor, or campaign event.",
+        "held for later: unlocks through a hard-earned breakthrough, mentor, or campaign event",
+    }
+)
+
+
+def _prereq_fingerprint(text: str) -> str:
+    low = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if not low:
+        return ""
+    if low in _GENERIC_PREREQ_NORMALIZED or low.startswith("unlocks through training, a mentor"):
+        return "GENERIC_TRAINING_MENTOR_FIELD"
+    if low.startswith("held for later"):
+        return "GENERIC_HELD_FOR_LATER"
+    if low.startswith("barely usable seed"):
+        return "GENERIC_BARELY_USABLE_SEED"
+    # Collapse near-identical mentor/field wording
+    shaped = re.sub(r"\b(mentor|trainer|teacher|master)\b", "mentor", low)
+    shaped = re.sub(r"\b(field discovery|discovery|find)\b", "discovery", shaped)
+    shaped = re.sub(r"\b(train|training|practice|drill)\b", "train", shaped)
+    return shaped[:80]
+
+
+def is_generic_prereq(text: str) -> bool:
+    fp = _prereq_fingerprint(text)
+    return fp.startswith("GENERIC_") or fp in {
+        "GENERIC_TRAINING_MENTOR_FIELD",
+        "GENERIC_HELD_FOR_LATER",
+        "GENERIC_BARELY_USABLE_SEED",
+    }
+
+
+def pick_default_prereq(
+    ability: dict[str, Any] | None = None,
+    *,
+    index: int = 0,
+    strength: str = "",
+    origin: str = "",
+) -> str:
+    """Pick a fair, non-identical unlock sentence (stable-ish from name + index)."""
+    name = str((ability or {}).get("name") or "")
+    blob = f"{name}|{index}|{strength}|{origin}"
+    h = sum(ord(c) for c in blob) + index * 17
+    pool = ABILITY_PREREQ_VARIETY_POOL
+    # Strong openers prefer "held until scene" flavors at end of pool
+    if (strength or "").lower() == "strong":
+        strong_pool = [p for p in pool if p.lower().startswith("held") or "campaign" in p.lower() or "setback" in p.lower()]
+        if not strong_pool:
+            strong_pool = list(pool[-4:])
+        return strong_pool[h % len(strong_pool)]
+    return pool[h % len(pool)]
+
+
+def diversify_ability_prerequisites(
+    abilities: list[Any] | None,
+    *,
+    force: bool = False,
+    origin: str = "",
+) -> list[dict[str, Any]]:
+    """
+    Ensure locked abilities do not all share the same mentor/training boilerplate.
+    Unlocked/empty prereqs stay empty. Deterministic pool rotation.
+    """
+    if not isinstance(abilities, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen_fps: list[str] = []
+    pool_i = 0
+    generic_hits = 0
+    for ab in abilities:
+        if isinstance(ab, dict):
+            p = str(ab.get("prerequisites") or "").strip()
+            if p and is_generic_prereq(p):
+                generic_hits += 1
+    identical_batch = False
+    fps_all = [
+        _prereq_fingerprint(str(a.get("prerequisites") or ""))
+        for a in abilities
+        if isinstance(a, dict) and str(a.get("prerequisites") or "").strip()
+    ]
+    if len(fps_all) >= 2 and len(set(fps_all)) == 1:
+        identical_batch = True
+
+    for idx, ab in enumerate(abilities):
+        if not isinstance(ab, dict):
+            continue
+        next_ab = dict(ab)
+        prereq = normalize_ability_prerequisites(next_ab.get("prerequisites") or next_ab.get("prerequisite"))
+        locked = bool(next_ab.get("locked"))
+        # Unlocked mild powers keep empty prereq
+        if not locked and not prereq:
+            next_ab["prerequisites"] = ""
+            out.append(next_ab)
+            continue
+        if not prereq and not locked:
+            next_ab["prerequisites"] = ""
+            out.append(next_ab)
+            continue
+
+        fp = _prereq_fingerprint(prereq)
+        must_replace = False
+        if not prereq and locked:
+            must_replace = True
+        if is_generic_prereq(prereq) and (force or generic_hits >= 2 or identical_batch or fp in seen_fps):
+            must_replace = True
+        if fp and fp in seen_fps and (force or identical_batch or len(seen_fps) >= 1):
+            must_replace = True
+        if must_replace:
+            used = {str(x.get("prerequisites") or "").strip().lower() for x in out}
+            used.update(seen_fps)
+            pick = None
+            strength = str(next_ab.get("_opening_strength") or "")
+            for _ in range(len(ABILITY_PREREQ_VARIETY_POOL) + 3):
+                cand = ABILITY_PREREQ_VARIETY_POOL[pool_i % len(ABILITY_PREREQ_VARIETY_POOL)]
+                pool_i += 1
+                # Prefer name-tinted default first attempt
+                if pick is None and pool_i == 1:
+                    cand = pick_default_prereq(next_ab, index=idx, strength=strength, origin=origin)
+                cfp = _prereq_fingerprint(cand)
+                if cand.lower() not in used and cfp not in seen_fps:
+                    pick = cand
+                    fp = cfp
+                    break
+            if pick is None:
+                pick = pick_default_prereq(next_ab, index=idx + pool_i, strength=strength, origin=origin)
+                # Force uniqueness with light suffix if still colliding
+                if _prereq_fingerprint(pick) in seen_fps:
+                    pick = f"{pick.rstrip('.')} — specific to {str(next_ab.get('name') or 'this power')[:40]}."
+                fp = _prereq_fingerprint(pick)
+            next_ab["prerequisites"] = pick[:500]
+            next_ab["_prereq_diversified"] = True
+        else:
+            next_ab["prerequisites"] = prereq
+        if fp:
+            seen_fps.append(fp)
+        out.append(next_ab)
+    return out
+
+
+def normalize_ability_prerequisites(value: Any) -> str:
+    """Coerce list/JSON leftovers into a clean human prereq string (never '[]')."""
+    if value is None:
+        return ""
+    if isinstance(value, (list, tuple, set)):
+        parts = [str(x).strip() for x in value if str(x).strip()]
+        return "; ".join(parts)[:500]
+    if isinstance(value, dict):
+        # Model sometimes returns {"condition": "..."} or empty {}
+        for key in ("text", "condition", "prerequisites", "prerequisite", "unlock"):
+            if value.get(key):
+                return normalize_ability_prerequisites(value.get(key))
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    # Empty JSON / placeholder forms that leak into the UI
+    if text.lower() in {
+        "[]",
+        "{}",
+        "null",
+        "none",
+        "nil",
+        "n/a",
+        "na",
+        "-",
+        "—",
+        "undefined",
+        "false",
+        "true",
+        "0",
+        "1",
+        "locked",
+        "unlocked",
+        "locked=true",
+        "locked=false",
+        "locked:true",
+        "locked:false",
+        "yes",
+        "no",
+    }:
+        return ""
+    # Model dumps field-control junk into prereq (e.g. "locked=true")
+    if re.fullmatch(r"locked\s*[=:]\s*(true|false|yes|no|1|0)", text, flags=re.I):
+        return ""
+    if re.fullmatch(r"(true|false)\s*[=:]\s*locked", text, flags=re.I):
+        return ""
+    # Stringified empty list with spaces
+    if re.fullmatch(r"\[\s*\]", text) or re.fullmatch(r"\{\s*\}", text):
+        return ""
+    # Accidental JSON array of strings
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            import json
+
+            parsed = json.loads(text)
+            return normalize_ability_prerequisites(parsed)
+        except Exception:
+            pass
+    return text[:500]
+
+
+def estimate_ability_opening_strength(ability: dict[str, Any] | None) -> str:
+    """
+    Classify opening strength for lock policy.
+
+    - mild: small utility / distraction / once-per-day soft effects → usable at Start
+    - strong: combat-winning / always-on heavy powers → may stay locked for later DM unlock
+    - moderate: everything else
+    """
+    if not isinstance(ability, dict):
+        return "moderate"
+    blob = " ".join(
+        [
+            str(ability.get("name") or ""),
+            str(ability.get("description") or ""),
+            str(ability.get("cost") or ""),
+        ]
+    ).lower()
+    strong_markers = (
+        "invulnerab",
+        "instant kill",
+        "one-shot",
+        "oneshot",
+        "mind control",
+        "time stop",
+        "omnipoten",
+        "always on",
+        "permanently",
+        "no cooldown",
+        "unlimited",
+        "annihilat",
+        "god-slay",
+        "erase from existence",
+        "dominate all",
+        " SSS",
+        "sss-rank",
+        "auto-win",
+        "cannot miss",
+        "ignore all defenses",
+        "mass death",
+        "level drain",
+        "absolute defense",
+        "absolute attack",
+    )
+    mild_markers = (
+        "minor distraction",
+        "briefly",
+        "small ",
+        "tiny ",
+        "mimic the sound",
+        "replicate its effect in a pinch",
+        "distract",
+        "disrupt an enemy's focus",
+        "remember the exact sound",
+        "hint of",
+        "faint ",
+        "whisper",
+        "notice",
+        "sense a",
+        "once per day",
+        "once a day",
+        "short moment",
+        "momentary",
+        "mild ",
+        "slight ",
+        "flavor",
+        "utility",
+        "flavorful",
+    )
+    combat_weight = sum(
+        1
+        for w in (
+            "damage",
+            "kill",
+            "slay",
+            "blast",
+            "strike down",
+            "overwhelm",
+            "dominate",
+            "control minds",
+            "summon army",
+            "immune to",
+        )
+        if w in blob
+    )
+    if any(m in blob for m in strong_markers) or combat_weight >= 2:
+        return "strong"
+    mild_hits = sum(1 for m in mild_markers if m in blob)
+    # Classic "once per day minor distraction" pattern
+    if mild_hits >= 2 or (
+        mild_hits >= 1
+        and combat_weight == 0
+        and any(x in blob for x in ("distract", "mimic", "sound", "whisper", "sense", "notice", "remember"))
+    ):
+        return "mild"
+    if combat_weight == 0 and re.search(r"\bonce per (day|scene|rest)\b", blob) and len(blob) < 420:
+        # Bounded soft actives default mild unless wording is heavy
+        if not any(w in blob for w in ("devastate", "destroy", "execute", "slaughter", "obliterate")):
+            return "mild"
+    return "moderate"
+
+
+def normalize_ability_lock_and_prerequisites(
+    ability: dict[str, Any] | None,
+    *,
+    origin: str = "",
+) -> dict[str, Any]:
+    """
+    Clean prereq placeholders and apply strength-based lock policy.
+
+    - Never leave prerequisites as '[]' / null-ish.
+    - Mild powers: unlocked at Start with empty prereq (usable off the bat).
+    - Strong powers: may stay locked for later DM unlock, but need a real unlock sentence.
+    - Acquired origin no longer forces every mild utility behind a fake lock.
+    """
+    if not isinstance(ability, dict):
+        return {}
+    out = dict(ability)
+    prereq = normalize_ability_prerequisites(
+        out.get("prerequisites") if "prerequisites" in out else out.get("prerequisite")
+    )
+    out["prerequisites"] = prereq
+    if "prerequisite" in out:
+        out["prerequisite"] = prereq
+
+    # Coerce messy locked flags (None / "true" / "locked=true")
+    raw_locked = out.get("locked")
+    if isinstance(raw_locked, str):
+        low_l = raw_locked.strip().lower()
+        if low_l in {"", "false", "0", "no", "none", "null", "unlocked"}:
+            out["locked"] = False
+        elif low_l in {"true", "1", "yes", "locked", "locked=true"}:
+            out["locked"] = True
+        else:
+            out["locked"] = False
+    elif raw_locked is None:
+        out["locked"] = False
+    else:
+        out["locked"] = bool(raw_locked)
+
+    locked = bool(out.get("locked"))
+    strength = estimate_ability_opening_strength(out)
+    out["_opening_strength"] = strength
+    origin_l = str(origin or "").strip().lower()
+
+    empty_prereq = not prereq
+
+    if strength == "mild":
+        # Soft powers should be playable immediately; empty "[]" lock is never correct.
+        if locked and empty_prereq:
+            out["locked"] = False
+            out["prerequisites"] = ""
+        elif locked and prereq and prereq.lower() in {
+            "unlocks through training, a mentor, or a costly field discovery.",
+            "barely usable seed; deepens only through repeated risky practice.",
+        }:
+            # Generic acquired lock boilerplate on a mild utility → unlock
+            out["locked"] = False
+            out["prerequisites"] = ""
+        else:
+            # Mild with a specific story prereq can stay locked (player chose a condition).
+            out["locked"] = locked
+    elif strength == "strong":
+        # Strong openers may be held for DM/play unlock — but never with blank/[] prereq.
+        if locked and empty_prereq:
+            out["prerequisites"] = pick_default_prereq(out, index=0, strength="strong", origin=origin_l)
+        elif not locked and origin_l == "acquired" and empty_prereq:
+            # Acquired + strong: prefer locked until earned
+            out["locked"] = True
+            out["prerequisites"] = pick_default_prereq(out, index=1, strength="strong", origin=origin_l)
+    else:
+        # moderate
+        if locked and empty_prereq:
+            if origin_l == "innate":
+                out["locked"] = False
+                out["prerequisites"] = ""
+            else:
+                out["prerequisites"] = pick_default_prereq(out, index=2, strength="moderate", origin=origin_l)
+
+    # Final sanitization
+    out["prerequisites"] = normalize_ability_prerequisites(out.get("prerequisites"))
+    if not out["prerequisites"]:
+        # Empty prereq implies usable unless explicitly locked with a real reason (shouldn't happen)
+        if out.get("locked") and not out["prerequisites"]:
+            out["locked"] = False
+    return out
+
+
+def _strip_usage_limits_from_description(desc: str) -> str:
+    """Remove frequency/cooldown clauses; keep pure effect + duration."""
+    cleaned = str(desc or "")
+    patterns = (
+        # Can be used once per rank/day/..., with a 1-minute cooldown...
+        r"\s*(?:,|;|\.)?\s*(?:and\s+)?(?:can\s+be\s+)?used\s+once\s+per\s+(?:day|hour|scene|encounter|rest|long\s+rest|week|rank|level|use)\b"
+        r"(?:\s*,?\s*with\s+(?:a\s+)?\d+[-–]?\s*(?:second|minute|hour)s?\s+cooldown(?:\s+after(?:\s+each\s+use)?)?)?",
+        r"\s*(?:,|;|\.)?\s*(?:once|1\s*time|one\s+time)\s+per\s+(?:day|hour|scene|encounter|rest|long\s+rest|week|rank|level|use)\b"
+        r"(?:\s*,?\s*with\s+(?:a\s+)?\d+[-–]?\s*(?:second|minute|hour)s?\s+cooldown(?:\s+after(?:\s+each\s+use)?)?)?",
+        r"\s*(?:,|;|\.)?\s*\d+\s*times?\s+per\s+(?:day|hour|scene|encounter|rank)\b",
+        r"\s*(?:,|;|\.)?\s*(?:once\s+a\s+day|daily\s+use)\b",
+        r"\s*(?:,|;|\.)?\s*with\s+(?:a\s+)?\d+[-–]?\s*(?:second|minute|hour|min|sec)s?\s+cooldown(?:\s+after(?:\s+each\s+use)?)?\b",
+        r"\s*(?:,|;|\.)?\s*\d+[-–]?\s*(?:second|minute|hour)s?\s+cooldown(?:\s+after(?:\s+each\s+use)?)?\b",
+        r"\s*(?:,|;|\.)?\s*(?:recharges?|recovers?)\s+after\s+\d+[-–]?\s*(?:second|minute|hour)s?\b",
+    )
+    for pat in patterns:
+        cleaned = re.sub(pat, "", cleaned, flags=re.I)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,;.")
+    # Fix trailing fragments
+    cleaned = re.sub(r"\s+\.\s*$", ".", cleaned)
+    if cleaned and not cleaned.endswith("."):
+        cleaned += "."
+    return cleaned
+
+
+def _unified_cost_from_desc_and_cost(desc: str, cost: str, d_facts: dict[str, Any], c_facts: dict[str, Any]) -> str:
+    """Merge frequency + recharge + strain into one cost string."""
+    freq_bits: list[str] = []
+    if d_facts.get("once_per_rank") or c_facts.get("once_per_rank") or re.search(r"\bonce per rank\b", cost, re.I):
+        freq_bits.append("Once per rank")
+    elif d_facts.get("uses_per_day") == 1 or (
+        d_facts.get("use_period_minutes") and abs(float(d_facts["use_period_minutes"]) - 24 * 60) < 1
+    ):
+        freq_bits.append("Once per day")
+    elif d_facts.get("uses_per_day"):
+        freq_bits.append(f"{int(d_facts['uses_per_day'])} times per day")
+    elif d_facts.get("use_period_minutes"):
+        mins = float(d_facts["use_period_minutes"])
+        if abs(mins - 60) < 0.5:
+            freq_bits.append("Once per hour")
+        elif abs(mins - 30) < 0.5:
+            freq_bits.append("Once per scene")
+        elif abs(mins - 24 * 60) < 1:
+            freq_bits.append("Once per day")
+        else:
+            freq_bits.append(f"At most once every {mins:g} minutes")
+
+    # Prefer shorter of desc/cost recharge when both set (CD is the mechanical gate)
+    rech = None
+    for src in (d_facts.get("recharge_minutes"), c_facts.get("recharge_minutes")):
+        if src is not None:
+            rech = float(src) if rech is None else min(rech, float(src))
+    cd_bit = ""
+    if rech is not None and rech > 0:
+        if rech < 1:
+            secs = max(1, int(round(rech * 60)))
+            cd_bit = f"{secs}-second cooldown"
+        elif abs(rech - int(rech)) < 0.05:
+            mins_i = int(round(rech))
+            cd_bit = f"{mins_i}-minute cooldown" if mins_i != 60 else "1-hour cooldown"
+        else:
+            cd_bit = f"{rech:g}-minute cooldown"
+
+    cost_core = str(cost or "").strip()
+    if cost_core.lower() in {"", "no cost", "none", "free", "model decides", "[]"}:
+        cost_core = ""
+
+    # Drop clone-y breath/meditation-only openers if we have a real CD + frequency
+    # Keep stamina/energy drain fragments.
+    strain_bits: list[str] = []
+    m_pct = re.search(r"(\d{1,3})\s*%\s*(stamina|energy|fatigue)", cost_core, re.I)
+    if m_pct:
+        strain_bits.append(f"{m_pct.group(1)}% {m_pct.group(2).lower()} drain")
+    elif re.search(r"\b(stamina|energy)\s+drain\b", cost_core, re.I):
+        strain_bits.append("stamina drain")
+    # Other non-timing cost text (noise, debt, reagent…) keep if not pure breath/meditation filler
+    residual = cost_core
+    residual = re.sub(r"\b\d+\s*(second|minute|hour)s?\s+of\s+(breath\s*control|meditation|breathing)\b[;,]?", "", residual, flags=re.I)
+    residual = re.sub(r"\b\d+\s*%\s*(stamina|energy|fatigue)\s*drain\b[;,]?", "", residual, flags=re.I)
+    residual = re.sub(r"\bonce\s+per\s+(rank|day|hour|scene|use)\b[;,]?", "", residual, flags=re.I)
+    residual = re.sub(r"\d+[-–]?\s*(second|minute|hour)s?\s+cooldown\b[;,]?", "", residual, flags=re.I)
+    residual = re.sub(r"\s{2,}", " ", residual).strip(" .;,")
+    if residual and len(residual) > 8 and not re.search(
+        r"^(breath\s*control|meditation to recharge|1 hour of meditation)\b", residual, re.I
+    ):
+        if residual.lower() not in {s.lower() for s in strain_bits}:
+            strain_bits.append(residual.rstrip("."))
+
+    pieces: list[str] = []
+    for bit in freq_bits:
+        if not any(bit.lower() in p.lower() for p in pieces):
+            pieces.append(bit)
+    if cd_bit and not any("cooldown" in p.lower() for p in pieces):
+        pieces.append(cd_bit)
+    for s in strain_bits:
+        if s and not any(s.lower() in p.lower() for p in pieces):
+            pieces.append(s)
+    if not pieces and cost_core:
+        return cost_core if cost_core.endswith(".") else cost_core + "."
+    if not pieces:
+        return "Short recovery after use."
+    return "; ".join(pieces) + "."
+
+
+def repair_ability_cross_field_consistency(ability: dict[str, Any]) -> dict[str, Any]:
+    """Auto-fix common timing contradictions on a single ability.
+
+    Preference when description has use frequency and cost has a shorter recharge:
+    - Keep effect + duration in description
+    - Move frequency + recharge together into cost (player-readable, one place of truth)
+    """
+    if not isinstance(ability, dict):
+        return {}
+    out = normalize_ability_lock_and_prerequisites(ability)
+    desc = str(out.get("description") or "").strip()
+    cost = str(out.get("cost") or "").strip()
+    check = ability_cross_field_fact_check(out)
+    d_facts = extract_ability_timing_facts(desc)
+    c_facts = extract_ability_timing_facts(cost)
+
+    fails = set(check.get("hard_fail") or [])
+    # Always strip usage limits from description when present (even if check somehow passed)
+    needs_strip = bool(d_facts.get("has_usage_limit_language")) or bool(
+        fails
+        & {
+            "use_limit_vs_recharge_mismatch",
+            "use_period_conflict_desc_vs_cost",
+            "conflicting_use_frequency_desc_vs_cost",
+            "uses_per_day_conflict",
+            "recharge_conflict_desc_vs_cost",
+            "usage_limits_embedded_in_description",
+            "once_per_rank_missing_from_cost",
+        }
+    )
+
+    if needs_strip:
+        cleaned = _strip_usage_limits_from_description(desc)
+        if cleaned and cleaned != desc:
+            out["description"] = cleaned
+        out["cost"] = _unified_cost_from_desc_and_cost(
+            desc, cost, d_facts, c_facts
+        )
+        if out.get("cost") and str(out.get("cost")).lower() not in {"no cost", "model decides"}:
+            out["cost_mode"] = "custom"
+
+        # Sync structured resource_cost from unified timing + stamina %
+        try:
+            from app.player_resources import parse_resource_cost
+
+            rc = parse_resource_cost(out.get("resource_cost"))
+            rech = d_facts.get("recharge_minutes")
+            if rech is None:
+                rech = c_facts.get("recharge_minutes")
+            # Re-read after unify
+            u_facts = extract_ability_timing_facts(str(out.get("cost") or ""))
+            if u_facts.get("recharge_minutes") is not None:
+                rech = u_facts["recharge_minutes"]
+            if rech is not None and _int_safe(rc.get("cooldown_minutes"), 0) == 0:
+                rc["cooldown_minutes"] = max(0, int(round(float(rech))))
+            pct = u_facts.get("stamina_pct") or d_facts.get("stamina_pct") or c_facts.get("stamina_pct")
+            if pct and _int_safe(rc.get("energy"), 0) == 0:
+                # Map % of a 20 baseline pool → absolute energy cost (min 1)
+                rc["energy"] = max(1, int(round(20 * float(pct) / 100.0)))
+            out["resource_cost"] = rc
+        except Exception:
+            pass
+
+    # Duration longer than recharge: shorten description duration note is risky;
+    # instead append clarification to cost that recharge starts after the effect ends.
+    if "duration_longer_than_recharge" in fails:
+        c = str(out.get("cost") or "").rstrip(".")
+        if c and "after the effect ends" not in c.lower():
+            out["cost"] = c + ". Recharge begins after the effect ends."
+        # Soft: also strip nothing; if still failing, quality gate will deny for LLM rewrite.
+
+    return out
+
+
+def _int_safe(v: Any, default: int = 0) -> int:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def evaluate_ability_quality(
+    ability: dict[str, Any] | None,
+    *,
+    existing: list[dict[str, Any]] | None = None,
+    sibling_names: set[str] | None = None,
+    one_skillish: bool = False,
+    origin: str = "",
+    require_strong_math: bool = True,
+) -> dict[str, Any]:
+    """Score one power for playability + stability. ok=False means quality-deny."""
+    hard: list[str] = []
+    soft: list[str] = []
+    score = 100
+    if not isinstance(ability, dict):
+        return {"ok": False, "score": 0, "hard_fail": ["not_an_object"], "soft": [], "ability": {}}
+
+    name = str(ability.get("name") or "").strip()
+    desc = str(ability.get("description") or "").strip()
+    cost = str(ability.get("cost") or "").strip()
+    prereq = str(ability.get("prerequisites") or ability.get("prerequisite") or "").strip()
+    math_text = str(ability.get("growth_math") or "").strip()
+    power_type = str(ability.get("power_type") or "").strip().lower()
+    locked = bool(ability.get("locked"))
+
+    # --- name ---
+    if len(name) < 2:
+        hard.append("name_missing")
+        score -= 40
+    elif len(name) > 80:
+        hard.append("name_too_long")
+        score -= 15
+    elif name.lower() in {"ability", "power", "skill", "special ability", "seed", "passive", "active"}:
+        hard.append("name_generic")
+        score -= 35
+    if name and is_overused_seed_domain(name):
+        hard.append("name_overused_domain")
+        score -= 30
+    sib = sibling_names or set()
+    if name and name.lower() in {s.lower() for s in sib if s}:
+        hard.append("name_duplicate_in_batch")
+        score -= 25
+    for ex in existing or []:
+        if isinstance(ex, dict) and str(ex.get("name") or "").strip().lower() == name.lower() and name:
+            hard.append("name_matches_existing")
+            score -= 25
+            break
+
+    # --- description ---
+    if len(desc) < 36:
+        hard.append("description_too_short")
+        score -= 30
+    elif len(desc) < 55:
+        soft.append("description_thin")
+        score -= 8
+    # 8B failure mode: description is a copy of the name (or a keyword dump)
+    name_key = re.sub(r"\s+", " ", name).strip().lower()
+    desc_key = re.sub(r"\s+", " ", desc).strip().lower()
+    if name_key and desc_key and name_key == desc_key:
+        hard.append("description_equals_name")
+        score -= 40
+    if name and ("," in name or ";" in name) and len(name) > 28:
+        hard.append("name_looks_like_keyword_dump")
+        score -= 20
+    if desc and len(desc.split()) <= 6 and len(desc) < 48:
+        hard.append("description_keyword_stub")
+        score -= 25
+    if _ABILITY_VAGUE_DESC.search(desc):
+        hard.append("description_vague_cliche")
+        score -= 25
+    if _ABILITY_META_LEAK.search(desc):
+        hard.append("description_leaks_design_meta")
+        score -= 35
+    if desc and not _ABILITY_ACTION_HINT.search(desc):
+        hard.append("description_no_playable_hook")
+        score -= 20
+    if _ABILITY_FREE_GOD.search(desc) or _ABILITY_FREE_GOD.search(cost):
+        hard.append("description_or_cost_unstable_godmode")
+        score -= 40
+    # Generic template leftovers
+    if re.search(r"barely useful at f rank;\s*practice and risk compound", desc, re.I):
+        hard.append("description_template_boilerplate")
+        score -= 20
+    if re.search(r"fatigue,\s*strain,\s*or a short aftereffect when forced", cost, re.I):
+        soft.append("cost_generic_template")
+        score -= 8
+    # Banned: "spend 1 hour each day/dawn in [place] to maintain this ability"
+    if _ABILITY_MAINTENANCE_HOUR_TEMPLATE.search(cost) or _ABILITY_MAINTENANCE_HOUR_TEMPLATE.search(desc):
+        hard.append("cost_maintenance_hour_template")
+        score -= 35
+    if re.search(
+        r"\byou must spend\s+\d+\s*hours?\s+each\s+(day|dawn|dusk|night)\b",
+        cost,
+        re.I,
+    ):
+        hard.append("cost_must_spend_hours_each_day")
+        score -= 30
+    # Obscure is fine; pure nonsense with no who/what/when fails above.
+
+    # --- growth math ---
+    if require_strong_math or one_skillish or power_type in {"compounding", "soft_cap", "breakthrough"}:
+        if not _ability_has_calculable_math(math_text):
+            hard.append("growth_math_not_calculable")
+            score -= 35
+        else:
+            # Soft stability: should mention rank path or XP somehow for compounding
+            low = math_text.lower()
+            if one_skillish or power_type == "compounding":
+                if not any(k in low for k in ("rank", "xp", "level", "threshold")):
+                    soft.append("growth_math_missing_rank_or_xp_path")
+                    score -= 10
+                if not any(k in low for k in ("soft", "break", "cap", "s/ss", "sss", "late")):
+                    soft.append("growth_math_weak_late_game_path")
+                    score -= 6
+    elif math_text and not _ability_has_calculable_math(math_text):
+        soft.append("growth_math_weak")
+        score -= 12
+
+    # --- cost ---
+    cost_l = cost.lower()
+    freeish = (not cost) or cost_l in {"none", "no cost", "free", "n/a", "-", "0"}
+    if power_type == "passive":
+        if not cost:
+            # Passiveives may omit cost; stamp a stable default later if needed
+            soft.append("passive_cost_empty_ok")
+        elif freeish:
+            soft.append("passive_no_cost")
+    else:
+        if freeish and one_skillish:
+            soft.append("active_seed_should_have_strain_cost")
+            score -= 8
+        if freeish and not one_skillish and power_type not in {"flat", ""}:
+            soft.append("active_missing_meaningful_cost")
+            score -= 10
+        if not cost:
+            hard.append("cost_missing")
+            score -= 15
+    if cost and len(cost) > 280:
+        soft.append("cost_too_long")
+        score -= 5
+
+    # --- prerequisites vs locked / origin ---
+    origin_l = (origin or "").lower()
+    prereq_norm = normalize_ability_prerequisites(prereq)
+    if prereq_norm != prereq:
+        soft.append("prereq_placeholder_form")
+        score -= 4
+        prereq = prereq_norm
+    # Literal "[]" / empty JSON must never ship as a prerequisite
+    if prereq.strip() in {"[]", "{}"} or re.fullmatch(r"\[\s*\]", prereq or ""):
+        hard.append("prereq_json_placeholder")
+        score -= 25
+    if locked and len(prereq) < 8:
+        hard.append("locked_without_prerequisites")
+        score -= 20
+    if origin_l == "acquired" and locked and len(prereq) < 8:
+        hard.append("acquired_locked_needs_prereq")
+        score -= 10
+    if origin_l == "innate" and locked and "remnant" not in prereq.lower() and "awaken" not in prereq.lower():
+        soft.append("innate_locked_odd")
+        score -= 5
+    # Mild utility powers should not be locked behind empty/placeholder prereqs
+    strength = estimate_ability_opening_strength(ability)
+    if strength == "mild" and locked and len(prereq) < 8:
+        hard.append("mild_power_locked_without_real_prereq")
+        score -= 18
+    if prereq and len(prereq) > 480:
+        soft.append("prereq_too_long")
+        score -= 4
+
+    # --- power_type ---
+    if power_type and power_type not in _VALID_POWER_TYPES:
+        soft.append("power_type_unknown")
+        score -= 6
+    if one_skillish and power_type and power_type not in {"compounding", "passive", "soft_cap", "breakthrough", ""}:
+        soft.append("power_type_odd_for_seed")
+        score -= 4
+
+    # --- cross-field fact check (description ↔ cost ↔ math) ---
+    xf = ability_cross_field_fact_check(ability)
+    for fail in xf.get("hard_fail") or []:
+        hard.append(str(fail))
+        score -= 22
+    for warn in xf.get("soft") or []:
+        soft.append(str(warn))
+        score -= 6
+
+    score = max(0, min(100, score))
+    # Hard fails always deny; otherwise require a solid score.
+    ok = not hard and score >= 62
+    return {
+        "ok": ok,
+        "score": score,
+        "hard_fail": hard,
+        "soft": soft,
+        "name": name,
+        "ability": ability,
+        "cross_field": xf.get("details") or {},
+    }
+
+
+def quality_gate_abilities(
+    abilities: list[Any] | None,
+    *,
+    existing: list[Any] | None = None,
+    one_skillish: bool = False,
+    origin: str = "",
+    require_strong_math: bool = True,
+    auto_repair: bool = True,
+) -> dict[str, Any]:
+    """Verify a whole ability batch. All entries must pass for ok=True."""
+    existing_clean = [a for a in (existing or []) if isinstance(a, dict)]
+    raw_list = [a for a in (abilities or []) if isinstance(a, dict)]
+    if not raw_list:
+        return {
+            "ok": False,
+            "score": 0,
+            "abilities": [],
+            "reports": [],
+            "denial_summary": ["empty_ability_list"],
+        }
+    reports: list[dict[str, Any]] = []
+    names_seen: set[str] = set()
+    denial_summary: list[str] = []
+    scores: list[int] = []
+    repaired_list: list[dict[str, Any]] = []
+    for ab in raw_list:
+        candidate = dict(ab)
+        if auto_repair:
+            candidate = normalize_ability_lock_and_prerequisites(candidate, origin=origin)
+            candidate = repair_ability_cross_field_consistency(candidate)
+            # Repair already calls normalize, but re-apply origin-aware lock policy after timing fixes
+            candidate = normalize_ability_lock_and_prerequisites(candidate, origin=origin)
+        else:
+            candidate["prerequisites"] = normalize_ability_prerequisites(
+                candidate.get("prerequisites") or candidate.get("prerequisite")
+            )
+        rep = evaluate_ability_quality(
+            candidate,
+            existing=existing_clean,
+            sibling_names=names_seen,
+            one_skillish=one_skillish,
+            origin=origin,
+            require_strong_math=require_strong_math,
+        )
+        # If still failing only on cross-field, keep repaired text for retry prompts.
+        reports.append(rep)
+        scores.append(int(rep.get("score") or 0))
+        repaired_list.append(candidate if rep.get("ok") else candidate)
+        n = str(candidate.get("name") or ab.get("name") or "").strip()
+        if n:
+            names_seen.add(n)
+        if not rep.get("ok"):
+            denial_summary.append(
+                f"{n or '?'}: " + ", ".join(rep.get("hard_fail") or rep.get("soft") or ["low_score"])
+            )
+    avg = int(round(sum(scores) / max(1, len(scores))))
+    all_ok = all(r.get("ok") for r in reports)
+    # Batch variety: two near-identical descriptions fail the gate.
+    descs = [
+        re.sub(r"\s+", " ", str(a.get("description") or "").lower())[:80]
+        for a in repaired_list
+    ]
+    if len(descs) >= 2 and len(set(descs)) < len(descs):
+        all_ok = False
+        denial_summary.append("batch_duplicate_descriptions")
+    # Near-duplicates (same lane / similar fiction) — not only exact string clones
+    near_pairs = find_near_duplicate_pairs(repaired_list, existing=existing_clean)
+    if near_pairs:
+        all_ok = False
+        top = near_pairs[0]
+        denial_summary.append(
+            "batch_near_duplicate_abilities:"
+            f"{top.get('names')}:{top.get('score')}"
+        )
+    # Batch cost variety: reject clone costs (meditation-hour spam, identical shapes).
+    cost_fps = [_cost_structure_fingerprint(str(a.get("cost") or "")) for a in repaired_list]
+    cost_fps_nonzero = [fp for fp in cost_fps if fp]
+    if len(cost_fps_nonzero) >= 2:
+        unique_costs = set(cost_fps_nonzero)
+        if len(unique_costs) == 1:
+            all_ok = False
+            denial_summary.append("batch_identical_cost_structure")
+        elif len(repaired_list) >= 3 and len(unique_costs) < max(2, (len(repaired_list) + 1) // 2):
+            all_ok = False
+            denial_summary.append("batch_low_cost_variety")
+        # Specific ban: 2+ maintenance-hour templates in one roll
+        maint_hits = sum(1 for fp in cost_fps_nonzero if fp == "MAINTAIN_HOUR_ENV_DAILY")
+        if maint_hits >= 2:
+            all_ok = False
+            denial_summary.append("batch_maintenance_hour_spam")
+        # Specific ban: 2+ "1 hour meditation to recharge" (with or without once-per-X)
+        med_hits = sum(
+            1
+            for fp in cost_fps_nonzero
+            if fp
+            in {
+                "HOUR_MEDITATION_RECHARGE",
+                "ONCE_PER_X_PLUS_HOUR_MEDITATION_RECHARGE",
+                "HOUR_RITUAL_RECHARGE",
+                "ONCE_DAY_PLUS_HOUR",
+            }
+        )
+        if med_hits >= 2:
+            all_ok = False
+            denial_summary.append("batch_meditation_hour_recharge_spam")
+    # Prerequisite variety (same "mentor or field discovery" on every card is weak)
+    prereq_fps = [
+        _prereq_fingerprint(str(a.get("prerequisites") or ""))
+        for a in repaired_list
+        if str(a.get("prerequisites") or "").strip()
+    ]
+    generic_prereq_hits = sum(1 for fp in prereq_fps if str(fp).startswith("GENERIC_"))
+    if len(prereq_fps) >= 2 and (len(set(prereq_fps)) == 1 or generic_prereq_hits >= 2):
+        try:
+            repaired_list = diversify_ability_prerequisites(repaired_list, force=True, origin=origin)
+            prereq_fps = [
+                _prereq_fingerprint(str(a.get("prerequisites") or ""))
+                for a in repaired_list
+                if str(a.get("prerequisites") or "").strip()
+            ]
+        except Exception:
+            pass
+        if len(prereq_fps) >= 2 and len(set(prereq_fps)) == 1:
+            all_ok = False
+            denial_summary.append("batch_identical_prerequisites")
+        elif generic_prereq_hits >= 2 and sum(
+            1 for fp in prereq_fps if str(fp).startswith("GENERIC_")
+        ) >= 2:
+            # Diversify failed to break generics — soft deny for retry
+            all_ok = False
+            denial_summary.append("batch_generic_prerequisite_spam")
+    return {
+        "ok": all_ok,
+        "score": avg,
+        # Prefer auto-repaired text (unified cost/use limits) even when later denials remain.
+        "abilities": repaired_list,
+        "reports": reports,
+        "denial_summary": denial_summary,
+        "auto_repaired": auto_repair,
+        "near_duplicate_pairs": near_pairs[:8] if near_pairs else [],
+    }
+
+
+def _local_remake_ability(
+    *,
+    forbidden_names: set[str],
+    origin: str = "",
+    world_style: str = "",
+) -> dict[str, Any]:
+    """Deterministic distinct ability when LLM rework/remake fails."""
+    from app.setup_composer import player_facing_domain_description, pick_seed_skill_domain
+
+    avoid = [n for n in forbidden_names if n]
+    dom = pick_seed_skill_domain(
+        avoid=avoid,
+        world_style=world_style,
+        salt=f"dedupe_remake|{time.time_ns()}|{random.randint(1, 99999)}",
+    )
+    name = str(dom.get("name") or "Quiet Craft")[:100]
+    # Ensure name not in forbidden (including soft contains)
+    if any(name.lower() == f.lower() or name.lower() in f.lower() for f in forbidden_names if f):
+        name = f"{name} Variant {random.randint(2, 9)}"
+    desc = player_facing_domain_description(dom)
+    ab = {
+        "name": name,
+        "description": desc,
+        "locked": origin == "acquired",
+        "prerequisites": (
+            pick_default_prereq({"name": name}, index=random.randint(0, 20), origin=origin)
+            if origin == "acquired"
+            else ""
+        ),
+        "cost": random.choice(
+            [
+                "A brief headache and ringing in the ears",
+                "One point of fatigue until you rest or eat",
+                "Numb fingers / shaky hands for a few minutes",
+                "Leaves you socially flat — harder to charm for a short while",
+            ]
+        ),
+        "growth_math": random.choice(GROWTH_MATH_SAMPLES),
+        "power_type": "compounding" if origin == "acquired" else "linear",
+        "_dedupe_source": "local_remake",
+    }
+    return normalize_ability_lock_and_prerequisites(ab, origin=origin)
+
+
+def _llm_rework_or_remake_ability(
+    *,
+    weaker: dict[str, Any],
+    keepers: list[dict[str, Any]],
+    mode: str,
+    origin: str = "",
+    world_style: str = "",
+    one_skillish: bool = False,
+) -> dict[str, Any] | None:
+    """Ask the model to rework (modify) or fully remake a near-duplicate ability."""
+    mode_l = "remake" if str(mode).lower().startswith("remake") else "rework"
+    forbidden = [str(k.get("name") or "").strip() for k in keepers if isinstance(k, dict)]
+    forbidden = [n for n in forbidden if n]
+    prompt = {
+        "task": (
+            f"{'REMAKE' if mode_l == 'remake' else 'REWORK'} one special ability so it is not a near-duplicate "
+            "of the keepers. Output must feel mechanically and fictionally distinct."
+        ),
+        "mode": mode_l,
+        "weaker_ability": {
+            "name": weaker.get("name"),
+            "description": weaker.get("description"),
+            "cost": weaker.get("cost"),
+            "prerequisites": weaker.get("prerequisites"),
+            "growth_math": weaker.get("growth_math"),
+            "power_type": weaker.get("power_type"),
+            "locked": weaker.get("locked"),
+        },
+        "keepers_do_not_copy": [
+            {
+                "name": k.get("name"),
+                "description": str(k.get("description") or "")[:220],
+                "power_type": k.get("power_type"),
+                "effect_lanes": sorted(_ability_effect_lanes(k)),
+            }
+            for k in keepers
+            if isinstance(k, dict)
+        ],
+        "forbidden_names": forbidden,
+        "ability_origin": origin,
+        "world_style": world_style,
+        "rules": [
+            "Return JSON only: {\"ability\": {name, description, locked, prerequisites, cost, growth_math, power_type}}.",
+            "Change the core action and domain — not just rename synonyms of the same power.",
+            "If mode is rework: keep a thin thematic link if possible, but different verb, limit, and payoff.",
+            "If mode is remake: invent a wholly new power in a different effect lane than keepers.",
+            "Description must be concrete playable prose (≥1 clear action), not equal to the name.",
+            "Fill growth_math with digits and XP/rank path.",
+            "Cost must be real and not clone keeper cost structures.",
+            "Never reuse forbidden_names or paraphrase keeper descriptions.",
+        ],
+        "preferred_lanes_if_remake": [
+            lane
+            for lane in _ABILITY_EFFECT_LANES
+            if lane not in set().union(*(_ability_effect_lanes(k) for k in keepers if isinstance(k, dict)))
+        ][:6],
+    }
+    try:
+        raw = _chat_json(
+            "Return JSON only. One distinct ability. No explanations.",
+            json.dumps(prompt, ensure_ascii=True),
+            timeout=_model_timeout(30, 150, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
+            phase=f"setup_ability_dedupe_{mode_l}",
+            max_tokens=500,
+        )
+    except Exception:
+        return None
+    ab = None
+    if isinstance(raw, dict):
+        if isinstance(raw.get("ability"), dict):
+            ab = raw["ability"]
+        elif isinstance(raw.get("special_abilities"), list) and raw["special_abilities"]:
+            cand = raw["special_abilities"][0]
+            if isinstance(cand, dict):
+                ab = cand
+        elif raw.get("name") or raw.get("description"):
+            ab = raw
+    if not isinstance(ab, dict):
+        return None
+    cleaned = normalize_ability_lock_and_prerequisites(dict(ab), origin=origin)
+    cleaned = repair_ability_cross_field_consistency(cleaned)
+    cleaned = normalize_ability_lock_and_prerequisites(cleaned, origin=origin)
+    if not str(cleaned.get("growth_math") or "").strip():
+        cleaned["growth_math"] = random.choice(GROWTH_MATH_SAMPLES)
+    # Quality solo check (soft math for non-seed unless one_skillish)
+    rep = evaluate_ability_quality(
+        cleaned,
+        existing=keepers,
+        sibling_names={str(k.get("name") or "") for k in keepers if isinstance(k, dict)},
+        one_skillish=one_skillish,
+        origin=origin,
+        require_strong_math=bool(one_skillish),
+    )
+    if not rep.get("ok"):
+        return None
+    # Must be distinct from keepers
+    for k in keepers:
+        if ability_similarity_score(cleaned, k) >= ABILITY_NEAR_DUP_THRESHOLD:
+            return None
+    cleaned["_dedupe_source"] = mode_l
+    return cleaned
+
+
+def ensure_distinct_abilities(
+    abilities: list[Any] | None,
+    *,
+    existing: list[Any] | None = None,
+    origin: str = "",
+    one_skillish: bool = False,
+    world_style: str = "",
+    max_rounds: int = ABILITY_DEDUPE_MAX_ROUNDS,
+    use_llm: bool = True,
+) -> dict[str, Any]:
+    """
+    Cross-check a batch for duplicates / near-duplicates.
+
+    For each near-pair: rework the weaker ability; if still similar, remake entirely;
+    re-check against the full set; rinse and repeat until clean or rounds exhausted.
+    """
+    items: list[dict[str, Any]] = [dict(a) for a in (abilities or []) if isinstance(a, dict)]
+    existing_clean = [a for a in (existing or []) if isinstance(a, dict)]
+    log: list[dict[str, Any]] = []
+    if len(items) + len(existing_clean) < 2:
+        return {"abilities": items, "ok": True, "rounds": 0, "log": log, "pairs_remaining": []}
+
+    for round_i in range(1, max(1, max_rounds) + 1):
+        pairs = find_near_duplicate_pairs(items, existing=existing_clean)
+        if not pairs:
+            return {
+                "abilities": items,
+                "ok": True,
+                "rounds": round_i - 1,
+                "log": log,
+                "pairs_remaining": [],
+            }
+        pair = pairs[0]
+        weaker_i = int(pair["weaker_index"])
+        if weaker_i < 0 or weaker_i >= len(items):
+            break
+        weaker = items[weaker_i]
+        keepers = [ab for idx, ab in enumerate(items) if idx != weaker_i] + existing_clean
+        forbidden = {str(k.get("name") or "").strip() for k in keepers if str(k.get("name") or "").strip()}
+        forbidden.add(str(weaker.get("name") or "").strip())
+
+        entry: dict[str, Any] = {
+            "round": round_i,
+            "pair": pair.get("names"),
+            "score": pair.get("score"),
+            "weaker": weaker.get("name"),
+            "actions": [],
+        }
+
+        replacement: dict[str, Any] | None = None
+        if use_llm:
+            replacement = _llm_rework_or_remake_ability(
+                weaker=weaker,
+                keepers=keepers,
+                mode="rework",
+                origin=origin,
+                world_style=world_style,
+                one_skillish=one_skillish,
+            )
+            entry["actions"].append("llm_rework" if replacement else "llm_rework_failed")
+            if replacement:
+                # still similar?
+                still = any(
+                    ability_similarity_score(replacement, k) >= ABILITY_NEAR_DUP_THRESHOLD for k in keepers
+                )
+                if still:
+                    entry["actions"].append("rework_still_similar")
+                    replacement = None
+
+        if replacement is None and use_llm:
+            replacement = _llm_rework_or_remake_ability(
+                weaker=weaker,
+                keepers=keepers,
+                mode="remake",
+                origin=origin,
+                world_style=world_style,
+                one_skillish=one_skillish,
+            )
+            entry["actions"].append("llm_remake" if replacement else "llm_remake_failed")
+            if replacement and any(
+                ability_similarity_score(replacement, k) >= ABILITY_NEAR_DUP_THRESHOLD for k in keepers
+            ):
+                entry["actions"].append("remake_still_similar")
+                replacement = None
+
+        if replacement is None:
+            replacement = _local_remake_ability(
+                forbidden_names=forbidden,
+                origin=origin,
+                world_style=world_style,
+            )
+            entry["actions"].append("local_remake")
+            # If local remake still collides (rare), force unique name suffix and different lane note
+            if any(ability_similarity_score(replacement, k) >= ABILITY_NEAR_DUP_THRESHOLD for k in keepers):
+                replacement["name"] = f"{replacement.get('name') or 'Craft Edge'} {random.randint(3, 99)}"
+                replacement["description"] = (
+                    str(replacement.get("description") or "").rstrip(".")
+                    + " Focuses on a different practical niche than the character's other powers."
+                )
+                entry["actions"].append("local_remake_forced_distinct")
+
+        items[weaker_i] = replacement
+        entry["result_name"] = replacement.get("name")
+        log.append(entry)
+
+    pairs_left = find_near_duplicate_pairs(items, existing=existing_clean)
+    return {
+        "abilities": items,
+        "ok": not pairs_left,
+        "rounds": max_rounds,
+        "log": log,
+        "pairs_remaining": pairs_left[:6],
+    }
+
+
+def evaluate_custom_skills_quality(
+    text: str,
+    *,
+    abilities: list[Any] | None = None,
+    one_skillish: bool = False,
+) -> dict[str, Any]:
+    """Quality-check custom_skills prose (especially weak-seed / OP frames)."""
+    raw = str(text or "").strip()
+    hard: list[str] = []
+    soft: list[str] = []
+    score = 100
+    if not raw:
+        return {"ok": False, "score": 0, "hard_fail": ["empty"], "soft": []}
+    low = raw.lower()
+    # Still a skeleton frame — not expanded fiction.
+    if "op_mc_frame" in low or "one_skill_frame" in low:
+        if len(raw) < 160 or "weak seed skill:" not in low:
+            hard.append("still_skeleton_frame")
+            score -= 40
+    if one_skillish:
+        if "weak seed skill:" not in low and "seed skill" not in low:
+            # Align with first ability name if present
+            a0 = ""
+            if isinstance(abilities, list) and abilities and isinstance(abilities[0], dict):
+                a0 = str(abilities[0].get("name") or "").strip()
+            if not a0 or a0.lower() not in low:
+                hard.append("missing_named_seed")
+                score -= 25
+        if is_overused_seed_domain(raw[:80]) or any(
+            bad in low for bad in ("observation", "ropework", "knot-work", "lie detection", "barter")
+        ):
+            # Only hard-fail if the *seed name* is overused, not if banned words appear in ban list
+            m = re.search(r"weak\s+seed\s+skill\s*:\s*([A-Za-z][A-Za-z0-9 \-]{1,40})", raw, re.I)
+            if m and is_overused_seed_domain(m.group(1)):
+                hard.append("seed_overused_domain")
+                score -= 30
+        if len(raw) < 100:
+            hard.append("custom_skills_too_thin")
+            score -= 20
+    if len(raw) > 4000:
+        soft.append("custom_skills_very_long")
+        score -= 5
+    score = max(0, min(100, score))
+    return {"ok": not hard and score >= 60, "score": score, "hard_fail": hard, "soft": soft}
+
+
+def _fallback_custom_skills_from_domain(
+    current_setup: dict[str, Any],
+    *,
+    domain: dict[str, str] | None = None,
+) -> str:
+    """Last-resort custom_skills string after quality denials — uses seed pool."""
+    abilities = current_setup.get("special_abilities") if isinstance(current_setup.get("special_abilities"), list) else []
+    name = ""
+    if abilities and isinstance(abilities[0], dict):
+        name = str(abilities[0].get("name") or "").strip()
+    if not name or is_overused_seed_domain(name):
+        dom = domain or pick_seed_skill_domain(
+            world_style=str(current_setup.get("world_style") or ""),
+            salt=f"cs_fallback|{time.time_ns()}",
+        )
+        name = str(dom.get("name") or "Digging")
+        # Use clean hint only (never prompt_hint with tier/lane tags).
+        hint = str(dom.get("hint") or "a thin practical edge").strip().rstrip(".")
+        req = str(dom.get("requires") or "")
+        late = str(dom.get("compounds_to") or "late-domain mastery")
+    else:
+        hint = "weak practical expression of the seed ability"
+        req = ""
+        late = "late compounding mastery of this domain"
+    parts = [
+        f"weak seed skill: {name}",
+        "near-useless rank F / level 1",
+        hint,
+        f"works best with {req}" if req else "no free combat kit at Start",
+        "track ranks via system UI if on else DM notes",
+        "XP from practice, mentors, risk, and breakthroughs",
+        f"late path: {late}",
+        "passives OK as domain expressions later",
+        "more powers may unlock in play not at Start",
+    ]
+    return ", ".join(p for p in parts if p)[:1200]
+
+
+def _ability_quality_retry_prompt(
+    *,
+    denied: dict[str, Any],
+    existing: list[Any],
+    origin: str,
+    intent_plan: dict[str, Any],
+    attempt: int,
+    count_min: int,
+    count_max: int,
+) -> dict[str, Any]:
+    """Prompt the model to invent again after a quality denial (not copy the pool)."""
+    return {
+        "task": (
+            f"QUALITY DENIAL #{attempt}: previous special_abilities failed the quality gate. "
+            "Invent NEW original powers — exhaust fresh ideas. Do not copy catalog seed names "
+            "unless you truly cannot invent (even then, reinvent the fiction)."
+        ),
+        "denial_summary": denied.get("denial_summary") or [],
+        "failed_reports": [
+            {
+                "name": r.get("name"),
+                "score": r.get("score"),
+                "hard_fail": r.get("hard_fail"),
+                "soft": r.get("soft"),
+            }
+            for r in (denied.get("reports") or [])[:6]
+        ],
+        "forbidden_abilities": existing,
+        "ability_origin": origin,
+        "count_min": count_min,
+        "count_max": count_max,
+        "field_intent": intent_slice_for_field(intent_plan, "special_abilities"),
+        "quality_bar": {
+            "name": "evocative, specific, not generic Ability/Power, not overused cliché domains",
+            "description": "≥1 concrete playable hook (what you do / when / limit); no vague mystery power",
+            "growth_math": "calculable XP/rank numbers a DM can apply; include soft-cap/breakthrough for seeds",
+            "cost": "meaningful strain/resource for actives; passives may be always-on with a drawback",
+            "prerequisites": "required when locked=true; concrete unlock path",
+            "stability": "no unlimited/omnipotent/auto-win wording",
+            "cross_field_consistency": (
+                "Description, cost, prerequisites, and growth_math must agree on use limits. "
+                "Never say 'once per day' in description while cost says '1 hour to recharge' — "
+                "put frequency + recharge together in cost, or use the same period in both fields."
+            ),
+        },
+        "ban_overused_domains": sorted(OVERUSED_SEED_DOMAINS),
+        "return_shape": {
+            "special_abilities": [
+                {
+                    "name": "original ability name",
+                    "description": "concrete playable base description",
+                    "locked": False,
+                    "prerequisites": "",
+                    "cost": "concrete cost or drawback",
+                    "growth_math": "concrete XP/rank formulas with numbers",
+                    "power_type": "compounding|passive|linear|soft_cap|breakthrough|flat|item_bound",
+                }
+            ]
+        },
+        "rules": [
+            "Return JSON only with special_abilities.",
+            "Fix every hard_fail from failed_reports.",
+            "Do not reuse forbidden_abilities names or paraphrase their descriptions.",
+            "Invent domains freely (summon, necro, heal support, weapon-bound, tool rites, weird hybrid) — original first.",
+            "Seed catalog names are last-resort inspiration only, not a menu to pick from.",
+            "Always fill growth_math with digits and rank/XP path.",
+            "If locked, prerequisites must be a real unlock sentence.",
+            "FACT-CHECK TIMING: description and cost must agree on use limits. Prefer effect+duration in description; "
+            "put frequency in cost when needed. Do NOT stamp every ability with the same meditation-hour recharge.",
+            "If hard_fail includes use_limit_vs_recharge_mismatch, unify frequency and recharge for THAT ability only.",
+            "If denial mentions batch_maintenance_hour_spam / batch_identical_cost_structure / batch_meditation_hour_recharge_spam: "
+            "each ability MUST get a DIFFERENT cost shape. BANNED clone: 'Once per rank/day; 1 hour of meditation to recharge after use' on more than one power. "
+            "Use varied costs: fatigue, reagent, social debt, tool wear, noise, once-per-scene breathlessness, nosebleed, heat drain — not identical meditation rituals.",
+            "Across a multi-ability batch, costs and prerequisites must not be the same sentence with one noun swapped.",
+        ],
+    }
+
+
+# Distinct cost shapes for batch diversification (never all meditation-hour clones).
+_ABILITY_COST_VARIETY_POOL = (
+    "A brief headache and ringing in the ears after use.",
+    "One point of fatigue until you rest or eat.",
+    "Numb fingers / shaky hands for a few minutes.",
+    "Spends a small personal focus (candle, salt pinch, named tool scrap) when used.",
+    "Leaves you socially flat — harder to charm for a short while.",
+    "A nosebleed or iron taste if forced twice in a row.",
+    "Makes a noticeable noise or scent; nearby people may investigate.",
+    "Tool or cloth wear: one piece of gear frays or dulls slightly.",
+    "Once per scene; short breathlessness after.",
+    "Once per day; mild mental fog for ten minutes after.",
+    "Costs a favor, coin, or small social debt when used in public.",
+    "Drains body heat; you shiver until warmed.",
+)
+
+
+def diversify_ability_costs(
+    abilities: list[Any] | None,
+    *,
+    force: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    If two or more abilities share the same cost *structure* (especially the
+    'Once per X; 1 hour meditation to recharge' clone), rewrite later costs
+    to distinct pool entries. Deterministic — no LLM required.
+    """
+    if not isinstance(abilities, list):
+        return []
+    out: list[dict[str, Any]] = []
+    seen_fps: list[str] = []
+    pool_i = 0
+    clone_templates = {
+        "HOUR_MEDITATION_RECHARGE",
+        "ONCE_PER_X_PLUS_HOUR_MEDITATION_RECHARGE",
+        "HOUR_RITUAL_RECHARGE",
+        "ONCE_DAY_PLUS_HOUR",
+        "MAINTAIN_HOUR_ENV_DAILY",
+        "ONCE_PER_RANK",
+        "ONCE_PER_RANK_BREATH_STAMINA",
+        "ONCE_PER_RANK_PLUS_SHORT_CD",
+        "BREATH_CONTROL_STAMINA_DRAIN",
+    }
+    # Count meditation-family hits to know if we must diversify
+    fps_all = [_cost_structure_fingerprint(str(a.get("cost") or "")) for a in abilities if isinstance(a, dict)]
+    med_count = sum(1 for fp in fps_all if fp in clone_templates)
+    identical = len(set(fp for fp in fps_all if fp)) <= 1 and len(fps_all) >= 2
+
+    for ab in abilities:
+        if not isinstance(ab, dict):
+            continue
+        next_ab = dict(ab)
+        cost = str(next_ab.get("cost") or "").strip()
+        fp = _cost_structure_fingerprint(cost)
+        must_replace = False
+        if force and fp in seen_fps and fp:
+            must_replace = True
+        if fp in seen_fps and fp:
+            must_replace = True
+        if med_count >= 2 and fp in clone_templates and seen_fps and any(s in clone_templates for s in seen_fps):
+            # Keep first meditation cost; diversify the rest
+            must_replace = True
+        if identical and seen_fps:
+            must_replace = True
+        if must_replace or (not cost and str(next_ab.get("power_type") or "").lower() != "passive"):
+            # Pick a pool cost not already used
+            used_text = {str(x.get("cost") or "").strip().lower() for x in out}
+            pick = None
+            for _ in range(len(_ABILITY_COST_VARIETY_POOL)):
+                cand = _ABILITY_COST_VARIETY_POOL[pool_i % len(_ABILITY_COST_VARIETY_POOL)]
+                pool_i += 1
+                if cand.lower() not in used_text:
+                    pick = cand
+                    break
+            if pick is None:
+                pick = f"{_ABILITY_COST_VARIETY_POOL[pool_i % len(_ABILITY_COST_VARIETY_POOL)]} (variant {pool_i})."
+                pool_i += 1
+            next_ab["cost"] = pick
+            next_ab["_cost_diversified"] = True
+            fp = _cost_structure_fingerprint(pick)
+        if fp:
+            seen_fps.append(fp)
+        out.append(next_ab)
+    # Also diversify structured resource_cost shapes (mana/energy/fatigue/CD)
+    try:
+        from app.player_resources import diversify_resource_costs, magic_allows_mana
+
+        magic_ok = magic_allows_mana(str((out[0] if out else {}).get("_magic_level") or ""), None)
+        # Prefer caller context via env of first ability if stamped later; default True
+        out = diversify_resource_costs(out, magic_ok=True, force=force)
+    except Exception:
+        pass
+    # Prerequisite variety (same mentor/field line on every card)
+    try:
+        out = diversify_ability_prerequisites(out, force=force)
+    except Exception:
+        pass
+    return out
 
 
 def _ensure_ability_growth_math(
@@ -2031,23 +4990,28 @@ def coherence_review_setup(
             "Return JSON only.",
             "Only include fields you actually change in field_patches.",
             "Never invent locked_fields keys.",
-            "Do not dilute a one-skill / compounding fantasy: if intent says one weak compounding skill, "
-            "custom_skills must still encode seed skill name/domain, start rank, tracking style, XP sources, "
-            "and hard limits. Put concrete calculable growth math on each ability's growth_math field "
-            "(XP_to_next or rank thresholds, per-use XP ± risk multipliers, soft caps, rank→bonus formulas). "
+            "Do not dilute an OP MC / compounding fantasy: if intent says a weak compounding seed, "
+            "custom_skills must encode seed name/domain, start rank, tracking style, XP sources, "
+            "and start-kit limits — not a permanent ban on later powers. Put concrete calculable growth_math "
+            "that can snowball toward late OP (F…S/SS/SSS, risk mult, soft caps, breakthroughs, rank→bonus). "
             "Vague 'gets stronger over time' is not enough — invent numbers on growth_math.",
             "You may rewrite ability growth_math solely to add missing calculable math when fiction is fine.",
-            "If special_abilities are present and one-skill fantasy, keep exactly one modest seed ability "
-            "aligned with custom_skills; do not invent a second combat toolkit.",
+            "If special_abilities are present and OP MC fantasy, keep a thin opening kit (usually one compounding "
+            "seed; optional locked passive); do not invent a free second combat toolkit at Start. "
+            "Fiction may allow more powers later through play.",
             "When rewriting special_abilities, preserve or fill growth_math with concrete calculable formulas.",
             "Prefer concrete nouns and limits over adjectives like 'mysterious', 'ancient destiny', 'chosen'.",
             "Keep custom_skills as one comma-separated string (no bullets).",
-            "STARTER GEAR LOGIC: starter_equipment is what the player owns the instant Start is pressed. "
-            "Fact-check against backstory_mode: pure isekai/summon/just-transported → only clothes/pockets "
-            "from the moment of transport (no fantasy shield/sword/armor/god loot). "
+            "STARTER GEAR + ORIGIN LOGIC: starter_equipment is what the player owns the instant Start is pressed. "
+            "Origin, character_backstory, clothes, and kit must match world vibe as one package. "
+            "If the destination is low-tech/fantasy isekai and the origin is modern/near-future tech life, "
+            "rewrite origin/backstory into a local vocation (optional faint otherworld memory) and localize gear — "
+            "do not leave a near-future maintenance tech hanging in a compound fantasy world. "
+            "Pure isekai/summon with explicit just-arrived Earth life may keep Earth origin, but kit is thin "
+            "(clothes + tiny pockets only — no free trade pack, no fantasy arsenal). "
             "Reincarnated/grew-up-here → this-life gear only. Native life → gear must fit their job/life. "
             "God gifts, quest rewards, system packages happen AFTER Start in play — never pre-seed them. "
-            "If gear is illogical, rewrite starter_equipment and/or appearance; do not invent a free arsenal.",
+            "If illogical, rewrite character_backstory and/or starter_equipment/appearance together.",
             "If everything is already solid, return empty field_patches and omit special_abilities.",
             "User-facing names/titles already filled should only change if clearly cheesy.",
         ],
@@ -2224,7 +5188,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     return_fields = _setup_randomizer_return_fields(group, current_setup, text_mode)
     if not return_fields:
         return {}
-    if return_fields == ["special_abilities"]:
+    if return_fields == ["special_abilities"] or group == "special_abilities":
         field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
         if str(field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "none").lower() == "none":
             return {"special_abilities": []}
@@ -2401,23 +5365,21 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "rules": base_rules,
         }
     elif return_fields == ["special_abilities"]:
-        field_context = current_setup.get("_field_context") or {}
+        field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
+        field_context = dict(field_context or {})
         quantity_locked = bool(field_context.get("quantity_locked"))
-        try:
-            requested_count = max(
-                0,
-                min(
-                    5,
-                    int(
-                        field_context.get("requested_count")
-                        if field_context.get("requested_count") is not None
-                        else field_context.get("existing_count")
-                        or 0
-                    ),
-                ),
-            )
-        except (TypeError, ValueError):
-            requested_count = 0
+        count_min, count_max = _ability_count_bounds(field_context)
+        pf_early = intent_plan.get("power_fantasy") if isinstance(intent_plan.get("power_fantasy"), dict) else {}
+        one_skillish_early = str(pf_early.get("growth") or "").lower() == "compounding" or str(
+            pf_early.get("start_power") or ""
+        ).lower() in {"near_useless", "weak"}
+        # Roll target count once (or honor client roll) before asking the model.
+        target_count = _roll_ability_count(field_context, one_skillish=one_skillish_early)
+        field_context["target_count"] = target_count
+        field_context["requested_count"] = target_count
+        field_context["count_rolled"] = True
+        current_setup["_field_context"] = field_context
+        requested_count = target_count
         existing_abilities = (
             current_setup.get("special_abilities")
             if isinstance(current_setup.get("special_abilities"), list)
@@ -2437,36 +5399,54 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         one_skillish = str(pf.get("growth") or "").lower() == "compounding" or str(
             pf.get("start_power") or ""
         ).lower() in {"near_useless", "weak"}
-        diversity_seed = random.randint(1000, 9999)
-        domain_hints = [
-            "craft/repair",
-            "trade/barter",
-            "memory of text",
-            "balance/climbing",
-            "tracking footprints",
-            "animal calm",
-            "poison/tincture smell",
-            "map sense",
-            "sleep discipline",
-            "lie detection (weak)",
-            "tool improvisation",
-            "pain tolerance",
-            "quiet footwork",
-            "fire-tending",
-            "knot-work",
+        diversity_seed = random.randint(1000, 999999)
+        # Catalog seeds are FALLBACK / spice only — model must invent first.
+        sample_n = min(6, len(SEED_SKILL_DOMAIN_POOL))
+        inspiration_only = [
+            {
+                "name": d.get("name"),
+                # Clean player-facing effect only — never paste tier/lane tags into ability text.
+                "effect_hint": d.get("hint"),
+                "requires": d.get("requires") or "",
+                "late_payoff_fiction": d.get("compounds_to") or "",
+                "lane": d.get("lane"),
+                "tier": d.get("tier"),
+            }
+            for d in random.sample(list(SEED_SKILL_DOMAIN_POOL), k=sample_n)
         ]
-        random.shuffle(domain_hints)
         prompt = {
             "task": (
                 "Generate NEW setup special abilities according to ability_origin. "
-                "This is a re-roll: invent different names and effects than any forbidden list. "
-                f"Diversity seed {diversity_seed} — pick a fresh domain (suggested pool: {', '.join(domain_hints[:5])})."
+                "INVENT original powers first — exhaust creative variety on your own. "
+                f"Diversity seed {diversity_seed}. "
+                "A small inspiration_only list is optional spice if you are stuck; do NOT treat it as a menu. "
+                "Outputs pass a quality gate (name, description, growth_math, cost, prerequisites)."
             ),
+            "invention_first": True,
+            "inspiration_only": inspiration_only,
+            "inspiration_policy": (
+                "Optional. Use at most as loose thematic spice. Prefer wholly original names/effects. "
+                "Copying an inspiration name is a last resort when truly out of ideas."
+            ),
+            "ban_overused_domains": sorted(OVERUSED_SEED_DOMAINS),
+            "quality_bar": {
+                "name": "specific evocative name; not Ability/Power; not banned cliché domains",
+                "description": "concrete playable hook (action + duration); put use-frequency in cost when a recharge also exists",
+                "growth_math": "digits + XP/rank path a DM can apply; soft-cap/breakthrough for seeds",
+                "cost": "real strain/resource; include once/day or recharge here consistently — no mismatch with description",
+                "prerequisites": "required when locked=true",
+                "stability": "no unlimited/omnipotent/auto-win",
+                "cross_field": "description/cost/math timing facts must agree",
+            },
             "ability_origin": field_context.get("ability_origin")
             or current_setup.get("special_ability_origin")
             or "none",
             "quantity_locked": quantity_locked,
-            "requested_count": requested_count,
+            # Server/client already rolled — model must return this exact count.
+            "target_count": target_count,
+            "requested_count": target_count,
+            "count_min": count_min,
+            "count_max": count_max,
             "must_not_reuse": {
                 "names": forbid_names,
                 "description_prefixes": forbid_descs,
@@ -2498,19 +5478,19 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "game_system": current_setup.get("game_system"),
                 "system_style": current_setup.get("system_style"),
                 "skill_style": current_setup.get("skill_style"),
-                # Hint only — do not copy domain words into a new ability name blindly
                 "custom_skills_hint": current_setup.get("custom_skills"),
             },
             "locked_setup": locked_setup,
             "return_shape": {
                 "special_abilities": [
                     {
-                        "name": "ability name",
-                        "description": "one concrete immutable base description",
+                        "name": "original ability name",
+                        "description": "one concrete immutable base description with playable hook",
                         "locked": False,
-                        "prerequisites": "",
-                        "cost": "no cost",
-                        "growth_math": "playable XP/rank formulas for this power (not empty for compounding seeds)",
+                        "prerequisites": "unlock path when locked; else empty",
+                        "cost": "concrete cost or drawback (not empty free god-mode)",
+                        "growth_math": "playable XP/rank formulas with numbers",
+                        "power_type": "compounding|passive|linear|soft_cap|breakthrough|flat|item_bound",
                     }
                 ]
             },
@@ -2532,25 +5512,50 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             + [
                 "Do not return the current abilities unchanged. Invent new names and descriptions.",
                 "Never reuse must_not_reuse.names or paraphrase must_not_reuse.description_prefixes.",
-                "Do not default to weather, sandstorms, storms, invisibility, or pure Observation/environment-sense powers unless the diversity seed points there.",
+                "INVENTION FIRST: create original domains and effects. Do not default to catalog seed names.",
+                "inspiration_only is optional spice if stuck — not a required domain list.",
+                "NEVER put design meta in description: no 'advanced tier', 'arcane lane', 'compounds toward:', 'When you try,'. Write fiction the player reads in play.",
+                "Description = what the character can do now (weak/limited). Late payoff belongs in growth fiction/math, not as labeled meta tags.",
+                "FACT-CHECK across description, cost, prerequisites, and growth_math: use limits must not contradict. "
+                "Description = effect + duration; cost = that ability's own drawback or frequency — not a shared stamp.",
+                "COST VARIETY (critical when returning 2+ abilities): each ability needs a DIFFERENT cost shape. "
+                "BANNED clone spam: the same 'Once per rank/day; 1 hour of meditation to recharge after use' on every power. "
+                "BANNED: 'You must spend 1 hour each day/dawn in [biome] to maintain this ability' with only the place swapped. "
+                "At most ONE ability in a batch may use a long meditation recharge. Others must use different costs: "
+                "short fatigue, scarce reagent, social debt, tool wear, noise, once-per-scene breathlessness, nosebleed, heat drain, attention cost.",
+                "NO NEAR-DUPLICATES: each ability must use a different core action and effect lane "
+                "(e.g. not two shields, two veil/stealth cloaks, two echo/distract sounds, or two generic buffs). "
+                "If two powers would feel the same in play, replace the weaker one with a distinct domain.",
+                "Do not use banned overused domains (Observation, knots/ropework, fabric/thread sense, barter, lie detection, footstep tracking, weather/sandstorm defaults).",
+                "Obscure is good; unusable is not. Every ability needs a concrete turn-1 action or always-on effect with a limit.",
+                "Spectrum is allowed: simple practical powers AND advanced lanes (summoning, necromancy, healing/support, weapon-bound arts, tool rites).",
+                "If a power needs a tool/weapon/focus, state that in description or cost; F-rank clumsy, high ranks make the item legendary-adjacent.",
                 "If ability_origin is none, return an empty special_abilities list.",
-                "If ability_origin is acquired, abilities should usually be locked or have prerequisites and feel learned, earned, trained, system-granted, event-awakened, tool-based, or recovered through play.",
-                "If ability_origin is innate, abilities should usually be usable at the start and feel inherent, inborn, inherited, racial, bodily, soul-deep, or otherwise natural to the character.",
-                "Use locked true for abilities that should exist but not be usable at the start.",
-                "Let backstory_mode and character_backstory decide whether abilities come from current race, training, former-life remnants, system awakening, vows, tools, or no special source at all.",
-                "For reincarnated or transmigrated characters, former strength may justify a locked remnant or remembered technique, but do not force former power unless the backstory supports it.",
-                "If field_intent.power_fantasy.start_power is near_useless or weak, abilities should start locked or extremely modest; compounding growth belongs to later play, not opening god-mode.",
-                "If growth is compounding / one-skill fantasy: return exactly ONE ability that is a weak seed power in a concrete domain (not a full toolkit). Domain must vary across re-rolls.",
-                "ALWAYS fill growth_math with concrete calculable rules for each ability (especially compounding / one-skill). Do not leave it empty. Do not put long formula essays only in custom_skills — growth_math is the math box on the power.",
-                "For one-skill fantasy, the ability is the playable expression of the seed skill; put fiction/tracking/limits in custom_skills; put XP/rank math in growth_math.",
-                "If custom_skills_hint or ONE_SKILL_FRAME is present, invent a matching seed domain and describe the ability as the weak practical expression of that skill.",
+                "If ability_origin is acquired: VARY locked — do NOT lock every ability. Mild/modest utilities → locked=false usable at Start; stronger/story powers may be locked=true with a real prerequisite. Aim for a mix (roughly half open).",
+                "If ability_origin is innate, abilities should usually be usable at the start (locked=false) and feel inherent, inborn, inherited, racial, bodily, soul-deep, or otherwise natural to the character.",
+                "If ability_origin is both, return a mix: some innate (unlocked) and some acquired (may be locked). Vary locked per entry — never lock the whole batch.",
+                "Use locked=true only when the power should exist but not be usable at Start — then prerequisites MUST be a real unlock path. locked=false means usable now.",
+                "Set power_type on each ability to one of: compounding, passive, linear, soft_cap, breakthrough, flat, item_bound.",
+                "Passive = always-on (may omit activate cost but should note a drawback or rank limit); can still have growth_math ranks.",
+                "Let backstory_mode and character_backstory decide ability source; do not force former-life power without support.",
+                "If field_intent.power_fantasy.start_power is near_useless or weak, abilities should start locked or extremely modest; compounding toward late OP belongs to later play, not opening god-mode.",
+                "If growth is compounding / OP MC fantasy and quantity is not locked: prefer ONE weak seed ability when count_min allows 1; if count_max≥2 you may add one locked passive domain expression. Never exceed count_max. Opening kit is thin — more powers may unlock later in play, not at Start.",
+                "ALWAYS fill growth_math with concrete calculable rules (especially OP compounding). Include a path toward high ranks (S/SS/SSS) with soft caps and breakthroughs. Empty growth_math fails the quality gate.",
+                "Cost and prerequisites will be quality-checked for stability — no unlimited free power.",
+                "If custom_skills_hint names a seed, you may align — still invent original fiction, do not paste slogans.",
             ],
         }
-        if one_skillish and not quantity_locked:
-            prompt["rules"] = prompt["rules"] + ["Return exactly 1 special_abilities entry for this one-skill / weak-start run."]
-        if quantity_locked:
+        # Count is decided by RNG (or quantity lock) before this prompt — never "pick 4 because max is 4".
+        prompt["rules"] = prompt["rules"] + [
+            f"Return exactly {max(1, int(target_count))} special_abilities entries, no more and no fewer. "
+            f"That count was rolled randomly in [{count_min}, {count_max}]"
+            + (" (quantity lock)" if quantity_locked else " (RNG)")
+            + ". Do not invent a different count."
+        ]
+        if one_skillish:
             prompt["rules"] = prompt["rules"] + [
-                f"Return exactly {requested_count} special_abilities entries, no more and no fewer."
+                "This is an OP MC / weak-start run: keep the opening kit modest in power "
+                f"even though you must still return exactly {max(1, int(target_count))} abilities."
             ]
     elif len(return_fields) == 1:
         field = return_fields[0]
@@ -2628,22 +5633,51 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Prefer female or male for ordinary former lives. Sexless/constructed or varies-by-form only when the former-world body is clearly nonstandard. "
                 "Blank is fine when former sex does not matter."
             ),
-            "special_ability_origin": "Return one of: none, acquired, innate. Use none when special powers would overdefine the character; acquired when abilities are learned, earned, unlocked, system-granted, trained, or recovered through play; innate when abilities are inborn, inherited, racial, bodily, soul-deep, or natural to the character.",
-            "backstory_mode": "Generate one concise way the character relates to their past. Known past, ordinary remembered life, reincarnated, transmigrated, hidden past, fragmented memories, and locally known history are all valid. Do not default to tragedy, amnesia, exile, destiny, noble bloodline, revenge, or combat roles unless supported.",
-            "memory_policy": "Generate one concise memory rule. Known ordinary memory, remembered former life, partial former-life fragments, uncertain rumors, slow discovery, or a custom variant are all valid; do not force mystery unless it fits.",
-            "character_backstory": "Generate 2-4 concise sentences of actual character history, not a motto or personality trait. Include: where they were born or what world/community they came from; how they lived before the RPG starts, such as work, family, training, debts, duties, or social position; why they are near the starting point now; and, only if the backstory_mode/world_style suggests reincarnation/transmigration, whether and how they died and what they remember from the former life. Keep it playable and original, but avoid chosen-one framing, noble lineage, revenge, or a combat profession unless supported.",
+            "special_ability_origin": "Return one of: none, acquired, innate, both. Use none when special powers would overdefine the character; acquired when abilities are learned, earned, unlocked, system-granted, trained, or recovered through play; innate when abilities are inborn, inherited, racial, bodily, soul-deep, or natural; both when the character should have a mix of innate and acquired powers.",
+            "backstory_mode": (
+                "Return ONLY one short label from: known, hidden, fragmented memories, reincarnated, transmigrated, "
+                "nameless drifter, amnesia. Never write a sentence here. "
+                "Use reincarnated when they grew up in this world after rebirth. "
+                "Use transmigrated for same-day portal/summon/truck/body-drop into this world. "
+                "Do not default to tragedy, destiny, noble bloodline, or revenge."
+            ),
+            "memory_policy": (
+                "Return ONLY one short phrase from: ordinary memory, remembers former life, former life fragments, "
+                "details emerge through choices, rumors may be wrong, private details stay private. "
+                "For transmigrated same-day drops, prefer remembers former life or former life fragments. "
+                "For reincarnated childhood, prefer former life fragments."
+            ),
+            "character_backstory": (
+                "Generate 2-4 concise third-person sentences of actual character history (use they/their, never I/my). "
+                "IMPORTANT: backstory_mode 'transmigrated' means TRANSPORT from another life/world — not a native fantasy biography. "
+                "For transmigrated REQUIRED structure: (1) concrete life BEFORE transport (job, place, ordinary stakes in the former world); "
+                "(2) HOW they were transported (death, truck, summon ritual, portal, body-drop); "
+                "(3) start at the moment of arrival or the hours just before — not already living as a local merchant/exile mid-plot. "
+                "Do NOT write disgraced nobles, festival guests, or local coup exiles as if they were always from this world. "
+                "Do NOT paste skill names, weak-seed blurbs, compounding, or ability rules into the backstory. "
+                "If reincarnated: grew up HERE for years + former-life fragments (not same-day truck-kun). "
+                "If body transmigration: old mind vs local body already known to NPCs. "
+                "Match world_style. No chosen-one, free hero kit, or revenge-by-default."
+            ),
             "hair": (
-                "Hair only for art: length + color + style in a short phrase "
-                "(e.g. short brown hair, long silver braid). No face details, no clothes."
+                "Hair ONLY: length + color + style in one short phrase "
+                "(e.g. messy copper curls, cropped black hair, white undercut). "
+                "No eyes, jaw, freckles, scars, or clothes. "
+                "Do NOT reuse current_setup.hair if present — invent a different look. "
+                "Avoid always defaulting to silver/cropped/grey tired face tropes."
             ),
             "facial_features": (
-                "Face-only portrait cues: eyes, freckles, scars, jaw, brows, marks. "
-                "2–5 short phrases. No hair (use hair field), no clothing, no personality essays."
+                "Face ONLY: eyes, freckles, scars, jaw, brows, marks — 2–5 short phrases. "
+                "NEVER include hair (no 'cropped silver hair', braids, ponytails). "
+                "No clothing. No personality essays. "
+                "Do NOT return the overused stack 'grey eyes, tired lids, square jaw'. "
+                "Do NOT reuse current_setup.facial_features — pick a fresh face."
             ),
             "appearance": (
-                "Clothing / worn gear only for art. Prefer zone tags: "
+                "Clothing / worn gear ONLY. Prefer zone tags: "
                 "'torso: travel coat; feet: dusty boots'. "
-                "Do NOT put hair or facial features here — use hair and facial_features fields. "
+                "Do NOT put hair or facial features here. "
+                "Do NOT reuse current_setup.appearance if present. "
                 "Portraits only use upper-body zones. Weak starts: ordinary clothes."
             ),
             "starter_equipment": (
@@ -2666,7 +5700,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "(practice/mentors/risk/milestones), (6) hard limits. "
                 "Do NOT dump long XP formulas here — those belong on the ability growth_math field. "
                 "If current_setup has special_abilities, align the seed skill with that ability. "
-                "Never default to weather/observation/sandstorm. Use commas between phrases. "
+                "Never default to weather/observation/sandstorm/knot-work/ropework/fabric/barter/lie-detection/footsteps. "
+                "Pick a fresh practical domain each roll. Use commas between phrases. "
                 "User-locked custom_skills must not be rewritten."
             ),
             "quest_style": "Quest STRUCTURE only: how hooks arrive (emergent, job board, faction chains, personal mysteries). Never describe player skills, compounding, near-useless abilities, or power fantasy.",
@@ -2731,7 +5766,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "For world_races, include human unless the concept strongly excludes humans.",
                 "For player_public_name and player_title, blank is the normal result; only fill these rare fields when the existing backstory makes them clearly useful.",
                 "For previous_life_age and previous_life_sex, blank is the normal result unless the setup clearly includes reincarnation, transmigration, rebirth, or remembered former life.",
-                "For special_ability_origin, return exactly one of none, acquired, or innate.",
+                "For special_ability_origin, return exactly one of none, acquired, innate, or both.",
             ],
         }
     else:
@@ -2763,11 +5798,16 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "player_age and player_sex are current-life descriptive identity fields. Prefer male/female for ordinary humanoids; rare exotic sex categories only when the world supports them. Keep them concise, and do not make them behavior constraints or stereotypes.",
                 "previous_life_age and previous_life_sex are only for reincarnated, transmigrated, reborn, or former-life starts. Leave them blank for ordinary known, hidden, or nameless starts without former-life memory.",
                 "Backstory mode affects both optional identity fields: reincarnated/transmigrated characters may carry former-world names or former-rank titles, while hidden/amnesia/nameless starts often stay blank unless the backstory gives NPC-facing clues.",
-                "backstory_mode and memory_policy describe how much of the past matters at the start without forcing mystery, trauma, or amnesia.",
-                "character_backstory should be 2-4 concise sentences with concrete origin details: birthplace/original world, former livelihood or role, important ties/debts/duties, why the character is at the opening, and death/reincarnation details only when fitting.",
+                "backstory_mode must be a short label (known/transmigrated/reincarnated/...), never a prose sentence.",
+                "memory_policy must be a short phrase (ordinary memory / remembers former life / former life fragments/...), never a menu dump.",
+                "character_backstory: third person only; 2-4 sentences.",
+                "transmigrated = former-world life + transport method + start at arrival (or just before). Never a native-only fantasy plot with a bolted-on 'woke in another world' sentence.",
+                "reincarnated = grew up in this world + former-life fragments. body transmigration = old mind in a local body.",
+                "Prefer the word transmigrated for the mode; do not confuse the AI with using 'isekai' as the backstory_mode label.",
+                "Do not write first-person diary voice (I/my). Do not invent chosen-one destiny or paste skill/compounding text into backstory.",
                 "custom_skills and special_abilities should fit the concrete backstory, race rules, world rules, and any optional identity fields already generated.",
                 "custom_skills must be one comma-separated string when present; never use bullets or newlines for proficiencies.",
-                "special_ability_origin controls ability generation: none should prevent setup abilities, acquired should lean toward future unlocked or earned abilities, and innate should lean toward inherent starting abilities.",
+                "special_ability_origin controls ability generation: none should prevent setup abilities, acquired should lean toward future unlocked or earned abilities, innate should lean toward inherent starting abilities, and both should mix innate and acquired powers in the list.",
             ],
             "rules": base_rules + ["Generate fields one at a time in the order requested. Later fields must fit earlier current_setup values."],
         }
@@ -2788,41 +5828,63 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     else:
         token_cap = _env_int("AI_RPG_RANDOMIZER_TOKENS", 520)
 
-    # Expand ONE_SKILL_FRAME skeleton when rolling custom_skills
+    # Expand OP_MC_FRAME / legacy ONE_SKILL_FRAME when rolling custom_skills
     if not text_mode and return_fields == ["custom_skills"]:
         cur_skills = str(current_setup.get("custom_skills") or "")
         pf = intent_plan.get("power_fantasy") if isinstance(intent_plan.get("power_fantasy"), dict) else {}
         one_skillish = (
-            "ONE_SKILL_FRAME" in cur_skills
+            "OP_MC_FRAME" in cur_skills
+            or "ONE_SKILL_FRAME" in cur_skills
             or str(pf.get("growth") or "").lower() == "compounding"
             or str(pf.get("start_power") or "").lower() in {"near_useless", "weak"}
         )
         if one_skillish and isinstance(prompt, dict):
             abilities = current_setup.get("special_abilities")
             ability_hint = ""
+            ability_name = ""
             if isinstance(abilities, list) and abilities:
                 a0 = abilities[0] if isinstance(abilities[0], dict) else {}
-                ability_hint = f"{a0.get('name') or ''}: {str(a0.get('description') or '')[:120]}"
-            prompt["task"] = (
-                "Expand skill fiction rules for a hardcore one-skill / compounding run into a rich custom_skills string. "
-                "Leave long XP formulas for the ability growth_math field; mention math only briefly if at all."
+                ability_name = str(a0.get("name") or "").strip()
+                ability_hint = f"{ability_name}: {str(a0.get('description') or '')[:120]}"
+            # Align with ability if present; otherwise invent — catalog is inspiration only.
+            inspire = pick_seed_skill_domain(
+                avoid=[ability_name] if ability_name else None,
+                world_style=str(current_setup.get("world_style") or ""),
+                genre=str((intent_plan.get("genre") if isinstance(intent_plan, dict) else "") or ""),
+                salt=f"custom_skills|{time.time_ns()}|{current_setup.get('player_name') or ''}",
             )
+            prompt["task"] = (
+                "Expand skill fiction rules for an OP MC / compounding seed run into a rich custom_skills string. "
+                "Invent original skill fiction first. Leave long XP formulas for ability growth_math. "
+                "If a seed ability already exists, align the skill name with it."
+            )
+            prompt["invention_first"] = True
+            prompt["inspiration_only"] = [inspire] if inspire else []
+            prompt["ban_overused_domains"] = sorted(OVERUSED_SEED_DOMAINS)
+            prompt["quality_bar"] = {
+                "lead": "weak seed skill: <Name>",
+                "must_not": "OP_MC_FRAME skeleton alone; Observation/knots/barter clichés",
+                "must_include": "rank F start, tracking style, XP sources in prose, late compounding path",
+            }
             prompt["one_skill_expansion"] = {
                 "seed_ability_if_any": ability_hint,
                 "must_include": [
-                    "exact seed skill/domain name (fresh; not weather/observation by default)",
+                    "exact seed skill/domain name (original, or aligned to seed ability)",
                     "starting rank/power (near-useless / F / level 1)",
-                    "how compounding works in fiction",
+                    "how compounding evolves toward late OP in fiction (not permanently weak)",
                     "how the DM or system tracks rank/level",
-                    "how XP or progress is earned (practice, mentors, risk, or DM milestones) — prose, not formula tables",
-                    "hard limits (no second combat skill toolkit at start)",
+                    "how XP or progress is earned (practice, mentors, risk, breakthroughs) — prose, not formula tables",
+                    "passives allowed (always-on ranks) as domain expressions",
+                    "opening kit is thin (no free second combat toolkit at Start); more powers may unlock later in play",
                 ],
-                "math_home": "Put calculable XP/rank formulas on special_abilities[].growth_math when abilities are rolled, not here.",
+                "math_home": "Put calculable XP/rank/OP-snowball formulas on special_abilities[].growth_math when abilities are rolled, not here.",
             }
             prompt["rules"] = list(prompt.get("rules") or []) + [
                 "Output a single comma-separated custom_skills string (no bullets).",
-                "If a seed ability already exists, align the skill domain with it.",
-                "Do not invent multiple independent combat skills.",
+                "Lead with 'weak seed skill: <Name>' using an original or ability-aligned name.",
+                "Invent first; inspiration_only is optional spice if stuck — not a required menu.",
+                "Never use banned overused domains from ban_overused_domains as the seed name.",
+                "Do not invent a free multi-skill combat kit at Start; later unlocks are fine to foreshadow.",
                 "Be concrete and tabletop-playable.",
             ]
 
@@ -2837,7 +5899,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             phase="setup_randomize",
             max_tokens=token_cap,
         )
-        validated = _validate_setup_randomization(group, result)
+        validated = _validate_setup_randomization(group, result, current_setup)
     except Exception as first_exc:
         # Small local models often break ability JSON shape — fall back instead of hard-failing setup.
         if return_fields == ["special_abilities"]:
@@ -2865,93 +5927,435 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             )
     elif not text_mode and return_fields == ["character_backstory"]:
         generated_backstory = str(validated.get("character_backstory") or "").strip()
-        if _backstory_is_too_vague(generated_backstory):
+        mode_for_story = str(
+            current_setup.get("backstory_mode")
+            or validated.get("backstory_mode")
+            or ""
+        )
+        if _backstory_is_too_vague(generated_backstory, mode=mode_for_story):
+            transmig = "transmigrat" in mode_for_story.lower() or bool(
+                (intent_plan or {}).get("isekai")
+            )
             retry_prompt = {
-                "task": "Regenerate the character backstory as concrete RPG setup history.",
+                "task": (
+                    "Regenerate the character backstory as concrete RPG setup history."
+                    + (
+                        " Mode is transmigrated: former-world life + transport method + start at arrival."
+                        if transmig
+                        else ""
+                    )
+                ),
+                "backstory_mode": mode_for_story or "known",
                 "rejected_backstory": generated_backstory,
+                "reject_reasons": [
+                    "missing former-world life before transport",
+                    "missing how they were transported",
+                    "reads as native fantasy plot only",
+                    "skill/power-fantasy text in backstory",
+                    "bolted-on generic woke-in-another-world line",
+                ]
+                if transmig
+                else ["too vague", "missing origin/livelihood/transition"],
                 "nearby_setup": prompt.get("nearby_setup") if isinstance(prompt, dict) else current_setup,
-                "return_shape": {"character_backstory": "2-4 concise sentences of concrete history"},
-                "required_details": [
-                    "birthplace, original world, or home community",
-                    "how the character lived before play: work, training, family, duties, debts, or social position",
-                    "why the character is at or near the starting point now",
-                    "death and reincarnation/transmigration details only if the setup calls for them",
-                ],
+                "return_shape": {"character_backstory": "2-4 concise third-person sentences"},
+                "required_details": (
+                    [
+                        "concrete former-world job/place (before transport)",
+                        "how transport happened (death, truck, summon, portal, body-drop)",
+                        "start at the moment of arrival or the hours just before — not already living a local mid-plot",
+                        "no skill names, compounding, or Guest Right-style ability blurbs",
+                    ]
+                    if transmig
+                    else [
+                        "birthplace, original world, or home community",
+                        "how the character lived before play: work, training, family, duties, debts, or social position",
+                        "why the character is at or near the starting point now",
+                        "death and reincarnation/transmigration details only if the setup calls for them",
+                    ]
+                ),
                 "rules": [
                     "Do not return a motto, personality trait, vague lesson, or single aphorism.",
+                    "Third person only (they/their).",
                     "Keep it playable and leave room for discovery.",
-                ],
-            }
-            validated = _validate_setup_randomization(
-                group,
-                _chat_json(
-                    "Return JSON only. Create concrete character history, not a vague hook.",
-                    json.dumps(retry_prompt, ensure_ascii=True),
-                    timeout=_model_timeout(30, 180, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
-                    phase="setup_randomize_backstory_retry",
-                    max_tokens=360,
-                ),
-            )
-    elif not text_mode and return_fields == ["special_abilities"]:
-        existing = (
-            current_setup.get("special_abilities")
-            if isinstance(current_setup.get("special_abilities"), list)
-            else []
-        )
-        generated = validated.get("special_abilities")
-        if _abilities_match_existing(generated if isinstance(generated, list) else [], existing):
-            retry_prompt = {
-                "task": "Generate different special abilities. The previous roll was rejected as a duplicate.",
-                "forbidden_abilities": existing,
-                "ability_origin": (current_setup.get("_field_context") or {}).get("ability_origin")
-                or current_setup.get("special_ability_origin"),
-                "field_intent": intent_slice_for_field(intent_plan, "special_abilities"),
-                "return_shape": {
-                    "special_abilities": [
-                        {
-                            "name": "new ability name",
-                            "description": "new concrete description, not a paraphrase of forbidden_abilities",
-                            "locked": False,
-                            "prerequisites": "",
-                            "cost": "no cost",
-                            "growth_math": "concrete XP/rank formulas",
-                        }
-                    ]
-                },
-                "rules": [
-                    "Return JSON only.",
-                    "Do not reuse names or paraphrase descriptions from forbidden_abilities.",
-                    "Avoid weather/sandstorm/invisibility/observation clichés unless the world is clearly about that.",
-                    "If growth/compounding or near_useless start_power: return exactly one weak seed ability.",
-                    "Invent a fresh domain (craft, social, memory, movement, craft, etc.).",
-                    "Always fill growth_math with calculable numbers for each ability.",
+                    "If transmigrated: do NOT write disgraced nobles / festival guests / local exiles as if always from this world.",
                 ],
             }
             try:
                 validated = _validate_setup_randomization(
                     group,
                     _chat_json(
-                        "Return JSON only. New abilities only — not duplicates.",
+                        "Return JSON only. Create concrete character history, not a vague hook.",
                         json.dumps(retry_prompt, ensure_ascii=True),
                         timeout=_model_timeout(30, 180, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
-                        phase="setup_randomize_abilities_retry",
-                        max_tokens=700,
+                        phase="setup_randomize_backstory_retry",
+                        max_tokens=360,
                     ),
+                    current_setup,
                 )
             except Exception:
-                validated = {"special_abilities": _fallback_special_abilities(current_setup)}
-            # Still same? Force local variety pool.
-            gen2 = validated.get("special_abilities")
-            if _abilities_match_existing(gen2 if isinstance(gen2, list) else [], existing):
-                validated = {"special_abilities": _fallback_special_abilities(current_setup)}
-        # Ensure math + discretionary optimize pass on growth_math
+                validated = dict(validated)
+            # Deterministic repair if still wrong for transmigrated
+            story2 = str(validated.get("character_backstory") or "").strip()
+            if transmig and _backstory_is_too_vague(story2, mode=mode_for_story or "transmigrated"):
+                try:
+                    from app.setup_composer import build_transmigration_backstory
+
+                    validated["character_backstory"] = build_transmigration_backstory(
+                        old_story=story2 or generated_backstory,
+                        idea=str(current_setup.get("_randomize_idea") or intent_plan.get("raw_idea") or ""),
+                        world_style=str(current_setup.get("world_style") or ""),
+                    )
+                except Exception:
+                    pass
+    elif not text_mode and (
+        return_fields == ["special_abilities"]
+        or group == "special_abilities"
+        or (len(return_fields) == 1 and return_fields[0] == "special_abilities")
+    ):
+        existing = (
+            current_setup.get("special_abilities")
+            if isinstance(current_setup.get("special_abilities"), list)
+            else []
+        )
+        fc = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
+        origin = str(fc.get("ability_origin") or current_setup.get("special_ability_origin") or "none")
+        pf = intent_plan.get("power_fantasy") if isinstance(intent_plan.get("power_fantasy"), dict) else {}
+        one_skillish = str(pf.get("growth") or "").lower() == "compounding" or str(
+            pf.get("start_power") or ""
+        ).lower() in {"near_useless", "weak"}
+        count_min, count_max = _ability_count_bounds(fc)
+        target_count = _roll_ability_count(fc, one_skillish=one_skillish)
+        # Persist roll so retries / fallback / validate all share the same target.
+        fc = dict(fc)
+        fc["target_count"] = target_count
+        fc["requested_count"] = target_count
+        fc["count_rolled"] = True
+        current_setup["_field_context"] = fc
+        denials: list[dict[str, Any]] = []
+        quality_source = "llm"
+        # Quality gate: invent → verify → retry on deny → seed-pool fallback after 2–3 denials.
+        for attempt in range(1, ABILITY_QUALITY_MAX_ATTEMPTS + 1):
+            generated = validated.get("special_abilities")
+            gen_list = generated if isinstance(generated, list) else []
+            gen_list = _enforce_ability_count(gen_list, target_count, current_setup=current_setup)
+            validated["special_abilities"] = gen_list
+            # Duplicate of current form is an automatic quality deny.
+            if _abilities_match_existing(gen_list, existing):
+                gate = {
+                    "ok": False,
+                    "score": 0,
+                    "abilities": gen_list,
+                    "reports": [],
+                    "denial_summary": ["duplicate_of_existing_abilities"],
+                }
+            else:
+                gate = quality_gate_abilities(
+                    gen_list,
+                    existing=existing,
+                    one_skillish=one_skillish,
+                    origin=origin,
+                    require_strong_math=True,
+                )
+            if gate.get("ok"):
+                quality_source = "llm" if attempt == 1 else f"llm_retry_{attempt}"
+                validated["special_abilities"] = gate.get("abilities") or gen_list
+                validated["quality_gate"] = {
+                    "ok": True,
+                    "source": quality_source,
+                    "attempt": attempt,
+                    "score": gate.get("score"),
+                    "denials": denials,
+                }
+                break
+            denials.append(
+                {
+                    "attempt": attempt,
+                    "score": gate.get("score"),
+                    "denial_summary": gate.get("denial_summary") or [],
+                    "reports": [
+                        {
+                            "name": r.get("name"),
+                            "score": r.get("score"),
+                            "hard_fail": r.get("hard_fail"),
+                            "soft": r.get("soft"),
+                        }
+                        for r in (gate.get("reports") or [])[:6]
+                    ],
+                }
+            )
+            if attempt >= ABILITY_QUALITY_MAX_ATTEMPTS:
+                # Prefer keeping individually-passing inventions over wiping the whole batch.
+                salvaged: list[dict[str, Any]] = []
+                for rep in gate.get("reports") or []:
+                    if not rep.get("ok"):
+                        continue
+                    ab = rep.get("ability")
+                    if isinstance(ab, dict) and str(ab.get("name") or "").strip():
+                        salvaged.append(dict(ab))
+                # Also accept repaired list entries that pass a solo re-check
+                if not salvaged:
+                    for ab in gate.get("abilities") or gen_list:
+                        if not isinstance(ab, dict):
+                            continue
+                        solo = evaluate_ability_quality(
+                            ab,
+                            existing=existing,
+                            one_skillish=one_skillish,
+                            origin=origin,
+                            require_strong_math=True,
+                        )
+                        if solo.get("ok"):
+                            salvaged.append(dict(ab))
+                if salvaged:
+                    validated = {
+                        "special_abilities": _enforce_ability_count(
+                            salvaged, target_count, current_setup=current_setup
+                        ),
+                        "quality_gate": {
+                            "ok": True,
+                            "source": f"llm_salvage_after_{attempt}",
+                            "attempt": attempt,
+                            "denials": denials,
+                            "reason": "salvaged_passing_abilities",
+                            "score": gate.get("score"),
+                            "target_count": target_count,
+                        },
+                    }
+                    quality_source = "llm_salvage"
+                else:
+                    # Exhausted invent/retry budget — curated seed-pool fallbacks.
+                    validated = {
+                        "special_abilities": _enforce_ability_count(
+                            _fallback_special_abilities(current_setup),
+                            target_count,
+                            current_setup=current_setup,
+                        ),
+                        "quality_gate": {
+                            "ok": True,
+                            "source": "fallback_seed_pool",
+                            "attempt": attempt,
+                            "denials": denials,
+                            "reason": "quality_denied_max_attempts",
+                            "target_count": target_count,
+                        },
+                    }
+                    quality_source = "fallback_seed_pool"
+                break
+            # Another invent pass with concrete denial feedback (not fallback yet).
+            retry_prompt = _ability_quality_retry_prompt(
+                denied=gate,
+                existing=existing,
+                origin=origin,
+                intent_plan=intent_plan,
+                attempt=attempt,
+                count_min=target_count,
+                count_max=target_count,
+            )
+            if isinstance(retry_prompt, dict):
+                retry_prompt["target_count"] = target_count
+                retry_prompt["rules"] = list(retry_prompt.get("rules") or []) + [
+                    f"Return exactly {target_count} special_abilities — count was pre-rolled; do not change it."
+                ]
+            try:
+                validated = _validate_setup_randomization(
+                    group,
+                    _chat_json(
+                        "Return JSON only. Fix quality denials with original inventions.",
+                        json.dumps(retry_prompt, ensure_ascii=True),
+                        timeout=_model_timeout(30, 180, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
+                        phase="setup_randomize_abilities_quality_retry",
+                        max_tokens=700,
+                    ),
+                    current_setup,
+                )
+            except Exception:
+                # Model failed mid-retry — count as denial and continue toward fallback.
+                validated = {"special_abilities": []}
+        # Soft polish only after quality pass / fallback (never mask a failed gate).
         abilities_out = validated.get("special_abilities")
         if isinstance(abilities_out, list):
-            validated["special_abilities"] = _maybe_optimize_ability_growth_math(
-                abilities_out,
-                intent_plan=intent_plan,
+            # Always break clone costs (meditation-hour spam) before further polish.
+            abilities_out = diversify_ability_costs(abilities_out, force=False)
+            # Fallback path may already have math; LLM path must already be calculable.
+            force_fill = quality_source == "fallback_seed_pool"
+            polished = _ensure_ability_growth_math(abilities_out, force_fill=force_fill)
+            if quality_source != "fallback_seed_pool":
+                polished = _maybe_optimize_ability_growth_math(
+                    polished,
+                    intent_plan=intent_plan,
+                    current_setup=current_setup,
+                )
+                # Re-check once after optimize — if polish broke quality, keep pre-optimize.
+                re_gate = quality_gate_abilities(
+                    polished,
+                    existing=existing,
+                    one_skillish=one_skillish,
+                    origin=origin,
+                    require_strong_math=True,
+                )
+                if re_gate.get("ok"):
+                    validated["special_abilities"] = re_gate.get("abilities") or polished
+                else:
+                    validated["special_abilities"] = abilities_out
+            else:
+                validated["special_abilities"] = polished
+
+            # Cross-check: near-duplicates → rework weaker → remake → re-check (rinse/repeat).
+            try:
+                dedupe = ensure_distinct_abilities(
+                    validated.get("special_abilities") if isinstance(validated.get("special_abilities"), list) else [],
+                    existing=existing,
+                    origin=origin,
+                    one_skillish=one_skillish,
+                    world_style=str(current_setup.get("world_style") or ""),
+                    max_rounds=ABILITY_DEDUPE_MAX_ROUNDS,
+                    use_llm=True,
+                )
+                if isinstance(dedupe.get("abilities"), list) and dedupe["abilities"]:
+                    # Final quality pass after dedupe swaps
+                    post = quality_gate_abilities(
+                        dedupe["abilities"],
+                        existing=existing,
+                        one_skillish=one_skillish,
+                        origin=origin,
+                        require_strong_math=True,
+                        auto_repair=True,
+                    )
+                    if post.get("ok"):
+                        validated["special_abilities"] = post.get("abilities") or dedupe["abilities"]
+                    else:
+                        # Keep distinct set even if soft quality dips; avoid reintroducing near-dups
+                        validated["special_abilities"] = dedupe["abilities"]
+                    if isinstance(validated.get("quality_gate"), dict):
+                        validated["quality_gate"]["dedupe"] = {
+                            "ok": bool(dedupe.get("ok")),
+                            "rounds": dedupe.get("rounds"),
+                            "log": dedupe.get("log") or [],
+                            "pairs_remaining": dedupe.get("pairs_remaining") or [],
+                        }
+            except Exception as dedupe_exc:
+                if isinstance(validated.get("quality_gate"), dict):
+                    validated["quality_gate"]["dedupe_error"] = str(dedupe_exc)[:200]
+
+            # Final hard enforce of the pre-rolled count
+            validated["special_abilities"] = _enforce_ability_count(
+                validated.get("special_abilities") if isinstance(validated.get("special_abilities"), list) else [],
+                target_count,
                 current_setup=current_setup,
             )
+            if isinstance(validated.get("quality_gate"), dict):
+                validated["quality_gate"]["final_count"] = len(validated["special_abilities"] or [])
+                validated["quality_gate"]["target_count"] = target_count
+            validated["ability_count_roll"] = {
+                "target": target_count,
+                "min": count_min,
+                "max": count_max,
+                "quantity_locked": bool(fc.get("quantity_locked")),
+            }
+
+    elif not text_mode and return_fields == ["custom_skills"]:
+        # Quality-ensure expanded skill fiction; fall back to seed-pool prose after denials.
+        pf = intent_plan.get("power_fantasy") if isinstance(intent_plan.get("power_fantasy"), dict) else {}
+        one_skillish = (
+            str(pf.get("growth") or "").lower() == "compounding"
+            or str(pf.get("start_power") or "").lower() in {"near_useless", "weak"}
+            or "op_mc_frame" in str(current_setup.get("custom_skills") or "").lower()
+            or "one_skill_frame" in str(current_setup.get("custom_skills") or "").lower()
+        )
+        abilities = (
+            current_setup.get("special_abilities")
+            if isinstance(current_setup.get("special_abilities"), list)
+            else []
+        )
+        denials_cs: list[dict[str, Any]] = []
+        for attempt in range(1, ABILITY_QUALITY_MAX_ATTEMPTS + 1):
+            text = str(validated.get("custom_skills") or "").strip()
+            gate = evaluate_custom_skills_quality(text, abilities=abilities, one_skillish=one_skillish)
+            # Always enforce a minimum quality bar (not only OP-MC frames).
+            thin_non_seed = (not one_skillish) and (len(text) < 80 or text.count(",") >= 5 and len(text) < 160)
+            if gate.get("ok") and not thin_non_seed:
+                validated["quality_gate"] = {
+                    "ok": True,
+                    "source": "llm" if attempt == 1 else f"llm_retry_{attempt}",
+                    "attempt": attempt,
+                    "score": gate.get("score"),
+                    "denials": denials_cs,
+                }
+                break
+            denials_cs.append(
+                {
+                    "attempt": attempt,
+                    "score": gate.get("score"),
+                    "hard_fail": list(gate.get("hard_fail") or []) + (["custom_skills_thin_keyword_dump"] if thin_non_seed else []),
+                    "soft": gate.get("soft"),
+                }
+            )
+            if attempt >= ABILITY_QUALITY_MAX_ATTEMPTS:
+                if one_skillish or not text or thin_non_seed:
+                    validated["custom_skills"] = _fallback_custom_skills_from_domain(current_setup)
+                    validated["quality_gate"] = {
+                        "ok": True,
+                        "source": "fallback_seed_pool",
+                        "attempt": attempt,
+                        "denials": denials_cs,
+                        "reason": "quality_denied_max_attempts",
+                    }
+                else:
+                    validated["quality_gate"] = {
+                        "ok": True,
+                        "source": "llm_kept_after_denials",
+                        "attempt": attempt,
+                        "denials": denials_cs,
+                        "score": gate.get("score"),
+                    }
+                break
+            retry_cs = {
+                "task": (
+                    f"QUALITY DENIAL #{attempt} for custom_skills. Expand into concrete skill fiction. "
+                    + (
+                        "Invent first; do not leave OP_MC_FRAME skeleton."
+                        if one_skillish
+                        else "Write playable skill rules as a readable comma-separated string (not a keyword dump)."
+                    )
+                ),
+                "failed": gate,
+                "seed_ability_if_any": (
+                    f"{abilities[0].get('name')}: {str(abilities[0].get('description') or '')[:120]}"
+                    if abilities and isinstance(abilities[0], dict)
+                    else ""
+                ),
+                "ban_overused_domains": sorted(OVERUSED_SEED_DOMAINS),
+                "return_shape": {"custom_skills": "comma-separated skill fiction string"},
+                "rules": (
+                    [
+                        "Lead with 'weak seed skill: <OriginalName>'.",
+                        "Include F-rank start, tracking style, XP sources in prose, late compounding path.",
+                        "No Observation/knots/barter/lie-detect seed names.",
+                        "Output custom_skills only as one string.",
+                    ]
+                    if one_skillish
+                    else [
+                        "Write 1-3 concrete skill rules or training paths in a single comma-separated string.",
+                        "Each clause should be a full phrase (not bare keywords like 'system UI, risk').",
+                        "Mention how skills grow (practice, mentors, reputation) without dumping rank tables here.",
+                        "Output custom_skills only as one string.",
+                    ]
+                ),
+            }
+            try:
+                validated = _validate_setup_randomization(
+                    group,
+                    _chat_json(
+                        "Return JSON only. Fix custom_skills quality denials.",
+                        json.dumps(retry_cs, ensure_ascii=True),
+                        timeout=_model_timeout(30, 180, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
+                        phase="setup_randomize_custom_skills_quality_retry",
+                        max_tokens=640,
+                    ),
+                    current_setup,
+                )
+            except Exception:
+                validated = {"custom_skills": ""}
     elif not text_mode and len(return_fields) == 1:
         field = return_fields[0]
         field_context = current_setup.get("_field_context") or {}
@@ -3211,10 +6615,32 @@ def _optional_identity_fill_chance(field: str, current_setup: dict[str, Any]) ->
     return min(chance, 0.68)
 
 
-def _backstory_is_too_vague(backstory: str) -> bool:
+def _backstory_is_too_vague(backstory: str, *, mode: str = "") -> bool:
     text = backstory.strip().lower()
     if len(text) < 140:
         return True
+    # Skill / progression dumps are not character history
+    if any(
+        m in text
+        for m in (
+            "weak seed",
+            "seed skill",
+            "compounding",
+            "growth math",
+            "guest right",
+            "xp_to_next",
+            "rank f",
+        )
+    ):
+        return True
+    mode_l = str(mode or "").lower()
+    if "transmigrat" in mode_l:
+        try:
+            from app.setup_composer import transmigration_story_score
+
+            return not bool(transmigration_story_score(backstory).get("ok"))
+        except Exception:
+            pass
     origin_markers = {
         "born",
         "raised",
@@ -3255,14 +6681,18 @@ def _backstory_is_too_vague(backstory: str) -> bool:
         "years as",
         "spent years",
     }
-    transition_markers = {"arrived", "left", "sent", "reached", "came", "fled", "returned", "woke", "now"}
+    transition_markers = {"arrived", "left", "sent", "reached", "came", "fled", "returned", "woke", "now", "died", "summon"}
     has_origin = any(marker in text for marker in origin_markers)
     has_prior_life = any(marker in text for marker in life_markers)
     has_transition = any(marker in text for marker in transition_markers)
     return not (has_origin and has_prior_life and has_transition)
 
 
-def _validate_setup_randomization(group: str, result: dict[str, Any]) -> dict[str, Any]:
+def _validate_setup_randomization(
+    group: str,
+    result: dict[str, Any],
+    current_setup: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if not isinstance(result, dict):
         raise LlmError("Randomizer returned a non-object JSON value.")
 
@@ -3309,6 +6739,15 @@ def _validate_setup_randomization(group: str, result: dict[str, Any]) -> dict[st
             result["special_abilities"] = abilities
         if not isinstance(abilities, list):
             raise LlmError("Randomizer returned special_abilities, but it was not a list.")
+        allowed_power_types = {
+            "compounding",
+            "passive",
+            "linear",
+            "soft_cap",
+            "breakthrough",
+            "flat",
+            "item_bound",
+        }
         cleaned_abilities: list[dict[str, Any]] = []
         for ability in abilities:
             if isinstance(ability, str) and ability.strip():
@@ -3319,7 +6758,43 @@ def _validate_setup_randomization(group: str, result: dict[str, Any]) -> dict[st
             description = str(ability.get("description") or "").strip().lower()
             if name in placeholder_values or description in placeholder_values:
                 raise LlmError("Randomizer returned placeholder special ability values.")
+            power_type = str(ability.get("power_type") or "").strip().lower().replace("-", "_").replace(" ", "_")
+            if power_type in {"softcap", "soft_capped"}:
+                power_type = "soft_cap"
+            if power_type in {"item", "itembound", "gear_bound", "gear"}:
+                power_type = "item_bound"
+            if power_type in {"one_skill", "oneskill", "compound", "op_mc", "opmc"}:
+                power_type = "compounding"
+            if power_type in {"aura", "always_on", "always-on", "passive_aura"}:
+                power_type = "passive"
+            if power_type not in allowed_power_types:
+                power_type = "linear"
+            ability["power_type"] = power_type
             cleaned_abilities.append(ability)
+        # Clamp to the same 1–4 range / lock policy the UI uses (Simple + Advanced).
+        setup = current_setup if isinstance(current_setup, dict) else {}
+        field_context = setup.get("_field_context") if isinstance(setup.get("_field_context"), dict) else {}
+        origin = str(
+            field_context.get("ability_origin")
+            or setup.get("special_ability_origin")
+            or "none"
+        ).strip().lower()
+        if origin == "none":
+            cleaned_abilities = []
+        else:
+            # Honor pre-rolled target (RNG min–max or quantity lock). Never leave "always max".
+            target = _roll_ability_count(field_context, one_skillish=False)
+            cleaned_abilities = _enforce_ability_count(
+                cleaned_abilities,
+                target,
+                current_setup=setup,
+            )
+            result["ability_count_roll"] = {
+                "target": target,
+                "min": _ability_count_bounds(field_context)[0],
+                "max": _ability_count_bounds(field_context)[1],
+                "quantity_locked": bool(field_context.get("quantity_locked")),
+            }
         result["special_abilities"] = cleaned_abilities
 
     if "special_ability_origin" in result:
@@ -3338,12 +6813,159 @@ def _validate_setup_randomization(group: str, result: dict[str, Any]) -> dict[st
             "innate": "innate",
             "inherent": "innate",
             "natural": "innate",
+            "both": "both",
+            "mixed": "both",
+            "mix": "both",
+            "acquired and innate": "both",
+            "innate and acquired": "both",
         }
         if origin not in aliases:
             raise LlmError("Randomizer returned an invalid special_ability_origin.")
         result["special_ability_origin"] = aliases[origin]
 
+    result = _sanitize_setup_randomization_values(result)
+    # Hair / face / clothes: strip cross-field contamination and overused stacks.
+    if any(k in result for k in ("hair", "facial_features", "appearance")):
+        look_ctx = dict(current_setup or {})
+        look_ctx.update({k: result.get(k) for k in ("hair", "facial_features", "appearance") if k in result})
+        look_out, _look_dirty = normalize_look_fields(
+            {k: result[k] for k in ("hair", "facial_features", "appearance") if k in result},
+            context=look_ctx,
+        )
+        result.update(look_out)
+        # If model echoed the current face/hair, force a different fallback pool pick.
+        for look_key in ("hair", "facial_features", "appearance"):
+            if look_key not in result:
+                continue
+            cur = str((current_setup or {}).get(look_key) or "").strip().lower()
+            got = str(result.get(look_key) or "").strip().lower()
+            if cur and got and cur == got:
+                pool = list(SETUP_RANDOMIZER_FALLBACKS.get(look_key) or [])
+                alt = [p for p in pool if str(p).strip().lower() != cur]
+                if alt:
+                    result[look_key] = random.choice(alt)
+            # Ban the classic collapse face
+            if look_key == "facial_features" and "grey eyes, tired lids, square jaw" in got:
+                pool = list(SETUP_RANDOMIZER_FALLBACKS.get("facial_features") or [])
+                alt = [p for p in pool if "tired lids" not in str(p).lower()]
+                result[look_key] = random.choice(alt) if alt else "hazel eyes, faint laugh lines, straight nose"
     return result
+
+
+def _sanitize_setup_randomization_values(result: dict[str, Any]) -> dict[str, Any]:
+    """Clamp 8B slop: bools-as-strings, instruction echoes, growth slogans in structure fields."""
+    if not isinstance(result, dict):
+        return result
+    out = dict(result)
+
+    def _as_bool(val: Any, default: bool = False) -> bool:
+        if isinstance(val, bool):
+            return val
+        s = str(val or "").strip().lower()
+        if s in {"true", "1", "yes", "on", "enabled"}:
+            return True
+        if s in {"false", "0", "no", "off", "disabled", "none"}:
+            return False
+        # Model returned a UI label instead of a boolean
+        if "system" in s or "window" in s or "compound" in s:
+            return default
+        return default
+
+    for bkey in (
+        "leveling_system",
+        "game_system",
+        "proficiency_system",
+        "skill_levels_enabled",
+        "race_magic_enabled",
+    ):
+        if bkey in out:
+            out[bkey] = _as_bool(out[bkey], default=bool(out[bkey]) if isinstance(out[bkey], bool) else False)
+
+    # Instruction-echo / forbidden fragments → fall back to safe labels
+    slogan_markers = (
+        "prevalence only",
+        "return only",
+        "forbidden",
+        "one-skill",
+        "one skill",
+        "near-useless",
+        "near useless",
+        "compounding",
+        "seed frame",
+        "growth",
+        "level delay",
+        "cooldown",
+    )
+    structure_defaults = {
+        "magic_level": "rare",
+        "proficiency_access": "only expert tasks require training",
+        "quest_style": "emergent local work",
+        "faction_pressure": "local disputes",
+        "economy": "scarce",
+        "npc_density": "moderate",
+        "npc_stat_scaling": "relative ranks",
+        "npc_skill_frequency": "some trained NPCs",
+        "death_rules": "downed, not deleted",
+        "loot_rarity": "earned and uncommon",
+    }
+    for key, default in structure_defaults.items():
+        if key not in out:
+            continue
+        raw = str(out[key] or "").strip()
+        low = raw.lower()
+        if not raw or any(m in low for m in slogan_markers) or len(raw) > 120 and key != "economy":
+            # memory_policy sometimes dumps all options — not in this map
+            out[key] = default
+        elif key == "magic_level" and low in {"magic prevalence only", "prevalence only"}:
+            out[key] = default
+
+    # memory_policy: one phrase, not a menu dump
+    if "memory_policy" in out:
+        mp = str(out["memory_policy"] or "").strip()
+        if mp.count(",") >= 3 or mp.count(";") >= 2 or len(mp) > 100:
+            out["memory_policy"] = "known"
+
+    # death_rules slogans
+    if "death_rules" in out:
+        dr = str(out["death_rules"] or "").lower()
+        if "scar economy" in dr or "compound" in dr:
+            out["death_rules"] = "downed, not deleted"
+
+    # system_style when game_system false-ish labels
+    if "system_style" in out and str(out.get("system_style") or "").lower() in {
+        "subtle blue-window system",
+        "true",
+        "false",
+    }:
+        pass  # fine
+    if out.get("game_system") is False:
+        # leave style alone
+        pass
+
+    # special abilities: acquired → prefer locked
+    origin = str(out.get("special_ability_origin") or "").lower()
+    if isinstance(out.get("special_abilities"), list):
+        cleaned = []
+        for ab in out["special_abilities"]:
+            if not isinstance(ab, dict):
+                continue
+            ab = dict(ab)
+            if origin == "acquired":
+                ab["locked"] = True
+            elif origin == "innate":
+                ab["locked"] = False
+            cleaned.append(ab)
+        out["special_abilities"] = cleaned
+
+    # Align custom_skills weakly with first ability name if empty/slogan
+    if isinstance(out.get("special_abilities"), list) and out["special_abilities"]:
+        first = out["special_abilities"][0]
+        aname = str(first.get("name") or "").strip()
+        cs = str(out.get("custom_skills") or "").strip()
+        if aname and (not cs or any(m in cs.lower() for m in ("one-skill", "compounding", "seed frame"))):
+            out["custom_skills"] = f"{aname} practice, modest seed, ranks through use"[:200]
+
+    return out
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -3407,7 +7029,7 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         if opts.get("game_system"):
             style = str(opts.get("system_style") or "subtle blue-window system")
             seed = opts.get("weak_skill_seed") if isinstance(opts.get("weak_skill_seed"), dict) else {}
-            seed_name = str(seed.get("name") or "Observation")
+            seed_name = str(seed.get("name") or pick_seed_skill_domain(salt=f"open|{location}").get("name") or "Digging")
             seed_val = seed.get("value", 1)
             system_bit = (
                 f"\n\nFor a heartbeat the world overlays a thin {style} edge — nothing loud, only readable:\n"
@@ -3418,9 +7040,10 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             )
         elif isinstance(opts.get("weak_skill_seed"), dict):
             seed = opts["weak_skill_seed"]
+            seed_name = str(seed.get("name") or pick_seed_skill_domain(salt=f"open2|{location}").get("name") or "Digging")
             system_bit = (
-                f"\n\nSomething in you recognizes a faint aptitude — {seed.get('name') or 'Observation'} — "
-                "so slight it barely counts, more a habit of looking than a power."
+                f"\n\nSomething in you recognizes a faint aptitude — {seed_name} — "
+                "so slight it barely counts, a thin practical habit rather than a power."
             )
         narration = (
             f"{location} comes into focus without waiting for a command. Damp air gathers at the edges of the street, "
@@ -3597,6 +7220,106 @@ def _clip_suggestion_text(text: str) -> str:
         return cleaned
     clipped = cleaned[:SUGGESTION_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:-")
     return clipped or cleaned[:SUGGESTION_MAX_CHARS].rstrip()
+
+
+def ambient_llm_enabled(settings: dict[str, Any] | None = None) -> bool:
+    """
+    Optional short ambient LLM for free map steps.
+    Off by default — enable with AI_RPG_AMBIENT_LLM=1 or settings.ambient_llm=true.
+    """
+    if _env_bool("AI_RPG_AMBIENT_LLM", False):
+        return True
+    if isinstance(settings, dict):
+        raw = settings.get("ambient_llm")
+        if isinstance(raw, bool):
+            return raw
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        if isinstance(raw, str) and raw.strip().lower() in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
+def generate_ambient_move_line(
+    template: str,
+    *,
+    travel: dict[str, Any] | None = None,
+    weather: dict[str, Any] | None = None,
+    settings: dict[str, Any] | None = None,
+) -> str:
+    """
+    Optional micro-narration for free walking. Returns plain text (no JSON).
+    Fails soft: returns the template on any error or when disabled.
+    Never invents combat, loot, inventory, or blocking scenes.
+    """
+    base = re.sub(r"\s+", " ", str(template or "").strip())
+    if not ambient_llm_enabled(settings):
+        return base
+    travel = travel if isinstance(travel, dict) else {}
+    weather = weather if isinstance(weather, dict) else {}
+    facts = {
+        "template_facts": base,
+        "terrain": travel.get("terrain") or "",
+        "from_terrain": travel.get("from_terrain") or "",
+        "minutes": int(travel.get("minutes") or 0),
+        "settlement": (travel.get("settlement") or {}).get("name")
+        if isinstance(travel.get("settlement"), dict)
+        else "",
+        "weather": weather.get("label") or weather.get("kind") or "",
+        "base_discovered": bool(travel.get("base_discovered")),
+    }
+    system = (
+        "You write one short ambient DM line for free map movement in a tabletop RPG. "
+        "Plain text only. One or two sentences, under 220 characters. "
+        "Ground the line in the provided facts. Do not invent combat, loot, inventory, "
+        "quest outcomes, blocking scenes, or new named NPCs. No JSON, no quotes wrapper."
+    )
+    user = json.dumps({"task": "ambient_move_line", "facts": facts}, ensure_ascii=True)
+    try:
+        raw = _chat_text(
+            system,
+            user,
+            timeout=_model_timeout(20, 60, "AI_RPG_AMBIENT_TIMEOUT"),
+            phase="ambient_move",
+            max_tokens=_env_int("AI_RPG_AMBIENT_TOKENS", 90),
+            temperature=0.65,
+        )
+    except Exception:
+        return base
+    line = re.sub(r"\s+", " ", str(raw or "").strip().strip("\"'"))
+    # Strip accidental labels / JSON wrappers
+    if line.startswith("{") and "ambient" in line.lower():
+        try:
+            parsed = json.loads(line)
+            if isinstance(parsed, dict):
+                line = str(parsed.get("ambient") or parsed.get("text") or parsed.get("line") or line)
+                line = re.sub(r"\s+", " ", line.strip().strip("\"'"))
+        except Exception:
+            pass
+    for prefix in ("Ambient:", "DM:", "Narration:", "Line:"):
+        if line.lower().startswith(prefix.lower()):
+            line = line[len(prefix) :].strip()
+    if len(line) > 280:
+        line = line[:280].rsplit(" ", 1)[0].rstrip(" ,.;:-") or line[:280]
+    # Reject empty, combat-y, or inventory hallucinations vs empty template
+    if not line or len(line) < 8:
+        return base
+    lower = line.lower()
+    banned = (
+        "you draw",
+        "you attack",
+        "you kill",
+        "you fight",
+        "in your inventory",
+        "you gain",
+        "loot:",
+        "quest complete",
+        "level up",
+        "[[",
+    )
+    if any(b in lower for b in banned):
+        return base
+    return line
 
 
 def estimated_tokens(text: str) -> int:
@@ -4241,7 +7964,277 @@ def _is_missing_narration_error(exc: Exception) -> bool:
     return MISSING_NARRATION_MESSAGE.lower() in str(exc).lower()
 
 
-def _normalize_turn(result: dict[str, Any]) -> dict[str, Any]:
+def _entity_code_name_map(context: dict[str, Any] | None, turn: dict[str, Any] | None = None) -> dict[str, str]:
+    """code -> display name for NPCs/locations/items/events (world + this turn's creates)."""
+    out: dict[str, str] = {}
+
+    def add(code: Any, name: Any, title: Any = None) -> None:
+        c = str(code or "").strip().upper()
+        if not c:
+            return
+        label = str(name or title or "").strip()
+        if not label:
+            return
+        # Prefer first non-empty name; don't overwrite with empties
+        if c not in out:
+            out[c] = label
+
+    ctx = context if isinstance(context, dict) else {}
+    for loc in ctx.get("locations") or []:
+        if not isinstance(loc, dict):
+            continue
+        add(loc.get("code"), loc.get("name"))
+        for npc in loc.get("npcs") or []:
+            if isinstance(npc, dict):
+                add(npc.get("code"), npc.get("name"))
+        for ev in loc.get("events") or []:
+            if isinstance(ev, dict):
+                add(ev.get("code"), ev.get("title") or ev.get("name"))
+    cur = ctx.get("current_location")
+    if isinstance(cur, dict):
+        add(cur.get("code"), cur.get("name"))
+    for key in ("inventory", "events", "npcs"):
+        for item in ctx.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            add(item.get("code"), item.get("name") or item.get("title"))
+    # Working set / shells often carry the live cast for this beat
+    for key in ("nearby_npcs", "shells", "npcs"):
+        bucket = (ctx.get("working_set") or {}).get(key) if isinstance(ctx.get("working_set"), dict) else None
+        if not isinstance(bucket, list):
+            bucket = ctx.get(key) if key in {"shells", "npcs"} else None
+        for item in bucket or []:
+            if isinstance(item, dict):
+                add(item.get("code"), item.get("name") or item.get("title"))
+    draft = turn if isinstance(turn, dict) else {}
+    for key in ("locations", "npcs", "events", "index_updates"):
+        for item in draft.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            add(item.get("code"), item.get("name") or item.get("title"))
+            # index_updates use entity fields
+            add(item.get("code"), item.get("name") or item.get("summary"))
+    return out
+
+
+def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
+    """
+    Fix common LLM naming holes:
+    - bare [[A]] without a readable name → Name [[A]]
+    - blank subjects / possessives ("— is", " 's hologram") using ordered cast names
+    Verifiers see codes+names in world_state; this is the deterministic safety net when
+    the model still emits empty names.
+    """
+    if not text or not isinstance(text, str):
+        return text or ""
+    code_to_name = {str(k).upper(): str(v).strip() for k, v in (code_to_name or {}).items() if str(v or "").strip()}
+
+    def expand_code(match: re.Match[str]) -> str:
+        full = match.group(0)
+        code = match.group(1).upper()
+        name = code_to_name.get(code, "")
+        if not name:
+            return full
+        # Already has the name immediately before the code tag
+        start = match.start()
+        window = text[max(0, start - (len(name) + 8)) : start]
+        if re.search(rf"{re.escape(name)}\s*$", window, flags=re.IGNORECASE):
+            return full
+        # Avoid "the Name [[A]]" doubling when "the" + role already present is fine
+        return f"{name} [[{code}]]"
+
+    repaired = REFERENCE_CODE_PATTERN.sub(expand_code, text)
+
+    # Grammar holes left when the model drops a subject name entirely
+    npc_names = [
+        code_to_name[c]
+        for c in sorted(code_to_name.keys(), key=lambda x: (len(x), x))
+        if re.fullmatch(r"[A-Z]{1,3}", c)
+    ]
+    # Prefer appearance order from first expanded tags
+    ordered: list[str] = []
+    for m in REFERENCE_CODE_PATTERN.finditer(repaired):
+        n = code_to_name.get(m.group(1).upper(), "")
+        if n and n not in ordered:
+            ordered.append(n)
+    for n in npc_names:
+        if n not in ordered:
+            ordered.append(n)
+
+    name_i = 0
+
+    def next_name() -> str:
+        nonlocal name_i
+        if name_i >= len(ordered):
+            return ""
+        n = ordered[name_i]
+        name_i += 1
+        return n
+
+    def fill_subject(match: re.Match[str]) -> str:
+        prefix = match.group(1) or ""
+        verb = match.group(2)
+        n = next_name()
+        if not n:
+            return match.group(0)
+        # Preserve spacing style
+        if prefix.endswith("—") or prefix.endswith("-"):
+            return f"{prefix} {n} {verb}"
+        return f"{prefix}{n} {verb}"
+
+    # "— is" / ". leans" / "while stands" / leading spaces before verb
+    repaired = re.sub(
+        r"([—–\-]\s*|(?<=[.!?]\s)|(?<=\s)(?:while|as|and|but|then)\s+|^\s*)"
+        r"(is|was|are|were|leans?|stands?|flicks?|watches?|glances?|smirks?|"
+        r"grunts?|nods?|shakes?|steps?|moves?|turns?|says?|asks?|whispers?|"
+        r"crosses|props?|twitches?|darts?)\b",
+        fill_subject,
+        repaired,
+        flags=re.IGNORECASE | re.MULTILINE,
+    )
+
+    def fill_possessive(match: re.Match[str]) -> str:
+        prefix = match.group(1) or ""
+        n = next_name()
+        if not n:
+            return match.group(0)
+        return f"{prefix}{n}'s"
+
+    # " 's hologram" / "—'s fingers"
+    repaired = re.sub(
+        r"([—–\-,\s]|^)(?:\s*)'s\b",
+        fill_possessive,
+        repaired,
+        flags=re.MULTILINE,
+    )
+    # Clean double spaces from fills
+    repaired = re.sub(r"[ \t]{2,}", " ", repaired)
+    repaired = re.sub(r" +([,.;:!?])", r"\1", repaired)
+    return repaired
+
+
+def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Deterministic name/code repair on narration after model output."""
+    if not isinstance(result, dict):
+        return result
+    try:
+        from app.world import invent_person_name, is_plausible_person_name, is_plausible_place_name
+    except Exception:
+        invent_person_name = None  # type: ignore
+        is_plausible_person_name = lambda n: bool(str(n or "").strip())  # type: ignore
+        is_plausible_place_name = lambda n: bool(str(n or "").strip())  # type: ignore
+
+    code_map = _entity_code_name_map(context, result)
+    # Bad → good renames so we can rewrite prose (e.g. "System pings a local job" → "Ashwalker")
+    rename_pairs: list[tuple[str, str]] = []
+
+    # Ensure draft NPCs always have a non-empty *plausible* person name
+    for npc in result.get("npcs") or []:
+        if not isinstance(npc, dict):
+            continue
+        name = str(npc.get("name") or "").strip()
+        code = str(npc.get("code") or "").strip().upper()
+        if not name or not is_plausible_person_name(name):
+            fallback = ""
+            if code and code_map.get(code) and is_plausible_person_name(code_map[code]):
+                fallback = code_map[code]
+            elif invent_person_name is not None:
+                seed = abs(hash(f"{code}|{name}|{npc.get('role') or ''}")) % (10**9)
+                fallback = invent_person_name(seed=seed)
+            else:
+                fallback = f"Stranger {code}" if code else "Stranger"
+            if name and name != fallback:
+                rename_pairs.append((name, fallback))
+            npc["name"] = fallback
+            if code:
+                code_map[code] = fallback
+        elif code:
+            code_map.setdefault(code, name)
+
+    # Locations: drop sentence-like toponyms (often copied from event titles)
+    for loc in result.get("locations") or []:
+        if not isinstance(loc, dict):
+            continue
+        lname = str(loc.get("name") or "").strip()
+        if lname and not is_plausible_place_name(lname):
+            # Prefer existing current location name from context
+            cur = ""
+            if isinstance(context, dict):
+                cl = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+                cur = str(cl.get("name") or "").strip()
+            new_name = cur if cur and is_plausible_place_name(cur) else "Nearby street"
+            if lname != new_name:
+                rename_pairs.append((lname, new_name))
+            loc["name"] = new_name
+
+    def rewrite_names(text: str) -> str:
+        out = text or ""
+        # Longest first so multi-word bad names replace cleanly
+        for old, new in sorted(rename_pairs, key=lambda p: len(p[0]), reverse=True):
+            if not old or old == new:
+                continue
+            # Word-ish replace; allow possessive
+            out = re.sub(
+                rf"(?<![\w]){re.escape(old)}(?=[\w]*'s|[^\w]|$)",
+                new,
+                out,
+                flags=re.IGNORECASE,
+            )
+        return out
+
+    segments = result.get("narration_segments")
+    if isinstance(segments, list) and segments:
+        new_segments: list[Any] = []
+        for seg in segments:
+            if isinstance(seg, dict):
+                text = rewrite_names(str(seg.get("text") or ""))
+                text = _repair_prose_entity_labels(text, code_map)
+                new_segments.append({**seg, "text": text})
+            else:
+                new_segments.append(seg)
+        result["narration_segments"] = new_segments
+        joined = "\n\n".join(
+            str(s.get("text") or "") for s in new_segments if isinstance(s, dict)
+        ).strip()
+        if joined:
+            result["narration"] = joined[:5600]
+    elif result.get("narration"):
+        text = rewrite_names(str(result.get("narration") or ""))
+        result["narration"] = _repair_prose_entity_labels(text, code_map)[:5600]
+
+    if result.get("turn_summary"):
+        text = rewrite_names(str(result.get("turn_summary") or ""))
+        result["turn_summary"] = _repair_prose_entity_labels(text, code_map)[:700]
+
+    # Scene plan event labels can keep system-job wording; clean NPC-looking entries only
+    plan = result.get("scene_plan") if isinstance(result.get("scene_plan"), dict) else None
+    if plan and rename_pairs:
+        for key in ("focus_points", "events", "notes"):
+            items = plan.get(key)
+            if not isinstance(items, list):
+                continue
+            for item in items:
+                if isinstance(item, dict):
+                    for field in ("summary", "title", "label", "text", "content"):
+                        if item.get(field):
+                            item[field] = rewrite_names(str(item.get(field)))
+                elif isinstance(item, str):
+                    pass
+
+    self_check = result.get("self_check") if isinstance(result.get("self_check"), dict) else None
+    if self_check is not None:
+        corrections = self_check.setdefault("corrections_made", [])
+        if isinstance(corrections, list):
+            note = "Deterministic entity name/code repair applied to narration."
+            if rename_pairs:
+                note += " Replaced non-person labels: " + ", ".join(
+                    f"{a!r}→{b!r}" for a, b in rename_pairs[:4]
+                )
+            corrections.append(note)
+    return result
+
+
+def _normalize_turn(result: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     result = _turn_payload(result)
     segments = _narration_segments_from_result(result)
     result["narration_segments"] = segments
@@ -4271,6 +8264,8 @@ def _normalize_turn(result: dict[str, Any]) -> dict[str, Any]:
         }
     result.setdefault("index_updates", [])
     result.setdefault("turn_summary", "")
+    # Always run name repair (uses draft npcs even without full context)
+    result = _repair_entity_names_in_turn(result, context)
     return result
 
 
@@ -4767,12 +8762,15 @@ def _ensure_narration_depth(
     phase: str,
     trace: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    normalized = _normalize_turn(turn)
+    normalized = _normalize_turn(turn, context)
     original_chars = _narration_char_count(normalized)
     if original_chars >= MIN_TURN_NARRATION_CHARS:
         return normalized
     try:
-        expanded = _normalize_turn(_retry_short_narration(context, player_input, normalized, system_prompt, timeout, usage, phase, trace))
+        expanded = _normalize_turn(
+            _retry_short_narration(context, player_input, normalized, system_prompt, timeout, usage, phase, trace),
+            context,
+        )
         if _narration_char_count(expanded) >= MIN_TURN_NARRATION_CHARS or _narration_char_count(expanded) > original_chars:
             return expanded
     except LlmError as exc:
@@ -5171,6 +9169,10 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     if theme_block:
         system_prompt = f"{system_prompt.rstrip()}\n\n{theme_block}"
         dsl_system_prompt = f"{DSL_SYSTEM_PROMPT.rstrip()}\n\n{theme_block}"
+    avoid_block = anti_repetition_block(context)
+    if avoid_block:
+        system_prompt = f"{system_prompt.rstrip()}\n\n{avoid_block}"
+        dsl_system_prompt = f"{dsl_system_prompt.rstrip()}\n\n{avoid_block}"
     if is_opening:
         open_block = opening_feel_prompt_block(session_theme, playthrough_options)
         if open_block:
@@ -5358,7 +9360,7 @@ def _generate_turn_body(
                 trace=trace,
             )
             try:
-                result = _normalize_turn(verified)
+                result = _normalize_turn(verified, active_context)
             except LlmError as exc:
                 if not _is_missing_narration_error(exc):
                     raise
@@ -5390,7 +9392,7 @@ def _generate_turn_body(
             result["_model_trace"] = trace
             return result
         except LlmError as exc:
-            draft = _normalize_turn(draft)
+            draft = _normalize_turn(draft, active_context)
             draft["self_check"] = {
                 "passed": False,
                 "issues_found": [f"Verifier pass failed after DSL draft; using DSL draft. {exc}"],
@@ -5489,7 +9491,9 @@ def _generate_turn_body(
             except LlmError as retry_exc:
                     raise _attach_model_usage(retry_exc, usage, trace)
     try:
-        draft = _clean_turn_for_handoff(_normalize_turn(draft), "draft_to_verify", trace)
+        draft = _clean_turn_for_handoff(
+            _normalize_turn(draft, active_context), "draft_to_verify", trace
+        )
         _append_trace(trace, {"phase": "draft_normalize", "event": "normalized", "narration_chars": _narration_char_count(draft), "keys": sorted(draft.keys())})
     except LlmError as exc:
         if not _is_missing_narration_error(exc):
@@ -5506,7 +9510,8 @@ def _generate_turn_body(
                     usage,
                     "draft_missing_narration_retry",
                     trace,
-                )
+                ),
+                active_context,
             ), "draft_missing_narration_to_verify", trace)
             _append_trace(trace, {"phase": "draft_missing_narration_retry", "event": "normalized", "narration_chars": _narration_char_count(draft), "keys": sorted(draft.keys())})
         except LlmError as retry_exc:
@@ -5566,7 +9571,7 @@ def _generate_turn_body(
             trace=trace,
         )
         try:
-            result = _normalize_turn(verified)
+            result = _normalize_turn(verified, active_context)
         except LlmError as exc:
             if not _is_missing_narration_error(exc):
                 raise
@@ -5607,7 +9612,7 @@ def _generate_turn_body(
                     trace=trace,
                 )
                 try:
-                    result = _normalize_turn(verified)
+                    result = _normalize_turn(verified, active_context)
                 except LlmError as verify_exc:
                     if not _is_missing_narration_error(verify_exc):
                         raise
@@ -5630,7 +9635,7 @@ def _generate_turn_body(
                 return result
             except LlmError:
                 pass
-        draft = _normalize_turn(draft)
+        draft = _normalize_turn(draft, active_context)
         draft["self_check"] = {
             "passed": False,
             "issues_found": ["Verifier pass failed; using draft."],

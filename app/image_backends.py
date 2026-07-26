@@ -37,6 +37,12 @@ IMAGE_CONFIG_KEY = "image_config"
 PLAYER_PORTRAIT_KEY = "player_portrait"
 PLAYER_FULLBODY_KEY = "player_fullbody"
 
+# Fixed character canvas sizes (SD-friendly, no stretch). Full body is always 512×768 (2:3).
+FACE_WIDTH = 512
+FACE_HEIGHT = 512
+FULLBODY_WIDTH = 512
+FULLBODY_HEIGHT = 768
+
 # Track last launched backend PID (best-effort, process-local).
 _last_launch: dict[str, Any] = {}
 _last_launch_mono: float = 0.0
@@ -73,10 +79,10 @@ def default_image_config() -> dict[str, Any]:
         "default_height": _env_int("AI_RPG_IMAGE_HEIGHT", 512),
         "default_steps": _env_int("AI_RPG_IMAGE_STEPS", 20),
         "default_cfg": float(_env("AI_RPG_IMAGE_CFG", "7") or 7),
-        # Keep negatives short. Child first at 1.3 (mild; avoid multi-tag age stacks).
+        # Keep negatives short. NSFW + child first at 1.3 (mild; avoid multi-tag age stacks).
         "negative_prompt": _env(
             "AI_RPG_IMAGE_NEGATIVE",
-            "(child:1.3), lowres, blurry, deformed, bad anatomy, extra limbs, extra fingers, "
+            "(nsfw:1.3), (child:1.3), lowres, blurry, deformed, bad anatomy, extra limbs, extra fingers, "
             "watermark, text, logo, multiple people, "
             "side profile, facing away, looking away, from behind, "
             "frame, border, picture frame",
@@ -2201,8 +2207,285 @@ def _cap_words(text: str, n: int = 3) -> str:
     return " ".join(str(text or "").split()[:n]).strip()
 
 
+def _format_forge_phrase(
+    text: str,
+    *,
+    max_words: int = 4,
+    weight: float | None = None,
+    force_group: bool = False,
+) -> str:
+    """
+    Format one visual concept for Forge / A1111 CLIP prompts.
+
+    Multi-word gear and look phrases stay **one unit** via attention syntax:
+      oil-stained factory coat  →  (oil-stained factory coat:1.05)
+      silver hair               →  silver hair   (2 short words, no weight needed)
+      coat                      →  coat
+
+    Forge/A1111 (not NovelAI):
+      (phrase)        ≈ ×1.1 attention
+      (phrase:1.15)   explicit weight
+      [phrase]        de-emphasize
+    Underscores (oil_stained_coat) are Danbooru/anime-tag style — fine for
+    booru models, worse for realistic checkpoints like CyberRealistic.
+    NovelAI-style {curly braces} are **not** used on Forge.
+    """
+    raw = _norm_text(text)
+    if not raw:
+        return ""
+    # Already a LoRA or weighted / grouped phrase — leave intact (normalize spaces).
+    if raw.startswith("<lora:"):
+        return raw
+    if re.match(r"^\([^)]*(:\s*[\d.]+)?\)$", raw) or re.match(r"^\[[^\]]*\]$", raw):
+        return raw
+    # Strip accidental outer quotes
+    raw = raw.strip("\"'`")
+    # Collapse internal underscores from booru-ish paste into spaces for realistic models
+    if "_" in raw and " " not in raw and not raw.startswith("<"):
+        raw = raw.replace("_", " ")
+    words = raw.split()
+    if not words:
+        return ""
+    # Cap word count so a single concept stays short (user: keep under ~4 words)
+    if len(words) > max_words:
+        words = words[:max_words]
+        raw = " ".join(words)
+    # Single token — no grouping needed
+    if len(words) == 1 and weight is None and not force_group:
+        return words[0].lower()
+    # Two short simple tokens (e.g. "silver hair") — spaces are fine in CLIP
+    if (
+        len(words) == 2
+        and weight is None
+        and not force_group
+        and all(len(w) <= 10 and "-" not in w for w in words)
+    ):
+        return " ".join(w.lower() for w in words)
+    # Multi-word / hyphenated / forced → group as one attention unit
+    phrase = " ".join(w.lower() for w in words)
+    if weight is not None:
+        w = max(0.5, min(1.4, float(weight)))
+        # Avoid silly :1.0 noise
+        if abs(w - 1.0) < 0.02:
+            return f"({phrase})"
+        return f"({phrase}:{w:g})"
+    # Mild default group for 3+ word or hyphenated gear so CLIP keeps them together
+    if force_group or len(words) >= 3 or any("-" in w for w in words):
+        return f"({phrase})"
+    return phrase
+
+
+# Non-visual / prose tokens that must never enter Forge prompts (they crash some
+# realistic checkpoints into abstract sludge — see fullbody cyberrealistic failures).
+_PROMPT_STOPWORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "of",
+        "to",
+        "for",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "from",
+        "your",
+        "you",
+        "my",
+        "our",
+        "their",
+        "his",
+        "her",
+        "its",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "has",
+        "have",
+        "had",
+        "do",
+        "does",
+        "did",
+        "will",
+        "would",
+        "could",
+        "should",
+        "may",
+        "might",
+        "must",
+        "can",
+        "this",
+        "that",
+        "these",
+        "those",
+        "into",
+        "onto",
+        "over",
+        "under",
+        "after",
+        "before",
+        "while",
+        "when",
+        "where",
+        "who",
+        "whom",
+        "which",
+        "what",
+        "how",
+        "why",
+        "not",
+        "no",
+        "nor",
+        "but",
+        "if",
+        "then",
+        "than",
+        "so",
+        "as",
+        "just",
+        "only",
+        "also",
+        "very",
+        "really",
+        "about",
+        "around",
+        "through",
+        "across",
+        "between",
+        "among",
+        "against",
+        "without",
+        "within",
+        "during",
+        "once",
+        "they",
+        "them",
+        "he",
+        "she",
+        "it",
+        "we",
+        "i",
+        "me",
+        "us",
+    }
+)
+_PROMPT_VERBISH = frozenset(
+    {
+        "refuses",
+        "refuse",
+        "refused",
+        "wants",
+        "want",
+        "wanted",
+        "needs",
+        "need",
+        "needed",
+        "says",
+        "said",
+        "tells",
+        "told",
+        "asks",
+        "asked",
+        "goes",
+        "went",
+        "comes",
+        "came",
+        "tries",
+        "tried",
+        "makes",
+        "made",
+        "takes",
+        "took",
+        "gives",
+        "gave",
+        "knows",
+        "knew",
+        "thinks",
+        "thought",
+        "feels",
+        "felt",
+        "lives",
+        "lived",
+        "born",
+        "raised",
+        "died",
+        "killed",
+        "works",
+        "worked",
+        "arrives",
+        "arrived",
+        "leaves",
+        "left",
+        "opens",
+        "opened",
+        "closes",
+        "closed",
+        "begins",
+        "began",
+        "starts",
+        "started",
+        "ends",
+        "ended",
+        "must",
+        "shall",
+        "cannot",
+        "can't",
+        "won't",
+        "don't",
+        "doesn't",
+        "isn't",
+        "aren't",
+    }
+)
+
+
+def _is_visual_prompt_tag(tag: str) -> bool:
+    """
+    True if a short tag looks like visual SD vocabulary (hair, coat, neon city…)
+    rather than story prose ("customs refuses your").
+    """
+    text = _norm_text(tag).lower().strip(" .,;:!?\"'")
+    if not text or len(text) < 2:
+        return False
+    # Unwrap Forge attention groups for the visual check
+    m = re.match(r"^\((.+?)(?::\s*[\d.]+)?\)$", text)
+    if m:
+        text = m.group(1).strip()
+    if text in {"custom", "none", "n/a", "random", "unknown", "optional"}:
+        return False
+    words = re.findall(r"[a-z0-9\-']+", text)
+    if not words:
+        return False
+    if len(words) > 5:
+        return False
+    # Reject pure stopword / verb-heavy prose
+    content = [w for w in words if w not in _PROMPT_STOPWORDS]
+    if not content:
+        return False
+    if any(w in _PROMPT_VERBISH for w in words):
+        return False
+    # Reject tags that are mostly function words (≤1 content word of length ≤2)
+    if len(content) == 1 and content[0] in _PROMPT_STOPWORDS:
+        return False
+    # Reject leading pronouns / dialogue-ish fragments
+    if words[0] in {"your", "you", "my", "our", "their", "his", "her", "its", "i", "we", "they"}:
+        return False
+    # Reject obvious sentence openers
+    if words[0] in {"born", "raised", "after", "once", "when", "while", "because", "although", "however"}:
+        return False
+    return True
+
+
 def _short_setting_tags(world_style: str = "", location: str = "") -> list[str]:
-    """Core setting tags from world vibe + start location (≤3 words each)."""
+    """Core *visual* setting tags from world vibe + start location (≤3 words each)."""
     tags: list[str] = []
     for raw in (world_style, location):
         text = _norm_text(raw)
@@ -2215,9 +2498,12 @@ def _short_setting_tags(world_style: str = "", location: str = "") -> list[str]:
             chunks = [" ".join(words[:3])] if words else []
         for c in chunks[:3]:
             w = _cap_words(c, 3).lower()
-            if w and w not in tags and w not in {"custom", "none", "n/a"}:
-                tags.append(w)
-    return tags[:4]
+            if not w or w in tags:
+                continue
+            if not _is_visual_prompt_tag(w):
+                continue
+            tags.append(w)
+    return tags[:3]
 
 
 # ---------------------------------------------------------------------------
@@ -2514,11 +2800,21 @@ def _parse_wardrobe_entry(raw: str) -> dict[str, str] | None:
     if category not in WARDROBE_CATEGORIES:
         category = "other"
 
+    # Keep under ~4 words; multi-word gear is grouped for Forge as (phrase) so CLIP
+    # treats "oil-stained factory coat" as one concept, not three loose tokens.
+    short_label = _cap_words(prompt_label, 4).lower()
+    n_words = len(short_label.split())
     return {
         "label": prompt_label[:80],
         "category": category,
         "zone": zone,
-        "prompt": _cap_words(prompt_label, 5).lower(),
+        "prompt": _format_forge_phrase(
+            short_label,
+            max_words=4,
+            # Mild weight only when grouping a multi-word concept
+            weight=1.05 if n_words >= 2 else None,
+            force_group=n_words >= 2,
+        ),
     }
 
 
@@ -2816,7 +3112,8 @@ def _facial_feature_tags(facial_features: str = "", *, kind: str = "face") -> li
     """
     kind_key = "fullbody" if str(kind).lower() in {"fullbody", "body", "full"} else "face"
     # Full body still benefits from a couple of face anchors for consistency.
-    max_tags = 4 if kind_key == "face" else 3
+    max_tags = 4 if kind_key == "face" else 2
+    max_words = 4 if kind_key == "face" else 3
     tags: list[str] = []
     seen: set[str] = set()
     for phrase in _split_look_phrases(facial_features):
@@ -2838,9 +3135,20 @@ def _facial_feature_tags(facial_features: str = "", *, kind: str = "face") -> li
             )
         ):
             continue
-        clean = _cap_words(phrase, 5).lower()
+        clean = _cap_words(phrase, max_words).lower()
         if not clean or clean in seen:
             continue
+        if not _is_visual_prompt_tag(clean):
+            continue
+        # Drop preposition-heavy mush ("shadowed under a broken")
+        words = clean.split()
+        if sum(1 for w in words if w in _PROMPT_STOPWORDS) >= max(1, len(words) // 2):
+            # Keep only content words when possible
+            content = [w for w in words if w not in _PROMPT_STOPWORDS]
+            if len(content) >= 2:
+                clean = " ".join(content[:max_words])
+            else:
+                continue
         seen.add(clean)
         tags.append(clean)
         if len(tags) >= max_tags:
@@ -2886,15 +3194,19 @@ def build_portrait_prompt(
     """
     Simple ordered tag prompt — face and body share the same skeleton.
 
-    Paragraph order (comma-separated):
+    Paragraph order (comma-separated concepts for Forge/A1111):
       1. core     — 1girl/1boy, setting tags (location / vibe)
       2. character — pose, hair, facial features, zone-filtered clothes
-      3. framing  — (portrait:1.5)  OR  (full body:1.7)
+      3. framing  — (portrait:1.5)  OR  (full body:1.35), head to toe
       4. detail   — optional tiny extra (full body may keep a small scene crumb)
       5. LoRAs    — appended later by build_character_prompt_pack
 
-    Full body relies on (full body:1.7) in the positive — no “legs out of frame” negatives
-    (those can force odd crops). Only pose + image-type differ between face and fullbody.
+    Multi-word gear is **one concept**, not free words:
+      (oil-stained factory coat:1.05)   ← Forge attention group (preferred)
+      oil-stained_factory_coat         ← booru/underscore style (not used here)
+      {oil stained factory coat}       ← NovelAI only (not Forge)
+
+    Keep each phrase ≤ ~4 words. Commas separate concepts; spaces inside ( ) stay one unit.
     Users refine weights in the engine box (Ctrl+↑/↓).
     """
     mode = str(visibility_mode or "full").lower().strip() or "full"
@@ -2925,12 +3237,18 @@ def build_portrait_prompt(
         parts.append("standing")
     hair_tag = _explicit_hair_tag(hair, extra=extra, appearance=f"{look_blob} {facial_features}", backstory=backstory)
     if hair_tag:
-        parts.append(hair_tag)
+        # "cropped silver hair" stays one unit when 3+ words or hyphenated
+        parts.append(_format_forge_phrase(hair_tag, max_words=4))
     for face_tag in _facial_feature_tags(facial_features, kind=kind_key):
-        if face_tag not in {p.lower() for p in parts}:
-            parts.append(face_tag)
+        formatted = _format_forge_phrase(face_tag, max_words=4)
+        if formatted and formatted.lower() not in {p.lower() for p in parts}:
+            parts.append(formatted)
     # Clothing tags: only zones visible in this frame (portrait never gets feet/legs).
     # Do not re-inject hair from wardrobe if we already have an explicit hair field.
+    # Multi-word gear → (oil-stained factory coat:1.05) so Forge keeps the phrase together.
+    clothes_budget = 6 if kind_key == "face" else 5
+    clothes_added = 0
+    seen_clothes_stems: set[str] = set()
     for clothes in _clothing_tags(
         title=title,
         equipment=equipment,
@@ -2939,11 +3257,35 @@ def build_portrait_prompt(
         kind=kind_key,
         visibility_mode=mode,
     ):
-        if hair_tag and clothes == hair_tag:
+        # Strip existing parens for stem matching / hair checks
+        clothes_bare = re.sub(r"^\((.+?)(?::\s*[\d.]+)?\)$", r"\1", clothes.strip()).strip()
+        if hair_tag and clothes_bare == hair_tag:
             continue
-        if "hair" in clothes and hair_tag:
+        if "hair" in clothes_bare and hair_tag:
             continue
-        parts.append(clothes)
+        if not _is_visual_prompt_tag(clothes_bare):
+            continue
+        # Dedupe near-duplicates ("oil-stained factory coat" / "frayed factory coat")
+        stem = re.sub(
+            r"\b(oil-?stained|frayed|weathered|worn|old|new|dirty|clean|torn|patched)\b",
+            "",
+            clothes_bare.lower(),
+        )
+        stem = re.sub(r"\s+", " ", stem).strip()
+        if stem and stem in seen_clothes_stems:
+            continue
+        if stem:
+            seen_clothes_stems.add(stem)
+        # wardrobe_tags already format; re-apply only if plain
+        if clothes.startswith("(") or clothes.startswith("<lora:"):
+            parts.append(clothes)
+        else:
+            parts.append(
+                _format_forge_phrase(clothes_bare, max_words=4, weight=1.05, force_group=True)
+            )
+        clothes_added += 1
+        if clothes_added >= clothes_budget:
+            break
 
     # --- 3. image type / framing ---
     if mode == "partial":
@@ -2954,20 +3296,20 @@ def build_portrait_prompt(
         if cue:
             # Drop prose; keep ≤3 words of visual framing
             short_cue = _cap_words(cue, 3).lower()
-            if short_cue and short_cue not in {p.lower() for p in parts}:
-                # Skip if it looks like a life-story opener ("born on the…")
-                if not short_cue.startswith(("born ", "raised ", "after ", "once ", "they ")):
-                    parts.append(short_cue)
+            if (
+                short_cue
+                and short_cue not in {p.lower() for p in parts}
+                and _is_visual_prompt_tag(short_cue)
+            ):
+                parts.append(short_cue)
     elif kind_key == "face":
         parts.append("(portrait:1.5)")
     else:
-        # Strong full-figure framing — face-ref img2img used to collapse to bust shots.
-        parts.append("(full body:1.7)")
-        parts.append("full body shot")
+        # Lean full-figure framing. Heavy stacked weights (1.7 + 6 framing tags)
+        # made CyberRealistic collapse to abstract sludge on 512×768.
+        parts.append("(full body:1.35)")
+        parts.append("full body")
         parts.append("head to toe")
-        parts.append("entire body in frame")
-        parts.append("standing full figure")
-        parts.append("wide shot")
 
     # --- 4. tiny optional detail (no big background inventing on portraits) ---
     if mode != "partial":
@@ -2976,18 +3318,215 @@ def build_portrait_prompt(
             already=set(parts),
             allow_scene=(kind_key == "fullbody"),
         ):
-            parts.append(tag)
+            if _is_visual_prompt_tag(tag):
+                parts.append(tag)
 
-    # Drop empties / dupes while preserving order
+    # Drop empties / dupes / non-visual mush while preserving order
     out: list[str] = []
     seen: set[str] = set()
     for p in parts:
         key = p.strip().lower()
         if not key or key in seen:
             continue
+        # Always keep structural subject / framing tags
+        if key in {
+            "1boy",
+            "1girl",
+            "1person",
+            "standing",
+            "looking at viewer",
+            "partial view",
+            "(portrait:1.5)",
+            "(full body:1.35)",
+            "(full body:1.7)",
+            "full body",
+            "full body shot",
+            "head to toe",
+        } or key.startswith("(portrait") or key.startswith("(full body"):
+            seen.add(key)
+            out.append(p.strip())
+            continue
+        if not _is_visual_prompt_tag(key) and not key.startswith("<lora:"):
+            continue
         seen.add(key)
         out.append(p.strip())
     return ", ".join(out)
+
+
+def _image_looks_abstract_failure(result: dict[str, Any] | None) -> bool:
+    """
+    Detect near-black / low-structure sludge that realistic models sometimes emit
+    when the prompt is prose-poisoned. Used to trigger a clean fullbody retry.
+    """
+    if not isinstance(result, dict) or not result.get("ok"):
+        return False
+    b64 = str(result.get("image_base64") or "")
+    if not b64 and str(result.get("data_url") or "").startswith("data:"):
+        b64 = _data_url_to_b64(str(result.get("data_url")))
+    if not b64:
+        return False
+    try:
+        from io import BytesIO
+
+        from PIL import Image, ImageFilter, ImageStat
+
+        im = Image.open(BytesIO(base64.b64decode(b64))).convert("RGB")
+        # Very dark overall
+        mean = sum(ImageStat.Stat(im).mean) / 3.0
+        if mean < 28:
+            return True
+        # Low edge energy + dark midtones → abstract mush
+        edges = im.convert("L").filter(ImageFilter.FIND_EDGES)
+        edge_mean = float(ImageStat.Stat(edges).mean[0])
+        if mean < 45 and edge_mean < 4.5:
+            return True
+        return False
+    except Exception:
+        return False
+
+
+def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
+    """
+    Clean player/engine prompt overrides before Forge.
+    Drops prose fragments that push realistic models into abstract failure.
+    """
+    text = _norm_text(prompt)
+    if not text:
+        return ""
+    kind_key = "fullbody" if str(kind).lower() in {"fullbody", "body", "full"} else "face"
+    # Redundant framing we collapse to a lean set for fullbody.
+    drop_framing = {
+        "full body shot",
+        "entire body in frame",
+        "standing full figure",
+        "wide shot",
+        "full figure",
+        "full-body",
+        "fullbody",
+    }
+    parts_out: list[str] = []
+    seen: set[str] = set()
+    seen_clothes_stems: set[str] = set()
+    has_full_body_weight = False
+    for raw in text.split(","):
+        tag = raw.strip()
+        if not tag:
+            continue
+        low = re.sub(r"\s+", " ", tag.lower()).strip()
+        # Normalize heavy full-body weight down
+        m_weight = re.match(r"^\(\s*full\s*body\s*:\s*([\d.]+)\s*\)$", low)
+        if m_weight:
+            has_full_body_weight = True
+            if low not in seen:
+                seen.add(low)
+                parts_out.append("(full body:1.35)")
+            continue
+        if low.startswith("<lora:"):
+            if low not in seen:
+                seen.add(low)
+                parts_out.append(tag)
+            continue
+        if low in drop_framing:
+            continue
+        # Preserve multi-word framing phrases before stopword stripping
+        if low in {"head to toe", "looking at viewer", "full body", "full body shot"}:
+            if low not in seen:
+                seen.add(low)
+                parts_out.append(low if low != "full body shot" else "full body")
+            continue
+        # Soft-strip obvious prose blobs
+        structural = any(
+            k in low
+            for k in (
+                "full body",
+                "portrait",
+                "head to toe",
+                "looking at",
+                "standing",
+                "1boy",
+                "1girl",
+                "1person",
+                "realistic",
+                "detailed",
+            )
+        )
+        if not structural and not _is_visual_prompt_tag(tag):
+            continue
+        # Preposition-heavy face mush → content words only (never touch framing phrases)
+        words = re.findall(r"[a-z0-9']+", low)
+        if (
+            words
+            and "head to toe" not in low
+            and sum(1 for w in words if w in _PROMPT_STOPWORDS) >= max(1, len(words) // 2)
+        ):
+            content = [w for w in words if w not in _PROMPT_STOPWORDS and w not in _PROMPT_VERBISH]
+            if len(content) < 2:
+                continue
+            tag = " ".join(content[:4])
+            low = tag
+        # Clothing near-dupe collapse
+        bare = re.sub(r"^\((.+?)(?::\s*[\d.]+)?\)$", r"\1", low).strip()
+        if any(w in bare for w in ("coat", "jacket", "cloak", "gloves", "boots", "pants", "shirt")):
+            stem = re.sub(
+                r"\b(oil-?stained|frayed|weathered|worn|old|new|dirty|clean|torn|patched|reinforced)\b",
+                "",
+                bare,
+            )
+            stem = re.sub(r"\s+", " ", stem).strip()
+            if stem and stem in seen_clothes_stems:
+                continue
+            if stem:
+                seen_clothes_stems.add(stem)
+        # Group multi-word plain tags so they stay one Forge concept
+        if not tag.startswith("(") and not tag.startswith("<lora:") and not tag.startswith("["):
+            word_n = len(bare.split())
+            if word_n >= 2 and any(
+                w in bare
+                for w in (
+                    "coat",
+                    "jacket",
+                    "cloak",
+                    "gloves",
+                    "boots",
+                    "pants",
+                    "shirt",
+                    "robe",
+                    "armor",
+                    "duster",
+                    "harness",
+                    "turtleneck",
+                )
+            ):
+                tag = _format_forge_phrase(bare, max_words=4, weight=1.05, force_group=True)
+                low = tag.lower()
+            elif word_n >= 3:
+                tag = _format_forge_phrase(bare, max_words=4)
+                low = tag.lower()
+        if low in seen:
+            continue
+        seen.add(low)
+        parts_out.append(tag)
+    blob = ", ".join(parts_out)
+    if kind_key == "fullbody":
+        low_blob = blob.lower()
+        if not has_full_body_weight and "full body" not in low_blob:
+            blob = f"{blob}, (full body:1.35), full body, head to toe" if blob else "(full body:1.35), full body, head to toe"
+        elif "head to toe" not in low_blob:
+            blob = f"{blob}, head to toe" if blob else "head to toe"
+        # Cap total tags so long engine boxes can't re-poison the model
+        tags = [t.strip() for t in blob.split(",") if t.strip()]
+        if len(tags) > 16:
+            # Keep subject / pose / framing + first wardrobe/face tags
+            keep: list[str] = []
+            rest: list[str] = []
+            for t in tags:
+                tl = t.lower()
+                if tl.startswith(("1boy", "1girl", "1person", "(full", "full body", "standing", "head to")) or "lora:" in tl:
+                    keep.append(t)
+                else:
+                    rest.append(t)
+            blob = ", ".join((keep + rest)[:16])
+    return blob.strip(" ,")
 
 
 def format_lora_tags(loras: list[Any] | None) -> str:
@@ -3028,11 +3567,37 @@ def _data_url_to_b64(data_url: str) -> str:
 
 
 # Negatives that fight portrait/bust composition when generating full body from a face ref.
+# Keep lean — long contradictory stacks (frame/border + head out of frame + half body…)
+# hurt CyberRealistic full-body more than they help.
 _FULLBODY_FRAME_NEGATIVES = (
     "portrait, close-up, headshot, bust shot, upper body only, head and shoulders, "
-    "cropped legs, legs out of frame, face only, tight crop, selfie, passport photo, "
-    "zoomed in face, mugshot, bust portrait, half body"
+    "cropped legs, face only, tight crop, selfie, passport photo, mugshot, half body, "
+    "abstract, glitch art, noise"
 )
+
+
+def resolve_character_canvas_size(kind: str, profile: dict[str, Any] | None = None) -> tuple[int, int]:
+    """
+    Fixed character art sizes. Full body is always 512×768 so Forge never
+    stretches a square face lock into a wrong aspect (a common warp cause).
+    Profile width/height are ignored for fullbody; face stays 512×512.
+    """
+    k = str(kind or "").strip().lower()
+    if k in {"fullbody", "body", "full", "full_body", "character_fullbody", "character_body"} or (
+        "fullbody" in k or ("body" in k and "face" not in k)
+    ):
+        return FULLBODY_WIDTH, FULLBODY_HEIGHT
+    # Face / headshot
+    if profile and isinstance(profile, dict):
+        try:
+            w = int(profile.get("width") or FACE_WIDTH)
+            h = int(profile.get("height") or FACE_HEIGHT)
+            # Clamp to square-ish face defaults if someone set wild values
+            if w == h and 256 <= w <= 1024:
+                return w, h
+        except (TypeError, ValueError):
+            pass
+    return FACE_WIDTH, FACE_HEIGHT
 
 
 def _composite_face_ref_for_fullbody(
@@ -3043,8 +3608,8 @@ def _composite_face_ref_for_fullbody(
 ) -> str:
     """
     Place a face portrait into the *upper* portion of a tall canvas instead of
-    stretching it full-frame. Stretching a face crop to 576×768 locks img2img
-    into portrait composition no matter how hard you prompt full body.
+    stretching it full-frame. Stretching a face crop to full-body size locks
+    img2img into portrait composition and warps proportions.
 
     Returns raw base64 PNG (no data: prefix). Empty string on failure.
     """
@@ -3058,13 +3623,24 @@ def _composite_face_ref_for_fullbody(
 
         raw = base64.b64decode(b64)
         face = Image.open(BytesIO(raw)).convert("RGB")
-        tw = max(64, int(width or 576))
-        th = max(64, int(height or 768))
+        tw = max(64, int(width or FULLBODY_WIDTH))
+        th = max(64, int(height or FULLBODY_HEIGHT))
+        # Always target the canonical full-body canvas.
+        if abs(tw - FULLBODY_WIDTH) > 8 or abs(th - FULLBODY_HEIGHT) > 8:
+            tw, th = FULLBODY_WIDTH, FULLBODY_HEIGHT
         fw0, fh0 = face.size
         # Already a tall fullbody-shaped canvas (e.g. previous composite) — do not nest again.
-        if fh0 >= fw0 * 1.15 and abs(fw0 - tw) <= 48 and abs(fh0 - th) <= 64:
+        # Use contain+pad resize (never stretch) if size differs.
+        if fh0 >= fw0 * 1.15 and abs(fw0 / max(1, fh0) - tw / th) < 0.08:
             if (fw0, fh0) != (tw, th):
-                face = face.resize((tw, th), Image.Resampling.LANCZOS)
+                # Letterbox to exact canvas without squashing anatomy.
+                canvas = Image.new("RGB", (tw, th), (42, 44, 48))
+                scale = min(tw / max(1, fw0), th / max(1, fh0))
+                nw = max(32, int(fw0 * scale))
+                nh = max(32, int(fh0 * scale))
+                resized = face.resize((nw, nh), Image.Resampling.LANCZOS)
+                canvas.paste(resized, ((tw - nw) // 2, (th - nh) // 2))
+                face = canvas
             out_buf = BytesIO()
             face.save(out_buf, format="PNG", optimize=True)
             return base64.b64encode(out_buf.getvalue()).decode("ascii")
@@ -3275,9 +3851,17 @@ def _generate_image_body(
     if not negative and shared.get("negative_prompt"):
         negative = str(shared.get("negative_prompt") or "")
     purpose_l0 = str(purpose or "").lower()
-    is_body_purpose0 = any(k in purpose_l0 for k in ("fullbody", "full body", "body"))
+    is_body_purpose0 = any(
+        k in purpose_l0 for k in ("fullbody", "full body", "character_fullbody", "character_body")
+    ) or (purpose_l0.endswith("_body") or purpose_l0 == "body")
+    # Hard-lock full-body canvas: 512×768. Wrong aspect + face img2img is the main warp source.
     if is_body_purpose0:
+        width, height = FULLBODY_WIDTH, FULLBODY_HEIGHT
         negative = _fullbody_negative(negative)
+    elif any(k in purpose_l0 for k in ("character_face", "face", "portrait")) and "full" not in purpose_l0:
+        # Keep face square unless caller already set a sensible square size
+        if width != height or width < 256:
+            width, height = FACE_WIDTH, FACE_HEIGHT
     try:
         if provider == "demo":
             result = _generate_demo_image(
@@ -3394,6 +3978,10 @@ def _generate_image_body(
                 face_ref_b64=lock_b64 if ad_wants_face_ref else None,
             )
 
+            # CodeFormer/GFPGAN on full-body often warps non-face regions when detection
+            # is weak; face portraits still benefit from restore_faces.
+            restore_faces = bool(cfg.get("forge_restore_faces")) and not is_body_purpose
+
             def _forge_call(*, use_cn: bool, init: str, always: dict | None) -> dict[str, Any]:
                 scripts = _merge_alwayson_scripts(
                     always if use_cn else None,
@@ -3414,7 +4002,7 @@ def _generate_image_body(
                     checkpoint=str(cfg.get("forge_checkpoint") or ""),
                     vae=str(cfg.get("forge_vae") or ""),
                     clip_skip=int(cfg.get("forge_clip_skip") or 1),
-                    restore_faces=bool(cfg.get("forge_restore_faces")),
+                    restore_faces=restore_faces,
                     tiling=bool(cfg.get("forge_tiling")),
                     enable_hr=bool(cfg.get("forge_enable_hr")) and not init and not use_cn,
                     hr_scale=float(cfg.get("forge_hr_scale") or 1.5),
@@ -4313,7 +4901,9 @@ def _generate_forge(
     if use_img2img:
         body["init_images"] = [str(init_images[0])]
         body["denoising_strength"] = float(denoising_strength if denoising_strength is not None else 0.65)
-        body["resize_mode"] = 0  # just resize
+        # 1 = crop and resize (never squash aspect). Mode 0 "just resize" stretches
+        # square face refs into tall canvases and warps full-body anatomy.
+        body["resize_mode"] = 1
     override: dict[str, Any] = {}
     if checkpoint and str(checkpoint).strip():
         override["sd_model_checkpoint"] = str(checkpoint).strip()
@@ -4545,8 +5135,8 @@ def default_image_presets() -> dict[str, Any]:
             "share_seed_base": True,
         },
         "face": {
-            "width": 512,
-            "height": 512,
+            "width": FACE_WIDTH,
+            "height": FACE_HEIGHT,
             "steps": 26,
             "cfg_scale": 7.5,
             "style": "",
@@ -4554,8 +5144,8 @@ def default_image_presets() -> dict[str, Any]:
             "negative_extra": "",
         },
         "fullbody": {
-            "width": 576,
-            "height": 768,
+            "width": FULLBODY_WIDTH,
+            "height": FULLBODY_HEIGHT,
             "steps": 30,
             "cfg_scale": 8,
             "style": "",
@@ -4592,6 +5182,16 @@ def load_image_presets() -> dict[str, Any]:
                 base = _deep_merge(base, user)
         except Exception:
             pass
+    # Always enforce character canvas sizes (old user presets used 576×768 which
+    # mismatched face-ref composites and some SD checkpoints → warped bodies).
+    face = base.setdefault("face", {})
+    if isinstance(face, dict):
+        face["width"] = FACE_WIDTH
+        face["height"] = FACE_HEIGHT
+    body = base.setdefault("fullbody", {})
+    if isinstance(body, dict):
+        body["width"] = FULLBODY_WIDTH
+        body["height"] = FULLBODY_HEIGHT
     # Overlay roots from image_config when present
     try:
         cfg = get_image_config()
@@ -4718,8 +5318,8 @@ def image_readiness(*, launch_if_offline: bool = False) -> dict[str, Any]:
             "url": "https://github.com/comfyanonymous/ComfyUI",
         },
         {
-            "label": "Mørkyn image docs",
-            "url": "/docs" if False else "docs/ConnectImages.md",
+            "label": "Mørkyn image docs (repo)",
+            "url": "https://github.com/Stelliro/Morkyn/blob/main/docs/ConnectImages.md",
         },
     ]
 
@@ -6307,13 +6907,13 @@ def generate_character_set(
 
     for index, kind in enumerate(normalized):
         profile = presets.get(kind) if isinstance(presets.get(kind), dict) else {}
-        # Prefer player-edited engine prompts when provided.
+        # Prefer player-edited engine prompts when provided (then sanitize).
         use_final = False
         if kind == "face" and face_prompt:
-            prompt = face_prompt
+            prompt = sanitize_engine_prompt(face_prompt, kind="face") or face_prompt
             use_final = True
         elif kind == "fullbody" and fullbody_prompt:
-            prompt = fullbody_prompt
+            prompt = sanitize_engine_prompt(fullbody_prompt, kind="fullbody") or fullbody_prompt
             use_final = True
         else:
             prompt = build_character_prompt(
@@ -6369,8 +6969,7 @@ def generate_character_set(
             else:
                 sibling = _stored_player_url(PLAYER_FULLBODY_KEY) or None
 
-        body_w = int(profile.get("width") or (512 if kind == "face" else 576))
-        body_h = int(profile.get("height") or (512 if kind == "face" else 768))
+        body_w, body_h = resolve_character_canvas_size(kind, profile if isinstance(profile, dict) else None)
         used_composite = False
         if sibling and use_ref:
             if cons.get("use_strong"):
@@ -6384,11 +6983,13 @@ def generate_character_set(
                     if composited:
                         init_image = f"data:image/png;base64,{composited}"
                         used_composite = True
-                        denoise = max(ref_denoise, 0.84)
+                        # Slightly freer denoise so body pose isn't locked to dark composite void.
+                        denoise = max(ref_denoise, 0.86)
                     else:
-                        # Fallback: still use face but force high denoise so pose can break free.
-                        init_image = sibling
-                        denoise = max(ref_denoise, 0.90)
+                        # No raw face fallback (would stretch 512² → 512×768 via img2img).
+                        # Generate body as txt2img without face lock instead.
+                        init_image = None
+                        denoise = None
                 else:
                     init_image = sibling
                     denoise = min(0.85, ref_denoise + 0.06)
@@ -6396,13 +6997,20 @@ def generate_character_set(
         if kind == "fullbody":
             kind_negative = _fullbody_negative(kind_negative)
 
+        # Fullbody: prefer stable cfg (7–7.5). Preset 8.0 + long prose tags was a failure mode.
+        steps_n = int(profile.get("steps") or 24)
+        cfg_n = float(profile.get("cfg_scale") or 7)
+        if kind == "fullbody":
+            cfg_n = min(cfg_n, 7.5)
+            steps_n = max(24, min(steps_n, 32))
+
         gen = generate_image(
             prompt=prompt,
             negative_prompt=kind_negative,
             width=body_w,
             height=body_h,
-            steps=int(profile.get("steps") or 24),
-            cfg_scale=float(profile.get("cfg_scale") or 7),
+            steps=steps_n,
+            cfg_scale=cfg_n,
             seed=kind_seed,
             purpose=f"character_{kind}",
             loras=[] if use_final else loras,
@@ -6413,10 +7021,67 @@ def generate_character_set(
             face_lock_image=face_lock,
             consistency_mode=str(cfg.get("character_consistency") or "auto"),
         )
+        # Quality gate: abstract/dark sludge → one clean txt2img retry (no face-ref, lean prompt).
+        if kind == "fullbody" and gen.get("ok") and _image_looks_abstract_failure(gen):
+            retry_prompt = build_character_prompt(
+                kind="fullbody",
+                name=name,
+                title=title,
+                known_as=known_as,
+                backstory="",  # no prose leakage
+                world_style=world_style if _is_visual_prompt_tag(str(world_style or "").split(",")[0]) else "",
+                extra="",
+                equipment=equipment[:4] if equipment else [],
+                hair=hair,
+                facial_features=facial_features,
+                appearance=appearance,
+                age=age,
+                sex=sex,
+                visibility_mode="full",
+            )
+            retry_prompt = sanitize_engine_prompt(retry_prompt, kind="fullbody")
+            retry_neg = _fullbody_negative(
+                "lowres, blurry, deformed, bad anatomy, watermark, text, abstract, portrait, close-up, headshot"
+            )
+            retry = generate_image(
+                prompt=retry_prompt or prompt,
+                negative_prompt=retry_neg,
+                width=body_w,
+                height=body_h,
+                steps=max(26, steps_n),
+                cfg_scale=7.0,
+                seed=int(kind_seed) + 17,
+                purpose="character_fullbody",
+                loras=[],
+                init_image=None,
+                denoising_strength=None,
+                apply_primary=False,
+                apply_loras=False,
+                face_lock_image=None,
+                consistency_mode="off",
+            )
+            if retry.get("ok") and not _image_looks_abstract_failure(retry):
+                retry["kind"] = kind
+                retry["built_prompt"] = retry.get("prompt") or retry_prompt
+                retry["used_face_reference"] = False
+                retry["face_ref_composited"] = False
+                retry["prompt_was_override"] = use_final
+                retry["abstract_retry"] = True
+                retry["first_attempt_seed"] = kind_seed
+                gen = retry
+            else:
+                gen["abstract_warning"] = (
+                    "Full-body pass looked abstract/dark; clean retry also weak. "
+                    "Try Generate prompt again, then Generate body."
+                )
+                gen["abstract_retry"] = True
+                gen["abstract_retry_ok"] = False
+
         gen["kind"] = kind
         gen["built_prompt"] = gen.get("prompt") or prompt
-        gen["used_face_reference"] = bool(init_image or face_lock)
-        gen["face_ref_composited"] = bool(used_composite)
+        gen["used_face_reference"] = bool(init_image or face_lock) and not gen.get("abstract_retry")
+        if not gen.get("face_ref_composited"):
+            gen["face_ref_composited"] = bool(used_composite) and not gen.get("abstract_retry")
         gen["prompt_was_override"] = use_final
         results[kind] = gen
         if not gen.get("ok"):

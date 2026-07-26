@@ -50,13 +50,22 @@ BUILTIN_SKILLS: list[dict[str, Any]] = [
     {"code": "performance", "name": "Performance", "category": "social", "attribute": "charisma", "secondary": "dexterity", "tags": ["song", "act", "story"], "base_dc": 12, "description": "Song, acting, storytelling, stagecraft."},
     {"code": "etiquette", "name": "Etiquette", "category": "social", "attribute": "charisma", "secondary": "intelligence", "tags": ["court", "manners", "protocol"], "base_dc": 13, "description": "Court manners, protocol, formal address."},
     {"code": "streetwise", "name": "Streetwise", "category": "social", "attribute": "wisdom", "secondary": "charisma", "tags": ["rumor", "underworld", "fence"], "base_dc": 12, "description": "Rumors, fences, gangs, city undercurrents."},
+    {"code": "disguise", "name": "Disguise", "category": "social", "attribute": "charisma", "secondary": "dexterity", "tags": ["costume", "impersonate", "mask"], "base_dc": 14, "description": "Costumes, false roles, blending into a crowd or court."},
+    {"code": "gambling", "name": "Gambling", "category": "social", "attribute": "charisma", "secondary": "intelligence", "tags": ["cards", "dice", "wager"], "base_dc": 13, "description": "Games of chance, reading a table, knowing when to fold."},
+    {"code": "appraise", "name": "Appraise", "category": "social", "attribute": "intelligence", "secondary": "wisdom", "tags": ["value", "forge", "price"], "base_dc": 13, "description": "Judging value, fakes, and market price of goods."},
     # Craft / tech
     {"code": "craft", "name": "Craft", "category": "craft", "attribute": "intelligence", "secondary": "dexterity", "tags": ["make", "repair", "forge"], "base_dc": 13, "description": "Making and repairing physical goods."},
+    {"code": "smithing", "name": "Smithing", "category": "craft", "attribute": "strength", "secondary": "intelligence", "tags": ["forge", "metal", "hammer"], "base_dc": 14, "description": "Working metal, edges, fittings, and forge heat."},
+    {"code": "cooking", "name": "Cooking", "category": "craft", "attribute": "wisdom", "secondary": "intelligence", "tags": ["food", "preserve", "campfire"], "base_dc": 12, "description": "Preparing meals, preserving food, campfire cookery."},
+    {"code": "animal_handling", "name": "Animal Handling", "category": "craft", "attribute": "wisdom", "secondary": "charisma", "tags": ["mount", "herd", "tame"], "base_dc": 12, "description": "Calming, directing, or reading beasts and mounts."},
+    {"code": "farming", "name": "Farming", "category": "craft", "attribute": "constitution", "secondary": "wisdom", "tags": ["crop", "soil", "harvest"], "base_dc": 12, "description": "Crops, soil, seasons, and rural labor."},
+    {"code": "mining", "name": "Mining", "category": "craft", "attribute": "strength", "secondary": "constitution", "tags": ["ore", "tunnel", "dig"], "base_dc": 13, "description": "Digging, ore sense, tunnel safety."},
     {"code": "lockpicking", "name": "Lockpicking", "category": "craft", "attribute": "dexterity", "secondary": "intelligence", "tags": ["lock", "pick", "bypass"], "base_dc": 14, "description": "Locks, latches, simple mechanical seals."},
     {"code": "tinkering", "name": "Tinkering", "category": "craft", "attribute": "intelligence", "secondary": "dexterity", "tags": ["gadget", "mechanism", "jury_rig"], "base_dc": 13, "description": "Mechanisms, gadgets, jury-rigs."},
     {"code": "hacking", "name": "Hacking / Systems", "category": "craft", "attribute": "intelligence", "secondary": "dexterity", "tags": ["console", "network", "code"], "base_dc": 14, "description": "Consoles, networks, access codes (sci-fi / system worlds)."},
     {"code": "vehicles", "name": "Vehicles / Piloting", "category": "craft", "attribute": "dexterity", "secondary": "intelligence", "tags": ["drive", "pilot", "ride"], "base_dc": 12, "description": "Carts, mounts, bikes, ships, craft."},
     {"code": "navigation", "name": "Navigation", "category": "craft", "attribute": "wisdom", "secondary": "intelligence", "tags": ["map", "stars", "route"], "base_dc": 12, "description": "Maps, stars, route planning, dead reckoning."},
+    {"code": "cartography", "name": "Cartography", "category": "craft", "attribute": "intelligence", "secondary": "wisdom", "tags": ["map", "sketch", "survey"], "base_dc": 13, "description": "Drawing maps, surveying landmarks, correcting charts."},
     # Combat
     {"code": "melee", "name": "Melee", "category": "combat", "attribute": "strength", "secondary": "dexterity", "tags": ["blade", "brawl", "strike"], "base_dc": 12, "description": "Close combat attacks and contests."},
     {"code": "ranged", "name": "Ranged", "category": "combat", "attribute": "dexterity", "secondary": "wisdom", "tags": ["bow", "gun", "throw"], "base_dc": 12, "description": "Bows, thrown weapons, firearms if present."},
@@ -69,6 +78,15 @@ BUILTIN_SKILLS: list[dict[str, Any]] = [
     {"code": "hazard", "name": "Hazard Avoidance", "category": "event", "attribute": "dexterity", "secondary": "wisdom", "tags": ["trap", "collapse", "spill"], "base_dc": 13, "description": "Traps, collapses, sudden environmental danger."},
     {"code": "discovery", "name": "Discovery", "category": "event", "attribute": "intelligence", "secondary": "wisdom", "tags": ["find", "ruin", "cache"], "base_dc": 13, "description": "Finding hidden places, caches, or story hooks while exploring."},
     {"code": "omen", "name": "Omen Reading", "category": "event", "attribute": "wisdom", "secondary": "intelligence", "tags": ["omen", "dream", "sign"], "base_dc": 14, "description": "Interpreting omens, dreams, and diegetic system signs."},
+    # Occult / support (for wild seed domains that graduate into catalog skills)
+    {"code": "healing", "name": "Healing Arts", "category": "physical", "attribute": "wisdom", "secondary": "intelligence", "tags": ["heal", "triage", "bandage", "support"], "base_dc": 13, "description": "Stabilizing wounds, triage, field medicine, recovery rites."},
+    {"code": "support", "name": "Support Craft", "category": "social", "attribute": "wisdom", "secondary": "charisma", "tags": ["buff", "rally", "aid", "cover"], "base_dc": 12, "description": "Rallying allies, covering, pacing a fight, non-damage help."},
+    {"code": "summoning", "name": "Summoning", "category": "mental", "attribute": "charisma", "secondary": "wisdom", "tags": ["summon", "spirit", "pact", "call"], "base_dc": 14, "description": "Calling minor spirits, familiars, or bound helpers."},
+    {"code": "necromancy", "name": "Necromancy", "category": "mental", "attribute": "intelligence", "secondary": "wisdom", "tags": ["undead", "bone", "grave", "soul"], "base_dc": 15, "description": "Grave rites, bone sense, restless dead, soul residue."},
+    {"code": "exorcism", "name": "Exorcism", "category": "mental", "attribute": "wisdom", "secondary": "charisma", "tags": ["banish", "cleanse", "ward", "spirit"], "base_dc": 14, "description": "Driving out unclean presence, blessing, salt and prayer."},
+    {"code": "alchemy", "name": "Alchemy", "category": "craft", "attribute": "intelligence", "secondary": "dexterity", "tags": ["potion", "reagent", "brew"], "base_dc": 14, "description": "Brews, reagents, unstable mixtures, antidotes."},
+    {"code": "ritual", "name": "Ritual", "category": "mental", "attribute": "intelligence", "secondary": "wisdom", "tags": ["circle", "rite", "ceremony"], "base_dc": 14, "description": "Circles, ceremonies, multi-step magical procedures."},
+    {"code": "weapon_art", "name": "Weapon Art", "category": "combat", "attribute": "dexterity", "secondary": "strength", "tags": ["weapon", "form", "kata", "style"], "base_dc": 13, "description": "Specialized forms bound to a weapon type or named blade."},
     {"code": "luck", "name": "Luck", "category": "general", "attribute": "charisma", "secondary": "wisdom", "tags": ["chance", "fate", "gamble"], "base_dc": 12, "description": "Pure chance when no skill cleanly applies."},
     {"code": "general", "name": "General Check", "category": "general", "attribute": "intelligence", "secondary": "wisdom", "tags": ["any", "fallback"], "base_dc": 12, "description": "Fallback when no specialized skill fits."},
 ]
@@ -113,7 +131,8 @@ def _codeify(name: str) -> str:
 
 def default_check_settings() -> dict[str, Any]:
     return {
-        "dice_checks_enabled": False,
+        # On by default so talk/sneak/force actions get server-side rolls.
+        "dice_checks_enabled": True,
         "dice_sides": 20,
         "check_difficulty": "normal",
         "show_rolls_in_ui": True,
@@ -136,6 +155,8 @@ def default_check_settings() -> dict[str, Any]:
         "unskilled_rank_threshold": 1,
         "severe_mishap_on_crit_fail": True,
         "auto_check_on_risky_actions": True,
+        # Always attempt a social reaction when the player opens talk
+        "auto_social_on_talk": True,
         "degree_flavor": True,
         "append_roll_to_narration": False,
     }
@@ -818,8 +839,92 @@ def resolve_check(
     }
 
 
+def _npc_pool_from_context(ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    pool: list[dict[str, Any]] = []
+    for n in ctx.get("npcs") or []:
+        if isinstance(n, dict):
+            pool.append(n)
+    loc = ctx.get("current_location") or {}
+    if isinstance(loc, dict):
+        for n in loc.get("npcs") or []:
+            if isinstance(n, dict):
+                pool.append(n)
+    for location in ctx.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        if loc.get("id") is not None and location.get("id") != loc.get("id"):
+            continue
+        for n in location.get("npcs") or []:
+            if isinstance(n, dict):
+                pool.append(n)
+    # de-dupe by code/name
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for n in pool:
+        key = str(n.get("code") or n.get("name") or id(n))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+    return out
+
+
+def social_attitude_from_check(
+    outcome: str,
+    npc: dict[str, Any] | None = None,
+) -> str:
+    """
+    Map social check result + NPC temperament to a reaction label.
+    Labels: Warm, Cordial, Neutral, Dismissive, Apprehensive, Condescending,
+    Antagonistic, Hostile — not spoken as system titles, for DM direction only.
+    """
+    npc = npc if isinstance(npc, dict) else {}
+    base = str(npc.get("attitude") or "neutral").lower()
+    personality = " ".join(
+        str(npc.get(k) or "") for k in ("personality", "principles", "dislikes", "likes", "role")
+    ).lower()
+    rank = outcome if outcome in OUTCOME_RANK else "failure"
+
+    proud = any(w in personality for w in ("proud", "noble", "arrogant", "court", "reeve", "elder", "chief"))
+    fearful = any(w in personality for w in ("fear", "timid", "anxious", "nervous", "wary"))
+    kind = any(w in personality for w in ("kind", "warm", "gentle", "helpful"))
+    hostile_base = base in {"hostile", "antagonistic", "angry"} or str(npc.get("attitude") or "") == "hostile"
+
+    if rank in {"critical_success", "success"}:
+        if hostile_base:
+            return "Apprehensive"
+        if proud:
+            return "Cordial"
+        if kind:
+            return "Warm"
+        return "Cordial" if rank == "critical_success" else "Neutral"
+    if rank == "partial":
+        if proud:
+            return "Condescending"
+        if fearful:
+            return "Apprehensive"
+        if hostile_base:
+            return "Dismissive"
+        return "Dismissive"
+    # failure / critical_failure
+    if rank == "critical_failure":
+        if proud:
+            return "Antagonistic"
+        if fearful:
+            return "Hostile" if hostile_base else "Apprehensive"
+        return "Hostile" if hostile_base else "Antagonistic"
+    # plain failure
+    if proud:
+        return "Condescending"
+    if fearful:
+        return "Apprehensive"
+    if hostile_base:
+        return "Hostile"
+    return "Dismissive"
+
+
 def infer_check_from_action(player_input: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
-    """Pick a skill code + optional opposition for auto-checks on risky actions."""
+    """Pick a skill code + optional opposition for auto-checks on player actions."""
     text = (player_input or "").lower()
     if not text or text.startswith("__"):
         return None
@@ -827,17 +932,51 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         (r"\b(attack|strike|slash|stab|swing|fight|melee)\b", "melee"),
         (r"\b(shoot|fire|bow|gun|throw)\b", "ranged"),
         (r"\b(sneak|hide|stealth|creep)\b", "stealth"),
-        (r"\b(persuade|convince|speech|talk down|negotiate)\b", "persuasion"),
+        (r"\b(persuade|convince|negotiate)\b", "persuasion"),
+        (r"\b(bargain|haggle|price|appraise|value of|worth)\b", "appraise"),
+        # Opening speech / ask / talk → charisma-backed persuasion
+        (r"\b(talk|speak|ask|greet|address|approach .+ (and )?(talk|ask|speak)|say (hello|hi)|introduce)\b", "persuasion"),
         (r"\b(lie|bluff|deceive|con)\b", "deception"),
         (r"\b(intimidate|threaten|scare)\b", "intimidation"),
+        (r"\b(disguise|costume|impersonat|pretend to be)\b", "disguise"),
+        (r"\b(gambl|bet|wager|cards|dice game)\b", "gambling"),
         (r"\b(symbol|rune|glyph|sigil|etch)\b", "symbol_lore"),
         (r"\b(read|inspect|examine|study|analyze)\b", "investigation"),
-        (r"\b(search|look for|scan)\b", "perception"),
+        (r"\b(search|look for|scan|look around)\b", "perception"),
         (r"\b(climb|jump|swim|lift|force|break|bash)\b", "athletics"),
         (r"\b(lock|pick the|unlock)\b", "lockpicking"),
-        (r"\b(heal|bandage|medicine|first aid)\b", "medicine"),
+        (r"\b(heal|bandage|medicine|first aid|triage|splint)\b", "healing"),
+        (r"\b(rally|cover (me|them|him|her)|support (ally|friend)|buff)\b", "support"),
+        (r"\b(summon|call (a |the )?(spirit|familiar|demon)|pact)\b", "summoning"),
+        (r"\b(necro|undead|bone (rite|command)|raise (dead|skeleton)|grave rite)\b", "necromancy"),
+        (r"\b(exorc|banish|cleanse spirit|salt circle)\b", "exorcism"),
+        (r"\b(alchem|brew potion|reagent|tincture)\b", "alchemy"),
+        (r"\b(ritual|draw (a )?circle|ceremony)\b", "ritual"),
+        (r"\b(weapon art|kata|form with (my |the )?(sword|spear|bow|axe))\b", "weapon_art"),
+        (r"\b(medicine|first aid kit)\b", "medicine"),
         (r"\b(hack|console|terminal|decrypt)\b", "hacking"),
         (r"\b(track|forage|camp|survive)\b", "survival"),
+        (r"\b(cook|meal|food|stew|roast)\b", "cooking"),
+        (r"\b(smith|forge|anvil|temper)\b", "smithing"),
+        (r"\b(animal|mount|horse|herd|tame|calm the)\b", "animal_handling"),
+        (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
+        (r"\b(mine|ore|tunnel|dig (for|out|a))\b", "mining"),
+        (r"\b(map|chart|survey|cartograph)\b", "cartography"),
+        (r"\b(navigat|stars|compass|bearing|dead reckon)\b", "navigation"),
+        (r"\b(tinker|gadget|mechanism|jury[- ]?rig)\b", "tinkering"),
+        (r"\b(drive|pilot|steer|sail)\b", "vehicles"),
+        (r"\b(history|lineage|old war|who ruled)\b", "history"),
+        (r"\b(nature|plant|beast ecology|weather pattern)\b", "nature"),
+        (r"\b(religion|rite|omen|prayer|cult)\b", "religion"),
+        (r"\b(arcana|magic theory|ward|spell residue)\b", "arcana"),
+        (r"\b(performance|sing|song|act|storytell)\b", "performance"),
+        (r"\b(etiquette|court manners|protocol|formal address)\b", "etiquette"),
+        (r"\b(streetwise|fence|underworld|gang rumor)\b", "streetwise"),
+        (r"\b(insight|read (him|her|them|the room)|sense motive)\b", "insight"),
+        (r"\b(acrobatics|balance|tumble|tightrope)\b", "acrobatics"),
+        (r"\b(sleight|pickpocket|palm|switch the)\b", "sleight_of_hand"),
+        (r"\b(tactics|ambush plan|formation)\b", "tactics"),
+        (r"\b(defense|parry|block|guard up)\b", "defense"),
     ]
     skill = None
     for pattern, code in pairs:
@@ -848,11 +987,13 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         return None
     opposition: dict[str, Any] = {}
     ctx = context or {}
+    matched_npc: dict[str, Any] | None = None
     # Prefer combat target / local NPC as opposition when present.
     mech = ctx.get("mechanics_context") if isinstance(ctx.get("mechanics_context"), dict) else {}
     combat = mech.get("combat") if isinstance(mech.get("combat"), dict) else {}
     target = combat.get("target") if isinstance(combat.get("target"), dict) else None
     if target:
+        matched_npc = target
         opposition = {
             "name": target.get("name") or "foe",
             "rank": target.get("rank"),
@@ -862,21 +1003,57 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
             "power": target.get("attack_max") or target.get("power"),
         }
     else:
-        for npc in (ctx.get("npcs") or [])[:6]:
-            if isinstance(npc, dict) and npc.get("name") and str(npc.get("name")).lower() in text:
+        for npc in _npc_pool_from_context(ctx)[:12]:
+            name = str(npc.get("name") or "").lower()
+            code = str(npc.get("code") or "").lower()
+            if name and (name in text or (code and code in text)):
+                matched_npc = npc
                 opposition = {
                     "name": npc.get("name"),
                     "rank": npc.get("rank"),
                     "stats": npc.get("stat_profile") or {},
                     "defense": npc.get("defense"),
+                    "attitude": npc.get("attitude"),
+                    "presence": npc.get("presence"),
+                    "power_rank": npc.get("power_rank"),
                 }
                 break
+        # Talk with no named target: use nearest local as soft opposition for DC color
+        if not matched_npc and skill in {"persuasion", "deception", "intimidation", "insight", "etiquette"}:
+            locals_ = _npc_pool_from_context(ctx)
+            if locals_:
+                matched_npc = locals_[0]
+                opposition = {
+                    "name": matched_npc.get("name"),
+                    "rank": matched_npc.get("rank"),
+                    "stats": matched_npc.get("stat_profile") or {},
+                    "attitude": matched_npc.get("attitude"),
+                }
     weapon = ""
     for w in ("sword", "axe", "spear", "dagger", "bow", "rifle", "hammer", "staff", "blade"):
         if w in text:
             weapon = w
             break
-    return {"skill_code": skill, "opposition": opposition or None, "weapon_or_tool": weapon}
+    return {
+        "skill_code": skill,
+        "opposition": opposition or None,
+        "weapon_or_tool": weapon,
+        "social": skill in {"persuasion", "deception", "intimidation", "insight", "etiquette", "performance", "streetwise"},
+        "npc_ref": {
+            "code": (matched_npc or {}).get("code"),
+            "name": (matched_npc or {}).get("name"),
+            "attitude": (matched_npc or {}).get("attitude"),
+            "personality": (matched_npc or {}).get("personality"),
+            "role": (matched_npc or {}).get("role"),
+            "presence": (matched_npc or {}).get("presence"),
+            "power_rank": (matched_npc or {}).get("power_rank"),
+            "principles": (matched_npc or {}).get("principles"),
+            "dislikes": (matched_npc or {}).get("dislikes"),
+            "likes": (matched_npc or {}).get("likes"),
+        }
+        if matched_npc
+        else None,
+    }
 
 
 def apply_check_to_turn(turn: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
@@ -965,6 +1142,7 @@ def gm_context_block(settings: dict[str, Any] | None, library: list[dict[str, An
         "custom_check_notes": cfg.get("custom_check_notes") or "",
         "rules": [
             "When a check matters (inspect symbols, force a door, talk down a guard), call for a skill check by code.",
+            "Vary skill codes across scenes: do not collapse every social beat to insight/deception or every craft beat to rope/knots/fabric. Prefer the most specific catalog skill (cooking, smithing, navigation, appraise, animal_handling, mining, cartography, etc.).",
             "If the linked attribute is low but a specialized skill rank is present, prefer partial success with incomplete info rather than total blank.",
             "On failure/critical failure with negative_outcomes, apply a concrete setback (wrong reading, alarm, injury risk, lost time, burned favor).",
             "New skills discovered in play should be registered and compared to similar catalog skills for DC balance.",

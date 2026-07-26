@@ -49,6 +49,12 @@ def init_db() -> None:
                 xp INTEGER NOT NULL,
                 gold INTEGER NOT NULL,
                 karma INTEGER NOT NULL DEFAULT 0,
+                energy INTEGER NOT NULL DEFAULT 20,
+                max_energy INTEGER NOT NULL DEFAULT 20,
+                mana INTEGER NOT NULL DEFAULT 0,
+                max_mana INTEGER NOT NULL DEFAULT 0,
+                fatigue INTEGER NOT NULL DEFAULT 0,
+                max_fatigue INTEGER NOT NULL DEFAULT 20,
                 public_name TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 age TEXT NOT NULL DEFAULT '',
@@ -167,6 +173,7 @@ def init_db() -> None:
                 prerequisites TEXT NOT NULL DEFAULT '',
                 growth_math TEXT NOT NULL DEFAULT '',
                 additions TEXT NOT NULL DEFAULT '',
+                resource_cost TEXT NOT NULL DEFAULT '{}',
                 source TEXT NOT NULL DEFAULT 'setup'
             );
 
@@ -471,6 +478,12 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("attack_max", "INTEGER NOT NULL DEFAULT 0"),
         ("defense", "INTEGER NOT NULL DEFAULT 0"),
         ("dodge", "INTEGER NOT NULL DEFAULT 0"),
+        # full | event_worthy | nameless | background
+        ("presence", "TEXT NOT NULL DEFAULT 'full'"),
+        # 0–100 social/military power in a place (higher = more power)
+        ("power_rank", "INTEGER NOT NULL DEFAULT 10"),
+        ("portrait_eligible", "INTEGER NOT NULL DEFAULT 1"),
+        ("shell", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
@@ -478,6 +491,16 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     player_columns = table_columns["player"]
     if "karma" not in player_columns:
         conn.execute("ALTER TABLE player ADD COLUMN karma INTEGER NOT NULL DEFAULT 0")
+    for column, definition in (
+        ("energy", "INTEGER NOT NULL DEFAULT 20"),
+        ("max_energy", "INTEGER NOT NULL DEFAULT 20"),
+        ("mana", "INTEGER NOT NULL DEFAULT 0"),
+        ("max_mana", "INTEGER NOT NULL DEFAULT 0"),
+        ("fatigue", "INTEGER NOT NULL DEFAULT 0"),
+        ("max_fatigue", "INTEGER NOT NULL DEFAULT 20"),
+    ):
+        if column not in player_columns:
+            conn.execute(f"ALTER TABLE player ADD COLUMN {column} {definition}")
     for column, default in (
         ("public_name", "''"),
         ("title", "''"),
@@ -505,10 +528,23 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         if column not in event_columns:
             conn.execute(f"ALTER TABLE events ADD COLUMN {column} {definition}")
 
+    # World-event bus columns (walk ambushes, quest stages, forced portals, etc.)
+    gm_cols = {row["name"] for row in conn.execute("PRAGMA table_info(gm_events)").fetchall()}
+    for column, definition in (
+        ("kind", "TEXT NOT NULL DEFAULT ''"),
+        ("due_turn", "INTEGER NOT NULL DEFAULT 0"),
+        ("force", "INTEGER NOT NULL DEFAULT 0"),
+        ("payload", "TEXT NOT NULL DEFAULT '{}'"),
+    ):
+        if column not in gm_cols:
+            conn.execute(f"ALTER TABLE gm_events ADD COLUMN {column} {definition}")
+
     ability_columns = table_columns["abilities"]
     for column in ("base_description", "cost", "prerequisites", "growth_math", "additions"):
         if column not in ability_columns:
             conn.execute(f"ALTER TABLE abilities ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
+    if "resource_cost" not in ability_columns:
+        conn.execute("ALTER TABLE abilities ADD COLUMN resource_cost TEXT NOT NULL DEFAULT '{}'")
 
     inventory_columns = table_columns["inventory"]
     for column, definition in (

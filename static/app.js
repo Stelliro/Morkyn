@@ -1,3 +1,25 @@
+/**
+ * Browser pages on http:// may not load or link to file:// (or bare Windows paths).
+ * Only allow http(s), blob, data, or root-relative app URLs.
+ */
+function isBrowserSafeMediaUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw) return false;
+  if (raw.startsWith("data:") || raw.startsWith("blob:")) return true;
+  if (raw.startsWith("/") && !raw.startsWith("//")) return true;
+  try {
+    const u = new URL(raw, window.location.origin);
+    if (u.protocol === "http:" || u.protocol === "https:") return true;
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+function safeMediaUrl(url, fallback = "") {
+  return isBrowserSafeMediaUrl(url) ? String(url).trim() : fallback;
+}
+
 const setupView = document.querySelector("#setupView");
 const gameView = document.querySelector("#gameView");
 const mainMenuView = document.querySelector("#mainMenuView");
@@ -26,6 +48,15 @@ const turnForm = document.querySelector("#turnForm");
 const turnInput = document.querySelector("#turnInput");
 const sendButton = document.querySelector("#sendButton");
 const continueButton = document.querySelector("#continueButton");
+const waitButton = document.querySelector("#waitButton");
+const waitPopover = document.querySelector("#waitPopover");
+const worldTimeLine = document.querySelector("#worldTimeLine");
+const weatherLine = document.querySelector("#weatherLine");
+const areaRepLine = document.querySelector("#areaRepLine");
+const socialChoiceBar = document.querySelector("#socialChoiceBar");
+const socialChoiceLabel = document.querySelector("#socialChoiceLabel");
+const socialWalkAwayBtn = document.querySelector("#socialWalkAwayBtn");
+const socialPersistBtn = document.querySelector("#socialPersistBtn");
 const suggestButton = document.querySelector("#suggestButton");
 const suggestionPanel = document.querySelector("#suggestionPanel");
 const suggestionsEl = document.querySelector("#suggestionList");
@@ -54,6 +85,8 @@ const abilityList = document.querySelector("#abilityList");
 const addAbilityButton = document.querySelector("#addAbilityButton");
 const randomAbilityButton = document.querySelector("#randomAbilityButton");
 const lockAbilityCount = document.querySelector("#lockAbilityCount");
+const abilityCountMinInput = document.querySelector("#abilityCountMin");
+const abilityCountMaxInput = document.querySelector("#abilityCountMax");
 const systemOptions = document.querySelector("#systemOptions");
 const formerLifeIdentity = document.querySelector("#formerLifeIdentity");
 const entityMenu = document.querySelector("#entityMenu");
@@ -77,7 +110,7 @@ const startSplashPhase = document.querySelector("#startSplashPhase");
 const startSplashDraft = document.querySelector("#startSplashDraft");
 
 let state = null;
-let activeTab = "player";
+let activeTab = "character";
 let selectedEntity = null;
 let bible = null;
 let searchResults = null;
@@ -140,7 +173,10 @@ const OPTIONAL_IDENTITY_FILL_CHANCE = {
   player_public_name: 0.22,
   player_title: 0.14,
 };
-const ABILITY_ORIGINS = new Set(["none", "acquired", "innate"]);
+const ABILITY_ORIGINS = new Set(["none", "acquired", "innate", "both"]);
+const ABILITY_COUNT_MIN_DEFAULT = 1;
+const ABILITY_COUNT_MAX_DEFAULT = 4;
+const ABILITY_COUNT_HARD_MAX = 4;
 
 const RANDOM_SETUP = {
   player_name: ["Wanderer", "Mara", "Corvin", "Iris Vale", "Ren", "Sable", "Tamsin", "Kael"],
@@ -165,7 +201,7 @@ const RANDOM_SETUP = {
     "sexless or constructed",
     "varies by form",
   ],
-  special_ability_origin: ["none", "acquired", "innate"],
+  special_ability_origin: ["none", "acquired", "innate", "both"],
   backstory_mode: ["known", "hidden", "fragmented memories", "reincarnated", "transmigrated", "nameless drifter"],
   memory_policy: ["known", "ordinary memory", "details emerge through choices", "rumors may be wrong", "private details stay private", "remembers former life", "former life fragments"],
   character_backstory: [
@@ -175,24 +211,57 @@ const RANDOM_SETUP = {
     "Born on the edge of a company town, they were trained young to weigh ore, settle shift disputes, and keep peace between hungry workers and richer overseers. They arrived at the starting point after their home contract collapsed, with a known name among laborers, a practical distrust of nobles, and a short list of people who may blame them for surviving.",
     "They remember being born somewhere else entirely: a quiet apartment, a locked office job, and a fatal accident on a rain-slick road. This new body has its own calluses and local debts, so the player begins with two lives worth of instincts but only fragments of why this world's people already seem to expect something from them.",
   ],
-  hair: ["short brown hair", "long silver braid", "messy black hair", "cropped sandy hair", "wavy auburn hair"],
+  hair: [
+    "short brown hair",
+    "long black braid",
+    "messy copper curls",
+    "cropped black hair",
+    "shoulder-length ash blonde",
+    "tight cornrows",
+    "bald with stubble shadow",
+    "white undercut",
+    "wavy auburn hair",
+    "chin-length dark hair",
+    "high ponytail, black",
+    "salt-and-pepper buzz cut",
+    "long red waves",
+    "short green-dyed tips",
+    "neat side part, brown",
+    "messy silver fringe",
+  ],
   facial_features: [
     "green eyes, light freckles, soft jaw",
     "dark brown eyes, thin scar on left cheek",
-    "grey eyes, tired lids, square jaw",
+    "amber eyes, high cheekbones, crooked smile",
+    "blue-grey eyes, deep-set, narrow nose",
+    "black eyes, round face, small burn near temple",
     "hazel eyes, faint laugh lines, straight nose",
+    "pale blue eyes, freckled bridge, soft mouth",
+    "gold-flecked brown eyes, thick brows, cleft chin",
+    "one cloudy eye, sharp cheekbones, thin lips",
+    "warm brown eyes, full cheeks, broken nose healed",
+    "violet contacts, painted freckles, pointed chin",
+    "green-brown eyes, deep laugh creases, strong brow",
   ],
   appearance: [
     "torso: travel-stained coat; feet: dusty boots; waist: rope coil",
-    "torso: plain work tunic; torso: leather apron; hands: work gloves; feet: practical boots",
+    "torso: plain work tunic; hands: work gloves; feet: practical boots",
     "torso: frayed cloak; legs: patched trousers; bag: worn satchel",
     "torso: simple street clothes; feet: cheap shoes; bag: thin travel bag",
+    "torso: secondhand hoodie; feet: scuffed sneakers; bag: messenger bag",
+    "torso: canvas jacket; waist: tool belt; feet: steel-toe boots",
+    "torso: rain cloak; legs: oilcloth trousers; bag: waterproof pack",
+    "torso: formal vest over shirt; feet: polished but cracked shoes",
+    "torso: hospital scrubs under coat; feet: soft shoes; bag: medical pouch",
+    "torso: quilted work vest; hands: fingerless gloves; feet: trail boots",
   ],
   starter_equipment: [
     "worn coat, coiled rope, pocket knife, dusty boots, water skin, 3 days rations",
     "plain clothes, work gloves, small tool pouch, practical boots, copper coins",
     "travel cloak, empty satchel, wooden charm, heel of bread",
     "secondhand jacket, notebook stub, stub of chalk, water flask",
+    "canvas bag, multi-tool, duct tape roll, cheap flashlight, snacks",
+    "rain cloak, fishing line, tin cup, flint kit, dried fish",
   ],
   skill_style: ["standard", "generous", "training-heavy", "strict"],
   proficiency_access: ["learned", "familiar actions free", "only expert tasks require training"],
@@ -266,9 +335,47 @@ const RANDOM_SETUP = {
 };
 
 const GROWTH_MATH_SAMPLES = [
-  "rank F→E@80 E→D@200 D→C@450 C→B@900; domain use 5-12 skill XP × risk (1 safe/2 contested/3 life-risk); XP_to_next = 50 * rank_index^1.4; after C practice XP ×0.5 until mentor breakthrough; +1 domain check per rank above F",
+  "OP seed: F→E@60 E→D@140 D→C@320 C→B@700 B→A@1500 A→S@3200 S→SS@7000 SS→SSS@15000; use 6-14 XP × risk (1/2/3/5 life-or-domain); XP_to_next = 40 * rank_index^1.55; after each letter-band soft cap ×0.55 until contested breakthrough; effect mult ≈ 1.22^ranks_above_F (stacks); rank check +1 per rank; late S+ unlocks domain passives",
   "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success ×2; soft cap at L6 (XP ×0.6 until setback recovery); effect magnitude +8% per level",
-  "thresholds F0 E100 D250 C500 B1000 A2000 S4000; practice 4 XP, contested 10, mentor drill 15; rank bonus +1 check / +5% effect; breakthrough needed after B",
+  "thresholds F0 E100 D250 C500 B1000 A2000 S4000 SS9000 SSS20000; practice 5 XP, contested 12, mentor 18, life-risk 25; rank +1 check / +12–20% effect compound; breakthrough after B and again after A before S-tier; passive auras unlock at C/A/S",
+];
+
+const POWER_GROWTH_TYPES = [
+  {
+    id: "compounding",
+    label: "Compounding",
+    tip: "Weak at F; each rank multiplies effect toward late OP (S/SS/SSS). Soft caps + breakthroughs keep early fair.",
+  },
+  {
+    id: "passive",
+    label: "Passive",
+    tip: "Always-on aura/trait (no activate cost). Can still rank up; weaker at start, stronger as the MC evolves.",
+  },
+  {
+    id: "linear",
+    label: "Linear",
+    tip: "Steady +check or +% per rank. Easy to balance; less explosive late game.",
+  },
+  {
+    id: "soft_cap",
+    label: "Soft-cap",
+    tip: "Normal growth until mid ranks, then XP slows hard until a mentor/story breakthrough.",
+  },
+  {
+    id: "breakthrough",
+    label: "Breakthrough",
+    tip: "Plateaus until a narrative beat; then a jump in rank/effect. Story-gated power.",
+  },
+  {
+    id: "flat",
+    label: "Flat",
+    tip: "No rank ladder — fixed talent or one-shot gift. Use for non-scaling powers.",
+  },
+  {
+    id: "item_bound",
+    label: "Item-bound",
+    tip: "Grows only while linked gear is worn/used; unequip freezes progress.",
+  },
 ];
 
 const ABILITY_PRESETS = [
@@ -420,59 +527,90 @@ let lastComposeIntent = null;
 let lastSessionTheme = null;
 
 /**
- * One-click director seeds for Randomize.
- * Labels stay short and plain; `idea` steers compose + field rolls (max ~400 chars).
+ * Director / vibe presets.
+ * Each preset has two LLM steers so Simple and Advanced Randomize stay stable:
+ * - simple_idea: short, same pipeline, fewer visible fields
+ * - advanced_idea: full composer steer (was formerly `idea`)
+ * Built-ins are not deletable; user presets live in localStorage.
  */
-const DIRECTOR_PRESETS = [
+const DIRECTOR_PRESETS_BUILTIN = [
   {
-    id: "one_skill",
-    label: "One Skill",
-    idea:
-      "Hardcore single-skill isekai: ordinary person with exactly one weak compounding skill/ability (domain varies—not weather/observation by default). Put calculable growth math on the ability Growth Math box (XP curves, rank thresholds, risk mult, soft caps, rank→bonus). Custom skills hold seed/tracking/limits fiction. Soft caps, no second combat toolkit. Local stakes, subtle UI, fair DM.",
+    id: "op_mc",
+    // legacy alias: older UI/localStorage used one_skill
+    aliases: ["one_skill"],
+    label: "OP MC",
+    builtin: true,
+    simple_idea:
+      "OP MC seed: start ordinary with one weak compounding power that can snowball into late-game OP (S/SS/SSS). Growth Math must make that path calculable. Passives allowed. More powers can unlock later — not stuck at one forever. Local stakes early, fair DM, no free second combat kit at start.",
+    advanced_idea:
+      "OP MC fantasy (isekai-friendly): ordinary person starts with exactly one weak seed power that compounds and evolves into something genuinely strong later (domain varies—not weather/observation by default). Put calculable Growth Math on the seed (XP curves through F→…→S/SS/SSS, risk mult, soft caps, breakthroughs, rank→bonus, late multipliers). Custom skills hold seed fiction, tracking, and limits — not a permanent one-skill ban. May gain more powers and passives through play (training, quests, breakthroughs); only the opening kit is thin. Passiveives are first-class (always-on ranks). Soft caps early, fair DM, local stakes; no free second combat toolkit at Start.",
   },
   {
     id: "fantasy",
     label: "Fantasy",
-    idea:
+    builtin: true,
+    simple_idea:
+      "Classic fantasy RPG: kingdoms, roads, ruins, workable magic. Balanced difficulty, local quests that can scale.",
+    advanced_idea:
       "Classic fantasy RPG: kingdoms, roads, ruins, and workable magic. Balanced difficulty; adventure and discovery; clear rules without loud game-UI; neither grimdark nor pure cozy. Local quests that can scale.",
   },
   {
     id: "cyberpunk",
     label: "Cyberpunk",
-    idea:
+    builtin: true,
+    simple_idea:
+      "Near-future cyberpunk: corps, street work, chrome, debt. Hard-normal; tech and social leverage; noir jobs.",
+    advanced_idea:
       "Near-future cyberpunk RPG: megacorps, street work, chrome, and debt. Hard-normal difficulty; tech and social leverage over magic; noir tone; jobs stay local until they touch bigger systems.",
   },
   {
     id: "adventurers",
     label: "Adventurers",
-    idea:
+    builtin: true,
+    simple_idea:
+      "Classic tabletop fantasy: dungeons, wilderness, factions. Fair challenge; loot and levels matter.",
+    advanced_idea:
       "Tabletop-campaign fantasy in the spirit of classic D&D: dungeons, wilderness, factions, and party roles in the world. Fair challenge, loot and levels matter, quest hooks without video-game menus.",
   },
   {
     id: "iron_front",
     label: "Iron Front",
-    idea:
+    builtin: true,
+    simple_idea:
+      "War-scarred grim setting: faith, heresy, scarce trust. Hard difficulty; survival over glory.",
+    advanced_idea:
       "War-scarred grim setting in a Warhammer vein: faith, heresy, brutal infantry, scarce trust. Hard difficulty; horror and attrition; loyalty and survival over glory; no power fantasy.",
   },
   {
     id: "court",
     label: "Court",
-    idea:
+    builtin: true,
+    simple_idea:
+      "Political intrigue: salons, succession, blackmail. Low open combat; reputation drives play.",
+    advanced_idea:
       "Political intrigue RPG: salons, succession, blackmail, soft power. Low open combat; reputation and leverage drive play; normal difficulty; every public move has consequences.",
   },
   {
     id: "frontier",
     label: "Frontier",
-    idea:
+    builtin: true,
+    simple_idea:
+      "Remote frontier: thin law, weather, supply, small settlements. Survival first; modest magic.",
+    advanced_idea:
       "Remote frontier RPG: thin law, weather, supply, and small settlements. Survival and craft first; modest magic if any; hard-normal difficulty; community stakes over empire plots.",
   },
   {
     id: "depth",
     label: "Depths",
-    idea:
+    builtin: true,
+    simple_idea:
+      "Underworld delves: rival crews, light and resources. Hard-normal; discoveries cost blood.",
+    advanced_idea:
       "Underworld and dungeon-depth RPG: delves, rival crews, ancient pressure. Resource and light management; hard-normal difficulty; discoveries cost blood; surface politics stay distant until they don't.",
   },
 ];
+
+const PRESETS_STORAGE_KEY = "morkyn-director-presets-v1";
 
 const SETTING_INFO = {
   player_name: {
@@ -501,7 +639,7 @@ const SETTING_INFO = {
     customPlaceholder: "Example: different from current body, unknown, not applicable",
   },
   special_ability_origin: {
-    description: "Controls whether setup defines no special abilities, abilities acquired through play, or innate abilities the character starts with.",
+    description: "None = no special powers. Acquired = learned/earned in play (usually locked). Innate = inborn and usable at start. Both = mix of acquired and innate per ability.",
   },
   backstory_mode: {
     description: "Controls how much of the character's past is known at the start and how carefully the model should reveal it.",
@@ -539,6 +677,9 @@ const SETTING_INFO = {
   },
   skill_levels_enabled: {
     description: "When on, individual skills can level up over time. When off, skills behave more like unlocked proficiencies.",
+  },
+  dice_checks_enabled: {
+    description: "When on, speech, strength, lore, events, and encounters can use dice. When off, the DM stays pure narrative.",
   },
   new_skill_frequency: {
     description: "Controls how often the player can discover or gain entirely new skills.",
@@ -720,18 +861,25 @@ const ACTION_HELP_TARGETS = [
   ["#setupModelButton", "Open the local LLM connection settings used for setup randomization, AI text fill, suggestions, and gameplay turns."],
   ["#saveSetupSettings", "Download the current setup form, ability cards, locks, and custom rules as a reusable JSON settings file."],
   ["#loadSetupSettingsButton", "Load a previously saved setup settings JSON file back into the setup form."],
-  ["#randomizeSetup", "Randomize the whole setup in dependency order. Locked fields are skipped. Optional idea box beside it steers the overall concept."],
-  ["#randomizeSetupPrompt", "Optional. Describe the kind of run you want (tone, genre, hook). Full Randomize uses this as overall intent while still filling each field."],
-  ["#directorPresets", "Director seeds: one-click genre templates (One Skill, Fantasy, Cyberpunk, Adventurers…). Fills the idea box and runs Randomize."],
+  ["#randomizeSetup", "Opens the Randomize idea box. Nothing is rolled until you press Confirm randomize. Locked fields are skipped."],
+  ["#randomizeSetupPrompt", "Optional idea (tone, genre, hook). Used only when you Confirm randomize."],
+  ["#randomizePopoverConfirm", "Runs full setup Randomize using the idea above (and any selected director seed idea)."],
+  ["#simplePresetConfirmRandomize", "Runs full setup Randomize from the selected preset / Simple idea (same as Confirm in the Randomize box)."],
+  ["#advancedPresetConfirmRandomize", "Runs full setup Randomize from the selected director seed / Advanced idea."],
+  ["#directorPresets", "Director seeds: pick a vibe to fill the Randomize idea. Press Confirm randomize to apply a full roll."],
+  [".setupModeBtn", "Simple = short new-game form. Advanced = full multi-step board (everything you had before)."],
+  [".imageModeBtn", "Simple image = generate face/body from identity. Advanced = engine prompts, LoRAs, checkpoint, tests."],
   // Intent summary help is attached to the title in renderIntentSummary (not the whole bar).
   ["input[name='session_theme_model']", "Optional model for this playthrough only (Ollama tag, API model, or GGUF path). Wins over the adapter map. Save Model applies it; blank clears."],
   ["#setupStart", "Start the playthrough with the current setup and ask the LLM to write the opening scene before the player acts."],
   ["#setupPrev", "Move to the previous setup step without changing any filled values."],
   ["#setupNext", "Move to the next setup step. On the final step, this starts the playthrough."],
   ["#randomAbilityButton", "Randomize the Special Abilities list. If Lock Count is on, only ability contents change; the number of cards stays fixed."],
-  ["#addAbilityButton", "Add a blank ability card so you can define a starting power, locked future power, prerequisite, and cost."],
+  ["#addAbilityButton", "Add a blank ability card and expand it for editing. Randomized powers stay collapsed until you open them."],
   ["#sendButton", "Submit the typed player input. If the text box is empty, this acts as Continue and lets the LLM advance the scene."],
-  ["#continueButton", "Ask the LLM to continue the current scene without adding a player action."],
+  ["#continueButton", "Continue the scene without typing an action — the DM advances from the current moment."],
+  ["#undoTurnButton", "Undo the last turn (rewind to the previous snapshot)."],
+  ["#redoTurnButton", "Redo / re-roll the last turn narration (regenerate from the last input)."],
   ["#suggestButton", "Ask the LLM for three concise player-input suggestions based on the current scene and known world state."],
   ["#regenSuggestionsButton", "Regenerate the three suggestions, optionally using the instruction typed beside this button."],
   ["#newGameButton", "Return to setup so you can start a new playthrough. This does not erase exported files."],
@@ -783,6 +931,7 @@ const SETUP_STEP_HELP = [
 ];
 
 const TAB_HELP = {
+  character: "Full character sheet: art, stats, skills, abilities, and inventory together.",
   player: "Show player stats, identity, skills, abilities, karma, rewind points, and model budget info.",
   inventory: "Show carried items, equipped slots, weight, packed slots, rarity, enchantments, and storage pressure.",
   bible: "Show a compact world bible: active location, player summary, important NPCs, events, and journal highlights.",
@@ -794,6 +943,7 @@ const TAB_HELP = {
   events: "Browse tracked events, statuses, and links to locations or NPCs.",
   talk: "Browse summarized conversations with NPCs.",
   drafts: "Browse saved response-draft checks, DCs, verdicts, and verification notes.",
+  quests: "Mark quest stages and queue force beats. Stages fire on Continue / Wait / action when due.",
 };
 
 /** Play-mode tab categories for the side rail / dropdown nav */
@@ -803,7 +953,8 @@ const TAB_CATEGORIES = [
     label: "You",
     hint: "Self",
     tabs: [
-      { id: "player", label: "Player" },
+      { id: "character", label: "Character" },
+      { id: "player", label: "Stats" },
       { id: "inventory", label: "Inventory" },
     ],
   },
@@ -834,6 +985,7 @@ const TAB_CATEGORIES = [
     tabs: [
       { id: "search", label: "Find" },
       { id: "drafts", label: "Checks" },
+      { id: "quests", label: "Quests" },
       { id: "model", label: "LLM" },
     ],
   },
@@ -853,7 +1005,8 @@ const ABILITY_FIELD_HELP = {
   name: "The ability name shown in setup and later player records.",
   locked: "Unlocked abilities are usable at the start. Locked abilities exist in setup but require the listed condition before use.",
   description: "The immutable base description of what this ability does. The model may discover details later, but should not rewrite this foundation.",
-  prerequisites: "Optional unlock condition, training path, item, oath, event, or other requirement.",
+  prerequisites:
+    "Optional unlock condition. Leave blank for powers usable at Start. Use a real sentence for strong locked powers — never [] or empty JSON. Mild utilities should stay unlocked.",
   cost: "Optional drawback, cooldown, resource, injury, fatigue, debt, risk, or other limit on using the ability.",
   growth_math:
     "Playable growth calculation for this power: XP curves, rank thresholds, per-use XP × risk, soft caps, rank→bonus formulas. Randomize invents numbers; the DM applies them in play.",
@@ -1069,17 +1222,27 @@ function refToken(type, code) {
 function linkifyText(value) {
   const text = escapeHtml(value ?? "");
   const map = getEntityMap();
+  // Also index NPCs that may only appear as flat state.npcs (if present)
+  for (const npc of state?.npcs || []) {
+    if (npc?.code && !map.has(String(npc.code).toUpperCase())) {
+      map.set(String(npc.code).toUpperCase(), { type: "npc", entity: npc });
+    }
+  }
   let html = text.replace(/\[\[([A-Z]+|L\d+|I\d+|E\d+)]]/gi, (_, rawCode) => {
     const code = rawCode.toUpperCase();
     const found = map.get(code);
-    if (!found) return escapeHtml(rawCode);
-    return `<button class="entityLink" data-code="${escapeHtml(code)}" type="button">${escapeHtml(entityLabel(found.entity))}</button>`;
+    if (!found) {
+      // Unresolved code — still show something readable, not a blank hole
+      return `<span class="entityLink unresolved" title="Unknown entity ${escapeHtml(code)}">${escapeHtml(code)}</span>`;
+    }
+    const label = entityLabel(found.entity) || code;
+    return `<button class="entityLink" data-code="${escapeHtml(code)}" type="button">${escapeHtml(label)}</button>`;
   });
 
   html = html.replace(/\b(L\d+|I\d+|E\d+)\b/g, (rawCode) => {
     const found = map.get(rawCode.toUpperCase());
     if (!found) return rawCode;
-    return `<button class="entityLink subtle" data-code="${escapeHtml(rawCode.toUpperCase())}" type="button">${escapeHtml(entityLabel(found.entity))}</button>`;
+    return `<button class="entityLink subtle" data-code="${escapeHtml(rawCode.toUpperCase())}" type="button">${escapeHtml(entityLabel(found.entity) || rawCode)}</button>`;
   });
   return html;
 }
@@ -1423,6 +1586,7 @@ function setField(name, value) {
   if (isRadioGroup) {
     const radio = Array.from(field).find((input) => input.value === String(nextValue));
     if (radio) radio.checked = true;
+    if (name === "special_ability_origin") updateAbilityOriginControls();
     return;
   }
   field.value = nextValue;
@@ -1577,6 +1741,12 @@ function setAiBusy(nextBusy, label = "AI is thinking...") {
   if (turnInput) turnInput.disabled = nextBusy;
   if (sendButton) sendButton.disabled = nextBusy;
   if (continueButton) continueButton.disabled = nextBusy;
+  const undoBtn = document.querySelector("#undoTurnButton");
+  const redoBtn = document.querySelector("#redoTurnButton");
+  if (undoBtn) undoBtn.disabled = nextBusy;
+  if (redoBtn) redoBtn.disabled = nextBusy;
+  if (waitButton) waitButton.disabled = nextBusy;
+  if (nextBusy) closeWaitPopover();
   if (suggestButton) suggestButton.disabled = nextBusy;
   if (regenSuggestionsButton) regenSuggestionsButton.disabled = nextBusy;
   if (regenerateButton) regenerateButton.disabled = nextBusy;
@@ -1592,10 +1762,127 @@ function setAiBusy(nextBusy, label = "AI is thinking...") {
   syncLlmBusyChrome(nextBusy ? label : "");
 }
 
+let llmRuntimePollTimer = null;
+let lastLlmRuntimePhase = "";
+
+function get_llm_runtime_placeholder(data) {
+  return {
+    phase: data?.error ? "error" : "ready",
+    message: data?.message || data?.error || "",
+    user_message: data?.message || data?.error || "",
+    method: data?.method || "",
+    error: data?.error || "",
+  };
+}
+
+function setLlmRuntimeBanner(runtime) {
+  const banner = document.querySelector("#llmRuntimeBanner");
+  const text = document.querySelector("#llmRuntimeText");
+  if (!banner || !text) return;
+  const phase = String(runtime?.phase || "offline");
+  const busy = phase === "switching" || phase === "starting";
+  const show = busy || phase === "error";
+  banner.classList.toggle("hidden", !show);
+  banner.classList.toggle("isBusy", busy);
+  banner.classList.toggle("isError", phase === "error");
+  banner.classList.toggle("isReady", phase === "ready");
+  const method = runtime?.method ? ` · ${runtime.method}` : "";
+  const msg =
+    runtime?.user_message ||
+    runtime?.message ||
+    (busy
+      ? "Website stays online — waiting for the LLM backend…"
+      : phase === "error"
+        ? runtime?.error || "LLM error"
+        : "LLM ready");
+  text.textContent = `${msg}${busy ? method : ""}`;
+  lastLlmRuntimePhase = phase;
+}
+
+async function pollLlmRuntimeOnce() {
+  try {
+    const res = await fetch("/api/llm-runtime", { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    setLlmRuntimeBanner(data);
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
+function startLlmRuntimeWatch(options = {}) {
+  const interval = Math.max(400, Number(options.intervalMs) || 900);
+  if (llmRuntimePollTimer) window.clearInterval(llmRuntimePollTimer);
+  pollLlmRuntimeOnce();
+  llmRuntimePollTimer = window.setInterval(() => {
+    pollLlmRuntimeOnce().then((data) => {
+      if (!data) return;
+      if (data.phase === "ready" && options.stopWhenReady) {
+        window.clearInterval(llmRuntimePollTimer);
+        llmRuntimePollTimer = null;
+        // Hide shortly after ready
+        window.setTimeout(() => setLlmRuntimeBanner({ phase: "ready", user_message: "" }), 1200);
+      }
+    });
+  }, interval);
+}
+
+function stopLlmRuntimeWatch() {
+  if (llmRuntimePollTimer) {
+    window.clearInterval(llmRuntimePollTimer);
+    llmRuntimePollTimer = null;
+  }
+}
+
+/**
+ * Ensure LLM base/LoRA match config before a turn.
+ * Web stays up; only the managed LLM process may soft-recycle (or hot-swap when available).
+ */
+async function ensureLlmAdapterForTurn(label = "Preparing LLM…") {
+  startLlmRuntimeWatch({ stopWhenReady: false });
+  try {
+    const res = await fetch("/api/llm-runtime/ensure", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_soft_recycle: false }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (data?.runtime) setLlmRuntimeBanner(data.runtime);
+    else if (data?.phase) setLlmRuntimeBanner(data);
+    // Soft recycle can take a while — keep polling until ready or error
+    const deadline = Date.now() + 180_000;
+    while (Date.now() < deadline) {
+      const snap = await pollLlmRuntimeOnce();
+      const phase = snap?.phase || "";
+      if (phase === "ready") break;
+      if (phase === "error") {
+        throw new Error(snap?.error || snap?.user_message || "LLM adapter failed to load");
+      }
+      await new Promise((r) => window.setTimeout(r, 800));
+    }
+    return data;
+  } finally {
+    // Leave banner briefly; stop aggressive polling after task
+    startLlmRuntimeWatch({ stopWhenReady: true, intervalMs: 1200 });
+  }
+}
+
 function enqueueAiTask(task, label = "AI is thinking...") {
   const run = async () => {
     setAiBusy(true, label);
     try {
+      // Soft-recycle / hot-swap only touches the LLM process; UI stays interactive under the banner.
+      if (String(label || "").toLowerCase().includes("turn") || String(label || "").toLowerCase().includes("scene") || String(label || "").toLowerCase().includes("thinking")) {
+        try {
+          await ensureLlmAdapterForTurn(label);
+        } catch (ensureErr) {
+          // Don't hard-block non-llama providers; surface message and continue
+          const msg = ensureErr?.message || String(ensureErr);
+          if (/lora|gguf|llama|adapter|model path/i.test(msg)) {
+            setLlmRuntimeBanner({ phase: "error", error: msg, user_message: msg });
+          }
+        }
+      }
       return await task();
     } finally {
       setAiBusy(false);
@@ -1652,15 +1939,87 @@ function withSetupRandomizationLock(task, label = "Randomizing setup...", fallba
 }
 
 function isSettingLocked(name) {
-  return Boolean(setupForm.querySelector(`[data-lock-setting="${name}"]`)?.checked);
+  // Any matching lock (Simple or Advanced) counts — keep them synced on change.
+  return Array.from(setupForm.querySelectorAll(`[data-lock-setting="${name}"]`)).some((input) => input.checked);
 }
 
 function lockedSettingNames() {
-  return Array.from(setupForm.querySelectorAll("[data-lock-setting]:checked")).map((input) => input.dataset.lockSetting);
+  return [
+    ...new Set(
+      Array.from(setupForm.querySelectorAll("[data-lock-setting]:checked"))
+        .map((input) => input.dataset.lockSetting)
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function syncSettingLocks(name, checked) {
+  if (!name || !setupForm) return;
+  setupForm.querySelectorAll(`[data-lock-setting="${name}"]`).forEach((input) => {
+    input.checked = Boolean(checked);
+  });
 }
 
 function abilityQuantityLocked() {
   return Boolean(lockAbilityCount?.checked);
+}
+
+function clampAbilityCount(value, fallback = ABILITY_COUNT_MIN_DEFAULT) {
+  const n = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(ABILITY_COUNT_MIN_DEFAULT, Math.min(ABILITY_COUNT_HARD_MAX, n));
+}
+
+function abilityCountRange() {
+  let min = clampAbilityCount(abilityCountMinInput?.value, ABILITY_COUNT_MIN_DEFAULT);
+  let max = clampAbilityCount(abilityCountMaxInput?.value, ABILITY_COUNT_MAX_DEFAULT);
+  if (min > max) {
+    const swap = min;
+    min = max;
+    max = swap;
+  }
+  return { min, max };
+}
+
+function syncAbilityCountRangeInputs() {
+  const { min, max } = abilityCountRange();
+  if (abilityCountMinInput) abilityCountMinInput.value = String(min);
+  if (abilityCountMaxInput) abilityCountMaxInput.value = String(max);
+  return { min, max };
+}
+
+function setAbilityCountRange(minValue, maxValue) {
+  if (abilityCountMinInput) abilityCountMinInput.value = String(clampAbilityCount(minValue, ABILITY_COUNT_MIN_DEFAULT));
+  if (abilityCountMaxInput) abilityCountMaxInput.value = String(clampAbilityCount(maxValue, ABILITY_COUNT_MAX_DEFAULT));
+  return syncAbilityCountRangeInputs();
+}
+
+function isOneSkillishIntent() {
+  const pf = lastComposeIntent?.power_fantasy || lastSessionTheme?.power_fantasy || {};
+  const growth = String(pf.growth || "").toLowerCase();
+  const start = String(pf.start_power || "").toLowerCase();
+  return growth === "compounding" || start === "near_useless" || start === "weak";
+}
+
+/** Last pure RNG roll for ability quantity (min–max inclusive). Used to enforce count after generate. */
+let lastAbilityCountRoll = null;
+
+/**
+ * Roll ability slot count before generation.
+ * Quantity locked → fixed. Otherwise pure RNG: uniform integer from min to max inclusive.
+ * Not biased by existing card count or OP-MC intent.
+ */
+function rollAbilityCountForRandomize() {
+  const { min, max } = abilityCountRange();
+  if (abilityQuantityLocked()) {
+    const slots = currentAbilitySlotCount();
+    if (slots > 0) return Math.max(1, Math.min(ABILITY_COUNT_HARD_MAX, slots));
+    return min;
+  }
+  // Pure RNG — server will honor this roll via requested_count + count_rolled.
+  const rolled = rollInt(min, max);
+  lastAbilityCountRoll = rolled;
+  return rolled;
 }
 
 function abilityOrigin() {
@@ -1678,23 +2037,285 @@ function setAbilityOrigin(value) {
 function abilityOriginLabel(value = abilityOrigin()) {
   if (value === "innate") return "Innate";
   if (value === "acquired") return "Acquired";
+  if (value === "both") return "Both";
   return "None";
 }
 
 function abilityDefaultLocked() {
-  return abilityOrigin() === "acquired";
+  const origin = abilityOrigin();
+  if (origin === "acquired") return true;
+  if (origin === "both") return randomBool(0.5);
+  return false;
+}
+
+function normalizeAbilityPrerequisites(value) {
+  if (value == null) return "";
+  if (Array.isArray(value)) {
+    return value.map((x) => String(x || "").trim()).filter(Boolean).join("; ").slice(0, 500);
+  }
+  if (typeof value === "object") {
+    return normalizeAbilityPrerequisites(value.text || value.condition || value.prerequisites || "");
+  }
+  let text = String(value).trim();
+  if (!text) return "";
+  const emptyForms = new Set([
+    "[]", "{}", "null", "none", "nil", "n/a", "na", "-", "—", "undefined",
+    "false", "true", "0", "1", "locked", "unlocked", "locked=true", "locked=false", "yes", "no",
+  ]);
+  if (emptyForms.has(text.toLowerCase())) return "";
+  if (/^\[\s*\]$/.test(text) || /^\{\s*\}$/.test(text)) return "";
+  if (/^locked\s*[=:]\s*(true|false|yes|no|1|0)$/i.test(text)) return "";
+  if (text.startsWith("[") && text.endsWith("]")) {
+    try {
+      return normalizeAbilityPrerequisites(JSON.parse(text));
+    } catch {
+      /* keep text */
+    }
+  }
+  return text.slice(0, 500);
+}
+
+/** Mild once/day utilities should be usable; only strong openers stay DM-gated. */
+function estimateAbilityOpeningStrength(ability = {}) {
+  const blob = `${ability.name || ""} ${ability.description || ""} ${ability.cost || ""}`.toLowerCase();
+  const strong = [
+    "invulnerab", "instant kill", "one-shot", "mind control", "time stop", "omnipoten",
+    "always on", "permanently", "no cooldown", "unlimited", "annihilat", "auto-win",
+    "ignore all defenses", "mass death", "absolute defense", "absolute attack",
+  ];
+  if (strong.some((m) => blob.includes(m))) return "strong";
+  const combat = ["damage", "kill", "slay", "blast", "overwhelm", "dominate"].filter((w) => blob.includes(w)).length;
+  if (combat >= 2) return "strong";
+  const mild = [
+    "minor distraction", "briefly", "mimic the sound", "distract", "disrupt an enemy",
+    "remember the exact sound", "once per day", "once a day", "momentary", "mild ", "slight ", "utility",
+  ];
+  const mildHits = mild.filter((m) => blob.includes(m)).length;
+  if (mildHits >= 2 || (mildHits >= 1 && combat === 0 && /distract|mimic|sound|whisper|sense|notice|remember/.test(blob))) {
+    return "mild";
+  }
+  if (combat === 0 && /\bonce per (day|scene|rest)\b/.test(blob) && blob.length < 420) return "mild";
+  return "moderate";
+}
+
+const ABILITY_PREREQ_VARIETY_POOL = [
+  "Unlocks after deliberate practice under real risk — not safe drills alone.",
+  "Unlocks when a mentor names the limit once, then leaves you to hold it alone.",
+  "Unlocks after a costly field discovery tied to this aptitude (tool, scar, or debt).",
+  "Unlocks after you fail a related check publicly and recover without quitting.",
+  "Unlocks after a night of focused practice with no audience and no shortcuts.",
+  "Unlocks when a rival or ally forces the half-formed version into play once.",
+  "Unlocks after studying a worn manual, mural, or scrap that matches the domain.",
+  "Unlocks after paying a real price (time, favor, or coin) to learn the first form.",
+  "Unlocks after surviving a setback that would have been easier with this already known.",
+  "Unlocks after you teach someone the outline — and realize what you still lack.",
+  "Unlocks at a marked place of practice (range, shrine, yard, workshop) after repeated visits.",
+  "Unlocks after a witnessed oath or contract about using this carefully.",
+  "Unlocks after you trade a comfort or privilege for focused training time.",
+  "Unlocks after a near-miss where instinct almost fires this power untrained.",
+  "Held until a campaign scene makes the unlock feel earned (mentor, trial, or discovery).",
+];
+
+function isGenericAbilityPrereq(text) {
+  const low = String(text || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ");
+  if (!low) return false;
+  if (low.startsWith("unlocks through training, a mentor")) return true;
+  if (low.startsWith("barely usable seed")) return true;
+  if (low.startsWith("held for later")) return true;
+  return false;
+}
+
+function pickDefaultAbilityPrereq(ability = {}, index = 0, strength = "") {
+  const name = String(ability.name || "");
+  let h = index * 17;
+  for (let i = 0; i < name.length; i++) h += name.charCodeAt(i);
+  const pool = ABILITY_PREREQ_VARIETY_POOL;
+  if (String(strength || "").toLowerCase() === "strong") {
+    const strong = pool.filter((p) => /held|campaign|setback/i.test(p));
+    const use = strong.length ? strong : pool.slice(-4);
+    return use[Math.abs(h) % use.length];
+  }
+  return pool[Math.abs(h) % pool.length];
+}
+
+function diversifyAbilityPrerequisites(abilities = []) {
+  const list = Array.isArray(abilities) ? abilities.filter((a) => a && typeof a === "object") : [];
+  if (list.length < 2) {
+    return list.map((a, i) => {
+      const next = { ...a };
+      next.prerequisites = normalizeAbilityPrerequisites(next.prerequisites);
+      if (next.locked && isGenericAbilityPrereq(next.prerequisites)) {
+        next.prerequisites = pickDefaultAbilityPrereq(next, i, estimateAbilityOpeningStrength(next));
+      }
+      return next;
+    });
+  }
+  const used = new Set();
+  let poolI = 0;
+  return list.map((a, idx) => {
+    const next = { ...a };
+    let p = normalizeAbilityPrerequisites(next.prerequisites);
+    const locked = !!next.locked;
+    if (!locked && !p) {
+      next.prerequisites = "";
+      return next;
+    }
+    const generic = isGenericAbilityPrereq(p);
+    const dup = p && used.has(p.toLowerCase());
+    if ((locked && !p) || generic || dup) {
+      let pick = null;
+      for (let n = 0; n < ABILITY_PREREQ_VARIETY_POOL.length + 2; n++) {
+        const cand =
+          n === 0
+            ? pickDefaultAbilityPrereq(next, idx, estimateAbilityOpeningStrength(next))
+            : ABILITY_PREREQ_VARIETY_POOL[poolI++ % ABILITY_PREREQ_VARIETY_POOL.length];
+        if (!used.has(cand.toLowerCase())) {
+          pick = cand;
+          break;
+        }
+      }
+      p = pick || `${pickDefaultAbilityPrereq(next, idx + poolI)} (${String(next.name || "power").slice(0, 24)})`;
+    }
+    next.prerequisites = p;
+    if (p) used.add(p.toLowerCase());
+    return next;
+  });
+}
+
+function normalizeAbilityLockAndPrerequisites(ability = {}, origin = abilityOrigin()) {
+  const next = { ...ability };
+  next.prerequisites = normalizeAbilityPrerequisites(next.prerequisites);
+  const strength = estimateAbilityOpeningStrength(next);
+  const emptyPrereq = !String(next.prerequisites || "").trim();
+  if (strength === "mild") {
+    if (next.locked && emptyPrereq) {
+      next.locked = false;
+      next.prerequisites = "";
+    } else if (
+      next.locked &&
+      /unlocks through training, a mentor|barely usable seed/i.test(String(next.prerequisites || ""))
+    ) {
+      next.locked = false;
+      next.prerequisites = "";
+    }
+  } else if (strength === "strong") {
+    if (next.locked && emptyPrereq) {
+      next.prerequisites = pickDefaultAbilityPrereq(next, 0, "strong");
+    } else if (!next.locked && origin === "acquired" && emptyPrereq) {
+      next.locked = true;
+      next.prerequisites = pickDefaultAbilityPrereq(next, 1, "strong");
+    }
+  } else if (next.locked && emptyPrereq) {
+    if (origin === "innate") {
+      next.locked = false;
+      next.prerequisites = "";
+    } else {
+      next.prerequisites = pickDefaultAbilityPrereq(next, 2, "moderate");
+    }
+  }
+  next.prerequisites = normalizeAbilityPrerequisites(next.prerequisites);
+  if (next.locked && !String(next.prerequisites || "").trim()) next.locked = false;
+  return next;
+}
+
+function applyOriginToAbility(ability = {}) {
+  let next = { ...ability };
+  const origin = abilityOrigin();
+  const strength = estimateAbilityOpeningStrength(next);
+  if (origin === "acquired") {
+    // Do NOT force every power locked. Mild = open; strong = locked; moderate respects model or RNG.
+    if (strength === "mild") {
+      next.locked = false;
+      next.prerequisites = "";
+    } else if (strength === "strong") {
+      next.locked = true;
+      if (!String(next.prerequisites || "").trim()) {
+        next.prerequisites = pickDefaultAbilityPrereq(next, 0, "strong");
+      }
+    } else {
+      // moderate: keep model flag when present; else ~45% locked
+      if (next.locked == null || next.locked === "") {
+        next.locked = randomBool(0.45);
+      } else {
+        next.locked = !!next.locked;
+      }
+      if (next.locked && !String(next.prerequisites || "").trim()) {
+        next.prerequisites = pickDefaultAbilityPrereq(next, 0, "moderate");
+      }
+      if (!next.locked) next.prerequisites = next.prerequisites || "";
+    }
+  } else if (origin === "innate") {
+    next.locked = false;
+    // Innate may still keep a light prereq only if the model wrote a real one
+  } else if (origin === "both") {
+    if (next.locked == null || next.locked === "") next.locked = randomBool(0.45);
+    if (strength === "mild") {
+      next.locked = false;
+      next.prerequisites = "";
+    }
+  }
+  if (!next.power_type) {
+    const types = POWER_GROWTH_TYPES.map((t) => t.id);
+    next.power_type = choice(types) || "linear";
+  }
+  next = normalizeAbilityLockAndPrerequisites(next, origin);
+  return next;
 }
 
 function currentAbilitySlotCount() {
-  return abilityList.querySelectorAll(".abilitySetupCard").length;
+  return abilityList?.querySelectorAll(".abilitySetupCard").length || 0;
 }
 
 function fitAbilitiesToLockedCount(abilities) {
   if (!abilityQuantityLocked()) return abilities;
-  const targetCount = currentAbilitySlotCount();
+  const targetCount = Math.max(1, currentAbilitySlotCount() || abilityCountRange().min);
   const nextAbilities = abilities.slice(0, targetCount);
-  while (nextAbilities.length < targetCount) nextAbilities.push(randomAbilityPreset());
+  while (nextAbilities.length < targetCount) nextAbilities.push(randomAbilityPreset(nextAbilities));
   return nextAbilities;
+}
+
+/**
+ * After LLM/fallback: enforce the pre-rolled target count (not always max).
+ * Uses lastAbilityCountRoll from field_context roll, or payload.ability_count_roll.
+ */
+function fitAbilitiesToCountPolicy(abilities, rolledTarget = null) {
+  const list = Array.isArray(abilities) ? abilities.filter((a) => a && typeof a === "object") : [];
+  if (abilityOrigin() === "none") return [];
+  if (abilityQuantityLocked()) return fitAbilitiesToLockedCount(list);
+  const { min, max } = abilityCountRange();
+  let target =
+    rolledTarget != null && Number.isFinite(Number(rolledTarget))
+      ? Number(rolledTarget)
+      : lastAbilityCountRoll != null
+        ? lastAbilityCountRoll
+        : null;
+  if (target == null || !Number.isFinite(target)) {
+    // No prior roll (e.g. loaded settings) — do not invent max; clamp only.
+    target = Math.min(max, Math.max(min, list.length || min));
+  }
+  target = Math.max(min, Math.min(max, Math.floor(target)));
+  let next = list.slice(0, target);
+  while (next.length < target) next.push(randomAbilityPreset(next));
+  return next;
+}
+
+function updatePowersDropdownMeta() {
+  const meta = document.querySelector("#powersDropdownMeta");
+  if (!meta) return;
+  const origin = abilityOrigin();
+  if (origin === "none") {
+    meta.textContent = "None · no special abilities";
+    return;
+  }
+  const count = currentAbilitySlotCount();
+  const { min, max } = abilityCountRange();
+  const rangeText = abilityQuantityLocked()
+    ? `count locked at ${Math.max(count, 1)}`
+    : `randomize ${min}–${max}`;
+  meta.textContent = `${abilityOriginLabel(origin)} · ${count} ability${count === 1 ? "" : "ies"} · ${rangeText}`;
 }
 
 function clearCustomValue(name) {
@@ -1751,7 +2372,13 @@ function rollInt(min, max) {
 
 function applyRandomizedSetup(payload) {
   const fields = payload?.fields || payload || {};
+  // Apply special_ability_origin before other fields that depend on it, and never
+  // treat the abilities array as a string form field.
+  if (fields.special_ability_origin != null && fields.special_ability_origin !== "") {
+    setAbilityOrigin(String(fields.special_ability_origin));
+  }
   Object.entries(fields).forEach(([name, value]) => {
+    if (name === "special_abilities" || name === "special_ability_origin") return;
     if (value === null || value === undefined) return;
     if (value === "" && !OPTIONAL_IDENTITY_FIELDS.has(name)) return;
     if (setupForm.querySelector(`[data-list-setting="${name}"]`)) {
@@ -1776,6 +2403,25 @@ function applyRandomizedSetup(payload) {
     }
     setField(name, String(value));
   });
+  // De-dupe / re-home hair vs face vs clothes after any model/local apply
+  if (
+    fields.hair != null ||
+    fields.facial_features != null ||
+    fields.appearance != null ||
+    payload?.hair != null ||
+    payload?.facial_features != null ||
+    payload?.appearance != null
+  ) {
+    normalizeLookFieldsInForm();
+  }
+  // Simple UI mirrors Advanced look fields (so art doesn't "leak" unseen advanced hair/face)
+  if (typeof setupUiMode !== "undefined" && setupUiMode === "simple") {
+    try {
+      pullFormToSimple();
+    } catch (_) {
+      /* pull may run before simple helpers exist on first paint */
+    }
+  }
 
   const abilities = Array.isArray(payload?.special_abilities)
     ? payload.special_abilities
@@ -1783,11 +2429,36 @@ function applyRandomizedSetup(payload) {
       ? fields.special_abilities
       : null;
   if (abilities) {
-    const nextAbilities = fitAbilitiesToLockedCount(abilities);
-    abilityList.innerHTML = "";
-    nextAbilities.forEach((ability) => addAbility(ability));
+    // Model returned powers while origin still "none" → open powers so they can apply
+    if (abilities.length && abilityOrigin() === "none") {
+      setAbilityOrigin("acquired");
+    }
+    const rolledTarget =
+      payload?.ability_count_roll?.target ??
+      payload?.quality_gate?.target_count ??
+      fields?.ability_count_roll?.target ??
+      lastAbilityCountRoll;
+    if (rolledTarget != null && Number.isFinite(Number(rolledTarget))) {
+      lastAbilityCountRoll = Number(rolledTarget);
+    }
+    const nextAbilities = diversifyAbilityPrerequisites(
+      fitAbilitiesToCountPolicy(abilities, rolledTarget).map((ability) => applyOriginToAbility(ability)),
+    );
+    if (abilityList) {
+      abilityList.innerHTML = "";
+      // Generated / randomized powers start collapsed so the list stays scannable.
+      nextAbilities.forEach((ability) => addAbility(ability, { expanded: false }));
+    }
   }
   normalizeRandomizerDependencies();
+  updateAbilityOriginControls();
+  updatePowersDropdownMeta();
+  placeAbilityBuilder();
+  // Make powers visible after a randomize that produced cards
+  if (currentAbilitySlotCount() > 0) {
+    const dropdown = document.querySelector("#powersDropdown");
+    if (dropdown) dropdown.open = true;
+  }
 }
 
 function commaSeparatedPhrases(value) {
@@ -1850,6 +2521,8 @@ function collectSetupSettings() {
     locks: lockedSettingNames(),
     ability_origin: abilityOrigin(),
     ability_count_locked: abilityQuantityLocked(),
+    ability_count_min: abilityCountRange().min,
+    ability_count_max: abilityCountRange().max,
     abilities: Array.from(abilityList.querySelectorAll(".abilitySetupCard")).map(abilityCardSnapshot).filter(Boolean),
     // Session theme / last Randomize intent so Start bias survives save/load.
     randomize_idea: setupRandomizeIdea(),
@@ -1918,22 +2591,36 @@ function restoreGainControls(entries) {
 function restoreAbilitySettings(settings) {
   setAbilityOrigin(settings.ability_origin || abilityOrigin() || "none");
   if (lockAbilityCount) lockAbilityCount.checked = Boolean(settings.ability_count_locked);
+  if (settings.ability_count_min != null || settings.ability_count_max != null) {
+    setAbilityCountRange(
+      settings.ability_count_min ?? ABILITY_COUNT_MIN_DEFAULT,
+      settings.ability_count_max ?? ABILITY_COUNT_MAX_DEFAULT,
+    );
+  } else {
+    syncAbilityCountRangeInputs();
+  }
   abilityList.innerHTML = "";
   if (abilityOrigin() !== "none") {
     (Array.isArray(settings.abilities) ? settings.abilities : []).forEach((ability) => {
-      addAbility({
-        name: ability.name || "",
-        description: ability.description || "",
-        locked: Boolean(ability.locked),
-        prerequisites: ability.prerequisites || "",
-        cost: ability.cost_mode === "custom" ? ability.cost || "" : ability.cost || ability.cost_mode || "no cost",
-        growth_math: ability.growth_math || "",
-      });
+      const cleaned = normalizeAbilityLockAndPrerequisites(
+        {
+          name: ability.name || "",
+          description: ability.description || "",
+          locked: Boolean(ability.locked),
+          prerequisites: ability.prerequisites || "",
+          cost: ability.cost_mode === "custom" ? ability.cost || "" : ability.cost || ability.cost_mode || "no cost",
+          growth_math: ability.growth_math || "",
+          power_type: ability.power_type || "",
+        },
+        settings.ability_origin || abilityOrigin(),
+      );
+      addAbility(cleaned, { expanded: false });
       const card = abilityList.lastElementChild;
       const costMode = card?.querySelector('[data-ability-field="cost_mode"]');
       const cost = card?.querySelector('[data-ability-field="cost"]');
       if (costMode && ability.cost_mode) costMode.value = ability.cost_mode;
       if (cost && ability.cost_mode === "custom") cost.value = ability.cost || "";
+      refreshAbilityCardSummary(card);
     });
   }
   updateAbilityOriginControls();
@@ -2088,36 +2775,139 @@ function fallbackRandomizeField(name, options = {}) {
     return;
   }
   if (name === "special_abilities") {
+    ensureAbilityOriginForRandomize();
     if (abilityOrigin() === "none") {
       abilityList.innerHTML = "";
+      updatePowersDropdownMeta();
       normalizeRandomizerDependencies();
       return;
     }
     const previous = collectAbilities();
-    const oneSkillish = (() => {
-      const pf = lastComposeIntent?.power_fantasy || lastSessionTheme?.power_fantasy || {};
-      const growth = String(pf.growth || "").toLowerCase();
-      const start = String(pf.start_power || "").toLowerCase();
-      return growth === "compounding" || start === "near_useless" || start === "weak";
-    })();
-    let count = abilityQuantityLocked()
-      ? Math.max(1, currentAbilitySlotCount() || 1)
-      : oneSkillish
-        ? 1
-        : rollInt(1, 5);
+    // Same count policy for Simple + Advanced (shared builder + field_context).
+    const count = rollAbilityCountForRandomize();
     abilityList.innerHTML = "";
     const used = [...previous];
     for (let i = 0; i < count; i += 1) {
       const next = randomAbilityPreset(used);
       used.push(next);
-      addAbility(next);
+      addAbility(next, { expanded: false });
     }
+    updateAbilityOriginControls();
+    updatePowersDropdownMeta();
+    placeAbilityBuilder();
+    const dropdown = document.querySelector("#powersDropdown");
+    if (dropdown && count > 0) dropdown.open = true;
   } else if (setupForm.querySelector(`[data-list-setting="${name}"]`)) {
     fallbackRandomizeListField(name);
   } else if (!fallbackRandomizeRadioField(name) && !fallbackRandomizeSelectField(name) && RANDOM_SETUP[name]) {
-    setField(name, choice(RANDOM_SETUP[name]));
+    setField(name, pickRandomSetupValue(name));
+  }
+  // Keep hair / face / clothes de-duplicated after local rolls
+  if (["hair", "facial_features", "appearance"].includes(name)) {
+    normalizeLookFieldsInForm();
   }
   normalizeRandomizerDependencies();
+}
+
+/** Pick from RANDOM_SETUP avoiding the current form value when possible. */
+function pickRandomSetupValue(name) {
+  const pool = RANDOM_SETUP[name] || [];
+  if (!pool.length) return "";
+  const current = String(setupForm?.elements?.[name]?.value || "")
+    .trim()
+    .toLowerCase();
+  const filtered = pool.filter((p) => String(p).trim().toLowerCase() !== current);
+  return choice(filtered.length ? filtered : pool);
+}
+
+/** Client-side: strip hair out of face, face out of clothes, etc. */
+function normalizeLookFieldsInForm() {
+  if (!setupForm) return;
+  const hairEl = setupForm.elements.hair;
+  const faceEl = setupForm.elements.facial_features;
+  const appEl = setupForm.elements.appearance;
+  if (!hairEl && !faceEl && !appEl) return;
+
+  const split = (raw) =>
+    String(raw || "")
+      .split(/\s*[,;|/]\s*|\s+·\s+/)
+      .map((p) => p.replace(/^\(+|\)+$/g, "").trim())
+      .filter(Boolean);
+
+  const isHair = (p) =>
+    /\b(hair|braid|ponytail|bun|dreadlocks|locs|cornrows|bangs|fringe|mane)\b/i.test(p) ||
+    /^(bald|shaved head|buzz cut|undercut)$/i.test(p);
+  const isFace = (p) =>
+    !isHair(p) &&
+    /\b(eyes?|iris|brow|lids?|freckles?|scar|jaw|chin|nose|cheek|lip|mouth|dimple|beard|stubble|glasses)\b/i.test(
+      p,
+    );
+  const isClothes = (p) =>
+    /:/.test(p) ||
+    /\b(coat|cloak|tunic|shirt|jacket|hoodie|boots|shoes|gloves|trousers|pants|bag|satchel|apron|belt)\b/i.test(
+      p,
+    );
+
+  let hair = split(hairEl?.value);
+  let face = split(faceEl?.value);
+  let app = split(appEl?.value);
+
+  const move = (list, pred) => {
+    const keep = [];
+    const moved = [];
+    for (const p of list) {
+      if (pred(p)) moved.push(p);
+      else keep.push(p);
+    }
+    return [keep, moved];
+  };
+
+  let moved;
+  [face, moved] = move(face, isHair);
+  hair = hair.concat(moved);
+  [face, moved] = move(face, isClothes);
+  app = app.concat(moved);
+  [app, moved] = move(app, (p) => isHair(p) && !p.includes(":"));
+  hair = hair.concat(moved);
+  [app, moved] = move(app, (p) => isFace(p) && !p.includes(":"));
+  face = face.concat(moved);
+  [hair, moved] = move(hair, isFace);
+  face = face.concat(moved);
+  [hair, moved] = move(hair, isClothes);
+  app = app.concat(moved);
+
+  const dedupe = (arr) => {
+    const seen = new Set();
+    const out = [];
+    for (const p of arr) {
+      const k = p.toLowerCase();
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push(p);
+    }
+    return out;
+  };
+  hair = dedupe(hair);
+  face = dedupe(face);
+  app = dedupe(app);
+
+  // Known collapse stack → replace if exact match
+  if (face.join(", ").toLowerCase() === "grey eyes, tired lids, square jaw") {
+    face = ["hazel eyes, faint laugh lines, straight nose"];
+  }
+
+  if (hairEl) hairEl.value = hair.slice(0, 2).join(", ");
+  if (faceEl) faceEl.value = face.join(", ");
+  if (appEl) {
+    appEl.value = app.some((p) => p.includes(":")) ? app.join("; ") : app.join(", ");
+  }
+  // Mirror into Simple fields when present
+  const sHair = document.querySelector("#simpleHair");
+  const sFace = document.querySelector("#simpleFace");
+  const sLook = document.querySelector("#simpleLook");
+  if (sHair && hairEl) sHair.value = hairEl.value;
+  if (sFace && faceEl) sFace.value = faceEl.value;
+  if (sLook && appEl) sLook.value = appEl.value;
 }
 
 function fallbackRandomizeSequence(fields) {
@@ -2173,18 +2963,35 @@ function fieldContext(name) {
   }
   if (name === "special_abilities") {
     const origin = abilityOrigin();
+    const { min, max } = abilityCountRange();
+    const quantityLocked = abilityQuantityLocked();
+    const existingCount = currentAbilitySlotCount();
+    // Always roll (or lock) the slot count *before* the model runs.
+    const rolledCount = rollAbilityCountForRandomize();
+    let originRule =
+      "Acquired origin: VARY locked per ability — do NOT lock every power. Mild/modest utilities should be locked=false and usable at Start; stronger or story powers may be locked=true with a real prerequisite. Roughly half open / half locked is fine.";
+    if (origin === "innate") {
+      originRule =
+        "Innate: almost all abilities locked=false and usable at Start (inherent, inherited, racial, bodily, soul-deep).";
+    } else if (origin === "both") {
+      originRule =
+        "Mix: some innate (locked=false) and some acquired (may be locked with prereqs). Vary locked per entry — never lock the whole batch.";
+    }
     return {
       type: "special_abilities",
       ability_origin: origin,
       origin_label: abilityOriginLabel(origin),
-      existing_count: abilityList.querySelectorAll(".abilitySetupCard").length,
-      quantity_locked: abilityQuantityLocked(),
-      requested_count: currentAbilitySlotCount(),
+      existing_count: existingCount,
+      quantity_locked: quantityLocked,
+      // Pre-rolled target — server must return exactly this many abilities.
+      requested_count: rolledCount,
+      target_count: rolledCount,
+      count_rolled: true,
+      count_min: min,
+      count_max: max,
       roll_rule: origin === "none"
         ? "Return an empty special_abilities list. No special abilities are defined at setup."
-        : abilityQuantityLocked()
-          ? "Generate exactly requested_count ability slots. Randomize content only; do not change quantity."
-          : `Roll a fair count from 1 to 5. ${origin === "innate" ? "Abilities should usually be usable at the start and described as inherent, inherited, racial, bodily, soul-deep, or otherwise innate." : "Abilities should usually be locked or have prerequisites because they are acquired through play, training, events, systems, vows, tools, or former-life recovery."}`,
+        : `Return exactly requested_count (${rolledCount}) ability slots (rolled from ${min}–${max}${quantityLocked ? ", quantity locked" : ", pure RNG"}). Do not pick a different count. Each ability needs name, description, locked, prerequisites, cost, growth_math, and power_type (compounding|passive|linear|soft_cap|breakthrough|flat|item_bound). ${originRule}`,
     };
   }
   return { type: "field", value: setupForm.elements[name]?.value || "" };
@@ -2225,13 +3032,38 @@ function currentSetupSnapshot(activeField = "") {
   return snapshot;
 }
 
+function intentWantsPowers(intent = lastComposeIntent) {
+  if (!intent || typeof intent !== "object") return false;
+  const pf = intent.power_fantasy && typeof intent.power_fantasy === "object" ? intent.power_fantasy : {};
+  const growth = String(pf.growth || "").toLowerCase();
+  const start = String(pf.start_power || "").toLowerCase();
+  const summary = String(pf.skill_summary || "").toLowerCase();
+  const idea = String(intent.raw_idea || setupRandomizeIdea() || "").toLowerCase();
+  if (growth === "compounding") return true;
+  if (start === "near_useless" || start === "weak") return true;
+  if (/op\s*mc|one.?skill|compound|seed power|special abilit/i.test(`${summary} ${idea}`)) return true;
+  return false;
+}
+
+/** Before rolling abilities: intent/preset that needs powers must not stay on origin "none". */
+function ensureAbilityOriginForRandomize(intent = lastComposeIntent) {
+  if (abilityOrigin() !== "none") return abilityOrigin();
+  if (!intentWantsPowers(intent)) return abilityOrigin();
+  setAbilityOrigin("acquired");
+  return "acquired";
+}
+
 function randomizeFieldApplies(name, formData = new FormData(setupForm)) {
   if (["race_magic_rarity", "race_magic_rules"].includes(name) && !boolField(formData, "race_magic_enabled")) return false;
   if (name === "system_style" && !boolField(formData, "game_system")) return false;
   if (["proficiency_access", "proficiency_growth_speed"].includes(name) && !boolField(formData, "proficiency_system")) return false;
   if (name === "xp_growth_speed" && !boolField(formData, "leveling_system")) return false;
   if (["previous_life_age", "previous_life_sex"].includes(name) && !formerLifeSelected(formData)) return false;
-  if (name === "special_abilities" && abilityOrigin() === "none") return false;
+  if (name === "special_abilities") {
+    // Intent-driven OP MC / compounding must still roll powers even if origin was left on None
+    if (abilityOrigin() === "none" && !intentWantsPowers()) return false;
+    if (abilityOrigin() === "none" && intentWantsPowers()) ensureAbilityOriginForRandomize();
+  }
   return true;
 }
 
@@ -2266,7 +3098,388 @@ async function randomizeGroup(group) {
 }
 
 function setupRandomizeIdea() {
-  return String(document.querySelector("#randomizeSetupPrompt")?.value || "").trim().slice(0, 400);
+  // Prefer live editor text for the active mode (edit without re-clicking chip)
+  if (setupUiMode === "simple") {
+    const liveSimple = String(document.querySelector("#presetSimpleIdea")?.value || "").trim();
+    if (liveSimple) return liveSimple.slice(0, 400);
+  } else {
+    const liveAdv = String(document.querySelector("#presetAdvancedIdea")?.value || "").trim();
+    if (liveAdv) return liveAdv.slice(0, 400);
+  }
+  const typed = String(document.querySelector("#randomizeSetupPrompt")?.value || "").trim();
+  if (typed) return typed.slice(0, 400);
+  const p = findPreset(selectedDirectorPresetId);
+  return ideaForActivePreset(p).slice(0, 400);
+}
+
+// --- Simple / Advanced setup + image UI ------------------------------------
+const SETUP_MODE_KEY = "morkyn-setup-mode";
+const IMAGE_MODE_KEY = "morkyn-image-ui-mode";
+let setupUiMode = "simple";
+let imageUiMode = "simple";
+let selectedDirectorPresetId = "";
+
+function loadSetupUiMode() {
+  try {
+    const v = String(localStorage.getItem(SETUP_MODE_KEY) || "simple").toLowerCase();
+    return v === "advanced" ? "advanced" : "simple";
+  } catch (_) {
+    return "simple";
+  }
+}
+
+function loadImageUiMode() {
+  try {
+    const v = String(localStorage.getItem(IMAGE_MODE_KEY) || "simple").toLowerCase();
+    return v === "advanced" ? "advanced" : "simple";
+  } catch (_) {
+    return "simple";
+  }
+}
+
+function setSetupUiMode(mode, options = {}) {
+  setupUiMode = mode === "advanced" ? "advanced" : "simple";
+  try {
+    localStorage.setItem(SETUP_MODE_KEY, setupUiMode);
+  } catch (_) {
+    /* ignore */
+  }
+  document.body.classList.toggle("setup-mode-simple", setupUiMode === "simple");
+  document.body.classList.toggle("setup-mode-advanced", setupUiMode === "advanced");
+  document.querySelectorAll(".setupModeBtn").forEach((btn) => {
+    btn.classList.toggle("isActive", btn.getAttribute("data-setup-mode") === setupUiMode);
+  });
+  const simplePanel = document.querySelector("#setupSimplePanel");
+  if (simplePanel) simplePanel.hidden = setupUiMode !== "simple";
+  if (setupUiMode === "simple") {
+    pullFormToSimple();
+    renderDirectorPresets();
+  } else if (options.fromSimple) {
+    pushSimpleToForm();
+  }
+  placeCharacterArtCard();
+  placeAbilityBuilder();
+  // When mode flips, refresh Randomize idea from active preset's matching idea text
+  if (selectedDirectorPresetId) {
+    const p = findPreset(selectedDirectorPresetId);
+    const ideaInput = document.querySelector("#randomizeSetupPrompt");
+    if (p && ideaInput && !ideaInput.matches(":focus")) {
+      ideaInput.value = ideaForActivePreset(p).slice(0, 400);
+    }
+  }
+  document.querySelectorAll("[data-director-preset]").forEach((btn) => {
+    btn.classList.toggle("isSelected", btn.getAttribute("data-director-preset") === selectedDirectorPresetId);
+  });
+  syncPresetEditorFromSelection();
+}
+
+function setImageUiMode(mode) {
+  imageUiMode = mode === "advanced" ? "advanced" : "simple";
+  try {
+    localStorage.setItem(IMAGE_MODE_KEY, imageUiMode);
+  } catch (_) {
+    /* ignore */
+  }
+  document.body.classList.toggle("image-mode-simple", imageUiMode === "simple");
+  document.body.classList.toggle("image-mode-advanced", imageUiMode === "advanced");
+  document.querySelectorAll(".imageModeBtn, [data-image-mode]").forEach((btn) => {
+    if (!btn.hasAttribute("data-image-mode")) return;
+    btn.classList.toggle("isActive", btn.getAttribute("data-image-mode") === imageUiMode);
+  });
+  const card = document.querySelector("#characterPortraitCard");
+  card?.classList.toggle("imageUiSimple", imageUiMode === "simple");
+  card?.classList.toggle("imageUiAdvanced", imageUiMode === "advanced");
+  // Studio panels re-render on open; flag is on body for CSS
+}
+
+function setFormFieldValue(name, value) {
+  const el = setupForm?.elements?.[name] || setupForm?.querySelector(`[name="${name}"]`);
+  if (!el) return;
+  if (el instanceof RadioNodeList || (el.length && el[0]?.type === "radio")) {
+    const list = setupForm.querySelectorAll(`input[name="${name}"]`);
+    list.forEach((r) => {
+      r.checked = r.value === value;
+    });
+    return;
+  }
+  if (el.type === "checkbox") {
+    el.checked = Boolean(value);
+    return;
+  }
+  el.value = value == null ? "" : String(value);
+}
+
+function getFormFieldValue(name) {
+  const el = setupForm?.elements?.[name];
+  if (!el) return "";
+  if (el instanceof RadioNodeList || (el.length && el[0]?.type === "radio")) {
+    const checked = setupForm.querySelector(`input[name="${name}"]:checked`);
+    return checked ? checked.value : "";
+  }
+  if (el.type === "checkbox") return el.checked;
+  return String(el.value || "");
+}
+
+function setWorldStyleSimple(text) {
+  const t = String(text || "").trim();
+  if (!setupForm) return;
+  // Simple "world vibe" → world_style custom + custom_style note — never start_location (that was Mosswake Gate leakage).
+  const custom = setupForm.querySelector('[name="world_style_custom"], [data-list-custom="world_style"]');
+  if (custom) {
+    custom.value = t.slice(0, 120);
+  }
+  const customRadio = setupForm.querySelector('input[name="world_style"][value="custom"]');
+  if (t) {
+    setupForm.querySelectorAll('input[name="world_style"]').forEach((inp) => {
+      inp.checked = inp.value === "custom";
+    });
+    if (customRadio) customRadio.checked = true;
+    // Also keep a short freeform style note for the composer
+    const styleEl = setupForm.querySelector('[name="custom_style"]');
+    if (styleEl && !String(styleEl.value || "").trim()) {
+      styleEl.value = t.slice(0, 200);
+    }
+  }
+}
+
+/** Simple ↔ Advanced shared rule fields (bools as "true"/"false" strings for radio groups). */
+const SIMPLE_RULE_BOOL_MAP = [
+  ["#simpleLeveling", "leveling_system", "true"],
+  ["#simpleGameSystem", "game_system", "false"],
+  ["#simpleDiceChecks", "dice_checks_enabled", "false"],
+  ["#simpleProficiency", "proficiency_system", "true"],
+  ["#simpleSkillLevels", "skill_levels_enabled", "true"],
+  ["#simpleRaceMagic", "race_magic_enabled", "false"],
+];
+const SIMPLE_RULE_TEXT_MAP = [
+  ["#simpleSystemStyle", "system_style", "subtle blue-window system"],
+  ["#simpleMagicLevel", "magic_level", "rare"],
+  ["#simpleDeathRules", "death_rules", "downed, not deleted"],
+];
+
+function updateSimpleRulesVisibility() {
+  const gameOn =
+    document.querySelector("#simpleGameSystem")?.value === "true" ||
+    getFormFieldValue("game_system") === "true";
+  const wrap = document.querySelector("#simpleSystemStyleWrap");
+  if (wrap) wrap.hidden = !gameOn;
+}
+
+function pushSimpleRulesToForm() {
+  for (const [sel, name] of SIMPLE_RULE_BOOL_MAP) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const val = el.value === "true" ? "true" : "false";
+    setFormFieldValue(name, val);
+  }
+  for (const [sel, name, fallback] of SIMPLE_RULE_TEXT_MAP) {
+    const el = document.querySelector(sel);
+    if (!el) continue;
+    const val = String(el.value || fallback || "").trim();
+    if (val) setFormFieldValue(name, val);
+  }
+  updateSimpleRulesVisibility();
+}
+
+function pullFormRulesToSimple() {
+  const set = (sel, val) => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    const s = val == null ? "" : String(val);
+    // Prefer matching option; leave default if value unknown
+    if (el.tagName === "SELECT") {
+      const ok = Array.from(el.options).some((o) => o.value === s);
+      if (ok) el.value = s;
+      else if (s === "true" || s === "false") el.value = s;
+    } else {
+      el.value = s;
+    }
+  };
+  for (const [sel, name, fallback] of SIMPLE_RULE_BOOL_MAP) {
+    const raw = getFormFieldValue(name);
+    const val = raw === "true" || raw === true ? "true" : raw === "false" || raw === false ? "false" : fallback;
+    set(sel, val);
+  }
+  for (const [sel, name, fallback] of SIMPLE_RULE_TEXT_MAP) {
+    set(sel, getFormFieldValue(name) || fallback);
+  }
+  updateSimpleRulesVisibility();
+}
+
+function pushSimpleToForm() {
+  if (!setupForm) return;
+  const name = document.querySelector("#simplePlayerName")?.value?.trim();
+  const age = document.querySelector("#simplePlayerAge")?.value?.trim();
+  const sex = document.querySelector("#simplePlayerSex")?.value || "";
+  const hair = document.querySelector("#simpleHair")?.value?.trim() || "";
+  const face = document.querySelector("#simpleFace")?.value?.trim() || "";
+  const look = document.querySelector("#simpleLook")?.value?.trim() || "";
+  const origin = document.querySelector("#simpleOrigin")?.value || "known";
+  const difficulty = document.querySelector("#simpleDifficulty")?.value || "normal";
+  const backstory = document.querySelector("#simpleBackstory")?.value?.trim() || "";
+  const world = document.querySelector("#simpleWorld")?.value?.trim() || "";
+  if (name) setFormFieldValue("player_name", name);
+  setFormFieldValue("player_age", age || "");
+  setFormFieldValue("player_sex", sex);
+  // Match Advanced: hair / face / clothing are separate art inputs
+  setFormFieldValue("hair", hair);
+  setFormFieldValue("facial_features", face);
+  setFormFieldValue("appearance", look);
+  setFormFieldValue("backstory_mode", origin);
+  if (origin === "reincarnated" || origin === "transmigrated") {
+    setFormFieldValue("memory_policy", "remembers former life");
+  } else if (origin === "amnesia" || origin === "hidden") {
+    setFormFieldValue("memory_policy", "slow reveal");
+  } else {
+    setFormFieldValue("memory_policy", "known");
+  }
+  setFormFieldValue("difficulty", difficulty);
+  setFormFieldValue("character_backstory", backstory);
+  if (world) setWorldStyleSimple(world);
+  pushSimpleRulesToForm();
+
+  // Powers live in shared #abilityList (reparented) — origin from ability origin radios
+  const abilities = collectAbilities();
+  if (abilities.length && abilityOrigin() === "none") setAbilityOrigin("acquired");
+  // Gear → starter_equipment structured text
+  const gearText = gearItemsToStarterEquipment(collectGearItems());
+  if (gearText) setFormFieldValue("starter_equipment", gearText);
+  // Simple extra look → advanced extra field for art rebuilds
+  const simpleExtra = document.querySelector("#setupArtExtraSimple")?.value?.trim() || "";
+  const advExtra = document.querySelector("#setupArtExtra");
+  if (advExtra && simpleExtra) advExtra.value = simpleExtra;
+  updateConditionalSetup?.();
+  updateAbilityOriginControls?.();
+}
+
+function pullFormToSimple() {
+  const set = (sel, val) => {
+    const el = document.querySelector(sel);
+    if (el) el.value = val == null ? "" : String(val);
+  };
+  set("#simplePlayerName", getFormFieldValue("player_name") || "Wanderer");
+  set("#simplePlayerAge", getFormFieldValue("player_age"));
+  set("#simplePlayerSex", getFormFieldValue("player_sex"));
+  // Keep Simple in sync with Advanced hair / face / clothing fields
+  set("#simpleHair", getFormFieldValue("hair"));
+  set("#simpleFace", getFormFieldValue("facial_features"));
+  set("#simpleLook", getFormFieldValue("appearance"));
+  // Legacy: if only combined look existed in appearance, leave hair/face as advanced has them
+  if (!getFormFieldValue("appearance") && !getFormFieldValue("hair") && !getFormFieldValue("facial_features")) {
+    /* nothing to show */
+  }
+  set("#simpleOrigin", getFormFieldValue("backstory_mode") || "known");
+  set("#simpleDifficulty", getFormFieldValue("difficulty") || "normal");
+  set("#simpleBackstory", getFormFieldValue("character_backstory"));
+  const worldCustom =
+    setupForm?.querySelector('[name="world_style_custom"], [data-list-custom="world_style"]')?.value ||
+    getFormFieldValue("custom_style") ||
+    "";
+  set("#simpleWorld", worldCustom);
+  pullFormRulesToSimple();
+
+  // Gear list from starter_equipment if empty
+  const gearList = document.querySelector("#simpleGearList");
+  if (gearList && !gearList.children.length) {
+    const parsed = parseStarterEquipmentToGear(getFormFieldValue("starter_equipment"));
+    parsed.forEach((g) => addGearItem(g));
+  }
+
+  // Powers block is shared — re-mount under Simple and show cards after randomize
+  placeAbilityBuilder();
+  updateAbilityOriginControls();
+  updatePowersDropdownMeta();
+  if (currentAbilitySlotCount() > 0) {
+    const dropdown = document.querySelector("#powersDropdown");
+    if (dropdown) dropdown.open = true;
+  }
+}
+
+function openRandomizePopover(fromEl) {
+  const pop = document.querySelector("#randomizePopover");
+  if (!pop) return;
+  const anchor =
+    fromEl ||
+    document.querySelector(setupUiMode === "simple" ? "#simpleOpenRandomize" : "#randomizeSetup") ||
+    document.querySelector("#simpleOpenRandomize") ||
+    document.querySelector("#randomizeSetup");
+  // Fixed to viewport so Confirm is never clipped by header overflow
+  if (anchor && typeof anchor.getBoundingClientRect === "function") {
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.min(360, window.innerWidth - 16);
+    let left = rect.right - width;
+    left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+    let top = rect.bottom + 6;
+    const estHeight = 220;
+    if (top + estHeight > window.innerHeight - 8) {
+      top = Math.max(8, rect.top - estHeight - 6);
+    }
+    pop.style.position = "fixed";
+    pop.style.top = `${top}px`;
+    pop.style.left = `${left}px`;
+    pop.style.right = "auto";
+    pop.style.zIndex = "120";
+  }
+  pop.classList.remove("hidden");
+  document.querySelector("#simpleOpenRandomize")?.setAttribute("aria-expanded", "true");
+  document.querySelector("#randomizeSetup")?.setAttribute("aria-expanded", "true");
+  document.querySelector("#randomizeSetupPrompt")?.focus();
+}
+
+function closeRandomizePopover() {
+  const pop = document.querySelector("#randomizePopover");
+  pop?.classList.add("hidden");
+  document.querySelector("#simpleOpenRandomize")?.setAttribute("aria-expanded", "false");
+  document.querySelector("#randomizeSetup")?.setAttribute("aria-expanded", "false");
+}
+
+function runConfirmedRandomize() {
+  if (isSetupActionSuppressed()) return;
+  if (setupUiMode === "simple") pushSimpleToForm();
+  closeRandomizePopover();
+  const idea = setupRandomizeIdea();
+  const label = idea ? "Randomizing setup from your idea..." : "Randomizing setup...";
+  const promptInput = document.querySelector("#randomizeSetupPrompt");
+  if (randomizeSetup) randomizeSetup.disabled = true;
+  if (promptInput) promptInput.disabled = true;
+  enqueueAiTask(
+    withSetupRandomizationLock(
+      () => randomizeAllSetup({ idea }),
+      label,
+      (error) => {
+        fallbackRandomizeSequence(RANDOM_FIELD_ORDER);
+        latestOutput.innerHTML = paragraphs(
+          `Model randomizer unavailable; used local fallback. ${error.message || error}`,
+        );
+      },
+    ),
+    label,
+  )
+    .then(() => {
+      if (setupUiMode === "simple") pullFormToSimple();
+    })
+    .finally(() => {
+      if (randomizeSetup) randomizeSetup.disabled = false;
+      if (promptInput) promptInput.disabled = false;
+    });
+}
+
+async function generateSetupPortraitSimple(kind) {
+  if (setupUiMode === "simple") pushSimpleToForm();
+  const se = document.querySelector("#setupArtExtraSimple")?.value?.trim();
+  const ae = document.querySelector("#setupArtExtra");
+  if (ae && se) ae.value = se;
+  fillDefaultNegativesOnBoot();
+  assertCanGenerateCharacterImage(kind || "both");
+  const status = document.querySelector("#setupArtSimpleStatus");
+  if (status) status.textContent = "Generating…";
+  try {
+    await generateSetupPortrait(kind || "both");
+    if (status) status.textContent = "Done (or see status above).";
+  } catch (err) {
+    if (status) status.textContent = err?.message || String(err) || "Art failed";
+    throw err;
+  }
 }
 
 async function randomizeField(name, options = {}) {
@@ -2326,6 +3539,7 @@ async function composeSetupIntent(idea) {
 
 function textAiKey(control) {
   if (!control) return "";
+  if (control.dataset.setupField) return control.dataset.setupField;
   if (control.dataset.abilityField) return `ability_${control.dataset.abilityField}`;
   if (control.dataset.gainNote) return `${control.dataset.gainNote}_note`;
   if (control.dataset.listCustom) return control.dataset.listCustom;
@@ -2335,16 +3549,25 @@ function textAiKey(control) {
 
 function textAiBaseField(control) {
   if (control?.dataset.abilityField) return "special_abilities";
+  if (control?.dataset.setupField) return control.dataset.setupField;
   return control?.dataset.gainNote || control?.dataset.listCustom || control?.dataset.customInput || control?.name || "";
 }
 
 function textAiLabel(control) {
   const label = control?.closest("label");
-  return label?.querySelector("span")?.textContent?.trim() || textAiKey(control).replaceAll("_", " ");
+  const span = label?.querySelector(".settingFieldHeader > span, :scope > span, span");
+  return span?.textContent?.trim() || textAiKey(control).replaceAll("_", " ");
 }
 
 function isTextAiControl(control) {
   if (!control || !control.matches("input, textarea")) return false;
+  // Simple-mode free text fields (id-based, no form name)
+  if (control.dataset.setupField && control.dataset.simpleAi === "true") {
+    if (control.tagName === "TEXTAREA") return true;
+    if (control.tagName === "INPUT") {
+      return !["button", "checkbox", "color", "file", "hidden", "number", "radio", "range", "reset", "submit"].includes(control.type || "text");
+    }
+  }
   if (control.matches("textarea[data-ability-field], textarea[name], textarea[data-list-custom], textarea[data-custom-input], textarea[data-gain-note]")) return true;
   if (control.matches('input[data-ability-field="name"]')) return true;
   if (!control.name || control.tagName !== "INPUT") return false;
@@ -2363,6 +3586,7 @@ function abilityCardSnapshot(card) {
     cost_mode: costMode,
     cost: costMode === "custom" ? field("cost")?.value.trim() || "" : costMode,
     growth_math: field("growth_math")?.value.trim() || "",
+    power_type: field("power_type")?.value || "linear",
   };
 }
 
@@ -2386,7 +3610,9 @@ function textAiPanelTemplate(label) {
 
 function ensureTextAiControls(root = setupForm) {
   root
-    .querySelectorAll("input[name], textarea[name], textarea[data-list-custom], textarea[data-custom-input], textarea[data-gain-note], input[data-ability-field], textarea[data-ability-field]")
+    .querySelectorAll(
+      "input[name], textarea[name], textarea[data-list-custom], textarea[data-custom-input], textarea[data-gain-note], input[data-ability-field], textarea[data-ability-field], input[data-setup-field][data-simple-ai], textarea[data-setup-field][data-simple-ai]",
+    )
     .forEach((control) => {
       if (!isTextAiControl(control) || control.dataset.textAiAttached || !textAiKey(control)) return;
       const label = textAiLabel(control);
@@ -2497,6 +3723,10 @@ function setTextAiControlValue(control, value) {
 
   control.value = text;
   control.dispatchEvent(new Event("input", { bubbles: true }));
+  // Simple-mode fields live outside the advanced named controls — sync into the real setup form.
+  if (control.dataset.setupField && setupUiMode === "simple") {
+    pushSimpleToForm();
+  }
   updateCustomControls();
   updateGainControls();
   updateTextAiControls();
@@ -2529,10 +3759,12 @@ async function fillTextAiControl(control, panel) {
 }
 
 function clearIntentSummary() {
-  const el = document.querySelector("#setupIntentSummary");
-  if (!el) return;
-  el.hidden = true;
-  el.innerHTML = "";
+  ["#setupIntentSummary", "#setupIntentSummarySimple"].forEach((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return;
+    el.hidden = true;
+    el.innerHTML = "";
+  });
 }
 
 function intentSummaryBits(intent, theme) {
@@ -2576,8 +3808,11 @@ function humanizeIntentToken(raw) {
 }
 
 function renderIntentSummary(intent, theme, options = {}) {
-  const el = document.querySelector("#setupIntentSummary");
-  if (!el) return;
+  const hosts = [
+    document.querySelector("#setupIntentSummary"),
+    document.querySelector("#setupIntentSummarySimple"),
+  ].filter(Boolean);
+  if (!hosts.length) return;
   const bits = intentSummaryBits(intent, theme);
   const hasAny =
     bits.genre ||
@@ -2621,12 +3856,9 @@ function renderIntentSummary(intent, theme, options = {}) {
     );
   }
   const source = options.source ? String(options.source) : "";
-  el.hidden = false;
-  el.removeAttribute("data-help-attached");
-  el.classList.remove("helpText", "helpTextActive");
-  el.innerHTML = `
+  const html = `
     <div class="intentSummaryHead">
-      <strong class="intentSummaryTitle" id="intentSummaryHelpTarget" tabindex="0">Compiled plan</strong>
+      <strong class="intentSummaryTitle" tabindex="0">Compiled plan</strong>
       <span class="muted intentSummarySub">Session theme after Randomize${source ? ` · ${escapeHtml(source)}` : ""}</span>
     </div>
     <div class="intentChipRow">${chips.join("") || `<span class="muted">No genre lean</span>`}</div>
@@ -2643,32 +3875,273 @@ function renderIntentSummary(intent, theme, options = {}) {
       }
     </div>
   `;
-  // Help only on the title, not the whole bar (avoids dotted underline + huge hit area).
-  const helpTarget = el.querySelector("#intentSummaryHelpTarget");
-  if (helpTarget) {
-    ensureHelpForTarget(
-      helpTarget,
-      "After Randomize (or Load Settings), this is the compiled genre / system / growth / DM plan stored as the session theme.",
-    );
+  hosts.forEach((host) => {
+    host.hidden = false;
+    host.removeAttribute("data-help-attached");
+    host.classList.remove("helpText", "helpTextActive");
+    host.innerHTML = html;
+    const helpTarget = host.querySelector(".intentSummaryTitle");
+    if (helpTarget) {
+      ensureHelpForTarget(
+        helpTarget,
+        "After Randomize (or Load Settings), this is the compiled genre / system / growth / DM plan stored as the session theme.",
+      );
+    }
+  });
+}
+
+function normalizePreset(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  // Migrate legacy director id
+  let id = String(raw.id || "").trim().slice(0, 48);
+  if (id === "one_skill") id = "op_mc";
+  const label = String(raw.label || "").trim().slice(0, 40);
+  if (!id || !label) return null;
+  const advanced =
+    String(raw.advanced_idea || raw.idea || "").trim().slice(0, 600) ||
+    String(raw.simple_idea || "").trim().slice(0, 600);
+  const simple =
+    String(raw.simple_idea || "").trim().slice(0, 400) ||
+    advanced.slice(0, 400);
+  const aliases = Array.isArray(raw.aliases)
+    ? raw.aliases.map((a) => String(a || "").trim()).filter(Boolean)
+    : [];
+  return {
+    id,
+    label,
+    aliases,
+    builtin: Boolean(raw.builtin),
+    simple_idea: simple,
+    advanced_idea: advanced,
+  };
+}
+
+function loadUserPresets() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(PRESETS_STORAGE_KEY) || "[]");
+    if (!Array.isArray(raw)) return [];
+    return raw.map(normalizePreset).filter(Boolean).filter((p) => !p.builtin);
+  } catch (_) {
+    return [];
   }
 }
 
-function renderDirectorPresets() {
-  const host = document.querySelector("#directorPresets");
-  if (!host || host.dataset.ready === "1") return;
-  host.dataset.ready = "1";
-  host.innerHTML = DIRECTOR_PRESETS.map(
-    (p) =>
-      `<button type="button" class="chipBtn secondaryButton directorPreset" data-director-preset="${escapeHtml(p.id)}" title="${escapeHtml(p.idea)}">${escapeHtml(p.label)}</button>`,
-  ).join("");
+function saveUserPresets(list) {
+  const cleaned = (list || []).map(normalizePreset).filter(Boolean).filter((p) => !p.builtin);
+  try {
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(cleaned));
+  } catch (_) {
+    /* ignore */
+  }
 }
 
-function applyDirectorPreset(presetId, { runRandomize = true } = {}) {
-  const preset = DIRECTOR_PRESETS.find((p) => p.id === presetId);
+function allDirectorPresets() {
+  const users = loadUserPresets();
+  const builtinIds = new Set(DIRECTOR_PRESETS_BUILTIN.map((p) => p.id));
+  // Built-ins keep aliases for findPreset (one_skill → op_mc)
+  const builtins = DIRECTOR_PRESETS_BUILTIN.map((p) => {
+    const n = normalizePreset({ ...p, builtin: true });
+    if (n && Array.isArray(p.aliases)) n.aliases = p.aliases.slice();
+    return n;
+  });
+  return [...builtins, ...users.filter((p) => p && !builtinIds.has(p.id))].filter(Boolean);
+}
+
+/** Idea text for Randomize: depends on Simple vs Advanced mode. */
+function ideaForActivePreset(preset) {
+  if (!preset) return "";
+  if (setupUiMode === "simple") {
+    return String(preset.simple_idea || preset.advanced_idea || "").slice(0, 400);
+  }
+  return String(preset.advanced_idea || preset.simple_idea || "").slice(0, 600);
+}
+
+function renderDirectorPresets() {
+  const hosts = [
+    document.querySelector("#directorPresets"),
+    document.querySelector("#simpleDirectorPresets"),
+  ].filter(Boolean);
+  const presets = allDirectorPresets();
+  const html = presets
+    .map(
+      (p) =>
+        `<button type="button" class="chipBtn secondaryButton directorPreset${
+          selectedDirectorPresetId === p.id ? " isSelected" : ""
+        }${p.builtin ? "" : " isUserPreset"}" data-director-preset="${escapeHtml(p.id)}" title="${escapeHtml(
+          ideaForActivePreset(p) || p.label,
+        )}">${escapeHtml(p.label)}</button>`,
+    )
+    .join("");
+  hosts.forEach((host) => {
+    host.innerHTML = html;
+    host.dataset.ready = "1";
+  });
+  syncPresetEditorFromSelection();
+}
+
+function renderSimpleDirectorPresets() {
+  renderDirectorPresets();
+}
+
+function findPreset(id) {
+  const key = String(id || "").trim();
+  if (!key) return null;
+  const resolved = key === "one_skill" ? "op_mc" : key;
+  return (
+    allDirectorPresets().find(
+      (p) => p.id === resolved || p.id === key || (Array.isArray(p.aliases) && p.aliases.includes(key)),
+    ) || null
+  );
+}
+
+function syncPresetEditorFromSelection() {
+  const preset = findPreset(selectedDirectorPresetId);
+  const labelEl = document.querySelector("#presetLabelInput");
+  const simpleEl = document.querySelector("#presetSimpleIdea");
+  const advEl = document.querySelector("#presetAdvancedIdea");
+  const delBtn = document.querySelector("#presetDeleteBtn");
+  const saveBtn = document.querySelector("#presetSaveBtn");
+  if (!labelEl || !simpleEl || !advEl) return;
+  if (!preset) {
+    labelEl.value = "";
+    simpleEl.value = "";
+    advEl.value = "";
+    labelEl.disabled = true;
+    simpleEl.disabled = true;
+    advEl.disabled = true;
+    if (delBtn) delBtn.disabled = true;
+    if (saveBtn) saveBtn.disabled = true;
+    return;
+  }
+  labelEl.value = preset.label;
+  simpleEl.value = preset.simple_idea || "";
+  advEl.value = preset.advanced_idea || "";
+  // Built-ins: ideas editable as session overrides when saved → duplicates to user copy
+  const isBuiltin = Boolean(preset.builtin);
+  labelEl.disabled = isBuiltin;
+  simpleEl.disabled = false;
+  advEl.disabled = false;
+  if (delBtn) delBtn.disabled = isBuiltin;
+  if (saveBtn) saveBtn.disabled = false;
+  if (saveBtn) {
+    saveBtn.textContent = isBuiltin ? "Save as copy" : "Save";
+    saveBtn.title = isBuiltin
+      ? "Save edited ideas as a new custom preset"
+      : "Save edits to this custom preset";
+  }
+}
+
+function applyDirectorPreset(presetId, { runRandomize = false } = {}) {
+  const preset = findPreset(presetId);
   if (!preset) return;
+  selectedDirectorPresetId = preset.id;
+  const idea = ideaForActivePreset(preset);
   const ideaInput = document.querySelector("#randomizeSetupPrompt");
-  if (ideaInput) ideaInput.value = preset.idea.slice(0, 400);
-  if (runRandomize) randomizeSetup?.click();
+  if (ideaInput) ideaInput.value = idea.slice(0, 400);
+  document.querySelectorAll("[data-director-preset]").forEach((btn) => {
+    btn.classList.toggle("isSelected", btn.getAttribute("data-director-preset") === preset.id);
+  });
+  syncPresetEditorFromSelection();
+  // Chips only set vibe/idea — Confirm randomize performs the roll (avoids surprise wipes).
+  if (runRandomize) runConfirmedRandomize();
+}
+
+function createUserPreset() {
+  const id = `user_${Date.now().toString(36)}`;
+  const label = "Custom preset";
+  const list = loadUserPresets();
+  list.push(
+    normalizePreset({
+      id,
+      label,
+      builtin: false,
+      simple_idea: "Ordinary start, fair DM, local stakes. Fill a complete playable setup.",
+      advanced_idea:
+        "Ordinary start, fair DM, local stakes. Complete playable setup with clear genre, tone, and progression.",
+    }),
+  );
+  saveUserPresets(list);
+  selectedDirectorPresetId = id;
+  renderDirectorPresets();
+  applyDirectorPreset(id);
+}
+
+function saveSelectedPresetFromEditor() {
+  const current = findPreset(selectedDirectorPresetId);
+  if (!current) {
+    window.alert("Select a preset first.");
+    return;
+  }
+  const label = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
+  const simple_idea = String(document.querySelector("#presetSimpleIdea")?.value || "").trim().slice(0, 400);
+  const advanced_idea = String(document.querySelector("#presetAdvancedIdea")?.value || "").trim().slice(0, 600);
+  if (!simple_idea && !advanced_idea) {
+    window.alert("Add at least one idea (Simple or Advanced).");
+    return;
+  }
+  let list = loadUserPresets();
+  if (current.builtin) {
+    // Save as a new custom copy
+    const id = `user_${Date.now().toString(36)}`;
+    const copy = normalizePreset({
+      id,
+      label: label || `${current.label} (copy)`,
+      builtin: false,
+      simple_idea: simple_idea || advanced_idea,
+      advanced_idea: advanced_idea || simple_idea,
+    });
+    list.push(copy);
+    saveUserPresets(list);
+    selectedDirectorPresetId = id;
+  } else {
+    list = list.map((p) =>
+      p.id === current.id
+        ? normalizePreset({
+            id: current.id,
+            label: label || current.label,
+            builtin: false,
+            simple_idea: simple_idea || advanced_idea,
+            advanced_idea: advanced_idea || simple_idea,
+          })
+        : p,
+    );
+    saveUserPresets(list);
+  }
+  renderDirectorPresets();
+  applyDirectorPreset(selectedDirectorPresetId);
+}
+
+function deleteSelectedUserPreset() {
+  const current = findPreset(selectedDirectorPresetId);
+  if (!current || current.builtin) {
+    window.alert("Built-in presets cannot be deleted. Save as a copy first if you want a custom version.");
+    return;
+  }
+  if (!window.confirm(`Delete preset “${current.label}”?`)) return;
+  saveUserPresets(loadUserPresets().filter((p) => p.id !== current.id));
+  selectedDirectorPresetId = DIRECTOR_PRESETS_BUILTIN[0]?.id || "";
+  renderDirectorPresets();
+  if (selectedDirectorPresetId) applyDirectorPreset(selectedDirectorPresetId);
+}
+
+function placeCharacterArtCard() {
+  const card = document.querySelector("#characterPortraitCard");
+  if (!card) return;
+  const simpleMount = document.querySelector("#setupSimpleArtMount");
+  const advMount = document.querySelector("#setupAdvancedArtMount");
+  if (setupUiMode === "simple" && simpleMount) {
+    if (card.parentElement !== simpleMount) simpleMount.appendChild(card);
+    // Start collapsed in simple unless user already expanded
+    if (!card.dataset.userExpanded) {
+      card.classList.add("isCollapsed");
+      const body = document.querySelector("#setupArtBody");
+      const btn = document.querySelector("#setupArtCollapseBtn");
+      if (body) body.hidden = true;
+      if (btn) btn.setAttribute("aria-expanded", "false");
+    }
+  } else if (advMount) {
+    if (card.parentElement !== advMount) advMount.appendChild(card);
+  }
 }
 
 async function randomizeAllSetup(options = {}) {
@@ -2679,11 +4152,14 @@ async function randomizeAllSetup(options = {}) {
   if (idea) {
     const composed = await composeSetupIntent(idea);
     intent = composed.intent || null;
+    lastComposeIntent = intent || lastComposeIntent;
     const overrides = composed.field_overrides || {};
     if (overrides && typeof overrides === "object" && Object.keys(overrides).length) {
       applyRandomizedSetup({ fields: overrides });
       normalizeRandomizerDependencies();
     }
+    // OP MC / weak-start: open ability origin before the powers field is walked
+    ensureAbilityOriginForRandomize(intent);
     renderIntentSummary(lastComposeIntent, lastSessionTheme, { source: "from idea" });
   } else {
     lastComposeIntent = null;
@@ -2692,6 +4168,7 @@ async function randomizeAllSetup(options = {}) {
   }
   for (const name of RANDOM_FIELD_ORDER) {
     normalizeRandomizerDependencies();
+    if (name === "special_abilities") ensureAbilityOriginForRandomize(intent);
     if (!randomizeFieldApplies(name)) continue;
     // Skip fields already set by deterministic intent overrides (still re-roll unlocked if empty).
     if (intent && options.skipOverrideFields !== false) {
@@ -2712,7 +4189,7 @@ async function randomizeAllSetup(options = {}) {
         "loot_rarity",
         "world_style",
         "system_style",
-        // custom_skills is intentionally NOT hard-skipped: ONE_SKILL_FRAME skeleton is expanded by LLM
+        // custom_skills is intentionally NOT hard-skipped: OP_MC_FRAME skeleton is expanded by LLM
         // Structure fields seeded clean from intent — do not let LLM re-paste growth slogans.
         "quest_style",
         "faction_pressure",
@@ -2754,8 +4231,22 @@ async function randomizeAllSetup(options = {}) {
   if (idea && (lastComposeIntent || lastSessionTheme)) {
     renderIntentSummary(lastComposeIntent, lastSessionTheme, { source: "after Randomize" });
   }
+  // Keep powers builder mounted/visible (Simple reparent + origin UI)
+  placeAbilityBuilder();
+  updateAbilityOriginControls();
+  updatePowersDropdownMeta();
+  if (currentAbilitySlotCount() > 0) {
+    const dropdown = document.querySelector("#powersDropdown");
+    if (dropdown) dropdown.open = true;
+  }
   // Full randomize finished → rebuild face/body engine prompts once (overwrites prior).
-  await rebuildEnginePrompts({ force: true, silent: false }).catch(() => {});
+  fillDefaultNegativesOnBoot();
+  await rebuildEnginePrompts({ force: true, silent: false })
+    .then((data) => {
+      if (data) markArtPromptsReady("randomize");
+      syncArtGenerateButtons();
+    })
+    .catch(() => {});
 }
 
 async function runSetupCoherencePass(options = {}) {
@@ -2946,21 +4437,30 @@ function isNarrowSetupViewport() {
 }
 
 function setSetupMoreOpen(open) {
-  if (!setupActionsMore || !setupMoreToggle) return;
-  // Desktop always shows tools; ignore collapse
+  const utility = document.querySelector("#setupHeaderUtility");
+  if (!setupMoreToggle) return;
+  // Desktop always shows theme / save tools flush-right with Settings
   if (!isNarrowSetupViewport()) {
-    setupActionsMore.hidden = false;
+    if (utility) {
+      utility.hidden = false;
+      utility.classList.remove("isCollapsed");
+    }
     setupMoreToggle.setAttribute("aria-expanded", "true");
+    setupMoreToggle.hidden = true;
     return;
   }
-  setupActionsMore.hidden = !open;
+  setupMoreToggle.hidden = false;
+  if (utility) {
+    utility.hidden = !open;
+    utility.classList.toggle("isCollapsed", !open);
+  }
   setupMoreToggle.setAttribute("aria-expanded", open ? "true" : "false");
   setupMoreToggle.textContent = open ? "Less" : "More";
 }
 
 function bindSetupMoreTools() {
-  if (!setupMoreToggle || !setupActionsMore) return;
-  // Phones: collapsed by default so Settings/Start stay reachable
+  if (!setupMoreToggle) return;
+  // Phones: collapse utility strip by default; desktop always open
   setSetupMoreOpen(!isNarrowSetupViewport());
   setupMoreToggle.addEventListener("click", (event) => {
     event.preventDefault();
@@ -3075,6 +4575,7 @@ function setActiveTab(tabId, options = {}) {
   renderIndex();
   if (activeTab === "bible") loadBible().catch((error) => (indexContent.innerHTML = paragraphs(error.message)));
   if (activeTab === "model") loadModelConfig().catch((error) => (indexContent.innerHTML = paragraphs(error.message)));
+  if (activeTab === "quests") loadQuestStages().catch((error) => (indexContent.innerHTML = paragraphs(error.message)));
 }
 
 function applyTabNavMode(mode) {
@@ -3121,6 +4622,7 @@ function setupDescription(name) {
 function decorateSetupFields() {
   setupForm.querySelectorAll("label").forEach((label) => {
     if (label.closest("fieldset")) return;
+    if (label.classList.contains("simpleSetupField")) return;
     const field = label.querySelector("input[name], select[name], textarea[name]");
     const name = field?.name;
     if (!name || !SETTING_INFO[name] || label.querySelector(".settingDescription")) return;
@@ -3156,7 +4658,39 @@ function decorateSetupFields() {
     ensureSettingControls(fieldset, fieldset.dataset.listSetting);
   });
 
+  decorateSimpleSetupFields();
   updateCustomControls();
+}
+
+/** Simple mode: Lock + Randomize (+ AI on text) for each mapped field. */
+function decorateSimpleSetupFields() {
+  const panel = document.querySelector("#setupSimplePanel");
+  if (!panel) return;
+  panel.querySelectorAll("label.simpleSetupField").forEach((label) => {
+    const field = label.querySelector("[data-setup-field]");
+    const name = field?.dataset?.setupField;
+    if (!name || label.querySelector(`[data-setting-controls="${name}"]`)) return;
+    label.classList.add("settingField");
+    ensureSettingControls(label, name);
+    // World vibe also locks the multi-select world_style so full randomize skips genre.
+    const alsoLock = String(field.dataset.simpleAlsoLock || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    alsoLock.forEach((extraName) => {
+      if (label.querySelector(`[data-lock-setting="${extraName}"]`)) return;
+      const controls = label.querySelector(`[data-setting-controls="${name}"]`);
+      if (!controls) return;
+      const extra = document.createElement("label");
+      extra.className = "settingLock";
+      extra.title = `Also lock ${extraName.replaceAll("_", " ")} when this is locked`;
+      extra.innerHTML = `<input type="checkbox" data-lock-setting="${escapeHtml(extraName)}" data-lock-mirror-of="${escapeHtml(name)}" />`;
+      // Hide mirror checkbox UI — synced from primary lock only
+      extra.hidden = true;
+      controls.append(extra);
+    });
+  });
+  ensureTextAiControls(panel);
 }
 
 function ensureSelectUtilityOptions(field) {
@@ -3195,7 +4729,11 @@ function ensureListUtilityOptions(fieldset) {
 }
 
 function ensureSettingControls(container, name) {
-  if (!name || container.querySelector(`[data-setting-controls="${name}"]`)) return;
+  if (!name) return;
+  // Already has controls inside, or a restructured shell already owns them
+  if (container.querySelector(`[data-setting-controls="${name}"]`)) return;
+  if (container.closest(".settingFieldShell")?.querySelector(`[data-setting-controls="${name}"]`)) return;
+
   const controls = document.createElement("div");
   controls.className = "settingControls";
   controls.dataset.settingControls = name;
@@ -3204,16 +4742,36 @@ function ensureSettingControls(container, name) {
     <label class="settingLock"><input type="checkbox" data-lock-setting="${escapeHtml(name)}" /> Lock</label>
   `;
 
-  // Labels: put Randomize/Lock on the title row so free-text fields stay easy to roll one-by-one.
+  // Labels: Randomize/Lock must NOT live inside the <label> — clicks on the field
+  // (or the first focus click after alt-tab) were activating Randomize via label association.
   if (container.matches("label")) {
     const title = Array.from(container.children).find((child) => child.tagName === "SPAN");
+    const shell = document.createElement("div");
+    // Preserve layout classes (settingField, simpleSetupField, wide, …)
+    shell.className = `${container.className} settingFieldShell`.trim();
+    container.className = "settingFieldControl";
+    container.replaceWith(shell);
+
+    const header = document.createElement("div");
+    header.className = "settingFieldHeader";
     if (title) {
-      const header = document.createElement("div");
-      header.className = "settingFieldHeader";
-      title.replaceWith(header);
-      header.append(title, controls);
-      return;
+      // Title is a real <label for=…> so it still focuses the control without wrapping Randomize
+      const titleLabel = document.createElement("label");
+      titleLabel.className = "settingFieldTitle";
+      titleLabel.textContent = title.textContent || settingLabel(name);
+      title.remove();
+      header.append(titleLabel, controls);
+      shell.append(header, container);
+      const control = container.querySelector("input, textarea, select");
+      if (control) {
+        if (!control.id) control.id = `setup-field-${name.replace(/[^\w-]+/g, "_")}`;
+        titleLabel.htmlFor = control.id;
+      }
+    } else {
+      header.append(controls);
+      shell.append(header, container);
     }
+    return;
   }
 
   // Fieldsets: keep controls visible under the legend, before option rows when possible.
@@ -3226,6 +4784,28 @@ function ensureSettingControls(container, name) {
   }
 
   container.append(controls);
+}
+
+/**
+ * Suppress accidental Randomize / destructive actions on the first click after the
+ * browser tab regains focus (Windows click-through: focus + activate under cursor).
+ */
+let setupActionSuppressUntil = 0;
+function markSetupActionSuppress(ms = 450) {
+  setupActionSuppressUntil = Math.max(setupActionSuppressUntil, performance.now() + ms);
+}
+function isSetupActionSuppressed() {
+  return performance.now() < setupActionSuppressUntil;
+}
+function bindSetupFocusClickGuard() {
+  const arm = () => markSetupActionSuppress(500);
+  window.addEventListener("blur", arm);
+  window.addEventListener("focus", arm);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") arm();
+  });
+  // First pointer after page show / bfcache restore
+  window.addEventListener("pageshow", arm);
 }
 
 function updateCustomControls() {
@@ -3273,12 +4853,16 @@ function updateAbilityOriginControls() {
   if (randomAbilityButton) randomAbilityButton.disabled = locked;
   if (addAbilityButton) addAbilityButton.disabled = locked;
   if (lockAbilityCount) lockAbilityCount.disabled = locked;
+  if (abilityCountMinInput) abilityCountMinInput.disabled = locked || abilityQuantityLocked();
+  if (abilityCountMaxInput) abilityCountMaxInput.disabled = locked || abilityQuantityLocked();
   setupForm.querySelectorAll('[data-lock-setting="special_abilities"]').forEach((input) => {
     input.disabled = locked;
   });
-  abilityList.querySelectorAll("input, select, textarea, button").forEach((control) => {
+  abilityList?.querySelectorAll("input, select, textarea, button").forEach((control) => {
     control.disabled = setupRandomizationLocked();
   });
+  syncAbilityCountRangeInputs();
+  updatePowersDropdownMeta();
   updateTextOptimizeControls();
 }
 
@@ -3289,7 +4873,7 @@ function readSetupValue(formData, name) {
   if (value === "random") {
     const options = availableSelectValues(name);
     if (options.length) return choice(options);
-    if (RANDOM_SETUP[name]?.length) return choice(RANDOM_SETUP[name]);
+    if (RANDOM_SETUP[name]?.length) return pickRandomSetupValue(name);
   }
   return value;
 }
@@ -3332,63 +4916,152 @@ function readGainSetting(name) {
   };
 }
 
-function abilityTemplate(ability = {}) {
+function abilitySummaryLabel(ability = {}) {
+  const name = String(ability.name || "").trim();
+  return name || "Unnamed power";
+}
+
+function abilitySummaryMeta(ability = {}) {
+  const locked = ability.locked ?? abilityDefaultLocked();
+  const powerType =
+    ability.power_type ||
+    (ability.compounding || ability.one_skill || ability.op_mc ? "compounding" : "linear");
+  const typeLabel = POWER_GROWTH_TYPES.find((t) => t.id === powerType)?.label || powerType;
+  return `${locked ? "Locked" : "Unlocked"} · ${typeLabel}`;
+}
+
+function setAbilityCardExpanded(card, expanded) {
+  if (!card) return;
+  const open = Boolean(expanded);
+  card.classList.toggle("is-collapsed", !open);
+  card.classList.toggle("is-expanded", open);
+  const btn = card.querySelector(".abilityCollapseToggle");
+  if (btn) {
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.title = open ? "Collapse power details" : "Expand power details";
+  }
+}
+
+function refreshAbilityCardSummary(card) {
+  if (!card) return;
+  const name = card.querySelector('[data-ability-field="name"]')?.value.trim() || "Unnamed power";
+  const locked = card.querySelector('[data-ability-field="locked"]:checked')?.value === "true";
+  const powerType = card.querySelector('[data-ability-field="power_type"]')?.value || "linear";
+  const typeLabel = POWER_GROWTH_TYPES.find((t) => t.id === powerType)?.label || powerType;
+  const nameEl = card.querySelector("[data-ability-summary-name]");
+  const metaEl = card.querySelector("[data-ability-summary-meta]");
+  if (nameEl) nameEl.textContent = name;
+  if (metaEl) metaEl.textContent = `${locked ? "Locked" : "Unlocked"} · ${typeLabel}`;
+}
+
+/**
+ * Build one ability card.
+ * @param {object} ability
+ * @param {{ expanded?: boolean }} options - expanded only for manual "Add Ability"; randomize stays collapsed.
+ */
+function abilityTemplate(ability = {}, options = {}) {
   const id = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : String(Date.now() + Math.random());
   const locked = ability.locked ?? abilityDefaultLocked();
+  const powerType =
+    ability.power_type ||
+    (ability.compounding || ability.one_skill || ability.op_mc ? "compounding" : "linear");
   const growthMath =
     ability.growth_math ||
-    (ability.compounding || ability.one_skill ? choice(GROWTH_MATH_SAMPLES) : "");
+    (powerType === "compounding" || powerType === "passive" || ability.one_skill || ability.op_mc ? "" : "");
+  const typeOptions = POWER_GROWTH_TYPES.map(
+    (t) =>
+      `<option value="${escapeHtml(t.id)}" ${powerType === t.id ? "selected" : ""} title="${escapeHtml(t.tip)}">${escapeHtml(t.label)}</option>`,
+  ).join("");
+  const tip = POWER_GROWTH_TYPES.find((t) => t.id === powerType)?.tip || "";
+  const expanded = Boolean(options.expanded);
+  const collapseClass = expanded ? "is-expanded" : "is-collapsed";
+  const summaryName = abilitySummaryLabel(ability);
+  const summaryMeta = abilitySummaryMeta({ ...ability, locked, power_type: powerType });
   return `
-    <article class="abilitySetupCard" data-ability-id="${escapeHtml(id)}">
-      <div class="abilityCardHeader">
+    <article class="abilitySetupCard ${collapseClass}" data-ability-id="${escapeHtml(id)}">
+      <header class="abilityCardSummary">
+        <button type="button" class="abilityCollapseToggle" aria-expanded="${expanded ? "true" : "false"}" title="${expanded ? "Collapse power details" : "Expand power details"}">
+          <span class="abilityCollapseChevron" aria-hidden="true"></span>
+          <span class="srOnly">Toggle power details</span>
+        </button>
+        <div class="abilitySummaryText">
+          <strong class="abilitySummaryName" data-ability-summary-name>${escapeHtml(summaryName)}</strong>
+          <span class="abilitySummaryMeta" data-ability-summary-meta>${escapeHtml(summaryMeta)}</span>
+        </div>
+        <button class="secondaryButton chipBtn removeAbility abilitySummaryRemove" type="button" title="Remove this power">Remove</button>
+      </header>
+      <div class="abilityCardBody">
+        <div class="abilityCardHeader">
+          <label>
+            <span>Name</span>
+            <input data-ability-field="name" value="${escapeHtml(ability.name || "")}" placeholder="Echo Step" maxlength="100" />
+          </label>
+          <label>
+            <span>Growth type</span>
+            <select data-ability-field="power_type" class="powerTypeSelect" title="How this power levels">
+              ${typeOptions}
+            </select>
+          </label>
+          <fieldset class="toggleSet compactToggle">
+            <legend>State</legend>
+            <label><input type="radio" data-ability-field="locked" name="ability_locked_${escapeHtml(id)}" value="false" ${locked ? "" : "checked"} /> Unlocked</label>
+            <label><input type="radio" data-ability-field="locked" name="ability_locked_${escapeHtml(id)}" value="true" ${locked ? "checked" : ""} /> Locked</label>
+          </fieldset>
+        </div>
+        <p class="empty powerTypeTip" data-power-type-tip>${escapeHtml(tip)}</p>
         <label>
-          <span>Name</span>
-          <input data-ability-field="name" value="${escapeHtml(ability.name || "")}" placeholder="Echo Step" maxlength="100" />
+          <span>Base Description</span>
+          <textarea data-ability-field="description" rows="2" maxlength="800" placeholder="What this ability does. The model cannot rewrite this after setup.">${escapeHtml(ability.description || "")}</textarea>
         </label>
-        <fieldset class="toggleSet compactToggle">
-          <legend>State</legend>
-          <label><input type="radio" data-ability-field="locked" name="ability_locked_${escapeHtml(id)}" value="false" ${locked ? "" : "checked"} /> Unlocked</label>
-          <label><input type="radio" data-ability-field="locked" name="ability_locked_${escapeHtml(id)}" value="true" ${locked ? "checked" : ""} /> Locked</label>
-        </fieldset>
-      </div>
-      <label>
-        <span>Base Description</span>
-        <textarea data-ability-field="description" rows="2" maxlength="800" placeholder="What this ability does. The model cannot rewrite this after setup.">${escapeHtml(ability.description || "")}</textarea>
-      </label>
-      <div class="abilityCardGrid">
-        <label>
-          <span>Prerequisites</span>
-          <textarea data-ability-field="prerequisites" rows="2" maxlength="500" placeholder="Optional: unlock condition, training, item, oath, event.">${escapeHtml(ability.prerequisites || "")}</textarea>
+        <div class="abilityCardGrid">
+          <label>
+            <span>Prerequisites</span>
+            <textarea data-ability-field="prerequisites" rows="2" maxlength="500" placeholder="Optional: unlock condition, training, item, oath, event.">${escapeHtml(ability.prerequisites || "")}</textarea>
+          </label>
+          <label>
+            <span>Cost</span>
+            <select data-ability-field="cost_mode">
+              <option value="no cost" ${!ability.cost || ability.cost === "no cost" ? "selected" : ""}>No cost</option>
+              <option value="model decides" ${ability.cost === "model decides" ? "selected" : ""}>Let model decide</option>
+              <option value="custom" ${ability.cost && !["no cost", "model decides"].includes(ability.cost) ? "selected" : ""}>Custom cost</option>
+            </select>
+            <textarea data-ability-field="cost" rows="2" maxlength="300" placeholder="Optional custom cost, limit, cooldown, resource, injury, debt, etc.">${escapeHtml(ability.cost && !["no cost", "model decides"].includes(ability.cost) ? ability.cost : "")}</textarea>
+          </label>
+        </div>
+        <label class="wide">
+          <span>Growth Math</span>
+          <textarea data-ability-field="growth_math" rows="3" maxlength="800" placeholder="How this power grows in numbers: XP_to_next, rank thresholds, per-use XP × risk, soft caps, rank→bonus.">${escapeHtml(growthMath)}</textarea>
         </label>
-        <label>
-          <span>Cost</span>
-          <select data-ability-field="cost_mode">
-            <option value="no cost" ${!ability.cost || ability.cost === "no cost" ? "selected" : ""}>No cost</option>
-            <option value="model decides" ${ability.cost === "model decides" ? "selected" : ""}>Let model decide</option>
-            <option value="custom" ${ability.cost && !["no cost", "model decides"].includes(ability.cost) ? "selected" : ""}>Custom cost</option>
-          </select>
-          <textarea data-ability-field="cost" rows="2" maxlength="300" placeholder="Optional custom cost, limit, cooldown, resource, injury, debt, etc.">${escapeHtml(ability.cost && !["no cost", "model decides"].includes(ability.cost) ? ability.cost : "")}</textarea>
-        </label>
-      </div>
-      <label class="wide">
-        <span>Growth Math</span>
-        <textarea data-ability-field="growth_math" rows="3" maxlength="800" placeholder="How this power grows in numbers: XP_to_next, rank thresholds, per-use XP × risk, soft caps, rank→bonus. Example: F0 E80 D200; use 5-12 XP × risk (1/2/3); +1 check per rank.">${escapeHtml(growthMath)}</textarea>
-      </label>
-      <div class="abilityCardActions">
-        <button class="secondaryButton randomizeOneAbility" type="button">Randomize This</button>
-        <button class="secondaryButton addAbilityAfter" type="button">Add Ability Below</button>
-        <button class="secondaryButton removeAbility" type="button">Remove</button>
+        <div class="abilityCardActions">
+          <button class="secondaryButton calcGrowthMathBtn" type="button" title="Fill growth math from type + current setup">Calculate level-up math</button>
+          <button class="secondaryButton randomizeOneAbility" type="button">Randomize This</button>
+          <button class="secondaryButton addAbilityAfter" type="button">Add Ability Below</button>
+          <button class="secondaryButton removeAbility" type="button">Remove</button>
+        </div>
       </div>
     </article>
   `;
 }
 
-function addAbility(ability = {}) {
+/**
+ * @param {object} ability
+ * @param {{ expanded?: boolean }} options - true only for manual Add Ability; randomize leaves collapsed.
+ */
+function addAbility(ability = {}, options = {}) {
   if (abilityOrigin() === "none") setAbilityOrigin("acquired");
-  abilityList.insertAdjacentHTML("beforeend", abilityTemplate(ability));
-  ensureTextAiControls(abilityList.lastElementChild || abilityList);
-  decorateFunctionHelp(abilityList.lastElementChild || abilityList);
+  let prepared = ability.name || ability.description ? { ...ability } : applyOriginToAbility(ability);
+  prepared = normalizeAbilityLockAndPrerequisites(prepared, abilityOrigin());
+  const expanded = Boolean(options.expanded);
+  abilityList.insertAdjacentHTML("beforeend", abilityTemplate(prepared, { expanded }));
+  const card = abilityList.lastElementChild;
+  ensureTextAiControls(card || abilityList);
+  decorateFunctionHelp(card || abilityList);
   updateAbilityOriginControls();
+  if (card) {
+    setAbilityCardExpanded(card, expanded);
+    refreshAbilityCardSummary(card);
+  }
+  return card;
 }
 
 function abilityFingerprint(ability) {
@@ -3404,11 +5077,12 @@ function randomAbilityPreset(avoidList = []) {
   );
   const pool = ABILITY_PRESETS.filter((p) => !avoid.has(abilityFingerprint(p)));
   const pick = pool.length ? choice(pool) : choice(ABILITY_PRESETS);
-  return { ...pick };
+  return applyOriginToAbility({ ...pick });
 }
 
 function randomizeAbility() {
-  addAbility(randomAbilityPreset());
+  // Randomize always inserts collapsed — user expands only via Add Ability or toggle.
+  addAbility(randomAbilityPreset(), { expanded: false });
 }
 
 function collectAbilities() {
@@ -3419,13 +5093,206 @@ function collectAbilities() {
       const name = field("name")?.value.trim() || "";
       const description = field("description")?.value.trim() || "";
       const locked = card.querySelector('[data-ability-field="locked"]:checked')?.value === "true";
-      const prerequisites = field("prerequisites")?.value.trim() || "";
+      const prerequisites = normalizeAbilityPrerequisites(field("prerequisites")?.value || "");
       const costMode = field("cost_mode")?.value || "no cost";
       const cost = costMode === "custom" ? field("cost")?.value.trim() || "model decides" : costMode;
       const growth_math = field("growth_math")?.value.trim() || "";
-      return { name, description, locked, prerequisites, cost, growth_math };
+      const power_type = field("power_type")?.value || "linear";
+      return normalizeAbilityLockAndPrerequisites(
+        { name, description, locked, prerequisites, cost, growth_math, power_type },
+        abilityOrigin(),
+      );
     })
     .filter((ability) => ability.name || ability.description);
+}
+
+function setupContextForGrowthMath() {
+  const difficulty = getFormFieldValue("difficulty") || document.querySelector("#simpleDifficulty")?.value || "normal";
+  const world =
+    document.querySelector("#simpleWorld")?.value?.trim() ||
+    setupForm?.querySelector('[name="world_style_custom"]')?.value ||
+    getFormFieldValue("custom_style") ||
+    "";
+  const origin = getFormFieldValue("backstory_mode") || document.querySelector("#simpleOrigin")?.value || "known";
+  const name = getFormFieldValue("player_name") || document.querySelector("#simplePlayerName")?.value || "Wanderer";
+  return { difficulty, world, origin, name };
+}
+
+function growthMathForPowerType(powerType, ability = {}, ctx = {}) {
+  const difficulty = String(ctx.difficulty || "normal").toLowerCase();
+  const hard = difficulty === "hard" || difficulty === "brutal";
+  const easy = difficulty === "easy";
+  const name = String(ability.name || "this power").trim() || "this power";
+  const worldNote = ctx.world ? ` World lean: ${String(ctx.world).slice(0, 80)}.` : "";
+  const type = String(powerType || "linear");
+
+  if (type === "flat") {
+    return `flat; no rank ladder for ${name}; effect stays as written in base description; uses do not grant rank XP (optional narrative mastery only).${worldNote}`;
+  }
+  if (type === "breakthrough") {
+    const xp = easy ? "practice 3-6, contested 8-12" : hard ? "practice 2-4, contested 10-16" : "practice 4-8, contested 10-14";
+    return `breakthrough ladder; ranks F→E@120 E→D@280 D→C@600 (plateau after C until story breakthrough); ${xp} XP × risk (1/2/3); soft cap after C practice ×0.4 until mentor/life-risk breakthrough; each rank above F: +1 domain check; post-breakthrough unlocks next band (B/A).${worldNote}`;
+  }
+  if (type === "soft_cap") {
+    return (
+      (easy ? GROWTH_MATH_SAMPLES[1] : hard ? GROWTH_MATH_SAMPLES[2] : GROWTH_MATH_SAMPLES[0]) +
+      ` soft-cap profile for ${name}; after rank C practice XP ×0.55 until setback recovery or mentor drill.${worldNote}`
+    );
+  }
+  if (type === "item_bound") {
+    return `item-bound growth for ${name}; XP only while linked gear is equipped/used; F→E@90 E→D@220 D→C@480; use grants 4-10 XP × risk (1/2/3); unequip freezes rank; each rank: +1 domain check while worn; soft cap after C ×0.6.${worldNote}`;
+  }
+  if (type === "passive") {
+    return `passive always-on for ${name}; ranks F→E@70 E→D@160 D→C@360 C→B@750 B→A@1600 A→S@3400; ambient XP 3-8/day in domain + 4-10 on relevant scenes × risk; no activate cost; each rank: +1 domain check / +8–14% passive effect; soft cap after C until story beat; stronger auras at A/S.${worldNote}`;
+  }
+  if (type === "compounding") {
+    const curve = hard
+      ? "XP_to_next = 42 * rank_index^1.65 (F=1); use grants 5-10 XP × risk (1/2/3/5); soft caps after C and B (practice ×0.5) until contested/story breakthrough; ladder through S/SS/SSS"
+      : easy
+        ? "XP_to_next = 30 * rank_index^1.5 (F=1); use grants 6-12 XP × risk (1/2/3); soft cap after B practice ×0.6 until breakthrough; path open to S+"
+        : "XP_to_next = 36 * rank_index^1.58 (F=1); use grants 5-11 XP × risk (1/2/3/4); soft cap after C practice ×0.55 until breakthrough; full ladder F…S/SS/SSS";
+    return `OP compounding for ${name}; ranks F,E,D,C,B,A,S,SS,SSS; ${curve}; each rank above F: +1 domain check and ~+14–22% effect magnitude (stack); late S+ may unlock domain passives / secondary expressions — opening kit stays one seed.${worldNote}`;
+  }
+  // linear default
+  return `linear ranks for ${name}; F0 E70 D160 C320 B600 A1100; use grants 5-10 XP × risk (1/2/3); XP_to_next ≈ 40 + 25*rank_index; each rank: +1 domain check / +8% effect; no hard compound mult.${worldNote}`;
+}
+
+function fillGrowthMathOnCard(card, { force = false } = {}) {
+  if (!card) return;
+  const field = (name) => card.querySelector(`[data-ability-field="${name}"]`);
+  const ta = field("growth_math");
+  if (!ta) return;
+  if (!force && String(ta.value || "").trim()) return;
+  const powerType = field("power_type")?.value || "linear";
+  const ability = {
+    name: field("name")?.value || "",
+    description: field("description")?.value || "",
+  };
+  ta.value = growthMathForPowerType(powerType, ability, setupContextForGrowthMath()).slice(0, 800);
+}
+
+function calculateAllAbilityGrowthMath({ force = false } = {}) {
+  if (!abilityList) return 0;
+  let n = 0;
+  abilityList.querySelectorAll(".abilitySetupCard").forEach((card) => {
+    const before = card.querySelector('[data-ability-field="growth_math"]')?.value || "";
+    fillGrowthMathOnCard(card, { force });
+    const after = card.querySelector('[data-ability-field="growth_math"]')?.value || "";
+    if (after && after !== before) n += 1;
+    else if (force && after) n += 1;
+  });
+  return n;
+}
+
+function updatePowerTypeTip(card) {
+  if (!card) return;
+  const type = card.querySelector('[data-ability-field="power_type"]')?.value || "linear";
+  const tip = POWER_GROWTH_TYPES.find((t) => t.id === type)?.tip || "";
+  const el = card.querySelector("[data-power-type-tip]");
+  if (el) el.textContent = tip;
+}
+
+// --- Gear / augments (simple + sync to starter_equipment) -------------------
+function gearItemTemplate(item = {}) {
+  const id = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : String(Date.now() + Math.random());
+  const effect = item.effect_type || "look_only";
+  return `
+    <article class="gearSetupCard" data-gear-id="${escapeHtml(id)}">
+      <div class="gearCardRow">
+        <label>
+          <span>Item</span>
+          <input data-gear-field="name" value="${escapeHtml(item.name || "")}" maxlength="80" placeholder="Travel coat, iron ring…" />
+        </label>
+        <label>
+          <span>Worn / slot</span>
+          <input data-gear-field="slot" value="${escapeHtml(item.slot || "")}" maxlength="40" placeholder="torso, feet, hand…" />
+        </label>
+        <label>
+          <span>Effect type</span>
+          <select data-gear-field="effect_type">
+            <option value="look_only" ${effect === "look_only" ? "selected" : ""}>Look only</option>
+            <option value="stat" ${effect === "stat" ? "selected" : ""}>Stat boost</option>
+            <option value="ability" ${effect === "ability" ? "selected" : ""}>Grants ability / action</option>
+            <option value="compounding" ${effect === "compounding" ? "selected" : ""}>Compounding with level</option>
+            <option value="mixed" ${effect === "mixed" ? "selected" : ""}>Mixed / special</option>
+          </select>
+        </label>
+      </div>
+      <label class="wide">
+        <span>What it does / rules</span>
+        <textarea data-gear-field="effect" rows="2" maxlength="400" placeholder="e.g. +1 endurance while worn; once/day muffles footsteps; compounds +2% quiet per player level while equipped">${escapeHtml(item.effect || "")}</textarea>
+      </label>
+      <div class="abilityCardActions">
+        <button type="button" class="secondaryButton removeGearItem" title="Remove">Remove</button>
+      </div>
+    </article>
+  `;
+}
+
+function addGearItem(item = {}) {
+  const list = document.querySelector("#simpleGearList");
+  if (!list) return;
+  list.insertAdjacentHTML("beforeend", gearItemTemplate(item));
+}
+
+function collectGearItems() {
+  return Array.from(document.querySelectorAll("#simpleGearList .gearSetupCard"))
+    .map((card) => {
+      const f = (n) => card.querySelector(`[data-gear-field="${n}"]`)?.value?.trim() || "";
+      return {
+        name: f("name"),
+        slot: f("slot"),
+        effect_type: f("effect_type") || "look_only",
+        effect: f("effect"),
+      };
+    })
+    .filter((g) => g.name || g.effect);
+}
+
+function gearItemsToStarterEquipment(items) {
+  return (items || [])
+    .map((g) => {
+      const bits = [g.name || "gear"];
+      if (g.slot) bits.push(`(${g.slot})`);
+      if (g.effect_type && g.effect_type !== "look_only") bits.push(`[${g.effect_type}]`);
+      if (g.effect) bits.push(`— ${g.effect}`);
+      return bits.join(" ");
+    })
+    .join("; ");
+}
+
+function parseStarterEquipmentToGear(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return [];
+  return raw
+    .split(/;|\n/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 12)
+    .map((line) => {
+      const slotM = line.match(/\(([^)]+)\)/);
+      const typeM = line.match(/\[(look_only|stat|ability|compounding|mixed)\]/i);
+      const effectM = line.split(/—|–|-/).slice(1).join("-").trim();
+      let name = line.replace(/\([^)]+\)/g, "").replace(/\[[^\]]+\]/g, "").split(/—|–/)[0].trim();
+      return {
+        name: name || line.slice(0, 40),
+        slot: slotM ? slotM[1] : "",
+        effect_type: typeM ? typeM[1].toLowerCase() : effectM ? "mixed" : "look_only",
+        effect: effectM || "",
+      };
+    });
+}
+
+function placeAbilityBuilder() {
+  const block = document.querySelector("#abilityOptions");
+  if (!block) return;
+  const simpleMount = document.querySelector("#setupSimplePowersMount");
+  const advMount = document.querySelector("#setupAdvancedPowersMount");
+  if (setupUiMode === "simple" && simpleMount) {
+    if (block.parentElement !== simpleMount) simpleMount.appendChild(block);
+  } else if (advMount) {
+    if (block.parentElement !== advMount) advMount.appendChild(block);
+  }
 }
 
 function updateSystemStyleDescription() {
@@ -3471,10 +5338,273 @@ function showMainMenu() {
   refreshContinueButton();
 }
 
+let characterSheetOpen = false;
+let characterSheetCategory = "you";
+
+function sheetTitleForCategory(cat) {
+  if (cat === "history") return { title: "History", sub: "Turn log — also available from the ☰ menu." };
+  if (cat === "world") return { title: "World", sub: "Bible, places, factions." };
+  if (cat === "people") return { title: "People", sub: "NPCs and social threads." };
+  if (cat === "tools") return { title: "Tools", sub: "Quests, model, meta." };
+  return { title: "Character", sub: "Art, stats, inventory, and self." };
+}
+
+function openCharacterSheet(category = "you") {
+  characterSheetOpen = true;
+  characterSheetCategory = category || "you";
+  closePlayMenu();
+  const drawer = document.querySelector("#characterSheetDrawer");
+  if (!drawer) return;
+  drawer.classList.remove("hidden");
+  drawer.setAttribute("aria-hidden", "false");
+  const meta = sheetTitleForCategory(characterSheetCategory);
+  const titleEl = document.querySelector("#characterSheetTitle");
+  const subEl = document.querySelector("#characterSheetSubtitle");
+  if (titleEl) titleEl.textContent = meta.title;
+  if (subEl) subEl.textContent = meta.sub;
+  document.querySelectorAll("[data-sheet-tab]").forEach((btn) => {
+    btn.toggleAttribute("data-sheet-active", btn.getAttribute("data-sheet-tab") === characterSheetCategory);
+  });
+  paintCharacterSheet();
+}
+
+function closeCharacterSheet() {
+  characterSheetOpen = false;
+  const drawer = document.querySelector("#characterSheetDrawer");
+  drawer?.classList.add("hidden");
+  drawer?.setAttribute("aria-hidden", "true");
+}
+
+function paintCharacterSheet() {
+  const body = document.querySelector("#characterSheetBody");
+  if (!body) return;
+  const cat = characterSheetCategory || "you";
+  if (cat === "history") {
+    renderHistory();
+    const hist = document.querySelector("#history");
+    body.innerHTML = `<div class="sheetHistoryMount">${hist ? hist.innerHTML : "<p class='empty'>No history yet.</p>"}</div>`;
+    return;
+  }
+  if (cat === "you") {
+    body.innerHTML = renderCharacter();
+    return;
+  }
+  // World / people / tools: render first tab of that category (bible, npcs, etc.)
+  const catDef = TAB_CATEGORIES.find((c) => c.id === cat) || TAB_CATEGORIES[0];
+  const tabs = catDef.tabs || [];
+  const prefer =
+    cat === "world"
+      ? "bible"
+      : cat === "people"
+        ? "npcs"
+        : cat === "tools"
+          ? "quests"
+          : tabs[0]?.id;
+  const tabId = tabs.some((t) => t.id === prefer) ? prefer : tabs[0]?.id || "character";
+  const renderers = TAB_RENDERERS();
+  const render = renderers[tabId] || renderCharacter;
+  const tabButtons = tabs
+    .map(
+      (t) =>
+        `<button type="button" class="chipBtn secondaryButton sheetInnerTab${t.id === tabId ? " isActive" : ""}" data-sheet-inner-tab="${escapeHtml(t.id)}">${escapeHtml(t.label)}</button>`,
+    )
+    .join("");
+  body.innerHTML = `
+    <div class="sheetInnerNav">${tabButtons}</div>
+    <div class="sheetInnerContent">${render()}</div>
+  `;
+  body.querySelectorAll("[data-sheet-inner-tab]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = btn.getAttribute("data-sheet-inner-tab");
+      const r = TAB_RENDERERS()[id];
+      const content = body.querySelector(".sheetInnerContent");
+      if (content && r) content.innerHTML = r();
+      body.querySelectorAll("[data-sheet-inner-tab]").forEach((b) => {
+        b.classList.toggle("isActive", b === btn);
+      });
+      if (id === "bible") loadBible().catch(() => {});
+      if (id === "model") loadModelConfig().catch(() => {});
+      if (id === "quests") loadQuestStages().catch(() => {});
+    });
+  });
+  if (tabId === "bible") loadBible().catch(() => {});
+  if (tabId === "model") loadModelConfig().catch(() => {});
+  if (tabId === "quests") loadQuestStages().catch(() => {});
+}
+
+function openPlayMenu() {
+  const drawer = document.querySelector("#playMenuDrawer");
+  const backdrop = document.querySelector("#playMenuBackdrop");
+  const toggle = document.querySelector("#playMenuToggle");
+  drawer?.classList.remove("hidden");
+  backdrop?.classList.remove("hidden");
+  drawer?.setAttribute("aria-hidden", "false");
+  backdrop?.setAttribute("aria-hidden", "false");
+  toggle?.setAttribute("aria-expanded", "true");
+  document.body.classList.add("play-menu-open");
+}
+
+function closePlayMenu() {
+  const drawer = document.querySelector("#playMenuDrawer");
+  const backdrop = document.querySelector("#playMenuBackdrop");
+  const toggle = document.querySelector("#playMenuToggle");
+  drawer?.classList.add("hidden");
+  backdrop?.classList.add("hidden");
+  drawer?.setAttribute("aria-hidden", "true");
+  backdrop?.setAttribute("aria-hidden", "true");
+  toggle?.setAttribute("aria-expanded", "false");
+  document.body.classList.remove("play-menu-open");
+}
+
+function togglePlayMenu() {
+  const drawer = document.querySelector("#playMenuDrawer");
+  if (drawer && !drawer.classList.contains("hidden")) closePlayMenu();
+  else openPlayMenu();
+}
+
+function bindPlaySideRail() {
+  if (document.body.dataset.playRailBound === "1") return;
+  document.body.dataset.playRailBound = "1";
+
+  document.querySelector("#playMenuToggle")?.addEventListener("click", () => togglePlayMenu());
+  document.querySelector("#playMenuClose")?.addEventListener("click", () => closePlayMenu());
+  document.querySelector("#playMenuBackdrop")?.addEventListener("click", () => closePlayMenu());
+  document.querySelector("#playMenuDrawer")?.addEventListener("click", (event) => {
+    const item = event.target.closest("[data-play-menu]");
+    if (!item) return;
+    const action = item.getAttribute("data-play-menu");
+    if (action === "scene") {
+      closePlayMenu();
+      closeCharacterSheet();
+      setSceneFocus(true);
+      return;
+    }
+    if (action === "map") {
+      closePlayMenu();
+      closeCharacterSheet();
+      setSceneFocus(false);
+      return;
+    }
+    if (action === "character") {
+      openCharacterSheet("you");
+      return;
+    }
+    if (action === "world" || action === "people" || action === "tools" || action === "history") {
+      openCharacterSheet(action);
+      return;
+    }
+  });
+
+  document.querySelector("#sceneFocusMapBtnHeader")?.addEventListener("click", () => {
+    closeCharacterSheet();
+    setSceneFocus(false);
+  });
+  document.querySelector("#sceneFocusChatBtnHeader")?.addEventListener("click", () => {
+    closeCharacterSheet();
+    setSceneFocus(true);
+  });
+
+  // Legacy rail (hidden) — still works if present
+  document.querySelector("#playSideRail")?.addEventListener("click", (event) => {
+    const btn = event.target.closest("[data-play-rail]");
+    if (!btn) return;
+    const action = btn.getAttribute("data-play-rail");
+    if (action === "character") openCharacterSheet("you");
+    else if (action === "scene") setSceneFocus(true);
+    else if (action === "map") setSceneFocus(false);
+    else if (action === "history") openCharacterSheet("history");
+  });
+
+  document.querySelector("#characterSheetClose")?.addEventListener("click", () => closeCharacterSheet());
+  document.querySelector("#characterSheetPopout")?.addEventListener("click", () => {
+    if (characterSheetCategory === "history") {
+      openTabPopout("history", "float");
+      return;
+    }
+    openTabPopout(characterSheetCategory === "you" ? "character" : "bible", "float");
+  });
+  document.querySelector("#characterSheetDrawer")?.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-sheet-tab]");
+    if (!tab) return;
+    openCharacterSheet(tab.getAttribute("data-sheet-tab") || "you");
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      closePlayMenu();
+    }
+  });
+}
+
+/**
+ * Compact campaign header for the top bar (not the full setup essay).
+ * Prefers genre + short tags; full text stays on hover title.
+ */
+function deriveCampaignHeader(raw, theme = {}) {
+  const full = String(raw || "").replace(/\s+/g, " ").trim();
+  const genre = String(theme.genre || theme.adapter_hint || "").trim();
+  const growth = String(theme.power_fantasy?.growth || theme.growth || "").trim();
+  const dm = String(theme.dm_stance || "").trim();
+  // Already a short stored header
+  if (full && full.length <= 56 && !/[.]/.test(full.slice(20))) {
+    return full;
+  }
+  const bits = [];
+  if (genre) bits.push(genre.split(/[,;|]/)[0].trim().slice(0, 28));
+  // First clause before a period / "Power fantasy" dump
+  if (full) {
+    let clause = full.split(/\.\s+|Power fantasy:|DM stance:/i)[0].trim();
+    clause = clause.replace(/^(world\s*vibe|setting)\s*[:\-–]\s*/i, "").trim();
+    if (clause && clause.length > 8) {
+      // Prefer a punchy lead ("Isekai RPG lean") over the whole clause
+      const lead = clause.match(/^[^,:]{4,40}/)?.[0]?.trim() || clause;
+      if (!bits.some((b) => lead.toLowerCase().includes(String(b).toLowerCase().slice(0, 8)))) {
+        bits.push(lead.slice(0, 40));
+      }
+    }
+  }
+  if (/compound/i.test(growth) || /compound/i.test(full)) bits.push("compound growth");
+  else if (/weak|near.?useless/i.test(full)) bits.push("start weak");
+  if (/fair/i.test(dm) || /fair DM/i.test(full)) bits.push("fair DM");
+  let header = bits
+    .filter(Boolean)
+    .filter((b, i, a) => a.findIndex((x) => x.toLowerCase() === b.toLowerCase()) === i)
+    .slice(0, 3)
+    .join(" · ");
+  if (!header) header = (full || "Adventure").slice(0, 48);
+  if (header.length > 56) header = `${header.slice(0, 53).trim()}…`;
+  return header;
+}
+
+function updateMapStatusWorld() {
+  const el = document.querySelector("#mapStatusWorld");
+  if (!el) return;
+  const opts = state?.settings?.playthrough_options || state?.settings || {};
+  const theme = opts.session_theme || state?.session_theme || lastSessionTheme || {};
+  const style =
+    String(opts.campaign_header || "").trim() ||
+    String(opts.custom_style || "").trim() ||
+    String(opts.world_style || "").trim() ||
+    String(theme.genre || theme.adapter_hint || theme.tone || "").trim() ||
+    String(opts.tone || "").trim() ||
+    "";
+  const full =
+    String(opts.custom_style || "").trim() ||
+    String(opts.world_style || "").trim() ||
+    style;
+  // Stored short header wins; else derive a compact campaign title
+  const display = opts.campaign_header
+    ? String(opts.campaign_header).trim().slice(0, 64)
+    : deriveCampaignHeader(style, theme);
+  el.textContent = display || "Adventure";
+  el.title = full || display || "World / session vibe";
+}
+
 function showGameView() {
   mainMenuView?.classList.add("hidden");
   setupView?.classList.add("hidden");
   gameView?.classList.remove("hidden");
+  bindPlaySideRail();
   // Ensure play chrome paints even if we only unhide the view.
   if (state?.setup_complete || state?.player) {
     const location = state.current_location || {};
@@ -3484,6 +5614,7 @@ function showGameView() {
       locationLine.textContent = code ? `${code} · ${shortName}` : shortName;
       locationLine.title = String(location.summary || shortName);
     }
+    updateMapStatusWorld();
     applyPlayLayout();
     renderHistory();
     renderIndex();
@@ -3491,6 +5622,7 @@ function showGameView() {
     refreshLocalMap();
     refreshNpcStage();
     restoreSavedFloatWindows();
+    if (characterSheetOpen) paintCharacterSheet();
   }
 }
 
@@ -3513,7 +5645,7 @@ function restoreLastTurnPanels(resume = null) {
     String(lastHistoryEntry(["narration"])?.content || "").trim() ||
     String(snap.last_summary || "").trim() ||
     String((state?.turn_summaries || [])[0]?.summary || "").trim();
-  const inputEntry = lastHistoryEntry(["player", "opening", "continue", "regenerate"]);
+  const inputEntry = lastHistoryEntry(["player", "opening", "continue", "regenerate", "wait"]);
   const inputText =
     String(snap.last_input || "").trim() ||
     String(inputEntry?.content || "").trim();
@@ -3528,10 +5660,12 @@ function restoreLastTurnPanels(resume = null) {
             ? "Continue"
             : inputKind === "regenerate"
               ? "Regenerate"
-              : "Last input";
+              : inputKind === "wait"
+                ? "Wait"
+                : "Last input";
       latestInput.innerHTML = paragraphs(inputKind && inputKind !== "player" ? `[${label}] ${inputText}` : inputText);
     } else {
-      latestInput.innerHTML = paragraphs("(resumed from save)");
+      latestInput.innerHTML = paragraphs("(start of playthrough — no prior action)");
     }
   }
 
@@ -3539,7 +5673,7 @@ function restoreLastTurnPanels(resume = null) {
     if (narrationText) {
       latestOutput.innerHTML = `<article class="turnNarration">${paragraphs(narrationText)}</article>`;
     } else {
-      latestOutput.innerHTML = paragraphs("Continued from last save. What do you do?");
+      latestOutput.innerHTML = paragraphs("Scene rewound. What do you do?");
     }
   }
 
@@ -4139,10 +6273,18 @@ function showSetupWizard(options = {}) {
   setSetupStep(0);
   updateConditionalSetup();
   bindSetupTutorialOnce();
+  setupUiMode = loadSetupUiMode();
+  imageUiMode = loadImageUiMode();
+  setSetupUiMode(setupUiMode);
+  setImageUiMode(imageUiMode);
+  renderDirectorPresets();
+  renderSimpleDirectorPresets();
   // New game: character art always starts collapsed (user can expand anytime).
   loadImageConfig()
     .catch(() => {})
     .finally(() => {
+      fillDefaultNegativesOnBoot();
+      syncArtGenerateButtons();
       initSetupArtCollapse({ forceCollapsed: true });
     });
   // First-time (or forced) tour
@@ -4156,13 +6298,26 @@ function showSetupWizard(options = {}) {
 function renderShell(nextState, options = {}) {
   state = nextState;
   const ready = Boolean(state.setup_complete) || (options.forceGame && Boolean(state?.player));
-  // Prefer server-cached portrait when present
+  // Prefer server-cached art when present; otherwise keep setup-localStorage art
   if (state.player_portrait?.data_url) {
     try {
       localStorage.setItem("morkyn-player-portrait", state.player_portrait.data_url);
     } catch (_) {
       /* ignore quota */
     }
+  } else {
+    const faceLs = safeMediaUrl(localStorage.getItem("morkyn-player-portrait") || "");
+    if (faceLs) state.player_portrait = { data_url: faceLs, kind: "face" };
+  }
+  if (state.player_fullbody?.data_url) {
+    try {
+      localStorage.setItem("morkyn-player-fullbody", state.player_fullbody.data_url);
+    } catch (_) {
+      /* ignore quota */
+    }
+  } else {
+    const bodyLs = safeMediaUrl(localStorage.getItem("morkyn-player-fullbody") || "");
+    if (bodyLs) state.player_fullbody = { data_url: bodyLs, kind: "fullbody" };
   }
   if (!ready) {
     // Prefer main menu over dumping into setup immediately.
@@ -4183,13 +6338,233 @@ function renderShell(nextState, options = {}) {
     locationLine.textContent = code ? `${code} · ${shortName}` : shortName;
     locationLine.title = String(location.summary || shortName);
   }
+  updateWorldTimeLine(state.world_time);
+  updateWeatherLine(state.weather);
+  updateAreaRepLine(state);
+  updateMapStatusWorld();
+  maybeShowSocialChoiceBar(state);
   renderHistory();
   renderIndex();
+  if (characterSheetOpen) paintCharacterSheet();
   updateTravelStatus(state.travel_ready);
   refreshLocalMap();
   refreshNpcStage();
   pushAllPopouts();
   queueAutoNpcPortraits();
+}
+
+function updateWorldTimeLine(worldTime) {
+  if (!worldTimeLine) return;
+  const wt = worldTime && typeof worldTime === "object" ? worldTime : state?.world_time;
+  if (!wt || !wt.label) {
+    worldTimeLine.textContent = "Day — · --:--";
+    return;
+  }
+  worldTimeLine.textContent = String(wt.label);
+  worldTimeLine.title = `In-world time · day ${wt.day ?? "?"} · ${String(wt.hour ?? 0).padStart(2, "0")}:${String(wt.minute_of_hour ?? 0).padStart(2, "0")}`;
+}
+
+function updateWeatherLine(weather) {
+  if (!weatherLine) return;
+  const w = weather && typeof weather === "object" ? weather : state?.weather;
+  if (!w || !w.kind) {
+    weatherLine.textContent = "Weather: Clear";
+    return;
+  }
+  const label = w.label || w.kind || "Clear";
+  const str = Number(w.strength);
+  const strTxt = Number.isFinite(str) && str > 0 && w.kind !== "clear" ? ` · ${Math.round(str * 100)}%` : "";
+  weatherLine.textContent = `Weather: ${label}${strTxt}`;
+  weatherLine.title = `kind=${w.kind} strength=${w.strength ?? 0}`;
+}
+
+function updateAreaRepLine(nextState) {
+  if (!areaRepLine) return;
+  const st = nextState || state || {};
+  const loc = st.current_location || {};
+  const code = String(loc.code || loc.id || "");
+  const settings = st.settings || {};
+  let reps = settings.area_reputation;
+  if (typeof reps === "string") {
+    try {
+      reps = JSON.parse(reps);
+    } catch {
+      reps = {};
+    }
+  }
+  if (!reps || typeof reps !== "object") reps = {};
+  const val = Number(reps[code] ?? reps[String(loc.id)] ?? 0);
+  const n = Number.isFinite(val) ? val : 0;
+  let band = "neutral";
+  if (n >= 20) band = "liked";
+  else if (n >= 5) band = "warm";
+  else if (n <= -20) band = "hated";
+  else if (n <= -5) band = "cold";
+  // Heat: friction from associating with disliked locals (stored when penalties fire)
+  let heat = settings.association_heat;
+  if (typeof heat === "string") {
+    try {
+      heat = JSON.parse(heat);
+    } catch {
+      heat = {};
+    }
+  }
+  const h = Number((heat && typeof heat === "object" ? heat[code] : 0) || 0);
+  const heatBit = h > 0 ? ` · heat ${h}` : "";
+  areaRepLine.textContent = code ? `Area ${code}: ${n >= 0 ? "+" : ""}${n} (${band})${heatBit}` : "Area: —";
+  areaRepLine.title = "Local standing (−100…+100). Heat rises when you befriend disliked locals.";
+}
+
+function maybeShowSocialChoiceBar(nextState) {
+  if (!socialChoiceBar) return;
+  const st = nextState || state || {};
+  const settings = st.settings || {};
+  let last = settings.last_social;
+  if (typeof last === "string") {
+    try {
+      last = JSON.parse(last);
+    } catch {
+      last = null;
+    }
+  }
+  const cold = Boolean(last && last.cold && last.npc_code);
+  const turnNow = Number(st.turn || 0);
+  const fresh = cold && (!last.turn || turnNow - Number(last.turn) <= 2);
+  socialChoiceBar.classList.toggle("hidden", !fresh);
+  if (fresh && socialChoiceLabel) {
+    const who = last.npc_code || "them";
+    socialChoiceLabel.textContent = `${who} seems ${last.attitude || "cold"}. Walk away or keep talking?`;
+  }
+}
+
+async function resolveSocialChoice(action) {
+  socialChoiceBar?.classList.add("hidden");
+  const label = action === "walk_away" ? "Walking away…" : "Pressing the conversation…";
+  await enqueueAiTask(async () => {
+    const res = await fetch("/api/social/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    if (data.state) renderShell(data.state);
+    const flavor = data.result?.flavor || action;
+    if (latestInput) latestInput.innerHTML = paragraphs(`Social: ${flavor.replace(/_/g, " ")}`);
+    // Soft note — not a full scene
+    showAmbientMoveLine(
+      action === "walk_away"
+        ? "You step back from the talk. Local standing may improve if they wanted space."
+        : "You keep at them. Cold receptions cost goodwill when you push.",
+    );
+  }, label).catch((err) => {
+    if (latestOutput) {
+      latestOutput.innerHTML = `<p class="bad">${escapeHtml(err.message || String(err))}</p>`;
+    }
+  });
+}
+
+function showAmbientMoveLine(text) {
+  const line = String(text || "").trim();
+  if (!line || !latestOutput) return;
+  // Non-blocking: append a soft line; do not replace scene narration
+  const wrap = document.createElement("p");
+  wrap.className = "ambientMoveLine";
+  wrap.textContent = line;
+  // Prefer map banner already set; also keep a short note under output if idle
+  const existing = latestOutput.querySelector(".ambientMoveLine");
+  if (existing) existing.replaceWith(wrap);
+  else latestOutput.appendChild(wrap);
+}
+
+function closeWaitPopover() {
+  waitPopover?.classList.add("hidden");
+  waitButton?.setAttribute("aria-expanded", "false");
+}
+
+function openWaitPopover() {
+  if (!waitPopover) return;
+  waitPopover.classList.remove("hidden");
+  waitButton?.setAttribute("aria-expanded", "true");
+}
+
+function waitKindLabel(kind) {
+  const k = String(kind || "wait").toLowerCase();
+  if (k === "meditate" || k === "meditation") return "Meditate";
+  if (k === "sleep" || k === "rest") return "Sleep";
+  return "Wait";
+}
+
+function currentWaitKind() {
+  const active = document.querySelector("#waitPopover [data-wait-kind].activeWaitKind");
+  const kind = (active?.getAttribute("data-wait-kind") || "wait").toLowerCase();
+  if (kind === "meditate" || kind === "sleep") return kind;
+  return "wait";
+}
+
+function setWaitKind(kind) {
+  const k = String(kind || "wait").toLowerCase();
+  document.querySelectorAll("#waitPopover [data-wait-kind]").forEach((btn) => {
+    btn.classList.toggle("activeWaitKind", (btn.getAttribute("data-wait-kind") || "") === k);
+  });
+  const go = document.querySelector("#waitCustomGo");
+  if (go) go.textContent = waitKindLabel(k);
+}
+
+async function requestWait(minutes, kind = "wait") {
+  closeWaitPopover();
+  const raw = Number(minutes);
+  // -1 = until dawn (server expands); else 1–1440
+  const mins = raw === -1 ? -1 : Math.max(1, Math.min(1440, Number.isFinite(raw) ? raw : 60));
+  const kindL = ["meditate", "sleep"].includes(String(kind || "").toLowerCase())
+    ? String(kind).toLowerCase()
+    : "wait";
+  const verb = waitKindLabel(kindL);
+  const label =
+    mins === -1
+      ? `${verb} until dawn…`
+      : mins >= 60
+        ? `${verb} ${mins / 60} hour(s)…`
+        : `${verb} ${mins} minute(s)…`;
+  latestOutput.innerHTML = paragraphs(label);
+  const response = await fetch("/api/wait", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ minutes: mins, kind: kindL }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const payload = await response.json();
+  if (payload?.wait?.after) updateWorldTimeLine(payload.wait.after);
+  if (payload?.world_time) updateWorldTimeLine(payload.world_time);
+  if (payload?.state?.weather) updateWeatherLine(payload.state.weather);
+  // Same display path as other turns
+  if (!displayTurnPayload(payload, { animateNarration: true })) {
+    renderShell(payload.state || payload);
+    if (payload.narration) {
+      latestOutput.innerHTML = paragraphs(payload.narration);
+    }
+  }
+  if (payload?.wait?.rng || payload?.wait?.after) {
+    const n = payload.wait?.rng?.event_count ?? 0;
+    const after = payload.wait?.after?.label || "";
+    const spent = payload.wait?.minutes ?? mins;
+    const usedKind = payload.wait?.kind || kindL;
+    const regen = payload.wait?.resource_regen;
+    let regenBit = "";
+    if (regen && typeof regen === "object") {
+      const bits = [];
+      if (regen.energy) bits.push(`E${regen.energy > 0 ? "+" : ""}${regen.energy}`);
+      if (regen.mana) bits.push(`M${regen.mana > 0 ? "+" : ""}${regen.mana}`);
+      if (regen.fatigue) bits.push(`F${regen.fatigue > 0 ? "+" : ""}${regen.fatigue}`);
+      if (bits.length) regenBit = ` · ${bits.join(" ")}`;
+    }
+    if (latestInput) {
+      latestInput.innerHTML = paragraphs(
+        `${waitKindLabel(usedKind)} ${spent === -1 || mins === -1 ? "until dawn" : spent >= 60 ? `${spent / 60}h` : `${spent}m`}${after ? ` → ${after}` : ""}${n ? ` · ${n} event(s)` : " · quiet"}${regenBit}`,
+      );
+    }
+  }
+  return payload;
 }
 
 function clearSuggestions(options = {}) {
@@ -5062,18 +7437,14 @@ function playerPortraitSignature() {
 }
 
 function playerFaceUrl() {
-  return (
-    state?.player_portrait?.data_url ||
-    localStorage.getItem("morkyn-player-portrait") ||
-    ""
+  return safeMediaUrl(
+    state?.player_portrait?.data_url || localStorage.getItem("morkyn-player-portrait") || "",
   );
 }
 
 function playerFullbodyUrl() {
-  return (
-    state?.player_fullbody?.data_url ||
-    localStorage.getItem("morkyn-player-fullbody") ||
-    ""
+  return safeMediaUrl(
+    state?.player_fullbody?.data_url || localStorage.getItem("morkyn-player-fullbody") || "",
   );
 }
 
@@ -5150,15 +7521,35 @@ function renderPlayer() {
     .map((c) => (typeof c === "string" ? c : c.name || c.summary || ""))
     .filter(Boolean)
     .join(" · ");
+  const resources = state.resources || player.resources || {};
+  const energy = resources.energy ?? player.energy;
+  const maxEnergy = resources.max_energy ?? player.max_energy;
+  const mana = resources.mana ?? player.mana;
+  const maxMana = resources.max_mana ?? player.max_mana;
+  const fatigue = resources.fatigue ?? player.fatigue;
+  const maxFatigue = resources.max_fatigue ?? player.max_fatigue;
+  const manaEnabled = resources.mana_enabled ?? (Number(maxMana) > 0);
+  const fatigueBand = resources.band ? String(resources.band) : "";
+  const collapse = state.collapse || player.collapse || {};
+  const collapseNote =
+    collapse.needs_rest
+      ? "Exhausted — rest, meditate, or sleep before hard physical actions."
+      : Array.isArray(collapse.effects) && collapse.effects.length
+        ? `Strain: ${collapse.effects.join(", ")}`
+        : "";
   return `
     ${playerPortraitHtml()}
     <div class="statGrid">
       ${statCard("Health", `${player.health ?? 0}/${player.max_health ?? 0}`)}
+      ${energy != null ? statCard("Energy", `${energy ?? 0}/${maxEnergy ?? 0}`) : ""}
+      ${manaEnabled ? statCard("Mana", `${mana ?? 0}/${maxMana ?? 0}`) : ""}
+      ${fatigue != null || maxFatigue != null ? statCard(fatigueBand && fatigueBand !== "fresh" ? `Fatigue (${fatigueBand})` : "Fatigue", `${fatigue ?? 0}/${maxFatigue ?? 0}`) : ""}
       ${statCard("Level", options.leveling_system === false ? "Off" : player.level ?? 1)}
       ${statCard("XP", options.leveling_system === false ? "Off" : player.xp ?? 0)}
       ${statCard("Gold", player.gold ?? 0)}
       ${statCard("Karma", player.karma ?? 0)}
     </div>
+    ${collapseNote ? card("Condition", collapseNote, collapse.band || "strain") : ""}
     ${card("Identity", identityParts.join(" | ") || "No identity details recorded.")}
     ${conditions ? card("Conditions", conditions) : ""}
     ${effectiveStats || equipmentAbilityNames ? card("Effective Equipment Effects", [effectiveStats ? `Stats: ${effectiveStats}` : "", equipmentAbilityNames ? `Abilities: ${equipmentAbilityNames}` : ""].filter(Boolean).join(" | "), "Active while equipped") : ""}
@@ -5175,12 +7566,32 @@ function renderPlayer() {
     ${renderRewindCard()}
     ${skills.map((skill) => card(escapeHtml(skill.name), skill.notes || "", `Value ${escapeHtml(skill.value)}`)).join("")}
     ${abilities
-      .map((ability) =>
-        card(
-          `${escapeHtml(ability.name)}${ability.locked ? ' <span class="warn">Locked</span>' : ""}`,
+      .map((ability) => {
+        const rc = ability.resource_cost || {};
+        const rcBits = [];
+        if (rc.energy) rcBits.push(`${rc.energy} energy`);
+        if (rc.mana) rcBits.push(`${rc.mana} mana`);
+        if (rc.fatigue) rcBits.push(`+${rc.fatigue} fatigue`);
+        if (rc.health) rcBits.push(`${rc.health} HP`);
+        if (rc.cooldown_minutes) {
+          const m = Number(rc.cooldown_minutes) || 0;
+          rcBits.push(m >= 60 && m % 60 === 0 ? `${m / 60}h CD` : `${m}m CD`);
+        }
+        const cd = ability.cooldown || {};
+        const cdLeft = Number(cd.remaining_minutes) || 0;
+        const flags = [
+          ability.locked ? "Locked" : "",
+          ability.can_use === false && !ability.locked ? "Unavailable" : "",
+          cdLeft > 0 ? `CD ${cdLeft >= 60 ? `${Math.ceil(cdLeft / 60)}h` : `${cdLeft}m`}` : "",
+          Array.isArray(ability.block_reasons) && ability.block_reasons.length
+            ? ability.block_reasons.filter((r) => r !== "locked" && r !== "cooldown").join(", ")
+            : "",
+        ].filter(Boolean);
+        return card(
+          `${escapeHtml(ability.name)}${flags.length ? ` <span class="warn">${escapeHtml(flags.join(" · "))}</span>` : ""}`,
           [
             ability.base_description || ability.description,
-            ability.cost ? `Cost: ${ability.cost}` : "",
+            rcBits.length ? `Resources: ${rcBits.join(", ")}` : ability.cost ? `Cost: ${ability.cost}` : "",
             ability.prerequisites ? `Prerequisites: ${ability.prerequisites}` : "",
             ability.growth_math ? `Growth math: ${ability.growth_math}` : "",
             ability.additions ? `Added notes: ${ability.additions}` : "",
@@ -5188,9 +7599,25 @@ function renderPlayer() {
             .filter(Boolean)
             .join(" | "),
           ability.source,
-        ),
-      )
+        );
+      })
       .join("")}
+  `;
+}
+
+/** Combined character sheet: art + stats + inventory (roomier than dual tabs). */
+function renderCharacter() {
+  return `
+    <div class="characterSheetCombined">
+      <section class="characterSheetSection">
+        <h3 class="characterSheetSectionTitle">You</h3>
+        ${renderPlayer()}
+      </section>
+      <section class="characterSheetSection">
+        <h3 class="characterSheetSectionTitle">Inventory</h3>
+        ${renderInventory()}
+      </section>
+    </div>
   `;
 }
 
@@ -5238,6 +7665,7 @@ function renderInventory() {
   const modifiers = state.inventory_capacity_modifiers || [];
   const summary = state.inventory_summary || {};
   const options = state.settings?.playthrough_options || {};
+  const gold = state.player?.gold ?? state.player?.money ?? null;
   const slotItems = new Map();
   inventory.forEach((item) => {
     if (!item.equipped_slot) return;
@@ -5245,6 +7673,8 @@ function renderInventory() {
     bucket.push(item);
     slotItems.set(item.equipped_slot, bucket);
   });
+  const packed = inventory.filter((item) => !item.equipped_slot);
+  const equippedCount = inventory.filter((item) => item.equipped_slot).length;
   const equippedSlots = slots
     .map((slot) => {
       const items = slotItems.get(slot.code) || [];
@@ -5262,37 +7692,41 @@ function renderInventory() {
       `;
     })
     .join("");
-  const itemRows = inventory.length
-    ? inventory
-        .map((item) => {
-          const enchantments = Array.isArray(item.enchantments) ? item.enchantments.filter(Boolean) : [];
-          return `
-            <article class="inventoryItem ${rarityClass(item.rarity)}">
-              <div>
-                <strong>${escapeHtml(item.name)}</strong>
-                <span>${escapeHtml(item.code || "")}</span>
-              </div>
-              <p>${linkifyText(item.description || "No description.")}</p>
-              <div class="itemMeta">${escapeHtml(itemMeta(item))}</div>
-              ${enchantments.length ? `<div class="enchantmentLine">${enchantments.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div>` : ""}
-            </article>
-          `;
-        })
-        .join("")
-    : `<p class="empty">No carried items.</p>`;
+  const itemCard = (item) => {
+    const enchantments = Array.isArray(item.enchantments) ? item.enchantments.filter(Boolean) : [];
+    const equipped = Boolean(item.equipped_slot);
+    return `
+      <article class="inventoryItem ${rarityClass(item.rarity)}${equipped ? " isEquipped" : ""}">
+        <div>
+          <strong>${escapeHtml(item.name)}</strong>
+          <span>${escapeHtml(item.code || "")}${equipped ? " · worn" : ""}</span>
+        </div>
+        <p>${linkifyText(item.description || "No description.")}</p>
+        <div class="itemMeta">${escapeHtml(itemMeta(item))}</div>
+        ${enchantments.length ? `<div class="enchantmentLine">${enchantments.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div>` : ""}
+      </article>
+    `;
+  };
+  const carriedRows = packed.length
+    ? packed.map(itemCard).join("")
+    : `<p class="empty">Pack is empty${equippedCount ? " (gear is equipped)." : "."}</p>`;
+  const allRows = inventory.length ? inventory.map(itemCard).join("") : "";
   const modifierRows = modifiers.length
     ? `<div class="capacityModifierList">${modifiers
         .map((modifier) => `<span>${escapeHtml(modifier.source)} · +${escapeHtml(modifier.weight_bonus || 0)} wt · +${escapeHtml(modifier.slot_bonus || 0)} slots${modifier.dimensional_space ? " · dimensional" : ""}</span>`)
         .join("")}</div>`
     : "";
   return `
-    <section class="inventoryWindow">
+    <section class="inventoryWindow playerInventory">
       <header class="inventoryHeader">
         <div>
-          <strong>Inventory</strong>
-          <span>${escapeHtml(options.loot_rarity || "earned and uncommon")}</span>
+          <strong>Player inventory</strong>
+          <span>${escapeHtml(inventory.length)} items · ${escapeHtml(equippedCount)} equipped · ${escapeHtml(options.loot_rarity || "earned loot")}</span>
         </div>
-        <div class="inventorySeal">${summary.dimensional_spaces ? "Dimensional" : "Mundane"}</div>
+        <div class="inventoryHeaderBadges">
+          ${gold !== null && gold !== undefined ? `<div class="inventorySeal inventoryGold">${escapeHtml(gold)} gold</div>` : ""}
+          <div class="inventorySeal">${summary.dimensional_spaces ? "Dimensional" : "Mundane"}</div>
+        </div>
       </header>
       <div class="inventoryMeters">
         ${inventoryMeter("Weight", summary.effective_weight ?? 0, summary.weight_capacity ?? 0, { note: summary.over_weight ? `Over by ${summary.over_weight}` : `Base ${summary.base_weight_capacity ?? 0}` })}
@@ -5301,14 +7735,22 @@ function renderInventory() {
       ${modifierRows}
       <div class="inventorySplit">
         <section class="equipmentGrid">
-          <h3>Equipped</h3>
-          <div>${equippedSlots || `<p class="empty">No equipment slots.</p>`}</div>
+          <h3>Equipped (${escapeHtml(slots.length || 0)} slots)</h3>
+          <div class="equipmentSlotGrid">${equippedSlots || `<p class="empty">No equipment slots yet.</p>`}</div>
         </section>
         <section class="itemLedger">
-          <h3>Carried</h3>
-          <div>${itemRows}</div>
+          <h3>Packed (${escapeHtml(packed.length)})</h3>
+          <div class="inventoryItemGrid">${carriedRows}</div>
         </section>
       </div>
+      ${
+        equippedCount
+          ? `<section class="itemLedger inventoryAllGear">
+              <h3>All gear</h3>
+              <div class="inventoryItemGrid">${allRows}</div>
+            </section>`
+          : ""
+      }
     </section>
   `;
 }
@@ -5395,6 +7837,144 @@ function renderDrafts() {
         )
         .join("")
     : `<p class="empty">No checks indexed.</p>`;
+}
+
+/** Quest stage editor (tools) — reached stages + queue force beats. */
+let questStageData = null;
+
+function renderQuests() {
+  const data = questStageData;
+  const turn = data?.turn ?? state?.turn ?? "—";
+  const stages = Array.isArray(data?.stages) ? data.stages : [];
+  const pending = Array.isArray(data?.pending_events) ? data.pending_events : [];
+  const stageCards = stages.length
+    ? stages
+        .map((s) =>
+          card(
+            escapeHtml(s.stage_id || "?"),
+            s.summary || "Stage marked.",
+            `reached T${escapeHtml(s.reached_turn)} · due T${escapeHtml(s.due_turn)} · ${escapeHtml(s.kind || "quest_stage")}${s.force ? " · force" : ""}`,
+          ),
+        )
+        .join("")
+    : `<p class="empty">No stages marked yet. Add one below to force a beat near the player.</p>`;
+  const pendingCards = pending.length
+    ? pending
+        .map((ev) => {
+          const id = Number(ev.id) || 0;
+          return `
+            <article class="card questEventCard">
+              <header>
+                <strong>${escapeHtml(ev.kind || "event")}${id ? ` #${id}` : ""}</strong>
+                <span class="meta">${ev.force ? "force" : "soft"} · due T${escapeHtml(ev.due_turn)} · ${escapeHtml(ev.status || "pending")}</span>
+              </header>
+              <p>${escapeHtml(ev.summary || ev.trigger || "—")}</p>
+              ${
+                id && String(ev.status || "") !== "active"
+                  ? `<button type="button" class="chipBtn secondaryButton" data-quest-cancel="${id}">Cancel</button>`
+                  : ""
+              }
+            </article>`;
+        })
+        .join("")
+    : `<p class="empty">No pending quest bus events.</p>`;
+  return `
+    <div class="questStageEditor">
+      <p class="empty">Current turn <strong>${escapeHtml(turn)}</strong>. Force stages fire on the next Continue / Wait / action once due (player is the trigger).</p>
+      <form id="questStageForm" class="questStageForm modelForm">
+        <h3 class="settingsSubhead">Mark stage</h3>
+        <label>
+          Stage id
+          <input name="stage_id" maxlength="80" required placeholder="portal_opens" autocomplete="off" />
+        </label>
+        <label>
+          Kind
+          <select name="kind">
+            <option value="quest_force">quest_force</option>
+            <option value="quest_stage">quest_stage</option>
+            <option value="quest_portal">quest_portal</option>
+          </select>
+        </label>
+        <label>
+          Due in turns
+          <input name="due_in_turns" type="number" min="0" max="50" value="1" />
+        </label>
+        <label class="checkboxRow">
+          <input name="force" type="checkbox" checked /> Force (cannot be cancelled by quiet narration)
+        </label>
+        <label>
+          Summary (what the DM must narrate)
+          <textarea name="summary" rows="3" maxlength="800" placeholder="A sealed portal opens beside the player…"></textarea>
+        </label>
+        <div class="composerActions">
+          <button type="submit" class="chipBtn">Queue stage</button>
+          <button type="button" class="chipBtn secondaryButton" id="questStageRefresh">Refresh</button>
+        </div>
+        <p id="questStageStatus" class="empty" hidden></p>
+      </form>
+      <h3 class="settingsSubhead">Reached stages</h3>
+      <div class="questStageList">${stageCards}</div>
+      <h3 class="settingsSubhead">Pending quest events</h3>
+      <div class="questPendingList">${pendingCards}</div>
+    </div>
+  `;
+}
+
+async function loadQuestStages() {
+  const response = await fetch("/api/events/quest-stages");
+  if (!response.ok) throw new Error(await response.text());
+  const payload = await response.json();
+  questStageData = {
+    turn: payload.turn,
+    stages: payload.stages || [],
+    stages_map: payload.stages_map || {},
+    pending_events: payload.pending_events || [],
+  };
+  if (activeTab === "quests") renderIndex();
+  return questStageData;
+}
+
+async function submitQuestStage(form) {
+  const fd = new FormData(form);
+  const stageId = String(fd.get("stage_id") || "").trim();
+  if (!stageId) throw new Error("Stage id is required.");
+  const body = {
+    stage_id: stageId,
+    kind: String(fd.get("kind") || "quest_force"),
+    summary: String(fd.get("summary") || "").trim(),
+    force: form.querySelector('[name="force"]')?.checked !== false,
+    due_in_turns: Math.max(0, Math.min(50, Number(fd.get("due_in_turns") || 1))),
+    payload: {},
+  };
+  const response = await fetch("/api/events/quest-stage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const payload = await response.json();
+  if (payload.quest) {
+    questStageData = {
+      turn: payload.quest.turn,
+      stages: payload.quest.stages || [],
+      stages_map: payload.quest.stages_map || {},
+      pending_events: payload.quest.pending_events || [],
+    };
+  } else {
+    await loadQuestStages();
+  }
+  if (activeTab === "quests") renderIndex();
+  return payload;
+}
+
+async function cancelQuestEvent(eventId) {
+  const response = await fetch("/api/events/cancel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event_id: Number(eventId) }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  await loadQuestStages();
 }
 
 function renderBible() {
@@ -5649,7 +8229,7 @@ function renderImageForm() {
         </label>
         <label>
           <span>Negative prompt (fallback if presets empty)</span>
-          <textarea name="negative_prompt" rows="2" maxlength="2000">${escapeHtml(config.negative_prompt || "lowres, blurry, deformed, bad anatomy, watermark, text")}</textarea>
+          <textarea name="negative_prompt" rows="2" maxlength="2000">${escapeHtml(ensureNsfwInNegative(config.negative_prompt || DEFAULT_IMAGE_NEGATIVE_BASE))}</textarea>
         </label>
         <div class="modelTokenGrid">
           <label>
@@ -5871,10 +8451,12 @@ function renderImageInstallablesHtml(data) {
           ? `<button type="button" class="secondaryButton chipBtn installImageComponent" data-install-id="${escapeHtml(item.id)}">Install</button>`
           : `<button type="button" class="secondaryButton chipBtn" disabled title="${escapeHtml(item.blocked_reason || "Set install root first")}">Install</button>`;
       const links = (item.links || [])
-        .map(
-          (l) =>
-            `<a href="${escapeHtml(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label || l.url)}</a>`,
-        )
+        .map((l) => {
+          const href = safeMediaUrl(l.url);
+          if (!href) return "";
+          return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label || l.url)}</a>`;
+        })
+        .filter(Boolean)
         .join("");
       const cls = item.installed ? "installed" : item.can_install ? "" : "blocked";
       return `
@@ -5952,6 +8534,9 @@ function renderThemeAdapterMapFields(config) {
   const map = config?.theme_adapter_map && typeof config.theme_adapter_map === "object"
     ? config.theme_adapter_map
     : {};
+  const loraMap = config?.theme_llm_lora_map && typeof config.theme_llm_lora_map === "object"
+    ? config.theme_llm_lora_map
+    : {};
   const hints = themeAdapterHintList(config);
   const rows = hints
     .map((hint) => {
@@ -5964,6 +8549,27 @@ function renderThemeAdapterMapFields(config) {
       </label>`;
     })
     .join("");
+  const loraRows = hints
+    .map((hint) => {
+      const entry = loraMap[hint] && typeof loraMap[hint] === "object" ? loraMap[hint] : { path: loraMap[hint] || "" };
+      const path = entry.path != null ? String(entry.path) : String(entry || "");
+      const scale = entry.scale != null ? String(entry.scale) : "1";
+      return `
+      <div class="themeLoraRow" data-theme-lora-hint="${escapeHtml(hint)}">
+        <label>
+          <span>${escapeHtml(hint)} LoRA (.gguf)</span>
+          <input name="theme_lora_path_${escapeHtml(hint)}" value="${escapeHtml(path)}" maxlength="1000"
+            placeholder="D:\\loras\\${escapeHtml(hint)}.gguf (blank = none)"
+            data-theme-lora-path="${escapeHtml(hint)}" />
+        </label>
+        <label class="themeLoraScale">
+          <span>Scale</span>
+          <input name="theme_lora_scale_${escapeHtml(hint)}" type="number" min="0" max="2" step="0.05"
+            value="${escapeHtml(scale)}" data-theme-lora-scale="${escapeHtml(hint)}" />
+        </label>
+      </div>`;
+    })
+    .join("");
   const sessionModel = currentSessionThemeModel();
   const mapped = mappedModelForCurrentAdapter(config);
   const hint = currentSessionAdapterHint();
@@ -5972,7 +8578,7 @@ function renderThemeAdapterMapFields(config) {
     : "No session theme yet — Randomize an idea or Start a run first.";
   return `
     <details class="themeAdapterMap" open>
-      <summary>Theme adapter models (optional)</summary>
+      <summary>Theme models + LLM LoRAs (optional)</summary>
       <p class="empty">When a playthrough has <code>session_theme.adapter_hint</code>, turns can use a different Ollama/API model (or GGUF path for llama.cpp). Leave blank to keep the main model.</p>
       ${rows}
       <label class="sessionThemeModelField">
@@ -5982,6 +8588,19 @@ function renderThemeAdapterMapFields(config) {
           data-session-theme-model="1" />
       </label>
       <p class="empty">${sessionHint} Per-session model <strong>wins</strong> over the map above. Saved with Model settings (setup) or applied live mid-run.</p>
+      <hr class="settingsDivider" />
+      <p class="empty"><strong>LLM LoRAs (not image LoRAs)</strong> — GGUF adapters on top of your base model. One active LoRA at a time with llama-cpp-python; theme change uses <em>hot-swap</em> if the server supports <code>/lora-adapters</code>, otherwise a <em>soft recycle</em> of only the LLM process. The website stays up; a banner shows while you wait.</p>
+      <label>
+        <span>Always-on LLM LoRA (optional)</span>
+        <input name="lora_path" value="${escapeHtml(config.lora_path || "")}" maxlength="1000"
+          placeholder="Blank = none; theme map overrides when set" />
+      </label>
+      ${loraRows}
+      <div class="modelButtonRow" style="margin-top:8px">
+        <button type="button" class="secondaryButton" data-llm-ensure>Ensure LLM adapter now</button>
+        <button type="button" class="secondaryButton" data-llm-soft-recycle title="Restart only the LLM process">Soft-recycle LLM</button>
+      </div>
+      <p class="empty">Ollama users: map each theme to a model that already includes the adapter (Modelfile <code>ADAPTER</code>), not a raw GGUF LoRA path.</p>
     </details>`;
 }
 
@@ -6069,6 +8688,7 @@ function renderModel() {
 }
 
 const TAB_RENDERERS = () => ({
+  character: renderCharacter,
   player: renderPlayer,
   inventory: renderInventory,
   bible: renderBible,
@@ -6080,10 +8700,12 @@ const TAB_RENDERERS = () => ({
   events: renderEvents,
   talk: renderTalk,
   drafts: renderDrafts,
+  quests: renderQuests,
 });
 
 const TAB_LABELS = {
-  player: "Player",
+  character: "Character",
+  player: "Stats",
   inventory: "Inventory",
   bible: "Bible",
   search: "Search",
@@ -6094,6 +8716,7 @@ const TAB_LABELS = {
   events: "Events",
   talk: "Talk",
   drafts: "Checks",
+  quests: "Quests",
   imageStudio: "Image Studio",
   art: "Image Studio",
   imageBrowser: "Image Browser",
@@ -6128,13 +8751,13 @@ function getFloatLayer() {
 
 const PLAY_LAYOUT_KEY = "morkyn-play-layout-v3";
 const FLOAT_LAYOUT_KEY = "morkyn-float-windows-v1";
-const PLAY_PANEL_IDS = ["chat", "map", "present", "tabs", "history"];
+// Main stage is chat + map only. Present lives inside map; tabs/history open via hamburger sheet.
+const PLAY_PANEL_IDS = ["chat", "map", "tabs", "history"];
 const DEFAULT_PANEL_WIDTHS = {
-  chat: 28,
-  map: 34,
-  present: 12,
-  tabs: 14,
-  history: 12,
+  chat: 38,
+  map: 62,
+  tabs: 0,
+  history: 0,
 };
 
 // Module state for play-panel layout + float windows (must exist before bind/boot).
@@ -6144,9 +8767,13 @@ let floatWindowState = loadFloatWindowState();
 
 /** @returns {{ custom: boolean, rows: Array<{ height: number, panels: Array<{ id: string, width: number }> }> }} */
 function makeSingleRowLayout(widthsById = DEFAULT_PANEL_WIDTHS, custom = false) {
-  const panels = PLAY_PANEL_IDS.map((id) => ({
+  // Default stage: only chat + map (tabs/history are off-stage drawer content).
+  const stageIds = custom
+    ? PLAY_PANEL_IDS.filter((id) => Number(widthsById[id] || DEFAULT_PANEL_WIDTHS[id] || 0) > 0 || id === "chat" || id === "map")
+    : ["chat", "map"];
+  const panels = stageIds.map((id) => ({
     id,
-    width: Number(widthsById[id]) || DEFAULT_PANEL_WIDTHS[id] || 12,
+    width: Number(widthsById[id]) || DEFAULT_PANEL_WIDTHS[id] || (id === "map" ? 62 : 38),
   }));
   const norm = normalizeLayoutWeights(
     panels.map((p) => p.width),
@@ -6167,11 +8794,11 @@ function cloneDefaultPlayLayout() {
 }
 
 function sceneFocusWidthMap() {
-  return { chat: 38, map: 20, present: 14, tabs: 16, history: 12 };
+  return { chat: 58, map: 42, tabs: 0, history: 0 };
 }
 
 function mapPrimaryWidthMap() {
-  return { ...DEFAULT_PANEL_WIDTHS };
+  return { chat: 36, map: 64, tabs: 0, history: 0 };
 }
 
 function loadPlayLayoutState() {
@@ -6370,10 +8997,21 @@ function panelEl(id) {
 }
 
 function activeLayoutRows() {
+  // Always prefer clean chat+map stage unless user has a custom layout that only uses chat/map.
   if (playLayout.custom && Array.isArray(playLayout.rows) && playLayout.rows.length) {
-    return playLayout.rows;
+    const flat = [];
+    playLayout.rows.forEach((row) => {
+      (row.panels || []).forEach((cell) => {
+        if (cell?.id) flat.push(cell.id);
+        if (Array.isArray(cell?.stack)) cell.stack.forEach((s) => s?.id && flat.push(s.id));
+      });
+    });
+    const onlyStage = flat.every((id) => id === "chat" || id === "map");
+    if (onlyStage && flat.includes("chat") && flat.includes("map")) {
+      return playLayout.rows;
+    }
+    // Old layouts that included present/tabs/history on the main stage → reset to chat+map.
   }
-  // Auto mode proportions (not sticky)
   const map =
     gameView?.classList.contains("sceneFocus") || gameView?.classList.contains("isGenerating")
       ? sceneFocusWidthMap()
@@ -6539,6 +9177,17 @@ function rebuildPlayGridDom(rows) {
       split.tabIndex = 0;
       grid.appendChild(split);
     }
+  });
+
+  // Tabs/history (and any leftover panels) stay off the main stage for the hamburger sheet.
+  PLAY_PANEL_IDS.forEach((id) => {
+    if (id === "chat" || id === "map") return;
+    const el = panels[id];
+    if (!el) return;
+    el.classList.add("playPanelOffstage");
+    el.hidden = true;
+    el.style.flex = "";
+    grid.appendChild(el);
   });
 }
 
@@ -7262,18 +9911,27 @@ function floatPanelStoredSize(panel, key) {
     if (!Number.isFinite(h) || h < 80) h = panel.offsetHeight || 420;
   }
   const large = key === "imageBrowser" || key === "imageStudio";
-  const maxW = large ? 1100 : 560;
-  const maxH = large ? 900 : 680;
+  const inventoryish = key === "inventory" || key === "player";
+  const maxW = large ? Math.min(1100, window.innerWidth * 0.96) : inventoryish ? Math.min(720, window.innerWidth * 0.94) : Math.min(640, window.innerWidth * 0.94);
+  const maxH = large ? Math.min(900, window.innerHeight * 0.9) : inventoryish ? Math.min(780, window.innerHeight * 0.88) : Math.min(720, window.innerHeight * 0.88);
+  const minW = inventoryish ? 300 : 260;
+  const minH = inventoryish ? 220 : 180;
   return {
-    width: Math.min(maxW, Math.max(260, Math.round(w))),
-    height: Math.min(maxH, Math.max(180, Math.round(h))),
+    width: Math.min(maxW, Math.max(minW, Math.round(w))),
+    height: Math.min(maxH, Math.max(minH, Math.round(h))),
   };
 }
 
 function applyFloatPanelSize(panel, width, height) {
   if (!panel) return;
-  const w = Math.max(260, Math.round(Number(width) || 360));
-  const h = Math.max(180, Math.round(Number(height) || 420));
+  const key = panel.getAttribute("data-float-tab") || "";
+  const inventoryish = key === "inventory" || key === "player";
+  const minW = inventoryish ? 300 : 260;
+  const minH = inventoryish ? 220 : 180;
+  const maxW = Math.min(window.innerWidth - 16, key === "imageBrowser" || key === "imageStudio" ? 1100 : inventoryish ? 720 : 640);
+  const maxH = Math.min(window.innerHeight - 16, key === "imageBrowser" || key === "imageStudio" ? 900 : inventoryish ? 780 : 720);
+  const w = Math.min(maxW, Math.max(minW, Math.round(Number(width) || 360)));
+  const h = Math.min(maxH, Math.max(minH, Math.round(Number(height) || 420)));
   panel.style.setProperty("--float-w", `${w}px`);
   panel.style.setProperty("--float-h", `${h}px`);
   // Keep inline sizes in sync for non-!important paths; collapsed chip ignores them via CSS.
@@ -7513,15 +10171,19 @@ function enableFloatResize(panel, key) {
   let resizing = false;
   const onMove = (event) => {
     if (!resizing) return;
-    const maxW = Math.min(window.innerWidth - 16, key === "imageBrowser" || key === "imageStudio" ? 1100 : 560);
-    const maxH = Math.min(window.innerHeight - 16, key === "imageBrowser" || key === "imageStudio" ? 900 : 680);
+    const large = key === "imageBrowser" || key === "imageStudio";
+    const inventoryish = key === "inventory" || key === "player";
+    const maxW = Math.min(window.innerWidth - 16, large ? 1100 : inventoryish ? 720 : 640);
+    const maxH = Math.min(window.innerHeight - 16, large ? 900 : inventoryish ? 780 : 720);
+    const minW = inventoryish ? 300 : 260;
+    const minH = inventoryish ? 220 : 180;
     let w = sw;
     let h = sh;
     if (mode === "x" || mode === "both") {
-      w = Math.min(maxW, Math.max(260, sw + (event.clientX - sx)));
+      w = Math.min(maxW, Math.max(minW, sw + (event.clientX - sx)));
     }
     if (mode === "y" || mode === "both") {
-      h = Math.min(maxH, Math.max(180, sh + (event.clientY - sy)));
+      h = Math.min(maxH, Math.max(minH, sh + (event.clientY - sy)));
     }
     // Only update CSS vars + synced size — never let chip measurements win
     applyFloatPanelSize(panel, w, h);
@@ -7629,6 +10291,79 @@ function renderIndex() {
   pushAllPopouts();
   // Re-apply Forge gate after player/art tab HTML rebuild
   syncForgeImageGateUi();
+}
+
+function showStarterLogicPopup(logic) {
+  if (!logic || typeof logic !== "object") return false;
+  const messages = Array.isArray(logic.player_messages) ? logic.player_messages.filter(Boolean) : [];
+  const stripped = Array.isArray(logic.stripped) ? logic.stripped : [];
+  const deferred = Array.isArray(logic.deferred) ? logic.deferred : [];
+  if (!logic.show_popup && !messages.length && !stripped.length && !deferred.length) return false;
+
+  const modal = document.querySelector("#starterLogicModal");
+  const title = document.querySelector("#starterLogicTitle");
+  const sub = document.querySelector("#starterLogicSubtitle");
+  const body = document.querySelector("#starterLogicBody");
+  if (!modal || !body) {
+    // Fallback alert if modal missing
+    const lines = messages.length
+      ? messages
+      : [
+          ...stripped.map((s) => (typeof s === "string" ? `Removed: ${s}` : s.reason || `Removed: ${s.name}`)),
+          ...deferred.map((d) => (typeof d === "string" ? `Held back: ${d}` : d.reason || `Held back: ${d.name}`)),
+        ];
+    if (lines.length) window.alert([logic.popup_title || "Starting gear adjusted", "", ...lines].join("\n"));
+    return lines.length > 0;
+  }
+  if (title) title.textContent = logic.popup_title || "Starting gear adjusted for lore";
+  if (sub) {
+    const arrival = logic.arrival?.arrival || logic.arrival?.notes || "";
+    sub.textContent = arrival
+      ? `Arrival: ${String(arrival).replace(/_/g, " ")}. These items were taken out of your starting kit.`
+      : "These items were taken out of your starting kit.";
+  }
+  const rows = [];
+  // Prefer structured removed/held lists so players see what was ripped and why.
+  const bits = [];
+  stripped.forEach((s) => {
+    const name = typeof s === "string" ? s : s.name;
+    const reason = typeof s === "string" ? "" : s.reason;
+    bits.push(
+      `<li class="starterLogicStrip"><strong>Removed</strong> ${escapeHtml(name || "?")}${
+        reason ? ` — ${escapeHtml(reason)}` : ""
+      }</li>`,
+    );
+  });
+  deferred.forEach((d) => {
+    const name = typeof d === "string" ? d : d.name;
+    const reason = typeof d === "string" ? "" : d.reason;
+    bits.push(
+      `<li class="starterLogicDefer"><strong>Held for later</strong> ${escapeHtml(name || "?")}${
+        reason ? ` — ${escapeHtml(reason)}` : ""
+      }</li>`,
+    );
+  });
+  if (bits.length) {
+    rows.push(`<ul class="starterLogicList">${bits.join("")}</ul>`);
+  } else if (messages.length) {
+    rows.push(
+      `<ul class="starterLogicList">${messages.map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul>`,
+    );
+  }
+  const keptNote = logic.summary ? `<p class="empty">${escapeHtml(logic.summary)}</p>` : "";
+  body.innerHTML = `${keptNote}${rows.join("") || "<p class='empty'>No details.</p>"}`;
+  modal.classList.remove("hidden");
+  return true;
+}
+
+function bindStarterLogicModal() {
+  if (document.body.dataset.starterLogicBound === "1") return;
+  document.body.dataset.starterLogicBound = "1";
+  const close = () => document.querySelector("#starterLogicModal")?.classList.add("hidden");
+  document.querySelector("#starterLogicClose")?.addEventListener("click", close);
+  document.querySelector("#starterLogicModal")?.addEventListener("click", (event) => {
+    if (event.target?.id === "starterLogicModal") close();
+  });
 }
 
 function showImageMissingModal(detail) {
@@ -7993,7 +10728,16 @@ function initSetupArtCollapse(options = {}) {
     card.addEventListener("click", (event) => {
       const t = event.target;
       if (!(t instanceof Element)) return;
-      // Forge install button — open settings, do not toggle
+      // Start ForgeSD without generating — do not toggle collapse
+      if (t.closest("#setupArtStartForge, [data-start-forge-sd]")) {
+        event.preventDefault();
+        event.stopPropagation();
+        startForgeSdFromUi().catch((err) => {
+          setArtForgeStatus(err?.message || String(err) || "Forge start failed", { bad: true });
+        });
+        return;
+      }
+      // Image settings — open settings, do not toggle
       if (t.closest("#setupArtOpenImageSettings")) {
         event.preventDefault();
         event.stopPropagation();
@@ -8006,11 +10750,15 @@ function initSetupArtCollapse(options = {}) {
       if (
         t.closest("#setupArtCollapseBtn") ||
         t.closest("[data-art-expand]") ||
-        (t.closest(".characterArtHead") && !t.closest("button.secondaryButton"))
+        (t.closest(".characterArtHead") && !t.closest("button.secondaryButton") && !t.closest(".imageModeToggle"))
       ) {
         event.preventDefault();
         event.stopPropagation();
         toggleSetupArtCollapsed();
+        const cardEl = document.querySelector("#characterPortraitCard");
+        if (cardEl) {
+          cardEl.dataset.userExpanded = setupArtIsCollapsed() ? "" : "1";
+        }
       }
     });
   }
@@ -8101,6 +10849,16 @@ function modelPayloadFromForm(form) {
     if (!hint) return;
     theme_adapter_map[hint] = String(input.value || "").trim();
   });
+  const theme_llm_lora_map = {};
+  form.querySelectorAll("[data-theme-lora-path]").forEach((input) => {
+    const hint = String(input.getAttribute("data-theme-lora-path") || "").trim();
+    if (!hint) return;
+    const scaleEl = form.querySelector(`[data-theme-lora-scale="${hint}"]`);
+    theme_llm_lora_map[hint] = {
+      path: String(input.value || "").trim(),
+      scale: finiteNumber(scaleEl?.value, 1),
+    };
+  });
   return {
     provider: formData.get("provider") || "llama_cpp",
     gguf_model_path: formData.get("gguf_model_path"),
@@ -8114,6 +10872,8 @@ function modelPayloadFromForm(form) {
     response_token_cap: Math.round(finiteNumber(formData.get("response_token_cap"), 1500)),
     response_token_hard_cap: Math.round(finiteNumber(formData.get("response_token_hard_cap"), 2000)),
     theme_adapter_map,
+    theme_llm_lora_map,
+    lora_path: String(formData.get("lora_path") || "").trim(),
   };
 }
 
@@ -8852,6 +11612,137 @@ const enginePromptDirty = {
   fullbody_negative: false,
 };
 
+/** True after Generate prompt / Randomize rebuild / manual positive entry. */
+let artPromptsReady = false;
+
+const DEFAULT_NSFW_NEG_TAG = "(nsfw:1.3)";
+const DEFAULT_IMAGE_NEGATIVE_BASE =
+  "(nsfw:1.3), (child:1.3), lowres, blurry, deformed, bad anatomy, extra limbs, extra fingers, watermark, text, logo, multiple people, side profile, facing away, looking away, from behind, frame, border, picture frame";
+/** Appended to full-body negatives so gens stay full figure (not cropped bust). */
+// Lean framing negatives only — long stacks ("frame, border, picture frame" + many
+// bust tokens) pushed CyberRealistic full-body into abstract dark sludge.
+// Lean framing negatives only — long stacks ("frame, border, picture frame" + many
+// bust tokens) pushed CyberRealistic full-body into abstract dark sludge.
+// Multi-word gear positives use Forge groups: (oil-stained factory coat:1.05)
+const FULLBODY_NEGATIVE_EXTRA = "cropped head, cropped feet, close-up, extreme close-up, abstract, glitch art";
+
+function ensureNsfwInNegative(text) {
+  const t = String(text || "").trim();
+  if (!t) return DEFAULT_IMAGE_NEGATIVE_BASE;
+  if (/\(\s*nsfw\s*:/i.test(t) || /(^|,\s*)nsfw(\s*[,:]|$)/i.test(t)) return t;
+  return `${DEFAULT_NSFW_NEG_TAG}, ${t}`;
+}
+
+function ensureFullbodyNegative(text) {
+  let t = ensureNsfwInNegative(text);
+  const low = t.toLowerCase();
+  for (const phrase of ["head out of frame", "feet out of frame"]) {
+    if (!low.includes(phrase)) t = `${t}, ${phrase}`;
+  }
+  return t;
+}
+
+function defaultNegativePromptText() {
+  const fromCfg = String(
+    imageConfig?.primary_negative || imageConfig?.negative_prompt || "",
+  ).trim();
+  return ensureNsfwInNegative(fromCfg || DEFAULT_IMAGE_NEGATIVE_BASE);
+}
+
+/** Fill face/body negative textareas on boot (positives stay empty until Generate prompt). */
+function fillDefaultNegativesOnBoot() {
+  const neg = defaultNegativePromptText();
+  const faceNeg = document.querySelector("#setupArtFaceNegative");
+  const bodyNeg = document.querySelector("#setupArtBodyNegative");
+  if (faceNeg && !String(faceNeg.value || "").trim()) {
+    faceNeg.value = neg;
+    enginePromptDirty.face_negative = false;
+  } else if (faceNeg) {
+    faceNeg.value = ensureNsfwInNegative(faceNeg.value);
+  }
+  if (bodyNeg && !String(bodyNeg.value || "").trim()) {
+    bodyNeg.value = ensureFullbodyNegative(`${neg}, ${FULLBODY_NEGATIVE_EXTRA}`);
+    enginePromptDirty.fullbody_negative = false;
+  } else if (bodyNeg) {
+    bodyNeg.value = ensureFullbodyNegative(bodyNeg.value);
+  }
+}
+
+function enginePositivesReady(kind = "both") {
+  const face = String(document.querySelector("#setupArtFacePrompt")?.value || "").trim();
+  const body = String(document.querySelector("#setupArtBodyPrompt")?.value || "").trim();
+  if (kind === "face") return Boolean(face);
+  if (kind === "fullbody" || kind === "body") return Boolean(body);
+  return Boolean(face || body);
+}
+
+function markArtPromptsReady(source = "manual") {
+  artPromptsReady = true;
+  syncArtGenerateButtons();
+  return source;
+}
+
+function syncArtGenerateButtons() {
+  const ready = artPromptsReady && enginePositivesReady("both");
+  document.querySelectorAll("[data-art-image-gen], #portraitPreviewBtn").forEach((btn) => {
+    if (!(btn instanceof HTMLButtonElement)) return;
+    const kind = btn.getAttribute("data-simple-art-gen") || btn.getAttribute("data-art-kind") || "face";
+    const kindReady =
+      kind === "both"
+        ? enginePositivesReady("face") && enginePositivesReady("fullbody")
+        : enginePositivesReady(kind === "body" ? "fullbody" : kind);
+    const ok = artPromptsReady && (kind === "both" ? kindReady : enginePositivesReady(kind === "body" ? "fullbody" : kind) || (kind === "face" || kind === "fullbody" ? kindReady : ready));
+    // Gate: need ready flag AND positive for the requested kind
+    let allow = false;
+    if (artPromptsReady) {
+      if (kind === "both") allow = enginePositivesReady("face") && enginePositivesReady("fullbody");
+      else if (kind === "fullbody" || kind === "body") allow = enginePositivesReady("fullbody");
+      else if (kind === "face") allow = enginePositivesReady("face");
+      else allow = enginePositivesReady("face"); // Generate image uses active tab
+    }
+    // portraitPreviewBtn uses active tab
+    if (btn.id === "portraitPreviewBtn") {
+      allow =
+        artPromptsReady &&
+        (activeArtPromptTab === "fullbody"
+          ? enginePositivesReady("fullbody")
+          : enginePositivesReady("face"));
+    }
+    btn.disabled = !allow;
+    btn.title = allow
+      ? btn.getAttribute("data-title-ready") || btn.title || "Generate image"
+      : "Generate prompt first (or type your own positives / finish Randomize)";
+  });
+}
+
+function assertCanGenerateCharacterImage(kind = "face") {
+  fillDefaultNegativesOnBoot();
+  const k = kind === "body" ? "fullbody" : kind;
+  // Manual positives count as ready
+  if (!artPromptsReady) {
+    if (k === "both" && enginePositivesReady("face") && enginePositivesReady("fullbody")) {
+      markArtPromptsReady("manual");
+    } else if (k !== "both" && enginePositivesReady(k)) {
+      markArtPromptsReady("manual");
+    }
+  }
+  if (k === "both") {
+    if (!enginePositivesReady("face") || !enginePositivesReady("fullbody")) {
+      throw new Error("Both face and body positives are required. Press Generate prompt first.");
+    }
+  } else if (!enginePositivesReady(k)) {
+    throw new Error(
+      `${k === "fullbody" ? "Body" : "Face"} positive is empty. Press Generate prompt or type a prompt first.`,
+    );
+  }
+  if (!artPromptsReady) {
+    throw new Error(
+      "Generate prompt first (or type your own positives / finish Randomize), then Generate image.",
+    );
+  }
+  return true;
+}
+
 let activeArtPromptTab = "face";
 
 function setArtPromptTab(tab) {
@@ -8965,9 +11856,9 @@ function setupPortraitPayloadFromForm(kinds = ["face", "fullbody"]) {
     face_prompt: facePrompt,
     fullbody_prompt: bodyPrompt,
     face_negative: faceNegative,
-    fullbody_negative: bodyNegative,
+    fullbody_negative: ensureFullbodyNegative(bodyNegative || defaultNegativePromptText()),
     // Prefer per-image negatives; only fall back when both empty
-    negative_override: faceNegative || bodyNegative || "",
+    negative_override: faceNegative || ensureFullbodyNegative(bodyNegative || "") || "",
     kinds: normalized,
     loras: collectSetupLoras(),
     use_face_reference: useFaceRef,
@@ -9058,23 +11949,35 @@ async function rebuildEnginePrompts({ force = false, silent = false } = {}) {
       bodyEl.classList.remove("enginePromptDirty");
     }
     if (faceNegEl && (force || !enginePromptDirty.face_negative || !faceNegEl.value.trim())) {
-      faceNegEl.value = data.face_negative || data.negative || "";
+      faceNegEl.value = ensureNsfwInNegative(data.face_negative || data.negative || defaultNegativePromptText());
       enginePromptDirty.face_negative = false;
       faceNegEl.classList.remove("enginePromptDirty");
+    } else if (faceNegEl) {
+      faceNegEl.value = ensureNsfwInNegative(faceNegEl.value);
     }
     if (bodyNegEl && (force || !enginePromptDirty.fullbody_negative || !bodyNegEl.value.trim())) {
-      bodyNegEl.value = data.fullbody_negative || data.negative || "";
+      bodyNegEl.value = ensureFullbodyNegative(
+        data.fullbody_negative || data.negative || `${defaultNegativePromptText()}, ${FULLBODY_NEGATIVE_EXTRA}`,
+      );
       enginePromptDirty.fullbody_negative = false;
       bodyNegEl.classList.remove("enginePromptDirty");
+    } else if (bodyNegEl) {
+      bodyNegEl.value = ensureFullbodyNegative(bodyNegEl.value);
     }
+    // Positives filled → unlock Generate image
+    if (enginePositivesReady("face") || enginePositivesReady("fullbody")) {
+      markArtPromptsReady("rebuild");
+    }
+    syncArtGenerateButtons();
     if (!silent) {
       setSetupArtStatus(
-        "Engine prompts rebuilt (face + body, each with positive & negative). Select a tab to edit.",
+        "Prompts ready (positives + negatives). You can Generate image now, or edit the text first.",
       );
     }
     return data;
   } catch (err) {
     if (!silent) setSetupArtStatus(err.message || String(err), { bad: true });
+    syncArtGenerateButtons();
     return null;
   }
 }
@@ -9097,6 +12000,11 @@ function markEnginePromptDirty(kind) {
           ? document.querySelector("#setupArtFaceNegative")
           : document.querySelector("#setupArtBodyNegative");
   el?.classList.add("enginePromptDirty");
+  // Typing positives unlocks image gen
+  if (key === "face" || key === "fullbody") {
+    if (enginePositivesReady(key)) markArtPromptsReady("manual");
+    else syncArtGenerateButtons();
+  }
 }
 
 function pushStudioCandidate(kind, resultPart, meta = {}) {
@@ -9142,14 +12050,36 @@ function setupBodyPlaceholderHtml() {
   return `<div class="visionPlaceholder"><strong>Full body</strong>Drop image or generate (face ref when available)</div>`;
 }
 
+function cacheSetupArtForPlay(faceUrl, bodyUrl) {
+  /** Setup art must survive into play via localStorage (+ server after Start). */
+  if (faceUrl && isBrowserSafeMediaUrl(faceUrl)) {
+    lastSetupFaceDataUrl = faceUrl;
+    try {
+      localStorage.setItem("morkyn-player-portrait", faceUrl);
+    } catch (_) {
+      /* quota */
+    }
+    if (state) state.player_portrait = { ...(state.player_portrait || {}), data_url: faceUrl, kind: "face" };
+  }
+  if (bodyUrl && isBrowserSafeMediaUrl(bodyUrl)) {
+    lastSetupBodyDataUrl = bodyUrl;
+    try {
+      localStorage.setItem("morkyn-player-fullbody", bodyUrl);
+    } catch (_) {
+      /* quota */
+    }
+    if (state) state.player_fullbody = { ...(state.player_fullbody || {}), data_url: bodyUrl, kind: "fullbody" };
+  }
+}
+
 function applySetupArtResult(result, kinds) {
   const card = document.querySelector("#characterPortraitCard");
   const faceFrame = card?.querySelector("[data-setup-face]");
   const bodyFrame = card?.querySelector("[data-setup-fullbody]");
   const faceUrl = result.face?.data_url || "";
   const bodyUrl = result.fullbody?.data_url || "";
+  cacheSetupArtForPlay(faceUrl, bodyUrl);
   if (faceUrl) {
-    lastSetupFaceDataUrl = faceUrl;
     pushStudioCandidate("face", result.face);
     setArtFrameContent(faceFrame, {
       badge: "face",
@@ -9159,7 +12089,6 @@ function applySetupArtResult(result, kinds) {
     });
   }
   if (bodyUrl) {
-    lastSetupBodyDataUrl = bodyUrl;
     pushStudioCandidate("fullbody", result.fullbody);
     setArtFrameContent(bodyFrame, {
       badge: "body · 3:4",
@@ -9173,6 +12102,27 @@ function applySetupArtResult(result, kinds) {
       hasArt: false,
       html: `<div class="visionPlaceholder"><strong>Glimpse only</strong>Full body skipped.</div>`,
     });
+  }
+}
+
+/** After /api/setup creates the world, push pre-game art into DB so reloads keep face+body. */
+async function persistSetupArtToServer() {
+  const face = safeMediaUrl(lastSetupFaceDataUrl || localStorage.getItem("morkyn-player-portrait") || "");
+  const body = safeMediaUrl(lastSetupBodyDataUrl || localStorage.getItem("morkyn-player-fullbody") || "");
+  if (!face && !body) return null;
+  try {
+    const res = await fetch("/api/player/art", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        face_data_url: face || "",
+        fullbody_data_url: body || "",
+      }),
+    });
+    if (!res.ok) return null;
+    return await res.json().catch(() => ({}));
+  } catch (_) {
+    return null;
   }
 }
 
@@ -9441,13 +12391,42 @@ function renderImageStudioHtml() {
   const primary = imageConfig?.primary_prompt || "";
   const primaryNeg = imageConfig?.primary_negative || imageConfig?.negative_prompt || "";
   const autoNpc = imageConfig?.auto_generate_npc_portraits ? "checked" : "";
+  const simple = imageUiMode !== "advanced";
   return `
-    <div class="imageStudioPanel">
+    <div class="imageStudioPanel ${simple ? "imageStudioSimple" : "imageStudioAdvanced"}">
       <header>
-        <h3>Image Studio</h3>
-        <p class="empty">Layer A = game primary style. Layer C = session extra + LoRAs. Identity (B) is filled from setup / play state. Generate hooks Forge first, then starts it only if offline.</p>
+        <div class="imageStudioHeaderRow">
+          <h3>Image Studio</h3>
+          <div class="imageModeToggle" role="group" aria-label="Studio complexity">
+            <button type="button" class="chipBtn secondaryButton imageModeBtn ${simple ? "isActive" : ""}" data-image-mode="simple">Simple</button>
+            <button type="button" class="chipBtn secondaryButton imageModeBtn ${!simple ? "isActive" : ""}" data-image-mode="advanced">Advanced</button>
+          </div>
+        </div>
+        <p class="empty">${
+          simple
+            ? "Generate face/body from identity. Switch to Advanced for primary prompts, LoRAs, and browser tools."
+            : "Layer A = game primary style. Layer C = session extra + LoRAs. Identity (B) is filled from setup / play state. Generate hooks Forge first, then starts it only if offline."
+        }</p>
       </header>
-      <div class="imageStudioGrid">
+      <div class="visionActions artKindActions">
+        <select id="studioArtGenKind" class="artGenSelect">
+          <option value="both" selected>Face + body</option>
+          <option value="face">Face only</option>
+          <option value="fullbody">Body only</option>
+        </select>
+        <button type="button" class="secondaryButton" id="studioGenerateBtn" data-art-generate>Generate</button>
+        ${
+          simple
+            ? ""
+            : `<button type="button" class="secondaryButton" id="studioSavePrimary">Save primary prompts</button>
+        <button type="button" class="secondaryButton" id="studioRefreshCatalog">Refresh catalog</button>
+        <button type="button" class="secondaryButton" data-open-image-browser title="Infinite Image Browsing (if installed) or native portraits">Image Browser</button>`
+        }
+      </div>
+      ${
+        simple
+          ? ""
+          : `<div class="imageStudioGrid">
         <label class="wide"><span>Primary positive (game-wide)</span>
           <textarea id="studioPrimaryPrompt" rows="3" maxlength="1200">${escapeHtml(primary)}</textarea>
         </label>
@@ -9458,18 +12437,8 @@ function renderImageStudioHtml() {
       <label class="inlineCheck">
         <input type="checkbox" id="studioAutoNpc" ${autoNpc} />
         <span>Auto-generate portraits for new NPCs in play (not the player)</span>
-      </label>
-      <div class="visionActions artKindActions">
-        <button type="button" class="secondaryButton" id="studioSavePrimary">Save primary prompts</button>
-        <select id="studioArtGenKind" class="artGenSelect">
-          <option value="both" selected>Face + body</option>
-          <option value="face">Face only</option>
-          <option value="fullbody">Body only</option>
-        </select>
-        <button type="button" class="secondaryButton" id="studioGenerateBtn" data-art-generate>Generate</button>
-        <button type="button" class="secondaryButton" id="studioRefreshCatalog">Refresh catalog</button>
-        <button type="button" class="secondaryButton" data-open-image-browser title="Infinite Image Browsing (if installed) or native portraits">Image Browser</button>
-      </div>
+      </label>`
+      }
       <p class="empty" id="studioStatus"></p>
       <h4>Candidates</h4>
       <div id="imageStudioCandidates" class="imageStudioCandidates"></div>
@@ -9522,8 +12491,9 @@ function renderNativePortraitGridHtml(items, filter = "all") {
       ${filtered
         .map((it) => {
           const name = String(it.name || it.id || "");
-          const url = String(it.url || "");
+          const url = safeMediaUrl(it.url || "");
           const kind = String(it.kind || "other");
+          if (!url) return "";
           return `
             <article class="nativePortraitCard" role="listitem" data-portrait-id="${escapeHtml(name)}" draggable="true" title="Drag onto Face or Full body">
               <button type="button" class="nativePortraitThumb" data-portrait-preview="${escapeHtml(name)}" title="${escapeHtml(name)} — drag to Face/Body">
@@ -9898,6 +12868,178 @@ async function checkImageReadiness(container) {
   return payload;
 }
 
+function setArtForgeStatus(msg, { bad = false, good = false } = {}) {
+  const els = [
+    document.querySelector("#setupArtSimpleStatus"),
+    document.querySelector("#setupArtForgeStatus"),
+    document.querySelector("#forgePathModalStatus"),
+  ].filter(Boolean);
+  els.forEach((el) => {
+    el.textContent = msg;
+    el.classList.toggle("bad", bad);
+    el.classList.toggle("good", good);
+  });
+  if (msg) setSetupArtStatus?.(msg, { bad });
+}
+
+function forgeRootCurrent() {
+  return String(
+    pendingImageRoots.forge || imageConfig?.forge_root || document.querySelector("#forgePathModalInput")?.value || "",
+  ).trim();
+}
+
+function openForgePathModal(prefill = "") {
+  const modal = document.querySelector("#forgePathModal");
+  const input = document.querySelector("#forgePathModalInput");
+  const cands = document.querySelector("#forgePathModalCandidates");
+  if (!modal) return;
+  if (input) input.value = prefill || forgeRootCurrent() || "";
+  if (cands) {
+    cands.innerHTML = "";
+    cands.classList.add("hidden");
+  }
+  setArtForgeStatus("Paste a path, Browse, or Auto-search common folders.");
+  modal.classList.remove("hidden");
+  input?.focus();
+}
+
+function closeForgePathModal() {
+  document.querySelector("#forgePathModal")?.classList.add("hidden");
+}
+
+async function saveForgeRootPath(path) {
+  const p = String(path || "").trim();
+  if (!p) throw new Error("Enter a ForgeSD folder path first.");
+  pendingImageRoots.forge = p;
+  document.querySelectorAll('input[name="forge_root"]').forEach((el) => {
+    el.value = p;
+  });
+  const patch = {
+    ...(imageConfig || {}),
+    provider: "forge",
+    forge_root: p,
+    comfy_root: pendingImageRoots.comfyui || imageConfig?.comfy_root || "",
+    auto_launch_if_offline: true,
+  };
+  const saveRes = await fetch("/api/image-config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  const data = await saveRes.json().catch(() => ({}));
+  if (!saveRes.ok) throw new Error(data.detail || data.error || "Could not save Forge path");
+  imageConfig = data;
+  if (imageConfig.forge_root) pendingImageRoots.forge = imageConfig.forge_root;
+  return p;
+}
+
+async function autoSearchForgeRoots() {
+  setArtForgeStatus("Searching common folders for ForgeSD…");
+  const response = await fetch("/api/image-path-search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind: "forge", max_results: 12, max_seconds: 14 }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(payload.detail || payload.error || "Search failed");
+  const candidates = payload.candidates || [];
+  const host = document.querySelector("#forgePathModalCandidates");
+  const input = document.querySelector("#forgePathModalInput");
+  if (!candidates.length) {
+    setArtForgeStatus(payload.message || "No installs found. Paste the folder path manually.", { bad: true });
+    host?.classList.add("hidden");
+    return payload;
+  }
+  if (host) {
+    host.classList.remove("hidden");
+    host.innerHTML = candidates
+      .map(
+        (c, i) =>
+          `<button type="button" class="secondaryButton chipBtn" data-forge-candidate="${escapeHtml(c.path)}">${i + 1}. ${escapeHtml(c.path)}</button>`,
+      )
+      .join("");
+  }
+  // Prefer first hit in the input
+  if (input && !String(input.value || "").trim()) {
+    input.value = String(candidates[0].path || "");
+  }
+  setArtForgeStatus(`Found ${candidates.length} candidate(s). Click one, or edit the path, then Save & Start.`);
+  return payload;
+}
+
+/**
+ * Start ForgeSD without generating art.
+ * If no install directory is saved, opens a path prompt (Browse / Auto-search).
+ */
+async function startForgeSdFromUi({ forcePathPrompt = false } = {}) {
+  if (!imageConfig) {
+    try {
+      await loadImageConfig();
+    } catch (_) {
+      /* continue */
+    }
+  }
+  let root = forgeRootCurrent();
+  if (forcePathPrompt || !root) {
+    openForgePathModal(root);
+    return { needs_path: true };
+  }
+  setArtForgeStatus("Checking ForgeSD…");
+  // Ensure provider is forge so launch targets the right backend
+  try {
+    await saveForgeRootPath(root);
+  } catch (err) {
+    setArtForgeStatus(err.message || String(err), { bad: true });
+    openForgePathModal(root);
+    return { ok: false, error: err.message };
+  }
+  try {
+    const probeRes = await fetch("/api/image-status", { method: "POST" });
+    const probe = await probeRes.json().catch(() => ({}));
+    if (probe.ok || probe.api_ok) {
+      setArtForgeStatus(probe.message || "ForgeSD already running.", { good: true });
+      forgeImageStatus = {
+        ok: true,
+        provider: probe.provider || "forge",
+        message: probe.message || "API OK",
+        raw: probe,
+      };
+      syncForgeImageGateUi?.();
+      loadImageCatalog("forge").catch(() => {});
+      return { ok: true, already_running: true };
+    }
+  } catch (_) {
+    /* launch */
+  }
+  setArtForgeStatus("Starting ForgeSD (no image generate)…");
+  const response = await fetch("/api/image-launch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider: "forge", force: false }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload.detail || payload.error || "Launch failed";
+    const msg = typeof detail === "string" ? detail : JSON.stringify(detail);
+    // Missing root / not found → prompt for directory
+    if (/root|path|folder|install|not found|empty|no forge/i.test(msg)) {
+      openForgePathModal(root);
+      setArtForgeStatus(msg, { bad: true });
+      return { ok: false, needs_path: true, error: msg };
+    }
+    setArtForgeStatus(msg, { bad: true });
+    throw new Error(msg);
+  }
+  setArtForgeStatus(payload.message || "ForgeSD start requested. Wait for API, then Generate.", {
+    good: !payload.pending,
+  });
+  window.setTimeout(() => {
+    loadImageCatalog("forge").catch(() => {});
+    probeImageBackendStatus({ silent: true }).catch(() => {});
+  }, 3500);
+  return payload;
+}
+
 async function launchImageBackendFromUi(container, event) {
   event?.preventDefault?.();
   event?.stopPropagation?.();
@@ -10125,6 +13267,7 @@ function updateConditionalSetup() {
   formerLifeIdentity?.classList.toggle("open", formerLifeSelected());
   updateCustomControls();
   updateAbilityOriginControls();
+  updateSimpleRulesVisibility();
 }
 
 async function loadState() {
@@ -10452,6 +13595,16 @@ function displayTurnPayload(payload, options = {}) {
   if (!payload?.state || !payload?.turn) return false;
   clearSuggestions();
   renderShell(payload.state);
+  // Cold social attitudes → offer walk away / keep talking without forcing a verb
+  try {
+    const checks = payload.skill_checks || payload.turn?.skill_checks || [];
+    const cold = (Array.isArray(checks) ? checks : []).some(
+      (c) => c && c.social_attitude && ["Dismissive", "Apprehensive", "Condescending", "Antagonistic", "Hostile"].includes(c.social_attitude),
+    );
+    if (cold) maybeShowSocialChoiceBar(payload.state);
+  } catch {
+    /* ignore */
+  }
   // After any turn resolves, narration is the main stage (map is secondary).
   setSceneFocus(true, { scroll: true, focusInput: false, smooth: false });
   const narrationText = turnNarrationText(payload.turn) || "The world hesitates.";
@@ -10524,12 +13677,187 @@ async function requestSuggestions(instruction = "") {
   renderSuggestions(Array.isArray(payload) ? payload : payload.suggestions || []);
 }
 
+/** Fill thin Simple setup so Advanced-depth fields reach similar richness (not identical values). */
+async function expandSimpleSetupDepth() {
+  pushSimpleToForm();
+  const idea =
+    setupRandomizeIdea() ||
+    [
+      document.querySelector("#simpleWorld")?.value,
+      document.querySelector("#simpleOrigin")?.value,
+      document.querySelector("#simpleDifficulty")?.value,
+      document.querySelector("#simpleBackstory")?.value,
+    ]
+      .filter(Boolean)
+      .join(" · ")
+      .slice(0, 400);
+  let intent = lastComposeIntent;
+  if (idea) {
+    try {
+      const composed = await composeSetupIntent(idea);
+      intent = composed.intent || intent;
+      const overrides = composed.field_overrides || {};
+      if (overrides && typeof overrides === "object") applyRandomizedSetup({ fields: overrides });
+    } catch {
+      /* continue with local fill */
+    }
+  }
+  // Prose / world fields that Simple often leaves default
+  const fillTargets = [
+    "world_style",
+    "tone",
+    "tech_level",
+    "magic_level",
+    "economy",
+    "custom_style",
+    "world_races",
+    "start_location",
+    "hair",
+    "facial_features",
+    "starter_equipment",
+    "character_backstory",
+    "death_rules",
+    "loot_rarity",
+    "npc_density",
+    "quest_style",
+    "faction_pressure",
+    "custom_skills",
+    "special_ability_origin",
+    "special_abilities",
+  ];
+  const formData = new FormData(setupForm);
+  for (const name of fillTargets) {
+    if (isSettingLocked(name)) continue;
+    if (!randomizeFieldApplies(name, formData)) continue;
+    // Skip if already substantial
+    if (name === "special_abilities") {
+      if (abilityOrigin() === "none") continue;
+      if (collectAbilities().length) continue;
+    } else if (name === "character_backstory") {
+      const v = String(setupForm.elements.character_backstory?.value || "").trim();
+      if (v.length >= 180) continue;
+    } else if (name === "custom_style") {
+      const v = String(setupForm.elements.custom_style?.value || "").trim();
+      if (v.length >= 80) continue;
+    } else if (name === "starter_equipment") {
+      const v = String(setupForm.elements.starter_equipment?.value || "").trim();
+      if (v.length >= 40) continue;
+    } else if (name === "appearance" || name === "hair" || name === "facial_features") {
+      const v = String(setupForm.elements[name]?.value || "").trim();
+      if (v.length >= 12) continue;
+    } else if (name === "start_location") {
+      const v = String(setupForm.elements.start_location?.value || "").trim();
+      if (v && v !== "Mosswake Gate") continue;
+    }
+    try {
+      await randomizeField(name, { idea, intent, ignoreLock: false });
+    } catch {
+      fallbackRandomizeField(name, { ignoreLock: false });
+    }
+  }
+  // Soft length pads for key prose without forcing identical Advanced content
+  const bs = setupForm.elements.character_backstory;
+  if (bs && String(bs.value || "").trim().length < 120) {
+    const present = [
+      document.querySelector("#simpleHair")?.value,
+      document.querySelector("#simpleFace")?.value,
+      document.querySelector("#simpleLook")?.value,
+    ]
+      .map((s) => String(s || "").trim())
+      .filter(Boolean)
+      .join("; ");
+    const origin = document.querySelector("#simpleOrigin")?.value || "known";
+    const world = document.querySelector("#simpleWorld")?.value || "";
+    bs.value = [
+      String(bs.value || "").trim(),
+      present ? `They present as: ${present}.` : "",
+      world ? `The world around them leans ${world}.` : "",
+      `Their past is ${origin}; they are near the opening with ordinary means and local pressure.`,
+    ]
+      .filter(Boolean)
+      .join(" ")
+      .slice(0, 1600);
+  }
+  pushSimpleToForm();
+  // Length scoring: Simple final package should land in a similar band to a typical Advanced fill
+  const score = scoreSetupDepth();
+  if (score.total < score.target * 0.7) {
+    // Second pass on weakest prose fields only
+    for (const name of score.weak) {
+      if (isSettingLocked(name)) continue;
+      try {
+        await randomizeField(name, { idea, intent, ignoreLock: false });
+      } catch {
+        fallbackRandomizeField(name, { ignoreLock: false });
+      }
+    }
+  }
+  pullFormToSimple();
+  const finalScore = scoreSetupDepth();
+  console.info("setup depth score", finalScore);
+  try {
+    const pct = finalScore.target ? Math.round((finalScore.total / finalScore.target) * 100) : 100;
+    addStartSplashLine?.(`Setup depth ${finalScore.total}/${finalScore.target} (~${pct}% of Advanced band).`);
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Rough char-budget score so Simple Start ≈ Advanced richness (not same text). */
+function scoreSetupDepth() {
+  const bands = {
+    character_backstory: { min: 200, weight: 3 },
+    custom_style: { min: 80, weight: 2 },
+    appearance: { min: 24, weight: 1 },
+    starter_equipment: { min: 40, weight: 2 },
+    start_location: { min: 4, weight: 1 },
+    hair: { min: 8, weight: 1 },
+    facial_features: { min: 12, weight: 1 },
+    custom_skills: { min: 20, weight: 1 },
+    race_ability_rules: { min: 40, weight: 1 },
+    inventory_rules: { min: 20, weight: 1 },
+  };
+  let total = 0;
+  let target = 0;
+  const weak = [];
+  for (const [name, band] of Object.entries(bands)) {
+    const el = setupForm?.elements?.[name];
+    const len = String(el?.value || "").trim().length;
+    const points = Math.min(1, len / band.min) * band.weight;
+    total += points;
+    target += band.weight;
+    if (len < band.min * 0.85) weak.push(name);
+  }
+  // Abilities when origin is set
+  if (abilityOrigin() !== "none") {
+    const abs = collectAbilities();
+    const aLen = abs.reduce((n, a) => n + String(a.description || "").length + String(a.growth_math || "").length, 0);
+    total += Math.min(2, aLen / 120);
+    target += 2;
+    if (abs.length === 0 || aLen < 80) weak.push("special_abilities");
+  }
+  return { total: Math.round(total * 10) / 10, target, weak, ratio: target ? total / target : 1 };
+}
+
 async function startGame(event) {
   event.preventDefault();
   if (aiBusy) return;
+  // Simple view writes into the real form before Start
+  if (setupUiMode === "simple") pushSimpleToForm();
+  // Fill empty growth math from power type + world/player context before abilities are read
+  calculateAllAbilityGrowthMath({ force: false });
   const startLabel = "Starting playthrough...";
   showStartSplash();
   await enqueueAiTask(withSetupRandomizationLock(async () => {
+    if (setupUiMode === "simple") {
+      latestOutput.innerHTML = paragraphs("Expanding Simple setup toward full playthrough depth...");
+      addStartSplashLine?.("Expanding Simple setup to Advanced-depth fields…");
+      try {
+        await expandSimpleSetupDepth();
+      } catch (err) {
+        console.warn("Simple expand failed; continuing with mapped fields.", err);
+      }
+    }
     latestOutput.innerHTML = paragraphs("Starting playthrough and writing the opening scene...");
     const formData = new FormData(setupForm);
     const skillCustom = readCustomText("skill_style");
@@ -10637,10 +13965,30 @@ async function startGame(event) {
     if (!response.ok) throw new Error(await response.text());
     latestInput.innerHTML = "";
     const responsePayload = await response.json();
-    if (!displayTurnPayload(responsePayload, { animateNarration: true, startSplash: true })) {
+    // Carry setup face/body into this playthrough (localStorage + DB)
+    await persistSetupArtToServer();
+    // Popup: items ripped for lore (wand in cyberpunk, magic on isekai arrival, etc.)
+    const gearLogic =
+      responsePayload?.starter_logic ||
+      responsePayload?.state?.settings?.playthrough_options?.starter_logic ||
+      null;
+    if (gearLogic) {
+      hideStartSplash();
+      bindStarterLogicModal();
+      showStarterLogicPopup(gearLogic);
+    }
+    if (!displayTurnPayload(responsePayload, { animateNarration: true, startSplash: !gearLogic })) {
       hideStartSplash();
       renderShell(responsePayload);
       await requestTurn("", { displayText: "Opening scene" });
+    } else {
+      // Refresh shell so Player tab shows cached art after opening narration
+      try {
+        const st = await fetch("/api/state").then((r) => r.json());
+        if (st) renderShell(st, { forceGame: true });
+      } catch (_) {
+        /* ignore */
+      }
     }
   }, startLabel), startLabel).catch((error) => {
     hideStartSplash();
@@ -10713,10 +14061,35 @@ async function rewindTurn(snapshotId = null) {
       }
     : { method: "POST" };
   const response = await fetch("/api/rewind", options);
-  if (!response.ok) throw new Error(await response.text());
-  latestInput.innerHTML = "";
-  latestOutput.innerHTML = paragraphs("Rewound one turn.");
-  renderShell(await response.json());
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const detail = payload.detail || payload.error || (await response.text?.()) || "Rewind failed";
+    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+  }
+  // Apply rewound world state, then rehydrate Last input + Narration from resume/history.
+  // (Previously we painted “Rewound one turn.” and never restored the prior scene.)
+  renderShell(payload, { forceGame: true });
+  const resume = payload.resume && typeof payload.resume === "object" ? payload.resume : null;
+  restoreLastTurnPanels(resume);
+  // Brief confirm in chat hint, not replacing narration
+  const hint = document.querySelector("#chatIdleHint");
+  if (hint) {
+    const turn = payload.rewound_turn ? ` (turn ${payload.rewound_turn})` : "";
+    const prev = hint.textContent;
+    hint.textContent = `Undid last turn${turn}`;
+    window.setTimeout(() => {
+      if (hint.textContent.startsWith("Undid last turn")) {
+        hint.textContent = prev || "Map is main while idle";
+      }
+    }, 2400);
+  }
+  // Refresh map after position/world may have rolled back
+  try {
+    await refreshLocalMap();
+  } catch (_) {
+    /* ignore */
+  }
+  return payload;
 }
 
 async function regenerateTurn() {
@@ -10783,9 +14156,40 @@ async function runSearch(query) {
 });
 
 setupForm.addEventListener("change", (event) => {
-  if (event.target.matches("[data-lock-setting]")) return;
-  const select = event.target.closest("select[name]");
-  if (select?.value === "random") {
+  if (event.target.matches("[data-lock-setting]")) {
+    const source = event.target;
+    const name = source.dataset.lockSetting;
+    const checked = source.checked;
+    syncSettingLocks(name, checked);
+    // Simple world vibe: locking custom_style also locks world_style (mirror checkbox).
+    const primaryField = Array.from(setupForm.querySelectorAll("[data-setup-field]")).find(
+      (el) => el.dataset.setupField === name,
+    );
+    const also = String(primaryField?.dataset?.simpleAlsoLock || "")
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    also.forEach((extra) => syncSettingLocks(extra, checked));
+    const mirrorOf = source.dataset.lockMirrorOf;
+    if (mirrorOf) syncSettingLocks(mirrorOf, checked);
+    // Hidden mirrors linked from a simple primary lock
+    setupForm.querySelectorAll(`[data-lock-mirror-of="${name}"]`).forEach((mirror) => {
+      mirror.checked = checked;
+    });
+    return;
+  }
+  if (event.target === lockAbilityCount || event.target === abilityCountMinInput || event.target === abilityCountMaxInput) {
+    syncAbilityCountRangeInputs();
+    updateAbilityOriginControls();
+    return;
+  }
+  if (event.target.matches('input[name="special_ability_origin"]')) {
+    updateAbilityOriginControls();
+    return;
+  }
+  // Only when the user actually picks the "random" option on that control (not focus noise)
+  const select = event.target.matches?.("select[name]") ? event.target : null;
+  if (select?.value === "random" && event.isTrusted && !isSetupActionSuppressed()) {
     const label = `Randomizing ${select.name}...`;
     enqueueAiTask(
       withSetupRandomizationLock(
@@ -10801,8 +14205,9 @@ setupForm.addEventListener("change", (event) => {
     );
     return;
   }
-  const randomList = event.target.closest('input[type="checkbox"][value="random"]');
-  if (randomList?.checked) {
+  const randomList =
+    event.target.matches?.('input[type="checkbox"][value="random"]') ? event.target : null;
+  if (randomList?.checked && event.isTrusted && !isSetupActionSuppressed()) {
     const label = `Randomizing ${randomList.name}...`;
     enqueueAiTask(
       withSetupRandomizationLock(
@@ -10833,6 +14238,9 @@ setupForm.addEventListener("input", (event) => {
     const value = Math.max(0, Math.min(100, Number(event.target.value || 0)));
     if (slider) slider.value = String(Math.min(Number(slider.max || 10), Math.max(Number(slider.min || 0), value)));
     updateGainControls();
+  }
+  if (event.target === abilityCountMinInput || event.target === abilityCountMaxInput) {
+    updatePowersDropdownMeta();
   }
   if (event.target.matches('textarea[name="character_backstory"], [data-custom-input="backstory_mode"], [data-custom-input="memory_policy"]')) updateConditionalSetup();
 });
@@ -10882,9 +14290,17 @@ setupForm.addEventListener("click", (event) => {
   const fieldRandomizer = event.target.closest("[data-randomize-field]");
   if (fieldRandomizer) {
     event.preventDefault();
+    event.stopPropagation();
+    // Ignore focus-click-through when returning to the browser tab
+    if (isSetupActionSuppressed() || !event.isTrusted) return;
+    // Must click the button itself (not a parent shell / nearby label)
+    if (event.target !== fieldRandomizer && !fieldRandomizer.contains(event.target)) return;
     const name = fieldRandomizer.dataset.randomizeField;
+    if (!name) return;
     fieldRandomizer.disabled = true;
     const label = `Randomizing ${name}...`;
+    // Keep Simple panel values in sync before/after field rolls.
+    if (setupUiMode === "simple") pushSimpleToForm();
     enqueueAiTask(
       withSetupRandomizationLock(
         () => randomizeField(name, { ignoreLock: true }),
@@ -10896,6 +14312,9 @@ setupForm.addEventListener("click", (event) => {
       ),
       label,
     )
+      .then(() => {
+        if (setupUiMode === "simple") pullFormToSimple();
+      })
       .finally(() => {
         fieldRandomizer.disabled = false;
       });
@@ -10903,6 +14322,10 @@ setupForm.addEventListener("click", (event) => {
   }
   const randomizer = event.target.closest("[data-randomize-group]");
   if (randomizer) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (isSetupActionSuppressed() || !event.isTrusted) return;
+    if (event.target !== randomizer && !randomizer.contains(event.target)) return;
     randomizer.disabled = true;
     const label = `Randomizing ${randomizer.dataset.randomizeGroup}...`;
     const group = randomizer.dataset.randomizeGroup;
@@ -10922,23 +14345,76 @@ setupForm.addEventListener("click", (event) => {
       });
   }
   const removeAbility = event.target.closest(".removeAbility");
-  if (removeAbility) removeAbility.closest(".abilitySetupCard")?.remove();
+  if (removeAbility) {
+    removeAbility.closest(".abilitySetupCard")?.remove();
+    updatePowersDropdownMeta();
+  }
+  const collapseToggle = event.target.closest(".abilityCollapseToggle");
+  if (collapseToggle) {
+    const card = collapseToggle.closest(".abilitySetupCard");
+    if (card) {
+      const open = card.classList.contains("is-collapsed");
+      setAbilityCardExpanded(card, open);
+    }
+    return;
+  }
+  // Click summary bar (not buttons) toggles collapse
+  const summaryBar = event.target.closest(".abilityCardSummary");
+  if (
+    summaryBar &&
+    !event.target.closest("button") &&
+    !event.target.closest("a") &&
+    !event.target.closest("input")
+  ) {
+    const card = summaryBar.closest(".abilitySetupCard");
+    if (card) {
+      const open = card.classList.contains("is-collapsed");
+      setAbilityCardExpanded(card, open);
+    }
+    return;
+  }
   const randomizeOne = event.target.closest(".randomizeOneAbility");
   if (randomizeOne) {
     const card = randomizeOne.closest(".abilitySetupCard");
     const preset = randomAbilityPreset();
     if (card) {
-      card.outerHTML = abilityTemplate(preset);
+      // Keep collapsed after randomize-this
+      card.outerHTML = abilityTemplate(preset, { expanded: false });
       ensureTextAiControls(abilityList);
       decorateFunctionHelp(abilityList);
+      updateAbilityOriginControls();
+      abilityList.querySelectorAll(".abilitySetupCard").forEach((c) => refreshAbilityCardSummary(c));
     }
   }
   const addAfter = event.target.closest(".addAbilityAfter");
   if (addAfter) {
-    addAfter.closest(".abilitySetupCard")?.insertAdjacentHTML("afterend", abilityTemplate());
-    ensureTextAiControls(abilityList);
-    decorateFunctionHelp(abilityList);
+    const prepared = applyOriginToAbility({});
+    // Manual add → start expanded for editing
+    addAfter
+      .closest(".abilitySetupCard")
+      ?.insertAdjacentHTML("afterend", abilityTemplate(prepared, { expanded: true }));
+    const inserted = addAfter.closest(".abilitySetupCard")?.nextElementSibling;
+    ensureTextAiControls(inserted || abilityList);
+    decorateFunctionHelp(inserted || abilityList);
+    updateAbilityOriginControls();
+    if (inserted) {
+      setAbilityCardExpanded(inserted, true);
+      refreshAbilityCardSummary(inserted);
+    }
   }
+});
+// Keep collapsed summary labels in sync while editing expanded cards
+setupForm?.addEventListener("input", (event) => {
+  const field = event.target?.closest?.("[data-ability-field]");
+  if (!field) return;
+  const card = field.closest(".abilitySetupCard");
+  if (card) refreshAbilityCardSummary(card);
+});
+setupForm?.addEventListener("change", (event) => {
+  const field = event.target?.closest?.("[data-ability-field]");
+  if (!field) return;
+  const card = field.closest(".abilitySetupCard");
+  if (card) refreshAbilityCardSummary(card);
 });
 setupForm.addEventListener("submit", startGame);
 setupForm.addEventListener("blur", (event) => {
@@ -10960,39 +14436,237 @@ setupSettingsFile?.addEventListener("change", () => {
       setupSettingsFile.value = "";
     });
 });
-randomizeSetup?.addEventListener("click", () => {
-  randomizeSetup.disabled = true;
-  const idea = setupRandomizeIdea();
-  const label = idea ? "Randomizing setup from your idea..." : "Randomizing setup...";
-  const promptInput = document.querySelector("#randomizeSetupPrompt");
-  if (promptInput) promptInput.disabled = true;
-  enqueueAiTask(
-    withSetupRandomizationLock(
-      () => randomizeAllSetup({ idea }),
-      label,
-      (error) => {
-        fallbackRandomizeSequence(RANDOM_FIELD_ORDER);
-        latestOutput.innerHTML = paragraphs(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
-      },
-    ),
-    label,
-  )
-    .finally(() => {
-      randomizeSetup.disabled = false;
-      if (promptInput) promptInput.disabled = false;
-    });
+function toggleRandomizePopover(fromEl) {
+  const pop = document.querySelector("#randomizePopover");
+  if (pop && !pop.classList.contains("hidden")) closeRandomizePopover();
+  else openRandomizePopover(fromEl);
+}
+randomizeSetup?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleRandomizePopover(event.currentTarget);
+});
+document.querySelector("#simpleOpenRandomize")?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  toggleRandomizePopover(event.currentTarget);
+});
+document.querySelector("#randomizePopoverCancel")?.addEventListener("click", () => closeRandomizePopover());
+document.querySelector("#randomizePopoverConfirm")?.addEventListener("click", () => runConfirmedRandomize());
+function syncSelectedPresetIdeaToPrompt() {
+  const preset = findPreset(selectedDirectorPresetId);
+  if (!preset) return;
+  const ideaInput = document.querySelector("#randomizeSetupPrompt");
+  if (ideaInput) ideaInput.value = ideaForActivePreset(preset).slice(0, 400);
+}
+
+document.querySelector("#simplePresetConfirmRandomize")?.addEventListener("click", (event) => {
+  event.preventDefault();
+  syncSelectedPresetIdeaToPrompt();
+  runConfirmedRandomize();
+});
+document.querySelector("#advancedPresetConfirmRandomize")?.addEventListener("click", (event) => {
+  event.preventDefault();
+  syncSelectedPresetIdeaToPrompt();
+  runConfirmedRandomize();
 });
 document.querySelector("#randomizeSetupPrompt")?.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") return;
-  event.preventDefault();
-  randomizeSetup?.click();
+  if (event.key === "Escape") {
+    event.preventDefault();
+    closeRandomizePopover();
+    return;
+  }
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    runConfirmedRandomize();
+  }
+});
+document.addEventListener("click", (event) => {
+  const pop = document.querySelector("#randomizePopover");
+  if (!pop || pop.classList.contains("hidden")) return;
+  if (event.target.closest("#randomizePopover, #randomizeSetup, #simpleOpenRandomize")) return;
+  closeRandomizePopover();
 });
 document.querySelector("#directorPresets")?.addEventListener("click", (event) => {
   const btn = event.target.closest("[data-director-preset]");
   if (!btn) return;
-  applyDirectorPreset(btn.dataset.directorPreset, { runRandomize: true });
+  applyDirectorPreset(btn.dataset.directorPreset, { runRandomize: false });
 });
-addAbilityButton?.addEventListener("click", () => addAbility());
+document.querySelector("#simpleDirectorPresets")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-director-preset]");
+  if (!btn) return;
+  applyDirectorPreset(btn.dataset.directorPreset, { runRandomize: false });
+});
+document.querySelector("#presetNewBtn")?.addEventListener("click", () => createUserPreset());
+document.querySelector("#presetSaveBtn")?.addEventListener("click", () => saveSelectedPresetFromEditor());
+document.querySelector("#presetDeleteBtn")?.addEventListener("click", () => deleteSelectedUserPreset());
+document.querySelector("#addGearItemBtn")?.addEventListener("click", () => addGearItem({}));
+document.querySelector("#calcAllGrowthMathBtn")?.addEventListener("click", () => {
+  const n = calculateAllAbilityGrowthMath({ force: true });
+  window.alert(
+    n
+      ? `Filled level-up math on ${n} power(s) from growth type + difficulty/world context.`
+      : "No ability cards to update. Add a power first.",
+  );
+});
+// Ability card: growth type tip + per-card calc; gear remove
+document.addEventListener("change", (event) => {
+  const typeSel = event.target?.closest?.('[data-ability-field="power_type"]');
+  if (typeSel) {
+    const card = typeSel.closest(".abilitySetupCard");
+    updatePowerTypeTip(card);
+  }
+});
+document.addEventListener("click", (event) => {
+  if (event.target.closest(".calcGrowthMathBtn")) {
+    event.preventDefault();
+    const card = event.target.closest(".abilitySetupCard");
+    fillGrowthMathOnCard(card, { force: true });
+    return;
+  }
+  if (event.target.closest(".removeGearItem")) {
+    event.preventDefault();
+    event.target.closest(".gearSetupCard")?.remove();
+    return;
+  }
+});
+document.querySelectorAll(".setupModeBtn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    const mode = btn.getAttribute("data-setup-mode") || "simple";
+    if (mode === "advanced") {
+      pushSimpleToForm();
+      setSetupUiMode("advanced", { fromSimple: true });
+    } else {
+      setSetupUiMode("simple");
+    }
+  });
+});
+document.querySelectorAll("[data-image-mode]").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    setImageUiMode(btn.getAttribute("data-image-mode") || "simple");
+  });
+});
+document.querySelectorAll('input[name="simple_power_mode"]').forEach((r) => {
+  r.addEventListener("change", () => {
+    const one = document.querySelector('input[name="simple_power_mode"]:checked')?.value === "one";
+    document.querySelector("#simplePowerFields")?.classList.toggle("hidden", !one);
+  });
+});
+// Keep simple fields → form when typing (so Advanced switch isn't the only sync)
+[
+  "#simplePlayerName",
+  "#simplePlayerAge",
+  "#simplePlayerSex",
+  "#simpleHair",
+  "#simpleFace",
+  "#simpleLook",
+  "#simpleOrigin",
+  "#simpleDifficulty",
+  "#simpleBackstory",
+  "#simpleWorld",
+  "#simpleAbilityName",
+  "#simpleAbilityDesc",
+  "#simpleLeveling",
+  "#simpleGameSystem",
+  "#simpleSystemStyle",
+  "#simpleDiceChecks",
+  "#simpleProficiency",
+  "#simpleSkillLevels",
+  "#simpleRaceMagic",
+  "#simpleMagicLevel",
+  "#simpleDeathRules",
+].forEach((sel) => {
+  const el = document.querySelector(sel);
+  if (!el) return;
+  const sync = () => {
+    if (setupUiMode === "simple") {
+      pushSimpleToForm();
+      if (sel === "#simpleGameSystem") updateSimpleRulesVisibility();
+      // Look fields feed art — keep advanced names in sync for prompt rebuild
+      if (sel === "#simpleHair" || sel === "#simpleFace" || sel === "#simpleLook") {
+        normalizeLookFieldsInForm();
+      }
+    }
+  };
+  el.addEventListener("change", sync);
+  el.addEventListener("input", sync);
+});
+// Advanced rule toggles → refresh Simple mirrors when visible
+[
+  "leveling_system",
+  "game_system",
+  "dice_checks_enabled",
+  "proficiency_system",
+  "skill_levels_enabled",
+  "race_magic_enabled",
+  "magic_level",
+  "death_rules",
+  "system_style",
+].forEach((name) => {
+  setupForm?.querySelectorAll(`[name="${name}"]`).forEach((el) => {
+    el.addEventListener("change", () => {
+      if (setupUiMode === "simple") pullFormRulesToSimple();
+    });
+  });
+});
+
+// ForgeSD path modal (Start without generate)
+document.querySelector("#forgePathModalClose")?.addEventListener("click", () => closeForgePathModal());
+document.querySelector("#forgePathModalCancel")?.addEventListener("click", () => closeForgePathModal());
+document.querySelector("#forgePathModal")?.addEventListener("click", (event) => {
+  if (event.target?.id === "forgePathModal") closeForgePathModal();
+});
+document.querySelector("#forgePathModalBrowse")?.addEventListener("click", async () => {
+  try {
+    setArtForgeStatus("Opening folder picker…");
+    const response = await fetch("/api/select-folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        kind: "forge",
+        initial_dir: String(document.querySelector("#forgePathModalInput")?.value || forgeRootCurrent() || "").trim(),
+      }),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || payload.error || "Folder picker failed");
+    const path = String(payload.path || "").trim();
+    if (!path) {
+      setArtForgeStatus("No folder selected.");
+      return;
+    }
+    const input = document.querySelector("#forgePathModalInput");
+    if (input) input.value = path;
+    setArtForgeStatus(`Folder selected: ${path}`);
+  } catch (err) {
+    setArtForgeStatus(err.message || String(err), { bad: true });
+  }
+});
+document.querySelector("#forgePathModalSearch")?.addEventListener("click", () => {
+  autoSearchForgeRoots().catch((err) => setArtForgeStatus(err.message || String(err), { bad: true }));
+});
+document.querySelector("#forgePathModalCandidates")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("[data-forge-candidate]");
+  if (!btn) return;
+  const path = btn.getAttribute("data-forge-candidate") || "";
+  const input = document.querySelector("#forgePathModalInput");
+  if (input) input.value = path;
+  setArtForgeStatus(`Selected: ${path}`);
+});
+document.querySelector("#forgePathModalSaveStart")?.addEventListener("click", async () => {
+  try {
+    const path = String(document.querySelector("#forgePathModalInput")?.value || "").trim();
+    await saveForgeRootPath(path);
+    closeForgePathModal();
+    await startForgeSdFromUi({ forcePathPrompt: false });
+  } catch (err) {
+    setArtForgeStatus(err.message || String(err), { bad: true });
+  }
+});
+addAbilityButton?.addEventListener("click", () => {
+  // Manual add: only case that starts expanded for immediate editing.
+  const card = addAbility({}, { expanded: true });
+  card?.querySelector('[data-ability-field="name"]')?.focus?.();
+});
 randomAbilityButton?.addEventListener("click", () => {
   randomAbilityButton.disabled = true;
   const label = "Randomizing abilities...";
@@ -11024,9 +14698,87 @@ setupStepButtons.forEach((button) => button.addEventListener("click", () => setS
 turnForm.addEventListener("submit", submitTurn);
 continueButton?.addEventListener("click", () => {
   if (aiBusy) return;
+  closeWaitPopover();
   enqueueAiTask(() => requestTurn(""), "AI is continuing...").catch((error) => {
     latestOutput.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
   });
+});
+document.querySelector("#undoTurnButton")?.addEventListener("click", () => {
+  if (aiBusy) return;
+  closeWaitPopover();
+  enqueueAiTask(async () => {
+    try {
+      await rewindTurn();
+    } catch (error) {
+      if (latestOutput) {
+        latestOutput.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+      } else {
+        window.alert(error.message || String(error));
+      }
+    }
+  }, "Undoing last turn…").catch(() => {});
+});
+document.querySelector("#redoTurnButton")?.addEventListener("click", () => {
+  if (aiBusy) return;
+  closeWaitPopover();
+  enqueueAiTask(async () => {
+    try {
+      // Re-roll the last turn from its snapshot (not “forward” after undo —
+      // true redo would need a separate redo stack).
+      await regenerateTurn();
+    } catch (error) {
+      if (latestOutput) {
+        latestOutput.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+      } else {
+        window.alert(error.message || String(error));
+      }
+    }
+  }, "Redoing last turn…").catch(() => {});
+});
+socialWalkAwayBtn?.addEventListener("click", () => {
+  if (aiBusy) return;
+  resolveSocialChoice("walk_away");
+});
+socialPersistBtn?.addEventListener("click", () => {
+  if (aiBusy) return;
+  resolveSocialChoice("persist");
+});
+waitButton?.addEventListener("click", (event) => {
+  event.preventDefault();
+  if (aiBusy) return;
+  if (waitPopover?.classList.contains("hidden")) openWaitPopover();
+  else closeWaitPopover();
+});
+waitPopover?.addEventListener("click", (event) => {
+  const kindBtn = event.target.closest("[data-wait-kind]");
+  if (kindBtn) {
+    event.preventDefault();
+    setWaitKind(kindBtn.getAttribute("data-wait-kind") || "wait");
+    return;
+  }
+  if (event.target.closest("#waitCustomGo")) {
+    event.preventDefault();
+    const raw = Number(document.querySelector("#waitCustomMinutes")?.value || 30);
+    const minutes = Math.max(1, Math.min(1440, Number.isFinite(raw) ? raw : 30));
+    const kind = currentWaitKind();
+    enqueueAiTask(() => requestWait(minutes, kind), `${waitKindLabel(kind)}…`).catch((error) => {
+      latestOutput.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+    });
+    return;
+  }
+  const btn = event.target.closest("[data-wait-minutes]");
+  if (!btn) return;
+  event.preventDefault();
+  const minutes = Number(btn.getAttribute("data-wait-minutes") || 60);
+  const kind = currentWaitKind();
+  enqueueAiTask(() => requestWait(minutes, kind), `${waitKindLabel(kind)}…`).catch((error) => {
+    latestOutput.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+  });
+});
+document.addEventListener("click", (event) => {
+  if (!waitPopover || waitPopover.classList.contains("hidden")) return;
+  if (event.target.closest(".waitMenuWrap")) return;
+  closeWaitPopover();
 });
 suggestButton?.addEventListener("click", () => {
   if (aiBusy) return;
@@ -11230,6 +14982,71 @@ indexTabs?.addEventListener("click", (event) => {
 });
 
 indexContent.addEventListener("click", (event) => {
+  const ensureBtn = event.target.closest("[data-llm-ensure]");
+  if (ensureBtn) {
+    event.preventDefault();
+    const form = ensureBtn.closest("form") || document.querySelector("#modelForm");
+    const status = document.querySelector("[data-model-status]");
+    (async () => {
+      if (form) {
+        await fetch("/api/model-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(modelPayloadFromForm(form)),
+        });
+      }
+      if (status) status.innerHTML = `<p class="empty">Ensuring LLM adapter (hot-swap or soft-recycle)… website stays up.</p>`;
+      startLlmRuntimeWatch({ stopWhenReady: true });
+      const res = await fetch("/api/llm-runtime/ensure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force_soft_recycle: false }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (status) {
+        const rt = data.runtime || data;
+        status.innerHTML = res.ok
+          ? `<p class="good">${escapeHtml(rt.user_message || rt.message || "LLM ready.")} <code>${escapeHtml(rt.method || "")}</code></p>`
+          : `<p class="bad">${escapeHtml(data.detail || data.error || "Ensure failed")}</p>`;
+      }
+      setLlmRuntimeBanner(data.runtime || data);
+    })().catch((err) => {
+      if (status) status.innerHTML = `<p class="bad">${escapeHtml(err.message || err)}</p>`;
+    });
+    return;
+  }
+  const recycleBtn = event.target.closest("[data-llm-soft-recycle]");
+  if (recycleBtn) {
+    event.preventDefault();
+    const form = recycleBtn.closest("form") || document.querySelector("#modelForm");
+    const status = document.querySelector("[data-model-status]");
+    (async () => {
+      if (form) {
+        await fetch("/api/model-config", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(modelPayloadFromForm(form)),
+        });
+      }
+      if (status) status.innerHTML = `<p class="empty">Soft-recycling LLM process only… UI stays online.</p>`;
+      startLlmRuntimeWatch({ stopWhenReady: true });
+      const res = await fetch("/api/llm-runtime/ensure", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ force_soft_recycle: true }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (status) {
+        status.innerHTML = data.ok !== false
+          ? `<p class="good">${escapeHtml(data.message || data.runtime?.message || "LLM recycled.")}</p>`
+          : `<p class="bad">${escapeHtml(data.error || data.detail || "Recycle failed")}</p>`;
+      }
+      setLlmRuntimeBanner(data.runtime || get_llm_runtime_placeholder(data));
+    })().catch((err) => {
+      if (status) status.innerHTML = `<p class="bad">${escapeHtml(err.message || err)}</p>`;
+    });
+    return;
+  }
   const popWin = event.target.closest("[data-popout-window]");
   if (popWin) {
     event.preventDefault();
@@ -11299,6 +15116,29 @@ indexContent.addEventListener("submit", (event) => {
     saveModelConfig(modelForm).catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
     return;
   }
+  const questStageForm = event.target.closest("#questStageForm");
+  if (questStageForm) {
+    event.preventDefault();
+    const status = questStageForm.querySelector("#questStageStatus");
+    if (status) {
+      status.hidden = false;
+      status.textContent = "Queueing stage…";
+      status.classList.remove("bad");
+    }
+    submitQuestStage(questStageForm)
+      .then(() => {
+        if (status) status.textContent = "Stage queued.";
+      })
+      .catch((error) => {
+        if (status) {
+          status.textContent = error.message || String(error);
+          status.classList.add("bad");
+        } else {
+          indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`;
+        }
+      });
+    return;
+  }
   const form = event.target.closest("#searchForm");
   if (!form) return;
   event.preventDefault();
@@ -11315,6 +15155,25 @@ indexContent.addEventListener("click", (event) => {
   const deactivateAlias = event.target.closest(".playerAliasDeactivate");
   if (deactivateAlias) {
     updatePlayerAliasState({ alias_id: null }).catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+    return;
+  }
+  if (event.target.closest("#questStageRefresh")) {
+    event.preventDefault();
+    loadQuestStages().catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+    return;
+  }
+  const questCancel = event.target.closest("[data-quest-cancel]");
+  if (questCancel) {
+    event.preventDefault();
+    const id = Number(questCancel.getAttribute("data-quest-cancel"));
+    if (id) {
+      questCancel.disabled = true;
+      cancelQuestEvent(id)
+        .catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`))
+        .finally(() => {
+          questCancel.disabled = false;
+        });
+    }
     return;
   }
   const testConnection = event.target.closest(".testModelConnection");
@@ -11613,9 +15472,19 @@ document.addEventListener("click", (event) => {
     if (slot) clearArtSlot(slot);
     return;
   }
-  if (event.target.closest("#setupArtRebuildBtn")) {
+  if (event.target.closest("#setupArtRebuildBtn, #setupArtGeneratePromptSimple, [data-generate-prompt]")) {
     event.preventDefault();
-    rebuildEnginePrompts({ force: true }).catch(() => {});
+    if (setupUiMode === "simple") pushSimpleToForm();
+    const se = document.querySelector("#setupArtExtraSimple")?.value?.trim();
+    const ae = document.querySelector("#setupArtExtra");
+    if (ae && se && !String(ae.value || "").trim()) ae.value = se;
+    fillDefaultNegativesOnBoot();
+    rebuildEnginePrompts({ force: true })
+      .then((data) => {
+        if (data) markArtPromptsReady("rebuild");
+        syncArtGenerateButtons();
+      })
+      .catch(() => {});
     return;
   }
   if (event.target.closest("#setupArtLockTestBtn")) {
@@ -11633,22 +15502,11 @@ document.addEventListener("click", (event) => {
     event.preventDefault();
     // Setup: only the selected Face / Full body tab (never both in one click).
     const genKind = activeArtPromptTab === "fullbody" ? "fullbody" : "face";
-    const faceP = document.querySelector("#setupArtFacePrompt")?.value?.trim();
-    const bodyP = document.querySelector("#setupArtBodyPrompt")?.value?.trim();
-    const faceN = document.querySelector("#setupArtFaceNegative")?.value?.trim();
-    const bodyN = document.querySelector("#setupArtBodyNegative")?.value?.trim();
-    if (genKind === "face" && (!faceP || !faceN)) {
-      setSetupArtStatus(
-        "Face positive/negative empty. Select Face tab, Rebuild prompts, then Generate.",
-        { bad: true },
-      );
-      return;
-    }
-    if (genKind === "fullbody" && (!bodyP || !bodyN)) {
-      setSetupArtStatus(
-        "Full-body positive/negative empty. Select Full body tab, Rebuild prompts, then Generate.",
-        { bad: true },
-      );
+    fillDefaultNegativesOnBoot();
+    try {
+      assertCanGenerateCharacterImage(genKind);
+    } catch (err) {
+      setSetupArtStatus(err.message || String(err), { bad: true });
       return;
     }
     generateSetupPortrait(genKind).catch((err) => {
@@ -11659,10 +15517,23 @@ document.addEventListener("click", (event) => {
   if (event.target.closest("#studioGenerateBtn")) {
     event.preventDefault();
     const genKind = document.querySelector("#studioArtGenKind")?.value || activeArtPromptTab || "face";
-    generateSetupPortrait(genKind).catch((err) => {
+    const run =
+      imageUiMode === "simple"
+        ? generateSetupPortraitSimple(genKind)
+        : generateSetupPortrait(genKind);
+    run.catch((err) => {
       setSetupArtStatus(err?.message || String(err) || "Art failed", { bad: true });
       const st = document.querySelector("#studioStatus");
       if (st) st.textContent = err?.message || String(err) || "Art failed";
+    });
+    return;
+  }
+  const simpleArt = event.target.closest("[data-simple-art-gen]");
+  if (simpleArt) {
+    event.preventDefault();
+    const kind = simpleArt.getAttribute("data-simple-art-gen") || "both";
+    generateSetupPortraitSimple(kind).catch((err) => {
+      setSetupArtStatus(err?.message || String(err) || "Art failed", { bad: true });
     });
     return;
   }
@@ -11670,8 +15541,36 @@ document.addEventListener("click", (event) => {
   if (artKind) {
     event.preventDefault();
     const kind = artKind.getAttribute("data-art-kind") || "both";
+    // Simple mode: rebuild identity prompts first
+    if (imageUiMode === "simple" || artKind.hasAttribute("data-simple-art-gen")) {
+      generateSetupPortraitSimple(kind).catch((err) => {
+        setSetupArtStatus(err?.message || String(err) || "Art failed", { bad: true });
+      });
+      return;
+    }
     generateSetupPortrait(kind).catch((err) => {
       setSetupArtStatus(err?.message || String(err) || "Art failed", { bad: true });
+    });
+    return;
+  }
+  // Studio mode toggles (re-render studio body)
+  const studioMode = event.target.closest(".imageStudioPanel [data-image-mode]");
+  if (studioMode) {
+    event.preventDefault();
+    setImageUiMode(studioMode.getAttribute("data-image-mode") || "simple");
+    const body = studioMode.closest(".floatPanelBody, .popoutTabInner, .imageStudioPanel")?.parentElement;
+    const host = document.querySelector("[data-popout-tab='imageStudio']") || document.querySelector(".floatPanel[data-float-tab='imageStudio'] .floatPanelBody");
+    if (host) {
+      host.innerHTML = renderImageStudioHtml();
+      renderImageStudioCandidates();
+      decorateFunctionHelp?.(host);
+    }
+    return;
+  }
+  if (event.target.closest("#setupArtStartForge, [data-start-forge-sd]")) {
+    event.preventDefault();
+    startForgeSdFromUi().catch((err) => {
+      setArtForgeStatus(err?.message || String(err) || "Forge start failed", { bad: true });
     });
     return;
   }
@@ -12247,7 +16146,14 @@ let activeMap = null;
 let tileLibSelection = new Set();
 /** Preferred sprite size for map cells: 16 or 32 (pixel art). Declared early for init. */
 let mapTilePx = Number(localStorage.getItem("morkyn-map-tile-px") || 32) === 16 ? 16 : 32;
-let mapAvatarUrl = localStorage.getItem("morkyn-map-avatar") || "";
+let mapAvatarUrl = safeMediaUrl(localStorage.getItem("morkyn-map-avatar") || "");
+if (!mapAvatarUrl) {
+  try {
+    localStorage.removeItem("morkyn-map-avatar");
+  } catch (_) {
+    /* ignore */
+  }
+}
 const _pixelTileCache = new Map();
 const _imageCache = new Map();
 
@@ -12255,6 +16161,8 @@ initWorldMapUi().catch(() => {});
 // Defer avatar tool bind until DOM handlers exist further down (function is hoisted).
 // mapTilePx/mapAvatarUrl must already be initialized above.
 bindMapAvatarTools();
+bindMapMovement();
+bindLocalMapClick();
 hideScriptGate();
 
 async function initWorldMapUi() {
@@ -12732,9 +16640,10 @@ function updateTravelStatus(ready) {
   const line = document.querySelector("#travelStatusLine");
   const banner = document.querySelector("#mapTravelBanner");
   const walkBtn = document.querySelector("#settlementWalkBtn");
+  // Adjacent steps (arrows / d-pad) are always free; only long jumps need travel_ready.
   const text = travelReady
-    ? "Travel open — you can pick a destination on the Map."
-    : "Travel locked — finish the current scene/event first.";
+    ? "Walk free: arrows / pad · click adjacent tiles · long trips open"
+    : "Walk free: arrows / pad · long trips locked until scene clears";
   if (line) {
     line.textContent = text;
     line.classList.toggle("locked", !travelReady);
@@ -12743,20 +16652,203 @@ function updateTravelStatus(ready) {
     banner.textContent = text;
     banner.classList.toggle("locked", !travelReady);
   }
+  // Settlement long-walk still respects the scene gate.
   if (walkBtn) walkBtn.disabled = !travelReady;
 }
 
+let mapMoveBusy = false;
+
+function isTypingInFormField(target) {
+  if (!target) return false;
+  const tag = String(target.tagName || "").toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return true;
+  if (target.isContentEditable) return true;
+  return Boolean(target.closest?.("input, textarea, select, [contenteditable='true']"));
+}
+
+function applyTravelMoveFeedback(data) {
+  if (!data || typeof data !== "object") return;
+  if (data.state?.world_time) updateWorldTimeLine(data.state.world_time);
+  else if (data.travel_result?.time?.after) updateWorldTimeLine(data.travel_result.time.after);
+  if (data.weather) updateWeatherLine(data.weather);
+  else if (data.state?.weather) updateWeatherLine(data.state.weather);
+  else if (data.travel_result?.weather) updateWeatherLine(data.travel_result.weather);
+  const banner = document.querySelector("#mapTravelBanner");
+  const travel = data.travel || {};
+  const tr = data.travel_result || {};
+  const mins = Number(travel.minutes || data.step?.minutes || 0);
+  const terrain = travel.terrain || data.step?.terrain || "";
+  const enc = travel.encounter || tr.encounter || {};
+  const parts = [];
+  if (mins > 0) parts.push(`+${mins}m`);
+  if (terrain) parts.push(String(terrain));
+  if (travel.weather_mult && Number(travel.weather_mult) > 1.05) parts.push(`wx×${Number(travel.weather_mult).toFixed(2)}`);
+  if (enc.happened) parts.push(String(enc.kind || "encounter").replace(/_/g, " "));
+  if (tr.ruler?.name) parts.push(`authority: ${tr.ruler.name}`);
+  if (tr.scene_fired || data.scene_turn) parts.push("scene!");
+  if (banner && parts.length) {
+    banner.textContent = `Walk ${parts.join(" · ")} · arrows free, long trips may wait on scene`;
+  }
+  // Ambient DM line — does NOT lock movement or require a choice
+  const ambient = data.ambient || tr.ambient || "";
+  if (ambient && !(tr.scene_fired || data.scene_turn)) {
+    showAmbientMoveLine(ambient);
+  }
+  // Ambush / forced travel event → full narration turn
+  if (data.scene_turn || (data.turn && data.input_kind === "event")) {
+    const scene = data.scene_turn || data;
+    try {
+      if (!displayTurnPayload(scene, { animateNarration: true })) {
+        if (data.state) renderShell(data.state);
+        const narr =
+          (scene.turn && (scene.turn.narration || turnNarrationText?.(scene.turn))) ||
+          data.narration ||
+          "";
+        if (narr && latestOutput) latestOutput.innerHTML = paragraphs(String(narr));
+      }
+      if (latestInput) {
+        const kind = data.world_event?.kind || tr.queued_event?.kind || "travel event";
+        latestInput.innerHTML = paragraphs(`Travel event · ${String(kind).replace(/_/g, " ")}`);
+      }
+      setSceneFocus?.(true, { scroll: true, focusInput: false, smooth: false });
+    } catch (err) {
+      console.warn("travel scene display failed", err);
+    }
+  }
+}
+
+async function walkStep(dx, dy, options = {}) {
+  const stepX = Math.max(-1, Math.min(1, Number(dx) || 0));
+  const stepY = Math.max(-1, Math.min(1, Number(dy) || 0));
+  if (!stepX && !stepY) return;
+  if (mapMoveBusy) return;
+  mapMoveBusy = true;
+  document.querySelectorAll(".mapDpadBtn[data-dx]").forEach((btn) => {
+    btn.disabled = true;
+  });
+  try {
+    const res = await fetch("/api/tiles/map/move", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dx: stepX, dy: stepY, mode: "free" }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+    // Free steps should not re-render the whole shell (avoids interrupting typing).
+    if (data.state?.current_location) {
+      state = { ...(state || {}), ...data.state, travel_ready: data.travel_ready };
+    }
+    updateTravelStatus(data.travel_ready !== false);
+    applyTravelMoveFeedback(data);
+    fullMapView = data.map || fullMapView;
+    await refreshLocalMap();
+    if (!document.querySelector("#mapOverlay")?.classList.contains("hidden")) {
+      await refreshFullMap();
+    }
+    if (options.quiet !== true && data.step && !data.step.free) {
+      // only announce long jumps
+    }
+  } catch (error) {
+    if (options.silent) return;
+    const msg = error.message || String(error);
+    // Soft feedback on banner instead of alert spam for blocked tiles
+    const banner = document.querySelector("#mapTravelBanner");
+    if (banner) {
+      banner.textContent = msg;
+      banner.classList.add("locked");
+      window.setTimeout(() => updateTravelStatus(travelReady), 1600);
+    } else {
+      window.alert(msg);
+    }
+  } finally {
+    mapMoveBusy = false;
+    document.querySelectorAll(".mapDpadBtn[data-dx]").forEach((btn) => {
+      btn.disabled = false;
+    });
+  }
+}
+
+function bindMapMovement() {
+  const dpad = document.querySelector("#mapDpad");
+  if (dpad && dpad.dataset.bound !== "1") {
+    dpad.dataset.bound = "1";
+    dpad.addEventListener("click", (event) => {
+      const btn = event.target.closest(".mapDpadBtn[data-dx]");
+      if (!btn) return;
+      event.preventDefault();
+      walkStep(btn.getAttribute("data-dx"), btn.getAttribute("data-dy"));
+    });
+  }
+  if (document.body.dataset.mapKeysBound === "1") return;
+  document.body.dataset.mapKeysBound = "1";
+  window.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
+    if (isTypingInFormField(event.target)) return;
+    const gameView = document.querySelector("#gameView");
+    if (!gameView || gameView.classList.contains("hidden")) return;
+    if (getComputedStyle(gameView).display === "none") return;
+    let dx = 0;
+    let dy = 0;
+    if (event.key === "ArrowUp") dy = -1;
+    else if (event.key === "ArrowDown") dy = 1;
+    else if (event.key === "ArrowLeft") dx = -1;
+    else if (event.key === "ArrowRight") dx = 1;
+    else return;
+    event.preventDefault();
+    walkStep(dx, dy, { silent: true });
+  });
+}
+
+function bindLocalMapClick() {
+  const canvas = document.querySelector("#playMapCanvas");
+  if (!canvas || canvas.dataset.clickMoveBound === "1") return;
+  canvas.dataset.clickMoveBound = "1";
+  canvas.addEventListener("click", (event) => {
+    if (!localMapView || !canvas._mapMeta) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cell = canvas._mapMeta.cell || mapTilePx || 32;
+    const cx = Math.floor(((event.clientX - rect.left) * scaleX) / cell) + canvas._mapMeta.minX;
+    const cy = Math.floor(((event.clientY - rect.top) * scaleY) / cell) + canvas._mapMeta.minY;
+    const px = Number(localMapView.player?.x ?? 0);
+    const py = Number(localMapView.player?.y ?? 0);
+    const dx = cx - px;
+    const dy = cy - py;
+    // One-step adjacent (incl. diagonal) = free walk, no confirm
+    if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && (dx || dy)) {
+      walkStep(dx, dy, { silent: true });
+      return;
+    }
+    // Longer click: only if travel open
+    if (!travelReady) {
+      const banner = document.querySelector("#mapTravelBanner");
+      if (banner) {
+        banner.textContent = "Adjacent steps only while the scene holds long travel.";
+        banner.classList.add("locked");
+        window.setTimeout(() => updateTravelStatus(travelReady), 1600);
+      }
+      return;
+    }
+    const tile = (localMapView.tiles || []).find((t) => Number(t.x) === cx && Number(t.y) === cy);
+    if (tile && tile.walkable !== false) {
+      walkToTile(cx, cy);
+    }
+  });
+}
+
 function loadImageEl(src) {
-  if (!src) return Promise.resolve(null);
-  if (_imageCache.has(src)) return Promise.resolve(_imageCache.get(src));
+  const safe = safeMediaUrl(src);
+  if (!safe) return Promise.resolve(null);
+  if (_imageCache.has(safe)) return Promise.resolve(_imageCache.get(safe));
   return new Promise((resolve) => {
     const img = new Image();
     img.onload = () => {
-      _imageCache.set(src, img);
+      _imageCache.set(safe, img);
       resolve(img);
     };
     img.onerror = () => resolve(null);
-    img.src = src;
+    img.src = safe;
   });
 }
 
@@ -12870,8 +16962,42 @@ function getPixelTileSprite(state, size = 16) {
 }
 
 /**
- * Crop the upper-center of a portrait into a circular head token.
- * No baked-in border — map UI draws the ring when painting tokens.
+ * Fit a square (or near-square) face portrait into a circular map token.
+ * Does **not** zoom/crop into the face — uses the whole portrait with cover-fit.
+ * Map UI draws the ring when painting tokens.
+ */
+async function fitPortraitTokenDataUrl(src, outSize = 32) {
+  const img = await loadImageEl(src);
+  if (!img) return "";
+  const size = Math.max(16, Math.min(128, Number(outSize) || 32));
+  const c = document.createElement("canvas");
+  c.width = size;
+  c.height = size;
+  const ctx = c.getContext("2d");
+  if (!ctx) return "";
+  ctx.imageSmoothingEnabled = true;
+  ctx.clearRect(0, 0, size, size);
+  const iw = img.naturalWidth || img.width || 1;
+  const ih = img.naturalHeight || img.height || 1;
+  // Cover-fit full image into square (no upper-face zoom crop)
+  const scale = Math.max(size / iw, size / ih);
+  const dw = iw * scale;
+  const dh = ih * scale;
+  const dx = (size - dw) / 2;
+  const dy = (size - dh) / 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(img, dx, dy, dw, dh);
+  ctx.restore();
+  return c.toDataURL("image/png");
+}
+
+/**
+ * Crop the upper-center of a *tall full-body* image into a circular head token.
+ * Only for uploads that look full-body (height ≫ width).
  */
 async function cropHeadDataUrl(src, outSize = 32) {
   const img = await loadImageEl(src);
@@ -12882,23 +17008,25 @@ async function cropHeadDataUrl(src, outSize = 32) {
   c.height = size;
   const ctx = c.getContext("2d");
   if (!ctx) return "";
-  ctx.imageSmoothingEnabled = false;
+  ctx.imageSmoothingEnabled = true;
   ctx.clearRect(0, 0, size, size);
   const iw = img.naturalWidth || img.width || 1;
   const ih = img.naturalHeight || img.height || 1;
-  const side = Math.min(iw, ih);
-  const sx = Math.max(0, (iw - side) / 2);
-  const sy = Math.max(0, (ih - side) * 0.08);
-  // Upper face crop (not full square gen with empty corners / frames)
-  const sh = side * 0.55;
-  const sw = side * 0.55;
-  const sxx = sx + (side - sw) / 2;
+  // Near-square → treat as face portrait, don't crop-zoom
+  if (ih <= iw * 1.2) {
+    return fitPortraitTokenDataUrl(src, outSize);
+  }
+  // Tall full-body: take upper head band
+  const headH = Math.min(ih, Math.max(iw * 0.9, ih * 0.32));
+  const headW = Math.min(iw, headH);
+  const sx = Math.max(0, (iw - headW) / 2);
+  const sy = Math.max(0, ih * 0.02);
   ctx.save();
   ctx.beginPath();
   ctx.arc(size / 2, size / 2, size / 2, 0, Math.PI * 2);
   ctx.closePath();
   ctx.clip();
-  ctx.drawImage(img, sxx, sy, sw, sh, 0, 0, size, size);
+  ctx.drawImage(img, sx, sy, headW, headH, 0, 0, size, size);
   ctx.restore();
   return c.toDataURL("image/png");
 }
@@ -12935,22 +17063,60 @@ function drawMapHeadToken(ctx, headImg, dx, dy, cell) {
 }
 
 function updateMapAvatarPreview(url) {
-  mapAvatarUrl = url || "";
+  const safe = safeMediaUrl(url);
+  mapAvatarUrl = safe;
+  if (!safe && url) {
+    try {
+      localStorage.removeItem("morkyn-map-avatar");
+    } catch (_) {
+      /* ignore */
+    }
+  }
   const img = document.querySelector("#mapAvatarPreview");
   const ph = document.querySelector("#mapAvatarPlaceholder");
-  if (img && url) {
-    img.src = url;
+  if (img && safe) {
+    img.src = safe;
     img.classList.remove("hidden");
     ph?.classList.add("hidden");
   } else {
+    if (img) img.removeAttribute("src");
     img?.classList.add("hidden");
     ph?.classList.remove("hidden");
   }
 }
 
+function drawMapIntelMarker(ctx, dx, dy, cell, marker) {
+  if (!ctx || !marker) return;
+  const kind = String(marker.kind || "note");
+  const cx = dx + cell / 2;
+  const cy = dy + cell / 2;
+  const r = Math.max(3, cell * 0.22);
+  let fill = "#9ecbff";
+  if (kind === "settlement" || kind === "town" || kind === "city") fill = "#ffd56a";
+  else if (kind === "danger") fill = "#ff6b6b";
+  else if (kind === "landmark") fill = "#c4a0ff";
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.globalAlpha = 0.92;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = "rgba(0,0,0,0.75)";
+  ctx.lineWidth = Math.max(1, cell / 20);
+  ctx.stroke();
+  // Pin stem for readability on dark fog
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + r * 0.85);
+  ctx.lineTo(cx, dy + cell - 2);
+  ctx.strokeStyle = fill;
+  ctx.lineWidth = Math.max(1, cell / 18);
+  ctx.stroke();
+}
+
 async function paintTileGrid(canvas, tiles, options = {}) {
   if (!canvas || !tiles?.length) return;
   const fog = Boolean(options.fog);
+  const circle = Boolean(options.circle);
   const tilePx = options.tilePx === 16 ? 16 : options.tilePx === 32 ? 32 : mapTilePx;
   // Display scale: each logical tile is tilePx art, optionally scaled for full map
   const scale = options.scale || (options.mode === "full" ? 1 : Math.max(1, Math.floor((options.cell || 32) / tilePx)));
@@ -12968,6 +17134,14 @@ async function paintTileGrid(canvas, tiles, options = {}) {
     maxY = Math.max(maxY, y);
   });
   if (!Number.isFinite(minX)) return;
+  // Circular local maps: force a square footprint so the clip is a true circle.
+  if (circle) {
+    const extent = Math.max(Math.abs(minX), Math.abs(maxX), Math.abs(minY), Math.abs(maxY), 1);
+    minX = -extent;
+    minY = -extent;
+    maxX = extent;
+    maxY = extent;
+  }
   const w = maxX - minX + 1;
   const h = maxY - minY + 1;
   canvas.width = w * cell;
@@ -12978,48 +17152,64 @@ async function paintTileGrid(canvas, tiles, options = {}) {
   ctx.fillStyle = "#080b10";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Preload archive images + avatar
+  const cxCanvas = canvas.width / 2;
+  const cyCanvas = canvas.height / 2;
+  const circleR = Math.min(canvas.width, canvas.height) / 2 - 1;
+
+  // Preload archive images + avatar (never file:// or bare disk paths)
   const urls = [];
   tiles.forEach((t) => {
-    if (t.image_data_url) urls.push(t.image_data_url);
-    if (t.image_path && !String(t.image_path).startsWith("data:")) {
-      /* path alone may not be browser-served */
-    }
+    if (t.image_data_url && isBrowserSafeMediaUrl(t.image_data_url)) urls.push(t.image_data_url);
+    // t.image_path is a server disk path — not browser-loadable from http origins
   });
-  const avatarSrc = options.avatarUrl || mapAvatarUrl;
+  const avatarSrc = safeMediaUrl(options.avatarUrl || mapAvatarUrl);
   if (avatarSrc) urls.push(avatarSrc);
   await Promise.all(urls.map((u) => loadImageEl(u)));
+
+  ctx.save();
+  if (circle) {
+    ctx.beginPath();
+    ctx.arc(cxCanvas, cyCanvas, circleR, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    // Void outside visited pocket (still inside circle)
+    ctx.fillStyle = "#0a0e14";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  }
 
   for (const t of tiles) {
     const x = Number(t.rel_x != null ? t.rel_x : t.x) - minX;
     const y = Number(t.rel_y != null ? t.rel_y : t.y) - minY;
     const dx = x * cell;
     const dy = y * cell;
-    const hidden = fog && t.fog && !t.is_player && !t.visited;
-    if (hidden) {
-      ctx.fillStyle = "#12151c";
-      ctx.fillRect(dx, dy, cell, cell);
-      // sparse noise
-      ctx.fillStyle = "#1a1e28";
-      ctx.fillRect(dx + 2, dy + 2, 2, 2);
-      continue;
-    }
     const state = String(t.state || "?");
-    const archive = t.image_data_url ? _imageCache.get(t.image_data_url) : null;
-    if (archive) {
-      ctx.globalAlpha = fog && !t.visited ? 0.4 : 1;
-      ctx.drawImage(archive, dx, dy, cell, cell);
-      ctx.globalAlpha = 1;
+    const isFogged = (fog || circle) && (t.fog || !t.visited) && !t.is_player;
+    const isUnknown = state === "unknown" || state === "?" || !state;
+
+    if (isFogged || isUnknown) {
+      // True fog — no terrain leak for unseen land
+      ctx.fillStyle = circle ? "#0d121a" : "#0a0e14";
+      ctx.fillRect(dx, dy, cell, cell);
+      ctx.strokeStyle = "rgba(70, 90, 110, 0.14)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(dx + 0.5, dy + 0.5, cell - 1, cell - 1);
     } else {
-      const sprite = getPixelTileSprite(state, tilePx);
-      ctx.globalAlpha = fog && !t.visited ? 0.4 : 1;
-      ctx.drawImage(sprite, dx, dy, cell, cell);
-      ctx.globalAlpha = 1;
+      const archive = t.image_data_url ? _imageCache.get(t.image_data_url) : null;
+      if (archive) {
+        ctx.drawImage(archive, dx, dy, cell, cell);
+      } else {
+        const sprite = getPixelTileSprite(state, tilePx);
+        ctx.drawImage(sprite, dx, dy, cell, cell);
+      }
     }
-    if (t.is_settlement) {
+    if (t.is_settlement && !isFogged) {
       ctx.strokeStyle = "#ffd56a";
       ctx.lineWidth = Math.max(1, cell / 16);
       ctx.strokeRect(dx + 1, dy + 1, cell - 2, cell - 2);
+    }
+    // Intel markers (towns / danger from locals or lived life) show on fog
+    if (t.marker) {
+      drawMapIntelMarker(ctx, dx, dy, cell, t.marker);
     }
     if (t.is_player) {
       const head = avatarSrc ? _imageCache.get(avatarSrc) : null;
@@ -13030,32 +17220,58 @@ async function paintTileGrid(canvas, tiles, options = {}) {
         // fallback circular marker
         const pad = Math.floor(cell * 0.18);
         const size = cell - pad * 2;
-        const cx = dx + pad + size / 2;
-        const cy = dy + pad + size / 2;
+        const pcx = dx + pad + size / 2;
+        const pcy = dy + pad + size / 2;
         const r = size / 2;
         ctx.beginPath();
-        ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        ctx.arc(pcx, pcy, r, 0, Math.PI * 2);
         ctx.fillStyle = "#ff4d6d";
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(cx, cy - r * 0.12, r * 0.38, 0, Math.PI * 2);
+        ctx.arc(pcx, pcy - r * 0.12, r * 0.38, 0, Math.PI * 2);
         ctx.fillStyle = "#ffd0d8";
         ctx.fill();
         ctx.beginPath();
-        ctx.arc(cx, cy, r - 0.5, 0, Math.PI * 2);
+        ctx.arc(pcx, pcy, r - 0.5, 0, Math.PI * 2);
         ctx.strokeStyle = "rgba(255,255,255,0.9)";
         ctx.lineWidth = Math.max(1, cell / 18);
         ctx.stroke();
       }
     }
   }
-  canvas._mapMeta = { minX, minY, cell, mode: options.mode || "local", tilePx };
+  ctx.restore();
+
+  // Outer ring chrome for circular local map
+  if (circle) {
+    ctx.beginPath();
+    ctx.arc(cxCanvas, cyCanvas, circleR - 0.5, 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(120, 200, 255, 0.55)";
+    ctx.lineWidth = Math.max(2, cell / 10);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cxCanvas, cyCanvas, circleR - Math.max(3, cell / 8), 0, Math.PI * 2);
+    ctx.strokeStyle = "rgba(0, 0, 0, 0.45)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
+  canvas._mapMeta = {
+    minX,
+    minY,
+    cell,
+    mode: options.mode || "local",
+    tilePx,
+    circle,
+    width: w,
+    height: h,
+  };
 }
 
 async function refreshLocalMap() {
   const canvas = document.querySelector("#playMapCanvas");
   const meta = document.querySelector("#playMapMeta");
   try {
+    // Larger circular viewport; vision is still 1-tile LOS server-side.
     const res = await fetch("/api/tiles/map/local?radius=6", { cache: "no-store" });
     const data = await res.json();
     if (!res.ok || data.empty) {
@@ -13076,17 +17292,25 @@ async function refreshLocalMap() {
       const sel = document.querySelector("#mapTilePxSelect");
       if (sel) sel.value = String(mapTilePx);
     }
-    const cellDisplay = mapTilePx; // 1:1 pixel tiles on nearby map
+    // Larger cells so the circular map reads as the main stage
+    const displayScale = mapTilePx === 16 ? 4 : 3; // 64px or 96px cells
     await paintTileGrid(canvas, data.tiles || [], {
-      cell: cellDisplay,
+      cell: mapTilePx * displayScale,
       tilePx: mapTilePx,
-      scale: 1,
-      fog: false,
+      scale: displayScale,
+      fog: true,
+      circle: true,
       mode: "local",
       avatarUrl: mapAvatarUrl,
     });
     if (meta) {
-      meta.textContent = `@(${data.player?.x},${data.player?.y}) · ${mapTilePx}px tiles · visited ${data.visited_count || 0}`;
+      const vision = data.vision_radius != null ? data.vision_radius : 1;
+      const marks = (data.markers || []).length;
+      meta.textContent = `@(${data.player?.x},${data.player?.y}) · vision ${vision} · visited ${data.visited_count || 0}${marks ? ` · intel ${marks}` : ""}`;
+    }
+    // Settlement strip: only places the player knows
+    if (data.settlements_nearby) {
+      renderSettlementList(data.settlements_nearby);
     }
   } catch (error) {
     if (meta) meta.textContent = `Map error: ${error.message || error}`;
@@ -13104,18 +17328,86 @@ async function refreshFullMap() {
       mapAvatarUrl = data.map_avatar.data_url;
       updateMapAvatarPreview(mapAvatarUrl);
     }
+    // Detailed world map: true fog (no terrain leak); pan/slide to explore known areas
+    const fullScale = mapTilePx === 16 ? 2 : 1;
     await paintTileGrid(canvas, data.tiles || [], {
       tilePx: mapTilePx,
-      scale: mapTilePx === 16 ? 1 : 1,
-      cell: mapTilePx,
+      scale: fullScale,
+      cell: mapTilePx * fullScale,
       fog: true,
+      circle: false,
       mode: "full",
       avatarUrl: mapAvatarUrl,
     });
     renderSettlementList(data.settlements || []);
+    // Scroll so the player is in view (local map still follows; this view pans freely)
+    const wrap = document.querySelector(".mapOverlayCanvasWrap");
+    if (wrap && canvas && data.player) {
+      const cell = canvas._mapMeta?.cell || mapTilePx;
+      const minX = canvas._mapMeta?.minX || 0;
+      const minY = canvas._mapMeta?.minY || 0;
+      const px = (Number(data.player.x) - minX + 0.5) * cell;
+      const py = (Number(data.player.y) - minY + 0.5) * cell;
+      const rect = canvas.getBoundingClientRect();
+      const scaleX = rect.width / Math.max(1, canvas.width);
+      const scaleY = rect.height / Math.max(1, canvas.height);
+      wrap.scrollLeft = Math.max(0, px * scaleX - wrap.clientWidth / 2);
+      wrap.scrollTop = Math.max(0, py * scaleY - wrap.clientHeight / 2);
+    }
+    bindFullMapPan();
   } catch (_) {
     /* ignore */
   }
+}
+
+/** Drag-to-slide the detailed world map (does not move the player). */
+function bindFullMapPan() {
+  const wrap = document.querySelector(".mapOverlayCanvasWrap");
+  if (!wrap || wrap.dataset.panBound === "1") return;
+  wrap.dataset.panBound = "1";
+  let dragging = false;
+  let lastX = 0;
+  let lastY = 0;
+  wrap.addEventListener("pointerdown", (event) => {
+    // Only primary button / touch; leave clicks for tile interact after small move
+    if (event.button != null && event.button !== 0) return;
+    dragging = true;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    wrap.classList.add("mapPanning");
+    wrap.setPointerCapture?.(event.pointerId);
+  });
+  wrap.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    const dx = event.clientX - lastX;
+    const dy = event.clientY - lastY;
+    lastX = event.clientX;
+    lastY = event.clientY;
+    wrap.scrollLeft -= dx;
+    wrap.scrollTop -= dy;
+    if (Math.abs(dx) + Math.abs(dy) > 3) {
+      wrap.dataset.didPan = "1";
+    }
+  });
+  const endPan = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    wrap.classList.remove("mapPanning");
+    try {
+      wrap.releasePointerCapture?.(event.pointerId);
+    } catch (_) {
+      /* ignore */
+    }
+    // Clear pan flag after click handlers run
+    window.setTimeout(() => {
+      delete wrap.dataset.didPan;
+    }, 0);
+  };
+  wrap.addEventListener("pointerup", endPan);
+  wrap.addEventListener("pointercancel", endPan);
+  wrap.addEventListener("pointerleave", (event) => {
+    if (dragging) endPan(event);
+  });
 }
 
 async function saveMapAvatar(dataUrl, source = "upload") {
@@ -13143,15 +17435,17 @@ async function mapAvatarFromPortrait() {
     const res = await fetch("/api/map-avatar");
     const info = await res.json().catch(() => ({}));
     if (info.portrait_data_url) {
-      const head = await cropHeadDataUrl(info.portrait_data_url, mapTilePx);
+      // Face portrait → full image fit, no aggressive crop
+      const head = await fitPortraitTokenDataUrl(info.portrait_data_url, mapTilePx);
       if (head) await saveMapAvatar(head, "portrait_head");
       return;
     }
     window.alert("Generate a player portrait first (Player tab → Regenerate), then use portrait head.");
     return;
   }
-  const head = await cropHeadDataUrl(portrait, mapTilePx);
-  if (!head) throw new Error("Could not crop head");
+  // Face portrait is already headshot — do not re-crop the face (was stretching/warping).
+  const head = await fitPortraitTokenDataUrl(portrait, mapTilePx);
+  if (!head) throw new Error("Could not build head token from portrait");
   await saveMapAvatar(head, "portrait_head");
 }
 
@@ -13207,7 +17501,7 @@ function bindMapAvatarTools() {
     reader.onload = async () => {
       try {
         let dataUrl = String(reader.result || "");
-        // Normalize to square head-ish crop
+        // Uploads may be full-body → crop head. Square/face images keep full frame.
         dataUrl = (await cropHeadDataUrl(dataUrl, mapTilePx)) || dataUrl;
         await saveMapAvatar(dataUrl, "upload");
       } catch (e) {
@@ -13279,31 +17573,41 @@ function showSettlementDetail(s) {
 
 async function walkToTile(x, y) {
   try {
+    const px = Number(localMapView?.player?.x ?? fullMapView?.player?.x ?? 0);
+    const py = Number(localMapView?.player?.y ?? fullMapView?.player?.y ?? 0);
+    const manh = Math.abs(Number(x) - px) + Math.abs(Number(y) - py);
+    const cheb = Math.max(Math.abs(Number(x) - px), Math.abs(Number(y) - py));
+    // Adjacent (incl. diagonal) = free step; longer = settlement/scene mode
+    const free = cheb <= 1 && manh > 0;
     const res = await fetch("/api/tiles/map/move", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ x, y }),
+      body: JSON.stringify({ x, y, mode: free ? "free" : "scene" }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
-    if (data.state) renderShell(data.state);
+    if (data.state) {
+      if (free) {
+        state = { ...(state || {}), ...data.state, travel_ready: data.travel_ready };
+      } else {
+        renderShell(data.state);
+      }
+    }
     updateTravelStatus(data.travel_ready);
+    applyTravelMoveFeedback(data);
     fullMapView = data.map || fullMapView;
-    if (fullMapView) {
-      await paintTileGrid(document.querySelector("#fullMapCanvas"), fullMapView.tiles || [], {
-        tilePx: mapTilePx,
-        cell: mapTilePx,
-        fog: true,
-        mode: "full",
-        avatarUrl: mapAvatarUrl,
-      });
+    await refreshLocalMap();
+    if (!document.querySelector("#mapOverlay")?.classList.contains("hidden")) {
+      await refreshFullMap();
+    } else if (fullMapView?.settlements) {
       renderSettlementList(fullMapView.settlements || []);
     }
-    await refreshLocalMap();
-    if (latestOutput) {
+    if (!free && latestOutput) {
+      const mins = data.travel?.minutes || data.step?.minutes || 0;
       latestOutput.innerHTML =
-        paragraphs(`You set out toward (${x}, ${y}). Travel closes until the next scene resolves.`) +
-        (latestOutput.innerHTML || "");
+        paragraphs(
+          `You set out toward (${x}, ${y})${mins ? ` (~${mins} minutes on the trail)` : ""}. Long travel closes until the next scene resolves — adjacent steps still work.`,
+        ) + (latestOutput.innerHTML || "");
     }
   } catch (error) {
     window.alert(error.message || String(error));
@@ -13343,13 +17647,20 @@ function bindFullMapHover() {
     const cy = Math.floor(((event.clientY - rect.top) * scaleY) / canvas._mapMeta.cell) + canvas._mapMeta.minY;
     const tile = (fullMapView.tiles || []).find((t) => Number(t.x) === cx && Number(t.y) === cy);
     const settle = (fullMapView.settlements || []).find((s) => Number(s.x) === cx && Number(s.y) === cy);
-    if (!tile || (tile.fog && !tile.visited && !tile.is_player)) {
+    const marker = (fullMapView.markers || []).find(
+      (m) => Number(m.x) === cx && Number(m.y) === cy,
+    );
+    if ((!tile || (tile.fog && !tile.visited && !tile.is_player)) && !marker && !settle) {
       tip?.classList.add("hidden");
       return;
     }
     const label = settle
       ? `${settle.name} (${settle.state || "settlement"})`
-      : `${tile.state || "tile"}${tile.visited ? " · visited" : ""}`;
+      : marker
+        ? `${marker.label || "Known place"} · ${marker.kind || "intel"}`
+        : tile?.fog
+          ? "Unknown ground"
+          : `${tile?.state || "tile"}${tile?.visited ? " · visited" : ""}`;
     if (tip) {
       tip.textContent = `${label} · (${cx},${cy})`;
       tip.style.left = `${event.clientX - rect.left + 12}px`;
@@ -13360,6 +17671,9 @@ function bindFullMapHover() {
   canvas.addEventListener("mouseleave", () => tip?.classList.add("hidden"));
   canvas.addEventListener("click", (event) => {
     if (!fullMapView || !canvas._mapMeta) return;
+    // Ignore click if this was a pan drag on the wrap
+    const wrap = document.querySelector(".mapOverlayCanvasWrap");
+    if (wrap?.dataset.didPan === "1") return;
     const rect = canvas.getBoundingClientRect();
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
@@ -13370,14 +17684,79 @@ function bindFullMapHover() {
       showSettlementDetail(settle);
       return;
     }
+    const marker = (fullMapView.markers || []).find(
+      (m) => Number(m.x) === cx && Number(m.y) === cy,
+    );
+    if (marker) {
+      showSettlementDetail({
+        x: marker.x,
+        y: marker.y,
+        name: marker.label,
+        state: marker.kind,
+        summary: marker.summary || `Known from ${marker.source || "intel"}.`,
+        kind: marker.kind,
+      });
+      return;
+    }
+    const px = Number(fullMapView.player?.x ?? 0);
+    const py = Number(fullMapView.player?.y ?? 0);
+    const dx = cx - px;
+    const dy = cy - py;
+    // Adjacent free step — no confirm, no travel gate
+    if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1 && (dx || dy)) {
+      walkStep(dx, dy, { silent: true });
+      return;
+    }
     if (travelReady) {
       const tile = (fullMapView.tiles || []).find((t) => Number(t.x) === cx && Number(t.y) === cy);
       if (tile && tile.walkable !== false && !tile.fog) {
-        if (window.confirm(`Walk to (${cx}, ${cy})?`)) walkToTile(cx, cy);
+        if (window.confirm(`Long walk to (${cx}, ${cy})?`)) walkToTile(cx, cy);
       }
     }
   });
 }
+
+/** Grant lived-area or rumor map intel (towns / danger hotspots). */
+async function grantMapKnowledge(payload = {}) {
+  const res = await fetch("/api/tiles/map/knowledge", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.error || "Knowledge grant failed");
+  if (data.map) fullMapView = data.map;
+  await refreshLocalMap();
+  if (!document.querySelector("#mapOverlay")?.classList.contains("hidden")) {
+    await refreshFullMap();
+  }
+  return data;
+}
+
+/** Survey from a high place — radius/height/clarity are DM-facing knobs. */
+async function surveyMapArea({ radius = 3, height = null, clarity = 1.0 } = {}) {
+  const res = await fetch("/api/tiles/map/survey", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ radius, height, clarity }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || data.error || "Survey failed");
+  if (data.map) fullMapView = data.map;
+  await refreshLocalMap();
+  if (!document.querySelector("#mapOverlay")?.classList.contains("hidden")) {
+    await refreshFullMap();
+  }
+  return data;
+}
+
+// Expose for console / future DM tools and turn hooks
+window.morkynMap = Object.assign(window.morkynMap || {}, {
+  grantMapKnowledge,
+  surveyMapArea,
+  refreshLocalMap,
+  refreshFullMap,
+});
 
 function localNpcsFromState() {
   if (!state) return [];
@@ -13765,6 +18144,13 @@ function bindArtDropZones() {
       applyDroppedArtImage(slot, uri.trim()).catch((err) => window.alert(err.message || String(err)));
       return;
     }
+    // Reject file:// and bare Windows paths (browser blocks them from http origins)
+    if (uri && !isBrowserSafeMediaUrl(uri) && !uri.includes("/api/portraits/file")) {
+      window.alert(
+        "Cannot use a local disk path or file:// link here. Drop an image file, or pick from Mørkyn portraits / generate art.",
+      );
+      return;
+    }
     // Same-origin portrait file URL from library thumb
     if (uri && (uri.includes("/api/portraits/file") || uri.includes("portraits/file"))) {
       try {
@@ -13777,6 +18163,28 @@ function bindArtDropZones() {
       } catch (_) {
         /* ignore bad uri */
       }
+      return;
+    }
+    // Same-origin http(s) image URL (e.g. IIB on localhost via HTTP, not file://)
+    if (uri && isBrowserSafeMediaUrl(uri) && (uri.startsWith("http://") || uri.startsWith("https://"))) {
+      fetch(uri, { mode: "cors" })
+        .then((r) => {
+          if (!r.ok) throw new Error("Could not fetch image URL");
+          return r.blob();
+        })
+        .then(
+          (blob) =>
+            new Promise((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(reader.result);
+              reader.onerror = () => reject(new Error("Read failed"));
+              reader.readAsDataURL(blob);
+            }),
+        )
+        .then((dataUrl) => applyDroppedArtImage(slot, dataUrl))
+        .catch(() => {
+          /* cross-origin IIB drag often fails; user can use native portraits */
+        });
     }
   });
 
@@ -14030,9 +18438,26 @@ document.querySelector("#appSettingsForm")?.addEventListener("submit", async (ev
 decorateSetupFields();
 ensureTextAiControls();
 renderDirectorPresets();
+renderSimpleDirectorPresets();
+// Default Simple setup + Simple image chrome (persisted in localStorage)
+try {
+  setSetupUiMode(loadSetupUiMode());
+  setImageUiMode(loadImageUiMode());
+  placeCharacterArtCard();
+  placeAbilityBuilder();
+  loadImageConfig()
+    .catch(() => {})
+    .finally(() => {
+      fillDefaultNegativesOnBoot();
+      syncArtGenerateButtons();
+    });
+} catch (_) {
+  document.body.classList.add("setup-mode-simple", "image-mode-simple");
+}
 decorateFunctionHelp();
 bindSetupNavExtras();
 bindSetupMoreTools();
+bindSetupFocusClickGuard();
 bindTabCategoryNav();
 setSetupStep(0);
 updateConditionalSetup();

@@ -1107,8 +1107,888 @@ label span,
   padding-bottom: 8px;
 }
 
+.setupPanel > .setupSimplePanel {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+
 .setupPanel > .setupDirectorBar {
   flex: 0 0 auto;
+}
+
+/* ---- Setup Simple / Advanced ---- */
+body.setup-mode-simple .setupAdvancedOnly {
+  display: none !important;
+}
+
+body.setup-mode-advanced .setupSimplePanel,
+body.setup-mode-advanced .setupSimpleOnlyInline {
+  display: none !important;
+}
+
+body.setup-mode-simple .setupSimplePanel {
+  display: block;
+}
+
+body.setup-mode-simple .setupSimplePanel[hidden] {
+  display: none !important;
+}
+
+body.setup-mode-simple .setupSimpleOnlyInline {
+  display: inline-flex;
+}
+
+/* Simple: one Start (header). Hide mobile start strip if any leaks. */
+body.setup-mode-simple #setupStartMobile {
+  display: none !important;
+}
+
+/* Simple + Advanced share the same header chrome */
+body.setup-mode-simple .setupHeader,
+body.setup-mode-advanced .setupHeader {
+  position: relative;
+}
+
+body.setup-mode-simple .setupHeaderUtility,
+body.setup-mode-advanced .setupHeaderUtility {
+  display: inline-flex;
+}
+
+.setupModeToggle,
+.imageModeToggle {
+  display: inline-flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.setupModeBtn.isActive,
+.imageModeBtn.isActive,
+.directorPreset.isSelected {
+  border-color: color-mix(in srgb, var(--neon) 55%, var(--line));
+  background: color-mix(in srgb, var(--neon-dim) 40%, var(--surface));
+  color: var(--neon);
+  box-shadow: 0 0 10px var(--neon-dim);
+}
+
+.setupSimplePanel {
+  padding: 2px 2px 16px;
+  min-height: 0;
+}
+
+.setupSimpleLead {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.88rem;
+  line-height: 1.4;
+}
+
+/* Form left · character art right (desktop) */
+.setupSimpleLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 38%);
+  gap: 14px 18px;
+  align-items: start;
+  min-height: 0;
+}
+
+.setupSimpleMain {
+  min-width: 0;
+  min-height: 0;
+}
+
+.setupSimpleArtCol {
+  min-width: 0;
+  position: sticky;
+  top: 8px;
+  align-self: start;
+  max-height: calc(100vh - 140px);
+  max-height: calc(100svh - 140px);
+  overflow: auto;
+}
+
+.setupSimpleArtMount {
+  min-height: 0;
+}
+
+.setupSimpleArtMount .characterArtCard {
+  margin: 0;
+  height: auto;
+}
+
+/* Expanded art: stack frames vertically in the side column */
+body.setup-mode-simple .setupSimpleArtMount .setupArtLayout {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 10px;
+}
+
+body.setup-mode-simple .setupSimpleArtMount .setupArtPair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
+  min-height: 160px;
+}
+
+@media (max-width: 900px) {
+  .setupSimpleLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .setupSimpleArtCol {
+    position: relative;
+    top: 0;
+    max-height: none;
+    order: -1; /* art on top when stacked */
+  }
+}
+
+.setupSimpleGrid {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(100px, 0.7fr) minmax(120px, 0.9fr);
+  gap: 10px 12px;
+  align-items: start;
+  max-width: none;
+}
+
+@media (max-width: 720px) {
+  .setupSimpleGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.setupSimpleGrid label {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  min-width: 0;
+}
+
+.setupSimpleGrid label > span {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.setupSimpleGrid .wide,
+.setupSimpleGrid .setupSimpleVibe,
+.setupSimpleGrid .setupSimplePower {
+  grid-column: 1 / -1;
+}
+
+.setupSimpleGrid textarea {
+  min-height: 2.4em;
+  max-height: 4.8em;
+  resize: vertical;
+}
+
+.setupSimpleGrid input[type="text"],
+.setupSimpleGrid select,
+.setupSimpleGrid textarea {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.setupSimplePower {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin: 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: transparent;
+  width: auto;
+  max-width: 100%;
+  justify-self: start;
+}
+
+.setupSimplePower legend {
+  padding: 0 4px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--muted);
+}
+
+.setupSimplePowerFields {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  max-width: 920px;
+}
+
+.setupSimpleVibeHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.setupSimpleVibeLabel {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0;
+}
+
+.setupSimpleVibeActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.setupSimpleVibe .empty {
+  margin: 0 0 6px;
+  font-size: 0.8rem;
+}
+
+.presetEditor {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, var(--neon) 12%);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  max-width: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.setupSimpleVibe {
+  width: 100%;
+  max-width: none;
+}
+
+.setupSimplePowers {
+  width: 100%;
+  max-width: none;
+}
+
+.setupSimpleRules {
+  width: 100%;
+  max-width: none;
+  padding: 0.65rem 0.75rem 0.85rem;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, var(--neon) 12%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 92%, transparent);
+}
+
+.setupSimpleRulesGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 0.65rem 0.85rem;
+  margin-top: 0.45rem;
+}
+
+.setupSimpleRulesGrid > label.simpleSetupField {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  margin: 0;
+}
+
+.setupSimpleRulesGrid > label.simpleSetupField > span {
+  font-size: 0.82rem;
+  opacity: 0.9;
+}
+
+.setupSimpleRulesGrid select {
+  width: 100%;
+  min-width: 0;
+}
+
+.setupSimpleGrid > label.simpleSetupField.settingField,
+.setupSimpleGrid > .settingFieldShell.simpleSetupField {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+}
+
+.setupSimpleGrid > label.simpleSetupField .settingFieldHeader,
+.setupSimpleGrid > .settingFieldShell .settingFieldHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+.setupSimpleGrid > label.simpleSetupField .settingControls,
+.setupSimpleGrid > .settingFieldShell .settingControls {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.setupSimpleGrid > label.simpleSetupField .textAiWrap,
+.setupSimpleGrid > .settingFieldShell .textAiWrap,
+.setupSimpleGrid > .settingFieldShell .settingFieldControl {
+  width: 100%;
+}
+
+.setupSimpleGrid > label.simpleSetupField .textAiPanel,
+.setupSimpleGrid > .settingFieldShell .textAiPanel {
+  width: 100%;
+}
+
+/* Randomize/Lock live outside the field <label> so focus clicks don't hit Randomize */
+.settingFieldShell {
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  min-width: 0;
+}
+
+.settingFieldShell > .settingFieldControl {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settingFieldShell .settingFieldTitle {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  margin: 0;
+}
+
+.setupSimplePowers .abilityBuilder {
+  border: none;
+  padding: 0;
+  background: transparent;
+}
+
+.powersDropdown {
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, var(--neon) 15%);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--surface) 94%, transparent);
+  overflow: hidden;
+}
+
+.powersDropdown > summary.powersDropdownSummary {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  min-height: 40px;
+}
+
+.powersDropdown > summary.powersDropdownSummary::-webkit-details-marker {
+  display: none;
+}
+
+.powersDropdownTitle {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.powersDropdownMeta {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text);
+}
+
+.powersDropdownChevron {
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.powersDropdown[open] > summary .powersDropdownChevron {
+  transform: rotate(180deg);
+}
+
+.powersDropdownBody {
+  border-top: 1px solid var(--line);
+  padding: 10px 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.abilityCountRangeRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-3, var(--surface)) 90%, transparent);
+}
+
+.abilityCountRangeLabel {
+  font-size: 12px;
+  font-weight: 650;
+  color: var(--text);
+}
+
+.abilityCountRangeField {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.abilityCountRangeField input {
+  width: 3.5rem;
+  min-width: 3.5rem;
+  padding: 4px 6px;
+  text-align: center;
+}
+
+.abilityCountRangeSep {
+  color: var(--muted);
+}
+
+.abilityCountRangeHint {
+  flex: 1 1 100%;
+  margin: 0;
+  font-size: 0.8rem;
+}
+
+.abilityBuilder.abilitiesNone .abilityCountRangeRow {
+  opacity: 0.55;
+}
+
+.setupSimpleGear {
+  width: 100%;
+  max-width: none;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 85%, var(--neon) 12%);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-sizing: border-box;
+}
+
+.simpleGearList {
+  display: grid;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.gearSetupCard {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-3, var(--surface)) 90%, transparent);
+}
+
+.gearCardRow {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+}
+
+.powerTypeTips {
+  margin: 8px 0 12px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 0.85rem;
+}
+
+.powerTypeTipsList {
+  margin: 6px 0 0;
+  padding-left: 1.2em;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.powerTypeTip {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+}
+
+.worldTimeLine {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  color: color-mix(in srgb, var(--muted) 70%, var(--neon, #6cf) 30%);
+  letter-spacing: 0.02em;
+}
+
+.weatherLine {
+  margin: 1px 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.areaRepLine {
+  margin: 1px 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.questStageEditor .questStageForm label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin-bottom: 0.55rem;
+  font-size: 0.85rem;
+}
+.questStageEditor .questStageForm .checkboxRow {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+.questStageEditor .settingsSubhead {
+  margin: 0.85rem 0 0.4rem;
+  font-size: 0.95rem;
+}
+.starterLogicPanel {
+  max-width: min(520px, 94vw);
+}
+.starterLogicBody {
+  padding: 4px 4px 12px;
+  max-height: min(50vh, 360px);
+  overflow: auto;
+}
+.starterLogicList {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.55rem;
+  line-height: 1.4;
+}
+.starterLogicList li {
+  color: var(--text);
+}
+.starterLogicList li.starterLogicStrip strong {
+  color: var(--bad, #e07070);
+}
+.starterLogicList li.starterLogicDefer strong {
+  color: var(--warn, #d4a84b);
+}
+
+.questEventCard {
+  margin-bottom: 0.5rem;
+}
+.questEventCard header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+  margin-bottom: 0.25rem;
+}
+.questEventCard .meta {
+  opacity: 0.75;
+  font-size: 0.8rem;
+}
+
+.socialChoiceBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, var(--neon, #6cf) 20%);
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+}
+
+.socialChoiceBar.hidden {
+  display: none;
+}
+
+.socialChoiceLabel {
+  font-size: 0.8rem;
+  color: var(--muted);
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+
+.ambientMoveLine {
+  margin: 6px 0 0;
+  padding: 6px 8px;
+  border-left: 2px solid color-mix(in srgb, var(--neon, #6cf) 40%, var(--line));
+  font-size: 0.82rem;
+  color: color-mix(in srgb, var(--text) 88%, var(--muted));
+  opacity: 0.92;
+}
+
+.waitMenuWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.waitPopover {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  min-width: 11rem;
+  padding: 6px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 96%, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.waitPopover.hidden {
+  display: none;
+}
+
+.waitDurationBtn {
+  appearance: none;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+
+.waitDurationBtn:hover {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--surface-3, var(--surface)) 90%, var(--neon, #6cf) 8%);
+}
+
+.waitPopoverHint {
+  margin: 4px 2px 2px;
+  font-size: 0.72rem;
+  line-height: 1.3;
+}
+
+.waitKindRow {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 2px;
+}
+
+.waitKindBtn {
+  appearance: none;
+  flex: 1;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.waitKindBtn:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--line) 70%, var(--neon, #6cf));
+}
+
+.waitKindBtn.activeWaitKind {
+  color: var(--text);
+  border-color: var(--neon, #6cf);
+  background: color-mix(in srgb, var(--surface-3, var(--surface)) 85%, var(--neon, #6cf) 12%);
+}
+
+.waitCustomRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  padding: 4px 6px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.waitCustomRow input {
+  width: 4.5rem;
+  min-width: 4.5rem;
+  padding: 4px 6px;
+}
+
+.setupAdvancedPowersMount {
+  min-height: 0;
+}
+
+.presetEditor label {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.presetEditor label > span {
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.presetEditor textarea {
+  min-height: 2.6em;
+  max-height: 7em;
+  resize: vertical;
+}
+
+.directorPreset.isUserPreset {
+  border-style: dashed;
+}
+
+.setupAdvancedArtMount {
+  min-height: 0;
+}
+
+.setupIntentSummarySimple {
+  margin-top: 12px;
+  max-height: min(22vh, 160px);
+}
+
+/* Randomize dropdown (confirm required) */
+.randomizeMenuWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.randomizePopover {
+  position: fixed;
+  z-index: 120;
+  width: min(360px, 92vw);
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--neon) 35%, var(--line));
+  background: color-mix(in srgb, var(--surface-solid, var(--surface)) 96%, #000);
+  box-shadow: var(--neon-glow, 0 0 20px rgba(0, 0, 0, 0.35)), 0 16px 40px rgba(0, 0, 0, 0.4);
+  display: grid;
+  gap: 10px;
+}
+
+.setupSimpleVibeActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.setupSimpleVibeActions #simplePresetConfirmRandomize,
+.directorPresetsRow #advancedPresetConfirmRandomize {
+  flex: 0 0 auto;
+}
+
+.randomizePopover.hidden {
+  display: none !important;
+}
+
+.randomizePopover textarea {
+  width: 100%;
+  min-height: 4.5em;
+  resize: vertical;
+}
+
+.randomizePopoverActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.randomizePopoverHint {
+  margin: 0;
+  font-size: 0.78rem;
+}
+
+/* ---- Image Simple / Advanced ---- */
+body.image-mode-simple .imageAdvancedOnly,
+.characterArtCard.imageUiSimple .imageAdvancedOnly {
+  display: none !important;
+}
+
+body.image-mode-advanced .imageSimpleOnly,
+.characterArtCard.imageUiAdvanced .imageSimpleOnly {
+  display: none !important;
+}
+
+body.image-mode-simple .imageSimpleOnly,
+.characterArtCard.imageUiSimple .imageSimpleOnly {
+  display: grid;
+  gap: 8px;
+}
+
+.setupArtSimpleActions {
+  margin-top: 8px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, var(--neon) 15%);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+.artActionsRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  width: 100%;
+}
+
+.artActionsPrimary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+}
+
+.artActionsForge {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+.artActionsPrimary [data-art-image-gen]:disabled,
+.artActionsPrimary #portraitPreviewBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.imageStudioHeaderRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.imageStudioHeaderRow h3 {
+  margin: 0;
 }
 
 /* Corner decal ticks */
@@ -1152,34 +2032,44 @@ label span,
   gap: 12px;
 }
 
-/* Desktop default: one compact toolbar row (mobile overrides to column + More) */
+/* Desktop: one clean bar — title left, all tools flush right (Simple + Advanced match) */
 .setupHeader {
-  flex-direction: row;
-  flex-wrap: wrap;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  align-items: stretch;
   justify-content: flex-start;
-  gap: 8px 12px;
+  gap: 0;
   padding-bottom: 12px;
   margin-bottom: 0;
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
   height: auto;
   min-height: 0;
-  align-self: start;
+  align-self: stretch;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .setupHeaderTop {
-  display: contents; /* Lead + Primary become header flex children on desktop */
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  width: 100%;
+  min-width: 0;
 }
 
 .setupHeaderLead {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 10px 14px;
   min-width: 0;
-  flex: 0 1 auto;
-  order: 1;
+  flex: 1 1 auto;
+  margin: 0;
+  order: unset;
 }
 
 .setupHeaderTitleBlock {
@@ -1189,14 +2079,100 @@ label span,
   min-width: 0;
 }
 
+/* Right cluster: mode · theme · tools · settings · randomize · start */
 .setupHeaderPrimary {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
   flex: 0 0 auto;
-  order: 3;
+  margin: 0 0 0 auto;
+  max-width: none;
+  order: unset;
+  min-width: 0;
+}
+
+/* Theme · Updates · Save · Load — same row, no stretch, no second-line float */
+.setupHeaderUtility {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.setupHeaderUtility .themePicker {
+  margin-right: 0;
+  flex: 0 0 auto;
+}
+
+.setupHeaderUtility .secondaryButton,
+.setupHeaderUtility .buttonLike {
+  min-height: 36px;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.setupPanel > .setupHeader {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* Kill leftover flex-grow from the old “idea box + randomize” chrome */
+.setupHeaderPrimary .setupModeToggle,
+.setupHeaderPrimary .setupMoreToggle,
+.setupHeaderPrimary .setupHeaderUtility,
+.setupHeaderPrimary .setupPrimarySettings,
+.setupHeaderPrimary .randomizeMenuWrap,
+.setupHeaderPrimary .setupRandomizeAll,
+.setupHeaderPrimary #setupStart {
+  flex: 0 0 auto;
+  order: unset;
+  max-width: none;
+  margin: 0;
+}
+
+.setupHeaderPrimary #setupStart {
+  flex-shrink: 0;
+}
+
+.forgePathModalPanel {
+  max-width: min(560px, 94vw);
+}
+
+.forgePathModalBody {
+  display: grid;
+  gap: 12px;
+  padding: 4px 2px 8px;
+}
+
+.forgePathModalBody input[type="text"] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.forgePathModalActions {
+  flex-wrap: wrap;
+}
+
+.forgePathCandidates {
+  display: grid;
+  gap: 6px;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.forgePathCandidates button {
+  text-align: left;
+  font-size: 0.82rem;
+  word-break: break-all;
+}
+
+.forgePathCandidates.hidden {
+  display: none !important;
 }
 
 .setupHeaderPrimary .setupPrimarySettings,
@@ -1205,24 +2181,25 @@ label span,
   min-height: 36px;
 }
 
+/* Old second-row tools panel — unused (tools moved into header primary) */
 .setupActions.setupActionsMore,
 .setupActionsMore {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-width: 0;
-  width: auto;
-  max-width: none;
-  order: 2;
-  padding-top: 0;
-  border-top: none;
+  display: none !important;
 }
 
 .setupActionsMore[hidden] {
   display: none !important;
+}
+
+/* Desktop: More toggle unnecessary — tools always visible on the right */
+@media (min-width: 900px) {
+  .setupHeaderPrimary .setupMoreToggle {
+    display: none !important;
+  }
+
+  .setupHeaderUtility {
+    display: inline-flex !important;
+  }
 }
 
 .setupStartMobile {
@@ -1254,35 +2231,25 @@ label span,
   flex: 0 0 auto;
 }
 
+/* Advanced Randomize is only a chip now (idea lives in the shared popover) */
 .setupRandomizeAll {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: min(420px, 48vw);
+  flex: 0 0 auto !important;
+  max-width: none;
   min-width: 0;
-  flex: 1 1 220px;
-}
-
-.setupRandomizeAll input {
-  flex: 1 1 auto;
-  min-width: 0;
-  min-height: 34px;
-  padding: 6px 10px;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--text);
-  font-size: 0.78rem;
-}
-
-.setupRandomizeAll input:focus {
-  outline: none;
-  border-color: color-mix(in srgb, var(--neon) 45%, var(--line));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--neon-dim) 55%, transparent);
+  width: auto;
 }
 
 .setupRandomizeAll #randomizeSetup {
   flex: 0 0 auto;
+}
+
+.randomizeMenuWrap {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
 }
 
 .setupDirectorBar {
@@ -1497,7 +2464,7 @@ label span,
   max-width: 100%;
 }
 
-/* Desktop: keep tools expanded in the top toolbar; hide More / mobile Start */
+/* Desktop: tools always visible on the right; never resurrect the old More row */
 @media (min-width: 900px) {
   .setupMoreToggle {
     display: none !important;
@@ -1505,8 +2472,7 @@ label span,
 
   .setupActionsMore,
   .setupActionsMore[hidden] {
-    display: flex !important;
-    visibility: visible;
+    display: none !important;
   }
 
   .setupStartMobile {
@@ -1514,34 +2480,33 @@ label span,
   }
 
   .setupHeader {
-    flex-direction: row;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 8px 10px;
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
   }
 
   .setupHeaderTop {
-    display: contents;
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
   }
 
   .setupHeaderLead {
-    order: 1;
-    flex: 0 1 auto;
-  }
-
-  .setupActionsMore {
-    order: 2;
-    flex: 1 1 220px;
-    justify-content: flex-end;
-    padding: 0;
-    border: none;
-    width: auto;
+    flex: 1 1 auto;
+    min-width: 0;
   }
 
   .setupHeaderPrimary {
-    order: 3;
     flex: 0 0 auto;
+    margin-left: auto;
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+  }
+
+  .setupHeaderUtility {
+    display: inline-flex !important;
   }
 
   .setupHeaderTagline {
@@ -2237,11 +3202,98 @@ fieldset.settingField > .settingControls {
 
 .abilitySetupCard {
   display: grid;
-  gap: 12px;
+  gap: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-3);
+  padding: 0;
+  overflow: hidden;
+}
+
+/* Collapsed by default after generate/randomize; only "Add Ability" starts expanded */
+.abilityCardSummary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  user-select: none;
+  background: color-mix(in srgb, var(--surface-3) 88%, var(--neon-dim));
+  border-bottom: 1px solid transparent;
+}
+
+.abilitySetupCard.is-expanded .abilityCardSummary {
+  border-bottom-color: var(--line);
+}
+
+.abilityCollapseToggle {
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+
+.abilityCollapseToggle:hover {
+  border-color: color-mix(in srgb, var(--neon) 40%, var(--line));
+  box-shadow: 0 0 10px var(--neon-dim);
+}
+
+.abilityCollapseChevron {
+  display: block;
+  width: 0.45em;
+  height: 0.45em;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg); /* points right when collapsed */
+  transition: transform 0.15s ease;
+  margin-top: -2px;
+}
+
+.abilitySetupCard.is-expanded .abilityCollapseChevron {
+  transform: rotate(45deg); /* points down when open */
+  margin-top: -4px;
+}
+
+.abilitySummaryText {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.abilitySummaryName {
+  font-size: 0.98rem;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.abilitySummaryMeta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.abilitySummaryRemove {
+  flex: 0 0 auto;
+}
+
+.abilityCardBody {
+  display: grid;
+  gap: 12px;
   padding: 12px;
+}
+
+.abilitySetupCard.is-collapsed .abilityCardBody {
+  display: none;
 }
 
 .abilityCardHeader,
@@ -2256,6 +3308,7 @@ fieldset.settingField > .settingControls {
   display: flex;
   justify-content: end;
   gap: 8px;
+  flex-wrap: wrap;
 }
 
 .compactToggle {
@@ -2294,8 +3347,8 @@ fieldset.settingField > .settingControls {
 }
 
 .abilityOriginOptions {
-  margin-top: 14px;
-  grid-template-columns: repeat(3, max-content) minmax(0, 1fr);
+  margin-top: 0;
+  grid-template-columns: repeat(4, max-content) minmax(0, 1fr);
   align-items: center;
   gap: 8px 14px;
 }
@@ -2656,6 +3709,70 @@ a.mainMenuGhost:hover {
   font-size: 0.85rem;
 }
 
+/* LLM process status only — website never restarts for LoRA/theme swaps */
+.llmRuntimeBanner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  font-size: 0.82rem;
+  line-height: 1.35;
+  border-bottom: 1px solid color-mix(in srgb, var(--neon-2) 28%, var(--line));
+  background: color-mix(in srgb, var(--neon-dim) 55%, var(--surface));
+  color: var(--text);
+  z-index: 6;
+}
+
+.llmRuntimeBanner.hidden {
+  display: none !important;
+}
+
+.llmRuntimeBanner.isBusy {
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--neon) 18%, var(--surface)),
+    color-mix(in srgb, var(--neon-2) 14%, var(--surface))
+  );
+  border-color: color-mix(in srgb, var(--neon) 45%, var(--line));
+}
+
+.llmRuntimeBanner.isError {
+  background: color-mix(in srgb, #c45c4a 22%, var(--surface));
+  border-color: color-mix(in srgb, #c45c4a 50%, var(--line));
+  color: #ffd8d0;
+}
+
+.llmRuntimeDot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--muted);
+  box-shadow: 0 0 8px transparent;
+}
+
+.llmRuntimeBanner.isBusy .llmRuntimeDot {
+  background: var(--neon);
+  box-shadow: 0 0 10px var(--neon-dim);
+  animation: llmPulse 1s ease-in-out infinite;
+}
+
+.llmRuntimeBanner.isError .llmRuntimeDot {
+  background: #e07060;
+}
+
+@keyframes llmPulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.9);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
 /* Scene focus visual emphasis (sizes come from flex JS layout) */
 .gameView.sceneFocus:not(.customLayout) .chatColumn,
 .gameView.isGenerating:not(.customLayout) .chatColumn {
@@ -2675,8 +3792,12 @@ a.mainMenuGhost:hover {
 }
 
 .gameView.sceneFocus:not(.customLayout) .mapMainCanvas {
-  width: min(100%, 280px) !important;
-  max-width: 100% !important;
+  /* Scene focus: keep map readable but secondary */
+  max-width: min(100%, 360px) !important;
+  max-height: min(42vh, 360px) !important;
+  min-width: 0 !important;
+  width: auto !important;
+  height: auto !important;
 }
 
 .gameView.sceneFocus:not(.customLayout) #chatIdleHint,
@@ -2686,6 +3807,493 @@ a.mainMenuGhost:hover {
 
 .gameView.customLayout #chatIdleHint {
   color: var(--neon);
+}
+
+/* Body: main stage only (scene + map). Tabs via hamburger sheet. */
+.playBody {
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  position: relative;
+}
+
+/* Legacy left rail — replaced by top-right hamburger */
+.playSideRail,
+.playSideRailHidden {
+  display: none !important;
+}
+
+/* —— Hamburger menu (top right) —— */
+.playMenuToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 36px;
+  padding: 0;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--neon) 40%, var(--line));
+  background: color-mix(in srgb, var(--neon-dim) 28%, var(--surface));
+  color: var(--neon);
+  cursor: pointer;
+}
+.playMenuToggle:hover {
+  box-shadow: 0 0 14px var(--neon-dim);
+}
+.playMenuBars {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  width: 18px;
+}
+.playMenuBars span {
+  display: block;
+  height: 2px;
+  width: 100%;
+  border-radius: 2px;
+  background: currentColor;
+  box-shadow: 0 0 6px var(--neon-dim);
+}
+.playMenuBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: rgba(0, 0, 0, 0.45);
+}
+.playMenuBackdrop.hidden {
+  display: none !important;
+}
+.playMenuDrawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  width: min(320px, 92vw);
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--surface-solid, var(--surface)) 97%, #000);
+  border-left: 1px solid color-mix(in srgb, var(--neon) 35%, var(--line));
+  box-shadow: -16px 0 48px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+.playMenuDrawer.hidden {
+  display: none !important;
+}
+.playMenuHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+.playMenuHeader h2 {
+  margin: 0 0 4px;
+  font-size: 1.1rem;
+  color: var(--neon);
+}
+.playMenuNav {
+  flex: 1 1 auto;
+  overflow: auto;
+  padding: 10px 12px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.playMenuGroupLabel {
+  margin: 12px 4px 4px;
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.playMenuItem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.92rem;
+  cursor: pointer;
+}
+.playMenuItem:hover {
+  border-color: color-mix(in srgb, var(--neon) 35%, var(--line));
+  background: color-mix(in srgb, var(--neon-dim) 22%, transparent);
+  color: var(--neon);
+}
+
+.playPanelOffstage {
+  display: none !important;
+}
+
+.topbar.topbarPlay {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 12px 16px;
+}
+.topbarPlay .topbarBrand,
+.topbarBrandPlay {
+  display: flex;
+  flex-direction: row;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: 12px 16px;
+  min-width: 0;
+  max-width: none;
+  flex: 1 1 auto;
+}
+.topbarBrandPlay .neonTitle {
+  flex: 0 0 auto;
+  margin: 0;
+}
+/* World vibe sits to the right of Mørkyn — full line, ellipsis only if the bar is too narrow */
+.topbarWorldVibe {
+  margin: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+  font-size: 0.88rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: color-mix(in srgb, var(--neon-2) 55%, var(--muted));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topActionsPlay {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* —— Present: horizontal strip above map —— */
+.presentStrip {
+  flex: 0 0 auto;
+  border-bottom: 1px solid color-mix(in srgb, var(--neon-2) 22%, var(--line));
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, #000), color-mix(in srgb, var(--surface) 70%, #0a0d12));
+  min-height: 0;
+  overflow: hidden;
+}
+.presentStripInner,
+.npcStageHorizontal {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  min-height: 72px;
+  max-height: 96px;
+  overflow: hidden;
+}
+.presentStripHead {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 auto;
+  min-width: 100px;
+}
+.presentStripLabel {
+  font-size: 0.68rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--neon-2);
+}
+.presentStripHead select {
+  min-width: 120px;
+  max-width: 160px;
+  font-size: 0.82rem;
+}
+.npcPortraitFrameCompact {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--neon) 30%, var(--line));
+  background: #0a0d12;
+}
+.npcPortraitFrameCompact img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.npcPortraitFrameCompact .npcPortraitPlaceholder {
+  font-size: 0.62rem;
+  padding: 4px;
+  text-align: center;
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--muted);
+}
+.presentStripMeta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.presentStripMeta strong {
+  display: block;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.presentStripMeta p {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.presentStripMeta .npcStageSummary {
+  display: none; /* keep strip short; full text in roster */
+}
+.presentStripActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+/* —— Map location / world status strip —— */
+.mapStatusStrip {
+  flex: 0 0 auto;
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--neon) 28%, var(--line));
+  background:
+    linear-gradient(135deg, color-mix(in srgb, var(--neon-dim) 35%, #0c1018), #0a0d12 70%);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--neon) 12%, transparent);
+}
+.mapStatusPrimary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px 14px;
+}
+.mapStatusLocation {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--neon);
+  text-shadow: 0 0 16px var(--neon-dim);
+  line-height: 1.25;
+}
+.mapStatusTileMeta {
+  font-size: 0.75rem;
+  color: var(--muted);
+  opacity: 0.9;
+}
+.mapStatusSecondary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+.mapStatusWorld {
+  font-weight: 600;
+  color: color-mix(in srgb, var(--neon-2) 70%, var(--text));
+}
+.mapStatusDot {
+  opacity: 0.45;
+}
+.mapStatusMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.mapStatusMeta .weatherLine,
+.mapStatusMeta .areaRepLine {
+  margin: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--line) 80%, var(--neon) 20%);
+  background: color-mix(in srgb, var(--surface) 70%, transparent);
+}
+
+
+.playSideRail {
+  display: none !important;
+  flex-direction: column;
+  gap: 4px;
+  flex: 0 0 52px;
+  padding: 8px 4px;
+  border-right: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface) 92%, #000);
+  z-index: 6;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.playRailBtn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 48px;
+  padding: 6px 2px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.62rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+}
+
+.playRailBtn:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--neon) 30%, var(--line));
+  background: color-mix(in srgb, var(--neon-dim) 18%, transparent);
+}
+
+.playRailBtn.isActive {
+  color: var(--neon);
+  border-color: color-mix(in srgb, var(--neon) 50%, var(--line));
+  background: color-mix(in srgb, var(--neon-dim) 35%, var(--surface));
+  box-shadow: 0 0 12px var(--neon-dim);
+}
+
+.playRailIcon {
+  font-size: 1.05rem;
+  line-height: 1;
+}
+
+.playRailLabel {
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+/* Side sheet — full stage overlay from the right (hamburger tabs) */
+.characterSheetDrawer {
+  position: absolute;
+  inset: 0 0 0 min(12%, 80px);
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  background: color-mix(in srgb, var(--surface-solid, var(--surface)) 97%, #000);
+  border-left: 1px solid color-mix(in srgb, var(--neon) 25%, var(--line));
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.35);
+}
+
+.playBody > .playGrid {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.characterSheetDrawer.hidden {
+  display: none !important;
+}
+
+.characterSheetHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.characterSheetHeader h2 {
+  margin: 0 0 4px;
+  font-size: 1.15rem;
+}
+
+.characterSheetActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.characterSheetActions [data-sheet-active] {
+  border-color: color-mix(in srgb, var(--neon) 55%, var(--line));
+  color: var(--neon);
+}
+
+.characterSheetBody {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 14px 24px;
+  overscroll-behavior: contain;
+}
+
+.characterSheetCombined {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: 1fr;
+}
+
+@media (min-width: 900px) {
+  .characterSheetCombined {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+}
+
+.characterSheetSectionTitle {
+  margin: 0 0 10px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.sheetInnerNav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.sheetInnerTab.isActive {
+  border-color: color-mix(in srgb, var(--neon) 50%, var(--line));
+  color: var(--neon);
+}
+
+@media (max-width: 720px) {
+  .characterSheetDrawer {
+    inset: 0;
+  }
+  .presentStripInner {
+    max-height: 88px;
+    padding: 6px 8px;
+    gap: 8px;
+  }
+  .mapStatusLocation {
+    font-size: 1rem;
+  }
+  .presentStripMeta .npcStageRole {
+    display: none;
+  }
+}
+
+.sheetHistoryMount {
+  max-height: min(70vh, 640px);
+  overflow: auto;
 }
 
 /* Flex play grid: rows can stack; panels sit side-by-side inside a row */
@@ -2700,6 +4308,13 @@ a.mainMenuGhost:hover {
   gap: 0;
   overflow: hidden;
   position: relative;
+  flex: 1 1 auto;
+}
+
+.gameView {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .playRow {
@@ -2713,7 +4328,7 @@ a.mainMenuGhost:hover {
 
 .playRow > .playPanel,
 .playRow > .playStack {
-  min-width: 80px;
+  min-width: 120px;
   min-height: 0;
   max-width: 100%;
   position: relative;
@@ -2730,11 +4345,30 @@ a.mainMenuGhost:hover {
 }
 
 .playStack > .playPanel {
-  min-height: 48px;
+  min-height: 72px;
   min-width: 0;
   max-width: 100%;
   position: relative;
   overflow: hidden;
+}
+
+/* Keep play panels usable when dragged small */
+.playPanel {
+  container-type: size;
+}
+
+.tabsPanel,
+.historyPanel,
+.presentPanel {
+  min-width: 140px;
+}
+
+.tabsPanel .indexContent,
+.historyPanel .historyList,
+.presentPanel .npcStage {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .playSplitterStack {
@@ -3012,7 +4646,8 @@ button.chipBtn.activeChip {
 
 .mapMain {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  /* present strip · status · header · canvas · footer · settlements */
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
   min-height: 0;
   min-width: 0;
   background:
@@ -3053,29 +4688,116 @@ button.chipBtn.activeChip {
 .mapMainStage {
   position: relative;
   min-height: 0;
-  display: grid;
-  place-items: center;
-  padding: 10px;
-  overflow: auto;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--neon-dim) 18%, transparent), transparent 62%),
+    #070a10;
 }
 
 .mapMainCanvas {
-  width: min(100%, 720px) !important;
-  max-width: 100% !important;
-  max-height: 100% !important;
+  /* Full circular map — larger stage footprint, follows player */
+  width: auto !important;
   height: auto !important;
-  border-radius: 12px;
-  border: 1px solid color-mix(in srgb, var(--neon) 30%, var(--line));
-  box-shadow: var(--neon-glow);
+  max-width: min(100%, 720px) !important;
+  max-height: min(100%, 720px) !important;
+  min-width: min(100%, 360px);
+  min-height: min(100%, 360px);
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--neon) 45%, var(--line));
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.55),
+    0 0 28px var(--neon-dim),
+    inset 0 0 40px rgba(0, 0, 0, 0.35);
   image-rendering: pixelated;
   background: #080b10;
+  flex: 0 0 auto;
+  aspect-ratio: 1;
+  object-fit: contain;
 }
 
 .mapMainFooter {
   padding: 8px 10px;
   border-top: 1px solid var(--line);
   display: grid;
+  gap: 8px;
+  min-height: 0;
+}
+
+.mapMoveRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.mapDpad {
+  display: grid;
+  grid-template-columns: repeat(3, 34px);
+  grid-template-rows: repeat(3, 30px);
+  gap: 3px;
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.mapDpadN { grid-column: 2; grid-row: 1; }
+.mapDpadW { grid-column: 1; grid-row: 2; }
+.mapDpadC { grid-column: 2; grid-row: 2; opacity: 0.35; }
+.mapDpadE { grid-column: 3; grid-row: 2; }
+.mapDpadS { grid-column: 2; grid-row: 3; }
+
+.mapDpadBtn {
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 0;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--neon) 40%, var(--line));
+  background: color-mix(in srgb, var(--surface-3) 80%, #000);
+  color: var(--neon);
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--neon-dim) 40%, transparent);
+}
+
+.mapDpadBtn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--neon-dim) 45%, var(--surface-3));
+  border-color: var(--neon);
+}
+
+.mapDpadBtn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.mapDpadBtn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.mapTravelBanner {
+  margin: 0;
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.mapTravelBanner.locked {
+  color: color-mix(in srgb, #e8a090 70%, var(--text));
+}
+
+.mapAvatarTools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
+  min-width: 0;
+  flex: 1 1 160px;
 }
 
 .mapSettlementStrip {
@@ -3406,8 +5128,8 @@ button.chipBtn {
   z-index: var(--float-z, 50);
   min-width: 260px;
   min-height: 180px;
-  max-width: min(560px, 94vw);
-  max-height: min(72vh, 680px);
+  max-width: min(720px, 96vw);
+  max-height: min(88vh, 820px);
   width: var(--float-w, 360px);
   height: var(--float-h, 420px);
   display: grid;
@@ -3417,12 +5139,22 @@ button.chipBtn {
   background: color-mix(in srgb, var(--surface-solid) 94%, #000);
   box-shadow: var(--neon-glow), 0 18px 50px rgba(0, 0, 0, 0.45);
   overflow: hidden;
+  resize: none;
   transition:
-    width 0.16s ease,
-    height 0.16s ease,
-    max-height 0.16s ease,
     box-shadow 0.16s ease,
     border-color 0.16s ease;
+}
+
+.floatPanel[data-float-tab="inventory"],
+.floatPanel[data-float-tab="player"] {
+  min-width: 300px;
+  min-height: 220px;
+  max-width: min(720px, 96vw);
+  max-height: min(88vh, 820px);
+}
+
+.floatPanel .floatResizeHandle {
+  touch-action: none;
 }
 
 .floatPanel.isFront {
@@ -3865,12 +5597,24 @@ button.chipBtn {
   overflow: auto;
   padding: 12px;
   display: grid;
-  place-items: center;
+  place-items: start center;
+  cursor: grab;
+  touch-action: none;
+  /* Larger detailed view — slide/pan around the fog-of-war world */
+  min-height: min(70vh, 640px);
+}
+
+.mapOverlayCanvasWrap.mapPanning {
+  cursor: grabbing;
+  user-select: none;
 }
 
 .fullMapCanvas {
-  max-width: 100%;
-  max-height: calc(100svh - 140px);
+  width: auto;
+  height: auto;
+  max-width: none;
+  /* Allow scroll/drag to pan large worlds; don't crush the whole map into a postage stamp */
+  max-height: none;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--neon-2) 30%, var(--line));
   box-shadow: var(--neon-glow);
@@ -4207,7 +5951,12 @@ button.chipBtn {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
-  margin-top: 8px;
+  min-width: 0;
+}
+
+.mapMainFooter .mapAvatarTools {
+  margin-top: 0;
+  flex: 1 1 160px;
 }
 
 .mapTilePx {
@@ -4261,9 +6010,7 @@ button.chipBtn {
 .playMapCanvas {
   image-rendering: pixelated;
   image-rendering: crisp-edges;
-  width: 100% !important;
-  max-height: 320px;
-  height: auto !important;
+  /* Circular main map — size comes from .mapMainCanvas */
   object-fit: contain;
 }
 
@@ -4387,7 +6134,7 @@ button.chipBtn {
 .playerFullbodyFrame img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
   object-position: top center;
   display: block;
 }
@@ -4598,7 +6345,8 @@ button.chipBtn {
 }
 
 .setupArtPair .portraitFrame.portraitFrameTall {
-  aspect-ratio: 3 / 4;
+  /* Match Forge full-body canvas 512×768 (2:3) — not 3:4 (576×768). */
+  aspect-ratio: 2 / 3;
   min-height: 0;
 }
 
@@ -5075,8 +6823,16 @@ button.chipBtn {
 }
 
 .portraitImageFull {
-  object-fit: cover;
+  object-fit: contain;
   object-position: top center;
+  image-rendering: auto;
+}
+
+.portraitFrame.portraitFrameTall .portraitImage,
+.portraitFrame.portraitFrameTall img {
+  object-fit: contain;
+  object-position: top center;
+  image-rendering: auto;
 }
 
 /* Character art — simple “what’s what” guide + Forge gate */
@@ -5853,7 +7609,8 @@ button.compactButton {
 .composer {
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 108px;
+  /* Input on top, action toolbar under it — room for Wait | Undo | Redo in a row */
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
   padding: 14px;
   border-top: 1px solid var(--line);
@@ -5862,16 +7619,43 @@ button.compactButton {
 
 #turnInput {
   min-height: 76px;
+  width: 100%;
 }
 
 .composerActions {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  align-content: start;
+  align-items: center;
 }
 
-.composerActions button {
-  width: 100%;
+.composerActions > button {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+/* Wait with Undo + Redo immediately to its right */
+.composerTurnTools {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.composerTurnTools > button,
+.composerTurnTools .waitMenuWrap > button {
+  width: auto;
+  min-width: 0;
+}
+
+.composerTurnTools #undoTurnButton,
+.composerTurnTools #redoTurnButton {
+  min-width: 3.4rem;
+}
+
+#sendButton {
+  min-width: 4.5rem;
 }
 
 .suggestionPanel {
@@ -6269,15 +8053,40 @@ button.compactButton {
     var(--surface);
   padding: 12px;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.035);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.playerInventory {
+  height: 100%;
+  min-height: 0;
+  align-content: start;
+  overflow: auto;
 }
 
 .inventoryHeader {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
   padding-bottom: 9px;
   border-bottom: 1px solid rgba(213, 184, 112, 0.24);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: linear-gradient(180deg, rgba(40, 36, 30, 0.98), rgba(30, 32, 34, 0.94));
+}
+
+.inventoryHeaderBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.inventoryGold {
+  color: #f0d69a !important;
+  border-color: rgba(240, 214, 154, 0.5) !important;
 }
 
 .inventoryHeader strong {
@@ -6352,9 +8161,41 @@ button.compactButton {
 
 .inventorySplit {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 200px), 1fr));
   gap: 12px;
   min-width: 0;
+}
+
+.equipmentSlotGrid,
+.inventoryItemGrid {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  min-width: 0;
+}
+
+.inventoryItem.isEquipped {
+  border-color: color-mix(in srgb, #d5b870 55%, var(--line));
+  box-shadow: inset 0 0 0 1px rgba(213, 184, 112, 0.18);
+}
+
+.inventoryAllGear {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(213, 184, 112, 0.18);
+}
+
+.tabMainColumn .indexContent .inventoryWindow,
+.floatPanelBody .inventoryWindow {
+  max-width: 100%;
+}
+
+.tabMainColumn .indexContent {
+  height: 100% !important;
+  max-height: 100%;
+  overflow: auto;
+  min-height: 0;
+  padding-bottom: 12px;
 }
 
 .capacityModifierList {
@@ -6833,14 +8674,25 @@ button.compactButton {
   }
 
   .composer {
-    grid-template-columns: minmax(0, 1fr) auto;
-    align-items: end;
+    grid-template-columns: minmax(0, 1fr);
+    align-items: stretch;
   }
 
   .composerActions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
+    align-items: center;
+  }
+
+  .composerActions > button {
+    width: auto;
+  }
+
+  .composerTurnTools {
+    display: inline-flex;
+    flex-wrap: nowrap;
+    gap: 6px;
   }
 }
 
@@ -7012,13 +8864,20 @@ button.compactButton {
   }
 
   .composerActions {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    display: flex;
+    flex-wrap: wrap;
     gap: 6px;
+    align-items: center;
   }
 
-  .composerActions button {
-    min-height: 42px;
+  .composerActions > button,
+  .composerTurnTools > button {
+    min-height: 36px;
+    width: auto;
+  }
+
+  .composerTurnTools {
+    flex-wrap: nowrap;
   }
 
   #turnInput {
@@ -7071,7 +8930,7 @@ button.compactButton {
     display: none;
   }
 
-  /* Compact chrome: one toolbar row + optional More panel */
+  /* Compact chrome: title row + tools wrap cleanly on the right */
   .setupHeader {
     flex: 0 0 auto;
     flex-direction: column;
@@ -7086,8 +8945,8 @@ button.compactButton {
 
   .setupHeaderTop {
     display: flex;
-    flex-wrap: nowrap;
-    gap: 6px;
+    flex-wrap: wrap;
+    gap: 6px 8px;
     align-items: center;
     width: 100%;
   }
@@ -7098,11 +8957,14 @@ button.compactButton {
     min-width: 0;
     gap: 8px;
     flex-wrap: nowrap;
-    order: unset;
   }
 
   .setupHeaderPrimary {
-    order: unset;
+    margin-left: auto;
+    flex: 1 1 auto;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    row-gap: 6px;
   }
 
   .setupHeaderLead #setupBackMenu {
@@ -7141,6 +9003,31 @@ button.compactButton {
     font-weight: 650;
   }
 
+  /* Utility tools (theme/save/load) share the right cluster; wrap under when tight */
+  .setupHeaderUtility {
+    display: inline-flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px;
+    width: auto;
+    max-width: 100%;
+  }
+
+  .setupHeaderUtility.isCollapsed,
+  .setupHeaderUtility[hidden] {
+    display: none !important;
+  }
+
+  .setupHeaderUtility .secondaryButton,
+  .setupHeaderUtility .buttonLike,
+  .setupHeaderUtility .themePicker select {
+    min-height: 40px;
+  }
+
+  .setupHeaderUtility .themePicker {
+    grid-column: unset;
+  }
+
   /* Start lives in bottom bar on phones */
   .setupStartDesktop,
   .setupHeaderPrimary #setupStart {
@@ -7163,39 +9050,7 @@ button.compactButton {
   }
 
   .setupActionsMore {
-    display: grid !important;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-    padding: 10px 0 4px;
-    max-height: min(42vh, 320px);
-    overflow: auto;
-    -webkit-overflow-scrolling: touch;
-    width: 100%;
-    flex: 0 0 auto;
-    order: unset;
-    border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-    justify-content: stretch;
-  }
-
-  .setupActionsMore[hidden] {
     display: none !important;
-  }
-
-  .setupActionsMore .themePicker {
-    grid-column: 1 / -1;
-  }
-
-  .setupActionsMore .setupRandomizeAll {
-    grid-column: 1 / -1;
-    max-width: none;
-    flex: 1 1 auto;
-  }
-
-  .setupActionsMore .secondaryButton,
-  .setupActionsMore .buttonLike {
-    min-height: 44px;
-    width: 100%;
-    justify-content: center;
   }
 
   .setupGrid,
@@ -7341,6 +9196,10 @@ button.compactButton {
 
   .sectionHeader,
   .subsectionHeader,
+  .abilityCardSummary {
+    flex-wrap: wrap;
+  }
+
   .abilityCardHeader,
   .abilityCardGrid,
   .visionCard {

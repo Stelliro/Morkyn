@@ -28,7 +28,11 @@ def test_intent_overrides_seed_custom_skills_and_dice():
     fields = intent_to_field_overrides(intent)
     assert fields.get("game_system") is True
     assert fields.get("dice_checks_enabled") is True
-    assert "Observation" in str(fields.get("custom_skills") or "")
+    # Structural frame only — domain is chosen later, not hardcoded Observation.
+    assert "OP_MC_FRAME" in str(fields.get("custom_skills") or "") or "weak seed" in str(
+        fields.get("custom_skills") or ""
+    ).lower()
+    assert "Observation" not in str(fields.get("custom_skills") or "")
     assert fields.get("check_difficulty") in ("easy", "normal", "hard", "brutal")
 
 
@@ -46,13 +50,19 @@ def test_weak_skill_seed_spec_named():
     assert seed["value"] == 1
 
 
-def test_weak_skill_seed_default_observation():
-    seed = weak_skill_seed_spec(
-        {},
-        {"power_fantasy": {"start_power": "near_useless", "growth": "compounding"}},
-    )
-    assert seed is not None
-    assert seed["name"] == "Observation"
+def test_weak_skill_seed_default_varies():
+    names = set()
+    for i in range(40):
+        seed = weak_skill_seed_spec(
+            {},
+            {"power_fantasy": {"start_power": "near_useless", "growth": "compounding"}},
+        )
+        assert seed is not None
+        names.add(seed["name"])
+    # Must not collapse to a single default (old behavior: always Observation).
+    assert len(names) >= 8
+    overused = {"Observation", "Ropework", "Knot", "Barter", "Lie Detection"}
+    assert not names.issubset(overused)
 
 
 def test_opening_feel_mentions_system_and_seed():
@@ -60,7 +70,7 @@ def test_opening_feel_mentions_system_and_seed():
         "game_system": True,
         "system_style": "subtle blue-window system",
         "difficulty": "hard",
-        "custom_skills": "weak seed skill: Observation",
+        "custom_skills": "weak seed skill: Digging",
     }
     theme = {
         "isekai": True,
@@ -70,7 +80,7 @@ def test_opening_feel_mentions_system_and_seed():
     }
     block = opening_feel_prompt_block(theme, opts)
     assert "system window" in block.lower() or "diegetic" in block.lower()
-    assert "Observation" in block
+    assert "Digging" in block
     assert "hard" in block.lower() or "danger" in block.lower() or "mark" in block.lower()
 
 

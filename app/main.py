@@ -40,11 +40,13 @@ from app.image_backends import (
     resolve_portrait_file,
     save_image_presets,
     search_backend_roots,
+    store_player_art_assets,
     update_image_config,
 )
 from app.gpu_gate import gate_status as gpu_gate_status
 from app.tile_world import (
     add_tile_image,
+    apply_survey,
     ascii_preview,
     clear_run_disables,
     delete_tile_images,
@@ -52,6 +54,8 @@ from app.tile_world import (
     full_map_view,
     generate_map,
     get_map,
+    grant_lived_area_knowledge,
+    grant_map_knowledge,
     list_maps,
     list_settlements,
     list_tile_states,
@@ -66,11 +70,15 @@ from app.llm import (
     LlmError,
     coherence_review_setup,
     compose_setup_intent,
+    ensure_llm_adapter_ready,
     fallback_setup_randomization,
     generate_setup_randomization,
+    get_llm_runtime,
     get_model_config,
     public_model_config,
+    soft_recycle_llm_backend,
     test_model_connection,
+    try_hot_swap_llm_lora,
     update_model_config,
 )
 from app.setup_composer import (
@@ -116,6 +124,19 @@ from app.world import (
     load_campaign_slot,
     play_continue_turn,
     play_turn,
+    play_wait_turn,
+    apply_map_travel_step,
+    play_world_event_turn,
+    queue_quest_stage_event,
+    queue_world_event,
+    list_due_world_events,
+    list_pending_world_events,
+    get_quest_stages,
+    cancel_world_event,
+    consume_due_world_events,
+    resolve_social_disengage,
+    resolve_social_persist,
+    get_weather,
     regenerate_last_turn,
     resume_snapshot,
     rewind_last_turn,
@@ -911,6 +932,40 @@ def api_image_browser(request: ImageBrowserRequest | None = None):
     }
 
 
+class PlayerArtStoreRequest(BaseModel):
+    """Persist pre-game setup face/body into the active playthrough settings."""
+
+    face_data_url: str = Field(default="", max_length=8_000_000)
+    fullbody_data_url: str = Field(default="", max_length=8_000_000)
+
+
+@app.post("/api/player/art")
+def api_player_art_store(request: PlayerArtStoreRequest):
+    """
+    Save setup-generated face/fullbody into world settings so play UI + reloads keep them.
+    Accepts data:image… URLs only (no file:// paths).
+    """
+    face_url = str(request.face_data_url or "").strip()
+    body_url = str(request.fullbody_data_url or "").strip()
+    if face_url and not face_url.startswith("data:image"):
+        raise HTTPException(status_code=400, detail="face_data_url must be a data:image URL")
+    if body_url and not body_url.startswith("data:image"):
+        raise HTTPException(status_code=400, detail="fullbody_data_url must be a data:image URL")
+    if not face_url and not body_url:
+        raise HTTPException(status_code=400, detail="Provide face_data_url and/or fullbody_data_url")
+    store_player_art_assets(
+        face={"data_url": face_url, "kind": "face"} if face_url else None,
+        fullbody={"data_url": body_url, "kind": "fullbody"} if body_url else None,
+        meta={"source": "setup_handoff"},
+    )
+    state = get_state()
+    return {
+        "ok": True,
+        "has_face": bool((state.get("player_portrait") or {}).get("data_url") if isinstance(state.get("player_portrait"), dict) else state.get("player_portrait")),
+        "has_fullbody": bool((state.get("player_fullbody") or {}).get("data_url") if isinstance(state.get("player_fullbody"), dict) else state.get("player_fullbody")),
+    }
+
+
 @app.get("/api/portraits")
 def api_list_portraits(limit: int = 120):
     """Native Mørkyn portrait library under data/portraits."""
@@ -1662,7 +1717,8 @@ def _map_avatar_payload() -> dict[str, Any]:
 
 
 @app.get("/api/tiles/map/local")
-def api_tile_map_local(radius: int = 4):
+def api_tile_map_local(radius: int = 6):
+    """Circular local map centered on the player (follows). Vision is still 1-tile LOS."""
     data = get_map(None)
     if not data:
         return {"empty": True, "tiles": [], "radius": radius}
@@ -1684,6 +1740,75 @@ def api_tile_map_full():
     view["map_avatar"] = _map_avatar_payload()
     view["tile_px"] = int((_map_avatar_payload() or {}).get("tile_px") or 32)
     return view
+
+
+class MapSurveyRequest(BaseModel):
+    """Survey / lookout: DM decides height (vantage) and clarity (weather/distance)."""
+
+    radius: int = Field(default=3, ge=1, le=16)
+    height: int | None = Field(default=None, ge=0, le=4)
+    clarity: float = Field(default=1.0, ge=0.1, le=1.5)
+
+
+@app.post("/api/tiles/map/survey")
+def api_tile_map_survey(request: MapSurveyRequest):
+    """Expand map vision from the player's tile with LOS (mountains block unless height helps)."""
+    data = get_map(None)
+    if not data:
+        raise HTTPException(status_code=400, detail="No active map.")
+    result = apply_survey(
+        data,
+        radius=int(request.radius),
+        height=request.height,
+        clarity=float(request.clarity),
+    )
+    view = full_map_view(data)
+    return {"ok": True, "survey": result, "map": view, "local": local_map_view(data, radius=6)}
+
+
+class MapKnowledgeRequest(BaseModel):
+    """Intel from locals, maps, or lived memory — towns/danger without full terrain."""
+
+    settlement_ids: list[str] = Field(default_factory=list)
+    danger: list[dict[str, Any]] = Field(default_factory=list)
+    notes: list[dict[str, Any]] = Field(default_factory=list)
+    source: str = Field(default="rumor", max_length=60)
+    # Lived-life helper (optional): auto-grant nearby towns/danger from age/traveler.
+    lived: bool = False
+    age: int = Field(default=25, ge=12, le=120)
+    traveler: bool = True
+
+
+@app.post("/api/tiles/map/knowledge")
+def api_tile_map_knowledge(request: MapKnowledgeRequest):
+    data = get_map(None)
+    if not data:
+        raise HTTPException(status_code=400, detail="No active map.")
+    lived_result = None
+    if request.lived:
+        lived_result = grant_lived_area_knowledge(
+            data,
+            age=int(request.age),
+            traveler=bool(request.traveler),
+            source=str(request.source or "lived"),
+        )
+    knowledge = grant_map_knowledge(
+        data,
+        settlement_ids=list(request.settlement_ids or []),
+        danger=list(request.danger or []),
+        notes=list(request.notes or []),
+        source=str(request.source or "rumor"),
+        save=True,
+    )
+    view = full_map_view(data)
+    return {
+        "ok": True,
+        "knowledge": knowledge,
+        "lived": lived_result,
+        "map": view,
+        "settlements": view.get("settlements") or [],
+        "markers": view.get("markers") or [],
+    }
 
 
 class MapAvatarRequest(BaseModel):
@@ -1748,9 +1873,14 @@ def api_map_avatar_set(request: MapAvatarRequest):
 
 
 class MapMoveRequest(BaseModel):
-    x: int
-    y: int
+    """Absolute tile or one-step delta. Adjacent steps (arrow keys) never require Continue."""
+    x: int | None = None
+    y: int | None = None
+    dx: int = 0
+    dy: int = 0
     force: bool = False
+    # free = map walk only (no scene lock). scene = long jump / settlement walk may gate.
+    mode: str = Field(default="free", max_length=20)
 
 
 @app.post("/api/tiles/map/move")
@@ -1758,36 +1888,131 @@ def api_tile_map_move(request: MapMoveRequest):
     from app.db import connect as _connect
     from app.world import get_state
 
-    # Travel lock: only when travel_ready unless force (debug)
-    with _connect() as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key = 'travel_ready'").fetchone()
-    ready = True
-    if row:
-        try:
-            ready = json.loads(row["value"]) if str(row["value"]).strip()[:1] in "[{tTfF0123456789" else str(row["value"]).lower() in {"1", "true", "yes", "on"}
-        except Exception:
-            ready = str(row["value"]).lower() in {"1", "true", "yes", "on"}
-    if not ready and not request.force:
-        raise HTTPException(
-            status_code=409,
-            detail="Travel is locked until the current event/scene is resolved. Wait for travel_ready.",
-        )
+    data = get_map(None)
+    if not data:
+        raise HTTPException(status_code=400, detail="No active map.")
+    px = int((data.get("player") or {}).get("x") or 0)
+    py = int((data.get("player") or {}).get("y") or 0)
+    # Prefer absolute coords; else apply one-step delta (arrow keys / d-pad).
+    if request.x is not None and request.y is not None:
+        tx, ty = int(request.x), int(request.y)
+    else:
+        dx = max(-1, min(1, int(request.dx or 0)))
+        dy = max(-1, min(1, int(request.dy or 0)))
+        if dx == 0 and dy == 0:
+            raise HTTPException(status_code=400, detail="Provide x,y or dx,dy.")
+        tx, ty = px + dx, py + dy
+    manh = abs(tx - px) + abs(ty - py)
+    cheb = max(abs(tx - px), abs(ty - py))
+    # Orthogonal or diagonal one-tile steps stay free (no Continue / travel lock).
+    free_step = cheb <= 1 and manh > 0 and (request.mode or "free").lower() != "scene"
+    # Long jumps still respect travel_ready unless force
+    if not free_step and not request.force:
+        with _connect() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'travel_ready'").fetchone()
+        ready = True
+        if row:
+            try:
+                ready = (
+                    json.loads(row["value"])
+                    if str(row["value"]).strip()[:1] in "[{tTfF0123456789"
+                    else str(row["value"]).lower() in {"1", "true", "yes", "on"}
+                )
+            except Exception:
+                ready = str(row["value"]).lower() in {"1", "true", "yes", "on"}
+        if not ready:
+            raise HTTPException(
+                status_code=409,
+                detail="Long travel is locked until the scene is free — use adjacent steps (arrows) anytime.",
+            )
     try:
-        view = move_player(None, request.x, request.y)
+        view = move_player(None, tx, ty)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    # After walking, lock travel until next scene resolution (AI or auto).
+    # Adjacent free steps keep travel open so the player can keep walking.
+    # Scene/settlement jumps still close travel for a beat.
+    next_ready = True if free_step else False
     with _connect() as conn:
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)",
-            (json.dumps(False),),
+            (json.dumps(next_ready),),
         )
+    travel = view.get("travel") if isinstance(view, dict) else None
+    travel_result = {}
+    scene_turn = None
+    try:
+        # Advance in-world minutes, seed rulers, roll path/forest encounters into DB shells
+        travel_result = apply_map_travel_step(travel, get_state(include_hidden=False))
+    except Exception:
+        travel_result = {"error": "travel_apply_failed"}
+    # Exhausted: undo map move so position matches server resource gate
+    if isinstance(travel_result, dict) and travel_result.get("blocked"):
+        try:
+            from app.tile_world import restore_player_position
+
+            view = restore_player_position(None, px, py)
+            # Keep travel meta for UI feedback
+            if isinstance(view, dict):
+                view["travel"] = travel if isinstance(travel, dict) else {}
+                view["travel_blocked"] = True
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Too exhausted to travel — wait, meditate, or sleep to recover energy.",
+                "reasons": (travel_result.get("resource_spend") or {}).get("reasons")
+                or travel_result.get("reasons")
+                or ["insufficient_energy"],
+                "resources": travel_result.get("resources"),
+                "resource_spend": travel_result.get("resource_spend"),
+            },
+        )
+    # Ambush / path event → full scene turn (RNG already decided)
+    if travel_result.get("needs_scene") and travel_result.get("queued_event"):
+        try:
+            # Lock long travel during the beat; free steps stay allowed via free_step logic later
+            next_ready = False
+            with _connect() as conn:
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)",
+                    (json.dumps(False),),
+                )
+            scene_turn = play_world_event_turn(travel_result["queued_event"], input_kind="event")
+            travel_result["scene_fired"] = True
+        except Exception as exc:
+            travel_result["scene_error"] = str(exc)[:300]
     try:
         autosave_campaign()
     except Exception:
         pass
     state = get_state()
-    return {"map": view, "travel_ready": False, "state": state, "ok": True}
+    payload = {
+        "map": view,
+        "travel_ready": next_ready if scene_turn is None else False,
+        "state": (scene_turn or {}).get("state") or state,
+        "ok": True,
+        "step": {
+            "from": [px, py],
+            "to": [tx, ty],
+            "free": free_step,
+            "minutes": (travel or {}).get("minutes") if isinstance(travel, dict) else 0,
+            "terrain": (travel or {}).get("terrain") if isinstance(travel, dict) else "",
+        },
+        "travel": travel if isinstance(travel, dict) else {},
+        "travel_result": travel_result,
+    }
+    if scene_turn:
+        payload["scene_turn"] = scene_turn
+        payload["turn"] = scene_turn.get("turn")
+        payload["narration"] = (scene_turn.get("turn") or {}).get("narration") or scene_turn.get("narration")
+        payload["used_fallback"] = scene_turn.get("used_fallback")
+        payload["input_kind"] = "event"
+        payload["world_event"] = scene_turn.get("world_event")
+    # Ambient DM color never locks movement
+    payload["ambient"] = (travel_result or {}).get("ambient") or ""
+    payload["weather"] = (travel_result or {}).get("weather") or (state or {}).get("weather")
+    return payload
 
 
 @app.get("/api/tiles/map/settlements")
@@ -2018,7 +2243,10 @@ def api_launcher_prefs_set(request: LauncherPrefsRequest):
 @app.get("/api/model-status")
 def api_model_status():
     try:
-        return test_model_connection()
+        status = test_model_connection()
+        if isinstance(status, dict):
+            status["llm_runtime"] = get_llm_runtime()
+        return status
     except Exception as exc:
         return JSONResponse(
             status_code=200,
@@ -2029,8 +2257,43 @@ def api_model_status():
                 "error": f"Model status check failed: {exc}",
                 "config": {},
                 "managed_start": None,
+                "llm_runtime": get_llm_runtime(),
             },
         )
+
+
+@app.get("/api/llm-runtime")
+def api_llm_runtime():
+    """
+    LLM process phase only. Web/UI is always independent.
+    phase: offline | starting | switching | ready | error
+    method: none | hot_swap | soft_recycle | already_ready
+    """
+    return get_llm_runtime()
+
+
+class LlmEnsureRequest(BaseModel):
+    """Optional: force ensure with current model config (+ theme LoRA already in config if set)."""
+    force_soft_recycle: bool = False
+
+
+@app.post("/api/llm-runtime/ensure")
+def api_llm_runtime_ensure(request: LlmEnsureRequest | None = None):
+    """
+    Ensure LLM base + LoRA match saved config.
+    Tries hot-swap first; otherwise soft-recycles only the managed LLM process.
+    Website stays up — client should poll GET /api/llm-runtime while phase is switching/starting.
+    """
+    req = request or LlmEnsureRequest()
+    config = get_model_config(ignore_override=True)
+    provider = str(config.get("provider") or "").strip().lower()
+    if req.force_soft_recycle and provider in {"llama_cpp", "llamacpp", "llama.cpp", ""}:
+        base_url = str(config.get("llama_cpp_base_url") or "http://localhost:8080").rstrip("/")
+        return soft_recycle_llm_backend(config, base_url)
+    try:
+        return ensure_llm_adapter_ready(config)
+    except LlmError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 class SkillCheckRequest(BaseModel):
@@ -2422,6 +2685,8 @@ class StarterLogicRequest(BaseModel):
     character_backstory: str = Field(default="", max_length=4000)
     world_style: str = Field(default="", max_length=200)
     tech_level: str = Field(default="", max_length=80)
+    magic_level: str = Field(default="", max_length=80)
+    special_ability_origin: str = Field(default="", max_length=40)
     intent: dict[str, Any] | None = None
     apply_fixes: bool = True
 
@@ -2441,6 +2706,8 @@ def api_setup_starter_logic(request: StarterLogicRequest):
         intent=request.intent,
         world_style=request.world_style,
         tech_level=request.tech_level,
+        magic_level=request.magic_level,
+        special_ability_origin=request.special_ability_origin,
         apply_fixes=bool(request.apply_fixes),
     )
 
@@ -2455,6 +2722,154 @@ def api_turn(request: TurnRequest):
 @app.post("/api/continue")
 def api_continue():
     return play_continue_turn()
+
+
+class WaitRequest(BaseModel):
+    # -1 = until dawn; 1–1440 custom or preset
+    minutes: int = Field(default=60, ge=-1, le=1440)
+    # wait | meditate | sleep — recovery rates differ
+    kind: str = Field(default="wait", max_length=40)
+
+
+@app.post("/api/wait")
+def api_wait(request: WaitRequest | None = None):
+    """Spend in-world time; server RNG rolls events before the DM narrates.
+    minutes=-1 waits until next dawn (06:00).
+    kind=wait|meditate|sleep recovers energy/mana/fatigue at different rates."""
+    minutes = int(request.minutes) if request else 60
+    kind = str(request.kind or "wait") if request else "wait"
+    return play_wait_turn(minutes, kind=kind)
+
+
+class QuestStageRequest(BaseModel):
+    stage_id: str = Field(..., max_length=80)
+    kind: str = Field(default="quest_force", max_length=40)
+    summary: str = Field(default="", max_length=800)
+    force: bool = True
+    due_in_turns: int = Field(default=1, ge=0, le=50)
+    payload: dict = Field(default_factory=dict)
+
+
+class WorldEventQueueRequest(BaseModel):
+    kind: str = Field(default="custom", max_length=80)
+    summary: str = Field(default="", max_length=1400)
+    trigger: str = Field(default="", max_length=900)
+    due_turn: int | None = None
+    force: bool = False
+    priority: int = Field(default=5, ge=0, le=10)
+    payload: dict = Field(default_factory=dict)
+
+
+@app.post("/api/events/quest-stage")
+def api_quest_stage(request: QuestStageRequest):
+    """Mark a quest stage; optionally force a beat N turns from now (default next turn)."""
+    stage_id = str(request.stage_id or "").strip()
+    if not stage_id:
+        raise HTTPException(status_code=400, detail="stage_id is required.")
+    return {
+        "ok": True,
+        "event": queue_quest_stage_event(
+            stage_id,
+            kind=request.kind,
+            summary=request.summary,
+            force=request.force,
+            due_in_turns=request.due_in_turns,
+            payload=request.payload,
+        ),
+        "quest": get_quest_stages(),
+    }
+
+
+@app.get("/api/events/quest-stages")
+def api_quest_stages():
+    """Reached stages + pending quest bus events for the stage editor UI."""
+    return {"ok": True, **get_quest_stages()}
+
+
+@app.get("/api/events/pending")
+def api_events_pending(limit: int = 24):
+    """All pending/active world-bus events (tools)."""
+    return {"ok": True, "events": list_pending_world_events(limit=max(1, min(80, int(limit or 24))))}
+
+
+class CancelWorldEventRequest(BaseModel):
+    event_id: int = Field(..., ge=1)
+
+
+@app.post("/api/events/cancel")
+def api_events_cancel(request: CancelWorldEventRequest):
+    """Cancel a pending world-bus event (does not rewrite history)."""
+    ok = cancel_world_event(int(request.event_id))
+    if not ok:
+        raise HTTPException(status_code=404, detail="Event not found or not cancellable.")
+    return {"ok": True, "event_id": int(request.event_id)}
+
+
+@app.post("/api/events/queue")
+def api_events_queue(request: WorldEventQueueRequest):
+    """Queue a world event (RNG flavor or force). For tools / quest systems."""
+    return {
+        "ok": True,
+        "event": queue_world_event(
+            kind=request.kind,
+            summary=request.summary,
+            trigger=request.trigger or request.kind,
+            due_turn=request.due_turn,
+            force=request.force,
+            priority=request.priority,
+            payload=request.payload,
+        ),
+    }
+
+
+@app.get("/api/events/due")
+def api_events_due(force_only: bool = False):
+    return {"events": list_due_world_events(force_only=force_only, limit=12)}
+
+
+class SocialActionRequest(BaseModel):
+    """Player chooses walk-away vs keep pushing after a cold social beat."""
+    action: str = Field(default="walk_away", max_length=40)  # walk_away | persist
+    npc_code: str = Field(default="", max_length=40)
+
+
+@app.post("/api/social/resolve")
+def api_social_resolve(request: SocialActionRequest):
+    """
+    Explicit social choice after an NPC resists chat.
+    walk_away when cold → small rep gain; persist → rep loss.
+    Does not require a full scene turn.
+    """
+    from app.db import connect as _connect
+
+    action = str(request.action or "walk_away").strip().lower()
+    with _connect() as conn:
+        settings = {}
+        try:
+            from app.world import _settings as _ws
+
+            settings = _ws(conn)
+        except Exception:
+            pass
+        last = settings.get("last_social") if isinstance(settings.get("last_social"), dict) else {}
+        code = str(request.npc_code or last.get("npc_code") or "").strip()
+        loc_id = last.get("location_id")
+        if not code:
+            raise HTTPException(status_code=400, detail="No social target (npc_code or last_social).")
+        if action in {"walk_away", "leave", "disengage"}:
+            result = resolve_social_disengage(
+                conn, npc_code=code, walked_away=True, location_id=int(loc_id) if loc_id else None
+            )
+        else:
+            result = resolve_social_persist(
+                conn, npc_code=code, location_id=int(loc_id) if loc_id else None
+            )
+    return {"ok": True, "result": result, "state": get_state()}
+
+
+@app.get("/api/weather")
+def api_weather():
+    return {"weather": get_weather()}
 
 
 @app.post("/api/suggestions")

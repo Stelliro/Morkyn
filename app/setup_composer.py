@@ -6,7 +6,10 @@ Phase order is topological; each field only receives matching intent keys.
 
 from __future__ import annotations
 
+import hashlib
+import random
 import re
+import time
 from typing import Any
 
 
@@ -292,7 +295,13 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "character_backstory": {
         "kind": "prose",
         "intent_keys": ["isekai", "portal_or_rebirth", "genre", "power_fantasy", "keywords", "tone"],
-        "forbidden": "Concrete character history only; not a setup slogan.",
+        "forbidden": (
+            "Concrete third-person character history only; not a setup slogan, skill dump, or power-fantasy essay. "
+            "If backstory_mode is transmigrated: MUST cover (1) life before transport, (2) how they were transported, "
+            "(3) start at the moment of arrival or just before — not a full native plot already living in the new world. "
+            "Do not invent disgraced nobles / festival guests / local quest hooks as if they were always from this world. "
+            "Do not paste skill names, compounding math, or Guest Right-style ability blurbs into the backstory."
+        ),
     },
     "hair": {
         "kind": "short_phrase",
@@ -300,9 +309,13 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
         "forbidden": "Hair only: length, color, style. Not face, clothes, or backstory.",
         "examples": [
             "short brown hair",
-            "long silver braid",
-            "messy black hair",
-            "cropped sandy hair",
+            "long black braid",
+            "messy copper curls",
+            "cropped black hair",
+            "shoulder-length ash blonde",
+            "tight cornrows",
+            "bald with stubble shadow",
+            "white undercut",
         ],
     },
     "facial_features": {
@@ -315,7 +328,9 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
         "examples": [
             "green eyes, light freckles, soft jaw",
             "dark brown eyes, thin scar on left cheek",
-            "grey eyes, tired lids, square jaw",
+            "amber eyes, high cheekbones, crooked smile",
+            "blue-grey eyes, deep-set, narrow nose",
+            "black eyes, round face, small burn near temple",
         ],
     },
     "appearance": {
@@ -330,6 +345,7 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "torso: travel-stained coat; feet: dusty boots; waist: rope coil",
             "torso: plain work tunic; hands: work gloves; feet: practical boots",
             "torso: frayed cloak; legs: patched trousers; bag: worn satchel",
+            "torso: secondhand hoodie; feet: scuffed sneakers; bag: messenger bag",
         ],
     },
     "starter_equipment": {
@@ -345,15 +361,16 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
         ],
         "forbidden": (
             "Comma-separated items the player already owns the moment Start is pressed. "
-            "Must pass arrival logic: isekai/summon = only clothes/pockets from transport; "
-            "reincarnated = this-life gear only; native = life-justified gear. "
+            "Must match origin + world vibe + arrival: pure isekai = thin clothes/pockets only; "
+            "reincarnated/transmigrated local life = modest this-life kit only; "
+            "never modern Earth maintenance kits in low-tech fantasy without localizing origin. "
             "No free shields/swords/armor/god gifts at isekai arrival — those come AFTER Start. "
-            "No legendaries."
+            "No legendaries. Prefer thin ordinary kits over packing every useful item."
         ),
         "examples": [
-            "worn coat, pocket notebook, copper coins, water flask",
-            "plain work clothes, work gloves, small tool pouch",
-            "travel cloak, empty satchel, wooden charm, heel of bread",
+            "patched work vest, work gloves, worn boots, copper coins",
+            "travel cloak, empty satchel, wooden charm, water skin",
+            "plain tunic, scuffed boots, coin purse, heel of bread",
         ],
     },
     "player_name": {
@@ -406,9 +423,9 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "special_ability_origin": {
         "kind": "enum",
-        "allowed_values": ["none", "acquired", "innate"],
+        "allowed_values": ["none", "acquired", "innate", "both"],
         "intent_keys": ["power_fantasy", "isekai"],
-        "forbidden": "Return only none, acquired, or innate.",
+        "forbidden": "Return only none, acquired, innate, or both.",
     },
     "special_abilities": {
         "kind": "abilities",
@@ -655,13 +672,39 @@ def apply_keyword_intent(idea: str, plan: dict[str, Any] | None = None) -> dict[
         return out
     out["raw_idea"] = str(idea or "").strip()[:400]
 
-    # Isekai / portal
-    if any(k in text for k in ("isekai", "another world", "other world", "transmigrat", "reincarnat", "summoned to", "transported to")):
+    # Isekai / portal / summon / truck-kun (broad markers — not only "summoned to")
+    if any(
+        k in text
+        for k in (
+            "isekai",
+            "another world",
+            "other world",
+            "transmigrat",
+            "reincarnat",
+            "summoned",
+            "summoning",
+            "transported to",
+            "transported into",
+            "truck-kun",
+            "truck accident",
+            "woke in another",
+            "woke up in another",
+            "into a fantasy",
+        )
+    ):
         out["isekai"] = True
         out["adapter_hint"] = "isekai_rpg"
-        if "reincarn" in text or "reborn" in text:
+        if ("reincarn" in text or "reborn" in text) and any(
+            m in text for m in ("grew up", "child", "years", "village", "childhood", "same world")
+        ):
+            out["portal_or_rebirth"] = "same_world_rebirth"
+        elif any(m in text for m in ("into the body", "into a body", "possess", "body of a", "this body")):
+            out["portal_or_rebirth"] = "body_transmigration"
+        elif any(m in text for m in ("summon", "ritual", "portal", "truck", "transported", "desk job", "died and woke")):
+            out["portal_or_rebirth"] = "other_world"
+        elif "reincarn" in text or "reborn" in text:
             out["portal_or_rebirth"] = "same_world_rebirth" if "same world" in text else "other_world"
-        elif "transmigrat" in text or "transported" in text or "summoned" in text:
+        elif "transmigrat" in text:
             out["portal_or_rebirth"] = "other_world"
         if not out.get("genre"):
             out["genre"] = "isekai dark fantasy" if "dark" in text else "isekai fantasy"
@@ -672,10 +715,40 @@ def apply_keyword_intent(idea: str, plan: dict[str, Any] | None = None) -> dict[
         if out.get("adapter_hint") in ("", "default"):
             out["adapter_hint"] = "system_rpg"
 
-    # Power fantasy growth
-    if any(k in text for k in ("compounding", "compounds", "compound", "exponential", "snowball", "stacking growth", "op later")):
+    # Power fantasy growth (OP MC preset steers here)
+    if any(
+        k in text
+        for k in (
+            "compounding",
+            "compounds",
+            "compound",
+            "exponential",
+            "snowball",
+            "stacking growth",
+            "op later",
+            "op mc",
+            "op-mc",
+            "late-game op",
+            "late game op",
+        )
+    ):
         out["power_fantasy"]["growth"] = "compounding"
-    if any(k in text for k in ("near useless", "useless skill", "weak start", "starts weak", "powerless", "bottom tier", "rank f")):
+    if any(
+        k in text
+        for k in (
+            "near useless",
+            "useless skill",
+            "weak start",
+            "starts weak",
+            "powerless",
+            "bottom tier",
+            "rank f",
+            "ordinary start",
+            "start ordinary",
+            "op mc",
+            "op-mc",
+        )
+    ):
         out["power_fantasy"]["start_power"] = "near_useless"
     elif any(k in text for k in ("overpowered", "already strong", "starts strong")):
         out["power_fantasy"]["start_power"] = "strong"
@@ -738,9 +811,22 @@ def apply_keyword_intent(idea: str, plan: dict[str, Any] | None = None) -> dict[
                 merged.append(k)
         out["keywords"] = merged[:12]
 
-    # Skill summary from idea
-    if "one weak skill" in text or "single skill" in text or "one skill" in text:
-        out["power_fantasy"]["skill_summary"] = out["power_fantasy"].get("skill_summary") or "one weak skill that can snowball"
+    # Skill summary from idea (OP MC / legacy one-skill wording)
+    if any(
+        m in text
+        for m in (
+            "one weak skill",
+            "single skill",
+            "one skill",
+            "op mc",
+            "op-mc",
+            "snowball",
+            "compounding",
+        )
+    ):
+        out["power_fantasy"]["skill_summary"] = out["power_fantasy"].get("skill_summary") or (
+            "one weak OP-MC seed power that compounds toward late power; more powers may unlock later"
+        )
 
     out["difficulty"] = _normalize_difficulty(out.get("difficulty") or "normal")
     if out.get("isekai") and not out.get("dm_stance"):
@@ -836,26 +922,29 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
         set_if_free("skill_growth_speed", "very fast")
         set_if_free("proficiency_growth_speed", "fast")
         set_if_free("xp_growth_speed", "fast")
-        set_if_free("new_skill_frequency", "rare")  # one skill fantasy — not a skill soup
+        # Opening is thin; later play may unlock more powers/passives (not a permanent one-skill ban)
+        set_if_free("new_skill_frequency", "normal")
         set_if_free("skill_levels_enabled", True)
         set_if_free("proficiency_system", True)
         set_if_free("skill_style", "training-heavy")
+        # Must open ability origin so special_abilities randomize is not skipped (default UI is None)
+        set_if_free("special_ability_origin", "acquired")
         # Structural skeleton only — LLM expands domain + concrete math during custom_skills roll.
         # Never hardcode Observation/weather domains here.
         set_if_free(
             "custom_skills",
-            "ONE_SKILL_FRAME: exactly one weak seed skill/ability domain (domain chosen later; never default "
-            "weather/observation); starts near-useless (rank F / level 1); compounds only through use, "
-            "training, and risk; track ranks via subtle system UI when on, else DM notes; XP from practice, "
-            "mentors, and high-risk successes; put calculable XP/rank formulas on the ability Growth Math "
-            "field; soft caps until breakthroughs; no second combat/speech toolkit at start",
+            "OP_MC_FRAME: start with one weak seed power (domain chosen later; never default weather/observation); "
+            "near-useless rank F / level 1; Growth Math must compound toward late OP (ladder through S/SS/SSS, "
+            "risk mult, soft caps, breakthroughs, rank→bonus, late multipliers); passives allowed as always-on "
+            "ranks; more powers may unlock later via play — only the opening kit is thin; track via subtle system "
+            "UI when on, else DM notes; no free second combat toolkit at Start",
         )
         if not str(pf.get("skill_summary") or "").strip():
             # Stash on intent for UI / later ability alignment (not a form field)
             intent.setdefault("power_fantasy", {})
             if isinstance(intent.get("power_fantasy"), dict):
                 intent["power_fantasy"]["skill_summary"] = (
-                    "One compounding seed skill: weak start, trackable ranks, growth_math on ability, use/risk/training"
+                    "OP MC seed: weak start, calculable snowball to late OP, passives OK, more powers later"
                 )
 
     if start_power in ("near_useless", "weak"):
@@ -864,9 +953,8 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
         if "custom_skills" not in fields and "custom_skills" not in locked:
             set_if_free(
                 "custom_skills",
-                "ONE_SKILL_FRAME: exactly one weak seed skill (domain varies); near-useless at start; "
-                "compounds via practice/risk; track levels (system or DM); formulas live on ability Growth Math; "
-                "no broad toolkit",
+                "OP_MC_FRAME: one weak seed power at start (domain varies); compounds toward OP with Growth Math; "
+                "passives OK; additional powers may unlock later; no broad toolkit at Start",
             )
 
     # System / isekai runs get optional mechanical friction on the Checks tab.
@@ -890,7 +978,11 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
         portal = str(intent.get("portal_or_rebirth") or "other_world")
         if portal == "same_world_rebirth":
             set_if_free("backstory_mode", "reincarnated")
-            set_if_free("memory_policy", "remembers former life")
+            # Childhood rebirth usually starts with fragments, not perfect recall
+            set_if_free("memory_policy", "former life fragments")
+        elif portal == "body_transmigration":
+            set_if_free("backstory_mode", "transmigrated")
+            set_if_free("memory_policy", "former life fragments")
         else:
             set_if_free("backstory_mode", "transmigrated")
             set_if_free("memory_policy", "remembers former life")
@@ -904,6 +996,19 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
         set_if_free("rank_scale", "F,E,D,C,B,A,S,SS,SSS")
         if growth == "compounding":
             set_if_free("skill_style", "training-heavy")
+        # world_style: only a setting phrase, never a slogan title from genre
+        genre = str(intent.get("genre") or "").strip()
+        if genre and "world_style" not in locked:
+            gl = genre.lower()
+            if (
+                len(genre) <= 48
+                and "fair edge" not in gl
+                and "op mc" not in gl
+                and not gl.endswith(" edge")
+            ):
+                set_if_free("world_style", genre[:80])
+            else:
+                set_if_free("world_style", "isekai fantasy compound")
 
     edge = str(intent.get("edge") or "").lower()
     if "injur" in edge:
@@ -914,8 +1019,18 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
         set_if_free("loot_rarity", "scarce mundane")
 
     genre = str(intent.get("genre") or "").strip()
-    if genre and "world_style" not in locked:
-        fields["world_style"] = genre[:120]
+    if genre and "world_style" not in locked and "world_style" not in fields:
+        gl = genre.lower()
+        if (
+            len(genre) <= 48
+            and "fair edge" not in gl
+            and "op mc" not in gl
+            and not gl.endswith(" edge")
+            and any(m in gl for m in ("fantasy", "isekai", "kingdom", "sect", "cyber", "city", "harbor", "frontier", "cultivat"))
+        ):
+            fields["world_style"] = genre[:80]
+        elif isekai:
+            fields["world_style"] = "isekai fantasy compound"
 
     tone = str(intent.get("tone") or "").strip()
     if tone and "tone" not in locked:
@@ -1026,6 +1141,57 @@ def theme_prompt_block(
         lines.append(
             f"- Style notes (light touch only, never override clear prose): {notes[:120]}"
         )
+    # Collect over-indexed setup words so the model deliberately under-uses them.
+    slogan_bits: list[str] = []
+    for raw in (genre, tone, edge, notes, str(pf.get("skill_summary") or "")):
+        for token in re.findall(r"[A-Za-z][A-Za-z'-]{3,}", raw or ""):
+            t = token.lower()
+            if t in {
+                "with",
+                "from",
+                "that",
+                "this",
+                "have",
+                "will",
+                "your",
+                "into",
+                "when",
+                "only",
+                "more",
+                "than",
+                "over",
+                "under",
+                "through",
+                "about",
+                "after",
+                "before",
+                "world",
+                "player",
+                "story",
+                "game",
+            }:
+                continue
+            slogan_bits.append(t)
+    # Keep unique, order-stable, short list
+    seen_s: set[str] = set()
+    slogans: list[str] = []
+    for t in slogan_bits:
+        if t in seen_s:
+            continue
+        seen_s.add(t)
+        slogans.append(t)
+        if len(slogans) >= 10:
+            break
+    if slogans:
+        lines.append(
+            "- Do not re-use these setup slogan words every turn (theme constraints, not catchphrases): "
+            + ", ".join(slogans)
+            + ". Invent fresh scene-specific wording instead."
+        )
+    lines.append(
+        "- Narrator personality: dry grounded DM — concrete, lightly wry, never preachy; "
+        "do not recite genre labels or power-fantasy slogans as prose filler."
+    )
     return "\n".join(lines)
 
 
@@ -1113,13 +1279,453 @@ def opening_feel_prompt_block(
     return "\n".join(lines)
 
 
+# Domains that models/fallbacks over-use. Never force these as the default seed.
+OVERUSED_SEED_DOMAINS = frozenset(
+    {
+        "observation",
+        "weather",
+        "sandstorm",
+        "storm sense",
+        "storm",
+        "ropework",
+        "rope work",
+        "rope",
+        "knot",
+        "knots",
+        "knot-work",
+        "knot work",
+        "fabric",
+        "thread",
+        "thread sense",
+        "sewing",
+        "barter",
+        "trade",
+        "trade/barter",
+        "haggle",
+        "lie detection",
+        "lie-detect",
+        "lie sense",
+        "footstep",
+        "footsteps",
+        "footwork",
+        "quiet footwork",
+        "tracking footprints",
+        "track footprints",
+        "footprints",
+    }
+)
+
+def _seed(
+    name: str,
+    hint: str,
+    *,
+    tier: str = "simple",
+    lane: str = "mundane",
+    requires: str = "",
+    compounds_to: str = "",
+) -> dict[str, str]:
+    """One weak-seed domain: obscure OK, but always playable at F and worth ranking up."""
+    return {
+        "name": name,
+        "hint": hint,
+        "tier": tier,  # simple | advanced
+        "lane": lane,  # mundane|tool|weapon|support|summon|necro|arcane|hybrid|tech
+        "requires": requires,  # tool/weapon/focus needed to express power
+        "compounds_to": compounds_to,  # late-game fantasy payoff
+    }
+
+
+# Wide seed pool for weak/compounding starts — obscure, usable, both simple and advanced.
+# F rank = nearly useless but *actionable*; high rank = wild payoff (never dead weight).
+SEED_SKILL_DOMAIN_POOL: list[dict[str, str]] = [
+    # ── Simple mundane labor / body ──────────────────────────────────────
+    _seed("Hauling", "awkward loads ride better — fewer dropped crates", compounds_to="superhuman burden carry / siege logistics"),
+    _seed("Digging", "shovel work in soft earth; slow trenches", requires="shovel or spade", compounds_to="tunnel craft / earth-shaping"),
+    _seed("Scaffold Sense", "feel when a board or ladder is about to give", compounds_to="structural prophecy / collapse denial"),
+    _seed("Breath Hold", "one extra lungful in smoke or water", compounds_to="void lung / deep-current survival"),
+    _seed("Cold Tolerance", "slight edge against chill", compounds_to="frost skin / winter dominion"),
+    _seed("Heat Tolerance", "last longer near forges or desert noon", compounds_to="cinder blood / forge walking"),
+    _seed("Pain Metering", "rate how bad a wound is, not ignore it", lane="support", compounds_to="pain redirect / combat triage aura"),
+    _seed("Load Balance", "stack carts so they tip less", compounds_to="perfect mass sense / anti-topple field"),
+    _seed("Grip Oil", "hands stay sticky-dry on wet wood or steel", compounds_to="impossible cling / wall-run grips"),
+    _seed("Sleep Debt", "nap 10 minutes that count as 30 — once a day", lane="support", compounds_to="battlefield micro-rest / party recovery pulse"),
+    # ── Simple tools (need the tool) ─────────────────────────────────────
+    _seed("Nail Sense", "know if a nail/peg will hold after one tap", lane="tool", requires="hammer + nail/peg", compounds_to="structure-binding strikes"),
+    _seed("Whetstone Habit", "keep an edge dull-useful", lane="tool", requires="whetstone + blade", compounds_to="edge that cuts wards"),
+    _seed("Glue Mix", "sticky repairs that fail under real stress at first", lane="tool", requires="adhesive kit", compounds_to="living sealant / bond magic"),
+    _seed("Lamp Trimming", "oil lamps, wicks, draft — tiny practical edge", lane="tool", requires="oil lamp", compounds_to="soul-flame lamps / light as weapon"),
+    _seed("Tin Patch", "hammer a thin patch over a leak or crack", lane="tool", requires="soft metal + mallet", compounds_to="instant plate-skin"),
+    _seed("Clay Patch", "seal pots/cracks with wet clay until baked", lane="tool", requires="clay", compounds_to="earth-suture / golem putty"),
+    _seed("Wire Twist", "twist soft wire into temporary fasteners", lane="tool", requires="soft wire", compounds_to="wire golem threads / snare nets"),
+    _seed("Gear Click", "hear when a simple mechanism is misaligned", lane="tool", requires="clockwork or latch nearby", compounds_to="machine communion"),
+    _seed("Rust Reading", "guess how long iron has been wet/ruined", lane="tool", compounds_to="rust command / iron plague"),
+    _seed("Key Blank", "file a soft blank toward a simple lock's shape", lane="tool", requires="blank key + files", tier="simple", compounds_to="skeleton-key intuition / lock dominion"),
+    _seed("Lens Polish", "clean a lens so smears stop lying to you", lane="tool", requires="glass lens or monocle", compounds_to="true-sight optics"),
+    _seed("Mortar Pestle", "crush herbs/minerals into usable grit", lane="tool", requires="mortar & pestle", compounds_to="alchemy catalyst mastery"),
+    _seed("Quill Steady", "write one clean line under stress", lane="tool", requires="quill/ink", compounds_to="living contract script / word-binding"),
+    _seed("Bell Tone", "ring a small bell at a pitch that carries oddly far", lane="tool", requires="hand bell", compounds_to="ward-shatter chime / rally peal"),
+    _seed("Mirror Flash", "angle a mirror for a one-second signal flash", lane="tool", requires="hand mirror", compounds_to="light-blade / soul reflection"),
+    _seed("Candle Count", "burn time guess for one candle within a few minutes", lane="tool", requires="candle", compounds_to="time-dilating flame"),
+    _seed("Needle Point", "push a needle through tough hide without snapping it", lane="tool", requires="needle", compounds_to="acupuncture seals / curse stitches"),
+    _seed("Chisel Line", "cut one straight groove in soft stone or wood", lane="tool", requires="chisel", compounds_to="rune-cutting / earth-scribe"),
+    # ── Field / travel ───────────────────────────────────────────────────
+    _seed("Trail Mud", "read soft ground for recent traffic — incomplete", compounds_to="omni-track / path rewrite"),
+    _seed("River Smell", "find water or damp air a little earlier", compounds_to="aquifer call / flood sense"),
+    _seed("Camp Ash", "judge how old a cold fire is", compounds_to="ash divination / ember resurrection"),
+    _seed("Star Slice", "one constellation useful for rough direction", compounds_to="star-path stepping"),
+    _seed("Pack Order", "repack so the load rides quieter", compounds_to="dimensional pack logic"),
+    _seed("Saddle Fit", "notice a bad mount strap before a fall", lane="tool", requires="saddle or harness", compounds_to="perfect mount bond"),
+    _seed("Ferry Timing", "guess tide/current windows poorly at first", compounds_to="current throne / tide step"),
+    _seed("Dust Sign", "see dust kicked far off", compounds_to="horizon radar"),
+    _seed("Moss Side", "guess north from moss/lichen — often wrong at F", compounds_to="living compass / ley north"),
+    _seed("Echo Vault", "clap once; rough sense of a cave's depth", compounds_to="sonar dominion / stone voice"),
+    # ── Animals / food ───────────────────────────────────────────────────
+    _seed("Herd Calm", "soothe one nervous animal briefly", compounds_to="beast legion command"),
+    _seed("Bait Guess", "pick mediocre bait for fish/traps", compounds_to="lure that pulls spirits"),
+    _seed("Spoilage Nose", "smell food going bad a day early", lane="support", compounds_to="decay clock / anti-rot field"),
+    _seed("Herb Thumb", "common field herbs; often wrong species at F", lane="support", compounds_to="panacea botany"),
+    _seed("Smoke Cure", "keep meat/smoke from total waste", lane="tool", requires="smoke rack or fire", compounds_to="preservation magic"),
+    _seed("Beehive Distance", "hear/feel a hive before walking into it", compounds_to="swarm pact"),
+    _seed("Bone Broth", "boil scraps into something that stops shakes", lane="support", requires="pot + fire", compounds_to="restorative feast alchemy"),
+    _seed("Feather Read", "guess a bird's mood from posture", compounds_to="avian scout network"),
+    # ── Social / urban (not lie-detect spam) ──────────────────────────────
+    _seed("Queue Sense", "pick the faster line or less angry clerk", compounds_to="bureaucracy dominion"),
+    _seed("Coin Ring", "tap-test cheap fakes — misses good forgeries", lane="tool", requires="coin to tap", compounds_to="true-value sight"),
+    _seed("Door Knock", "read household mood from how a door is answered", compounds_to="threshold mastery"),
+    _seed("Market Echo", "overhear price gossip; often outdated", compounds_to="market prophecy"),
+    _seed("Name Catch", "retain one new name per scene reliably", compounds_to="true-name ledger"),
+    _seed("Accent Mirror", "slight local pronunciation mimic — comic at F", compounds_to="perfect persona mask"),
+    _seed("Favor Debt", "instinct for who still owes whom", compounds_to="debt chains as power"),
+    _seed("Crowd Drift", "move with a throng without being shoved flat", compounds_to="mob current ride"),
+    _seed("Toast Timing", "raise a cup at the socially correct second", lane="support", compounds_to="oath-binding toasts"),
+    _seed("Seat Rank", "guess who outranks whom from seating alone", compounds_to="hierarchy rewrite presence"),
+    # ── Perception niches ────────────────────────────────────────────────
+    _seed("Ink Memory", "recall one short written line for a day", compounds_to="living library mind"),
+    _seed("Echo Count", "guess room size from a clap or footfall", compounds_to="space-map pulse"),
+    _seed("Lamp Glare", "recover sight a beat faster after bright light", compounds_to="flash immunity / solar glare strike"),
+    _seed("Draft Feel", "sense air leaks, secret gaps, open flues", compounds_to="breath of hidden rooms"),
+    _seed("Glass Ring", "tap glass/ceramic for cracks", lane="tool", requires="tap tool", compounds_to="shatter command"),
+    _seed("Salt Taste", "detect brine, sweat, or cheap adulterants", compounds_to="blood-salt truth / purification"),
+    _seed("Pulse Count", "count another person's pulse if you can touch a wrist", lane="support", requires="touch", compounds_to="heartbeat dominion / calm or panic"),
+    # ── Support / healing (simple → advanced) ────────────────────────────
+    _seed("Pressure Point", "slow a bleed with correct finger pressure", lane="support", tier="simple", compounds_to="meridian combat medicine"),
+    _seed("Clean Cloth", "keep one bandage cleaner than it should be", lane="support", requires="cloth bandage", compounds_to="antiseptic aura / holy wrap"),
+    _seed("Splint Stick", "bind a limb with sticks so it hurts less to move", lane="support", requires="splints + wrap", compounds_to="bone-knit field"),
+    _seed("Triage Sort", "pick who needs help first in a mess of injured", lane="support", tier="simple", compounds_to="mass-casualty miracle triage"),
+    _seed("Fever Cloth", "cool a fever with wet cloth + timing", lane="support", requires="water + cloth", compounds_to="plaguebreak touch"),
+    _seed("Stitch Calm", "sew a shallow cut without fainting the patient", lane="support", requires="needle + thread", compounds_to="flesh-suture magic"),
+    _seed("Antidote Guess", "pick a common counter for mild poison — often wrong", lane="support", tier="simple", compounds_to="universal antidote craft"),
+    _seed("Rest Circle", "draw a quiet camp circle that helps allies sleep", lane="support", tier="simple", compounds_to="sanctuary dome"),
+    _seed("Rally Word", "one short phrase that steadies a shaken ally", lane="support", tier="simple", compounds_to="battle-hymn dominion"),
+    _seed("Shield Cover", "angle a shield so an ally takes less splash", lane="support", requires="shield", compounds_to="aegis projection"),
+    _seed("Mana Sip", "share a thimble of stamina/mana with a touch — tiny at F", lane="support", tier="advanced", compounds_to="party resource lattice"),
+    _seed("Life Thread", "feel if a downed body still has a life-thread", lane="support", tier="advanced", compounds_to="pull souls back from the brink"),
+    _seed("Purge Touch", "nudge mild disease/curse residue off skin — unreliable", lane="support", tier="advanced", compounds_to="exorcist cleanse"),
+    _seed("Chorus Heal", "hum a tone that eases aches in listeners nearby", lane="support", tier="advanced", requires="voice", compounds_to="cathedral restoration song"),
+    _seed("Blood Seal", "press a drop of blood to seal a minor cut faster", lane="support", tier="advanced", requires="own blood + focus", compounds_to="blood-rite regeneration"),
+    _seed("Ward Cradle", "hold a crude ward over a sleeping ally for minutes", lane="support", tier="advanced", compounds_to="fortress of rest"),
+    # ── Weapon-specific (need that weapon class) ─────────────────────────
+    _seed("Spear Line", "keep a spear point from wobbling on the thrust", lane="weapon", requires="spear/polearm", compounds_to="horizon pierce / formation spear arts"),
+    _seed("Axe Nest", "set an axe head so it doesn't twist in the cut", lane="weapon", requires="axe", compounds_to="cleave that splits wards"),
+    _seed("Bow Breath", "release on the exhale — groups shots tighter", lane="weapon", requires="bow", compounds_to="seeking shafts / sky-piercer"),
+    _seed("Dagger Slip", "draw a dagger without snagging the sheath", lane="weapon", requires="dagger", compounds_to="shadow-cut / vein-scribe"),
+    _seed("Hammer Beat", "find the sweet spot on a hammer face", lane="weapon", requires="warhammer/maul", compounds_to="shockwave blows"),
+    _seed("Staff Circle", "spin a staff once without smacking yourself", lane="weapon", requires="staff", compounds_to="orbitting barrier staff"),
+    _seed("Whip Crack", "make a whip pop without hitting yourself", lane="weapon", requires="whip", compounds_to="space-fold lash"),
+    _seed("Chain Rattle", "control a short chain swing without self-wrap", lane="weapon", requires="chain weapon", compounds_to="living chain serpent"),
+    _seed("Shield Bash Angle", "bash with the rim, not the face, on purpose", lane="weapon", requires="shield", compounds_to="meteor bash / wall break"),
+    _seed("Sling Pocket", "seat a stone in a sling pouch correctly", lane="weapon", requires="sling", compounds_to="meteor stones"),
+    _seed("Rapier Tip", "keep point-control on a light blade for one exchange", lane="weapon", requires="rapier/foil", compounds_to="needle of light"),
+    _seed("Gun Oil", "keep a firearm from jamming once in wet weather", lane="weapon", requires="firearm + oil kit", tier="simple", compounds_to="bullet-curving marksmanship"),
+    _seed("Net Cast", "throw a net that mostly opens", lane="weapon", requires="net", compounds_to="binding constellation net"),
+    _seed("Scythe Sweep", "sweep low without burying the blade in dirt", lane="weapon", requires="scythe", compounds_to="harvest that reaps spirits"),
+    _seed("Twin Balance", "hold two light weapons without crossing wrists", lane="weapon", requires="paired light weapons", tier="advanced", compounds_to="mirror-blade dance"),
+    _seed("Greatsword Stop", "stop a heavy swing without spinning yourself", lane="weapon", requires="greatsword", tier="advanced", compounds_to="horizon cleave"),
+    # ── Simple weird / hybrid ────────────────────────────────────────────
+    _seed("Shadow Edge", "notice where your shadow touches another person's", lane="hybrid", compounds_to="shadow merge / umbral blade"),
+    _seed("Coin Flip Bias", "feel when a flip is slightly unfair — not control it yet", lane="hybrid", compounds_to="fate dice sovereignty"),
+    _seed("Door Hinge", "oil/know a hinge so it screams less", lane="tool", requires="oil", compounds_to="portal hinge walking"),
+    _seed("Color Blindspot", "spot one dye color others mix up in this region", compounds_to="true-spectrum sight"),
+    _seed("Lefthand Mirror", "do a simple task slightly better left-handed once", compounds_to="bilateral god-body"),
+    _seed("Joke Timing", "land one dry joke that breaks tension — sometimes", lane="support", compounds_to="morale dominion / fear-break laughter"),
+    _seed("Map Crease", "fold a map so the right road shows first", lane="tool", requires="map", compounds_to="living cartography"),
+    _seed("Salt Circle", "pour a salt line that *mostly* stays unbroken", lane="arcane", requires="salt", compounds_to="banishment fortress"),
+    _seed("Candle Whisper", "flame leans toward the larger lie in the room — unreliable", lane="arcane", requires="candle", compounds_to="truthfire oracle"),
+    _seed("Pocket Weight", "guess if a pocket holds coin, key, or blade by hang", compounds_to="inventory x-ray"),
+    # ── Arcane / system (advanced-leaning, still F-weak) ────────────────
+    _seed("Residue Glow", "faint sense of spent magic on objects — unreliable", lane="arcane", compounds_to="ley cartography / magic forensics"),
+    _seed("Omen Nudge", "one wrong/right gut twitch per day", lane="arcane", compounds_to="fate editing"),
+    _seed("Ward Itch", "skin prickle near crude wards only", lane="arcane", compounds_to="ward craft / ward break"),
+    _seed("Dream Tag", "wake remembering one useful dream detail", lane="arcane", compounds_to="dreamwalk dominion"),
+    _seed("Rune Scratch", "copy one simple mark that *almost* holds power", lane="arcane", tier="advanced", requires="stylus + surface", compounds_to="world-script runes"),
+    _seed("Mana Leak", "feel when a spell is about to fizzle nearby", lane="arcane", tier="advanced", compounds_to="mana theft / spell catch"),
+    _seed("Focus Crack", "sense hairline cracks in a magic focus", lane="arcane", requires="touch a focus/crystal", compounds_to="focus forge / crystal thrall"),
+    _seed("Chant Breath", "hold a one-word chant without going flat", lane="arcane", requires="voice", compounds_to="word of unmaking"),
+    _seed("Circle Chalk", "draw a circle that stays round under stress", lane="arcane", requires="chalk", compounds_to="reality cages"),
+    _seed("Sigil Smudge", "intentionally smudge a hostile mark to weaken it 10%", lane="arcane", tier="advanced", compounds_to="anti-sigil crusade"),
+    _seed("Element Taste", "tongue-tip sense of fire/water/earth/air residue", lane="arcane", tier="advanced", compounds_to="elemental throne"),
+    _seed("Contract Ink", "spot when a written deal has a hidden clause — vague", lane="arcane", tier="advanced", compounds_to="pact sovereignty"),
+    _seed("Star Ink", "map one night-sky pattern onto a page correctly", lane="arcane", requires="ink + night sky", compounds_to="constellation magic"),
+    _seed("Echo Spell", "repeat the last syllable of someone else's cantrip", lane="arcane", tier="advanced", compounds_to="spell echo legion"),
+    _seed("Glass Soul", "store a thimble of emotion in a bottle until opened", lane="arcane", tier="advanced", requires="small bottle", compounds_to="emotion armory"),
+    # ── Summoning spectrum ───────────────────────────────────────────────
+    _seed("Name Whisper", "whisper a half-remembered name; something *might* listen", lane="summon", tier="simple", compounds_to="true-name summons"),
+    _seed("Crumb Offering", "leave crumbs; a pest spirit might nibble and linger", lane="summon", tier="simple", requires="food scrap", compounds_to="feast-bound armies"),
+    _seed("Shadow Pup", "pull a palm-sized shadow-critter that flees if stared at", lane="summon", tier="simple", compounds_to="shadow legion"),
+    _seed("Candle Servant", "a flame-sprite keeps one candle lit against wind", lane="summon", requires="candle", compounds_to="infernal retinue"),
+    _seed("Paper Bird", "fold a bird that glides 3 meters with a note", lane="summon", requires="paper", compounds_to="origami war-flock"),
+    _seed("Bone Whistle", "whistle through bone; bones nearby rattle once", lane="summon", requires="bone whistle", compounds_to="osseous choir"),
+    _seed("Ink Familiar", "a blot of ink forms an eye that lasts seconds", lane="summon", tier="advanced", requires="ink", compounds_to="living grimoire familiar"),
+    _seed("Door Knock Spirit", "knock thrice; a threshold spirit answers *sometimes*", lane="summon", tier="advanced", compounds_to="gate court diplomacy"),
+    _seed("Pact Scratch", "cut a finger; a minor entity signs a day-long favor", lane="summon", tier="advanced", requires="blood + focus", compounds_to="archdemon contracts"),
+    _seed("Echo Twin", "spawn a silent afterimage that holds a pose 2 seconds", lane="summon", tier="advanced", compounds_to="army of selves"),
+    _seed("Rain Caller", "coax a single extra raindrop from a wet sky", lane="summon", tier="simple", compounds_to="storm throne"),
+    _seed("Root Handshake", "touch a plant; feel if something intelligent sleeps in it", lane="summon", compounds_to="forest avatar call"),
+    _seed("Coin Vassal", "spin a coin; a luck-sprite may bias the next flip", lane="summon", requires="coin", compounds_to="fortune court"),
+    _seed("Mask Guest", "wear a mask; invite a personality that isn't quite yours", lane="summon", tier="advanced", requires="mask", compounds_to="pantheon mask legion"),
+    _seed("Lantern Guide", "a pale light leads 10 steps toward safety — or a trap", lane="summon", requires="lantern", compounds_to="psychopomp convoy"),
+    _seed("Swarm Hum", "hum until insects gather in a fist-sized cloud", lane="summon", tier="advanced", compounds_to="plague swarm crown"),
+    # ── Necromancy spectrum (usable, not pure edgelord) ─────────────────
+    _seed("Grave Chill", "hands go cold near recent death — unreliable range", lane="necro", tier="simple", compounds_to="death radar / reaper cartography"),
+    _seed("Bone Sort", "tell animal bone from humanish at a glance — sometimes wrong", lane="necro", tier="simple", compounds_to="bone architecture"),
+    _seed("Last Breath", "smell whether a corpse died scared, calm, or fighting", lane="necro", tier="simple", compounds_to="death-scene reconstruction"),
+    _seed("Marrow Tap", "tap bone; hear a hollow vs solid note", lane="necro", requires="bone", compounds_to="osseomancy constructs"),
+    _seed("Ash Name", "speak a dead person's name over ash; ash stirs", lane="necro", requires="ash + true name fragment", compounds_to="name-bound revenants"),
+    _seed("Shroud Fold", "fold burial cloth so it settles without wrinkling", lane="necro", requires="shroud/cloth", compounds_to="soul-binding shrouds"),
+    _seed("Quiet Wake", "sit vigil; restless dead nearby calm for minutes", lane="necro", tier="advanced", compounds_to="necropolis peace / undead diplomacy"),
+    _seed("Finger Candle", "light a finger-flame on a knucklebone — tiny heat", lane="necro", requires="knucklebone", compounds_to="soulfire pyre"),
+    _seed("Debt of the Dead", "sense if a corpse was owed coin or blood", lane="necro", tier="advanced", compounds_to="ghost debt armies"),
+    _seed("Pale Stitch", "stitch a corpse's lips/eyes with ceremony — slows haunt risk", lane="necro", requires="needle + corpse", compounds_to="full reanimation arts"),
+    _seed("Rattle Command", "rattle bones in rhythm; one bone twitches", lane="necro", tier="advanced", requires="bones", compounds_to="skeleton cohorts"),
+    _seed("Memory Moss", "moss on a grave whispers one true fact if asked kindly", lane="necro", tier="advanced", compounds_to="cemetery oracle network"),
+    _seed("Cold Ledger", "count how many have died in a room over years — rough", lane="necro", compounds_to="mass-death chronicle magic"),
+    _seed("Soul Lint", "pluck faint residue of a soul from a keepsake", lane="necro", tier="advanced", requires="keepsake", compounds_to="soulforge / phylactery craft"),
+    _seed("Dirge Hum", "hum a funeral note that slows decay for an hour", lane="necro", tier="advanced", compounds_to="antirot field / mummy arts"),
+    # ── Tech / modern-leaning ────────────────────────────────────────────
+    _seed("Wire Trace", "follow a cable or pipe with a finger", lane="tech", compounds_to="network dominion"),
+    _seed("Dial Guess", "set a simple dial near the right mark", lane="tech", compounds_to="perfect calibration god"),
+    _seed("Static Tick", "feel charged devices or bad grounding", lane="tech", compounds_to="lightning machine soul"),
+    _seed("Label Decode", "half-read foreign labels from context", lane="tech", compounds_to="universal interface"),
+    _seed("Solder Kiss", "make one cold-solder joint that sometimes holds", lane="tech", requires="solder kit", compounds_to="circuit life-binding"),
+    _seed("Boot Sequence", "power-cycle a device in the least stupid order", lane="tech", compounds_to="machine resurrection"),
+    _seed("Signal Ghost", "hear a faint channel in static — maybe music, maybe code", lane="tech", tier="advanced", compounds_to="spectrum throne"),
+    # ── Combat-adjacent body ─────────────────────────────────────────────
+    _seed("Guard Angle", "hold a stick/shield at a less stupid angle", lane="weapon", compounds_to="perfect guard domain"),
+    _seed("Throw Line", "lob a small object closer to where you meant", compounds_to="orbital throw arts"),
+    _seed("Brace Fall", "take a tumble with fewer broken things", compounds_to="impact null"),
+    _seed("Distance Pace", "count paces for short distances roughly", compounds_to="spatial lockstep"),
+    _seed("Clinch Escape", "know one dumb way out of a grab", compounds_to="untouchable flow"),
+    _seed("Blind Guard", "cover the right organ when you can't see the strike", compounds_to="pre-cognitive block"),
+    # ── Wild advanced hybrids (still F-usable hooks) ─────────────────────
+    _seed("Blood Compass", "a drop of blood on water points vaguely toward its owner", lane="hybrid", tier="advanced", requires="blood + water", compounds_to="world-hunt blood magic"),
+    _seed("Mirror Debt", "owe your reflection one favor; it helps once", lane="hybrid", tier="advanced", requires="mirror", compounds_to="reflection army"),
+    _seed("Second Shadow", "cast two shadows for a breath under one light", lane="hybrid", tier="advanced", compounds_to="multiplicity body"),
+    _seed("Hunger Bargain", "skip a meal; gain a tiny edge on the next desperate act", lane="hybrid", compounds_to="ascetic war-god path"),
+    _seed("Scar Library", "each scar stores one fact you can reread by touch", lane="hybrid", tier="advanced", compounds_to="body grimoire"),
+    _seed("Guest Right", "break bread; hostilities pause for a short formal beat", lane="support", tier="advanced", requires="shared food", compounds_to="diplomatic sanctuary law"),
+    _seed("Oath Splinter", "hear when an oath nearby is about to crack", lane="arcane", tier="advanced", compounds_to="oath forge / oath break"),
+    _seed("Tide Bone", "carry a bone that aches before storms or ambushes", lane="hybrid", requires="carried bone", compounds_to="disaster oracle"),
+    _seed("Empty Chair", "set a place for the absent; luck leans toward reunion or omen", lane="summon", tier="advanced", compounds_to="call across worlds"),
+    _seed("Weapon Name", "whisper a name to your weapon; it answers with a twitch", lane="weapon", tier="advanced", requires="named weapon bond", compounds_to="legendary ego-weapon"),
+    _seed("Choir Blade", "two allies strike on your count for a tiny damage sync", lane="support", tier="advanced", compounds_to="legion tempo warfare"),
+    _seed("Grave Garden", "grow one flower from soil mixed with ash", lane="necro", tier="advanced", compounds_to="necromantic ecology"),
+    _seed("Summoner's Patience", "wait motionless; a minor spirit is likelier to approach", lane="summon", tier="advanced", compounds_to="court of waiting gods"),
+    _seed("Healer's Vice", "hurt yourself a little to stabilize another a little", lane="support", tier="advanced", compounds_to="life-transfer throne"),
+    _seed("Blacksmith Prayer", "quench metal while speaking a short blessing — 10% fewer cracks", lane="tool", requires="forge + quench", compounds_to="relic forging"),
+    _seed("Apothecary Gamble", "mix two safe reagents; third effect is random mild", lane="support", requires="reagent kit", compounds_to="chaos pharmacy mastery"),
+    _seed("Exorcist Salt", "throw salt that stings unclean things slightly more", lane="arcane", requires="salt", compounds_to="banishment liturgy"),
+    _seed("Necro Suture", "stitch living tissue with thread that once bound a corpse", lane="necro", tier="advanced", requires="grave thread + needle", compounds_to="undying fleshcraft"),
+    _seed("Familiar Bond", "share hunger with a small animal for one meal", lane="summon", compounds_to="soul-linked familiar empire"),
+    _seed("Spell Steal Spark", "snuff a cantrip-level spark mid-air once in a while", lane="arcane", tier="advanced", compounds_to="archmage countersteal"),
+    _seed("Barrier Hum", "hum to thicken air in front of one ally by a breath", lane="support", tier="advanced", compounds_to="force-wall orchestra"),
+    _seed("Poison Garden", "grow one toxic plant that won't kill you if you're careful", lane="hybrid", compounds_to="venom ecology control"),
+    _seed("Light Eater", "swallow candlelight — room dims slightly for seconds", lane="arcane", requires="flame source", compounds_to="void photophage"),
+    _seed("Anchor Nail", "drive a nail that makes a small object harder to move", lane="tool", requires="nail + hammer", compounds_to="reality anchors"),
+    _seed("Soul Ledger", "write a living person's name; feel their general health band", lane="support", tier="advanced", requires="true name + ink", compounds_to="census of souls"),
+]
+
+# Drop any accidental empties / fix entries that used invalid kwargs in older drafts.
+SEED_SKILL_DOMAIN_POOL = [
+    {k: v for k, v in d.items() if k != "lane_note" and v is not None}
+    for d in SEED_SKILL_DOMAIN_POOL
+    if d.get("name")
+]
+
+
+def seed_skill_domain_names() -> list[str]:
+    return [str(d.get("name") or "").strip() for d in SEED_SKILL_DOMAIN_POOL if d.get("name")]
+
+
+def is_overused_seed_domain(name: str) -> bool:
+    n = re.sub(r"\s+", " ", (name or "").strip().lower())
+    if not n:
+        return False
+    if n in OVERUSED_SEED_DOMAINS:
+        return True
+    for bad in OVERUSED_SEED_DOMAINS:
+        if bad in n or n in bad:
+            return True
+    return False
+
+
+def pick_seed_skill_domain(
+    *,
+    avoid: list[str] | None = None,
+    world_style: str = "",
+    genre: str = "",
+    rng: random.Random | None = None,
+    salt: str = "",
+    prefer_lane: str = "",
+    prefer_tier: str = "",
+) -> dict[str, str]:
+    """Pick a fresh weak-seed domain. Biases lightly by world_style / lane / tier."""
+    r = rng or random.Random()
+    if salt:
+        # Stable-but-different pick when salt changes (setup rolls, map seeds).
+        digest = hashlib.sha256(f"{salt}|{world_style}|{genre}|{prefer_lane}|{prefer_tier}".encode("utf-8")).hexdigest()
+        r = random.Random(int(digest[:16], 16))
+
+    avoid_l = {re.sub(r"\s+", " ", a.strip().lower()) for a in (avoid or []) if a}
+    pool = [
+        d
+        for d in SEED_SKILL_DOMAIN_POOL
+        if d.get("name")
+        and not is_overused_seed_domain(str(d["name"]))
+        and str(d["name"]).strip().lower() not in avoid_l
+    ]
+    if not pool:
+        pool = [d for d in SEED_SKILL_DOMAIN_POOL if d.get("name")]
+
+    style = f"{world_style} {genre}".lower()
+    preferred: list[dict[str, str]] = []
+
+    def _lane(*lanes: str) -> list[dict[str, str]]:
+        want = {x.lower() for x in lanes}
+        return [d for d in pool if str(d.get("lane") or "").lower() in want]
+
+    def _names(*names: str) -> list[dict[str, str]]:
+        want = set(names)
+        return [d for d in pool if d.get("name") in want]
+
+    # ~half the time roll a random lane so wild combos show up even in "normal" worlds.
+    if prefer_lane:
+        preferred = _lane(prefer_lane)
+    elif r.random() < 0.42:
+        lane_roll = r.choice(
+            [
+                "mundane",
+                "tool",
+                "weapon",
+                "support",
+                "summon",
+                "necro",
+                "arcane",
+                "hybrid",
+                "tech",
+            ]
+        )
+        preferred = _lane(lane_roll)
+    elif any(w in style for w in ("necro", "undead", "grave", "gothic", "death")):
+        preferred = _lane("necro", "summon", "hybrid")
+    elif any(w in style for w in ("summon", "demon", "spirit", "shaman", "pact")):
+        preferred = _lane("summon", "arcane", "hybrid")
+    elif any(w in style for w in ("heal", "temple", "cleric", "support", "monk")):
+        preferred = _lane("support", "arcane")
+    elif any(w in style for w in ("sea", "coast", "harbor", "pirate", "island")):
+        preferred = _names("Ferry Timing", "River Smell", "Breath Hold", "Saddle Fit", "Salt Taste", "Tide Bone", "Rain Caller", "Bone Whistle")
+        preferred += _lane("summon")
+    elif any(w in style for w in ("desert", "ash", "volcan", "dune")):
+        preferred = _names("Heat Tolerance", "Dust Sign", "Trail Mud", "Camp Ash", "Light Eater", "Ash Name")
+    elif any(w in style for w in ("city", "urban", "noir", "guild", "court")):
+        preferred = _lane("mundane", "support", "tool") + _names("Queue Sense", "Coin Ring", "Contract Ink", "Seat Rank")
+    elif any(w in style for w in ("forest", "wild", "frontier", "road")):
+        preferred = _names("Trail Mud", "Camp Ash", "Herb Thumb", "Herd Calm", "Root Handshake", "Poison Garden")
+    elif any(w in style for w in ("tech", "cyber", "space", "sci", "mecha", "industrial")):
+        preferred = _lane("tech", "tool")
+    elif any(w in style for w in ("magic", "cultiv", "arcane", "witch", "rune", "isekai")):
+        preferred = _lane("arcane", "summon", "support", "hybrid")
+    elif any(w in style for w in ("war", "soldier", "knight", "gladiator", "military")):
+        preferred = _lane("weapon", "support")
+
+    # Tier spice: sometimes force simple obscure, sometimes advanced crazy.
+    tier_pick = (prefer_tier or "").lower()
+    if not tier_pick:
+        roll = r.random()
+        if roll < 0.38:
+            tier_pick = "simple"
+        elif roll < 0.76:
+            tier_pick = "advanced"
+        # else: any tier
+    if tier_pick in {"simple", "advanced"}:
+        tiered = [d for d in (preferred or pool) if str(d.get("tier") or "simple") == tier_pick]
+        if tiered:
+            preferred = tiered
+
+    # 50% prefer style/lane match when available so domains still feel world-fit without monotony.
+    if preferred and r.random() < 0.5:
+        choice = dict(r.choice(preferred))
+    else:
+        choice = dict(r.choice(pool))
+    # Keep `hint` player-facing clean. Stash LLM-only guidance separately so UI
+    # never shows "advanced tier; arcane lane; compounds toward: …".
+    clean_hint = str(choice.get("hint") or "").strip().rstrip(".")
+    choice["hint"] = clean_hint
+    prompt_bits = [clean_hint] if clean_hint else []
+    if choice.get("requires"):
+        prompt_bits.append(f"tool/focus: {choice['requires']}")
+    if choice.get("compounds_to"):
+        prompt_bits.append(f"late payoff (fiction only, not starting power): {choice['compounds_to']}")
+    if choice.get("tier"):
+        prompt_bits.append(f"design tier={choice['tier']}")
+    if choice.get("lane"):
+        prompt_bits.append(f"design lane={choice['lane']}")
+    choice["prompt_hint"] = "; ".join(prompt_bits)
+    return choice
+
+
+def player_facing_domain_description(domain: dict[str, Any] | None) -> str:
+    """Write a setup-card description from a seed domain — no meta labels."""
+    if not isinstance(domain, dict):
+        return "A thin practical edge that is barely useful until practiced."
+    name = str(domain.get("name") or "Seed").strip()
+    # Prefer raw pool hint, never prompt_hint (which can carry design tags).
+    hint = str(domain.get("hint") or "").strip().rstrip(".")
+    # Strip any leaked design tags if a caller mutated hint earlier.
+    hint = re.sub(
+        r"\s*;\s*(?:compounds toward|requires|advanced tier|simple tier|design tier|design lane|arcane lane|mundane lane|tool lane|weapon lane|support lane|summon lane|necro lane|hybrid lane|tech lane)[^;]*",
+        "",
+        hint,
+        flags=re.I,
+    ).strip(" ;.")
+    req = str(domain.get("requires") or "").strip()
+    late = str(domain.get("compounds_to") or "").strip()
+    # Opening sentence: concrete effect, weak and limited.
+    if hint:
+        body = hint[0].upper() + hint[1:] if hint else hint
+        # If hint is a fragment ("hear when…"), frame it as a weak sense/act.
+        if not re.match(r"^(You|When|A |An |The |Briefly|Once|Can |May )", body, re.I):
+            body = f"You can {body[0].lower() + body[1:] if body else 'sense a faint edge'}."
+        else:
+            if not body.endswith("."):
+                body += "."
+    else:
+        body = f"{name} is a faint, unreliable aptitude — barely more than a habit at first."
+    if req:
+        body += f" It only answers cleanly when you have {req}."
+    body += " At F rank the effect is brief, incomplete, or easy to miss."
+    if late:
+        body += f" With practice it may grow toward {late} — never as a free start."
+    return body[:800]
+
+
 def weak_skill_seed_spec(
     playthrough_options: dict[str, Any] | None = None,
     session_theme: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """
     When setup wants a near-useless start / compounding seed, return one skill row to insert.
-    Prefer an explicit name in custom_skills; else a modest Observation seed.
+    Prefer an explicit name in custom_skills or the first special ability; else a fresh domain
+    from SEED_SKILL_DOMAIN_POOL (never a fixed Observation / knot / barter default).
     """
     opts = playthrough_options if isinstance(playthrough_options, dict) else {}
     theme = session_theme if isinstance(session_theme, dict) else {}
@@ -1137,12 +1743,14 @@ def weak_skill_seed_spec(
         or "near-useless" in custom_l
         or "near useless" in custom_l
         or "almost no useful" in custom_l
+        or "op_mc_frame" in custom_l
+        or "one_skill_frame" in custom_l
     )
     if not wants_seed:
         return None
 
     name = ""
-    # Named seed: "weak seed skill: Foo" / "One weak seed skill: Observation"
+    # Named seed: "weak seed skill: Foo" / "One weak seed skill: Digging"
     m = re.search(
         r"(?:weak\s+seed\s+(?:skill|proficiency)?|seed\s+skill|seed\s+proficiency)\s*[:\-–]?\s*([A-Za-z][A-Za-z0-9 \-]{1,40})",
         custom,
@@ -1154,19 +1762,79 @@ def weak_skill_seed_spec(
         m2 = re.search(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\s*\((?:near[- ]?useless|F\b|weak)", custom)
         if m2:
             name = m2.group(1).strip()
+    # "Seed skill Digging rank F" / "Seed skill: Hauling"
+    if not name:
+        m2b = re.search(
+            r"\bseed\s+(?:skill|power|domain|proficiency)\s*[:\-–]?\s*([A-Z][A-Za-z0-9 \-]{1,40})",
+            custom,
+        )
+        if m2b:
+            name = m2b.group(1).strip().rstrip(".;,")
     if not name:
         summary = str(pf.get("skill_summary") or "").strip()
         m3 = re.search(r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)?)\b", summary)
-        if m3 and m3.group(1).lower() not in {"the", "and", "with"}:
+        if m3 and m3.group(1).lower() not in {"the", "and", "with", "weak", "seed", "power", "start"}:
             name = m3.group(1)
-    if not name:
-        name = "Observation"
+    # Prefer the rolled special ability name when custom_skills is still a skeleton frame.
+    if not name or is_overused_seed_domain(name) or name.lower() in {
+        "start",
+        "power",
+        "domain",
+        "chosen",
+        "later",
+        "never",
+        "default",
+        "weather",
+    }:
+        abilities = opts.get("special_abilities")
+        if isinstance(abilities, list) and abilities:
+            a0 = abilities[0] if isinstance(abilities[0], dict) else {}
+            aname = str(a0.get("name") or "").strip()
+            if aname and not is_overused_seed_domain(aname):
+                name = aname
+    domain: dict[str, str] = {}
+    if not name or is_overused_seed_domain(name):
+        domain = pick_seed_skill_domain(
+            world_style=str(opts.get("world_style") or theme.get("genre") or ""),
+            genre=str(theme.get("genre") or ""),
+            salt=f"{time.time_ns()}|{custom[:40]}|{opts.get('player_name') or ''}",
+        )
+        name = str(domain.get("name") or "Digging")
+        hint = str(domain.get("hint") or "")
+    else:
+        hint = ""
 
+    # Strip design tags if hint was ever mutated for the LLM.
+    clean_hint = re.sub(
+        r"\s*;\s*(?:compounds toward|requires|advanced tier|simple tier|design tier|design lane|"
+        r"arcane lane|mundane lane|tool lane|weapon lane|support lane|summon lane|necro lane|"
+        r"hybrid lane|tech lane)[^;]*",
+        "",
+        str(hint or ""),
+        flags=re.I,
+    ).strip(" ;.")
     notes = (
         "Weak opening seed: nearly useless now; can compound through careful practice, training, and risk. "
         "Not a free power spike."
+        + (f" Effect: {clean_hint}." if clean_hint else "")
     )[:700]
-    return {"name": name[:80], "value": 1, "notes": notes}
+    hint = clean_hint
+    out: dict[str, Any] = {
+        "name": name[:80],
+        "value": 1,
+        "notes": notes,
+        "domain_hint": hint,
+    }
+    if domain:
+        if domain.get("requires"):
+            out["requires"] = domain["requires"]
+        if domain.get("compounds_to"):
+            out["compounds_to"] = domain["compounds_to"]
+        if domain.get("tier"):
+            out["tier"] = domain["tier"]
+        if domain.get("lane"):
+            out["lane"] = domain["lane"]
+    return out
 
 
 # Fields that must never carry player skill / power-fantasy slogans.
@@ -1641,6 +2309,731 @@ def resolve_memory_policy(
     return "details emerge through choices", reasons
 
 
+_HAIR_TOKEN_RE = re.compile(
+    r"\b("
+    r"(?:short|long|cropped|messy|wavy|curly|straight|shoulder[- ]length|waist[- ]length|chin[- ]length|"
+    r"bald|shaved|buzzed|undercut|braid(?:ed)?|ponytail|bun|dreadlocks|cornrows|locs|"
+    r"silver|white|grey|gray|black|brown|blonde|blond|red|auburn|copper|ash|sandy|platinum|"
+    r"ginger|blue|green|pink|purple)\s+"
+    r"){0,3}"
+    r"(?:hair|braid|braids|ponytail|bun|dreadlocks|locs|cornrows|mane|fringe|bangs)\b"
+    r"|"
+    r"\bbald\b|\bshaved head\b|\bbuzz cut\b|\bundercut\b",
+    re.I,
+)
+_FACE_ONLY_HINT_RE = re.compile(
+    r"\b(eyes?|iris|pupil|brow|brows|eyelid|lids|lash|lashes|freckles?|scar|scars|"
+    r"jaw|chin|nose|cheek|cheeks|lip|lips|mouth|dimple|dimples|wrinkle|lines|"
+    r"tattoo|tattoos|birthmark|mole|moles|beard|stubble|mustache|moustache|"
+    r"glasses|spectacles|monocle)\b",
+    re.I,
+)
+
+
+def _split_look_phrases(text: str) -> list[str]:
+    raw = str(text or "").strip()
+    if not raw:
+        return []
+    # Split on common list separators; keep parentheticals attached until strip.
+    parts = re.split(r"\s*[,;|/]\s*|\s+·\s+", raw)
+    out: list[str] = []
+    for p in parts:
+        t = re.sub(r"^\(+|\)+$", "", p.strip(" ."))
+        t = t.strip(" .")
+        if t:
+            out.append(t)
+    return out
+
+
+def _phrase_is_hair(phrase: str) -> bool:
+    p = phrase.strip()
+    if not p:
+        return False
+    if _HAIR_TOKEN_RE.search(p):
+        return True
+    low = p.lower()
+    return low in {"bald", "shaved head", "buzz cut", "undercut"} or low.endswith(" hair")
+
+
+def _phrase_is_face(phrase: str) -> bool:
+    if _phrase_is_hair(phrase):
+        return False
+    return bool(_FACE_ONLY_HINT_RE.search(phrase))
+
+
+def _phrase_is_clothing(phrase: str) -> bool:
+    low = phrase.lower()
+    if ":" in low:  # zone:item
+        return True
+    return bool(
+        re.search(
+            r"\b(coat|cloak|tunic|shirt|jacket|hoodie|boots|shoes|gloves|apron|"
+            r"trousers|pants|skirt|robe|armor|bag|satchel|belt|scarf|hood)\b",
+            low,
+        )
+    )
+
+
+def normalize_look_fields(
+    fields: dict[str, Any],
+    *,
+    context: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    """Keep hair / face / clothing in the right fields; strip duplicates across them.
+
+    Fixes LLM slop like facial_features = '(cropped silver hair), grey eyes, tired lids, square jaw'.
+    """
+    out = dict(fields)
+    dirty: dict[str, list[str]] = {}
+    merged = {**(context or {}), **out}
+
+    hair_raw = str(out.get("hair", merged.get("hair") or "") or "").strip()
+    face_raw = str(out.get("facial_features", merged.get("facial_features") or "") or "").strip()
+    app_raw = str(out.get("appearance", merged.get("appearance") or "") or "").strip()
+
+    # Only run when at least one look field is in this batch (or any present in out).
+    if not any(k in out for k in ("hair", "facial_features", "appearance")):
+        return out, dirty
+
+    hair_bits = _split_look_phrases(hair_raw)
+    face_bits = _split_look_phrases(face_raw)
+    app_bits = _split_look_phrases(app_raw)
+
+    rescued_hair: list[str] = []
+    clean_face: list[str] = []
+    clean_app: list[str] = []
+    clean_hair: list[str] = []
+
+    for p in hair_bits:
+        if _phrase_is_hair(p) or not (_phrase_is_face(p) or _phrase_is_clothing(p)):
+            clean_hair.append(p)
+        elif _phrase_is_face(p):
+            clean_face.append(p)
+            dirty.setdefault("hair", []).append("moved_face_phrase_to_facial_features")
+        elif _phrase_is_clothing(p):
+            clean_app.append(p)
+            dirty.setdefault("hair", []).append("moved_clothing_phrase_to_appearance")
+
+    for p in face_bits:
+        if _phrase_is_hair(p):
+            rescued_hair.append(p)
+            dirty.setdefault("facial_features", []).append("moved_hair_phrase_to_hair")
+        elif _phrase_is_clothing(p):
+            clean_app.append(p)
+            dirty.setdefault("facial_features", []).append("moved_clothing_phrase_to_appearance")
+        else:
+            clean_face.append(p)
+
+    for p in app_bits:
+        if _phrase_is_hair(p) and not re.search(r"^\w+:", p):
+            rescued_hair.append(p)
+            dirty.setdefault("appearance", []).append("moved_hair_phrase_to_hair")
+        elif _phrase_is_face(p) and not re.search(r"^\w+:", p):
+            clean_face.append(p)
+            dirty.setdefault("appearance", []).append("moved_face_phrase_to_facial_features")
+        else:
+            clean_app.append(p)
+
+    # Merge rescued hair; prefer existing hair field if non-empty after clean
+    for p in rescued_hair:
+        if p.lower() not in {h.lower() for h in clean_hair}:
+            clean_hair.append(p)
+
+    # Dedupe face bits
+    seen_f: set[str] = set()
+    face_final: list[str] = []
+    for p in clean_face:
+        k = p.lower()
+        if k in seen_f:
+            continue
+        seen_f.add(k)
+        face_final.append(p)
+
+    # Ban the known collapse stack if it's the whole face field
+    collapse = "grey eyes, tired lids, square jaw"
+    if ", ".join(face_final).lower().strip() == collapse:
+        dirty.setdefault("facial_features", []).append("overused_face_stack")
+        face_final = ["hazel eyes, faint laugh lines, straight nose"]
+
+    hair_final = ", ".join(clean_hair).strip()
+    # Prefer single hair phrase
+    if hair_final.count(",") >= 2:
+        hair_final = clean_hair[0] if clean_hair else hair_final
+
+    face_joined = ", ".join(face_final).strip()
+    app_joined = "; ".join(clean_app).strip() if any(":" in a for a in clean_app) else ", ".join(clean_app).strip()
+
+    if "hair" in out or rescued_hair or dirty.get("hair"):
+        if hair_final != hair_raw:
+            out["hair"] = hair_final
+            dirty.setdefault("hair", []).append("normalized_look_fields")
+        elif "hair" in out:
+            out["hair"] = hair_final
+    if "facial_features" in out or dirty.get("facial_features"):
+        if face_joined != face_raw:
+            out["facial_features"] = face_joined
+            dirty.setdefault("facial_features", []).append("normalized_look_fields")
+        elif "facial_features" in out:
+            out["facial_features"] = face_joined
+    if "appearance" in out or dirty.get("appearance"):
+        if app_joined != app_raw:
+            out["appearance"] = app_joined
+            dirty.setdefault("appearance", []).append("normalized_look_fields")
+        elif "appearance" in out:
+            out["appearance"] = app_joined
+
+    return out, dirty
+
+
+# Canonical origin labels (UI + starter_logic classify against these stems).
+BACKSTORY_MODE_CANON = (
+    "known",
+    "hidden",
+    "fragmented memories",
+    "reincarnated",
+    "transmigrated",
+    "nameless drifter",
+    "amnesia",
+)
+MEMORY_POLICY_CANON = (
+    "known",
+    "ordinary memory",
+    "details emerge through choices",
+    "rumors may be wrong",
+    "private details stay private",
+    "remembers former life",
+    "former life fragments",
+)
+
+
+def normalize_backstory_mode(value: Any, *, story: str = "", idea: str = "") -> str:
+    """Collapse free-prose modes into a short canonical mode label."""
+    raw = str(value or "").strip()
+    blob = f"{raw} {story} {idea}".lower()
+    if not raw and not story and not idea:
+        return ""
+    # Exact / near-exact canon
+    low = raw.lower()
+    for canon in BACKSTORY_MODE_CANON:
+        if low == canon or low.replace("_", " ") == canon:
+            return canon
+    if any(m in blob for m in ("amnesia", "no memory", "blank slate", "remember nothing")):
+        return "amnesia"
+    if any(m in blob for m in ("nameless", "no name", "drifter without a name")):
+        return "nameless drifter"
+    if any(m in blob for m in ("fragmented memor", "memory fragment", "half-memor")):
+        # Prefer reincarnated/transmigrated if those also present
+        if any(m in blob for m in ("reincarnat", "reborn", "born again")):
+            return "reincarnated"
+        if any(m in blob for m in ("transmigrat", "summon", "portal", "truck", "another world", "woke in")):
+            return "transmigrated"
+        return "fragmented memories"
+    if any(m in blob for m in ("reincarnat", "reborn", "born again", "second life as a child", "grew up after rebirth")):
+        return "reincarnated"
+    if any(
+        m in blob
+        for m in (
+            "transmigrat",
+            "summon",
+            "portal",
+            "truck",
+            "another world",
+            "other world",
+            "into the body",
+            "into a body",
+            "woke on a dirt",
+            "woke in a",
+            "died at a desk",
+            "died on the job",
+        )
+    ):
+        return "transmigrated"
+    if any(m in blob for m in ("hidden past", "secret identity", "concealed")):
+        return "hidden"
+    if low in {"known life", "ordinary", "native", "known past"}:
+        return "known"
+    # Free-prose mode that is really a backstory sentence — reclassify from story
+    if len(raw) > 40 or raw.count(" ") >= 6:
+        return normalize_backstory_mode("", story=story or raw, idea=idea) or "known"
+    return raw[:60] if raw else "known"
+
+
+def normalize_memory_policy(value: Any, *, mode: str = "", story: str = "") -> str:
+    """One short memory rule — not a free essay or menu dump."""
+    raw = str(value or "").strip()
+    low = raw.lower()
+    story_l = str(story or "").lower()
+    mode_l = str(mode or "").lower()
+    for canon in MEMORY_POLICY_CANON:
+        if low == canon:
+            return canon
+    if raw.count(",") >= 3 or raw.count(";") >= 2 or len(raw) > 90:
+        raw = ""
+        low = ""
+    if any(m in low for m in ("remembers former", "full former", "intact former", "clear former")):
+        # Policy or story mentions fragments → keep partial recall, not full
+        if any(m in low or m in story_l for m in ("fragment", "partial", "half-memor", "half remember", "half-remember")):
+            return "former life fragments"
+        return "remembers former life"
+    if any(m in low or m in story_l for m in ("fragment", "half-memor", "partial", "bits of", "scraps of")):
+        if any(
+            m in mode_l or m in story_l or m in low
+            for m in ("former", "previous", "reincarn", "transmigr", "another world", "desk", "office")
+        ):
+            return "former life fragments"
+        return "details emerge through choices"
+    if any(m in low for m in ("rumor", "may be wrong", "uncertain")):
+        return "rumors may be wrong"
+    if any(m in low for m in ("private", "stay private")):
+        return "private details stay private"
+    if any(m in low for m in ("ordinary memory", "known memory", "clear memory")) or low in {"known", "ordinary"}:
+        # Mode implies former life — don't leave pure "known"
+        if any(m in mode_l for m in ("reincarnat", "transmigrat")):
+            return "former life fragments"
+        return "ordinary memory"
+    if not raw:
+        if any(m in mode_l for m in ("reincarnat", "transmigrat")):
+            return "former life fragments"
+        return "ordinary memory"
+    # Collapse long free prose into closest canon
+    if len(raw) > 60:
+        if "fragment" in low:
+            return "former life fragments"
+        if "former" in low or "previous" in low:
+            return "remembers former life"
+        return "details emerge through choices"
+    return raw[:80]
+
+
+def normalize_previous_life_age(value: Any) -> str:
+    """Prefer digits (e.g. 27). Map word ages; drop junk."""
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    m = re.search(r"\b(\d{1,3})\b", raw)
+    if m:
+        n = int(m.group(1))
+        if 1 <= n <= 120:
+            return str(n)
+    word_map = {
+        "early twenties": "22",
+        "mid twenties": "25",
+        "late twenties": "28",
+        "twenties": "25",
+        "early thirties": "32",
+        "mid thirties": "35",
+        "late thirties": "38",
+        "thirties": "35",
+        "forty": "40",
+        "fifty": "50",
+    }
+    for k, v in word_map.items():
+        if k in raw:
+            return v
+    # "twenty-seven" style
+    ones = {
+        "one": 1,
+        "two": 2,
+        "three": 3,
+        "four": 4,
+        "five": 5,
+        "six": 6,
+        "seven": 7,
+        "eight": 8,
+        "nine": 9,
+        "ten": 10,
+        "eleven": 11,
+        "twelve": 12,
+        "thirteen": 13,
+        "fourteen": 14,
+        "fifteen": 15,
+        "sixteen": 16,
+        "seventeen": 17,
+        "eighteen": 18,
+        "nineteen": 19,
+    }
+    tens = {"twenty": 20, "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60}
+    for t, tv in tens.items():
+        if t in raw:
+            for o, ov in ones.items():
+                if o in raw and o != "ten":
+                    return str(tv + ov)
+            return str(tv)
+    for o, ov in ones.items():
+        if re.search(rf"\b{o}\b", raw):
+            return str(ov)
+    return ""
+
+
+def rewrite_backstory_third_person(story: str) -> str:
+    """Setup backstories are third-person character history, not diary voice."""
+    text = str(story or "").strip()
+    if not text:
+        return text
+    # Only rewrite if clearly first-person dominant (case-insensitive)
+    first = len(re.findall(r"\b(I|I'm|I've|I'd|I'll|me|my|mine)\b", text, flags=re.I))
+    third = len(re.findall(r"\b(they|their|them|she|he|her|his)\b", text, flags=re.I))
+    if first < 1:
+        return text
+    if first <= third and third > 0:
+        return text
+    out = text
+    replacements = [
+        (r"\bI've\b", "they've"),
+        (r"\bI'm\b", "they're"),
+        (r"\bI'd\b", "they'd"),
+        (r"\bI'll\b", "they'll"),
+        (r"\bI was\b", "they were"),
+        (r"\bI am\b", "they are"),
+        (r"\bI had\b", "they had"),
+        (r"\bI have\b", "they have"),
+        (r"\bI\b", "they"),
+        (r"\bme\b", "them"),
+        (r"\bmy\b", "their"),
+        (r"\bmine\b", "theirs"),
+    ]
+    for pat, rep in replacements:
+        out = re.sub(pat, rep, out, flags=re.I)
+    out = re.sub(r"\bthey was\b", "they were", out, flags=re.I)
+    out = re.sub(r"\bthey is\b", "they are", out, flags=re.I)
+    return re.sub(r"\s+", " ", out).strip()
+
+
+_FORMER_WORLD_MARKERS = (
+    "former life",
+    "previous life",
+    "old world",
+    "before dying",
+    "before the transport",
+    "before transport",
+    "earth",
+    "modern",
+    "office",
+    "desk",
+    "commute",
+    "apartment",
+    "warehouse",
+    "forklift",
+    "hospital",
+    "tokyo",
+    "city job",
+    "night-shift",
+    "night shift",
+    "smartphone",
+    "near-future",
+    "near future",
+    "technician",
+    "salaryman",
+    "university",
+    "high school",
+    "truck",
+    "logistics",
+    "neon",
+    "megacity",
+    "corporate",
+    "hospital stair",
+    "blackout",
+)
+
+_TRANSPORT_MARKERS = (
+    "died",
+    "death",
+    "killed",
+    "truck",
+    "accident",
+    "crash",
+    "summon",
+    "portal",
+    "transported",
+    "transmigrat",
+    "woke",
+    "waking",
+    "opened their eyes",
+    "opened my eyes",
+    "into the body",
+    "into a body",
+    "inside the body",
+    "body of a",
+    "ritual",
+    "torn from",
+    "yanked",
+    "dumped into",
+    "arrived through",
+    "last night",
+    "dirt road",
+)
+
+_NATIVE_FANTASY_PLOT_MARKERS = (
+    "disgraced noble",
+    "noble heir",
+    "failed coup",
+    "forced into exile",
+    "wandering merchant",
+    "town's festival",
+    "towns festival",
+    "guest right",
+    "way back to their homeland",
+    "collapsing empire",
+    "sect outer disciple",
+    "posing as a",
+    "distant town",
+    "court intrigue",
+)
+
+_BACKSTORY_SKILL_META_MARKERS = (
+    "weak seed",
+    "seed skill",
+    "compounding",
+    "growth math",
+    "guest right",
+    "once per day",
+    "xp_to_next",
+    "rank f",
+    "system window",
+    "status window",
+)
+
+
+def transmigration_story_score(story: str) -> dict[str, Any]:
+    """Score whether a backstory actually covers former life + transport for transmigrated mode."""
+    low = re.sub(r"\s+", " ", str(story or "").strip().lower())
+    has_former = any(m in low for m in _FORMER_WORLD_MARKERS)
+    has_transport = any(m in low for m in _TRANSPORT_MARKERS)
+    # Must land somewhere / wake somewhere — death alone is not enough
+    has_arrival_place = any(
+        m in low
+        for m in (
+            "woke",
+            "waking",
+            "another world",
+            "other world",
+            "this world",
+            "dirt road",
+            "into the body",
+            "inside the body",
+            "opened their eyes",
+            "found themselves",
+            "found themself",
+        )
+    )
+    native_plot = sum(1 for m in _NATIVE_FANTASY_PLOT_MARKERS if m in low)
+    skill_meta = any(m in low for m in _BACKSTORY_SKILL_META_MARKERS)
+    # "another world" alone at the end of a bolt-on sentence is weak if no former-life job
+    bolted = "woke in another world with ordinary work habits" in low or (
+        "torn from that life" in low and not has_former
+    )
+    ok = (
+        has_former
+        and has_transport
+        and has_arrival_place
+        and not skill_meta
+        and native_plot < 2
+        and not bolted
+    )
+    return {
+        "ok": ok,
+        "has_former_world": has_former,
+        "has_transport": has_transport,
+        "has_arrival_place": has_arrival_place,
+        "native_fantasy_plot_hits": native_plot,
+        "skill_meta": skill_meta,
+        "bolted_generic_arrival": bolted,
+    }
+
+
+def build_transmigration_backstory(
+    *,
+    old_story: str = "",
+    idea: str = "",
+    world_style: str = "",
+) -> str:
+    """
+    Canonical transmigrated structure (third person):
+    1) life before transport  2) how transported  3) start at arrival / just before.
+    """
+    idea_l = re.sub(r"\s+", " ", str(idea or "").strip().lower())
+    ws = re.sub(r"\s+", " ", str(world_style or "").strip().lower())
+    old = re.sub(r"\s+", " ", str(old_story or "").strip())
+
+    # Infer former vocation from idea / old text
+    blob = f"{idea_l} {old.lower()}"
+    if any(m in blob for m in ("forklift", "warehouse", "logistics")):
+        former = (
+            "In their former life they worked night shifts at a logistics warehouse, "
+            "living by schedules, debt, and cargo marks rather than swords or titles"
+        )
+        transport = (
+            "A truck accident ended that life; they woke on a dirt road at the edge of "
+        )
+    elif any(m in blob for m in ("desk", "office", "clerk", "salaryman")):
+        former = (
+            "In their former life they were an overworked office clerk who measured days in emails, "
+            "commutes, and unpaid overtime"
+        )
+        transport = (
+            "They died at a desk / on the way home and woke with those ordinary habits still intact at the edge of "
+        )
+    elif any(m in blob for m in ("maintenance", "technician", "engineer", "repair")):
+        former = (
+            "In their former life they were a maintenance technician who fixed machines and systems for a living, "
+            "not magic or politics"
+        )
+        transport = (
+            "They died on the job or mid-shift and opened their eyes in "
+        )
+    elif any(m in blob for m in ("student", "university", "high school", "college")):
+        former = (
+            "In their former life they were an ordinary student with exams, part-time work, and a small rented room"
+        )
+        transport = "A sudden accident tore them out of that life; they woke in "
+    elif any(m in blob for m in ("summon", "ritual")):
+        former = (
+            "In their former life they were a city civilian on an ordinary street, not a warrior or chosen hero"
+        )
+        transport = (
+            "A failed summoning ritual yanked them across worlds still wearing street clothes into "
+        )
+    else:
+        former = (
+            "In their former life they held an ordinary job in a modern city — rent, work shifts, and small debts, "
+            "with no training for swords, sects, or empire games"
+        )
+        transport = (
+            "Death or forced transport tore them out of that life; they woke in "
+        )
+
+    if "sect" in ws or "wuxia" in ws:
+        place = "a sect compound's outer court in another world"
+    elif "compound" in ws or "isekai" in ws:
+        place = "a river-compound yard and dirt road in another world"
+    elif "harbor" in ws or "port" in ws:
+        place = "a rationed harbor district in another world"
+    else:
+        place = "an unfamiliar low-tech world they had never seen before"
+
+    now = (
+        f"{place}, with only the clothes and pocket scraps from before transport. "
+        "The story starts at that arrival (or the hours just before), not as a native exile already living a local plot. "
+        "They have no free hero kit — only ordinary habits and the need to learn which rules of this world can kill them."
+    )
+    return f"{former}. {transport}{now}"[:1600]
+
+
+def ensure_isekai_arrival_beat(story: str, *, mode: str = "", idea: str = "", world_style: str = "") -> str:
+    """
+    For transmigrated mode: require former-world life + transport + arrival start.
+
+    Never bolt a generic 'woke in another world' line onto a native fantasy plot
+    (disgraced noble / festival guest / local quest). Rewrite those entirely.
+    """
+    text = str(story or "").strip()
+    mode_l = str(mode or "").lower()
+    idea_l = str(idea or "").lower()
+    needs = "transmigrat" in mode_l or any(
+        m in idea_l for m in ("isekai", "transmigrat", "summon", "truck", "another world", "other world")
+    )
+    # Reincarnated is a different shape — do not force truck-kun structure
+    if "reincarnat" in mode_l or "reborn" in mode_l:
+        return text
+    if not needs:
+        return text
+
+    score = transmigration_story_score(text)
+    if score["ok"]:
+        return text
+
+    # Broken: native fantasy plot, skill meta, missing former world, or bolted generic line
+    return build_transmigration_backstory(
+        old_story=text,
+        idea=idea,
+        world_style=world_style,
+    )
+
+
+def normalize_origin_package(
+    fields: dict[str, Any],
+    *,
+    idea: str = "",
+    context: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, list[str]]]:
+    """Normalize mode/memory/story/previous-life fields for isekai & native starts."""
+    out = dict(fields)
+    dirty: dict[str, list[str]] = {}
+    merged = {**(context or {}), **out}
+    idea_s = str(idea or merged.get("_randomize_idea") or "")
+    story = str(out.get("character_backstory", merged.get("character_backstory")) or "")
+    mode_in = out.get("backstory_mode", merged.get("backstory_mode"))
+    mem_in = out.get("memory_policy", merged.get("memory_policy"))
+
+    if "backstory_mode" in out or "character_backstory" in out or idea_s:
+        mode = normalize_backstory_mode(mode_in, story=story, idea=idea_s)
+        if mode and mode != str(mode_in or "").strip():
+            dirty.setdefault("backstory_mode", []).append("normalized_origin_mode")
+            out["backstory_mode"] = mode
+        elif "backstory_mode" in out:
+            out["backstory_mode"] = mode or out.get("backstory_mode")
+
+    mode_now = str(out.get("backstory_mode", merged.get("backstory_mode")) or "")
+    if "memory_policy" in out or "backstory_mode" in out or "character_backstory" in out:
+        mem = normalize_memory_policy(mem_in, mode=mode_now, story=story)
+        if mem != str(mem_in or "").strip():
+            dirty.setdefault("memory_policy", []).append("normalized_memory_policy")
+        if "memory_policy" in out or dirty.get("memory_policy"):
+            out["memory_policy"] = mem
+
+    if "character_backstory" in out or story:
+        rewritten = rewrite_backstory_third_person(story)
+        # Strip skill/power-fantasy dumps from backstory prose
+        if any(m in rewritten.lower() for m in _BACKSTORY_SKILL_META_MARKERS):
+            dirty.setdefault("character_backstory", []).append("stripped_skill_meta_from_backstory")
+            # Full rebuild if skill essay polluted the history
+            rewritten = ""
+        rewritten = ensure_isekai_arrival_beat(
+            rewritten,
+            mode=mode_now,
+            idea=idea_s,
+            world_style=str(out.get("world_style", merged.get("world_style")) or ""),
+        )
+        if rewritten != story:
+            dirty.setdefault("character_backstory", []).append("normalized_origin_backstory")
+            out["character_backstory"] = rewritten
+
+    if "previous_life_age" in out or "previous_life_age" in merged:
+        age_in = out.get("previous_life_age", merged.get("previous_life_age"))
+        age = normalize_previous_life_age(age_in)
+        # Only keep previous-life age for former-life modes
+        if not any(m in mode_now.lower() for m in ("reincarnat", "transmigrat", "fragment")):
+            age = ""
+        if str(age_in or "").strip() != age:
+            dirty.setdefault("previous_life_age", []).append("normalized_previous_life_age")
+            out["previous_life_age"] = age
+        elif "previous_life_age" in out:
+            out["previous_life_age"] = age
+
+    if "previous_life_sex" in out:
+        if not any(m in mode_now.lower() for m in ("reincarnat", "transmigrat", "fragment")):
+            if out.get("previous_life_sex"):
+                dirty.setdefault("previous_life_sex", []).append("cleared_without_former_life")
+            out["previous_life_sex"] = ""
+
+    # world_style: reject slogan genres ("Compound Clerk's Fair Edge")
+    if "world_style" in out:
+        ws = str(out.get("world_style") or "").strip()
+        low = ws.lower()
+        if (
+            len(ws) > 48
+            or any(m in low for m in ("fair edge", "op mc", "compounding", "weak seed", "player agency"))
+            or (ws.count(" ") >= 6 and not any(m in low for m in ("fantasy", "isekai", "kingdom", "sect", "cyber", "city")))
+        ):
+            dirty.setdefault("world_style", []).append("slogan_world_style")
+            if "isekai" in idea_s.lower() or "isekai" in low:
+                out["world_style"] = "isekai fantasy compound"
+            else:
+                out["world_style"] = "frontier dark fantasy"
+
+    return out, dirty
+
+
 def apply_consistency_lint(
     fields: dict[str, Any],
     *,
@@ -1650,10 +3043,28 @@ def apply_consistency_lint(
     Cross-field consistency pass.
     - race_magic_rules / race_ability_rules must not invent peoples absent from world_races
     - memory_policy should match backstory_mode + character_backstory wording
+    - hair / facial_features / appearance stay de-duplicated and in the right fields
+    - isekai/transmigrated origin package (mode/memory/story) is canonicalized
     """
     out = dict(fields)
     dirty: dict[str, list[str]] = {}
     merged = {**(context or {}), **out}
+
+    # Origin package first so memory lint sees canonical modes
+    origin_out, origin_dirty = normalize_origin_package(
+        out,
+        idea=str((context or {}).get("_randomize_idea") or (context or {}).get("idea") or ""),
+        context=merged,
+    )
+    out.update(origin_out)
+    for field, reasons in origin_dirty.items():
+        dirty.setdefault(field, []).extend(reasons)
+    merged = {**(context or {}), **out}
+
+    look_out, look_dirty = normalize_look_fields(out, context=merged)
+    out.update(look_out)
+    for field, reasons in look_dirty.items():
+        dirty.setdefault(field, []).extend(reasons)
 
     races_value = out.get("world_races", merged.get("world_races"))
     # When world_races changes, also repair race rules present in context so the form stays coherent.
@@ -1815,6 +3226,7 @@ def sanitize_setup_fields(
             dirty[field] = reasons
             out[field] = clean
     # Second pass: cross-field consistency (races ↔ race rules; memory ↔ backstory).
+    ctx = {**ctx, "idea": idea or ctx.get("idea") or "", "_randomize_idea": idea or ctx.get("_randomize_idea") or ""}
     out, cross = apply_consistency_lint(out, context=ctx)
     for field, reasons in cross.items():
         dirty.setdefault(field, []).extend(reasons)
@@ -1840,6 +3252,8 @@ def sanitize_setup_fields(
                     "character_backstory",
                     "world_style",
                     "tech_level",
+                    "magic_level",
+                    "special_ability_origin",
                 )
             }
             gear_out, gear_dirty = apply_starter_logic_to_setup(gear_in, intent=intent)
@@ -1850,4 +3264,28 @@ def sanitize_setup_fields(
                 out["_starter_logic"] = gear_out["_starter_logic"]
         except Exception:
             pass
+    # Fourth pass: board-wide duplicates / patterns / inconsistencies.
+    try:
+        from app.setup_crosscheck import crosscheck_setup_fields
+
+        report = crosscheck_setup_fields(
+            out,
+            idea=idea or str(ctx.get("_randomize_idea") or ""),
+            context=ctx,
+            repair=True,
+        )
+        if isinstance(report.get("fields"), dict):
+            for key, value in report["fields"].items():
+                if str(key).startswith("_"):
+                    continue
+                if out.get(key) != value:
+                    dirty.setdefault(key, []).append("setup_crosscheck")
+                    out[key] = value
+        out["_setup_crosscheck"] = {
+            "ok": bool(report.get("ok")),
+            "summary": report.get("summary") or {},
+            "findings": list(report.get("findings") or [])[:40],
+        }
+    except Exception:
+        pass
     return out, dirty
