@@ -369,6 +369,63 @@ def test_use_limit_vs_recharge_mismatch_detected_and_repaired():
     assert "once per day" in gate["abilities"][0]["cost"].lower()
 
 
+def test_assign_locks_after_creation_prefers_stronger():
+    from app.llm import assign_ability_locks_after_creation, ability_power_lock_score
+
+    mild = {
+        "name": "Soft Whisper",
+        "description": "A mild brief whisper that can briefly distract one person nearby.",
+        "cost": "1 energy",
+        "resource_cost": {"energy": 1, "mana": 0, "fatigue": 0, "health": 0, "cooldown_minutes": 0},
+        "power_type": "linear",
+        "locked": False,
+        "prerequisites": "",
+    }
+    strong = {
+        "name": "Annihilating Tide",
+        "description": "A battlefield mass wave that can slay and dominate enemies across the field permanently.",
+        "cost": "8 mana; 6 energy; 3h cooldown",
+        "resource_cost": {"energy": 6, "mana": 8, "fatigue": 2, "health": 0, "cooldown_minutes": 180},
+        "power_type": "compounding",
+        "locked": False,
+        "prerequisites": "",
+    }
+    mid = {
+        "name": "Iron Guard",
+        "description": "You raise a solid shield of force that can block one solid strike for a few seconds.",
+        "cost": "3 energy; 1 fatigue",
+        "resource_cost": {"energy": 3, "mana": 0, "fatigue": 1, "health": 0, "cooldown_minutes": 20},
+        "power_type": "linear",
+        "locked": False,
+        "prerequisites": "",
+    }
+    sm, _ = ability_power_lock_score(mild)
+    ss, _ = ability_power_lock_score(strong)
+    assert ss > sm
+
+    # Force many trials: strong should be locked more often than mild when locks exist
+    strong_locked = 0
+    mild_locked = 0
+    trials = 40
+    for _ in range(trials):
+        batch = assign_ability_locks_after_creation(
+            [dict(mild), dict(mid), dict(strong)],
+            origin="acquired",
+        )
+        by_name = {a["name"]: a for a in batch}
+        if by_name["Annihilating Tide"].get("locked"):
+            strong_locked += 1
+            assert str(by_name["Annihilating Tide"].get("prerequisites") or "").strip()
+        if by_name["Soft Whisper"].get("locked"):
+            mild_locked += 1
+    assert strong_locked >= mild_locked
+    assert strong_locked >= trials // 3  # strong often locked when any locks roll
+
+    innate = assign_ability_locks_after_creation([dict(strong), dict(mild)], origin="innate")
+    assert all(not a.get("locked") for a in innate)
+    assert all(not str(a.get("prerequisites") or "").strip() for a in innate)
+
+
 def test_diversify_generic_prerequisites_across_batch():
     from app.llm import diversify_ability_prerequisites, is_generic_prereq
 

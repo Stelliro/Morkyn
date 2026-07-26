@@ -1219,8 +1219,28 @@ function refToken(type, code) {
   return `${PREFIX[type] || ""}${code}`;
 }
 
+/** Strip accidental entity-button HTML if it leaked into plain narration text. */
+function stripLeakedEntityHtml(value) {
+  let text = String(value ?? "");
+  if (!text.includes("<") && !/type\s*=\s*["']?button/i.test(text)) return text;
+  // Full buttons → keep inner label
+  text = text.replace(/<button\b[^>]*\bentityLink\b[^>]*>([\s\S]*?)<\/button>/gi, "$1");
+  // Broken: Name Name" type="button">Name
+  text = text.replace(
+    /([A-Za-z][A-Za-z0-9' .\-]{1,60}?)\s+\1"\s*type="button">\1/gi,
+    "$1",
+  );
+  text = text.replace(/["']\s*type\s*=\s*["']button["']\s*>/gi, " ");
+  text = text.replace(/<\/?button\b[^>]*>/gi, " ");
+  // Collapse "Name Name" once more for long labels
+  text = text.replace(/\s{2,}/g, " ").trim();
+  return text;
+}
+
 function linkifyText(value) {
-  const text = escapeHtml(value ?? "");
+  // Never feed already-rendered HTML back through linkify (causes button spam).
+  const cleaned = stripLeakedEntityHtml(value ?? "");
+  const text = escapeHtml(cleaned);
   const map = getEntityMap();
   // Also index NPCs that may only appear as flat state.npcs (if present)
   for (const npc of state?.npcs || []) {
@@ -1228,8 +1248,11 @@ function linkifyText(value) {
       map.set(String(npc.code).toUpperCase(), { type: "npc", entity: npc });
     }
   }
+  // Track which codes we already linked so we don't double-wrap
+  const linked = new Set();
   let html = text.replace(/\[\[([A-Z]+|L\d+|I\d+|E\d+)]]/gi, (_, rawCode) => {
     const code = rawCode.toUpperCase();
+    linked.add(code);
     const found = map.get(code);
     if (!found) {
       // Unresolved code — still show something readable, not a blank hole
@@ -1239,16 +1262,22 @@ function linkifyText(value) {
     return `<button class="entityLink" data-code="${escapeHtml(code)}" type="button">${escapeHtml(label)}</button>`;
   });
 
-  html = html.replace(/\b(L\d+|I\d+|E\d+)\b/g, (rawCode) => {
-    const found = map.get(rawCode.toUpperCase());
+  html = html.replace(/\b(L\d+|I\d+|E\d+)\b/g, (rawCode, offset, full) => {
+    const code = rawCode.toUpperCase();
+    // Skip if this token sits inside an HTML tag we already wrote
+    const before = full.slice(Math.max(0, offset - 24), offset);
+    if (/data-code=["']?$/.test(before) || /<[^>]*$/.test(before)) return rawCode;
+    if (linked.has(code)) return rawCode;
+    const found = map.get(code);
     if (!found) return rawCode;
-    return `<button class="entityLink subtle" data-code="${escapeHtml(rawCode.toUpperCase())}" type="button">${escapeHtml(entityLabel(found.entity) || rawCode)}</button>`;
+    linked.add(code);
+    return `<button class="entityLink subtle" data-code="${escapeHtml(code)}" type="button">${escapeHtml(entityLabel(found.entity) || rawCode)}</button>`;
   });
   return html;
 }
 
 function paragraphs(text) {
-  const value = String(text ?? "").trim();
+  const value = stripLeakedEntityHtml(String(text ?? "").trim());
   if (!value) return `<p class="empty">Empty.</p>`;
   return value
     .split(/\n+/)
@@ -2221,47 +2250,112 @@ function normalizeAbilityLockAndPrerequisites(ability = {}, origin = abilityOrig
   return next;
 }
 
-function applyOriginToAbility(ability = {}) {
-  let next = { ...ability };
-  const origin = abilityOrigin();
-  const strength = estimateAbilityOpeningStrength(next);
-  if (origin === "acquired") {
-    // Do NOT force every power locked. Mild = open; strong = locked; moderate respects model or RNG.
-    if (strength === "mild") {
-      next.locked = false;
-      next.prerequisites = "";
-    } else if (strength === "strong") {
-      next.locked = true;
-      if (!String(next.prerequisites || "").trim()) {
-        next.prerequisites = pickDefaultAbilityPrereq(next, 0, "strong");
+/**
+ * Power rank for post-creation lock assignment (higher = more likely locked).
+ */
+function abilityPowerLockScore(ability = {}) {
+  const strength = estimateAbilityOpeningStrength(ability);
+  let score = strength === "strong" ? 30 : strength === "mild" ? 0 : 10;
+  const blob = `${ability.name || ""} ${ability.description || ""} ${ability.cost || ""}`.toLowerCase();
+  const rc = ability.resource_cost && typeof ability.resource_cost === "object" ? ability.resource_cost : {};
+  score += Math.min(12, Number(rc.energy) || 0);
+  score += Math.min(16, (Number(rc.mana) || 0) * 2);
+  score += Math.min(8, (Number(rc.fatigue) || 0) * 2);
+  score += Math.min(10, (Number(rc.health) || 0) * 3);
+  const cd = Number(rc.cooldown_minutes) || 0;
+  if (cd >= 60) score += 8;
+  else if (cd >= 15) score += 4;
+  if (/battlefield|army|mass |dominate|annihilat|\bkill\b|\bslay\b/.test(blob)) score += 8;
+  if (/minor|briefly|tiny|whisper|distract|utility|hint/.test(blob)) score -= 4;
+  return { score: Math.max(0, score), strength };
+}
+
+/** Pure RNG: how many of N created powers should be locked (origin-shaped). */
+function rollLockCountForBatch(n, origin = abilityOrigin()) {
+  n = Math.max(0, Math.floor(Number(n) || 0));
+  if (n <= 0) return 0;
+  const o = String(origin || "acquired").toLowerCase();
+  if (o === "none" || o === "innate") return 0;
+  if (o === "both") {
+    let k = 0;
+    for (let i = 0; i < n; i++) if (Math.random() < 0.4) k += 1;
+    return k;
+  }
+  // acquired
+  let k = rollInt(0, n);
+  if (n >= 2 && k === 0 && Math.random() < 0.55) k = rollInt(1, Math.max(1, Math.floor(n / 2) + 1));
+  if (n >= 3 && k === n && Math.random() < 0.45) k = rollInt(Math.max(1, n - 2), n - 1);
+  return Math.max(0, Math.min(n, k));
+}
+
+/**
+ * After powers are created for the rolled quantity: decide which are locked.
+ * Locks the strongest powers first; fair prerequisites only on locked entries.
+ */
+function assignAbilityLocksAfterCreation(abilities = [], origin = abilityOrigin()) {
+  const list = Array.isArray(abilities) ? abilities.filter((a) => a && typeof a === "object").map((a) => ({ ...a })) : [];
+  if (!list.length) return list;
+  const o = String(origin || "acquired").toLowerCase();
+  if (o === "none") return list;
+  if (o === "innate") {
+    return list.map((ab) => {
+      ab.locked = false;
+      ab.prerequisites = "";
+      return ab;
+    });
+  }
+
+  const scored = list.map((ab, i) => {
+    const { score, strength } = abilityPowerLockScore(ab);
+    ab._opening_strength = strength;
+    ab._lock_score = score;
+    return { score, strength, i, ab };
+  });
+
+  let lockCount = rollLockCountForBatch(list.length, o);
+  const strongIdx = scored.filter((s) => s.strength === "strong").map((s) => s.i);
+  if (strongIdx.length) lockCount = Math.min(list.length, Math.max(lockCount, strongIdx.length));
+
+  const mildN = scored.filter((s) => s.strength === "mild").length;
+  if (mildN === list.length && lockCount > 0 && list.length >= 2) {
+    lockCount = Math.random() < 0.35 ? 1 : 0;
+  } else if (mildN > 0 && lockCount > list.length - mildN) {
+    lockCount = Math.min(lockCount, list.length - mildN + (Math.random() < 0.25 ? 1 : 0));
+  }
+
+  const ranked = scored.slice().sort((a, b) => b.score - a.score || Math.random() - 0.5);
+  const lockedSet = new Set(ranked.slice(0, lockCount).map((s) => s.i));
+
+  list.forEach((ab, i) => {
+    const strength = ab._opening_strength || "moderate";
+    if (lockedSet.has(i)) {
+      ab.locked = true;
+      const p = normalizeAbilityPrerequisites(ab.prerequisites);
+      if (!p || isGenericAbilityPrereq(p)) {
+        ab.prerequisites = pickDefaultAbilityPrereq(ab, i, strength);
+      } else {
+        ab.prerequisites = p;
       }
     } else {
-      // moderate: keep model flag when present; else ~45% locked
-      if (next.locked == null || next.locked === "") {
-        next.locked = randomBool(0.45);
-      } else {
-        next.locked = !!next.locked;
-      }
-      if (next.locked && !String(next.prerequisites || "").trim()) {
-        next.prerequisites = pickDefaultAbilityPrereq(next, 0, "moderate");
-      }
-      if (!next.locked) next.prerequisites = next.prerequisites || "";
+      ab.locked = false;
+      ab.prerequisites = "";
     }
-  } else if (origin === "innate") {
-    next.locked = false;
-    // Innate may still keep a light prereq only if the model wrote a real one
-  } else if (origin === "both") {
-    if (next.locked == null || next.locked === "") next.locked = randomBool(0.45);
-    if (strength === "mild") {
-      next.locked = false;
-      next.prerequisites = "";
-    }
-  }
+  });
+
+  return diversifyAbilityPrerequisites(list).map((ab) => {
+    if (!ab.locked) ab.prerequisites = "";
+    return ab;
+  });
+}
+
+function applyOriginToAbility(ability = {}) {
+  // Identity / growth defaults only — locks are assigned on the full batch after creation.
+  let next = { ...ability };
   if (!next.power_type) {
     const types = POWER_GROWTH_TYPES.map((t) => t.id);
     next.power_type = choice(types) || "linear";
   }
-  next = normalizeAbilityLockAndPrerequisites(next, origin);
+  next.prerequisites = normalizeAbilityPrerequisites(next.prerequisites);
   return next;
 }
 
@@ -2441,9 +2535,9 @@ function applyRandomizedSetup(payload) {
     if (rolledTarget != null && Number.isFinite(Number(rolledTarget))) {
       lastAbilityCountRoll = Number(rolledTarget);
     }
-    const nextAbilities = diversifyAbilityPrerequisites(
-      fitAbilitiesToCountPolicy(abilities, rolledTarget).map((ability) => applyOriginToAbility(ability)),
-    );
+    // 1) fit to rolled quantity  2) light origin prep  3) score power → roll locks → prereqs on strongest
+    const fitted = fitAbilitiesToCountPolicy(abilities, rolledTarget).map((ability) => applyOriginToAbility(ability));
+    const nextAbilities = assignAbilityLocksAfterCreation(fitted, abilityOrigin());
     if (abilityList) {
       abilityList.innerHTML = "";
       // Generated / randomized powers start collapsed so the list stays scannable.
@@ -2969,13 +3063,13 @@ function fieldContext(name) {
     // Always roll (or lock) the slot count *before* the model runs.
     const rolledCount = rollAbilityCountForRandomize();
     let originRule =
-      "Acquired origin: VARY locked per ability — do NOT lock every power. Mild/modest utilities should be locked=false and usable at Start; stronger or story powers may be locked=true with a real prerequisite. Roughly half open / half locked is fine.";
+      "Invent distinct powers (name, description, cost, growth_math). The app rolls quantity first, then after creation locks the stronger powers and sets prerequisites only on those. Focus on fiction quality, not forcing locked=true on every card.";
     if (origin === "innate") {
       originRule =
-        "Innate: almost all abilities locked=false and usable at Start (inherent, inherited, racial, bodily, soul-deep).";
+        "Innate: inherent/inborn powers. Prefer usable-at-start fiction; the app will usually leave them unlocked.";
     } else if (origin === "both") {
       originRule =
-        "Mix: some innate (locked=false) and some acquired (may be locked with prereqs). Vary locked per entry — never lock the whole batch.";
+        "Mix inherent and trained-feeling powers; the app assigns locks by relative power after generation.";
     }
     return {
       type: "special_abilities",

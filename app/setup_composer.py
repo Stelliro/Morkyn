@@ -2822,6 +2822,7 @@ def transmigration_story_score(story: str) -> dict[str, Any]:
     bolted = "woke in another world with ordinary work habits" in low or (
         "torn from that life" in low and not has_former
     )
+    contradictions = backstory_self_contradictions(story)
     ok = (
         has_former
         and has_transport
@@ -2829,6 +2830,7 @@ def transmigration_story_score(story: str) -> dict[str, Any]:
         and not skill_meta
         and native_plot < 2
         and not bolted
+        and not contradictions.get("hard")
     )
     return {
         "ok": ok,
@@ -2838,7 +2840,231 @@ def transmigration_story_score(story: str) -> dict[str, Any]:
         "native_fantasy_plot_hits": native_plot,
         "skill_meta": skill_meta,
         "bolted_generic_arrival": bolted,
+        "self_contradictions": contradictions.get("codes") or [],
     }
+
+
+def backstory_self_contradictions(story: str) -> dict[str, Any]:
+    """
+    Detect internal stance clashes in a single backstory blob.
+
+    Classic 8B fail:
+      "a world where magic is a tool, not a gift"
+      + "survival depends on wit, not wizardry"
+    — one claims usable magic exists; the other denies relying on magic at all.
+    """
+    low = re.sub(r"\s+", " ", str(story or "").strip().lower())
+    if not low:
+        return {"hard": [], "soft": [], "codes": [], "ok": True}
+
+    hard: list[str] = []
+    soft: list[str] = []
+    details: list[str] = []
+
+    # --- Magic stance ---
+    affirms_usable_magic = any(
+        p in low
+        for p in (
+            "magic is a tool",
+            "magic as a tool",
+            "magic is common",
+            "magic is everyday",
+            "magic is a craft",
+            "where magic works",
+            "learn magic",
+            "use magic",
+            "using magic",
+            "spellcraft",
+            "spellwork",
+            "cast spells",
+            "casting spells",
+            "wizardry is",
+            "arcane tools",
+            "mana is",
+        )
+    )
+    denies_magic_or_wizardry = any(
+        p in low
+        for p in (
+            "not wizardry",
+            "no wizardry",
+            "without wizardry",
+            "not magic",
+            "no magic",
+            "without magic",
+            "magicless",
+            "magic-less",
+            "anti-magic",
+            "depends on wit, not",
+            "depends on wits, not",
+            "wit not wizard",
+            "wits not wizard",
+            "survival depends on wit",
+            "survival depends on wits",
+            "ordinary human with no magic",
+            "cannot use magic",
+            "can't use magic",
+        )
+    )
+    # Explicit "tool not gift" is an affirm; pair with "not wizardry" is hard fail
+    if affirms_usable_magic and denies_magic_or_wizardry:
+        hard.append("magic_affirmed_and_denied")
+        details.append(
+            "Backstory both presents usable magic (e.g. 'magic is a tool') and denies magic/wizardry "
+            "(e.g. 'wit, not wizardry'). Pick one coherent stance."
+        )
+
+    # Former life had no magic vs transported because of magic skill — soft only
+    if "no training for" in low and "magic" in low and "cast" in low:
+        soft.append("former_life_no_magic_but_casts")
+
+    # Just arrived vs long local career (transmig self-clash)
+    just_arrived = any(
+        p in low
+        for p in (
+            "waking up",
+            "woke up",
+            "just arrived",
+            "same day",
+            "hours just before",
+            "moment of arrival",
+            "found themselves",
+            "found themself",
+        )
+    )
+    long_local = any(
+        p in low
+        for p in (
+            "for years they lived",
+            "grew up here",
+            "raised in this",
+            "lived here for years",
+            "lifelong resident",
+            "had always lived",
+        )
+    )
+    if just_arrived and long_local:
+        hard.append("just_arrived_and_long_local")
+        details.append("Backstory both claims same-day arrival and long residence in this world.")
+
+    # Penniless / only scraps vs wealthy noble kit in same breath
+    poor = any(p in low for p in ("only a faded", "only the clothes", "pocket scraps", "nothing but", "penniless", "no money"))
+    rich = any(p in low for p in ("family fortune", "inherited vault", "royal treasury", "bags of gold", "vast wealth"))
+    if poor and rich:
+        soft.append("penniless_and_wealthy")
+
+    return {
+        "ok": not hard,
+        "hard": hard,
+        "soft": soft,
+        "codes": hard + soft,
+        "details": details,
+    }
+
+
+def repair_backstory_self_contradictions(
+    story: str,
+    *,
+    magic_level: str = "",
+    world_style: str = "",
+    magic_enabled: bool | None = None,
+) -> str:
+    """
+    Deterministic rewrite so a single backstory holds one magic/arrival stance.
+
+    Prefer setup magic_level when present; otherwise keep the first coherent claim
+    and rewrite the opposing clause.
+    """
+    text = re.sub(r"\s+", " ", str(story or "").strip())
+    if not text:
+        return text
+    issues = backstory_self_contradictions(text)
+    if issues.get("ok") and not issues.get("soft"):
+        return text
+
+    low = text.lower()
+    ml = str(magic_level or "").strip().lower()
+    ws = str(world_style or "").strip().lower()
+
+    # Resolve whether this world has usable magic
+    if magic_enabled is None:
+        if any(x in ml for x in ("none", "no magic", "off", "absent", "disabled", "zero")):
+            magic_enabled = False
+        elif any(x in ml for x in ("rare", "common", "high", "cultivat", "ubiquitous", "tool")):
+            magic_enabled = True
+        elif any(x in ws for x in ("cyberpunk", "hard sci-fi", "no magic", "mundane modern")):
+            magic_enabled = False
+        elif any(x in ws for x in ("fantasy", "isekai", "magic", "arcane", "cultivat", "wizard")):
+            magic_enabled = True
+        else:
+            # Prefer the affirmative "magic is a tool" clause if present
+            magic_enabled = any(
+                p in low
+                for p in ("magic is a tool", "magic as a tool", "magic is common", "learn magic", "use magic")
+            )
+
+    if "magic_affirmed_and_denied" in (issues.get("hard") or []):
+        if magic_enabled:
+            # Keep usable-magic framing; rewrite "wit not wizardry" into tool-learning stakes
+            text = re.sub(
+                r"(?i)\b(?:they['’]re|they are|and they are)\s+forced to navigate a reality where "
+                r"survival depends on wit(?:s)?,?\s*not wizardry\.?",
+                "they must learn local craft-magic rules, debts, and tools without free gifts or chosen-one talent",
+                text,
+            )
+            text = re.sub(
+                r"(?i)\bwhere survival depends on wit(?:s)?,?\s*not wizardry\.?",
+                "where survival means learning which magic-tools they can touch and which debts those tools create",
+                text,
+            )
+            text = re.sub(
+                r"(?i)\bdepends on wit(?:s)?,?\s*not wizardry\b",
+                "depends on learning paid tools and local rules, not free wizardry gifts",
+                text,
+            )
+            text = re.sub(
+                r"(?i)\bwithout magic\b|\bno magic\b|\bcannot use magic\b|\bcan'?t use magic\b",
+                "without free innate gifts",
+                text,
+            )
+        else:
+            # No/rare magic world: strip "magic is a tool" affirmations
+            text = re.sub(
+                r"(?i)\ba world where magic is a tool,?\s*not a gift\.?",
+                "a world that runs on labor, coin, and local rules rather than free power",
+                text,
+            )
+            text = re.sub(
+                r"(?i)\bwhere magic is a tool,?\s*not a gift\.?",
+                "where hard work and local rules matter more than free power",
+                text,
+            )
+            text = re.sub(
+                r"(?i)\bmagic is a tool,?\s*not a gift\b",
+                "power is earned through work and coin, not free gifts",
+                text,
+            )
+            text = re.sub(
+                r"(?i)\b(learn|use|using)\s+magic\b",
+                r"\1 local craft",
+                text,
+            )
+
+    if "just_arrived_and_long_local" in (issues.get("hard") or []):
+        # Prefer arrival framing for transmig-style text
+        text = re.sub(
+            r"(?i)\b(for years they lived|grew up here|raised in this|lived here for years|"
+            r"lifelong resident|had always lived)[^.]*\.?",
+            "They have only just arrived and know almost nothing of local custom yet.",
+            text,
+        )
+
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    text = re.sub(r"\s+([,.;])", r"\1", text)
+    # Ensure terminal period
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text[:1600]
 
 
 def build_transmigration_backstory(
@@ -2937,6 +3163,9 @@ def ensure_isekai_arrival_beat(story: str, *, mode: str = "", idea: str = "", wo
         return text
     if not needs:
         return text
+
+    # Always strip self-contradictory magic/arrival stances first
+    text = repair_backstory_self_contradictions(text, world_style=world_style)
 
     score = transmigration_story_score(text)
     if score["ok"]:

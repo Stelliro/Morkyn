@@ -459,6 +459,34 @@ def check_cross_field_inconsistencies(fields: dict[str, Any]) -> tuple[dict[str,
         except Exception:
             pass
 
+    # Internal stance clashes (magic is a tool + not wizardry, etc.)
+    if story:
+        try:
+            from app.setup_composer import (
+                backstory_self_contradictions,
+                repair_backstory_self_contradictions,
+            )
+
+            clash = backstory_self_contradictions(str(out.get("character_backstory") or ""))
+            if not clash.get("ok"):
+                findings.append(
+                    _finding(
+                        sev="wrong",
+                        code="backstory_self_contradiction",
+                        fields=["character_backstory"],
+                        detail=",".join(clash.get("hard") or clash.get("codes") or [])[:200],
+                        repair="repair_backstory_self_contradictions",
+                    )
+                )
+                out["character_backstory"] = repair_backstory_self_contradictions(
+                    str(out.get("character_backstory") or ""),
+                    magic_level=str(out.get("magic_level") or ""),
+                    world_style=str(out.get("world_style") or world),
+                )
+                story = _norm(out.get("character_backstory"))
+        except Exception:
+            pass
+
     # Transmigrated must be former-world + transport + arrival start (not native fantasy plot)
     if "transmigrat" in mode and story:
         try:
@@ -478,7 +506,8 @@ def check_cross_field_inconsistencies(fields: dict[str, Any]) -> tuple[dict[str,
                         detail=(
                             f"former={score.get('has_former_world')} transport={score.get('has_transport')} "
                             f"native_hits={score.get('native_fantasy_plot_hits')} meta={score.get('skill_meta')} "
-                            f"bolted={score.get('bolted_generic_arrival')}"
+                            f"bolted={score.get('bolted_generic_arrival')} "
+                            f"contradict={score.get('self_contradictions')}"
                         ),
                         repair="build_transmigration_backstory",
                     )

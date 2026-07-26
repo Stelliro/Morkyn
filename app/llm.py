@@ -2751,42 +2751,14 @@ def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str,
     abilities: list[dict[str, Any]] = []
     for index in range(count):
         ability = dict(ordered[index % len(ordered)])
-        if origin == "acquired":
-            # Vary locks with pure RNG — seed templates often force locked=true.
-            ability["locked"] = random.random() < 0.45
-            if ability["locked"] and not str(ability.get("prerequisites") or "").strip():
-                ability["prerequisites"] = pick_default_prereq(
-                    ability, index=index, strength="moderate", origin=origin
-                )
-            if not ability["locked"]:
-                ability["prerequisites"] = ""
-        elif origin == "innate":
-            ability["locked"] = False
-            ability["prerequisites"] = ""
-        elif origin == "both":
-            ability["locked"] = random.random() < 0.45
-            if ability["locked"] and not str(ability.get("prerequisites") or "").strip():
-                ability["prerequisites"] = pick_default_prereq(
-                    ability, index=index, strength="moderate", origin=origin
-                )
-            if not ability["locked"]:
-                ability["prerequisites"] = ""
+        # Locks assigned after the full batch exists (see assign_ability_locks_after_creation).
+        ability["locked"] = False
+        ability["prerequisites"] = ""
         if one_skillish:
-            # Opening kit: first entry is OP-compounding seed; later slots prefer passive
-            if origin == "acquired":
-                ability["locked"] = True
-            if not str(ability.get("prerequisites") or "").strip() and ability.get("locked"):
-                ability["prerequisites"] = pick_default_prereq(
-                    ability, index=index, strength="moderate", origin=origin
-                )
             if index == 0:
                 ability["power_type"] = "compounding"
             else:
                 ability["power_type"] = ability.get("power_type") if ability.get("power_type") == "passive" else "passive"
-                ability["locked"] = True
-                ability["prerequisites"] = ability.get("prerequisites") or (
-                    "Passive domain expression; unlocks after seed ranks up or a breakthrough."
-                )
         if not ability.get("power_type"):
             ability["power_type"] = random.choice(power_types)
         if not str(ability.get("growth_math") or "").strip():
@@ -2795,7 +2767,8 @@ def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str,
             # Always ensure OP-MC fallbacks carry concrete late-game math
             ability["growth_math"] = str(ability.get("growth_math") or random.choice(GROWTH_MATH_SAMPLES))[:800]
         abilities.append(ability)
-    return abilities
+    # Create → score power → roll how many locked → lock strongest + fair prereqs
+    return assign_ability_locks_after_creation(abilities, origin=origin)
 
 
 def _ability_has_calculable_math(text: str) -> bool:
@@ -3364,6 +3337,156 @@ def pick_default_prereq(
             strong_pool = list(pool[-4:])
         return strong_pool[h % len(strong_pool)]
     return pool[h % len(pool)]
+
+
+def ability_power_lock_score(ability: dict[str, Any] | None) -> tuple[int, str]:
+    """
+    Rank powers for post-creation lock assignment.
+    Higher score → more likely locked (stronger / costlier).
+    Returns (score, strength_label).
+    """
+    if not isinstance(ability, dict):
+        return (1, "moderate")
+    strength = estimate_ability_opening_strength(ability)
+    base = {"mild": 0, "moderate": 10, "strong": 30}.get(strength, 10)
+    blob = f"{ability.get('name') or ''} {ability.get('description') or ''} {ability.get('cost') or ''}".lower()
+    # Structured resource costs when already stamped
+    rc = ability.get("resource_cost")
+    if isinstance(rc, str) and rc.strip():
+        try:
+            rc = json.loads(rc)
+        except Exception:
+            rc = {}
+    if isinstance(rc, dict):
+        try:
+            base += min(12, int(rc.get("energy") or 0))
+            base += min(16, int(rc.get("mana") or 0) * 2)
+            base += min(8, int(rc.get("fatigue") or 0) * 2)
+            base += min(10, int(rc.get("health") or 0) * 3)
+            cd = int(rc.get("cooldown_minutes") or 0)
+            if cd >= 60:
+                base += 8
+            elif cd >= 15:
+                base += 4
+        except (TypeError, ValueError):
+            pass
+    # Fiction weight
+    if any(w in blob for w in ("battlefield", "army", "mass ", "dominate", "annihilat", "kill", "slay")):
+        base += 8
+    if any(w in blob for w in ("minor", "briefly", "tiny", "whisper", "distract", "utility", "hint")):
+        base -= 4
+    if str(ability.get("power_type") or "").lower() == "passive" and strength != "strong":
+        base += 2  # passives often delayed for acquired kits
+    return (max(0, base), strength)
+
+
+def roll_lock_count_for_batch(n: int, *, origin: str = "acquired") -> int:
+    """
+    Pure RNG: how many of the N created powers should be locked.
+    Origin shapes the range; stronger powers are chosen later for those slots.
+    """
+    n = max(0, int(n or 0))
+    if n <= 0:
+        return 0
+    origin_l = str(origin or "acquired").strip().lower()
+    if origin_l in {"none", "innate"}:
+        return 0
+    if origin_l == "both":
+        # Mix: 0..n with soft bias toward ~40% locked
+        return sum(1 for _ in range(n) if random.random() < 0.4)
+    # acquired: roll k in [0, n] with light bias away from all-unlocked when n>=2
+    # Uniform first, then nudge if everyone open on multi-power kits
+    k = random.randint(0, n)
+    if n >= 2 and k == 0 and random.random() < 0.55:
+        k = random.randint(1, max(1, n // 2 + 1))
+    if n >= 3 and k == n and random.random() < 0.45:
+        # Avoid locking the entire batch too often
+        k = random.randint(max(1, n - 2), n - 1)
+    return max(0, min(n, k))
+
+
+def assign_ability_locks_after_creation(
+    abilities: list[Any] | None,
+    *,
+    origin: str = "acquired",
+) -> list[dict[str, Any]]:
+    """
+    After powers exist: roll how many are locked, then lock the *strongest* ones
+    and attach fair prerequisites only to those. Weaker powers stay usable at Start.
+
+    Order of operations (caller):
+      1) roll quantity
+      2) create abilities
+      3) this function
+      4) diversify costs/prereqs if needed
+    """
+    if not isinstance(abilities, list) or not abilities:
+        return []
+    origin_l = str(origin or "acquired").strip().lower()
+    out: list[dict[str, Any]] = [dict(a) for a in abilities if isinstance(a, dict)]
+    if not out:
+        return []
+
+    if origin_l in {"none"}:
+        return out
+
+    # Score every power now that fiction/cost exist
+    scored: list[tuple[int, int, str, dict[str, Any]]] = []
+    for i, ab in enumerate(out):
+        score, strength = ability_power_lock_score(ab)
+        ab["_opening_strength"] = strength
+        ab["_lock_score"] = score
+        scored.append((score, i, strength, ab))
+
+    if origin_l == "innate":
+        for ab in out:
+            ab["locked"] = False
+            ab["prerequisites"] = ""
+        return out
+
+    n = len(out)
+    lock_count = roll_lock_count_for_batch(n, origin=origin_l)
+
+    # Always lock "strong" powers when acquired/both — raise floor
+    strong_idxs = [i for _s, i, strength, _ab in scored if strength == "strong"]
+    if origin_l in {"acquired", "both"} and strong_idxs:
+        lock_count = max(lock_count, len(strong_idxs))
+        lock_count = min(n, lock_count)
+
+    # Prefer keeping pure mild open: if all mild and lock_count high, reduce
+    mild_n = sum(1 for _s, _i, strength, _ab in scored if strength == "mild")
+    if mild_n == n and lock_count > 0 and n >= 2:
+        # At most one mild can be held back
+        lock_count = min(lock_count, 1) if random.random() < 0.35 else 0
+    elif mild_n > 0 and lock_count > (n - mild_n):
+        # Don't lock more than non-mild + maybe one mild
+        lock_count = min(lock_count, (n - mild_n) + (1 if random.random() < 0.25 else 0))
+
+    # Rank strongest first; tie-break random
+    ranked = sorted(scored, key=lambda t: (t[0], random.random()), reverse=True)
+    locked_indices = {t[1] for t in ranked[:lock_count]}
+
+    for i, ab in enumerate(out):
+        strength = str(ab.get("_opening_strength") or "moderate")
+        if i in locked_indices:
+            ab["locked"] = True
+            existing_p = normalize_ability_prerequisites(ab.get("prerequisites") or ab.get("prerequisite"))
+            if not existing_p or is_generic_prereq(existing_p):
+                ab["prerequisites"] = pick_default_prereq(
+                    ab, index=i, strength=strength, origin=origin_l
+                )
+            else:
+                ab["prerequisites"] = existing_p
+        else:
+            ab["locked"] = False
+            ab["prerequisites"] = ""
+
+    # Distinct unlock paths for the locked subset
+    out = diversify_ability_prerequisites(out, force=False, origin=origin_l)
+    for ab in out:
+        if not ab.get("locked"):
+            ab["prerequisites"] = ""
+    return out
 
 
 def diversify_ability_prerequisites(
@@ -5531,10 +5654,10 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Spectrum is allowed: simple practical powers AND advanced lanes (summoning, necromancy, healing/support, weapon-bound arts, tool rites).",
                 "If a power needs a tool/weapon/focus, state that in description or cost; F-rank clumsy, high ranks make the item legendary-adjacent.",
                 "If ability_origin is none, return an empty special_abilities list.",
-                "If ability_origin is acquired: VARY locked — do NOT lock every ability. Mild/modest utilities → locked=false usable at Start; stronger/story powers may be locked=true with a real prerequisite. Aim for a mix (roughly half open).",
-                "If ability_origin is innate, abilities should usually be usable at the start (locked=false) and feel inherent, inborn, inherited, racial, bodily, soul-deep, or otherwise natural to the character.",
-                "If ability_origin is both, return a mix: some innate (unlocked) and some acquired (may be locked). Vary locked per entry — never lock the whole batch.",
-                "Use locked=true only when the power should exist but not be usable at Start — then prerequisites MUST be a real unlock path. locked=false means usable now.",
+                "Focus on inventing distinct powers (name, description, cost, growth_math). The app assigns locked/prerequisites AFTER generation: stronger powers are more likely locked with unlock paths; weaker ones stay usable at Start. You may still set locked as a hint, but power level of the fiction matters more.",
+                "If ability_origin is innate, describe inherent/inborn powers (the app will prefer unlocked at Start).",
+                "If ability_origin is both, invent a mix of inherent and trained-feeling powers.",
+                "When you set locked=true, prerequisites must be a real unlock path — but prefer leaving lock decisions to strength of the power text.",
                 "Set power_type on each ability to one of: compounding, passive, linear, soft_cap, breakthrough, flat, item_bound.",
                 "Passive = always-on (may omit activate cost but should note a drawback or rank limit); can still have growth_math ranks.",
                 "Let backstory_mode and character_backstory decide ability source; do not force former-life power without support.",
@@ -5655,6 +5778,9 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "(3) start at the moment of arrival or the hours just before — not already living as a local merchant/exile mid-plot. "
                 "Do NOT write disgraced nobles, festival guests, or local coup exiles as if they were always from this world. "
                 "Do NOT paste skill names, weak-seed blurbs, compounding, or ability rules into the backstory. "
+                "ONE coherent stance on magic: never say both 'magic is a tool' AND 'survival depends on wit, not wizardry' in the same story. "
+                "If magic exists as craft/tools, survival can still be hard learning, debts, and local rules — not 'no wizardry'. "
+                "If magic is absent/rare for them, do not call it a tool they must use. Match magic_level / world_style. "
                 "If reincarnated: grew up HERE for years + former-life fragments (not same-day truck-kun). "
                 "If body transmigration: old mind vs local body already known to NPCs. "
                 "Match world_style. No chosen-one, free hero kit, or revenge-by-default."
@@ -5932,10 +6058,10 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             or validated.get("backstory_mode")
             or ""
         )
+        transmig = "transmigrat" in mode_for_story.lower() or bool(
+            (intent_plan or {}).get("isekai")
+        )
         if _backstory_is_too_vague(generated_backstory, mode=mode_for_story):
-            transmig = "transmigrat" in mode_for_story.lower() or bool(
-                (intent_plan or {}).get("isekai")
-            )
             retry_prompt = {
                 "task": (
                     "Regenerate the character backstory as concrete RPG setup history."
@@ -5953,9 +6079,14 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                     "reads as native fantasy plot only",
                     "skill/power-fantasy text in backstory",
                     "bolted-on generic woke-in-another-world line",
+                    "self-contradiction on magic (tool vs not wizardry)",
                 ]
                 if transmig
-                else ["too vague", "missing origin/livelihood/transition"],
+                else [
+                    "too vague",
+                    "missing origin/livelihood/transition",
+                    "self-contradiction on magic (tool vs not wizardry)",
+                ],
                 "nearby_setup": prompt.get("nearby_setup") if isinstance(prompt, dict) else current_setup,
                 "return_shape": {"character_backstory": "2-4 concise third-person sentences"},
                 "required_details": (
@@ -5964,6 +6095,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                         "how transport happened (death, truck, summon, portal, body-drop)",
                         "start at the moment of arrival or the hours just before — not already living a local mid-plot",
                         "no skill names, compounding, or Guest Right-style ability blurbs",
+                        "one coherent magic stance only",
                     ]
                     if transmig
                     else [
@@ -5971,6 +6103,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                         "how the character lived before play: work, training, family, duties, debts, or social position",
                         "why the character is at or near the starting point now",
                         "death and reincarnation/transmigration details only if the setup calls for them",
+                        "one coherent magic stance only",
                     ]
                 ),
                 "rules": [
@@ -5978,6 +6111,12 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                     "Third person only (they/their).",
                     "Keep it playable and leave room for discovery.",
                     "If transmigrated: do NOT write disgraced nobles / festival guests / local exiles as if always from this world.",
+                    "ONE magic stance only: never pair 'magic is a tool' with 'wit, not wizardry' / 'no magic'.",
+                    "Do not both claim same-day arrival and years of living here.",
+                ],
+                "reject_also": [
+                    "self-contradiction: magic is a tool + not wizardry",
+                    "self-contradiction: just arrived + lived here for years",
                 ],
             }
             try:
@@ -6007,6 +6146,20 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                     )
                 except Exception:
                     pass
+        # Always strip self-contradictory magic/arrival stances (first pass and after retry)
+        try:
+            from app.setup_composer import repair_backstory_self_contradictions
+
+            story_final = str(validated.get("character_backstory") or generated_backstory or "").strip()
+            fixed = repair_backstory_self_contradictions(
+                story_final,
+                magic_level=str(current_setup.get("magic_level") or ""),
+                world_style=str(current_setup.get("world_style") or ""),
+            )
+            if fixed:
+                validated["character_backstory"] = fixed
+        except Exception:
+            pass
     elif not text_mode and (
         return_fields == ["special_abilities"]
         or group == "special_abilities"
@@ -6243,14 +6396,33 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 target_count,
                 current_setup=current_setup,
             )
+            # After powers exist: roll lock count, lock strongest, set prereqs only on those
+            try:
+                validated["special_abilities"] = assign_ability_locks_after_creation(
+                    validated.get("special_abilities") if isinstance(validated.get("special_abilities"), list) else [],
+                    origin=origin,
+                )
+            except Exception:
+                pass
             if isinstance(validated.get("quality_gate"), dict):
                 validated["quality_gate"]["final_count"] = len(validated["special_abilities"] or [])
                 validated["quality_gate"]["target_count"] = target_count
+                locked_n = sum(
+                    1
+                    for a in (validated.get("special_abilities") or [])
+                    if isinstance(a, dict) and a.get("locked")
+                )
+                validated["quality_gate"]["locked_count"] = locked_n
             validated["ability_count_roll"] = {
                 "target": target_count,
                 "min": count_min,
                 "max": count_max,
                 "quantity_locked": bool(fc.get("quantity_locked")),
+                "locked_count": sum(
+                    1
+                    for a in (validated.get("special_abilities") or [])
+                    if isinstance(a, dict) and a.get("locked")
+                ),
             }
 
     elif not text_mode and return_fields == ["custom_skills"]:
@@ -6633,6 +6805,14 @@ def _backstory_is_too_vague(backstory: str, *, mode: str = "") -> bool:
         )
     ):
         return True
+    # Internal stance clashes fail quality (magic tool vs not wizardry, etc.)
+    try:
+        from app.setup_composer import backstory_self_contradictions
+
+        if not bool(backstory_self_contradictions(backstory).get("ok")):
+            return True
+    except Exception:
+        pass
     mode_l = str(mode or "").lower()
     if "transmigrat" in mode_l:
         try:
@@ -8017,17 +8197,61 @@ def _entity_code_name_map(context: dict[str, Any] | None, turn: dict[str, Any] |
     return out
 
 
+def _strip_leaked_entity_html(text: str) -> str:
+    """Remove accidental entity-button HTML that leaked into plain narration."""
+    if not text:
+        return text or ""
+    # Fragments may lack '<' (broken mid-tag paste) — still clean type="button"
+    if "<" not in text and "type=" not in text.lower() and "button" not in text.lower():
+        return text
+    out = text
+    out = re.sub(
+        r"<button\b[^>]*\bentityLink\b[^>]*>(.*?)</button>",
+        r"\1",
+        out,
+        flags=re.I | re.S,
+    )
+    out = re.sub(
+        r'([A-Za-z][A-Za-z0-9\' .\-]{1,60}?)\s+\1"\s*type="button">\1',
+        r"\1",
+        out,
+        flags=re.I,
+    )
+    out = re.sub(r'["\']\s*type\s*=\s*["\']button["\']\s*>', " ", out, flags=re.I)
+    out = re.sub(r"</?button\b[^>]*>", " ", out, flags=re.I)
+    out = re.sub(r"\s{2,}", " ", out)
+    return out.strip()
+
+
+def _collapse_repeated_entity_names(text: str, names: list[str]) -> str:
+    """Collapse consecutive repeated entity labels."""
+    out = text or ""
+    for name in sorted({str(n).strip() for n in names if str(n or "").strip()}, key=len, reverse=True):
+        if len(name) < 3:
+            continue
+        out = re.sub(
+            rf"(?<![\w])(?:{re.escape(name)}\s+){{1,4}}{re.escape(name)}(?=[\w]*'s|[^\w]|$)",
+            name,
+            out,
+            flags=re.IGNORECASE,
+        )
+    return out
+
+
 def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     """
     Fix common LLM naming holes:
-    - bare [[A]] without a readable name → Name [[A]]
-    - blank subjects / possessives ("— is", " 's hologram") using ordered cast names
-    Verifiers see codes+names in world_state; this is the deterministic safety net when
-    the model still emits empty names.
+    - bare [[A]] without a readable name -> Name [[A]]
+    - blank subjects / possessives using ordered cast names
+
+    Conservative: do NOT inject names before every mid-sentence stands/leans
+    (that caused Name Name stands spam when a scenery label was cast as an NPC).
     """
     if not text or not isinstance(text, str):
         return text or ""
     code_to_name = {str(k).upper(): str(v).strip() for k, v in (code_to_name or {}).items() if str(v or "").strip()}
+
+    repaired = _strip_leaked_entity_html(text)
 
     def expand_code(match: re.Match[str]) -> str:
         full = match.group(0)
@@ -8035,23 +8259,19 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         name = code_to_name.get(code, "")
         if not name:
             return full
-        # Already has the name immediately before the code tag
         start = match.start()
-        window = text[max(0, start - (len(name) + 8)) : start]
+        window = repaired[max(0, start - (len(name) + 8)) : start]
         if re.search(rf"{re.escape(name)}\s*$", window, flags=re.IGNORECASE):
             return full
-        # Avoid "the Name [[A]]" doubling when "the" + role already present is fine
         return f"{name} [[{code}]]"
 
-    repaired = REFERENCE_CODE_PATTERN.sub(expand_code, text)
+    repaired = REFERENCE_CODE_PATTERN.sub(expand_code, repaired)
 
-    # Grammar holes left when the model drops a subject name entirely
     npc_names = [
         code_to_name[c]
         for c in sorted(code_to_name.keys(), key=lambda x: (len(x), x))
         if re.fullmatch(r"[A-Z]{1,3}", c)
     ]
-    # Prefer appearance order from first expanded tags
     ordered: list[str] = []
     for m in REFERENCE_CODE_PATTERN.finditer(repaired):
         n = code_to_name.get(m.group(1).upper(), "")
@@ -8066,7 +8286,7 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     def next_name() -> str:
         nonlocal name_i
         if name_i >= len(ordered):
-            return ""
+            return ordered[0] if ordered else ""
         n = ordered[name_i]
         name_i += 1
         return n
@@ -8077,17 +8297,15 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         n = next_name()
         if not n:
             return match.group(0)
-        # Preserve spacing style
-        if prefix.endswith("—") or prefix.endswith("-"):
+        if prefix.endswith("—") or prefix.endswith("–") or prefix.endswith("-"):
             return f"{prefix} {n} {verb}"
         return f"{prefix}{n} {verb}"
 
-    # "— is" / ". leans" / "while stands" / leading spaces before verb
     repaired = re.sub(
-        r"([—–\-]\s*|(?<=[.!?]\s)|(?<=\s)(?:while|as|and|but|then)\s+|^\s*)"
+        r"([—–]\s*|(?<=[.!?]\s)|^\s*)"
         r"(is|was|are|were|leans?|stands?|flicks?|watches?|glances?|smirks?|"
         r"grunts?|nods?|shakes?|steps?|moves?|turns?|says?|asks?|whispers?|"
-        r"crosses|props?|twitches?|darts?)\b",
+        r"crosses|parts?|twitches?|darts?)\b",
         fill_subject,
         repaired,
         flags=re.IGNORECASE | re.MULTILINE,
@@ -8100,18 +8318,16 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
             return match.group(0)
         return f"{prefix}{n}'s"
 
-    # " 's hologram" / "—'s fingers"
     repaired = re.sub(
-        r"([—–\-,\s]|^)(?:\s*)'s\b",
+        r"([—–,\(]|(?<=\s\s)|^)(?:\s*)'s\b",
         fill_possessive,
         repaired,
         flags=re.MULTILINE,
     )
-    # Clean double spaces from fills
+    repaired = _collapse_repeated_entity_names(repaired, ordered + list(code_to_name.values()))
     repaired = re.sub(r"[ \t]{2,}", " ", repaired)
     repaired = re.sub(r" +([,.;:!?])", r"\1", repaired)
     return repaired
-
 
 def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Deterministic name/code repair on narration after model output."""
@@ -8173,10 +8389,34 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
         for old, new in sorted(rename_pairs, key=lambda p: len(p[0]), reverse=True):
             if not old or old == new:
                 continue
-            # Word-ish replace; allow possessive
+            # 1) Agent uses: "Name stands/leans/says..."
+            out = re.sub(
+                rf"(?<![\w]){re.escape(old)}(?=\s+(?:stands?|leans?|says?|asks?|watches?|"
+                rf"glances?|smirks?|grunts?|nods?|shakes?|steps?|moves?|turns?|"
+                rf"crosses|walks?|runs?|offers?|appears?)\b)",
+                new,
+                out,
+                flags=re.IGNORECASE,
+            )
+            # 2) Possessive: Name's
+            out = re.sub(
+                rf"(?<![\w]){re.escape(old)}('s)\b",
+                rf"{new}\1",
+                out,
+                flags=re.IGNORECASE,
+            )
+            # 3) Remaining bare mentions — skip determiner+object ("the X is your only view")
+            #    so physical props keep reading as objects after a person rename.
+            def _bare_repl(m: re.Match[str]) -> str:
+                start = m.start()
+                prev = out[max(0, start - 5) : start].lower()
+                if re.search(r"\b(the|a|an)\s+$", prev):
+                    return m.group(0)
+                return new
+
             out = re.sub(
                 rf"(?<![\w]){re.escape(old)}(?=[\w]*'s|[^\w]|$)",
-                new,
+                _bare_repl,
                 out,
                 flags=re.IGNORECASE,
             )

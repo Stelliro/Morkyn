@@ -4,15 +4,47 @@ from __future__ import annotations
 
 from app.setup_composer import (
     apply_keyword_intent,
+    backstory_self_contradictions,
     intent_to_field_overrides,
     normalize_backstory_mode,
     normalize_memory_policy,
     normalize_origin_package,
     normalize_previous_life_age,
+    repair_backstory_self_contradictions,
     rewrite_backstory_third_person,
     sanitize_setup_fields,
 )
 from app.starter_logic import fact_check_starter_loadout
+
+
+def test_magic_tool_vs_not_wizardry_detected_and_repaired():
+    """Classic 8B clash: magic is a tool + survival by wit not wizardry."""
+    story = (
+        "They were a data analyst in a bustling Tokyo office, drowning in spreadsheets and coffee, "
+        "when a mysterious glitch in the company’s server transported them to a world where magic is a tool, "
+        "not a gift. Waking up in a foreign town with only a faded ticket and a strange symbol on their wrist, "
+        "they’re forced to navigate a reality where survival depends on wit, not wizardry."
+    )
+    check = backstory_self_contradictions(story)
+    assert check["ok"] is False
+    assert "magic_affirmed_and_denied" in check["hard"]
+
+    # Magic world: keep tool framing, drop "not wizardry"
+    fixed_magic = repair_backstory_self_contradictions(
+        story, magic_level="common", world_style="isekai fantasy"
+    )
+    low_m = fixed_magic.lower()
+    assert "not wizardry" not in low_m
+    assert "magic is a tool" in low_m or "craft-magic" in low_m or "magic-tools" in low_m
+    assert backstory_self_contradictions(fixed_magic)["ok"] is True
+
+    # No-magic world: drop tool affirmation
+    fixed_none = repair_backstory_self_contradictions(
+        story, magic_level="none", world_style="hard sci-fi"
+    )
+    low_n = fixed_none.lower()
+    assert "magic is a tool" not in low_n
+    assert backstory_self_contradictions(fixed_none)["ok"] is True
 
 
 def test_normalize_mode_from_prose():

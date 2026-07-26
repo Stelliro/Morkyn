@@ -297,6 +297,15 @@ _NAME_SYSTEM_RE = re.compile(
     r")\b",
     re.I,
 )
+# Scenery / architecture — fine for places, never for people (classic: "Sky-crack first window")
+_NAME_SCENERY_RE = re.compile(
+    r"\b("
+    r"window|windowsill|sill|door|doorway|gate|arch|alley|street|road|pavement|"
+    r"railing|fire\s*escape|lantern|lamp|crack|sky-?crack|ledge|rooftop|roof|"
+    r"balcony|stair|stairs|corridor|hallway|threshold|frame|glass|pane"
+    r")\b",
+    re.I,
+)
 _NAME_FUNCTION_WORDS = frozenset(
     {
         "a",
@@ -323,24 +332,38 @@ _NAME_FUNCTION_WORDS = frozenset(
         "that",
         "near",
         "nearby",
+        "first",
+        "second",
+        "third",
+        "last",
+        "only",
+        "main",
+        "upper",
+        "lower",
     }
 )
 
 
 def is_plausible_person_name(name: str) -> bool:
-    """True for short proper names/titles — not event blurbs or system job lines."""
+    """True for short proper names/titles — not event blurbs, scenery, or system job lines."""
     n = norm_name(str(name or ""))
     if len(n) < 2 or len(n) > 48:
         return False
     words = n.split()
-    if len(words) > 5:
+    if len(words) > 4:
         return False
     if _NAME_VERB_RE.search(n) or _NAME_SYSTEM_RE.search(n):
         return False
-    # "a cloaked figure" / "local job" style
+    # Architecture / props are not people
+    if _NAME_SCENERY_RE.search(n):
+        return False
+    # "a cloaked figure" / "local job" / "first window" style
     if len(words) >= 3 and sum(1 for w in words if w.lower() in _NAME_FUNCTION_WORDS) >= 2:
         return False
     if re.search(r"\b(a local|from the|in exchange|offering|retrieving|help with)\b", n, re.I):
+        return False
+    # Ordinal + object ("first window", "second gate") is not a person
+    if re.search(r"\b(first|second|third|last|only)\s+\w+\b", n, re.I) and len(words) <= 3:
         return False
     # Bare code-like
     if re.fullmatch(r"[A-Z]{1,3}\d{0,3}", n):
@@ -349,7 +372,7 @@ def is_plausible_person_name(name: str) -> bool:
 
 
 def is_plausible_place_name(name: str) -> bool:
-    """Places can be multi-word, but not full system/event sentences."""
+    """Places can be multi-word, but not full system/event sentences or bare props."""
     n = norm_name(str(name or ""))
     if len(n) < 2 or len(n) > 60:
         return False
@@ -361,6 +384,18 @@ def is_plausible_place_name(name: str) -> bool:
     if re.search(r"\b(in exchange|offering|retrieving|help with|appears?,)\b", n, re.I):
         return False
     if n.lower().startswith("system "):
+        return False
+    # Bare props / furniture / "first window" are not place names
+    if re.fullmatch(r"(the\s+)?(first|second|third|only)\s+(window|door|gate|sill|ledge)", n, re.I):
+        return False
+    if re.fullmatch(r"(the\s+)?(window|door|sill|railing|lantern|lamp|pane|frame)", n, re.I):
+        return False
+    # "... window/door/sill" as the head noun (Sky-crack first window) is scenery, not a locale label
+    if re.search(
+        r"\b(window|windowsill|sill|doorway|railing|fire\s*escape|lantern|lamp|pane|frame)\s*$",
+        n,
+        re.I,
+    ):
         return False
     return True
 
@@ -3351,6 +3386,12 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             stamped_batch = diversify_ability_prerequisites(
                 stamped_batch,
                 force=True,
+                origin=special_ability_origin,
+            )
+            from app.llm import assign_ability_locks_after_creation
+
+            stamped_batch = assign_ability_locks_after_creation(
+                stamped_batch,
                 origin=special_ability_origin,
             )
         except Exception:
