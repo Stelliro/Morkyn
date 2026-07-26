@@ -1639,6 +1639,8 @@ def api_image_npc_portrait(request: NpcPortraitRequest):
         width=request.width or 384,
         height=request.height or 384,
         purpose="npc_portrait",
+        loras=None,  # resolve_active_loras uses saved forge_active_loras
+        apply_loras=True,
     )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "NPC portrait failed")

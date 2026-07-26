@@ -113,6 +113,8 @@ def default_image_config() -> dict[str, Any]:
         "forge_hr_scale": 1.5,
         "forge_hr_upscaler": "Latent",
         "forge_denoising_strength": 0.45,
+        # Active LoRAs for character/NPC art (name + weight). Applied on every gen when set.
+        "forge_active_loras": [],
         # Light cross-image ref (img2img denoise). Strong uses ControlNet InstantID/IP-Adapter when installed.
         "fullbody_use_face_ref": True,
         # Higher denoise = weaker composition lock (freer full-body pose). Face is
@@ -261,6 +263,7 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
         "forge_hr_scale",
         "forge_hr_upscaler",
         "forge_denoising_strength",
+        "forge_active_loras",
         "fullbody_use_face_ref",
         "fullbody_ref_denoise",
         "character_consistency",
@@ -320,9 +323,28 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
                 continue
         elif key in bool_keys:
             next_cfg[key] = bool(payload.get(key))
+        elif key == "forge_active_loras":
+            raw_loras = payload.get(key)
+            cleaned: list[dict[str, Any]] = []
+            if isinstance(raw_loras, list):
+                for item in raw_loras[:24]:
+                    if isinstance(item, dict):
+                        nm = str(item.get("name") or "").strip()
+                        if not nm:
+                            continue
+                        try:
+                            wt = float(item.get("weight", 1.0))
+                        except (TypeError, ValueError):
+                            wt = 1.0
+                        cleaned.append({"name": nm[:200], "weight": max(0.05, min(2.0, wt))})
+                    elif isinstance(item, str) and item.strip():
+                        cleaned.append({"name": item.strip()[:200], "weight": 1.0})
+            next_cfg[key] = cleaned
         else:
             next_cfg[key] = str(payload.get(key) or "").strip()
     next_cfg["provider"] = _normalize_provider(next_cfg.get("provider"))
+    if not isinstance(next_cfg.get("forge_active_loras"), list):
+        next_cfg["forge_active_loras"] = []
     # Normalize paths (Windows paste often leaves trailing spaces/quotes).
     for path_key in ("forge_root", "comfy_root", "forge_checkpoint", "comfy_checkpoint", "forge_vae"):
         if path_key in next_cfg and next_cfg[path_key] is not None:
@@ -3529,6 +3551,30 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
     return blob.strip(" ,")
 
 
+def resolve_active_loras(loras: list[Any] | None = None, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """Prefer request LoRAs; fall back to saved forge_active_loras in image config."""
+    raw = list(loras or [])
+    if not raw:
+        conf = cfg if isinstance(cfg, dict) else get_image_config()
+        stored = conf.get("forge_active_loras")
+        if isinstance(stored, list):
+            raw = stored
+    out: list[dict[str, Any]] = []
+    for entry in raw[:24]:
+        if isinstance(entry, dict):
+            name = str(entry.get("name") or entry.get("alias") or "").strip()
+            if not name:
+                continue
+            try:
+                weight = float(entry.get("weight") if entry.get("weight") is not None else 1.0)
+            except (TypeError, ValueError):
+                weight = 1.0
+            out.append({"name": name, "weight": max(0.05, min(2.0, weight))})
+        elif isinstance(entry, str) and entry.strip():
+            out.append({"name": entry.strip(), "weight": 1.0})
+    return out
+
+
 def format_lora_tags(loras: list[Any] | None) -> str:
     """Turn [{name, weight}] into A1111/Forge prompt tags."""
     tags: list[str] = []
@@ -3772,10 +3818,17 @@ def generate_image(
         low_p = prompt.lower()
         if "full body" not in low_p and "fullbody" not in low_p:
             prompt = f"(full body:1.7), full body shot, head to toe, {prompt}" if prompt else "(full body:1.7), full body shot, head to toe"
-    if apply_loras:
-        lora_tags = format_lora_tags(loras)
+    # Always resolve LoRAs (request first, then saved config). Skip tags already in prompt.
+    resolved_loras = resolve_active_loras(loras, cfg)
+    if apply_loras and resolved_loras:
+        lora_tags = format_lora_tags(resolved_loras)
         if lora_tags:
-            prompt = f"{prompt}, {lora_tags}" if prompt else lora_tags
+            low_p = prompt.lower()
+            # Tags are space-separated <lora:…:w> chunks
+            missing_bits = [t for t in lora_tags.split() if t and t.lower() not in low_p]
+            if missing_bits:
+                add = " ".join(missing_bits)
+                prompt = f"{prompt}, {add}" if prompt else add
     if not prompt:
         return {"ok": False, "provider": provider, "error": "Prompt is empty."}
     if is_body and negative_prompt is not None:
@@ -4004,7 +4057,8 @@ def _generate_image_body(
                     clip_skip=int(cfg.get("forge_clip_skip") or 1),
                     restore_faces=restore_faces,
                     tiling=bool(cfg.get("forge_tiling")),
-                    enable_hr=bool(cfg.get("forge_enable_hr")) and not init and not use_cn,
+                    # Hires fix is txt2img-only (A1111/Forge); skip when img2img init or ControlNet unit.
+                    enable_hr=bool(cfg.get("forge_enable_hr")) and not bool(init) and not use_cn,
                     hr_scale=float(cfg.get("forge_hr_scale") or 1.5),
                     hr_upscaler=str(cfg.get("forge_hr_upscaler") or "Latent"),
                     denoising_strength=denoise,
@@ -7004,6 +7058,7 @@ def generate_character_set(
             cfg_n = min(cfg_n, 7.5)
             steps_n = max(24, min(steps_n, 32))
 
+        # Always pass LoRAs: final engine prompts may omit them; generate_image de-dupes tags.
         gen = generate_image(
             prompt=prompt,
             negative_prompt=kind_negative,
@@ -7013,11 +7068,11 @@ def generate_character_set(
             cfg_scale=cfg_n,
             seed=kind_seed,
             purpose=f"character_{kind}",
-            loras=[] if use_final else loras,
+            loras=loras,
             init_image=init_image,
             denoising_strength=denoise,
             apply_primary=not use_final,
-            apply_loras=not use_final,
+            apply_loras=True,
             face_lock_image=face_lock,
             consistency_mode=str(cfg.get("character_consistency") or "auto"),
         )

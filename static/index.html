@@ -760,7 +760,19 @@
                   </div>
                 </div>
 
-                <details class="artLoraDropdown imageAdvancedOnly" id="setupArtLoraDropdown">
+                <!-- LoRAs + hires: always visible (simple + advanced) — core art path, not optional advanced chrome -->
+                <div class="artGenQualityBar" id="setupArtQualityBar">
+                  <label class="inlineCheck" title="txt2img only (off when using face-ref img2img)">
+                    <input type="checkbox" id="setupArtEnableHr" />
+                    <span>Hires fix</span>
+                  </label>
+                  <label class="artHrScaleLabel" title="Upscale factor after first pass">
+                    <span>Scale</span>
+                    <input id="setupArtHrScale" type="number" min="1" max="2.5" step="0.05" value="1.5" />
+                  </label>
+                  <span class="muted artHrHint" id="setupArtHrHint">Uses Forge settings · LoRAs apply to face, body &amp; NPCs</span>
+                </div>
+                <details class="artLoraDropdown" id="setupArtLoraDropdown">
                   <summary class="artLoraSummary">
                     <span class="artLoraSummaryTitle">LoRAs</span>
                     <span class="artLoraSummaryMeta" id="setupArtLoraSummary">None selected · click to browse</span>
@@ -769,7 +781,7 @@
                   <div class="artLoraDropdownBody">
                     <div class="artLoraToolbar">
                       <input id="setupArtLoraFilter" type="search" placeholder="Filter LoRAs…" autocomplete="off" aria-label="Filter LoRAs" />
-                      <span class="muted artLoraHint" id="setupArtLoraHint">Forge style — check to enable, set weight like A1111</span>
+                      <span class="muted artLoraHint" id="setupArtLoraHint">Forge style — check to enable, set weight like A1111. Saved for NPC gens too.</span>
                     </div>
                     <div id="setupArtLoraList" class="loraPickList" role="group" aria-label="LoRA selection"></div>
                   </div>

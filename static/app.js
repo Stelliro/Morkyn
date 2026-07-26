@@ -10636,6 +10636,8 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
     setPlayerArtStatus("Hook Forge/Comfy if running; start only if offline…");
     try {
       const faceRef = playerFaceUrl() || "";
+      // Ensure latest LoRA/hires toggles are on the server before gen
+      persistArtQualitySettings({ silent: true });
       const res = await fetch("/api/image/character-set", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -10647,6 +10649,7 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
           subject: "player",
           use_face_reference: true,
           reference_data_url: kinds.includes("fullbody") && !kinds.includes("face") ? faceRef : "",
+          loras: collectSetupLoras(),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -10702,6 +10705,11 @@ async function loadImageConfig() {
   if (!response.ok) throw new Error(await response.text());
   imageConfig = await response.json();
   syncPortraitControls();
+  syncArtQualityControlsFromConfig();
+  // Re-render LoRA list so saved checks appear after config loads
+  if (document.querySelector("#setupArtLoraList")) {
+    renderSetupLoraList(document.querySelector("#setupArtLoraFilter")?.value || "");
+  }
   return imageConfig;
 }
 
@@ -11040,6 +11048,7 @@ function imagePayloadFromForm(form) {
     forge_restore_faces: !!form.querySelector('input[name="forge_restore_faces"]')?.checked,
     forge_tiling: !!form.querySelector('input[name="forge_tiling"]')?.checked,
     forge_enable_hr: !!form.querySelector('input[name="forge_enable_hr"]')?.checked,
+    forge_active_loras: Array.isArray(imageConfig?.forge_active_loras) ? imageConfig.forge_active_loras : collectSetupLoras(),
     forge_hr_scale: finiteNumber(formData.get("forge_hr_scale"), 1.5),
     forge_hr_upscaler: forgeHrUpscaler,
     forge_denoising_strength: finiteNumber(formData.get("forge_denoising_strength"), 0.45),
@@ -11425,15 +11434,69 @@ let setupArtBackendTab = "forge";
 
 function collectSetupLoras() {
   const list = document.querySelector("#setupArtLoraList");
-  if (!list) return [];
-  return [...list.querySelectorAll("input[data-lora-name]:checked")].map((el) => {
-    const name = el.getAttribute("data-lora-name") || "";
-    const weightEl = [...list.querySelectorAll("input[data-lora-weight]")].find(
-      (w) => w.getAttribute("data-lora-weight") === name,
-    );
-    const weight = parseFloat(weightEl?.value || "1") || 1;
-    return { name, weight };
-  }).filter((x) => x.name);
+  if (!list) {
+    // Fallback to last saved config (play / NPC gen when setup list not mounted)
+    const stored = imageConfig?.forge_active_loras;
+    return Array.isArray(stored)
+      ? stored.filter((x) => x && x.name).map((x) => ({ name: String(x.name), weight: Number(x.weight) || 1 }))
+      : [];
+  }
+  return [...list.querySelectorAll("input[data-lora-name]:checked")]
+    .map((el) => {
+      const name = el.getAttribute("data-lora-name") || "";
+      const weightEl = [...list.querySelectorAll("input[data-lora-weight]")].find(
+        (w) => w.getAttribute("data-lora-weight") === name,
+      );
+      const weight = parseFloat(weightEl?.value || "1") || 1;
+      return { name, weight };
+    })
+    .filter((x) => x.name);
+}
+
+/** Push LoRA selection + hires toggles into image config (used by NPC gens too). */
+let _persistArtQualityTimer = null;
+function persistArtQualitySettings({ silent = true } = {}) {
+  clearTimeout(_persistArtQualityTimer);
+  _persistArtQualityTimer = setTimeout(async () => {
+    try {
+      if (!imageConfig) await loadImageConfig();
+      const loras = collectSetupLoras();
+      const enableHr = !!document.querySelector("#setupArtEnableHr")?.checked;
+      const hrScale = Math.max(1, Math.min(2.5, parseFloat(document.querySelector("#setupArtHrScale")?.value || "1.5") || 1.5));
+      const patch = {
+        ...(imageConfig || {}),
+        forge_active_loras: loras,
+        forge_enable_hr: enableHr,
+        forge_hr_scale: hrScale,
+      };
+      const res = await fetch("/api/image-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (res.ok) {
+        imageConfig = await res.json();
+        if (!silent) setSetupArtStatus?.(`Saved ${loras.length} LoRA(s)${enableHr ? " · hires on" : ""}.`);
+      }
+    } catch (_) {
+      /* ignore */
+    }
+  }, 280);
+}
+
+function syncArtQualityControlsFromConfig() {
+  const cfg = imageConfig || {};
+  const hr = document.querySelector("#setupArtEnableHr");
+  if (hr) hr.checked = !!cfg.forge_enable_hr;
+  const scale = document.querySelector("#setupArtHrScale");
+  if (scale && cfg.forge_hr_scale != null) scale.value = String(cfg.forge_hr_scale);
+  const hint = document.querySelector("#setupArtHrHint");
+  if (hint) {
+    const n = Array.isArray(cfg.forge_active_loras) ? cfg.forge_active_loras.length : 0;
+    hint.textContent = cfg.forge_enable_hr
+      ? `Hires ×${cfg.forge_hr_scale || 1.5} (txt2img) · ${n} LoRA(s) saved for NPC gens`
+      : `Hires off · ${n} LoRA(s) saved for NPC gens`;
+  }
 }
 
 /** Apply a data/portraits file into face or fullbody slots (setup + play). */
@@ -11546,7 +11609,23 @@ function renderSetupLoraList(filter = "") {
   const host = document.querySelector("#setupArtLoraList");
   if (!host) return;
   const q = String(filter || "").toLowerCase().trim();
-  const selected = new Map(collectSetupLoras().map((l) => [l.name, l.weight]));
+  // Prefer live DOM checks; if list not yet built, seed from saved forge_active_loras
+  const selected = new Map();
+  const hasDom = host.querySelector("input[data-lora-name]");
+  if (hasDom) {
+    for (const el of host.querySelectorAll("input[data-lora-name]:checked")) {
+      const name = el.getAttribute("data-lora-name") || "";
+      if (!name) continue;
+      const weightEl = [...host.querySelectorAll("input[data-lora-weight]")].find(
+        (w) => w.getAttribute("data-lora-weight") === name,
+      );
+      selected.set(name, parseFloat(weightEl?.value || "1") || 1);
+    }
+  } else {
+    for (const l of imageConfig?.forge_active_loras || []) {
+      if (l?.name) selected.set(String(l.name), Number(l.weight) || 1);
+    }
+  }
   const items = (setupArtLoraCatalog || [])
     .filter((l) => {
       const name = String(l.name || l.alias || "");
@@ -11559,7 +11638,7 @@ function renderSetupLoraList(filter = "") {
         ? "ComfyUI LoRA list is limited here — wire LoRAs in your workflow, or use ForgeSD for extra-network style picks."
         : setupArtLoraCatalog.length
           ? "No LoRAs match filter."
-          : "No LoRAs loaded — start Forge and expand this dropdown (or open Studio).";
+          : "No LoRAs loaded — start Forge and Refresh catalog (or open Studio).";
     host.innerHTML = `<span class="empty">${emptyMsg}</span>`;
     updateSetupLoraSummary();
     return;
@@ -11570,7 +11649,7 @@ function renderSetupLoraList(filter = "") {
       const checked = selected.has(name) ? "checked" : "";
       const weight = selected.get(name) ?? 1;
       const short = name.length > 52 ? `${name.slice(0, 50)}…` : name;
-      return `<label><input type="checkbox" data-lora-name="${escapeHtml(name)}" ${checked} /><span title="${escapeHtml(name)}">${escapeHtml(short)}</span><input class="loraWeight" type="number" min="0.05" max="2" step="0.05" value="${weight}" data-lora-weight="${escapeHtml(name)}" title="Weight" /></label>`;
+      return `<label class="loraPickRow"><input type="checkbox" data-lora-name="${escapeHtml(name)}" ${checked} /><span title="${escapeHtml(name)}">${escapeHtml(short)}</span><input class="loraWeight" type="number" min="0.05" max="2" step="0.05" value="${weight}" data-lora-weight="${escapeHtml(name)}" title="Weight" /></label>`;
     })
     .join("");
   updateSetupLoraSummary();
@@ -12372,8 +12451,11 @@ async function generateSetupPortrait(kindOrKinds = "both") {
             .catch(() => {});
         }
       }
+      // Persist LoRAs + hires so NPC gens share the same stack
+      persistArtQualitySettings({ silent: true });
       // Never send client-only keys; avoids accidental validation noise.
       const { _checkpoint: _ck, ...sendBody } = payload;
+      sendBody.loras = collectSetupLoras();
       const response = await fetch("/api/image/character-set", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -15871,6 +15953,11 @@ document.addEventListener("input", (event) => {
     event.target?.matches?.("#setupArtLoraList input[data-lora-name], #setupArtLoraList input[data-lora-weight]")
   ) {
     updateSetupLoraSummary();
+    persistArtQualitySettings({ silent: true });
+  }
+  if (event.target?.id === "setupArtHrScale") {
+    persistArtQualitySettings({ silent: true });
+    syncArtQualityControlsFromConfig();
   }
   const eng = event.target?.getAttribute?.("data-engine-prompt");
   if (eng) {
@@ -15891,6 +15978,12 @@ document.addEventListener("change", (event) => {
     event.target?.matches?.("#setupArtLoraList input[data-lora-name], #setupArtLoraList input[data-lora-weight]")
   ) {
     updateSetupLoraSummary();
+    persistArtQualitySettings({ silent: true });
+  }
+  if (event.target?.id === "setupArtEnableHr") {
+    persistArtQualitySettings({ silent: true });
+    if (imageConfig) imageConfig.forge_enable_hr = !!event.target.checked;
+    syncArtQualityControlsFromConfig();
   }
 });
 

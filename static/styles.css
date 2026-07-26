@@ -1928,6 +1928,98 @@ body.image-mode-simple .imageAdvancedOnly,
   display: none !important;
 }
 
+/* LoRA + hires quality bar — always on (simple + advanced) */
+.artGenQualityBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--surface-2, var(--surface)) 90%, transparent);
+  font-size: 0.82rem;
+}
+.artHrScaleLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.artHrScaleLabel input {
+  width: 4.2rem;
+  padding: 2px 6px;
+}
+.artHrHint {
+  font-size: 0.72rem;
+  flex: 1 1 10rem;
+}
+.artLoraDropdown {
+  margin: 4px 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.artLoraDropdown > summary {
+  cursor: pointer;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  font-size: 0.85rem;
+}
+.artLoraDropdown > summary::-webkit-details-marker {
+  display: none;
+}
+.artLoraSummaryTitle {
+  font-weight: 700;
+}
+.artLoraSummaryMeta {
+  color: var(--muted);
+  font-size: 0.78rem;
+  flex: 1;
+}
+.artLoraDropdownBody {
+  padding: 0 10px 10px;
+  border-top: 1px solid var(--line);
+}
+.artLoraToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+.artLoraToolbar input[type="search"] {
+  flex: 1 1 12rem;
+  min-width: 8rem;
+}
+.loraPickList {
+  display: grid;
+  gap: 4px;
+  max-height: 11rem;
+  overflow: auto;
+  padding-right: 4px;
+}
+.loraPickRow {
+  display: grid;
+  grid-template-columns: auto 1fr 4.5rem;
+  gap: 8px;
+  align-items: center;
+  font-size: 0.8rem;
+  padding: 3px 4px;
+  border-radius: 4px;
+}
+.loraPickRow:hover {
+  background: color-mix(in srgb, var(--surface-2, var(--surface)) 85%, var(--neon, #6cf) 8%);
+}
+.loraPickRow input[type="number"] {
+  width: 100%;
+  padding: 2px 4px;
+}
+
 body.image-mode-advanced .imageSimpleOnly,
 .characterArtCard.imageUiAdvanced .imageSimpleOnly {
   display: none !important;
