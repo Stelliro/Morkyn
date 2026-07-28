@@ -391,7 +391,7 @@
                 <div class="setupSimpleGrid">
                   <label class="simpleSetupField">
                     <span>Name</span>
-                    <input id="simplePlayerName" type="text" maxlength="80" placeholder="Wanderer" autocomplete="off" data-setup-field="player_name" data-simple-ai="true" />
+                    <input id="simplePlayerName" type="text" maxlength="80" placeholder="e.g. Mara Ellison" autocomplete="off" data-setup-field="player_name" data-simple-ai="true" />
                   </label>
                   <label class="simpleSetupField">
                     <span>Age</span>
@@ -663,10 +663,10 @@
                     <p class="empty" id="setupArtSimpleStatus">Negatives load automatically. Press <strong>Generate prompt</strong> (or finish Randomize) before generating images. Use <strong>Start ForgeSD</strong> separately when ready.</p>
                     <div class="artActionsRow">
                       <div class="artKindActions artActionsPrimary">
-                        <button type="button" class="secondaryButton" id="setupArtGeneratePromptSimple" data-generate-prompt title="Build positive prompts from identity">Generate prompt</button>
                         <button type="button" class="secondaryButton" data-art-kind="face" data-simple-art-gen="face" data-art-image-gen title="Requires prompt first">Generate face</button>
                         <button type="button" class="secondaryButton" data-art-kind="fullbody" data-simple-art-gen="fullbody" data-art-image-gen title="Requires prompt first">Generate body</button>
                         <button type="button" class="secondaryButton" data-art-kind="both" data-simple-art-gen="both" data-art-image-gen title="Requires prompt first">Both</button>
+                        <button type="button" class="secondaryButton" id="setupArtGeneratePromptSimple" data-generate-prompt title="Rebuild positives from identity (can overwrite hand-typed prompts)">Generate prompt</button>
                         <button type="button" class="secondaryButton chipBtn" data-requires-forge-image data-open-image-studio title="Image Studio">Studio…</button>
                       </div>
                       <div class="artKindActions artActionsForge">
@@ -742,8 +742,8 @@
                     <p class="empty" id="setupArtLockStatus" hidden></p>
                     <div class="artActionsRow">
                       <div class="artKindActions artActionsPrimary">
-                        <button type="button" class="secondaryButton" id="setupArtRebuildBtn" data-generate-prompt title="Build positive prompts from identity + settings">Generate prompt</button>
                         <button type="button" class="secondaryButton" id="portraitPreviewBtn" data-art-generate data-art-image-gen title="Generate the selected Face or Full body tab (requires prompt)">Generate image</button>
+                        <button type="button" class="secondaryButton" id="setupArtRebuildBtn" data-generate-prompt title="Rebuild positives from identity + settings (can overwrite hand-typed prompts)">Generate prompt</button>
                         <button type="button" class="secondaryButton" id="setupArtLockTestBtn" title="Probe Forge InstantID / FaceID / ReActor">Test face-lock</button>
                         <button type="button" class="secondaryButton" id="openImageStudioBtn" data-requires-forge-image data-open-image-studio title="Image Studio (after Forge is connected)">Studio…</button>
                         <button type="button" class="secondaryButton" id="openImageBrowserBtn" data-requires-forge-image data-open-image-browser title="Image Library (after Forge is connected)">Image Library ⧉</button>
@@ -762,15 +762,34 @@
 
                 <!-- LoRAs + hires: always visible (simple + advanced) — core art path, not optional advanced chrome -->
                 <div class="artGenQualityBar" id="setupArtQualityBar">
-                  <label class="inlineCheck" title="txt2img only (off when using face-ref img2img)">
+                  <label class="inlineCheck" title="Upscale after first pass. Face/txt2img uses native hires fix; fullbody face-ref uses extras upscale (needs a real ESRGAN model, not Latent).">
                     <input type="checkbox" id="setupArtEnableHr" />
-                    <span>Hires fix</span>
+                    <span>Hires / upscale</span>
                   </label>
-                  <label class="artHrScaleLabel" title="Upscale factor after first pass">
+                  <label class="artHrScaleLabel" title="Upscale factor (e.g. 1.5 = 512→768)">
                     <span>Scale</span>
-                    <input id="setupArtHrScale" type="number" min="1" max="2.5" step="0.05" value="1.5" />
+                    <input id="setupArtHrScale" type="number" min="1" max="4" step="0.05" value="1.5" />
                   </label>
-                  <span class="muted artHrHint" id="setupArtHrHint">Uses Forge settings · LoRAs apply to face, body &amp; NPCs</span>
+                  <label class="artHrScaleLabel" title="Second-pass denoise (hires fix). Lower = closer to first pass; ~0.3–0.5 typical.">
+                    <span>Denoise</span>
+                    <input id="setupArtHrDenoise" type="number" min="0" max="1" step="0.05" value="0.45" />
+                  </label>
+                  <label class="artHrScaleLabel" title="Second-pass sampling steps (0 = same as first-pass steps). Typical 10–20.">
+                    <span>Steps</span>
+                    <input id="setupArtHrSteps" type="number" min="0" max="80" step="1" value="0" />
+                  </label>
+                  <label class="artHrUpscalerLabel" title="For fullbody face-ref gens pick R-ESRGAN 4x+ or 4x-UltraSharp (Latent only works on pure txt2img hires).">
+                    <span>Upscaler</span>
+                    <select id="setupArtHrUpscaler" aria-label="Hires upscaler">
+                      <option value="R-ESRGAN 4x+">R-ESRGAN 4x+</option>
+                      <option value="4x-UltraSharp">4x-UltraSharp</option>
+                      <option value="ESRGAN_4x">ESRGAN_4x</option>
+                      <option value="Latent">Latent (txt2img only)</option>
+                      <option value="Latent (nearest-exact)">Latent (nearest-exact)</option>
+                      <option value="Nearest">Nearest</option>
+                    </select>
+                  </label>
+                  <span class="muted artHrHint" id="setupArtHrHint">Hires off · body face-ref uses extras (pick ESRGAN, not Latent)</span>
                 </div>
                 <details class="artLoraDropdown" id="setupArtLoraDropdown">
                   <summary class="artLoraSummary">
@@ -781,7 +800,7 @@
                   <div class="artLoraDropdownBody">
                     <div class="artLoraToolbar">
                       <input id="setupArtLoraFilter" type="search" placeholder="Filter LoRAs…" autocomplete="off" aria-label="Filter LoRAs" />
-                      <span class="muted artLoraHint" id="setupArtLoraHint">Forge style — check to enable, set weight like A1111. Saved for NPC gens too.</span>
+                      <span class="muted artLoraHint" id="setupArtLoraHint">Opt-in only · uses each LoRA’s preferred weight &amp; trigger keywords · thumbnails from sidecar previews</span>
                     </div>
                     <div id="setupArtLoraList" class="loraPickList" role="group" aria-label="LoRA selection"></div>
                   </div>
@@ -791,12 +810,12 @@
               <div class="setupGrid">
                 <label>
                   <span>Name</span>
-                  <input name="player_name" value="Wanderer" maxlength="80" />
+                  <input name="player_name" value="" maxlength="80" placeholder="Personal name, e.g. Mara Ellison" />
                 </label>
 
                 <label>
                   <span>Known As</span>
-                  <input name="player_public_name" value="" maxlength="100" placeholder="Optional public name, nickname, or alias" />
+                  <input name="player_public_name" value="" maxlength="100" placeholder="Optional nickname, handle, or alias (not the legal name)" />
                 </label>
 
                 <label>
@@ -912,13 +931,13 @@
                 <details class="powersDropdown" id="powersDropdown">
                   <summary class="powersDropdownSummary">
                     <span class="powersDropdownTitle">Powers</span>
-                    <span class="powersDropdownMeta" id="powersDropdownMeta">None · open to set origin, count range, abilities</span>
+                    <span class="powersDropdownMeta" id="powersDropdownMeta">None · open to set count range and abilities</span>
                     <span class="powersDropdownChevron" aria-hidden="true">▾</span>
                   </summary>
                   <div class="powersDropdownBody">
                     <header class="subsectionHeader">
                       <div>
-                        <p class="empty">Add none, one, or several abilities. Growth type per card; Calculate level-up math fills numbers from world/difficulty. Final math also refreshes at Start.</p>
+                        <p class="empty">Add none, one, or several abilities. Per-card Locked + prerequisites cover learned vs starting powers. Growth type per card; Calculate level-up math fills numbers from world/difficulty. Final math also refreshes at Start.</p>
                       </div>
                       <div class="subsectionActions">
                         <button id="calcAllGrowthMathBtn" class="secondaryButton" type="button" title="Fill empty growth math from power type + setup context">Calculate all level-up math</button>
@@ -928,14 +947,6 @@
                         <button id="addAbilityButton" class="secondaryButton" type="button">Add Ability</button>
                       </div>
                     </header>
-                    <fieldset id="abilityOriginOptions" class="optionSet abilityOriginOptions">
-                      <legend>Ability Origin</legend>
-                      <label><input type="radio" name="special_ability_origin" value="none" checked /> None</label>
-                      <label><input type="radio" name="special_ability_origin" value="acquired" /> Acquired</label>
-                      <label><input type="radio" name="special_ability_origin" value="innate" /> Innate</label>
-                      <label><input type="radio" name="special_ability_origin" value="both" /> Both</label>
-                      <p class="settingDescription empty">Acquired = usually locked/learned in play. Innate = usable at start. Both = mix per ability. None = no special powers.</p>
-                    </fieldset>
                     <div class="abilityCountRangeRow" id="abilityCountRangeRow">
                       <span class="abilityCountRangeLabel">Randomize ability count</span>
                       <label class="abilityCountRangeField">

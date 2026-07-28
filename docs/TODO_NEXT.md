@@ -81,6 +81,8 @@ Go top-down. Send one item at a time (“send him in” = implement that id).
 
 ## Not implemented (explicit backlog)
 
+> **Priority note (2026-07-26):** Do **not** start large new systems right now. Focus on fixing/polishing what already ships (setup, resources, art prompts, sanitation, play loop). New features below stay parked until that stabilizes.
+
 | # | Id | Task | Size | Notes |
 |---|-----|------|------|--------|
 | 1 | **n1** | Full economy simulation | L | Out of scope for time/event arc |
@@ -95,6 +97,8 @@ Go top-down. Send one item at a time (“send him in” = implement that id).
 | 10 | **n10** | Inventory hallucination hard reject in apply_turn | M | Prompts only; apply layer doesn’t strip invented items |
 | 11 | **n11** | Automated regression for wait/weather/rep | S | Unit-ish scripts ad hoc; no CI suite |
 | ~~12~~ | ~~**n12**~~ | ~~Playtest re-run after systems + fix 8B inventory~~ | M | Done 2026-07-25: 4/4 turns, solid, 0 hard issues |
+| 13 | **n13** | **Capture / restraint: LLM can lock player in place** | L | **Parked — design only.** When the player is **captured** (cell, bonds, custody), the GM/LLM must be able to: (1) **freeze map movement** so free-step/travel cannot walk out; (2) set a **stuck duration** (minutes/hours/days, or **indefinite** until a condition); (3) still allow in-place play (talk, wait, train, invent escape) when escape may require skill growth; (4) **move/set player map position** for escort-to-cell, drag-off, prison transfer (implies server-trusted position apply, not free player teleport spam); (5) **auto-pathing** for forced escorts / “guards take you there” so the map animates a path rather than a hard snap. Gate: only on real capture/restraint outcomes — never casual scene flavor. Depends on clear state (`restrained` / `custody` / location flags), travel hard-block, wait/train while locked, and optional unlock conditions. **Do not implement until current WIP is solid.** |
+| 14 | **n14** | **Scene cast + `{NPC}` placeholders (anti gear-as-person)** | L | **Parked — design approved in spirit; implement after integrity polish.** See design notes below. |
 
 ---
 
@@ -130,9 +134,62 @@ Go top-down. Send one item at a time (“send him in” = implement that id).
 
 | # | Id | Task | Size |
 |---|-----|------|------|
-| — | — | Queue cleared for this arc | — |
+| 1 | **n14** | Scene cast + `{NPC}` / `{ITEM}` placeholders + verifier | L |
+| — | n1 / n2 / g17 | Optional later | — |
 
-Next optional backlog: n1 economy, n2 multiplayer clock, deeper g17 concurrency polish, more g18 if new example blocks appear.
+---
+
+## n14 design (scene cast + placeholders) — parked
+
+**Problem (seen in export `ai-rpg-world-1785072774757`):** 8B writes faction lines like  
+`L1's allies or I1's rebels` / `travel-stained coat's rebels` — places and inventory used as people. NPCs appear in prose but `npcs` table stays empty.
+
+**Server-first approach (do not trust freeform names):**
+
+1. **`involved` / scene cast (structured, before or with ops)**  
+   Deterministic-ish cast list for the beat, e.g.  
+   `involved: { npcs: [{slot:"NPC_1", role_hint:"hooded broker", code:null}], items:[{slot:"ITEM_1", ref:"I1"|null}], places:[{slot:"PLACE_1", code:"L1"}] }`  
+   Prefer reusing known codes from location/inventory; only invent slots for new faces.
+
+2. **Draft narration with placeholders only**  
+   Model (or NAR stage) must write agents as `{NPC_1}`, `{PLACE_1}`, `{ITEM_1}` — never free-text coat/inn as a person.  
+   Example: `Choose your side—{NPC_1}'s allies or {NPC_2}'s rebels`.
+
+3. **Bind pass (deterministic)**  
+   Map slots → codes/names from `involved` + DB.  
+   `{NPC_1}` → `Mara [[A]]`; `{PLACE_1}` → `Second Shadow Inn [[L1]]`; `{ITEM_1}` only for object phrasing (`your travel-stained coat [[I1]]`), never as faction head.
+
+4. **Verifier gates (fail → re-fill placeholders or one repair call)**  
+   - Every `{NPC_*}` bound to a **person** name/code (not inventory).  
+   - Every `{ITEM_*}` bound to inventory/item type.  
+   - Reject gear/place heads with agent verbs / faction possessives.  
+   - If model filled a slot with clothing label → reject and re-roll name from `invent_person_name` or re-ask bind only.
+
+5. **Why this works without full LLM trust**  
+   Cast size and types are constrained by server; prose may only *refer* to slots; naming is a fill-in map, not free invention mid-sentence.
+
+**Do not implement until:** export integrity fixes (ability codes, equip worn gear, starter item merge bugs, settings pollution) are stable.
+
+---
+
+## Export audit notes (`ai-rpg-world-1785072774757.json`, 2026-07-26)
+
+Integrity / quality issues found (fix when touching apply/setup, not all blocking):
+
+| Severity | Issue |
+|----------|--------|
+| High | Opening names figures but **`npcs` = 0**; conversation `npc_id` null |
+| High | Narration agents as **`L1's` / `I1's`** (code-as-person) |
+| High | Ability rows **`code`/`power_type` null** in export payload |
+| Med | Item **`water skin [mixed] — stained coat`** (merge/corruption); type clothing |
+| Med | Worn gear (coat/boots) **not equipped** into TORSO/FEET |
+| Med | Player name **`Sweat Marker`** (setup 8B garbage) |
+| Med | Location summary polluted with **setup slogans** (power fantasy / DM stance) |
+| Med | **10× `settlement_ruler:Stest*`** + `quest_stages` test pollution in settings |
+| Low | Turn summary / history_summaries are **pipeline stubs**, not real scene text |
+| Low | Self-check `passed: true` despite short narration + name repairs |
+
+Next optional backlog: n1 economy, n2 multiplayer clock, deeper g17 concurrency polish.
 
 ---
 

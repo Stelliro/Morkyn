@@ -232,7 +232,7 @@ TURN_INTENT_LIMITS = {
 ACTION_SEGMENT_RULES = {
     "opening_scene": [
         ("world_setup", "Read setup identity, current location, playthrough options, and nearby hooks; establish the world without choosing for the player.", ["setup", "opening", "location", "identity", "hooks"]),
-        ("starting_limits", "Respect starting health, derived equipment effects, inventory limits, ability origin, and the no-default-skills rule.", ["health", "effective_stats", "inventory", "abilities", "skills"]),
+        ("starting_limits", "Respect starting health, derived equipment effects, inventory limits, ability locks/prerequisites, and the no-default-skills rule.", ["health", "effective_stats", "inventory", "abilities", "skills"]),
     ],
     "continue_scene": [
         ("immediate_pressure", "Use current location, nearby NPCs/events, hidden clocks, and the last summaries to advance only a small beat.", ["location", "npc", "events", "pressure", "choice"]),
@@ -306,6 +306,16 @@ _NAME_SCENERY_RE = re.compile(
     r")\b",
     re.I,
 )
+# Worn gear / props — never person names (classic: "travel-stained coat" cast as an NPC/faction)
+_NAME_GEAR_RE = re.compile(
+    r"\b("
+    r"coat|cloak|jacket|robe|tunic|vest|shirt|boots?|shoes?|gloves?|hat|hood|"
+    r"satchel|bag|pack|pouch|belt|scabbard|sheath|sword|dagger|blade|bow|crossbow|"
+    r"armor|armour|helm|helmet|shield|staff|wand|tankard|mug|scrolls?|map|"
+    r"travel-?stained|oil-?stained|frayed|weathered|patched|worn\s+tool"
+    r")\b",
+    re.I,
+)
 _NAME_FUNCTION_WORDS = frozenset(
     {
         "a",
@@ -345,7 +355,7 @@ _NAME_FUNCTION_WORDS = frozenset(
 
 
 def is_plausible_person_name(name: str) -> bool:
-    """True for short proper names/titles — not event blurbs, scenery, or system job lines."""
+    """True for short proper names/titles — not event blurbs, scenery, gear, or system job lines."""
     n = norm_name(str(name or ""))
     if len(n) < 2 or len(n) > 48:
         return False
@@ -357,6 +367,12 @@ def is_plausible_person_name(name: str) -> bool:
     # Architecture / props are not people
     if _NAME_SCENERY_RE.search(n):
         return False
+    # Clothing / tools / inventory fluff is not a person or faction label
+    if _NAME_GEAR_RE.search(n):
+        return False
+    # Hyphenated outfit tags ("travel-stained coat") are wardrobe, not names
+    if re.search(r"\b\w+-\w+\s+(coat|cloak|jacket|boots?|tunic|robe)\b", n, re.I):
+        return False
     # "a cloaked figure" / "local job" / "first window" style
     if len(words) >= 3 and sum(1 for w in words if w.lower() in _NAME_FUNCTION_WORDS) >= 2:
         return False
@@ -365,8 +381,27 @@ def is_plausible_person_name(name: str) -> bool:
     # Ordinal + object ("first window", "second gate") is not a person
     if re.search(r"\b(first|second|third|last|only)\s+\w+\b", n, re.I) and len(words) <= 3:
         return False
-    # Bare code-like
-    if re.fullmatch(r"[A-Z]{1,3}\d{0,3}", n):
+    # Bare entity codes (case-insensitive): L1, I2, E3, A, AB — never people
+    if re.fullmatch(r"[A-Za-z]{1,3}\d{0,3}", n):
+        return False
+    if re.fullmatch(r"[LIElie]\d+", n):
+        return False
+    # Bare place nouns ("the inn", "nearby street", "gate") are not people
+    if re.fullmatch(
+        r"(the\s+)?(inn|tavern|pub|bar|gate|road|street|square|market|harbor|harbour|"
+        r"dock|bridge|tower|temple|church|school|manor|castle|keep|fort|camp|"
+        r"village|town|city|forest|cave|ruins?|alley|plaza|hall)",
+        n,
+        re.I,
+    ):
+        return False
+    # Place-ish multiword heads ("… Inn", "… Gate", "… Street")
+    if re.search(
+        r"\b(inn|tavern|pub|gate|road|street|square|market|harbor|harbour|bridge|"
+        r"tower|temple|church|manor|castle|keep|fort|village|town|city|alley|plaza|hall)\s*$",
+        n,
+        re.I,
+    ) and len(words) >= 2:
         return False
     return True
 
@@ -407,16 +442,22 @@ def invent_person_name(*, seed: int | None = None) -> str:
 
 
 def _ability_origin(value: Any, has_requested_abilities: bool = False) -> str:
+    """
+    Legacy playthrough option. UI no longer exposes Ability Origin —
+    empty ability list means no powers; non-empty list uses per-card locks.
+    When abilities are present but origin is missing/none, default to both.
+    """
     cleaned = str(value or "").strip().lower().replace("-", " ").replace("_", " ")
-    if cleaned in {"none", "no abilities", "no special abilities"}:
-        return "none"
     if cleaned in {"innate", "born with", "inborn", "inherent", "natural"}:
         return "innate"
     if cleaned in {"acquired", "gained", "learned", "earned", "unlocked"}:
         return "acquired"
     if cleaned in {"both", "mixed", "mix", "acquired and innate", "innate and acquired"}:
         return "both"
-    return "acquired" if has_requested_abilities else "none"
+    if cleaned in {"none", "no abilities", "no special abilities"}:
+        # Prefer the ability list over a stale "none" origin from old saves.
+        return "both" if has_requested_abilities else "none"
+    return "both" if has_requested_abilities else "none"
 
 
 def clamp(value: int, low: int, high: int) -> int:
@@ -2789,14 +2830,132 @@ def _maybe_spawn_offscreen_gm_event(conn, turn: int) -> None:
     )
 
 
+def _is_place_or_item_code(value: Any) -> bool:
+    """True for location/item/event codes (L1, I2, E3) — never valid NPC codes."""
+    return bool(re.fullmatch(r"[LIElie]\d+", str(value or "").strip()))
+
+
+def _looks_like_misfiled_location(npc: dict[str, Any]) -> bool:
+    """
+    Model sometimes puts a place into the npcs[] array:
+      {code: L1, name: \"Second Shadow Inn\", role: location|place|inn}
+    Those must not become people.
+    """
+    if not isinstance(npc, dict):
+        return True
+    code = str(npc.get("code") or "").strip()
+    name = norm_name(str(npc.get("name") or ""))
+    role = str(npc.get("role") or "").strip().lower()
+    if _is_place_or_item_code(code) and (
+        not name
+        or not is_plausible_person_name(name)
+        or role in {"location", "place", "locale", "site", "area", "room", "building", "inn", "gate", "road"}
+    ):
+        return True
+    if role in {"location", "place", "locale", "site", "area", "room", "building"}:
+        return True
+    # Name is only a place code
+    if _is_place_or_item_code(name):
+        return True
+    return False
+
+
+def _collect_npcs_from_turn_result(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    Flatten top-level npcs + nested locations[].npcs.
+    8B models often nest cast under the place and leave top-level npcs empty —
+    that was creating places with zero people, then prose fell back to [[L1]] as a 'character'.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def add(raw: Any, *, default_location: str = "") -> None:
+        if isinstance(raw, str):
+            text = norm_name(raw)
+            if not text or _is_place_or_item_code(text):
+                return
+            raw = {"name": text, "location": default_location}
+        if not isinstance(raw, dict):
+            return
+        npc = dict(raw)
+        if _looks_like_misfiled_location(npc):
+            return
+        # Strip place/item codes forced into npc.code (allocate real alpha on insert)
+        code = str(npc.get("code") or "").strip()
+        if _is_place_or_item_code(code) or re.fullmatch(r"I\d+|E\d+", code, re.I):
+            npc["code"] = ""
+        if default_location and not (npc.get("location") or npc.get("location_code")):
+            npc["location"] = default_location
+        name = norm_name(str(npc.get("name") or ""))
+        # Reject bare place codes as names
+        if _is_place_or_item_code(name):
+            return
+        key = f"{str(npc.get('code') or '').upper()}|{name.lower()}"
+        if key in seen or key == "|":
+            return
+        seen.add(key)
+        out.append(npc)
+
+    for npc in result.get("npcs") or []:
+        add(npc)
+    for loc in result.get("locations") or []:
+        if not isinstance(loc, dict):
+            continue
+        loc_ref = str(loc.get("name") or loc.get("code") or "").strip()
+        nested = loc.get("npcs") or loc.get("people") or loc.get("characters") or []
+        if isinstance(nested, list):
+            for npc in nested:
+                add(npc, default_location=loc_ref)
+    # Conversations / events often name speakers the model forgot to put in npcs[]
+    for convo in result.get("conversations") or []:
+        if not isinstance(convo, dict):
+            continue
+        ref = str(convo.get("npc_name") or convo.get("name") or "").strip()
+        code = str(convo.get("npc_code") or convo.get("code") or "").strip()
+        if _is_place_or_item_code(code):
+            code = ""
+        if ref and not _is_place_or_item_code(ref):
+            add({"name": ref, "code": code, "role": "local", "presence": "event_worthy"})
+        elif code and re.fullmatch(r"[A-Za-z]{1,3}", code):
+            # Known alpha code only — let upsert match existing; no place codes
+            add({"code": code, "name": "", "role": "local"})
+    for event in result.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        ref = str(event.get("npc_name") or "").strip()
+        code = str(event.get("npc_code") or "").strip()
+        if _is_place_or_item_code(code):
+            code = ""
+        if ref and not _is_place_or_item_code(ref):
+            add(
+                {
+                    "name": ref,
+                    "code": code,
+                    "location": event.get("location") or event.get("location_code") or "",
+                    "role": "local",
+                    "presence": "event_worthy",
+                }
+            )
+    return out
+
+
 def _sanitize_stored_entity_names(conn) -> None:
     """One-shot cleanup for corrupt saves (event titles used as people/places)."""
     try:
+        # NPC rows that stole location/item codes (L1/I1) → reassign alpha codes
         for row in conn.execute("SELECT id, name, code FROM npcs").fetchall():
+            code = str(row["code"] or "").strip()
+            if _is_place_or_item_code(code) or re.fullmatch(r"I\d+|E\d+", code, re.I) or not code:
+                try:
+                    new_code = _next_alpha_code(conn, "npcs")
+                    conn.execute("UPDATE npcs SET code = ? WHERE id = ?", (new_code, int(row["id"])))
+                    code = new_code
+                except Exception:
+                    pass
             name = str(row["name"] or "")
             if is_plausible_person_name(name):
                 continue
-            seed = abs(hash(f"{row['code']}|{row['id']}")) % (10**9)
+            seed = abs(hash(f"{code}|{row['id']}")) % (10**9)
             fixed = invent_person_name(seed=seed)
             conn.execute("UPDATE npcs SET name = ? WHERE id = ?", (fixed, int(row["id"])))
         for row in conn.execute("SELECT id, name, code FROM locations").fetchall():
@@ -3122,6 +3281,32 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         state["travel_ready"] = tr
     else:
         state["travel_ready"] = str(tr).lower() in {"1", "true", "yes", "on"} if tr is not None else True
+    # Location specials: heavens prison (blank map + no free movement), etc.
+    loc_flags = settings.get("location_special_flags")
+    if isinstance(loc_flags, str) and loc_flags.strip():
+        try:
+            loc_flags = json.loads(loc_flags)
+        except Exception:
+            loc_flags = {}
+    if not isinstance(loc_flags, dict):
+        loc_flags = {}
+    ml = settings.get("movement_locked")
+    if isinstance(ml, bool):
+        movement_locked = ml
+    else:
+        movement_locked = str(ml).lower() in {"1", "true", "yes", "on"} if ml is not None else bool(
+            loc_flags.get("movement_locked")
+        )
+    mb = settings.get("map_blank")
+    if isinstance(mb, bool):
+        map_blank = mb
+    else:
+        map_blank = str(mb).lower() in {"1", "true", "yes", "on"} if mb is not None else bool(
+            loc_flags.get("map_blank")
+        )
+    state["location_special_flags"] = loc_flags
+    state["movement_locked"] = bool(movement_locked)
+    state["map_blank"] = bool(map_blank)
     portrait = settings.get("player_portrait")
     if isinstance(portrait, dict):
         state["player_portrait"] = portrait
@@ -3245,6 +3430,55 @@ def _clear_playthrough(conn) -> None:
         shutil.rmtree(SOURCE_INDEX_DIR)
 
 
+def _sanitize_item_name(name: Any) -> str:
+    """
+    Clean inventory labels: strip bracket tags and accidental multi-item merges.
+    e.g. 'water skin [mixed] — stained coat' → 'water skin'
+    """
+    n = re.sub(r"\s+", " ", str(name or "").strip())
+    if not n:
+        return ""
+    # Drop bracketed provenance/type tags
+    n = re.sub(r"\[[^\]]*\]", " ", n)
+    # Split accidental multi-item joins on em/en dash
+    if re.search(r"[—–]", n) or " - " in n:
+        parts = re.split(r"\s*[—–]\s*|\s+-\s+", n)
+        parts = [re.sub(r"\s+", " ", p).strip(" .,;:") for p in parts if p and p.strip()]
+        if len(parts) >= 2:
+            # Prefer the first chunk if it looks like a real item phrase
+            first, rest = parts[0], parts[1]
+            # If first is tiny, take the longer piece
+            n = first if len(first) >= 3 else rest
+            # If first is a full phrase and rest is another item, keep first only
+            if len(first) >= 3:
+                n = first
+    n = re.sub(r"\s+", " ", n).strip(" .,;:|/\\")
+    # Refuse pure punctuation / empty after clean
+    if len(n) < 2:
+        return ""
+    return n[:100]
+
+
+def _default_equip_slot_for_item(name: str, item_type: str = "") -> str:
+    """Map worn starter gear to a body slot code (TORSO/FEET/…)."""
+    low = f"{name} {item_type}".lower()
+    if any(w in low for w in ("boot", "shoe", "sandal", "greave")):
+        return "FEET"
+    if any(w in low for w in ("helm", "helmet", "hat", "hood", "mask", "cap")):
+        return "HEAD"
+    if any(w in low for w in ("coat", "cloak", "robe", "jacket", "armor", "armour", "tunic", "dress", "shirt", "vest")):
+        return "TORSO"
+    if any(w in low for w in ("belt", "sash", "sheath")):
+        return "WAIST"
+    if "glove" in low or "bracer" in low:
+        return "WRIST"
+    if any(w in low for w in ("ring",)):
+        return "FINGER"
+    if any(w in low for w in ("amulet", "necklace", "collar", "scarf")):
+        return "NECK"
+    return ""
+
+
 def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
     player_name = norm_name(str(options.get("player_name") or "Wanderer"))
     public_name = norm_name(str(options.get("player_public_name") or ""))
@@ -3267,6 +3501,23 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
     inventory_slot_limit = max(1, min(10000, int(_float(options.get("inventory_slot_limit"), 24))))
     inventory_rules = str(options.get("inventory_rules") or "").strip()[:900]
     start_location = norm_name(str(options.get("start_location") or "Mosswake Gate"))
+    # Isekai / transmigrated: play begins at NEW-WORLD arrival, never previous-life workplace
+    try:
+        from app.setup_composer import ensure_isekai_start_location
+
+        _sess_theme = options.get("session_theme") if isinstance(options.get("session_theme"), dict) else None
+        start_location, _loc_changed = ensure_isekai_start_location(
+            start_location,
+            backstory_mode=str(options.get("backstory_mode") or ""),
+            idea=str(options.get("_randomize_idea") or options.get("custom_style") or ""),
+            world_style=str(options.get("world_style") or ""),
+            genre=str((_sess_theme or {}).get("genre") or options.get("world_style") or ""),
+            character_backstory=str(options.get("character_backstory") or ""),
+            session_theme=_sess_theme,
+        )
+        start_location = norm_name(start_location or "Mosswake Gate")
+    except Exception:
+        pass
     skill_style = str(options.get("skill_style") or "standard")
     custom_skills = str(options.get("custom_skills") or "").strip()
     special_name = norm_name(str(options.get("special_ability_name") or "Unwritten Talent"))
@@ -3278,7 +3529,14 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         for ability in raw_abilities:
             if not isinstance(ability, dict):
                 continue
-            name = norm_name(str(ability.get("name") or ""))
+            raw_name = str(ability.get("name") or "")
+            try:
+                from app.llm import sanitize_ability_name
+
+                raw_name = sanitize_ability_name(raw_name) or raw_name
+            except Exception:
+                pass
+            name = norm_name(raw_name)
             if not name:
                 continue
             # Normalize prereq placeholders ("[]"), lock policy, and desc↔cost timing splits.
@@ -3333,6 +3591,8 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
 
     with connect() as conn:
         _clear_playthrough(conn)
+        # Drop harness leftovers so they never ride into a live export
+        _purge_test_settings(conn)
         conn.execute("INSERT INTO pacing (key, value) VALUES ('turn', '0')")
         # Calendar label from world style (short), not a full slogan
         epoch = str(world_style or "").strip().split(",")[0].strip()[:40]
@@ -3340,12 +3600,15 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             epoch = "Common Era"
         init_world_clock(conn, day=1, minute=WORLD_DEFAULT_START_MINUTE, epoch_label=epoch)
 
+        # Keep location summary place-like — never dump setup slogans into the map label
+        style_short = str(world_style or "frontier dark fantasy").strip().split(",")[0].strip()[:80]
+        loc_summary = f"Starting location for a {style_short} playthrough."
         cursor = conn.execute(
             "INSERT INTO locations (code, name, summary, visit_count) VALUES (?, ?, ?, ?)",
             (
                 "L1",
                 start_location,
-                f"Starting location for a {world_style} playthrough. {custom_style}".strip(),
+                loc_summary[:400],
                 1,
             ),
         )
@@ -3397,19 +3660,36 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             stamped_batch = list(special_abilities)
 
-        for ability in stamped_batch:
+        for ab_index, ability in enumerate(stamped_batch):
             cost_text = str(ability.get("cost") or "")[:300]
             rc = ability.get("resource_cost") if isinstance(ability.get("resource_cost"), dict) else {}
             rc_json = json.dumps(rc, ensure_ascii=True) if rc else "{}"
+            power_type = str(ability.get("power_type") or "linear").strip().lower().replace("-", "_")
+            if power_type not in {
+                "compounding",
+                "passive",
+                "linear",
+                "soft_cap",
+                "breakthrough",
+                "flat",
+                "item_bound",
+            }:
+                power_type = "linear"
+            ab_code = str(ability.get("code") or "").strip().upper() or f"AB{ab_index + 1}"
             conn.execute(
                 """
-                INSERT INTO abilities (name, description, locked, base_description, cost, prerequisites, growth_math, resource_cost, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO abilities (
+                    code, name, description, locked, power_type, base_description,
+                    cost, prerequisites, growth_math, resource_cost, source
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    ab_code[:20],
                     ability["name"],
                     ability["description"],
                     1 if ability.get("locked") else 0,
+                    power_type[:40],
                     ability.get("description") or "",
                     cost_text,
                     ability.get("prerequisites") or "",
@@ -3464,7 +3744,7 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         starter_items: list[str] = []
         if starter_raw:
             for part in re.split(r"[,;|]+", starter_raw):
-                name_item = re.sub(r"\s+", " ", part).strip(" .")
+                name_item = _sanitize_item_name(part)
                 if name_item and name_item.lower() not in {s.lower() for s in starter_items}:
                     starter_items.append(name_item[:100])
         for index, item_name in enumerate(starter_items[:12]):
@@ -3500,7 +3780,8 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             for row in starter_logic_report.get("kept") or []:
                 if not isinstance(row, dict):
                     continue
-                if str(row.get("name") or "").lower() == low:
+                kept_name = _sanitize_item_name(str(row.get("name") or "")).lower()
+                if kept_name == low or str(row.get("name") or "").lower() == low:
                     provenance = str(row.get("provenance") or "setup")
                     latent = bool(row.get("latent_possible"))
                     break
@@ -3512,10 +3793,23 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             else:
                 desc += " Mundane at Start."
             code = f"I{index + 1}"
+            equip_slot = _default_equip_slot_for_item(item_name, item_type) or ""
+            # Only one item per exclusive body slot at start
+            if equip_slot:
+                taken = conn.execute(
+                    "SELECT COUNT(*) AS c FROM inventory WHERE equipped_slot = ?",
+                    (equip_slot,),
+                ).fetchone()
+                if taken and int(taken["c"] or 0) > 0:
+                    equip_slot = ""
             conn.execute(
                 """
-                INSERT INTO inventory (code, name, description, quantity, weight, slot_size, item_type, rarity, enchantments, stat_modifiers, granted_abilities, stack_limit, carry_modifier, container_bonus_weight, container_bonus_slots, dimensional_space)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO inventory (
+                    code, name, description, quantity, weight, slot_size, item_type, rarity,
+                    enchantments, stat_modifiers, granted_abilities, stack_limit, carry_modifier,
+                    container_bonus_weight, container_bonus_slots, dimensional_space, equipped_slot
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     code,
@@ -3534,6 +3828,7 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                     0.0,
                     0,
                     0,
+                    equip_slot,
                 ),
             )
 
@@ -3678,6 +3973,33 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             pass
         _set_setting(conn, "setup_complete", "true")
         _set_setting(conn, "playthrough_options", stored_options)
+        # Location specials (heavens = blank map + movement lock; themed arrivals keep theme id)
+        try:
+            from app.setup_composer import apply_location_special_flags
+
+            loc_flags = apply_location_special_flags(
+                start_location,
+                world_style=str(world_style or ""),
+                genre=str((stored_options.get("session_theme") or {}).get("genre") or world_style or "")
+                if isinstance(stored_options.get("session_theme"), dict)
+                else str(world_style or ""),
+                idea=str(options.get("_randomize_idea") or options.get("custom_style") or ""),
+                session_theme=stored_options.get("session_theme")
+                if isinstance(stored_options.get("session_theme"), dict)
+                else None,
+            )
+            _set_setting(conn, "location_special_flags", loc_flags)
+            _set_setting(conn, "movement_locked", bool(loc_flags.get("movement_locked")))
+            _set_setting(conn, "map_blank", bool(loc_flags.get("map_blank")))
+            if loc_flags.get("movement_locked"):
+                _set_setting(conn, "travel_ready", False)
+            stored_options["location_theme"] = str(loc_flags.get("theme") or "")
+            stored_options["location_special_flags"] = loc_flags
+            _set_setting(conn, "playthrough_options", stored_options)
+        except Exception:
+            _set_setting(conn, "location_special_flags", {})
+            _set_setting(conn, "movement_locked", False)
+            _set_setting(conn, "map_blank", False)
         conn.execute(
             "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
             (0, "setup", f"Playthrough started: {json.dumps(stored_options, ensure_ascii=True)}"),
@@ -3746,11 +4068,84 @@ def _table_rows(conn, table: str) -> list[dict[str, Any]]:
     return rows_to_dicts(conn.execute(f"SELECT * FROM {table}").fetchall())
 
 
+def _is_test_settings_key(key: str) -> bool:
+    """Ephemeral / harness keys that must not pollute player exports or live saves."""
+    k = str(key or "")
+    if k.startswith("settlement_ruler:Stest"):
+        return True
+    if k.startswith("settlement_ruler:test"):
+        return True
+    if k in {"quest_stages"}:
+        # Only drop pure-test quest stage bags (all keys look like tests)
+        return False  # handled by value scrub below
+    return False
+
+
+def _scrub_settings_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Filter test pollution from settings for export."""
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "")
+        if _is_test_settings_key(key):
+            continue
+        if key == "quest_stages":
+            try:
+                raw = json.loads(str(row.get("value") or "{}"))
+            except Exception:
+                raw = {}
+            if isinstance(raw, dict):
+                cleaned = {
+                    k: v
+                    for k, v in raw.items()
+                    if "test" not in str(k).lower()
+                    and not (isinstance(v, dict) and "test" in str(v.get("kind") or "").lower())
+                }
+                if not cleaned:
+                    continue
+                row = {**row, "value": json.dumps(cleaned, ensure_ascii=True)}
+        out.append(row)
+    return out
+
+
+def _purge_test_settings(conn) -> None:
+    """Remove harness leftovers so live playthroughs stay clean."""
+    try:
+        conn.execute("DELETE FROM settings WHERE key LIKE 'settlement_ruler:Stest%'")
+        conn.execute("DELETE FROM settings WHERE key LIKE 'settlement_ruler:test%'")
+        row = conn.execute("SELECT value FROM settings WHERE key = 'quest_stages'").fetchone()
+        if row and row["value"]:
+            try:
+                raw = json.loads(str(row["value"]))
+            except Exception:
+                raw = None
+            if isinstance(raw, dict):
+                cleaned = {
+                    k: v
+                    for k, v in raw.items()
+                    if "test" not in str(k).lower()
+                    and not (isinstance(v, dict) and "test" in str(v.get("kind") or "").lower())
+                }
+                if cleaned:
+                    conn.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'quest_stages'",
+                        (json.dumps(cleaned, ensure_ascii=True),),
+                    )
+                else:
+                    conn.execute("DELETE FROM settings WHERE key = 'quest_stages'")
+    except Exception:
+        pass
+
+
 def export_world() -> dict[str, Any]:
     with connect() as conn:
+        tables = {table: _table_rows(conn, table) for table in WORLD_TABLES}
+        if "settings" in tables:
+            tables["settings"] = _scrub_settings_rows(list(tables.get("settings") or []))
         return {
             "format": "ai-rpg-world-v1",
-            "tables": {table: _table_rows(conn, table) for table in WORLD_TABLES},
+            "tables": tables,
             "history_summaries": HISTORY_SUMMARY_PATH.read_text(encoding="utf-8") if HISTORY_SUMMARY_PATH.exists() else "",
         }
 
@@ -5244,9 +5639,22 @@ def _sanitize_npc_role(role: Any) -> str:
 
 
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
+    if not isinstance(npc, dict):
+        return None
+    # Places/items misfiled as NPCs (code L1 + inn name) — skip entirely
+    if _looks_like_misfiled_location(npc):
+        return None
     name = norm_name(str(npc.get("name", "")))
     code = norm_name(str(npc.get("code", "")))
+    # Never look up / treat location or item codes as NPC codes
+    if _is_place_or_item_code(code) or re.fullmatch(r"I\d+|E\d+", code, re.I):
+        code = ""
+    if _is_place_or_item_code(name):
+        name = ""
     if not name and code:
+        # Only alpha NPC codes can resolve an existing face without a name
+        if not re.fullmatch(r"[A-Za-z]{1,3}", code):
+            return None
         existing = conn.execute("SELECT id FROM npcs WHERE code = ?", (code,)).fetchone()
         return int(existing["id"]) if existing else None
     if not name:
@@ -5257,7 +5665,12 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         name = invent_person_name(seed=seed)
         npc["name"] = name
 
-    location_id = _find_location_id(conn, npc.get("location") or npc.get("location_code"))
+    # Prefer named place; if model stuffed location_code=L1, resolve that place — do not invent a person from L1
+    loc_ref = npc.get("location") or npc.get("location_code") or npc.get("place")
+    if _is_place_or_item_code(str(loc_ref or "")):
+        # Keep L1 as a place ref (good) — _find_location_id handles L#
+        pass
+    location_id = _find_location_id(conn, loc_ref)
     race = str(npc.get("race") or npc.get("species") or "human")[:80]
     role = _sanitize_npc_role(npc.get("role") or "local")
     summary = str(npc.get("summary") or "")[:1400]
@@ -5463,16 +5876,17 @@ def _filter_inventory_changes(
     for change in changes:
         if not isinstance(change, dict):
             continue
-        name = norm_name(str(change.get("name", "")))
+        name = _sanitize_item_name(str(change.get("name", "")))
         if not name:
             continue
+        change = dict(change)
+        change["name"] = name
         try:
             delta = int(change.get("quantity_delta") or 0)
         except (TypeError, ValueError):
             delta = 0
         # Cap absurd single-turn minting even when grounded
         if delta > 99:
-            change = dict(change)
             change["quantity_delta"] = 99
             delta = 99
         existing = conn.execute("SELECT id, quantity FROM inventory WHERE name = ?", (name,)).fetchone()
@@ -5535,9 +5949,10 @@ def _filter_inventory_changes(
 
 def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
     for change in changes:
-        name = norm_name(str(change.get("name", "")))
+        name = _sanitize_item_name(str(change.get("name", "")))
         if not name:
             continue
+        change = {**change, "name": name}
         delta = int(change.get("quantity_delta") or 0)
         description = str(change.get("description") or "")[:700]
         has_weight = "weight" in change
@@ -6118,6 +6533,25 @@ def _apply_conversations(conn, conversations: list[dict[str, Any]], turn: int) -
         if not summary:
             continue
         npc_id = _npc_id_by_ref(conn, convo.get("npc_code") or convo.get("npc"))
+        # Fallback: attach orphan dialogue to a face at the player's location
+        if npc_id is None:
+            try:
+                prow = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+                loc_id = int(prow["current_location_id"]) if prow and prow["current_location_id"] else None
+            except Exception:
+                loc_id = None
+            if loc_id:
+                row = conn.execute(
+                    """
+                    SELECT id FROM npcs
+                    WHERE location_id = ?
+                    ORDER BY CASE WHEN shell = 0 THEN 0 ELSE 1 END, id DESC
+                    LIMIT 1
+                    """,
+                    (loc_id,),
+                ).fetchone()
+                if row:
+                    npc_id = int(row["id"])
         claims = convo.get("player_claims") or []
         conn.execute(
             "INSERT INTO conversations (turn, npc_id, topic, summary, player_claims) VALUES (?, ?, ?, ?, ?)",
@@ -6129,6 +6563,104 @@ def _apply_conversations(conn, conversations: list[dict[str, Any]], turn: int) -
                 json.dumps(claims if isinstance(claims, list) else [str(claims)]),
             ),
         )
+
+
+_FIGURE_HINT_RE = re.compile(
+    r"\b("
+    r"(?:a|an|the)\s+(?:hooded|cloaked|masked|armou?red|ash[- ]?gr[ae]y|gray[- ]?cloaked|"
+    r"tall|short|older|young|weathered|scarred|lean|burly|thin|stocky)\s+"
+    r"(?:figure|man|woman|stranger|person|traveler|traveller|merchant|guard|patron|guest)|"
+    r"(?:a|an|the)\s+(?:second|third|another|nearby|watching)\s+figure|"
+    r"(?:a|an)\s+(?:stranger|merchant|guard|innkeeper|bartender|barkeep|traveler|traveller|"
+    r"wanderer|broker|scout|soldier|patron|guest|keeper|server|barmaid|barman)|"
+    # Spoken dialogue with a named/titled speaker: Mara says / the innkeeper asks
+    r"(?:the\s+)?(?:innkeeper|bartender|barkeep|guard|merchant|stranger|keeper|"
+    r"server|barmaid|barman|captain|clerk)\s+(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)|"
+    r"[A-Z][a-z]{2,12}\s+(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?|replies?|answers?)"
+    r")\b",
+    re.I,
+)
+
+
+def _ensure_npcs_from_narration(
+    conn,
+    result: dict[str, Any],
+    narration: str,
+    location_id: int | None,
+) -> list[dict[str, Any]]:
+    """
+    If prose introduces speaking/visible figures but the model returned no/few npcs,
+    seed shell NPC rows so the cast table matches the scene.
+    """
+    if not location_id:
+        return []
+    text = str(narration or "")
+    if not text.strip():
+        return []
+    hints = [m.group(0).strip() for m in _FIGURE_HINT_RE.finditer(text)]
+    # Dialogue without a listed speaker still implies at least one face
+    has_dialogue = bool(re.search(r'[“"][^”"]{8,}[”"]', text))
+    existing = [n for n in (result.get("npcs") or []) if isinstance(n, dict)]
+    # Also count DB faces at this location (already upserted this turn)
+    db_count = int(
+        conn.execute(
+            "SELECT COUNT(*) AS c FROM npcs WHERE location_id = ?",
+            (int(location_id),),
+        ).fetchone()["c"]
+        or 0
+    )
+    target = min(3, max(len(hints), 1 if has_dialogue and not existing and db_count == 0 else 0))
+    if target <= 0:
+        return []
+    need = max(0, target - max(len(existing), db_count))
+    if need <= 0 and existing:
+        return []
+    if need <= 0 and db_count > 0:
+        return []
+    # If model listed none but hints exist, seed from hint count
+    if not existing and db_count == 0:
+        need = min(3, max(len(hints), 1 if has_dialogue else 0))
+    created: list[dict[str, Any]] = []
+    roles = ("hooded stranger", "cloaked local", "wary patron", "watchful traveler")
+    for i in range(need):
+        role = roles[i % len(roles)]
+        hint = hints[i] if i < len(hints) else ""
+        if "merchant" in hint.lower():
+            role = "merchant"
+        elif "guard" in hint.lower():
+            role = "guard"
+        elif "innkeeper" in hint.lower() or "barkeep" in hint.lower() or "bartender" in hint.lower():
+            role = "innkeeper"
+        try:
+            shell = create_shell_npc(
+                conn,
+                int(location_id),
+                presence="event_worthy",
+                power_rank=8 + i * 2,
+                role=role,
+                seed=abs(hash(f"{location_id}|{hint}|{i}|{text[:40]}")) % (10**9),
+            )
+        except Exception:
+            continue
+        if not shell:
+            continue
+        entry = {
+            "code": shell.get("code"),
+            "name": shell.get("name"),
+            "role": shell.get("role") or role,
+            "summary": shell.get("summary") or "Present in the opening scene.",
+            "attitude": "neutral",
+            "location": "",
+            "presence": "event_worthy",
+            "shell": False,
+            "power_rank": shell.get("power_rank") or 8,
+            "_seeded_from_narration": True,
+        }
+        created.append(entry)
+        existing.append(entry)
+    if created:
+        result["npcs"] = existing
+    return created
 
 
 def _apply_response_drafts(conn, drafts: list[dict[str, Any]], turn: int) -> None:
@@ -6251,6 +6783,17 @@ def _apply_ability_updates(conn, updates: list[dict[str, Any]]) -> None:
         cost = str(update.get("cost") or "")[:300]
         prerequisites = str(update.get("prerequisites") or "")[:500]
         growth_math = str(update.get("growth_math") or "")[:800]
+        power_type = str(update.get("power_type") or "").strip().lower().replace("-", "_")
+        if power_type and power_type not in {
+            "compounding",
+            "passive",
+            "linear",
+            "soft_cap",
+            "breakthrough",
+            "flat",
+            "item_bound",
+        }:
+            power_type = ""
         rc_json = ""
         if "resource_cost" in update and update.get("resource_cost") is not None:
             try:
@@ -6273,10 +6816,11 @@ def _apply_ability_updates(conn, updates: list[dict[str, Any]]) -> None:
                     cost = COALESCE(NULLIF(?, ''), cost),
                     prerequisites = COALESCE(NULLIF(?, ''), prerequisites),
                     growth_math = COALESCE(NULLIF(?, ''), growth_math),
-                    resource_cost = ?
+                    resource_cost = ?,
+                    power_type = COALESCE(NULLIF(?, ''), power_type)
                 WHERE id = ?
                 """,
-                (additions, cost, prerequisites, growth_math, rc_json, ability["id"]),
+                (additions, cost, prerequisites, growth_math, rc_json, power_type, ability["id"]),
             )
         else:
             conn.execute(
@@ -6285,10 +6829,11 @@ def _apply_ability_updates(conn, updates: list[dict[str, Any]]) -> None:
                 SET additions = ?,
                     cost = COALESCE(NULLIF(?, ''), cost),
                     prerequisites = COALESCE(NULLIF(?, ''), prerequisites),
-                    growth_math = COALESCE(NULLIF(?, ''), growth_math)
+                    growth_math = COALESCE(NULLIF(?, ''), growth_math),
+                    power_type = COALESCE(NULLIF(?, ''), power_type)
                 WHERE id = ?
                 """,
-                (additions, cost, prerequisites, growth_math, ability["id"]),
+                (additions, cost, prerequisites, growth_math, power_type, ability["id"]),
             )
 
 
@@ -6746,10 +7291,67 @@ def apply_turn(
             pass
 
         for location in result.get("locations") or []:
-            _upsert_location(conn, str(location.get("name", "")), str(location.get("summary") or ""))
+            if not isinstance(location, dict):
+                continue
+            # Never treat a location row whose "name" is only L1/I1 as a new place label
+            loc_name = str(location.get("name") or "")
+            if _is_place_or_item_code(loc_name):
+                continue
+            _upsert_location(conn, loc_name, str(location.get("summary") or ""))
 
-        for npc in result.get("npcs") or []:
+        # Flatten nested locations[].npcs + conversation speakers; drop place-as-person junk
+        collected_npcs = _collect_npcs_from_turn_result(result)
+        result["npcs"] = collected_npcs
+        for npc in collected_npcs:
             _upsert_npc(conn, npc)
+
+        # Opening/scene figures without structured npcs → seed cast so export isn't empty
+        try:
+            loc_id_seed = None
+            prow2 = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+            if prow2 and prow2["current_location_id"]:
+                loc_id_seed = int(prow2["current_location_id"])
+            seeded = _ensure_npcs_from_narration(conn, result, narration, loc_id_seed)
+            if seeded:
+                # Re-run name repair so prose can pick up new codes/names if needed
+                try:
+                    from app.llm import _repair_entity_names_in_turn
+
+                    cast2 = rows_to_dicts(
+                        conn.execute(
+                            "SELECT code, name, role FROM npcs WHERE location_id = ? ORDER BY id",
+                            (loc_id_seed,),
+                        ).fetchall()
+                    ) if loc_id_seed else []
+                    mini_ctx2 = {
+                        "locations": [{"code": "L1", "name": "", "npcs": cast2}],
+                        "npcs": cast2,
+                        "inventory": rows_to_dicts(
+                            conn.execute("SELECT code, name FROM inventory ORDER BY id").fetchall()
+                        ),
+                        "current_location": {"code": "L1", "name": ""},
+                    }
+                    # Prefer real location code/name
+                    if loc_id_seed:
+                        lrow = conn.execute(
+                            "SELECT code, name FROM locations WHERE id = ?", (loc_id_seed,)
+                        ).fetchone()
+                        if lrow:
+                            mini_ctx2["current_location"] = {
+                                "code": lrow["code"],
+                                "name": lrow["name"],
+                            }
+                            mini_ctx2["locations"] = [
+                                {"code": lrow["code"], "name": lrow["name"], "npcs": cast2}
+                            ]
+                    repaired2 = _repair_entity_names_in_turn(dict(result), mini_ctx2)
+                    if isinstance(repaired2, dict):
+                        result = repaired2
+                        narration = _narration_text(result)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         _apply_relationships(conn, result.get("relationships") or [])
         # Inventory fidelity: strip hallucinated gains not grounded in narration/existing stack

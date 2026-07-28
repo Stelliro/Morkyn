@@ -380,12 +380,17 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "player_name": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords"],
-        "forbidden": "A playable name only.",
+        "forbidden": (
+            "Personal/legal name only: given name or given + family "
+            "(e.g. Mara Ellison, Tomas Reed). Not a nickname, handle, callsign, "
+            "or epithet (Ash, River, Patch, the Red, Ashwalker, Wanderer)."
+        ),
+        "examples": ["Mara Ellison", "Tomas Reed", "Elena Croft", "Kael Morin"],
     },
     "player_public_name": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords"],
-        "forbidden": "Alias only; blank is normal.",
+        "forbidden": "Alias/nickname/handle only; blank is normal. Do not put the legal name here.",
     },
     "player_title": {
         "kind": "short_phrase",
@@ -423,18 +428,24 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "start_location": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords", "isekai"],
-        "forbidden": "Place name only.",
-    },
-    "special_ability_origin": {
-        "kind": "enum",
-        "allowed_values": ["none", "acquired", "innate", "both"],
-        "intent_keys": ["power_fantasy", "isekai"],
-        "forbidden": "Return only none, acquired, innate, or both.",
+        "forbidden": (
+            "Place name only for WHERE play begins. "
+            "If isekai/transmigrated: MUST be the new-world arrival site "
+            "(gate, dirt road, compound yard, pier) — NEVER the previous-life workplace "
+            "(Seoul warehouse, office, apartment, hospital ward)."
+        ),
+        "examples": [
+            "Mosswake Gate",
+            "Outer Compound Yard",
+            "Ferry Landing Stone",
+            "Ash Road Cut",
+            "Red Lantern Dock",
+        ],
     },
     "special_abilities": {
         "kind": "abilities",
         "intent_keys": ["power_fantasy", "keywords", "genre", "isekai"],
-        "forbidden": "Ability list only; respect start_power and growth from intent.",
+        "forbidden": "Ability list only; respect start_power and growth from intent. Per-ability locked/prerequisites encode learned vs starting powers.",
     },
 }
 
@@ -539,7 +550,7 @@ SETUP_COMPOSER_PHASES: list[dict[str, Any]] = [
     {
         "id": "powers",
         "label": "Powers",
-        "fields": ["special_ability_origin", "special_abilities"],
+        "fields": ["special_abilities"],
         "depends_on": ["identity", "progression", "world_peoples"],
     },
 ]
@@ -931,8 +942,6 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
         set_if_free("skill_levels_enabled", True)
         set_if_free("proficiency_system", True)
         set_if_free("skill_style", "training-heavy")
-        # Must open ability origin so special_abilities randomize is not skipped (default UI is None)
-        set_if_free("special_ability_origin", "acquired")
         # Structural skeleton only — LLM expands domain + concrete math during custom_skills roll.
         # Never hardcode Observation/weather domains here.
         set_if_free(
@@ -952,8 +961,7 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
                 )
 
     if start_power in ("near_useless", "weak"):
-        set_if_free("special_ability_origin", "acquired")
-        # abilities filled later by walk; origin acquired + locked weak seed
+        # abilities filled later by walk; weak seed cards use locked + prereqs per ability
         if "custom_skills" not in fields and "custom_skills" not in locked:
             set_if_free(
                 "custom_skills",
@@ -990,6 +998,18 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
         else:
             set_if_free("backstory_mode", "transmigrated")
             set_if_free("memory_policy", "remembers former life")
+        # Play begins at NEW-WORLD arrival — never previous-life workplace as start_location.
+        if portal != "same_world_rebirth":
+            set_if_free(
+                "start_location",
+                pick_isekai_arrival_location(
+                    world_style=str(fields.get("world_style") or intent.get("genre") or ""),
+                    genre=str(intent.get("genre") or ""),
+                    idea=str(intent.get("raw_idea") or intent.get("style_notes") or ""),
+                    session_theme=session_theme_from_intent(intent) if isinstance(intent, dict) else None,
+                    seed=None,
+                ),
+            )
         # Structural seeds — never skill slogans (growth lives in custom_skills).
         set_if_free("quest_style", "job board and personal mysteries")
         set_if_free("faction_pressure", "local disputes under guild pressure")
@@ -1244,14 +1264,25 @@ def opening_feel_prompt_block(
         "Opening scene feel (turn_kind=opening_scene only):",
         "- Establish an immediate, playable situation with 2–4 concrete hooks; do not choose for the player.",
         "- Keep the first scene local and personal before world-ending stakes.",
+        "- Entity refs: always use the real place name from world_state.current_location "
+        "(e.g. Low Gate Timber Arch [[L1]]), and if inventory or local NPCs exist, name them the same way "
+        "(Sarah [[A]], cracked phone [[I1]]). Do not write vague 'the street' only — pin the starting place. "
+        "You do not need all three (place/NPC/item) in one beat, but every named entity that is in state must "
+        "appear as readable Name [[code]] so the UI can make it clickable.",
     ]
     stakes = _stakes_line(difficulty, str(theme.get("edge") or ""))
     if stakes:
         lines.append(f"- Match opening pressure to difficulty: {stakes}")
     if isekai:
         lines.append(
-            "- Isekai texture welcome: mild new-world disorientation, practical first problems "
-            "(language, work, shelter, local rules) — never chosen-one destiny."
+            "- Isekai / transmigrated opening MUST begin at the moment of arrival in the NEW world "
+            "(wake after death/teleport/summon on a gate road, yard, pier, or alley) — "
+            "NEVER open in the previous life (Seoul warehouse, office desk, apartment, Earth hospital). "
+            "Previous life is memory only; Start = new world, now."
+        )
+        lines.append(
+            "- Isekai texture: mild disorientation, practical first problems "
+            "(language, shelter, local rules, who is watching) — never chosen-one destiny."
         )
     if game_system and system_ui:
         lines.append(
@@ -1872,7 +1903,6 @@ GROWTH_HOME_FIELDS = frozenset(
         "xp_growth_speed",
         "new_skill_frequency",
         "skill_style",
-        "special_ability_origin",
     }
 )
 
@@ -2064,7 +2094,6 @@ STRUCTURE_FIELD_DEFAULTS: dict[str, str] = {
     "skill_growth_speed": "normal",
     "proficiency_growth_speed": "normal",
     "new_skill_frequency": "normal",
-    "special_ability_origin": "none",
     "tone": "grounded adventure",
     "tech_level": "medieval",
 }
@@ -3083,11 +3112,17 @@ def rewrite_backstory_third_person(story: str) -> str:
 
 _FORMER_WORLD_MARKERS = (
     "former life",
+    "former world",
     "previous life",
     "old world",
     "before dying",
     "before the transport",
     "before transport",
+    "before the transfer",
+    "first life",
+    "ordinary first life",
+    "did not grow up in this world",
+    "they remember being",
     "earth",
     "modern",
     "office",
@@ -3108,6 +3143,7 @@ _FORMER_WORLD_MARKERS = (
     "salaryman",
     "university",
     "high school",
+    "middle-school",
     "truck",
     "logistics",
     "neon",
@@ -3115,6 +3151,35 @@ _FORMER_WORLD_MARKERS = (
     "corporate",
     "hospital stair",
     "blackout",
+    "teacher",
+    "nurse",
+    "clerk",
+    "courier",
+    "ride-share",
+    "bakery",
+    "florist",
+    "janitor",
+    "paramedic",
+    "stagehand",
+    "library",
+    "pharmacy",
+    "cook",
+    "kitchen",
+    "stocker",
+    "hygienist",
+    "stenographer",
+    "receptionist",
+    "baggage",
+    "security guard",
+    "lab tech",
+    "intern",
+    "beekeeper",
+    "ticket clerk",
+    "night-host",
+    "night host",
+    "death found them as",
+    "they were a ",
+    "life as a ",
 )
 
 _TRANSPORT_MARKERS = (
@@ -3128,10 +3193,12 @@ _TRANSPORT_MARKERS = (
     "portal",
     "transported",
     "transmigrat",
+    "transfer",
     "woke",
     "waking",
     "opened their eyes",
     "opened my eyes",
+    "awareness returned",
     "into the body",
     "into a body",
     "inside the body",
@@ -3143,6 +3210,11 @@ _TRANSPORT_MARKERS = (
     "arrived through",
     "last night",
     "dirt road",
+    "cut that life short",
+    "ended with",
+    "ended mid",
+    "never returned them",
+    "surface at",
 )
 
 _NATIVE_FANTASY_PLOT_MARKERS = (
@@ -3449,82 +3521,1399 @@ def repair_backstory_self_contradictions(
     return text[:1600]
 
 
+# ---------------------------------------------------------------------------
+# Isekai arrival seeds — play ALWAYS begins in the NEW world, not Earth job sites
+# ---------------------------------------------------------------------------
+
+# Places that mean "still in previous life" — invalid as start_location for isekai.
+PREVIOUS_LIFE_PLACE_MARKERS: tuple[str, ...] = (
+    "seoul",
+    "tokyo",
+    "osaka",
+    "busan",
+    "shanghai",
+    "beijing",
+    "new york",
+    "london",
+    "warehouse",
+    "logistics hub",
+    "data center",
+    "office tower",
+    "office building",
+    "cubicle",
+    "apartment",
+    "studio flat",
+    "hospital ward",
+    "er bay",
+    "subway platform",
+    "train station tokyo",
+    "convenience store backroom",
+    "server room",
+    "call center",
+    "parking garage",
+    "neon-silicon",
+    "neo-silicon",
+    "earth",
+    "modern city block",
+)
+
+# ---------------------------------------------------------------------------
+# Themed arrival location banks (start_location when transmigrated / pure isekai)
+# ---------------------------------------------------------------------------
+
+# Theme id → keyword fragments matched against world_style / genre / idea.
+LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "celestial": (
+        "heaven",
+        "heavens",
+        "celestial",
+        "paradise",
+        "afterlife",
+        "angel",
+        "divine court",
+        "empyrean",
+        "limbo",
+        "sky realm",
+        "judgment hall",
+        "choir of",
+        "prison of light",
+    ),
+    "cyberpunk": (
+        "cyber",
+        "cyberpunk",
+        "neon",
+        "megacity",
+        "corpo",
+        "netrunner",
+        "chrome",
+        "sprawl",
+        "near future",
+        "near-future",
+        "synthwave city",
+        "arcology",
+    ),
+    "steampunk": (
+        "steampunk",
+        "steam-punk",
+        "clockwork",
+        "airship",
+        "brass",
+        "gaslamp",
+        "gas lamp",
+        "victorian industrial",
+        "aether engine",
+        "cogwork",
+    ),
+    "wasteland": (
+        "wasteland",
+        "post-apoc",
+        "post apoc",
+        "postapoc",
+        "fallout",
+        "scorched",
+        "ashland",
+        "ruined world",
+        "dead earth",
+        "radioactive",
+        "scrapyard world",
+    ),
+    "noir": (
+        "noir",
+        "hardboiled",
+        "hard-boiled",
+        "rainy crime",
+        "detective city",
+        "gumshoe",
+    ),
+    "undersea": (
+        "undersea",
+        "underwater",
+        "aquatic",
+        "sunken",
+        "abyssal",
+        "ocean depth",
+        "coral city",
+    ),
+    "arctic": (
+        "arctic",
+        "tundra",
+        "frozen",
+        "glacier",
+        "icebound",
+        "permafrost",
+        "snow waste",
+    ),
+    "desert": (
+        "desert",
+        "sand sea",
+        "dune",
+        "oasis",
+        "badlands",
+        "salt flat",
+    ),
+    "gothic": (
+        "gothic",
+        "vampire",
+        "haunted castle",
+        "dark romance",
+        "blood court",
+        "crypt",
+    ),
+    "space": (
+        "space",
+        "orbital",
+        "starship",
+        "space station",
+        "colony ship",
+        "void station",
+        "sci-fi",
+        "scifi",
+        "science fiction",
+    ),
+    "fantasy": (
+        "fantasy",
+        "isekai",
+        "wuxia",
+        "cultivation",
+        "sect",
+        "compound",
+        "frontier",
+        "medieval",
+        "sword",
+        "magic",
+    ),
+}
+
+# Large per-theme arrival name pools.
+LOCATION_SEEDS_BY_THEME: dict[str, tuple[str, ...]] = {
+    "fantasy": (
+        "Mosswake Gate",
+        "Outer Compound Yard",
+        "Ash Road Cut",
+        "Ferry Landing Stone",
+        "Red Lantern Dock",
+        "Low Gate Timber Arch",
+        "Saltwind Pier",
+        "River Compound Fence Line",
+        "Blackwater Relay",
+        "Cinder Market Edge",
+        "Ninth Stair Threshold",
+        "Weeping Willow Causeway",
+        "Iron Bell Crossroads",
+        "Pale Bridge Footing",
+        "Hearthless Alley Mouth",
+        "Sect Outer Court Gate",
+        "Ration Yard Post",
+        "Mudflat Shrine Path",
+        "Lantern-Rope Landing",
+        "Dust Road Mile Marker",
+        "Thornwall Outpost",
+        "Greenhollow Ford",
+        "Moonwell Steps",
+        "Cragwatch Barracks Gate",
+        "Silk Road Caravanserai",
+        "Broken Oath Cairn",
+        "Twin Banner Square",
+        "Fogmere Ferry Slip",
+        "Copper Vein Mine Mouth",
+        "Starfall Ruin Arch",
+        "Hound's Rest Tavern Yard",
+        "Emberleaf Glade Path",
+        "Winter King's Road Marker",
+        "Sable Keep Outer Ward",
+        "Pilgrim's Last Well",
+        "Reedcutter's Wharf",
+        "Bone-White Chapel Porch",
+        "Market of Silent Scales",
+        "Vale of Three Stones",
+        "Ravenroost Watchpost",
+    ),
+    "cyberpunk": (
+        "Neon Vein Overpass",
+        "Level-12 Hab Stack Landing",
+        "Chrome District Rain Gutter",
+        "Corp Plaza Sublevel Gate",
+        "Black Market Data Alley",
+        "Maglev Platform 9-B",
+        "Arcology B-17 Atrium Floor",
+        "Night Market Chip Row",
+        "Synthmeat Vendor Strip",
+        "Police Drone Dock Yard",
+        "Undercity Cable Bridge",
+        "Rain-Slick Transit Hub",
+        "Red Sector Firewall Gate",
+        "Abandoned Net-Cafe Floor",
+        "Vertical Farm Loading Bay",
+        "Holo-Billboard Rooftop",
+        "Scrap Mecha Repair Lot",
+        "Submerged Metro Spur",
+        "Corporate Ritual Garden",
+        "Gutter Clinic Side Door",
+        "Skybridge Checkpoint 4",
+        "Dusty Server Farm Hall",
+        "Rogue AI Shrine Alcove",
+        "Smog Layer Observation Deck",
+        "Night-Bus Terminal Cage",
+    ),
+    "steampunk": (
+        "Brassworks Dock Crane",
+        "Aether Platform 3",
+        "Clocktower Footing Yard",
+        "Gaslamp Quarter Arch",
+        "Airship Mooring Ring",
+        "Cograil Station Platform",
+        "Pressure Valve Market",
+        "Gilded Gearworks Gate",
+        "Steam Tunnel Mouth",
+        "Dirigible Hangar Floor",
+        "Copper Pipe Catwalk",
+        "Royal Assay Office Steps",
+        "Fogbound Pier of Gears",
+        "Automaton Parade Square",
+        "Boilerhouse Ration Line",
+        "Ornithopter Roof Pad",
+        "Velvet Ticket Hall",
+        "Smokestack District Bridge",
+        "Chronometer Guild Court",
+        "Subterranean Gear Vault Entry",
+        "Brass Balloon Field",
+        "Ink & Aether Printworks Yard",
+        "Springwound Barracks Gate",
+        "Canal of Pistons Landing",
+        "Observation Cupola Stair",
+    ),
+    "wasteland": (
+        "Rust Mile Marker 0",
+        "Ash Basin Settlement Edge",
+        "Scrap Spire Base Camp",
+        "Dry Well Trading Post",
+        "Radiation Fence Gate",
+        "Bone Highway Cut",
+        "Silt Caravan Circle",
+        "Collapsed Overpass Nest",
+        "Salt-Glass Ruin Mouth",
+        "Bunker Hatch 17",
+        "Wind Turbine Graveyard",
+        "Black Rain Puddle Road",
+        "Mutant Market Canvas Row",
+        "Old World Rest Stop Shell",
+        "Pipeline Break Camp",
+        "Crater Rim Lookout",
+        "Dead Rail Switchyard",
+        "Filter-Mask Vendor Stall",
+        "Concrete Dome Settlement",
+        "Sun-Bleached Billboard Cross",
+        "Toxic Marsh Boardwalk",
+        "Warlord Checkpoint Chain",
+        "Dust Storm Shelter Mouth",
+        "Fuel-Drum Ring Camp",
+        "Glassed Highway Mile",
+    ),
+    "celestial": (
+        # Heavens / afterlife — map is intentionally blank; movement locked (prison of light).
+        "The Heavens — White Court Threshold",
+        "Empty Empyrean",
+        "Judgment Hall of Clouds",
+        "Silent Choir Cell",
+        "Unmapped Heaven",
+        "Prison of Light",
+        "Blank Vault of Stars",
+        "Limbo of Unfinished Names",
+        "Silver Gate That Does Not Open",
+        "Cloud Cell Without Walls",
+        "Choir Gallery — Sealed Pew",
+        "Afterlife Holding Garden",
+        "Empyrean Waiting Room",
+        "Heaven's Anonymous Wing",
+        "The Unwritten Firmament",
+        "Pearl Court Holding Cell",
+        "Divine Intake Antechamber",
+        "Halo Archive Vestibule",
+        "Weightless White Corridor",
+        "Celestial Remand Garden",
+    ),
+    "noir": (
+        "Rain-Slick Precinct Steps",
+        "Neon Diner Booth 4",
+        "Wharf Warehouse Night Gate",
+        "Cheap Hotel Lobby Desk",
+        "Fog Pier Underpass",
+        "Smoky Club Alley Door",
+        "City Hall Back Stair",
+        "Riverfront Morgue Loading",
+        "Cross-Town Taxi Stand",
+        "Newspaper Press Alley",
+        "Private Eye Office Landing",
+        "Bridge of Bad Debts",
+        "Midnight Ferry Slip",
+        "Downtown Speak-Easy Hatch",
+        "Floodlit Interrogation Yard",
+    ),
+    "undersea": (
+        "Coral Gate Pressure Lock",
+        "Kelp Road Marker Stone",
+        "Abyss Elevator Cage",
+        "Sunken Plaza of Shells",
+        "Bubble District Atrium",
+        "Trench Market Float Dock",
+        "Whale-Bone Cathedral Porch",
+        "Pressure Dome Outer Ring",
+        "Biolume Alley Mouth",
+        "Reef Patrol Barracks Gate",
+        "Flooded Archive Vestibule",
+        "Tide Engine Pump Floor",
+        "Pearl Court Sublevel",
+        "Current Bridge Anchorage",
+        "Deep-Station Intake Hall",
+    ),
+    "arctic": (
+        "Ice Road Mile Marker",
+        "Permafrost Research Hatch",
+        "Glacier Crevasse Camp",
+        "Aurora Watch Outpost",
+        "Frozen Harbor Crane",
+        "Snow-Buried Relay Hut",
+        "Whiteout Trail Cairn",
+        "Thermal Vent Settlement Edge",
+        "Icebreaker Dock Rime",
+        "Tundra Caravan Circle",
+        "Frostbite Clinic Porch",
+        "Polar Radio Tower Base",
+        "Seal-Oil Market Yard",
+        "Blue Ice Chapel Steps",
+        "Northern Fence Gate",
+    ),
+    "desert": (
+        "Salt Flat Mile Stone",
+        "Oasis Tent Ring",
+        "Dune Shadow Waystation",
+        "Sun-Baked Caravanserai",
+        "Sandglass Ruin Arch",
+        "Mirage Well Path",
+        "Dust Devil Crossroads",
+        "Cliff Shade Market",
+        "Red Mesa Camp Circle",
+        "Cistern Mouth Settlement",
+        "Camel Rope Yard",
+        "Wind Tower of Clay",
+        "Bone Dry River Crossing",
+        "Spice Road Toll Post",
+        "Night-Cold Dune Camp",
+    ),
+    "gothic": (
+        "Raven-Gable Chapel Yard",
+        "Iron Gate of the Manor",
+        "Candle Crypt Stairs",
+        "Mist-Hung Grave Path",
+        "Blood Rose Conservatory Door",
+        "Bell Tower Rain Landing",
+        "Cobweb Ballroom Threshold",
+        "Moonlit Moat Bridge",
+        "Vampire Court Antechamber",
+        "Widow's Walk Roof Edge",
+        "Catacomb Service Hatch",
+        "Gargoyle Perch Balcony",
+        "Black Lace Salon Entry",
+        "Storm-Lit Carriage Court",
+        "Thorn Maze Heart",
+    ),
+    "space": (
+        "Docking Ring Airlock 7",
+        "Hab Module Corridor C",
+        "Observation Cupola Deck",
+        "Cargo Bay Zero-G Net",
+        "Medbay Isolation Hatch",
+        "Hydroponics Aisle 3",
+        "Bridge Antechamber",
+        "Engineering Catwalk",
+        "Colony Dome Outer Ring",
+        "Shuttle Bay Marking Paint",
+        "Cryo-Bay Thaw Pad",
+        "Asteroid Mining Hab Floor",
+        "Station Market Float Lane",
+        "Radiation Shelter Hatch",
+        "Starport Customs Cage",
+    ),
+}
+
+# Default / legacy alias — fantasy pool (kept for imports that still reference it).
+ISEKAI_ARRIVAL_LOCATION_SEEDS: tuple[str, ...] = LOCATION_SEEDS_BY_THEME["fantasy"]
+
+# Name markers that force blank-map + movement-lock (heavens / divine prison).
+HEAVEN_PRISON_NAME_MARKERS: tuple[str, ...] = (
+    "heaven",
+    "heavens",
+    "empyrean",
+    "celestial court",
+    "white court",
+    "judgment hall",
+    "silent choir",
+    "prison of light",
+    "blank vault",
+    "afterlife",
+    "limbo",
+    "firmament",
+    "cloud cell",
+    "halo archive",
+    "divine intake",
+    "celestial remand",
+    "pearl court holding",
+    "weightless white",
+    "unmapped heaven",
+    "choir gallery",
+    "holding garden",
+    "anonymous wing",
+)
+
+
+def detect_location_theme(
+    *,
+    world_style: str = "",
+    genre: str = "",
+    idea: str = "",
+    session_theme: dict[str, Any] | None = None,
+) -> str:
+    """Pick a location theme id from style / genre / session theme text."""
+    theme = session_theme if isinstance(session_theme, dict) else {}
+    blob = " ".join(
+        [
+            str(world_style or ""),
+            str(genre or ""),
+            str(idea or ""),
+            str(theme.get("genre") or ""),
+            str(theme.get("adapter_hint") or ""),
+            str(theme.get("tone") or ""),
+            str(theme.get("style_notes") or ""),
+            " ".join(str(k) for k in (theme.get("keywords") or []) if k)
+            if isinstance(theme.get("keywords"), list)
+            else "",
+        ]
+    )
+    low = re.sub(r"\s+", " ", blob.lower())
+    # Priority order: niche themes before generic fantasy.
+    priority = (
+        "celestial",
+        "cyberpunk",
+        "steampunk",
+        "wasteland",
+        "space",
+        "undersea",
+        "arctic",
+        "desert",
+        "gothic",
+        "noir",
+        "fantasy",
+    )
+    for tid in priority:
+        keys = LOCATION_THEME_KEYWORDS.get(tid) or ()
+        if any(k in low for k in keys):
+            return tid
+    return "fantasy"
+
+
+def location_special_flags_for(
+    location_name: str,
+    *,
+    theme: str = "",
+    world_style: str = "",
+) -> dict[str, Any]:
+    """
+    Special runtime flags for a start (or current) location.
+    Heavens / celestial confinement: blank map + no free movement (prison of light).
+    """
+    name = re.sub(r"\s+", " ", str(location_name or "").strip())
+    low = name.lower()
+    tid = str(theme or "").strip().lower() or detect_location_theme(world_style=world_style)
+    is_heaven = tid == "celestial" or any(m in low for m in HEAVEN_PRISON_NAME_MARKERS)
+    if is_heaven:
+        return {
+            "map_blank": True,
+            "movement_locked": True,
+            "reason": "celestial_confinement",
+            "label": "The Heavens — bound",
+            "theme": "celestial",
+            "location": name[:120],
+            "hint": "The map shows nothing. You cannot walk free until something changes your confinement.",
+        }
+    return {
+        "map_blank": False,
+        "movement_locked": False,
+        "reason": "",
+        "label": "",
+        "theme": tid or "fantasy",
+        "location": name[:120],
+        "hint": "",
+    }
+
+
+def apply_location_special_flags(
+    location_name: str,
+    *,
+    theme: str = "",
+    world_style: str = "",
+    genre: str = "",
+    idea: str = "",
+    session_theme: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve theme + flags for a location name (used at Start)."""
+    tid = str(theme or "").strip() or detect_location_theme(
+        world_style=world_style,
+        genre=genre,
+        idea=idea,
+        session_theme=session_theme,
+    )
+    return location_special_flags_for(location_name, theme=tid, world_style=world_style)
+
+# Clothing seeds for appearance (zone-tagged, varied jobs / arrivals).
+APPEARANCE_SEED_POOL: tuple[str, ...] = (
+    "torso: plain travel clothes; feet: practical shoes; bag: thin shoulder bag",
+    "torso: secondhand work shirt; feet: scuffed shoes; hands: cheap gloves",
+    "torso: light jacket over tee; feet: sneakers; bag: small daypack",
+    "torso: rain-damp hoodie; feet: wet sneakers; bag: empty",
+    "torso: pressed shirt under vest; feet: cracked dress shoes",
+    "torso: hospital scrub top under coat; feet: soft shoes; neck: badge lanyard",
+    "torso: kitchen apron over street clothes; feet: non-slip shoes",
+    "torso: delivery jacket; hands: bike gloves; feet: trail shoes",
+    "torso: teacher cardigan over blouse; feet: flats; bag: tote",
+    "torso: hotel-uniform shirt; feet: polished but worn shoes",
+    "torso: patched canvas vest; hands: work gloves; feet: worn boots",
+    "torso: coarse hooded tunic; feet: scuffed leather shoes; bag: worn satchel",
+    "torso: travel cloak; legs: patched trousers; feet: dusty boots",
+    "torso: plain work tunic; waist: rope belt; feet: practical boots",
+    "torso: oilcloth rain cloak; legs: tough trousers; bag: waterproof wrap",
+    "torso: simple robes (outer court); feet: cloth shoes",
+    "torso: ferry-hand jacket; feet: salt-stained boots; bag: net pouch",
+    "torso: market stall apron; feet: soft shoes; bag: coin purse",
+    "torso: quilted work vest; hands: fingerless gloves; feet: trail boots",
+    "torso: formal vest over shirt; feet: cracked shoes; bag: thin case",
+)
+
+# Pocket / start kits tied to arrival (not the eternal wrench+coins kit).
+STARTER_KIT_SEED_POOL: tuple[str, ...] = (
+    "cracked phone, house keys, transit card, light jacket, half-empty water bottle",
+    "hospital badge on a lanyard, soft shoes, zip hoodie, folded scrub top, cheap earbuds",
+    "bike gloves, delivery bag, rain poncho, dead phone, protein bar",
+    "teacher's tote, red pen, lesson notes, cardigan, bus pass",
+    "hotel keycard, pressed shirt, small umbrella, mints, spare name tag",
+    "kitchen apron, burn cream tube, non-slip shoes, spare hair tie, street wallet",
+    "folding knife, tin cup, wool scarf, oilcloth wrap, day of hard bread",
+    "sewing kit, scrap cloth, wooden needle case, soft shoes, dried fruit",
+    "fishing hooks, line spool, tin cup, straw hat, smoked fish",
+    "ledger stub, charcoal pencil, plain tunic, belt pouch, water skin",
+    "work gloves, repair pouch, patched vest, worn boots, water skin",
+    "travel cloak, pocket knife, dusty boots, heel of bread, water skin",
+    "plain clothes, notebook stub, stub of chalk, cheap shoes, water flask",
+    "rain cloak, flint kit, tin cup, dried fish, rope coil",
+    "dead phone, wallet with useless cards, apartment keys, light jacket",
+    "ID badge, lanyard, soft shoes, hoodie, half pack of mints",
+    "messenger bag, cracked earbuds, bus pass, secondhand jacket",
+    "canvas daypack, multi-tool, snacks, duct tape scrap, flashlight",
+)
+
+
+def is_previous_life_place_name(name: str) -> bool:
+    """True if start_location clearly names Earth / former-life workplace."""
+    low = re.sub(r"\s+", " ", str(name or "").strip().lower())
+    if not low:
+        return False
+    if any(m in low for m in PREVIOUS_LIFE_PLACE_MARKERS):
+        return True
+    # Bare modern job-site patterns
+    if re.search(
+        r"\b(warehouse|office|apartment|studio|cubicle|data\s*center|call\s*center|"
+        r"server\s*room|parking\s*garage|er\s*bay|icu|ward)\b",
+        low,
+    ):
+        return True
+    return False
+
+
+def pick_isekai_arrival_location(
+    *,
+    world_style: str = "",
+    genre: str = "",
+    idea: str = "",
+    session_theme: dict[str, Any] | None = None,
+    theme: str = "",
+    seed: int | None = None,
+) -> str:
+    """New-world place name for Start when the player is transmigrated/isekai'd.
+
+    Theme-aware: cyberpunk / steampunk / wasteland / heavens / etc. pick from
+    LOCATION_SEEDS_BY_THEME. Fantasy keeps sub-bias for sect / harbor / compound.
+    """
+    rng = random.Random(seed if seed is not None else random.randint(1, 10**9))
+    tid = str(theme or "").strip().lower() or detect_location_theme(
+        world_style=world_style,
+        genre=genre,
+        idea=idea,
+        session_theme=session_theme,
+    )
+    pool = list(LOCATION_SEEDS_BY_THEME.get(tid) or LOCATION_SEEDS_BY_THEME["fantasy"])
+    ws = re.sub(r"\s+", " ", f"{world_style} {genre} {idea}".lower())
+    # Fantasy sub-bias when still on the fantasy bank
+    if tid == "fantasy":
+        if "sect" in ws or "wuxia" in ws or "cultivation" in ws:
+            narrowed = [
+                p
+                for p in pool
+                if any(k in p.lower() for k in ("sect", "court", "stair", "gate", "shrine", "bridge", "moonwell", "starfall"))
+            ]
+            pool = narrowed or pool
+        elif "harbor" in ws or "port" in ws or "coast" in ws or ("sea" in ws and "wasteland" not in ws):
+            narrowed = [
+                p
+                for p in pool
+                if any(k in p.lower() for k in ("dock", "pier", "landing", "ferry", "salt", "lantern", "wharf", "ford"))
+            ]
+            pool = narrowed or pool
+        elif "compound" in ws or "isekai" in ws:
+            narrowed = [
+                p
+                for p in pool
+                if any(k in p.lower() for k in ("compound", "yard", "gate", "relay", "road", "cross", "outpost", "barracks"))
+            ]
+            pool = narrowed or pool
+    return rng.choice(pool)
+
+
+def ensure_isekai_start_location(
+    start_location: str,
+    *,
+    backstory_mode: str = "",
+    idea: str = "",
+    world_style: str = "",
+    genre: str = "",
+    character_backstory: str = "",
+    session_theme: dict[str, Any] | None = None,
+) -> tuple[str, bool]:
+    """
+    For pure isekai / transmigrated starts, force start_location into the NEW world.
+    Returns (location, changed).
+    """
+    mode = str(backstory_mode or "").lower()
+    idea_l = str(idea or "").lower()
+    story_l = str(character_backstory or "").lower()
+    is_isekai = (
+        "transmigrat" in mode
+        or any(m in idea_l for m in ("isekai", "transmigrat", "truck", "summon", "another world", "other world"))
+        or any(m in story_l for m in ("another world", "woke in", "transported", "summon"))
+    )
+    # Reincarnated childhood already lives HERE — any local place is fine; still block Earth cities.
+    is_reinc = "reincarnat" in mode or "reborn" in mode
+    loc = re.sub(r"\s+", " ", str(start_location or "").strip())
+    pick_kw = dict(
+        world_style=world_style,
+        genre=genre,
+        idea=idea,
+        session_theme=session_theme,
+    )
+    if not is_isekai and not is_reinc:
+        return loc or pick_isekai_arrival_location(**pick_kw), False
+    if is_previous_life_place_name(loc) or not loc:
+        return pick_isekai_arrival_location(**pick_kw), True
+    # Transmigrated: also reject "their warehouse" style without markers if story is pure isekai arrival
+    if "transmigrat" in mode and re.search(r"\b(their|his|her)\s+(warehouse|office|apartment|desk)\b", loc, re.I):
+        return pick_isekai_arrival_location(**pick_kw), True
+    return loc, False
+
+
+def pick_appearance_seed(*, seed: int | None = None, modern_arrival: bool = False) -> str:
+    rng = random.Random(seed if seed is not None else random.randint(1, 10**9))
+    pool = list(APPEARANCE_SEED_POOL)
+    if modern_arrival:
+        modernish = [p for p in pool if any(k in p for k in ("hoodie", "sneakers", "tee", "scrub", "delivery", "jacket", "badge"))]
+        if modernish:
+            pool = modernish
+    return rng.choice(pool)
+
+
+def pick_starter_kit_seed(*, seed: int | None = None, modern_arrival: bool = False) -> str:
+    rng = random.Random(seed if seed is not None else random.randint(1, 10**9))
+    pool = list(STARTER_KIT_SEED_POOL)
+    if modern_arrival:
+        modernish = [p for p in pool if any(k in p.lower() for k in ("phone", "badge", "keys", "hoodie", "wallet", "earbuds", "transit"))]
+        if modernish:
+            pool = modernish
+    return rng.choice(pool)
+
+
+# Stock motifs the 8B model (and old repair templates) overuse — ban clones.
+BACKSTORY_OVERUSED_MOTIFS: tuple[str, ...] = (
+    "expired coffee",
+    "seoul warehouse",
+    "seoul",
+    "half-eaten bento",
+    "bento box",
+    "always landed heads",
+    "landed heads",
+    "collapsing ceiling",
+    "blue light pulled",
+    "blue light",
+    "dust-covered alley",
+    "rusted wrench",
+    "surviving on overtime",
+    "night shift at a seoul",
+    "night-shift forklift",
+    "logistics hub",
+    "neo-silicon",
+    "iron spire",
+    # Old repair-template clones (freight / truck / dirt-road package)
+    "freight and labels",
+    "schedules and sore feet",
+    "night shifts moving freight",
+    "bent pair of glasses",
+    "no free hero kit",
+    "not as a native already living a local plot",
+    "which rules of this world can kill them",
+    "work-yard fence line",
+    "living by schedules and sore feet rather than swords",
+    "woke on a dirt road at the edge",
+    "ordinary habits and the need to learn",
+    "the story starts at that arrival (or the hours just before)",
+)
+
+# Single-hit hard bans (any one is enough to fail quality)
+BACKSTORY_HARD_CLONE_MOTIFS: tuple[str, ...] = (
+    "expired coffee",
+    "half-eaten bento",
+    "always landed heads",
+    "collapsing ceiling and a blue light",
+    "no free hero kit",
+    "freight and labels",
+    "bent pair of glasses",
+    "schedules and sore feet",
+    "not as a native already living a local plot",
+    "which rules of this world can kill them",
+    "the story starts at that arrival (or the hours just before)",
+    "night shifts moving freight",
+)
+
+
+def backstory_has_overused_motifs(story: str, *, min_hits: int = 2) -> list[str]:
+    """Return matched overused motifs (empty if story is fresh enough)."""
+    low = re.sub(r"\s+", " ", str(story or "").lower())
+    hits = [m for m in BACKSTORY_OVERUSED_MOTIFS if m in low]
+    hard = [m for m in BACKSTORY_HARD_CLONE_MOTIFS if m in low]
+    if hard:
+        return hard
+    return hits if len(hits) >= min_hits else []
+
+
+def _normalize_backstory_prose(value: Any) -> str:
+    """Join list-shaped model outputs into plain third-person prose."""
+    if isinstance(value, list):
+        parts = [str(p).strip().strip("'\"") for p in value if str(p or "").strip()]
+        text = " ".join(parts)
+    else:
+        text = str(value or "").strip()
+    # Model sometimes returns a Python list as a string
+    if text.startswith("[") and ("'," in text or '",' in text):
+        try:
+            import ast
+
+            parsed = ast.literal_eval(text)
+            if isinstance(parsed, list):
+                text = " ".join(str(p).strip() for p in parsed if str(p or "").strip())
+        except Exception:
+            text = re.sub(r"^\[|\]$", "", text)
+            text = re.sub(r"['\"]\s*,\s*['\"]", " ", text)
+            text = text.replace("'", " ").replace('"', " ")
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text[:1600]
+
+
+# --- Transmigration diversity banks (combinatorial fallback) ------------------
+
+_TX_JOBS: tuple[str, ...] = (
+    "middle-school math teacher who graded papers past midnight",
+    "ride-share driver chasing surge fares on rain-slick avenues",
+    "junior ER nurse living by call lights and short meal breaks",
+    "hotel front-desk clerk on graveyard, smiling through lost keys",
+    "line cook in a cramped kitchen with burns on both wrists",
+    "bike courier threading winter wind with a phone map on the bars",
+    "freelance web fixer coding rent money from a kitchen table",
+    "phone-repair stall owner under a noisy transit bridge",
+    "museum security guard walking empty galleries after close",
+    "community-college lab tech washing glassware between classes",
+    "public-library assistant reshelving late returns and quiet crises",
+    "veterinary receptionist calming frantic owners and loud dogs",
+    "apartment-building super fixing locks, leaks, and angry notes",
+    "dental hygienist who knew every patient's small talk by heart",
+    "city bus driver running the same route until the seats memorized them",
+    "bakery opener who punched dough before the sun and slept by noon",
+    "temp office clerk drowning in spreadsheets and unpaid overtime",
+    "florist who wired funeral bouquets and wedding rushes back-to-back",
+    "radio night-host reading ads between songs nobody requested",
+    "high-school janitor with a ring of keys and a thermos of cheap tea",
+    "court stenographer whose wrists ached more than their patience",
+    "airport baggage handler who could smell storms in the jetway air",
+    "grocery night stocker rebuilding cereal aisles under fluorescent hum",
+    "paramedic trainee still learning which sirens meant late dinners",
+    "community theater stagehand living on black paint and delayed cues",
+    "kindergarten aide with glitter in every coat pocket",
+    "rooftop beekeeper selling jars at a weekend market stall",
+    "ferry ticket clerk counting waves more carefully than tips",
+    "architecture intern surviving on plotters, coffee, and redlines",
+    "pharmacy tech counting pills under buzzing pharmacy lights",
+)
+
+_TX_DEATHS: tuple[str, ...] = (
+    "a black-ice bus stop and a driver who never saw them",
+    "a wet stairwell fall that ended mid-breath",
+    "a train-platform shove into sudden dark",
+    "a kitchen gas flash they never outran",
+    "a failed code in a hospital corridor when the lights cut",
+    "a scaffold collapse during a lunch-break walk",
+    "a wrong-way driver on a midnight highway",
+    "a sudden aneurysm between one ordinary step and the next",
+    "a drowning riptide on a rare day off at the coast",
+    "a building fire's smoke that closed the stairwell",
+    "a construction site cable snap overhead",
+    "a ritual circle drawn by strangers who never meant to take them",
+    "a portal tearing open under a collapsing walkway",
+    "sleep on a long coach ride that simply never returned them",
+    "a lightning strike on an open field path",
+    "a medical allergic crash nobody caught in time",
+    "a ferry railing give-way in winter chop",
+    "a rooftop slip while checking storm damage",
+    "a summoning misfire that stole the nearest warm body",
+    "a cracked overpass that dropped a bus into dark water",
+)
+
+_TX_ARRIVALS: tuple[str, ...] = (
+    "a muddy road outside a timber gate they had never seen",
+    "the lowest step of a foreign stone stair above unknown rooftops",
+    "a lantern-lit market lane that smelled of oil and wet rope",
+    "a ferry landing where strangers argued in an unknown tongue",
+    "the outer court of a martial school before dawn drills",
+    "a salt pier under foreign banners snapping in wind",
+    "a river ford marked by three leaning waystones",
+    "a ration-line square where nobody recognized their clothes",
+    "a mossy shrine path cut into a hillside",
+    "a caravan camp's edge where beasts stamped and guards watched",
+    "a fog-bound crossroads with a cracked mile marker",
+    "a rain-soaked stable yard behind a walled inn",
+    "a cliff path overlooking terraced fields they could not name",
+    "a canal towpath where barges rode low with grain",
+    "a desert oasis ring of tents and clay cisterns",
+    "a snow-cut trail hut with frost on the latch",
+    "a neon-slick underpass in a megacity that still was not home",
+    "a brass airship mooring ring humming with steam",
+    "a scrap-spire base camp under a dead radio tower",
+    "a silent white corridor that felt like judgment more than place",
+)
+
+_TX_POCKETS: tuple[str, ...] = (
+    "a dead phone, transit card, and the clothes they died in",
+    "soft work shoes, a badge lanyard, and nothing that opens a door here",
+    "a half-empty water bottle, house keys, and a cracked earbuds case",
+    "a cheap umbrella, pressed shirt, and a hotel keycard from nowhere useful",
+    "bike gloves, a rain poncho, and a protein bar gone soft",
+    "a red pen, lesson notes in a tote, and a bus pass that means nothing",
+    "burn cream, a spare hair tie, and a street wallet with useless cards",
+    "a sewing kit, scrap cloth, and soft shoes still damp from rain",
+    "a notebook of unfinished lists and a stub of chalk",
+    "reading glasses with one loose arm, a library card, and lint",
+    "a thermos lid, apron string, and flour still on their cuffs",
+    "a staff radio that only statics, and scuffed security shoes",
+    "florist wire snips and a pocketful of cut stems",
+    "stage-black fingerless gloves and a roll of spike tape",
+    "a ferry ticket stub and salt already drying on their coat",
+    "glitter, stickers, and a child-sized bandage in a coat pocket",
+    "a market coin purse with the wrong currency",
+    "plotter USB stick, coffee-stained sketch roll, and aspirin",
+    "only street clothes and the muscle memory of an ordinary job",
+    "a pharmacy badge clip and empty exam-glove pockets",
+)
+
+_TX_CLOSERS: tuple[str, ...] = (
+    "Play begins at that arrival — they are a newcomer with ordinary habits, not a local plot already in motion.",
+    "The campaign opens on that threshold: former-world memory intact, no free power, everything still to learn.",
+    "From that first unfamiliar hour forward, they must invent a life here without a hero starter pack.",
+    "Nothing here knows their name yet; the story starts cold at the landing, not mid-local intrigue.",
+    "They keep modern reflexes and empty pockets — useful habits, not destiny gear.",
+    "Whatever comes next starts from that first disoriented breath in a place that is not Earth.",
+    "They are not a native of this plotline; they are a late arrival who still dresses wrong.",
+    "Local laws, monsters, and manners are all unread manuals — the opening is pure arrival shock.",
+)
+
+
+def _tx_avoid_overlap(choice: str, banned_blob: str) -> bool:
+    """True if choice shares a long concrete chunk with banned_blob (old clone)."""
+    low = choice.lower()
+    ban = banned_blob.lower()
+    if not ban.strip():
+        return False
+    for chunk in re.findall(r"[a-z0-9][a-z0-9' -]{10,48}", low):
+        if chunk in ban:
+            return True
+    return False
+
+
 def build_transmigration_backstory(
     *,
     old_story: str = "",
     idea: str = "",
     world_style: str = "",
+    genre: str = "",
+    seed: int | None = None,
 ) -> str:
     """
     Canonical transmigrated structure (third person):
     1) life before transport  2) how transported  3) start at arrival / just before.
+
+    Large combinatorial banks + anti-clone filters so repair paths never re-emit
+    the freight/truck/dirt-road/no-free-hero-kit package.
     """
+    import random as _random
+
+    rng = _random.Random(seed if seed is not None else _random.randint(1, 10**9))
     idea_l = re.sub(r"\s+", " ", str(idea or "").strip().lower())
-    ws = re.sub(r"\s+", " ", str(world_style or "").strip().lower())
+    ws = re.sub(r"\s+", " ", f"{world_style or ''} {genre or ''}".strip().lower())
     old = re.sub(r"\s+", " ", str(old_story or "").strip())
+    ban_blob = f"{idea_l} {old.lower()}"
 
-    # Infer former vocation from idea / old text
-    blob = f"{idea_l} {old.lower()}"
-    if any(m in blob for m in ("forklift", "warehouse", "logistics")):
-        former = (
-            "In their former life they worked night shifts at a logistics warehouse, "
-            "living by schedules, debt, and cargo marks rather than swords or titles"
+    def _pick(pool: tuple[str, ...] | list[str], *, tries: int = 28) -> str:
+        items = list(pool)
+        rng.shuffle(items)
+        for cand in items[:tries]:
+            if not _tx_avoid_overlap(cand, ban_blob):
+                return cand
+        return items[0] if items else ""
+
+    job = _pick(_TX_JOBS)
+    if any(m in idea_l for m in ("nurse", "hospital", "medic")):
+        job = _pick(
+            [j for j in _TX_JOBS if any(k in j for k in ("nurse", "paramedic", "hygienist", "pharmacy"))]
+            or list(_TX_JOBS)
         )
-        transport = (
-            "A truck accident ended that life; they woke on a dirt road at the edge of "
+    elif any(m in idea_l for m in ("teacher", "school", "student")):
+        job = _pick(
+            [j for j in _TX_JOBS if any(k in j for k in ("teacher", "library", "kindergarten", "college", "stenographer"))]
+            or list(_TX_JOBS)
         )
-    elif any(m in blob for m in ("desk", "office", "clerk", "salaryman")):
-        former = (
-            "In their former life they were an overworked office clerk who measured days in emails, "
-            "commutes, and unpaid overtime"
+    elif any(m in idea_l for m in ("cook", "chef", "kitchen", "bakery")):
+        job = _pick([j for j in _TX_JOBS if any(k in j for k in ("cook", "bakery"))] or list(_TX_JOBS))
+    elif any(m in idea_l for m in ("driver", "courier", "delivery", "bus")):
+        job = _pick(
+            [j for j in _TX_JOBS if any(k in j for k in ("driver", "courier", "bus", "baggage", "ferry"))]
+            or list(_TX_JOBS)
         )
-        transport = (
-            "They died at a desk / on the way home and woke with those ordinary habits still intact at the edge of "
+    elif any(m in idea_l for m in ("summon", "ritual")):
+        job = _pick(
+            [j for j in _TX_JOBS if any(k in j for k in ("clerk", "teacher", "library", "office"))]
+            or list(_TX_JOBS)
         )
-    elif any(m in blob for m in ("maintenance", "technician", "engineer", "repair")):
-        former = (
-            "In their former life they were a maintenance technician who fixed machines and systems for a living, "
-            "not magic or politics"
+
+    death = _pick(_TX_DEATHS)
+    if any(m in idea_l for m in ("summon", "ritual")):
+        death = _pick(
+            [d for d in _TX_DEATHS if any(k in d for k in ("ritual", "summon", "portal"))] or list(_TX_DEATHS)
         )
-        transport = (
-            "They died on the job or mid-shift and opened their eyes in "
+    elif any(m in idea_l for m in ("truck", "car", "highway", "bus")):
+        death = _pick(
+            [d for d in _TX_DEATHS if any(k in d for k in ("bus", "highway", "driver", "train", "overpass"))]
+            or list(_TX_DEATHS)
         )
-    elif any(m in blob for m in ("student", "university", "high school", "college")):
-        former = (
-            "In their former life they were an ordinary student with exams, part-time work, and a small rented room"
+    elif any(m in idea_l for m in ("drown", "sea", "ocean", "ferry")):
+        death = _pick(
+            [d for d in _TX_DEATHS if any(k in d for k in ("drown", "ferry", "coast", "riptide", "water"))]
+            or list(_TX_DEATHS)
         )
-        transport = "A sudden accident tore them out of that life; they woke in "
-    elif any(m in blob for m in ("summon", "ritual")):
-        former = (
-            "In their former life they were a city civilian on an ordinary street, not a warrior or chosen hero"
+
+    try:
+        tid = detect_location_theme(world_style=world_style, genre=genre, idea=idea)
+        themed = list(LOCATION_SEEDS_BY_THEME.get(tid) or ())
+    except Exception:
+        themed = []
+    if themed:
+        place_name = _pick(tuple(themed))
+        arrival = f"{place_name} in another world"
+    else:
+        arrival = _pick(_TX_ARRIVALS)
+        if any(k in ws for k in ("sect", "wuxia", "cultivation")):
+            arrival = _pick(
+                (
+                    "the outer court of a martial school before dawn drills",
+                    "a mossy shrine path cut into a hillside",
+                    "the lowest gate of a sect compound in another world",
+                )
+            )
+        elif any(k in ws for k in ("harbor", "port", "coast", "sea")):
+            arrival = _pick(
+                (
+                    "a salt pier under foreign banners snapping in wind",
+                    "a ferry landing where strangers argued in an unknown tongue",
+                    "a canal towpath where barges rode low with grain",
+                )
+            )
+        elif any(k in ws for k in ("cyber", "neon", "mega")):
+            arrival = "a neon-slick underpass in a megacity that still was not home"
+        elif any(k in ws for k in ("steam", "brass", "airship")):
+            arrival = "a brass airship mooring ring humming with steam"
+        elif any(k in ws for k in ("waste", "ash", "scrap", "post-apoc")):
+            arrival = "a scrap-spire base camp under a dead radio tower"
+        elif any(k in ws for k in ("heaven", "celestial", "empyrean")):
+            arrival = "a silent white corridor that felt like judgment more than place"
+
+    pocket = _pick(_TX_POCKETS)
+    closer = _pick(_TX_CLOSERS)
+
+    shape = rng.randint(0, 5)
+    if shape == 0:
+        text = (
+            f"Before the transfer they were a {job}. "
+            f"Then came {death}; when awareness returned they were at {arrival}, "
+            f"carrying {pocket}. {closer}"
         )
-        transport = (
-            "A failed summoning ritual yanked them across worlds still wearing street clothes into "
+    elif shape == 1:
+        text = (
+            f"They remember being a {job} until {death}. "
+            f"They woke at {arrival} with {pocket}. {closer}"
+        )
+    elif shape == 2:
+        text = (
+            f"Death found them as a {job} via {death}. "
+            f"Arrival was {arrival} — {pocket} for inventory. {closer}"
+        )
+    elif shape == 3:
+        text = (
+            f"An ordinary first life as a {job} ended with {death}. "
+            f"The next breath was air over {arrival}, and all they still owned was {pocket}. {closer}"
+        )
+    elif shape == 4:
+        text = (
+            f"They did not grow up in this world. As a {job} they lived by modern schedules until {death} "
+            f"cut that life short. Now they stand at {arrival} with {pocket}. {closer}"
         )
     else:
-        former = (
-            "In their former life they held an ordinary job in a modern city — rent, work shifts, and small debts, "
-            "with no training for swords, sects, or empire games"
-        )
-        transport = (
-            "Death or forced transport tore them out of that life; they woke in "
+        text = (
+            f"Former world: {job}. Transport: {death}. "
+            f"They surface at {arrival} holding {pocket}. {closer}"
         )
 
-    if "sect" in ws or "wuxia" in ws:
-        place = "a sect compound's outer court in another world"
-    elif "compound" in ws or "isekai" in ws:
-        place = "a river-compound yard and dirt road in another world"
-    elif "harbor" in ws or "port" in ws:
-        place = "a rationed harbor district in another world"
-    else:
-        place = "an unfamiliar low-tech world they had never seen before"
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    if backstory_has_overused_motifs(text) and (seed is None or seed < 10**8):
+        return build_transmigration_backstory(
+            old_story=text,
+            idea="teacher nurse courier cook student hotel desk florist radio host",
+            world_style=world_style,
+            genre=genre,
+            seed=(seed or 0) + 7919,
+        )
+    return text[:1600]
 
-    now = (
-        f"{place}, with only the clothes and pocket scraps from before transport. "
-        "The story starts at that arrival (or the hours just before), not as a native exile already living a local plot. "
-        "They have no free hero kit — only ordinary habits and the need to learn which rules of this world can kill them."
+
+def evaluate_backstory_quality(
+    story: str,
+    *,
+    mode: str = "",
+    idea: str = "",
+    world_style: str = "",
+    memory_policy: str = "",
+    rejected: str = "",
+) -> dict[str, Any]:
+    """
+    Score one character_backstory like evaluate_ability_quality.
+    ok=False means quality-deny (invent again / diversified fallback).
+    """
+    hard: list[str] = []
+    soft: list[str] = []
+    score = 100
+    text = _normalize_backstory_prose(story)
+    low = re.sub(r"\s+", " ", text.lower())
+    mode_l = str(mode or "").lower()
+    idea_l = str(idea or "").lower()
+    is_transmig = "transmigrat" in mode_l or any(
+        m in idea_l for m in ("isekai", "transmigrat", "summon", "truck", "another world", "other world")
     )
-    return f"{former}. {transport}{now}"[:1600]
+    is_reinc = "reincarnat" in mode_l or "reborn" in mode_l
+
+    if len(text) < 80:
+        hard.append("backstory_too_short")
+        score -= 40
+    elif len(text) < 140:
+        soft.append("backstory_thin")
+        score -= 12
+    if len(text) > 1550:
+        soft.append("backstory_too_long")
+        score -= 6
+
+    if re.search(r"\b(i was|i am|i'm|my life|i died|i woke|i remember)\b", low):
+        hard.append("first_person")
+        score -= 25
+
+    if any(m in low for m in _BACKSTORY_SKILL_META_MARKERS):
+        hard.append("skill_meta_in_backstory")
+        score -= 35
+
+    stock = backstory_has_overused_motifs(text)
+    if stock:
+        hard.append("overused_stock_motifs")
+        score -= 40
+        soft.append("motifs:" + ",".join(stock[:6]))
+
+    try:
+        clash = backstory_self_contradictions(text)
+        if clash.get("hard"):
+            hard.append("self_contradiction")
+            score -= 30
+            soft.extend([f"contradict:{c}" for c in (clash.get("hard") or [])[:4]])
+        elif clash.get("soft"):
+            soft.append("soft_self_contradiction")
+            score -= 8
+    except Exception:
+        pass
+
+    rej = re.sub(r"\s+", " ", str(rejected or "").lower())
+    if rej and len(rej) > 60 and text:
+        a = set(re.findall(r"[a-z]{4,}", low))
+        b = set(re.findall(r"[a-z]{4,}", rej))
+        if a and b:
+            overlap = len(a & b) / max(1, min(len(a), len(b)))
+            if overlap >= 0.72:
+                hard.append("near_paraphrase_of_rejected")
+                score -= 30
+
+    if is_transmig and not is_reinc:
+        tx = transmigration_story_score(text)
+        if not tx.get("has_former_world"):
+            hard.append("missing_former_world_life")
+            score -= 25
+        if not tx.get("has_transport"):
+            hard.append("missing_transport")
+            score -= 25
+        if not tx.get("has_arrival_place"):
+            hard.append("missing_arrival_place")
+            score -= 20
+        if tx.get("native_fantasy_plot_hits", 0) >= 2:
+            hard.append("native_fantasy_plot")
+            score -= 30
+        if tx.get("bolted_generic_arrival"):
+            hard.append("bolted_generic_arrival")
+            score -= 20
+        if tx.get("skill_meta"):
+            hard.append("skill_meta_in_backstory")
+            score -= 20
+        jobish = any(
+            m in low
+            for m in (
+                "worked",
+                "job",
+                "teacher",
+                "nurse",
+                "cook",
+                "clerk",
+                "driver",
+                "student",
+                "office",
+                "hospital",
+                "courier",
+                "baker",
+                "guard",
+                "tech",
+                "cashier",
+                "mechanic",
+                "doctor",
+                "waiter",
+                "barista",
+                "janitor",
+                "florist",
+                "library",
+                "ferry",
+                "stagehand",
+                "pharmacist",
+                "hygienist",
+                "paramedic",
+                "stocker",
+                "stenographer",
+                "super fixing",
+                "receptionist",
+                "stocker",
+                "host reading",
+            )
+        )
+        if not jobish and tx.get("has_former_world"):
+            soft.append("former_life_vague_no_job")
+            score -= 10
+    elif is_reinc:
+        if not any(
+            m in low
+            for m in ("grew up", "years", "child", "raised", "born in", "village", "childhood", "apprentice")
+        ):
+            hard.append("reincarnated_missing_this_life")
+            score -= 22
+    else:
+        if not any(
+            m in low
+            for m in (
+                "born",
+                "raised",
+                "grew up",
+                "from ",
+                "village",
+                "town",
+                "city",
+                "worked",
+                "family",
+                "apprentice",
+            )
+        ):
+            soft.append("native_origin_vague")
+            score -= 10
+
+    mem = str(memory_policy or "").lower()
+    if "fragment" in mem and is_transmig and "remember" in low and "perfect" in low:
+        soft.append("memory_policy_clash")
+        score -= 6
+
+    score = max(0, min(100, score))
+    ok = not hard and score >= 62
+    return {
+        "ok": ok,
+        "score": score,
+        "hard_fail": hard,
+        "soft": soft,
+        "story": text,
+        "is_transmigrated": is_transmig,
+        "is_reincarnated": is_reinc,
+        "stock_motifs": stock if stock else [],
+    }
+
+
+def quality_gate_backstory(
+    story: str,
+    *,
+    mode: str = "",
+    idea: str = "",
+    world_style: str = "",
+    memory_policy: str = "",
+    rejected: str = "",
+    auto_repair: bool = True,
+    seed: int | None = None,
+) -> dict[str, Any]:
+    """
+    Verify a backstory (ability-style quality gate).
+    When auto_repair=True, apply contradiction repair + diversified transmigration rebuild.
+    """
+    import random as _random
+
+    text = _normalize_backstory_prose(story)
+    rep = evaluate_backstory_quality(
+        text,
+        mode=mode,
+        idea=idea,
+        world_style=world_style,
+        memory_policy=memory_policy,
+        rejected=rejected,
+    )
+    source = "raw"
+    if rep.get("ok"):
+        return {
+            "ok": True,
+            "score": rep.get("score"),
+            "story": rep.get("story") or text,
+            "report": rep,
+            "denial_summary": [],
+            "source": source,
+            "repaired": False,
+        }
+
+    denial = list(rep.get("hard_fail") or []) + list(rep.get("soft") or [])
+    if not auto_repair:
+        return {
+            "ok": False,
+            "score": rep.get("score"),
+            "story": rep.get("story") or text,
+            "report": rep,
+            "denial_summary": denial,
+            "source": source,
+            "repaired": False,
+        }
+
+    fixed = text
+    try:
+        fixed = repair_backstory_self_contradictions(fixed, world_style=world_style)
+        source = "contradiction_repair"
+    except Exception:
+        pass
+    try:
+        fixed = rewrite_backstory_third_person(fixed)
+    except Exception:
+        pass
+    mode_l = str(mode or "").lower()
+    idea_l = str(idea or "").lower()
+    needs_tx = "transmigrat" in mode_l or any(
+        m in idea_l for m in ("isekai", "transmigrat", "summon", "truck", "another world", "other world")
+    )
+    if needs_tx and "reincarnat" not in mode_l:
+        try:
+            fixed = ensure_isekai_arrival_beat(
+                fixed, mode=mode or "transmigrated", idea=idea, world_style=world_style
+            )
+            source = "isekai_arrival_beat"
+        except Exception:
+            pass
+        rep2 = evaluate_backstory_quality(
+            fixed,
+            mode=mode,
+            idea=idea,
+            world_style=world_style,
+            memory_policy=memory_policy,
+            rejected=rejected or text,
+        )
+        if not rep2.get("ok"):
+            rng_seed = seed if seed is not None else _random.randint(1, 10**9)
+            fixed = build_transmigration_backstory(
+                old_story=fixed or text,
+                idea=idea or "fresh ordinary life portal",
+                world_style=world_style,
+                seed=rng_seed,
+            )
+            source = "fallback_transmigration_bank"
+            rep2 = evaluate_backstory_quality(
+                fixed,
+                mode=mode,
+                idea=idea,
+                world_style=world_style,
+                memory_policy=memory_policy,
+                rejected=rejected or text,
+            )
+    else:
+        rep2 = evaluate_backstory_quality(
+            fixed,
+            mode=mode,
+            idea=idea,
+            world_style=world_style,
+            memory_policy=memory_policy,
+            rejected=rejected or text,
+        )
+        if not rep2.get("ok") and len(fixed) < 100:
+            fixed = (
+                "They grew up in a working neighborhood near the starting region, learned a modest trade, "
+                "and reached the opening place with ordinary habits and no free power."
+            )
+            source = "fallback_native_stub"
+            rep2 = evaluate_backstory_quality(
+                fixed,
+                mode=mode,
+                idea=idea,
+                world_style=world_style,
+                memory_policy=memory_policy,
+            )
+
+    denial2 = list(rep2.get("hard_fail") or []) + list(rep2.get("soft") or [])
+    return {
+        "ok": bool(rep2.get("ok")),
+        "score": rep2.get("score"),
+        "story": rep2.get("story") or fixed,
+        "report": rep2,
+        "denial_summary": denial if rep2.get("ok") else (denial2 or denial),
+        "source": source,
+        "repaired": True,
+        "pre_repair": rep,
+    }
 
 
 def ensure_isekai_arrival_beat(story: str, *, mode: str = "", idea: str = "", world_style: str = "") -> str:
@@ -3532,7 +4921,8 @@ def ensure_isekai_arrival_beat(story: str, *, mode: str = "", idea: str = "", wo
     For transmigrated mode: require former-world life + transport + arrival start.
 
     Never bolt a generic 'woke in another world' line onto a native fantasy plot
-    (disgraced noble / festival guest / local quest). Rewrite those entirely.
+    (disgraced noble / festival guest / local quest). Rewrite those entirely —
+    but do not stamp the freight/truck/dirt-road template if a light stitch works.
     """
     text = str(story or "").strip()
     mode_l = str(mode or "").lower()
@@ -3540,26 +4930,31 @@ def ensure_isekai_arrival_beat(story: str, *, mode: str = "", idea: str = "", wo
     needs = "transmigrat" in mode_l or any(
         m in idea_l for m in ("isekai", "transmigrat", "summon", "truck", "another world", "other world")
     )
-    # Reincarnated is a different shape — do not force truck-kun structure
     if "reincarnat" in mode_l or "reborn" in mode_l:
         return text
     if not needs:
         return text
 
-    # Always strip self-contradictory magic/arrival stances first
     text = repair_backstory_self_contradictions(text, world_style=world_style)
+
+    if backstory_has_overused_motifs(text):
+        return build_transmigration_backstory(
+            old_story=text,
+            idea=idea or "fresh ordinary life portal",
+            world_style=world_style,
+            seed=abs(hash(text)) % (10**9) or 42,
+        )
 
     score = transmigration_story_score(text)
     if score["ok"]:
         return text
 
-    # Broken: native fantasy plot, skill meta, missing former world, or bolted generic line
     return build_transmigration_backstory(
         old_story=text,
         idea=idea,
         world_style=world_style,
+        seed=(abs(hash(text)) % (10**9)) + 11,
     )
-
 
 def normalize_origin_package(
     fields: dict[str, Any],
@@ -3608,6 +5003,35 @@ def normalize_origin_package(
         if rewritten != story:
             dirty.setdefault("character_backstory", []).append("normalized_origin_backstory")
             out["character_backstory"] = rewritten
+
+    # start_location: isekai/transmigrated must begin in the NEW world, not Earth job site
+    if (
+        "start_location" in out
+        or "start_location" in merged
+        or "backstory_mode" in out
+        or "character_backstory" in out
+    ):
+        loc_in = str(out.get("start_location", merged.get("start_location")) or "")
+        _sess = out.get("session_theme", merged.get("session_theme"))
+        _genre = ""
+        if isinstance(_sess, dict):
+            _genre = str(_sess.get("genre") or "")
+        if not _genre:
+            _genre = str(out.get("world_style", merged.get("world_style")) or "")
+        loc_fixed, loc_changed = ensure_isekai_start_location(
+            loc_in,
+            backstory_mode=mode_now,
+            idea=idea_s,
+            world_style=str(out.get("world_style", merged.get("world_style")) or ""),
+            genre=_genre,
+            character_backstory=str(out.get("character_backstory", merged.get("character_backstory")) or story),
+            session_theme=_sess if isinstance(_sess, dict) else None,
+        )
+        if loc_changed:
+            dirty.setdefault("start_location", []).append("forced_new_world_arrival_site")
+            out["start_location"] = loc_fixed
+        elif "start_location" in out and loc_fixed:
+            out["start_location"] = loc_fixed
 
     if "previous_life_age" in out or "previous_life_age" in merged:
         age_in = out.get("previous_life_age", merged.get("previous_life_age"))
@@ -3772,7 +5196,6 @@ def structural_fallback(field: str, context: dict[str, Any] | None = None) -> An
         "skill_growth_speed": "normal",
         "proficiency_growth_speed": "normal",
         "new_skill_frequency": "normal",
-        "special_ability_origin": "none",
         "leveling_system": True,
         "game_system": bool(isekai),
         "proficiency_system": False,

@@ -225,7 +225,10 @@ def check_ability_duplicates(fields: dict[str, Any]) -> tuple[dict[str, Any], li
     abs_list = out.get("special_abilities")
     if not isinstance(abs_list, list):
         return out, findings
-    origin = str(out.get("special_ability_origin") or "")
+    # Origin UI removed — normalize locks with "both" (per-card locked/prereqs).
+    origin = str(out.get("special_ability_origin") or "both") or "both"
+    if origin in {"none", "off", "no", ""} and abs_list:
+        origin = "both"
     # Always normalize each ability (prereq placeholders, lock policy)
     try:
         from app.llm import normalize_ability_lock_and_prerequisites
@@ -523,43 +526,43 @@ def check_cross_field_inconsistencies(fields: dict[str, Any]) -> tuple[dict[str,
         except Exception:
             pass
 
-    # Transmigrated must be former-world + transport + arrival start (not native fantasy plot)
-    if "transmigrat" in mode and story:
+    # Transmigrated / isekai backstory quality gate (same spirit as ability quality gate)
+    idea_blob = _norm(out.get("_randomize_idea") or out.get("custom_style") or "")
+    if story and (
+        "transmigrat" in mode
+        or any(
+            m in idea_blob + " " + world
+            for m in ("isekai", "transmigrat", "another world", "other world", "summon", "truck")
+        )
+    ):
         try:
-            from app.setup_composer import (
-                build_transmigration_backstory,
-                ensure_isekai_arrival_beat,
-                transmigration_story_score,
-            )
+            from app.setup_composer import quality_gate_backstory
 
-            score = transmigration_story_score(str(out.get("character_backstory") or ""))
-            if not score.get("ok"):
+            gate = quality_gate_backstory(
+                str(out.get("character_backstory") or ""),
+                mode=str(out.get("backstory_mode") or mode or "transmigrated"),
+                idea=str(out.get("_randomize_idea") or idea_blob or ""),
+                world_style=str(out.get("world_style") or world),
+                memory_policy=str(out.get("memory_policy") or ""),
+                auto_repair=True,
+            )
+            rep = gate.get("report") if isinstance(gate.get("report"), dict) else {}
+            if not gate.get("ok") or gate.get("repaired"):
                 findings.append(
                     _finding(
-                        sev="wrong",
-                        code="transmigrated_backstory_missing_origin_transport",
+                        sev="wrong" if not gate.get("ok") else "pattern",
+                        code="backstory_quality_gate",
                         fields=["character_backstory", "backstory_mode"],
                         detail=(
-                            f"former={score.get('has_former_world')} transport={score.get('has_transport')} "
-                            f"native_hits={score.get('native_fantasy_plot_hits')} meta={score.get('skill_meta')} "
-                            f"bolted={score.get('bolted_generic_arrival')} "
-                            f"contradict={score.get('self_contradictions')}"
-                        ),
-                        repair="build_transmigration_backstory",
+                            f"ok={gate.get('ok')} score={gate.get('score')} source={gate.get('source')} "
+                            f"hard={rep.get('hard_fail') or gate.get('denial_summary')}"
+                        )[:240],
+                        repair="quality_gate_backstory",
                     )
                 )
-                out["character_backstory"] = ensure_isekai_arrival_beat(
-                    str(out.get("character_backstory") or ""),
-                    mode=str(out.get("backstory_mode") or "transmigrated"),
-                    idea=str(out.get("_randomize_idea") or ""),
-                    world_style=str(out.get("world_style") or world),
-                )
-                if not transmigration_story_score(str(out.get("character_backstory") or "")).get("ok"):
-                    out["character_backstory"] = build_transmigration_backstory(
-                        old_story=str(out.get("character_backstory") or ""),
-                        idea=str(out.get("_randomize_idea") or ""),
-                        world_style=str(out.get("world_style") or world),
-                    )
+            if gate.get("story"):
+                out["character_backstory"] = str(gate.get("story"))
+                story = _norm(out.get("character_backstory"))
         except Exception:
             pass
 
@@ -587,13 +590,13 @@ def check_cross_field_inconsistencies(fields: dict[str, Any]) -> tuple[dict[str,
                     detail="magical gear while magic_level is off",
                 )
             )
-        if origin not in {"", "none", "off"} and abilities:
+        if abilities:
             findings.append(
                 _finding(
                     sev="hole",
                     code="abilities_with_magic_off",
-                    fields=["special_ability_origin", "magic_level"],
-                    detail="special abilities enabled while magic_level is none (may be non-magic powers — verify)",
+                    fields=["special_abilities", "magic_level"],
+                    detail="special abilities present while magic_level is none (may be non-magic powers — verify)",
                 )
             )
 
@@ -711,18 +714,19 @@ def check_cross_field_inconsistencies(fields: dict[str, Any]) -> tuple[dict[str,
         except Exception:
             pass
 
-    # Abilities present while origin none
-    if origin in {"none", "off", "no", ""} and abilities:
+    # Ability Origin UI removed — list emptiness is the source of truth.
+    # Stale origin=none must not wipe non-empty ability cards (legacy saves / models).
+    if abilities and origin in {"none", "off", "no", ""}:
         findings.append(
             _finding(
-                sev="bug",
-                code="abilities_with_origin_none",
-                fields=["special_abilities", "special_ability_origin"],
-                detail="special_abilities non-empty while origin is none",
-                repair="clear_abilities",
+                sev="pattern",
+                code="abilities_without_origin_field",
+                fields=["special_abilities"],
+                detail="special_abilities present; origin field is unused (per-card locks apply)",
+                repair="set_origin_both",
             )
         )
-        out["special_abilities"] = []
+        out["special_ability_origin"] = "both"
 
     # previous_life_age normalize
     if "previous_life_age" in out:

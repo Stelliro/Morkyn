@@ -165,9 +165,11 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS abilities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL DEFAULT '',
                 name TEXT NOT NULL UNIQUE,
                 description TEXT NOT NULL DEFAULT '',
                 locked INTEGER NOT NULL DEFAULT 0,
+                power_type TEXT NOT NULL DEFAULT 'linear',
                 base_description TEXT NOT NULL DEFAULT '',
                 cost TEXT NOT NULL DEFAULT '',
                 prerequisites TEXT NOT NULL DEFAULT '',
@@ -545,6 +547,22 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             conn.execute(f"ALTER TABLE abilities ADD COLUMN {column} TEXT NOT NULL DEFAULT ''")
     if "resource_cost" not in ability_columns:
         conn.execute("ALTER TABLE abilities ADD COLUMN resource_cost TEXT NOT NULL DEFAULT '{}'")
+    if "power_type" not in ability_columns:
+        conn.execute("ALTER TABLE abilities ADD COLUMN power_type TEXT NOT NULL DEFAULT 'linear'")
+    if "code" not in ability_columns:
+        conn.execute("ALTER TABLE abilities ADD COLUMN code TEXT NOT NULL DEFAULT ''")
+    # Backfill ability codes (AB1, AB2…) when missing
+    try:
+        bare = conn.execute(
+            "SELECT id FROM abilities WHERE code = '' OR code IS NULL ORDER BY id"
+        ).fetchall()
+        for row in bare:
+            conn.execute(
+                "UPDATE abilities SET code = ? WHERE id = ?",
+                (f"AB{int(row['id'])}", int(row["id"])),
+            )
+    except Exception:
+        pass
 
     inventory_columns = table_columns["inventory"]
     for column, definition in (

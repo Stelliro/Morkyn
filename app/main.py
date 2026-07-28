@@ -27,6 +27,7 @@ from app.image_backends import (
     list_comfy_workflows,
     list_image_installables,
     list_local_checkpoints,
+    list_local_loras,
     delete_local_portrait,
     list_local_portraits,
     load_image_presets,
@@ -37,6 +38,7 @@ from app.image_backends import (
     public_image_presets,
     reset_image_presets,
     resolve_character_consistency_mode,
+    resolve_lora_preview_path,
     resolve_portrait_file,
     save_image_presets,
     search_backend_roots,
@@ -542,6 +544,9 @@ class ImageConfigRequest(BaseModel):
     timeout_seconds: int = Field(default=180, ge=10, le=900)
     forge_root: str = Field(default="", max_length=1000)
     comfy_root: str = Field(default="", max_length=1000)
+    # Extra folders (absolute). One path per list entry — outside install roots if needed.
+    lora_dirs: list[str] = Field(default_factory=list)
+    checkpoint_dirs: list[str] = Field(default_factory=list)
     auto_launch_if_offline: bool = True
     # Forge generation
     forge_checkpoint: str = Field(default="", max_length=400)
@@ -553,8 +558,10 @@ class ImageConfigRequest(BaseModel):
     forge_tiling: bool = False
     forge_enable_hr: bool = False
     forge_hr_scale: float = Field(default=1.5, ge=1.0, le=4.0)
-    forge_hr_upscaler: str = Field(default="Latent", max_length=200)
+    forge_hr_upscaler: str = Field(default="R-ESRGAN 4x+", max_length=200)
     forge_denoising_strength: float = Field(default=0.45, ge=0.0, le=1.0)
+    forge_hr_second_pass_steps: int = Field(default=0, ge=0, le=150)
+    forge_active_loras: list[dict[str, Any]] = Field(default_factory=list)
     fullbody_use_face_ref: bool = True
     fullbody_ref_denoise: float = Field(default=0.88, ge=0.55, le=0.95)
     character_consistency: str = Field(default="light", max_length=20)
@@ -806,7 +813,9 @@ def api_image_config():
 
 @app.post("/api/image-config")
 def api_update_image_config(request: ImageConfigRequest):
-    return update_image_config(request.model_dump())
+    # Only apply fields the client actually sent — full model_dump() would reset
+    # forge_root / path lists / LoRAs to defaults on partial patches.
+    return update_image_config(request.model_dump(exclude_unset=True))
 
 
 @app.post("/api/image-status")
@@ -827,7 +836,39 @@ def api_image_catalog(request: ImageCatalogRequest | None = None):
     catalog = fetch_backend_catalog(provider)
     catalog["comfy_workflows_on_disk"] = list_comfy_workflows()
     catalog["disk_checkpoints"] = list_local_checkpoints()
+    # Ensure disk LoRAs carry sidecar weight/keywords/preview even if merge skipped some
+    try:
+        catalog["disk_loras"] = list_local_loras()
+    except Exception:
+        catalog.setdefault("disk_loras", catalog.get("disk_loras") or [])
     return catalog
+
+
+@app.get("/api/image/lora-preview")
+def api_lora_preview(name: str = ""):
+    """
+    Serve a small LoRA preview image from the configured LoRA folders.
+    Only files under forge_root / custom lora_dirs are allowed.
+    """
+    path = resolve_lora_preview_path(name)
+    if not path or not path.is_file():
+        raise HTTPException(status_code=404, detail="LoRA preview not found")
+    suffix = path.suffix.lower()
+    media = {
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".gif": "image/gif",
+    }.get(suffix, "application/octet-stream")
+    return FileResponse(
+        path,
+        media_type=media,
+        headers={
+            "Cache-Control": "public, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 @app.get("/api/gpu-gate")
@@ -1063,6 +1104,12 @@ class CharacterSetRequest(BaseModel):
     fullbody_prompt: str = Field(default="", max_length=8000)
     face_negative: str = Field(default="", max_length=4000)
     fullbody_negative: str = Field(default="", max_length=4000)
+    # Optional hires overrides (UI quality bar) — applied for this gen even if config save races.
+    forge_enable_hr: bool | None = None
+    forge_hr_scale: float | None = Field(default=None, ge=1.0, le=4.0)
+    forge_hr_upscaler: str | None = Field(default=None, max_length=200)
+    forge_denoising_strength: float | None = Field(default=None, ge=0.0, le=1.0)
+    forge_hr_second_pass_steps: int | None = Field(default=None, ge=0, le=150)
 
 
 class CharacterPromptPreviewRequest(BaseModel):
@@ -1371,6 +1418,11 @@ def api_image_character_set(request: CharacterSetRequest):
         fullbody_prompt=request.fullbody_prompt or "",
         face_negative=request.face_negative or "",
         fullbody_negative=request.fullbody_negative or "",
+        forge_enable_hr=request.forge_enable_hr,
+        forge_hr_scale=request.forge_hr_scale,
+        forge_hr_upscaler=request.forge_hr_upscaler,
+        forge_denoising_strength=request.forge_denoising_strength,
+        forge_hr_second_pass_steps=request.forge_hr_second_pass_steps,
     )
     if not result.get("ok"):
         # 424 Failed Dependency-ish; use 400 with structured body for UI
@@ -1639,8 +1691,9 @@ def api_image_npc_portrait(request: NpcPortraitRequest):
         width=request.width or 384,
         height=request.height or 384,
         purpose="npc_portrait",
-        loras=None,  # resolve_active_loras uses saved forge_active_loras
-        apply_loras=True,
+        # No silent forge_active_loras injection — LoRAs only when the request passes them.
+        loras=None,
+        apply_loras=False,
     )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result.get("error") or "NPC portrait failed")
@@ -1653,6 +1706,104 @@ def api_image_npc_portrait(request: NpcPortraitRequest):
 
 
 # --- Tile world / map presets / image archive ---------------------------------
+
+
+def _location_special_runtime() -> dict[str, Any]:
+    """Read map_blank / movement_locked flags (heavens prison, etc.)."""
+    from app.db import connect as _connect
+
+    flags: dict[str, Any] = {}
+    movement_locked = False
+    map_blank = False
+    try:
+        with _connect() as conn:
+            rows = {
+                str(r["key"]): r["value"]
+                for r in conn.execute(
+                    "SELECT key, value FROM settings WHERE key IN "
+                    "('location_special_flags', 'movement_locked', 'map_blank')"
+                ).fetchall()
+            }
+        raw = rows.get("location_special_flags")
+        if raw:
+            try:
+                loaded = json.loads(raw) if isinstance(raw, str) else raw
+                if isinstance(loaded, dict):
+                    flags = loaded
+            except Exception:
+                flags = {}
+        ml = rows.get("movement_locked")
+        if ml is not None:
+            try:
+                movement_locked = bool(json.loads(ml)) if str(ml).strip()[:1] in "[{tTfF0123456789" else str(ml).lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+            except Exception:
+                movement_locked = str(ml).lower() in {"1", "true", "yes", "on"}
+        else:
+            movement_locked = bool(flags.get("movement_locked"))
+        mb = rows.get("map_blank")
+        if mb is not None:
+            try:
+                map_blank = bool(json.loads(mb)) if str(mb).strip()[:1] in "[{tTfF0123456789" else str(mb).lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+            except Exception:
+                map_blank = str(mb).lower() in {"1", "true", "yes", "on"}
+        else:
+            map_blank = bool(flags.get("map_blank"))
+    except Exception:
+        pass
+    return {
+        "flags": flags,
+        "movement_locked": bool(movement_locked),
+        "map_blank": bool(map_blank),
+        "label": str(flags.get("label") or ("Bound" if movement_locked else "")),
+        "hint": str(
+            flags.get("hint")
+            or (
+                "The map shows nothing. You cannot walk free until something changes your confinement."
+                if map_blank or movement_locked
+                else ""
+            )
+        ),
+    }
+
+
+def _blank_map_payload(*, radius: int | None = None, full: bool = False) -> dict[str, Any]:
+    """Empty map view for heavens / prison confinement."""
+    runtime = _location_special_runtime()
+    payload: dict[str, Any] = {
+        "empty": True,
+        "map_blank": True,
+        "movement_locked": True,
+        "tiles": [],
+        "ascii": "",
+        "player": {"x": 0, "y": 0},
+        "settlements": [],
+        "settlements_nearby": [],
+        "markers": [],
+        "visited_count": 0,
+        "vision_radius": 0,
+        "location_special_flags": runtime.get("flags") or {},
+        "confinement": {
+            "label": runtime.get("label") or "The Heavens — bound",
+            "hint": runtime.get("hint")
+            or "The map shows nothing. You cannot walk free until something changes your confinement.",
+            "reason": (runtime.get("flags") or {}).get("reason") or "celestial_confinement",
+        },
+    }
+    if radius is not None:
+        payload["radius"] = radius
+    if full:
+        payload["mode"] = "full"
+    return payload
 
 
 @app.get("/api/tiles/states")
@@ -1672,12 +1823,18 @@ def api_tile_maps():
 
 @app.get("/api/tiles/map")
 def api_tile_map(map_id: str = ""):
+    runtime = _location_special_runtime()
+    if runtime.get("map_blank"):
+        return _blank_map_payload()
     data = get_map(map_id or None)
     if not data:
         # Soft empty payload so the UI can boot without a hard 404.
         return {"id": None, "tiles": [], "ascii": "", "empty": True}
     data["ascii"] = ascii_preview(data)
     data["empty"] = False
+    data["map_blank"] = False
+    data["movement_locked"] = bool(runtime.get("movement_locked"))
+    data["location_special_flags"] = runtime.get("flags") or {}
     # Drop heavy nested grid duplicate if client only needs tiles
     return data
 
@@ -1721,6 +1878,12 @@ def _map_avatar_payload() -> dict[str, Any]:
 @app.get("/api/tiles/map/local")
 def api_tile_map_local(radius: int = 6):
     """Circular local map centered on the player (follows). Vision is still 1-tile LOS."""
+    runtime = _location_special_runtime()
+    if runtime.get("map_blank"):
+        blank = _blank_map_payload(radius=radius)
+        blank["map_avatar"] = _map_avatar_payload()
+        blank["tile_px"] = int((_map_avatar_payload() or {}).get("tile_px") or 32)
+        return blank
     data = get_map(None)
     if not data:
         return {"empty": True, "tiles": [], "radius": radius}
@@ -1730,17 +1893,29 @@ def api_tile_map_local(radius: int = 6):
     view["preset_id"] = data.get("preset_id")
     view["map_avatar"] = _map_avatar_payload()
     view["tile_px"] = int((_map_avatar_payload() or {}).get("tile_px") or 32)
+    view["map_blank"] = False
+    view["movement_locked"] = bool(runtime.get("movement_locked"))
+    view["location_special_flags"] = runtime.get("flags") or {}
     return view
 
 
 @app.get("/api/tiles/map/full")
 def api_tile_map_full():
+    runtime = _location_special_runtime()
+    if runtime.get("map_blank"):
+        blank = _blank_map_payload(full=True)
+        blank["map_avatar"] = _map_avatar_payload()
+        blank["tile_px"] = int((_map_avatar_payload() or {}).get("tile_px") or 32)
+        return blank
     data = get_map(None)
     if not data:
         return {"empty": True, "tiles": [], "settlements": []}
     view = full_map_view(data)
     view["map_avatar"] = _map_avatar_payload()
     view["tile_px"] = int((_map_avatar_payload() or {}).get("tile_px") or 32)
+    view["map_blank"] = False
+    view["movement_locked"] = bool(runtime.get("movement_locked"))
+    view["location_special_flags"] = runtime.get("flags") or {}
     return view
 
 
@@ -1755,6 +1930,12 @@ class MapSurveyRequest(BaseModel):
 @app.post("/api/tiles/map/survey")
 def api_tile_map_survey(request: MapSurveyRequest):
     """Expand map vision from the player's tile with LOS (mountains block unless height helps)."""
+    runtime = _location_special_runtime()
+    if runtime.get("map_blank") or runtime.get("movement_locked"):
+        raise HTTPException(
+            status_code=409,
+            detail=runtime.get("hint") or "No map to survey — you are confined.",
+        )
     data = get_map(None)
     if not data:
         raise HTTPException(status_code=400, detail="No active map.")
@@ -1890,6 +2071,19 @@ def api_tile_map_move(request: MapMoveRequest):
     from app.db import connect as _connect
     from app.world import get_state
 
+    runtime = _location_special_runtime()
+    if runtime.get("movement_locked") or runtime.get("map_blank"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": runtime.get("hint")
+                or "You cannot move — confined (blank map / prison state).",
+                "movement_locked": True,
+                "map_blank": bool(runtime.get("map_blank")),
+                "label": runtime.get("label") or "Bound",
+                "reason": (runtime.get("flags") or {}).get("reason") or "confinement",
+            },
+        )
     data = get_map(None)
     if not data:
         raise HTTPException(status_code=400, detail="No active map.")
@@ -2029,6 +2223,7 @@ def api_tile_settlements():
 def api_travel_status():
     from app.db import connect as _connect
 
+    runtime = _location_special_runtime()
     with _connect() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key = 'travel_ready'").fetchone()
     ready = True
@@ -2037,7 +2232,16 @@ def api_travel_status():
             ready = json.loads(row["value"])
         except Exception:
             ready = str(row["value"]).lower() in {"1", "true", "yes", "on"}
-    return {"travel_ready": bool(ready)}
+    if runtime.get("movement_locked") or runtime.get("map_blank"):
+        ready = False
+    return {
+        "travel_ready": bool(ready),
+        "movement_locked": bool(runtime.get("movement_locked")),
+        "map_blank": bool(runtime.get("map_blank")),
+        "location_special_flags": runtime.get("flags") or {},
+        "confinement_label": runtime.get("label") or "",
+        "confinement_hint": runtime.get("hint") or "",
+    }
 
 
 @app.post("/api/tiles/generate")
@@ -2482,6 +2686,10 @@ def api_select_folder(request: SelectFolderRequest | None = None):
             "comfy": "Select ComfyUI install folder",
             "models": "Select models folder",
             "controlnet": "Select ControlNet models folder",
+            "lora": "Select LoRA folder",
+            "loras": "Select LoRA folder",
+            "checkpoint": "Select checkpoint folder",
+            "checkpoints": "Select checkpoint folder",
         }
         title = titles.get(kind, "Select folder")
     initial_dir = initial if initial and Path(initial).is_dir() else str(Path.home())

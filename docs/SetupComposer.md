@@ -23,7 +23,7 @@ Source of truth: `app/setup_composer.py` (`SETUP_COMPOSER_PHASES`, `FIELD_CONTRA
 | progression | difficulty + world | leveling, system UI, skill growth… |
 | people | world + difficulty | npc density, quests, ranks… |
 | identity | world + peoples | backstory, names, start location… |
-| powers | identity + progression + peoples | ability origin + abilities |
+| powers | identity + progression + peoples | special abilities (per-card locks) |
 
 API:
 

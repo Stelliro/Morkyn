@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.llm import (
     ABILITY_QUALITY_MAX_ATTEMPTS,
     _fallback_custom_skills_from_domain,
@@ -128,6 +130,70 @@ def test_near_duplicate_detection_and_local_dedupe():
         pairs2 = find_near_duplicate_pairs(out["abilities"])
         assert not pairs2, pairs2
     assert len(names) == 3
+
+
+def test_sanitize_ability_name_strips_numeric_suffix():
+    from app.llm import (
+        ability_name_has_numeric_junk,
+        sanitize_ability_name,
+        _unique_ability_display_name,
+        evaluate_ability_quality,
+        ensure_distinct_abilities,
+    )
+
+    assert sanitize_ability_name("Salt Circle 52") == "Salt Circle"
+    assert sanitize_ability_name("Name Whisper 40") == "Name Whisper"
+    assert sanitize_ability_name("Lamp Glare 87") == "Lamp Glare"
+    assert sanitize_ability_name("Quiet Craft Variant 7") == "Quiet Craft"
+    assert sanitize_ability_name("Power (2)") == "Power"
+    assert ability_name_has_numeric_junk("Salt Circle 52") is True
+    assert ability_name_has_numeric_junk("Salt Circle") is False
+
+    rep = evaluate_ability_quality(
+        {
+            "name": "Salt Circle 52",
+            "description": "Pour a salt line that mostly stays unbroken for a few seconds when you focus.",
+            "cost": "A brief headache after use",
+            "growth_math": "XP_to_next = 30 + 12*level; use grants 3-8 XP; soft cap at L6",
+            "power_type": "linear",
+            "locked": False,
+            "prerequisites": "",
+        },
+        require_strong_math=False,
+    )
+    # evaluate sees raw unless gate sanitizes — numeric suffix is a hard fail
+    assert "name_numeric_suffix" in (rep.get("hard_fail") or []) or rep.get("ok") is False
+
+    # Unique remake never appends bare digits
+    taken = {"Salt Circle", "Name Whisper", "Lamp Glare"}
+    for i in range(20):
+        n = _unique_ability_display_name("Salt Circle", taken, salt=f"t{i}")
+        assert not ability_name_has_numeric_junk(n), n
+        assert not re.search(r"\d", n), n
+        taken.add(n)
+
+    # ensure_distinct forced path should not produce Name 52
+    a = {
+        "name": "Autumn Veil",
+        "description": "Thin leaf-light that hides your outline for a breath in woods.",
+        "cost": "Concentration while holding still.",
+        "prerequisites": "",
+        "growth_math": "XP_to_next = 30 + 12*level; use grants 3-8 XP",
+        "power_type": "linear",
+        "locked": False,
+    }
+    b = {
+        "name": "Leaf Shroud",
+        "description": "Thin leaf-light that hides your outline for a breath in woods.",
+        "cost": "Concentration while holding still.",
+        "prerequisites": "",
+        "growth_math": "XP_to_next = 30 + 12*level; use grants 3-8 XP",
+        "power_type": "linear",
+        "locked": False,
+    }
+    out = ensure_distinct_abilities([a, b], origin="innate", use_llm=False, max_rounds=4)
+    for ab in out.get("abilities") or []:
+        assert not ability_name_has_numeric_junk(str(ab.get("name") or "")), ab.get("name")
 
 
 def test_special_abilities_group_return_fields_not_character_block():

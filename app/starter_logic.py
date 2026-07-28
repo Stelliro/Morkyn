@@ -361,8 +361,9 @@ _ITEM_LOCALIZE: list[tuple[str, str]] = [
     (r"\btrainers\b", "scuffed leather shoes"),
     (r"\bt-shirt\b", "plain work shirt"),
     (r"\btee shirt\b", "plain work shirt"),
-    (r"\bsmartphone\b", "wooden charm"),
-    (r"\bphone\b", "wooden charm"),
+    # Dead phones can stay as pocket flavor on pure isekai; only strip when fully localizing long-residence lives.
+    (r"\bsmartphone\b", "cracked phone"),
+    (r"\bphone\b", "cracked phone"),
     (r"\blaptop\b", ""),
     (r"\bearbuds\b", ""),
     (r"\bheadphones\b", ""),

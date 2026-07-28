@@ -60,7 +60,6 @@ def test_coerce_typed_enums_and_bools():
             "difficulty": "COMPOUNDING EDGE",
             "narration_detail": "rich prose please",
             "xp_growth_speed": "very slow",
-            "special_ability_origin": "born with",
             "proficiency_access": "Start with one near-useless compounding skill seed frame",
         }
     )
@@ -69,7 +68,6 @@ def test_coerce_typed_enums_and_bools():
     assert out["magic_level"] == "rare"
     assert out["difficulty"] == "normal"
     assert out["xp_growth_speed"] == "very slow"
-    assert out["special_ability_origin"] == "innate"
     assert "compound" not in str(out["proficiency_access"]).lower()
     assert dirty
 

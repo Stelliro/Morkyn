@@ -1951,9 +1951,24 @@ body.image-mode-simple .imageAdvancedOnly,
   width: 4.2rem;
   padding: 2px 6px;
 }
+.artHrUpscalerLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  min-width: 10rem;
+  flex: 1 1 12rem;
+}
+.artHrUpscalerLabel select {
+  flex: 1 1 auto;
+  min-width: 8rem;
+  max-width: 16rem;
+  padding: 2px 6px;
+  font-size: 0.82rem;
+}
 .artHrHint {
   font-size: 0.72rem;
-  flex: 1 1 10rem;
+  flex: 1 1 12rem;
 }
 .artLoraDropdown {
   margin: 4px 0 10px;
@@ -1999,18 +2014,18 @@ body.image-mode-simple .imageAdvancedOnly,
 .loraPickList {
   display: grid;
   gap: 4px;
-  max-height: 11rem;
+  max-height: 16rem;
   overflow: auto;
   padding-right: 4px;
 }
 .loraPickRow {
   display: grid;
-  grid-template-columns: auto 1fr 4.5rem;
+  grid-template-columns: auto 40px minmax(0, 1fr) 58px;
   gap: 8px;
   align-items: center;
   font-size: 0.8rem;
-  padding: 3px 4px;
-  border-radius: 4px;
+  padding: 4px 6px;
+  border-radius: 6px;
 }
 .loraPickRow:hover {
   background: color-mix(in srgb, var(--surface-2, var(--surface)) 85%, var(--neon, #6cf) 8%);
@@ -6627,7 +6642,7 @@ button.chipBtn {
 }
 
 .loraPickList {
-  max-height: 120px;
+  max-height: 16rem;
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -6635,19 +6650,7 @@ button.chipBtn {
   background: var(--surface-2, transparent);
   display: flex;
   flex-direction: column;
-  gap: 4px;
-}
-
-.loraPickList label {
-  flex-direction: row !important;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-}
-
-.loraPickList .loraWeight {
-  width: 52px;
-  margin-left: auto;
+  gap: 3px;
 }
 
 .artKindActions {
@@ -6833,30 +6836,72 @@ button.chipBtn {
   margin: 0;
 }
 
-/* LoRA rows: checkbox + name + weight in one line */
-.loraPickList label {
+/* LoRA rows: checkbox + thumb + name/keywords + weight */
+.loraPickList label.loraPickRow,
+.loraPickList .loraPickRow {
   display: grid !important;
-  grid-template-columns: auto minmax(0, 1fr) 56px;
+  grid-template-columns: auto 40px minmax(0, 1fr) 58px;
   align-items: center;
   gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
 }
 
-.loraPickList label span {
+.loraPickList .loraThumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+}
+
+.loraPickList .loraThumb.missing,
+.loraPickList .loraThumbEmpty {
+  display: inline-block;
+  width: 40px;
+  height: 40px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(0, 0, 0, 0.2));
+  border: 1px dashed rgba(255, 255, 255, 0.12);
+}
+
+.loraPickList .loraPickMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  text-align: left;
+}
+
+.loraPickList .loraPickName {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: left;
-  /* LoRA names are values, not section titles — keep sentence case / body weight */
   text-transform: none;
   letter-spacing: 0;
   font-weight: 600;
   color: var(--text);
-  font-size: 13px;
+  font-size: 12.5px;
+  line-height: 1.25;
+}
+
+.loraPickList .loraKeywords {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  line-height: 1.25;
+  color: var(--muted, #9aa3ad);
+  font-weight: 400;
+  text-transform: none;
 }
 
 .loraPickList .loraWeight {
-  width: 56px;
+  width: 58px;
   margin-left: 0;
+  font-size: 12px;
 }
 
 .imageStudioPanel {
@@ -8542,6 +8587,14 @@ button.compactButton {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: start;
+}
+
+.pathPickerRow textarea {
+  min-height: 3.2rem;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 0.9em;
 }
 
 .modelTokenGrid {

@@ -25,6 +25,13 @@ def test_scenery_phrase_rejected_as_person_name():
     assert is_plausible_place_name("Skycrack Spire")  # real place-ish name ok
 
 
+def test_gear_phrase_rejected_as_person_name():
+    assert not is_plausible_person_name("travel-stained coat")
+    assert not is_plausible_person_name("Worn tool satchel")
+    assert not is_plausible_person_name("oil-stained factory coat")
+    assert is_plausible_person_name("Mara")
+
+
 def test_repair_rewrites_bad_npc_and_location_in_narration():
     narr = (
         "A cloaked figure named System pings a local job appears, offering coins. "
@@ -52,6 +59,31 @@ def test_invent_person_name_is_short():
     n = invent_person_name(seed=42)
     assert is_plausible_person_name(n)
     assert len(n.split()) <= 2
+
+
+def test_inject_codes_for_known_place_and_item_names():
+    from app.llm import _inject_entity_codes_for_known_names, _repair_prose_entity_labels
+
+    prose = (
+        "Low Gate Timber Arch comes into focus. "
+        "You still have a cracked phone and soft work shoes in your pockets."
+    )
+    cmap = {
+        "L1": "Low Gate Timber Arch",
+        "I1": "cracked phone",
+        "I2": "soft work shoes",
+    }
+    injected = _inject_entity_codes_for_known_names(prose, cmap)
+    assert "Low Gate Timber Arch [[L1]]" in injected
+    assert "cracked phone [[I1]]" in injected
+    assert "soft work shoes [[I2]]" in injected
+    # Idempotent-ish: no double codes for same name
+    again = _inject_entity_codes_for_known_names(injected, cmap)
+    assert again.count("[[L1]]") == 1
+
+    repaired = _repair_prose_entity_labels(prose, cmap)
+    assert "[[L1]]" in repaired
+    assert "[[I1]]" in repaired
 
 
 def test_repair_scenery_npc_and_does_not_spam_name_before_every_verb():
@@ -96,3 +128,59 @@ def test_repair_scenery_npc_and_does_not_spam_name_before_every_verb():
     repaired = _repair_prose_entity_labels(prose, {"A": "Mara"})
     assert repaired.lower().count("mara") <= 2
     assert "Mara Mara" not in repaired
+
+
+def test_repair_coat_as_faction_and_split_crossbow():
+    from app.llm import _repair_gear_as_agent_prose, _repair_entity_names_in_turn
+
+    raw = (
+        "Choose your side—Second Shadow Inn's allies or travel-stained coat's rebels—"
+        "and the city's fate will hinge on your first move. "
+        "Their hand rests on the hilt of a cross, bow slung across their back."
+    )
+    fixed = _repair_gear_as_agent_prose(
+        raw,
+        inventory_names=["travel-stained coat"],
+    )
+    assert "coat's rebels" not in fixed.lower()
+    assert "the rebels" in fixed.lower()
+    assert "crossbow" in fixed.lower()
+    assert "cross, bow" not in fixed.lower()
+
+    result = {
+        "npcs": [{"code": "A", "name": "travel-stained coat", "role": "rebel"}],
+        "narration": raw,
+    }
+    out = _repair_entity_names_in_turn(
+        result,
+        {
+            "current_location": {"name": "Second Shadow Inn", "code": "L1"},
+            "inventory": [{"name": "travel-stained coat", "code": "I1"}],
+        },
+    )
+    assert is_plausible_person_name(out["npcs"][0]["name"])
+    assert "coat" not in out["npcs"][0]["name"].lower()
+    assert "coat's rebels" not in out["narration"].lower()
+    assert "crossbow" in out["narration"].lower()
+
+
+def test_repair_bare_code_possessives_from_export():
+    """Export fail: L1's allies or I1's rebels (place vs item codes as people)."""
+    from app.llm import _repair_entity_names_in_turn
+
+    raw = (
+        "Choose your side—L1's allies or I1's rebels—and the city's fate will hinge. "
+        "A hooded figure leans in. Hand on a cross, bow."
+    )
+    out = _repair_entity_names_in_turn(
+        {"narration": raw, "npcs": []},
+        {
+            "current_location": {"name": "Second Shadow Inn", "code": "L1"},
+            "inventory": [{"name": "travel-stained coat", "code": "I1"}],
+        },
+    )
+    narr = out["narration"]
+    assert "I1's" not in narr and "I1’s" not in narr
+    assert "the rebels" in narr.lower()
+    assert "Second Shadow Inn" in narr
+    assert "crossbow" in narr.lower()

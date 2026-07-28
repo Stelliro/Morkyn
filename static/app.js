@@ -173,13 +173,37 @@ const OPTIONAL_IDENTITY_FILL_CHANCE = {
   player_public_name: 0.22,
   player_title: 0.14,
 };
+/** @deprecated Origin UI removed — locks live per ability. Kept for save-file compat only. */
 const ABILITY_ORIGINS = new Set(["none", "acquired", "innate", "both"]);
 const ABILITY_COUNT_MIN_DEFAULT = 1;
 const ABILITY_COUNT_MAX_DEFAULT = 4;
 const ABILITY_COUNT_HARD_MAX = 4;
 
 const RANDOM_SETUP = {
-  player_name: ["Wanderer", "Mara", "Corvin", "Iris Vale", "Ren", "Sable", "Tamsin", "Kael"],
+  // Personal/legal names (Given or Given + family) — not handles/nicknames.
+  player_name: [
+    "Mara Ellison",
+    "Corvin Hale",
+    "Iris Vale",
+    "Tamsin Reed",
+    "Kael Morin",
+    "Elena Croft",
+    "Jonas Pike",
+    "Sable Quinn",
+    "Ren Ashford",
+    "Liora Dane",
+    "Marcus Bell",
+    "Nadia Voss",
+    "Tobias Wren",
+    "Helena Kade",
+    "Darius Cole",
+    "Miriam Shaw",
+    "Owen Graves",
+    "Celia Thorn",
+    "Felix Rourke",
+    "Ava Mercer",
+  ],
+  // Nicknames / public handles only (usually blank).
   player_public_name: ["", "Ash", "River", "Patch", "Northlight", "Second Bell", "Vellum"],
   player_title: ["", "the Weatherwise", "of Kiln Street", "the Long Listener", "Under New Moons", "the Spare Key"],
   player_age: ["17", "19", "24", "31", "middle-aged", "appears 30", "adult"],
@@ -201,7 +225,6 @@ const RANDOM_SETUP = {
     "sexless or constructed",
     "varies by form",
   ],
-  special_ability_origin: ["none", "acquired", "innate", "both"],
   backstory_mode: ["known", "hidden", "fragmented memories", "reincarnated", "transmigrated", "nameless drifter"],
   memory_policy: ["known", "ordinary memory", "details emerge through choices", "rumors may be wrong", "private details stay private", "remembers former life", "former life fragments"],
   character_backstory: [
@@ -244,24 +267,56 @@ const RANDOM_SETUP = {
     "green-brown eyes, deep laugh creases, strong brow",
   ],
   appearance: [
-    "torso: travel-stained coat; feet: dusty boots; waist: rope coil",
-    "torso: plain work tunic; hands: work gloves; feet: practical boots",
-    "torso: frayed cloak; legs: patched trousers; bag: worn satchel",
-    "torso: simple street clothes; feet: cheap shoes; bag: thin travel bag",
-    "torso: secondhand hoodie; feet: scuffed sneakers; bag: messenger bag",
-    "torso: canvas jacket; waist: tool belt; feet: steel-toe boots",
-    "torso: rain cloak; legs: oilcloth trousers; bag: waterproof pack",
-    "torso: formal vest over shirt; feet: polished but cracked shoes",
-    "torso: hospital scrubs under coat; feet: soft shoes; bag: medical pouch",
+    "torso: plain travel clothes; feet: practical shoes; bag: thin shoulder bag",
+    "torso: secondhand work shirt; feet: scuffed shoes; hands: cheap gloves",
+    "torso: light jacket over tee; feet: sneakers; bag: small daypack",
+    "torso: rain-damp hoodie; feet: wet sneakers",
+    "torso: hospital scrub top under coat; feet: soft shoes; neck: badge lanyard",
+    "torso: kitchen apron over street clothes; feet: non-slip shoes",
+    "torso: delivery jacket; hands: bike gloves; feet: trail shoes",
+    "torso: teacher cardigan over blouse; feet: flats; bag: tote",
+    "torso: patched canvas vest; hands: work gloves; feet: worn boots",
+    "torso: coarse hooded tunic; feet: scuffed leather shoes; bag: worn satchel",
+    "torso: travel cloak; legs: patched trousers; feet: dusty boots",
+    "torso: plain work tunic; waist: rope belt; feet: practical boots",
+    "torso: oilcloth rain cloak; legs: tough trousers; bag: waterproof wrap",
+    "torso: simple robes; feet: cloth shoes",
+    "torso: ferry-hand jacket; feet: salt-stained boots; bag: net pouch",
+    "torso: market stall apron; feet: soft shoes; bag: coin purse",
     "torso: quilted work vest; hands: fingerless gloves; feet: trail boots",
+    "torso: formal vest over shirt; feet: cracked shoes",
   ],
   starter_equipment: [
     "worn coat, coiled rope, pocket knife, dusty boots, water skin, 3 days rations",
-    "plain clothes, work gloves, small tool pouch, practical boots, copper coins",
+    "plain clothes, work gloves, small tool pouch, practical boots",
     "travel cloak, empty satchel, wooden charm, heel of bread",
     "secondhand jacket, notebook stub, stub of chalk, water flask",
     "canvas bag, multi-tool, duct tape roll, cheap flashlight, snacks",
     "rain cloak, fishing line, tin cup, flint kit, dried fish",
+    "cracked phone, house keys, transit card, light jacket, half-empty water bottle",
+    "hospital badge on a lanyard, soft shoes, zip hoodie, cheap earbuds",
+    "bike gloves, delivery bag, rain poncho, dead phone, protein bar",
+    "teacher's tote, red pen, lesson notes, cardigan, bus pass",
+    "hotel keycard, pressed shirt, small umbrella, mints",
+    "kitchen apron, non-slip shoes, spare hair tie, street wallet",
+    "folding knife, tin cup, wool scarf, day of hard bread",
+    "sewing kit, scrap cloth, soft shoes, dried fruit",
+    "dead phone, wallet with useless cards, apartment keys, light jacket",
+    "ID badge, lanyard, soft shoes, hoodie",
+  ],
+  start_location: [
+    "Mosswake Gate",
+    "Outer Compound Yard",
+    "Ash Road Cut",
+    "Ferry Landing Stone",
+    "Red Lantern Dock",
+    "Blackwater Relay",
+    "Cinder Market Edge",
+    "Sect Outer Court Gate",
+    "Saltwind Pier",
+    "Iron Bell Crossroads",
+    "Pale Bridge Footing",
+    "Ration Yard Post",
   ],
   skill_style: ["standard", "generous", "training-heavy", "strict"],
   proficiency_access: ["learned", "familiar actions free", "only expert tasks require training"],
@@ -454,9 +509,9 @@ const SYSTEM_STYLE_DESCRIPTIONS = {
 };
 
 const RANDOM_GROUPS = {
-  character: ["backstory_mode", "memory_policy", "character_backstory", "hair", "facial_features", "appearance", "starter_equipment", "player_name", "player_public_name", "player_title", "player_age", "player_sex", "previous_life_age", "previous_life_sex", "special_ability_origin", "special_abilities"],
+  character: ["backstory_mode", "memory_policy", "character_backstory", "hair", "facial_features", "appearance", "starter_equipment", "player_name", "player_public_name", "player_title", "player_age", "player_sex", "previous_life_age", "previous_life_sex", "special_abilities"],
   // Powers step: ability cards + custom skill rules (compounding / XP / tracking live here)
-  powers: ["special_ability_origin", "special_abilities", "custom_skills"],
+  powers: ["special_abilities", "custom_skills"],
   world: ["world_style", "magic_level", "world_races", "race_magic_enabled", "race_magic_rarity", "tech_level", "tone", "economy", "start_location", "custom_style", "race_magic_rules", "race_ability_rules"],
   people: ["npc_density", "quest_style", "faction_pressure", "npc_stat_scaling", "npc_skill_frequency", "rank_scale"],
   rules: ["difficulty", "death_rules", "narration_detail", "loot_rarity", "inventory_weight_limit", "inventory_slot_limit", "inventory_rules", "leveling_system", "game_system", "proficiency_system", "skill_levels_enabled", "skill_style", "proficiency_access", "new_skill_frequency", "xp_growth_speed", "skill_growth_speed", "proficiency_growth_speed", "system_style", "custom_skills"],
@@ -518,7 +573,6 @@ let RANDOM_FIELD_ORDER = [
   "previous_life_age",
   "previous_life_sex",
   "start_location",
-  "special_ability_origin",
   "special_abilities",
 ];
 
@@ -614,7 +668,8 @@ const PRESETS_STORAGE_KEY = "morkyn-director-presets-v1";
 
 const SETTING_INFO = {
   player_name: {
-    description: "The name shown in player records and story summaries.",
+    description:
+      "Personal/legal name for records and formal address: a given name, or given + family (e.g. Mara Ellison). Not a nickname, street handle, or epithet — those go under Public name / Title.",
   },
   player_public_name: {
     description: "A rare public name, alias, or nickname. Usually blank unless the backstory or Backstory Mode gives NPCs a reason to know another name.",
@@ -637,9 +692,6 @@ const SETTING_INFO = {
   previous_life_sex: {
     description: "Former-life sex for reincarnated/transmigrated starts. Prefer male/female for ordinary former lives; exotic categories only when that body was clearly nonstandard.",
     customPlaceholder: "Example: different from current body, unknown, not applicable",
-  },
-  special_ability_origin: {
-    description: "None = no special powers. Acquired = learned/earned in play (usually locked). Innate = inborn and usable at start. Both = mix of acquired and innate per ability.",
   },
   backstory_mode: {
     description: "Controls how much of the character's past is known at the start and how carefully the model should reveal it.",
@@ -1138,7 +1190,7 @@ function decorateFunctionHelp(root = document) {
   findAll(root, "[data-randomize-group]").forEach((button) => {
     const group = button.dataset.randomizeGroup;
     const powersHelp =
-      "Re-roll ability origin, ability cards (including Growth Math), and Custom Proficiencies. Not name/backstory.";
+      "Re-roll ability cards (including Growth Math) and Custom Proficiencies. Not name/backstory.";
     ensureHelpForTarget(
       button,
       group === "powers" ? powersHelp : RANDOM_GROUP_HELP[group] || "Randomize this setup group while respecting locked fields.",
@@ -1204,15 +1256,85 @@ function getEntityMap() {
   const map = new Map();
   const add = (type, entity) => {
     if (!entity?.code) return;
-    map.set(entity.code.toUpperCase(), { type, entity });
+    map.set(String(entity.code).toUpperCase(), { type, entity });
   };
+  // Current place first so L1 is always available for opening prose
+  if (state?.current_location?.code) add("location", state.current_location);
   for (const location of state?.locations || []) {
     add("location", location);
     for (const npc of location.npcs || []) add("npc", npc);
+    for (const ev of location.events || []) add("event", ev);
   }
   for (const item of state?.inventory || []) add("item", item);
   for (const event of state?.events || []) add("event", event);
+  // Flat NPC list (working set / shells)
+  for (const npc of state?.npcs || []) {
+    if (npc?.code) add("npc", npc);
+  }
   return map;
+}
+
+/** Escape a string for use inside a RegExp (after HTML-escaping labels). */
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Turn known entity *names* into the same clickable buttons as [[codes]].
+ * LLM can just write "Low Gate Timber Arch" or "Mara" — UI links them when state knows them.
+ */
+function linkifyKnownEntityNames(html, map) {
+  if (!html || !map || !map.size) return html;
+  // Longest labels first so "Low Gate Timber Arch" wins over "Gate"
+  const entries = [];
+  const seenLabel = new Set();
+  for (const [code, found] of map.entries()) {
+    const label = String(entityLabel(found?.entity) || "").trim();
+    if (label.length < 3) continue;
+    // Skip pure codes / too-generic labels
+    if (/^(L\d+|I\d+|E\d+|[A-Z]{1,3})$/i.test(label)) continue;
+    const low = label.toLowerCase();
+    if (seenLabel.has(low)) continue;
+    // Avoid linking very common English words if they ever get stored as names
+    if (
+      ["the street", "the road", "the room", "someone", "stranger", "unknown", "nearby street"].includes(
+        low,
+      )
+    ) {
+      continue;
+    }
+    seenLabel.add(low);
+    entries.push({ code, label, esc: escapeHtml(label) });
+  }
+  entries.sort((a, b) => b.label.length - a.label.length);
+  if (!entries.length) return html;
+
+  // Only rewrite plain-text segments — never inside existing entity buttons/tags
+  const parts = String(html).split(/(<button\b[^>]*>[\s\S]*?<\/button>|<[^>]+>)/gi);
+  return parts
+    .map((part) => {
+      if (!part || part.startsWith("<")) return part;
+      let out = part;
+      for (const { code, esc } of entries) {
+        // Case-insensitive match on the already HTML-escaped label (no lookbehind — wider browser support)
+        const re = new RegExp(`(${escapeRegExp(esc)})`, "gi");
+        out = out.replace(re, (match, _g1, offset, full) => {
+          const s = typeof full === "string" ? full : out;
+          const at = typeof offset === "number" ? offset : 0;
+          const before = s.slice(Math.max(0, at - 1), at);
+          const after = s.slice(at + match.length, at + match.length + 1);
+          // Word-ish boundaries only
+          if (before && /[A-Za-z0-9_]/.test(before)) return match;
+          if (after && /[A-Za-z0-9_]/.test(after)) return match;
+          // Already inside a data-code attribute chunk
+          const windowBefore = s.slice(Math.max(0, at - 32), at);
+          if (/data-code=["'][^"']*$/.test(windowBefore) || /<[^>]*$/.test(windowBefore)) return match;
+          return `<button class="entityLink" data-code="${escapeHtml(code)}" type="button">${match}</button>`;
+        });
+      }
+      return out;
+    })
+    .join("");
 }
 
 function refToken(type, code) {
@@ -1242,13 +1364,7 @@ function linkifyText(value) {
   const cleaned = stripLeakedEntityHtml(value ?? "");
   const text = escapeHtml(cleaned);
   const map = getEntityMap();
-  // Also index NPCs that may only appear as flat state.npcs (if present)
-  for (const npc of state?.npcs || []) {
-    if (npc?.code && !map.has(String(npc.code).toUpperCase())) {
-      map.set(String(npc.code).toUpperCase(), { type: "npc", entity: npc });
-    }
-  }
-  // Track which codes we already linked so we don't double-wrap
+  // Track which codes we already linked so we don't double-wrap bare codes
   const linked = new Set();
   let html = text.replace(/\[\[([A-Z]+|L\d+|I\d+|E\d+)]]/gi, (_, rawCode) => {
     const code = rawCode.toUpperCase();
@@ -1262,10 +1378,12 @@ function linkifyText(value) {
     return `<button class="entityLink" data-code="${escapeHtml(code)}" type="button">${escapeHtml(label)}</button>`;
   });
 
-  html = html.replace(/\b(L\d+|I\d+|E\d+)\b/g, (rawCode, offset, full) => {
-    const code = rawCode.toUpperCase();
-    // Skip if this token sits inside an HTML tag we already wrote
-    const before = full.slice(Math.max(0, offset - 24), offset);
+  // Bare L1 / I2 / E3 (not already wrapped)
+  html = html.replace(/\b(L\d+|I\d+|E\d+)\b/g, (rawCode, _g1, offset, input) => {
+    const code = String(rawCode || "").toUpperCase();
+    const full = typeof input === "string" ? input : String(html || "");
+    const at = typeof offset === "number" ? offset : 0;
+    const before = full.slice(Math.max(0, at - 24), at);
     if (/data-code=["']?$/.test(before) || /<[^>]*$/.test(before)) return rawCode;
     if (linked.has(code)) return rawCode;
     const found = map.get(code);
@@ -1273,6 +1391,9 @@ function linkifyText(value) {
     linked.add(code);
     return `<button class="entityLink subtle" data-code="${escapeHtml(code)}" type="button">${escapeHtml(entityLabel(found.entity) || rawCode)}</button>`;
   });
+
+  // Plain names → same clickable buttons (opening often writes names without [[codes]])
+  html = linkifyKnownEntityNames(html, map);
   return html;
 }
 
@@ -1615,7 +1736,6 @@ function setField(name, value) {
   if (isRadioGroup) {
     const radio = Array.from(field).find((input) => input.value === String(nextValue));
     if (radio) radio.checked = true;
-    if (name === "special_ability_origin") updateAbilityOriginControls();
     return;
   }
   field.value = nextValue;
@@ -2051,29 +2171,32 @@ function rollAbilityCountForRandomize() {
   return rolled;
 }
 
+/**
+ * Ability origin UI is gone. Locks/prereqs live per card.
+ * Internal lock helpers still use "both" (mix strong locks + some open starters).
+ * Payload uses "none" only when the ability list is empty.
+ */
 function abilityOrigin() {
-  const value = setupForm.querySelector('input[name="special_ability_origin"]:checked')?.value || "none";
-  return ABILITY_ORIGINS.has(value) ? value : "none";
+  return "both";
 }
 
-function setAbilityOrigin(value) {
-  const origin = ABILITY_ORIGINS.has(value) ? value : "none";
-  const radio = setupForm.querySelector(`input[name="special_ability_origin"][value="${origin}"]`);
-  if (radio) radio.checked = true;
+function setAbilityOrigin(_value) {
+  // No-op: origin radios removed. Kept so old save/randomize paths don't throw.
   updateAbilityOriginControls();
 }
 
-function abilityOriginLabel(value = abilityOrigin()) {
-  if (value === "innate") return "Innate";
-  if (value === "acquired") return "Acquired";
-  if (value === "both") return "Both";
-  return "None";
+function abilityOriginLabel(_value) {
+  return "Powers";
+}
+
+/** Derived for start payload / backend compat only. */
+function derivedAbilityOriginForPayload(abilities = collectAbilities()) {
+  const list = Array.isArray(abilities) ? abilities : [];
+  return list.length ? "both" : "none";
 }
 
 function abilityDefaultLocked() {
-  const origin = abilityOrigin();
-  if (origin === "acquired") return true;
-  if (origin === "both") return randomBool(0.5);
+  // Prefer open starters; post-batch assignAbilityLocksAfterCreation locks the strong ones.
   return false;
 }
 
@@ -2377,7 +2500,6 @@ function fitAbilitiesToLockedCount(abilities) {
  */
 function fitAbilitiesToCountPolicy(abilities, rolledTarget = null) {
   const list = Array.isArray(abilities) ? abilities.filter((a) => a && typeof a === "object") : [];
-  if (abilityOrigin() === "none") return [];
   if (abilityQuantityLocked()) return fitAbilitiesToLockedCount(list);
   const { min, max } = abilityCountRange();
   let target =
@@ -2399,17 +2521,16 @@ function fitAbilitiesToCountPolicy(abilities, rolledTarget = null) {
 function updatePowersDropdownMeta() {
   const meta = document.querySelector("#powersDropdownMeta");
   if (!meta) return;
-  const origin = abilityOrigin();
-  if (origin === "none") {
-    meta.textContent = "None · no special abilities";
+  const count = currentAbilitySlotCount();
+  if (!count) {
+    meta.textContent = "None · open to add abilities";
     return;
   }
-  const count = currentAbilitySlotCount();
   const { min, max } = abilityCountRange();
   const rangeText = abilityQuantityLocked()
     ? `count locked at ${Math.max(count, 1)}`
     : `randomize ${min}–${max}`;
-  meta.textContent = `${abilityOriginLabel(origin)} · ${count} ability${count === 1 ? "" : "ies"} · ${rangeText}`;
+  meta.textContent = `${count} abilit${count === 1 ? "y" : "ies"} · ${rangeText}`;
 }
 
 function clearCustomValue(name) {
@@ -2466,11 +2587,7 @@ function rollInt(min, max) {
 
 function applyRandomizedSetup(payload) {
   const fields = payload?.fields || payload || {};
-  // Apply special_ability_origin before other fields that depend on it, and never
-  // treat the abilities array as a string form field.
-  if (fields.special_ability_origin != null && fields.special_ability_origin !== "") {
-    setAbilityOrigin(String(fields.special_ability_origin));
-  }
+  // Never treat the abilities array as a string form field.
   Object.entries(fields).forEach(([name, value]) => {
     if (name === "special_abilities" || name === "special_ability_origin") return;
     if (value === null || value === undefined) return;
@@ -2481,6 +2598,12 @@ function applyRandomizedSetup(payload) {
     }
     if (typeof value === "boolean") {
       setField(name, String(value));
+      return;
+    }
+    // Clamp model nicknames out of the legal Name field
+    if (name === "player_name") {
+      const current = String(setupForm?.elements?.player_name?.value || "").trim();
+      setField(name, sanitizePlayerNameClient(value, current));
       return;
     }
     const field = setupForm.elements[name];
@@ -2523,10 +2646,6 @@ function applyRandomizedSetup(payload) {
       ? fields.special_abilities
       : null;
   if (abilities) {
-    // Model returned powers while origin still "none" → open powers so they can apply
-    if (abilities.length && abilityOrigin() === "none") {
-      setAbilityOrigin("acquired");
-    }
     const rolledTarget =
       payload?.ability_count_roll?.target ??
       payload?.quality_gate?.target_count ??
@@ -2535,9 +2654,9 @@ function applyRandomizedSetup(payload) {
     if (rolledTarget != null && Number.isFinite(Number(rolledTarget))) {
       lastAbilityCountRoll = Number(rolledTarget);
     }
-    // 1) fit to rolled quantity  2) light origin prep  3) score power → roll locks → prereqs on strongest
+    // 1) fit to rolled quantity  2) card defaults  3) score power → roll locks → prereqs on strongest
     const fitted = fitAbilitiesToCountPolicy(abilities, rolledTarget).map((ability) => applyOriginToAbility(ability));
-    const nextAbilities = assignAbilityLocksAfterCreation(fitted, abilityOrigin());
+    const nextAbilities = assignAbilityLocksAfterCreation(fitted, "both");
     if (abilityList) {
       abilityList.innerHTML = "";
       // Generated / randomized powers start collapsed so the list stays scannable.
@@ -2613,7 +2732,6 @@ function collectSetupSettings() {
       };
     }),
     locks: lockedSettingNames(),
-    ability_origin: abilityOrigin(),
     ability_count_locked: abilityQuantityLocked(),
     ability_count_min: abilityCountRange().min,
     ability_count_max: abilityCountRange().max,
@@ -2683,7 +2801,6 @@ function restoreGainControls(entries) {
 }
 
 function restoreAbilitySettings(settings) {
-  setAbilityOrigin(settings.ability_origin || abilityOrigin() || "none");
   if (lockAbilityCount) lockAbilityCount.checked = Boolean(settings.ability_count_locked);
   if (settings.ability_count_min != null || settings.ability_count_max != null) {
     setAbilityCountRange(
@@ -2694,29 +2811,27 @@ function restoreAbilitySettings(settings) {
     syncAbilityCountRangeInputs();
   }
   abilityList.innerHTML = "";
-  if (abilityOrigin() !== "none") {
-    (Array.isArray(settings.abilities) ? settings.abilities : []).forEach((ability) => {
-      const cleaned = normalizeAbilityLockAndPrerequisites(
-        {
-          name: ability.name || "",
-          description: ability.description || "",
-          locked: Boolean(ability.locked),
-          prerequisites: ability.prerequisites || "",
-          cost: ability.cost_mode === "custom" ? ability.cost || "" : ability.cost || ability.cost_mode || "no cost",
-          growth_math: ability.growth_math || "",
-          power_type: ability.power_type || "",
-        },
-        settings.ability_origin || abilityOrigin(),
-      );
-      addAbility(cleaned, { expanded: false });
-      const card = abilityList.lastElementChild;
-      const costMode = card?.querySelector('[data-ability-field="cost_mode"]');
-      const cost = card?.querySelector('[data-ability-field="cost"]');
-      if (costMode && ability.cost_mode) costMode.value = ability.cost_mode;
-      if (cost && ability.cost_mode === "custom") cost.value = ability.cost || "";
-      refreshAbilityCardSummary(card);
-    });
-  }
+  (Array.isArray(settings.abilities) ? settings.abilities : []).forEach((ability) => {
+    const cleaned = normalizeAbilityLockAndPrerequisites(
+      {
+        name: ability.name || "",
+        description: ability.description || "",
+        locked: Boolean(ability.locked),
+        prerequisites: ability.prerequisites || "",
+        cost: ability.cost_mode === "custom" ? ability.cost || "" : ability.cost || ability.cost_mode || "no cost",
+        growth_math: ability.growth_math || "",
+        power_type: ability.power_type || "",
+      },
+      "both",
+    );
+    addAbility(cleaned, { expanded: false });
+    const card = abilityList.lastElementChild;
+    const costMode = card?.querySelector('[data-ability-field="cost_mode"]');
+    const cost = card?.querySelector('[data-ability-field="cost"]');
+    if (costMode && ability.cost_mode) costMode.value = ability.cost_mode;
+    if (cost && ability.cost_mode === "custom") cost.value = ability.cost || "";
+    refreshAbilityCardSummary(card);
+  });
   updateAbilityOriginControls();
 }
 
@@ -2869,13 +2984,6 @@ function fallbackRandomizeField(name, options = {}) {
     return;
   }
   if (name === "special_abilities") {
-    ensureAbilityOriginForRandomize();
-    if (abilityOrigin() === "none") {
-      abilityList.innerHTML = "";
-      updatePowersDropdownMeta();
-      normalizeRandomizerDependencies();
-      return;
-    }
     const previous = collectAbilities();
     // Same count policy for Simple + Advanced (shared builder + field_context).
     const count = rollAbilityCountForRandomize();
@@ -2886,6 +2994,12 @@ function fallbackRandomizeField(name, options = {}) {
       used.push(next);
       addAbility(next, { expanded: false });
     }
+    // Stronger cards get locks/prereqs after the full batch is filled.
+    const batch = collectAbilities();
+    if (batch.length) {
+      abilityList.innerHTML = "";
+      assignAbilityLocksAfterCreation(batch, "both").forEach((ab) => addAbility(ab, { expanded: false }));
+    }
     updateAbilityOriginControls();
     updatePowersDropdownMeta();
     placeAbilityBuilder();
@@ -2894,13 +3008,61 @@ function fallbackRandomizeField(name, options = {}) {
   } else if (setupForm.querySelector(`[data-list-setting="${name}"]`)) {
     fallbackRandomizeListField(name);
   } else if (!fallbackRandomizeRadioField(name) && !fallbackRandomizeSelectField(name) && RANDOM_SETUP[name]) {
-    setField(name, pickRandomSetupValue(name));
+    if (name === "player_name") {
+      const current = String(setupForm?.elements?.player_name?.value || "").trim();
+      setField(name, sanitizePlayerNameClient(pickRandomSetupValue(name), current));
+    } else {
+      setField(name, pickRandomSetupValue(name));
+    }
   }
   // Keep hair / face / clothes de-duplicated after local rolls
   if (["hair", "facial_features", "appearance"].includes(name)) {
     normalizeLookFieldsInForm();
   }
   normalizeRandomizerDependencies();
+}
+
+/** Nickname/handle patterns that belong in Known As, not Name. */
+const PLAYER_NAME_NICKNAME_BLOCK = new Set([
+  "ash", "river", "patch", "vellum", "thorn", "spark", "shadow", "ghost", "fox", "wolf",
+  "raven", "crow", "blade", "storm", "ember", "cinder", "northlight", "second bell",
+  "wanderer", "stranger", "traveler", "traveller", "drifter", "nameless", "hero", "protagonist", "player", "mc",
+]);
+
+function isNicknameStylePlayerName(value) {
+  const raw = String(value || "").trim().replace(/\s+/g, " ");
+  if (!raw) return true;
+  const low = raw.toLowerCase();
+  if (PLAYER_NAME_NICKNAME_BLOCK.has(low)) return true;
+  if (/^(the|of)\s+/i.test(raw)) return true;
+  if (
+    /^(?:[A-Za-z]+)(?:walker|wick|well|bin|line|post|cut|mark|field|row|gate|path|coil|hook|rest|lane|drift|watch|keep)$/i.test(
+      raw,
+    )
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function sanitizePlayerNameClient(value, forbidden = "") {
+  const name = String(value || "").trim().replace(/\s+/g, " ").slice(0, 80);
+  const forbid = String(forbidden || "").trim().toLowerCase();
+  if (name && !isNicknameStylePlayerName(name) && name.toLowerCase() !== forbid) {
+    return name
+      .split(" ")
+      .map((w) => {
+        const low = w.toLowerCase();
+        if (["de", "del", "van", "von", "of", "da", "di"].includes(low)) return low;
+        return w.charAt(0).toUpperCase() + w.slice(1);
+      })
+      .join(" ")
+      .slice(0, 80);
+  }
+  const pool = (RANDOM_SETUP.player_name || []).filter(
+    (n) => String(n).toLowerCase() !== forbid && !isNicknameStylePlayerName(n),
+  );
+  return pool.length ? choice(pool) : "Mara Ellison";
 }
 
 /** Pick from RANDOM_SETUP avoiding the current form value when possible. */
@@ -3056,25 +3218,15 @@ function fieldContext(name) {
     };
   }
   if (name === "special_abilities") {
-    const origin = abilityOrigin();
     const { min, max } = abilityCountRange();
     const quantityLocked = abilityQuantityLocked();
     const existingCount = currentAbilitySlotCount();
     // Always roll (or lock) the slot count *before* the model runs.
     const rolledCount = rollAbilityCountForRandomize();
-    let originRule =
-      "Invent distinct powers (name, description, cost, growth_math). The app rolls quantity first, then after creation locks the stronger powers and sets prerequisites only on those. Focus on fiction quality, not forcing locked=true on every card.";
-    if (origin === "innate") {
-      originRule =
-        "Innate: inherent/inborn powers. Prefer usable-at-start fiction; the app will usually leave them unlocked.";
-    } else if (origin === "both") {
-      originRule =
-        "Mix inherent and trained-feeling powers; the app assigns locks by relative power after generation.";
-    }
+    const originRule =
+      "Invent distinct powers (name, description, cost, growth_math). Mix inherent and trained-feeling fiction as fits the world. The app rolls quantity first, then after creation locks the stronger powers and sets prerequisites only on those. Focus on fiction quality, not forcing locked=true on every card.";
     return {
       type: "special_abilities",
-      ability_origin: origin,
-      origin_label: abilityOriginLabel(origin),
       existing_count: existingCount,
       quantity_locked: quantityLocked,
       // Pre-rolled target — server must return exactly this many abilities.
@@ -3083,9 +3235,7 @@ function fieldContext(name) {
       count_rolled: true,
       count_min: min,
       count_max: max,
-      roll_rule: origin === "none"
-        ? "Return an empty special_abilities list. No special abilities are defined at setup."
-        : `Return exactly requested_count (${rolledCount}) ability slots (rolled from ${min}–${max}${quantityLocked ? ", quantity locked" : ", pure RNG"}). Do not pick a different count. Each ability needs name, description, locked, prerequisites, cost, growth_math, and power_type (compounding|passive|linear|soft_cap|breakthrough|flat|item_bound). ${originRule}`,
+      roll_rule: `Return exactly requested_count (${rolledCount}) ability slots (rolled from ${min}–${max}${quantityLocked ? ", quantity locked" : ", pure RNG"}). Do not pick a different count. Each ability needs name, description, locked, prerequisites, cost, growth_math, and power_type (compounding|passive|linear|soft_cap|breakthrough|flat|item_bound). ${originRule}`,
     };
   }
   return { type: "field", value: setupForm.elements[name]?.value || "" };
@@ -3139,12 +3289,9 @@ function intentWantsPowers(intent = lastComposeIntent) {
   return false;
 }
 
-/** Before rolling abilities: intent/preset that needs powers must not stay on origin "none". */
-function ensureAbilityOriginForRandomize(intent = lastComposeIntent) {
-  if (abilityOrigin() !== "none") return abilityOrigin();
-  if (!intentWantsPowers(intent)) return abilityOrigin();
-  setAbilityOrigin("acquired");
-  return "acquired";
+/** @deprecated Origin UI removed — always ready for ability rolls. */
+function ensureAbilityOriginForRandomize(_intent = lastComposeIntent) {
+  return "both";
 }
 
 function randomizeFieldApplies(name, formData = new FormData(setupForm)) {
@@ -3153,11 +3300,8 @@ function randomizeFieldApplies(name, formData = new FormData(setupForm)) {
   if (["proficiency_access", "proficiency_growth_speed"].includes(name) && !boolField(formData, "proficiency_system")) return false;
   if (name === "xp_growth_speed" && !boolField(formData, "leveling_system")) return false;
   if (["previous_life_age", "previous_life_sex"].includes(name) && !formerLifeSelected(formData)) return false;
-  if (name === "special_abilities") {
-    // Intent-driven OP MC / compounding must still roll powers even if origin was left on None
-    if (abilityOrigin() === "none" && !intentWantsPowers()) return false;
-    if (abilityOrigin() === "none" && intentWantsPowers()) ensureAbilityOriginForRandomize();
-  }
+  // special_abilities always applies when requested — empty list is a valid "no powers" outcome
+  if (name === "special_ability_origin") return false;
   return true;
 }
 
@@ -3171,7 +3315,6 @@ function normalizeRandomizerDependencies() {
   if (!boolField(formData, "game_system")) setField("system_style", "subtle blue-window system");
   if (!boolField(formData, "proficiency_system")) setField("proficiency_access", "only expert tasks require training");
   if (!boolField(formData, "leveling_system")) setField("xp_growth_speed", "normal");
-  if (abilityOrigin() === "none") abilityList.innerHTML = "";
   updateConditionalSetup();
 }
 
@@ -3432,9 +3575,8 @@ function pushSimpleToForm() {
   if (world) setWorldStyleSimple(world);
   pushSimpleRulesToForm();
 
-  // Powers live in shared #abilityList (reparented) — origin from ability origin radios
+  // Powers live in shared #abilityList (reparented)
   const abilities = collectAbilities();
-  if (abilities.length && abilityOrigin() === "none") setAbilityOrigin("acquired");
   // Gear → starter_equipment structured text
   const gearText = gearItemsToStarterEquipment(collectGearItems());
   if (gearText) setFormFieldValue("starter_equipment", gearText);
@@ -3451,7 +3593,7 @@ function pullFormToSimple() {
     const el = document.querySelector(sel);
     if (el) el.value = val == null ? "" : String(val);
   };
-  set("#simplePlayerName", getFormFieldValue("player_name") || "Wanderer");
+  set("#simplePlayerName", getFormFieldValue("player_name") || "");
   set("#simplePlayerAge", getFormFieldValue("player_age"));
   set("#simplePlayerSex", getFormFieldValue("player_sex"));
   // Keep Simple in sync with Advanced hair / face / clothing fields
@@ -4252,8 +4394,6 @@ async function randomizeAllSetup(options = {}) {
       applyRandomizedSetup({ fields: overrides });
       normalizeRandomizerDependencies();
     }
-    // OP MC / weak-start: open ability origin before the powers field is walked
-    ensureAbilityOriginForRandomize(intent);
     renderIntentSummary(lastComposeIntent, lastSessionTheme, { source: "from idea" });
   } else {
     lastComposeIntent = null;
@@ -4262,7 +4402,6 @@ async function randomizeAllSetup(options = {}) {
   }
   for (const name of RANDOM_FIELD_ORDER) {
     normalizeRandomizerDependencies();
-    if (name === "special_abilities") ensureAbilityOriginForRandomize(intent);
     if (!randomizeFieldApplies(name)) continue;
     // Skip fields already set by deterministic intent overrides (still re-roll unlocked if empty).
     if (intent && options.skipOverrideFields !== false) {
@@ -4276,7 +4415,6 @@ async function randomizeAllSetup(options = {}) {
         "proficiency_growth_speed",
         "xp_growth_speed",
         "new_skill_frequency",
-        "special_ability_origin",
         "backstory_mode",
         "memory_policy",
         "death_rules",
@@ -4368,7 +4506,6 @@ async function runSetupCoherencePass(options = {}) {
     "player_title",
     "player_public_name",
     "special_abilities",
-    "special_ability_origin",
     "player_name",
     "backstory_mode",
     "memory_policy",
@@ -4939,11 +5076,9 @@ function updateGainControls() {
 }
 
 function updateAbilityOriginControls() {
-  const origin = abilityOrigin();
-  const noneSelected = origin === "none";
-  abilityOptions?.classList.toggle("abilitiesNone", noneSelected);
-  if (noneSelected && abilityList.children.length) abilityList.innerHTML = "";
-  const locked = noneSelected || setupRandomizationLocked();
+  // Origin radios removed — ability list is always available (empty = no powers).
+  abilityOptions?.classList.remove("abilitiesNone");
+  const locked = setupRandomizationLocked();
   if (randomAbilityButton) randomAbilityButton.disabled = locked;
   if (addAbilityButton) addAbilityButton.disabled = locked;
   if (lockAbilityCount) lockAbilityCount.disabled = locked;
@@ -4953,7 +5088,7 @@ function updateAbilityOriginControls() {
     input.disabled = locked;
   });
   abilityList?.querySelectorAll("input, select, textarea, button").forEach((control) => {
-    control.disabled = setupRandomizationLocked();
+    control.disabled = locked;
   });
   syncAbilityCountRangeInputs();
   updatePowersDropdownMeta();
@@ -5142,9 +5277,8 @@ function abilityTemplate(ability = {}, options = {}) {
  * @param {{ expanded?: boolean }} options - true only for manual Add Ability; randomize leaves collapsed.
  */
 function addAbility(ability = {}, options = {}) {
-  if (abilityOrigin() === "none") setAbilityOrigin("acquired");
   let prepared = ability.name || ability.description ? { ...ability } : applyOriginToAbility(ability);
-  prepared = normalizeAbilityLockAndPrerequisites(prepared, abilityOrigin());
+  prepared = normalizeAbilityLockAndPrerequisites(prepared, "both");
   const expanded = Boolean(options.expanded);
   abilityList.insertAdjacentHTML("beforeend", abilityTemplate(prepared, { expanded }));
   const card = abilityList.lastElementChild;
@@ -5180,7 +5314,6 @@ function randomizeAbility() {
 }
 
 function collectAbilities() {
-  if (abilityOrigin() === "none") return [];
   return Array.from(abilityList.querySelectorAll(".abilitySetupCard"))
     .map((card) => {
       const field = (name) => card.querySelector(`[data-ability-field="${name}"]`);
@@ -5194,7 +5327,7 @@ function collectAbilities() {
       const power_type = field("power_type")?.value || "linear";
       return normalizeAbilityLockAndPrerequisites(
         { name, description, locked, prerequisites, cost, growth_math, power_type },
-        abilityOrigin(),
+        "both",
       );
     })
     .filter((ability) => ability.name || ability.description);
@@ -5712,7 +5845,12 @@ function showGameView() {
     applyPlayLayout();
     renderHistory();
     renderIndex();
-    updateTravelStatus(state.travel_ready);
+    updateTravelStatus(state.travel_ready, {
+      movement_locked: state.movement_locked,
+      map_blank: state.map_blank,
+      confinement_label: state.location_special_flags?.label || "",
+      label: state.location_special_flags?.label || "",
+    });
     refreshLocalMap();
     refreshNpcStage();
     restoreSavedFloatWindows();
@@ -6440,7 +6578,12 @@ function renderShell(nextState, options = {}) {
   renderHistory();
   renderIndex();
   if (characterSheetOpen) paintCharacterSheet();
-  updateTravelStatus(state.travel_ready);
+  updateTravelStatus(state.travel_ready, {
+    movement_locked: state.movement_locked,
+    map_blank: state.map_blank,
+    confinement_label: state.location_special_flags?.label || "",
+    label: state.location_special_flags?.label || "",
+  });
   refreshLocalMap();
   refreshNpcStage();
   pushAllPopouts();
@@ -8390,6 +8533,22 @@ function renderImageForm() {
           <p class="empty">Pick your ForgeSD / webui folder with Browse, or Allow search, or paste any path. Free choice — not limited to detected installs.</p>
         </label>
         <label>
+          <span>Custom LoRA folder(s)</span>
+          <div class="pathPickerRow">
+            <textarea name="lora_dirs" rows="2" maxlength="4000" placeholder="D:\\ForgeSD\\models\\loras&#10;One folder per line — scanned in addition to install root">${escapeHtml(pathListToText(config.lora_dirs))}</textarea>
+            <button class="secondaryButton browseExtraModelDir" type="button" data-browse-extra="lora_dirs" title="Pick a LoRA folder and append it">Browse…</button>
+          </div>
+          <p class="empty">Optional. Use when LoRAs live outside Forge (or under a shared pack). Disk scan works offline — no API required.</p>
+        </label>
+        <label>
+          <span>Custom checkpoint folder(s)</span>
+          <div class="pathPickerRow">
+            <textarea name="checkpoint_dirs" rows="2" maxlength="4000" placeholder="D:\\ForgeSD\\models\\checkpoints&#10;One folder per line">${escapeHtml(pathListToText(config.checkpoint_dirs))}</textarea>
+            <button class="secondaryButton browseExtraModelDir" type="button" data-browse-extra="checkpoint_dirs" title="Pick a checkpoint folder and append it">Browse…</button>
+          </div>
+          <p class="empty">Optional. Extra .safetensors / .ckpt folders merged into the checkpoint dropdown.</p>
+        </label>
+        <label>
           <span>Checkpoint ${forgeModels.length ? `(${forgeModels.length} found)` : "(Refresh catalog after Save root)"}</span>
           <select name="forge_checkpoint">${forgeModelOptionsHtml(catalog, config.forge_checkpoint || "")}</select>
           <input name="forge_checkpoint_custom" value="" maxlength="400" placeholder="Or paste exact filename e.g. dreamshaperXL_lightningDPMSDE.safetensors" />
@@ -8420,8 +8579,12 @@ function renderImageForm() {
             <input name="forge_hr_scale" type="number" min="1" max="4" step="0.05" value="${escapeHtml(config.forge_hr_scale ?? 1.5)}" />
           </label>
           <label>
-            <span>Denoising (hires)</span>
+            <span>Denoising (hires second pass)</span>
             <input name="forge_denoising_strength" type="number" min="0" max="1" step="0.05" value="${escapeHtml(config.forge_denoising_strength ?? 0.45)}" />
+          </label>
+          <label>
+            <span>Hires steps (0 = same as first pass)</span>
+            <input name="forge_hr_second_pass_steps" type="number" min="0" max="150" step="1" value="${escapeHtml(config.forge_hr_second_pass_steps ?? 0)}" />
           </label>
         </div>
         <label>
@@ -8429,10 +8592,10 @@ function renderImageForm() {
           <select name="forge_hr_upscaler">${optionListHtml(forgeUpscalers.length ? forgeUpscalers : ["Latent", "Latent (nearest-exact)", "Nearest", "ESRGAN_4x", "R-ESRGAN 4x+", "4x-UltraSharp"], config.forge_hr_upscaler || "Latent", { allowCustom: false })}</select>
           <input name="forge_hr_upscaler_custom" value="" maxlength="200" placeholder="Or paste exact upscaler name e.g. 4x-UltraSharp" />
         </label>
-        <p class="empty">Samplers, VAEs, and hires upscalers come from your Forge API when online, plus models scanned under the install root. Custom paste always wins over the dropdown. Generation sends them via <code>sampler_name</code>, <code>override_settings.sd_vae</code>, and <code>hr_upscaler</code>.</p>
+        <p class="empty">Samplers, VAEs, and hires upscalers come from your Forge API when online, plus models scanned under the install root. Custom paste always wins over the dropdown. Generation sends them via <code>sampler_name</code>, <code>override_settings.sd_vae</code>, and <code>hr_upscaler</code> / <code>hr_second_pass_steps</code>. Face-ref body gens post-upscale via the extras API (pick a real ESRGAN model, not Latent).</p>
         <label class="checkboxRow"><input type="checkbox" name="forge_restore_faces" value="true" ${config.forge_restore_faces ? "checked" : ""} /> <span>Restore faces</span></label>
         <label class="checkboxRow"><input type="checkbox" name="forge_tiling" value="true" ${config.forge_tiling ? "checked" : ""} /> <span>Tiling</span></label>
-        <label class="checkboxRow"><input type="checkbox" name="forge_enable_hr" value="true" ${config.forge_enable_hr ? "checked" : ""} /> <span>Enable hires fix</span></label>
+        <label class="checkboxRow"><input type="checkbox" name="forge_enable_hr" value="true" ${config.forge_enable_hr ? "checked" : ""} /> <span>Enable hires fix / post-upscale</span></label>
         ${catalog.forge?.options?.sd_model_checkpoint ? `<p class="empty">Currently loaded in Forge: <code>${escapeHtml(String(catalog.forge.options.sd_model_checkpoint))}</code>${catalog.forge?.options?.sd_vae ? ` · VAE: <code>${escapeHtml(String(catalog.forge.options.sd_vae))}</code>` : ""}</p>` : ""}
       </div>
 
@@ -10636,8 +10799,9 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
     setPlayerArtStatus("Hook Forge/Comfy if running; start only if offline…");
     try {
       const faceRef = playerFaceUrl() || "";
-      // Ensure latest LoRA/hires toggles are on the server before gen
-      persistArtQualitySettings({ silent: true });
+      // Ensure latest LoRA/hires toggles are on the server before gen (must await).
+      await persistArtQualitySettings({ silent: true, flush: true });
+      const hr = artHiresRequestFields();
       const res = await fetch("/api/image/character-set", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -10650,6 +10814,7 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
           use_face_reference: true,
           reference_data_url: kinds.includes("fullbody") && !kinds.includes("face") ? faceRef : "",
           loras: collectSetupLoras(),
+          ...hr,
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -10672,7 +10837,14 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
         pushStudioCandidate("fullbody", data.fullbody);
       }
       const ref = data.fullbody?.used_face_reference ? " · face ref" : "";
-      setPlayerArtStatus(`Done (${Math.round((data.elapsed_ms || 0) / 1000)}s) — ${kinds.join(" + ")}${ref}.`);
+      const hrNote =
+        data.fullbody?.hires_note ||
+        data.face?.hires_note ||
+        data.fullbody?.hires_error ||
+        data.face?.hires_error ||
+        "";
+      const hrBit = hrNote ? ` · ${String(hrNote).slice(0, 120)}` : hr.forge_enable_hr ? " · hires on" : "";
+      setPlayerArtStatus(`Done (${Math.round((data.elapsed_ms || 0) / 1000)}s) — ${kinds.join(" + ")}${ref}${hrBit}.`);
       renderIndex();
     } catch (error) {
       setPlayerArtStatus(error.message || String(error), { bad: true });
@@ -11013,6 +11185,14 @@ function imagePayloadFromForm(form) {
   const comfyRoot = _lastFilledInput(form, "comfy_root", pendingImageRoots.comfyui || "");
   if (forgeRoot) pendingImageRoots.forge = forgeRoot;
   if (comfyRoot) pendingImageRoots.comfyui = comfyRoot;
+  const loraDirs = parsePathListText(
+    form.querySelector('textarea[name="lora_dirs"]')?.value ?? formData.get("lora_dirs") ?? imageConfig?.lora_dirs,
+  );
+  const checkpointDirs = parsePathListText(
+    form.querySelector('textarea[name="checkpoint_dirs"]')?.value ??
+      formData.get("checkpoint_dirs") ??
+      imageConfig?.checkpoint_dirs,
+  );
   return {
     provider: String(formData.get("provider") || "off"),
     forge_base_url: String(formData.get("forge_base_url") || "http://127.0.0.1:7860").trim(),
@@ -11028,6 +11208,8 @@ function imagePayloadFromForm(form) {
     timeout_seconds: Math.round(finiteNumber(formData.get("timeout_seconds"), 180)),
     forge_root: forgeRoot,
     comfy_root: comfyRoot,
+    lora_dirs: loraDirs,
+    checkpoint_dirs: checkpointDirs,
     auto_launch_if_offline: !!form.querySelector('input[name="auto_launch_if_offline"]')?.checked,
     auto_generate_npc_portraits: !!form.querySelector('input[name="auto_generate_npc_portraits"]')?.checked,
     character_consistency: String(formData.get("character_consistency") || "light").trim() || "light",
@@ -11048,10 +11230,12 @@ function imagePayloadFromForm(form) {
     forge_restore_faces: !!form.querySelector('input[name="forge_restore_faces"]')?.checked,
     forge_tiling: !!form.querySelector('input[name="forge_tiling"]')?.checked,
     forge_enable_hr: !!form.querySelector('input[name="forge_enable_hr"]')?.checked,
-    forge_active_loras: Array.isArray(imageConfig?.forge_active_loras) ? imageConfig.forge_active_loras : collectSetupLoras(),
+    // Only currently checked LoRAs — never re-send a stale always-on stack
+    forge_active_loras: collectSetupLoras(),
     forge_hr_scale: finiteNumber(formData.get("forge_hr_scale"), 1.5),
     forge_hr_upscaler: forgeHrUpscaler,
     forge_denoising_strength: finiteNumber(formData.get("forge_denoising_strength"), 0.45),
+    forge_hr_second_pass_steps: Math.round(finiteNumber(formData.get("forge_hr_second_pass_steps"), 0)),
     iib_open_mode: String(formData.get("iib_open_mode") || "embed").trim() || "embed",
     iib_base_url: String(formData.get("iib_base_url") || "").trim(),
     comfy_sampler_name: String(formData.get("comfy_sampler_name") || "euler").trim(),
@@ -11310,13 +11494,17 @@ async function probeImageBackendStatus({ silent = true } = {}) {
             decorateFunctionHelp(modelModalContent);
             refreshImageInstallablesPanel(modelModalContent).catch(() => {});
           }
-          // Keep setup art checkpoint/lora lists in sync too
+          // Keep setup art checkpoint/lora/hires lists in sync too
           if (typeof fillSetupArtCheckpointSelect === "function" && imageCatalog) {
             fillSetupArtCheckpointSelect(imageCatalog);
             setupArtLoraCatalog = imageCatalog?.forge?.loras || setupArtLoraCatalog || [];
             if (typeof renderSetupLoraList === "function") {
               renderSetupLoraList(document.querySelector("#setupArtLoraFilter")?.value || "");
             }
+          }
+          if (typeof syncArtQualityControlsFromConfig === "function") {
+            // Catalog refresh: keep current upscaler/hires picks if the user set them.
+            syncArtQualityControlsFromConfig({ preserveDom: true });
           }
         })
         .catch(() => {});
@@ -11432,14 +11620,30 @@ let lastSetupBodyDataUrl = "";
 /** Active character-art backend tab: forge | comfyui */
 let setupArtBackendTab = "forge";
 
+/** Catalog row for a LoRA name (preferred weight / keywords / preview). */
+function findLoraCatalogEntry(name) {
+  const key = String(name || "").toLowerCase();
+  if (!key) return null;
+  const pool = setupArtLoraCatalog || imageCatalog?.forge?.loras || imageCatalog?.disk_loras || [];
+  return pool.find((l) => String(l?.name || l?.alias || "").toLowerCase() === key) || null;
+}
+
+function defaultLoraWeight(entry) {
+  if (!entry) return 1;
+  const pref = Number(entry.preferred_weight);
+  if (Number.isFinite(pref) && pref !== 0) return pref;
+  return 1;
+}
+
+/**
+ * Only LoRAs the user has checked in the UI.
+ * Never auto-enables from saved config — empty when nothing is checked.
+ */
 function collectSetupLoras() {
   const list = document.querySelector("#setupArtLoraList");
   if (!list) {
-    // Fallback to last saved config (play / NPC gen when setup list not mounted)
-    const stored = imageConfig?.forge_active_loras;
-    return Array.isArray(stored)
-      ? stored.filter((x) => x && x.name).map((x) => ({ name: String(x.name), weight: Number(x.weight) || 1 }))
-      : [];
+    // Setup list not mounted: do not auto-apply previously saved stacks.
+    return [];
   }
   return [...list.querySelectorAll("input[data-lora-name]:checked")]
     .map((el) => {
@@ -11447,55 +11651,256 @@ function collectSetupLoras() {
       const weightEl = [...list.querySelectorAll("input[data-lora-weight]")].find(
         (w) => w.getAttribute("data-lora-weight") === name,
       );
-      const weight = parseFloat(weightEl?.value || "1") || 1;
-      return { name, weight };
+      const entry = findLoraCatalogEntry(name);
+      const fallback = defaultLoraWeight(entry);
+      let weight = parseFloat(weightEl?.value || String(fallback));
+      if (!Number.isFinite(weight)) weight = fallback;
+      const activation =
+        entry?.activation_text ||
+        (Array.isArray(entry?.keywords) ? entry.keywords.join(", ") : "") ||
+        "";
+      return {
+        name,
+        weight,
+        activation_text: activation,
+        keywords: Array.isArray(entry?.keywords) ? entry.keywords : [],
+      };
     })
     .filter((x) => x.name);
 }
 
 /** Push LoRA selection + hires toggles into image config (used by NPC gens too). */
 let _persistArtQualityTimer = null;
-function persistArtQualitySettings({ silent = true } = {}) {
-  clearTimeout(_persistArtQualityTimer);
-  _persistArtQualityTimer = setTimeout(async () => {
-    try {
-      if (!imageConfig) await loadImageConfig();
-      const loras = collectSetupLoras();
-      const enableHr = !!document.querySelector("#setupArtEnableHr")?.checked;
-      const hrScale = Math.max(1, Math.min(2.5, parseFloat(document.querySelector("#setupArtHrScale")?.value || "1.5") || 1.5));
-      const patch = {
-        ...(imageConfig || {}),
-        forge_active_loras: loras,
-        forge_enable_hr: enableHr,
-        forge_hr_scale: hrScale,
-      };
-      const res = await fetch("/api/image-config", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      if (res.ok) {
-        imageConfig = await res.json();
-        if (!silent) setSetupArtStatus?.(`Saved ${loras.length} LoRA(s)${enableHr ? " · hires on" : ""}.`);
-      }
-    } catch (_) {
-      /* ignore */
-    }
-  }, 280);
+let _persistArtQualityPending = null;
+function readArtHiresControls() {
+  const enableHr = !!document.querySelector("#setupArtEnableHr")?.checked;
+  const hrScale = Math.max(
+    1,
+    Math.min(4, parseFloat(document.querySelector("#setupArtHrScale")?.value || "1.5") || 1.5),
+  );
+  const hrDenoise = Math.max(
+    0,
+    Math.min(1, parseFloat(document.querySelector("#setupArtHrDenoise")?.value || "0.45") || 0.45),
+  );
+  const hrSteps = Math.max(
+    0,
+    Math.min(150, Math.round(parseFloat(document.querySelector("#setupArtHrSteps")?.value || "0") || 0)),
+  );
+  const hrUpscaler =
+    String(document.querySelector("#setupArtHrUpscaler")?.value || "").trim() ||
+    String(imageConfig?.forge_hr_upscaler || "R-ESRGAN 4x+").trim() ||
+    "R-ESRGAN 4x+";
+  return { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler };
 }
 
-function syncArtQualityControlsFromConfig() {
+/** Hires fields to include on character-set / generate requests (avoids config race). */
+function artHiresRequestFields() {
+  const { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler } = readArtHiresControls();
+  return {
+    forge_enable_hr: enableHr,
+    forge_hr_scale: hrScale,
+    forge_denoising_strength: hrDenoise,
+    forge_hr_second_pass_steps: hrSteps,
+    forge_hr_upscaler: hrUpscaler,
+  };
+}
+
+async function _flushArtQualitySettings({ silent = true } = {}) {
+  try {
+    if (!imageConfig) await loadImageConfig();
+    const loras = collectSetupLoras();
+    const { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler } = readArtHiresControls();
+    // Keep in-memory config in sync immediately so subsequent code sees hires on.
+    if (imageConfig) {
+      imageConfig.forge_active_loras = loras;
+      imageConfig.forge_enable_hr = enableHr;
+      imageConfig.forge_hr_scale = hrScale;
+      imageConfig.forge_denoising_strength = hrDenoise;
+      imageConfig.forge_hr_second_pass_steps = hrSteps;
+      imageConfig.forge_hr_upscaler = hrUpscaler;
+    }
+    const patch = {
+      ...(imageConfig || {}),
+      forge_active_loras: loras,
+      forge_enable_hr: enableHr,
+      forge_hr_scale: hrScale,
+      forge_denoising_strength: hrDenoise,
+      forge_hr_second_pass_steps: hrSteps,
+      forge_hr_upscaler: hrUpscaler,
+    };
+    const res = await fetch("/api/image-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (res.ok) {
+      const saved = await res.json();
+      // Merge server response but never clobber values the user just set in the quality bar
+      // if the server omitted/defaulted a field (or a race overwrote an older patch).
+      imageConfig = {
+        ...(imageConfig || {}),
+        ...(saved || {}),
+        forge_enable_hr: enableHr,
+        forge_hr_scale: hrScale,
+        forge_denoising_strength: hrDenoise,
+        forge_hr_second_pass_steps: hrSteps,
+        forge_hr_upscaler: hrUpscaler,
+        forge_active_loras: loras,
+      };
+      if (!silent) {
+        const ups = enableHr ? ` · hires ×${hrScale} ${hrUpscaler}` : "";
+        setSetupArtStatus?.(`Saved ${loras.length} LoRA(s)${ups}.`);
+      }
+      // Refresh hint from what we know we saved — do not rebuild the select from defaults.
+      updateArtHrHintFromControls();
+      const hint = document.querySelector("#setupArtHrHint");
+      if (hint && enableHr) {
+        hint.textContent = hint.textContent.replace(" · saving…", " · saved");
+      }
+    }
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+/**
+ * Persist LoRA/hires toggles.
+ * - Default: debounced (typing/toggling).
+ * - { flush: true }: await immediate save (call before generate).
+ */
+function persistArtQualitySettings({ silent = true, flush = false } = {}) {
+  if (flush) {
+    clearTimeout(_persistArtQualityTimer);
+    _persistArtQualityTimer = null;
+    _persistArtQualityPending = _flushArtQualitySettings({ silent });
+    return _persistArtQualityPending;
+  }
+  clearTimeout(_persistArtQualityTimer);
+  _persistArtQualityPending = new Promise((resolve) => {
+    _persistArtQualityTimer = setTimeout(async () => {
+      await _flushArtQualitySettings({ silent });
+      resolve();
+    }, 280);
+  });
+  return _persistArtQualityPending;
+}
+
+function populateHrUpscalerSelect(preferred, { preserveDom = false } = {}) {
+  const sel = document.querySelector("#setupArtHrUpscaler");
+  if (!sel) return;
+  // While the user is mid-edit, never wipe the dropdown back to a stale config value.
+  if (preserveDom && sel.options && sel.options.length > 1 && sel.value) {
+    return;
+  }
+  const fromCatalog = Array.isArray(imageCatalog?.forge?.upscalers)
+    ? imageCatalog.forge.upscalers.map((u) => String(u || "").trim()).filter(Boolean)
+    : [];
+  const fallbacks = [
+    "R-ESRGAN 4x+",
+    "4x-UltraSharp",
+    "ESRGAN_4x",
+    "Latent",
+    "Latent (nearest-exact)",
+    "Nearest",
+  ];
+  const names = [];
+  const seen = new Set();
+  for (const n of [...fromCatalog, ...fallbacks]) {
+    const key = n.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    names.push(n);
+  }
+  // Prefer: explicit preferred → current DOM → saved config → real ESRGAN (not Latent for body extras)
+  const want =
+    String(preferred || "").trim() ||
+    String(sel.value || "").trim() ||
+    String(imageConfig?.forge_hr_upscaler || "").trim() ||
+    "R-ESRGAN 4x+";
+  if (want && !seen.has(want.toLowerCase())) names.unshift(want);
+  const prev = sel.value;
+  sel.innerHTML = names
+    .map((n) => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`)
+    .join("");
+  const pick =
+    names.find((n) => n.toLowerCase() === want.toLowerCase()) ||
+    names.find((n) => n.toLowerCase() === String(prev || "").toLowerCase()) ||
+    names[0] ||
+    "R-ESRGAN 4x+";
+  sel.value = pick;
+}
+
+function updateArtHrHintFromControls() {
+  const hint = document.querySelector("#setupArtHrHint");
+  if (!hint) return;
+  const { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler } = readArtHiresControls();
+  const n = typeof collectSetupLoras === "function" ? collectSetupLoras().length : 0;
+  if (enableHr) {
+    const st = hrSteps > 0 ? ` · ${hrSteps} steps` : " · steps = first pass";
+    hint.textContent = `Hires ×${hrScale} · ${hrUpscaler} · denoise ${hrDenoise}${st} · ${n} LoRA(s) · saving…`;
+  } else {
+    hint.textContent = `Hires off · ${n} LoRA(s) checked (opt-in only) · face-ref body gens post-upscale when enabled`;
+  }
+}
+
+/** Push current quality-bar DOM into imageConfig (no network). */
+function mirrorArtHiresControlsToImageConfig() {
+  if (!imageConfig) return;
+  const { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler } = readArtHiresControls();
+  imageConfig.forge_enable_hr = enableHr;
+  imageConfig.forge_hr_scale = hrScale;
+  imageConfig.forge_denoising_strength = hrDenoise;
+  imageConfig.forge_hr_second_pass_steps = hrSteps;
+  imageConfig.forge_hr_upscaler = hrUpscaler;
+}
+
+function syncArtQualityControlsFromConfig({ preserveDom = false } = {}) {
   const cfg = imageConfig || {};
-  const hr = document.querySelector("#setupArtEnableHr");
-  if (hr) hr.checked = !!cfg.forge_enable_hr;
-  const scale = document.querySelector("#setupArtHrScale");
-  if (scale && cfg.forge_hr_scale != null) scale.value = String(cfg.forge_hr_scale);
+  if (!preserveDom) {
+    const hr = document.querySelector("#setupArtEnableHr");
+    if (hr) hr.checked = !!cfg.forge_enable_hr;
+    const scale = document.querySelector("#setupArtHrScale");
+    if (scale && cfg.forge_hr_scale != null) scale.value = String(cfg.forge_hr_scale);
+    const denoise = document.querySelector("#setupArtHrDenoise");
+    if (denoise && cfg.forge_denoising_strength != null) {
+      denoise.value = String(cfg.forge_denoising_strength);
+    }
+    const steps = document.querySelector("#setupArtHrSteps");
+    if (steps && cfg.forge_hr_second_pass_steps != null) {
+      steps.value = String(cfg.forge_hr_second_pass_steps);
+    }
+    populateHrUpscalerSelect(cfg.forge_hr_upscaler || "R-ESRGAN 4x+", { preserveDom: false });
+  } else {
+    // Catalog refresh only: fill missing options, keep user's current selection
+    populateHrUpscalerSelect(
+      document.querySelector("#setupArtHrUpscaler")?.value || cfg.forge_hr_upscaler || "R-ESRGAN 4x+",
+      { preserveDom: false },
+    );
+  }
   const hint = document.querySelector("#setupArtHrHint");
   if (hint) {
-    const n = Array.isArray(cfg.forge_active_loras) ? cfg.forge_active_loras.length : 0;
-    hint.textContent = cfg.forge_enable_hr
-      ? `Hires ×${cfg.forge_hr_scale || 1.5} (txt2img) · ${n} LoRA(s) saved for NPC gens`
-      : `Hires off · ${n} LoRA(s) saved for NPC gens`;
+    const n = collectSetupLoras().length;
+    const on = preserveDom
+      ? !!document.querySelector("#setupArtEnableHr")?.checked
+      : !!cfg.forge_enable_hr;
+    if (on) {
+      const scale = preserveDom
+        ? document.querySelector("#setupArtHrScale")?.value || cfg.forge_hr_scale
+        : cfg.forge_hr_scale;
+      const ups = preserveDom
+        ? document.querySelector("#setupArtHrUpscaler")?.value || cfg.forge_hr_upscaler
+        : cfg.forge_hr_upscaler;
+      const den = preserveDom
+        ? document.querySelector("#setupArtHrDenoise")?.value || cfg.forge_denoising_strength
+        : cfg.forge_denoising_strength;
+      const steps = preserveDom
+        ? document.querySelector("#setupArtHrSteps")?.value || cfg.forge_hr_second_pass_steps
+        : cfg.forge_hr_second_pass_steps;
+      const st = Number(steps) > 0 ? ` · ${steps} steps` : " · steps = first pass";
+      hint.textContent = `Hires ×${scale || 1.5} · ${ups || "R-ESRGAN 4x+"} · denoise ${den ?? 0.45}${st} · ${n} LoRA(s)`;
+    } else {
+      hint.textContent = `Hires off · ${n} LoRA(s) checked (opt-in only) · face-ref body gens post-upscale when enabled`;
+    }
   }
 }
 
@@ -11609,27 +12014,23 @@ function renderSetupLoraList(filter = "") {
   const host = document.querySelector("#setupArtLoraList");
   if (!host) return;
   const q = String(filter || "").toLowerCase().trim();
-  // Prefer live DOM checks; if list not yet built, seed from saved forge_active_loras
+  // Only preserve checks already in the live DOM — never auto-enable from saved config.
   const selected = new Map();
-  const hasDom = host.querySelector("input[data-lora-name]");
-  if (hasDom) {
-    for (const el of host.querySelectorAll("input[data-lora-name]:checked")) {
-      const name = el.getAttribute("data-lora-name") || "";
-      if (!name) continue;
-      const weightEl = [...host.querySelectorAll("input[data-lora-weight]")].find(
-        (w) => w.getAttribute("data-lora-weight") === name,
-      );
-      selected.set(name, parseFloat(weightEl?.value || "1") || 1);
-    }
-  } else {
-    for (const l of imageConfig?.forge_active_loras || []) {
-      if (l?.name) selected.set(String(l.name), Number(l.weight) || 1);
-    }
+  for (const el of host.querySelectorAll("input[data-lora-name]:checked")) {
+    const name = el.getAttribute("data-lora-name") || "";
+    if (!name) continue;
+    const weightEl = [...host.querySelectorAll("input[data-lora-weight]")].find(
+      (w) => w.getAttribute("data-lora-weight") === name,
+    );
+    selected.set(name, parseFloat(weightEl?.value || "NaN"));
   }
   const items = (setupArtLoraCatalog || [])
     .filter((l) => {
       const name = String(l.name || l.alias || "");
-      return !q || name.toLowerCase().includes(q);
+      const act = String(l.activation_text || (l.keywords || []).join(" ") || "");
+      const desc = String(l.description || "");
+      const blob = `${name} ${act} ${desc}`.toLowerCase();
+      return !q || blob.includes(q);
     })
     .slice(0, 120);
   if (!items.length) {
@@ -11638,7 +12039,7 @@ function renderSetupLoraList(filter = "") {
         ? "ComfyUI LoRA list is limited here — wire LoRAs in your workflow, or use ForgeSD for extra-network style picks."
         : setupArtLoraCatalog.length
           ? "No LoRAs match filter."
-          : "No LoRAs loaded — start Forge and Refresh catalog (or open Studio).";
+          : "No LoRAs found — set Forge install root and/or custom LoRA folders in Images settings, then Refresh catalog. Disk scan works offline.";
     host.innerHTML = `<span class="empty">${emptyMsg}</span>`;
     updateSetupLoraSummary();
     return;
@@ -11647,12 +12048,155 @@ function renderSetupLoraList(filter = "") {
     .map((l) => {
       const name = String(l.name || l.alias || "");
       const checked = selected.has(name) ? "checked" : "";
-      const weight = selected.get(name) ?? 1;
-      const short = name.length > 52 ? `${name.slice(0, 50)}…` : name;
-      return `<label class="loraPickRow"><input type="checkbox" data-lora-name="${escapeHtml(name)}" ${checked} /><span title="${escapeHtml(name)}">${escapeHtml(short)}</span><input class="loraWeight" type="number" min="0.05" max="2" step="0.05" value="${weight}" data-lora-weight="${escapeHtml(name)}" title="Weight" /></label>`;
+      const pref = defaultLoraWeight(l);
+      const weight = Number.isFinite(selected.get(name)) ? selected.get(name) : pref;
+      const short = name.length > 40 ? `${name.slice(0, 38)}…` : name;
+      const keywords = Array.isArray(l.keywords)
+        ? l.keywords
+        : String(l.activation_text || "")
+            .split(/[,;\n]+/)
+            .map((s) => s.trim())
+            .filter(Boolean);
+      const kwLine = keywords.slice(0, 4).join(", ");
+      const moreKw = keywords.length > 4 ? ` +${keywords.length - 4}` : "";
+      const desc = String(l.description || "").trim();
+      const titleBits = [name, desc, keywords.length ? `Triggers: ${keywords.join(", ")}` : "", `Preferred weight: ${pref}`]
+        .filter(Boolean)
+        .join(" · ");
+      const previewUrl = l.preview_url || (l.has_preview ? `/api/image/lora-preview?name=${encodeURIComponent(name)}` : "");
+      const thumb = previewUrl
+        ? `<img class="loraThumb" src="${escapeHtml(previewUrl)}" alt="" loading="lazy" decoding="async" onerror="this.classList.add('missing')" />`
+        : `<span class="loraThumb loraThumbEmpty" aria-hidden="true"></span>`;
+      const meta = kwLine
+        ? `<span class="loraKeywords" title="${escapeHtml(keywords.join(", "))}">${escapeHtml(kwLine)}${escapeHtml(moreKw)}</span>`
+        : desc
+          ? `<span class="loraKeywords muted">${escapeHtml(desc.length > 48 ? `${desc.slice(0, 46)}…` : desc)}</span>`
+          : `<span class="loraKeywords muted">No trigger keywords</span>`;
+      // Weight range: allow slider LoRAs beyond 0–2 (e.g. age sliders)
+      const wMin = pref < 0 || Math.abs(pref) > 2 ? -5 : 0.05;
+      const wMax = Math.abs(pref) > 2 ? 5 : 2;
+      const wStep = Math.abs(pref) > 2 ? 0.1 : 0.05;
+      return `<label class="loraPickRow" title="${escapeHtml(titleBits)}">
+        <input type="checkbox" data-lora-name="${escapeHtml(name)}" ${checked} />
+        ${thumb}
+        <span class="loraPickMeta">
+          <span class="loraPickName">${escapeHtml(short)}</span>
+          ${meta}
+        </span>
+        <input class="loraWeight" type="number" min="${wMin}" max="${wMax}" step="${wStep}" value="${weight}" data-lora-weight="${escapeHtml(name)}" title="Strength (sidecar preferred: ${pref})" />
+      </label>`;
     })
     .join("");
+  // When user enables a LoRA, snap weight to preferred if still at default 1,
+  // then write <lora:…> + trigger keywords into the engine prompt boxes.
+  host.querySelectorAll("input[data-lora-name]").forEach((box) => {
+    box.addEventListener("change", () => {
+      const name = box.getAttribute("data-lora-name") || "";
+      if (box.checked) {
+        const entry = findLoraCatalogEntry(name);
+        const pref = defaultLoraWeight(entry);
+        const weightEl = [...host.querySelectorAll("input[data-lora-weight]")].find(
+          (w) => w.getAttribute("data-lora-weight") === name,
+        );
+        if (weightEl && (weightEl.value === "" || weightEl.value === "1" || weightEl.value === "1.0")) {
+          weightEl.value = String(pref);
+        }
+      }
+      updateSetupLoraSummary();
+      syncLorasIntoEnginePrompts();
+      persistArtQualitySettings({ silent: true });
+    });
+  });
+  host.querySelectorAll("input[data-lora-weight]").forEach((wEl) => {
+    wEl.addEventListener("change", () => {
+      updateSetupLoraSummary();
+      syncLorasIntoEnginePrompts();
+      persistArtQualitySettings({ silent: true });
+    });
+  });
   updateSetupLoraSummary();
+}
+
+/** Build Forge prompt fragment for currently checked LoRAs. */
+function formatCheckedLoraPromptFragment() {
+  const parts = [];
+  for (const l of collectSetupLoras()) {
+    const name = String(l.name || "").trim();
+    if (!name) continue;
+    let weight = Number(l.weight);
+    if (!Number.isFinite(weight)) weight = 1;
+    // Soft clamp matching backend
+    weight = Math.max(-5, Math.min(5, weight));
+    if (Math.abs(weight) < 0.01) weight = weight < 0 ? -0.01 : 0.01;
+    const wStr = String(Number(weight.toFixed(4))).replace(/\.?0+$/, "") || "1";
+    parts.push(`<lora:${name}:${wStr}>`);
+    const act = String(l.activation_text || "").trim();
+    if (act) parts.push(act);
+  }
+  return parts.join(" ").trim();
+}
+
+/**
+ * Keep engine face/body prompts in sync with checked LoRAs.
+ * Strips previous <lora:…> tags + known activation phrases, then appends the current set.
+ */
+function syncLorasIntoEnginePrompts() {
+  const faceEl = document.querySelector("#setupArtFacePrompt");
+  const bodyEl = document.querySelector("#setupArtBodyPrompt");
+  if (!faceEl && !bodyEl) return;
+
+  const escapeRegExp = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+  const stripLoraBits = (text) => {
+    let t = String(text || "");
+    // Remove all existing <lora:name:w> tags
+    t = t.replace(/,?\s*<lora:[^>]+>/gi, "");
+    // Remove activation phrases for catalog LoRAs (re-added for still-checked ones)
+    const pool = setupArtLoraCatalog || imageCatalog?.forge?.loras || [];
+    for (const l of pool) {
+      const act = String(l.activation_text || "").trim();
+      if (act.length < 2) continue;
+      try {
+        const re = new RegExp(`,?\\s*${escapeRegExp(act)}(?=,|$)`, "gi");
+        t = t.replace(re, "");
+      } catch (_) {
+        /* ignore bad patterns */
+      }
+    }
+    // Collapse leftover double commas / spaces
+    t = t.replace(/\s+,/g, ",").replace(/,\s*,+/g, ",");
+    t = t.replace(/\s{2,}/g, " ").replace(/^[\s,]+|[\s,]+$/g, "");
+    return t.trim();
+  };
+
+  const fragment = formatCheckedLoraPromptFragment();
+  const apply = (el) => {
+    if (!el) return;
+    const base = stripLoraBits(el.value);
+    if (!fragment) {
+      if (el.value !== base) {
+        el.value = base;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      return;
+    }
+    // If base empty, still show LoRA tags so enable is visible
+    const next = base ? `${base}, ${fragment}` : fragment;
+    if (el.value.trim() !== next.trim()) {
+      el.value = next;
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  };
+  apply(faceEl);
+  apply(bodyEl);
+  // Mark ready so generate doesn't think prompts are empty after LoRA-only enable
+  if (fragment && typeof markArtPromptsReady === "function") {
+    try {
+      markArtPromptsReady("lora");
+    } catch (_) {
+      /* ignore */
+    }
+  }
 }
 
 function fillSetupArtCheckpointSelect(data) {
@@ -11705,7 +12249,7 @@ function setSetupArtBackendTab(tab) {
     loraHint.textContent =
       next === "comfyui"
         ? "ComfyUI — extra networks UI is Forge-first; workflow LoRAs preferred"
-        : "Forge style — check to enable, set weight like A1111";
+        : "Optional — only applied when you generate (never auto-written into the prompt text)";
   }
   if (imageCatalog) {
     fillSetupArtCheckpointSelect(imageCatalog);
@@ -11791,13 +12335,10 @@ let artPromptsReady = false;
 const DEFAULT_NSFW_NEG_TAG = "(nsfw:1.3)";
 const DEFAULT_IMAGE_NEGATIVE_BASE =
   "(nsfw:1.3), (child:1.3), lowres, blurry, deformed, bad anatomy, extra limbs, extra fingers, watermark, text, logo, multiple people, side profile, facing away, looking away, from behind, frame, border, picture frame";
-/** Appended to full-body negatives so gens stay full figure (not cropped bust). */
-// Lean framing negatives only — long stacks ("frame, border, picture frame" + many
-// bust tokens) pushed CyberRealistic full-body into abstract dark sludge.
-// Lean framing negatives only — long stacks ("frame, border, picture frame" + many
-// bust tokens) pushed CyberRealistic full-body into abstract dark sludge.
-// Multi-word gear positives use Forge groups: (oil-stained factory coat:1.05)
-const FULLBODY_NEGATIVE_EXTRA = "cropped head, cropped feet, close-up, extreme close-up, abstract, glitch art";
+/** Optional body-only extras (keep lean — framing phrases live in ensureFullbodyNegative). */
+// Do not stack synonyms: close-up covers extreme close-up; head/feet out of frame
+// covers cropped head/feet. Common multi-word negatives stay spaced (no underscores).
+const FULLBODY_NEGATIVE_EXTRA = "abstract, glitch art";
 
 function ensureNsfwInNegative(text) {
   const t = String(text || "").trim();
@@ -11806,12 +12347,35 @@ function ensureNsfwInNegative(text) {
   return `${DEFAULT_NSFW_NEG_TAG}, ${t}`;
 }
 
+/**
+ * Full-body framing negatives. Spaces on purpose — these are standard SD tags
+ * (not underscore-joined gear concepts). Skips if already present; drops redundant
+ * synonyms that only bloat the string.
+ */
 function ensureFullbodyNegative(text) {
   let t = ensureNsfwInNegative(text);
-  const low = t.toLowerCase();
-  for (const phrase of ["head out of frame", "feet out of frame"]) {
-    if (!low.includes(phrase)) t = `${t}, ${phrase}`;
+  // Drop synonym clutter if an older save / paste still has it.
+  const dropToken = (s, re) =>
+    s.replace(re, (_, a, b) => (a && b ? "," : ""));
+  t = dropToken(t, /(^|,\s*)extreme\s+close[- ]?up(\s*,|$)/gi);
+  t = dropToken(t, /(^|,\s*)cropped\s+head(\s*,|$)/gi);
+  t = dropToken(t, /(^|,\s*)cropped\s+feet(\s*,|$)/gi);
+  t = dropToken(t, /(^|,\s*)cropped\s+legs(\s*,|$)/gi);
+  t = t
+    .replace(/\s*,\s*/g, ", ")
+    .replace(/(?:,\s*){2,}/g, ", ")
+    .replace(/\s{2,}/g, " ")
+    .replace(/^,\s*|,\s*$/g, "")
+    .trim();
+  // Canonical framing only (spaces — very common prompts, not multi-word gear).
+  for (const phrase of ["head out of frame", "feet out of frame", "close-up"]) {
+    const low = t.toLowerCase();
+    const spaced = phrase.replace(/-/g, " ");
+    if (!low.includes(phrase) && !low.includes(spaced)) {
+      t = t ? `${t}, ${phrase}` : phrase;
+    }
   }
+  // abstract / glitch only once via FULLBODY_NEGATIVE_EXTRA when bootstrapping
   return t;
 }
 
@@ -12121,6 +12685,9 @@ async function rebuildEnginePrompts({ force = false, silent = false } = {}) {
       enginePromptDirty.fullbody = false;
       bodyEl.classList.remove("enginePromptDirty");
     }
+    // Ensure checked LoRAs are visible in the prompt text (server may already inject;
+    // this re-syncs if the user toggled boxes without a full rebuild).
+    syncLorasIntoEnginePrompts();
     if (faceNegEl && (force || !enginePromptDirty.face_negative || !faceNegEl.value.trim())) {
       faceNegEl.value = ensureNsfwInNegative(data.face_negative || data.negative || defaultNegativePromptText());
       enginePromptDirty.face_negative = false;
@@ -12451,11 +13018,12 @@ async function generateSetupPortrait(kindOrKinds = "both") {
             .catch(() => {});
         }
       }
-      // Persist LoRAs + hires so NPC gens share the same stack
-      persistArtQualitySettings({ silent: true });
+      // Persist LoRAs + hires so NPC gens share the same stack (await so Forge gets flags).
+      await persistArtQualitySettings({ silent: true, flush: true });
       // Never send client-only keys; avoids accidental validation noise.
       const { _checkpoint: _ck, ...sendBody } = payload;
       sendBody.loras = collectSetupLoras();
+      Object.assign(sendBody, artHiresRequestFields());
       const response = await fetch("/api/image/character-set", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -13292,6 +13860,90 @@ async function selectModelFile(form) {
   if (payload.path) form.querySelector('[name="gguf_model_path"]').value = payload.path;
 }
 
+function pathListToText(value) {
+  if (Array.isArray(value)) return value.filter(Boolean).join("\n");
+  return String(value || "").trim();
+}
+
+function parsePathListText(value) {
+  if (Array.isArray(value)) {
+    return value.map((v) => String(v || "").trim()).filter(Boolean).slice(0, 24);
+  }
+  return String(value || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split(/[\n;|]+/)
+    .map((s) => s.trim().replace(/^["']|["']$/g, ""))
+    .filter(Boolean)
+    .slice(0, 24);
+}
+
+/**
+ * Append a folder from the native picker into a multi-path textarea (lora_dirs / checkpoint_dirs).
+ */
+async function browseExtraModelDir(fieldName, form) {
+  const kind = fieldName === "checkpoint_dirs" ? "checkpoint" : "lora";
+  const ta =
+    form?.querySelector?.(`textarea[name="${fieldName}"]`) ||
+    document.querySelector(`#imageForm textarea[name="${fieldName}"]`);
+  const current = parsePathListText(ta?.value || imageConfig?.[fieldName] || []);
+  const initial = current[current.length - 1] || imageConfig?.forge_root || "";
+  const status =
+    form?.parentElement?.querySelector("[data-image-status]") ||
+    document.querySelector("[data-image-status]");
+  if (status) {
+    status.innerHTML = `<p class="empty">Opening folder picker for ${escapeHtml(kind)} paths…</p>`;
+  }
+  const response = await fetch("/api/select-folder", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ kind, initial_dir: String(initial || "").trim() }),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(payload.detail || payload.error || "Folder picker failed");
+  }
+  const path = String(payload.path || "").trim();
+  if (!path) {
+    if (status) status.innerHTML = `<p class="empty">No folder selected.</p>`;
+    return payload;
+  }
+  const next = parsePathListText([...current, path]);
+  if (ta) ta.value = next.join("\n");
+  document.querySelectorAll(`#imageForm textarea[name="${fieldName}"]`).forEach((el) => {
+    el.value = next.join("\n");
+  });
+  try {
+    const patch = {
+      ...(imageConfig || {}),
+      provider: form?.querySelector?.('[name="provider"]')?.value || imageConfig?.provider || "off",
+      forge_root: pendingImageRoots.forge || imageConfig?.forge_root || "",
+      comfy_root: pendingImageRoots.comfyui || imageConfig?.comfy_root || "",
+      [fieldName]: next,
+    };
+    const saveRes = await fetch("/api/image-config", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    });
+    if (saveRes.ok) {
+      imageConfig = await saveRes.json();
+      await loadImageCatalog(imageConfig.provider || "forge").catch(() => null);
+      if (document.querySelector("#setupArtLoraList")) {
+        setupArtLoraCatalog = imageCatalog?.forge?.loras || imageCatalog?.disk_loras || [];
+        renderSetupLoraList(document.querySelector("#setupArtLoraFilter")?.value || "");
+        fillSetupArtCheckpointSelect(imageCatalog);
+      }
+    }
+  } catch (_) {
+    /* keep path even if save fails */
+  }
+  if (status) {
+    status.innerHTML = `<p class="good">Added ${escapeHtml(kind)} folder: <code>${escapeHtml(path)}</code> (${next.length} path(s))</p>`;
+  }
+  return payload;
+}
+
 /**
  * Native folder picker for Forge/Comfy roots (or any custom directory).
  * Writes all matching inputs in the form, updates pendingImageRoots, optionally soft-saves.
@@ -13898,7 +14550,6 @@ async function expandSimpleSetupDepth() {
     "quest_style",
     "faction_pressure",
     "custom_skills",
-    "special_ability_origin",
     "special_abilities",
   ];
   const formData = new FormData(setupForm);
@@ -13907,7 +14558,6 @@ async function expandSimpleSetupDepth() {
     if (!randomizeFieldApplies(name, formData)) continue;
     // Skip if already substantial
     if (name === "special_abilities") {
-      if (abilityOrigin() === "none") continue;
       if (collectAbilities().length) continue;
     } else if (name === "character_backstory") {
       const v = String(setupForm.elements.character_backstory?.value || "").trim();
@@ -14004,13 +14654,13 @@ function scoreSetupDepth() {
     target += band.weight;
     if (len < band.min * 0.85) weak.push(name);
   }
-  // Abilities when origin is set
-  if (abilityOrigin() !== "none") {
-    const abs = collectAbilities();
+  // Abilities (optional — only score when cards exist)
+  const abs = collectAbilities();
+  if (abs.length) {
     const aLen = abs.reduce((n, a) => n + String(a.description || "").length + String(a.growth_math || "").length, 0);
     total += Math.min(2, aLen / 120);
     target += 2;
-    if (abs.length === 0 || aLen < 80) weak.push("special_abilities");
+    if (aLen < 80) weak.push("special_abilities");
   }
   return { total: Math.round(total * 10) / 10, target, weak, ratio: target ? total / target : 1 };
 }
@@ -14044,8 +14694,8 @@ async function startGame(event) {
     const customSkillsText = commaSeparatedPhrases(formData.get("custom_skills"));
     if (customSkillsField) customSkillsField.value = customSkillsText;
     const customSkills = commaSeparatedPhrases([customSkillsText, skillCustom ? `Skill learning rule: ${skillCustom}` : ""]);
-    const specialAbilityOrigin = abilityOrigin();
-    const specialAbilities = specialAbilityOrigin === "none" ? [] : collectAbilities();
+    const specialAbilities = collectAbilities();
+    const specialAbilityOrigin = derivedAbilityOriginForPayload(specialAbilities);
     const includeFormerLife = formerLifeSelected(formData);
     const setupPayload = {
       player_name: textField(formData, "player_name", "Wanderer", 80),
@@ -14356,10 +15006,6 @@ setupForm.addEventListener("change", (event) => {
   }
   if (event.target === lockAbilityCount || event.target === abilityCountMinInput || event.target === abilityCountMaxInput) {
     syncAbilityCountRangeInputs();
-    updateAbilityOriginControls();
-    return;
-  }
-  if (event.target.matches('input[name="special_ability_origin"]')) {
     updateAbilityOriginControls();
     return;
   }
@@ -15506,6 +16152,21 @@ modelModalContent?.addEventListener("click", (event) => {
       });
     return;
   }
+  const browseExtra = event.target.closest(".browseExtraModelDir");
+  if (browseExtra) {
+    const field = browseExtra.getAttribute("data-browse-extra") || "lora_dirs";
+    const form = browseExtra.closest("#imageForm") || browseExtra.closest("form");
+    browseExtra.disabled = true;
+    browseExtraModelDir(field, form)
+      .catch((error) => {
+        const status = modelModalContent?.querySelector?.("[data-image-status]");
+        if (status) status.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+      })
+      .finally(() => {
+        browseExtra.disabled = false;
+      });
+    return;
+  }
   const imageTab = event.target.closest("[data-image-tab]");
   if (imageTab && modelModalContent?.contains(imageTab)) {
     imageSettingsTab = imageTab.dataset.imageTab || "general";
@@ -15955,7 +16616,11 @@ document.addEventListener("input", (event) => {
     updateSetupLoraSummary();
     persistArtQualitySettings({ silent: true });
   }
-  if (event.target?.id === "setupArtHrScale") {
+  if (
+    event.target?.id === "setupArtHrScale" ||
+    event.target?.id === "setupArtHrDenoise" ||
+    event.target?.id === "setupArtHrSteps"
+  ) {
     persistArtQualitySettings({ silent: true });
     syncArtQualityControlsFromConfig();
   }
@@ -15980,10 +16645,19 @@ document.addEventListener("change", (event) => {
     updateSetupLoraSummary();
     persistArtQualitySettings({ silent: true });
   }
-  if (event.target?.id === "setupArtEnableHr") {
+  if (
+    event.target?.id === "setupArtEnableHr" ||
+    event.target?.id === "setupArtHrScale" ||
+    event.target?.id === "setupArtHrDenoise" ||
+    event.target?.id === "setupArtHrSteps" ||
+    event.target?.id === "setupArtHrUpscaler"
+  ) {
+    // Critical: mirror DOM → imageConfig first, then save.
+    // Never call full syncArtQualityControlsFromConfig() here — that used to
+    // rebuild the upscaler select from stale config and wipe the user's pick.
+    mirrorArtHiresControlsToImageConfig();
+    updateArtHrHintFromControls();
     persistArtQualitySettings({ silent: true });
-    if (imageConfig) imageConfig.forge_enable_hr = !!event.target.checked;
-    syncArtQualityControlsFromConfig();
   }
 });
 
@@ -16822,25 +17496,54 @@ let travelReady = true;
 let focusedNpcCode = "";
 const npcPortraitCache = {};
 
-function updateTravelStatus(ready) {
-  travelReady = ready !== false;
+let movementLocked = false;
+let mapBlank = false;
+
+function updateTravelStatus(ready, opts) {
+  const o = opts && typeof opts === "object" ? opts : {};
+  if ("movement_locked" in o) movementLocked = o.movement_locked === true;
+  if ("map_blank" in o) mapBlank = o.map_blank === true;
+  if (typeof ready === "object" && ready) {
+    // Allow passing full travel-status payload as first arg
+    if ("travel_ready" in ready) {
+      travelReady = ready.travel_ready !== false;
+    }
+    if ("movement_locked" in ready) movementLocked = ready.movement_locked === true;
+    if ("map_blank" in ready) mapBlank = ready.map_blank === true;
+    if (ready.location_special_flags?.movement_locked) movementLocked = true;
+    if (ready.location_special_flags?.map_blank) mapBlank = true;
+  } else {
+    travelReady = ready !== false;
+  }
+  if (movementLocked || mapBlank) travelReady = false;
   const line = document.querySelector("#travelStatusLine");
   const banner = document.querySelector("#mapTravelBanner");
   const walkBtn = document.querySelector("#settlementWalkBtn");
-  // Adjacent steps (arrows / d-pad) are always free; only long jumps need travel_ready.
-  const text = travelReady
-    ? "Walk free: arrows / pad · click adjacent tiles · long trips open"
-    : "Walk free: arrows / pad · long trips locked until scene clears";
+  let text;
+  if (mapBlank || movementLocked) {
+    const label =
+      o.confinement_label ||
+      o.label ||
+      (typeof ready === "object" && ready?.confinement_label) ||
+      "Bound";
+    text = mapBlank
+      ? `${label}: map blank · movement locked`
+      : `${label}: movement locked · no free walk`;
+  } else if (travelReady) {
+    text = "Walk free: arrows / pad · click adjacent tiles · long trips open";
+  } else {
+    text = "Walk free: arrows / pad · long trips locked until scene clears";
+  }
   if (line) {
     line.textContent = text;
-    line.classList.toggle("locked", !travelReady);
+    line.classList.toggle("locked", !travelReady || movementLocked || mapBlank);
   }
   if (banner) {
     banner.textContent = text;
-    banner.classList.toggle("locked", !travelReady);
+    banner.classList.toggle("locked", !travelReady || movementLocked || mapBlank);
   }
-  // Settlement long-walk still respects the scene gate.
-  if (walkBtn) walkBtn.disabled = !travelReady;
+  // Settlement long-walk still respects the scene gate / prison.
+  if (walkBtn) walkBtn.disabled = !travelReady || movementLocked || mapBlank;
 }
 
 let mapMoveBusy = false;
@@ -16908,6 +17611,14 @@ async function walkStep(dx, dy, options = {}) {
   const stepX = Math.max(-1, Math.min(1, Number(dx) || 0));
   const stepY = Math.max(-1, Math.min(1, Number(dy) || 0));
   if (!stepX && !stepY) return;
+  if (movementLocked || mapBlank || state?.movement_locked || state?.map_blank) {
+    const tip =
+      state?.location_special_flags?.hint ||
+      "You cannot move — confined (blank map / prison state).";
+    const banner = document.querySelector("#mapTravelBanner");
+    if (banner) banner.textContent = tip;
+    return;
+  }
   if (mapMoveBusy) return;
   mapMoveBusy = true;
   document.querySelectorAll(".mapDpadBtn[data-dx]").forEach((btn) => {
@@ -17461,8 +18172,46 @@ async function refreshLocalMap() {
     // Larger circular viewport; vision is still 1-tile LOS server-side.
     const res = await fetch("/api/tiles/map/local?radius=6", { cache: "no-store" });
     const data = await res.json();
+    if (data?.map_blank || data?.movement_locked) {
+      mapBlank = !!data.map_blank;
+      movementLocked = !!data.movement_locked;
+      updateTravelStatus(false, {
+        movement_locked: movementLocked,
+        map_blank: mapBlank,
+        confinement_label: data.confinement?.label || data.location_special_flags?.label || "",
+      });
+    }
     if (!res.ok || data.empty) {
-      if (meta) meta.textContent = "No map yet — generate on World setup.";
+      if (meta) {
+        if (data?.map_blank || data?.confinement) {
+          meta.textContent =
+            data.confinement?.label ||
+            data.location_special_flags?.label ||
+            "Bound — map blank · cannot move";
+          if (data.confinement?.hint) meta.title = data.confinement.hint;
+        } else {
+          meta.textContent = "No map yet — generate on World setup.";
+        }
+      }
+      // Clear canvas for prison / blank map
+      if (canvas && (data?.map_blank || data?.empty)) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          canvas.width = 320;
+          canvas.height = 320;
+          ctx.fillStyle = "#0a0a0f";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#6a6a80";
+          ctx.font = "13px sans-serif";
+          ctx.textAlign = "center";
+          const label = data?.confinement?.label || "No map";
+          ctx.fillText(label, canvas.width / 2, canvas.height / 2 - 8);
+          ctx.fillStyle = "#4a4a5a";
+          ctx.font = "11px sans-serif";
+          ctx.fillText(data?.map_blank ? "confined" : "empty", canvas.width / 2, canvas.height / 2 + 12);
+        }
+      }
+      localMapView = data?.map_blank ? data : null;
       return;
     }
     localMapView = data;
@@ -17509,6 +18258,37 @@ async function refreshFullMap() {
   try {
     const res = await fetch("/api/tiles/map/full", { cache: "no-store" });
     const data = await res.json();
+    if (data?.map_blank) {
+      mapBlank = true;
+      movementLocked = true;
+      fullMapView = data;
+      if (canvas) {
+        const ctx = canvas.getContext("2d");
+        if (ctx) {
+          canvas.width = 480;
+          canvas.height = 360;
+          ctx.fillStyle = "#0a0a0f";
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.fillStyle = "#6a6a80";
+          ctx.font = "14px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(
+            data.confinement?.label || "The Heavens — bound",
+            canvas.width / 2,
+            canvas.height / 2 - 6,
+          );
+          ctx.fillStyle = "#4a4a5a";
+          ctx.font = "12px sans-serif";
+          ctx.fillText("map blank · movement locked", canvas.width / 2, canvas.height / 2 + 16);
+        }
+      }
+      updateTravelStatus(false, {
+        movement_locked: true,
+        map_blank: true,
+        confinement_label: data.confinement?.label || "",
+      });
+      return;
+    }
     if (!res.ok || data.empty) return;
     fullMapView = data;
     if (data.map_avatar?.data_url) {
@@ -17759,6 +18539,13 @@ function showSettlementDetail(s) {
 }
 
 async function walkToTile(x, y) {
+  if (movementLocked || mapBlank || state?.movement_locked || state?.map_blank) {
+    window.alert(
+      state?.location_special_flags?.hint ||
+        "You cannot move — confined (blank map / prison state).",
+    );
+    return;
+  }
   try {
     const px = Number(localMapView?.player?.x ?? fullMapView?.player?.x ?? 0);
     const py = Number(localMapView?.player?.y ?? fullMapView?.player?.y ?? 0);
@@ -17809,7 +18596,7 @@ function openMapOverlay() {
   refreshFullMap();
   fetch("/api/travel-status")
     .then((r) => r.json())
-    .then((d) => updateTravelStatus(d.travel_ready))
+    .then((d) => updateTravelStatus(d))
     .catch(() => {});
 }
 

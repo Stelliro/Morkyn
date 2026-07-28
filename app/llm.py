@@ -281,7 +281,6 @@ SETUP_RANDOMIZER_FIELD_GROUPS = {
         "starter_equipment",
         "previous_life_age",
         "previous_life_sex",
-        "special_ability_origin",
         "special_abilities",
     ],
     "world": [
@@ -324,7 +323,30 @@ SETUP_RANDOMIZER_FIELD_GROUPS = {
 # Shared with frontend via /api/setup/composer — dependency-safe load order.
 SETUP_RANDOMIZER_ALL_FIELD_ORDER = list(COMPOSER_FIELD_ORDER)
 SETUP_RANDOMIZER_FALLBACKS = {
-    "player_name": ["Mara", "Corvin", "Iris Vale", "Ren", "Sable", "Tamsin", "Kael"],
+    # Legal/given names (or given + family). Not handles, street nicknames, or epithets.
+    "player_name": [
+        "Mara Ellison",
+        "Corvin Hale",
+        "Iris Vale",
+        "Tamsin Reed",
+        "Kael Morin",
+        "Elena Croft",
+        "Jonas Pike",
+        "Sable Quinn",
+        "Ren Ashford",
+        "Liora Dane",
+        "Marcus Bell",
+        "Nadia Voss",
+        "Tobias Wren",
+        "Helena Kade",
+        "Darius Cole",
+        "Miriam Shaw",
+        "Owen Graves",
+        "Celia Thorn",
+        "Felix Rourke",
+        "Ava Mercer",
+    ],
+    # Handles / nicknames / public aliases only (usually blank).
     "player_public_name": ["", "Ash", "River", "Patch", "Northlight", "Second Bell"],
     "player_title": ["", "the Weatherwise", "of Kiln Street", "the Long Listener", "the Spare Key"],
     "player_age": ["17", "19", "24", "31", "middle-aged", "appears 30", "adult"],
@@ -332,7 +354,6 @@ SETUP_RANDOMIZER_FALLBACKS = {
     "player_sex": ["female", "male", "", "intersex", "sexless or constructed", "varies by form"],
     "previous_life_age": ["19", "27", "34", "46", "elderly", "unknown"],
     "previous_life_sex": ["female", "male", "", "intersex", "sexless or constructed", "varies by form"],
-    "special_ability_origin": ["none", "acquired", "innate", "both"],
     "backstory_mode": ["known", "hidden", "fragmented memories", "reincarnated", "transmigrated", "nameless drifter"],
     "memory_policy": ["known", "ordinary memory", "details emerge through choices", "rumors may be wrong", "private details stay private", "remembers former life"],
     "hair": [
@@ -367,43 +388,83 @@ SETUP_RANDOMIZER_FALLBACKS = {
         "violet contacts, painted freckles, pointed chin",
         "green-brown eyes, deep laugh creases, strong brow",
     ],
-    "appearance": [
-        "torso: travel-stained coat; feet: dusty boots; waist: rope coil",
-        "torso: plain work tunic; hands: work gloves; feet: practical boots",
-        "torso: frayed cloak; legs: patched trousers; bag: worn satchel",
-        "torso: simple street clothes; feet: cheap shoes; bag: thin travel bag",
-        "torso: secondhand hoodie; feet: scuffed sneakers; bag: messenger bag",
-        "torso: canvas jacket; waist: tool belt; feet: steel-toe boots",
-        "torso: rain cloak; legs: oilcloth trousers; bag: waterproof pack",
-        "torso: formal vest over shirt; feet: polished but cracked shoes",
-        "torso: hospital scrubs under coat; feet: soft shoes; bag: medical pouch",
-        "torso: quilted work vest; hands: fingerless gloves; feet: trail boots",
-    ],
+    "appearance": list(
+        # Filled from setup_composer seed pool at import end if available; keep local fallbacks:
+        [
+            "torso: plain travel clothes; feet: practical shoes; bag: thin shoulder bag",
+            "torso: secondhand work shirt; feet: scuffed shoes; hands: cheap gloves",
+            "torso: light jacket over tee; feet: sneakers; bag: small daypack",
+            "torso: rain-damp hoodie; feet: wet sneakers",
+            "torso: hospital scrub top under coat; feet: soft shoes; neck: badge lanyard",
+            "torso: kitchen apron over street clothes; feet: non-slip shoes",
+            "torso: delivery jacket; hands: bike gloves; feet: trail shoes",
+            "torso: teacher cardigan over blouse; feet: flats; bag: tote",
+            "torso: patched canvas vest; hands: work gloves; feet: worn boots",
+            "torso: coarse hooded tunic; feet: scuffed leather shoes; bag: worn satchel",
+            "torso: travel cloak; legs: patched trousers; feet: dusty boots",
+            "torso: plain work tunic; waist: rope belt; feet: practical boots",
+            "torso: oilcloth rain cloak; legs: tough trousers; bag: waterproof wrap",
+            "torso: simple robes; feet: cloth shoes",
+            "torso: ferry-hand jacket; feet: salt-stained boots; bag: net pouch",
+            "torso: market stall apron; feet: soft shoes; bag: coin purse",
+            "torso: quilted work vest; hands: fingerless gloves; feet: trail boots",
+            "torso: formal vest over shirt; feet: cracked shoes",
+        ]
+    ),
     "starter_equipment": [
         "worn coat, coiled rope, pocket knife, dusty boots, water skin, 3 days rations",
-        "plain clothes, work gloves, small tool pouch, practical boots, copper coins",
+        "plain clothes, work gloves, small tool pouch, practical boots",
         "travel cloak, empty satchel, wooden charm, heel of bread",
         "secondhand jacket, notebook stub, stub of chalk, water flask",
         "canvas bag, multi-tool, duct tape roll, cheap flashlight, snacks",
         "rain cloak, fishing line, tin cup, flint kit, dried fish",
+        "cracked phone, house keys, transit card, light jacket, half-empty water bottle",
+        "hospital badge on a lanyard, soft shoes, zip hoodie, folded scrub top, cheap earbuds",
+        "bike gloves, delivery bag, rain poncho, dead phone, protein bar",
+        "teacher's tote, red pen, lesson notes, cardigan, bus pass",
+        "hotel keycard, pressed shirt, small umbrella, mints, spare name tag",
+        "kitchen apron, burn cream tube, non-slip shoes, spare hair tie, street wallet",
+        "folding knife, tin cup, wool scarf, oilcloth wrap, day of hard bread",
+        "sewing kit, scrap cloth, wooden needle case, soft shoes, dried fruit",
+        "fishing hooks, line spool, tin cup, straw hat, smoked fish",
+        "ledger stub, charcoal pencil, plain tunic, belt pouch, water skin",
+        "dead phone, wallet with useless cards, apartment keys, light jacket",
+        "ID badge, lanyard, soft shoes, hoodie, half pack of mints",
+        "messenger bag, cracked earbuds, bus pass, secondhand jacket",
+        "work gloves, repair pouch, patched vest, worn boots, water skin",
     ],
     "character_backstory": [
         "Born in a canal district where freight crews raised children as extra hands, they grew up reading cargo marks, weather signs, and people's excuses. Before the story begins, they worked as a route clerk who kept small settlements supplied, and they reached the starting area carrying one delayed delivery, two unpaid favors, and a fear that their last ledger was altered.",
         "Born in a hill village that treated old ruins as common landmarks, they spent most of their life repairing tools, copying maps, and guiding travelers through roads locals considered ordinary. They left after a winter landslide exposed sealed stonework under the village shrine, bringing practical skills, a few local contacts, and one question their elders refused to answer.",
-        # Pure isekai arrival (truck / desk → dirt road)
-        "In their former life they worked night shifts at a logistics warehouse until a truck accident killed them. They woke on a dirt road beside a river compound in another world with city-work habits intact, empty pockets, and no free hero kit — only the need to learn which local rules can still kill them.",
-        # Body transmigration
-        "They remember dying as a tired office clerk, then waking inside the body of a debt-ridden compound ledger-hand already known to local gate crews. The body's calluses and unpaid favors are real; their old-world memories arrive in fragments between work shifts.",
-        # Reincarnated childhood
-        "Reborn into a canal village as a child years ago, they grew up hauling water and copying notice-board marks while half-remembering glass towers and night traffic from a life that no longer has a body. Locals know them only as a quiet apprentice, not as anyone from another world.",
-        # Ritual summon
+        "They taught evening classes in a rented room above a laundry, grading papers until the building fire alarm failed. Smoke and a wrong turn on the stair took them; they woke under open sky beside a timber gate, still clutching a red pen and a bus pass that means nothing here.",
+        "A ride-share driver chasing surge pay died when a truck jumped a curb. They opened their eyes on a muddy road outside a walled settlement, phone dead, only street clothes and ordinary driving habits left.",
+        "Hospital admissions night shift ended mid-code when the power cut and something else cut through. They came to on stone steps above foreign rooftops with a lanyard badge and soft shoes, no free power — only crisis habits.",
         "A failed outer-court ritual yanked them out of a rainy city street and into a sect compound still wearing street clothes. They remember the summon circle, the smell of burnt paper, and the awkward silence of disciples who expected a legendary spirit instead of a confused outsider.",
+        "Reborn into a canal village as a child years ago, they grew up hauling water and copying notice-board marks while half-remembering glass towers and night traffic from a life that no longer has a body. Locals know them only as a quiet apprentice, not as anyone from another world.",
+        "They cooked line food until a kitchen gas blast blacked them out. Next breath was cold air and rope smells in a low-tech alley; apron gone, only burns and street clothes remaining.",
     ],
     "skill_style": ["standard", "generous", "training-heavy", "strict"],
     "proficiency_access": ["learned", "familiar actions free", "only expert tasks require training"],
     "new_skill_frequency": ["normal", "very rare", "rare", "frequent", "very frequent"],
     "world_style": ["frontier dark fantasy", "wuxia sect politics", "system apocalypse", "post-collapse settlement", "mage academy intrigue", "low magic mercantile city", "space frontier salvage"],
-    "start_location": ["Mosswake Gate", "Blackwater Relay", "The Ninth Stair", "Cinder Market", "Ashford Clinic", "Red Lantern Dock", "Saint Vale Station"],
+    "start_location": [
+        "Mosswake Gate",
+        "Blackwater Relay",
+        "The Ninth Stair",
+        "Cinder Market Edge",
+        "Ashford Clinic Gate",
+        "Red Lantern Dock",
+        "Saint Vale Station",
+        "Outer Compound Yard",
+        "Ash Road Cut",
+        "Ferry Landing Stone",
+        "Low Gate Timber Arch",
+        "Saltwind Pier",
+        "Iron Bell Crossroads",
+        "Pale Bridge Footing",
+        "Sect Outer Court Gate",
+        "Ration Yard Post",
+    ],
     "tone": ["grounded adventure", "survival pressure", "political intrigue", "mythic progression", "grim road story"],
     "economy": ["scarce", "barter-heavy", "coin-driven", "guild-controlled"],
     "loot_rarity": ["earned and uncommon", "scarce mundane", "generous adventuring", "high-magic loot"],
@@ -2239,7 +2300,6 @@ def _setup_randomizer_return_fields(group: str, current_setup: dict[str, Any], t
     elif group in SETUP_RANDOMIZER_ALL_FIELD_ORDER or group in {
         "special_abilities",
         "custom_skills",
-        "special_ability_origin",
     }:
         # Single known field name (not a group key)
         return_fields = [group]
@@ -2307,6 +2367,155 @@ def _fallback_sex_value(field: str, current_setup: dict[str, Any]) -> str:
     return random.choice(population)
 
 
+# Single-token handles / nature-noun nicknames that belong in public_name, not player_name.
+_PLAYER_NAME_NICKNAME_BLOCKLIST = frozenset(
+    {
+        "ash",
+        "river",
+        "patch",
+        "vellum",
+        "thorn",
+        "spark",
+        "shadow",
+        "ghost",
+        "fox",
+        "wolf",
+        "raven",
+        "crow",
+        "blade",
+        "storm",
+        "ember",
+        "cinder",
+        "northlight",
+        "second bell",
+        "wanderer",
+        "stranger",
+        "traveler",
+        "traveller",
+        "drifter",
+        "nameless",
+        "hero",
+        "protagonist",
+        "player",
+        "mc",
+    }
+)
+
+
+def _is_nickname_style_player_name(name: str) -> bool:
+    """True for handles, epithets, compound shell-nicknames — not a real personal name."""
+    raw = re.sub(r"\s+", " ", str(name or "").strip())
+    if not raw:
+        return True
+    low = raw.lower()
+    if low in _PLAYER_NAME_NICKNAME_BLOCKLIST:
+        return True
+    # "the Red", "of Kiln Street", title-style
+    if re.match(r"^(the|of)\s+", low):
+        return True
+    # Quoted handles / code-like
+    if raw.startswith('"') or raw.startswith("'") or re.fullmatch(r"[A-Za-z]{1,3}\d+", raw):
+        return True
+    # Compound shell nicknames: Ashwalker, Reedwick, Mossgate (nature+job/place stem)
+    if re.fullmatch(
+        r"[A-Za-z]+(?:walker|wick|well|bin|line|post|cut|mark|field|row|gate|path|coil|hook|rest|lane|drift|watch|keep)",
+        raw,
+        re.I,
+    ):
+        return True
+    # Single evocative noun without a capital surname pattern (Patch, River) already blocked;
+    # multi-word with only lowercase is not a proper name
+    words = raw.split()
+    if len(words) == 1 and len(words[0]) <= 4 and words[0].lower() in _PLAYER_NAME_NICKNAME_BLOCKLIST:
+        return True
+    return False
+
+
+# Stock starter kits the 8B model welds into every isekai roll.
+_STARTER_STOCK_MARKERS = (
+    "rusted wrench",
+    "copper coins",
+    "worn satchel",
+    "rain-slicked hoodie",
+    "scuffed sneakers",
+    "half-eaten bento",
+    "faded id badge",
+)
+
+
+def _diversify_starter_equipment(value: Any) -> str:
+    """
+    Break the set-in-stone isekai pocket kit (wrench + copper coins + satchel + hoodie…).
+    If the roll is a stock clone, replace with a random varied fallback.
+    """
+    raw = str(value or "").strip()
+    if isinstance(value, list):
+        raw = ", ".join(str(x).strip() for x in value if str(x or "").strip())
+    # Flatten list-as-string junk
+    low = raw.lower()
+    stock_hits = sum(1 for m in _STARTER_STOCK_MARKERS if m in low)
+    # Always-on coins + wrench is the worst clone
+    if stock_hits >= 3 or ("wrench" in low and "copper" in low and "satchel" in low):
+        try:
+            from app.setup_composer import pick_starter_kit_seed
+
+            return pick_starter_kit_seed(modern_arrival=True)[:500]
+        except Exception:
+            pool = list(SETUP_RANDOMIZER_FALLBACKS.get("starter_equipment") or [])
+            random.shuffle(pool)
+            for cand in pool:
+                cl = str(cand).lower()
+                if sum(1 for m in _STARTER_STOCK_MARKERS if m in cl) < 2:
+                    return str(cand)[:500]
+            return "cracked phone, house keys, light jacket, transit card, half-empty water bottle"
+    # Soft-remove overused copper coins when the kit already has 4+ items
+    parts = [p.strip() for p in re.split(r"[,;]+", raw) if p.strip()]
+    if len(parts) >= 4:
+        parts = [p for p in parts if not re.fullmatch(r"(a\s+)?(few\s+)?copper coins?", p, flags=re.I)]
+    # Cap duplicate tool spam
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for p in parts:
+        key = re.sub(r"\s+", " ", p.lower())
+        # Collapse wrench variants
+        if "wrench" in key or "spanner" in key:
+            key_stem = "wrench"
+        elif "copper coin" in key:
+            key_stem = "coins"
+        else:
+            key_stem = key
+        if key_stem in seen:
+            continue
+        seen.add(key_stem)
+        cleaned.append(p)
+    return ", ".join(cleaned)[:500] if cleaned else raw[:500]
+
+
+def _sanitize_player_name(value: Any, *, forbidden: str = "") -> str:
+    """
+    player_name = personal/legal name NPCs would put on a record.
+    Nicknames, street handles, and epithets belong in player_public_name / player_title.
+    """
+    name = re.sub(r"\s+", " ", str(value or "").strip())[:80]
+    forbid = re.sub(r"\s+", " ", str(forbidden or "").strip()).lower()
+    if name and not _is_nickname_style_player_name(name) and name.lower() != forbid:
+        # Prefer Title Case for display (keep short particles if any)
+        parts = []
+        for w in name.split():
+            if w.lower() in {"de", "del", "van", "von", "of", "da", "di"}:
+                parts.append(w.lower())
+            else:
+                parts.append(w[:1].upper() + w[1:] if w else w)
+        return " ".join(parts)[:80]
+    pool = list(SETUP_RANDOMIZER_FALLBACKS.get("player_name") or ["Mara Ellison"])
+    random.shuffle(pool)
+    for candidate in pool:
+        c = str(candidate).strip()
+        if c.lower() != forbid and not _is_nickname_style_player_name(c):
+            return c[:80]
+    return "Mara Ellison"
+
+
 def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
     if field in PREVIOUS_LIFE_IDENTITY_FIELDS and not _setup_has_former_life_identity(current_setup):
         return ""
@@ -2320,6 +2529,15 @@ def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
         return random.choice(SETUP_RANDOMIZER_BOOLEAN_FALLBACKS[field])
     if field == "special_abilities":
         return _fallback_special_abilities(current_setup)
+    if field == "player_name":
+        forbid = str(current_setup.get("player_name") or "")
+        values = list(SETUP_RANDOMIZER_FALLBACKS.get("player_name") or [])
+        random.shuffle(values)
+        for value in values:
+            cleaned = _sanitize_player_name(value, forbidden=forbid)
+            if cleaned.lower() != forbid.strip().lower():
+                return cleaned
+        return _sanitize_player_name("", forbidden=forbid)
     values = SETUP_RANDOMIZER_FALLBACKS.get(field)
     if values:
         value = random.choice(values)
@@ -2691,19 +2909,45 @@ def _enforce_ability_count(
                 names.add(n)
         except Exception:
             pass
-        # Last resort: duplicate last with a variant name (rare)
-        while len(clean) < target and clean:
-            extra = dict(clean[-1])
-            extra["name"] = f"{extra.get('name') or 'Power'} ({len(clean) + 1})"
-            clean.append(extra)
+        # Last resort: pad with a distinct seed-domain ability (never "Power (2)" / "Name 52")
+        while len(clean) < target:
+            try:
+                pad_one = _local_remake_ability(
+                    forbidden_names=names,
+                    origin=str((current_setup or {}).get("special_ability_origin") or "both"),
+                    world_style=str((current_setup or {}).get("world_style") or ""),
+                )
+                n = sanitize_ability_name(pad_one.get("name")) or "Quiet Craft"
+                pad_one["name"] = n
+                if n.lower() in names:
+                    n = _unique_ability_display_name(n, names, salt=f"pad|{len(clean)}")
+                    pad_one["name"] = n
+                clean.append(pad_one)
+                names.add(n.lower())
+            except Exception:
+                # Absolute last resort: word-only unique name, not a number
+                extra = dict(clean[-1]) if clean else {"name": "Quiet Craft", "description": "A thin practical edge."}
+                extra = dict(extra)
+                extra["name"] = _unique_ability_display_name(
+                    str(extra.get("name") or "Quiet Craft"),
+                    names,
+                    salt=f"pad_fallback|{len(clean)}",
+                )
+                clean.append(extra)
+                names.add(str(extra.get("name") or "").lower())
+                if len(clean) >= target:
+                    break
     return clean[:target]
 
 
 def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str, Any]]:
     field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
-    origin = str(field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "none").strip().lower()
-    if origin == "none":
-        return []
+    # Origin UI removed — locks are per ability; default batch policy is "both".
+    origin = str(
+        field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "both"
+    ).strip().lower()
+    if origin in {"none", "off", "no", ""}:
+        origin = "both"
     # One-skill / near-useless intents → single seed ability when range allows
     intent = _resolve_setup_intent(current_setup)
     pf = intent.get("power_fantasy") if isinstance(intent.get("power_fantasy"), dict) else {}
@@ -2926,6 +3170,7 @@ _VALID_POWER_TYPES = frozenset(
 )
 # Max quality-denied rolls before seed-pool fallback (initial + retries).
 ABILITY_QUALITY_MAX_ATTEMPTS = 3
+BACKSTORY_QUALITY_MAX_ATTEMPTS = 3
 
 # Duration / recharge units → minutes for cross-field fact-check.
 _TIME_UNIT_MINUTES = {
@@ -4047,6 +4292,9 @@ def evaluate_ability_quality(
     elif name.lower() in {"ability", "power", "skill", "special ability", "seed", "passive", "active"}:
         hard.append("name_generic")
         score -= 35
+    if name and ability_name_has_numeric_junk(name):
+        hard.append("name_numeric_suffix")
+        score -= 30
     if name and is_overused_seed_domain(name):
         hard.append("name_overused_domain")
         score -= 30
@@ -4240,6 +4488,11 @@ def quality_gate_abilities(
     repaired_list: list[dict[str, Any]] = []
     for ab in raw_list:
         candidate = dict(ab)
+        # Strip "Salt Circle 52" style junk before quality scoring
+        if candidate.get("name"):
+            cleaned_name = sanitize_ability_name(candidate.get("name"))
+            if cleaned_name:
+                candidate["name"] = cleaned_name
         if auto_repair:
             candidate = normalize_ability_lock_and_prerequisites(candidate, origin=origin)
             candidate = repair_ability_cross_field_consistency(candidate)
@@ -4356,6 +4609,131 @@ def quality_gate_abilities(
     }
 
 
+# Word-only name variants when a seed domain collides — never bare integers (no "Salt Circle 52").
+_ABILITY_NAME_PREFIXES = (
+    "Deep",
+    "Quiet",
+    "Ashen",
+    "Iron",
+    "Pale",
+    "Hollow",
+    "Bright",
+    "Rough",
+    "Still",
+    "Cold",
+    "Soft",
+    "Wild",
+)
+_ABILITY_NAME_SUFFIXES = (
+    "Mark",
+    "Craft",
+    "Edge",
+    "Rite",
+    "Sense",
+    "Thread",
+    "Ward",
+    "Hand",
+    "Step",
+    "Breath",
+    "Line",
+    "Knack",
+)
+
+
+def sanitize_ability_name(name: Any) -> str:
+    """Strip accidental numeric suffixes from ability names (e.g. 'Salt Circle 52' → 'Salt Circle')."""
+    text = re.sub(r"\s+", " ", str(name or "").strip())
+    if not text:
+        return ""
+    # Order matters: strip "Variant 7" / "(2)" before bare trailing digits.
+    text = re.sub(r"\s+Variant\s+\d{1,3}$", "", text, flags=re.I)
+    text = re.sub(r"\s*\(\d{1,3}\)\s*$", "", text)
+    # "Salt Circle 52", "Name Whisper 40", "Lamp Glare 87"
+    text = re.sub(r"\s+\d{1,3}$", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:100]
+
+
+def ability_name_has_numeric_junk(name: str) -> bool:
+    """True if the display name ends with a bare number / Variant N / (N)."""
+    text = re.sub(r"\s+", " ", str(name or "").strip())
+    if re.search(r"\s+\d{1,3}$", text):
+        return True
+    if re.search(r"\s+Variant\s+\d{1,3}$", text, re.I):
+        return True
+    if re.search(r"\s*\(\d{1,3}\)\s*$", text):
+        return True
+    return False
+
+
+def _unique_ability_display_name(
+    base: str,
+    forbidden_names: set[str] | list[str] | None,
+    *,
+    world_style: str = "",
+    salt: str = "",
+) -> str:
+    """
+    Return a player-facing ability name that is not in forbidden_names.
+    Never appends bare integers. Prefers alternate seed domains, then word variants.
+    """
+    from app.setup_composer import pick_seed_skill_domain, seed_skill_domain_names
+
+    forbidden = {
+        re.sub(r"\s+", " ", str(f or "").strip().lower())
+        for f in (forbidden_names or [])
+        if str(f or "").strip()
+    }
+    # Also treat numbered clones of a base as taken (Salt Circle 12 blocks Salt Circle)
+    forbidden_bases = {re.sub(r"\s+\d{1,3}$", "", f).strip() for f in forbidden if f}
+
+    def _taken(n: str) -> bool:
+        key = re.sub(r"\s+", " ", str(n or "").strip().lower())
+        if not key:
+            return True
+        if key in forbidden or key in forbidden_bases:
+            return True
+        # Exact match only — do not use substring "name in forbidden" (false positives)
+        return False
+
+    clean_base = sanitize_ability_name(base) or "Quiet Craft"
+    if not _taken(clean_base):
+        return clean_base[:100]
+
+    # Try several fresh seed domains
+    avoid = list(forbidden) + [clean_base]
+    for i in range(12):
+        dom = pick_seed_skill_domain(
+            avoid=avoid,
+            world_style=world_style,
+            salt=f"{salt}|uniq|{i}|{time.time_ns()}",
+        )
+        cand = sanitize_ability_name(str(dom.get("name") or ""))
+        if cand and not _taken(cand):
+            return cand[:100]
+        if cand:
+            avoid.append(cand)
+
+    # Word-only variants of the cleaned base
+    words = clean_base.split()
+    short = " ".join(words[:2]) if words else clean_base
+    for prefix in random.sample(list(_ABILITY_NAME_PREFIXES), k=len(_ABILITY_NAME_PREFIXES)):
+        cand = f"{prefix} {short}".strip()
+        if not _taken(cand):
+            return cand[:100]
+    for suffix in random.sample(list(_ABILITY_NAME_SUFFIXES), k=len(_ABILITY_NAME_SUFFIXES)):
+        cand = f"{short} {suffix}".strip()
+        if not _taken(cand):
+            return cand[:100]
+
+    # Last resort: uncommon two-word combo from seed name halves (still no digits)
+    pool_names = [n for n in seed_skill_domain_names() if n and not _taken(n)]
+    if pool_names:
+        return random.choice(pool_names)[:100]
+    # Extremely rare full exhaustion
+    return f"{random.choice(_ABILITY_NAME_PREFIXES)} {random.choice(_ABILITY_NAME_SUFFIXES)}"[:100]
+
+
 def _local_remake_ability(
     *,
     forbidden_names: set[str],
@@ -4371,10 +4749,13 @@ def _local_remake_ability(
         world_style=world_style,
         salt=f"dedupe_remake|{time.time_ns()}|{random.randint(1, 99999)}",
     )
-    name = str(dom.get("name") or "Quiet Craft")[:100]
-    # Ensure name not in forbidden (including soft contains)
-    if any(name.lower() == f.lower() or name.lower() in f.lower() for f in forbidden_names if f):
-        name = f"{name} Variant {random.randint(2, 9)}"
+    name = _unique_ability_display_name(
+        str(dom.get("name") or "Quiet Craft"),
+        forbidden_names,
+        world_style=world_style,
+        salt=f"local_remake|{time.time_ns()}",
+    )
+    # If we had to rename away from the domain, keep description from domain but name unique
     desc = player_facing_domain_description(dom)
     ab = {
         "name": name,
@@ -4595,15 +4976,25 @@ def ensure_distinct_abilities(
                 world_style=world_style,
             )
             entry["actions"].append("local_remake")
-            # If local remake still collides (rare), force unique name suffix and different lane note
+            # If local remake still collides (rare), pick a fully distinct name + niche note — no bare numbers.
             if any(ability_similarity_score(replacement, k) >= ABILITY_NEAR_DUP_THRESHOLD for k in keepers):
-                replacement["name"] = f"{replacement.get('name') or 'Craft Edge'} {random.randint(3, 99)}"
+                replacement["name"] = _unique_ability_display_name(
+                    str(replacement.get("name") or "Craft Edge"),
+                    forbidden | {str(replacement.get("name") or "")},
+                    world_style=world_style,
+                    salt=f"forced_distinct|{time.time_ns()}",
+                )
                 replacement["description"] = (
                     str(replacement.get("description") or "").rstrip(".")
                     + " Focuses on a different practical niche than the character's other powers."
                 )
                 entry["actions"].append("local_remake_forced_distinct")
 
+        # Always sanitize numeric junk on the way out of a remake
+        if isinstance(replacement, dict):
+            replacement["name"] = sanitize_ability_name(replacement.get("name")) or str(
+                replacement.get("name") or "Quiet Craft"
+            )[:100]
         items[weaker_i] = replacement
         entry["result_name"] = replacement.get("name")
         log.append(entry)
@@ -5315,10 +5706,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     return_fields = _setup_randomizer_return_fields(group, current_setup, text_mode)
     if not return_fields:
         return {}
-    if return_fields == ["special_abilities"] or group == "special_abilities":
-        field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
-        if str(field_context.get("ability_origin") or current_setup.get("special_ability_origin") or "none").lower() == "none":
-            return {"special_abilities": []}
+    # Ability origin UI removed — special_abilities always generate when requested.
 
     base_rules = [
         "Return one JSON object only.",
@@ -5417,7 +5805,6 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "player_sex",
             "previous_life_age",
             "previous_life_sex",
-            "special_ability_origin",
             "character_backstory",
             "hair",
             "facial_features",
@@ -5485,11 +5872,32 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         }
     elif return_fields == ["player_name"]:
         prompt = {
-            "task": "Generate one playable RPG player name without assuming a default genre.",
+            "task": (
+                "Generate one personal/legal character name for the player character "
+                "(what goes on papers and in formal address)."
+            ),
             "forbidden_name": current_setup.get("player_name") or "Wanderer",
-            "context": "broad RPG character creation",
-            "return_shape": {"player_name": "new generated name"},
-            "rules": base_rules,
+            "context": {
+                "world_style": current_setup.get("world_style"),
+                "player_sex": current_setup.get("player_sex"),
+                "backstory_mode": current_setup.get("backstory_mode"),
+            },
+            "return_shape": {"player_name": "Given name, or Given + family name"},
+            "name_rules": [
+                "player_name is a real personal name: given name alone (Elena, Tomas) OR given + family (Mara Ellison, Corvin Hale).",
+                "Prefer two-part names about half the time; single given names are fine when they sound like names, not handles.",
+                "NOT a nickname, street handle, callsign, epithet, title, or compound fantasy moniker.",
+                "Forbidden style examples: Ash, River, Patch, Northlight, Second Bell, the Red, Ashwalker, Wanderer, Shadow.",
+                "Those belong in player_public_name or player_title — never here.",
+                "No quotes, no ranks (Captain…), no 'the …', no pure nature-noun handles.",
+                "Match world_style lightly (modern vs fantasy surnames) without becoming a joke name.",
+                "Must differ from forbidden_name.",
+            ],
+            "rules": base_rules
+            + [
+                "Return only player_name in the JSON object.",
+                "Use ordinary personal-name shape, not a nickname.",
+            ],
         }
     elif return_fields == ["special_abilities"]:
         field_context = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
@@ -5543,7 +5951,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         ]
         prompt = {
             "task": (
-                "Generate NEW setup special abilities according to ability_origin. "
+                "Generate NEW setup special abilities. "
                 "INVENT original powers first — exhaust creative variety on your own. "
                 f"Diversity seed {diversity_seed}. "
                 "A small inspiration_only list is optional spice if you are stuck; do NOT treat it as a menu. "
@@ -5565,9 +5973,6 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "stability": "no unlimited/omnipotent/auto-win",
                 "cross_field": "description/cost/math timing facts must agree",
             },
-            "ability_origin": field_context.get("ability_origin")
-            or current_setup.get("special_ability_origin")
-            or "none",
             "quantity_locked": quantity_locked,
             # Server/client already rolled — model must return this exact count.
             "target_count": target_count,
@@ -5586,7 +5991,6 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "player_sex": current_setup.get("player_sex"),
                 "previous_life_age": current_setup.get("previous_life_age"),
                 "previous_life_sex": current_setup.get("previous_life_sex"),
-                "special_ability_origin": current_setup.get("special_ability_origin"),
                 "backstory_mode": current_setup.get("backstory_mode"),
                 "memory_policy": current_setup.get("memory_policy"),
                 "character_backstory": current_setup.get("character_backstory"),
@@ -5657,10 +6061,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Obscure is good; unusable is not. Every ability needs a concrete turn-1 action or always-on effect with a limit.",
                 "Spectrum is allowed: simple practical powers AND advanced lanes (summoning, necromancy, healing/support, weapon-bound arts, tool rites).",
                 "If a power needs a tool/weapon/focus, state that in description or cost; F-rank clumsy, high ranks make the item legendary-adjacent.",
-                "If ability_origin is none, return an empty special_abilities list.",
-                "Focus on inventing distinct powers (name, description, cost, growth_math). The app assigns locked/prerequisites AFTER generation: stronger powers are more likely locked with unlock paths; weaker ones stay usable at Start. You may still set locked as a hint, but power level of the fiction matters more.",
-                "If ability_origin is innate, describe inherent/inborn powers (the app will prefer unlocked at Start).",
-                "If ability_origin is both, invent a mix of inherent and trained-feeling powers.",
+                "Focus on inventing distinct powers (name, description, cost, growth_math). Mix inherent and trained-feeling fiction as fits the world. The app assigns locked/prerequisites AFTER generation: stronger powers are more likely locked with unlock paths; weaker ones stay usable at Start. You may still set locked as a hint, but power level of the fiction matters more.",
                 "When you set locked=true, prerequisites must be a real unlock path — but prefer leaving lock decisions to strength of the power text.",
                 "Set power_type on each ability to one of: compounding, passive, linear, soft_cap, breakthrough, flat, item_bound.",
                 "Passive = always-on (may omit activate cost but should note a drawback or rank limit); can still have growth_math ranks.",
@@ -5760,7 +6161,6 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Prefer female or male for ordinary former lives. Sexless/constructed or varies-by-form only when the former-world body is clearly nonstandard. "
                 "Blank is fine when former sex does not matter."
             ),
-            "special_ability_origin": "Return one of: none, acquired, innate, both. Use none when special powers would overdefine the character; acquired when abilities are learned, earned, unlocked, system-granted, trained, or recovered through play; innate when abilities are inborn, inherited, racial, bodily, soul-deep, or natural; both when the character should have a mix of innate and acquired powers.",
             "backstory_mode": (
                 "Return ONLY one short label from: known, hidden, fragmented memories, reincarnated, transmigrated, "
                 "nameless drifter, amnesia. Never write a sentence here. "
@@ -5776,18 +6176,21 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             ),
             "character_backstory": (
                 "Generate 2-4 concise third-person sentences of actual character history (use they/their, never I/my). "
+                "INVENT a FRESH job, city, death/transport method, and arrival detail every roll — do NOT reuse stock clones. "
+                "BANNED stock motifs (never use): Seoul warehouse, expired coffee, half-eaten bento, coin that always lands heads, "
+                "collapsing ceiling + blue light, dust-covered alley + rusted wrench, Neo-Silicon, Iron Spire, night-shift forklift clones, "
+                "freight and labels, schedules and sore feet, bent pair of glasses, 'no free hero kit', "
+                "'not as a native already living a local plot', work-yard fence line, dirt-road-at-the-edge clones. "
+                "Vary former jobs: teacher, nurse, courier, cook, clerk, student, hotel desk, bike delivery, florist, radio host, janitor — not always warehouse/freight. "
+                "Vary transport: fall, medical emergency, summon, portal, train, ferry, fire — not always truck accident. "
                 "IMPORTANT: backstory_mode 'transmigrated' means TRANSPORT from another life/world — not a native fantasy biography. "
                 "For transmigrated REQUIRED structure: (1) concrete life BEFORE transport (job, place, ordinary stakes in the former world); "
                 "(2) HOW they were transported (death, truck, summon ritual, portal, body-drop); "
                 "(3) start at the moment of arrival or the hours just before — not already living as a local merchant/exile mid-plot. "
                 "Do NOT write disgraced nobles, festival guests, or local coup exiles as if they were always from this world. "
                 "Do NOT paste skill names, weak-seed blurbs, compounding, or ability rules into the backstory. "
-                "ONE coherent stance on magic: never say both 'magic is a tool' AND 'survival depends on wit, not wizardry' in the same story. "
-                "If magic exists as craft/tools, survival can still be hard learning, debts, and local rules — not 'no wizardry'. "
-                "If magic is absent/rare for them, do not call it a tool they must use. Match magic_level / world_style. "
-                "If reincarnated: grew up HERE for years + former-life fragments (not same-day truck-kun). "
-                "If body transmigration: old mind vs local body already known to NPCs. "
-                "Match world_style. No chosen-one, free hero kit, or revenge-by-default."
+                "ONE coherent stance on magic. Match world_style. No chosen-one, free hero kit, or revenge-by-default. "
+                "Return a single prose string (not a JSON list of sentences)."
             ),
             "hair": (
                 "Hair ONLY: length + color + style in one short phrase "
@@ -5812,8 +6215,11 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             ),
             "starter_equipment": (
                 "Comma-separated mundane starting items at Start (inventory). "
-                "3–7 items. Clothes + tools matching role. Wearables also feed art by body zone. "
-                "Near-useless starts: no combat kit/legendaries. Match appearance."
+                "3–6 items matching THIS character's job/arrival — invent a fresh kit every roll. "
+                "BANNED as default every time: rusted wrench + copper coins + worn satchel + rain-slicked hoodie + scuffed sneakers stack. "
+                "Do NOT always include copper coins or a wrench. Vary tools, bags, and clothes with the job. "
+                "Isekai/modern arrival may keep a cracked/dead phone, keys, ID badge, wallet, or transit card — phones are fine as dead pocket tech. "
+                "Fantasy natives: no modern phones; use local tools. Near-useless starts: no combat kit/legendaries. Match appearance."
             ),
             "world_races": "Generate a concise list of peoples/species only (e.g. human; human, elf, beastfolk). Include human unless excluded. Never power labels like Low-Power Human, and never skill/growth slogans.",
             "race_magic_rules": "Generate clear per-race magic access rules only. State who can cast, training vs innate, taboos. Do NOT paste global skill compounding delays, cooldowns, or player power fantasy.",
@@ -5896,9 +6302,128 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "For world_races, include human unless the concept strongly excludes humans.",
                 "For player_public_name and player_title, blank is the normal result; only fill these rare fields when the existing backstory makes them clearly useful.",
                 "For previous_life_age and previous_life_sex, blank is the normal result unless the setup clearly includes reincarnation, transmigration, rebirth, or remembered former life.",
-                "For special_ability_origin, return exactly one of none, acquired, innate, or both.",
             ],
         }
+        # Diversity seeds stop 8B from welding one stock clone across re-rolls
+        if field == "character_backstory":
+            prompt["diversity_seed"] = random.randint(1000, 999999)
+            prompt["ban_stock_motifs"] = [
+                "Seoul warehouse",
+                "expired coffee",
+                "half-eaten bento",
+                "coin that always lands heads",
+                "collapsing ceiling + blue light",
+                "dust-covered alley + rusted wrench",
+            ]
+            prompt["rules"] = list(prompt.get("rules") or []) + [
+                f"Diversity seed {prompt['diversity_seed']}: invent a NEW job/city/transport/arrival — never the banned stock motifs.",
+                "Return one prose string, not a list of sentences.",
+            ]
+            mode_l = str(current_setup.get("backstory_mode") or "").lower()
+            if "transmigrat" in mode_l or bool(intent_plan.get("isekai")):
+                prompt["rules"] = list(prompt.get("rules") or []) + [
+                    "End the backstory at NEW-WORLD arrival (or hours just before). "
+                    "Do not leave the character still living their Earth job as the playable present.",
+                    "start_location (if known) is the arrival site — match the final sentence to that place type.",
+                    "Play Start = moment of teleport/death-wake in the new world — never previous-life workplace.",
+                ]
+        if field == "starter_equipment":
+            prompt["diversity_seed"] = random.randint(1000, 999999)
+            prompt["ban_default_kit"] = [
+                "rusted wrench",
+                "copper coins always",
+                "worn satchel + rain-slicked hoodie + scuffed sneakers stack",
+            ]
+            try:
+                from app.setup_composer import STARTER_KIT_SEED_POOL
+
+                prompt["kit_seeds_inspiration_only"] = random.sample(
+                    list(STARTER_KIT_SEED_POOL), k=min(4, len(STARTER_KIT_SEED_POOL))
+                )
+            except Exception:
+                pass
+            prompt["rules"] = list(prompt.get("rules") or []) + [
+                f"Diversity seed {prompt['diversity_seed']}: fresh mundane kit matching role; phones/keys/ID ok for modern isekai.",
+                "Do not return the same wrench+coins+satchel kit every time.",
+            ]
+        if field == "start_location":
+            mode_l = str(current_setup.get("backstory_mode") or "").lower()
+            idea_l = str(current_setup.get("_randomize_idea") or intent_plan.get("raw_idea") or "").lower()
+            isekaiish = (
+                "transmigrat" in mode_l
+                or bool(intent_plan.get("isekai"))
+                or any(m in idea_l for m in ("isekai", "transmigrat", "truck", "another world"))
+            )
+            if isekaiish:
+                try:
+                    from app.setup_composer import (
+                        LOCATION_SEEDS_BY_THEME,
+                        detect_location_theme,
+                        pick_isekai_arrival_location,
+                    )
+
+                    prompt["diversity_seed"] = random.randint(1000, 999999)
+                    theme_id = detect_location_theme(
+                        world_style=str(current_setup.get("world_style") or ""),
+                        genre=str(intent_plan.get("genre") or current_setup.get("world_style") or ""),
+                        idea=str(idea_l or ""),
+                        session_theme=intent_plan if isinstance(intent_plan, dict) else None,
+                    )
+                    theme_pool = list(
+                        LOCATION_SEEDS_BY_THEME.get(theme_id) or LOCATION_SEEDS_BY_THEME["fantasy"]
+                    )
+                    prompt["arrival_location_theme"] = theme_id
+                    prompt["arrival_location_seeds"] = random.sample(
+                        theme_pool, k=min(6, len(theme_pool))
+                    )
+                    theme_hint = {
+                        "celestial": "heavens/afterlife names (prison of light — blank map, no free movement)",
+                        "cyberpunk": "neon megacity / corpo / undercity arrival names",
+                        "steampunk": "brass, airship, gaslamp, clockwork arrival names",
+                        "wasteland": "scrap, ash, bunker, radiation-fence arrival names",
+                        "space": "station airlock / hab / docking ring arrival names",
+                        "noir": "rainy city crime-scene arrival names",
+                        "undersea": "pressure lock / coral / trench arrival names",
+                        "arctic": "ice road / glacier outpost arrival names",
+                        "desert": "dune / oasis / caravanserai arrival names",
+                        "gothic": "manor / crypt / chapel arrival names",
+                    }.get(theme_id, "fantasy gate/yard/pier/road-cut arrival names")
+                    prompt["rules"] = list(prompt.get("rules") or []) + [
+                        "Isekai/transmigrated: start_location MUST be the NEW-WORLD arrival site "
+                        f"matching theme '{theme_id}' ({theme_hint}) — NEVER Seoul/warehouse/office/"
+                        "apartment/hospital on Earth.",
+                        "Play begins the moment they arrive/die-and-wake — not mid previous-life shift.",
+                        f"Example arrival names (adapt, invent similar): {', '.join(prompt['arrival_location_seeds'][:4])}",
+                    ]
+                    if theme_id == "celestial":
+                        prompt["rules"].append(
+                            "Celestial/heavens starts: the player is confined — map is blank and "
+                            "they cannot walk free until the story changes confinement."
+                        )
+                    prompt["_fallback_arrival_location"] = pick_isekai_arrival_location(
+                        world_style=str(current_setup.get("world_style") or ""),
+                        genre=str(intent_plan.get("genre") or ""),
+                        idea=str(idea_l or ""),
+                        session_theme=intent_plan if isinstance(intent_plan, dict) else None,
+                        theme=theme_id,
+                        seed=prompt["diversity_seed"],
+                    )
+                except Exception:
+                    pass
+        if field == "appearance":
+            try:
+                from app.setup_composer import APPEARANCE_SEED_POOL
+
+                prompt["diversity_seed"] = random.randint(1000, 999999)
+                prompt["clothing_seeds_inspiration_only"] = random.sample(
+                    list(APPEARANCE_SEED_POOL), k=min(5, len(APPEARANCE_SEED_POOL))
+                )
+                prompt["rules"] = list(prompt.get("rules") or []) + [
+                    f"Diversity seed {prompt['diversity_seed']}: invent a fresh clothing set; "
+                    "use zone tags; inspiration_only is optional spice not a required menu.",
+                ]
+            except Exception:
+                pass
     else:
         prompt_current_setup = current_setup
         if group == "character":
@@ -5910,7 +6435,6 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "player_sex": current_setup.get("player_sex"),
                 "previous_life_age": current_setup.get("previous_life_age"),
                 "previous_life_sex": current_setup.get("previous_life_sex"),
-                "special_ability_origin": current_setup.get("special_ability_origin"),
                 "backstory_mode": current_setup.get("backstory_mode"),
                 "memory_policy": current_setup.get("memory_policy"),
                 "character_backstory": current_setup.get("character_backstory"),
@@ -5923,7 +6447,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "locked_setup": locked_setup,
             "return_fields": return_fields,
             "character_identity_rules": [
-                "player_public_name is rare. Leave it blank by default; fill it only when the backstory implies an alias, public handle, former-world name, or name strangers would plausibly know.",
+                "player_name is the character's personal/legal name (Given, or Given + family). Not a nickname, handle, callsign, or epithet. Examples: Mara Ellison, Tomas Reed, Elena. Bad: Ash, River, Patch, the Red, Ashwalker, Wanderer.",
+                "player_public_name is rare. Leave it blank by default; fill it only when the backstory implies an alias, public handle, former-world name, or name strangers would plausibly know. Nicknames and street names go here, not in player_name.",
                 "player_title is rare. Leave it blank by default; fill it only when reputation, formal office, reincarnated former power, high strength, infamous deeds, or local rumors make a title more playable.",
                 "player_age and player_sex are current-life descriptive identity fields. Prefer male/female for ordinary humanoids; rare exotic sex categories only when the world supports them. Keep them concise, and do not make them behavior constraints or stereotypes.",
                 "previous_life_age and previous_life_sex are only for reincarnated, transmigrated, reborn, or former-life starts. Leave them blank for ordinary known, hidden, or nameless starts without former-life memory.",
@@ -5937,7 +6462,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Do not write first-person diary voice (I/my). Do not invent chosen-one destiny or paste skill/compounding text into backstory.",
                 "custom_skills and special_abilities should fit the concrete backstory, race rules, world rules, and any optional identity fields already generated.",
                 "custom_skills must be one comma-separated string when present; never use bullets or newlines for proficiencies.",
-                "special_ability_origin controls ability generation: none should prevent setup abilities, acquired should lean toward future unlocked or earned abilities, innate should lean toward inherent starting abilities, and both should mix innate and acquired powers in the list.",
+                "special_abilities: use each card's locked + prerequisites for learned vs starting powers. Empty list means no special powers.",
             ],
             "rules": base_rules + ["Generate fields one at a time in the order requested. Later fields must fit earlier current_setup values."],
         }
@@ -6038,96 +6563,137 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             raise first_exc
     if not text_mode and return_fields == ["player_name"]:
         current_name = str(current_setup.get("player_name") or "").strip().lower()
-        generated_name = str(validated.get("player_name") or "").strip().lower()
-        if current_name and generated_name == current_name:
+        generated_name = str(validated.get("player_name") or "").strip()
+        if current_name and generated_name.lower() == current_name:
             retry_prompt = {
-                "task": "Generate one new playable RPG player name.",
+                "task": "Generate one new personal/legal RPG character name (Given or Given + family).",
                 "forbidden_name": current_setup.get("player_name"),
-                "return_shape": {"player_name": "new name that is not the forbidden_name"},
+                "return_shape": {"player_name": "new personal name that is not a nickname"},
+                "name_rules": [
+                    "Not a nickname/handle/epithet (Ash, River, Patch, the Red, Ashwalker are forbidden).",
+                    "Prefer names like Elena Croft, Tomas Reed, or Mira.",
+                ],
             }
             validated = _validate_setup_randomization(
                 group,
                 _chat_json(
-                    "Return JSON only. Create a different name. Do not explain.",
+                    "Return JSON only. Create a different personal name, not a nickname. Do not explain.",
                     json.dumps(retry_prompt, ensure_ascii=True),
                     timeout=_model_timeout(30, 120, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
                     phase="setup_randomize_name_retry",
                     max_tokens=80,
                 ),
             )
+        # Always clamp nickname-style model output to a real personal name.
+        validated["player_name"] = _sanitize_player_name(
+            validated.get("player_name"),
+            forbidden=str(current_setup.get("player_name") or ""),
+        )
     elif not text_mode and return_fields == ["character_backstory"]:
-        generated_backstory = str(validated.get("character_backstory") or "").strip()
+        # Quality gate: invent → verify → retry on deny → diversified bank fallback
+        # (same shape as special_abilities quality_gate_abilities).
+        from app.setup_composer import (
+            _normalize_backstory_prose,
+            quality_gate_backstory,
+        )
+
         mode_for_story = str(
-            current_setup.get("backstory_mode")
-            or validated.get("backstory_mode")
+            current_setup.get("backstory_mode") or validated.get("backstory_mode") or ""
+        )
+        idea_s = str(
+            current_setup.get("_randomize_idea")
+            or (intent_plan or {}).get("raw_idea")
             or ""
         )
+        world_s = str(current_setup.get("world_style") or "")
+        mem_s = str(current_setup.get("memory_policy") or validated.get("memory_policy") or "")
         transmig = "transmigrat" in mode_for_story.lower() or bool(
             (intent_plan or {}).get("isekai")
         )
-        if _backstory_is_too_vague(generated_backstory, mode=mode_for_story):
-            retry_prompt = {
-                "task": (
-                    "Regenerate the character backstory as concrete RPG setup history."
-                    + (
-                        " Mode is transmigrated: former-world life + transport method + start at arrival."
-                        if transmig
-                        else ""
-                    )
-                ),
-                "backstory_mode": mode_for_story or "known",
-                "rejected_backstory": generated_backstory,
-                "reject_reasons": [
-                    "missing former-world life before transport",
-                    "missing how they were transported",
-                    "reads as native fantasy plot only",
-                    "skill/power-fantasy text in backstory",
-                    "bolted-on generic woke-in-another-world line",
-                    "self-contradiction on magic (tool vs not wizardry)",
-                ]
-                if transmig
-                else [
-                    "too vague",
-                    "missing origin/livelihood/transition",
-                    "self-contradiction on magic (tool vs not wizardry)",
-                ],
-                "nearby_setup": prompt.get("nearby_setup") if isinstance(prompt, dict) else current_setup,
-                "return_shape": {"character_backstory": "2-4 concise third-person sentences"},
-                "required_details": (
-                    [
-                        "concrete former-world job/place (before transport)",
-                        "how transport happened (death, truck, summon, portal, body-drop)",
-                        "start at the moment of arrival or the hours just before — not already living a local mid-plot",
-                        "no skill names, compounding, or Guest Right-style ability blurbs",
-                        "one coherent magic stance only",
-                    ]
-                    if transmig
-                    else [
-                        "birthplace, original world, or home community",
-                        "how the character lived before play: work, training, family, duties, debts, or social position",
-                        "why the character is at or near the starting point now",
-                        "death and reincarnation/transmigration details only if the setup calls for them",
-                        "one coherent magic stance only",
-                    ]
-                ),
-                "rules": [
-                    "Do not return a motto, personality trait, vague lesson, or single aphorism.",
-                    "Third person only (they/their).",
-                    "Keep it playable and leave room for discovery.",
-                    "If transmigrated: do NOT write disgraced nobles / festival guests / local exiles as if always from this world.",
-                    "ONE magic stance only: never pair 'magic is a tool' with 'wit, not wizardry' / 'no magic'.",
-                    "Do not both claim same-day arrival and years of living here.",
-                ],
-                "reject_also": [
-                    "self-contradiction: magic is a tool + not wizardry",
-                    "self-contradiction: just arrived + lived here for years",
-                ],
-            }
+        denials: list[dict[str, Any]] = []
+        quality_source = "llm"
+        diversity_seed = random.randint(1000, 999999)
+        current_story = _normalize_backstory_prose(validated.get("character_backstory"))
+        validated["character_backstory"] = current_story
+
+        for attempt in range(1, BACKSTORY_QUALITY_MAX_ATTEMPTS + 1):
+            gate = quality_gate_backstory(
+                current_story,
+                mode=mode_for_story,
+                idea=idea_s,
+                world_style=world_s,
+                memory_policy=mem_s,
+                rejected="" if attempt == 1 else current_story,
+                auto_repair=False,  # invent-first; fallback only after max attempts
+                seed=diversity_seed + attempt,
+            )
+            if gate.get("ok"):
+                quality_source = "llm" if attempt == 1 else f"llm_retry_{attempt}"
+                validated["character_backstory"] = _normalize_backstory_prose(
+                    gate.get("story") or current_story
+                )
+                validated["quality_gate"] = {
+                    "ok": True,
+                    "source": quality_source,
+                    "attempt": attempt,
+                    "score": gate.get("score"),
+                    "denials": denials,
+                    "kind": "character_backstory",
+                }
+                break
+            rep = gate.get("report") if isinstance(gate.get("report"), dict) else {}
+            denials.append(
+                {
+                    "attempt": attempt,
+                    "score": gate.get("score"),
+                    "denial_summary": gate.get("denial_summary") or [],
+                    "hard_fail": rep.get("hard_fail") or [],
+                    "soft": rep.get("soft") or [],
+                }
+            )
+            if attempt >= BACKSTORY_QUALITY_MAX_ATTEMPTS:
+                # Exhausted invent/retry — diversified bank / repair fallback (like ability seed pool).
+                final_gate = quality_gate_backstory(
+                    current_story,
+                    mode=mode_for_story or ("transmigrated" if transmig else "known"),
+                    idea=idea_s,
+                    world_style=world_s,
+                    memory_policy=mem_s,
+                    rejected=current_story,
+                    auto_repair=True,
+                    seed=diversity_seed + 99,
+                )
+                validated["character_backstory"] = _normalize_backstory_prose(
+                    final_gate.get("story") or current_story
+                )
+                validated["quality_gate"] = {
+                    "ok": bool(final_gate.get("ok")),
+                    "source": final_gate.get("source") or "fallback_transmigration_bank",
+                    "attempt": attempt,
+                    "score": final_gate.get("score"),
+                    "denials": denials,
+                    "reason": "quality_denied_max_attempts",
+                    "kind": "character_backstory",
+                    "denial_summary": final_gate.get("denial_summary") or [],
+                }
+                quality_source = str(final_gate.get("source") or "fallback")
+                break
+            # Another invent pass with concrete denial feedback
+            retry_prompt = _backstory_quality_retry_prompt(
+                denied=gate,
+                mode=mode_for_story,
+                idea=idea_s,
+                world_style=world_s,
+                rejected=current_story,
+                attempt=attempt,
+                transmig=transmig,
+                nearby_setup=prompt.get("nearby_setup") if isinstance(prompt, dict) else current_setup,
+            )
             try:
-                validated = _validate_setup_randomization(
+                retried = _validate_setup_randomization(
                     group,
                     _chat_json(
-                        "Return JSON only. Create concrete character history, not a vague hook.",
+                        "Return JSON only. Create a fresh concrete character history that passes the quality gate — not a synonym of the rejected clone.",
                         json.dumps(retry_prompt, ensure_ascii=True),
                         timeout=_model_timeout(30, 180, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
                         phase="setup_randomize_backstory_retry",
@@ -6135,34 +6701,15 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                     ),
                     current_setup,
                 )
+                current_story = _normalize_backstory_prose(
+                    retried.get("character_backstory") or current_story
+                )
+                validated["character_backstory"] = current_story
             except Exception:
-                validated = dict(validated)
-            # Deterministic repair if still wrong for transmigrated
-            story2 = str(validated.get("character_backstory") or "").strip()
-            if transmig and _backstory_is_too_vague(story2, mode=mode_for_story or "transmigrated"):
-                try:
-                    from app.setup_composer import build_transmigration_backstory
-
-                    validated["character_backstory"] = build_transmigration_backstory(
-                        old_story=story2 or generated_backstory,
-                        idea=str(current_setup.get("_randomize_idea") or intent_plan.get("raw_idea") or ""),
-                        world_style=str(current_setup.get("world_style") or ""),
-                    )
-                except Exception:
-                    pass
-        # Always strip self-contradictory magic/arrival stances (first pass and after retry)
-        try:
-            from app.setup_composer import repair_backstory_self_contradictions
-
-            story_final = str(validated.get("character_backstory") or generated_backstory or "").strip()
-            fixed = repair_backstory_self_contradictions(
-                story_final,
-                magic_level=str(current_setup.get("magic_level") or ""),
-                world_style=str(current_setup.get("world_style") or ""),
-            )
-            if fixed:
-                validated["character_backstory"] = fixed
-        except Exception:
+                # Keep current_story; next loop may fallback
+                pass
+        else:
+            # for-else: loop completed without break (shouldn't with range max)
             pass
     elif not text_mode and (
         return_fields == ["special_abilities"]
@@ -6175,7 +6722,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             else []
         )
         fc = current_setup.get("_field_context") if isinstance(current_setup.get("_field_context"), dict) else {}
-        origin = str(fc.get("ability_origin") or current_setup.get("special_ability_origin") or "none")
+        origin = "both"
         pf = intent_plan.get("power_fantasy") if isinstance(intent_plan.get("power_fantasy"), dict) else {}
         one_skillish = str(pf.get("growth") or "").lower() == "compounding" or str(
             pf.get("start_power") or ""
@@ -6791,6 +7338,89 @@ def _optional_identity_fill_chance(field: str, current_setup: dict[str, Any]) ->
     return min(chance, 0.68)
 
 
+def _backstory_quality_retry_prompt(
+    *,
+    denied: dict[str, Any],
+    mode: str,
+    idea: str,
+    world_style: str,
+    rejected: str,
+    attempt: int,
+    transmig: bool,
+    nearby_setup: Any = None,
+) -> dict[str, Any]:
+    """Prompt the model to invent again after a backstory quality denial (not stamp the freight template)."""
+    rep = denied.get("report") if isinstance(denied.get("report"), dict) else {}
+    hard = list(rep.get("hard_fail") or denied.get("denial_summary") or [])
+    soft = list(rep.get("soft") or [])
+    ban = list(
+        {
+            "Seoul warehouse",
+            "expired coffee",
+            "half-eaten bento",
+            "coin that always lands heads",
+            "collapsing ceiling",
+            "blue light",
+            "dust-covered alley",
+            "rusted wrench",
+            "freight and labels",
+            "bent pair of glasses",
+            "no free hero kit",
+            "schedules and sore feet",
+            "work-yard fence line",
+            "night shifts moving freight",
+            "not as a native already living a local plot",
+            "which rules of this world can kill them",
+            *list(rep.get("stock_motifs") or []),
+        }
+    )
+    return {
+        "task": (
+            f"QUALITY DENIAL #{attempt}: previous character_backstory failed the quality gate. "
+            "Invent a FRESH concrete life — different job, transport, arrival place, and pocket props. "
+            "Do NOT paraphrase the rejected_backstory or stamp the freight/truck/dirt-road template."
+        ),
+        "denial_summary": denied.get("denial_summary") or hard,
+        "hard_fail": hard,
+        "soft": soft,
+        "diversity_seed": random.randint(1000, 999999),
+        "backstory_mode": mode or ("transmigrated" if transmig else "known"),
+        "rejected_backstory": str(rejected or "")[:500],
+        "ban_motifs": ban,
+        "idea": str(idea or "")[:400],
+        "world_style": str(world_style or "")[:200],
+        "nearby_setup": nearby_setup,
+        "return_shape": {"character_backstory": "2-4 concise third-person sentences as ONE string"},
+        "required_details": (
+            [
+                "concrete former-world job NEVER used in rejected_backstory (teacher, nurse, cook, courier, clerk, florist, radio host, janitor, stagehand…)",
+                "HOW they were transported (vary: fall, medical, summon, portal, train, ferry — not always truck/freight)",
+                "start at NEW-WORLD arrival with different pocket props",
+                "no skill names, compounding, weak seed, or ability rules",
+                "no 'no free hero kit' / 'freight and labels' / 'bent pair of glasses' boilerplate",
+            ]
+            if transmig
+            else [
+                "fresh birthplace and livelihood",
+                "why they are near the starting point",
+                "no banned stock motifs",
+            ]
+        ),
+        "quality_bar": {
+            "person": "third person they/their only",
+            "length": "2-4 sentences, ≥140 characters",
+            "transmigrated": "former life + transport + arrival place required",
+            "forbidden": "stock clones, skill meta, first person, native fantasy plot for isekai",
+        },
+        "rules": [
+            "Third person only (they/their).",
+            "Do NOT paraphrase rejected_backstory with synonym swaps.",
+            "Return prose string only, not a JSON list of sentences.",
+            "Fix every hard_fail from the denial.",
+        ],
+    }
+
+
 def _backstory_is_too_vague(backstory: str, *, mode: str = "") -> bool:
     text = backstory.strip().lower()
     if len(text) < 140:
@@ -6958,54 +7588,23 @@ def _validate_setup_randomization(
         # Clamp to the same 1–4 range / lock policy the UI uses (Simple + Advanced).
         setup = current_setup if isinstance(current_setup, dict) else {}
         field_context = setup.get("_field_context") if isinstance(setup.get("_field_context"), dict) else {}
-        origin = str(
-            field_context.get("ability_origin")
-            or setup.get("special_ability_origin")
-            or "none"
-        ).strip().lower()
-        if origin == "none":
-            cleaned_abilities = []
-        else:
-            # Honor pre-rolled target (RNG min–max or quantity lock). Never leave "always max".
-            target = _roll_ability_count(field_context, one_skillish=False)
-            cleaned_abilities = _enforce_ability_count(
-                cleaned_abilities,
-                target,
-                current_setup=setup,
-            )
-            result["ability_count_roll"] = {
-                "target": target,
-                "min": _ability_count_bounds(field_context)[0],
-                "max": _ability_count_bounds(field_context)[1],
-                "quantity_locked": bool(field_context.get("quantity_locked")),
-            }
+        # Honor pre-rolled target (RNG min–max or quantity lock). Never leave "always max".
+        target = _roll_ability_count(field_context, one_skillish=False)
+        cleaned_abilities = _enforce_ability_count(
+            cleaned_abilities,
+            target,
+            current_setup=setup,
+        )
+        result["ability_count_roll"] = {
+            "target": target,
+            "min": _ability_count_bounds(field_context)[0],
+            "max": _ability_count_bounds(field_context)[1],
+            "quantity_locked": bool(field_context.get("quantity_locked")),
+        }
         result["special_abilities"] = cleaned_abilities
 
-    if "special_ability_origin" in result:
-        origin = str(result.get("special_ability_origin") or "").strip().lower().replace("-", " ").replace("_", " ")
-        aliases = {
-            "none": "none",
-            "no abilities": "none",
-            "no special abilities": "none",
-            "gained": "acquired",
-            "acquired": "acquired",
-            "learned": "acquired",
-            "earned": "acquired",
-            "unlocked": "acquired",
-            "born with": "innate",
-            "inborn": "innate",
-            "innate": "innate",
-            "inherent": "innate",
-            "natural": "innate",
-            "both": "both",
-            "mixed": "both",
-            "mix": "both",
-            "acquired and innate": "both",
-            "innate and acquired": "both",
-        }
-        if origin not in aliases:
-            raise LlmError("Randomizer returned an invalid special_ability_origin.")
-        result["special_ability_origin"] = aliases[origin]
+    # Drop legacy special_ability_origin if a model still returns it.
+    result.pop("special_ability_origin", None)
 
     result = _sanitize_setup_randomization_values(result)
     # Hair / face / clothes: strip cross-field contamination and overused stacks.
@@ -7041,6 +7640,55 @@ def _sanitize_setup_randomization_values(result: dict[str, Any]) -> dict[str, An
     if not isinstance(result, dict):
         return result
     out = dict(result)
+
+    # player_name: personal/legal name only — not handles/nicknames/epithets
+    if "player_name" in out:
+        out["player_name"] = _sanitize_player_name(out.get("player_name"))
+
+    # character_backstory: join list dumps + kill stock Seoul/warehouse clones
+    if "character_backstory" in out:
+        try:
+            from app.setup_composer import (
+                _normalize_backstory_prose,
+                backstory_has_overused_motifs,
+                build_transmigration_backstory,
+            )
+
+            story = _normalize_backstory_prose(out.get("character_backstory"))
+            if backstory_has_overused_motifs(story):
+                story = build_transmigration_backstory(
+                    old_story="",
+                    idea=str(out.get("_randomize_idea") or ""),
+                    world_style=str(out.get("world_style") or ""),
+                    seed=random.randint(1, 10**9),
+                )
+            out["character_backstory"] = story
+        except Exception:
+            pass
+
+    # starter_equipment: break the wrench+coins+satchel+hoodie stone kit
+    if "starter_equipment" in out:
+        out["starter_equipment"] = _diversify_starter_equipment(out.get("starter_equipment"))
+
+    # start_location: never previous-life workplace for isekai/transmigrated
+    if "start_location" in out or "backstory_mode" in out or "character_backstory" in out:
+        try:
+            from app.setup_composer import ensure_isekai_start_location
+
+            loc_in = str(out.get("start_location") or "")
+            loc_fixed, changed = ensure_isekai_start_location(
+                loc_in,
+                backstory_mode=str(out.get("backstory_mode") or ""),
+                idea=str(out.get("_randomize_idea") or ""),
+                world_style=str(out.get("world_style") or ""),
+                genre=str(out.get("world_style") or ""),
+                character_backstory=str(out.get("character_backstory") or ""),
+                session_theme=out.get("session_theme") if isinstance(out.get("session_theme"), dict) else None,
+            )
+            if changed or (loc_fixed and "start_location" in out):
+                out["start_location"] = loc_fixed
+        except Exception:
+            pass
 
     # Shared type coercion (bools, magic_level, difficulty, growth speeds, instruction echoes).
     out, _typed = coerce_typed_setup_fields(out)
@@ -7078,19 +7726,9 @@ def _sanitize_setup_randomization_values(result: dict[str, Any]) -> dict[str, An
         if is_instruction_echo(ss) or ss.lower() in {"true", "false", "yes", "no", "on", "off"}:
             out["system_style"] = "subtle blue-window system" if out.get("game_system") else ""
 
-    # special abilities: acquired → prefer locked (g15)
-    origin = str(out.get("special_ability_origin") or "").lower()
+    # special abilities: keep model lock flags; batch lock assignment runs elsewhere
     if isinstance(out.get("special_abilities"), list):
-        cleaned = []
-        for ab in out["special_abilities"]:
-            if not isinstance(ab, dict):
-                continue
-            ab = dict(ab)
-            if origin == "acquired":
-                ab["locked"] = True
-            elif origin == "innate":
-                ab["locked"] = False
-            cleaned.append(ab)
+        cleaned = [dict(ab) for ab in out["special_abilities"] if isinstance(ab, dict)]
         out["special_abilities"] = cleaned
 
     # Align custom_skills weakly with first ability name if empty/slogan (g14 soft)
@@ -7165,6 +7803,60 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             "hard": "The air already feels tight: scarce help, sharp eyes, and little room for loud mistakes.",
             "brutal": "Nothing here is soft. The first wrong step could cost blood, coin, or a name.",
         }.get(difficulty, "The place has enough pressure to make standing still feel like a decision.")
+        # Prefer coded entity refs so the UI can make them clickable (Name [[L1]] / Name [[I2]])
+        loc_obj = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+        loc_name = str(loc_obj.get("name") or location or "the road").strip()
+        loc_code = str(loc_obj.get("code") or "L1").strip().upper() or "L1"
+        place_ref = f"{loc_name} [[{loc_code}]]" if loc_name else f"[[{loc_code}]]"
+        inv_bits: list[str] = []
+        for it in (context.get("inventory") or [])[:6]:
+            if not isinstance(it, dict):
+                continue
+            iname = str(it.get("name") or "").strip()
+            icode = str(it.get("code") or "").strip().upper()
+            if iname and icode:
+                inv_bits.append(f"{iname} [[{icode}]]")
+            elif iname:
+                inv_bits.append(iname)
+        gear_bit = ""
+        if inv_bits:
+            if len(inv_bits) == 1:
+                gear_bit = f" What you still carry is plain: {inv_bits[0]}."
+            else:
+                gear_bit = (
+                    " What you still carry is plain: "
+                    + ", ".join(inv_bits[:-1])
+                    + f", and {inv_bits[-1]}."
+                )
+        npc_bits: list[str] = []
+        for npc in (context.get("npcs") or [])[:4]:
+            if not isinstance(npc, dict):
+                continue
+            nname = str(npc.get("name") or "").strip()
+            ncode = str(npc.get("code") or "").strip().upper()
+            if nname and ncode and re.fullmatch(r"[A-Z]{1,3}", ncode):
+                npc_bits.append(f"{nname} [[{ncode}]]")
+            elif nname:
+                npc_bits.append(nname)
+        # Also scan nested location cast
+        for loc in context.get("locations") or []:
+            if not isinstance(loc, dict):
+                continue
+            for npc in loc.get("npcs") or []:
+                if not isinstance(npc, dict) or len(npc_bits) >= 4:
+                    continue
+                nname = str(npc.get("name") or "").strip()
+                ncode = str(npc.get("code") or "").strip().upper()
+                label = f"{nname} [[{ncode}]]" if nname and ncode else nname
+                if label and label not in npc_bits:
+                    npc_bits.append(label)
+        people_bit = ""
+        if npc_bits:
+            people_bit = (
+                " Nearby faces or voices you can already pin to a name: "
+                + ", ".join(npc_bits[:3])
+                + "."
+            )
         system_bit = ""
         if opts.get("game_system"):
             style = str(opts.get("system_style") or "subtle blue-window system")
@@ -7173,7 +7865,7 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             seed_val = seed.get("value", 1)
             system_bit = (
                 f"\n\nFor a heartbeat the world overlays a thin {style} edge — nothing loud, only readable:\n"
-                f"[ STATUS ] Location: {location}\n"
+                f"[ STATUS ] Location: {place_ref}\n"
                 f"[ SKILL  ] {seed_name} … rank F / value {seed_val} (nearly useless)\n"
                 "[ NOTE   ] No combat suite. Grow through practice and risk.\n"
                 "The window fades as quickly as it arrived, leaving only the ordinary street and that one thin promise of growth."
@@ -7186,11 +7878,12 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 "so slight it barely counts, a thin practical habit rather than a power."
             )
         narration = (
-            f"{location} comes into focus without waiting for a command. Damp air gathers at the edges of the street, "
+            f"{place_ref} comes into focus without waiting for a command. Damp air gathers at the edges of the street, "
             "voices move behind closed doors, and something nearby is just unresolved enough to invite a first choice. "
             "The first details are practical rather than grand: where the ground is slick, where the nearest shelter or exit might be, "
             "who seems busy enough to ignore trouble, and which small sound keeps tugging attention back toward the center of the scene. "
             f"{pressure}"
+            f"{gear_bit}{people_bit}"
             f"{system_bit}\n\n"
             "A few possible openings sit close together. You could listen before anyone notices you listening, approach the nearest sign of activity, "
             "inspect the odd detail that does not quite belong, ask a passerby for the local shape of things, or move on before the moment chooses a shape for you. "
@@ -8198,10 +8891,61 @@ def _collapse_repeated_entity_names(text: str, names: list[str]) -> str:
     return out
 
 
+def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]) -> str:
+    """
+    When prose names a known place/NPC/item without [[code]], append the code once
+    after each occurrence so the UI can link it:  Low Gate Timber Arch → … [[L1]]
+
+    Longest names first. Skips very short / generic labels.
+    """
+    if not text or not code_to_name:
+        return text or ""
+    # Prefer first code for a given display name
+    name_to_code: dict[str, str] = {}
+    for code, name in code_to_name.items():
+        c = str(code or "").strip().upper()
+        n = str(name or "").strip()
+        if not c or not n or len(n) < 3:
+            continue
+        if n.lower() in {
+            "the street",
+            "the road",
+            "the room",
+            "someone",
+            "stranger",
+            "unknown",
+            "nearby street",
+            "a worn item",
+        }:
+            continue
+        key = n.lower()
+        if key not in name_to_code:
+            name_to_code[key] = c
+    if not name_to_code:
+        return text
+    out = text
+    for name_l, code in sorted(name_to_code.items(), key=lambda kv: -len(kv[0])):
+        # Capture original casing from first match via re.I; don't double-append [[code]]
+        # Look for name not already followed by [[same code]]
+        pattern = re.compile(
+            rf"(?<!\[\[)\b({re.escape(name_l)})\b(?!\s*\[\[{re.escape(code)}\]\])",
+            flags=re.IGNORECASE,
+        )
+
+        def _repl(m: re.Match[str], _code: str = code) -> str:
+            return f"{m.group(1)} [[{_code}]]"
+
+        out = pattern.sub(_repl, out)
+    # Collapse accidental "Name [[L1]] [[L1]]"
+    out = re.sub(r"(\[\[(?:[A-Z]{1,3}|L\d+|I\d+|E\d+)\]\])(?:\s+\1)+", r"\1", out, flags=re.I)
+    return out
+
+
 def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     """
     Fix common LLM naming holes:
     - bare [[A]] without a readable name -> Name [[A]]
+    - known names without codes -> Name [[code]] (UI clickability)
     - blank subjects / possessives using ordered cast names
 
     Conservative: do NOT inject names before every mid-sentence stands/leans
@@ -8212,6 +8956,8 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     code_to_name = {str(k).upper(): str(v).strip() for k, v in (code_to_name or {}).items() if str(v or "").strip()}
 
     repaired = _strip_leaked_entity_html(text)
+    # Names known to the world but written without codes (opening often does this)
+    repaired = _inject_entity_codes_for_known_names(repaired, code_to_name)
 
     def expand_code(match: re.Match[str]) -> str:
         full = match.group(0)
@@ -8289,6 +9035,158 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     repaired = re.sub(r" +([,.;:!?])", r"\1", repaired)
     return repaired
 
+def _repair_bare_code_possessives(
+    text: str,
+    *,
+    code_map: dict[str, str] | None = None,
+    item_codes: set[str] | None = None,
+    place_codes: set[str] | None = None,
+) -> str:
+    """
+    Models often dump bare codes as people: \"L1's allies or I1's rebels\".
+    Expand place codes to names; never treat item codes as faction agents.
+    """
+    out = text or ""
+    if not out:
+        return out
+    cmap = {str(k).upper(): str(v).strip() for k, v in (code_map or {}).items() if str(v or "").strip()}
+    items = {str(c).upper() for c in (item_codes or set())}
+    places = {str(c).upper() for c in (place_codes or set())}
+    group_noun = (
+        r"allies|rebels|men|women|crew|gang|forces|soldiers|band|faction|enemies|"
+        r"friends|followers|people|side|sides|camp|company|party"
+    )
+
+    def repl(m: re.Match[str]) -> str:
+        code = m.group(1).upper()
+        group = m.group(2)
+        # Item code used as faction head → drop code, keep group
+        if code in items or re.fullmatch(r"I\d+", code):
+            return f"the {group}"
+        name = cmap.get(code, "")
+        if name:
+            # Places may keep a light possessive when they are locales
+            if code in places or re.fullmatch(r"L\d+", code):
+                return f"{name}'s {group}"
+            # NPC codes: proper Name's group
+            if re.fullmatch(r"[A-Z]{1,3}", code):
+                return f"{name}'s {group}"
+            return f"{name}'s {group}"
+        # Unknown L# → soft place phrase
+        if re.fullmatch(r"L\d+", code):
+            return f"the inn's {group}" if group else m.group(0)
+        if re.fullmatch(r"I\d+", code):
+            return f"the {group}"
+        return m.group(0)
+
+    out = re.sub(
+        rf"\b([A-Z]{{1,3}}|L\d+|I\d+|E\d+)(?:'s|’s)\s+({group_noun})\b",
+        repl,
+        out,
+        flags=re.I,
+    )
+    # Bare place/item codes used as subjects (not inside [[ ]]) — expand or neutralize
+    def bare_place_item(m: re.Match[str]) -> str:
+        code = m.group(1).upper()
+        start = m.start()
+        window = out[max(0, start - 2) : start + len(m.group(0)) + 2]
+        if "[[" in window or "]]" in window:
+            return m.group(0)
+        name = cmap.get(code, "")
+        if re.fullmatch(r"L\d+", code):
+            return f"{name} [[{code}]]" if name else m.group(0)
+        if re.fullmatch(r"I\d+", code):
+            return name if name else "a worn item"
+        return m.group(0)
+
+    out = re.sub(r"(?<!\[\[)\b(L\d+|I\d+)\b(?!\]\])", bare_place_item, out)
+    return out
+
+
+def _repair_gear_as_agent_prose(text: str, *, inventory_names: list[str] | None = None) -> str:
+    """
+    Fix classic 8B failures where wardrobe / gear is treated as a person or faction:
+      "travel-stained coat's rebels" → "the rebels"
+      "worn tool satchel's allies" → "the allies"
+    Also rejoin split weapons: "cross, bow" / "cross bow" → "crossbow".
+    """
+    out = text or ""
+    if not out:
+        return out
+
+    # Split compound weapons (common "cross, bow" → "crossbow")
+    out = re.sub(r"\bcross\s*[,/]\s*bow\b", "crossbow", out, flags=re.I)
+    out = re.sub(r"\bcross\s+bow\b", "crossbow", out, flags=re.I)
+    out = re.sub(r"\bhilt of a\s+cross\b(?!\s*bow)", "hilt of a crossbow", out, flags=re.I)
+
+    gear_head = (
+        r"coat|cloaks?|jackets?|robes?|tunics?|vests?|shirts?|boots?|shoes?|gloves?|"
+        r"hats?|hoods?|satchels?|bags?|packs?|pouches?|belts?|scabbards?|sheaths?|"
+        r"swords?|daggers?|blades?|bows?|crossbows?|armor|armour|helms?|helmets?|"
+        r"shields?|staves|staffs?|wands?|tankards?|mugs?|scrolls?|maps?"
+    )
+    group_noun = (
+        r"allies|rebels|men|women|crew|gang|forces|soldiers|band|faction|enemies|"
+        r"friends|followers|people|side|sides|camp|company|party"
+    )
+    # Multi-word gear phrase ending in a gear head noun, possessive + group
+    # e.g. "travel-stained coat's rebels", "the frayed cloak's men"
+    out = re.sub(
+        rf"\b(?:the\s+|a\s+|an\s+)?"
+        rf"(?:[\w\-]+[\s\-]+){{0,3}}(?:{gear_head})"
+        rf"(?:'s|’s)\s+({group_noun})\b",
+        r"the \1",
+        out,
+        flags=re.I,
+    )
+    # Bare "coat's rebels" without modifiers
+    out = re.sub(
+        rf"\b(?:{gear_head})(?:'s|’s)\s+({group_noun})\b",
+        r"the \1",
+        out,
+        flags=re.I,
+    )
+
+    # Inventory item names used as agents: "Rusty Knife says" / "Rusty Knife's voice"
+    for iname in sorted({str(n).strip() for n in (inventory_names or []) if str(n or "").strip()}, key=len, reverse=True):
+        if len(iname) < 4:
+            continue
+        # Only rewrite when the item name looks like gear, not a proper person-like title
+        try:
+            from app.world import is_plausible_person_name
+
+            if is_plausible_person_name(iname) and not re.search(
+                r"\b(coat|cloak|boots?|satchel|sword|dagger|knife|bow)\b", iname, re.I
+            ):
+                continue
+        except Exception:
+            pass
+        # Possessive group / voice / hand as if person
+        out = re.sub(
+            rf"(?<![\w]){re.escape(iname)}(?:'s|’s)\s+({group_noun}|voice|hand|eyes?|gaze|boot|bootheel)\b",
+            lambda m, _n=iname: (
+                f"the {m.group(1)}"
+                if re.fullmatch(group_noun, m.group(1), flags=re.I)
+                else f"its {m.group(1)}"
+            ),
+            out,
+            flags=re.I,
+        )
+        # Agent verbs on pure gear names
+        out = re.sub(
+            rf"(?<![\w]){re.escape(iname)}(?=\s+(?:stands?|leans?|says?|asks?|watches?|glances?|"
+            rf"smirks?|grunts?|nods?|whispers?|shouts?)\b)",
+            "Someone",
+            out,
+            flags=re.I,
+        )
+
+    # "Choose your side—X's allies or Y's rebels" with gear already cleaned → tidy double "the"
+    out = re.sub(r"\bthe\s+the\b", "the", out, flags=re.I)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    return out
+
+
 def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Deterministic name/code repair on narration after model output."""
     if not isinstance(result, dict):
@@ -8304,12 +9202,37 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
     # Bad → good renames so we can rewrite prose (e.g. "System pings a local job" → "Ashwalker")
     rename_pairs: list[tuple[str, str]] = []
 
-    # Ensure draft NPCs always have a non-empty *plausible* person name
+    inv_names: list[str] = []
+    if isinstance(context, dict):
+        for it in context.get("inventory") or []:
+            if isinstance(it, dict) and it.get("name"):
+                inv_names.append(str(it.get("name")))
+    for ch in result.get("inventory_changes") or []:
+        if isinstance(ch, dict) and ch.get("name"):
+            inv_names.append(str(ch.get("name")))
+
+    # Ensure draft NPCs always have a non-empty *plausible* person name.
+    # Strip location/item codes (L1/I1) — those must never be people.
+    cleaned_npcs: list[dict[str, Any]] = []
     for npc in result.get("npcs") or []:
         if not isinstance(npc, dict):
             continue
+        npc = dict(npc)
         name = str(npc.get("name") or "").strip()
         code = str(npc.get("code") or "").strip().upper()
+        role = str(npc.get("role") or "").strip().lower()
+        # Misfiled place rows (common 8B bug: place lands in npcs[])
+        if re.fullmatch(r"L\d+|I\d+|E\d+", code) and (
+            not name
+            or role in {"location", "place", "locale", "site", "inn", "gate", "road"}
+            or not is_plausible_person_name(name)
+        ):
+            continue
+        if re.fullmatch(r"L\d+|I\d+|E\d+", code):
+            code = ""
+            npc["code"] = ""
+        if re.fullmatch(r"L\d+|I\d+|E\d+", name, re.I):
+            name = ""
         if not name or not is_plausible_person_name(name):
             fallback = ""
             if code and code_map.get(code) and is_plausible_person_name(code_map[code]):
@@ -8318,14 +9241,16 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
                 seed = abs(hash(f"{code}|{name}|{npc.get('role') or ''}")) % (10**9)
                 fallback = invent_person_name(seed=seed)
             else:
-                fallback = f"Stranger {code}" if code else "Stranger"
+                fallback = f"Stranger {code}" if code and re.fullmatch(r"[A-Z]{1,3}", code) else "Stranger"
             if name and name != fallback:
                 rename_pairs.append((name, fallback))
             npc["name"] = fallback
-            if code:
+            if code and re.fullmatch(r"[A-Z]{1,3}", code):
                 code_map[code] = fallback
-        elif code:
+        elif code and re.fullmatch(r"[A-Z]{1,3}", code):
             code_map.setdefault(code, name)
+        cleaned_npcs.append(npc)
+    result["npcs"] = cleaned_npcs
 
     # Locations: drop sentence-like toponyms (often copied from event titles)
     for loc in result.get("locations") or []:
@@ -8343,8 +9268,49 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
                 rename_pairs.append((lname, new_name))
             loc["name"] = new_name
 
+    # Inventory rows: never keep outfit-prompt garbage as if it were a person (names stay as items)
+    for ch in result.get("inventory_changes") or []:
+        if not isinstance(ch, dict):
+            continue
+        iname = str(ch.get("name") or "").strip()
+        # Underscore prompt tags → spaces for display items
+        if "_" in iname and " " not in iname and not iname.startswith("<"):
+            cleaned = iname.replace("_", " ")
+            if cleaned != iname:
+                rename_pairs.append((iname, cleaned))
+                ch["name"] = cleaned
+                inv_names.append(cleaned)
+
+    item_codes: set[str] = set()
+    place_codes: set[str] = set()
+    if isinstance(context, dict):
+        for it in context.get("inventory") or []:
+            if isinstance(it, dict) and it.get("code"):
+                item_codes.add(str(it.get("code")).upper())
+        cl = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+        if cl.get("code"):
+            place_codes.add(str(cl.get("code")).upper())
+        for loc in context.get("locations") or []:
+            if isinstance(loc, dict) and loc.get("code"):
+                place_codes.add(str(loc.get("code")).upper())
+    for loc in result.get("locations") or []:
+        if isinstance(loc, dict) and loc.get("code"):
+            place_codes.add(str(loc.get("code")).upper())
+    for ch in result.get("inventory_changes") or []:
+        if isinstance(ch, dict) and ch.get("code"):
+            item_codes.add(str(ch.get("code")).upper())
+    # Always treat I# pattern as items even without map
+    item_codes |= {c for c in code_map if re.fullmatch(r"I\d+", c)}
+
     def rewrite_names(text: str) -> str:
         out = text or ""
+        out = _repair_bare_code_possessives(
+            out,
+            code_map=code_map,
+            item_codes=item_codes,
+            place_codes=place_codes,
+        )
+        out = _repair_gear_as_agent_prose(out, inventory_names=inv_names)
         # Longest first so multi-word bad names replace cleanly
         for old, new in sorted(rename_pairs, key=lambda p: len(p[0]), reverse=True):
             if not old or old == new:
@@ -8367,12 +9333,12 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
             )
             # 3) Remaining bare mentions — skip determiner+object ("the X is your only view")
             #    so physical props keep reading as objects after a person rename.
-            def _bare_repl(m: re.Match[str]) -> str:
+            def _bare_repl(m: re.Match[str], _new: str = new) -> str:
                 start = m.start()
                 prev = out[max(0, start - 5) : start].lower()
                 if re.search(r"\b(the|a|an)\s+$", prev):
                     return m.group(0)
-                return new
+                return _new
 
             out = re.sub(
                 rf"(?<![\w]){re.escape(old)}(?=[\w]*'s|[^\w]|$)",
@@ -8380,6 +9346,13 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
                 out,
                 flags=re.IGNORECASE,
             )
+        out = _repair_gear_as_agent_prose(out, inventory_names=inv_names)
+        out = _repair_bare_code_possessives(
+            out,
+            code_map=code_map,
+            item_codes=item_codes,
+            place_codes=place_codes,
+        )
         return out
 
     segments = result.get("narration_segments")

@@ -57,6 +57,33 @@ def _env(name: str, default: str = "") -> str:
     return str(value).strip()
 
 
+def _parse_path_list(raw: Any) -> list[str]:
+    """Normalize path lists from env, JSON, textarea (newlines / ; / |)."""
+    items: list[str] = []
+    if raw is None:
+        return items
+    if isinstance(raw, (list, tuple)):
+        parts = [str(x) for x in raw]
+    else:
+        text = str(raw).replace("\r\n", "\n").replace("\r", "\n")
+        parts = re.split(r"[\n;|]+", text)
+    seen: set[str] = set()
+    for part in parts:
+        path = str(part or "").strip().strip('"').strip("'")
+        if not path:
+            continue
+        key = path.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        items.append(path[:1000])
+    return items[:24]
+
+
+def _parse_path_list_env(name: str) -> list[str]:
+    return _parse_path_list(_env(name, ""))
+
+
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or not str(raw).strip():
@@ -98,6 +125,10 @@ def default_image_config() -> dict[str, Any]:
         # Install roots (for Allow search / auto-launch). Also mirrored in presets.launch.
         "forge_root": _env("AI_RPG_FORGE_ROOT", ""),
         "comfy_root": _env("AI_RPG_COMFY_ROOT", ""),
+        # Extra model folders (absolute paths). One path per line/semicolon; scanned in addition to install roots.
+        # Use when LoRAs/checkpoints live outside the Forge/Comfy models tree.
+        "lora_dirs": _parse_path_list_env("AI_RPG_LORA_DIRS"),
+        "checkpoint_dirs": _parse_path_list_env("AI_RPG_CHECKPOINT_DIRS"),
         # When Generate requests launch_if_offline: hook first, then start once if needed.
         "auto_launch_if_offline": _env("AI_RPG_IMAGE_AUTO_LAUNCH", "1").lower()
         not in {"0", "false", "no", "off"},
@@ -111,8 +142,13 @@ def default_image_config() -> dict[str, Any]:
         "forge_tiling": False,
         "forge_enable_hr": False,
         "forge_hr_scale": 1.5,
-        "forge_hr_upscaler": "Latent",
+        # Prefer a real ESRGAN model so face-ref (img2img extras) post-upscale works.
+        # "Latent" only works for native txt2img hires fix.
+        "forge_hr_upscaler": "R-ESRGAN 4x+",
+        # Second-pass denoise for hires fix (txt2img) — not the face-ref img2img denoise.
         "forge_denoising_strength": 0.45,
+        # Hires second-pass sampling steps (0 = same as first-pass steps).
+        "forge_hr_second_pass_steps": 0,
         # Active LoRAs for character/NPC art (name + weight). Applied on every gen when set.
         "forge_active_loras": [],
         # Light cross-image ref (img2img denoise). Strong uses ControlNet InstantID/IP-Adapter when installed.
@@ -229,6 +265,18 @@ def get_image_config() -> dict[str, Any]:
         merged["default_cfg"] = float(merged.get("default_cfg", 7))
     except (TypeError, ValueError):
         merged["default_cfg"] = 7.0
+    # Path lists: stored + optional env override (env wins when set).
+    for list_key, env_name in (
+        ("lora_dirs", "AI_RPG_LORA_DIRS"),
+        ("checkpoint_dirs", "AI_RPG_CHECKPOINT_DIRS"),
+    ):
+        env_paths = _parse_path_list_env(env_name)
+        if env_paths:
+            merged[list_key] = env_paths
+        else:
+            merged[list_key] = _parse_path_list(merged.get(list_key))
+    if not isinstance(merged.get("forge_active_loras"), list):
+        merged["forge_active_loras"] = []
     return merged
 
 
@@ -251,6 +299,8 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
         "timeout_seconds",
         "forge_root",
         "comfy_root",
+        "lora_dirs",
+        "checkpoint_dirs",
         "auto_launch_if_offline",
         "forge_checkpoint",
         "forge_vae",
@@ -263,6 +313,7 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
         "forge_hr_scale",
         "forge_hr_upscaler",
         "forge_denoising_strength",
+        "forge_hr_second_pass_steps",
         "forge_active_loras",
         "fullbody_use_face_ref",
         "fullbody_ref_denoise",
@@ -298,6 +349,7 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
         "default_steps",
         "timeout_seconds",
         "forge_clip_skip",
+        "forge_hr_second_pass_steps",
     }
     float_keys = {
         "default_cfg",
@@ -340,11 +392,15 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
                     elif isinstance(item, str) and item.strip():
                         cleaned.append({"name": item.strip()[:200], "weight": 1.0})
             next_cfg[key] = cleaned
+        elif key in ("lora_dirs", "checkpoint_dirs"):
+            next_cfg[key] = _parse_path_list(payload.get(key))
         else:
             next_cfg[key] = str(payload.get(key) or "").strip()
     next_cfg["provider"] = _normalize_provider(next_cfg.get("provider"))
     if not isinstance(next_cfg.get("forge_active_loras"), list):
         next_cfg["forge_active_loras"] = []
+    next_cfg["lora_dirs"] = _parse_path_list(next_cfg.get("lora_dirs"))
+    next_cfg["checkpoint_dirs"] = _parse_path_list(next_cfg.get("checkpoint_dirs"))
     # Normalize paths (Windows paste often leaves trailing spaces/quotes).
     for path_key in ("forge_root", "comfy_root", "forge_checkpoint", "comfy_checkpoint", "forge_vae"):
         if path_key in next_cfg and next_cfg[path_key] is not None:
@@ -356,6 +412,10 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
     next_cfg["forge_clip_skip"] = max(1, min(12, int(next_cfg.get("forge_clip_skip") or 1)))
     next_cfg["forge_hr_scale"] = max(1.0, min(4.0, float(next_cfg.get("forge_hr_scale") or 1.5)))
     next_cfg["forge_denoising_strength"] = max(0.0, min(1.0, float(next_cfg.get("forge_denoising_strength") or 0.45)))
+    next_cfg["forge_hr_second_pass_steps"] = max(0, min(150, int(next_cfg.get("forge_hr_second_pass_steps") or 0)))
+    next_cfg["forge_hr_upscaler"] = (
+        str(next_cfg.get("forge_hr_upscaler") or "R-ESRGAN 4x+").strip() or "R-ESRGAN 4x+"
+    )
     next_cfg["fullbody_ref_denoise"] = max(0.55, min(0.95, float(next_cfg.get("fullbody_ref_denoise") or 0.88)))
     next_cfg["character_lock_weight"] = max(0.1, min(1.5, float(next_cfg.get("character_lock_weight") or 0.65)))
     next_cfg["adetailer_denoise"] = max(0.1, min(0.9, float(next_cfg.get("adetailer_denoise") or 0.4)))
@@ -471,6 +531,7 @@ def _checkpoint_dirs_for_root(root: Path) -> list[Path]:
         root.parent / "models" / "Stable-diffusion",
         root.parent / "models" / "checkpoints",
         root / "webui" / "models" / "Stable-diffusion",
+        root / "webui" / "models" / "checkpoints",
     ]
     # Deduplicate existing dirs
     seen: set[str] = set()
@@ -488,17 +549,71 @@ def _checkpoint_dirs_for_root(root: Path) -> list[Path]:
     return out
 
 
-def _forge_install_roots(forge_root: str | None = None) -> list[Path]:
-    """Configured Forge/WebUI roots only (no machine-specific hardcodes)."""
+def _lora_dirs_for_root(root: Path) -> list[Path]:
+    """Candidate folders that hold LoRA/LyCORIS weight files."""
+    candidates = [
+        root / "models" / "Lora",
+        root / "models" / "lora",
+        root / "models" / "loras",
+        root / "models" / "LyCORIS",
+        root / "models" / "lycoris",
+        root / "webui" / "models" / "Lora",
+        root / "webui" / "models" / "lora",
+        root / "webui" / "models" / "loras",
+        root.parent / "models" / "Lora",
+        root.parent / "models" / "loras",
+    ]
+    seen: set[str] = set()
+    out: list[Path] = []
+    for path in candidates:
+        try:
+            key = str(path.resolve()).lower() if path.exists() else str(path).lower()
+        except Exception:
+            key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_dir():
+            out.append(path)
+    return out
+
+
+def _path_list_dirs(raw: Any) -> list[Path]:
+    """Resolve configured extra dirs that actually exist."""
+    out: list[Path] = []
+    seen: set[str] = set()
+    for text in _parse_path_list(raw):
+        try:
+            path = Path(text).expanduser()
+            key = str(path.resolve()).lower() if path.exists() else str(path).lower()
+        except Exception:
+            path = Path(text)
+            key = str(path).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if path.is_dir():
+            out.append(path)
+    return out
+
+
+def _forge_install_roots(forge_root: str | None = None, comfy_root: str | None = None) -> list[Path]:
+    """Configured Forge/WebUI/Comfy roots only (no machine-specific hardcodes)."""
     cfg = get_image_config()
     roots: list[Path] = []
-    for raw in (forge_root, cfg.get("forge_root")):
+    seen: set[str] = set()
+    for raw in (forge_root, comfy_root, cfg.get("forge_root"), cfg.get("comfy_root")):
         text = str(raw or "").strip().strip('"').strip("'")
         if not text:
             continue
-        p = Path(text)
-        if p not in roots:
-            roots.append(p)
+        try:
+            key = str(Path(text).resolve()).lower()
+        except Exception:
+            key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(Path(text))
     return roots
 
 
@@ -829,54 +944,67 @@ def _dedupe_checkpoint_models(models: list[dict[str, Any]]) -> list[dict[str, An
     return [by_key[k] for k in order]
 
 
-def list_local_checkpoints(forge_root: str | None = None, comfy_root: str | None = None) -> list[dict[str, str]]:
-    """Scan disk for checkpoint files so the UI can pick without API being up."""
-    cfg = get_image_config()
-    roots: list[Path] = []
-    seen_roots: set[str] = set()
-    for raw in (
-        forge_root if forge_root is not None else cfg.get("forge_root"),
-        comfy_root if comfy_root is not None else cfg.get("comfy_root"),
-    ):
-        text = str(raw or "").strip().strip('"').strip("'")
-        if not text:
-            continue
-        try:
-            key = str(Path(text).resolve()).lower()
-        except Exception:
-            key = text.lower()
-        if key in seen_roots:
-            continue
-        seen_roots.add(key)
-        roots.append(Path(text))
-    # Only configured install roots — never hardcode a machine-specific path.
-
+def _scan_weight_files(
+    folders: list[Path],
+    *,
+    exts: set[str],
+    max_depth: int = 4,
+    as_lora: bool = False,
+) -> list[dict[str, str]]:
+    """Collect model weight files from explicit folders."""
     found: list[dict[str, str]] = []
     seen_keys: set[str] = set()
     seen_paths: set[str] = set()
-    exts = {".safetensors", ".ckpt", ".pt", ".pth"}
-    for root in roots:
-        for folder in _checkpoint_dirs_for_root(root):
-            try:
-                for path in folder.rglob("*"):
-                    if not path.is_file():
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        try:
+            for path in folder.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    rel = path.relative_to(folder)
+                    if len(rel.parts) > max_depth:
                         continue
-                    if path.suffix.lower() not in exts:
+                except ValueError:
+                    continue
+                if path.suffix.lower() not in exts:
+                    continue
+                if path.name.lower().startswith("put "):
+                    continue
+                # Skip tiny placeholder / non-model junk under model trees
+                try:
+                    if path.stat().st_size < 1024:
                         continue
-                    if path.name.lower().startswith("put "):
-                        continue
-                    try:
-                        path_key = str(path.resolve()).lower()
-                    except Exception:
-                        path_key = str(path).lower()
-                    if path_key in seen_paths:
-                        continue
+                except OSError:
+                    continue
+                try:
+                    path_key = str(path.resolve()).lower()
+                except Exception:
+                    path_key = str(path).lower()
+                if path_key in seen_paths:
+                    continue
+                if as_lora:
+                    # Forge extra-network name is usually the stem (no extension).
+                    name = path.stem
+                    name_key = name.lower()
+                else:
                     name = path.name
                     name_key = _normalize_checkpoint_key(name) or name.lower()
-                    if name_key in seen_keys:
-                        continue
-                    seen_paths.add(path_key)
-                    seen_keys.add(name_key)
+                if name_key in seen_keys:
+                    continue
+                seen_paths.add(path_key)
+                seen_keys.add(name_key)
+                if as_lora:
+                    found.append(
+                        {
+                            "name": name,
+                            "alias": path.name,
+                            "path": str(path),
+                            "source": "disk",
+                        }
+                    )
+                else:
                     found.append(
                         {
                             "title": name,
@@ -885,10 +1013,335 @@ def list_local_checkpoints(forge_root: str | None = None, comfy_root: str | None
                             "source": "disk",
                         }
                     )
-            except Exception:
-                continue
-    found.sort(key=lambda m: m.get("title") or "")
+        except Exception:
+            continue
+    if as_lora:
+        found.sort(key=lambda m: (m.get("name") or "").lower())
+    else:
+        found.sort(key=lambda m: (m.get("title") or "").lower())
     return found
+
+
+def _lora_preview_candidates(weight_path: Path) -> list[Path]:
+    """Common sidecar image names next to a LoRA weight file."""
+    stem = weight_path.stem
+    parent = weight_path.parent
+    names = (
+        f"{stem}.preview.jpeg",
+        f"{stem}.preview.jpg",
+        f"{stem}.preview.png",
+        f"{stem}.preview.webp",
+        f"{stem}.png",
+        f"{stem}.jpg",
+        f"{stem}.jpeg",
+        f"{stem}.webp",
+        f"{stem}.preview.JPEG",
+        f"{stem}.PNG",
+    )
+    return [parent / n for n in names]
+
+
+def _read_lora_sidecar_meta(weight_path: Path) -> dict[str, Any]:
+    """
+    Read Forge/A1111 LoRA sidecar JSON (activation text, preferred weight, description).
+
+    Typical keys:
+      preferred weight, activation text, description, negative text, sd version
+    """
+    meta: dict[str, Any] = {
+        "preferred_weight": None,
+        "activation_text": "",
+        "keywords": [],
+        "description": "",
+        "negative_text": "",
+        "sd_version": "",
+        "preview_path": "",
+        "has_preview": False,
+    }
+    if not weight_path or not Path(weight_path).is_file():
+        return meta
+    path = Path(weight_path)
+    # Sidecar JSON
+    for json_path in (path.with_suffix(".json"), path.parent / f"{path.stem}.json"):
+        if not json_path.is_file():
+            continue
+        try:
+            raw = json.loads(json_path.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        # Preferred weight (case variants)
+        for key in ("preferred weight", "preferred_weight", "weight", "strength", "default weight"):
+            if key in raw and raw[key] not in (None, ""):
+                try:
+                    meta["preferred_weight"] = float(raw[key])
+                except (TypeError, ValueError):
+                    pass
+                break
+        # Activation / trigger keywords
+        act = ""
+        for key in ("activation text", "activation_text", "trigger", "trigger words", "trigger_words", "trained words", "trainedWords"):
+            if key in raw and raw[key] not in (None, ""):
+                if isinstance(raw[key], list):
+                    act = ", ".join(str(x).strip() for x in raw[key] if str(x).strip())
+                else:
+                    act = str(raw[key]).strip()
+                break
+        meta["activation_text"] = act[:500]
+        if act:
+            # Split on commas for UI chips
+            meta["keywords"] = [p.strip() for p in re.split(r"[,;\n]+", act) if p.strip()][:24]
+        for key in ("description", "desc", "notes"):
+            if key in raw and raw[key]:
+                meta["description"] = str(raw[key]).strip()[:400]
+                break
+        for key in ("negative text", "negative_text", "negative"):
+            if key in raw and raw[key]:
+                meta["negative_text"] = str(raw[key]).strip()[:300]
+                break
+        for key in ("sd version", "sd_version", "base model", "base_model"):
+            if key in raw and raw[key]:
+                meta["sd_version"] = str(raw[key]).strip()[:40]
+                break
+        break
+    # Preview image next to weight
+    for candidate in _lora_preview_candidates(path):
+        if candidate.is_file():
+            try:
+                if candidate.stat().st_size < 200:
+                    continue
+            except OSError:
+                continue
+            meta["preview_path"] = str(candidate)
+            meta["has_preview"] = True
+            break
+    return meta
+
+
+def _enrich_lora_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    """Attach sidecar weight/keywords/preview fields to a catalog LoRA row."""
+    out = dict(entry or {})
+    name = str(out.get("name") or out.get("alias") or "").strip()
+    path_s = str(out.get("path") or "").strip()
+    path = Path(path_s) if path_s else None
+    # If path missing, try resolve by name under known lora folders
+    if (not path or not path.is_file()) and name:
+        for folder in _all_lora_folders():
+            for ext in (".safetensors", ".pt", ".ckpt", ".pth"):
+                candidate = folder / f"{name}{ext}"
+                if candidate.is_file():
+                    path = candidate
+                    out["path"] = str(candidate)
+                    break
+                # Case-insensitive stem match
+            if path and path.is_file():
+                break
+            try:
+                for f in folder.iterdir():
+                    if f.is_file() and f.suffix.lower() in {".safetensors", ".pt", ".ckpt", ".pth"} and f.stem.lower() == name.lower():
+                        path = f
+                        out["path"] = str(f)
+                        break
+            except OSError:
+                pass
+            if path and path.is_file():
+                break
+    meta = _read_lora_sidecar_meta(path) if path and path.is_file() else _read_lora_sidecar_meta(Path())
+    pref = meta.get("preferred_weight")
+    if pref is not None:
+        try:
+            # Keep real slider range (age sliders can be > 2); clamp soft for safety.
+            # Treat exact 0 as "unset" so we don't ship a no-op strength.
+            pv = float(pref)
+            out["preferred_weight"] = 1.0 if abs(pv) < 1e-6 else max(-5.0, min(5.0, pv))
+        except (TypeError, ValueError):
+            out["preferred_weight"] = 1.0
+    else:
+        out["preferred_weight"] = 1.0
+    out["activation_text"] = str(meta.get("activation_text") or "")
+    out["keywords"] = list(meta.get("keywords") or [])
+    out["description"] = str(meta.get("description") or "")
+    out["negative_text"] = str(meta.get("negative_text") or "")
+    out["sd_version"] = str(meta.get("sd_version") or "")
+    out["has_preview"] = bool(meta.get("has_preview"))
+    # Preview served via API by name (path stays server-side)
+    if name:
+        out["preview_url"] = f"/api/image/lora-preview?name={urllib.parse.quote(name)}" if out["has_preview"] else ""
+    else:
+        out["preview_url"] = ""
+    # Don't leak huge absolute paths to casual UI if unwanted — keep for server resolve
+    return out
+
+
+def _all_lora_folders() -> list[Path]:
+    """All configured LoRA directories for disk reads / preview security checks."""
+    cfg = get_image_config()
+    folders: list[Path] = []
+    for root in _forge_install_roots(cfg.get("forge_root"), cfg.get("comfy_root")):
+        folders.extend(_lora_dirs_for_root(root))
+    folders.extend(_path_list_dirs(cfg.get("lora_dirs")))
+    # Dedupe
+    out: list[Path] = []
+    seen: set[str] = set()
+    for f in folders:
+        try:
+            key = str(f.resolve()).lower()
+        except Exception:
+            key = str(f).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        if f.is_dir():
+            out.append(f)
+    return out
+
+
+def list_local_checkpoints(
+    forge_root: str | None = None,
+    comfy_root: str | None = None,
+    checkpoint_dirs: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Scan disk for checkpoint files so the UI can pick without API being up."""
+    cfg = get_image_config()
+    roots = _forge_install_roots(forge_root, comfy_root)
+    folders: list[Path] = []
+    for root in roots:
+        folders.extend(_checkpoint_dirs_for_root(root))
+    extra = checkpoint_dirs if checkpoint_dirs is not None else cfg.get("checkpoint_dirs")
+    folders.extend(_path_list_dirs(extra))
+    return _scan_weight_files(
+        folders,
+        exts={".safetensors", ".ckpt", ".pt", ".pth"},
+        max_depth=3,
+        as_lora=False,
+    )
+
+
+def list_local_loras(
+    forge_root: str | None = None,
+    comfy_root: str | None = None,
+    lora_dirs: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Scan disk for LoRA weights (Forge models/Lora, custom folders).
+    Enriches each entry with sidecar preferred weight, activation keywords, preview.
+    """
+    cfg = get_image_config()
+    roots = _forge_install_roots(forge_root, comfy_root)
+    folders: list[Path] = []
+    for root in roots:
+        folders.extend(_lora_dirs_for_root(root))
+    extra = lora_dirs if lora_dirs is not None else cfg.get("lora_dirs")
+    folders.extend(_path_list_dirs(extra))
+    raw = _scan_weight_files(
+        folders,
+        exts={".safetensors", ".pt", ".ckpt", ".pth"},
+        max_depth=4,
+        as_lora=True,
+    )
+    return [_enrich_lora_entry(item) for item in raw]
+
+
+def resolve_lora_preview_path(name: str) -> Path | None:
+    """Resolve a safe on-disk preview image for a LoRA name (security-scoped)."""
+    needle = str(name or "").strip()
+    if not needle or ".." in needle or "/" in needle or "\\" in needle:
+        return None
+    allowed_roots = _all_lora_folders()
+    if not allowed_roots:
+        return None
+    needle_l = needle.lower()
+    for folder in allowed_roots:
+        weight: Path | None = None
+        try:
+            for f in folder.iterdir():
+                if (
+                    f.is_file()
+                    and f.stem.lower() == needle_l
+                    and f.suffix.lower() in {".safetensors", ".pt", ".ckpt", ".pth"}
+                ):
+                    weight = f
+                    break
+        except OSError:
+            continue
+        if not weight or not weight.is_file():
+            continue
+        meta = _read_lora_sidecar_meta(weight)
+        preview = str(meta.get("preview_path") or "")
+        if not preview:
+            continue
+        try:
+            resolved = Path(preview).resolve()
+            if not resolved.is_file():
+                continue
+            for root in allowed_roots:
+                try:
+                    resolved.relative_to(root.resolve())
+                    return resolved
+                except ValueError:
+                    continue
+        except Exception:
+            continue
+    return None
+
+
+def _merge_lora_catalog(api_loras: list[Any], disk_loras: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Prefer API entries; fill gaps from disk; always attach sidecar meta."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    disk_by_name = {
+        str(d.get("name") or "").strip().lower(): d for d in (disk_loras or []) if d.get("name")
+    }
+    for item in api_loras or []:
+        if isinstance(item, dict):
+            name = str(item.get("name") or item.get("alias") or "").strip()
+            alias = str(item.get("alias") or item.get("name") or "").strip()
+            path = str(item.get("path") or "")
+        else:
+            name = str(item or "").strip()
+            alias = name
+            path = ""
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        entry: dict[str, Any] = {"name": name, "alias": alias or name, "source": "api"}
+        disk = disk_by_name.get(key) or {}
+        if path:
+            entry["path"] = path
+        elif disk.get("path"):
+            entry["path"] = disk["path"]
+        # Prefer disk sidecar enrichment (has preferred weight / preview)
+        if disk:
+            for k in (
+                "preferred_weight",
+                "activation_text",
+                "keywords",
+                "description",
+                "negative_text",
+                "sd_version",
+                "has_preview",
+                "preview_url",
+            ):
+                if disk.get(k) not in (None, "", []):
+                    entry[k] = disk[k]
+            if disk.get("path") and not entry.get("path"):
+                entry["path"] = disk["path"]
+        out.append(_enrich_lora_entry(entry))
+    for item in disk_loras or []:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(_enrich_lora_entry(item if isinstance(item, dict) else {"name": name}))
+    out.sort(key=lambda m: (m.get("name") or "").lower())
+    return out[:800]
 
 
 def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -900,7 +1353,16 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
     cfg = get_image_config() if config is None else dict(config)
     provider = _normalize_provider(provider or cfg.get("provider"))
     disk_models = _dedupe_checkpoint_models(
-        list_local_checkpoints(cfg.get("forge_root"), cfg.get("comfy_root"))
+        list_local_checkpoints(
+            cfg.get("forge_root"),
+            cfg.get("comfy_root"),
+            cfg.get("checkpoint_dirs"),
+        )
+    )
+    disk_loras = list_local_loras(
+        cfg.get("forge_root"),
+        cfg.get("comfy_root"),
+        cfg.get("lora_dirs"),
     )
     out: dict[str, Any] = {
         "provider": provider,
@@ -912,9 +1374,10 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
             "schedulers": [],
             "vaes": [],
             "upscalers": [],
-            "loras": [],
+            "loras": list(disk_loras),  # disk LoRAs always available offline
             "options": {},
             "disk_models": disk_models,
+            "disk_loras": disk_loras,
         },
         "comfyui": {
             "checkpoints": [m["title"] for m in disk_models],
@@ -922,10 +1385,15 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
             "schedulers": [],
             "vaes": [],
             "upscalers": [],
+            "loras": list(disk_loras),
             "workflows": list_comfy_workflows(),
             "disk_models": disk_models,
+            "disk_loras": disk_loras,
         },
         "disk_checkpoints": disk_models,
+        "disk_loras": disk_loras,
+        "lora_dirs": list(cfg.get("lora_dirs") or []),
+        "checkpoint_dirs": list(cfg.get("checkpoint_dirs") or []),
     }
     # Offline-safe seed: disk VAEs/upscalers + full sampler/scheduler fallback lists
     _seed_forge_catalog_lists(out, cfg)
@@ -933,6 +1401,7 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
     if provider == "off":
         out["message"] = (
             f"Provider is off — {len(disk_models)} checkpoint(s), "
+            f"{len(disk_loras)} LoRA(s), "
             f"{len(out['forge']['vaes'])} VAE(s), "
             f"{len(out['forge']['upscalers'])} upscaler(s) on disk / fallbacks. "
             "Pick Forge/Comfy/Demo to generate; Refresh catalog when the API is up for live lists."
@@ -942,8 +1411,8 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
     if provider == "demo":
         out["ok"] = True
         out["message"] = (
-            f"Demo mode — {len(disk_models)} local checkpoint file(s) listed (not used by demo). "
-            f"{len(out['forge']['samplers'])} sampler fallback(s) ready if you switch to Forge."
+            f"Demo mode — {len(disk_models)} checkpoint(s), {len(disk_loras)} LoRA(s) on disk "
+            f"(not used by demo). {len(out['forge']['samplers'])} sampler fallback(s) ready if you switch to Forge."
         )
         return out
     try:
@@ -958,10 +1427,12 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
             # Offline: keep disk/fallback seeds — do not hammer every API route with timeouts
             if not api_online:
                 out["forge"]["models"] = _dedupe_checkpoint_models(list(disk_models))
+                out["forge"]["loras"] = _merge_lora_catalog([], disk_loras)
                 out["ok"] = True
                 out["message"] = (
                     f"Forge API offline at {base} — using disk/fallback catalog: "
                     f"{len(out['forge']['models'])} model(s), "
+                    f"{len(out['forge']['loras'])} LoRA(s), "
                     f"{len(out['forge']['samplers'])} sampler(s), "
                     f"{len(out['forge']['vaes'])} VAE(s), "
                     f"{len(out['forge']['upscalers'])} upscaler(s). "
@@ -992,8 +1463,9 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
                 out["forge"]["models"] = _dedupe_checkpoint_models(list(disk_models))
             try:
                 loras = _http_json("GET", f"{base}/sdapi/v1/loras", timeout=12)
+                api_loras: list[dict[str, str]] = []
                 if isinstance(loras, list):
-                    out["forge"]["loras"] = [
+                    api_loras = [
                         {
                             "name": str(
                                 (m.get("name") if isinstance(m, dict) else None)
@@ -1002,13 +1474,15 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
                                 or ""
                             ),
                             "alias": str((m.get("alias") if isinstance(m, dict) else "") or ""),
+                            "source": "api",
                         }
                         for m in loras
                         if (isinstance(m, dict) and (m.get("name") or m.get("alias")))
                         or (not isinstance(m, dict) and str(m).strip())
-                    ][:800]
+                    ]
+                out["forge"]["loras"] = _merge_lora_catalog(api_loras, disk_loras)
             except Exception:
-                out["forge"]["loras"] = []
+                out["forge"]["loras"] = _merge_lora_catalog([], disk_loras)
 
             # --- Samplers: live API first (all user/extension samplers), then fallbacks ---
             api_samplers: list[str] = []
@@ -1152,6 +1626,7 @@ def fetch_backend_catalog(provider: str | None = None, config: dict[str, Any] | 
                 out["message"]
                 or (
                     f"Forge catalog ({live_bit}disk): {len(out['forge']['models'])} model(s), "
+                    f"{len(out['forge']['loras'])} LoRA(s), "
                     f"{len(out['forge']['samplers'])} sampler(s), "
                     f"{len(out['forge']['vaes'])} VAE(s), "
                     f"{len(out['forge']['upscalers'])} upscaler(s)."
@@ -2229,6 +2704,97 @@ def _cap_words(text: str, n: int = 3) -> str:
     return " ".join(str(text or "").split()[:n]).strip()
 
 
+# Framing / common SD phrases that must keep spaces (not underscore-joined).
+# Includes negatives like "head out of frame" — very common prompts, not gear concepts.
+# Eye/skin colors also stay spaced (grey eyes, not steel_grey_eyes).
+_FRAMING_SPACE_PHRASES = frozenset(
+    {
+        "full body",
+        "looking at viewer",
+        "partial view",
+        "1boy",
+        "1girl",
+        "1person",
+        "head out of frame",
+        "feet out of frame",
+        "close-up",
+        "close up",
+        "side profile",
+        "facing away",
+        "looking away",
+        "from behind",
+        "upper body only",
+        "head and shoulders",
+        "bust shot",
+        "half body",
+        "picture frame",
+        "facing camera",
+        "front view",
+        "single character",
+        "glitch art",
+        "grey eyes",
+        "gray eyes",
+        "blue eyes",
+        "green eyes",
+        "brown eyes",
+        "hazel eyes",
+        "black eyes",
+        "amber eyes",
+        "red eyes",
+        "dark eyes",
+        "light eyes",
+        "short hair",
+        "long hair",
+        "black hair",
+        "brown hair",
+        "blonde hair",
+        "red hair",
+        "white hair",
+        "grey hair",
+        "gray hair",
+        "thin scar",
+        "facial scar",
+        "small scar",
+        "faint scar",
+    }
+)
+
+# Single full-body framing tag — never stack "full body" + "head to toe" + shot variants.
+_FULLBODY_FRAME_TAG = "(full body:1.35)"
+
+
+def _normalize_prompt_token(word: str) -> str:
+    """
+    One token for underscore tags.
+    Possessives / apostrophes: mechanic's → mechanics (not mechanic_s).
+    Hyphens become underscores; other junk is stripped.
+    """
+    w = str(word or "").lower().strip()
+    if not w:
+        return ""
+    # Normalize curly quotes to ASCII apostrophe
+    w = w.replace("\u2019", "'").replace("\u2018", "'").replace("\u02bc", "'")
+    # Possessive / plural-possessive: word's / words' → words
+    w = re.sub(r"'s\b", "s", w)
+    w = re.sub(r"s'\b", "s", w)
+    # Remaining apostrophes (don't, o'clock) → drop, keep letters together
+    w = w.replace("'", "")
+    # Hyphens → underscore; other non-word → underscore
+    w = w.replace("-", "_")
+    w = re.sub(r"[^\w]+", "_", w)
+    return re.sub(r"_+", "_", w).strip("_")
+
+
+def _underscore_join_words(words: list[str]) -> str:
+    """Join concept words with underscores (hyphens become underscores too)."""
+    parts: list[str] = []
+    for w in words:
+        piece = _normalize_prompt_token(w)
+        if piece:
+            parts.append(piece)
+    return re.sub(r"_+", "_", "_".join(parts)).strip("_")
+
+
 def _format_forge_phrase(
     text: str,
     *,
@@ -2239,61 +2805,76 @@ def _format_forge_phrase(
     """
     Format one visual concept for Forge / A1111 CLIP prompts.
 
-    Multi-word gear and look phrases stay **one unit** via attention syntax:
-      oil-stained factory coat  →  (oil-stained factory coat:1.05)
-      silver hair               →  silver hair   (2 short words, no weight needed)
-      coat                      →  coat
+    Multi-word gear/setting phrases use **underscores** so CLIP keeps them as one
+    concept instead of firing strong separate tokens:
+      mecha school hangar  →  mecha_school_hangar
+      worn tool satchel    →  worn_tool_satchel
+      oil-stained coat     →  oil_stained_coat
+      frayed mechanic's coat → frayed_mechanics_coat  (not frayed_mechanic_s_coat)
 
-    Forge/A1111 (not NovelAI):
-      (phrase)        ≈ ×1.1 attention
-      (phrase:1.15)   explicit weight
-      [phrase]        de-emphasize
-    Underscores (oil_stained_coat) are Danbooru/anime-tag style — fine for
-    booru models, worse for realistic checkpoints like CyberRealistic.
-    NovelAI-style {curly braces} are **not** used on Forge.
+    Do **not** add meaningless weights near 1.0 (e.g. :1.05). Real emphasis only
+    when the caller passes a weight that actually differs from 1 (e.g. 1.2 / 0.8):
+      (portrait:1.5)   ok — structural framing
+      worn_tool_satchel  not (worn tool satchel:1.05)
+
+    force_group is kept for call-site compat; multi-word always underscore-joins.
     """
     raw = _norm_text(text)
     if not raw:
         return ""
-    # Already a LoRA or weighted / grouped phrase — leave intact (normalize spaces).
+    # LoRA tags — leave intact
     if raw.startswith("<lora:"):
         return raw
-    if re.match(r"^\([^)]*(:\s*[\d.]+)?\)$", raw) or re.match(r"^\[[^\]]*\]$", raw):
+    # Structural weighted framing — keep spaces + real weights
+    if re.match(r"^\(\s*(portrait|full\s*body)\s*:\s*[\d.]+\s*\)$", raw, re.I):
+        return re.sub(r"\s+", " ", raw.strip())
+    # Already parenthesized / bracketed: unwrap near-1.0 weights, reformat body
+    m_grp = re.match(r"^\((.+?)(?::\s*([\d.]+))?\)$", raw)
+    if m_grp:
+        inner = m_grp.group(1).strip()
+        w_raw = m_grp.group(2)
+        try:
+            w_val = float(w_raw) if w_raw is not None else None
+        except ValueError:
+            w_val = None
+        # Real structural weights stay
+        if re.match(r"^(portrait|full\s*body)$", inner, re.I) and w_val is not None:
+            return f"({inner}:{w_val:g})" if abs(w_val - 1.0) >= 0.05 else f"({inner})"
+        # Near-1.0 noise → drop weight and underscore the concept
+        if w_val is None or abs(w_val - 1.0) < 0.08:
+            return _format_forge_phrase(inner, max_words=max_words, weight=None, force_group=True)
+        # Meaningful weight: underscore body, keep weight
+        body = _format_forge_phrase(inner, max_words=max_words, weight=None, force_group=True)
+        if body.startswith("(") or body.startswith("<"):
+            return body
+        return f"({body}:{max(0.5, min(1.6, w_val)):g})"
+    if re.match(r"^\[[^\]]*\]$", raw):
         return raw
-    # Strip accidental outer quotes
-    raw = raw.strip("\"'`")
-    # Collapse internal underscores from booru-ish paste into spaces for realistic models
-    if "_" in raw and " " not in raw and not raw.startswith("<"):
-        raw = raw.replace("_", " ")
-    words = raw.split()
+    # Strip accidental outer double-quotes only (keep internal apostrophes for possessive fix)
+    raw = raw.strip().strip('"').strip("`")
+    # Normalize existing underscores / hyphens into word splits for re-join
+    split_src = raw.replace("-", " ").replace("_", " ")
+    words = [w for w in split_src.split() if w]
     if not words:
         return ""
-    # Cap word count so a single concept stays short (user: keep under ~4 words)
     if len(words) > max_words:
         words = words[:max_words]
-        raw = " ".join(words)
-    # Single token — no grouping needed
-    if len(words) == 1 and weight is None and not force_group:
-        return words[0].lower()
-    # Two short simple tokens (e.g. "silver hair") — spaces are fine in CLIP
-    if (
-        len(words) == 2
-        and weight is None
-        and not force_group
-        and all(len(w) <= 10 and "-" not in w for w in words)
-    ):
-        return " ".join(w.lower() for w in words)
-    # Multi-word / hyphenated / forced → group as one attention unit
-    phrase = " ".join(w.lower() for w in words)
+    # Framing phrases keep natural spaces
+    spaced = " ".join(w.lower() for w in words)
+    # Compare without apostrophes for framing match
+    spaced_key = re.sub(r"['\u2019]", "", spaced)
+    if spaced in _FRAMING_SPACE_PHRASES or spaced_key in _FRAMING_SPACE_PHRASES:
+        return spaced_key if spaced_key in _FRAMING_SPACE_PHRASES else spaced
+    # Single / multi-word → underscore join (possessives folded: mechanic's → mechanics)
+    phrase = _underscore_join_words(words)
+    if not phrase:
+        return ""
     if weight is not None:
-        w = max(0.5, min(1.4, float(weight)))
-        # Avoid silly :1.0 noise
-        if abs(w - 1.0) < 0.02:
-            return f"({phrase})"
+        w = max(0.5, min(1.6, float(weight)))
+        # Skip near-1.0 noise — same as bare tag
+        if abs(w - 1.0) < 0.08:
+            return phrase
         return f"({phrase}:{w:g})"
-    # Mild default group for 3+ word or hyphenated gear so CLIP keeps them together
-    if force_group or len(words) >= 3 or any("-" in w for w in words):
-        return f"({phrase})"
     return phrase
 
 
@@ -2520,11 +3101,15 @@ def _short_setting_tags(world_style: str = "", location: str = "") -> list[str]:
             chunks = [" ".join(words[:3])] if words else []
         for c in chunks[:3]:
             w = _cap_words(c, 3).lower()
-            if not w or w in tags:
+            if not w:
                 continue
-            if not _is_visual_prompt_tag(w):
+            # Multi-word settings → underscores (mecha_school_hangar), not free tokens
+            formatted = _format_forge_phrase(w, max_words=3, force_group=True)
+            if not formatted or formatted in tags:
                 continue
-            tags.append(w)
+            if not _is_visual_prompt_tag(formatted.replace("_", " ")):
+                continue
+            tags.append(formatted)
     return tags[:3]
 
 
@@ -2751,6 +3336,197 @@ def _infer_wardrobe_from_label(label: str) -> tuple[str, str]:
     return "other", "skip"
 
 
+# Condition / fluff words stripped from gear prompts (keep the garment, not the story).
+_WARDROBE_STRIP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "frayed",
+        "scuffed",
+        "worn",
+        "stained",
+        "weathered",
+        "patched",
+        "torn",
+        "dirty",
+        "dusty",
+        "faded",
+        "old",
+        "new",
+        "clean",
+        "soiled",
+        "muddy",
+        "tattered",
+        "ragged",
+        "threadbare",
+        "beaten",
+        "battered",
+        "scratched",
+        "reinforced",
+        "steel",
+        "toed",
+        "toeing",
+        "mixed",
+        "heavy",
+        "thick",
+        "thin",
+        "slightly",
+        "very",
+        "somewhat",
+        "lightly",
+        "heavily",
+        "oil",
+        "blood",
+        "mud",
+        "ash",
+        "soot",
+        "travel",  # "travel-stained" residue — type "travel coat" rare; prefer bare coat
+    }
+)
+# Optional single type word kept before a garment head: work_coat, leather_boots
+_WARDROBE_TYPE_WORDS = frozenset(
+    {
+        "work",
+        "leather",
+        "wool",
+        "silk",
+        "linen",
+        "cotton",
+        "plate",
+        "chain",
+        "scale",
+        "mage",
+        "wizard",
+        "military",
+        "simple",
+        "fine",
+        "dark",
+        "black",
+        "white",
+        "red",
+        "blue",
+        "green",
+        "brown",
+        "grey",
+        "gray",
+        "silver",
+        "fur",
+        "denim",
+        "canvas",
+    }
+)
+# Canonical garment heads (last matching word wins).
+_WARDROBE_HEAD_MAP: dict[str, str] = {
+    "boots": "boots",
+    "boot": "boots",
+    "shoes": "shoes",
+    "shoe": "shoes",
+    "sandals": "sandals",
+    "heels": "heels",
+    "slippers": "slippers",
+    "coat": "coat",
+    "overcoat": "coat",
+    "parka": "coat",
+    "cloak": "cloak",
+    "cape": "cape",
+    "jacket": "jacket",
+    "robe": "robe",
+    "robes": "robes",
+    "gown": "gown",
+    "mantle": "cloak",
+    "shirt": "shirt",
+    "blouse": "blouse",
+    "tunic": "tunic",
+    "vest": "vest",
+    "apron": "apron",
+    "dress": "dress",
+    "pants": "pants",
+    "trousers": "pants",
+    "leggings": "leggings",
+    "skirt": "skirt",
+    "shorts": "shorts",
+    "jeans": "jeans",
+    "gloves": "gloves",
+    "gauntlets": "gloves",
+    "belt": "belt",
+    "sash": "sash",
+    "hat": "hat",
+    "cap": "cap",
+    "hood": "hood",
+    "helmet": "helmet",
+    "scarf": "scarf",
+    "armor": "armor",
+    "armour": "armor",
+    "mail": "mail",
+    "plate": "plate",
+    "uniform": "uniform",
+    "clothes": "clothes",
+    "clothing": "clothes",
+    "leathers": "leathers",
+    "satchel": "satchel",
+    "backpack": "backpack",
+    "pack": "pack",
+    "bag": "bag",
+    "pouch": "pouch",
+}
+
+
+def _simplify_wardrobe_label(label: str) -> str:
+    """
+    Collapse gear prose to a short SD tag: frayed work coat → work coat;
+    scuffed / steel-toed boots → boots. No [mixed] / stain stories.
+    """
+    text = str(label or "").lower()
+    text = re.sub(r"\[[^\]]*\]", " ", text)
+    text = re.sub(r"[—–]+", " ", text)
+    # Multi-word condition phrases first
+    for phrase in (
+        "steel toed",
+        "steel-toed",
+        "oil stained",
+        "oil-stained",
+        "travel stained",
+        "travel-stained",
+        "blood stained",
+        "blood-stained",
+        "mud stained",
+        "well worn",
+        "well-worn",
+        "battle worn",
+        "battle-worn",
+    ):
+        text = text.replace(phrase.replace("-", " "), " ")
+        text = text.replace(phrase, " ")
+    text = text.replace("-", " ").replace("_", " ")
+    words = [w for w in re.findall(r"[a-z0-9]+", text) if w and w not in _WARDROBE_STRIP_WORDS]
+    if not words:
+        return ""
+    # Find garment head (prefer last known head)
+    head = ""
+    head_i = -1
+    for i, w in enumerate(words):
+        if w in _WARDROBE_HEAD_MAP:
+            head = _WARDROBE_HEAD_MAP[w]
+            head_i = i
+    if head:
+        type_w = words[head_i - 1] if head_i > 0 else ""
+        if type_w and type_w in _WARDROBE_TYPE_WORDS and type_w != head:
+            return f"{type_w} {head}"
+        return head
+    # Unknown item — keep at most two trailing content words
+    return " ".join(words[-2:])
+
+
+def _wardrobe_stem(label: str) -> str:
+    """Stem for dedupe: work coat / frayed coat → coat; boots variants → boots."""
+    simple = _simplify_wardrobe_label(label)
+    if not simple:
+        return ""
+    words = simple.split()
+    return words[-1] if words else ""
+
+
 def _parse_wardrobe_entry(raw: str) -> dict[str, str] | None:
     """
     Parse one wardrobe entry into {label, category, zone, prompt}.
@@ -2822,21 +3598,19 @@ def _parse_wardrobe_entry(raw: str) -> dict[str, str] | None:
     if category not in WARDROBE_CATEGORIES:
         category = "other"
 
-    # Keep under ~4 words; multi-word gear is grouped for Forge as (phrase) so CLIP
-    # treats "oil-stained factory coat" as one concept, not three loose tokens.
-    short_label = _cap_words(prompt_label, 4).lower()
-    n_words = len(short_label.split())
+    # Lean SD tags: work coat / boots — not frayed_work_coat, scuffed_boots, steel_toed_boots
+    simple = _simplify_wardrobe_label(prompt_label)
+    if not simple:
+        return None
+    # Skip leftover junk that is not wearable visual gear
+    if simple in {"mixed", "item", "gear", "stuff", "water", "skin", "coin", "coins"}:
+        return None
     return {
-        "label": prompt_label[:80],
+        "label": simple[:80],
         "category": category,
         "zone": zone,
-        "prompt": _format_forge_phrase(
-            short_label,
-            max_words=4,
-            # Mild weight only when grouping a multi-word concept
-            weight=1.05 if n_words >= 2 else None,
-            force_group=n_words >= 2,
-        ),
+        "prompt": _format_forge_phrase(simple, max_words=2, force_group=True),
+        "stem": _wardrobe_stem(simple),
     }
 
 
@@ -2881,7 +3655,8 @@ def wardrobe_tags_for_frame(
         frame = "face"
     visible = FRAME_VISIBLE_ZONES.get(frame) or FRAME_VISIBLE_ZONES["face"]
     if max_tags is None:
-        max_tags = 5 if frame == "fullbody" else 3
+        # Keep lean — too many gear tags fight the subject and face lock
+        max_tags = 3 if frame == "fullbody" else 2
 
     # Prefer: hair → head → face → neck → torso → arms → hands → waist → legs → feet → bag → held
     zone_order = {
@@ -2904,6 +3679,7 @@ def wardrobe_tags_for_frame(
     )
     tags: list[str] = []
     seen: set[str] = set()
+    seen_stems: set[str] = set()
     for entry in ranked:
         prompt = str(entry.get("prompt") or "").strip()
         if not prompt or prompt in seen:
@@ -2911,6 +3687,11 @@ def wardrobe_tags_for_frame(
         # Face frame: skip pure held tools (knives) unless they are clearly torso-visible outerwear
         if frame in {"face", "partial"} and entry.get("zone") in {"held", "bag", "waist"}:
             continue
+        stem = str(entry.get("stem") or _wardrobe_stem(prompt.replace("_", " ")))
+        if stem and stem in seen_stems:
+            continue
+        if stem:
+            seen_stems.add(stem)
         seen.add(prompt)
         tags.append(prompt)
         if len(tags) >= max_tags:
@@ -3127,15 +3908,115 @@ def _extra_detail_tags(
     return []
 
 
+# Eye/skin fluff that makes tags needlessly complex (steel grey eyes → grey eyes).
+_FACE_INTENSIFIERS = frozenset(
+    {
+        "steel",
+        "icy",
+        "piercing",
+        "deep",
+        "vivid",
+        "bright",
+        "intense",
+        "stormy",
+        "glittering",
+        "shining",
+        "glowing",
+        "sparkling",
+        "striking",
+        "haunting",
+        "cold",
+        "warm",
+        "soft",
+        "hard",
+        "sharp",
+        "pale",
+        "darkish",
+        "slightly",
+        "very",
+        "somewhat",
+        "rather",
+        "quite",
+    }
+)
+
+
+def _simplify_face_feature_phrase(phrase: str) -> str:
+    """
+    Lean face tags: steel grey eyes → grey eyes; thin scar across left brow → thin scar.
+    Keep common eye colors as spaced phrases (SD-friendly).
+    """
+    text = re.sub(r"\s+", " ", str(phrase or "").lower()).strip(" .,;:")
+    if not text:
+        return ""
+    text = text.replace("-", " ").replace("_", " ")
+    words = [w for w in re.findall(r"[a-z0-9']+", text) if w]
+    if not words:
+        return ""
+    # Scars: drop location prose ("across left brow") — face gen owns placement; body omits scars.
+    if any(w in {"scar", "scars", "scarred"} for w in words):
+        keep = [w for w in words if w in {"thin", "faint", "small", "long", "scar", "scars", "facial"}]
+        if "scar" not in keep and "scars" not in keep:
+            keep.append("scar")
+        # Prefer "thin scar" / "facial scar"
+        if "thin" in keep:
+            return "thin scar"
+        if "faint" in keep:
+            return "faint scar"
+        if "small" in keep:
+            return "small scar"
+        return "facial scar"
+    # Eyes: strip intensifiers, keep color + eyes
+    if "eyes" in words or "eye" in words:
+        content = [w for w in words if w not in _FACE_INTENSIFIERS and w not in _PROMPT_STOPWORDS]
+        # Normalize eye → eyes
+        content = ["eyes" if w == "eye" else w for w in content]
+        # color eyes
+        colors = [
+            w
+            for w in content
+            if w
+            in {
+                "grey",
+                "gray",
+                "blue",
+                "green",
+                "brown",
+                "hazel",
+                "black",
+                "amber",
+                "red",
+                "gold",
+                "violet",
+                "heterochromia",
+            }
+        ]
+        if colors:
+            return f"{colors[0]} eyes"
+        if "eyes" in content:
+            return "eyes"
+        return ""
+    # Freckles / jaw / other short cues — strip intensifiers, max 2 words
+    content = [
+        w
+        for w in words
+        if w not in _FACE_INTENSIFIERS and w not in _PROMPT_STOPWORDS and w not in {"across", "along", "over", "under", "left", "right", "upper", "lower"}
+    ]
+    if not content:
+        return ""
+    return " ".join(content[:2])
+
+
 def _facial_feature_tags(facial_features: str = "", *, kind: str = "face") -> list[str]:
     """
-    Bust-visible face details for portraits and full body.
-    Keeps short phrase tags (eyes, freckles, scars, jaw) — not clothing.
+    Face-only visual tags (eyes, freckles, scars).
+    Full-body prompts omit these — face-lock / face image owns identity so we
+    do not emit thin_scar (no location) or fight the lock with bust detail.
     """
     kind_key = "fullbody" if str(kind).lower() in {"fullbody", "body", "full"} else "face"
-    # Full body still benefits from a couple of face anchors for consistency.
-    max_tags = 4 if kind_key == "face" else 2
-    max_words = 4 if kind_key == "face" else 3
+    if kind_key == "fullbody":
+        return []
+    max_tags = 3
     tags: list[str] = []
     seen: set[str] = set()
     for phrase in _split_look_phrases(facial_features):
@@ -3157,20 +4038,11 @@ def _facial_feature_tags(facial_features: str = "", *, kind: str = "face") -> li
             )
         ):
             continue
-        clean = _cap_words(phrase, max_words).lower()
+        clean = _simplify_face_feature_phrase(phrase)
         if not clean or clean in seen:
             continue
         if not _is_visual_prompt_tag(clean):
             continue
-        # Drop preposition-heavy mush ("shadowed under a broken")
-        words = clean.split()
-        if sum(1 for w in words if w in _PROMPT_STOPWORDS) >= max(1, len(words) // 2):
-            # Keep only content words when possible
-            content = [w for w in words if w not in _PROMPT_STOPWORDS]
-            if len(content) >= 2:
-                clean = " ".join(content[:max_words])
-            else:
-                continue
         seen.add(clean)
         tags.append(clean)
         if len(tags) >= max_tags:
@@ -3219,17 +4091,17 @@ def build_portrait_prompt(
     Paragraph order (comma-separated concepts for Forge/A1111):
       1. core     — 1girl/1boy, setting tags (location / vibe)
       2. character — pose, hair, facial features, zone-filtered clothes
-      3. framing  — (portrait:1.5)  OR  (full body:1.35), head to toe
+      3. framing  — (portrait:1.5)  OR  (full body:1.35) once (never "full body" + "head to toe")
       4. detail   — optional tiny extra (full body may keep a small scene crumb)
-      5. LoRAs    — appended later by build_character_prompt_pack
+      5. LoRAs    — never baked into this string; only applied at gen when explicitly selected
 
-    Multi-word gear is **one concept**, not free words:
-      (oil-stained factory coat:1.05)   ← Forge attention group (preferred)
-      oil-stained_factory_coat         ← booru/underscore style (not used here)
-      {oil stained factory coat}       ← NovelAI only (not Forge)
+    Multi-word gear is **one concept** via underscores, but kept lean:
+      work_coat  (not frayed_work_coat)
+      boots      (not scuffed_boots / steel_toed_boots)
+    Face cues stay simple and spaced when common (grey eyes). Full body omits face
+    detail tags so face-lock owns likeness.
 
-    Keep each phrase ≤ ~4 words. Commas separate concepts; spaces inside ( ) stay one unit.
-    Users refine weights in the engine box (Ctrl+↑/↓).
+    Do not emit (phrase:1.05). Keep each phrase short. Commas separate concepts.
     """
     mode = str(visibility_mode or "full").lower().strip() or "full"
     kind_key = "fullbody" if str(kind).lower() in {"fullbody", "body", "full"} else "face"
@@ -3267,8 +4139,8 @@ def build_portrait_prompt(
             parts.append(formatted)
     # Clothing tags: only zones visible in this frame (portrait never gets feet/legs).
     # Do not re-inject hair from wardrobe if we already have an explicit hair field.
-    # Multi-word gear → (oil-stained factory coat:1.05) so Forge keeps the phrase together.
-    clothes_budget = 6 if kind_key == "face" else 5
+    # Multi-word gear → underscore join (worn_tool_satchel), never (…:1.05).
+    clothes_budget = 2 if kind_key == "face" else 3
     clothes_added = 0
     seen_clothes_stems: set[str] = set()
     for clothes in _clothing_tags(
@@ -3281,30 +4153,24 @@ def build_portrait_prompt(
     ):
         # Strip existing parens for stem matching / hair checks
         clothes_bare = re.sub(r"^\((.+?)(?::\s*[\d.]+)?\)$", r"\1", clothes.strip()).strip()
+        clothes_bare = clothes_bare.replace("_", " ")
+        # Re-simplify in case engine/equipment still carries long labels
+        clothes_bare = _simplify_wardrobe_label(clothes_bare) or clothes_bare
         if hair_tag and clothes_bare == hair_tag:
             continue
         if "hair" in clothes_bare and hair_tag:
             continue
         if not _is_visual_prompt_tag(clothes_bare):
             continue
-        # Dedupe near-duplicates ("oil-stained factory coat" / "frayed factory coat")
-        stem = re.sub(
-            r"\b(oil-?stained|frayed|weathered|worn|old|new|dirty|clean|torn|patched)\b",
-            "",
-            clothes_bare.lower(),
-        )
-        stem = re.sub(r"\s+", " ", stem).strip()
+        stem = _wardrobe_stem(clothes_bare)
         if stem and stem in seen_clothes_stems:
             continue
         if stem:
             seen_clothes_stems.add(stem)
-        # wardrobe_tags already format; re-apply only if plain
-        if clothes.startswith("(") or clothes.startswith("<lora:"):
-            parts.append(clothes)
-        else:
-            parts.append(
-                _format_forge_phrase(clothes_bare, max_words=4, weight=1.05, force_group=True)
-            )
+        # Never paste raw <lora:> from wardrobe; LoRAs are gen-time only.
+        if clothes.startswith("<lora:"):
+            continue
+        parts.append(_format_forge_phrase(clothes_bare, max_words=2, force_group=True))
         clothes_added += 1
         if clothes_added >= clothes_budget:
             break
@@ -3327,11 +4193,8 @@ def build_portrait_prompt(
     elif kind_key == "face":
         parts.append("(portrait:1.5)")
     else:
-        # Lean full-figure framing. Heavy stacked weights (1.7 + 6 framing tags)
-        # made CyberRealistic collapse to abstract sludge on 512×768.
-        parts.append("(full body:1.35)")
-        parts.append("full body")
-        parts.append("head to toe")
+        # One framing tag only — stacking "full body" / "head to toe" / shot variants is redundant.
+        parts.append(_FULLBODY_FRAME_TAG)
 
     # --- 4. tiny optional detail (no big background inventing on portraits) ---
     if mode != "partial":
@@ -3359,12 +4222,20 @@ def build_portrait_prompt(
             "looking at viewer",
             "partial view",
             "(portrait:1.5)",
-            "(full body:1.35)",
-            "(full body:1.7)",
-            "full body",
-            "full body shot",
-            "head to toe",
+            _FULLBODY_FRAME_TAG,
         } or key.startswith("(portrait") or key.startswith("(full body"):
+            # Collapse any full-body framing variant to the single canonical tag
+            if key.startswith("(full body") or key in {
+                "full body",
+                "full body shot",
+                "head to toe",
+                "from head to toe",
+            }:
+                if _FULLBODY_FRAME_TAG.lower() in seen:
+                    continue
+                seen.add(_FULLBODY_FRAME_TAG.lower())
+                out.append(_FULLBODY_FRAME_TAG)
+                continue
             seen.add(key)
             out.append(p.strip())
             continue
@@ -3416,8 +4287,9 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
     if not text:
         return ""
     kind_key = "fullbody" if str(kind).lower() in {"fullbody", "body", "full"} else "face"
-    # Redundant framing we collapse to a lean set for fullbody.
+    # Redundant / obsolete framing — collapse to a single (full body:1.35).
     drop_framing = {
+        "full body",
         "full body shot",
         "entire body in frame",
         "standing full figure",
@@ -3425,36 +4297,36 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
         "full figure",
         "full-body",
         "fullbody",
+        "head to toe",
+        "from head to toe",
     }
     parts_out: list[str] = []
     seen: set[str] = set()
     seen_clothes_stems: set[str] = set()
-    has_full_body_weight = False
+    has_full_body_frame = False
     for raw in text.split(","):
         tag = raw.strip()
         if not tag:
             continue
         low = re.sub(r"\s+", " ", tag.lower()).strip()
-        # Normalize heavy full-body weight down
+        # Any full-body framing variant → one canonical tag
         m_weight = re.match(r"^\(\s*full\s*body\s*:\s*([\d.]+)\s*\)$", low)
-        if m_weight:
-            has_full_body_weight = True
-            if low not in seen:
-                seen.add(low)
-                parts_out.append("(full body:1.35)")
+        if m_weight or low in drop_framing or low in {"(full body)", "(full body:1.7)", "(full body:1.35)"}:
+            if not has_full_body_frame:
+                has_full_body_frame = True
+                seen.add(_FULLBODY_FRAME_TAG.lower())
+                parts_out.append(_FULLBODY_FRAME_TAG)
             continue
         if low.startswith("<lora:"):
             if low not in seen:
                 seen.add(low)
                 parts_out.append(tag)
             continue
-        if low in drop_framing:
-            continue
         # Preserve multi-word framing phrases before stopword stripping
-        if low in {"head to toe", "looking at viewer", "full body", "full body shot"}:
+        if low in {"looking at viewer"}:
             if low not in seen:
                 seen.add(low)
-                parts_out.append(low if low != "full body shot" else "full body")
+                parts_out.append(low)
             continue
         # Soft-strip obvious prose blobs
         structural = any(
@@ -3462,7 +4334,6 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
             for k in (
                 "full body",
                 "portrait",
-                "head to toe",
                 "looking at",
                 "standing",
                 "1boy",
@@ -3478,7 +4349,6 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
         words = re.findall(r"[a-z0-9']+", low)
         if (
             words
-            and "head to toe" not in low
             and sum(1 for w in words if w in _PROMPT_STOPWORDS) >= max(1, len(words) // 2)
         ):
             content = [w for w in words if w not in _PROMPT_STOPWORDS and w not in _PROMPT_VERBISH]
@@ -3486,43 +4356,65 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
                 continue
             tag = " ".join(content[:4])
             low = tag
-        # Clothing near-dupe collapse
+        # Clothing: simplify + stem-dedupe (frayed work coat / scuffed boots → work_coat, boots)
         bare = re.sub(r"^\((.+?)(?::\s*[\d.]+)?\)$", r"\1", low).strip()
-        if any(w in bare for w in ("coat", "jacket", "cloak", "gloves", "boots", "pants", "shirt")):
-            stem = re.sub(
-                r"\b(oil-?stained|frayed|weathered|worn|old|new|dirty|clean|torn|patched|reinforced)\b",
-                "",
-                bare,
+        bare_sp = bare.replace("_", " ")
+        # Drop consumable / junk tags that sometimes leak into engine boxes
+        if re.search(
+            r"\b(water\s*skin|waterskin|coin|coins|ration|bread|flask|mixed)\b",
+            bare_sp,
+        ):
+            continue
+        if any(
+            w in bare_sp
+            for w in (
+                "coat",
+                "jacket",
+                "cloak",
+                "gloves",
+                "boots",
+                "boot",
+                "pants",
+                "shirt",
+                "tunic",
+                "robe",
+                "armor",
+                "shoes",
             )
-            stem = re.sub(r"\s+", " ", stem).strip()
+        ):
+            simple = _simplify_wardrobe_label(bare_sp)
+            if simple:
+                bare_sp = simple
+                bare = simple
+            stem = _wardrobe_stem(bare_sp)
             if stem and stem in seen_clothes_stems:
                 continue
             if stem:
                 seen_clothes_stems.add(stem)
-        # Group multi-word plain tags so they stay one Forge concept
-        if not tag.startswith("(") and not tag.startswith("<lora:") and not tag.startswith("["):
-            word_n = len(bare.split())
-            if word_n >= 2 and any(
-                w in bare
-                for w in (
-                    "coat",
-                    "jacket",
-                    "cloak",
-                    "gloves",
-                    "boots",
-                    "pants",
-                    "shirt",
-                    "robe",
-                    "armor",
-                    "duster",
-                    "harness",
-                    "turtleneck",
-                )
-            ):
-                tag = _format_forge_phrase(bare, max_words=4, weight=1.05, force_group=True)
+        # Face cues in a full-body engine paste: drop (face-lock owns identity)
+        if kind_key == "fullbody" and any(
+            w in bare_sp for w in ("eyes", "scar", "freckle", "brow", "jaw", "cheek")
+        ):
+            if not any(w in bare_sp for w in ("coat", "boot", "shirt", "hair", "standing", "full body")):
+                continue
+        # Unwrap near-1.0 attention noise; gear max 2 words; eyes keep spaces via framing list
+        if tag.startswith("(") and not re.match(r"^\(\s*(portrait|full\s*body)\s*:", tag, re.I):
+            tag = _format_forge_phrase(bare_sp if bare_sp else tag, max_words=2)
+            low = tag.lower()
+            bare = re.sub(r"^\((.+?)(?::\s*[\d.]+)?\)$", r"\1", low).strip()
+        elif not tag.startswith("(") and not tag.startswith("<lora:") and not tag.startswith("["):
+            # Re-simplify face intensifiers if user pasted steel grey eyes
+            if "eyes" in bare_sp or "scar" in bare_sp:
+                simplified_face = _simplify_face_feature_phrase(bare_sp)
+                if simplified_face:
+                    bare_sp = simplified_face
+            word_n = len(re.split(r"[\s_]+", bare_sp.strip()))
+            if word_n >= 2:
+                max_w = 2 if any(g in bare_sp for g in ("coat", "boot", "pants", "shirt", "gloves")) else 3
+                tag = _format_forge_phrase(bare_sp, max_words=max_w, force_group=True)
                 low = tag.lower()
-            elif word_n >= 3:
-                tag = _format_forge_phrase(bare, max_words=4)
+            else:
+                tag = bare_sp or tag
                 low = tag.lower()
         if low in seen:
             continue
@@ -3531,10 +4423,8 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
     blob = ", ".join(parts_out)
     if kind_key == "fullbody":
         low_blob = blob.lower()
-        if not has_full_body_weight and "full body" not in low_blob:
-            blob = f"{blob}, (full body:1.35), full body, head to toe" if blob else "(full body:1.35), full body, head to toe"
-        elif "head to toe" not in low_blob:
-            blob = f"{blob}, head to toe" if blob else "head to toe"
+        if not has_full_body_frame and "full body" not in low_blob:
+            blob = f"{blob}, {_FULLBODY_FRAME_TAG}" if blob else _FULLBODY_FRAME_TAG
         # Cap total tags so long engine boxes can't re-poison the model
         tags = [t.strip() for t in blob.split(",") if t.strip()]
         if len(tags) > 16:
@@ -3543,7 +4433,7 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
             rest: list[str] = []
             for t in tags:
                 tl = t.lower()
-                if tl.startswith(("1boy", "1girl", "1person", "(full", "full body", "standing", "head to")) or "lora:" in tl:
+                if tl.startswith(("1boy", "1girl", "1person", "(full", "full body", "standing")) or "lora:" in tl:
                     keep.append(t)
                 else:
                     rest.append(t)
@@ -3551,10 +4441,21 @@ def sanitize_engine_prompt(prompt: str, *, kind: str = "fullbody") -> str:
     return blob.strip(" ,")
 
 
-def resolve_active_loras(loras: list[Any] | None = None, cfg: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Prefer request LoRAs; fall back to saved forge_active_loras in image config."""
+def resolve_active_loras(
+    loras: list[Any] | None = None,
+    cfg: dict[str, Any] | None = None,
+    *,
+    fallback_saved: bool = False,
+) -> list[dict[str, Any]]:
+    """
+    Normalize explicit LoRA selections.
+
+    Does **not** auto-load forge_active_loras unless fallback_saved=True.
+    Callers must pass the LoRAs they want; never inject silent always-on stacks
+    into prompts.
+    """
     raw = list(loras or [])
-    if not raw:
+    if not raw and fallback_saved:
         conf = cfg if isinstance(cfg, dict) else get_image_config()
         stored = conf.get("forge_active_loras")
         if isinstance(stored, list):
@@ -3576,18 +4477,31 @@ def resolve_active_loras(loras: list[Any] | None = None, cfg: dict[str, Any] | N
 
 
 def format_lora_tags(loras: list[Any] | None) -> str:
-    """Turn [{name, weight}] into A1111/Forge prompt tags."""
+    """
+    Turn [{name, weight, activation_text}] into A1111/Forge prompt fragments.
+
+    Order per LoRA: <lora:name:weight> then activation keywords (if any).
+    Only emits tags for LoRAs the caller explicitly passed — never auto-picks.
+    """
     tags: list[str] = []
     for entry in loras or []:
         if isinstance(entry, str):
             name = entry.strip()
             weight = 1.0
+            activation = ""
         elif isinstance(entry, dict):
             name = str(entry.get("name") or entry.get("alias") or "").strip()
             try:
                 weight = float(entry.get("weight") if entry.get("weight") is not None else 1.0)
             except (TypeError, ValueError):
                 weight = 1.0
+            activation = str(
+                entry.get("activation_text")
+                or entry.get("activation")
+                or ""
+            ).strip()
+            if not activation and isinstance(entry.get("keywords"), list):
+                activation = ", ".join(str(k).strip() for k in entry["keywords"] if str(k).strip())
         else:
             continue
         if not name:
@@ -3596,9 +4510,58 @@ def format_lora_tags(loras: list[Any] | None) -> str:
         if name.startswith("<lora:"):
             tags.append(name)
             continue
-        weight = max(0.05, min(2.0, weight))
+        # Allow slider LoRAs outside 0–2 (e.g. age sliders); soft clamp
+        weight = max(-5.0, min(5.0, weight))
+        if abs(weight) < 0.01:
+            weight = 0.01 if weight >= 0 else -0.01
         tags.append(f"<lora:{name}:{weight:g}>")
+        if activation:
+            # Keep activation as short comma list, not re-underscored here (user keywords)
+            tags.append(activation)
     return " ".join(tags)
+
+
+def enrich_lora_selection(loras: list[Any] | None) -> list[dict[str, Any]]:
+    """
+    Fill preferred weight / activation text for an explicit selection from disk sidecars.
+    Does not invent selections — only enriches names the client already chose.
+    """
+    resolved = resolve_active_loras(loras, fallback_saved=False)
+    if not resolved:
+        return []
+    # Index disk catalog once
+    try:
+        catalog = {str(x.get("name") or "").lower(): x for x in list_local_loras()}
+    except Exception:
+        catalog = {}
+    out: list[dict[str, Any]] = []
+    for item in resolved:
+        name = str(item.get("name") or "").strip()
+        key = name.lower()
+        meta = catalog.get(key) or _enrich_lora_entry({"name": name})
+        weight = item.get("weight")
+        # If client sent default 1.0 and sidecar has preferred, prefer sidecar
+        try:
+            w = float(weight if weight is not None else 1.0)
+        except (TypeError, ValueError):
+            w = 1.0
+        pref = meta.get("preferred_weight")
+        if pref is not None and abs(w - 1.0) < 0.001:
+            try:
+                w = float(pref)
+            except (TypeError, ValueError):
+                pass
+        activation = str(item.get("activation_text") or meta.get("activation_text") or "").strip()
+        out.append(
+            {
+                "name": name,
+                "weight": w,
+                "activation_text": activation,
+                "keywords": list(meta.get("keywords") or []),
+                "preferred_weight": meta.get("preferred_weight"),
+            }
+        )
+    return out
 
 
 def _data_url_to_b64(data_url: str) -> str:
@@ -3613,12 +4576,11 @@ def _data_url_to_b64(data_url: str) -> str:
 
 
 # Negatives that fight portrait/bust composition when generating full body from a face ref.
-# Keep lean — long contradictory stacks (frame/border + head out of frame + half body…)
-# hurt CyberRealistic full-body more than they help.
+# Keep lean — synonym stacks (close-up + extreme close-up, cropped head + head out of frame)
+# bloat the string and hurt CyberRealistic more than they help. Spaces on common tags.
 _FULLBODY_FRAME_NEGATIVES = (
-    "portrait, close-up, headshot, bust shot, upper body only, head and shoulders, "
-    "cropped legs, face only, tight crop, selfie, passport photo, mugshot, half body, "
-    "abstract, glitch art, noise"
+    "portrait, close-up, headshot, upper body only, half body, "
+    "head out of frame, feet out of frame, abstract, glitch art"
 )
 
 
@@ -3754,12 +4716,39 @@ def _strip_portrait_framing_tokens(prompt: str) -> str:
 
 
 def _fullbody_negative(negative: str) -> str:
-    """Append framing negatives that discourage portrait crops."""
+    """Append lean framing negatives; strip redundant synonym clutter first."""
     neg = str(negative or "").strip()
+    # Drop older synonym noise if still present in saved/pasted negatives.
+    for pat in (
+        r"(^|,\s*)extreme\s+close[- ]?up(\s*,|$)",
+        r"(^|,\s*)cropped\s+head(\s*,|$)",
+        r"(^|,\s*)cropped\s+feet(\s*,|$)",
+        r"(^|,\s*)cropped\s+legs(\s*,|$)",
+        r"(^|,\s*)face\s+only(\s*,|$)",
+        r"(^|,\s*)tight\s+crop(\s*,|$)",
+        r"(^|,\s*)passport\s+photo(\s*,|$)",
+        r"(^|,\s*)mugshot(\s*,|$)",
+        r"(^|,\s*)bust\s+shot(\s*,|$)",
+        r"(^|,\s*)head\s+and\s+shoulders(\s*,|$)",
+        r"(^|,\s*)selfie(\s*,|$)",
+    ):
+        # Drop the whole token; keep a single comma join if both sides remain.
+        neg = re.sub(pat, lambda m: "," if m.group(1) and m.group(2) else "", neg, flags=re.I)
+    neg = re.sub(r"\s*,\s*", ", ", neg)
+    neg = re.sub(r"(?:,\s*){2,}", ", ", neg)
+    neg = re.sub(r"\s{2,}", " ", neg).strip(" ,")
     extra = _FULLBODY_FRAME_NEGATIVES
-    # Avoid doubling if user already pasted them.
-    low = neg.lower()
-    bits = [p.strip() for p in extra.split(",") if p.strip() and p.strip().lower() not in low]
+    # Normalize for contains-check: treat close_up / close-up / close up as same.
+    low = re.sub(r"[\s_\-]+", " ", neg.lower())
+    bits: list[str] = []
+    for p in extra.split(","):
+        phrase = p.strip()
+        if not phrase:
+            continue
+        key = re.sub(r"[\s_\-]+", " ", phrase.lower())
+        if key not in low:
+            bits.append(phrase)
+            low = f"{low}, {key}"
     if not bits:
         return neg
     add = ", ".join(bits)
@@ -3783,6 +4772,7 @@ def generate_image(
     apply_loras: bool = True,
     face_lock_image: str | None = None,
     consistency_mode: str | None = None,
+    config_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Generate one image. Returns:
@@ -3791,10 +4781,13 @@ def generate_image(
     init_image: data URL or raw base64 — when set, Forge uses img2img (light lock).
     face_lock_image: reference face for strong ControlNet InstantID / IP-Adapter when available.
     apply_primary / apply_loras: set False when prompt is already the final engine string.
+    config_override: merge into image config for this call only (e.g. hires flags from UI).
     """
     from app.gpu_gate import gpu_session
 
-    cfg = get_image_config()
+    cfg = dict(get_image_config())
+    if isinstance(config_override, dict) and config_override:
+        cfg.update(config_override)
     provider = _normalize_provider(cfg.get("provider"))
     if provider == "off":
         return {
@@ -3817,17 +4810,37 @@ def generate_image(
         # Ensure full-body framing tokens survive engine edits.
         low_p = prompt.lower()
         if "full body" not in low_p and "fullbody" not in low_p:
-            prompt = f"(full body:1.7), full body shot, head to toe, {prompt}" if prompt else "(full body:1.7), full body shot, head to toe"
-    # Always resolve LoRAs (request first, then saved config). Skip tags already in prompt.
-    resolved_loras = resolve_active_loras(loras, cfg)
-    if apply_loras and resolved_loras:
+            prompt = f"{_FULLBODY_FRAME_TAG}, {prompt}" if prompt else _FULLBODY_FRAME_TAG
+    # LoRAs only when the caller explicitly passes a non-empty list.
+    # Never fall back to forge_active_loras. Enrich weight/keywords from sidecars.
+    if apply_loras and loras:
+        resolved_loras = enrich_lora_selection(loras)
         lora_tags = format_lora_tags(resolved_loras)
         if lora_tags:
             low_p = prompt.lower()
-            # Tags are space-separated <lora:…:w> chunks
-            missing_bits = [t for t in lora_tags.split() if t and t.lower() not in low_p]
-            if missing_bits:
-                add = " ".join(missing_bits)
+            # Avoid re-adding if every <lora:…> is already present
+            lora_bits = [t for t in re.findall(r"<lora:[^>]+>", lora_tags, flags=re.I) if t]
+            missing_lora = [t for t in lora_bits if t.lower() not in low_p]
+            # Activation keywords: append once if not already in prompt
+            act_parts: list[str] = []
+            for entry in resolved_loras:
+                act = str(entry.get("activation_text") or "").strip()
+                if act and act.lower() not in low_p:
+                    act_parts.append(act)
+            chunks: list[str] = []
+            if missing_lora:
+                chunks.append(" ".join(missing_lora))
+            elif not lora_bits and lora_tags:
+                # string form without parse — push whole fragment if nothing matched
+                if lora_tags.lower() not in low_p:
+                    chunks.append(lora_tags)
+            if act_parts:
+                # Only add activation words not already covered by lora_tags string
+                for act in act_parts:
+                    if act.lower() not in low_p and act not in " ".join(chunks):
+                        chunks.append(act)
+            if chunks:
+                add = ", ".join(chunks)
                 prompt = f"{prompt}, {add}" if prompt else add
     if not prompt:
         return {"ok": False, "provider": provider, "error": "Prompt is empty."}
@@ -3893,6 +4906,9 @@ def _generate_image_body(
     if seed is None:
         seed = int(time.time() * 1000) % (2**31 - 1)
     timeout = int(cfg.get("timeout_seconds") or 180)
+    # Hires roughly doubles work — give Forge more wall time so second pass isn't cut off.
+    if bool(cfg.get("forge_enable_hr")) and float(cfg.get("forge_hr_scale") or 1.0) > 1.01:
+        timeout = max(timeout, min(900, int(timeout * 1.75) + 45))
     started = time.time()
     init_b64 = _data_url_to_b64(init_image or "")
 
@@ -3956,7 +4972,8 @@ def _generate_image_body(
                 composited = _composite_face_ref_for_fullbody(init_b64, width=width, height=height)
                 if composited:
                     init_b64 = composited
-                    denoise = max(float(denoise), 0.84)
+                    # Keep denoise moderate so the composited face is not washed out
+                    denoise = min(max(float(denoise), 0.78), 0.88)
             elif is_body_purpose and lock_b64 and not init_b64:
                 composited = _composite_face_ref_for_fullbody(lock_b64, width=width, height=height)
                 if composited and (
@@ -3964,7 +4981,7 @@ def _generate_image_body(
                     or resolved.get("mode") == "light"
                 ):
                     init_b64 = composited
-                    denoise = max(float(denoise), 0.84)
+                    denoise = min(max(float(denoise), 0.78), 0.88)
             ref_b64_for_fallback = lock_b64 or init_b64
             ad_wants_face_ref = (
                 bool(cfg.get("adetailer_enable"))
@@ -3998,7 +5015,7 @@ def _generate_image_body(
                         )
                         init_b64 = composited or lock_b64
                         if composited:
-                            denoise = max(float(denoise), 0.84)
+                            denoise = min(max(float(denoise), 0.78), 0.88)
                     else:
                         init_b64 = lock_b64
             if resolved.get("use_strong") and lock_b64:
@@ -4040,6 +5057,15 @@ def _generate_image_body(
                     always if use_cn else None,
                     adetailer_scripts,
                 )
+                # Hires denoise/upscaler/steps are separate from face-ref img2img denoise.
+                try:
+                    hr_denoise = float(cfg.get("forge_denoising_strength") or 0.45)
+                except (TypeError, ValueError):
+                    hr_denoise = 0.45
+                try:
+                    hr_steps = int(cfg.get("forge_hr_second_pass_steps") or 0)
+                except (TypeError, ValueError):
+                    hr_steps = 0
                 return _generate_forge(
                     base_url=forge_base,
                     prompt=prompt,
@@ -4057,11 +5083,14 @@ def _generate_image_body(
                     clip_skip=int(cfg.get("forge_clip_skip") or 1),
                     restore_faces=restore_faces,
                     tiling=bool(cfg.get("forge_tiling")),
-                    # Hires fix is txt2img-only (A1111/Forge); skip when img2img init or ControlNet unit.
-                    enable_hr=bool(cfg.get("forge_enable_hr")) and not bool(init) and not use_cn,
+                    # Always honor hires toggle. txt2img uses native enable_hr;
+                    # img2img (face-ref) post-upscales via extras with the same upscaler/scale.
+                    enable_hr=bool(cfg.get("forge_enable_hr")),
                     hr_scale=float(cfg.get("forge_hr_scale") or 1.5),
                     hr_upscaler=str(cfg.get("forge_hr_upscaler") or "Latent"),
-                    denoising_strength=denoise,
+                    hr_denoising_strength=hr_denoise,
+                    hr_second_pass_steps=hr_steps,
+                    img2img_denoising_strength=denoise if init or use_cn else None,
                     init_images=[init] if init else None,
                     alwayson_scripts=scripts,
                     prefer_txt2img_with_controlnet=bool(use_cn),
@@ -4102,6 +5131,22 @@ def _generate_image_body(
             result["consistency_strong"] = bool(prefer_cn)
             result["adetailer"] = bool(adetailer_scripts)
             result["adetailer_face_ref"] = bool(ad_wants_face_ref and lock_b64)
+            result["hires_enabled"] = bool(cfg.get("forge_enable_hr"))
+            result["hires_native"] = bool(result.get("hires_native"))
+            result["hires_post_upscale"] = bool(result.get("hires_post_upscale"))
+            if result.get("hires_error"):
+                result["hires_note"] = str(result.get("hires_error"))[:300]
+            elif result.get("hires_post_upscale"):
+                result["hires_note"] = (
+                    f"Post-upscaled ×{cfg.get('forge_hr_scale') or 1.5} with "
+                    f"{cfg.get('forge_hr_upscaler') or 'upscaler'} (face-ref gens use extras API)."
+                )
+            elif result.get("hires_native"):
+                result["hires_note"] = (
+                    f"Native hires fix ×{cfg.get('forge_hr_scale') or 1.5} · "
+                    f"{cfg.get('forge_hr_upscaler') or 'Latent'} · "
+                    f"denoise {cfg.get('forge_denoising_strength') or 0.45}"
+                )
             if ad_wants_face_ref and lock_b64:
                 result["adetailer_face_ref_note"] = (
                     "ADetailer has no external face-image field; face was locked into the main "
@@ -4152,6 +5197,15 @@ def _generate_image_body(
     except Exception:
         path = ""
 
+    # Report output size after possible hires upscale
+    out_w, out_h = width, height
+    if bool(cfg.get("forge_enable_hr")) and float(cfg.get("forge_hr_scale") or 1.0) > 1.01:
+        try:
+            scale = float(cfg.get("forge_hr_scale") or 1.5)
+            out_w = max(width, int(round(width * scale)))
+            out_h = max(height, int(round(height * scale)))
+        except (TypeError, ValueError):
+            pass
     return {
         "ok": True,
         "provider": provider,
@@ -4160,10 +5214,16 @@ def _generate_image_body(
         "data_url": f"data:{mime};base64,{raw_b64}",
         "path": path,
         "seed": int(seed),
-        "width": width,
-        "height": height,
+        "width": out_w,
+        "height": out_h,
+        "base_width": width,
+        "base_height": height,
         "prompt": prompt,
         "negative_prompt": negative,
+        "hires_enabled": bool(cfg.get("forge_enable_hr")),
+        "hires_native": bool(result.get("hires_native")),
+        "hires_post_upscale": bool(result.get("hires_post_upscale")),
+        "hires_note": result.get("hires_note") or result.get("hires_error") or "",
         "elapsed_ms": int((time.time() - started) * 1000),
     }
 
@@ -4901,6 +5961,191 @@ def resolve_character_consistency_mode(cfg: dict[str, Any] | None = None) -> dic
     return {"mode": "light", "probe": probe, "use_light_img2img": True, "use_strong": False}
 
 
+def _list_forge_api_upscaler_names(base_url: str, timeout: int = 15) -> list[str]:
+    """Names Forge accepts for extras / hires (best-effort)."""
+    base = base_url.rstrip("/")
+    names: list[str] = []
+    for path in ("/sdapi/v1/upscalers", "/sdapi/v1/latent-upscale-modes"):
+        try:
+            payload = _http_json("GET", f"{base}{path}", timeout=min(timeout, 20))
+        except Exception:
+            continue
+        if not isinstance(payload, list):
+            continue
+        for item in payload:
+            label = _catalog_item_name(item)
+            if label and label.lower() not in {"none", "null"}:
+                names.append(label)
+    # de-dupe preserve order
+    out: list[str] = []
+    seen: set[str] = set()
+    for n in names:
+        key = n.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(n)
+    return out
+
+
+def _resolve_extras_upscaler(base_url: str, preferred: str, timeout: int = 15) -> str:
+    """
+    Map UI/hires upscaler name to something the extras API accepts.
+    Latent* only works inside native hires fix — extras needs a real model.
+    """
+    want = str(preferred or "").strip() or "R-ESRGAN 4x+"
+    if want.lower().startswith("latent") or want.lower() in {"nearest", "none", "bilinear", "bicubic"}:
+        want = "R-ESRGAN 4x+"
+    available = _list_forge_api_upscaler_names(base_url, timeout=timeout)
+    if not available:
+        return want
+    low_map = {n.lower(): n for n in available}
+    if want.lower() in low_map:
+        return low_map[want.lower()]
+    # Fuzzy: filename stem match (4x-UltraSharp.pth → 4x-UltraSharp)
+    want_stem = Path(want).stem.lower().replace(" ", "").replace("_", "").replace("-", "")
+    for n in available:
+        stem = Path(n).stem.lower().replace(" ", "").replace("_", "").replace("-", "")
+        if stem == want_stem or want_stem in stem or stem in want_stem:
+            return n
+    # Prefer common high-quality models installed with Forge
+    for candidate in (
+        "R-ESRGAN 4x+",
+        "R-ESRGAN 4x+ Anime6B",
+        "4x-UltraSharp",
+        "ESRGAN_4x",
+        "SwinIR_4x",
+        "LDSR",
+    ):
+        if candidate.lower() in low_map:
+            return low_map[candidate.lower()]
+    # First non-latent real upscaler
+    for n in available:
+        if not n.lower().startswith("latent") and n.lower() not in {"none", "nearest"}:
+            return n
+    return want
+
+
+def _image_b64_size(raw_b64: str) -> tuple[int, int]:
+    """Best-effort (width, height) for a raw base64 PNG/JPEG."""
+    try:
+        import base64
+        from io import BytesIO
+
+        from PIL import Image
+
+        raw = str(raw_b64 or "").split(",", 1)[0].strip()
+        img = Image.open(BytesIO(base64.b64decode(raw)))
+        return int(img.size[0]), int(img.size[1])
+    except Exception:
+        return 512, 768
+
+
+def _forge_extra_upscale(
+    *,
+    base_url: str,
+    image_b64: str,
+    upscaler: str,
+    scale: float,
+    timeout: int,
+) -> str:
+    """
+    Post-upscale via Forge/A1111 extras API.
+    Used when hires fix is requested but the gen was img2img (face-ref path),
+    because native enable_hr is txt2img-only on A1111/Forge.
+    Returns raw base64 PNG (no data: prefix).
+    """
+    base = base_url.rstrip("/")
+    raw_in = str(image_b64 or "").split(",", 1)[0].strip()
+    if not raw_in:
+        raise RuntimeError("No image to upscale.")
+    scale_f = max(1.05, min(4.0, float(scale or 1.5)))
+    ups = _resolve_extras_upscaler(base, str(upscaler or ""), timeout=min(20, timeout))
+    # Also try every non-latent upscaler the API reports (exact names matter for 422s).
+    api_names = [
+        n
+        for n in _list_forge_api_upscaler_names(base, timeout=min(20, timeout))
+        if n and not n.lower().startswith("latent") and n.lower() not in {"none", "nearest", "nearest-exact"}
+    ]
+    candidates: list[str] = []
+    for c in [ups, *api_names, "R-ESRGAN 4x+", "R-ESRGAN4x+", "ESRGAN_4x", "4x-UltraSharp", "SwinIR_4x"]:
+        if c and c not in candidates:
+            candidates.append(c)
+
+    src_w, src_h = _image_b64_size(raw_in)
+    out_w = max(64, min(4096, int(round(src_w * scale_f))))
+    out_h = max(64, min(4096, int(round(src_h * scale_f))))
+    # Snap to multiples of 8 (Forge/A1111 often expects this)
+    out_w = max(64, (out_w // 8) * 8)
+    out_h = max(64, (out_h // 8) * 8)
+
+    last_err = ""
+    # Forge FastAPI often 422s on w/h=0 or int visibility fields — try several valid shapes.
+    for try_ups in candidates[:8]:
+        bodies: list[dict[str, Any]] = [
+            # Minimal scale-by-factor (most portable)
+            {
+                "resize_mode": 0,
+                "upscaling_resize": float(scale_f),
+                "upscaler_1": try_ups,
+                "image": raw_in,
+            },
+            # Explicit target size (resize_mode 1 = scale to w/h)
+            {
+                "resize_mode": 1,
+                "upscaling_resize_w": int(out_w),
+                "upscaling_resize_h": int(out_h),
+                "upscaling_crop": False,
+                "upscaler_1": try_ups,
+                "image": raw_in,
+            },
+            # Full A1111-style payload with floats (not 0 w/h)
+            {
+                "resize_mode": 0,
+                "show_extras_results": True,
+                "gfpgan_visibility": 0.0,
+                "codeformer_visibility": 0.0,
+                "codeformer_weight": 0.0,
+                "upscaling_resize": float(scale_f),
+                "upscaling_resize_w": int(out_w),
+                "upscaling_resize_h": int(out_h),
+                "upscaling_crop": False,
+                "upscaler_1": try_ups,
+                "upscaler_2": "None",
+                "extras_upscaler_2_visibility": 0.0,
+                "upscale_first": False,
+                "image": raw_in,
+            },
+        ]
+        for body in bodies:
+            try:
+                payload = _http_json(
+                    "POST",
+                    f"{base}/sdapi/v1/extra-single-image",
+                    body=body,
+                    timeout=timeout,
+                )
+            except Exception as exc:
+                last_err = str(exc)[:400]
+                continue
+            if not isinstance(payload, dict):
+                last_err = "Forge extras upscale returned no payload."
+                continue
+            out = payload.get("image") or payload.get("images")
+            if isinstance(out, list) and out:
+                return str(out[0]).split(",", 1)[0]
+            if isinstance(out, str) and out.strip():
+                return out.split(",", 1)[0]
+            last_err = f"no image for upscaler={try_ups!r}"
+    raise RuntimeError(
+        f"Forge extras upscale failed (tried {candidates[:5]!r} @ ×{scale_f}). {last_err} "
+        "Pick a real model like R-ESRGAN 4x+ or 4x-UltraSharp in Hires upscaler "
+        "(not Latent — Latent only works with native txt2img hires fix). "
+        "If every attempt is HTTP 422, Forge's extras endpoint may be broken under --nowebui; "
+        "try scale 1.5 + R-ESRGAN 4x+ or disable Hires for face-ref body gens."
+    )
+
+
 def _generate_forge(
     *,
     base_url: str,
@@ -4922,7 +6167,10 @@ def _generate_forge(
     enable_hr: bool = False,
     hr_scale: float = 1.5,
     hr_upscaler: str = "Latent",
-    denoising_strength: float = 0.45,
+    hr_denoising_strength: float = 0.45,
+    hr_second_pass_steps: int = 0,
+    # Face-ref / img2img denoise (separate from hires denoise)
+    img2img_denoising_strength: float | None = None,
     init_images: list[str] | None = None,
     alwayson_scripts: dict[str, Any] | None = None,
     prefer_txt2img_with_controlnet: bool = False,
@@ -4930,6 +6178,8 @@ def _generate_forge(
     base = base_url.rstrip("/")
     sampler = (sampler_name or "").strip() or "Euler a"
     use_img2img = bool(init_images and init_images[0]) and not prefer_txt2img_with_controlnet
+    # Native hires fix is txt2img-only on Forge/A1111.
+    want_hr = bool(enable_hr) and not use_img2img
     body: dict[str, Any] = {
         "prompt": prompt,
         "negative_prompt": negative_prompt,
@@ -4943,18 +6193,34 @@ def _generate_forge(
         "sampler_name": sampler,
         "restore_faces": bool(restore_faces),
         "tiling": bool(tiling),
-        "enable_hr": bool(enable_hr) and not use_img2img,
+        "enable_hr": want_hr,
     }
     sched = (scheduler or "").strip()
     if sched and sched.lower() not in {"", "automatic", "auto"}:
         body["scheduler"] = sched
-    if enable_hr and not use_img2img:
+    if want_hr:
         body["hr_scale"] = float(hr_scale or 1.5)
         body["hr_upscaler"] = str(hr_upscaler or "Latent")
-        body["denoising_strength"] = float(denoising_strength or 0.45)
+        body["denoising_strength"] = float(hr_denoising_strength if hr_denoising_strength is not None else 0.45)
+        hr_steps = int(hr_second_pass_steps or 0)
+        if hr_steps > 0:
+            body["hr_second_pass_steps"] = hr_steps
+        # Some Forge builds also read hr_sampler_name; keep main sampler for second pass.
+        body["hr_sampler_name"] = sampler
+        # Forge/reForge aliases seen in the wild
+        body["hr_resize_x"] = 0
+        body["hr_resize_y"] = 0
+        body["hr_checkpoint_name"] = "Use same checkpoint"
+        body["hr_prompt"] = ""
+        body["hr_negative_prompt"] = ""
     if use_img2img:
         body["init_images"] = [str(init_images[0])]
-        body["denoising_strength"] = float(denoising_strength if denoising_strength is not None else 0.65)
+        den = (
+            float(img2img_denoising_strength)
+            if img2img_denoising_strength is not None
+            else 0.65
+        )
+        body["denoising_strength"] = den
         # 1 = crop and resize (never squash aspect). Mode 0 "just resize" stretches
         # square face refs into tall canvases and warps full-body anatomy.
         body["resize_mode"] = 1
@@ -4977,13 +6243,38 @@ def _generate_forge(
         raise RuntimeError("Forge/A1111 returned no images. Is --api enabled?")
     # A1111 sometimes appends metadata after a comma in the base64 field.
     raw = str(images[0]).split(",", 1)[0]
-    return {
+    out: dict[str, Any] = {
         "image_base64": raw,
         "mime": "image/png",
         "raw": payload,
         "mode": "img2img" if use_img2img else "txt2img",
         "used_controlnet": bool(alwayson_scripts),
+        "hires_native": want_hr,
+        "hires_requested": bool(enable_hr),
     }
+    # Face-ref / img2img gens: native hires is unavailable → post-upscale with extras.
+    # Also fallback when native hires was requested on txt2img but still came back base-sized.
+    need_post = bool(enable_hr) and float(hr_scale or 1.0) > 1.01 and (
+        use_img2img or not want_hr
+    )
+    if need_post:
+        try:
+            up_b64 = _forge_extra_upscale(
+                base_url=base,
+                image_b64=raw,
+                upscaler=str(hr_upscaler or "R-ESRGAN 4x+"),
+                scale=float(hr_scale or 1.5),
+                timeout=timeout,
+            )
+            out["image_base64"] = up_b64
+            out["hires_post_upscale"] = True
+            out["hires_native"] = False
+            out["hires_upscaler"] = str(hr_upscaler or "")
+            out["hires_scale"] = float(hr_scale or 1.5)
+        except Exception as up_exc:
+            out["hires_post_upscale"] = False
+            out["hires_error"] = str(up_exc)[:400]
+    return out
 
 
 def _load_comfy_workflow(workflow_name: str) -> dict[str, Any]:
@@ -6514,7 +7805,7 @@ def build_character_prompt(
     Shared simple tag prompt for face and fullbody.
 
     Order: subject → setting → pose → hair → face → clothing → image-type
-    Face vs body only swap pose / (portrait) vs (full body + feet).
+    Face vs body only swap pose / (portrait:1.5) vs a single (full body:1.35).
     """
     return build_portrait_prompt(
         name=name,
@@ -6579,7 +7870,9 @@ def build_character_prompt_pack(
     Players can copy/edit the returned strings in the UI, then send them as overrides.
 
     Final positive order:
-      [optional primary theme], core tags…, <lora:…>  (LoRAs always last)
+      [optional primary theme], core tags…
+    LoRA tags are never baked into face/fullbody prompt strings — they are only
+    applied at generate time when the client explicitly passes a selection.
     """
     cfg = get_image_config()
     presets = load_image_presets()
@@ -6632,15 +7925,26 @@ def build_character_prompt_pack(
     if vis_mode == "partial":
         normalized = [k for k in normalized if k == "face"] or ["face"]
 
-    lora_tags = format_lora_tags(loras)
+    # Explicit selection only (caller passed loras). Empty = nothing injected.
+    lora_tags = format_lora_tags(enrich_lora_selection(loras) if loras else [])
 
     def _finalize(subject_prompt: str) -> str:
-        # Optional primary theme first, core tags, LoRAs last (after a comma).
+        # Optional primary theme first, core tags, then checked LoRAs last.
         core = str(subject_prompt or "").strip()
         if primary and primary.lower() not in core.lower():
             core = f"{primary}, {core}" if core else primary
         if lora_tags:
-            return f"{core}, {lora_tags}" if core else lora_tags
+            # Avoid double-inject if subject already carries the same <lora:…>
+            low = core.lower()
+            bits = [t for t in re.findall(r"<lora:[^>]+>", lora_tags, flags=re.I) if t.lower() not in low]
+            act_bits: list[str] = []
+            # Activation keywords from format_lora_tags sit after each <lora:…>
+            rest = re.sub(r"<lora:[^>]+>", "", lora_tags).strip(" ,")
+            if rest and rest.lower() not in low:
+                act_bits.append(rest)
+            add = " ".join(bits + act_bits).strip()
+            if add:
+                return f"{core}, {add}" if core else add
         return core
 
     face_subject = build_character_prompt(
@@ -6815,6 +8119,12 @@ def generate_character_set(
     fullbody_prompt: str = "",
     face_negative: str = "",
     fullbody_negative: str = "",
+    # Optional per-request hires overrides (avoid race with debounced image-config save).
+    forge_enable_hr: bool | None = None,
+    forge_hr_scale: float | None = None,
+    forge_hr_upscaler: str | None = None,
+    forge_denoising_strength: float | None = None,
+    forge_hr_second_pass_steps: int | None = None,
 ) -> dict[str, Any]:
     """
     Generate face and/or fullbody images using presets.
@@ -6834,7 +8144,34 @@ def generate_character_set(
     fullbody_prompt = str(fullbody_prompt or "").strip()
     face_negative = str(face_negative or "").strip()
     fullbody_negative = str(fullbody_negative or "").strip()
-    cfg = get_image_config()
+    cfg = dict(get_image_config())
+    # Apply hires overrides for this run (and persist so later gens share them).
+    hr_patch: dict[str, Any] = {}
+    if forge_enable_hr is not None:
+        hr_patch["forge_enable_hr"] = bool(forge_enable_hr)
+    if forge_hr_scale is not None:
+        try:
+            hr_patch["forge_hr_scale"] = max(1.0, min(4.0, float(forge_hr_scale)))
+        except (TypeError, ValueError):
+            pass
+    if forge_hr_upscaler is not None and str(forge_hr_upscaler).strip():
+        hr_patch["forge_hr_upscaler"] = str(forge_hr_upscaler).strip()[:200]
+    if forge_denoising_strength is not None:
+        try:
+            hr_patch["forge_denoising_strength"] = max(0.0, min(1.0, float(forge_denoising_strength)))
+        except (TypeError, ValueError):
+            pass
+    if forge_hr_second_pass_steps is not None:
+        try:
+            hr_patch["forge_hr_second_pass_steps"] = max(0, min(150, int(forge_hr_second_pass_steps)))
+        except (TypeError, ValueError):
+            pass
+    if hr_patch:
+        cfg.update(hr_patch)
+        try:
+            update_image_config(hr_patch)
+        except Exception:
+            pass
 
     subject_gate = assess_character_art_readiness(
         name=name,
@@ -6921,16 +8258,17 @@ def generate_character_set(
         else bool(use_face_reference)
     )
     ref_url = str(reference_data_url or "").strip()
-    # Denoise: lower = stronger ref / composition lock; higher = freer full-body pose.
-    # Face is composited into a tall canvas — default ~0.88 keeps likeness without bust crop.
+    # Denoise: lower = stronger face lock; higher = freer pose.
+    # Face is composited into a tall canvas — ~0.82 keeps likeness without bust crop.
     try:
-        ref_denoise = float(cfg.get("fullbody_ref_denoise") or 0.88)
+        ref_denoise = float(cfg.get("fullbody_ref_denoise") or 0.82)
     except (TypeError, ValueError):
-        ref_denoise = 0.88
+        ref_denoise = 0.82
     # Soften old strong saves (≤0.72) that glued body gens to portrait composition.
     if ref_denoise <= 0.72:
-        ref_denoise = 0.88
-    ref_denoise = max(0.75, min(0.95, ref_denoise))
+        ref_denoise = 0.82
+    # Very high denoise washes the face ref (feels like "face lock off")
+    ref_denoise = max(0.75, min(0.90, ref_denoise))
 
     results: dict[str, Any] = {
         "ok": True,
@@ -7075,6 +8413,7 @@ def generate_character_set(
             apply_loras=True,
             face_lock_image=face_lock,
             consistency_mode=str(cfg.get("character_consistency") or "auto"),
+            config_override=cfg,
         )
         # Quality gate: abstract/dark sludge → one clean txt2img retry (no face-ref, lean prompt).
         if kind == "fullbody" and gen.get("ok") and _image_looks_abstract_failure(gen):
@@ -7096,7 +8435,7 @@ def generate_character_set(
             )
             retry_prompt = sanitize_engine_prompt(retry_prompt, kind="fullbody")
             retry_neg = _fullbody_negative(
-                "lowres, blurry, deformed, bad anatomy, watermark, text, abstract, portrait, close-up, headshot"
+                "lowres, blurry, deformed, bad anatomy, watermark, text, abstract"
             )
             retry = generate_image(
                 prompt=retry_prompt or prompt,
@@ -7114,6 +8453,7 @@ def generate_character_set(
                 apply_loras=False,
                 face_lock_image=None,
                 consistency_mode="off",
+                config_override=cfg,
             )
             if retry.get("ok") and not _image_looks_abstract_failure(retry):
                 retry["kind"] = kind
@@ -7157,4 +8497,7 @@ def generate_character_set(
     results["elapsed_ms"] = int((time.time() - started) * 1000)
     results["equipment_used"] = equipment
     results["injuries_used"] = injuries
+    results["hires_enabled"] = bool(cfg.get("forge_enable_hr"))
+    results["hires_scale"] = float(cfg.get("forge_hr_scale") or 1.5)
+    results["hires_upscaler"] = str(cfg.get("forge_hr_upscaler") or "")
     return results
