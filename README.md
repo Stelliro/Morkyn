@@ -43,7 +43,29 @@ Assets: [`Media/`](Media/).
 
 ## Quick Start
 
-**Requirements:** Windows (primary), Python 3.11+, a local model server or GGUF model (or cloud OpenAI-compatible API).
+**Requirements:** Windows (primary), Python 3.11+, Git, and a local model server or GGUF model (or cloud OpenAI-compatible API).
+
+### Never installed it before? Use the one-file launcher
+
+Download **[`start.bat`](https://github.com/Stelliro/Morkyn/releases/latest/download/start.bat)** (Windows) or **[`start.sh`](https://github.com/Stelliro/Morkyn/releases/latest/download/start.sh)** (Linux / macOS) from the [latest release](https://github.com/Stelliro/Morkyn/releases/latest), drop it in an empty folder, and run it.
+
+```text
+Windows        double-click start.bat
+Linux / macOS  bash start.sh
+```
+
+It clones the project into a `Morkyn` subfolder, builds a private `.venv`, installs the dependencies, and starts the game. Every run after that checks GitHub for updates and **asks before applying them** — answer no and it starts the copy you already have. With no connection it skips the check and starts anyway, and it never touches a checkout with uncommitted local changes.
+
+| Flag | Effect |
+| --- | --- |
+| `--full` | also install `llama-cpp-python` (only for the built-in GGUF server) |
+| `--update` | apply an available update without asking |
+| `--no-update` | skip the update check entirely |
+| `--help` | full usage |
+
+Both scripts also work from inside an existing checkout — they detect it and skip the clone.
+
+### Already have the repo
 
 ```powershell
 python -m pip install -r requirements.txt

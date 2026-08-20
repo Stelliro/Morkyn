@@ -21,6 +21,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > Changes after `0.9.0` live here.
 
+### Added
+
+- One-file bootstrappers `start.bat` (Windows) and `start.sh` (Linux / macOS), published as assets on the `v0.9.0` release. Dropped into an empty folder they clone the repo, build a private `.venv`, install dependencies and start the game; on later runs they check GitHub, **ask before updating**, and start the existing copy when the answer is no, when the machine is offline, or when the checkout has local changes. Flags: `--full`, `--update`, `--no-update`, `--help`; Windows passes anything else through to `Morkyn.bat`.
+  - The default install filters `llama-cpp-python` out of `requirements.txt` rather than duplicating the pins. Its CUDA wheels are a large download that fails outright without a matching toolchain, and neither Ollama nor the cloud APIs need it. `--full` installs it.
+- `.gitattributes` pinning `*.sh` to LF. The repo is developed with `core.autocrlf=true`, which would otherwise check `start.sh` out with CRLF and break its shebang on Linux and macOS.
+
 ---
 
 ## [0.9.0] - 2026-08-20

@@ -1,0 +1,4 @@
+# Shell scripts must keep LF endings. A CRLF start.sh fails on Linux and macOS
+# with "bad interpreter: /bin/bash^M", and most Windows clones set
+# core.autocrlf=true, which would otherwise rewrite them on checkout.
+*.sh text eol=lf

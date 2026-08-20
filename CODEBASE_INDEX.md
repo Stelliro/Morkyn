@@ -62,6 +62,7 @@ Morkyn/
 |-- tests/                           # behavior_test, narration pipeline unit tests
 |-- benchmarks/                      # Dual-role / long-run harnesses (reports/ gitignored)
 |-- data/                            # Runtime only (gitignored): world.db, source_index, slots, traces
+|-- start.bat / start.sh             # Bootstrappers: clone, update-prompt, launch
 |-- Morkyn.bat / Morkyn.ps1          # Primary launcher (root)
 |-- start_ai_rpg.bat / .ps1          # Compatibility shims -> Morkyn.*
 |-- README.md / CHANGELOG.md / LICENSE.md / PRIVACY_POLICY.md
@@ -187,12 +188,12 @@ Morkyn/
 
 #### Launchers
 
-- **Files:** `Morkyn.ps1`, `Morkyn.bat` (primary); `start_ai_rpg.ps1`, `start_ai_rpg.bat` (compatibility shims)
+- **Files:** `Morkyn.ps1`, `Morkyn.bat` (primary); `start.bat`, `start.sh` (standalone bootstrappers, published as release assets); `start_ai_rpg.ps1`, `start_ai_rpg.bat` (compatibility shims)
 - **Purpose:** Interactive pre-play menu (simple + Advanced Gatehouse), install missing Python dependencies, optionally start a managed llama.cpp server, and open the browser.
 - **Key API:** Environment overrides documented in `README.md`; prefs in `data/launcher_prefs.json`.
-- **Consumers:** Windows local users.
+- **Consumers:** Windows local users; `start.sh` covers Linux and macOS.
 - **Dependencies:** Python, requirements from `requirements.txt`, optional local GGUF model or Ollama/cloud API.
-- **Design Notes:** Simple menu is the default (where / engine / pipeline / Play); Advanced (`9`) exposes the full board. Keyboard always works; mouse clicks are best-effort in a normal Windows console. The launcher uses `AI_RPG_GGUF_MODEL` when a managed llama.cpp server should start, and when that env var is absent it reuses a saved `model_config.gguf_model_path` from SQLite on the next launch. Without a configured GGUF path, it still starts the browser app but warns that no managed llama.cpp server will start unless Ollama/cloud is configured. Local-network mode sets `AI_RPG_APP_HOST=0.0.0.0` for phone access; VPN mode prefers overlay adapters. Managed llama.cpp remains loopback by default (`AI_RPG_LLM_HOST=127.0.0.1`). Startup wait: `AI_RPG_LLM_STARTUP_TIMEOUT`. LLM logs: temp files by default, or `AI_RPG_LLM_LOG_MODE=console`.
+- **Design Notes:** Simple menu is the default (where / engine / pipeline / Play); Advanced (`9`) exposes the full board. Keyboard always works; mouse clicks are best-effort in a normal Windows console. The launcher uses `AI_RPG_GGUF_MODEL` when a managed llama.cpp server should start, and when that env var is absent it reuses a saved `model_config.gguf_model_path` from SQLite on the next launch. Without a configured GGUF path, it still starts the browser app but warns that no managed llama.cpp server will start unless Ollama/cloud is configured. Local-network mode sets `AI_RPG_APP_HOST=0.0.0.0` for phone access; VPN mode prefers overlay adapters. Managed llama.cpp remains loopback by default (`AI_RPG_LLM_HOST=127.0.0.1`). Startup wait: `AI_RPG_LLM_STARTUP_TIMEOUT`. LLM logs: temp files by default, or `AI_RPG_LLM_LOG_MODE=console`. `start.bat` / `start.sh` are the download-and-run entry point: they clone the repo when it is absent, compare `HEAD` against `origin/main` and prompt before fast-forwarding, refuse to touch a checkout with local changes or local commits, and fall through to starting the existing copy when offline. They build a private `.venv` and install `requirements.txt` with `llama-cpp-python` filtered out unless `--full` is passed, because its CUDA wheels are a large download that fails without a matching toolchain and neither Ollama nor the cloud APIs need it. `start.bat` then hands off to `Morkyn.bat` with the venv ahead on `PATH`; `start.sh` runs uvicorn directly, since there is no POSIX Gatehouse.
 
 ---
 
