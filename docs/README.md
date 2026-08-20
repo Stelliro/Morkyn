@@ -12,6 +12,10 @@
 | [showcase/100-turn-lore-teaser.md](showcase/100-turn-lore-teaser.md) | Dual-role 100-turn Mosswake lore presentation |
 | [showcase/100-turn-metrics.json](showcase/100-turn-metrics.json) | Metrics snapshot for that run |
 | [SkillChecks.md](SkillChecks.md) | Dice rolls, skill catalog, partial salvage, events |
+| [DiceAuthority.md](DiceAuthority.md) | Bands vs numbers: who decides "how much", and the roll audit |
+| [ContentPacks.md](ContentPacks.md) | Add/remove/retune skills, powers, items — and the spec for external LLMs |
+| [Encounters.md](Encounters.md) | Stat/weather/environment-aware danger model |
+| [Venues.md](Venues.md) | Shops as real interiors: containment, opening hours, commonality, keeper identity |
 | [SetupComposer.md](SetupComposer.md) | Randomize tree, session theme, adapter routing |
 | [WeldingRig.md](WeldingRig.md) | Offline LoRA pack: datasets, adapter names, wiring |
 | [PLAYTEST_SMOKE.md](PLAYTEST_SMOKE.md) | Isekai opening + 3-turn smoke checklist |

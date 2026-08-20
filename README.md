@@ -4,7 +4,7 @@
   <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
 </p>
 
-**Version `0.9.0-beta`**
+**Version `0.9.0`**
 
 **Mørkyn** is a local-first browser RPG. A local LLM narrates turns and proposes structured world changes, while SQLite remains the source of truth for the player, inventory, NPCs, events, summaries, and long-running continuity.
 
@@ -90,6 +90,7 @@ Morkyn/
 ├── app/                      # FastAPI backend
 ├── static/                   # browser UI (no build step)
 ├── Media/                    # logo, key art, screenshots
+├── content/                  # built-in content packs
 ├── docs/                     # design notes (APIs, pipeline, DSL, metrics)
 ├── tools/                    # smokes, screenshots, playtest helpers
 ├── tests/                    # regression + unit tests
@@ -108,6 +109,14 @@ Morkyn/
 - Local-only, LAN/phone, and trusted VPN launch modes.
 - Optional adaptive narration pipeline and agent bridge endpoints.
 - Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
+
+### New in 0.9.0
+
+- **Server-rolled dice.** The model writes a band (`small`, `large`, …); the app rolls the amount and scales it by level, difficulty, and growth settings. Every roll is audited in `dice_rolls`. Deterministic seeding means a rewind reproduces the same dice.
+- **Content packs.** JSON files that add, retune, or remove skills, powers, items, and tables with no code changes. Drop one in `data/packs/`.
+- **Venues.** Shops, inns, forges and temples are real places you walk into and back out of, with opening hours against the world clock, a keeper who stays the same person, and a settlement-size rule so a hamlet has no apothecary. See [docs/Venues.md](docs/Venues.md).
+- **Continuity fixes.** Movement, narrative person, and NPC identity are now server contracts with deterministic repair rather than things the model is asked to remember.
+- **Danger model.** Travel, wait, and rest risk accounts for stats, skills, wounds, fatigue, load, terrain, weather, and time of day.
 
 ## Local images (ForgeSD / ComfyUI)
 
@@ -227,7 +236,7 @@ python benchmarks/run_dual_role_playtest.py
 | Field | Value |
 | --- | --- |
 | Product | **Mørkyn** |
-| Version | **0.7.0** |
+| Version | **0.9.0** |
 | GitHub | https://github.com/Stelliro/Morkyn |
 
 Formerly published as AI RPG Consistency Prototype (`ai-rpg-consistency-prototype`).

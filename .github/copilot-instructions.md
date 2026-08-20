@@ -46,7 +46,7 @@
 - Keep model output JSON-first and synchronized across `app/prompts.py`, `app/llm.py`, `app/world.py`, and `static/app.js`.
 - Use parameterized SQL and `app.db.connect()` for database access.
 - Escape player-provided and model-provided text before inserting HTML in `static/app.js`.
-- Tests must use temporary `AI_RPG_DB`, `AI_RPG_HISTORY_SUMMARY`, and `AI_RPG_SOURCE_INDEX` paths before importing `app.db` or `app.world`.
+- Tests must set temporary `AI_RPG_*` paths **and** re-apply them in `setUpModule()`. Setting them at import time alone is not enough: `unittest` imports every test module before running any test, so the module imported last owns the environment while everyone else's tests run.
 - Do not require a real local model for automated tests; patch or mock LLM transport.
 - Keep the frontend framework-free unless the project intentionally adopts a build pipeline.
 

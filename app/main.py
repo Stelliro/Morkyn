@@ -154,7 +154,7 @@ from app.world import (
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 MEDIA_DIR = ROOT / "Media"
-APP_VERSION = "V0.9.0-beta"
+APP_VERSION = "V0.9.0"
 
 app = FastAPI(title="Mørkyn")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -686,6 +686,18 @@ class SuggestionRequest(BaseModel):
 @app.on_event("startup")
 def startup() -> None:
     init_db()
+    # Load content packs from content/packs (built-in) and data/packs (user),
+    # then push their tables into the dice and encounter systems. Dropping a
+    # JSON file in data/packs is the whole install step.
+    try:
+        from app.content_packs import apply_active_packs, sync_packs_from_disk
+
+        synced = sync_packs_from_disk()
+        apply_active_packs()
+        for failure in synced.get("failed") or []:
+            print(f"[content-packs] skipped {failure.get('file')}: {failure.get('error')}")
+    except Exception as exc:  # never block startup on optional content
+        print(f"[content-packs] load skipped: {exc}")
 
 
 @app.get("/")
@@ -2579,6 +2591,163 @@ def api_skill_check_enable(request: SkillEnableRequest):
     return {"skill": row}
 
 
+# --- content packs -----------------------------------------------------------
+
+
+class PackPayloadRequest(BaseModel):
+    pack: dict[str, Any] = Field(default_factory=dict)
+
+
+class PackIdRequest(BaseModel):
+    pack_id: str = Field(..., max_length=64)
+
+
+class PackEnableRequest(BaseModel):
+    pack_id: str = Field(..., max_length=64)
+    enabled: bool = True
+
+
+@app.get("/api/content-packs")
+def api_content_packs():
+    """Installed packs with per-section counts."""
+    from app.content_packs import list_packs
+
+    return {"packs": list_packs()}
+
+
+@app.get("/api/content-packs/authoring-bundle")
+def api_content_pack_bundle():
+    """
+    Everything an external LLM needs to author a pack with zero project context:
+    schema, field-to-column mapping, hard rules, an example, and existing codes.
+    """
+    from app.content_packs import authoring_bundle
+
+    return authoring_bundle()
+
+
+@app.post("/api/content-packs/validate")
+def api_content_pack_validate(request: PackPayloadRequest):
+    """Check a pack without installing it. Errors carry a JSON path and a fix."""
+    from app.content_packs import validate_pack
+
+    return validate_pack(request.pack)
+
+
+@app.post("/api/content-packs/install")
+def api_content_pack_install(request: PackPayloadRequest):
+    from app.content_packs import PackError, apply_active_packs, install_pack
+
+    try:
+        result = install_pack(request.pack, source="api")
+    except PackError as exc:
+        raise HTTPException(status_code=400, detail=json.loads(str(exc))) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    apply_active_packs()
+    return result
+
+
+@app.post("/api/content-packs/remove")
+def api_content_pack_remove(request: PackIdRequest):
+    from app.content_packs import apply_active_packs, remove_pack
+
+    result = remove_pack(request.pack_id)
+    if not result.get("removed"):
+        raise HTTPException(status_code=400, detail=result)
+    apply_active_packs()
+    return result
+
+
+@app.post("/api/content-packs/enable")
+def api_content_pack_enable(request: PackEnableRequest):
+    from app.content_packs import apply_active_packs, set_pack_enabled
+
+    result = set_pack_enabled(request.pack_id, request.enabled)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result)
+    apply_active_packs()
+    return result
+
+
+@app.get("/api/content-packs/export/{pack_id}")
+def api_content_pack_export(pack_id: str):
+    """Get a pack back as JSON — for editing by hand or by another model."""
+    from app.content_packs import export_pack
+
+    pack = export_pack(pack_id)
+    if pack is None:
+        raise HTTPException(status_code=404, detail="Pack not installed")
+    return pack
+
+
+# --- dice + danger audit ------------------------------------------------------
+
+
+@app.get("/api/dice/recent")
+def api_dice_recent(limit: int = 40, turn: int | None = None):
+    """Every server-rolled amount, newest first. This is the 'why did I get 7 gold' feed."""
+    from app.rng import recent_rolls
+
+    return {"rolls": recent_rolls(limit=limit, turn=turn)}
+
+
+@app.get("/api/danger")
+def api_danger():
+    """Current danger assessment for the player's tile, with its factor breakdown."""
+    from app import encounters as encounters_mod
+    from app.world import get_weather, get_world_time
+
+    try:
+        snapshot = encounters_mod.player_snapshot()
+        terrain = "plains"
+        settlement = None
+        try:
+            from app.tile_world import get_map
+
+            world_map = get_map(None)
+            if world_map:
+                px = int((world_map.get("player") or {}).get("x") or 0)
+                py = int((world_map.get("player") or {}).get("y") or 0)
+                for tile in world_map.get("tiles") or []:
+                    if int(tile.get("x") or -1) == px and int(tile.get("y") or -1) == py:
+                        terrain = str(tile.get("state") or "plains")
+                        sid = tile.get("settlement_id")
+                        if sid:
+                            for meta in world_map.get("settlements_meta") or []:
+                                if str(meta.get("id")) == str(sid):
+                                    settlement = meta
+                                    break
+                        break
+        except Exception:
+            pass
+
+        assessment = encounters_mod.assess_danger(
+            terrain=terrain,
+            weather=get_weather(),
+            world_time=get_world_time(),
+            player=snapshot.get("player"),
+            skills=snapshot.get("skills"),
+            resources=snapshot.get("resources"),
+            inventory_summary=snapshot.get("inventory_summary"),
+            options=snapshot.get("options"),
+            settlement=settlement,
+            area_reputation=int(snapshot.get("area_reputation") or 0),
+            on_road=terrain in {"road", "bridge"},
+        )
+        return {
+            "danger": assessment.get("danger"),
+            "band": assessment.get("band"),
+            "terrain": terrain,
+            "environment": assessment.get("environment"),
+            "player_multiplier": assessment.get("player_multiplier"),
+            "factors": assessment.get("factors"),
+            "narrator_view": encounters_mod.danger_context_block(assessment),
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
 @app.get("/api/generation-progress")
 def api_generation_progress():
     """Live phase + partial narration while a turn/opening is generating."""
@@ -2605,15 +2774,15 @@ def api_debug_trace(name: str = ""):
     Read a model-trace file for the per-turn Debug panel.
     Only basenames under the model-trace directory are allowed.
     """
-    from app.world import MODEL_TRACE_DIR
+    from app.world import model_trace_dir
 
     clean = Path(str(name or "").strip()).name
     if not clean or clean in {".", ".."} or not clean.endswith(".json"):
         raise HTTPException(status_code=400, detail="Provide a .json trace file name.")
     if any(ch in clean for ch in ("/", "\\")):
         raise HTTPException(status_code=400, detail="Invalid trace name.")
-    path = (MODEL_TRACE_DIR / clean).resolve()
-    root = MODEL_TRACE_DIR.resolve()
+    path = (model_trace_dir() / clean).resolve()
+    root = model_trace_dir().resolve()
     try:
         path.relative_to(root)
     except ValueError as exc:

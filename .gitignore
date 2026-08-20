@@ -83,3 +83,6 @@ portraits/
 # Node (not used, but keep clean if experiments appear)
 node_modules/
 package-lock.json
+
+# Local agent/tool scratch state, not project source
+.grok/

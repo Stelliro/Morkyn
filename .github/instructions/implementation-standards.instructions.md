@@ -53,7 +53,7 @@ description: "AI RPG implementation standards - security, compatibility, code qu
 
 - New features should include focused tests when a reliable harness exists.
 - Bug fixes should include regression coverage when practical.
-- Tests must set temporary `AI_RPG_DB`, `AI_RPG_HISTORY_SUMMARY`, and `AI_RPG_SOURCE_INDEX` paths before importing `app.db` or `app.world`.
+- Tests must set temporary `AI_RPG_*` paths **and** re-apply them in `setUpModule()`, then assert the resolved paths land inside the temp dir. Import-time assignment alone does not survive `unittest discover`.
 - Mock LLM transport and file pickers in automated tests.
 - Do not rely on `behavior_test.py` as authoritative until it is rewritten for the current schema and function names.
 

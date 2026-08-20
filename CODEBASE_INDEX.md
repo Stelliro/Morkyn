@@ -15,7 +15,7 @@
 - **Primary Languages:** Python, JavaScript, HTML, CSS
 - **Key Frameworks / Libraries:** FastAPI, Pydantic, SQLite, Uvicorn, llama-cpp-python server, Ollama-compatible APIs
 - **Target Platforms:** Windows local development, browser UI at localhost or trusted local-network phone/tablet browsers
-- **Current Version:** 0.7.0
+- **Current Version:** 0.9.0
 - **Status:** Active development / prototype
 - **Brand assets:** `Media/` (logo + key art)
 
@@ -40,14 +40,21 @@ Morkyn/
 |   `-- instructions/
 |-- app/
 |   |-- __init__.py
+|   |-- content_packs.py             # JSON packs: skills/powers/items/tables + authoring spec
 |   |-- db.py                        # SQLite connection, schema, migrations
+|   |-- encounters.py                # Danger model + encounter resolution
 |   |-- llm.py                       # Model config, JSON chat, token budget, traces, fallbacks
 |   |-- main.py                      # FastAPI routes (turns, slots, diagnostics, model)
 |   |-- narration_pipeline.py        # Adaptive paragraph quality pipeline
 |   |-- prompts.py                   # System/verifier prompts + agentic CoD steps
+|   |-- rng.py                       # Dice, magnitude bands, deterministic seeds, roll audit
+|   |-- venues.py                    # Shop/inn kinds, opening hours, settlement commonality
 |   |-- turn_dsl.py                  # NAR+OPS draft language
 |   |-- updates.py                   # Optional GitHub update/rollback
 |   `-- world.py                     # State, planner, memory consolidation, slots, index
+|-- content/
+|   |-- packs/                       # Built-in packs (auto-loaded, disable-only)
+|   `-- pack-examples/               # Templates to copy into data/packs/
 |-- static/                          # Browser UI (no build step)
 |-- Media/                           # Brand assets (logo, key art, screenshots)
 |-- docs/                            # Design notes + docs/README.md index
@@ -81,7 +88,7 @@ Morkyn/
 - **Key API:** `connect()`, `init_db()`, `row_to_dict()`, `rows_to_dicts()`
 - **Consumers:** `app.main` startup and most of `app.world`.
 - **Dependencies:** Python `sqlite3`, `pathlib`, environment variable `AI_RPG_DB`.
-- **Design Notes:** `data/world.db` is the default source of truth. Player setup identity columns include `age`, `sex`, `previous_life_age`, and `previous_life_sex` as additive text migrations. Tests should set `AI_RPG_DB` before importing `app.db` or `app.world` to avoid touching real play data.
+- **Design Notes:** `data/world.db` is the default source of truth. Player setup identity columns include `age`, `sex`, `previous_life_age`, and `previous_life_sex` as additive text migrations. The path is resolved by `db_path()` on every `connect()`, never frozen at import, so `AI_RPG_DB` is authoritative regardless of import order; tests must still re-apply their env in `setUpModule()` because the variable itself is process-global. `dice_rolls` stores the audit trail for every server-rolled amount. `content_packs` / `content_pack_entries` register installed content so uninstall is exact. `inventory` carries `stat_links` (canonical attribute keys), `power_codes` (references into `abilities.code`), and `roll_profile` (flat check modifiers applied while equipped); `abilities` carries `read_only`, `roll_profile`, `magnitude_kind`/`magnitude_band`, and `activation` so powers are fixed rules the dice roller consults rather than text the model re-derives.
 
 #### World Engine
 
@@ -100,6 +107,65 @@ Morkyn/
 - **Consumers:** `app.main` model endpoints and `app.world` turn flow.
 - **Dependencies:** `app.prompts`, `urllib`, environment variables, local llama.cpp or Ollama-compatible services.
 - **Design Notes:** LLM output is JSON-first. Turn generation consumes the focused turn planner packet, runs deterministic handoff cleanup before the draft, performs a draft pass, cleans the draft payload before verification, validates usable narration, scores a selective verification policy, then either skips the model verifier for high-certainty low-risk drafts or runs the verifier focused on remaining checks. The policy treats matching `verification_memory` rows as already-cleared checks when their confidence meets `AI_RPG_VERIFY_MEMORY_CERTAINTY` (default 0.86), so repeated verified facts can make later matching turns draft-only when no risky state changes are present. The policy only skips when the draft has enough narration, valid entity references, a sane scene-plan shape, a passing self-check, no high-risk state changes, and all planner verification checks have been deterministically or previously cleared; `AI_RPG_FAST_VERIFICATION` toggles this path and `AI_RPG_VERIFY_SKIP_CERTAINTY` sets the default 0.88 skip threshold. Verified payloads are cleaned again before world application, and valid turns below the 1000-character narration floor get one depth retry before returning. Normal turn narration targets about 1500 visible characters and stays below 2400 characters / 700 words; deterministic fallback turns follow the same depth expectation. Context-overflow failures trigger compact turn-context retries before deterministic fallback narration. llama.cpp turn draft/verify timeouts are phase-specific through `AI_RPG_TURN_DRAFT_TIMEOUT` and `AI_RPG_TURN_VERIFY_TIMEOUT`, with longer local defaults for slow first-scene generation; setup randomization and suggestions use `AI_RPG_SETUP_RANDOMIZER_TIMEOUT` and `AI_RPG_SUGGESTION_TIMEOUT`. Input suggestions are clipped near 100 visible characters, with a 120-character maximum. Each turn writes a JSON trace file under `AI_RPG_MODEL_TRACE_DIR` (default `data/model_traces`) containing focused prompt context, deterministic handoff cleanup records, prompts, raw model outputs, parsed JSON, verification-memory hits, verification-policy scores, verifier/self-check data, timing/error records, fallback decisions, and the final turn payload; `AI_RPG_MODEL_TRACE_KEEP` limits retained files and `AI_RPG_TRACE_VALUE_LIMIT` caps individual string values. These traces capture observable model artifacts, not hidden chain-of-thought the model never returned. Model settings default to the llama.cpp-compatible provider unless `AI_RPG_MODEL_PROVIDER=ollama` or the UI explicitly selects Ollama. They store a soft response token target (`response_token_cap`, default 1500) and a hard response token cap (`response_token_hard_cap`, default 2000); repair calls use at least the soft target while all response requests are clamped by the hard cap and remaining context. No machine-specific GGUF path is embedded in defaults; set `AI_RPG_GGUF_MODEL` or use the Model settings UI to choose a local model. `/api/model-status` checks the configured provider and, for llama.cpp with a saved GGUF path, starts a managed `llama_cpp.server` process when the configured `/v1/models` endpoint is refused. Generation requests to llama.cpp also start the managed server and retry once when `/v1/chat/completions` or `/v1/completions` is refused, so setup/opening generation does not depend on pressing Test first. Timeout errors include the failed phase, timeout seconds, approximate prompt tokens, configured soft response target, configured repair cap, and configured hard cap so caps are not mistaken for actual token usage. Refused model-server connections are classified as transport failures, skip generic draft retry, and state that no model response was generated and no token cap was hit. When deterministic fallback is used, any collected model usage rows are still written to `model_logs` for later diagnosis. Turn normalization accepts common narration/segment aliases, hidden `gm_events`, and reuses valid draft narration when the verifier omits it. Malformed JSON repair uses a larger repair token budget so full turn objects are less likely to fall through to deterministic fallback; if draft JSON repair still times out but the raw draft contains readable narration, the adapter recovers narration only, ignores unparseable state changes, and continues through verification instead of immediately using deterministic fallback. Setup randomization includes current age/sex and previous-life age/sex, normalizes `custom_skills` into comma-separated phrases so AI-filled Custom Proficiencies match the setup UI contract, and falls back to deterministic backend values when model output is unavailable or invalid.
+
+#### Dice Authority
+
+- **Files:** `app/rng.py`
+- **Purpose:** Owns every "how many" and "how much" decision. Dice notation parsing, deterministic seeding, magnitude bands, and the roll audit trail.
+- **Key API:** `roll_dice()`, `seed_from()`, `campaign_seed()`, `rng_for()`, `resolve_magnitude()`, `normalize_band()`, `band_from_number()`, `record_roll()`, `recent_rolls()`, `band_contract_block()`, `set_magnitude_overrides()`
+- **Consumers:** `app.world` (turn band resolution), `app.encounters`, `app.prompts`, `app.turn_dsl`, `app.main`.
+- **Dependencies:** `app.db`, stdlib `hashlib`/`random`.
+- **Design Notes:** The model proposes a band (`none, trivial, small, moderate, large, huge`, `-` prefix for losses) and this module rolls the number, scaled by player level, campaign difficulty, and growth-speed settings, then clamped per table. Negative bands clamp the *magnitude* before negating — clamping after negation silently zeroed every loss on floor-0 tables (damage, fame, item_count). Seeds come from blake2b over (campaign seed, turn, tag, salt) rather than Python's randomized `hash()`, so rewind/regenerate reproduce identical dice across processes. `campaign_rng_seed` lives in `settings` and travels with world export. Raw numbers from a model are not trusted and not rejected: they are bucketed via `band_from_number()` and re-rolled, keeping older prompts and third-party agents working. `AI_RPG_BAND_AUTHORITY` (or the `band_authority` playthrough option) selects `rolled` (default), `bands`, or `off`. Every roll is written to `dice_rolls` and summarized into the turn journal under kind `dice`.
+
+#### Content Packs
+
+- **Files:** `app/content_packs.py`, `content/packs/`, `content/pack-examples/`, `data/packs/`
+- **Purpose:** Add, retune, or remove skills, powers, items, encounter tables, and magnitude tables from JSON files with no code changes; and emit a self-contained authoring specification for external LLMs.
+- **Key API:** `validate_pack()`, `install_pack()`, `remove_pack()`, `set_pack_enabled()`, `list_packs()`, `export_pack()`, `sync_packs_from_disk()`, `apply_active_packs()`, `active_skills()/active_powers()/active_items()/active_encounter_tables()/active_magnitude_tables()`, `skill_triggers()`, `disabled_skill_codes()`, `authoring_bundle()`
+- **Consumers:** `app.skill_checks` (skill overlay + triggers), `app.encounters` (terrain/kind tables), `app.rng` (magnitude overrides), `app.world` (item power resolution), `app.main` routes.
+- **Dependencies:** `app.db`, `app.rng`.
+- **Design Notes:** Format `morkyn-content-pack-v1`. Load order is built-in Python catalog → `content/packs/` (builtin, disable-only) → `data/packs/` (user, removable), with later entries overriding earlier ones by `code`; `"enabled": false` on a built-in code removes that content from play. Every contributed entry is recorded in `content_pack_entries` so uninstall is exact, and live `inventory`/`abilities` rows are *detached* (`pack_id` cleared) rather than deleted so a player never loses gear to an uninstall. `validate_pack()` returns errors as `{path, message, fix}` specifically so the response can be fed back to an authoring model for self-correction; `authoring_bundle()` bundles the schema, field→column mapping, hard rules, a worked example, and in-use codes for a model with zero project context. Packs are loaded at FastAPI startup and never block it on failure.
+
+#### Encounters and Danger
+
+- **Files:** `app/encounters.py`
+- **Purpose:** Server-side decision of whether anything happens while moving, waiting, or resting, and what.
+- **Key API:** `assess_danger()`, `roll_encounter()`, `player_snapshot()`, `terrain_profile()`, `kind_profile()`, `danger_band()`, `top_factors()`, `danger_context_block()`, `encounter_summary_line()`
+- **Consumers:** `app.tile_world.roll_travel_encounter()`, `app.world._local_crowd_danger()` (wait/rest path), `app.main` `/api/danger`.
+- **Dependencies:** `app.rng`, `app.content_packs`, `app.db`. Imports no `app.world`/`app.tile_world` at module scope, so both may call in.
+- **Design Notes:** Danger is two-stage: environment terms (terrain, weather, clock, road/settlement, difficulty, hidden base) are **additive** and set the level; player terms (awareness stats, field skills, level-vs-terrain, wounds, fatigue, energy, carried load, karma, area reputation, known danger markers) are **multiplicative** and scale it. Additive player bonuses were tried first and were wrong — a few of them cancelled a town's entire base risk and made every skilled character untouchable. The combined player multiplier is damped as `raw ** 0.55` clamped 0.4–2.6, because undamped products saturated the cap for any character with several mild penalties. Exposure compounds as `1 - (1 - danger) ** hours` with a 0.12-hour floor per step. Encounter participant counts and threat come from `rng.resolve_magnitude()` band rolls, never from the model. A passive awareness check against `DC 10 + danger*12` decides `forewarned` vs `surprised`, and a clean read on a non-hostile meeting can avoid it entirely. `player_snapshot()` is a deliberately cheap four-query read rather than `world.get_state()`, which runs on every map step. All failures fall back to the legacy terrain+weather roll so travel never breaks.
+
+#### Local-Model Turn Pipeline Guards
+
+- **Files:** `app/llm.py` (verification policy, circuit breaker, depth retry), `app/skill_checks.py` (`search_skills`, `gm_context_block`)
+- **Purpose:** Keep the turn pipeline affordable and reliable on 7B-class local models.
+- **Key API:** `verifier_is_disabled()`, `verifier_breaker_status()`, `reset_verifier_breaker()`, `_verified_output_is_useful()`, `_retry_narration_prose()`, `search_skills()`
+- **Design Notes:** Measured on Ollama `qwen2.5:7b-instruct`: the JSON verify pass returned an echo of the input `world_state` on 42/42 turns and the JSON depth retry truncated mid-object on 18/18, together consuming 89% of wall-clock while producing nothing. Three guards address this. (1) **Verifier circuit breaker** — `_verified_output_is_useful()` detects regurgitation (reply carries `world_state`/`draft_turn` wrapper keys, or lacks any turn-shaped key) because that failure parses as valid JSON; after `AI_RPG_VERIFY_FAILURE_LIMIT` consecutive failures (default 3, `0` disables) the pass is skipped for the session and resets on any success, so capable models are unaffected. Both the DSL and JSON draft paths are hooked — patching only one is a silent no-op, since the DSL path is the one that runs by default. (2) **Prose depth retry** — `_retry_narration_prose()` asks only for prose and splices it into the existing turn, replacing a retry that requested a whole turn JSON; that form could not fit the response cap and could discard the draft's structured ops. Output is clamped to `MAX_TURN_NARRATION_CHARS` on paragraph boundaries. The JSON retry remains as a fallback. (3) **Verification-skip policy** — short narration is no longer a blocker (the verifier cannot lengthen prose) and `conversations` is no longer high-risk (it records a topic and summary, mints nothing); inventory/skills/events/abilities remain high-risk. Separately, `gm_context_block(query=...)` searches the skill catalog per turn instead of shipping all ~60 entries (~6.4KB/~1,600 tokens); the catalog is no longer persisted into `playthrough_options`, which had been re-sending it inside every prompt. Net effect over 30 turns: median narration 888 → 1993 chars, below-floor turns 60% → 0%, mean turn ~53s → ~19s.
+
+#### Turn Continuity Authority
+
+- **Files:** `app/world.py` (contracts + repairs), `app/llm.py` (`_ensure_narration_voice`, `_retry_narration_voice`, `_splice_prose_into_turn`), `app/prompts.py` (`PROSE_VOICE` point-of-view block), `app/turn_dsl.py` (travel op rules)
+- **Purpose:** Hold the turn-to-turn state a 7B does not reliably maintain on its own — where the player is, who they are addressed as, and whether an NPC actually has a name.
+- **Key API:** `movement_contract()`, `resolve_movement()`, `travel_intent()`, `narrative_voice_contract()`, `player_pronouns()`, `check_narrative_voice()`, `is_generic_person_label()`, `name_seed()`
+- **Consumers:** `app.world.build_prompt_context` (packet blocks), `app.world.apply_turn` (repairs + telemetry), `app.llm` narration quality ladder, `app.turn_dsl.build_dsl_user_prompt`.
+- **Dependencies:** `app.rng` (`seed_from`), `app.db`.
+- **Design Notes:** Same pattern as the dice authority: state the server already knows is stated as a contract in the packet, and verified afterwards rather than trusted. Measured on a 30-turn `qwen2.5:7b-instruct` run — **0 `MOVE` and 0 `LOC_NEW` ops across eight travel actions** (the world never grew past one location), 11 of 30 narrations in third person, and an NPC stored under the literal name `"Woman"`.
+  **Movement.** `movement_contract()` ships the current location, the required field, and `known_places` — **names, not codes**. Given a code list a 7B reuses the nearest listed code as a stand-in for anywhere new (it narrated a river valley while recording a move back to town, on 8 of 11 moves), and with only `L1` in the world it invents `MOVE L2`, which `_find_location_id()` resolves back to the current location so the move silently no-ops. `move_to_location` already resolves by name against existing places, so codes only enabled those failures; `_match_location_by_name()` matches case- and article-insensitively so "the Redmill Ford" cannot mint a twin. `resolve_movement()` rejects unknown and self-referential codes, then fills a missing `MOVE` from evidence the model produced *this turn*, most-confident first: a place it minted via `LOC_NEW`; a known place the player named verbatim; an `[[L#]]` in the narration's last 900 characters alongside arrival language; or, only after an invented code, a place name extracted from the arrival sentence (`_movement_destination_from_narration`, which requires a destination preposition so scenery cannot become a location). It runs **before** `_save_snapshot()` so a repaired destination is inside the rewind record. Status (`model` / `not_travel` / `repaired` / `unresolved`, plus a `prose_mismatch` flag when the model moves to a place its own prose never names) lands on `state.movement` and the `play_turn` payload; repairs and unresolved travel are journaled. `play_turn` must re-attach this telemetry after any `get_state()` refresh — the injuries path re-reads state and silently dropped it on half of turns.
+  **Resolving the action.** The largest cause of travel turns that never travelled was not a missing op: the model narrated deliberation ("Do you approach the figure, or continue to the ruins? The choice is yours.") instead of the journey. A resolve-the-action rule in `PROSE_VOICE` and the DSL prompt took travel turns that moved from 25% to 83%. The residue is trimmed deterministically — `_trim_menu_ending()` and `_trim_option_list()` in `app/llm.py` cut stock closers and trailing bullet menus, since prompting alone did not shift the behaviour and the UI already asks the player what to do. Both are deliberately narrow: perception phrasing ("you could hear the mill wheel") is excluded, a list with prose under it is left alone as something in the world, and nothing is trimmed below `MIN_TURN_NARRATION_CHARS`.
+  **Intent.** `_intent_tokens()` stems inflected verbs (`walking` → `walk`, `going` → `go`, plus an irregular table) because keywords are stored as bare verbs and `"keep walking east"` scored zero for travel. `travel_intent()` accepts travel as a *secondary* intent, since ties break in keyword-table order and put travel behind investigation.
+  **Voice.** `narrative_voice_contract()` states second person and the player's pronoun set (male/female only when clearly stated, otherwise they/them) per packet; the long-form rule lives in `PROSE_VOICE` inside the system prompt, which the runtime caches, so the packet copy stays short. `check_narrative_voice()` flags only the unambiguous failure — a narration over 200 characters that never says "you" — which triggers one prose-only rewrite through `_retry_narration_voice()` (`AI_RPG_VOICE_REPAIR=0` disables). Pronoun counts are reported on `state.voice_check` but never auto-rewritten: NPCs have genders too, so a regex pass cannot tell a mis-gendered player from a correctly gendered cast.
+  **Names.** `is_generic_person_label()` rejects article + modifier + generic-head labels ("Woman", "The Hooded Figure", "Guard") while keeping anything carrying a real proper-noun token ("Old Mara", "Captain Vesk"). Rejected names flow into the existing `invent_person_name()` + prose-rename path, via `unique_person_name()` — the shell pool is only 20x20 and a live run produced two NPCs both called "Saltbin". `name_seed()` replaces `abs(hash(...))` at all three call sites — Python string hashing is randomized per process, so the same save renamed the same NPC differently on every reload. Place names get `humanize_place_name()` at both the upsert and lookup sites, after a run put a location called `east_road` on the player's map.
+  **Opcodes.** `OPCODE_ALIASES` + `normalize_opcode()` in `app/turn_dsl.py` map near-misses onto the closed list, and an unrecognized line is now skipped rather than fatal: a single `MOV` typo used to raise and discard every other op in that turn. A block where *nothing* parses still raises, so genuinely wrong output format still triggers a retry.
+
+  **World variety.** Prose read well while the *world* kept reinventing the same person and place under new labels. Prose-seeded NPC roles came from a fixed four-item cycle starting "hooded stranger"/"cloaked local", which won 24 of 27 NPCs and fed back on itself — seeded strangers entered the cast, the cast entered the prompt, the model wrote more hooded figures. `_SEED_ROLE_POOLS` now supplies location-aware occupations (chosen by *scored* keyword match, so a town summary mentioning "the road" no longer staffs a gate-town with charcoal burners), never repeats a role standing in that place, and puts appearance in the summary instead of the role column. Identity is world-wide, not per-location: `_person_name_taken()`/`unique_person_name()` guard every name generator (the 20x20 shell pool produced three "Grainwick"s), and `_upsert_npc` matches an existing NPC by name anywhere and moves them, rather than minting a second "Aria the baker" at the next location. For places, `_place_extension_target()` folds "Riverbend Hillcrest Camp" back into "Riverbend Hillcrest" when the addition is only a generic tail noun, `_match_location_by_name()` strips leading descriptors so "Old Ruins by the River" is not a second "Ruins by the River", and `is_plausible_place_name()` rejects bare headings after a run recorded `MOVE East` as a location named "East".
+  **Anti-repetition.** `anti_repetition_block()` was raw word frequency, so a turn spent with Larkcoil at Redmill Ford came back telling the model to avoid "larkcoil", "redmill", "ford" — asking the narrator to stop naming its own world. Entity names are protected at two layers (`_protected_entity_words` from the packet, and every DB name inside `narration_tics`). `narration_tics()` adds run-wide tics because words like "hooded" recur just under once per turn: no single-turn threshold catches them, yet they are what makes twenty-four scenes read alike.
+
+> **Trap:** three separate allowlists silently drop data that is not listed —
+> `HANDOFF_BASE_CONTEXT_KEYS` (context blocks), `HANDOFF_PLAYER_FIELDS` (player
+> patch fields), and the DSL `OPCODES` set. Each has now caused a real bug where
+> a feature looked wired up and was nulled out in the packet. When adding a
+> context block or a player field, add it to the allowlist in the same commit and
+> check the rendered prompt in a trace, not just the code path.
 
 #### Prompt Contracts
 
@@ -189,7 +255,10 @@ Morkyn/
 - Keep API interactions in `static/app.js` aligned with route names and request models in `app/main.py`.
 
 ### Testing
-- For isolated tests, set `AI_RPG_DB`, `AI_RPG_SOURCE_INDEX`, and `AI_RPG_HISTORY_SUMMARY` before importing `app.db` or `app.world`.
+- For isolated tests, set `AI_RPG_DB`, `AI_RPG_SOURCE_INDEX`, and `AI_RPG_HISTORY_SUMMARY` to a temp dir at import **and** re-apply them in `setUpModule()`.
+- **Trap:** `unittest discover` imports every test module before running any test, and the paths live in process-global env vars, so whichever module is imported last owns them during everyone's tests. Import-time assignment alone silently sent fixtures into `data/world.db`. Each isolated module asserts its resolved paths sit under its temp dir; keep that guard.
+- Runtime paths are functions, not constants (`app.db.db_path()`, `app.world.source_index_dir()`, `model_trace_dir()`, `history_summary_path()`, `consolidated_facts_path()`, `campaign_slots_dir()`, `source_index_manifest()`, `app.idea_bank.user_dir()`, `app.launcher_prefs.prefs_path()`). Do not reintroduce module-level `Path(os.getenv(...))` constants for anything under `data/` — that is what froze the paths.
+- Run everything with `python -m unittest discover -s tests -p "test_*.py"` (**354 tests**), plus `python tests/behavior_test.py` (7 checks) which is not collected by that pattern. Files written as bare `assert` functions (no `TestCase`) are invisible to `unittest` on their own and would pass vacuously; `tests/test_bare_assert_files.py` imports them under isolated paths and wraps each `test_*` in a generated `TestCase` so they actually run. Keep that file — deleting it silently drops 127 checks. Convert a file to real `TestCase` classes and the wrapper skips it automatically.
 - Patch or mock LLM calls for deterministic tests; do not require a real model for normal automated checks.
 - Avoid touching `data/world.db` or `data/history_summaries.jsonl` during tests.
 - Prefer `tests/behavior_test.py` and `tests/test_narration_pipeline.py` over ad-hoc root scripts.
@@ -299,6 +368,25 @@ python -m unittest discover
 
 Run `python tests/behavior_test.py` for memory/token/slots regressions and `python tests/test_narration_pipeline.py` for pipeline unit checks.
 
+Self-contained `unittest` suites that set up their own temp runtime and run with a
+bare `python <file>`:
+
+```powershell
+python tests/test_dice_and_packs.py   # dice authority, content packs, danger model (64)
+python tests/test_continuity.py       # movement, voice, names, variety, menus (75)
+```
+
+Live model probes (need Ollama running; `PLAYTEST_TURNS` and `PLAYTEST_OLLAMA_MODEL` override):
+
+```powershell
+python tools/playtest_continuity.py   # movement / voice / names / menus + story health
+python tools/playtest_7b_longrun.py   # does output decay as the database fills?
+```
+
+The remaining `tests/test_*.py` files are bare `assert` functions with no runner,
+so `python <file>` on them exits 0 without executing anything — they need `pytest`
+(not currently installed) or `unittest discover` with `PYTHONPATH` set to the repo root.
+
 ### Production Build
 
 There is no production build step. This is a local prototype served directly by Uvicorn and static files.
@@ -332,6 +420,15 @@ There is no production build step. This is a local prototype served directly by 
 | GET | `/api/bible` | Return World Bible summary data |
 | POST | `/api/gm-notes` | Save hidden GM notes for backend model context |
 | GET | `/api/gm-notes` | Return hidden GM notes for backend tooling; not exposed in the normal UI |
+| GET | `/api/content-packs` | List installed content packs with per-section counts |
+| GET | `/api/content-packs/authoring-bundle` | Self-contained pack spec for an external LLM (schema, rules, field→column map, example, in-use codes) |
+| POST | `/api/content-packs/validate` | Validate a pack; errors carry `{path, message, fix}` for model self-correction |
+| POST | `/api/content-packs/install` | Install or replace a pack |
+| POST | `/api/content-packs/remove` | Uninstall a user pack and everything it contributed |
+| POST | `/api/content-packs/enable` | Enable/disable an installed pack (the only removal path for built-ins) |
+| GET | `/api/content-packs/export/{pack_id}` | Return a pack as authored JSON for editing or sharing |
+| GET | `/api/dice/recent` | Audit feed of server-rolled amounts (`?limit=`, `?turn=`) |
+| GET | `/api/danger` | Current danger assessment for the player's tile with its factor breakdown |
 
 ---
 
@@ -415,9 +512,10 @@ These columns are additive migrations. The engine treats the LLM's event metadat
 7. The draft response is checked by a second verifier prompt when remaining checks or blockers require it.
 8. JSON is parsed, repaired through a JSON-only repair pass if necessary, and normalized.
 9. Context-overflow errors are retried with compact prompt context and smaller completion caps before deterministic fallback is used.
-10. `app.world` applies allowed state changes, deterministic combat damage, clamps risky values, writes journal entries, summaries, hidden GM events, model logs, verification-memory rows, and rewind snapshots.
-11. The API returns updated state plus the turn object to the browser; the UI renders narration as continuous prose even when the model returned compatibility paragraph chunks.
-12. If model generation fails in a recoverable way, fallback narration can be returned and marked in the payload.
+10. `app.world.apply_turn` resolves band amounts into rolled numbers and repairs a missing `MOVE` on travel turns (`resolve_movement`) *before* taking the rewind snapshot, so both are inside the record rather than applied on top of it.
+11. `app.world` applies allowed state changes, deterministic combat damage, clamps risky values, writes journal entries, summaries, hidden GM events, model logs, verification-memory rows, and rewind snapshots.
+12. The API returns updated state plus the turn object to the browser; the UI renders narration as continuous prose even when the model returned compatibility paragraph chunks. Continuity telemetry (`dice_rolls`, `movement`, `voice_check`) rides along at the payload top level.
+13. If model generation fails in a recoverable way, fallback narration can be returned and marked in the payload.
 
 ---
 
@@ -438,6 +536,7 @@ These columns are additive migrations. The engine treats the LLM's event metadat
 |---|---|---|
 | Long local-LLM turns on 8B | Medium | Expect multi-minute turns; use dual-role benchmarks or cloud/agent provider for faster iteration |
 | No formal CI or test runner | Medium | Add focused temp-DB backend tests before large schema or turn-application changes |
+| ~~9 pre-existing test failures on `test/morkyn-0.9-wip`~~ — resolved | Resolved | All 9 fixed. Four were real defects: a `known` character rewritten into a transmigrated one by first-hit origin classification; `stitch_arrival_keep_former_life` discarding the player's former life; the backstory gate rejecting arrival phrasing its own generator writes; and `abs(hash(text))` seeding, which made every repaired backstory identical and unreproducible. Five were stale assertions updated to current contracts (entity-code injection, the legacy `special_ability_origin` field, lock-after-creation). Suite is now 297 unittest tests + 7 behavior checks, all passing. |
 | Default GGUF model path is machine-specific | Low | Override with `AI_RPG_GGUF_MODEL` or choose a model in the UI |
 | Runtime data is local-only | Low | `data/` is ignored by git; export/import JSON is the current portability path |
 | Quest, faction, and item-tag systems are still broad | Low | README notes these as likely future schema layers; combat now has a first deterministic health/damage layer but not a full tactical engine |
