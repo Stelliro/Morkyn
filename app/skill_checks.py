@@ -367,6 +367,16 @@ def _skill_row(raw: dict[str, Any], *, source: str = "built-in") -> dict[str, An
     }
 
 
+def _pack_skill_overlay() -> dict[str, dict[str, Any]]:
+    """Skills contributed by installed content packs (empty when none/unavailable)."""
+    try:
+        from app.content_packs import active_skills
+
+        return active_skills()
+    except Exception:
+        return {}
+
+
 def load_skill_library() -> list[dict[str, Any]]:
     path = _library_path()
     built = [_skill_row(s, source="built-in") for s in BUILTIN_SKILLS]
@@ -390,6 +400,19 @@ def load_skill_library() -> list[dict[str, Any]]:
                     by_code[row["code"]] = row
         except Exception:
             pass
+
+    # Content packs win last: they may retune a built-in's DC/attribute or
+    # switch it off entirely with "enabled": false.
+    for code, entry in _pack_skill_overlay().items():
+        row = _skill_row(entry, source=str(entry.get("source") or "pack"))
+        existing = by_code.get(code)
+        if existing:
+            row["times_seen"] = max(int(existing.get("times_seen") or 0), int(row.get("times_seen") or 0))
+        row["triggers"] = list(entry.get("triggers") or [])
+        row["opposed_by"] = str(entry.get("opposed_by") or "")
+        row["growth"] = entry.get("growth") if isinstance(entry.get("growth"), dict) else {}
+        by_code[code] = row
+
     return sorted(by_code.values(), key=lambda s: (s.get("category") or "", s.get("name") or ""))
 
 
@@ -547,6 +570,121 @@ def attribute_modifier(score: int) -> int:
     return max(-5, min(10, (int(score) - 10) // 2))
 
 
+def _coerce_profile(raw: Any) -> dict[str, int]:
+    """Parse a stored roll_profile ({"melee": 2}) from JSON text or dict."""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, value in raw.items():
+        code = _codeify(key)
+        if not code:
+            continue
+        try:
+            out[code] = max(-12, min(12, int(value)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def gear_roll_modifiers(
+    inventory: list[dict[str, Any]] | None = None,
+    abilities: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Collect flat check modifiers from equipped items and always-on powers.
+
+    Items carry ``roll_profile`` ({"melee": 2}) and ``power_codes`` pointing at
+    abilities; abilities carry their own ``roll_profile``. Both are read-only
+    facts about the world, so the roller can apply them without the narrator
+    ever doing arithmetic. Only *equipped* items and *unlocked* powers count —
+    the same rule that already governs ``player.effective_stats``.
+    """
+    totals: dict[str, int] = {}
+    sources: list[dict[str, Any]] = []
+    granted_codes: set[str] = set()
+
+    for item in inventory or []:
+        if not isinstance(item, dict):
+            continue
+        if not str(item.get("equipped_slot") or "").strip():
+            continue
+        profile = _coerce_profile(item.get("roll_profile"))
+        for code, mod in profile.items():
+            totals[code] = totals.get(code, 0) + mod
+        if profile:
+            sources.append(
+                {
+                    "kind": "item",
+                    "code": item.get("code"),
+                    "name": item.get("name"),
+                    "profile": profile,
+                }
+            )
+        raw_codes = item.get("power_codes")
+        if isinstance(raw_codes, str):
+            try:
+                raw_codes = json.loads(raw_codes or "[]")
+            except json.JSONDecodeError:
+                raw_codes = []
+        for code in raw_codes or []:
+            if str(code).strip():
+                granted_codes.add(str(code).strip())
+
+    # Powers an item grants may live in a content pack rather than the live
+    # abilities table (that table only holds powers the player has earned).
+    # Fold those in so an item's declared powers still shift the dice.
+    known_codes = {str(a.get("code") or "") for a in (abilities or []) if isinstance(a, dict)}
+    pack_abilities: list[dict[str, Any]] = []
+    if granted_codes - known_codes:
+        try:
+            from app.content_packs import active_powers
+
+            pool = active_powers()
+            for code in granted_codes - known_codes:
+                entry = pool.get(code)
+                if entry:
+                    pack_abilities.append({**entry, "code": code})
+        except Exception:
+            pack_abilities = []
+
+    for ability in list(abilities or []) + pack_abilities:
+        if not isinstance(ability, dict):
+            continue
+        if ability.get("locked"):
+            continue
+        activation = str(ability.get("activation") or "active").lower()
+        code = str(ability.get("code") or "")
+        # Passives always apply; item-granted powers apply because the item is
+        # equipped; deliberate active powers only apply when actually used, and
+        # that path goes through mechanics_context instead.
+        if activation != "passive" and code not in granted_codes:
+            continue
+        profile = _coerce_profile(ability.get("roll_profile"))
+        if not profile:
+            continue
+        for skill_code, mod in profile.items():
+            totals[skill_code] = totals.get(skill_code, 0) + mod
+        sources.append(
+            {
+                "kind": "power",
+                "code": code,
+                "name": ability.get("name"),
+                "activation": activation,
+                "profile": profile,
+            }
+        )
+
+    # Stacked gear should not turn a d20 into a formality.
+    for code in list(totals):
+        totals[code] = max(-15, min(15, totals[code]))
+    return {"modifiers": totals, "sources": sources}
+
+
 def opposition_power(
     opposition: dict[str, Any] | None,
     *,
@@ -644,13 +782,20 @@ def resolve_check(
     context_note: str = "",
     weapon_or_tool: str = "",
     rng: random.Random | None = None,
+    inventory: list[dict[str, Any]] | None = None,
+    abilities: list[dict[str, Any]] | None = None,
+    roll_modifiers: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Roll a check with:
-      - attribute base + skill modifier
+      - attribute base + skill modifier + equipped gear/power modifiers
       - DC from skill base, global difficulty, and optional contested opposition power
       - degree bands (barely / bad nothing / unskilled mishap)
       - optional lasting injury suggestions for severe fails
+
+    ``inventory`` and ``abilities`` are optional; when supplied, equipped items
+    and passive/granted powers automatically shift the roll via their
+    ``roll_profile``. Pass ``roll_modifiers`` to add situational shifts on top.
     """
     cfg = merge_check_settings(settings)
     if not cfg.get("dice_checks_enabled"):
@@ -663,6 +808,10 @@ def resolve_check(
 
     library = {s["code"]: s for s in load_skill_library()}
     skill = library.get(skill_code) or library.get(_codeify(skill_code))
+    if skill and not skill.get("enabled", True):
+        # A pack switched this skill off: fall back to the generic check rather
+        # than silently rolling a skill the campaign says does not exist.
+        skill = library.get("general")
     if not skill:
         reg = register_or_adjust_skill({"name": skill_code, "source": "playthrough"})
         skill = reg["skill"]
@@ -677,7 +826,23 @@ def resolve_check(
     attr_mod = attribute_modifier(attr_score)
     skill_rank = _skill_rank(player_skills, skill.get("code") or skill.get("name") or "")
     skill_mod = skill_rank
-    total_mod = attr_mod + skill_mod
+    skill_key = str(skill.get("code") or "")
+
+    # Equipped gear and passive/granted powers shift the roll automatically.
+    gear = gear_roll_modifiers(inventory, abilities)
+    gear_mod = int((gear["modifiers"] or {}).get(skill_key, 0))
+    gear_sources = [
+        {**src, "applied": int((src.get("profile") or {}).get(skill_key, 0))}
+        for src in gear["sources"]
+        if (src.get("profile") or {}).get(skill_key)
+    ]
+
+    situational_mod = 0
+    situational = _coerce_profile(roll_modifiers)
+    if situational:
+        situational_mod = int(situational.get(skill_key, 0))
+
+    total_mod = attr_mod + skill_mod + gear_mod + situational_mod
     unskilled = skill_rank < int(cfg.get("unskilled_rank_threshold") or 1)
 
     # Contested DC: base skill DC + difficulty + opposition power (stats + RNG)
@@ -789,8 +954,14 @@ def resolve_check(
             f"{injury['summary']}"
         )
 
+    mod_parts = [f"attr {attr_mod:+d}", f"skill {skill_mod:+d}"]
+    if gear_mod:
+        mod_parts.append(f"gear {gear_mod:+d}")
+    if situational_mod:
+        mod_parts.append(f"situation {situational_mod:+d}")
     display_lines = [
-        f"You rolled {natural} with your base of {attr_score} ({attr_key}) and a modifier of {total_mod:+d} (attr {attr_mod:+d} + skill {skill_mod:+d}).",
+        f"You rolled {natural} with your base of {attr_score} ({attr_key}) "
+        f"and a modifier of {total_mod:+d} ({' + '.join(mod_parts)}).",
         f"Total: {total}  ·  Base success (DC): {target_dc}"
         + (f"  ·  vs {opp_info['name']} power {opp_info['power_total']}" if opp_info else ""),
         f"Result: {outcome.replace('_', ' ')} ({degree.replace('_', ' ')})  ·  margin {margin:+d}",
@@ -813,6 +984,9 @@ def resolve_check(
         "attribute_mod": attr_mod,
         "skill_rank": skill_rank,
         "skill_mod": skill_mod,
+        "gear_mod": gear_mod,
+        "gear_sources": gear_sources,
+        "situational_mod": situational_mod,
         "total": total,
         "dc": target_dc,
         "base_success": target_dc,
@@ -978,11 +1152,26 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         (r"\b(tactics|ambush plan|formation)\b", "tactics"),
         (r"\b(defense|parry|block|guard up)\b", "defense"),
     ]
+    # Pack triggers are checked first so a campaign can route "pole the barge"
+    # to its own skill instead of falling through to a built-in near-match.
+    try:
+        from app.content_packs import disabled_skill_codes, skill_triggers
+
+        pack_pairs = skill_triggers()
+        disabled = disabled_skill_codes()
+    except Exception:
+        pack_pairs, disabled = [], set()
+
     skill = None
-    for pattern, code in pairs:
-        if re.search(pattern, text):
-            skill = code
-            break
+    for pattern, code in list(pack_pairs) + pairs:
+        if code in disabled:
+            continue
+        try:
+            if re.search(pattern, text):
+                skill = code
+                break
+        except re.error:
+            continue
     if not skill:
         return None
     opposition: dict[str, Any] = {}
@@ -1071,6 +1260,13 @@ def apply_check_to_turn(turn: dict[str, Any], check: dict[str, Any]) -> dict[str
         except (TypeError, ValueError):
             pass
         result["player"] = player
+        # This amount was rolled by the check above, not guessed by the model.
+        # Mark it so band authority passes it through instead of re-rolling
+        # a server-computed injury into a different number.
+        authored = list(result.get("_server_authored") or [])
+        if "player.health_delta" not in authored:
+            authored.append("player.health_delta")
+        result["_server_authored"] = authored
 
     journal = list(result.get("journal") or [])
     journal.append(
@@ -1112,25 +1308,128 @@ def catalog_public() -> dict[str, Any]:
     }
 
 
-def gm_context_block(settings: dict[str, Any] | None, library: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """Compact packet for prompt context / playthrough options."""
+def search_skills(
+    query: str,
+    library: list[dict[str, Any]] | None = None,
+    *,
+    limit: int = 12,
+    settings: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
+    """
+    Find the skills relevant to one action, ranked by match strength.
+
+    Used instead of shipping the whole catalog into every prompt. Matching is
+    deliberately cheap and local: name/code tokens, tags, category, and the
+    same trigger regexes that drive auto-checks.
+    """
+    cfg = merge_check_settings(settings)
+    lib = library if library is not None else load_skill_library()
+    enabled_codes = set(cfg.get("enabled_skill_codes") or [])
+    enabled_cats = set(cfg.get("enabled_categories") or [])
+    text = _norm(query)
+    tokens = {t for t in text.split() if len(t) > 2}
+
+    scored: list[tuple[float, dict[str, Any]]] = []
+    for skill in lib:
+        if not skill.get("enabled", True):
+            continue
+        if enabled_codes and skill.get("code") not in enabled_codes:
+            continue
+        if enabled_cats and skill.get("category") not in enabled_cats:
+            continue
+        score = 0.0
+        name_tokens = set(_norm(str(skill.get("name") or "")).split())
+        code_token = _norm(str(skill.get("code") or "").replace("_", " "))
+        if code_token and code_token in text:
+            score += 5.0
+        if name_tokens & tokens:
+            score += 3.0 * len(name_tokens & tokens)
+        else:
+            # Stem-ish prefix match so "persuade" finds "persuasion" and
+            # "sneaking" finds "stealth"'s tag "sneak". Exact tokens rarely
+            # line up between natural player phrasing and skill names.
+            for want in name_tokens | {code_token}:
+                if len(want) < 5:
+                    continue
+                if any(t[:5] == want[:5] for t in tokens):
+                    score += 2.5
+                    break
+        for tag in skill.get("tags") or []:
+            tag_norm = _norm(str(tag))
+            if not tag_norm:
+                continue
+            if tag_norm in text:
+                score += 2.0
+            elif len(tag_norm) >= 4 and any(t[:4] == tag_norm[:4] for t in tokens):
+                score += 1.0
+        for trigger in skill.get("triggers") or []:
+            try:
+                if re.search(str(trigger), text):
+                    score += 6.0
+            except re.error:
+                continue
+        if score > 0:
+            scored.append((score, skill))
+
+    scored.sort(key=lambda pair: (-pair[0], pair[1].get("name") or ""))
+    return [skill for _, skill in scored[: max(1, int(limit))]]
+
+
+def gm_context_block(
+    settings: dict[str, Any] | None,
+    library: list[dict[str, Any]] | None = None,
+    *,
+    query: str = "",
+    limit: int = 12,
+) -> dict[str, Any]:
+    """
+    Compact packet for prompt context / playthrough options.
+
+    ``active_skills`` used to carry the entire enabled catalog — 60 entries,
+    ~6.4KB, ~1,600 tokens in *every* turn prompt, on a model that mostly does
+    not choose skills any more because checks resolve server-side. When a
+    ``query`` is supplied the catalog is searched instead of dumped, and only
+    the matching skills (plus a small always-useful core) ship.
+    """
     cfg = merge_check_settings(settings)
     if not cfg.get("dice_checks_enabled"):
         return {"dice_checks_enabled": False}
     lib = library if library is not None else load_skill_library()
     enabled_codes = set(cfg.get("enabled_skill_codes") or [])
     enabled_cats = set(cfg.get("enabled_categories") or [])
-    active = [
-        {
-            "code": s["code"],
-            "name": s["name"],
-            "category": s["category"],
-            "attribute": s["attribute"],
-            "base_dc": s["base_dc"],
+
+    def _slim(skill: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "code": skill["code"],
+            "name": skill["name"],
+            "category": skill["category"],
+            "attribute": skill["attribute"],
+            "base_dc": skill["base_dc"],
         }
+
+    eligible = [
+        s
         for s in lib
-        if s.get("enabled") and (not enabled_codes or s["code"] in enabled_codes) and (not enabled_cats or s.get("category") in enabled_cats)
+        if s.get("enabled")
+        and (not enabled_codes or s["code"] in enabled_codes)
+        and (not enabled_cats or s.get("category") in enabled_cats)
     ]
+
+    if query:
+        matched = search_skills(query, lib, limit=limit, settings=cfg)
+        # Always keep a couple of universal fallbacks so the model has a valid
+        # code to name even when nothing matched the action.
+        core = [s for s in eligible if s.get("code") in {"general", "perception", "persuasion"}]
+        seen: set[str] = set()
+        active = []
+        for skill in matched + core:
+            if skill["code"] in seen:
+                continue
+            seen.add(skill["code"])
+            active.append(_slim(skill))
+        active = active[: max(1, limit + 3)]
+    else:
+        active = [_slim(s) for s in eligible]
     return {
         "dice_checks_enabled": True,
         "dice_sides": cfg["dice_sides"],

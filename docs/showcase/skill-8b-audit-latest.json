@@ -1,0 +1,288 @@
+{
+  "model": "qwen3:8b",
+  "started": "2026-07-26T14:47:56",
+  "scenarios": [
+    {
+      "id": "isekai_weak_seed",
+      "idea": "isekai ordinary to overpowered; nearly useless seed skill that compounds; fair DM; no free arsenal; subtle system window",
+      "origin": "acquired",
+      "abilities_raw": [
+        {
+          "name": "System Overclock",
+          "description": "Boost system performance by 50% for 10 minutes. Can only be used once per hour.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "10 minutes of system downtime. Once per hour.",
+          "growth_math": "XP: 50 per use. XP_to_next = 40 * rank_index^1.55. Rank 1: 10 min. Rank 2: 15 min. Rank 3: 20 min. Rank 4: 25 min. Rank 5: 30 min. Soft cap at Rank 5. Effect mult: 1.22^ranks_above_F.",
+          "power_type": "compounding",
+          "_opening_strength": "moderate"
+        },
+        {
+          "name": "Skill Synergy",
+          "description": "Enhance one skill by 20% for 1 hour. Can be used once per day.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "1 hour of focused practice. Once per day.",
+          "growth_math": "XP: 100 per use. XP_to_next = 36 * rank_index^1.58. Rank 1: 1 hour. Rank 2: 2 hours. Rank 3: 3 hours. Rank 4: 4 hours. Rank 5: 5 hours. Breakthrough at Rank 5. Effect mult: 1.22^ranks_above_F.",
+          "power_type": "compounding",
+          "_opening_strength": "moderate"
+        }
+      ],
+      "abilities_normalized": [
+        {
+          "name": "System Overclock",
+          "description": "Boost system performance by 50% for 10 minutes. Can only be used once per hour.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "10 minutes of system downtime. Once per hour.",
+          "growth_math": "XP: 50 per use. XP_to_next = 40 * rank_index^1.55. Rank 1: 10 min. Rank 2: 15 min. Rank 3: 20 min. Rank 4: 25 min. Rank 5: 30 min. Soft cap at Rank 5. Effect mult: 1.22^ranks_above_F.",
+          "power_type": "compounding",
+          "_opening_strength": "moderate"
+        },
+        {
+          "name": "Skill Synergy",
+          "description": "Enhance one skill by 20% for 1 hour. Can be used once per day.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "1 hour of focused practice. Once per day.",
+          "growth_math": "XP: 100 per use. XP_to_next = 36 * rank_index^1.58. Rank 1: 1 hour. Rank 2: 2 hours. Rank 3: 3 hours. Rank 4: 4 hours. Rank 5: 5 hours. Breakthrough at Rank 5. Effect mult: 1.22^ranks_above_F.",
+          "power_type": "compounding",
+          "_opening_strength": "moderate"
+        }
+      ],
+      "custom_skills": "weak seed skill: system ping, F, starts as faint static headache near interfaces, DM tracks rank via UI notes, XP from story flags and stamina cost, compounds to status-window static",
+      "quality_gate": {
+        "ok": true,
+        "score": 100,
+        "denial_summary": []
+      },
+      "findings": [
+        {
+          "sev": "bug",
+          "code": "use_limit_vs_recharge",
+          "detail": "desc once/day vs cost hour"
+        }
+      ],
+      "errors": [],
+      "timings_s": {
+        "custom_skills": 1.5,
+        "special_abilities": 12.8
+      }
+    },
+    {
+      "id": "grim_work",
+      "idea": "grim harbor work, debt, filing habit, hard fair, no destiny",
+      "origin": "innate",
+      "abilities_raw": [
+        {
+          "name": "Chrono Echo",
+          "description": "Project a temporary duplicate of yourself into the past, repeating your last action for 3 seconds. This duplicate fades after 5 seconds or if you move more than 10 feet. Can be used once per day.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "Once per day. 1 hour of meditation to recharge after use.",
+          "growth_math": "XP_to_next = 50 * rank_index^1.6; use 6-12 XP × risk (1/2/3/4); rank +1 check / +15% effect; soft cap after rank 4 ×0.6 until breakthrough; max rank 5; effect mult ≈ 1.25^ranks_above_F",
+          "power_type": "compounding",
+          "_opening_strength": "mild"
+        }
+      ],
+      "abilities_normalized": [
+        {
+          "name": "Chrono Echo",
+          "description": "Project a temporary duplicate of yourself into the past, repeating your last action for 3 seconds. This duplicate fades after 5 seconds or if you move more than 10 feet. Can be used once per day.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "Once per day. 1 hour of meditation to recharge after use.",
+          "growth_math": "XP_to_next = 50 * rank_index^1.6; use 6-12 XP × risk (1/2/3/4); rank +1 check / +15% effect; soft cap after rank 4 ×0.6 until breakthrough; max rank 5; effect mult ≈ 1.25^ranks_above_F",
+          "power_type": "compounding",
+          "_opening_strength": "mild"
+        }
+      ],
+      "custom_skills": "ledger_debt, ordinary, tracks unpaid favors and broken handshakes, system_ui, XP from practice/mentors/risk/milestones, hard limit: no mind-reading",
+      "quality_gate": {
+        "ok": true,
+        "score": 100,
+        "denial_summary": []
+      },
+      "findings": [
+        {
+          "sev": "bug",
+          "code": "use_limit_vs_recharge",
+          "detail": "desc once/day vs cost hour"
+        }
+      ],
+      "errors": [],
+      "timings_s": {
+        "custom_skills": 1.1,
+        "special_abilities": 16.7
+      }
+    },
+    {
+      "id": "wuxia_both",
+      "idea": "wuxia sect politics, slow cultivation, reputation debts",
+      "origin": "both",
+      "abilities_raw": [
+        {
+          "name": "Veil of the Autumn Grove",
+          "description": "You can summon a dense, living veil of autumn leaves that obscures your presence from sight and sound. Lasts 10 minutes per rank. Once per day.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "Once per day. 1 hour of meditation to recharge after use.",
+          "growth_math": "Rank 1: 10min, XP: 50; Rank 2: 15min, XP: 100; Rank 3: 20min, XP: 150; Rank 4: 25min, XP: 200; Rank 5: 30min, XP: 250; Soft cap at Rank 5 (XP * 0.6), +1 domain check/rank",
+          "power_type": "soft_cap",
+          "_opening_strength": "mild"
+        },
+        {
+          "name": "Eclipse of the Moonless Night",
+          "description": "You can briefly summon a localized eclipse that darkens the sky and silences all sound for 5 seconds. Can be used once per hour.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "Once per hour. 10 minutes of stillness to recharge.",
+          "growth_math": "Rank 1: 5s, XP: 30; Rank 2: 8s, XP: 60; Rank 3: 12s, XP: 90; Rank 4: 16s, XP: 120; Rank 5: 20s, XP: 150; Breakthrough at Rank 5, +1 domain check/rank",
+          "power_type": "breakthrough",
+          "_opening_strength": "mild"
+        },
+        {
+          "name": "Whisper of the Forgotten Grove",
+          "description": "You can hear faint whispers from the past, revealing hidden truths or forgotten knowledge. Lasts 1 minute per rank. Once per day.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "Once per day. 1 hour of silence to recharge.",
+          "growth_math": "Rank 1: 1min, XP: 40; Rank 2: 2min, XP: 80; Rank 3: 3min, XP: 120; Rank 4: 4min, XP: 160; Rank 5: 5min, XP: 200; Flat cap at Rank 5, +1 domain check/rank",
+          "power_type": "flat",
+          "_opening_strength": "mild"
+        }
+      ],
+      "abilities_normalized": [
+        {
+          "name": "Veil of the Autumn Grove",
+          "description": "You can summon a dense, living veil of autumn leaves that obscures your presence from sight and sound. Lasts 10 minutes per rank. Once per day.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "Once per day. 1 hour of meditation to recharge after use.",
+          "growth_math": "Rank 1: 10min, XP: 50; Rank 2: 15min, XP: 100; Rank 3: 20min, XP: 150; Rank 4: 25min, XP: 200; Rank 5: 30min, XP: 250; Soft cap at Rank 5 (XP * 0.6), +1 domain check/rank",
+          "power_type": "soft_cap",
+          "_opening_strength": "mild"
+        },
+        {
+          "name": "Eclipse of the Moonless Night",
+          "description": "You can briefly summon a localized eclipse that darkens the sky and silences all sound for 5 seconds. Can be used once per hour.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "Once per hour. 10 minutes of stillness to recharge.",
+          "growth_math": "Rank 1: 5s, XP: 30; Rank 2: 8s, XP: 60; Rank 3: 12s, XP: 90; Rank 4: 16s, XP: 120; Rank 5: 20s, XP: 150; Breakthrough at Rank 5, +1 domain check/rank",
+          "power_type": "breakthrough",
+          "_opening_strength": "mild"
+        },
+        {
+          "name": "Whisper of the Forgotten Grove",
+          "description": "You can hear faint whispers from the past, revealing hidden truths or forgotten knowledge. Lasts 1 minute per rank. Once per day.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "Once per day. 1 hour of silence to recharge.",
+          "growth_math": "Rank 1: 1min, XP: 40; Rank 2: 2min, XP: 80; Rank 3: 3min, XP: 120; Rank 4: 4min, XP: 160; Rank 5: 5min, XP: 200; Flat cap at Rank 5, +1 domain check/rank",
+          "power_type": "flat",
+          "_opening_strength": "mild"
+        }
+      ],
+      "custom_skills": "sect face-read bow, seasonal slow tick, training-heavy growth",
+      "quality_gate": {
+        "ok": true,
+        "score": 100,
+        "denial_summary": []
+      },
+      "findings": [
+        {
+          "sev": "bug",
+          "code": "use_limit_vs_recharge",
+          "detail": "desc once/day vs cost hour"
+        },
+        {
+          "sev": "bug",
+          "code": "use_limit_vs_recharge",
+          "detail": "desc once/day vs cost hour"
+        }
+      ],
+      "errors": [],
+      "timings_s": {
+        "custom_skills": 0.7,
+        "special_abilities": 18.5
+      }
+    },
+    {
+      "id": "cozy_craft",
+      "idea": "gentle river village mystery, craft and social skills matter, easy",
+      "origin": "acquired",
+      "abilities_raw": [
+        {
+          "name": "River Whisper",
+          "description": "Sense the current's mood and direction; guide a boat safely through fog or rapids. Use once per day; recharge after 1 hour of river time.",
+          "cost": "Once per day; 1 hour of river time to recharge",
+          "growth_math": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP × risk (1/2/3/4); soft cap after C ×0.55 until breakthrough; ladder F→S/SS/SSS; each rank +1 check / +14–22% effect",
+          "prerequisites": "locked=true",
+          "power_type": "compounding",
+          "_opening_strength": "mild",
+          "locked": false
+        },
+        {
+          "name": "Mist Recall",
+          "description": "Store one memory in the mist; recall it once per week to avoid a mistake or find a hidden path. Use once per week; no recharge.",
+          "cost": "Once per week; no recharge",
+          "growth_math": "XP_to_next = 40 * rank_index^1.55; use 6-14 XP × risk (1/2/3/5); soft caps after each band ×0.55 until contested breakthrough; effect mult ≈ 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
+          "prerequisites": "locked=true",
+          "power_type": "linear",
+          "_opening_strength": "moderate"
+        }
+      ],
+      "abilities_normalized": [
+        {
+          "name": "River Whisper",
+          "description": "Sense the current's mood and direction; guide a boat safely through fog or rapids. Use once per day; recharge after 1 hour of river time.",
+          "cost": "Once per day; 1 hour of river time to recharge",
+          "growth_math": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP × risk (1/2/3/4); soft cap after C ×0.55 until breakthrough; ladder F→S/SS/SSS; each rank +1 check / +14–22% effect",
+          "prerequisites": "locked=true",
+          "power_type": "compounding",
+          "_opening_strength": "mild",
+          "locked": false
+        },
+        {
+          "name": "Mist Recall",
+          "description": "Store one memory in the mist; recall it once per week to avoid a mistake or find a hidden path. Use once per week; no recharge.",
+          "cost": "Once per week; no recharge",
+          "growth_math": "XP_to_next = 40 * rank_index^1.55; use 6-14 XP × risk (1/2/3/5); soft caps after each band ×0.55 until contested breakthrough; effect mult ≈ 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
+          "prerequisites": "locked=true",
+          "power_type": "linear",
+          "_opening_strength": "moderate"
+        }
+      ],
+      "custom_skills": "river craft hands, ordinary, growth from helping the village, system UI, practice/mentors, no hard limits",
+      "quality_gate": {
+        "ok": true,
+        "score": 100,
+        "denial_summary": []
+      },
+      "findings": [
+        {
+          "sev": "bug",
+          "code": "use_limit_vs_recharge",
+          "detail": "desc once/day vs cost hour"
+        },
+        {
+          "sev": "hole",
+          "code": "identical_prereqs",
+          "detail": "locked=true"
+        }
+      ],
+      "errors": [],
+      "timings_s": {
+        "custom_skills": 0.9,
+        "special_abilities": 5.1
+      }
+    }
+  ],
+  "summary": {
+    "bugs": 5,
+    "wrong": 0,
+    "holes": 1,
+    "abilities": 8
+  }
+}

@@ -576,6 +576,109 @@ let RANDOM_FIELD_ORDER = [
   "special_abilities",
 ];
 
+/**
+ * Simple UI Confirm Randomize — only fields the Simple panel owns.
+ * Advanced-depth fields (tone, quests, start_location, custom_skills, …) are filled
+ * later by expandSimpleSetupDepth() on Start, not during Simple randomize.
+ * Order still follows world → rules → identity → powers.
+ */
+const SIMPLE_RANDOM_FIELD_ORDER = [
+  "world_style",
+  "custom_style",
+  "magic_level",
+  "race_magic_enabled",
+  "difficulty",
+  "death_rules",
+  "leveling_system",
+  "game_system",
+  "system_style",
+  "dice_checks_enabled",
+  "proficiency_system",
+  "skill_levels_enabled",
+  "backstory_mode",
+  "memory_policy",
+  "character_backstory",
+  "hair",
+  "facial_features",
+  "appearance",
+  "starter_equipment",
+  "player_name",
+  "player_age",
+  "player_sex",
+  "special_abilities",
+];
+
+/** Intent overrides allowed during Simple randomize (no advanced-depth stamp). */
+const SIMPLE_INTENT_OVERRIDE_KEYS = new Set([
+  "world_style",
+  "custom_style",
+  "magic_level",
+  "race_magic_enabled",
+  "difficulty",
+  "death_rules",
+  "leveling_system",
+  "game_system",
+  "system_style",
+  "dice_checks_enabled",
+  "check_difficulty",
+  "unskilled_mishaps",
+  "auto_check_on_risky_actions",
+  "show_rolls_in_ui",
+  "proficiency_system",
+  "skill_levels_enabled",
+  "backstory_mode",
+  "memory_policy",
+  "player_name",
+  "player_age",
+  "player_sex",
+  "hair",
+  "facial_features",
+  "appearance",
+  "starter_equipment",
+  "character_backstory",
+  "special_abilities",
+]);
+
+function randomizeMode() {
+  return setupUiMode === "simple" ? "simple" : "advanced";
+}
+
+/** Field walk for Confirm Randomize (Simple surface vs full Advanced). */
+function randomizeFieldOrderForMode(mode = randomizeMode()) {
+  if (mode === "simple") {
+    // Keep SIMPLE order; if composer later renames fields, still prefer known simple list.
+    const known = new Set(RANDOM_FIELD_ORDER);
+    return SIMPLE_RANDOM_FIELD_ORDER.filter((f) => known.has(f) || SIMPLE_RANDOM_FIELD_ORDER.includes(f));
+  }
+  return RANDOM_FIELD_ORDER.slice();
+}
+
+function filterIntentOverridesForMode(overrides, mode = randomizeMode()) {
+  if (!overrides || typeof overrides !== "object") return {};
+  if (mode !== "simple") return { ...overrides };
+  const out = {};
+  for (const [k, v] of Object.entries(overrides)) {
+    if (SIMPLE_INTENT_OVERRIDE_KEYS.has(k)) out[k] = v;
+  }
+  return out;
+}
+
+/**
+ * Advanced-depth overrides only for Simple Start expand.
+ * Drops Simple-surface keys (SIMPLE_INTENT_OVERRIDE_KEYS / SIMPLE_RANDOM_FIELD_ORDER)
+ * so pushSimpleToForm user edits are not clobbered by stash or compose re-apply.
+ */
+function depthOnlyFieldOverrides(fields) {
+  if (!fields || typeof fields !== "object") return {};
+  const out = {};
+  for (const [k, v] of Object.entries(fields)) {
+    if (SIMPLE_INTENT_OVERRIDE_KEYS.has(k)) continue;
+    if (SIMPLE_RANDOM_FIELD_ORDER.includes(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 /** Last compiled Randomize intent → passed into field rolls and Start playthrough. */
 let lastComposeIntent = null;
 let lastSessionTheme = null;
@@ -3674,16 +3777,25 @@ function runConfirmedRandomize() {
   if (setupUiMode === "simple") pushSimpleToForm();
   closeRandomizePopover();
   const idea = setupRandomizeIdea();
-  const label = idea ? "Randomizing setup from your idea..." : "Randomizing setup...";
+  const mode = randomizeMode();
+  const fieldOrder = randomizeFieldOrderForMode(mode);
+  const label =
+    mode === "simple"
+      ? idea
+        ? "Randomizing Simple fields from your idea..."
+        : "Randomizing Simple fields..."
+      : idea
+        ? "Randomizing full Advanced setup from your idea..."
+        : "Randomizing full Advanced setup...";
   const promptInput = document.querySelector("#randomizeSetupPrompt");
   if (randomizeSetup) randomizeSetup.disabled = true;
   if (promptInput) promptInput.disabled = true;
   enqueueAiTask(
     withSetupRandomizationLock(
-      () => randomizeAllSetup({ idea }),
+      () => randomizeAllSetup({ idea, mode, fieldOrder }),
       label,
       (error) => {
-        fallbackRandomizeSequence(RANDOM_FIELD_ORDER);
+        fallbackRandomizeSequence(fieldOrder);
         latestOutput.innerHTML = paragraphs(
           `Model randomizer unavailable; used local fallback. ${error.message || error}`,
         );
@@ -4382,27 +4494,57 @@ function placeCharacterArtCard() {
 
 async function randomizeAllSetup(options = {}) {
   const idea = String(options.idea || setupRandomizeIdea() || "").trim().slice(0, 400);
+  const mode = options.mode === "simple" || options.mode === "advanced" ? options.mode : randomizeMode();
+  const fieldOrder = Array.isArray(options.fieldOrder) && options.fieldOrder.length
+    ? options.fieldOrder
+    : randomizeFieldOrderForMode(mode);
   await ensureComposerOrder();
+  // Advanced uses full composer order (may refresh from API); Simple keeps fixed surface list.
+  const walkOrder =
+    mode === "simple"
+      ? fieldOrder
+      : RANDOM_FIELD_ORDER.length
+        ? RANDOM_FIELD_ORDER.slice()
+        : fieldOrder;
   let intent = null;
   // Tree root: compile intent, apply deterministic overrides, then walk dependent fields.
   if (idea) {
     const composed = await composeSetupIntent(idea);
     intent = composed.intent || null;
     lastComposeIntent = intent || lastComposeIntent;
-    const overrides = composed.field_overrides || {};
+    // Keep full overrides on session_theme / lastCompose for Start + Advanced;
+    // only stamp Simple-allowed keys into the form during Simple randomize.
+    const rawOverrides = composed.field_overrides || {};
+    const overrides = filterIntentOverridesForMode(rawOverrides, mode);
     if (overrides && typeof overrides === "object" && Object.keys(overrides).length) {
       applyRandomizedSetup({ fields: overrides });
       normalizeRandomizerDependencies();
     }
-    renderIntentSummary(lastComposeIntent, lastSessionTheme, { source: "from idea" });
+    // Stash full intent overrides for expandSimpleSetupDepth / Start (not applied to form yet in Simple).
+    if (mode === "simple" && rawOverrides && typeof rawOverrides === "object") {
+      lastComposeIntent = {
+        ...(lastComposeIntent || {}),
+        _full_field_overrides: rawOverrides,
+      };
+    }
+    renderIntentSummary(lastComposeIntent, lastSessionTheme, {
+      source: mode === "simple" ? "from idea (Simple fields only)" : "from idea",
+    });
   } else {
     lastComposeIntent = null;
     lastSessionTheme = null;
     clearIntentSummary();
   }
-  for (const name of RANDOM_FIELD_ORDER) {
+  console.info(
+    `setup randomize mode=${mode} fields=${walkOrder.length}`,
+    walkOrder.slice(0, 12),
+    walkOrder.length > 12 ? "…" : "",
+  );
+  for (const name of walkOrder) {
     normalizeRandomizerDependencies();
     if (!randomizeFieldApplies(name)) continue;
+    // Simple mode: never LLM-fill advanced-only fields even if walkOrder drifts.
+    if (mode === "simple" && !SIMPLE_RANDOM_FIELD_ORDER.includes(name)) continue;
     // Skip fields already set by deterministic intent overrides (still re-roll unlocked if empty).
     if (intent && options.skipOverrideFields !== false) {
       // Always re-walk text-heavy / identity fields so LLM can enrich; keep hard overrides for enums/bools.
@@ -4449,9 +4591,8 @@ async function randomizeAllSetup(options = {}) {
     }
     await randomizeField(name, idea ? { idea, intent } : { intent });
   }
-  // Full-package coherence pass: LLM re-reads setup for tacky/AI-generic prose.
-  // Locked fields win; slower but more coherent.
-  if (options.coherencePass !== false) {
+  // Full-package coherence pass: Advanced only (Simple package is intentionally thin until Start).
+  if (mode === "advanced" && options.coherencePass !== false) {
     try {
       syncLlmBusyChrome("Polishing setup for coherence…");
       await runSetupCoherencePass({ idea, intent });
@@ -4461,7 +4602,9 @@ async function randomizeAllSetup(options = {}) {
   }
   // Refresh summary after walk (intent may still be the pre-walk plan).
   if (idea && (lastComposeIntent || lastSessionTheme)) {
-    renderIntentSummary(lastComposeIntent, lastSessionTheme, { source: "after Randomize" });
+    renderIntentSummary(lastComposeIntent, lastSessionTheme, {
+      source: mode === "simple" ? "after Simple Randomize" : "after Randomize",
+    });
   }
   // Keep powers builder mounted/visible (Simple reparent + origin UI)
   placeAbilityBuilder();
@@ -8595,7 +8738,7 @@ function renderImageForm() {
         <p class="empty">Samplers, VAEs, and hires upscalers come from your Forge API when online, plus models scanned under the install root. Custom paste always wins over the dropdown. Generation sends them via <code>sampler_name</code>, <code>override_settings.sd_vae</code>, and <code>hr_upscaler</code> / <code>hr_second_pass_steps</code>. Face-ref body gens post-upscale via the extras API (pick a real ESRGAN model, not Latent).</p>
         <label class="checkboxRow"><input type="checkbox" name="forge_restore_faces" value="true" ${config.forge_restore_faces ? "checked" : ""} /> <span>Restore faces</span></label>
         <label class="checkboxRow"><input type="checkbox" name="forge_tiling" value="true" ${config.forge_tiling ? "checked" : ""} /> <span>Tiling</span></label>
-        <label class="checkboxRow"><input type="checkbox" name="forge_enable_hr" value="true" ${config.forge_enable_hr ? "checked" : ""} /> <span>Enable hires fix / post-upscale</span></label>
+        <label class="checkboxRow"><input type="checkbox" name="forge_enable_hr" value="true" ${config.forge_enable_hr === true || config.forge_enable_hr === 1 || config.forge_enable_hr === "true" ? "checked" : ""} /> <span>Enable hires fix / post-upscale (off by default)</span></label>
         ${catalog.forge?.options?.sd_model_checkpoint ? `<p class="empty">Currently loaded in Forge: <code>${escapeHtml(String(catalog.forge.options.sd_model_checkpoint))}</code>${catalog.forge?.options?.sd_vae ? ` · VAE: <code>${escapeHtml(String(catalog.forge.options.sd_vae))}</code>` : ""}</p>` : ""}
       </div>
 
@@ -10800,8 +10943,14 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
     try {
       const faceRef = playerFaceUrl() || "";
       // Ensure latest LoRA/hires toggles are on the server before gen (must await).
+      // resolveArtHiresSettings prevents an unsynced default-unchecked box from wiping Hires ON.
       await persistArtQualitySettings({ silent: true, flush: true });
       const hr = artHiresRequestFields();
+      if (hr.forge_enable_hr) {
+        setPlayerArtStatus(
+          `Generating with hires ×${hr.forge_hr_scale} (${hr.forge_hr_upscaler})…`,
+        );
+      }
       const res = await fetch("/api/image/character-set", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -10843,8 +10992,18 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
         data.fullbody?.hires_error ||
         data.face?.hires_error ||
         "";
-      const hrBit = hrNote ? ` · ${String(hrNote).slice(0, 120)}` : hr.forge_enable_hr ? " · hires on" : "";
-      setPlayerArtStatus(`Done (${Math.round((data.elapsed_ms || 0) / 1000)}s) — ${kinds.join(" + ")}${ref}${hrBit}.`);
+      const dimBit = (() => {
+        const fb = data.fullbody || data.face || {};
+        const w = fb.width || fb.hires_width;
+        const h = fb.height || fb.hires_height;
+        return w && h ? ` · ${w}×${h}` : "";
+      })();
+      const hrBit = hrNote
+        ? ` · ${String(hrNote).slice(0, 140)}`
+        : hr.forge_enable_hr
+          ? " · hires on (no note)"
+          : "";
+      setPlayerArtStatus(`Done (${Math.round((data.elapsed_ms || 0) / 1000)}s) — ${kinds.join(" + ")}${ref}${dimBit}${hrBit}.`);
       renderIndex();
     } catch (error) {
       setPlayerArtStatus(error.message || String(error), { bad: true });
@@ -10872,14 +11031,35 @@ async function loadModelConfig() {
   renderIndex();
 }
 
-async function loadImageConfig() {
+async function loadImageConfig({ applyToQualityBar = true } = {}) {
   const response = await fetch("/api/image-config");
   if (!response.ok) throw new Error(await response.text());
-  imageConfig = await response.json();
+  const loaded = await response.json();
+  // If the setup quality bar is mid-edit, keep DOM values authoritative and
+  // merge server fields underneath — never wipe hires/upscaler while typing.
+  const qualityDirty = document.querySelector("#setupArtQualityBar")?.dataset?.dirty === "1";
+  if (qualityDirty && imageConfig) {
+    mirrorArtHiresControlsToImageConfig();
+    const liveHr = {
+      forge_enable_hr: imageConfig.forge_enable_hr,
+      forge_hr_scale: imageConfig.forge_hr_scale,
+      forge_denoising_strength: imageConfig.forge_denoising_strength,
+      forge_hr_second_pass_steps: imageConfig.forge_hr_second_pass_steps,
+      forge_hr_upscaler: imageConfig.forge_hr_upscaler,
+      forge_active_loras: imageConfig.forge_active_loras,
+    };
+    imageConfig = { ...(loaded || {}), ...liveHr };
+  } else {
+    imageConfig = loaded;
+  }
   syncPortraitControls();
-  syncArtQualityControlsFromConfig();
+  if (applyToQualityBar && !qualityDirty) {
+    syncArtQualityControlsFromConfig();
+  } else if (applyToQualityBar && qualityDirty) {
+    updateArtHrHintFromControls();
+  }
   // Re-render LoRA list so saved checks appear after config loads
-  if (document.querySelector("#setupArtLoraList")) {
+  if (document.querySelector("#setupArtLoraList") && !qualityDirty) {
     renderSetupLoraList(document.querySelector("#setupArtLoraFilter")?.value || "");
   }
   return imageConfig;
@@ -11177,10 +11357,12 @@ function imagePayloadFromForm(form) {
     String(formData.get("forge_scheduler_custom") || "").trim() ||
     String(formData.get("forge_scheduler") || "Automatic").trim() ||
     "Automatic";
+  // Prefer form fields; if Images settings form omitted hires (hidden tab), keep live quality-bar / config.
   const forgeHrUpscaler =
     String(formData.get("forge_hr_upscaler_custom") || "").trim() ||
-    String(formData.get("forge_hr_upscaler") || "Latent").trim() ||
-    "Latent";
+    String(formData.get("forge_hr_upscaler") || "").trim() ||
+    String(imageConfig?.forge_hr_upscaler || "R-ESRGAN 4x+").trim() ||
+    "R-ESRGAN 4x+";
   const forgeRoot = _lastFilledInput(form, "forge_root", pendingImageRoots.forge || "");
   const comfyRoot = _lastFilledInput(form, "comfy_root", pendingImageRoots.comfyui || "");
   if (forgeRoot) pendingImageRoots.forge = forgeRoot;
@@ -11229,13 +11411,24 @@ function imagePayloadFromForm(form) {
     forge_clip_skip: Math.round(finiteNumber(formData.get("forge_clip_skip"), 1)),
     forge_restore_faces: !!form.querySelector('input[name="forge_restore_faces"]')?.checked,
     forge_tiling: !!form.querySelector('input[name="forge_tiling"]')?.checked,
-    forge_enable_hr: !!form.querySelector('input[name="forge_enable_hr"]')?.checked,
+    // Hires: if the Images form has no enable checkbox in DOM, keep quality-bar / saved values.
+    forge_enable_hr: form.querySelector('input[name="forge_enable_hr"]')
+      ? !!form.querySelector('input[name="forge_enable_hr"]')?.checked
+      : imageConfig?.forge_enable_hr === true ||
+        imageConfig?.forge_enable_hr === 1 ||
+        imageConfig?.forge_enable_hr === "true",
     // Only currently checked LoRAs — never re-send a stale always-on stack
     forge_active_loras: collectSetupLoras(),
-    forge_hr_scale: finiteNumber(formData.get("forge_hr_scale"), 1.5),
+    forge_hr_scale: formData.has("forge_hr_scale")
+      ? finiteNumber(formData.get("forge_hr_scale"), 1.5)
+      : finiteNumber(imageConfig?.forge_hr_scale, 1.5),
     forge_hr_upscaler: forgeHrUpscaler,
-    forge_denoising_strength: finiteNumber(formData.get("forge_denoising_strength"), 0.45),
-    forge_hr_second_pass_steps: Math.round(finiteNumber(formData.get("forge_hr_second_pass_steps"), 0)),
+    forge_denoising_strength: formData.has("forge_denoising_strength")
+      ? finiteNumber(formData.get("forge_denoising_strength"), 0.45)
+      : finiteNumber(imageConfig?.forge_denoising_strength, 0.45),
+    forge_hr_second_pass_steps: formData.has("forge_hr_second_pass_steps")
+      ? Math.round(finiteNumber(formData.get("forge_hr_second_pass_steps"), 0))
+      : Math.round(finiteNumber(imageConfig?.forge_hr_second_pass_steps, 0)),
     iib_open_mode: String(formData.get("iib_open_mode") || "embed").trim() || "embed",
     iib_base_url: String(formData.get("iib_base_url") || "").trim(),
     comfy_sampler_name: String(formData.get("comfy_sampler_name") || "euler").trim(),
@@ -11672,6 +11865,10 @@ function collectSetupLoras() {
 /** Push LoRA selection + hires toggles into image config (used by NPC gens too). */
 let _persistArtQualityTimer = null;
 let _persistArtQualityPending = null;
+/** Resolve fn for the outstanding debounced Promise (settled on clearTimeout). */
+let _persistArtQualitySettle = null;
+/** Monotonic token so late / overlapping flush completions cannot clobber newer intent. */
+let _artQualityFlushGen = 0;
 function readArtHiresControls() {
   const enableHr = !!document.querySelector("#setupArtEnableHr")?.checked;
   const hrScale = Math.max(
@@ -11693,91 +11890,305 @@ function readArtHiresControls() {
   return { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler };
 }
 
-/** Hires fields to include on character-set / generate requests (avoids config race). */
-function artHiresRequestFields() {
-  const { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler } = readArtHiresControls();
+function _cfgHiresOn(cfg) {
+  return cfg?.forge_enable_hr === true || cfg?.forge_enable_hr === 1 || cfg?.forge_enable_hr === "true";
+}
+
+/**
+ * Single source of truth for hires settings (DOM + saved config).
+ *
+ * Critical: the quality-bar checkbox defaults unchecked in HTML. If loadImageConfig
+ * has not yet painted a saved Hires ON into the checkbox, a naive DOM read returns
+ * false and used to *overwrite* the server config with false on every gen flush —
+ * which made upscale look "broken" / "stopped working".
+ *
+ * Rules:
+ * - Quality bar dirty (user is editing) → DOM wins.
+ * - Not dirty + imageConfig loaded → config wins for enable flag + scale/upscaler.
+ * - Otherwise → DOM.
+ */
+function resolveArtHiresSettings() {
+  const fromDom = readArtHiresControls();
+  const dirty = document.querySelector("#setupArtQualityBar")?.dataset?.dirty === "1";
+  if (dirty || !imageConfig) {
+    return {
+      enableHr: !!fromDom.enableHr,
+      hrScale: fromDom.hrScale,
+      hrDenoise: fromDom.hrDenoise,
+      hrSteps: fromDom.hrSteps,
+      hrUpscaler: fromDom.hrUpscaler,
+      source: dirty ? "dom-dirty" : "dom",
+    };
+  }
+  const cfgOn = _cfgHiresOn(imageConfig);
+  let hrScale = fromDom.hrScale;
+  let hrDenoise = fromDom.hrDenoise;
+  let hrSteps = fromDom.hrSteps;
+  let hrUpscaler = fromDom.hrUpscaler;
+  if (imageConfig.forge_hr_scale != null) {
+    const n = Number(imageConfig.forge_hr_scale);
+    if (Number.isFinite(n) && n >= 1) hrScale = Math.max(1, Math.min(4, n));
+  }
+  if (imageConfig.forge_denoising_strength != null) {
+    const n = Number(imageConfig.forge_denoising_strength);
+    if (Number.isFinite(n)) hrDenoise = Math.max(0, Math.min(1, n));
+  }
+  if (imageConfig.forge_hr_second_pass_steps != null) {
+    const n = Number(imageConfig.forge_hr_second_pass_steps);
+    if (Number.isFinite(n)) hrSteps = Math.max(0, Math.min(150, Math.round(n)));
+  }
+  if (String(imageConfig.forge_hr_upscaler || "").trim()) {
+    hrUpscaler = String(imageConfig.forge_hr_upscaler).trim();
+  }
   return {
-    forge_enable_hr: enableHr,
-    forge_hr_scale: hrScale,
-    forge_denoising_strength: hrDenoise,
-    forge_hr_second_pass_steps: hrSteps,
-    forge_hr_upscaler: hrUpscaler,
+    // Config is authoritative when the user is not mid-edit
+    enableHr: cfgOn,
+    hrScale,
+    hrDenoise,
+    hrSteps,
+    hrUpscaler,
+    source: "config",
   };
 }
 
+/** Apply resolved hires settings back onto the quality-bar DOM (honest UI). */
+function applyResolvedHiresToDom(resolved) {
+  if (!resolved) return;
+  const hr = document.querySelector("#setupArtEnableHr");
+  if (hr) hr.checked = !!resolved.enableHr;
+  const scale = document.querySelector("#setupArtHrScale");
+  if (scale && !scale.disabled && resolved.hrScale != null) scale.value = String(resolved.hrScale);
+  // Always write values even when disabled so turning hires on shows correct numbers
+  if (scale && resolved.hrScale != null) scale.value = String(resolved.hrScale);
+  const denoise = document.querySelector("#setupArtHrDenoise");
+  if (denoise && resolved.hrDenoise != null) denoise.value = String(resolved.hrDenoise);
+  const steps = document.querySelector("#setupArtHrSteps");
+  if (steps && resolved.hrSteps != null) steps.value = String(resolved.hrSteps);
+  const ups = document.querySelector("#setupArtHrUpscaler");
+  if (ups && resolved.hrUpscaler) {
+    const want = String(resolved.hrUpscaler);
+    const has = [...ups.options].some((o) => o.value === want);
+    if (!has) {
+      const opt = document.createElement("option");
+      opt.value = want;
+      opt.textContent = want;
+      ups.appendChild(opt);
+    }
+    ups.value = want;
+  }
+  setArtHiresControlsEnabled(!!resolved.enableHr);
+  updateArtHrHintFromControls();
+}
+
+/** Hires fields to include on character-set / generate requests (avoids config race). */
+function artHiresRequestFields() {
+  const r = resolveArtHiresSettings();
+  return {
+    forge_enable_hr: !!r.enableHr,
+    forge_hr_scale: r.hrScale,
+    forge_denoising_strength: r.hrDenoise,
+    forge_hr_second_pass_steps: r.hrSteps,
+    forge_hr_upscaler: r.hrUpscaler,
+  };
+}
+
+function _hiresControlsMatchSnapshot(live, snap) {
+  if (!live || !snap) return false;
+  return (
+    !!live.enableHr === !!snap.enableHr &&
+    Number(live.hrScale) === Number(snap.hrScale) &&
+    Number(live.hrDenoise) === Number(snap.hrDenoise) &&
+    Number(live.hrSteps) === Number(snap.hrSteps) &&
+    String(live.hrUpscaler || "") === String(snap.hrUpscaler || "")
+  );
+}
+
 async function _flushArtQualitySettings({ silent = true } = {}) {
+  // Own this flush generation; late completions from older gens are ignored on merge.
+  const flushGen = ++_artQualityFlushGen;
   try {
-    if (!imageConfig) await loadImageConfig();
+    // Never call loadImageConfig() here — it re-applies config to the quality bar
+    // and races with in-progress edits. Fetch raw config only if we have none.
+    if (!imageConfig) {
+      const response = await fetch("/api/image-config");
+      if (response.ok) imageConfig = await response.json();
+    }
+    // Stale: a newer flush started while we waited for config — abandon this pass.
+    if (flushGen !== _artQualityFlushGen) return;
     const loras = collectSetupLoras();
-    const { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler } = readArtHiresControls();
+    // Config-wins for LoRAs until the setup list is mounted and hydrated: an empty
+    // collect must not wipe a non-empty saved stack on hires-only quality flushes.
+    const loraListEl = document.querySelector("#setupArtLoraList");
+    const loraUiReady =
+      !!loraListEl &&
+      loraListEl.querySelectorAll("input[data-lora-name]").length > 0;
+    // Omit empty forge_active_loras when config still has a stack and UI is not ready.
+    const omitLorasFromPatch =
+      !loras.length &&
+      Array.isArray(imageConfig?.forge_active_loras) &&
+      imageConfig.forge_active_loras.length > 0 &&
+      !loraUiReady;
+    // Use resolve — never clobber saved Hires ON with an unsynced default-unchecked box.
+    const resolved = resolveArtHiresSettings();
+    const { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler } = resolved;
+    const flushedSnap = { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler };
+    // Keep DOM honest when we trusted config over a stale unchecked box
+    if (resolved.source === "config") {
+      applyResolvedHiresToDom(resolved);
+    }
     // Keep in-memory config in sync immediately so subsequent code sees hires on.
     if (imageConfig) {
-      imageConfig.forge_active_loras = loras;
+      if (!omitLorasFromPatch) imageConfig.forge_active_loras = loras;
       imageConfig.forge_enable_hr = enableHr;
       imageConfig.forge_hr_scale = hrScale;
       imageConfig.forge_denoising_strength = hrDenoise;
       imageConfig.forge_hr_second_pass_steps = hrSteps;
       imageConfig.forge_hr_upscaler = hrUpscaler;
     }
+    // Partial patch only — do not re-POST the entire imageConfig blob (path lists etc.).
     const patch = {
-      ...(imageConfig || {}),
-      forge_active_loras: loras,
       forge_enable_hr: enableHr,
       forge_hr_scale: hrScale,
       forge_denoising_strength: hrDenoise,
       forge_hr_second_pass_steps: hrSteps,
       forge_hr_upscaler: hrUpscaler,
     };
+    // Omit forge_active_loras when empty collect would wipe a non-empty config stack
+    // and the LoRA UI is not yet ready (reload / pre-catalog). Intentional clear still
+    // POSTs [] once checkboxes are mounted and the user unchecked all.
+    if (loras.length || loraUiReady) {
+      patch.forge_active_loras = loras;
+    }
     const res = await fetch("/api/image-config", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     });
+    // A newer flush owns the bar now — do not merge stale closed-over values.
+    if (flushGen !== _artQualityFlushGen) return;
     if (res.ok) {
       const saved = await res.json();
-      // Merge server response but never clobber values the user just set in the quality bar
-      // if the server omitted/defaulted a field (or a race overwrote an older patch).
-      imageConfig = {
-        ...(imageConfig || {}),
-        ...(saved || {}),
-        forge_enable_hr: enableHr,
-        forge_hr_scale: hrScale,
-        forge_denoising_strength: hrDenoise,
-        forge_hr_second_pass_steps: hrSteps,
-        forge_hr_upscaler: hrUpscaler,
-        forge_active_loras: loras,
-      };
+      if (flushGen !== _artQualityFlushGen) return;
+      const bar = document.querySelector("#setupArtQualityBar");
+      const live = readArtHiresControls();
+      const domMatches = _hiresControlsMatchSnapshot(live, flushedSnap);
+      // Only clear dirty + force-merge flushed hires when DOM still matches what we POSTed.
+      // Mid-flight edits keep dirty=1 and live imageConfig mirror (do not write closed-over values).
+      if (domMatches) {
+        imageConfig = {
+          ...(imageConfig || {}),
+          ...(saved || {}),
+          forge_enable_hr: enableHr,
+          forge_hr_scale: hrScale,
+          forge_denoising_strength: hrDenoise,
+          forge_hr_second_pass_steps: hrSteps,
+          forge_hr_upscaler: hrUpscaler,
+          forge_active_loras: omitLorasFromPatch
+            ? imageConfig?.forge_active_loras || []
+            : loras,
+        };
+        if (bar && domMatches) bar.dataset.dirty = "0";
+      } else {
+        // Diverged mid-flight: keep live DOM authoritative; leave dirty set; re-queue save.
+        if (imageConfig) {
+          imageConfig.forge_enable_hr = live.enableHr;
+          imageConfig.forge_hr_scale = live.hrScale;
+          imageConfig.forge_denoising_strength = live.hrDenoise;
+          imageConfig.forge_hr_second_pass_steps = live.hrSteps;
+          imageConfig.forge_hr_upscaler = live.hrUpscaler;
+          const liveLoras = collectSetupLoras();
+          if (liveLoras.length || loraUiReady) {
+            imageConfig.forge_active_loras = liveLoras;
+          }
+        }
+        if (bar) bar.dataset.dirty = "1";
+        // Let a newer debounced flush own the save (do not start another concurrent flush here).
+        persistArtQualitySettings({ silent: true });
+      }
       if (!silent) {
         const ups = enableHr ? ` · hires ×${hrScale} ${hrUpscaler}` : "";
         setSetupArtStatus?.(`Saved ${loras.length} LoRA(s)${ups}.`);
       }
-      // Refresh hint from what we know we saved — do not rebuild the select from defaults.
+      // Refresh hint only — never rebuild upscaler <select> after save.
       updateArtHrHintFromControls();
       const hint = document.querySelector("#setupArtHrHint");
       if (hint && enableHr) {
-        hint.textContent = hint.textContent.replace(" · saving…", " · saved");
+        hint.textContent = String(hint.textContent || "").replace(" · saving…", " · saved");
       }
+    } else {
+      // HTTP failure after optimistic write: keep dirty, re-queue, surface status.
+      const bar = document.querySelector("#setupArtQualityBar");
+      if (bar) bar.dataset.dirty = "1";
+      setSetupArtStatus?.("Could not save art quality settings — retrying…");
+      persistArtQualitySettings({ silent: true });
     }
   } catch (_) {
-    /* ignore */
+    // Network throw after optimistic write: same recovery as HTTP failure.
+    const bar = document.querySelector("#setupArtQualityBar");
+    if (bar) bar.dataset.dirty = "1";
+    setSetupArtStatus?.("Could not save art quality settings — retrying…");
+    persistArtQualitySettings({ silent: true });
   }
 }
 
 /**
  * Persist LoRA/hires toggles.
  * - Default: debounced (typing/toggling).
- * - { flush: true }: await immediate save (call before generate).
+ * - { flush: true }: await prior in-flight flush, then immediate save (call before generate).
+ * Serializes flushes so a stale POST completion cannot overwrite newer enableHr/scale.
  */
 function persistArtQualitySettings({ silent = true, flush = false } = {}) {
   if (flush) {
+    // Settle outstanding debounce Promise before clearTimeout so await prior cannot hang.
     clearTimeout(_persistArtQualityTimer);
     _persistArtQualityTimer = null;
-    _persistArtQualityPending = _flushArtQualitySettings({ silent });
+    if (typeof _persistArtQualitySettle === "function") {
+      const _resolveDebounce = _persistArtQualitySettle;
+      _persistArtQualitySettle = null;
+      try {
+        _resolveDebounce();
+      } catch (_) {
+        /* ignore */
+      }
+    }
+    const prior = _persistArtQualityPending;
+    _persistArtQualityPending = (async () => {
+      if (prior) {
+        try {
+          await prior;
+        } catch (_) {
+          /* prior flush errors must not block latest intent */
+        }
+      }
+      // Capture DOM only after prior work settles so enableHr reflects latest intent.
+      await _flushArtQualitySettings({ silent });
+    })();
     return _persistArtQualityPending;
   }
+  // Re-debounce: settle abandoned timer Promise so prior await cannot hang forever.
   clearTimeout(_persistArtQualityTimer);
+  if (typeof _persistArtQualitySettle === "function") {
+    const _resolveDebounce = _persistArtQualitySettle;
+    _persistArtQualitySettle = null;
+    try {
+      _resolveDebounce();
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  const prior = _persistArtQualityPending;
   _persistArtQualityPending = new Promise((resolve) => {
+    _persistArtQualitySettle = resolve;
     _persistArtQualityTimer = setTimeout(async () => {
+      _persistArtQualityTimer = null;
+      _persistArtQualitySettle = null;
+      if (prior) {
+        try {
+          await prior;
+        } catch (_) {
+          /* ignore */
+        }
+      }
       await _flushArtQualitySettings({ silent });
       resolve();
     }, 280);
@@ -11788,8 +12199,23 @@ function persistArtQualitySettings({ silent = true, flush = false } = {}) {
 function populateHrUpscalerSelect(preferred, { preserveDom = false } = {}) {
   const sel = document.querySelector("#setupArtHrUpscaler");
   if (!sel) return;
-  // While the user is mid-edit, never wipe the dropdown back to a stale config value.
-  if (preserveDom && sel.options && sel.options.length > 1 && sel.value) {
+  const current = String(sel.value || "").trim();
+  // Mid-edit / dirty bar: keep the user's selection exactly; only append missing options.
+  if (
+    preserveDom ||
+    document.querySelector("#setupArtQualityBar")?.dataset?.dirty === "1"
+  ) {
+    const keep = String(preferred || current || "").trim();
+    if (keep) {
+      const has = [...sel.options].some((o) => o.value.toLowerCase() === keep.toLowerCase());
+      if (!has) {
+        const opt = document.createElement("option");
+        opt.value = keep;
+        opt.textContent = keep;
+        sel.insertBefore(opt, sel.firstChild);
+      }
+      sel.value = keep;
+    }
     return;
   }
   const fromCatalog = Array.isArray(imageCatalog?.forge?.upscalers)
@@ -11830,16 +12256,27 @@ function populateHrUpscalerSelect(preferred, { preserveDom = false } = {}) {
   sel.value = pick;
 }
 
+function setArtHiresControlsEnabled(on) {
+  const enabled = !!on;
+  for (const id of ["setupArtHrScale", "setupArtHrDenoise", "setupArtHrSteps", "setupArtHrUpscaler"]) {
+    const el = document.querySelector(`#${id}`);
+    if (el) el.disabled = !enabled;
+  }
+  const bar = document.querySelector("#setupArtQualityBar");
+  if (bar) bar.classList.toggle("artHrOff", !enabled);
+}
+
 function updateArtHrHintFromControls() {
   const hint = document.querySelector("#setupArtHrHint");
-  if (!hint) return;
   const { enableHr, hrScale, hrDenoise, hrSteps, hrUpscaler } = readArtHiresControls();
+  setArtHiresControlsEnabled(enableHr);
+  if (!hint) return;
   const n = typeof collectSetupLoras === "function" ? collectSetupLoras().length : 0;
   if (enableHr) {
-    const st = hrSteps > 0 ? ` · ${hrSteps} steps` : " · steps = first pass";
-    hint.textContent = `Hires ×${hrScale} · ${hrUpscaler} · denoise ${hrDenoise}${st} · ${n} LoRA(s) · saving…`;
+    const st = hrSteps > 0 ? ` · ${hrSteps} steps` : " · auto second-pass steps";
+    hint.textContent = `Hires ON ×${hrScale} · ${hrUpscaler} · denoise ${hrDenoise}${st} (diffusion refine) · ${n} LoRA(s)`;
   } else {
-    hint.textContent = `Hires off · ${n} LoRA(s) checked (opt-in only) · face-ref body gens post-upscale when enabled`;
+    hint.textContent = `Hires off (opt-in) · ${n} LoRA(s) · quality second pass, not soft resize`;
   }
 }
 
@@ -11856,50 +12293,46 @@ function mirrorArtHiresControlsToImageConfig() {
 
 function syncArtQualityControlsFromConfig({ preserveDom = false } = {}) {
   const cfg = imageConfig || {};
-  if (!preserveDom) {
-    const hr = document.querySelector("#setupArtEnableHr");
-    if (hr) hr.checked = !!cfg.forge_enable_hr;
-    const scale = document.querySelector("#setupArtHrScale");
-    if (scale && cfg.forge_hr_scale != null) scale.value = String(cfg.forge_hr_scale);
-    const denoise = document.querySelector("#setupArtHrDenoise");
-    if (denoise && cfg.forge_denoising_strength != null) {
-      denoise.value = String(cfg.forge_denoising_strength);
-    }
-    const steps = document.querySelector("#setupArtHrSteps");
-    if (steps && cfg.forge_hr_second_pass_steps != null) {
-      steps.value = String(cfg.forge_hr_second_pass_steps);
-    }
-    populateHrUpscalerSelect(cfg.forge_hr_upscaler || "R-ESRGAN 4x+", { preserveDom: false });
-  } else {
-    // Catalog refresh only: fill missing options, keep user's current selection
+  const dirty = document.querySelector("#setupArtQualityBar")?.dataset?.dirty === "1";
+  // Hard rule: never overwrite the quality bar while the user is editing it.
+  if (preserveDom || dirty) {
     populateHrUpscalerSelect(
       document.querySelector("#setupArtHrUpscaler")?.value || cfg.forge_hr_upscaler || "R-ESRGAN 4x+",
-      { preserveDom: false },
+      { preserveDom: true },
     );
+    updateArtHrHintFromControls();
+    return;
   }
+  // Never default the quality-bar checkbox on; only explicit true/1/"true" enable it.
+  // Missing / false / "false" / null → OFF (opt-in).
+  const hrOn = cfg.forge_enable_hr === true || cfg.forge_enable_hr === 1 || cfg.forge_enable_hr === "true";
+  const hr = document.querySelector("#setupArtEnableHr");
+  if (hr) hr.checked = !!hrOn;
+  // Keep config mirror honest when server sent a falsey/ambiguous value
+  if (imageConfig && !hrOn) imageConfig.forge_enable_hr = false;
+  const scale = document.querySelector("#setupArtHrScale");
+  if (scale && cfg.forge_hr_scale != null) scale.value = String(cfg.forge_hr_scale);
+  const denoise = document.querySelector("#setupArtHrDenoise");
+  if (denoise && cfg.forge_denoising_strength != null) {
+    denoise.value = String(cfg.forge_denoising_strength);
+  }
+  const steps = document.querySelector("#setupArtHrSteps");
+  if (steps && cfg.forge_hr_second_pass_steps != null) {
+    steps.value = String(cfg.forge_hr_second_pass_steps);
+  }
+  populateHrUpscalerSelect(cfg.forge_hr_upscaler || "R-ESRGAN 4x+", { preserveDom: false });
+  setArtHiresControlsEnabled(!!hrOn);
   const hint = document.querySelector("#setupArtHrHint");
   if (hint) {
     const n = collectSetupLoras().length;
-    const on = preserveDom
-      ? !!document.querySelector("#setupArtEnableHr")?.checked
-      : !!cfg.forge_enable_hr;
-    if (on) {
-      const scale = preserveDom
-        ? document.querySelector("#setupArtHrScale")?.value || cfg.forge_hr_scale
-        : cfg.forge_hr_scale;
-      const ups = preserveDom
-        ? document.querySelector("#setupArtHrUpscaler")?.value || cfg.forge_hr_upscaler
-        : cfg.forge_hr_upscaler;
-      const den = preserveDom
-        ? document.querySelector("#setupArtHrDenoise")?.value || cfg.forge_denoising_strength
-        : cfg.forge_denoising_strength;
-      const steps = preserveDom
-        ? document.querySelector("#setupArtHrSteps")?.value || cfg.forge_hr_second_pass_steps
-        : cfg.forge_hr_second_pass_steps;
-      const st = Number(steps) > 0 ? ` · ${steps} steps` : " · steps = first pass";
-      hint.textContent = `Hires ×${scale || 1.5} · ${ups || "R-ESRGAN 4x+"} · denoise ${den ?? 0.45}${st} · ${n} LoRA(s)`;
+    if (hrOn) {
+      const st =
+        Number(cfg.forge_hr_second_pass_steps) > 0
+          ? ` · ${cfg.forge_hr_second_pass_steps} steps`
+          : " · steps = first pass";
+      hint.textContent = `Hires ON ×${cfg.forge_hr_scale || 1.5} · ${cfg.forge_hr_upscaler || "4x-UltraSharp"} · denoise ${cfg.forge_denoising_strength ?? 0.45}${st} (diffusion refine) · ${n} LoRA(s)`;
     } else {
-      hint.textContent = `Hires off · ${n} LoRA(s) checked (opt-in only) · face-ref body gens post-upscale when enabled`;
+      hint.textContent = `Hires off (opt-in) · ${n} LoRA(s) · quality second pass, not soft resize`;
     }
   }
 }
@@ -12014,7 +12447,8 @@ function renderSetupLoraList(filter = "") {
   const host = document.querySelector("#setupArtLoraList");
   if (!host) return;
   const q = String(filter || "").toLowerCase().trim();
-  // Only preserve checks already in the live DOM — never auto-enable from saved config.
+  // Preserve checks already in the live DOM; when empty (reload / first paint), hydrate
+  // from imageConfig.forge_active_loras so quality flushes do not wipe the saved stack.
   const selected = new Map();
   for (const el of host.querySelectorAll("input[data-lora-name]:checked")) {
     const name = el.getAttribute("data-lora-name") || "";
@@ -12023,6 +12457,14 @@ function renderSetupLoraList(filter = "") {
       (w) => w.getAttribute("data-lora-weight") === name,
     );
     selected.set(name, parseFloat(weightEl?.value || "NaN"));
+  }
+  if (!selected.size && Array.isArray(imageConfig?.forge_active_loras)) {
+    for (const entry of imageConfig.forge_active_loras) {
+      const name = String(entry?.name || entry?.alias || "").trim();
+      if (!name) continue;
+      const w = Number(entry?.weight);
+      selected.set(name, Number.isFinite(w) ? w : NaN);
+    }
   }
   const items = (setupArtLoraCatalog || [])
     .filter((l) => {
@@ -13019,11 +13461,18 @@ async function generateSetupPortrait(kindOrKinds = "both") {
         }
       }
       // Persist LoRAs + hires so NPC gens share the same stack (await so Forge gets flags).
+      // resolveArtHiresSettings prevents an unsynced default-unchecked box from wiping Hires ON.
       await persistArtQualitySettings({ silent: true, flush: true });
       // Never send client-only keys; avoids accidental validation noise.
       const { _checkpoint: _ck, ...sendBody } = payload;
       sendBody.loras = collectSetupLoras();
-      Object.assign(sendBody, artHiresRequestFields());
+      const hrFields = artHiresRequestFields();
+      Object.assign(sendBody, hrFields);
+      if (hrFields.forge_enable_hr) {
+        setSetupArtStatus(
+          `Generating with hires ×${hrFields.forge_hr_scale} (${hrFields.forge_hr_upscaler})…`,
+        );
+      }
       const response = await fetch("/api/image/character-set", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -13065,7 +13514,20 @@ async function generateSetupPortrait(kindOrKinds = "both") {
         result.fullbody?.used_face_reference || result.face?.used_face_reference
           ? " · used other image as ref"
           : "";
-      setSetupArtStatus(`Done (${secs}s) — ${kinds.join(" + ")}${refNote}.`);
+      const hrNote =
+        result.fullbody?.hires_note ||
+        result.face?.hires_note ||
+        result.fullbody?.hires_error ||
+        result.face?.hires_error ||
+        "";
+      const sizeNote = (() => {
+        const fb = result.fullbody || result.face || {};
+        const w = fb.width || fb.hires_width;
+        const h = fb.height || fb.hires_height;
+        return w && h ? ` · ${w}×${h}` : "";
+      })();
+      const hrBit = hrNote ? ` · ${String(hrNote).slice(0, 140)}` : "";
+      setSetupArtStatus(`Done (${secs}s) — ${kinds.join(" + ")}${refNote}${sizeNote}${hrBit}.`);
       return result;
     } catch (error) {
       setSetupArtStatus(error.message || String(error), { bad: true });
@@ -14520,12 +14982,32 @@ async function expandSimpleSetupDepth() {
       .join(" · ")
       .slice(0, 400);
   let intent = lastComposeIntent;
+  // Prefer full overrides saved during Simple randomize (were filtered from the form then).
+  // Advanced-depth fill only: strip Simple-surface keys so pushSimpleToForm user edits
+  // (player_name, difficulty, …) are not clobbered on Start by randomize-time stash.
+  const rawStashed =
+    lastComposeIntent && typeof lastComposeIntent._full_field_overrides === "object"
+      ? lastComposeIntent._full_field_overrides
+      : null;
+  // Advanced-depth only: strip Simple-surface keys so pushSimpleToForm user edits win.
+  // depthOnlyFieldOverrides drops SIMPLE_INTENT_OVERRIDE_KEYS + SIMPLE_RANDOM_FIELD_ORDER.
+  const stashed = depthOnlyFieldOverrides(rawStashed);
+  if (stashed && Object.keys(stashed).length) {
+    applyRandomizedSetup({ fields: stashed });
+    normalizeRandomizerDependencies();
+  }
   if (idea) {
     try {
       const composed = await composeSetupIntent(idea);
       intent = composed.intent || intent;
-      const overrides = composed.field_overrides || {};
-      if (overrides && typeof overrides === "object") applyRandomizedSetup({ fields: overrides });
+      // Advanced-depth overrides only — same surface strip as stash so compose cannot
+      // re-stamp player_name/difficulty/etc. after pushSimpleToForm user edits.
+      const rawOverrides = composed.field_overrides || {};
+      const overrides = depthOnlyFieldOverrides(rawOverrides);
+      if (overrides && Object.keys(overrides).length) {
+        applyRandomizedSetup({ fields: overrides });
+        normalizeRandomizerDependencies();
+      }
     } catch {
       /* continue with local fill */
     }
@@ -14556,6 +15038,11 @@ async function expandSimpleSetupDepth() {
   for (const name of fillTargets) {
     if (isSettingLocked(name)) continue;
     if (!randomizeFieldApplies(name, formData)) continue;
+    // After pushSimpleToForm, Simple-surface keys are user-owned — never re-roll on Start
+    // (enums like magic_level/death_rules/world_style are never empty selects).
+    if (SIMPLE_RANDOM_FIELD_ORDER.includes(name) || SIMPLE_INTENT_OVERRIDE_KEYS.has(name)) {
+      continue;
+    }
     // Skip if already substantial
     if (name === "special_abilities") {
       if (collectAbilities().length) continue;
@@ -14608,9 +15095,16 @@ async function expandSimpleSetupDepth() {
   // Length scoring: Simple final package should land in a similar band to a typical Advanced fill
   const score = scoreSetupDepth();
   if (score.total < score.target * 0.7) {
-    // Second pass on weakest prose fields only
+    // Second pass on weakest prose fields only — do not wholesale replace non-empty
+    // Simple-surface prose the user already set (short hair/backstory is intentional).
     for (const name of score.weak) {
       if (isSettingLocked(name)) continue;
+      // Skip non-empty Simple-surface prose (preserve user short hair/backstory).
+      if (
+        (SIMPLE_RANDOM_FIELD_ORDER.includes(name) || SIMPLE_INTENT_OVERRIDE_KEYS.has(name)) &&
+        String(setupForm?.elements?.[name]?.value || "").trim()
+      )
+        continue;
       try {
         await randomizeField(name, { idea, intent, ignoreLock: false });
       } catch {
@@ -16616,13 +17110,18 @@ document.addEventListener("input", (event) => {
     updateSetupLoraSummary();
     persistArtQualitySettings({ silent: true });
   }
+  // Hires number fields fire `input` on every keystroke — only mirror + debounced save.
+  // NEVER call syncArtQualityControlsFromConfig() here (that was resetting values mid-edit).
   if (
     event.target?.id === "setupArtHrScale" ||
     event.target?.id === "setupArtHrDenoise" ||
     event.target?.id === "setupArtHrSteps"
   ) {
+    const bar = document.querySelector("#setupArtQualityBar");
+    if (bar) bar.dataset.dirty = "1";
+    mirrorArtHiresControlsToImageConfig();
+    updateArtHrHintFromControls();
     persistArtQualitySettings({ silent: true });
-    syncArtQualityControlsFromConfig();
   }
   const eng = event.target?.getAttribute?.("data-engine-prompt");
   if (eng) {
@@ -16655,6 +17154,8 @@ document.addEventListener("change", (event) => {
     // Critical: mirror DOM → imageConfig first, then save.
     // Never call full syncArtQualityControlsFromConfig() here — that used to
     // rebuild the upscaler select from stale config and wipe the user's pick.
+    const bar = document.querySelector("#setupArtQualityBar");
+    if (bar) bar.dataset.dirty = "1";
     mirrorArtHiresControlsToImageConfig();
     updateArtHrHintFromControls();
     persistArtQualitySettings({ silent: true });

@@ -1823,6 +1823,93 @@ def walk_minutes_for_step(
     return max(5, int(base))
 
 
+def _known_danger_near(map_data: dict[str, Any] | None, x: int, y: int, radius: int = 3) -> int:
+    """How many danger markers the player already knows about within radius."""
+    if not isinstance(map_data, dict):
+        return 0
+    knowledge = map_data.get("knowledge") if isinstance(map_data.get("knowledge"), dict) else {}
+    count = 0
+    for marker in knowledge.get("danger") or []:
+        if not isinstance(marker, dict):
+            continue
+        try:
+            if max(abs(int(marker.get("x")) - x), abs(int(marker.get("y")) - y)) <= radius:
+                count += 1
+        except (TypeError, ValueError):
+            continue
+    return count
+
+
+def _finish_travel_encounter(
+    rolled: dict[str, Any],
+    assessment: dict[str, Any],
+    base_here: dict[str, Any] | None,
+    x: int,
+    y: int,
+    minutes: int,
+    state: str,
+) -> dict[str, Any]:
+    """Shape an encounters.roll_encounter result like the legacy travel payload."""
+    happened = bool(rolled.get("happened"))
+    kind = str(rolled.get("kind") or "none")
+    discovered = False
+
+    # Walking onto an undiscovered camp is how camps get found, so that beat
+    # takes priority over whatever the terrain table would otherwise have
+    # picked this step.
+    if base_here and not base_here.get("discovered") and happened:
+        kind = "hidden_base"
+    if base_here and happened and (kind == "hidden_base" or not base_here.get("discovered")):
+        discovered = True
+        base_here = dict(base_here)
+        base_here["discovered"] = True
+        base_here["discovered_at"] = f"{x},{y}"
+
+    hostile = bool(rolled.get("hostile_default"))
+    if base_here and str(base_here.get("owner") or "") == "bandit" and kind == "hidden_base":
+        hostile = True
+
+    payload: dict[str, Any] = {
+        "happened": happened,
+        "kind": kind if happened else "none",
+        # Legacy key: several callers and the UI still read `p`.
+        "p": rolled.get("chance"),
+        "chance": rolled.get("chance"),
+        "roll": rolled.get("roll"),
+        "terrain": state,
+        "minutes": minutes,
+        "danger": assessment.get("danger"),
+        "danger_band": assessment.get("band"),
+        "danger_environment": assessment.get("environment"),
+        "danger_player_multiplier": assessment.get("player_multiplier"),
+        "factors": assessment.get("factors") or [],
+    }
+    if not happened:
+        payload["avoided"] = bool(rolled.get("avoided"))
+        payload["avoided_kind"] = rolled.get("avoided_kind")
+        payload["awareness"] = rolled.get("awareness")
+        payload["hidden_base"] = base_here
+        payload["base_discovered"] = False
+        return payload
+
+    payload.update(
+        {
+            "label": rolled.get("label"),
+            "wary_not_evil": bool(rolled.get("wary_not_evil")) and not hostile,
+            "hostile_default": hostile,
+            "hidden_base": base_here,
+            "base_discovered": discovered,
+            "outcome_seed": rolled.get("outcome_seed") or 0,
+            "participant_tier": rolled.get("participant_tier") or "nameless",
+            "count": rolled.get("count"),
+            "threat": rolled.get("threat"),
+            "surprise": rolled.get("surprise"),
+            "awareness": rolled.get("awareness"),
+        }
+    )
+    return payload
+
+
 def roll_travel_encounter(
     to_cell: dict[str, Any] | None,
     *,
@@ -1830,13 +1917,72 @@ def roll_travel_encounter(
     seed: int,
     hidden_bases: list[dict[str, Any]] | None = None,
     weather: dict[str, Any] | None = None,
+    world_time: dict[str, Any] | None = None,
+    map_data: dict[str, Any] | None = None,
+    settlement: dict[str, Any] | None = None,
+    on_road: bool = False,
 ) -> dict[str, Any]:
     """
-    Paths: lower total chaos than deep wild, but *bandits* more likely on roads.
-    Forest: higher wild/hidden-base share, lower organized bandit share.
-    Weather raises overall encounter chance (server RNG).
+    Roll whether this step turns into an event, and what kind.
+
+    Terrain still sets the baseline, but the actual chance now runs through
+    :func:`app.encounters.assess_danger`, so the player's stats, skills,
+    fatigue, wounds, carried load, notoriety, local standing and the clock all
+    move the number. Weather and terrain alone made a dying novice exactly as
+    safe as a rested scout on the same tile.
+
+    Return shape is unchanged for existing callers; the extra ``danger``,
+    ``factors``, ``awareness`` and ``count`` keys are additive.
     """
     state = str((to_cell or {}).get("state") or "plains").lower()
+    x = int((to_cell or {}).get("x") or 0)
+    y = int((to_cell or {}).get("y") or 0)
+
+    base_here = None
+    for b in hidden_bases or []:
+        if not isinstance(b, dict):
+            continue
+        if int(b.get("x") or -1) == x and int(b.get("y") or -1) == y:
+            base_here = b
+            break
+
+    try:
+        from app import encounters as encounters_mod
+
+        snapshot = encounters_mod.player_snapshot()
+        if world_time is None:
+            from app.world import get_world_time
+
+            world_time = get_world_time()
+        assessment = encounters_mod.assess_danger(
+            terrain=state,
+            weather=weather,
+            world_time=world_time,
+            player=snapshot.get("player"),
+            skills=snapshot.get("skills"),
+            resources=snapshot.get("resources"),
+            inventory_summary=snapshot.get("inventory_summary"),
+            options=snapshot.get("options"),
+            settlement=settlement,
+            known_danger_nearby=_known_danger_near(map_data, x, y),
+            area_reputation=int(snapshot.get("area_reputation") or 0),
+            on_road=bool(on_road) or state in {"road", "bridge"},
+            hidden_base_here=bool(base_here and not base_here.get("discovered")),
+        )
+        rolled = encounters_mod.roll_encounter(
+            assessment,
+            minutes=minutes,
+            seed=seed,
+            player=snapshot.get("player"),
+            skills=snapshot.get("skills"),
+            options=snapshot.get("options"),
+        )
+        return _finish_travel_encounter(rolled, assessment, base_here, x, y, minutes, state)
+    except Exception:
+        # Never let the danger model stop someone from walking.
+        pass
+
+    # --- legacy fallback: terrain + weather only ------------------------------
     table = TERRAIN_AMBUSH.get(state) or {
         "p": 0.10,
         "bandit": 0.30,
@@ -2162,13 +2308,6 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
         ^ (py * 12347)
         ^ (len(data.get("visited") or []) * 17)
     )
-    encounter = roll_travel_encounter(
-        {**cell, "x": x, "y": y},
-        minutes=minutes,
-        seed=seed,
-        hidden_bases=list(data.get("hidden_bases") or []),
-        weather=weather_snapshot,
-    )
     settlement_id = cell.get("settlement_id")
     settlement_meta = None
     if settlement_id:
@@ -2176,6 +2315,17 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
             if str(sm.get("id")) == str(settlement_id):
                 settlement_meta = sm
                 break
+
+    encounter = roll_travel_encounter(
+        {**cell, "x": x, "y": y},
+        minutes=minutes,
+        seed=seed,
+        hidden_bases=list(data.get("hidden_bases") or []),
+        weather=weather_snapshot,
+        map_data=data,
+        settlement=settlement_meta,
+        on_road=str(cell.get("state") or "") in {"road", "bridge"},
+    )
 
     data["player"] = {"x": x, "y": y}
     mark_visited(data, x, y, radius=DEFAULT_VISION_RADIUS)

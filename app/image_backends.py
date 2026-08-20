@@ -277,7 +277,25 @@ def get_image_config() -> dict[str, Any]:
             merged[list_key] = _parse_path_list(merged.get(list_key))
     if not isinstance(merged.get("forge_active_loras"), list):
         merged["forge_active_loras"] = []
+    # Hires is opt-in; never treat string "false" as True
+    merged["forge_enable_hr"] = _as_bool(merged.get("forge_enable_hr"), default=False)
     return merged
+
+
+def _as_bool(value: Any, *, default: bool = False) -> bool:
+    """Strict bool parse — bool('false') is True in Python, which must not enable hires."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    return default
 
 
 def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
@@ -374,7 +392,7 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
             except (TypeError, ValueError):
                 continue
         elif key in bool_keys:
-            next_cfg[key] = bool(payload.get(key))
+            next_cfg[key] = _as_bool(payload.get(key), default=False)
         elif key == "forge_active_loras":
             raw_loras = payload.get(key)
             cleaned: list[dict[str, Any]] = []
@@ -426,7 +444,10 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
         cons = "light"
     next_cfg["character_consistency"] = cons
     for bk in bool_keys:
-        next_cfg[bk] = bool(next_cfg.get(bk))
+        # Strict: only true/1/yes/on are True — str "false" must NOT become True via bool("false")
+        next_cfg[bk] = _as_bool(next_cfg.get(bk), default=False)
+    # Hires stays opt-in forever unless explicitly enabled
+    next_cfg["forge_enable_hr"] = _as_bool(next_cfg.get("forge_enable_hr"), default=False)
     # Keep presets.launch roots in sync when set via image config.
     try:
         presets = load_image_presets()
@@ -2767,6 +2788,7 @@ def _normalize_prompt_token(word: str) -> str:
     """
     One token for underscore tags.
     Possessives / apostrophes: mechanic's → mechanics (not mechanic_s).
+    Lone possessive leftovers like "s" from a bad split are dropped by the caller.
     Hyphens become underscores; other junk is stripped.
     """
     w = str(word or "").lower().strip()
@@ -2775,6 +2797,7 @@ def _normalize_prompt_token(word: str) -> str:
     # Normalize curly quotes to ASCII apostrophe
     w = w.replace("\u2019", "'").replace("\u2018", "'").replace("\u02bc", "'")
     # Possessive / plural-possessive: word's / words' → words
+    # Prefer keeping the stem ("teacher's" → "teachers") so the concept survives.
     w = re.sub(r"'s\b", "s", w)
     w = re.sub(r"s'\b", "s", w)
     # Remaining apostrophes (don't, o'clock) → drop, keep letters together
@@ -2782,7 +2805,11 @@ def _normalize_prompt_token(word: str) -> str:
     # Hyphens → underscore; other non-word → underscore
     w = w.replace("-", "_")
     w = re.sub(r"[^\w]+", "_", w)
-    return re.sub(r"_+", "_", w).strip("_")
+    w = re.sub(r"_+", "_", w).strip("_")
+    # Reject pure single-letter tags (possessive 's residue after a bad split)
+    if len(w) <= 1:
+        return ""
+    return w
 
 
 def _underscore_join_words(words: list[str]) -> str:
@@ -3469,13 +3496,36 @@ _WARDROBE_HEAD_MAP: dict[str, str] = {
     "pack": "pack",
     "bag": "bag",
     "pouch": "pouch",
+    "tote": "tote",
+    "handbag": "bag",
+    "briefcase": "bag",
 }
+
+
+def _fold_possessives_for_tokens(text: str) -> str:
+    """
+    Fold possessives before alnum tokenization.
+
+    Without this, findall([a-z0-9]+) on "teacher's tote" yields
+    ['teacher', 's', 'tote'] → last-two shorten becomes the bad tag s_tote.
+    """
+    w = str(text or "")
+    w = w.replace("\u2019", "'").replace("\u2018", "'").replace("\u02bc", "'")
+    # word's / words' → word / words (drop the possessive marker, keep the stem)
+    w = re.sub(r"'s\b", "", w)
+    w = re.sub(r"s'\b", "s", w)
+    # Any remaining apostrophes (don't, o'clock) — drop so letters stay one token
+    w = w.replace("'", "")
+    return w
 
 
 def _simplify_wardrobe_label(label: str) -> str:
     """
     Collapse gear prose to a short SD tag: frayed work coat → work coat;
     scuffed / steel-toed boots → boots. No [mixed] / stain stories.
+
+    Possessives are folded first so "teacher's tote" → "tote" / "teacher tote",
+    never the broken "s tote" / s_tote tag.
     """
     text = str(label or "").lower()
     text = re.sub(r"\[[^\]]*\]", " ", text)
@@ -3498,8 +3548,11 @@ def _simplify_wardrobe_label(label: str) -> str:
     ):
         text = text.replace(phrase.replace("-", " "), " ")
         text = text.replace(phrase, " ")
+    text = _fold_possessives_for_tokens(text)
     text = text.replace("-", " ").replace("_", " ")
     words = [w for w in re.findall(r"[a-z0-9]+", text) if w and w not in _WARDROBE_STRIP_WORDS]
+    # Drop lone letters left from a broken possessive split (or noise).
+    words = [w for w in words if len(w) > 1]
     if not words:
         return ""
     # Find garment head (prefer last known head)
@@ -4907,7 +4960,7 @@ def _generate_image_body(
         seed = int(time.time() * 1000) % (2**31 - 1)
     timeout = int(cfg.get("timeout_seconds") or 180)
     # Hires roughly doubles work — give Forge more wall time so second pass isn't cut off.
-    if bool(cfg.get("forge_enable_hr")) and float(cfg.get("forge_hr_scale") or 1.0) > 1.01:
+    if _as_bool(cfg.get("forge_enable_hr"), default=False) and float(cfg.get("forge_hr_scale") or 1.0) > 1.01:
         timeout = max(timeout, min(900, int(timeout * 1.75) + 45))
     started = time.time()
     init_b64 = _data_url_to_b64(init_image or "")
@@ -5083,11 +5136,10 @@ def _generate_image_body(
                     clip_skip=int(cfg.get("forge_clip_skip") or 1),
                     restore_faces=restore_faces,
                     tiling=bool(cfg.get("forge_tiling")),
-                    # Always honor hires toggle. txt2img uses native enable_hr;
-                    # img2img (face-ref) post-upscales via extras with the same upscaler/scale.
-                    enable_hr=bool(cfg.get("forge_enable_hr")),
+                    # Opt-in only. txt2img → native enable_hr; img2img → extras then refine.
+                    enable_hr=_as_bool(cfg.get("forge_enable_hr"), default=False),
                     hr_scale=float(cfg.get("forge_hr_scale") or 1.5),
-                    hr_upscaler=str(cfg.get("forge_hr_upscaler") or "Latent"),
+                    hr_upscaler=str(cfg.get("forge_hr_upscaler") or "R-ESRGAN 4x+"),
                     hr_denoising_strength=hr_denoise,
                     hr_second_pass_steps=hr_steps,
                     img2img_denoising_strength=denoise if init or use_cn else None,
@@ -5131,21 +5183,59 @@ def _generate_image_body(
             result["consistency_strong"] = bool(prefer_cn)
             result["adetailer"] = bool(adetailer_scripts)
             result["adetailer_face_ref"] = bool(ad_wants_face_ref and lock_b64)
-            result["hires_enabled"] = bool(cfg.get("forge_enable_hr"))
+            result["hires_enabled"] = _as_bool(cfg.get("forge_enable_hr"), default=False)
             result["hires_native"] = bool(result.get("hires_native"))
             result["hires_post_upscale"] = bool(result.get("hires_post_upscale"))
-            if result.get("hires_error"):
+            result["hires_quality"] = bool(
+                result.get("hires_quality")
+                if "hires_quality" in result
+                else (
+                    result.get("hires_native")
+                    or str(result.get("hires_method") or "")
+                    in {"extras_then_img2img", "img2img_hires_pass", "native_hires_fix"}
+                )
+            )
+            # Do NOT force PIL enlarge here — bigger soft pixels are not quality hires.
+            method = str(result.get("hires_method") or "")
+            try:
+                mw, mh = _image_b64_size(str(result.get("image_base64") or ""))
+                size_bit = f" → {mw}×{mh}" if mw and mh else ""
+            except Exception:
+                size_bit = ""
+            if result.get("hires_native"):
+                result["hires_note"] = (
+                    f"Native Hires.fix ×{cfg.get('forge_hr_scale') or 1.5} · "
+                    f"{cfg.get('forge_hr_upscaler') or 'Latent'} · "
+                    f"denoise {cfg.get('forge_denoising_strength') or 0.45}{size_bit}"
+                )
+            elif method == "extras_then_img2img":
+                result["hires_note"] = (
+                    f"Quality hires ×{cfg.get('forge_hr_scale') or 1.5}: "
+                    f"{cfg.get('forge_hr_upscaler') or 'ESRGAN'} + diffusion refine "
+                    f"@ denoise {cfg.get('forge_denoising_strength') or 0.45}{size_bit}"
+                )
+            elif method == "img2img_hires_pass":
+                result["hires_note"] = (
+                    f"Quality hires ×{cfg.get('forge_hr_scale') or 1.5}: "
+                    f"diffusion second pass @ denoise {cfg.get('forge_denoising_strength') or 0.45}"
+                    f"{size_bit}"
+                )
+            elif method == "extras_only_soft":
+                result["hires_note"] = (
+                    f"Soft upscale only ×{cfg.get('forge_hr_scale') or 1.5} "
+                    f"({cfg.get('forge_hr_upscaler') or 'ESRGAN'}){size_bit} — no diffusion refine"
+                )
+            elif result.get("hires_error") and not result.get("hires_post_upscale"):
                 result["hires_note"] = str(result.get("hires_error"))[:300]
             elif result.get("hires_post_upscale"):
                 result["hires_note"] = (
-                    f"Post-upscaled ×{cfg.get('forge_hr_scale') or 1.5} with "
-                    f"{cfg.get('forge_hr_upscaler') or 'upscaler'} (face-ref gens use extras API)."
+                    f"Hires ({method or 'post'}) ×{cfg.get('forge_hr_scale') or 1.5}{size_bit}"
                 )
-            elif result.get("hires_native"):
+            elif result.get("hires_requested") or result.get("hires_enabled"):
+                native_err = str(result.get("hires_native_error") or "")[:120]
                 result["hires_note"] = (
-                    f"Native hires fix ×{cfg.get('forge_hr_scale') or 1.5} · "
-                    f"{cfg.get('forge_hr_upscaler') or 'Latent'} · "
-                    f"denoise {cfg.get('forge_denoising_strength') or 0.45}"
+                    "Hires requested but quality second pass did not apply."
+                    + (f" Native HR: {native_err}" if native_err else "")
                 )
             if ad_wants_face_ref and lock_b64:
                 result["adetailer_face_ref_note"] = (
@@ -5197,15 +5287,36 @@ def _generate_image_body(
     except Exception:
         path = ""
 
-    # Report output size after possible hires upscale
+    # Report real output size after possible hires upscale (measure bytes, don't assume).
     out_w, out_h = width, height
-    if bool(cfg.get("forge_enable_hr")) and float(cfg.get("forge_hr_scale") or 1.0) > 1.01:
-        try:
-            scale = float(cfg.get("forge_hr_scale") or 1.5)
-            out_w = max(width, int(round(width * scale)))
-            out_h = max(height, int(round(height * scale)))
-        except (TypeError, ValueError):
-            pass
+    hr_on = _as_bool(cfg.get("forge_enable_hr"), default=False)
+    try:
+        measured_w, measured_h = _image_b64_size(raw_b64)
+        if measured_w > 0 and measured_h > 0:
+            out_w, out_h = measured_w, measured_h
+    except Exception:
+        if hr_on and float(cfg.get("forge_hr_scale") or 1.0) > 1.01 and (
+            result.get("hires_native") or result.get("hires_post_upscale")
+        ):
+            try:
+                scale = float(cfg.get("forge_hr_scale") or 1.5)
+                out_w = max(width, int(round(width * scale)))
+                out_h = max(height, int(round(height * scale)))
+            except (TypeError, ValueError):
+                pass
+    # If hires was on but image stayed base-size, surface that clearly.
+    hires_note = result.get("hires_note") or result.get("hires_error") or ""
+    if hr_on and float(cfg.get("forge_hr_scale") or 1.0) > 1.01:
+        enlarged = out_w >= int(width * 1.1) or out_h >= int(height * 1.1)
+        if not enlarged and not hires_note:
+            hires_note = "Hires on but output stayed near base resolution."
+        elif enlarged and not hires_note:
+            if result.get("hires_native"):
+                hires_note = f"Native hires → {out_w}×{out_h}"
+            elif result.get("hires_post_upscale"):
+                hires_note = (
+                    f"Post-upscaled ({result.get('hires_method') or 'post'}) → {out_w}×{out_h}"
+                )
     return {
         "ok": True,
         "provider": provider,
@@ -5220,10 +5331,20 @@ def _generate_image_body(
         "base_height": height,
         "prompt": prompt,
         "negative_prompt": negative,
-        "hires_enabled": bool(cfg.get("forge_enable_hr")),
+        "hires_enabled": hr_on,
         "hires_native": bool(result.get("hires_native")),
         "hires_post_upscale": bool(result.get("hires_post_upscale")),
-        "hires_note": result.get("hires_note") or result.get("hires_error") or "",
+        "hires_method": result.get("hires_method") or "",
+        "hires_quality": bool(
+            result.get("hires_quality")
+            if "hires_quality" in result
+            else (
+                result.get("hires_native")
+                or str(result.get("hires_method") or "")
+                in {"extras_then_img2img", "img2img_hires_pass", "native_hires_fix"}
+            )
+        ),
+        "hires_note": hires_note,
         "elapsed_ms": int((time.time() - started) * 1000),
     }
 
@@ -6026,19 +6147,44 @@ def _resolve_extras_upscaler(base_url: str, preferred: str, timeout: int = 15) -
     return want
 
 
+def _forge_raw_b64(image_b64: str) -> str:
+    """
+    Normalize to raw base64 for Forge APIs.
+    Handles data: URLs, pure base64, and rare 'base64,metadata' API responses.
+    IMPORTANT: never use split(',',1)[0] on data URLs — that keeps the header, not pixels.
+    """
+    raw = str(image_b64 or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith("data:") and "," in raw:
+        raw = raw.split(",", 1)[1]
+    # Strip whitespace/newlines common in long data URLs
+    raw = "".join(raw.split())
+    return raw
+
+
+def _pil_resample():
+    from PIL import Image
+
+    try:
+        return Image.Resampling.LANCZOS
+    except AttributeError:  # pragma: no cover — older Pillow
+        return Image.LANCZOS
+
+
 def _image_b64_size(raw_b64: str) -> tuple[int, int]:
-    """Best-effort (width, height) for a raw base64 PNG/JPEG."""
+    """Best-effort (width, height) for a raw base64 / data-URL PNG/JPEG."""
     try:
         import base64
         from io import BytesIO
 
         from PIL import Image
 
-        raw = str(raw_b64 or "").split(",", 1)[0].strip()
+        raw = _forge_raw_b64(raw_b64)
         img = Image.open(BytesIO(base64.b64decode(raw)))
         return int(img.size[0]), int(img.size[1])
     except Exception:
-        return 512, 768
+        return 0, 0
 
 
 def _forge_extra_upscale(
@@ -6051,12 +6197,11 @@ def _forge_extra_upscale(
 ) -> str:
     """
     Post-upscale via Forge/A1111 extras API.
-    Used when hires fix is requested but the gen was img2img (face-ref path),
-    because native enable_hr is txt2img-only on A1111/Forge.
+    Used when hires is on (face-ref img2img can't use native enable_hr).
     Returns raw base64 PNG (no data: prefix).
     """
     base = base_url.rstrip("/")
-    raw_in = str(image_b64 or "").split(",", 1)[0].strip()
+    raw_in = _forge_raw_b64(image_b64)
     if not raw_in:
         raise RuntimeError("No image to upscale.")
     scale_f = max(1.05, min(4.0, float(scale or 1.5)))
@@ -6073,22 +6218,32 @@ def _forge_extra_upscale(
             candidates.append(c)
 
     src_w, src_h = _image_b64_size(raw_in)
+    if src_w <= 0 or src_h <= 0:
+        src_w, src_h = 512, 768
     out_w = max(64, min(4096, int(round(src_w * scale_f))))
     out_h = max(64, min(4096, int(round(src_h * scale_f))))
     # Snap to multiples of 8 (Forge/A1111 often expects this)
     out_w = max(64, (out_w // 8) * 8)
     out_h = max(64, (out_h // 8) * 8)
+    data_url = f"data:image/png;base64,{raw_in}"
 
     last_err = ""
     # Forge FastAPI often 422s on w/h=0 or int visibility fields — try several valid shapes.
     for try_ups in candidates[:8]:
         bodies: list[dict[str, Any]] = [
-            # Minimal scale-by-factor (most portable)
+            # Minimal scale-by-factor (most portable) — raw b64
             {
                 "resize_mode": 0,
                 "upscaling_resize": float(scale_f),
                 "upscaler_1": try_ups,
                 "image": raw_in,
+            },
+            # Same with data-URL (some Forge builds prefer it)
+            {
+                "resize_mode": 0,
+                "upscaling_resize": float(scale_f),
+                "upscaler_1": try_ups,
+                "image": data_url,
             },
             # Explicit target size (resize_mode 1 = scale to w/h)
             {
@@ -6133,17 +6288,310 @@ def _forge_extra_upscale(
                 continue
             out = payload.get("image") or payload.get("images")
             if isinstance(out, list) and out:
-                return str(out[0]).split(",", 1)[0]
+                return _forge_raw_b64(str(out[0]))
             if isinstance(out, str) and out.strip():
-                return out.split(",", 1)[0]
+                return _forge_raw_b64(out)
             last_err = f"no image for upscaler={try_ups!r}"
     raise RuntimeError(
         f"Forge extras upscale failed (tried {candidates[:5]!r} @ ×{scale_f}). {last_err} "
         "Pick a real model like R-ESRGAN 4x+ or 4x-UltraSharp in Hires upscaler "
         "(not Latent — Latent only works with native txt2img hires fix). "
         "If every attempt is HTTP 422, Forge's extras endpoint may be broken under --nowebui; "
-        "try scale 1.5 + R-ESRGAN 4x+ or disable Hires for face-ref body gens."
+        "img2img refine / PIL fallback will still run."
     )
+
+
+def _pil_upscale_b64(image_b64: str, scale: float) -> str:
+    """Guaranteed LANCZOS upscale so hires is never a no-op when Forge APIs fail."""
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    raw_in = _forge_raw_b64(image_b64)
+    if not raw_in:
+        raise RuntimeError("No image for PIL upscale.")
+    scale_f = max(1.05, min(4.0, float(scale or 1.5)))
+    img = Image.open(BytesIO(base64.b64decode(raw_in)))
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGBA" if "A" in (img.mode or "") else "RGB")
+    tw = max(64, min(4096, int(round(img.size[0] * scale_f))))
+    th = max(64, min(4096, int(round(img.size[1] * scale_f))))
+    tw = max(64, (tw // 8) * 8)
+    th = max(64, (th // 8) * 8)
+    if tw <= img.size[0] and th <= img.size[1]:
+        tw = max(img.size[0] + 8, int(round(img.size[0] * 1.25)))
+        th = max(img.size[1] + 8, int(round(img.size[1] * 1.25)))
+        tw = max(64, (tw // 8) * 8)
+        th = max(64, (th // 8) * 8)
+    out = img.resize((tw, th), _pil_resample())
+    buf = BytesIO()
+    out.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _pil_resize_b64(image_b64: str, width: int, height: int) -> str:
+    """Resize raw base64 image to exact canvas (used before img2img refine upscale)."""
+    import base64
+    from io import BytesIO
+
+    from PIL import Image
+
+    raw_in = _forge_raw_b64(image_b64)
+    if not raw_in:
+        raise RuntimeError("No image to resize.")
+    tw = max(64, min(4096, int(width)))
+    th = max(64, min(4096, int(height)))
+    tw = max(64, (tw // 8) * 8)
+    th = max(64, (th // 8) * 8)
+    img = Image.open(BytesIO(base64.b64decode(raw_in)))
+    if img.mode not in ("RGB", "RGBA"):
+        img = img.convert("RGBA" if "A" in (img.mode or "") else "RGB")
+    if img.size == (tw, th):
+        return raw_in
+    out = img.resize((tw, th), _pil_resample())
+    buf = BytesIO()
+    out.save(buf, format="PNG")
+    return base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _is_latent_upscaler(name: str) -> bool:
+    n = str(name or "").strip().lower()
+    return (not n) or n.startswith("latent") or n in {"none", "nearest", "bilinear", "bicubic"}
+
+
+def _apply_post_hires_upscale(
+    *,
+    base_url: str,
+    image_b64: str,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    scale: float,
+    steps: int,
+    cfg_scale: float,
+    seed: int,
+    sampler_name: str,
+    timeout: int,
+    hr_upscaler: str,
+    hr_denoising_strength: float,
+    checkpoint: str = "",
+    vae: str = "",
+    clip_skip: int = 1,
+) -> tuple[str, str, list[str]]:
+    """
+    Quality hires when native enable_hr is unavailable (broken on some Forge builds).
+
+    Bigger ≠ better. Real quality needs a **diffusion second pass** at higher res:
+      A) Pixel upscaler (ESRGAN/UltraSharp) then img2img re-sample at denoise ~0.4–0.5
+      B) Direct img2img at target size with denoise ~0.45 (hires-without-hires-fix)
+
+    Pure extras or PIL alone only enlarge pixels (often softer) — never treat those
+    as a successful quality hires unless diffusion refine also ran.
+    Returns (upscaled_b64, method, errors).
+    """
+    scale_f = max(1.05, min(4.0, float(scale or 1.5)))
+    errors: list[str] = []
+    raw_in = _forge_raw_b64(image_b64)
+    if not raw_in:
+        return "", "", ["no image"]
+
+    # Second-pass denoise: enough for new detail, not so high it redraws identity.
+    try:
+        den = float(hr_denoising_strength if hr_denoising_strength is not None else 0.45)
+    except (TypeError, ValueError):
+        den = 0.45
+    den = max(0.32, min(0.62, den))
+    second_steps = max(14, min(32, int(steps or 20)))
+    ups_name = str(hr_upscaler or "4x-UltraSharp").strip() or "4x-UltraSharp"
+    use_pixel_upscaler = not _is_latent_upscaler(ups_name)
+
+    # --- Path A: ESRGAN/UltraSharp upscale → diffusion refine (best quality when models exist)
+    if use_pixel_upscaler:
+        extras_b64 = ""
+        try:
+            extras_b64 = _forge_extra_upscale(
+                base_url=base_url,
+                image_b64=raw_in,
+                upscaler=ups_name,
+                scale=scale_f,
+                timeout=timeout,
+            )
+            sw, sh = _image_b64_size(raw_in)
+            uw, uh = _image_b64_size(extras_b64)
+            if not (uw >= max(sw * 1.1, sw + 8) or uh >= max(sh * 1.1, sh + 8)):
+                errors.append(f"extras non-enlarged {uw}x{uh} from {sw}x{sh}")
+                extras_b64 = ""
+        except Exception as exc:
+            errors.append(f"extras: {exc}")
+            extras_b64 = ""
+
+        if extras_b64:
+            try:
+                refined = _forge_img2img_upscale(
+                    base_url=base_url,
+                    image_b64=extras_b64,
+                    prompt=prompt,
+                    negative_prompt=negative_prompt,
+                    width=width,
+                    height=height,
+                    scale=1.0,  # already at target size from extras
+                    steps=second_steps,
+                    cfg_scale=cfg_scale,
+                    seed=int(seed),
+                    sampler_name=sampler_name,
+                    timeout=timeout,
+                    denoise=den,
+                    checkpoint=str(checkpoint or ""),
+                    vae=str(vae or ""),
+                    clip_skip=int(clip_skip or 1),
+                    already_target_size=True,
+                )
+                return refined, "extras_then_img2img", errors
+            except Exception as exc:
+                errors.append(f"extras_refine: {exc}")
+                # Extras alone is still better than nothing but NOT full quality —
+                # fall through to diffusion-from-base which invents detail.
+
+    # --- Path B: diffusion second pass at higher res (true quality when native HR broken)
+    try:
+        up = _forge_img2img_upscale(
+            base_url=base_url,
+            image_b64=raw_in,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            scale=scale_f,
+            steps=second_steps,
+            cfg_scale=cfg_scale,
+            seed=int(seed),
+            sampler_name=sampler_name,
+            timeout=timeout,
+            denoise=den,
+            checkpoint=str(checkpoint or ""),
+            vae=str(vae or ""),
+            clip_skip=int(clip_skip or 1),
+            already_target_size=False,
+        )
+        sw, sh = _image_b64_size(raw_in)
+        uw, uh = _image_b64_size(up)
+        if uw >= max(sw * 1.1, sw + 8) or uh >= max(sh * 1.1, sh + 8):
+            return up, "img2img_hires_pass", errors
+        errors.append(f"img2img_hires_pass non-enlarged {uw}x{uh} from {sw}x{sh}")
+    except Exception as exc:
+        errors.append(f"img2img_hires_pass: {exc}")
+
+    # --- Path C: extras alone (larger, often softer — last real-model attempt)
+    if use_pixel_upscaler:
+        try:
+            up = _forge_extra_upscale(
+                base_url=base_url,
+                image_b64=raw_in,
+                upscaler=ups_name,
+                scale=scale_f,
+                timeout=timeout,
+            )
+            sw, sh = _image_b64_size(raw_in)
+            uw, uh = _image_b64_size(up)
+            if uw >= max(sw * 1.1, sw + 8) or uh >= max(sh * 1.1, sh + 8):
+                return up, "extras_only_soft", errors
+        except Exception as exc:
+            errors.append(f"extras_only: {exc}")
+
+    # Soft pixel resize is NOT quality hires — return empty so caller can surface failure.
+    # (Avoid labeling LANCZOS as a successful hires fix.)
+    errors.append("no_quality_hires_path (native enable_hr unavailable; diffusion/extras failed)")
+    return "", "", errors
+
+
+def _try_native_hires_txt2img(
+    *,
+    base_url: str,
+    body: dict[str, Any],
+    timeout: int,
+    hr_scale: float,
+    hr_upscaler: str,
+    hr_denoising_strength: float,
+    hr_second_pass_steps: int,
+    sampler: str,
+    width: int,
+    height: int,
+) -> tuple[str | None, str]:
+    """
+    Attempt Forge/A1111 native enable_hr. Many Forge builds 500 with TypeError;
+    return (None, error) so callers fall back to quality second-pass.
+    """
+    scale_f = max(1.05, min(4.0, float(hr_scale or 1.5)))
+    ups = str(hr_upscaler or "Latent").strip() or "Latent"
+    # Prefer Latent* for native second-pass detail; pixel models also OK when present
+    tw = max(64, min(2048, int(round(int(width) * scale_f))))
+    th = max(64, min(2048, int(round(int(height) * scale_f))))
+    tw = max(64, (tw // 8) * 8)
+    th = max(64, (th // 8) * 8)
+    den = float(hr_denoising_strength if hr_denoising_strength is not None else 0.45)
+    den = max(0.25, min(0.7, den))
+    hr_steps = int(hr_second_pass_steps or 0)
+    if hr_steps <= 0:
+        hr_steps = max(10, min(24, int(body.get("steps") or 16)))
+
+    variants: list[dict[str, Any]] = [
+        {
+            "enable_hr": True,
+            "hr_scale": scale_f,
+            "hr_upscaler": ups,
+            "denoising_strength": den,
+            "hr_second_pass_steps": hr_steps,
+            "hr_resize_x": 0,
+            "hr_resize_y": 0,
+            "hr_sampler_name": sampler,
+            "hr_prompt": "",
+            "hr_negative_prompt": "",
+            "hr_scheduler": "Automatic",
+        },
+        {
+            "enable_hr": True,
+            "hr_scale": scale_f,
+            "hr_upscaler": "Latent",
+            "denoising_strength": den,
+            "hr_second_pass_steps": hr_steps,
+            "hr_sampler_name": sampler,
+            "hr_prompt": "",
+            "hr_negative_prompt": "",
+        },
+        {
+            "enable_hr": True,
+            "hr_scale": scale_f,
+            "hr_upscaler": ups if not _is_latent_upscaler(ups) else "Latent (nearest-exact)",
+            "denoising_strength": den,
+            "hr_second_pass_steps": hr_steps,
+            "hr_resize_x": tw,
+            "hr_resize_y": th,
+            "hr_sampler_name": sampler,
+            "hr_prompt": str(body.get("prompt") or ""),
+            "hr_negative_prompt": str(body.get("negative_prompt") or ""),
+        },
+    ]
+    last_err = ""
+    for extra in variants:
+        try:
+            req = dict(body)
+            req.update(extra)
+            payload = _http_json("POST", f"{base_url.rstrip('/')}/sdapi/v1/txt2img", body=req, timeout=timeout)
+            images = payload.get("images") if isinstance(payload, dict) else None
+            if not images:
+                last_err = "native HR returned no images"
+                continue
+            raw = _forge_raw_b64(str(images[0]))
+            ow, oh = _image_b64_size(raw)
+            if ow >= int(width) * 1.1 or oh >= int(height) * 1.1:
+                return raw, str(extra.get("hr_upscaler") or ups)
+            last_err = f"native HR not enlarged ({ow}x{oh})"
+        except Exception as exc:
+            last_err = str(exc)[:220]
+            continue
+    return None, last_err
 
 
 def _generate_forge(
@@ -6175,55 +6623,235 @@ def _generate_forge(
     alwayson_scripts: dict[str, Any] | None = None,
     prefer_txt2img_with_controlnet: bool = False,
 ) -> dict[str, Any]:
+    """
+    Forge txt2img/img2img with quality hires (opt-in).
+
+    Bigger alone is not quality. Hires means a second diffusion pass at higher res:
+      1) Try native enable_hr (real Hires.fix) on pure txt2img
+      2) Else: first pass → ESRGAN (if non-Latent) → img2img re-sample @ denoise
+         or direct img2img second pass at scale
+    Soft extras-only / PIL-only are not reported as successful quality hires.
+    """
     base = base_url.rstrip("/")
     sampler = (sampler_name or "").strip() or "Euler a"
-    use_img2img = bool(init_images and init_images[0]) and not prefer_txt2img_with_controlnet
-    # Native hires fix is txt2img-only on Forge/A1111.
-    want_hr = bool(enable_hr) and not use_img2img
+    # Normalize init to raw base64 (data: URLs break Forge and our old split logic)
+    init_raw = ""
+    if init_images and init_images[0]:
+        init_raw = _forge_raw_b64(str(init_images[0]))
+    use_img2img = bool(init_raw) and not prefer_txt2img_with_controlnet
+    # Opt-in only — never run hires/upscale unless explicitly enabled.
+    hr_on = _as_bool(enable_hr, default=False) and float(hr_scale or 1.0) > 1.01
+    scale_f = max(1.05, min(4.0, float(hr_scale or 1.5))) if hr_on else 1.0
+
+    def _build_base_body() -> dict[str, Any]:
+        body: dict[str, Any] = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "width": int(width),
+            "height": int(height),
+            "steps": int(steps),
+            "cfg_scale": float(cfg_scale),
+            "seed": int(seed),
+            "batch_size": 1,
+            "n_iter": 1,
+            "sampler_name": sampler,
+            "restore_faces": bool(restore_faces),
+            "tiling": bool(tiling),
+            "enable_hr": False,
+        }
+        sched = (scheduler or "").strip()
+        if sched and sched.lower() not in {"", "automatic", "auto"}:
+            body["scheduler"] = sched
+        if use_img2img:
+            body["init_images"] = [init_raw]
+            den = (
+                float(img2img_denoising_strength)
+                if img2img_denoising_strength is not None
+                else 0.65
+            )
+            body["denoising_strength"] = den
+            # 1 = crop and resize (never squash aspect). Mode 0 "just resize" stretches
+            # square face refs into tall canvases and warps full-body anatomy.
+            body["resize_mode"] = 1
+        override: dict[str, Any] = {}
+        if checkpoint and str(checkpoint).strip():
+            override["sd_model_checkpoint"] = str(checkpoint).strip()
+        if vae and str(vae).strip() and str(vae).strip().lower() not in {"automatic", "auto", "none"}:
+            override["sd_vae"] = str(vae).strip()
+        if int(clip_skip or 1) > 1:
+            override["CLIP_stop_at_last_layers"] = int(clip_skip)
+        if override:
+            body["override_settings"] = override
+            body["override_settings_restore_afterwards"] = True
+        if alwayson_scripts:
+            body["alwayson_scripts"] = alwayson_scripts
+        return body
+
+    endpoint = f"{base}/sdapi/v1/img2img" if use_img2img else f"{base}/sdapi/v1/txt2img"
+    out: dict[str, Any] = {
+        "mime": "image/png",
+        "mode": "img2img" if use_img2img else "txt2img",
+        "used_controlnet": bool(alwayson_scripts),
+        "hires_native": False,
+        "hires_requested": hr_on,
+        "hires_post_upscale": False,
+    }
+
+    # --- Native Hires.fix on pure txt2img (when Forge supports it)
+    if hr_on and not use_img2img:
+        native_raw, native_meta = _try_native_hires_txt2img(
+            base_url=base,
+            body=_build_base_body(),
+            timeout=timeout,
+            hr_scale=scale_f,
+            hr_upscaler=str(hr_upscaler or "Latent"),
+            hr_denoising_strength=float(hr_denoising_strength or 0.45),
+            hr_second_pass_steps=int(hr_second_pass_steps or 0),
+            sampler=sampler,
+            width=int(width),
+            height=int(height),
+        )
+        if native_raw:
+            out["image_base64"] = native_raw
+            out["hires_native"] = True
+            out["hires_method"] = "native_hires_fix"
+            out["hires_upscaler"] = str(native_meta or hr_upscaler or "Latent")
+            out["hires_scale"] = scale_f
+            try:
+                ow, oh = _image_b64_size(native_raw)
+                out["hires_width"] = ow
+                out["hires_height"] = oh
+            except Exception:
+                pass
+            return out
+        out["hires_native_error"] = str(native_meta or "native HR failed")[:300]
+
+    # --- First pass (no native HR)
+    payload = _http_json("POST", endpoint, body=_build_base_body(), timeout=timeout)
+    images = payload.get("images") if isinstance(payload, dict) else None
+    if not images:
+        raise RuntimeError("Forge/A1111 returned no images. Is --api enabled?")
+    raw = _forge_raw_b64(str(images[0]))
+    out["image_base64"] = raw
+    out["raw"] = payload
+
+    # --- Quality second pass (diffusion), not soft size-only upscale
+    if hr_on:
+        hr_steps = int(hr_second_pass_steps or 0)
+        pass_steps = hr_steps if hr_steps > 0 else max(16, min(28, int(steps or 20)))
+        up_b64, method, errors = _apply_post_hires_upscale(
+            base_url=base,
+            image_b64=raw,
+            prompt=prompt,
+            negative_prompt=negative_prompt,
+            width=width,
+            height=height,
+            scale=scale_f,
+            steps=pass_steps,
+            cfg_scale=cfg_scale,
+            seed=int(seed),
+            sampler_name=sampler,
+            timeout=timeout,
+            hr_upscaler=str(hr_upscaler or "4x-UltraSharp"),
+            hr_denoising_strength=float(hr_denoising_strength or 0.45),
+            checkpoint=str(checkpoint or ""),
+            vae=str(vae or ""),
+            clip_skip=int(clip_skip or 1),
+        )
+        if up_b64:
+            out["image_base64"] = up_b64
+            out["hires_post_upscale"] = True
+            out["hires_method"] = method
+            out["hires_upscaler"] = str(hr_upscaler or "")
+            out["hires_scale"] = scale_f
+            # Soft-only path is larger but not true quality
+            out["hires_quality"] = method not in {"extras_only_soft", "pil_lanczos", "pil_lanczos_forced"}
+            try:
+                ow, oh = _image_b64_size(up_b64)
+                out["hires_width"] = ow
+                out["hires_height"] = oh
+            except Exception:
+                pass
+            if errors:
+                out["hires_fallback_errors"] = [str(e)[:160] for e in errors[:4]]
+            if method == "extras_only_soft":
+                out["hires_note"] = (
+                    f"Upscaled ×{scale_f} with {hr_upscaler} only (no diffusion second pass — "
+                    f"softer). Prefer Denoise ~0.45 for quality refine."
+                )
+        else:
+            out["hires_post_upscale"] = False
+            out["hires_quality"] = False
+            out["hires_error"] = (
+                " | ".join(str(e) for e in errors)[:400]
+                if errors
+                else "Quality hires second pass failed"
+            )
+    return out
+
+
+def _forge_img2img_upscale(
+    *,
+    base_url: str,
+    image_b64: str,
+    prompt: str,
+    negative_prompt: str,
+    width: int,
+    height: int,
+    scale: float,
+    steps: int,
+    cfg_scale: float,
+    seed: int,
+    sampler_name: str,
+    timeout: int,
+    denoise: float = 0.45,
+    checkpoint: str = "",
+    vae: str = "",
+    clip_skip: int = 1,
+    already_target_size: bool = False,
+) -> str:
+    """
+    Diffusion second pass at higher resolution — this is the quality step.
+
+    Do NOT use very low denoise after PIL enlarge (that only freezes softness).
+    Target denoise ~0.35–0.55 so the UNet invents high-frequency detail.
+    """
+    base = base_url.rstrip("/")
+    raw_in = _forge_raw_b64(image_b64)
+    if not raw_in:
+        raise RuntimeError("No image for img2img upscale.")
+    scale_f = 1.0 if already_target_size else max(1.05, min(4.0, float(scale or 1.5)))
+    src_w, src_h = _image_b64_size(raw_in)
+    if already_target_size:
+        tw = max(64, (int(src_w or width or 512) // 8) * 8)
+        th = max(64, (int(src_h or height or 768) // 8) * 8)
+    else:
+        base_w = src_w or int(width) or 512
+        base_h = src_h or int(height) or 768
+        tw = max(64, min(2048, int(round(base_w * scale_f))))
+        th = max(64, min(2048, int(round(base_h * scale_f))))
+        tw = max(64, (tw // 8) * 8)
+        th = max(64, (th // 8) * 8)
+    # Quality denoise band — low denoise freezes blur; high redraws identity
+    den = max(0.28, min(0.65, float(denoise if denoise is not None else 0.45)))
     body: dict[str, Any] = {
         "prompt": prompt,
         "negative_prompt": negative_prompt,
-        "width": width,
-        "height": height,
-        "steps": steps,
+        "width": tw,
+        "height": th,
+        "steps": max(12, min(40, int(steps or 18))),
         "cfg_scale": cfg_scale,
         "seed": seed,
         "batch_size": 1,
         "n_iter": 1,
-        "sampler_name": sampler,
-        "restore_faces": bool(restore_faces),
-        "tiling": bool(tiling),
-        "enable_hr": want_hr,
+        "sampler_name": (sampler_name or "Euler a").strip() or "Euler a",
+        "init_images": [raw_in],
+        "denoising_strength": den,
+        # Let Forge scale init to canvas — do not pre-soften with PIL
+        "resize_mode": 0,
+        "enable_hr": False,
+        "restore_faces": False,
     }
-    sched = (scheduler or "").strip()
-    if sched and sched.lower() not in {"", "automatic", "auto"}:
-        body["scheduler"] = sched
-    if want_hr:
-        body["hr_scale"] = float(hr_scale or 1.5)
-        body["hr_upscaler"] = str(hr_upscaler or "Latent")
-        body["denoising_strength"] = float(hr_denoising_strength if hr_denoising_strength is not None else 0.45)
-        hr_steps = int(hr_second_pass_steps or 0)
-        if hr_steps > 0:
-            body["hr_second_pass_steps"] = hr_steps
-        # Some Forge builds also read hr_sampler_name; keep main sampler for second pass.
-        body["hr_sampler_name"] = sampler
-        # Forge/reForge aliases seen in the wild
-        body["hr_resize_x"] = 0
-        body["hr_resize_y"] = 0
-        body["hr_checkpoint_name"] = "Use same checkpoint"
-        body["hr_prompt"] = ""
-        body["hr_negative_prompt"] = ""
-    if use_img2img:
-        body["init_images"] = [str(init_images[0])]
-        den = (
-            float(img2img_denoising_strength)
-            if img2img_denoising_strength is not None
-            else 0.65
-        )
-        body["denoising_strength"] = den
-        # 1 = crop and resize (never squash aspect). Mode 0 "just resize" stretches
-        # square face refs into tall canvases and warps full-body anatomy.
-        body["resize_mode"] = 1
     override: dict[str, Any] = {}
     if checkpoint and str(checkpoint).strip():
         override["sd_model_checkpoint"] = str(checkpoint).strip()
@@ -6234,47 +6862,11 @@ def _generate_forge(
     if override:
         body["override_settings"] = override
         body["override_settings_restore_afterwards"] = True
-    if alwayson_scripts:
-        body["alwayson_scripts"] = alwayson_scripts
-    endpoint = f"{base}/sdapi/v1/img2img" if use_img2img else f"{base}/sdapi/v1/txt2img"
-    payload = _http_json("POST", endpoint, body=body, timeout=timeout)
+    payload = _http_json("POST", f"{base}/sdapi/v1/img2img", body=body, timeout=timeout)
     images = payload.get("images") if isinstance(payload, dict) else None
     if not images:
-        raise RuntimeError("Forge/A1111 returned no images. Is --api enabled?")
-    # A1111 sometimes appends metadata after a comma in the base64 field.
-    raw = str(images[0]).split(",", 1)[0]
-    out: dict[str, Any] = {
-        "image_base64": raw,
-        "mime": "image/png",
-        "raw": payload,
-        "mode": "img2img" if use_img2img else "txt2img",
-        "used_controlnet": bool(alwayson_scripts),
-        "hires_native": want_hr,
-        "hires_requested": bool(enable_hr),
-    }
-    # Face-ref / img2img gens: native hires is unavailable → post-upscale with extras.
-    # Also fallback when native hires was requested on txt2img but still came back base-sized.
-    need_post = bool(enable_hr) and float(hr_scale or 1.0) > 1.01 and (
-        use_img2img or not want_hr
-    )
-    if need_post:
-        try:
-            up_b64 = _forge_extra_upscale(
-                base_url=base,
-                image_b64=raw,
-                upscaler=str(hr_upscaler or "R-ESRGAN 4x+"),
-                scale=float(hr_scale or 1.5),
-                timeout=timeout,
-            )
-            out["image_base64"] = up_b64
-            out["hires_post_upscale"] = True
-            out["hires_native"] = False
-            out["hires_upscaler"] = str(hr_upscaler or "")
-            out["hires_scale"] = float(hr_scale or 1.5)
-        except Exception as up_exc:
-            out["hires_post_upscale"] = False
-            out["hires_error"] = str(up_exc)[:400]
-    return out
+        raise RuntimeError("img2img upscale returned no images.")
+    return _forge_raw_b64(str(images[0]))
 
 
 def _load_comfy_workflow(workflow_name: str) -> dict[str, Any]:
@@ -8148,7 +8740,8 @@ def generate_character_set(
     # Apply hires overrides for this run (and persist so later gens share them).
     hr_patch: dict[str, Any] = {}
     if forge_enable_hr is not None:
-        hr_patch["forge_enable_hr"] = bool(forge_enable_hr)
+        # Strict parse — never treat string "false" as True
+        hr_patch["forge_enable_hr"] = _as_bool(forge_enable_hr, default=False)
     if forge_hr_scale is not None:
         try:
             hr_patch["forge_hr_scale"] = max(1.0, min(4.0, float(forge_hr_scale)))
@@ -8497,7 +9090,7 @@ def generate_character_set(
     results["elapsed_ms"] = int((time.time() - started) * 1000)
     results["equipment_used"] = equipment
     results["injuries_used"] = injuries
-    results["hires_enabled"] = bool(cfg.get("forge_enable_hr"))
+    results["hires_enabled"] = _as_bool(cfg.get("forge_enable_hr"), default=False)
     results["hires_scale"] = float(cfg.get("forge_hr_scale") or 1.5)
     results["hires_upscaler"] = str(cfg.get("forge_hr_upscaler") or "")
     return results

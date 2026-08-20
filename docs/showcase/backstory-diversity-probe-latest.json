@@ -1,0 +1,227 @@
+{
+  "model": "qwen3:8b",
+  "rows": [
+    {
+      "id": "same_A1",
+      "mode": "known",
+      "memory": "ordinary memory",
+      "world": "low magic coastal town",
+      "idea": "ordinary local who works docks",
+      "story": "['Mara Ellison was born and raised in the working-class district of Brinehaven, a coastal town known for its bustling docks and salt-stained air, where her family survived by hauling fish and repairing nets.', 'She spent her early adulthood as a dockworker, enduring long shifts and the weight of her father\u2019s debts, all while quietly resenting the town\u2019s reliance on the sea for survival and the lack of opportunity beyond its shores.', 'A violent storm damaged the lighthouse, and during the chaos, Mara accidentally activated an ancient mechanism hidden beneath the foundation, pulling her into a parallel world where magic is both a tool and a necessity for survival.']",
+      "error": "",
+      "s": 9.4
+    },
+    {
+      "id": "same_A2",
+      "mode": "known",
+      "memory": "ordinary memory",
+      "world": "low magic coastal town",
+      "idea": "ordinary local who works docks",
+      "story": "Mara worked the docks of a bustling port city, sorting cargo and keeping watch over the tides. A storm knocked out the power grid, and during the blackout, a strange light engulfed the harbor, pulling her into the sea. She awoke on a beach in a coastal town where the waves roll in without the rhythm of her former world.",
+      "error": "",
+      "s": 1.3
+    },
+    {
+      "id": "same_A3",
+      "mode": "known",
+      "memory": "ordinary memory",
+      "world": "low magic coastal town",
+      "idea": "ordinary local who works docks",
+      "story": "['Mara Ellison was born in the working-class district of Havenport, where she spent her youth hauling fish and timber alongside her father, a dockworker who struggled to provide for his family.', \"She lived a quiet, unremarkable life, balancing shifts at the docks with odd jobs around the town, until a freak storm during a lunar eclipse shattered the harbor's stone wall and unleashed a surge of ancient energy that pulled her into a rift.\", 'Now Mara navigates a world where magic lingers in the air like salt in the wind, but she refuses to wield it as a weapon, instead using her knowledge of the town\u2019s hidden currents to survive and uncover the rift\u2019s secrets.']",
+      "error": "",
+      "s": 3.4
+    },
+    {
+      "id": "same_A4",
+      "mode": "known",
+      "memory": "ordinary memory",
+      "world": "low magic coastal town",
+      "idea": "ordinary local who works docks",
+      "story": "Mara worked the docks in a quiet coastal town, sorting cargo and dreaming of better days. A mysterious storm swept through the harbor, and during the chaos, she was pulled into a whirlpool that left her stranded on unfamiliar shores. She wakes up in the same town, but the sea has changed, and the people here don't recognize her.",
+      "error": "",
+      "s": 1.3
+    },
+    {
+      "id": "trans_B1",
+      "mode": "transmigrated",
+      "memory": "remembers former life",
+      "world": "frontier dark fantasy",
+      "idea": "desk job then truck accident isekai",
+      "story": "['Mara Ellison was a forensic accountant in a midwest city, working late shifts at a firm that specialized in corporate fraud. A truck crash killed her on the highway, and she awoke in a forest with a jagged cut on her arm and a faint hum in her ears.', 'She was transported through a sudden, blinding light that followed the crash, and when she opened her eyes, she was lying on damp moss beneath a sky that burned with unfamiliar stars.', 'The forest is alive with creatures that do not belong to any map, and Mara remembers the smell of her office, the weight of her keyboard, and the exact moment her life ended.']",
+      "error": "",
+      "s": 3.8
+    },
+    {
+      "id": "trans_B2",
+      "mode": "transmigrated",
+      "memory": "remembers former life",
+      "world": "frontier dark fantasy",
+      "idea": "desk job then truck accident isekai",
+      "story": "['Mara Ellison worked the night shift at a data center in Seattle, coding maintenance scripts and surviving on instant noodles and the flicker of server lights. A truck crash shattered her leg and hurled her through a shimmering rift in the sky, depositing her in a blighted forest with no memory of how she got there.', 'She awoke beneath a canopy of rotting trees, the air thick with the scent of decay and the distant growl of unseen beasts. Her leg throbs, her clothes are torn, and the world feels both alien and eerily familiar.', 'Mara clings to her knowledge of technology and survival, using her wits to navigate this dark frontier, though she\u2019s unsure if the tools she knows will serve her here or if she\u2019s meant to wield something else entirely.']",
+      "error": "",
+      "s": 4.1
+    },
+    {
+      "id": "reinc_C1",
+      "mode": "reincarnated",
+      "memory": "former life fragments",
+      "world": "wuxia mountain valley",
+      "idea": "reborn as village child years ago",
+      "story": "['Mara Ellison was born in a coastal fishing village in the original world, where she learned to navigate tides and trade routes before becoming a translator in Shanghai, balancing family obligations with a quiet life of contract work.', 'She died suddenly during a storm, collapsing from an undiagnosed illness, only to awaken in a wuxia mountain valley with a sword at her hip and the lingering taste of iron, her memories fragmented but her instincts sharp.', 'Now she trains under a reclusive martial artist who teaches her that magic is a discipline of focus and will, not innate power, and that survival here demands both skill and secrecy.', 'Her past life\u2019s debts and unresolved family tensions haunt her, forcing her to choose between returning to her former world or embracing her new path as a warrior of the unseen.']",
+      "error": "",
+      "s": 4.4
+    },
+    {
+      "id": "hidden_D1",
+      "mode": "hidden",
+      "memory": "details emerge through choices",
+      "world": "city intrigue noir",
+      "idea": "courier with a sealed past",
+      "story": "['Mara Ellison was born in the dockside slums of Virelle, where she learned to navigate shadows and secrets as a courier for the city\u2019s underground syndicate, delivering messages and goods under the noses of both law and crime.', 'She vanished from her life after a failed delivery left her marked by the syndicate, forcing her to flee to the city\u2019s forgotten districts, where she survived by selling information and trading in stolen memories.', 'Now, she wakes in a fog-drenched alley with a sealed package and no memory of its contents, caught between the ghosts of her past and the strange, shifting city that feels both familiar and wrong.']",
+      "error": "",
+      "s": 4.2
+    }
+  ],
+  "pair_sims": [
+    [
+      0.049079754601226995,
+      "same_A1",
+      "same_A2"
+    ],
+    [
+      0.09615384615384616,
+      "same_A1",
+      "same_A3"
+    ],
+    [
+      0.04938271604938271,
+      "same_A1",
+      "same_A4"
+    ],
+    [
+      0.041474654377880185,
+      "same_A1",
+      "trans_B1"
+    ],
+    [
+      0.016597510373443983,
+      "same_A1",
+      "trans_B2"
+    ],
+    [
+      0.045454545454545456,
+      "same_A1",
+      "reinc_C1"
+    ],
+    [
+      0.04225352112676056,
+      "same_A1",
+      "hidden_D1"
+    ],
+    [
+      0.011560693641618497,
+      "same_A2",
+      "same_A3"
+    ],
+    [
+      0.10377358490566038,
+      "same_A2",
+      "same_A4"
+    ],
+    [
+      0.01764705882352941,
+      "same_A2",
+      "trans_B1"
+    ],
+    [
+      0.010526315789473684,
+      "same_A2",
+      "trans_B2"
+    ],
+    [
+      0.02564102564102564,
+      "same_A2",
+      "reinc_C1"
+    ],
+    [
+      0.011976047904191617,
+      "same_A2",
+      "hidden_D1"
+    ],
+    [
+      0.023529411764705882,
+      "same_A3",
+      "same_A4"
+    ],
+    [
+      0.013215859030837005,
+      "same_A3",
+      "trans_B1"
+    ],
+    [
+      0.028925619834710745,
+      "same_A3",
+      "trans_B2"
+    ],
+    [
+      0.044715447154471545,
+      "same_A3",
+      "reinc_C1"
+    ],
+    [
+      0.0319634703196347,
+      "same_A3",
+      "hidden_D1"
+    ],
+    [
+      0.01775147928994083,
+      "same_A4",
+      "trans_B1"
+    ],
+    [
+      0.0213903743315508,
+      "same_A4",
+      "trans_B2"
+    ],
+    [
+      0.020512820512820513,
+      "same_A4",
+      "reinc_C1"
+    ],
+    [
+      0.03067484662576687,
+      "same_A4",
+      "hidden_D1"
+    ],
+    [
+      0.04219409282700422,
+      "trans_B1",
+      "trans_B2"
+    ],
+    [
+      0.024096385542168676,
+      "trans_B1",
+      "reinc_C1"
+    ],
+    [
+      0.037037037037037035,
+      "trans_B1",
+      "hidden_D1"
+    ],
+    [
+      0.026217228464419477,
+      "trans_B2",
+      "reinc_C1"
+    ],
+    [
+      0.038461538461538464,
+      "trans_B2",
+      "hidden_D1"
+    ],
+    [
+      0.07725321888412018,
+      "reinc_C1",
+      "hidden_D1"
+    ]
+  ]
+}

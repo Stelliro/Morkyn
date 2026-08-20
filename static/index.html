@@ -761,35 +761,34 @@
                 </div>
 
                 <!-- LoRAs + hires: always visible (simple + advanced) — core art path, not optional advanced chrome -->
-                <div class="artGenQualityBar" id="setupArtQualityBar">
-                  <label class="inlineCheck" title="Upscale after first pass. Face/txt2img uses native hires fix; fullbody face-ref uses extras upscale (needs a real ESRGAN model, not Latent).">
+                <div class="artGenQualityBar artHrOff" id="setupArtQualityBar">
+                  <label class="inlineCheck" title="Opt-in quality hires: second diffusion pass at higher resolution (not just a bigger soft image). Uses ESRGAN/UltraSharp + img2img refine, or direct img2img second pass. Off by default.">
                     <input type="checkbox" id="setupArtEnableHr" />
                     <span>Hires / upscale</span>
                   </label>
-                  <label class="artHrScaleLabel" title="Upscale factor (e.g. 1.5 = 512→768)">
+                  <label class="artHrScaleLabel" title="Resolution scale for second pass (e.g. 1.5 = 512→768). Bigger alone is not quality — denoise does the work.">
                     <span>Scale</span>
-                    <input id="setupArtHrScale" type="number" min="1" max="4" step="0.05" value="1.5" />
+                    <input id="setupArtHrScale" type="number" min="1" max="4" step="0.05" value="1.5" disabled />
                   </label>
-                  <label class="artHrScaleLabel" title="Second-pass denoise (hires fix). Lower = closer to first pass; ~0.3–0.5 typical.">
+                  <label class="artHrScaleLabel" title="Second-pass denoise. ~0.4–0.5 adds real detail; below ~0.3 only freezes a soft enlarge.">
                     <span>Denoise</span>
-                    <input id="setupArtHrDenoise" type="number" min="0" max="1" step="0.05" value="0.45" />
+                    <input id="setupArtHrDenoise" type="number" min="0" max="1" step="0.05" value="0.45" disabled />
                   </label>
-                  <label class="artHrScaleLabel" title="Second-pass sampling steps (0 = same as first-pass steps). Typical 10–20.">
+                  <label class="artHrScaleLabel" title="Second-pass sampling steps (0 = auto ~16–28). Higher = more refine time.">
                     <span>Steps</span>
-                    <input id="setupArtHrSteps" type="number" min="0" max="80" step="1" value="0" />
+                    <input id="setupArtHrSteps" type="number" min="0" max="80" step="1" value="0" disabled />
                   </label>
-                  <label class="artHrUpscalerLabel" title="For fullbody face-ref gens pick R-ESRGAN 4x+ or 4x-UltraSharp (Latent only works on pure txt2img hires).">
+                  <label class="artHrUpscalerLabel" title="Pixel upscaler before diffusion refine. Prefer 4x-UltraSharp or R-ESRGAN 4x+. Latent skips pixel upscale and uses diffusion-only second pass.">
                     <span>Upscaler</span>
-                    <select id="setupArtHrUpscaler" aria-label="Hires upscaler">
-                      <option value="R-ESRGAN 4x+">R-ESRGAN 4x+</option>
+                    <select id="setupArtHrUpscaler" aria-label="Hires upscaler" disabled>
                       <option value="4x-UltraSharp">4x-UltraSharp</option>
+                      <option value="R-ESRGAN 4x+">R-ESRGAN 4x+</option>
                       <option value="ESRGAN_4x">ESRGAN_4x</option>
-                      <option value="Latent">Latent (txt2img only)</option>
+                      <option value="Latent">Latent (diffusion-only pass)</option>
                       <option value="Latent (nearest-exact)">Latent (nearest-exact)</option>
-                      <option value="Nearest">Nearest</option>
                     </select>
                   </label>
-                  <span class="muted artHrHint" id="setupArtHrHint">Hires off · body face-ref uses extras (pick ESRGAN, not Latent)</span>
+                  <span class="muted artHrHint" id="setupArtHrHint">Hires off (opt-in) · quality second pass, not soft resize</span>
                 </div>
                 <details class="artLoraDropdown" id="setupArtLoraDropdown">
                   <summary class="artLoraSummary">

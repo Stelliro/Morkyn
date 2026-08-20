@@ -1928,6 +1928,16 @@ body.image-mode-simple .imageAdvancedOnly,
   display: none !important;
 }
 
+/* Hires sub-controls dimmed when toggle is off */
+.artGenQualityBar.artHrOff .artHrScaleLabel,
+.artGenQualityBar.artHrOff .artHrUpscalerLabel {
+  opacity: 0.45;
+}
+.artGenQualityBar.artHrOff .artHrScaleLabel input,
+.artGenQualityBar.artHrOff .artHrUpscalerLabel select {
+  pointer-events: none;
+}
+
 /* LoRA + hires quality bar — always on (simple + advanced) */
 .artGenQualityBar {
   display: flex;

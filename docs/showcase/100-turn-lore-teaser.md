@@ -8,12 +8,12 @@
 | --- | --- |
 | Turns completed | **100** / 100 |
 | Errors | **0** |
-| Wall time | **4.889s** |
-| Mean apply | **45.16 ms** / turn |
+| Wall time | **9.666s** |
+| Mean apply | **89.23 ms** / turn |
 | Unique locations | 5 |
 | Final location | Outer Clearing |
-| Final level / XP | 1 / 135 |
-| Inventory items | 6 |
+| Final level / XP | 1 / 220 |
+| Inventory items | 3 |
 | Events tracked | 7 |
 
 ## Premise
@@ -128,4 +128,4 @@ Cycle 5 of the long road continues. The letter is still sealed. The debts are st
 
 Raw machine reports stay local under `benchmarks/reports/` (gitignored). This teaser is the shareable presentation slice.
 
-_Generated 2026-07-19T22:05:29 · backend `apply_turn/SQLite`._
+_Generated 2026-08-16T16:09:15 · backend `apply_turn/SQLite`._

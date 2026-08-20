@@ -1,0 +1,390 @@
+{
+  "model": "qwen3:8b",
+  "scenarios": [
+    {
+      "id": "truck_kun_summon",
+      "idea": "isekai truck accident, woke on a dirt road in a fantasy compound, ordinary to overpowered",
+      "errors": [],
+      "findings": [
+        {
+          "sev": "wrong",
+          "code": "first_person_backstory",
+          "detail": "Born in a working-class district of Neo-Silicon City, I was a night-shift forkli"
+        },
+        {
+          "sev": "hole",
+          "code": "mode_mismatch",
+          "detail": "mode='woke from a truck crash in a fantasy compound' expected one of ('transmigrated', 'known')"
+        }
+      ],
+      "compose_s": 3.4,
+      "intent": {
+        "isekai": true,
+        "portal_or_rebirth": "other_world",
+        "genre": "Isekai compound survival",
+        "adapter_hint": "isekai_rpg"
+      },
+      "overrides": {
+        "backstory_mode": "transmigrated",
+        "memory_policy": "remembers former life",
+        "world_style": "Isekai compound survival",
+        "special_ability_origin": "acquired"
+      },
+      "backstory_mode": "woke from a truck crash in a fantasy compound",
+      "memory_policy": "partial former-life fragments",
+      "character_backstory": "Born in a working-class district of Neo-Silicon City, I was a night-shift forklift operator at a logistics hub. My life revolved around the rhythm of warehouse shifts and the looming debt from a car accident that left me with a broken leg. I woke up in the shadow of the Iron Spire, a compound where survivors barter scraps and skills, my body feeling like a stranger's, with only fragments of the crash lingering in my mind.",
+      "previous_life_age": "28",
+      "previous_life_sex": "male",
+      "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots, small repair pouch, water skin",
+      "dirty": {
+        "starter_equipment": [
+          "starter_logic_arrival"
+        ],
+        "appearance": [
+          "starter_logic_appearance"
+        ]
+      },
+      "after_starter_logic": {
+        "arrival": "native_life",
+        "vibe": {
+          "register": "fantasy_lowtech",
+          "origin": "local_world",
+          "path": "already_local",
+          "localized": false,
+          "vocation": ""
+        },
+        "character_backstory": "Born in a working-class district of Neo-Silicon City, I was a night-shift forklift operator at a logistics hub. My life revolved around the rhythm of warehouse shifts and the looming debt from a car accident that left me with a broken leg. I woke up in the shadow of the Iron Spire, a compound where survivors barter scraps and skills, my body feeling like a stranger's, with only fragments of the crash lingering in my mind.",
+        "backstory_mode": "woke from a truck crash in a fantasy compound",
+        "memory_policy": "partial former-life fragments",
+        "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots, small repair pouch, water skin"
+      },
+      "final_story": "Born in a working-class district of Neo-Silicon City, I was a night-shift forklift operator at a logistics hub. My life revolved around the rhythm of warehouse shifts and the looming debt from a car accident that left me with a broken leg. I woke up in the shadow of the Iron Spire, a compound where survivors barter scraps and skills, my body feeling like a stranger's, with only fragments of the crash lingering in my mind.",
+      "final_mode": "woke from a truck crash in a fantasy compound",
+      "final_memory": "partial former-life fragments"
+    },
+    {
+      "id": "body_transmigration",
+      "idea": "transmigrated into the body of a debt-ridden compound clerk, former office life memories, no free power",
+      "errors": [],
+      "findings": [
+        {
+          "sev": "hole",
+          "code": "transmigrated_missing_arrival",
+          "detail": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of lif"
+        },
+        {
+          "sev": "hole",
+          "code": "memory_full_but_no_former_detail",
+          "detail": "remembers former life with fragmented office routines"
+        }
+      ],
+      "compose_s": 3.3,
+      "intent": {
+        "isekai": true,
+        "portal_or_rebirth": "other_world",
+        "genre": "Compound Clerk's Fair Edge",
+        "adapter_hint": "isekai_rpg"
+      },
+      "overrides": {
+        "backstory_mode": "transmigrated",
+        "memory_policy": "remembers former life",
+        "world_style": "Compound Clerk's Fair Edge",
+        "special_ability_origin": "acquired"
+      },
+      "backstory_mode": "transmigrated",
+      "memory_policy": "remembers former life with fragmented office routines",
+      "character_backstory": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the river compound yards.",
+      "previous_life_age": "34",
+      "previous_life_sex": "male",
+      "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots, small repair pouch, water skin",
+      "dirty": {
+        "starter_equipment": [
+          "starter_logic_arrival"
+        ],
+        "appearance": [
+          "starter_logic_appearance"
+        ],
+        "character_backstory": [
+          "starter_logic_origin_vibe"
+        ]
+      },
+      "after_starter_logic": {
+        "arrival": "isekai_arrival",
+        "vibe": {
+          "register": "fantasy_lowtech",
+          "origin": "local_world",
+          "path": "already_local",
+          "localized": false,
+          "vocation": ""
+        },
+        "character_backstory": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the river compound yards.",
+        "backstory_mode": "transmigrated",
+        "memory_policy": "remembers former life with fragmented office routines",
+        "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots"
+      },
+      "final_story": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the river compound yards.",
+      "final_mode": "transmigrated",
+      "final_memory": "remembers former life with fragmented office routines"
+    },
+    {
+      "id": "reincarnated_childhood",
+      "idea": "reincarnated as a village child years ago, grew up local, remembers fragments of modern life",
+      "errors": [],
+      "findings": [
+        {
+          "sev": "hole",
+          "code": "reincarnated_without_this_life",
+          "detail": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary deb"
+        },
+        {
+          "sev": "hole",
+          "code": "missing_origin_markers",
+          "detail": "none of ('reborn', 'reincarnat', 'grew up', 'child', 'years', 'village') in story"
+        },
+        {
+          "sev": "bug",
+          "code": "previous_life_age_not_numeric",
+          "detail": "late twenties"
+        }
+      ],
+      "compose_s": 3.2,
+      "intent": {
+        "isekai": true,
+        "portal_or_rebirth": "same_world_rebirth",
+        "genre": "Ordinary fantasy in a low-key world",
+        "adapter_hint": "isekai_rpg"
+      },
+      "overrides": {
+        "backstory_mode": "reincarnated",
+        "memory_policy": "remembers former life",
+        "world_style": "Ordinary fantasy in a low-key world"
+      },
+      "backstory_mode": "reincarnated with fragmented memories of a modern world",
+      "memory_policy": "partial former-life fragments",
+      "character_backstory": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the compound yards.",
+      "previous_life_age": "late twenties",
+      "previous_life_sex": "male",
+      "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots, small repair pouch, water skin",
+      "dirty": {
+        "starter_equipment": [
+          "starter_logic_arrival"
+        ],
+        "appearance": [
+          "starter_logic_appearance"
+        ],
+        "character_backstory": [
+          "starter_logic_origin_vibe"
+        ]
+      },
+      "after_starter_logic": {
+        "arrival": "reincarnated_life",
+        "vibe": {
+          "register": "fantasy_lowtech",
+          "origin": "local_world",
+          "path": "already_local",
+          "localized": false,
+          "vocation": ""
+        },
+        "character_backstory": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the compound yards.",
+        "backstory_mode": "reincarnated with fragmented memories of a modern world",
+        "memory_policy": "partial former-life fragments",
+        "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots, small repair pouch, water skin"
+      },
+      "final_story": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the compound yards.",
+      "final_mode": "reincarnated with fragmented memories of a modern world",
+      "final_memory": "partial former-life fragments"
+    },
+    {
+      "id": "summoned_ritual",
+      "idea": "summoned by a failed ritual into a sect outer court, still wearing city clothes, hard fair",
+      "errors": [],
+      "findings": [
+        {
+          "sev": "bug",
+          "code": "previous_life_age_not_numeric",
+          "detail": "twenty-seven"
+        }
+      ],
+      "compose_s": 2.8,
+      "intent": {
+        "isekai": false,
+        "portal_or_rebirth": "other_world",
+        "genre": "wuxia sect politics",
+        "adapter_hint": "isekai_rpg"
+      },
+      "overrides": {
+        "world_style": "wuxia sect politics"
+      },
+      "backstory_mode": "transmigrated into a sect outer court, still wearing city clothes",
+      "memory_policy": "the pier does not care who you were",
+      "character_backstory": "Born in a bustling city known for its tea trade, they were a modest merchant's apprentice, mastering the art of negotiation and survival in a cutthroat market. Summoned by a failed ritual into a wuxia sect's outer court, they arrived still in their city clothes, a stark reminder of their origins. The sect's tea temperature dictates status, and their cold tea was met with cold welcome, setting the stage for a hard, fair journey through the court's politics.",
+      "previous_life_age": "twenty-seven",
+      "previous_life_sex": "male",
+      "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots",
+      "dirty": {
+        "starter_equipment": [
+          "starter_logic_arrival"
+        ],
+        "appearance": [
+          "starter_logic_appearance"
+        ]
+      },
+      "after_starter_logic": {
+        "arrival": "isekai_arrival",
+        "vibe": {
+          "register": "fantasy_lowtech",
+          "origin": "local_world",
+          "path": "already_local",
+          "localized": false,
+          "vocation": ""
+        },
+        "character_backstory": "Born in a bustling city known for its tea trade, they were a modest merchant's apprentice, mastering the art of negotiation and survival in a cutthroat market. Summoned by a failed ritual into a wuxia sect's outer court, they arrived still in their city clothes, a stark reminder of their origins. The sect's tea temperature dictates status, and their cold tea was met with cold welcome, setting the stage for a hard, fair journey through the court's politics.",
+        "backstory_mode": "transmigrated into a sect outer court, still wearing city clothes",
+        "memory_policy": "the pier does not care who you were",
+        "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots"
+      },
+      "final_story": "Born in a bustling city known for its tea trade, they were a modest merchant's apprentice, mastering the art of negotiation and survival in a cutthroat market. Summoned by a failed ritual into a wuxia sect's outer court, they arrived still in their city clothes, a stark reminder of their origins. The sect's tea temperature dictates status, and their cold tea was met with cold welcome, setting the stage for a hard, fair journey through the court's politics.",
+      "final_mode": "transmigrated into a sect outer court, still wearing city clothes",
+      "final_memory": "the pier does not care who you were"
+    },
+    {
+      "id": "near_future_tech_drop",
+      "idea": "near-future maintenance tech died on the job, isekai into cultivation compound, transmigrated",
+      "errors": [],
+      "findings": [
+        {
+          "sev": "hole",
+          "code": "transmigrated_missing_arrival",
+          "detail": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of lif"
+        }
+      ],
+      "compose_s": 3.1,
+      "intent": {
+        "isekai": true,
+        "portal_or_rebirth": "other_world",
+        "genre": "Near-future isekai cultivation compound",
+        "adapter_hint": "isekai_rpg"
+      },
+      "overrides": {
+        "backstory_mode": "transmigrated",
+        "memory_policy": "remembers former life",
+        "world_style": "Near-future isekai cultivation compound",
+        "special_ability_origin": "acquired"
+      },
+      "backstory_mode": "transmigrated",
+      "memory_policy": "retains partial former-life fragments with uncertain rumors",
+      "character_backstory": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the river compound yards.",
+      "previous_life_age": "28",
+      "previous_life_sex": "male",
+      "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots, small repair pouch, water skin",
+      "dirty": {
+        "starter_equipment": [
+          "starter_logic_arrival"
+        ],
+        "appearance": [
+          "starter_logic_appearance"
+        ],
+        "character_backstory": [
+          "starter_logic_origin_vibe"
+        ],
+        "backstory_mode": [
+          "starter_logic_origin_vibe"
+        ]
+      },
+      "after_starter_logic": {
+        "arrival": "isekai_arrival",
+        "vibe": {
+          "register": "fantasy_lowtech",
+          "origin": "local_world",
+          "path": "already_local",
+          "localized": false,
+          "vocation": ""
+        },
+        "character_backstory": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the river compound yards.",
+        "backstory_mode": "transmigrated",
+        "memory_policy": "retains partial former-life fragments with uncertain rumors",
+        "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots"
+      },
+      "final_story": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the river compound yards.",
+      "final_mode": "transmigrated",
+      "final_memory": "retains partial former-life fragments with uncertain rumors"
+    },
+    {
+      "id": "desk_job_portal",
+      "idea": "died at a desk job and woke in another world last night, pure isekai arrival",
+      "errors": [],
+      "findings": [
+        {
+          "sev": "hole",
+          "code": "transmigrated_missing_arrival",
+          "detail": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of lif"
+        },
+        {
+          "sev": "hole",
+          "code": "memory_full_but_no_former_detail",
+          "detail": "remembers former life with fragmented clues"
+        },
+        {
+          "sev": "hole",
+          "code": "missing_origin_markers",
+          "detail": "none of ('desk', 'died', 'woke', 'another world', 'last night', 'office') in story"
+        }
+      ],
+      "compose_s": 3.0,
+      "intent": {
+        "isekai": true,
+        "portal_or_rebirth": "other_world",
+        "genre": "low fantasy isekai with gritty survival",
+        "adapter_hint": "isekai_rpg"
+      },
+      "overrides": {
+        "backstory_mode": "transmigrated",
+        "memory_policy": "remembers former life",
+        "world_style": "low fantasy isekai with gritty survival",
+        "special_ability_origin": "acquired"
+      },
+      "backstory_mode": "transmigrated",
+      "memory_policy": "remembers former life with fragmented clues",
+      "character_backstory": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the compound yards.",
+      "previous_life_age": "29",
+      "previous_life_sex": "male",
+      "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots, small repair pouch, water skin",
+      "dirty": {
+        "starter_equipment": [
+          "starter_logic_arrival"
+        ],
+        "appearance": [
+          "starter_logic_appearance"
+        ],
+        "character_backstory": [
+          "starter_logic_origin_vibe"
+        ],
+        "backstory_mode": [
+          "starter_logic_origin_vibe"
+        ]
+      },
+      "after_starter_logic": {
+        "arrival": "isekai_arrival",
+        "vibe": {
+          "register": "fantasy_lowtech",
+          "origin": "local_world",
+          "path": "already_local",
+          "localized": false,
+          "vocation": ""
+        },
+        "character_backstory": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the compound yards.",
+        "backstory_mode": "transmigrated",
+        "memory_policy": "remembers former life with fragmented clues",
+        "starter_equipment": "patched canvas work vest, cracked work gloves, worn work boots"
+      },
+      "final_story": "A compound yard mender who kept pumps, belts, and cart fittings running in a river compound. Ordinary work, ordinary debts — the kind of life that fits a gritty isekai yard, not a free arsenal Strange half-memories of another life's machines and glass towers still surface in dreams, but the body and debts of this life are what matter at dawn Work and sleep are in the compound yards.",
+      "final_mode": "transmigrated",
+      "final_memory": "remembers former life with fragmented clues"
+    }
+  ],
+  "summary": {
+    "bugs": 2,
+    "wrong": 1,
+    "holes": 9
+  }
+}
