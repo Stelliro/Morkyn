@@ -121,11 +121,97 @@ HIGH_RISK_TURN_CHANGE_KEYS = {
     "npcs",
     "relationships",
     "events",
-    "conversations",
     "response_drafts",
     "index_updates",
     "ability_updates",
 }
+
+# --- verifier circuit breaker ------------------------------------------------
+#
+# Small local models cannot do the verify pass. Measured on qwen2.5:7b-instruct:
+# `verify` returned an echo of the input world_state on 42/42 turns, then
+# `verify_repair` failed on all 42 too — ~26s per turn spent producing nothing.
+#
+# Rather than a per-model config flag nobody will set, watch the pass and stop
+# calling it once it has clearly proven itself useless on this machine. On a
+# model where verification works, the breaker never trips and nothing changes.
+_VERIFY_FAILURE_STREAK = 0
+_VERIFY_DISABLED_REASON = ""
+
+
+def _verify_breaker_limit() -> int:
+    try:
+        return max(0, int(os.getenv("AI_RPG_VERIFY_FAILURE_LIMIT", "3")))
+    except (TypeError, ValueError):
+        return 3
+
+
+def verifier_is_disabled() -> bool:
+    """True once the verify pass has failed enough times to stop trying."""
+    limit = _verify_breaker_limit()
+    return bool(limit) and _VERIFY_FAILURE_STREAK >= limit
+
+
+def _note_verify_outcome(ok: bool, reason: str = "") -> None:
+    global _VERIFY_FAILURE_STREAK, _VERIFY_DISABLED_REASON
+    if ok:
+        _VERIFY_FAILURE_STREAK = 0
+        _VERIFY_DISABLED_REASON = ""
+        return
+    _VERIFY_FAILURE_STREAK += 1
+    if verifier_is_disabled() and not _VERIFY_DISABLED_REASON:
+        _VERIFY_DISABLED_REASON = (
+            f"Model verifier failed {_VERIFY_FAILURE_STREAK} times in a row "
+            f"({reason or 'unusable output'}); skipping it for this session. "
+            f"Set AI_RPG_VERIFY_FAILURE_LIMIT=0 to always retry."
+        )
+
+
+def _verified_output_is_useful(verified: Any, draft: dict[str, Any]) -> bool:
+    """
+    Did the verifier actually return a corrected turn?
+
+    The characteristic small-model failure is regurgitation: it echoes the
+    ``world_state`` it was given back as its answer. That parses as JSON and
+    looks like success, so check for turn-shaped content instead of validity.
+    """
+    if not isinstance(verified, dict):
+        return False
+    # Echoing the prompt back: the reply carries the input wrapper keys.
+    if "world_state" in verified or "draft_turn" in verified:
+        return False
+    turn_keys = {"narration", "narration_segments", "scene_plan", "turn_summary", "self_check"}
+    if not (turn_keys & set(verified)):
+        return False
+    # A verifier that returns nothing but an empty shell is not useful either.
+    return bool(_narration_char_count(_coerce_turn_shape(verified)) or verified.get("narration_segments"))
+
+
+def _coerce_turn_shape(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def verifier_breaker_status() -> dict[str, Any]:
+    return {
+        "failure_streak": _VERIFY_FAILURE_STREAK,
+        "disabled": verifier_is_disabled(),
+        "reason": _VERIFY_DISABLED_REASON,
+        "limit": _verify_breaker_limit(),
+    }
+
+
+def reset_verifier_breaker() -> None:
+    """Clear the breaker — used by tests and when model config changes."""
+    global _VERIFY_FAILURE_STREAK, _VERIFY_DISABLED_REASON
+    _VERIFY_FAILURE_STREAK = 0
+    _VERIFY_DISABLED_REASON = ""
+
+
+# Recording that a conversation happened is not a risky state change — it
+# writes a topic and a summary, mints nothing, and cannot unbalance a run.
+# It was the single most common reason verification could not be skipped
+# (fired on most talk turns), so it now carries only a small certainty cost.
+LOW_RISK_TURN_CHANGE_KEYS = {"conversations"}
 VERIFY_REQUIRED_INTENTS = {"opening_scene", "continue_scene", "conversation", "claim_check", "inventory", "trade", "ability", "training"}
 LOW_RISK_SKIP_INTENTS = {"general", "investigation", "rest", "travel", "combat"}
 TURN_WRAPPER_KEYS = ("turn", "result", "response", "output")
@@ -192,6 +278,10 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "action_context",
     "working_set",
     "event_lifecycle",
+    # Server-stated contracts. Omitting a key here nulls it out of the packet
+    # silently — the same failure that stripped the band fields off `player`.
+    "movement_contract",
+    "narrative_voice",
     "equipment_effects",
     "inventory_summary",
     "active_player_alias",
@@ -262,6 +352,13 @@ HANDOFF_PLAYER_FIELDS = {
     "karma_delta",
     "karma_reason",
     "karma_visibility",
+    # Band forms of the amounts above. This is an allowlist: anything missing
+    # here is silently stripped during handoff cleanup, so omitting the bands
+    # made the model's amounts vanish before world.apply_turn could roll them.
+    "health_band",
+    "xp_band",
+    "gold_band",
+    "karma_band",
 }
 MISSING_NARRATION_MESSAGE = "Model JSON did not include usable narration text."
 PREVIOUS_LIFE_IDENTITY_FIELDS = {"previous_life_age", "previous_life_sex"}
@@ -9192,11 +9289,17 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
     if not isinstance(result, dict):
         return result
     try:
-        from app.world import invent_person_name, is_plausible_person_name, is_plausible_place_name
+        from app.world import invent_person_name, is_plausible_person_name, is_plausible_place_name, name_seed
     except Exception:
         invent_person_name = None  # type: ignore
         is_plausible_person_name = lambda n: bool(str(n or "").strip())  # type: ignore
         is_plausible_place_name = lambda n: bool(str(n or "").strip())  # type: ignore
+        import hashlib as _hl
+        # Still blake2b, not hash(): the fallback must stay reproducible too.
+        name_seed = lambda *parts: int.from_bytes(  # type: ignore
+            _hl.blake2b("|".join(str(p) for p in parts).encode("utf-8", "replace"), digest_size=8).digest(),
+            "big",
+        ) & 0x7FFFFFFFFFFFFFFF
 
     code_map = _entity_code_name_map(context, result)
     # Bad → good renames so we can rewrite prose (e.g. "System pings a local job" → "Ashwalker")
@@ -9238,8 +9341,7 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
             if code and code_map.get(code) and is_plausible_person_name(code_map[code]):
                 fallback = code_map[code]
             elif invent_person_name is not None:
-                seed = abs(hash(f"{code}|{name}|{npc.get('role') or ''}")) % (10**9)
-                fallback = invent_person_name(seed=seed)
+                fallback = invent_person_name(seed=name_seed(code, name, npc.get("role") or ""))
             else:
                 fallback = f"Stranger {code}" if code and re.fullmatch(r"[A-Z]{1,3}", code) else "Stranger"
             if name and name != fallback:
@@ -9783,7 +9885,14 @@ def _verification_policy(context: dict[str, Any], player_input: str, draft: dict
         deterministic.append("narration_depth")
         certainty += 0.12
     else:
-        blockers.append("short_narration")
+        # Short narration is NOT a verifier blocker. Length is the depth
+        # retry's job; the consistency verifier does not lengthen prose, and
+        # on small models forcing it here cost ~26s per turn to produce
+        # nothing. Measured on a 7B: verify+verify_repair fired on 42/42 turns
+        # and never once returned a usable object. Keep the certainty penalty
+        # so a short draft still leans toward verification when something
+        # *else* is also shaky.
+        reasons.append("Draft narration is short; depth retry handles length, not the verifier.")
         remaining.append("narration_depth")
         certainty -= 0.15
 
@@ -9795,6 +9904,11 @@ def _verification_policy(context: dict[str, Any], player_input: str, draft: dict
         blockers.append("draft_self_check_not_passed")
         remaining.append("self_check")
         certainty -= 0.12
+
+    low_risk_keys = _nonempty_turn_keys(draft, LOW_RISK_TURN_CHANGE_KEYS)
+    if low_risk_keys:
+        reasons.append(f"Low-risk records present (not a blocker): {', '.join(low_risk_keys[:6])}")
+        certainty -= 0.04
 
     high_risk_keys = _nonempty_turn_keys(draft, HIGH_RISK_TURN_CHANGE_KEYS)
     if high_risk_keys:
@@ -9887,6 +10001,321 @@ def _mark_draft_verified_by_policy(draft: dict[str, Any], policy: dict[str, Any]
     return result
 
 
+def _retry_narration_prose(
+    context: dict[str, Any],
+    player_input: str,
+    turn: dict[str, Any],
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Ask only for longer prose, then splice it into the existing turn.
+
+    The original depth retry asked for a complete replacement turn JSON. That
+    had two failure modes, both observed on a 7B: the full turn schema does not
+    fit in the response cap (it truncated mid-object every time, 18/18), and
+    regenerating the whole turn risks losing the structured ops the draft had
+    already produced.
+
+    Prose is the smallest possible thing to ask for, cannot truncate into
+    invalid JSON, and leaves every state change from the draft untouched.
+    """
+    existing = str(turn.get("narration") or "")
+    plan = turn.get("scene_plan") if isinstance(turn.get("scene_plan"), dict) else {}
+    instruction = "\n".join(
+        [
+            "Rewrite this scene as longer, richer prose. Return ONLY the prose.",
+            "No JSON. No headers. No markdown fences. No commentary. Just the scene text.",
+            "",
+            f"Target about {TARGET_TURN_NARRATION_CHARS} characters, never below "
+            f"{MIN_TURN_NARRATION_CHARS}, never above {MAX_TURN_NARRATION_CHARS}.",
+            "Keep every fact, name, and [[CODE]] reference from the draft. Add sensory",
+            "detail, NPC reaction, consequence, and concrete choices the player could take.",
+            "Do not invent new rewards, items, or numbers. Do not decide the player's next action.",
+            "",
+            f"Scene goal: {str(plan.get('goal') or '')[:300]}",
+            f"Player action: {str(player_input or '')[:300]}",
+            "",
+            "Draft scene to expand:",
+            existing[:4000],
+        ]
+    )
+    raw = _chat_text(
+        system_prompt,
+        instruction,
+        timeout=timeout,
+        usage=usage,
+        phase=phase,
+        max_tokens=max(_turn_max_tokens(context, "draft"), DEFAULT_RESPONSE_TOKEN_CAP),
+        trace=trace,
+    )
+    prose = _clean_retry_prose(raw)
+    if len(prose.strip()) <= len(existing.strip()):
+        raise LlmError("Depth retry returned no additional prose.")
+    return _splice_prose_into_turn(turn, prose)
+
+
+def _splice_prose_into_turn(turn: dict[str, Any], prose: str) -> dict[str, Any]:
+    """
+    Replace only the narration on a turn, leaving every structured op intact.
+
+    Honours the upper bound: asked for "longer", a 7B happily returned 3,351
+    characters against a 2,400 ceiling, so trim on paragraph boundaries and the
+    scene still ends on a complete beat rather than mid-sentence.
+    """
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", str(prose or "").strip()) if p.strip()]
+    kept: list[str] = []
+    running = 0
+    for para in paragraphs[:12]:
+        if kept and running + len(para) > MAX_TURN_NARRATION_CHARS:
+            break
+        kept.append(para[:2800])
+        running += len(para)
+    if not kept:
+        kept = [str(prose or "")[:MAX_TURN_NARRATION_CHARS]]
+
+    expanded = dict(turn)
+    expanded["narration"] = "\n\n".join(kept)[:MAX_TURN_NARRATION_CHARS]
+    expanded["narration_segments"] = [{"label": "paragraph", "text": para} for para in kept]
+    return expanded
+
+
+def _clean_retry_prose(raw: str) -> str:
+    """Strip anything the model wrapped around the prose despite being told not to."""
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+    text = re.sub(r"\s*```$", "", text).strip()
+    # Some models still emit the DSL markers or a JSON wrapper out of habit.
+    for marker in ("===NAR===", "===NARRATION===", "@NAR"):
+        if marker in text.upper():
+            idx = text.upper().find(marker)
+            text = text[idx + len(marker):]
+    for marker in ("===OPS===", "@OPS"):
+        idx = text.upper().find(marker)
+        if idx >= 0:
+            text = text[:idx]
+    if text.lstrip().startswith("{"):
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return str(parsed.get("narration") or "").strip()
+        except json.JSONDecodeError:
+            pass
+    return text.strip()
+
+
+# Stock closers that hand the turn back to the player instead of resolving it.
+# Deliberately narrow: only endings that carry no information, so deleting one
+# can never lose a fact. Broader "you could X or Y" phrasings are left alone —
+# those sometimes contain real detail, and a wrong cut costs more than a menu.
+_MENU_CLOSER_RE = re.compile(
+    r"^(?:"
+    r"(?:the\s+)?(?:choice|decision|call)\s+is\s+yours\.?"
+    r"|what\s+(?:will|do)\s+you\s+do(?:\s+next)?\??"
+    # "Or do you continue your journey...?" — the second half of a two-part menu
+    # arrives as its own sentence, so the leading conjunction must be allowed.
+    r"|(?:(?:so|or|and)[,]?\s+)?(?:do|will|would)\s+you\s+\w+[^.?!]{0,200}\?"
+    r"|which\s+(?:path|way|one)\s+(?:will|do)\s+you\s+\w+[^.?!]{0,80}\?"
+    r"|the\s+choice\s+before\s+you[^.?!]{0,80}[.?!]"
+    # The menu split across two sentences: "You could approach the group...
+    # Or, you could continue down the road." Both halves are closers, and the
+    # two-sentence cap in _trim_menu_ending removes exactly the pair.
+    # "You could hear the mill wheel" is description; only offered *actions* count.
+    r"|(?:or,?\s+)?you\s+(?:could|might)\s+"
+    r"(?!hear|see|smell|feel|taste|sense|tell|make\s+out|swear|imagine|almost|just|well|barely)"
+    r"[^.?!]{0,160}[.?!]"
+    r")$",
+    re.I,
+)
+
+
+# "You could: \n- Follow the main road... \n- Head north..." — the same menu in
+# list form, and also a plain formatting violation: the contract asks for
+# continuous prose. Seen on 5/24 turns of a live run.
+_OPTION_LIST_RE = re.compile(r"\n[ \t]*(?:[-*•–]|\d+[.)])[ \t]+\S", re.M)
+# The sentence that introduces the list ("You could:", "Your options are:").
+# Matched per-sentence, not per-line: the body is usually one long paragraph, so
+# a line-anchored pattern never reached it.
+_LIST_LEAD_IN_RE = re.compile(
+    r"(?:you\s+(?:could|can|might|may)|your\s+options|choose\s+from|several\s+(?:paths?|options)|"
+    r"the\s+following|options?\s+(?:are|before\s+you))",
+    re.I,
+)
+
+
+def _trim_option_list(narration: str, *, floor: int = MIN_TURN_NARRATION_CHARS) -> tuple[str, int]:
+    """
+    Cut a trailing bullet/numbered option list, plus the line that introduces it.
+
+    Only trailing lists: a list in the middle of a scene is more likely to be
+    something the player is reading in-world (a notice, a ledger) than a menu.
+    """
+    text = str(narration or "").rstrip()
+    match = _OPTION_LIST_RE.search(text)
+    if not match:
+        return text, 0
+    head = text[: match.start()].rstrip()
+    # Everything after the first bullet must itself be list-shaped, otherwise
+    # prose resumed below it and this is not a closing menu.
+    tail = text[match.start():]
+    tail_lines = [ln.strip() for ln in tail.splitlines() if ln.strip()]
+    if not tail_lines:
+        return text, 0
+    bulleted = sum(1 for ln in tail_lines if re.match(r"^(?:[-*•–]|\d+[.)])\s+", ln))
+    # Every remaining line must be a bullet. If prose resumed under the list,
+    # the list was something in the world (a notice, a ledger), not a menu.
+    if bulleted < 2 or bulleted != len(tail_lines):
+        return text, 0
+    # Drop the sentence(s) that set the list up; a colon-terminated sentence
+    # immediately above a bullet list is always the lead-in.
+    for _ in range(2):
+        sentences = re.split(r"(?<=[.!?:])\s+", head.strip())
+        if len(sentences) < 2:
+            break
+        last = sentences[-1].strip()
+        if not (last.endswith(":") or _LIST_LEAD_IN_RE.search(last)):
+            break
+        candidate = " ".join(sentences[:-1]).rstrip()
+        if len(candidate) < floor:
+            break
+        head = candidate
+    if len(head) < floor:
+        return text, 0
+    return head, bulleted
+
+
+def _trim_menu_ending(narration: str, *, floor: int = MIN_TURN_NARRATION_CHARS) -> tuple[str, int]:
+    """
+    Drop trailing "The choice is yours." style closers.
+
+    A 7B restates the player's options as a menu on roughly a quarter of turns
+    even when the system prompt forbids it; the behaviour did not move with
+    prompting. Since the UI already asks the player what they want to do, these
+    sentences are filler, and cutting them is cheaper and more reliable than
+    another generation pass.
+
+    Never trims below `floor` characters and never removes more than two
+    sentences, so a short scene keeps its body even if the ending is weak.
+    """
+    text = str(narration or "").rstrip()
+    if not text:
+        return text, 0
+    removed = 0
+    for _ in range(2):
+        parts = re.split(r"(?<=[.!?])\s+", text.strip())
+        if len(parts) < 2:
+            break
+        last = parts[-1].strip()
+        if not _MENU_CLOSER_RE.match(last):
+            break
+        candidate = " ".join(parts[:-1]).rstrip()
+        if len(candidate) < floor:
+            break
+        text = candidate
+        removed += 1
+    return text, removed
+
+
+def _apply_menu_trim(turn: dict[str, Any]) -> dict[str, Any]:
+    """Strip trailing option lists and menu closers, rebuilding segments to match."""
+    original = str(turn.get("narration") or "")
+    listless, list_removed = _trim_option_list(original)
+    trimmed, removed = _trim_menu_ending(listless)
+    removed += list_removed
+    if not removed:
+        return turn
+    turn["narration"] = trimmed
+    segments = turn.get("narration_segments")
+    if isinstance(segments, list) and segments:
+        rebuilt = [p.strip() for p in re.split(r"\n\s*\n", trimmed) if p.strip()]
+        if rebuilt:
+            turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in rebuilt]
+    turn["_menu_trimmed"] = removed
+    return turn
+
+
+def _narration_voice_drift(turn: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    """Point-of-view check on a drafted turn. Returns the report, drift flag included."""
+    try:
+        from app.world import check_narrative_voice
+
+        state = {
+            "narrative_voice": context.get("narrative_voice"),
+            "player": context.get("player") or {},
+            "settings": context.get("settings") or {},
+        }
+        return check_narrative_voice(str(turn.get("narration") or ""), state)
+    except Exception:
+        return {"drift": False}
+
+
+def _retry_narration_voice(
+    context: dict[str, Any],
+    player_input: str,
+    turn: dict[str, Any],
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Rewrite a third-person narration into second person, changing nothing else.
+
+    Only fires on unambiguous drift (a full narration that never says "you"), so
+    it costs one extra prose pass on the rare turn instead of every turn.
+    """
+    existing = str(turn.get("narration") or "")
+    voice = context.get("narrative_voice") if isinstance(context.get("narrative_voice"), dict) else {}
+    pronouns = voice.get("player_pronouns") if isinstance(voice.get("player_pronouns"), dict) else {}
+    subject = str(pronouns.get("subject") or "they")
+    obj = str(pronouns.get("object") or "them")
+    possessive = str(pronouns.get("possessive") or "their")
+    name = str(voice.get("player_name") or "").strip()
+    instruction = "\n".join(
+        [
+            "Rewrite this scene in SECOND PERSON. Return ONLY the prose.",
+            "No JSON. No headers. No markdown fences. No commentary. Just the scene text.",
+            "",
+            "The player character is addressed as \"you\" / \"your\" throughout.",
+            (
+                f"Replace every third-person reference to {name} with \"you\"."
+                if name
+                else "Replace every third-person reference to the player character with \"you\"."
+            ),
+            f"If another character speaks about the player, use {subject}/{obj}/{possessive}.",
+            "Other characters keep their own names and pronouns exactly as written.",
+            "",
+            "Change nothing else: same events, same facts, same names, same [[CODE]] references,",
+            "same order, same length. This is a person change, not a rewrite.",
+            "",
+            "Scene to convert:",
+            existing[:4000],
+        ]
+    )
+    raw = _chat_text(
+        system_prompt,
+        instruction,
+        timeout=timeout,
+        usage=usage,
+        phase=phase,
+        max_tokens=max(_turn_max_tokens(context, "draft"), DEFAULT_RESPONSE_TOKEN_CAP),
+        trace=trace,
+    )
+    prose = _clean_retry_prose(raw)
+    if len(prose.strip()) < max(200, int(len(existing.strip()) * 0.5)):
+        raise LlmError("Voice retry returned too little prose to trust.")
+    spliced = _splice_prose_into_turn(turn, prose)
+    if _narration_voice_drift(spliced, context).get("drift"):
+        raise LlmError("Voice retry came back in third person again.")
+    return spliced
+
+
 def _retry_short_narration(
     context: dict[str, Any],
     player_input: str,
@@ -9939,16 +10368,38 @@ def _ensure_narration_depth(
     original_chars = _narration_char_count(normalized)
     if original_chars >= MIN_TURN_NARRATION_CHARS:
         return normalized
-    try:
-        expanded = _normalize_turn(
-            _retry_short_narration(context, player_input, normalized, system_prompt, timeout, usage, phase, trace),
-            context,
-        )
-        if _narration_char_count(expanded) >= MIN_TURN_NARRATION_CHARS or _narration_char_count(expanded) > original_chars:
-            return expanded
-    except LlmError as exc:
-        usage.append({"phase": f"{phase}_failed", "error": _trim_text(str(exc), 500)})
-        _append_trace(trace, {"phase": phase, "event": "depth_retry_failed", "error": str(exc)})
+
+    # Prose-only first: it is the smallest thing to ask for, cannot truncate
+    # into invalid JSON, and preserves the draft's structured ops. The
+    # full-turn JSON retry stays as a fallback for models that handle it.
+    for attempt, retry in (
+        ("prose", _retry_narration_prose),
+        ("json", _retry_short_narration),
+    ):
+        try:
+            expanded = _normalize_turn(
+                retry(context, player_input, normalized, system_prompt, timeout, usage, phase, trace),
+                context,
+            )
+            expanded_chars = _narration_char_count(expanded)
+            if expanded_chars >= MIN_TURN_NARRATION_CHARS or expanded_chars > original_chars:
+                _append_trace(
+                    trace,
+                    {
+                        "phase": phase,
+                        "event": "depth_retry_ok",
+                        "mode": attempt,
+                        "before_chars": original_chars,
+                        "after_chars": expanded_chars,
+                    },
+                )
+                return expanded
+        except LlmError as exc:
+            usage.append({"phase": f"{phase}_{attempt}_failed", "error": _trim_text(str(exc), 500)})
+            _append_trace(
+                trace,
+                {"phase": phase, "event": "depth_retry_failed", "mode": attempt, "error": str(exc)},
+            )
     self_check = normalized.get("self_check")
     if not isinstance(self_check, dict):
         self_check = {}
@@ -10209,9 +10660,53 @@ def _ensure_narration_quality(
         # Small models aim lower; only fall back to whole-turn depth retry if still very short.
         floor = max(400, min(MIN_TURN_NARRATION_CHARS, int(soft_target * 0.65)))
         if _narration_char_count(refined) >= floor:
-            return refined
-        return _ensure_narration_depth(refined, context, player_input, system_prompt, timeout, usage, phase, trace)
-    return _ensure_narration_depth(turn, context, player_input, system_prompt, timeout, usage, phase, trace)
+            deep = refined
+        else:
+            deep = _ensure_narration_depth(refined, context, player_input, system_prompt, timeout, usage, phase, trace)
+    else:
+        deep = _ensure_narration_depth(turn, context, player_input, system_prompt, timeout, usage, phase, trace)
+    voiced = _ensure_narration_voice(deep, context, player_input, system_prompt, timeout, usage, phase, trace)
+    return _apply_menu_trim(voiced)
+
+
+def _voice_repair_enabled() -> bool:
+    return str(os.getenv("AI_RPG_VOICE_REPAIR", "1")).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _ensure_narration_voice(
+    turn: dict[str, Any],
+    context: dict[str, Any],
+    player_input: str,
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    One prose pass to fix a narration that drifted out of second person.
+
+    Deliberately narrow: only fires when the narration never addresses the
+    player at all. Partial drift (a stray third-person sentence) is left to the
+    prompt contract — a rewrite for that would cost a pass on most turns and
+    risk mangling correct prose.
+    """
+    report = _narration_voice_drift(turn, context)
+    turn["_voice_check"] = report
+    if not report.get("drift") or not _voice_repair_enabled():
+        return turn
+    try:
+        fixed = _normalize_turn(
+            _retry_narration_voice(context, player_input, turn, system_prompt, timeout, usage, f"{phase}_voice", trace),
+            context,
+        )
+        fixed["_voice_check"] = {**_narration_voice_drift(fixed, context), "repaired": True}
+        _append_trace(trace, {"phase": phase, "event": "voice_retry_ok", "before": report})
+        return fixed
+    except LlmError as exc:
+        usage.append({"phase": f"{phase}_voice_failed", "error": _trim_text(str(exc), 500)})
+        _append_trace(trace, {"phase": phase, "event": "voice_retry_failed", "error": str(exc)})
+    return turn
 
 
 def _retry_missing_narration(
@@ -10516,6 +11011,26 @@ def _generate_turn_body(
             result["_model_usage"] = usage
             result["_model_trace"] = trace
             return result
+
+        if verifier_is_disabled():
+            # Breaker tripped: this model cannot produce a usable verify object.
+            _append_trace(
+                trace,
+                {"phase": "verify", "event": "verifier_disabled", **verifier_breaker_status()},
+            )
+            usage.append({"phase": "verify_skipped_breaker", "reason": _VERIFY_DISABLED_REASON})
+            result = _ensure_narration_quality(
+                draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace
+            )
+            result = _clean_turn_for_handoff(result, "dsl_draft_to_world", trace)
+            result["_verification_policy"] = {
+                **(verification_policy if isinstance(verification_policy, dict) else {}),
+                "verifier_breaker": verifier_breaker_status(),
+            }
+            result["_model_usage"] = usage
+            result["_model_trace"] = trace
+            return result
+
         try:
             progress_update(
                 "verify",
@@ -10538,6 +11053,7 @@ def _generate_turn_body(
                 if not _is_missing_narration_error(exc):
                     raise
                 result = _merge_verified_with_draft_narration(verified, draft)
+            _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
             progress_update(
                 "narration",
                 "Polishing narration quality…",
@@ -10565,6 +11081,7 @@ def _generate_turn_body(
             result["_model_trace"] = trace
             return result
         except LlmError as exc:
+            _note_verify_outcome(False, _trim_text(str(exc), 120))
             draft = _normalize_turn(draft, active_context)
             draft["self_check"] = {
                 "passed": False,
@@ -10727,6 +11244,31 @@ def _generate_turn_body(
         result["_model_usage"] = usage
         result["_model_trace"] = trace
         return result
+    if verifier_is_disabled():
+        # The breaker has tripped: this model cannot produce a usable verify
+        # object, so go straight to the draft + depth pass instead of burning
+        # a timeout on it every turn.
+        _append_trace(
+            trace,
+            {
+                "phase": "verify",
+                "event": "verifier_disabled",
+                **verifier_breaker_status(),
+            },
+        )
+        usage.append({"phase": "verify_skipped_breaker", "reason": _VERIFY_DISABLED_REASON})
+        result = _ensure_narration_quality(
+            draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace
+        )
+        result = _clean_turn_for_handoff(result, "draft_to_world", trace)
+        result["_verification_policy"] = {
+            **verification_policy,
+            "verifier_breaker": verifier_breaker_status(),
+        }
+        result["_model_usage"] = usage
+        result["_model_trace"] = trace
+        return result
+
     try:
         progress_update(
             "verify",
@@ -10749,6 +11291,7 @@ def _generate_turn_body(
             if not _is_missing_narration_error(exc):
                 raise
             result = _merge_verified_with_draft_narration(verified, draft)
+        _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
         progress_update(
             "narration",
             "Polishing narration quality…",
@@ -10772,6 +11315,9 @@ def _generate_turn_body(
         result["_model_trace"] = trace
         return result
     except LlmError as exc:
+        # Any hard verify failure counts toward the breaker too, not just
+        # syntactically-valid garbage.
+        _note_verify_outcome(False, _trim_text(str(exc), 120))
         if _is_context_length_error(exc):
             try:
                 compact_context = _clean_context_for_handoff(_compact_turn_context(active_context), "planner_to_verify_compact_retry", trace)

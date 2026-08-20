@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
-PREFS_PATH = Path(os.getenv("AI_RPG_LAUNCHER_PREFS") or (ROOT / "data" / "launcher_prefs.json"))
+def prefs_path() -> Path:
+    """Resolved per call so AI_RPG_LAUNCHER_PREFS is honoured whatever the import order."""
+    return Path(os.getenv("AI_RPG_LAUNCHER_PREFS") or (ROOT / "data" / "launcher_prefs.json"))
 
 
 def default_prefs() -> dict[str, Any]:
@@ -37,10 +39,10 @@ def default_prefs() -> dict[str, Any]:
 
 def load_prefs() -> dict[str, Any]:
     base = default_prefs()
-    if not PREFS_PATH.is_file():
+    if not prefs_path().is_file():
         return base
     try:
-        raw = json.loads(PREFS_PATH.read_text(encoding="utf-8"))
+        raw = json.loads(prefs_path().read_text(encoding="utf-8"))
         if isinstance(raw, dict):
             for key, value in raw.items():
                 if key in base:
@@ -73,8 +75,8 @@ def save_prefs(updates: dict[str, Any] | None) -> dict[str, Any]:
         "open_browser",
     ):
         current[bkey] = bool(current.get(bkey))
-    PREFS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    PREFS_PATH.write_text(json.dumps(current, ensure_ascii=True, indent=2), encoding="utf-8")
+    prefs_path().parent.mkdir(parents=True, exist_ok=True)
+    prefs_path().write_text(json.dumps(current, ensure_ascii=True, indent=2), encoding="utf-8")
     return current
 
 

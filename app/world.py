@@ -12,6 +12,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from app import venues
 from app.db import connect, row_to_dict, rows_to_dicts
 from app.llm import (
     LlmError,
@@ -23,12 +24,36 @@ from app.llm import (
     generate_turn,
 )
 
-HISTORY_SUMMARY_PATH = Path(os.getenv("AI_RPG_HISTORY_SUMMARY", "data/history_summaries.jsonl"))
-SOURCE_INDEX_DIR = Path(os.getenv("AI_RPG_SOURCE_INDEX", "data/source_index"))
-SOURCE_INDEX_MANIFEST = SOURCE_INDEX_DIR / "manifest.json"
-MODEL_TRACE_DIR = Path(os.getenv("AI_RPG_MODEL_TRACE_DIR", "data/model_traces"))
-CONSOLIDATED_FACTS_PATH = Path(os.getenv("AI_RPG_CONSOLIDATED_FACTS", "data/consolidated_facts.jsonl"))
-CAMPAIGN_SLOTS_DIR = Path(os.getenv("AI_RPG_CAMPAIGN_SLOTS", "data/campaign_slots"))
+# Runtime paths are resolved per call, never frozen at import.
+#
+# These were module constants. Whichever module imported app.world first decided
+# them for the whole process, so a test that set AI_RPG_* afterwards silently
+# wrote its fixtures into the player's real data/ folder. Functions re-read the
+# environment every time, which is what makes test isolation actually hold.
+
+
+def history_summary_path() -> Path:
+    return Path(os.getenv("AI_RPG_HISTORY_SUMMARY", "data/history_summaries.jsonl"))
+
+
+def source_index_dir() -> Path:
+    return Path(os.getenv("AI_RPG_SOURCE_INDEX", "data/source_index"))
+
+
+def source_index_manifest() -> Path:
+    return source_index_dir() / "manifest.json"
+
+
+def model_trace_dir() -> Path:
+    return Path(os.getenv("AI_RPG_MODEL_TRACE_DIR", "data/model_traces"))
+
+
+def consolidated_facts_path() -> Path:
+    return Path(os.getenv("AI_RPG_CONSOLIDATED_FACTS", "data/consolidated_facts.jsonl"))
+
+
+def campaign_slots_dir() -> Path:
+    return Path(os.getenv("AI_RPG_CAMPAIGN_SLOTS", "data/campaign_slots"))
 MEMORY_CONSOLIDATE_KEEP_SUMMARIES = max(4, int(os.getenv("AI_RPG_MEMORY_KEEP_SUMMARIES", "12")))
 MEMORY_CONSOLIDATE_MAX_FACTS = max(20, int(os.getenv("AI_RPG_MEMORY_MAX_FACTS", "200")))
 GM_OFFSCREEN_INTERVAL = max(2, int(os.getenv("AI_RPG_GM_OFFSCREEN_INTERVAL", "8")))
@@ -207,7 +232,10 @@ TURN_INTENT_KEYWORDS = {
     "claim_check": {"claim", "said", "told", "promised", "allowed", "permission", "prove", "verify", "truth", "rumor"},
     "combat": {"attack", "fight", "punch", "kick", "stab", "slash", "shoot", "cast", "strike", "block", "dodge", "parry", "ambush"},
     "investigation": {"look", "inspect", "search", "listen", "examine", "investigate", "watch", "read", "study", "track", "peek", "scan"},
-    "travel": {"go", "move", "walk", "run", "travel", "head", "enter", "leave", "return", "approach", "climb", "cross", "follow"},
+    "travel": {
+        "go", "move", "walk", "run", "travel", "head", "enter", "leave", "return", "approach", "climb", "cross", "follow",
+        "ride", "sail", "march", "depart", "exit", "wander", "journey", "flee", "descend", "ascend", "board", "hike", "trek",
+    },
     "trade": {"buy", "sell", "pay", "trade", "barter", "shop", "hire", "rent", "price", "cost"},
     "inventory": {"use", "equip", "wear", "drop", "take", "grab", "loot", "craft", "store", "pack", "unpack", "draw", "hold"},
     "training": {"train", "practice", "learn", "teach", "mentor", "study", "drill", "improve"},
@@ -316,6 +344,57 @@ _NAME_GEAR_RE = re.compile(
     r")\b",
     re.I,
 )
+# Generic person labels a model reaches for instead of naming someone.
+# A 7B run produced an NPC literally recorded as "Woman" (code C), then referred
+# to it in prose as "a tall woman [[C]]" for 30 turns. These are descriptions,
+# not names: the head noun tells you nothing that the role column doesn't.
+_NAME_GENERIC_HEADS = frozenset(
+    {
+        "man", "men", "woman", "women", "boy", "girl", "lad", "lass", "kid",
+        "child", "children", "person", "people", "guy", "gal", "fellow", "folk",
+        "figure", "silhouette", "shape", "form", "shadow", "stranger", "newcomer",
+        "passerby", "bystander", "onlooker", "witness", "local", "native",
+        "traveler", "traveller", "wanderer", "visitor", "guest", "customer",
+        "patron", "youth", "elder", "adult", "teen", "teenager", "adolescent",
+        "male", "female", "one", "someone", "somebody", "individual",
+    }
+)
+# Occupations: fine as a role, never as the whole display name on their own.
+_NAME_GENERIC_ROLES = frozenset(
+    {
+        "guard", "guardsman", "soldier", "warrior", "knight", "sentry", "watchman",
+        "merchant", "trader", "shopkeeper", "vendor", "peddler", "innkeeper",
+        "barkeep", "bartender", "blacksmith", "smith", "baker", "butcher",
+        "farmer", "fisher", "fisherman", "hunter", "miner", "priest", "priestess",
+        "monk", "cleric", "acolyte", "healer", "scholar", "scribe", "clerk",
+        "mage", "wizard", "sorcerer", "witch", "druid", "bard", "thief", "bandit",
+        "brigand", "mercenary", "assassin", "beggar", "servant", "maid", "cook",
+        "porter", "sailor", "captain", "officer", "noble", "lord", "lady",
+        "gentleman", "commoner", "peasant", "villager", "townsfolk", "townsperson",
+        "citizen", "apprentice", "student", "teacher", "master", "mistress",
+        "messenger", "courier", "courtier", "official", "magistrate", "jailer",
+        "cultist", "raider", "scout", "ranger", "tracker", "guide", "driver",
+        "stablehand", "groom", "nurse", "doctor", "physician", "alchemist",
+    }
+)
+# Adjectives that only ever describe — they cannot carry a name by themselves.
+_NAME_GENERIC_MODIFIERS = frozenset(
+    {
+        "old", "young", "elderly", "aged", "middle-aged", "tall", "short", "thin",
+        "slim", "lean", "stout", "fat", "burly", "broad", "small", "large", "big",
+        "little", "hooded", "cloaked", "robed", "masked", "veiled", "bearded",
+        "scarred", "grizzled", "weathered", "ragged", "shabby", "wealthy", "rich",
+        "poor", "nervous", "anxious", "angry", "quiet", "silent", "loud", "kind",
+        "cruel", "friendly", "hostile", "suspicious", "wary", "drunk", "drunken",
+        "wounded", "injured", "sick", "tired", "weary", "dark", "pale", "fair",
+        "grey", "gray", "white", "black", "red", "blonde", "blond", "brown",
+        "haired", "eyed", "unnamed", "unknown", "mysterious", "strange", "odd",
+        "familiar", "another", "other", "certain", "same", "new", "random",
+        "generic", "nameless", "faceless", "anonymous", "armed", "armored",
+        "armoured", "uniformed", "well-dressed", "plain", "ordinary", "average",
+    }
+)
+
 _NAME_FUNCTION_WORDS = frozenset(
     {
         "a",
@@ -354,6 +433,38 @@ _NAME_FUNCTION_WORDS = frozenset(
 )
 
 
+def is_generic_person_label(name: str) -> bool:
+    """
+    True when a "name" is only a description: "Woman", "Old Man", "The Hooded Figure",
+    "Guard". These carry no identity — the role/summary columns already hold that —
+    and they read badly in prose ("a tall woman [[C]]" every turn for 30 turns).
+
+    A single proper-noun token anywhere keeps the name: "Old Mara", "Captain Thornrow",
+    and "Guard Aria" are all real names with a descriptive modifier attached.
+    """
+    n = norm_name(str(name or "")).lower()
+    if not n:
+        return True
+    # Strip punctuation the model sometimes glues on ("the woman," / "woman?")
+    tokens = [tok for tok in re.split(r"[^a-z0-9'-]+", n) if tok]
+    if not tokens:
+        return True
+    if len(tokens) > 5:
+        return False
+    generic = _NAME_GENERIC_HEADS | _NAME_GENERIC_ROLES | _NAME_GENERIC_MODIFIERS
+    saw_generic = False
+    for token in tokens:
+        if token in _NAME_FUNCTION_WORDS:
+            continue
+        if token in generic:
+            saw_generic = True
+            continue
+        # Any token that is not an article, a modifier, or a generic head is
+        # treated as the actual name.
+        return False
+    return saw_generic
+
+
 def is_plausible_person_name(name: str) -> bool:
     """True for short proper names/titles — not event blurbs, scenery, gear, or system job lines."""
     n = norm_name(str(name or ""))
@@ -361,6 +472,9 @@ def is_plausible_person_name(name: str) -> bool:
         return False
     words = n.split()
     if len(words) > 4:
+        return False
+    # Descriptions are not names ("Woman", "Hooded Figure", "The Old Guard")
+    if is_generic_person_label(n):
         return False
     if _NAME_VERB_RE.search(n) or _NAME_SYSTEM_RE.search(n):
         return False
@@ -406,10 +520,25 @@ def is_plausible_person_name(name: str) -> bool:
     return True
 
 
+# Bare directions and relative positions are not places. A live run recorded
+# `MOVE East` and put a location called "East" on the player's map.
+_BARE_DIRECTION_RE = re.compile(
+    r"^(?:the\s+)?(?:far\s+|deep\s+|due\s+)?"
+    r"(?:north|south|east|west|northeast|northwest|southeast|southwest|"
+    r"up|down|left|right|ahead|onward|onwards|forward|forwards|back|backward|"
+    r"beyond|nearby|elsewhere|somewhere|there|here|outside|inside|away)"
+    r"(?:\s+(?:side|end|way|ward|wards))?$",
+    re.I,
+)
+
+
 def is_plausible_place_name(name: str) -> bool:
     """Places can be multi-word, but not full system/event sentences or bare props."""
     n = norm_name(str(name or ""))
     if len(n) < 2 or len(n) > 60:
+        return False
+    # "East", "the far side", "ahead" — a heading, not a destination
+    if _BARE_DIRECTION_RE.match(n):
         return False
     words = n.split()
     if len(words) > 6:
@@ -435,10 +564,66 @@ def is_plausible_place_name(name: str) -> bool:
     return True
 
 
+def name_seed(*parts: Any) -> int:
+    """
+    Stable seed for replacement names.
+
+    Python's ``hash()`` is randomized per process, so the same corrupt save
+    reopened tomorrow used to rename the same NPC to something else. Rewind and
+    reload must land on the same face.
+    """
+    try:
+        from app.rng import seed_from
+
+        return seed_from("npc_name", *parts)
+    except Exception:
+        payload = "|".join(str(p) for p in parts).encode("utf-8", "replace")
+        return int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "big") & 0x7FFFFFFFFFFFFFFF
+
+
 def invent_person_name(*, seed: int | None = None) -> str:
     """Deterministic-ish shell name for NPCs when the model invents garbage labels."""
     rng = random.Random(seed if seed is not None else random.randint(1, 10**9))
     return f"{rng.choice(_SHELL_NAME_PARTS_A)}{rng.choice(_SHELL_NAME_PARTS_B)}"
+
+
+def _person_name_taken(conn, name: str) -> bool:
+    """True when any NPC anywhere already holds this name."""
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (str(name or ""),)
+        ).fetchone()
+    except Exception:
+        return False
+    return bool(row)
+
+
+def unique_person_name(conn, seed: int, *, attempts: int = 24) -> str:
+    """
+    A replacement name no live NPC already holds.
+
+    The name space is 20x20; a live run with seven repaired NPCs produced two
+    called "Saltbin", which reads as one character in two places. Re-roll on
+    collision, still deterministically, and only fall back to a suffix if the
+    pool is genuinely exhausted.
+    """
+    try:
+        taken = {
+            str(row["name"] or "").strip().lower()
+            for row in conn.execute("SELECT name FROM npcs").fetchall()
+        }
+    except Exception:
+        taken = set()
+    name = invent_person_name(seed=seed)
+    for attempt in range(attempts):
+        if name.strip().lower() not in taken:
+            return name
+        name = invent_person_name(seed=name_seed(seed, "retry", attempt))
+    for suffix in range(2, 40):
+        candidate = f"{name} {suffix}"
+        if candidate.strip().lower() not in taken:
+            return candidate
+    return name
 
 
 def _ability_origin(value: Any, has_requested_abilities: bool = False) -> str:
@@ -1387,7 +1572,8 @@ def _local_crowd_danger(context: dict[str, Any] | None = None) -> dict[str, floa
     tod = _time_of_day_crowd_mods(hour, settlement_like=settlement_like, market_like=market_like)
     crowd = max(0.02, min(1.0, crowd * float(tod["crowd_mul"])))
     danger = max(0.02, min(1.0, danger * float(tod["danger_mul"])))
-    return {
+
+    out = {
         "crowd": round(crowd, 3),
         "danger": round(danger, 3),
         "time_band": tod["band"],
@@ -1395,6 +1581,39 @@ def _local_crowd_danger(context: dict[str, Any] | None = None) -> dict[str, floa
         "crowd_mul": tod["crowd_mul"],
         "danger_mul": tod["danger_mul"],
     }
+
+    # Standing still is exposure too: run the same player-aware danger model
+    # the travel path uses, so resting wounded and exhausted in a bad place is
+    # actually riskier than resting fresh in a good one. Crowd stays as
+    # computed above — how many people are around is not about the player.
+    try:
+        from app import encounters as encounters_mod
+
+        snapshot = encounters_mod.player_snapshot()
+        assessment = encounters_mod.assess_danger(
+            terrain=tile_state or ("town" if settlement_like else "plains"),
+            weather=context.get("weather") if isinstance(context.get("weather"), dict) else get_weather(),
+            world_time=context.get("world_time") if isinstance(context.get("world_time"), dict) else {"hour": hour},
+            player=snapshot.get("player"),
+            skills=snapshot.get("skills"),
+            resources=snapshot.get("resources"),
+            inventory_summary=snapshot.get("inventory_summary"),
+            options=opts,
+            settlement=sm or None,
+            area_reputation=int(snapshot.get("area_reputation") or 0),
+        )
+        # Blend rather than replace: the location-flavour heuristics above know
+        # things the terrain table does not (named wards, market squares).
+        blended = (float(assessment.get("danger") or danger) + danger) / 2.0
+        out["danger"] = round(max(0.02, min(1.0, blended)), 3)
+        out["danger_band"] = assessment.get("band")
+        out["danger_factors"] = assessment.get("factors") or []
+        out["danger_environment"] = assessment.get("environment")
+        out["danger_player_multiplier"] = assessment.get("player_multiplier")
+    except Exception:
+        pass
+
+    return out
 
 
 def roll_wait_events(
@@ -1472,21 +1691,22 @@ def create_shell_npc(
     power_rank: int = 0,
     role: str = "passerby",
     seed: int | None = None,
+    appearance: str = "",
 ) -> dict[str, Any]:
-    """Minimal NPC for crowd / one-shot drama. No portrait, no deep stats."""
+    """
+    Minimal NPC for crowd / one-shot drama. No portrait, no deep stats.
+
+    `role` is an occupation; `appearance` is how they look. Folding the two
+    together is what produced a world where every face was a "hooded stranger".
+    """
     presence = presence if presence in {"nameless", "background", "event_worthy"} else "nameless"
-    rng = random.Random(seed if seed is not None else random.randint(1, 10**9))
-    name = f"{rng.choice(_SHELL_NAME_PARTS_A)}{rng.choice(_SHELL_NAME_PARTS_B)}"
-    # Avoid unique(location, name) collisions
-    for n in range(8):
-        candidate = name if n == 0 else f"{name} {rng.randint(2, 99)}"
-        exists = conn.execute(
-            "SELECT 1 FROM npcs WHERE location_id = ? AND name = ?",
-            (int(location_id), candidate),
-        ).fetchone()
-        if not exists:
-            name = candidate
-            break
+    # Uniqueness is world-wide, not per-location: the pool is 20x20, and a run
+    # with sixteen seeded faces produced three separate people all called
+    # "Grainwick". Two of anyone reads as one character in two places.
+    name = unique_person_name(
+        conn,
+        seed if seed is not None else random.randint(1, 10**9),
+    )
     code = _next_alpha_code(conn, "npcs")
     shell = 1 if presence in {"nameless", "background"} else 0
     portrait = 0 if shell else 1
@@ -1505,7 +1725,8 @@ def create_shell_npc(
             int(location_id),
             name,
             str(role or "passerby")[:80],
-            "A brief face in the crowd." if presence == "nameless" else "Someone at the edge of the scene.",
+            (("A brief face in the crowd." if presence == "nameless" else "Someone at the edge of the scene.")
+             + str(appearance or ""))[:300],
             presence,
             power_rank,
             portrait,
@@ -2190,8 +2411,8 @@ def _index_record(kind: str, title: str, text: str, code: str = "", turn: int | 
 
 
 def _write_source_index(state: dict[str, Any]) -> None:
-    SOURCE_INDEX_DIR.mkdir(parents=True, exist_ok=True)
-    for existing in SOURCE_INDEX_DIR.rglob("*.jsonl"):
+    source_index_dir().mkdir(parents=True, exist_ok=True)
+    for existing in source_index_dir().rglob("*.jsonl"):
         existing.unlink()
     player = state.get("player") or {}
     identity_rows = [
@@ -2323,13 +2544,13 @@ def _write_source_index(state: dict[str, Any]) -> None:
         "memory/consolidated_facts.jsonl": consolidated_rows,
     }
     for relative, rows in files.items():
-        _write_jsonl(SOURCE_INDEX_DIR / relative, rows)
+        _write_jsonl(source_index_dir() / relative, rows)
     manifest = {
         "format": "ai-rpg-source-index-v1",
         "description": "Line-oriented source index for searching durable RPG facts without loading full history into the LLM prompt.",
         "files": {relative: {"records": len(rows)} for relative, rows in files.items()},
     }
-    SOURCE_INDEX_MANIFEST.write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
+    source_index_manifest().write_text(json.dumps(manifest, ensure_ascii=True, indent=2), encoding="utf-8")
 
 
 def _source_importance(record: dict[str, Any]) -> float:
@@ -2385,10 +2606,10 @@ def _score_source_record(query_tokens: set[str], record: dict[str, Any], current
 
 def search_source_index(query: str, limit: int = 16, current_turn: int = 0) -> list[dict[str, Any]]:
     query_tokens = _tokens(query)
-    if not query_tokens or not SOURCE_INDEX_DIR.exists():
+    if not query_tokens or not source_index_dir().exists():
         return []
     results: list[dict[str, Any]] = []
-    for path in SOURCE_INDEX_DIR.rglob("*.jsonl"):
+    for path in source_index_dir().rglob("*.jsonl"):
         try:
             with path.open("r", encoding="utf-8") as handle:
                 for line_number, line in enumerate(handle, start=1):
@@ -2408,7 +2629,7 @@ def search_source_index(query: str, limit: int = 16, current_turn: int = 0) -> l
                                 "text": record.get("text", ""),
                                 "turn": record.get("turn"),
                                 "importance": _source_importance(record),
-                                "source": str(path.relative_to(SOURCE_INDEX_DIR)).replace("\\", "/"),
+                                "source": str(path.relative_to(source_index_dir())).replace("\\", "/"),
                                 "line": line_number,
                                 "score": round(score, 4),
                             }
@@ -2419,11 +2640,11 @@ def search_source_index(query: str, limit: int = 16, current_turn: int = 0) -> l
 
 
 def _load_consolidated_facts() -> list[dict[str, Any]]:
-    if not CONSOLIDATED_FACTS_PATH.exists():
+    if not consolidated_facts_path().exists():
         return []
     facts: list[dict[str, Any]] = []
     try:
-        with CONSOLIDATED_FACTS_PATH.open("r", encoding="utf-8") as handle:
+        with consolidated_facts_path().open("r", encoding="utf-8") as handle:
             for line in handle:
                 if not line.strip():
                     continue
@@ -2458,9 +2679,9 @@ def _load_consolidated_fact_records() -> list[dict[str, Any]]:
 
 
 def _write_consolidated_facts(facts: list[dict[str, Any]]) -> None:
-    CONSOLIDATED_FACTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    consolidated_facts_path().parent.mkdir(parents=True, exist_ok=True)
     trimmed = facts[-MEMORY_CONSOLIDATE_MAX_FACTS:]
-    _write_jsonl(CONSOLIDATED_FACTS_PATH, trimmed)
+    _write_jsonl(consolidated_facts_path(), trimmed)
 
 
 def consolidate_memory(keep_recent_summaries: int | None = None, max_facts: int | None = None) -> dict[str, Any]:
@@ -2521,11 +2742,11 @@ def consolidate_memory(keep_recent_summaries: int | None = None, max_facts: int 
     _write_consolidated_facts(existing)
 
     # Keep JSONL history summaries from ballooning: retain only recent lines.
-    if HISTORY_SUMMARY_PATH.exists():
+    if history_summary_path().exists():
         try:
-            lines = [line for line in HISTORY_SUMMARY_PATH.read_text(encoding="utf-8").splitlines() if line.strip()]
+            lines = [line for line in history_summary_path().read_text(encoding="utf-8").splitlines() if line.strip()]
             if len(lines) > keep:
-                HISTORY_SUMMARY_PATH.write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
+                history_summary_path().write_text("\n".join(lines[-keep:]) + "\n", encoding="utf-8")
         except OSError as exc:
             raise ValueError(f"Failed to prune history summaries: {exc}") from exc
 
@@ -2554,9 +2775,9 @@ def _safe_slot_name(name: str) -> str:
 
 
 def list_campaign_slots() -> list[dict[str, Any]]:
-    CAMPAIGN_SLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    campaign_slots_dir().mkdir(parents=True, exist_ok=True)
     slots: list[dict[str, Any]] = []
-    for path in sorted(CAMPAIGN_SLOTS_DIR.glob("*/world.json")):
+    for path in sorted(campaign_slots_dir().glob("*/world.json")):
         slot_name = path.parent.name
         meta_path = path.parent / "metadata.json"
         metadata: dict[str, Any] = {"slot": slot_name}
@@ -2578,7 +2799,7 @@ AUTOSAVE_SLOT = "last"
 def save_campaign_slot(slot_name: str) -> dict[str, Any]:
     safe = _safe_slot_name(slot_name)
     payload = export_world()
-    slot_dir = CAMPAIGN_SLOTS_DIR / safe
+    slot_dir = campaign_slots_dir() / safe
     slot_dir.mkdir(parents=True, exist_ok=True)
     world_path = slot_dir / "world.json"
     world_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -2707,8 +2928,8 @@ def has_continuable_save() -> dict[str, Any]:
     except Exception:
         pass
     # Disk autosave
-    meta_path = CAMPAIGN_SLOTS_DIR / AUTOSAVE_SLOT / "metadata.json"
-    world_path = CAMPAIGN_SLOTS_DIR / AUTOSAVE_SLOT / "world.json"
+    meta_path = campaign_slots_dir() / AUTOSAVE_SLOT / "metadata.json"
+    world_path = campaign_slots_dir() / AUTOSAVE_SLOT / "world.json"
     if world_path.exists():
         meta: dict[str, Any] = {}
         if meta_path.exists():
@@ -2731,7 +2952,7 @@ def has_continuable_save() -> dict[str, Any]:
 
 def load_campaign_slot(slot_name: str) -> dict[str, Any]:
     safe = _safe_slot_name(slot_name)
-    world_path = CAMPAIGN_SLOTS_DIR / safe / "world.json"
+    world_path = campaign_slots_dir() / safe / "world.json"
     if not world_path.exists():
         raise ValueError(f"Campaign slot '{safe}' was not found.")
     try:
@@ -2745,7 +2966,7 @@ def load_campaign_slot(slot_name: str) -> dict[str, Any]:
 
 def delete_campaign_slot(slot_name: str) -> dict[str, Any]:
     safe = _safe_slot_name(slot_name)
-    slot_dir = CAMPAIGN_SLOTS_DIR / safe
+    slot_dir = campaign_slots_dir() / safe
     if not slot_dir.exists():
         raise ValueError(f"Campaign slot '{safe}' was not found.")
     shutil.rmtree(slot_dir)
@@ -2955,8 +3176,7 @@ def _sanitize_stored_entity_names(conn) -> None:
             name = str(row["name"] or "")
             if is_plausible_person_name(name):
                 continue
-            seed = abs(hash(f"{code}|{row['id']}")) % (10**9)
-            fixed = invent_person_name(seed=seed)
+            fixed = invent_person_name(seed=name_seed(code, row["id"]))
             conn.execute("UPDATE npcs SET name = ? WHERE id = ?", (fixed, int(row["id"])))
         for row in conn.execute("SELECT id, name, code FROM locations").fetchall():
             name = str(row["name"] or "")
@@ -3110,16 +3330,36 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         item["enchantments"] = _json(item.get("enchantments"), [])
         item["stat_modifiers"] = _normalize_stat_modifiers(item.get("stat_modifiers"))
         item["granted_abilities"] = _normalize_granted_abilities(item.get("granted_abilities"), item)
+        # Machine-usable links: canonical stat keys, referenced power codes,
+        # and the check modifiers the dice roller applies while equipped.
+        item["stat_links"] = _json(item.get("stat_links"), {})
+        item["power_codes"] = _json(item.get("power_codes"), [])
+        item["roll_profile"] = _json(item.get("roll_profile"), {})
     for slot in equipment_slots:
         slot["accepts"] = _json(slot.get("accepts"), [])
     for entry in verification_memory:
         entry["entity_codes"] = _json(entry.get("entity_codes"), [])
+
+    for ability in abilities:
+        ability["roll_profile"] = _json(ability.get("roll_profile"), {})
+        ability["resource_cost"] = _json(ability.get("resource_cost"), {})
+        ability["read_only"] = bool(ability.get("read_only", 1))
 
     equipment_effects = _equipment_effects(inventory)
     state_abilities = [*abilities, *equipment_effects["granted_abilities"]]
     if player is not None:
         player["effective_stats"] = equipment_effects["stat_modifiers"]
         player["equipment_ability_names"] = [ability.get("name") for ability in equipment_effects["granted_abilities"] if ability.get("name")]
+
+    # Flat check modifiers currently in effect from equipped gear and passive
+    # or item-granted powers. Surfaced so the UI can show why a roll succeeded
+    # and so the narrator never has to compute a bonus itself.
+    try:
+        from app.skill_checks import gear_roll_modifiers
+
+        gear_rolls = gear_roll_modifiers(inventory, state_abilities)
+    except Exception:
+        gear_rolls = {"modifiers": {}, "sources": []}
 
     # Energy / fatigue / mana pools (server-enforced)
     resources: dict[str, Any] = {}
@@ -3223,6 +3463,31 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             (location for location in locations if location["id"] == player["current_location_id"]),
             None,
         )
+    if current_location:
+        # What can be walked into from right here, and whether it is open at this
+        # hour. Without this the model has no way to know a shop exists, so it
+        # invents one -- which is how an apothecary appeared in a hamlet.
+        current_location = dict(current_location)
+        inside_id = int(current_location.get("parent_id") or 0)
+        current_location["venues_here"] = venues_at(conn, int(current_location["id"]))
+        if inside_id:
+            parent = next((loc for loc in locations if loc["id"] == inside_id), None)
+            current_location["inside_venue"] = True
+            current_location["venue_kind"] = str(current_location.get("kind") or "")
+            current_location["exit_to"] = str((parent or {}).get("name") or "")
+            keeper_id = int(current_location.get("keeper_npc_id") or 0)
+            keeper = next((n for n in npcs if int(n.get("id") or 0) == keeper_id), None) if keeper_id else None
+            if keeper:
+                current_location["keeper"] = {
+                    "code": str(keeper.get("code") or ""),
+                    "name": str(keeper.get("name") or ""),
+                    "role": str(keeper.get("role") or ""),
+                }
+            # Siblings share the street outside, so they are one step away, not two.
+            current_location["venues_here"] = venues_at(conn, inside_id)
+        else:
+            current_location["inside_venue"] = False
+            current_location["settlement_size"] = settlement_size_for(conn, current_location)
 
     context_window = context_window_tokens()
     latest_budget = max((int(log.get("estimated_tokens") or 0) for log in model_logs[:2]), default=0)
@@ -3240,6 +3505,7 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         "inventory_capacity_modifiers": inventory_capacity_modifiers,
         "inventory_summary": _inventory_summary(settings, inventory, equipment_slots, inventory_capacity_modifiers),
         "equipment_effects": equipment_effects,
+        "gear_roll_modifiers": gear_rolls,
         "skills": skills,
         "abilities": state_abilities,
         "events": events,
@@ -3257,7 +3523,7 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             "warning_threshold": int(context_window * 0.75),
             "latest_estimated_tokens": latest_budget,
             "warning": latest_budget >= int(context_window * 0.75),
-            "consolidated_facts": len(_load_consolidated_facts()) if CONSOLIDATED_FACTS_PATH.exists() else 0,
+            "consolidated_facts": len(_load_consolidated_facts()) if consolidated_facts_path().exists() else 0,
             "turn_summaries": len(turn_summaries),
         },
         "rewind_points": rewind_points,
@@ -3392,6 +3658,17 @@ def update_session_theme(patch: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def _clear_playthrough(conn) -> None:
+    # A new playthrough gets fresh luck: forget the memoized seed and the old
+    # roll history so audit rows never bleed across campaigns.
+    try:
+        from app.rng import reset_seed_cache
+
+        reset_seed_cache()
+        conn.execute("DELETE FROM settings WHERE key = 'campaign_rng_seed'")
+        conn.execute("DELETE FROM dice_rolls")
+    except Exception:
+        pass
+
     for table in (
         "response_drafts",
         "aliases",
@@ -3424,10 +3701,10 @@ def _clear_playthrough(conn) -> None:
     )
     conn.execute("DELETE FROM pacing")
     conn.execute("UPDATE gm_notes SET content = '', updated_at = CURRENT_TIMESTAMP WHERE id = 1")
-    if HISTORY_SUMMARY_PATH.exists():
-        HISTORY_SUMMARY_PATH.unlink()
-    if SOURCE_INDEX_DIR.exists():
-        shutil.rmtree(SOURCE_INDEX_DIR)
+    if history_summary_path().exists():
+        history_summary_path().unlink()
+    if source_index_dir().exists():
+        shutil.rmtree(source_index_dir())
 
 
 def _sanitize_item_name(name: Any) -> str:
@@ -3948,7 +4225,11 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             check_settings = settings_from_setup(options)
             stored_options["skill_check_settings"] = check_settings
             stored_options["dice_checks_enabled"] = bool(check_settings.get("dice_checks_enabled"))
-            stored_options["skill_check_context"] = gm_context_block(check_settings)
+            # Deliberately NOT storing the skill catalog here. playthrough_options
+            # ships inside every turn prompt, so a catalog stored on it was sent
+            # to the model every turn forever. build_prompt_context() now attaches
+            # a per-turn, action-filtered block instead.
+            stored_options.pop("skill_check_context", None)
         except Exception:
             stored_options["dice_checks_enabled"] = bool(options.get("dice_checks_enabled"))
         # Optional weak skill seed (isekai / compounding / near_useless) — one seed only, not a toolkit.
@@ -4146,11 +4427,21 @@ def export_world() -> dict[str, Any]:
         return {
             "format": "ai-rpg-world-v1",
             "tables": tables,
-            "history_summaries": HISTORY_SUMMARY_PATH.read_text(encoding="utf-8") if HISTORY_SUMMARY_PATH.exists() else "",
+            "history_summaries": history_summary_path().read_text(encoding="utf-8") if history_summary_path().exists() else "",
         }
 
 
 def _restore_world(data: dict[str, Any]) -> None:
+    # The incoming world carries its own campaign_rng_seed; drop the memoized
+    # one so restored saves keep their own luck instead of inheriting the
+    # seed of whatever world happened to be loaded before.
+    try:
+        from app.rng import reset_seed_cache
+
+        reset_seed_cache()
+    except Exception:
+        pass
+
     tables = data.get("tables") or {}
     # Older campaign slots predate world_maps in WORLD_TABLES. Only replace maps
     # when the export explicitly includes that key (even if the list is empty).
@@ -4194,8 +4485,8 @@ def _restore_world(data: dict[str, Any]) -> None:
             conn.rollback()
             raise
     text = str(data.get("history_summaries") or "")
-    HISTORY_SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    HISTORY_SUMMARY_PATH.write_text(text, encoding="utf-8")
+    history_summary_path().parent.mkdir(parents=True, exist_ok=True)
+    history_summary_path().write_text(text, encoding="utf-8")
 
 
 def import_world(data: dict[str, Any]) -> dict[str, Any]:
@@ -4250,7 +4541,7 @@ def search_world(query: str) -> dict[str, Any]:
         "query": query,
         "results": sorted(results, key=lambda item: item["score"], reverse=True)[:40],
         "source_index": {
-            "manifest": str(SOURCE_INDEX_MANIFEST).replace("\\", "/"),
+            "manifest": str(source_index_manifest()).replace("\\", "/"),
             "results": source_results,
         },
     }
@@ -4378,7 +4669,7 @@ def _save_snapshot(conn, turn: int, result: dict[str, Any]) -> None:
         "turn": turn,
         "max_ids": max_ids,
         "rows": rows,
-        "history_summaries": HISTORY_SUMMARY_PATH.read_text(encoding="utf-8") if HISTORY_SUMMARY_PATH.exists() else "",
+        "history_summaries": history_summary_path().read_text(encoding="utf-8") if history_summary_path().exists() else "",
     }
     conn.execute("INSERT INTO turn_snapshots (turn, snapshot) VALUES (?, ?)", (turn, json.dumps(snapshot, ensure_ascii=True)))
     conn.execute("DELETE FROM turn_snapshots WHERE id NOT IN (SELECT id FROM turn_snapshots ORDER BY id DESC LIMIT 12)")
@@ -4419,11 +4710,61 @@ def _explicit_turn_references(player_input: str) -> dict[str, list[str]]:
     return refs
 
 
+# Irregular past/present forms the suffix stemmer below cannot reach.
+_IRREGULAR_ACTION_STEMS = {
+    "went": "go", "gone": "go", "ran": "run", "rode": "ride", "left": "leave",
+    "came": "come", "flew": "fly", "swam": "swim", "fled": "flee", "drove": "drive",
+    "took": "take", "gave": "give", "bought": "buy", "sold": "sell", "paid": "pay",
+    "told": "tell", "said": "say", "spoke": "speak", "fought": "fight",
+    "struck": "strike", "shot": "shoot", "found": "find", "saw": "see",
+    "heard": "listen", "wore": "wear", "held": "hold", "drew": "draw",
+    "slept": "sleep", "taught": "teach", "read": "read", "hid": "hide",
+}
+
+
+def _intent_tokens(player_input: str) -> set[str]:
+    """
+    Input tokens plus crude verb stems.
+
+    Intent keywords are stored as bare verbs, so "keep walking east" scored zero
+    for travel and fell through to `general` — which is exactly the input the
+    movement contract most needs to fire on.
+    """
+    tokens = _tokens(player_input)
+    stems = set(tokens)
+    for token in tokens:
+        mapped = _IRREGULAR_ACTION_STEMS.get(token)
+        if mapped:
+            stems.add(mapped)
+        for suffix in ("ing", "ed", "es", "s"):
+            if len(token) <= len(suffix) + 1 or not token.endswith(suffix):
+                continue
+            stem = token[: -len(suffix)]
+            stems.add(stem)
+            stems.add(stem + "e")  # moving -> move, riding -> ride
+            if len(stem) > 2 and stem[-1] == stem[-2]:
+                stems.add(stem[:-1])  # running -> run, stopping -> stop
+    return stems
+
+
+def travel_intent(player_input: str) -> bool:
+    """
+    True when the turn reads as movement, primary or secondary.
+
+    Ties between intents are broken by keyword-table order, which puts travel
+    behind conversation, combat, and investigation — so "look for the north road
+    and walk there" classifies as investigation. For deciding whether a MOVE was
+    expected, a secondary travel signal is enough.
+    """
+    primary, secondary = _turn_intent(player_input)
+    return primary == "travel" or "travel" in secondary
+
+
 def _turn_intent(player_input: str) -> tuple[str, list[str]]:
     kind = _turn_kind(player_input)
     if kind != "player_action":
         return kind, []
-    tokens = _tokens(player_input)
+    tokens = _intent_tokens(player_input)
     scores: list[tuple[str, int]] = []
     lowered = str(player_input or "").lower()
     for intent, keywords in TURN_INTENT_KEYWORDS.items():
@@ -4441,6 +4782,914 @@ def _turn_intent(player_input: str) -> tuple[str, list[str]]:
         primary = "claim_check"
         secondary = [intent for intent, _score in scores if intent != "claim_check"][:3]
     return primary, secondary
+
+
+# --- movement authority ------------------------------------------------------
+#
+# A 30-turn 7B run emitted zero MOVE and zero LOC_NEW ops across ~10 explicit
+# travel actions: prose described leaving town, the player never left the
+# starting tile, and the world stayed one location wide forever. The model is
+# not reliable enough to remember a state opcode it only needs occasionally, so
+# movement gets the same treatment as amounts — the server states the contract
+# up front and repairs the omission afterwards.
+
+_TRAVEL_ARRIVAL_RE = re.compile(
+    r"\b("
+    r"arriv\w*|reach(?:es|ed|ing)?|enter(?:s|ed|ing)?|"
+    r"step(?:s|ped|ping)?\s+(?:in|into|out|onto|through|past|beyond)|"
+    r"cross(?:es|ed|ing)?\s+(?:into|over)|come(?:s)?\s+(?:to|upon)|came\s+(?:to|upon)|"
+    r"find\s+yourself|now\s+stand\w*|leav(?:e|es|ing)\s+behind|left\s+behind|"
+    r"set(?:s|ting)?\s+(?:out|off)|walk(?:s|ed|ing)?\s+(?:into|through|out|on)|"
+    r"ride(?:s|ing)?\s+(?:into|through)|rode\s+(?:into|through)|"
+    r"the\s+gates?\s+(?:of|close|open)|behind\s+you"
+    r")\b",
+    re.I,
+)
+
+
+# ---------------------------------------------------------------------------
+# Venues: shops and interiors you can actually be inside
+# ---------------------------------------------------------------------------
+
+
+def _world_minute(conn) -> int:
+    return int(_float(_pacing_get(conn, "world_minute", str(WORLD_DEFAULT_START_MINUTE)), WORLD_DEFAULT_START_MINUTE))
+
+
+def _location_row(conn, location_id: int):
+    if not location_id:
+        return None
+    try:
+        return conn.execute("SELECT * FROM locations WHERE id = ?", (int(location_id),)).fetchone()
+    except Exception:
+        return None
+
+
+def venues_at(conn, parent_id: int) -> list[dict[str, Any]]:
+    """Venues whose parent is this place, with their open/closed state right now."""
+    if not parent_id:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)
+        ).fetchall()
+    except Exception:
+        return []
+    now = _world_minute(conn)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "code": str(row["code"] or ""),
+                "name": str(row["name"] or ""),
+                "kind": str(row["kind"] or ""),
+                "open": venues.is_open(row["open_minute"], row["close_minute"], now),
+                "hours": venues.hours_note(row, now),
+            }
+        )
+    return out
+
+
+def settlement_size_for(conn, row) -> str:
+    """This place's settlement size, inferred and stored the first time it is asked for."""
+    if row is None:
+        return "village"
+    stored = str(venues._field(row, "settlement_size", "") or "").strip()
+    if stored:
+        return stored
+    # A venue inherits its parent's size: the apothecary is not its own town.
+    parent_id = int(venues._field(row, "parent_id", 0) or 0)
+    if parent_id:
+        return settlement_size_for(conn, _location_row(conn, parent_id))
+    # Deliberately does not write the inferred value back. This runs from
+    # get_state, which is a read path -- persisting here opened a write inside
+    # someone else's transaction and deadlocked the database. The inference is
+    # deterministic, so caching it buys nothing; the column exists so a value can
+    # be set explicitly and then wins over the guess.
+    return venues.settlement_size_from_name(
+        str(venues._field(row, "name", "") or ""), str(venues._field(row, "summary", "") or "")
+    )
+
+
+def venue_capacity_left(conn, parent_id: int, kind: str) -> int:
+    """How many more venues of this kind this settlement can hold."""
+    normalized = venues.normalize_kind(kind) or kind
+    if not normalized:
+        return 99
+    try:
+        existing = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM locations WHERE parent_id = ? AND kind = ?",
+                (int(parent_id), normalized),
+            ).fetchone()[0]
+        )
+    except Exception:
+        existing = 0
+    return max(0, venues.kind_capacity(normalized) - existing)
+
+
+def stamp_venue_fields(conn, location_id: int, *, parent_id: int, kind: str) -> None:
+    """Record containment, kind and the kind's default opening hours."""
+    normalized = venues.normalize_kind(kind) or kind
+    open_minute, close_minute = venues.default_hours(normalized)
+    try:
+        conn.execute(
+            "UPDATE locations SET parent_id = ?, kind = ?, open_minute = ?, close_minute = ? WHERE id = ?",
+            (int(parent_id), normalized, int(open_minute), int(close_minute), int(location_id)),
+        )
+    except Exception:
+        pass
+
+
+def bind_venue_keeper(conn, venue_id: int) -> int:
+    """Pin one NPC behind this venue's counter, so the keeper stops changing identity.
+
+    A live probe visited "the same" apothecary three times and met Jethook, then
+    "a woman with a kind face", then "a man in worn clothes" -- nobody was bound
+    to the shop, so the model reinvented the keeper each visit.
+    """
+    row = _location_row(conn, venue_id)
+    if row is None or not str(row["kind"] or ""):
+        return 0
+    existing = int(venues._field(row, "keeper_npc_id", 0) or 0)
+    if existing and conn.execute("SELECT 1 FROM npcs WHERE id = ?", (existing,)).fetchone():
+        return existing
+    npc = conn.execute(
+        "SELECT id FROM npcs WHERE location_id = ? AND COALESCE(shell, 0) = 0 ORDER BY id LIMIT 1",
+        (int(venue_id),),
+    ).fetchone()
+    if npc is None:
+        return 0
+    conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc["id"]), int(venue_id)))
+    return int(npc["id"])
+
+
+def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute: int | None = None) -> dict[str, Any]:
+    """Can the player enter this venue right now, and if not, where should they go?
+
+    Two rules, both of which a flat location table could not express:
+      * You enter a venue from its parent. Standing two locations away and saying
+        "back to the apothecary" used to teleport the player straight inside.
+      * A venue obeys its opening hours against the world clock.
+    """
+    if venue_row is None:
+        return {"ok": True, "reason": ""}
+    kind = str(venues._field(venue_row, "kind", "") or "")
+    parent_id = int(venues._field(venue_row, "parent_id", 0) or 0)
+    venue_id = int(venues._field(venue_row, "id", 0) or 0)
+    if not kind and not parent_id:
+        return {"ok": True, "reason": ""}
+    if venue_id and int(player_location_id or 0) == venue_id:
+        return {"ok": True, "reason": ""}
+    if parent_id and int(player_location_id or 0) != parent_id:
+        return {
+            "ok": False,
+            "reason": "unreachable",
+            "redirect_to": parent_id,
+            "detail": "a venue is entered from the place it stands in",
+        }
+    now = _world_minute(conn) if world_minute is None else int(world_minute)
+    if not venues.is_open(
+        venues._field(venue_row, "open_minute", -1), venues._field(venue_row, "close_minute", -1), now
+    ):
+        return {
+            "ok": False,
+            "reason": "closed",
+            "detail": venues.hours_note(venue_row, now),
+        }
+    return {"ok": True, "reason": ""}
+
+
+def venue_plausibility(conn, parent_id: int, kind: str) -> dict[str, Any]:
+    """Could a venue of this kind open here at all?
+
+    Stops a hamlet from conjuring an apothecary the moment a player asks for one.
+    """
+    normalized = venues.normalize_kind(kind) or kind
+    if not normalized:
+        return {"ok": True, "reason": ""}
+    parent = _location_row(conn, parent_id)
+    size = settlement_size_for(conn, parent)
+    if not venues.kind_allowed(normalized, size):
+        return {
+            "ok": False,
+            "reason": "too_small",
+            "detail": f"a {size} has no {venues.kind_label(normalized)}",
+            "size": size,
+        }
+    if venue_capacity_left(conn, parent_id, normalized) <= 0:
+        return {
+            "ok": False,
+            "reason": "already_served",
+            "detail": f"this {size} already has as many as it supports",
+            "size": size,
+        }
+    return {"ok": True, "reason": "", "size": size}
+
+
+# Going through a door is travel, but the words that say so are too common to add
+# to the keyword set: "in" and "out" turned "I put the coin in my pocket" and
+# "I hand out the flyers" into travel turns. These match the phrase instead.
+_VENUE_ENTER_RE = re.compile(
+    r"\b(?:step|steps|stepping|walk|walks|walking|go|goes|going|head|heads|heading|duck|ducks|ducking|"
+    r"slip|slips|slipping|push|pushes|pushing|enter|enters|entering|move|moves|moving|come|comes|coming)\b"
+    r"[^.!?]{0,40}?\b(?:in|into|inside|through)\b",
+    re.I,
+)
+_VENUE_EXIT_RE = re.compile(
+    r"\b(?:step|steps|stepping|walk|walks|walking|go|goes|going|head|heads|heading|come|comes|coming|"
+    r"back|leave|leaves|leaving|exit|exits|exiting)\b[^.!?]{0,40}?\b(?:out|outside|back out|out onto)\b",
+    re.I,
+)
+
+
+def venue_move_intent(text: str) -> str:
+    """"enter", "exit" or "" for a line that walks the player through a doorway."""
+    line = str(text or "")
+    if _VENUE_EXIT_RE.search(line):
+        return "exit"
+    if _VENUE_ENTER_RE.search(line):
+        return "enter"
+    return ""
+
+
+def _venue_named_anywhere(conn, player_input: str, *, exclude_parent: int = 0):
+    """A venue anywhere in the world that the player's line names.
+
+    Used only for a return from somewhere else, so it prefers places already
+    visited -- "that apothecary I visited earlier" means the one they know, not
+    a same-trade shop in another town.
+    """
+    text = str(player_input or "").lower()
+    if not text:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT * FROM locations WHERE parent_id != 0 AND parent_id != ? "
+            "ORDER BY visit_count DESC, id",
+            (int(exclude_parent or 0),),
+        ).fetchall()
+    except Exception:
+        return None
+    for row in rows:
+        name = str(row["name"] or "").lower()
+        if name and name in text:
+            return row
+    for row in rows:
+        kind = str(row["kind"] or "")
+        if not kind:
+            continue
+        label = venues.kind_label(kind).lower()
+        if (label and label in text) or kind.replace("_", " ") in text:
+            return row
+    return None
+
+
+def _mint_venue_from_request(conn, parent_id: int, player_input: str) -> str:
+    """Open the kind of venue the player just asked to walk into, if it fits here.
+
+    Only the player's own words are consulted -- letting the narration mint venues
+    would put a shop wherever the prose drifted. Returns the new venue's name, or
+    "" when the settlement cannot support that trade.
+    """
+    if not parent_id:
+        return ""
+    parent = _location_row(conn, parent_id)
+    if parent is None:
+        return ""
+    text = str(player_input or "").lower()
+    kind = ""
+    for candidate, spec in venues.VENUE_KINDS.items():
+        label = venues.kind_label(candidate).lower()
+        if label and re.search(rf"\b{re.escape(label)}\b", text):
+            kind = candidate
+            break
+    if not kind:
+        kind = venues.venue_kind_from_name(text)
+    if not kind:
+        return ""
+    if not venue_plausibility(conn, parent_id, kind)["ok"]:
+        return ""
+    parent_name = str(parent["name"] or "").strip()
+    base = re.sub(r"\s+(square|market|green|commons|gate|row|street|lane)$", "", parent_name, flags=re.I).strip()
+    name = f"{base or parent_name} {venues.kind_label(kind).title()}".strip()
+    if _match_location_by_name(conn, name) is not None:
+        return ""
+    new_id = _upsert_location(conn, name, "", parent_id=parent_id, kind=kind)
+    row = _location_row(conn, new_id)
+    return str(row["name"] or "") if row is not None else ""
+
+
+def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
+    """A venue standing in `parent_id` that the player's line (or the prose) names.
+
+    Matches the venue's own name first, then its kind word ("the apothecary"),
+    so "I go back inside the same apothecary" resolves without the player having
+    to reproduce the shop's proper name.
+    """
+    if not parent_id:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)
+        ).fetchall()
+    except Exception:
+        return None
+    if not rows:
+        return None
+    text = f"{player_input or ''} {str(narration or '')[-600:]}".lower()
+    for row in rows:
+        name = str(row["name"] or "").lower()
+        if name and name in text:
+            return row
+    for row in rows:
+        kind = str(row["kind"] or "")
+        if not kind:
+            continue
+        label = venues.kind_label(kind).lower()
+        if label and label in text:
+            return row
+        if kind.replace("_", " ") in text:
+            return row
+    return None
+
+
+def movement_contract(state: dict[str, Any], player_input: str, intent: str) -> dict[str, Any]:
+    """Server-stated travel rule for the turn packet: where the player is, and what op moves them."""
+    current = state.get("current_location") or {}
+    current_code = str(current.get("code") or "")
+    known: list[dict[str, str]] = []
+    for location in state.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        code = str(location.get("code") or "")
+        if not code or code == current_code:
+            continue
+        # Interiors are listed separately under venues_here with their own rule.
+        # Leaving them in known_places invited "travel" straight into a shop from
+        # across the map, which is exactly what the containment rule forbids.
+        if int(location.get("parent_id") or 0):
+            continue
+        known.append({"code": code, "name": str(location.get("name") or "")})
+        if len(known) >= 10:
+            break
+    travel = intent == "travel" or travel_intent(player_input) or bool(venue_move_intent(player_input))
+    current_name = str(current.get("name") or "")
+    contract: dict[str, Any] = {
+        "current_location": {"code": current_code, "name": current_name},
+        "travel_intent": travel,
+        # Names, not codes. Given a code list a 7B reuses the nearest listed code
+        # as a stand-in for anywhere new, so the map stayed two places wide while
+        # the prose wandered through ruins and river valleys that never existed.
+        # move_to_location resolves by name against existing places first, so a
+        # name is safe for somewhere old and correct for somewhere new.
+        "known_places": [entry["name"] for entry in known if entry.get("name")],
+        "rule": (
+            "Location is state, not prose. Player ends the turn somewhere other than "
+            f"{current_name or 'here'} => write that place's NAME in player.move_to_location. "
+            "An existing name moves there; a new name creates it. Write the name the prose "
+            "actually describes — never substitute a different known place, and never invent a "
+            "location code (an unlisted code is discarded and the player does not move). "
+            "A new place needs its own name, not a known one with a word bolted on: if "
+            "known_places already has \"Riverbend Camp\", the next place is not \"Riverbend "
+            "Hillcrest Camp\". Either it IS Riverbend Camp, or it has a different name."
+        ),
+    }
+    # Venues here, so the model works from what exists instead of conjuring a shop.
+    #
+    # The rule ships even when nothing has been built yet: without it the model
+    # narrated stepping into a shop and recorded no move at all, which is the
+    # whole defect. An empty settlement needs to be told that going inside is a
+    # move, and which kinds of place could plausibly be here.
+    here_venues = [v for v in (current.get("venues_here") or []) if isinstance(v, dict)]
+    settlement = str(current.get("settlement_size") or "")
+    if here_venues or (settlement and not current.get("inside_venue")):
+        if here_venues:
+            contract["venues_here"] = [
+                {"name": v.get("name"), "kind": v.get("kind"), "hours": v.get("hours")} for v in here_venues[:8]
+            ]
+        contract["settlement_size"] = settlement
+        contract["venue_rule"] = (
+            "Interiors are places, not scenery. Whenever the player goes inside a shop, inn, forge or "
+            "temple, write that building's NAME in player.move_to_location — stepping through a door is "
+            "a move. Use a name from venues_here when one fits; otherwise name the new building "
+            f"(\"{current_name} Apothecary\", \"The Salt Crow\") and it is created here. "
+            f"Interiors are entered only from {current_name or 'outside'}: a player standing anywhere "
+            "else must travel here first. When the player steps back out, move them to "
+            f"\"{current_name}\"."
+        )
+        if settlement:
+            allowed = venues.plausible_kinds(settlement)
+            contract["venue_kinds_possible"] = [venues.kind_label(k) for k in allowed][:18]
+            contract["venue_rule"] += (
+                f" This is a {settlement}; only the trades in venue_kinds_possible plausibly exist here. "
+                "If the player looks for something a place this size would not have, say so in the prose "
+                "instead of producing one."
+            )
+        shut = [str(v.get("name") or "") for v in here_venues if not v.get("open")]
+        if shut:
+            contract["closed_now"] = shut
+            contract["venue_rule"] += (
+                " Closed at this hour and cannot be entered: " + ", ".join(shut[:6]) + "."
+            )
+    if current.get("inside_venue"):
+        contract["inside_venue"] = {
+            "name": current_name,
+            "kind": str(current.get("venue_kind") or ""),
+            "exit_to": str(current.get("exit_to") or ""),
+        }
+        keeper = current.get("keeper") or {}
+        if keeper.get("name"):
+            contract["inside_venue"]["keeper"] = f"{keeper['name']} ({keeper.get('role') or 'keeper'})"
+            contract["inside_venue"]["keeper_rule"] = (
+                f"{keeper['name']} keeps this place. Do not introduce a different keeper, "
+                "and do not re-describe them as a stranger."
+            )
+        contract["rule"] += (
+            f" The player is currently INSIDE {current_name}. Leaving means writing "
+            f"\"{current.get('exit_to') or 'the street outside'}\" in player.move_to_location."
+        )
+
+    # Only worth the tokens on turns that might actually move: most turns are not travel.
+    if travel:
+        contract["expectation"] = (
+            "This input is travel. The player already decided to go; complete the journey in prose "
+            "and end the scene somewhere specific. Do not end still deciding, and do not offer the "
+            "trip back as a choice. Name where they end up in player.move_to_location — if the "
+            "scene reaches somewhere not in known_places, invent a fitting name for it."
+        )
+    return contract
+
+
+# --- narrative voice authority -----------------------------------------------
+#
+# Same 30-turn run: 22 turns opened in second person, 11 in third, and the
+# player character — declared sex "unspecified" — drew 21 he/his sentences
+# against 12 she/her. Both facts are server-known, so neither should be left to
+# the model to remember.
+
+_PRONOUN_SETS = {
+    "female": {"subject": "she", "object": "her", "possessive": "her", "reflexive": "herself"},
+    "male": {"subject": "he", "object": "him", "possessive": "his", "reflexive": "himself"},
+    "neutral": {"subject": "they", "object": "them", "possessive": "their", "reflexive": "themself"},
+}
+_FEMALE_WORDS = frozenset({"female", "woman", "girl", "f", "fem", "feminine", "she", "her", "lady"})
+_MALE_WORDS = frozenset({"male", "man", "boy", "m", "masc", "masculine", "he", "him", "his"})
+
+
+def player_pronouns(sex: Any) -> dict[str, str]:
+    """
+    Pronoun set for the player character.
+
+    Anything that is not clearly male or female — blank, "unspecified",
+    "sexless or constructed", "varies by form" — resolves to they/them rather
+    than letting the model coin-flip a gender it will then flip again next turn.
+    """
+    value = str(sex or "").strip().lower()
+    tokens = {tok for tok in re.split(r"[^a-z]+", value) if tok}
+    if tokens & _FEMALE_WORDS and not (tokens & _MALE_WORDS):
+        return dict(_PRONOUN_SETS["female"])
+    if tokens & _MALE_WORDS and not (tokens & _FEMALE_WORDS):
+        return dict(_PRONOUN_SETS["male"])
+    return dict(_PRONOUN_SETS["neutral"])
+
+
+def narrative_voice_contract(state: dict[str, Any]) -> dict[str, Any]:
+    """Locked narration person plus the player's pronouns, stated as server truth."""
+    player = state.get("player") or {}
+    options = ((state.get("settings") or {}).get("playthrough_options") or {})
+    sex = player.get("sex") or options.get("player_sex") or ""
+    pronouns = player_pronouns(sex)
+    name = str(player.get("public_name") or player.get("name") or "").strip()
+    return {
+        "person": "second",
+        "player_address": "you / your",
+        "player_pronouns": pronouns,
+        "player_name": name,
+        # Short on purpose: the full point-of-view rule lives in the system
+        # prompt, which the server sends once and the runtime caches. This block
+        # is per-turn packet text, so it carries only the campaign-specific facts.
+        "rule": (
+            "Second person for the player (\"you\")"
+            + (f", never \"{name} walks\"" if name else "")
+            + f". Third-person references to the player use {pronouns['subject']}/{pronouns['object']}/"
+            f"{pronouns['possessive']} only, every turn."
+        ),
+    }
+
+
+_SECOND_PERSON_RE = re.compile(r"\b(you|your|yours|yourself|yourselves)\b", re.I)
+_PRONOUN_COUNT_RE = {
+    "he": re.compile(r"\b(he|him|his|himself)\b", re.I),
+    "she": re.compile(r"\b(she|her|hers|herself)\b", re.I),
+    "they": re.compile(r"\b(they|them|their|theirs|themself|themselves)\b", re.I),
+}
+
+
+def check_narrative_voice(narration: str, state: dict[str, Any]) -> dict[str, Any]:
+    """
+    Measure point-of-view drift on a finished narration.
+
+    ``drift`` marks the unambiguous failure — a full narration that never once
+    addresses the player as "you". Pronoun counts are reported but not acted on:
+    NPCs have genders too, so a raw he/she tally cannot tell a mis-gendered
+    player from a correctly gendered cast, and a regex rewrite would break more
+    prose than it fixed.
+    """
+    text = str(narration or "")
+    voice = state.get("narrative_voice") if isinstance(state.get("narrative_voice"), dict) else None
+    if voice is None:
+        voice = narrative_voice_contract(state)
+    expected = str((voice.get("player_pronouns") or {}).get("subject") or "they")
+    second = len(_SECOND_PERSON_RE.findall(text))
+    name = str(voice.get("player_name") or "").strip()
+    name_subject = 0
+    if len(name) >= 3:
+        name_subject = len(
+            re.findall(rf"(?<!\w){re.escape(name)}(?!\w)\s+(?:[a-z]+s|is|was|had|does|goes|has)\b", text)
+        )
+    return {
+        "expected_person": "second",
+        "expected_player_pronoun": expected,
+        "second_person_refs": second,
+        "player_name_as_subject": name_subject,
+        "pronoun_mix": {key: len(pattern.findall(text)) for key, pattern in _PRONOUN_COUNT_RE.items()},
+        "drift": bool(len(text) > 200 and second == 0),
+    }
+
+
+# Terrain/settlement head nouns worth minting a place from when the model
+# relocated the player in prose but never named where.
+_PLACE_HEAD_NOUNS = (
+    "clearing", "crossroads", "crossing", "ford", "bridge", "riverbank", "bank",
+    "ridge", "hollow", "gully", "ravine", "pass", "hill", "hilltop", "slope",
+    "treeline", "thicket", "grove", "woods", "forest", "glade", "meadow", "field",
+    "moor", "marsh", "fen", "bog", "shore", "beach", "cove", "cliff", "quarry",
+    "mine", "cave", "cavern", "ruins", "ruin", "tower", "keep", "fort", "camp",
+    "campsite", "village", "hamlet", "town", "settlement", "outpost", "waystation",
+    "inn", "tavern", "mill", "farmstead", "barn", "chapel", "shrine", "graveyard",
+    "gate", "gatehouse", "road", "track", "trail", "path", "lane", "junction",
+    "market", "square", "courtyard", "hall", "cellar", "docks", "wharf", "pier",
+)
+# Only text introduced by a destination preposition is a candidate. "The road
+# narrows" is scenery; "you step into the clearing" is an address. Without this
+# anchor the extractor happily named the world after the first capitalised word
+# in the paragraph, and after whichever noun the prose opened on.
+_ARRIVAL_PREP = (
+    r"(?:into|onto|to|toward|towards|through|past|beyond|inside|"
+    r"reach(?:es|ed)?|enter(?:s|ed)?|arrive[sd]?\s+(?:at|in)|"
+    r"come[s]?\s+(?:to|upon)|came\s+(?:to|upon)|step[s|ped]*\s+(?:in|into|onto|through))"
+)
+_ARRIVAL_PROPER_RE = re.compile(
+    _ARRIVAL_PREP + r"\s+(?:the\s+)?([A-Z][a-z'’-]{2,}(?:\s+[A-Z][a-z'’-]{2,}){0,3})",
+)
+_ARRIVAL_HEAD_RE = re.compile(
+    _ARRIVAL_PREP + r"\s+(?:the|a|an)\s+([a-z]+\s+)?(" + "|".join(_PLACE_HEAD_NOUNS) + r")\b",
+    re.I,
+)
+_WEAK_PLACE_MODIFIERS = frozenset(
+    {"same", "other", "only", "very", "quiet", "still", "next", "far", "near", "open", "empty"}
+)
+
+
+def _movement_destination_from_narration(
+    tail: str,
+    *,
+    known_names: set[str],
+    person_names: set[str],
+    current_name: str,
+) -> str:
+    """
+    Name the place the prose just moved the player into.
+
+    Last resort, reached only when the model signalled travel it could not
+    address (it invented a location code) and nothing already in the database
+    matches. Both patterns require a destination preposition, so only text the
+    prose actually presents as somewhere-you-went is eligible.
+
+    A proper noun wins ("...into Thistledown Hollow"); failing that a terrain
+    head noun becomes a plain title ("...into a clearing" -> "Clearing"). The
+    second is a duller name than the model would have chosen, but the player
+    does leave town.
+
+    Matches are scanned last-first: arrival is the end of the scene.
+    """
+    blocked = {n.strip().lower() for n in (known_names | person_names) if n and n.strip()}
+    blocked.add(current_name.strip().lower())
+
+    def _blocked(value: str) -> bool:
+        low = value.lower()
+        return any(low == name or (len(name) > 3 and (low in name or name in low)) for name in blocked)
+
+    for match in reversed(list(_ARRIVAL_PROPER_RE.finditer(tail))):
+        candidate = norm_name(match.group(1))
+        if not candidate or _blocked(candidate):
+            continue
+        if candidate.lower() in _NAME_FUNCTION_WORDS:
+            continue
+        if is_plausible_place_name(candidate):
+            return candidate
+
+    for match in reversed(list(_ARRIVAL_HEAD_RE.finditer(tail))):
+        modifier = (match.group(1) or "").strip()
+        noun = match.group(2).strip()
+        if modifier.lower() in _WEAK_PLACE_MODIFIERS:
+            modifier = ""
+        name = norm_name(f"{modifier} {noun}".strip().title())
+        if name and not _blocked(name) and is_plausible_place_name(name):
+            return name
+    return ""
+
+
+def _movement_destination_from_input(rows: list[Any], player_input: str, current_name: str) -> Any:
+    """Match a known place named in the player's own words. Exact word-boundary only — no fuzzy guessing."""
+    lowered = f" {str(player_input or '').lower()} "
+    best = None
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        if len(name) < 4 or name == current_name:
+            continue
+        if re.search(rf"(?<!\w){re.escape(name.lower())}(?!\w)", lowered):
+            # Longest match wins: "Mosswake Gate" beats "Mosswake"
+            if best is None or len(name) > len(str(best["name"] or "")):
+                best = row
+    return best
+
+
+def gate_venue_move(conn, from_location_id: int, to_location_id: int) -> dict[str, Any]:
+    """Decide whether a move into a venue is allowed, and where it lands instead.
+
+    Interiors are not reachable from across the map and are not open at every
+    hour. A live probe walked from Riverbend Camp straight into an apothecary two
+    locations away, at night, and was served by a keeper who had never existed.
+
+      * Standing anywhere but the venue's parent -> the move is redirected to the
+        parent, so the journey still happens and entering costs the next turn.
+      * Closed -> the player stays put and the turn reports the hours.
+    """
+    to_id = int(to_location_id or 0)
+    from_id = int(from_location_id or 0)
+    if not to_id or to_id == from_id:
+        return {"location_id": to_id or from_id, "note": None}
+    row = _location_row(conn, to_id)
+    if row is None:
+        return {"location_id": to_id, "note": None}
+    check = venue_entry_check(conn, from_id, row)
+    if check.get("ok"):
+        return {"location_id": to_id, "note": None}
+    venue_name = str(venues._field(row, "name", "") or "")
+    if check.get("reason") == "unreachable":
+        parent_id = int(check.get("redirect_to") or 0)
+        parent = _location_row(conn, parent_id)
+        parent_name = str(venues._field(parent, "name", "") or "") if parent is not None else ""
+        if parent_id and parent_id != from_id:
+            return {
+                "location_id": parent_id,
+                "note": {
+                    "kind": "venue_redirect",
+                    "venue": venue_name,
+                    "landed": parent_name,
+                    "detail": f"{venue_name} is entered from {parent_name}; the journey ends there.",
+                },
+            }
+        return {
+            "location_id": from_id,
+            "note": {
+                "kind": "venue_unreachable",
+                "venue": venue_name,
+                "detail": f"{venue_name} cannot be reached from here.",
+            },
+        }
+    if check.get("reason") == "closed":
+        return {
+            "location_id": from_id,
+            "note": {
+                "kind": "venue_closed",
+                "venue": venue_name,
+                "detail": f"{venue_name} is {check.get('detail') or 'closed'}.",
+            },
+        }
+    return {"location_id": to_id, "note": None}
+
+
+def resolve_movement(
+    conn,
+    result: dict[str, Any],
+    player_input: str,
+    *,
+    intent: str,
+    narration: str,
+) -> dict[str, Any]:
+    """
+    Fill in a MOVE the model forgot, and report what happened either way.
+
+    Only fires on travel intent, and only through evidence the model itself
+    produced this turn. Three rules, most-confident first:
+
+    1. It minted a new place this turn — on a travel turn that is where the
+       player went. (Accepts the rare false positive of a place merely named in
+       passing; the alternative was never moving at all.)
+    2. The player's own input names a known place by its exact stored name.
+    3. The narration's tail says the player arrived somewhere and tags an
+       existing [[L#]] that is not the current location.
+
+    Returns a report; ``status`` is one of ``model`` (the model did its job),
+    ``not_travel``, ``repaired``, or ``unresolved``.
+    """
+    player_patch = result.get("player")
+    if not isinstance(player_patch, dict):
+        player_patch = {}
+        result["player"] = player_patch
+
+    row = conn.execute(
+        """
+        SELECT l.id AS id, l.code AS code, l.name AS name
+        FROM player p LEFT JOIN locations l ON l.id = p.current_location_id
+        WHERE p.id = 1
+        """
+    ).fetchone()
+    current_code = str((row["code"] if row else "") or "")
+    current_name = str((row["name"] if row else "") or "")
+
+    rows = conn.execute("SELECT id, code, name FROM locations ORDER BY id").fetchall()
+    known_codes = {str(row["code"] or "").upper() for row in rows if row["code"]}
+
+    note = ""
+    explicit_code = str(player_patch.get("move_to_location_code") or "").strip().upper()
+    explicit_name = str(player_patch.get("move_to_location") or "").strip()
+    if explicit_code:
+        if explicit_code == current_code.upper():
+            # "Move to where you already are" is not a move; do not burn a visit.
+            player_patch["move_to_location_code"] = None
+            note = "same_place_code"
+        elif explicit_code not in known_codes:
+            # Observed on a 7B: it wants to travel, cannot name the destination,
+            # and invents the next code in sequence ("MOVE L2" with only L1 in
+            # the world). _find_location_id resolves an unknown L-code back to
+            # the current location, so the move silently became a no-op — the
+            # model looked compliant while the world never advanced.
+            player_patch["move_to_location_code"] = None
+            note = "invented_code"
+        else:
+            report = {"status": "model", "from": current_code, "destination": explicit_code}
+            # Flag, do not "fix": when the model reuses a listed code as a
+            # stand-in for somewhere new, the prose and the map disagree (a live
+            # run narrated a river valley while recording a move back to town).
+            # There is no reliable way to recover the intended place from prose
+            # that never names it, so surface it for measurement instead of
+            # guessing a destination and being confidently wrong.
+            dest_name = next(
+                (str(row["name"] or "") for row in rows if str(row["code"] or "").upper() == explicit_code),
+                "",
+            )
+            tail = str(narration or "")[-900:].lower()
+            if dest_name and dest_name.lower() not in tail and explicit_code.lower() not in tail:
+                report["prose_mismatch"] = dest_name
+            return report
+    if explicit_name:
+        # Same-place guard for names, not just codes. A live run answered "head
+        # back to that apothecary" with MOVE naming the camp the player was
+        # already standing in; that counted as the model doing its job, so the
+        # repair rules never ran and the player never moved.
+        resolved = _match_location_by_name(conn, humanize_place_name(explicit_name))
+        current_id = int((row["id"] if row is not None and "id" in row.keys() else 0) or 0)
+        if resolved is not None and current_id and int(resolved["id"]) == current_id:
+            player_patch["move_to_location"] = None
+            note = note or "same_place_name"
+        else:
+            return {"status": "model", "from": current_code, "destination": explicit_name[:120]}
+
+    # A doorway is a move the model reliably narrates and reliably fails to record.
+    # Resolve it from state rather than hoping: the venues here are known, and so
+    # is the way out of the one the player is standing in.
+    doorway = venue_move_intent(player_input)
+    if doorway:
+        here_row = conn.execute(
+            "SELECT l.* FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+        ).fetchone()
+        if here_row is not None:
+            here_id = int(here_row["id"])
+            inside_of = int(venues._field(here_row, "parent_id", 0) or 0)
+            if doorway == "exit" and inside_of:
+                parent = _location_row(conn, inside_of)
+                if parent is not None:
+                    player_patch["move_to_location"] = str(parent["name"] or "")[:120]
+                    return {
+                        "status": "repaired",
+                        "rule": "venue_exit",
+                        "from": current_code,
+                        "destination": str(parent["name"] or ""),
+                    }
+            if doorway == "enter":
+                parent_for_venues = inside_of or here_id
+                target = _venue_named_in(conn, parent_for_venues, player_input, narration)
+                if target is not None and int(target["id"]) != here_id:
+                    player_patch["move_to_location"] = str(target["name"] or "")[:120]
+                    return {
+                        "status": "repaired",
+                        "rule": "venue_enter",
+                        "from": current_code,
+                        "destination": str(target["name"] or ""),
+                    }
+                # Bootstrap: the player asked to walk into a kind of shop this
+                # settlement supports and none exists yet. Rules that pick an
+                # existing place cannot help, and the model reliably narrates the
+                # visit without recording it, so mint the venue here.
+                minted = _mint_venue_from_request(conn, parent_for_venues, player_input)
+                if minted:
+                    player_patch["move_to_location"] = minted[:120]
+                    return {
+                        "status": "repaired",
+                        "rule": "venue_opened",
+                        "from": current_code,
+                        "destination": minted,
+                    }
+
+    if intent != "travel" and not travel_intent(player_input) and not doorway:
+        status = {"status": "not_travel", "from": current_code, "intent": intent}
+        if note:
+            status["rejected"] = note
+        return status
+
+    for location in result.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        name = norm_name(str(location.get("name") or ""))
+        if not name or name == current_name or _is_place_or_item_code(name):
+            continue
+        if not is_plausible_place_name(name):
+            continue
+        player_patch["move_to_location"] = name[:120]
+        return {"status": "repaired", "rule": "new_location", "from": current_code, "destination": name}
+
+    named = _movement_destination_from_input(rows, player_input, current_name)
+    if named is not None:
+        player_patch["move_to_location_code"] = str(named["code"])
+        return {
+            "status": "repaired",
+            "rule": "player_input",
+            "from": current_code,
+            "destination": str(named["name"] or ""),
+        }
+
+    # "Head back to that apothecary" from two locations away. Naming a venue is
+    # not a doorway phrase -- there is no "inside" in it -- so it belongs here, on
+    # the travel path. Aim at the venue and let the entry gate redirect the move
+    # to its parent: the journey home happens this turn, going inside costs the
+    # next one. Without this the player simply stood still.
+    remote_venue = _venue_named_anywhere(conn, player_input)
+    if remote_venue is not None and int(remote_venue["id"]) != _find_location_id(conn, current_code or ""):
+        player_patch["move_to_location"] = str(remote_venue["name"] or "")[:120]
+        return {
+            "status": "repaired",
+            "rule": "venue_return",
+            "from": current_code,
+            "destination": str(remote_venue["name"] or ""),
+        }
+
+    tail = str(narration or "")[-900:]
+    arrived = bool(_TRAVEL_ARRIVAL_RE.search(tail))
+    if arrived:
+        by_code = {str(r["code"] or "").upper(): r for r in rows}
+        for code in reversed(re.findall(r"\[\[\s*(L\d+)\s*\]\]", tail, re.I)):
+            code = code.upper()
+            if code != current_code.upper() and code in by_code:
+                player_patch["move_to_location_code"] = code
+                return {
+                    "status": "repaired",
+                    "rule": "narration_code",
+                    "from": current_code,
+                    "destination": str(by_code[code]["name"] or ""),
+                }
+
+    # Bootstrap: the model said it was travelling (by inventing a code) but the
+    # world has nowhere to go yet. Rules 1-3 can only pick an existing place, so
+    # without this the first journey out of the starting location can never
+    # happen and the map stays one tile wide forever.
+    if arrived and note == "invented_code":
+        person_names = {
+            str(row["name"] or "")
+            for row in conn.execute("SELECT name FROM npcs").fetchall()
+        }
+        minted = _movement_destination_from_narration(
+            tail,
+            known_names={str(row["name"] or "") for row in rows},
+            person_names=person_names,
+            current_name=current_name,
+        )
+        if minted:
+            player_patch["move_to_location"] = minted[:120]
+            return {
+                "status": "repaired",
+                "rule": "narration_place",
+                "from": current_code,
+                "destination": minted,
+            }
+
+    report = {"status": "unresolved", "from": current_code}
+    if note:
+        report["rejected"] = note
+    return report
 
 
 def _context_limit_profile(intent: str, state: dict[str, Any]) -> dict[str, int]:
@@ -4928,6 +6177,78 @@ def _turn_plan(player_input: str, state: dict[str, Any], query: set[str], refs: 
     }
 
 
+# Words the narrator leans on across a whole run. Single-turn frequency cannot
+# see these: "hooded" appeared 63 times in 72 turns — under once a turn, so no
+# per-turn threshold ever caught it, yet it is exactly what made every scene
+# read the same.
+_TIC_STOPWORDS = frozenset(
+    {
+        "with", "from", "that", "this", "have", "will", "your", "into", "when", "only",
+        "more", "than", "over", "under", "through", "about", "after", "before", "they",
+        "them", "their", "there", "here", "what", "where", "which", "while", "would",
+        "could", "should", "been", "were", "said", "just", "like", "back", "then",
+        "still", "even", "also", "some", "very", "across", "around", "toward", "towards",
+        "between", "without", "another", "something", "someone", "nothing", "everything",
+        "because", "though", "these", "those", "much", "many", "each", "both", "does",
+        "seems", "seem", "feels", "look", "looks", "into", "onto", "upon", "away",
+        "down", "under", "again", "against", "being", "want", "wants", "know", "knows",
+        "make", "makes", "take", "takes", "come", "comes", "goes", "give", "gives",
+        "hand", "hands", "head", "turn", "turns", "step", "steps", "walk", "walks",
+    }
+)
+
+
+def narration_tics(conn, *, lookback: int = 14, min_rate: float = 0.45, limit: int = 10) -> list[str]:
+    """
+    Words the last `lookback` narrations reused often enough to be a tic.
+
+    `min_rate` is occurrences per narration, so a word must show up in most
+    scenes to qualify. Entity names are not filtered here — `anti_repetition_block`
+    protects those, because it is the layer that knows the current cast.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT content FROM journal WHERE kind = 'narration' ORDER BY id DESC LIMIT ?",
+            (max(2, int(lookback)),),
+        ).fetchall()
+    except Exception:
+        return []
+    texts = [str(row["content"] or "") for row in rows if row and row["content"]]
+    if len(texts) < 3:
+        return []
+    # Every name in the world, not just this turn's packet: the packet caps how
+    # many NPCs it carries, so an off-screen cast member could otherwise be
+    # handed to the model as a word to stop using.
+    protected: set[str] = set()
+    for table in ("npcs", "locations", "inventory"):
+        try:
+            for row in conn.execute(f"SELECT name FROM {table}").fetchall():
+                for token in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(row["name"] or "")):
+                    protected.add(token.lower())
+        except Exception:
+            continue
+    try:
+        prow = conn.execute("SELECT name, public_name, title FROM player WHERE id = 1").fetchone()
+        for key in ("name", "public_name", "title"):
+            for token in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str((prow[key] if prow else "") or "")):
+                protected.add(token.lower())
+    except Exception:
+        pass
+    counts: dict[str, int] = {}
+    for text in texts:
+        for token in re.findall(r"[A-Za-z][A-Za-z'-]{3,}", text):
+            word = token.lower()
+            if word in _TIC_STOPWORDS or word in protected:
+                continue
+            counts[word] = counts.get(word, 0) + 1
+    threshold = max(2, int(round(min_rate * len(texts))))
+    ranked = sorted(
+        ((word, n) for word, n in counts.items() if n >= threshold),
+        key=lambda kv: (-kv[1], kv[0]),
+    )
+    return [word for word, _ in ranked[:limit]]
+
+
 def _working_set(current_code: str | None, locations: list[dict[str, Any]], relevant_sources: list[dict[str, Any]]) -> dict[str, Any]:
     nearby_npcs: list[str] = []
     nearby_events: list[str] = []
@@ -4958,6 +6279,15 @@ def _event_lifecycle_context(state: dict[str, Any]) -> dict[str, Any]:
         "focus_point_range": {"min": 1, "max": 6},
         "return_event_guidance": "Keep local NPCs durable, keep current-visit events stable while the player remains here, let temporary opportunities often fade after departure, and add new return events sparingly when the location has changed or time has plausibly moved.",
     }
+
+
+def _recent_narration_tics() -> list[str]:
+    """Tic list for the turn packet; never lets a stats query break a turn."""
+    try:
+        with connect() as conn:
+            return narration_tics(conn)
+    except Exception:
+        return []
 
 
 def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, Any]:
@@ -5148,6 +6478,9 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "action_context": action_context,
         "working_set": _working_set(current_code, locations, relevant_sources),
         "event_lifecycle": event_lifecycle,
+        "movement_contract": movement_contract(state, player_input, intent),
+        "narrative_voice": narrative_voice_contract(state),
+        "overused_words": _recent_narration_tics(),
         "retrieval": {
             "method": "sequential deterministic context planner plus mechanics context, action-specific player slices, active-location scoring, and source_index JSONL search",
             "planner": TURN_CONTEXT_PLANNER_VERSION,
@@ -5156,7 +6489,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             "verification_checks": turn_plan["verification_checks"],
             "query_terms": sorted(query)[:30],
             "included_locations": [location.get("code") for location in locations],
-            "source_index_manifest": str(SOURCE_INDEX_MANIFEST).replace("\\", "/"),
+            "source_index_manifest": str(source_index_manifest()).replace("\\", "/"),
             "source_hits": len(relevant_sources),
         },
     }
@@ -5165,7 +6498,9 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
 
         opts = ((state.get("settings") or {}).get("playthrough_options") or {})
         check_cfg = merge_check_settings(opts.get("skill_check_settings") if isinstance(opts.get("skill_check_settings"), dict) else opts)
-        prompt_context["skill_check_context"] = gm_context_block(check_cfg)
+        # Search the catalog for what this action needs instead of shipping all
+        # ~60 skills every turn (~6.4KB / ~1600 tokens of a 7B's window).
+        prompt_context["skill_check_context"] = gm_context_block(check_cfg, query=str(player_input or ""))
     except Exception:
         prompt_context["skill_check_context"] = {"dice_checks_enabled": False}
     verification_memory = _verification_memory_context(prompt_context)
@@ -5316,8 +6651,8 @@ def rewind_last_turn(snapshot_id: int | None = None) -> dict[str, Any]:
             _restore_snapshot_rows(conn, rows)
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA foreign_key_check")
-            HISTORY_SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
-            HISTORY_SUMMARY_PATH.write_text(str(snapshot.get("history_summaries") or ""), encoding="utf-8")
+            history_summary_path().parent.mkdir(parents=True, exist_ok=True)
+            history_summary_path().write_text(str(snapshot.get("history_summaries") or ""), encoding="utf-8")
         else:
             _restore_world(snapshot)
         # Drop this snapshot and any newer ones (they are no longer valid after rewind)
@@ -5414,8 +6749,132 @@ def _next_turn(conn) -> int:
     return turn
 
 
-def _upsert_location(conn, name: str, summary: str = "") -> int:
-    name = norm_name(name)
+def humanize_place_name(name: str) -> str:
+    """
+    Turn an identifier-shaped destination into a readable place name.
+
+    A 7B given "MOVE <name>" sometimes answers with a slug rather than a name —
+    a live run produced a location displayed to the player as `east_road`.
+    Separators become spaces and all-lowercase names get title case, so the map
+    reads "East Road". Names that already have capitals are left alone, so
+    "Mosswake Gate" and "Second Shadow Inn" are untouched.
+    """
+    text = norm_name(str(name or ""))
+    if not text:
+        return text
+    if re.search(r"[_]|(?<=[a-z])-(?=[a-z])", text):
+        text = norm_name(re.sub(r"[_-]+", " ", text))
+    if text and not any(ch.isupper() for ch in text):
+        text = " ".join(word[:1].upper() + word[1:] if word else word for word in text.split(" "))
+    return text
+
+
+def _match_location_by_name(conn, name: str):
+    """
+    Find an existing place by name, tolerating case and a leading article.
+
+    Naming is now the primary way to move ("MOVE Redmill Ford"), so "the Redmill
+    Ford" and "redmill ford" must land on the existing row instead of minting a
+    near-duplicate beside it.
+    """
+    value = humanize_place_name(name)
+    if not value:
+        return None
+    row = conn.execute(
+        "SELECT id, summary FROM locations WHERE name = ? COLLATE NOCASE", (value,)
+    ).fetchone()
+    if row:
+        return row
+    # Leading descriptors too: a live run produced both "Ruins by the River" and
+    # "Old Ruins by the River" as separate map entries.
+    bare = re.sub(
+        r"^(?:the|a|an|old|new|great|little|lesser|greater|upper|lower|"
+        r"abandoned|ruined|broken|forgotten|ancient)\s+",
+        "",
+        value,
+        flags=re.I,
+    ).strip()
+    if bare and bare.lower() != value.lower():
+        row = conn.execute(
+            "SELECT id, summary FROM locations WHERE name = ? COLLATE NOCASE", (bare,)
+        ).fetchone()
+        if row:
+            return row
+    return conn.execute(
+        "SELECT id, summary FROM locations WHERE name = ? COLLATE NOCASE OR name = ? COLLATE NOCASE",
+        (f"The {value}", f"The {bare}" if bare else value),
+    ).fetchone()
+
+
+# Generic tail nouns a model bolts onto a name it already used. A live run
+# produced Riverbend Camp, Riverbend Hillcrest, Riverbend Hillcrest Camp and
+# Riverbend Hillcrest Post — four map entries for what the prose treated as one
+# area, and names the player cannot tell apart.
+_PLACE_TAIL_NOUNS = frozenset(
+    {
+        "camp", "campsite", "post", "outpost", "site", "area", "place", "spot",
+        "road", "path", "trail", "track", "way", "lane", "crossing", "bend",
+        "edge", "side", "end", "gate", "entrance", "approach", "outskirts",
+        "grounds", "quarter", "district", "square", "yard", "clearing",
+    }
+)
+
+
+def _place_extension_target(conn, name: str):
+    """
+    An existing place this name is merely an extension of.
+
+    Only fires when an existing name is a full leading prefix and everything
+    added is a generic tail noun: "Riverbend Hillcrest" + "Camp". A genuinely
+    new place ("Redmill Ford" next to "Mosswake Gate") shares no prefix and is
+    untouched, and a distinctive added word ("Riverbend Chapel") is kept as its
+    own place because "chapel" is not in the generic list.
+    """
+    tokens = [t for t in re.split(r"\s+", humanize_place_name(name).lower()) if t]
+    if len(tokens) < 2:
+        return None
+    try:
+        rows = conn.execute("SELECT id, name, summary FROM locations ORDER BY id").fetchall()
+    except Exception:
+        return None
+    best = None
+    best_len = 0
+    for row in rows:
+        existing = [t for t in re.split(r"\s+", str(row["name"] or "").lower()) if t]
+        if not existing or len(existing) >= len(tokens):
+            continue
+        if tokens[: len(existing)] != existing:
+            continue
+        extra = tokens[len(existing):]
+        if len(extra) > 2 or not all(word in _PLACE_TAIL_NOUNS for word in extra):
+            continue
+        if len(existing) > best_len:
+            best, best_len = row, len(existing)
+    return best
+
+
+def _venue_parent_for_new_place(conn, kind: str) -> int:
+    """Which place a newly named venue belongs to: where the player is standing.
+
+    Venues do not nest -- if the player is already inside a shop, a second shop
+    named this turn belongs to the street outside, not to the shop.
+    """
+    if not kind:
+        return 0
+    try:
+        player = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    except Exception:
+        return 0
+    here_id = int((player["current_location_id"] if player else 0) or 0)
+    here = _location_row(conn, here_id)
+    if here is None:
+        return 0
+    parent_of_here = int(venues._field(here, "parent_id", 0) or 0)
+    return parent_of_here or here_id
+
+
+def _upsert_location(conn, name: str, summary: str = "", *, parent_id: int | None = None, kind: str | None = None) -> int:
+    name = humanize_place_name(name)
     if not name:
         raise ValueError("Location name is required.")
     # Refuse event/system sentence fragments as place names (e.g. "System pings a local job")
@@ -5428,7 +6887,9 @@ def _upsert_location(conn, name: str, summary: str = "") -> int:
         except Exception:
             pass
         name = "Nearby street"
-    existing = conn.execute("SELECT id, summary FROM locations WHERE name = ?", (name,)).fetchone()
+    existing = _match_location_by_name(conn, name)
+    if existing is None:
+        existing = _place_extension_target(conn, name)
     if existing:
         if summary and summary not in existing["summary"]:
             # Don't merge wall-of-setup-text into a place summary
@@ -5439,18 +6900,38 @@ def _upsert_location(conn, name: str, summary: str = "") -> int:
                 merged = f"{existing['summary']} {short}".strip()[:1400]
                 conn.execute("UPDATE locations SET summary = ? WHERE id = ?", (merged, existing["id"]))
         return int(existing["id"])
+    # A place whose name says "apothecary" is an interior, not a second town.
+    resolved_kind = venues.venue_kind_from_name(name) if kind is None else (kind or "")
+    resolved_parent = 0
+    if resolved_kind:
+        resolved_parent = (
+            _venue_parent_for_new_place(conn, resolved_kind) if parent_id is None else int(parent_id or 0)
+        )
+        if resolved_parent and not venue_plausibility(conn, resolved_parent, resolved_kind)["ok"]:
+            # A hamlet has no apothecary. Asking for one used to conjure it; now
+            # the player simply stays where they are and finds no such place.
+            return resolved_parent
+
     cursor = conn.execute(
         "INSERT INTO locations (code, name, summary, visit_count) VALUES (?, ?, ?, 0)",
         (_next_code(conn, "locations", "L"), name, summary[:1400] if len(summary or "") < 500 else summary[:200]),
     )
-    return int(cursor.lastrowid)
+    new_id = int(cursor.lastrowid)
+    if resolved_kind and resolved_parent and resolved_parent != new_id:
+        stamp_venue_fields(conn, new_id, parent_id=resolved_parent, kind=resolved_kind)
+    return new_id
 
 
 def _find_location_id(conn, name_or_code: str | None) -> int:
     if name_or_code:
-        value = norm_name(str(name_or_code))
+        # Slugs must resolve to the same row as their readable form, or
+        # "east_road" and "East Road" become two locations.
+        value = humanize_place_name(str(name_or_code))
         value = _alias_target(conn, value, "location") or value
-        row = conn.execute("SELECT id FROM locations WHERE code = ? OR name = ?", (value, value)).fetchone()
+        row = conn.execute("SELECT id FROM locations WHERE code = ?", (value.upper(),)).fetchone()
+        if row:
+            return int(row["id"])
+        row = _match_location_by_name(conn, value)
         if row:
             return int(row["id"])
         # Codes like L1 should not invent a place named "L1" if already current
@@ -5661,8 +7142,7 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         return None
     # Event titles / system job lines must not become people ("System pings a local job")
     if not is_plausible_person_name(name):
-        seed = abs(hash(f"{code}|{name}|{npc.get('role') or ''}")) % (10**9)
-        name = invent_person_name(seed=seed)
+        name = unique_person_name(conn, name_seed(code, name, npc.get("role") or ""))
         npc["name"] = name
 
     # Prefer named place; if model stuffed location_code=L1, resolve that place — do not invent a person from L1
@@ -5699,6 +7179,22 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
             "SELECT * FROM npcs WHERE location_id = ? AND name = ?",
             (location_id, name),
         ).fetchone()
+    if existing is None:
+        # Same name elsewhere is the same person, not a twin. The lookup used to
+        # be per-location, so a live run ended with two NPCs both called "Aria",
+        # both bakers, in different places. People also legitimately travel, so
+        # matching by name world-wide and moving them is the right reading.
+        existing = conn.execute(
+            "SELECT * FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (name,)
+        ).fetchone()
+        if existing is not None and int(existing["location_id"] or 0) != int(location_id or 0):
+            try:
+                conn.execute(
+                    "UPDATE npcs SET location_id = ? WHERE id = ?",
+                    (int(location_id), int(existing["id"])),
+                )
+            except Exception:
+                pass
 
     if existing:
         # Shell / nameless / background: refuse full-cast promotion from LLM dumps
@@ -5947,6 +7443,150 @@ def _filter_inventory_changes(
     return kept
 
 
+# Which check an item type shifts when nothing explicit is declared. This is
+# how a plain "Iron Sword" from the model still ends up affecting melee rolls
+# without the model ever being asked to reason about modifiers.
+_ITEM_TYPE_ROLL_SKILL: dict[str, str] = {
+    "weapon": "melee",
+    "sword": "melee",
+    "blade": "melee",
+    "axe": "melee",
+    "spear": "melee",
+    "club": "melee",
+    "bow": "ranged",
+    "crossbow": "ranged",
+    "gun": "ranged",
+    "firearm": "ranged",
+    "rifle": "ranged",
+    "thrown": "ranged",
+    "armor": "defense",
+    "shield": "defense",
+    "helm": "defense",
+    "tool": "craft",
+    "tools": "craft",
+    "lockpick": "lockpicking",
+    "lockpicks": "lockpicking",
+    "medical": "medicine",
+    "instrument": "performance",
+    "map": "navigation",
+    "compass": "navigation",
+    "cloak": "stealth",
+    "disguise": "disguise",
+}
+
+_RARITY_ROLL_BONUS: dict[str, int] = {
+    "common": 0,
+    "uncommon": 1,
+    "rare": 2,
+    "epic": 3,
+    "legendary": 4,
+    "unique": 4,
+    "mythic": 5,
+}
+
+
+def _roll_skill_for_item(name: str, item_type: str) -> str:
+    """Best-guess skill an item helps with, from its type then its name."""
+    text = f"{item_type} {name}".lower()
+    for keyword, skill in _ITEM_TYPE_ROLL_SKILL.items():
+        if re.search(rf"\b{re.escape(keyword)}", text):
+            return skill
+    return ""
+
+
+def _derive_item_links(
+    conn,
+    *,
+    name: str,
+    item_type: str,
+    rarity: str,
+    stat_modifiers: dict[str, Any],
+    granted_abilities: list[dict[str, Any]],
+    change: dict[str, Any],
+) -> tuple[dict[str, int], list[str], dict[str, int]]:
+    """
+    Turn the model's free-text item description into machine-usable links.
+
+    Returns ``(stat_links, power_codes, roll_profile)``:
+
+    * **stat_links** — ``stat_modifiers`` collapsed onto the six canonical
+      attribute keys, so "Might +2" and "strength: 2" mean the same thing.
+    * **power_codes** — codes of powers this item grants, resolved against
+      installed content packs and existing ability rows. Inline
+      ``granted_abilities`` keep working unchanged; this only adds a reference
+      when a real power already exists to point at.
+    * **roll_profile** — flat check modifiers. Taken from the change when
+      declared, otherwise derived from item type, rarity and stat links, so
+      gear affects dice without the narrator doing arithmetic.
+    """
+    try:
+        from app.content_packs import active_powers, normalize_stat_key
+    except Exception:  # pragma: no cover - packs are optional
+        active_powers, normalize_stat_key = (lambda: {}), (lambda v: str(v or "").strip().lower())
+
+    stat_links: dict[str, int] = {}
+    for key, value in (stat_modifiers or {}).items():
+        canon = normalize_stat_key(key)
+        if not canon:
+            continue
+        try:
+            stat_links[canon] = stat_links.get(canon, 0) + int(_float(value, 0))
+        except (TypeError, ValueError):
+            continue
+
+    # --- powers this item points at ------------------------------------------
+    power_codes: list[str] = []
+    declared = change.get("power_codes") or change.get("ability_codes") or []
+    if isinstance(declared, str):
+        declared = [p.strip() for p in declared.split(",") if p.strip()]
+    pack_powers = active_powers()
+    by_name = {str(p.get("name") or "").strip().lower(): code for code, p in pack_powers.items()}
+
+    for ref in declared or []:
+        ref = str(ref).strip()
+        if ref and (ref in pack_powers or ref.lower() in by_name):
+            power_codes.append(ref if ref in pack_powers else by_name[ref.lower()])
+
+    for ability in granted_abilities or []:
+        if not isinstance(ability, dict):
+            continue
+        label = str(ability.get("name") or "").strip()
+        if not label:
+            continue
+        code = ability.get("code") or by_name.get(label.lower())
+        if not code:
+            row = conn.execute(
+                "SELECT code FROM abilities WHERE lower(name) = ?", (label.lower(),)
+            ).fetchone()
+            code = row["code"] if row else None
+        if code and str(code) not in power_codes:
+            power_codes.append(str(code))
+
+    # --- how this item shifts dice -------------------------------------------
+    roll_profile: dict[str, int] = {}
+    declared_profile = change.get("roll_profile")
+    if isinstance(declared_profile, dict):
+        for key, value in declared_profile.items():
+            skill = re.sub(r"[^a-z0-9]+", "_", str(key).lower()).strip("_")
+            if not skill:
+                continue
+            try:
+                roll_profile[skill] = max(-12, min(12, int(_float(value, 0))))
+            except (TypeError, ValueError):
+                continue
+
+    if not roll_profile:
+        skill = _roll_skill_for_item(name, item_type)
+        if skill:
+            bonus = _RARITY_ROLL_BONUS.get(str(rarity or "common").strip().lower(), 0)
+            # A relevant attribute bonus also shows up at the tip of the tool.
+            bonus += min(2, sum(max(0, v) for v in stat_links.values()) // 2)
+            if bonus:
+                roll_profile[skill] = max(-12, min(12, bonus))
+
+    return stat_links, power_codes[:12], roll_profile
+
+
 def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
     for change in changes:
         name = _sanitize_item_name(str(change.get("name", "")))
@@ -5985,6 +7625,16 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
         container_bonus_weight = max(0.0, _float(change.get("container_bonus_weight"), 0.0))
         container_bonus_slots = max(0, min(10000, int(_float(change.get("container_bonus_slots"), 0))))
         dimensional_space = 1 if bool(change.get("dimensional_space")) else 0
+        stat_links, power_codes, roll_profile = _derive_item_links(
+            conn,
+            name=name,
+            item_type=item_type,
+            rarity=rarity,
+            stat_modifiers=stat_modifiers,
+            granted_abilities=granted_abilities,
+            change=change,
+        )
+        has_links = bool(has_stat_modifiers or has_granted_abilities or change.get("roll_profile") or change.get("power_codes"))
         existing = conn.execute("SELECT * FROM inventory WHERE name = ?", (name,)).fetchone()
         if existing:
             quantity = max(0, int(existing["quantity"]) + delta)
@@ -6011,7 +7661,10 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
                     carry_modifier = CASE WHEN ? THEN ? ELSE carry_modifier END,
                     container_bonus_weight = CASE WHEN ? THEN MAX(container_bonus_weight, ?) ELSE container_bonus_weight END,
                     container_bonus_slots = CASE WHEN ? THEN MAX(container_bonus_slots, ?) ELSE container_bonus_slots END,
-                    dimensional_space = CASE WHEN ? THEN MAX(dimensional_space, ?) ELSE dimensional_space END
+                    dimensional_space = CASE WHEN ? THEN MAX(dimensional_space, ?) ELSE dimensional_space END,
+                    stat_links = CASE WHEN ? THEN ? ELSE stat_links END,
+                    power_codes = CASE WHEN ? THEN ? ELSE power_codes END,
+                    roll_profile = CASE WHEN ? THEN ? ELSE roll_profile END
                 WHERE id = ?
                 """,
                 (
@@ -6040,6 +7693,12 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
                     container_bonus_slots,
                     int(has_dimensional),
                     dimensional_space,
+                    int(has_links),
+                    json.dumps(stat_links, ensure_ascii=True),
+                    int(has_links),
+                    json.dumps(power_codes, ensure_ascii=True),
+                    int(has_links),
+                    json.dumps(roll_profile, ensure_ascii=True),
                     existing["id"],
                 ),
             )
@@ -6048,8 +7707,8 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
         elif delta > 0:
             conn.execute(
                 """
-                INSERT INTO inventory (code, name, description, quantity, weight, slot_size, item_type, rarity, enchantments, stat_modifiers, granted_abilities, stack_limit, carry_modifier, container_bonus_weight, container_bonus_slots, dimensional_space)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO inventory (code, name, description, quantity, weight, slot_size, item_type, rarity, enchantments, stat_modifiers, granted_abilities, stack_limit, carry_modifier, container_bonus_weight, container_bonus_slots, dimensional_space, stat_links, power_codes, roll_profile)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _next_code(conn, "inventory", "I"),
@@ -6068,6 +7727,9 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
                     container_bonus_weight,
                     container_bonus_slots,
                     dimensional_space,
+                    json.dumps(stat_links, ensure_ascii=True),
+                    json.dumps(power_codes, ensure_ascii=True),
+                    json.dumps(roll_profile, ensure_ascii=True),
                 ),
             )
 
@@ -6275,12 +7937,21 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     previous_location_id = location_id
 
     move_to = player_patch.get("move_to_location") or player_patch.get("move_to_location_code")
+    venue_note: dict[str, Any] | None = None
     if move_to:
         location_id = _find_location_id(conn, str(move_to))
+        gate = gate_venue_move(conn, previous_location_id, location_id)
+        location_id = int(gate["location_id"] or previous_location_id)
+        venue_note = gate.get("note")
         if location_id != previous_location_id:
             _settle_departed_location_events(conn, previous_location_id, turn)
             conn.execute("UPDATE locations SET visit_count = visit_count + 1 WHERE id = ?", (location_id,))
             _refresh_arrived_location_events(conn, location_id, turn)
+    if venue_note:
+        conn.execute(
+            "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+            (turn, venue_note["kind"], str(venue_note.get("detail") or "")[:900]),
+        )
 
     conn.execute(
         """
@@ -6565,6 +8236,114 @@ def _apply_conversations(conn, conversations: list[dict[str, Any]], turn: int) -
         )
 
 
+# Roles for NPCs seeded from prose.
+#
+# This used to be a fixed four-item cycle starting "hooded stranger", "cloaked
+# local" — and because a scene rarely seeds more than two faces, those two won
+# almost every time: 24 of 27 NPCs across three live runs. Worse, it fed back on
+# itself. The seeder wrote hooded strangers into the cast, the cast went into the
+# next prompt, and the model kept writing hooded figures for the seeder to catch.
+#
+# A role is an occupation — what this person does here. Appearance belongs in the
+# summary, so a baker can still be wearing a hood.
+_SEED_ROLE_POOLS: dict[str, tuple[str, ...]] = {
+    "indoor": (
+        "patron", "server", "cook", "lodger", "card player", "musician",
+        "kitchen hand", "regular", "landlord's son", "wine seller",
+    ),
+    "water": (
+        "ferryman", "net mender", "boatwright", "mudlark", "dock hand",
+        "eel fisher", "bargeman", "salt carrier",
+    ),
+    "wilderness": (
+        "forager", "trapper", "charcoal burner", "pilgrim", "goatherd",
+        "woodcutter", "road warden", "peddler", "hermit", "surveyor",
+        "beekeeper", "deserter",
+    ),
+    "settlement": (
+        "carter", "baker", "tanner", "porter", "stablehand", "roofer",
+        "herbalist", "scribe", "cooper", "weaver", "drover", "toll keeper",
+        "off-duty guard", "apprentice", "message runner", "rag picker",
+        "well keeper", "chandler",
+    ),
+}
+# Scored, not first-hit: a town summary that merely mentions "the road" used to
+# classify the place as wilderness and staff a gate-town with charcoal burners.
+# Ambiguous words ("road", "path") are deliberately absent — they appear
+# everywhere. Settlement is the default when nothing scores.
+_SEED_POOL_HINTS = (
+    ("indoor", ("inn", "tavern", "hall", "cellar", "kitchen", "chapel", "temple", "hearth", "common room", "taproom")),
+    ("water", ("ford", "river", "dock", "wharf", "harbor", "harbour", "riverbank", "beach", "shore", "bridge", "mill", "quay", "ferry")),
+    ("wilderness", ("forest", "woods", "woodland", "moor", "ridge", "cave", "ruins", "wilds", "clearing", "marsh", "thicket", "glade", "hollow", "wilderness")),
+    ("settlement", ("town", "village", "city", "market", "square", "gate", "street", "quarter", "district", "hamlet", "settlement", "keep", "fort", "caravan")),
+)
+# Appearance words a model reaches for; kept out of the role column entirely.
+_APPEARANCE_WORDS = (
+    "hooded", "cloaked", "masked", "veiled", "robed", "tall", "short", "older",
+    "young", "weathered", "scarred", "lean", "burly", "thin", "stocky", "armoured", "armored",
+)
+
+
+def _seed_role_pool(conn, location_id: int) -> tuple[str, ...]:
+    """Pick an occupation pool that fits where the scene is happening."""
+    try:
+        row = conn.execute(
+            "SELECT name, summary FROM locations WHERE id = ?", (int(location_id),)
+        ).fetchone()
+    except Exception:
+        row = None
+    text = f"{(row['name'] if row else '')} {(row['summary'] if row else '')}".lower()
+    scores = {
+        pool: sum(1 for word in keywords if word in text)
+        for pool, keywords in _SEED_POOL_HINTS
+    }
+    best = max(scores, key=lambda pool: (scores[pool], pool == "settlement"))
+    return _SEED_ROLE_POOLS[best if scores[best] else "settlement"]
+
+
+def _seed_role_for(conn, location_id: int, hint: str, index: int, salt: Any = "") -> str:
+    """
+    An occupation for a prose-seeded face, avoiding roles already standing here.
+
+    An explicit occupation in the prose always wins; otherwise the pool is walked
+    deterministically from a campaign-stable seed so reruns and rewinds agree.
+    """
+    low = str(hint or "").lower()
+    for word, role in (
+        ("merchant", "merchant"), ("guard", "guard"), ("innkeeper", "innkeeper"),
+        ("barkeep", "innkeeper"), ("bartender", "innkeeper"), ("soldier", "soldier"),
+        ("scout", "scout"), ("broker", "broker"), ("server", "server"),
+        ("barmaid", "server"), ("barman", "server"), ("keeper", "keeper"),
+        ("traveler", "traveler"), ("traveller", "traveler"), ("wanderer", "traveler"),
+        ("patron", "patron"), ("guest", "guest"),
+    ):
+        if word in low:
+            return role
+    pool = _seed_role_pool(conn, location_id)
+    try:
+        taken = {
+            str(r["role"] or "").strip().lower()
+            for r in conn.execute("SELECT role FROM npcs WHERE location_id = ?", (int(location_id),)).fetchall()
+        }
+    except Exception:
+        taken = set()
+    start = name_seed("seed_role", location_id, salt, index) % len(pool)
+    for step in range(len(pool)):
+        candidate = pool[(start + step) % len(pool)]
+        if candidate.lower() not in taken:
+            return candidate
+    return pool[start]
+
+
+def _appearance_note(hint: str) -> str:
+    """Keep the model'sappearance, in the summary where it belongs."""
+    low = str(hint or "").lower()
+    found = [word for word in _APPEARANCE_WORDS if word in low]
+    if not found:
+        return ""
+    return f" Looks {found[0]}."
+
+
 _FIGURE_HINT_RE = re.compile(
     r"\b("
     r"(?:a|an|the)\s+(?:hooded|cloaked|masked|armou?red|ash[- ]?gr[ae]y|gray[- ]?cloaked|"
@@ -6621,16 +8400,9 @@ def _ensure_npcs_from_narration(
     if not existing and db_count == 0:
         need = min(3, max(len(hints), 1 if has_dialogue else 0))
     created: list[dict[str, Any]] = []
-    roles = ("hooded stranger", "cloaked local", "wary patron", "watchful traveler")
     for i in range(need):
-        role = roles[i % len(roles)]
         hint = hints[i] if i < len(hints) else ""
-        if "merchant" in hint.lower():
-            role = "merchant"
-        elif "guard" in hint.lower():
-            role = "guard"
-        elif "innkeeper" in hint.lower() or "barkeep" in hint.lower() or "bartender" in hint.lower():
-            role = "innkeeper"
+        role = _seed_role_for(conn, int(location_id), hint, i, salt=text[:40])
         try:
             shell = create_shell_npc(
                 conn,
@@ -6638,7 +8410,8 @@ def _ensure_npcs_from_narration(
                 presence="event_worthy",
                 power_rank=8 + i * 2,
                 role=role,
-                seed=abs(hash(f"{location_id}|{hint}|{i}|{text[:40]}")) % (10**9),
+                seed=name_seed("shell_npc", location_id, hint, i, text[:40]),
+                appearance=_appearance_note(hint),
             )
         except Exception:
             continue
@@ -6850,8 +8623,8 @@ def _summarize_turn(result: dict[str, Any], player_input: str) -> str:
 def _write_turn_summary(conn, turn: int, result: dict[str, Any], player_input: str) -> None:
     summary = _summarize_turn(result, player_input)
     conn.execute("INSERT INTO turn_summaries (turn, summary) VALUES (?, ?)", (turn, summary))
-    HISTORY_SUMMARY_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with HISTORY_SUMMARY_PATH.open("a", encoding="utf-8") as handle:
+    history_summary_path().parent.mkdir(parents=True, exist_ok=True)
+    with history_summary_path().open("a", encoding="utf-8") as handle:
         handle.write(json.dumps({"turn": turn, "summary": summary}, ensure_ascii=True) + "\n")
 
 
@@ -6999,7 +8772,7 @@ def _turn_without_private_trace(result: dict[str, Any]) -> dict[str, Any]:
 
 def _prune_model_trace_files() -> None:
     keep = max(1, min(500, int(_float(os.getenv("AI_RPG_MODEL_TRACE_KEEP"), 50))))
-    files = sorted(MODEL_TRACE_DIR.glob("turn-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
+    files = sorted(model_trace_dir().glob("turn-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
     for old_path in files[keep:]:
         try:
             old_path.unlink()
@@ -7029,7 +8802,7 @@ def _write_model_trace_file(
     fallback_reason: str,
 ) -> str:
     # Always write: the play UI offers a per-turn Debug toggle to view/copy the file.
-    MODEL_TRACE_DIR.mkdir(parents=True, exist_ok=True)
+    model_trace_dir().mkdir(parents=True, exist_ok=True)
     fallback_notice = _fallback_notice(fallback_reason) if used_fallback else ""
     payload = {
         "format": "ai-rpg-model-trace-v1",
@@ -7062,7 +8835,7 @@ def _write_model_trace_file(
         "model_trace": result.get("_model_trace") or [],
     }
     suffix = "-fallback" if used_fallback else ""
-    path = MODEL_TRACE_DIR / f"turn-{turn:06d}-{_safe_trace_kind(input_kind)}{suffix}.json"
+    path = model_trace_dir() / f"turn-{turn:06d}-{_safe_trace_kind(input_kind)}{suffix}.json"
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, default=str), encoding="utf-8")
     _prune_model_trace_files()
     return _public_path(path)
@@ -7246,6 +9019,267 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
     return f"{player_input}\n\nResolved player references: {expansions}"
 
 
+# Which turn fields are amounts, and which magnitude table rolls each one.
+#   (container path, band key, numeric key, magnitude kind, allows negative)
+_BAND_FIELDS: tuple[tuple[str, str, str, str, bool], ...] = (
+    ("player", "xp_band", "xp_delta", "xp", False),
+    ("player", "gold_band", "gold_delta", "gold", True),
+    ("player", "health_band", "health_delta", "damage", True),
+    ("player", "karma_band", "karma_delta", "karma", True),
+)
+
+
+def band_authority_mode(options: dict[str, Any] | None = None) -> str:
+    """
+    How much numeric authority the model keeps.
+
+    ``rolled``  (default) — bands are rolled, and bare numbers are read as band
+                hints and re-rolled. The server owns every amount.
+    ``bands``   — bands are rolled; explicit numbers are passed through (still
+                clamped as before).
+    ``off``     — legacy behaviour, bands ignored.
+    """
+    env = str(os.getenv("AI_RPG_BAND_AUTHORITY") or "").strip().lower()
+    if env in {"rolled", "bands", "off"}:
+        return env
+    opts = options if isinstance(options, dict) else {}
+    mode = str(opts.get("band_authority") or "").strip().lower()
+    return mode if mode in {"rolled", "bands", "off"} else "rolled"
+
+
+def _resolve_amount(
+    *,
+    kind: str,
+    band: Any,
+    raw_number: Any,
+    mode: str,
+    level: int,
+    options: dict[str, Any],
+    turn: int,
+    tag: str,
+    seed: int,
+    allow_negative: bool = False,
+) -> tuple[int | None, dict[str, Any] | None]:
+    """
+    Decide one amount. Returns ``(value, roll_record)``; ``value`` is None when
+    nothing should change.
+
+    A declared band always wins. A bare number is treated as an intent signal:
+    it says roughly how big the model *wanted* the change to be, and the server
+    rolls that band properly. This keeps old prompts, cached browser clients,
+    and third-party agents working while still moving the arithmetic here.
+    """
+    from app import rng as rng_mod
+
+    has_band = band is not None and str(band).strip() != ""
+    try:
+        number = int(_float(raw_number, 0))
+    except (TypeError, ValueError):
+        number = 0
+
+    if mode == "off":
+        return (number if number else None), None
+
+    if not has_band:
+        if not number:
+            return None, None
+        if mode == "bands":
+            return number, None
+        band = rng_mod.band_from_number(kind, number, level=level)
+    else:
+        # A model that invents a band word ("fresh", "modest") still clearly
+        # meant *something* to happen. Falling through to "none" silently
+        # deleted the change; treat an unrecognized word as a small one.
+        canon = rng_mod.normalize_band(str(band).lstrip("-"), default="")
+        if not canon:
+            band = ("-" if str(band).startswith("-") else "") + "small"
+
+    negative = False
+    if allow_negative:
+        negative = number < 0 or str(band).strip().lower().startswith(("-", "lose", "spend"))
+
+    roll = rng_mod.resolve_magnitude(
+        kind,
+        str(band).lstrip("-"),
+        level=level,
+        difficulty=str(options.get("difficulty") or "normal"),
+        options=options,
+        negative=negative,
+        turn=turn,
+        tag=tag,
+        seed=seed,
+    )
+    return roll["value"], roll
+
+
+def resolve_turn_bands(
+    conn,
+    result: dict[str, Any],
+    *,
+    turn: int,
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """
+    Replace every "how much" the model proposed with a server-rolled amount.
+
+    Local models are poor at restraint with numbers — asked for XP they mint
+    250, then 400 next turn. Asking them only for a *band* ("small", "large")
+    and rolling the amount here keeps rewards on a curve, makes them respond
+    to level/difficulty/growth settings automatically, and makes the whole
+    thing auditable in the ``dice_rolls`` table.
+    """
+    from app import rng as rng_mod
+
+    options = options if isinstance(options, dict) else {}
+    mode = band_authority_mode(options)
+    if mode == "off":
+        return {"mode": mode, "rolls": []}
+
+    try:
+        prow = conn.execute("SELECT level FROM player WHERE id = 1").fetchone()
+        level = int(prow["level"]) if prow else 1
+    except Exception:
+        level = 1
+
+    # Resolve the campaign seed once, from the connection already held. Letting
+    # each roll open its own connection made SQLite block on its busy timeout
+    # against this transaction (1.9s benchmark -> 117s).
+    seed = rng_mod.campaign_seed(conn)
+    rolls: list[dict[str, Any]] = []
+
+    # Amounts the server itself computed this turn (skill-check injuries,
+    # resolved combat damage). They are already dice results; re-rolling them
+    # would replace real mechanics with a second, unrelated roll.
+    server_authored = {str(p) for p in (result.get("_server_authored") or [])}
+
+    for container, band_key, number_key, kind, signed in _BAND_FIELDS:
+        block = result.get(container)
+        if not isinstance(block, dict):
+            continue
+        if f"{container}.{number_key}" in server_authored:
+            block.pop(band_key, None)
+            continue
+        value, roll = _resolve_amount(
+            kind=kind,
+            band=block.get(band_key),
+            raw_number=block.get(number_key),
+            mode=mode,
+            level=level,
+            options=options,
+            turn=turn,
+            seed=seed,
+            tag=f"{container}.{number_key}",
+            allow_negative=signed,
+        )
+        if roll:
+            rolls.append(roll)
+        if value is None:
+            block.pop(number_key, None)
+        else:
+            block[number_key] = value
+        block.pop(band_key, None)
+
+    for change in result.get("inventory_changes") or []:
+        if not isinstance(change, dict):
+            continue
+        band = change.get("quantity_band")
+        raw = change.get("quantity_delta")
+        if band is None and raw in (None, ""):
+            continue
+        losing = str(band or "").strip().lower().startswith(("-", "lose")) or _float(raw, 0) < 0
+        value, roll = _resolve_amount(
+            kind="item_count",
+            band=band,
+            raw_number=raw,
+            mode=mode,
+            level=level,
+            options=options,
+            turn=turn,
+            seed=seed,
+            tag=f"item:{str(change.get('name') or '')[:32]}",
+        )
+        if roll:
+            rolls.append(roll)
+        change.pop("quantity_band", None)
+        if value is None:
+            continue
+        change["quantity_delta"] = -abs(value) if losing else abs(value)
+
+    for npc in result.get("npcs") or []:
+        if not isinstance(npc, dict):
+            continue
+        if npc.get("trust_band") is None and not npc.get("trust_delta"):
+            continue
+        losing = str(npc.get("trust_band") or "").strip().lower().startswith(("-", "lose")) or _float(npc.get("trust_delta"), 0) < 0
+        value, roll = _resolve_amount(
+            kind="trust",
+            band=npc.get("trust_band"),
+            raw_number=npc.get("trust_delta"),
+            mode=mode,
+            level=level,
+            options=options,
+            turn=turn,
+            seed=seed,
+            tag=f"trust:{str(npc.get('code') or npc.get('name') or '')[:24]}",
+        )
+        if roll:
+            rolls.append(roll)
+        npc.pop("trust_band", None)
+        if value is not None:
+            npc["trust_delta"] = -abs(value) if losing else abs(value)
+
+    for event in result.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        if event.get("fame_band") is None and not event.get("fame_score"):
+            continue
+        value, roll = _resolve_amount(
+            kind="fame",
+            band=event.get("fame_band"),
+            raw_number=event.get("fame_score"),
+            mode=mode,
+            level=level,
+            options=options,
+            turn=turn,
+            seed=seed,
+            tag=f"fame:{str(event.get('title') or '')[:24]}",
+        )
+        if roll:
+            rolls.append(roll)
+        event.pop("fame_band", None)
+        if value is not None:
+            event["fame_score"] = max(0, min(80, value))
+
+    for change in result.get("skill_changes") or []:
+        if not isinstance(change, dict):
+            continue
+        if change.get("delta_band") is None and not change.get("delta"):
+            continue
+        value, roll = _resolve_amount(
+            kind="skill_gain",
+            band=change.get("delta_band"),
+            raw_number=change.get("delta"),
+            mode=mode,
+            level=level,
+            options=options,
+            turn=turn,
+            seed=seed,
+            tag=f"skill:{str(change.get('name') or '')[:24]}",
+        )
+        if roll:
+            rolls.append(roll)
+        change.pop("delta_band", None)
+        if value is not None:
+            change["delta"] = value
+
+    rng_mod.record_rolls(conn, rolls, turn=turn, source="turn_bands")
+    return {
+        "mode": mode,
+        "rolls": rolls,
+        "lines": [rng_mod.explain(r) for r in rolls],
+    }
+
+
 def apply_turn(
     result: dict[str, Any],
     player_input: str,
@@ -7257,8 +9291,45 @@ def apply_turn(
     with connect() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         next_turn = int(row["value"]) + 1 if row else 1
+
+        # Movement runs before the snapshot so a repaired destination is part of
+        # the rewind record, not applied on top of it.
+        try:
+            movement_report = resolve_movement(
+                conn,
+                result,
+                player_input,
+                intent=_turn_intent(player_input)[0],
+                narration=_narration_text(result),
+            )
+        except Exception as exc:
+            movement_report = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200]}
+
         _save_snapshot(conn, next_turn, result)
         turn = _next_turn(conn)
+
+        # Every "how much" the model proposed becomes a server-rolled amount
+        # before anything touches the database. Runs first so the snapshot
+        # above still holds the model's raw proposal for debugging.
+        try:
+            band_report = resolve_turn_bands(
+                conn,
+                result,
+                turn=turn,
+                options=_settings(conn).get("playthrough_options") or {},
+            )
+        except Exception as exc:
+            # Falling back here means the model's raw numbers pass through
+            # unrolled, so make it loud rather than a silent downgrade.
+            band_report = {"mode": "error", "rolls": [], "error": f"{type(exc).__name__}: {exc}"[:200]}
+            try:
+                conn.execute(
+                    "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                    (turn, "system", f"Band resolution failed; amounts were not rolled. {band_report['error']}"),
+                )
+            except Exception:
+                pass
+
         narration = _narration_text(result)
         # Last-line defense: expand [[codes]] / fill blank subjects using live cast names
         try:
@@ -7304,6 +9375,17 @@ def apply_turn(
         result["npcs"] = collected_npcs
         for npc in collected_npcs:
             _upsert_npc(conn, npc)
+
+        # Pin one keeper per venue. Without this the model reinvented whoever was
+        # behind the counter on every visit -- the same apothecary was staffed by
+        # a man, then a woman, then a different man across three visits.
+        try:
+            here_row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+            here_id = int((here_row["current_location_id"] if here_row else 0) or 0)
+            if here_id and str(venues._field(_location_row(conn, here_id), "kind", "") or ""):
+                bind_venue_keeper(conn, here_id)
+        except Exception:
+            pass
 
         # Opening/scene figures without structured npcs → seed cast so export isn't empty
         try:
@@ -7391,6 +9473,29 @@ def apply_turn(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                 (turn, "self_check", json.dumps(result.get("self_check"), ensure_ascii=True)[:1800]),
             )
+        # Movement repairs are state changes the model did not ask for — say so.
+        if movement_report.get("status") == "repaired":
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (
+                    turn,
+                    "system",
+                    "Travel action with no MOVE op; server moved the player to "
+                    f"{movement_report.get('destination') or '?'} ({movement_report.get('rule')})."[:1400],
+                ),
+            )
+        elif movement_report.get("status") == "unresolved":
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (turn, "system", "Travel action with no MOVE op and no resolvable destination; player stayed put."),
+            )
+        # Keep the dice visible: the player can always ask why they got 7 gold.
+        if band_report.get("lines"):
+            result["_band_rolls"] = band_report
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (turn, "dice", " · ".join(band_report["lines"])[:1400]),
+            )
         if used_fallback:
             reason = fallback_reason or "Local LLM was unavailable or returned invalid JSON."
             conn.execute(
@@ -7413,7 +9518,22 @@ def apply_turn(
     except Exception:
         # Consolidation must not block turn application; use /api/memory/consolidate to force and surface errors.
         pass
-    return _state_with_refreshed_source_index()
+    state = _state_with_refreshed_source_index()
+    # Surface this turn's dice on the returned state. `result` is discarded
+    # here, so anything left only on it (as _band_rolls originally was) is
+    # invisible to the API and the UI.
+    if isinstance(state, dict) and band_report.get("rolls"):
+        state["dice_rolls"] = {
+            "mode": band_report.get("mode"),
+            "turn": turn,
+            "lines": band_report.get("lines") or [],
+            "rolls": band_report.get("rolls") or [],
+        }
+    if isinstance(state, dict):
+        # Measurable: a playtest can count model / repaired / unresolved travel turns.
+        state["movement"] = {**movement_report, "turn": turn}
+        state["voice_check"] = check_narrative_voice(narration, state)
+    return state
 
 
 def _turn_reward_summary(before_state: dict[str, Any], after_state: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
@@ -7919,6 +10039,14 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         input_kind=input_kind,
         prompt_context=prompt_context,
     )
+    # apply_turn annotates the state it returns; later code re-reads state from
+    # the database on some paths (injuries), which silently dropped these on
+    # about half the turns. Keep them locally and re-attach after any refresh.
+    turn_telemetry = {
+        key: (state or {}).get(key)
+        for key in ("dice_rolls", "movement", "voice_check")
+        if isinstance(state, dict) and state.get(key)
+    }
     if ability_use_pack:
         result["ability_use"] = {
             "ok": ability_use_pack.get("ok"),
@@ -7982,6 +10110,9 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                 state = get_state(include_hidden=False)
     except Exception:
         pass
+    if isinstance(state, dict):
+        for key, value in turn_telemetry.items():
+            state.setdefault(key, value)
     debug_trace_path = _write_model_trace_file(
         _current_turn_number(),
         input_kind,
@@ -8039,7 +10170,7 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                 travel_ready = False
             # Player move this turn implies they already walked.
             player_patch = result.get("player") if isinstance(result.get("player"), dict) else {}
-            if player_patch.get("move_to_location"):
+            if player_patch.get("move_to_location") or player_patch.get("move_to_location_code"):
                 travel_ready = False
             # Explicit scene_plan goal "resolve" / "leave" unlocks
             plan = result.get("scene_plan") if isinstance(result.get("scene_plan"), dict) else {}
@@ -8072,6 +10203,13 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         "debug_trace_path": debug_trace_path or "",
         "debug": debug_bundle,
         "skill_checks": skill_check_results or result.get("skill_checks") or [],
+        # Amounts the server rolled this turn, alongside skill_checks so the UI
+        # can show both kinds of dice in one place.
+        "dice_rolls": (state or {}).get("dice_rolls") or {},
+        # Continuity telemetry: whether the model moved the player itself, the
+        # server had to, or a travel turn resolved nowhere; plus point-of-view drift.
+        "movement": (state or {}).get("movement") or {},
+        "voice_check": (state or {}).get("voice_check") or {},
         "travel_ready": bool(travel_ready),
         "travel": {
             "ready": bool(travel_ready),
@@ -8620,7 +10758,7 @@ def ensure_settlement_ruler(
     power = int(settlement.get("ruler_power_rank") or 50)
     power = max(30, min(100, power))
     role = _RULER_ROLE_BY_CLASS.get(sclass, "local authority")
-    rng = random.Random(hash(sid) & 0x7FFFFFFF)
+    rng = random.Random(name_seed("ruler", sid))
     surnames = ["Vale", "Reed", "Cross", "Hale", "Morn", "Wick", "Ash", "Quay"]
     summary = f"Holds authority in this {sclass}; power rank {power}."
     code = ""
@@ -8628,8 +10766,12 @@ def ensure_settlement_ruler(
     cur = None
     for attempt in range(12):
         code = _next_alpha_code(conn, "npcs")
+        # npcs is UNIQUE(location_id, name), so the insert retry below cannot
+        # catch a duplicate in a different place. Check the whole world.
         base = f"{rng.choice(_SHELL_NAME_PARTS_A)} {rng.choice(surnames)}"
         name = base if attempt == 0 else f"{base} {sid[-4:]}{attempt}"
+        if _person_name_taken(conn, name):
+            name = unique_person_name(conn, name_seed("ruler", sid, attempt))
         try:
             cur = conn.execute(
                 """
@@ -8679,6 +10821,8 @@ def ensure_settlement_ruler(
             ncode = _next_alpha_code(conn, "npcs")
             base = f"{rng.choice(_SHELL_NAME_PARTS_A)}{rng.choice(_SHELL_NAME_PARTS_B)}"
             nname = base if attempt == 0 else f"{base} {nrole.split()[0][:6]}{attempt}"
+            if _person_name_taken(conn, nname):
+                nname = unique_person_name(conn, name_seed("local_cast", nrole, attempt))
             try:
                 conn.execute(
                     """
@@ -9060,7 +11204,7 @@ def play_wait_turn(minutes: int, kind: str = "wait") -> dict[str, Any]:
             ^ (before["day"] * 10007)
             ^ (before["minute"] * 17)
             ^ (_current_turn_number() * 131)
-            ^ (hash(str((context.get("current_location") or {}).get("code") or "")) & 0xFFFF)
+            ^ (name_seed(str((context.get("current_location") or {}).get("code") or "")) & 0xFFFF)
         )
         rng_pack = roll_wait_events(
             minutes=minutes,

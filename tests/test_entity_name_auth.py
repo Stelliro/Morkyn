@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.llm import _repair_entity_names_in_turn
 from app.world import invent_person_name, is_plausible_person_name, is_plausible_place_name
 
@@ -109,8 +111,13 @@ def test_repair_scenery_npc_and_does_not_spam_name_before_every_verb():
     assert fixed["locations"][0]["name"] == "Cinder Market"
     # Physical window kept as object; person uses renamed
     assert "window is your only view" in fixed["narration"].lower()
-    assert f"{npc_name.lower()} stands" in fixed["narration"].lower()
-    assert f"{npc_name.lower()} leans" in fixed["narration"].lower()
+    # The repair tags the entity, so the text reads "Dockbin [[A]] stands".
+    # Assert the name is attached to the verb, allowing that tag between them.
+    low = fixed["narration"].lower()
+    for verb in ("stands", "leans"):
+        assert re.search(
+            rf"{re.escape(npc_name.lower())}(?:\s*\[\[[^\]]+\]\])?\s+{verb}", low
+        ), (verb, low)
     # Should not paste the name before every verb endlessly
     assert fixed["narration"].lower().count(npc_name.lower()) <= 3
 

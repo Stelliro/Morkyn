@@ -6,12 +6,23 @@ from pathlib import Path
 from typing import Any
 
 
-DB_PATH = Path(os.getenv("AI_RPG_DB", "data/world.db"))
+def db_path() -> Path:
+    """Resolve the world database path, re-reading the environment every call.
+
+    Deliberately not a module-level constant. Tests set ``AI_RPG_DB`` to a temp
+    path at import time, but a constant is frozen by whichever module imports
+    ``app.db`` first -- under ``unittest discover`` that is an alphabetically
+    earlier test file, and every later test then wrote into the player's real
+    ``data/world.db``. Resolving per call makes the env var authoritative
+    regardless of import order.
+    """
+    return Path(os.getenv("AI_RPG_DB", "data/world.db"))
 
 
 def connect() -> sqlite3.Connection:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    path = db_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
@@ -37,7 +48,22 @@ def init_db() -> None:
                 name TEXT NOT NULL UNIQUE,
                 summary TEXT NOT NULL DEFAULT '',
                 discovered_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                visit_count INTEGER NOT NULL DEFAULT 0
+                visit_count INTEGER NOT NULL DEFAULT 0,
+                -- Containment. 0 = a place in the open world; otherwise the id of
+                -- the place you must be standing in to enter this one. A shop on a
+                -- square is the square's child, so entering it is an ordinary move
+                -- and it can never be reached from two towns away.
+                parent_id INTEGER NOT NULL DEFAULT 0,
+                -- '' for open places; otherwise a venue kind (apothecary, smithy...)
+                kind TEXT NOT NULL DEFAULT '',
+                -- Minutes past midnight. -1/-1 means always open.
+                open_minute INTEGER NOT NULL DEFAULT -1,
+                close_minute INTEGER NOT NULL DEFAULT -1,
+                -- hamlet | village | town | city, on settlements. Decides which
+                -- venue kinds can plausibly exist here.
+                settlement_size TEXT NOT NULL DEFAULT '',
+                -- The one NPC who is always behind this counter.
+                keeper_npc_id INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS player (
@@ -391,6 +417,57 @@ def init_db() -> None:
                 FOREIGN KEY (image_id) REFERENCES tile_images(id) ON DELETE CASCADE
             );
 
+            -- Every "how much" decision the server rolled, for player audit.
+            CREATE TABLE IF NOT EXISTS dice_rolls (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                turn INTEGER NOT NULL DEFAULT 0,
+                tag TEXT NOT NULL DEFAULT '',
+                kind TEXT NOT NULL DEFAULT '',
+                notation TEXT NOT NULL DEFAULT '',
+                rolls TEXT NOT NULL DEFAULT '[]',
+                modifier INTEGER NOT NULL DEFAULT 0,
+                raw_total INTEGER NOT NULL DEFAULT 0,
+                value INTEGER NOT NULL DEFAULT 0,
+                band TEXT NOT NULL DEFAULT '',
+                seed INTEGER NOT NULL DEFAULT 0,
+                inputs TEXT NOT NULL DEFAULT '{}',
+                source TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_dice_rolls_turn ON dice_rolls(turn);
+
+            -- Installed content packs (skills / powers / items / tables).
+            CREATE TABLE IF NOT EXISTS content_packs (
+                id TEXT PRIMARY KEY,
+                label TEXT NOT NULL DEFAULT '',
+                version TEXT NOT NULL DEFAULT '1',
+                author TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT 'user',
+                enabled INTEGER NOT NULL DEFAULT 1,
+                builtin INTEGER NOT NULL DEFAULT 0,
+                checksum TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '{}',
+                installed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            -- One row per thing a pack contributed, so removal is exact.
+            CREATE TABLE IF NOT EXISTS content_pack_entries (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pack_id TEXT NOT NULL,
+                section TEXT NOT NULL,
+                entry_code TEXT NOT NULL,
+                entry_name TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL DEFAULT '{}',
+                UNIQUE(pack_id, section, entry_code),
+                FOREIGN KEY (pack_id) REFERENCES content_packs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_pack_entries_section
+            ON content_pack_entries(section, entry_code);
+
             -- Generated / active maps
             CREATE TABLE IF NOT EXISTS world_maps (
                 id TEXT PRIMARY KEY,
@@ -451,6 +528,17 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     }
     if "code" not in table_columns["locations"]:
         conn.execute("ALTER TABLE locations ADD COLUMN code TEXT NOT NULL DEFAULT ''")
+    location_columns = table_columns["locations"]
+    for column, definition in (
+        ("parent_id", "INTEGER NOT NULL DEFAULT 0"),
+        ("kind", "TEXT NOT NULL DEFAULT ''"),
+        ("open_minute", "INTEGER NOT NULL DEFAULT -1"),
+        ("close_minute", "INTEGER NOT NULL DEFAULT -1"),
+        ("settlement_size", "TEXT NOT NULL DEFAULT ''"),
+        ("keeper_npc_id", "INTEGER NOT NULL DEFAULT 0"),
+    ):
+        if column not in location_columns:
+            conn.execute(f"ALTER TABLE locations ADD COLUMN {column} {definition}")
     if "code" not in table_columns["npcs"]:
         conn.execute("ALTER TABLE npcs ADD COLUMN code TEXT NOT NULL DEFAULT ''")
     if "code" not in table_columns["inventory"]:
@@ -551,6 +639,19 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE abilities ADD COLUMN power_type TEXT NOT NULL DEFAULT 'linear'")
     if "code" not in ability_columns:
         conn.execute("ALTER TABLE abilities ADD COLUMN code TEXT NOT NULL DEFAULT ''")
+    # Powers are read-only rules the dice roller consults; they are never
+    # re-derived by the model mid-play. roll_profile says which checks the
+    # power modifies; magnitude_band is its default "how much" band.
+    for column, definition in (
+        ("read_only", "INTEGER NOT NULL DEFAULT 1"),
+        ("roll_profile", "TEXT NOT NULL DEFAULT '{}'"),
+        ("magnitude_band", "TEXT NOT NULL DEFAULT ''"),
+        ("magnitude_kind", "TEXT NOT NULL DEFAULT ''"),
+        ("activation", "TEXT NOT NULL DEFAULT 'active'"),
+        ("pack_id", "TEXT NOT NULL DEFAULT ''"),
+    ):
+        if column not in ability_columns:
+            conn.execute(f"ALTER TABLE abilities ADD COLUMN {column} {definition}")
     # Backfill ability codes (AB1, AB2…) when missing
     try:
         bare = conn.execute(
@@ -579,6 +680,19 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("container_bonus_slots", "INTEGER NOT NULL DEFAULT 0"),
         ("dimensional_space", "INTEGER NOT NULL DEFAULT 0"),
         ("equipped_slot", "TEXT NOT NULL DEFAULT ''"),
+        # --- item -> stats / powers wiring -------------------------------
+        # stat_links: canonical stat keys only ({"strength": 2}), normalized
+        #   from the free-text stat_modifiers the model may write.
+        # power_codes: JSON array of abilities.code (AB1, AB2...) this item
+        #   grants while equipped. Powers stay read-only; the item points at
+        #   them rather than restating them.
+        # roll_profile: which skill checks this item shifts, e.g.
+        #   {"melee": 2, "stealth": -1}. The dice roller applies these
+        #   automatically so the model never has to reason about modifiers.
+        ("stat_links", "TEXT NOT NULL DEFAULT '{}'"),
+        ("power_codes", "TEXT NOT NULL DEFAULT '[]'"),
+        ("roll_profile", "TEXT NOT NULL DEFAULT '{}'"),
+        ("pack_id", "TEXT NOT NULL DEFAULT ''"),
     ):
         if column not in inventory_columns:
             conn.execute(f"ALTER TABLE inventory ADD COLUMN {column} {definition}")

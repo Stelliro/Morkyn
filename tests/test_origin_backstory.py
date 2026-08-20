@@ -197,8 +197,12 @@ def test_native_fantasy_plot_rewritten_for_transmigrated():
     assert "guest right" not in fixed_l
     assert "compounding" not in fixed_l
     assert "disgraced noble" not in fixed_l
-    assert "former life" in fixed_l or "worked" in fixed_l or "job" in fixed_l or "office" in fixed_l or "warehouse" in fixed_l or "technician" in fixed_l or "student" in fixed_l or "city" in fixed_l
-    assert any(m in fixed_l for m in ("died", "woke", "accident", "truck", "summon", "portal", "transport"))
+    # Assert the properties, not a hand-copied keyword list: the composer writes
+    # valid transports the list never covered ("...ended with a ferry railing
+    # give-way in winter chop"), and the vocabulary lives in setup_composer.
+    rebuilt = transmigration_story_score(fixed)
+    assert rebuilt["has_former_world"] is True, fixed
+    assert rebuilt["has_transport"] is True, fixed
     assert transmigration_story_score(fixed)["ok"] is True
 
 

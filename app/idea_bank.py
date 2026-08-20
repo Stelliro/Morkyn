@@ -11,6 +11,7 @@ Sources (merged, ship first then user overlays):
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -20,7 +21,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parent.parent
 SHIPPED_DIR = ROOT / "config" / "idea_bank"
-USER_DIR = Path(os.getenv("AI_RPG_IDEA_BANK", str(ROOT / "data" / "idea_bank")))
+def user_dir() -> Path:
+    """Resolved per call so AI_RPG_IDEA_BANK is honoured whatever the import order."""
+    return Path(os.getenv("AI_RPG_IDEA_BANK", str(ROOT / "data" / "idea_bank")))
 
 # kind → typical setup fields that benefit from that spark
 KIND_FIELDS: dict[str, tuple[str, ...]] = {
@@ -95,7 +98,8 @@ def _norm_card(raw: dict[str, Any], *, source: str) -> dict[str, Any] | None:
     card_id = str(raw.get("id") or "").strip()
     if not card_id:
         slug = re.sub(r"[^a-z0-9]+", "_", f"{kind}_{title}".lower()).strip("_")[:64]
-        card_id = slug or f"idea_{abs(hash(text)) % 10**8}"
+        # blake2b, not hash(): card ids must be the same string in every process.
+        card_id = slug or "idea_" + hashlib.blake2b(text.encode("utf-8", "replace"), digest_size=5).hexdigest()
     return {
         "id": card_id[:80],
         "kind": kind[:40],
@@ -110,7 +114,7 @@ def _norm_card(raw: dict[str, Any], *, source: str) -> dict[str, Any] | None:
 
 def _iter_jsonl_paths() -> list[Path]:
     paths: list[Path] = []
-    for folder in (SHIPPED_DIR, USER_DIR):
+    for folder in (SHIPPED_DIR, user_dir()):
         if not folder.is_dir():
             continue
         try:
@@ -178,8 +182,8 @@ def idea_bank_stats() -> dict[str, Any]:
         "total": len(cards),
         "by_kind": dict(sorted(by_kind.items())),
         "shipped_dir": str(SHIPPED_DIR).replace("\\", "/"),
-        "user_dir": str(USER_DIR).replace("\\", "/"),
-        "user_dir_exists": USER_DIR.is_dir(),
+        "user_dir": str(user_dir()).replace("\\", "/"),
+        "user_dir_exists": user_dir().is_dir(),
         "files": [
             (
                 str(p.relative_to(ROOT)).replace("\\", "/")
@@ -371,8 +375,8 @@ def append_user_idea(card: dict[str, Any], *, filename: str = "user_ideas.jsonl"
     normalized = _norm_card(card, source=f"data/idea_bank/{filename}")
     if not normalized:
         raise ValueError("Idea card needs title or text.")
-    USER_DIR.mkdir(parents=True, exist_ok=True)
-    path = USER_DIR / filename
+    user_dir().mkdir(parents=True, exist_ok=True)
+    path = user_dir() / filename
     # strip internal source before write; re-derive on load
     row = {
         "id": normalized["id"],

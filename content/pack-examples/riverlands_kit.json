@@ -1,0 +1,102 @@
+{
+  "format": "morkyn-content-pack-v1",
+  "id": "riverlands_kit",
+  "label": "Riverlands Kit",
+  "version": "1.0.0",
+  "author": "example",
+  "description": "A small themed pack: one skill, one power, one item that ties them together.",
+  "skills": [
+    {
+      "code": "poling",
+      "name": "Poling",
+      "category": "craft",
+      "attribute": "strength",
+      "secondary": "dexterity",
+      "tags": [
+        "boat",
+        "river",
+        "punt"
+      ],
+      "base_dc": 12,
+      "description": "Pushing a flat boat upriver with a pole without losing the line.",
+      "triggers": [
+        "\\b(pole|punt|push the (boat|barge|raft))\\b"
+      ],
+      "growth": {
+        "band": "small",
+        "on": [
+          "success",
+          "critical_success"
+        ]
+      }
+    }
+  ],
+  "powers": [
+    {
+      "code": "AB_river_read",
+      "name": "River Read",
+      "description": "Read the current for a heartbeat and know where the channel runs.",
+      "activation": "active",
+      "read_only": true,
+      "resource_cost": {
+        "energy": 2
+      },
+      "cooldown_turns": 1,
+      "roll_profile": {
+        "poling": 2,
+        "navigation": 1
+      },
+      "magnitude": {
+        "kind": "duration_minutes",
+        "band": "small"
+      },
+      "prerequisites": "Has poled a river at least once"
+    }
+  ],
+  "items": [
+    {
+      "code": "IT_river_pole",
+      "name": "Ironshod River Pole",
+      "item_type": "tool",
+      "rarity": "uncommon",
+      "weight": 4.0,
+      "slot_size": 2,
+      "stack_limit": 1,
+      "equip_slot": "main_hand",
+      "description": "A long ash pole with an iron foot, worn smooth at the grip.",
+      "stat_links": {
+        "strength": 1
+      },
+      "power_codes": [
+        "AB_river_read"
+      ],
+      "roll_profile": {
+        "poling": 2,
+        "athletics": 1
+      }
+    }
+  ],
+  "encounter_tables": {
+    "terrain": {
+      "swamp": {
+        "base_chance": 0.18,
+        "kinds": {
+          "wild_threat": 55,
+          "bandit_ambush": 15,
+          "traveler": 10,
+          "hidden_base": 20
+        }
+      }
+    },
+    "kinds": {
+      "wild_threat": {
+        "label": "Something in the reeds",
+        "hostile": true,
+        "avoid_skill": "perception",
+        "count_band": "small",
+        "threat_band": "moderate"
+      }
+    }
+  },
+  "magnitude_tables": {}
+}

@@ -3248,6 +3248,58 @@ _BACKSTORY_SKILL_META_MARKERS = (
 )
 
 
+# Arrival detection used to be a flat phrase list ("woke", "found themselves", ...).
+# It rejected perfectly good arrivals the composer itself writes -- "when awareness
+# returned they were at a lantern-lit market lane" scored missing_arrival_place, so
+# the gate failed the generator's own output. These add a structural route: an
+# awareness cue and a place, in the same sentence. Purely additive; the original
+# phrase list below still passes on its own.
+_ARRIVAL_AWARENESS_CUES: tuple[str, ...] = (
+    "woke", "waking", "awoke", "awaken",
+    "came to", "came round", "came around",
+    "awareness returned", "consciousness returned", "senses returned",
+    "regained consciousness", "opened their eyes", "opened her eyes",
+    "opened his eyes", "opened my eyes",
+    "next thing they knew", "next thing i knew",
+    "found themselves", "found themself", "found myself",
+    "found herself", "found himself",
+    "they surface", "arrival was", "next breath", "first disoriented breath",
+    "stood", "standing", "landed", "arrived",
+)
+
+_ARRIVAL_PLACE_HEADS: tuple[str, ...] = (
+    "road", "roads", "lane", "lanes", "street", "streets", "alley", "square", "market",
+    "gate", "gates", "yard", "courtyard", "court", "path", "paths", "trail", "track",
+    "hut", "camp", "stair", "stairs", "step", "steps", "pier", "landing", "ford",
+    "crossroads", "crossroad", "shrine", "temple", "chapel", "towpath", "oasis",
+    "village", "town", "city", "inn", "tavern", "hall", "bridge", "wharf", "dock",
+    "docks", "harbor", "harbour", "port", "field", "fields", "forest", "wood", "woods",
+    "clearing", "cave", "cell", "chamber", "room", "plaza", "terrace", "hillside",
+    "riverbank", "bank", "shore", "beach", "stable", "barn", "mill", "well", "wall",
+    "tower", "keep", "fort", "ruin", "ruins", "grove", "meadow", "moor", "ridge",
+    "valley", "pass", "cliff", "canal", "dune", "tent", "wagon", "cart", "deck",
+    "corridor", "underpass", "compound", "monastery", "outpost", "post", "relay",
+    "station", "platform", "quay", "slope", "ledge", "gorge", "mooring", "spire",
+)
+
+_ARRIVAL_LOCATIVE_RE = re.compile(
+    r"\b(?:at|in|on|onto|into|beside|outside|inside|under|near|within|among|amid|by|above|over)\s+"
+    r"(?:the|a|an|some|that|this|their|its)?\s*"
+    r"(?:[\w'-]+[\s,-]+){0,5}"
+    r"(?:" + "|".join(_ARRIVAL_PLACE_HEADS) + r")\b"
+)
+
+
+def _has_structural_arrival(low: str) -> bool:
+    """True when one sentence both signals waking/arriving and names a place."""
+    for sentence in re.split(r"[.!?;]+", low):
+        if not sentence.strip():
+            continue
+        if any(cue in sentence for cue in _ARRIVAL_AWARENESS_CUES) and _ARRIVAL_LOCATIVE_RE.search(sentence):
+            return True
+    return False
+
+
 def transmigration_story_score(story: str) -> dict[str, Any]:
     """Score whether a backstory actually covers former life + transport for transmigrated mode."""
     low = re.sub(r"\s+", " ", str(story or "").strip().lower())
@@ -3269,7 +3321,7 @@ def transmigration_story_score(story: str) -> dict[str, Any]:
             "found themselves",
             "found themself",
         )
-    )
+    ) or _has_structural_arrival(low)
     native_plot = sum(1 for m in _NATIVE_FANTASY_PLOT_MARKERS if m in low)
     skill_meta = any(m in low for m in _BACKSTORY_SKILL_META_MARKERS)
     # "another world" alone at the end of a bolt-on sentence is weak if no former-life job
@@ -4404,28 +4456,70 @@ _TX_ARRIVALS: tuple[str, ...] = (
     "a silent white corridor that felt like judgment more than place",
 )
 
-_TX_POCKETS: tuple[str, ...] = (
+# Pocket contents have to belong to the job that produced them. Job and pocket
+# were drawn independently, so a public-library assistant could arrive carrying
+# "a red pen, lesson notes in a tote" -- a teacher's kit -- and a portal death
+# could leave someone with a ferry ticket stub. Each row maps job keywords to the
+# pockets that fit; the neutral pockets read correctly after any ordinary life and
+# are always offered too, so coherence does not cost variety.
+_POCKETS_BY_JOB: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("teacher", "stenographer"), ("a red pen, lesson notes in a tote, and a bus pass that means nothing",)),
+    (("library", "lab tech", "college"), ("reading glasses with one loose arm, a library card, and lint",)),
+    (
+        ("nurse", "paramedic", "hygienist", "pharmacy", "veterinary"),
+        (
+            "burn cream, a spare hair tie, and a street wallet with useless cards",
+            "a pharmacy badge clip and empty exam-glove pockets",
+        ),
+    ),
+    (("cook", "bakery"), ("a thermos lid, apron string, and flour still on their cuffs",)),
+    (("courier", "bike"), ("bike gloves, a rain poncho, and a protein bar gone soft",)),
+    (("driver", "ferry", "baggage"), ("a ferry ticket stub and salt already drying on their coat",)),
+    (
+        ("security", "janitor", "super"),
+        ("a staff radio that only statics, and scuffed security shoes",),
+    ),
+    (("florist",), ("florist wire snips and a pocketful of cut stems",)),
+    (("stagehand", "theater", "radio"), ("stage-black fingerless gloves and a roll of spike tape",)),
+    (("kindergarten", "aide"), ("glitter, stickers, and a child-sized bandage in a coat pocket",)),
+    (
+        ("clerk", "office", "front-desk", "receptionist"),
+        (
+            "a notebook of unfinished lists and a stub of chalk",
+            "a cheap umbrella, pressed shirt, and a hotel keycard from nowhere useful",
+        ),
+    ),
+    (("beekeeper", "market", "stall"), ("a market coin purse with the wrong currency",)),
+    (
+        ("architecture", "web fixer", "phone-repair"),
+        ("plotter USB stick, coffee-stained sketch roll, and aspirin",),
+    ),
+    (("stocker", "grocery"), ("a half-empty water bottle, house keys, and a cracked earbuds case",)),
+    (("tailor", "sewing"), ("a sewing kit, scrap cloth, and soft shoes still damp from rain",)),
+)
+
+# True after any ordinary life, so they stay available whatever the job was.
+_TX_POCKETS_NEUTRAL: tuple[str, ...] = (
     "a dead phone, transit card, and the clothes they died in",
     "soft work shoes, a badge lanyard, and nothing that opens a door here",
-    "a half-empty water bottle, house keys, and a cracked earbuds case",
-    "a cheap umbrella, pressed shirt, and a hotel keycard from nowhere useful",
-    "bike gloves, a rain poncho, and a protein bar gone soft",
-    "a red pen, lesson notes in a tote, and a bus pass that means nothing",
-    "burn cream, a spare hair tie, and a street wallet with useless cards",
-    "a sewing kit, scrap cloth, and soft shoes still damp from rain",
-    "a notebook of unfinished lists and a stub of chalk",
-    "reading glasses with one loose arm, a library card, and lint",
-    "a thermos lid, apron string, and flour still on their cuffs",
-    "a staff radio that only statics, and scuffed security shoes",
-    "florist wire snips and a pocketful of cut stems",
-    "stage-black fingerless gloves and a roll of spike tape",
-    "a ferry ticket stub and salt already drying on their coat",
-    "glitter, stickers, and a child-sized bandage in a coat pocket",
-    "a market coin purse with the wrong currency",
-    "plotter USB stick, coffee-stained sketch roll, and aspirin",
     "only street clothes and the muscle memory of an ordinary job",
-    "a pharmacy badge clip and empty exam-glove pockets",
 )
+
+
+def _pockets_for_job(job: str) -> tuple[str, ...]:
+    """Pocket contents that fit `job`, always plus the job-neutral ones."""
+    low = str(job or "").lower()
+    matched: tuple[str, ...] = ()
+    for keys, pockets in _POCKETS_BY_JOB:
+        if any(key in low for key in keys):
+            matched = pockets
+            break
+    out: list[str] = []
+    for cand in (*matched, *_TX_POCKETS_NEUTRAL):
+        if cand not in out:
+            out.append(cand)
+    return tuple(out)
+
 
 _TX_CLOSERS: tuple[str, ...] = (
     "Play begins at that arrival — they are a newcomer with ordinary habits, not a local plot already in motion.",
@@ -4458,6 +4552,7 @@ def build_transmigration_backstory(
     world_style: str = "",
     genre: str = "",
     seed: int | None = None,
+    keep_former_life: str = "",
 ) -> str:
     """
     Canonical transmigrated structure (third person):
@@ -4505,6 +4600,12 @@ def build_transmigration_backstory(
             [j for j in _TX_JOBS if any(k in j for k in ("clerk", "teacher", "library", "office"))]
             or list(_TX_JOBS)
         )
+
+    if keep_former_life:
+        # The caller wants this person kept, not replaced. old_story is only a ban
+        # list here, so without this the player's own former life is what the
+        # generator most carefully avoids re-using.
+        job = keep_former_life
 
     death = _pick(_TX_DEATHS)
     if any(m in idea_l for m in ("summon", "ritual")):
@@ -4557,34 +4658,34 @@ def build_transmigration_backstory(
         elif any(k in ws for k in ("heaven", "celestial", "empyrean")):
             arrival = "a silent white corridor that felt like judgment more than place"
 
-    pocket = _pick(_TX_POCKETS)
+    pocket = _pick(_pockets_for_job(job))
     closer = _pick(_TX_CLOSERS)
 
     shape = rng.randint(0, 5)
     if shape == 0:
         text = (
-            f"Before the transfer they were a {job}. "
+            f"Before the transfer they were {_article_for(job)} {job}. "
             f"Then came {death}; when awareness returned they were at {arrival}, "
             f"carrying {pocket}. {closer}"
         )
     elif shape == 1:
         text = (
-            f"They remember being a {job} until {death}. "
+            f"They remember being {_article_for(job)} {job} until {death}. "
             f"They woke at {arrival} with {pocket}. {closer}"
         )
     elif shape == 2:
         text = (
-            f"Death found them as a {job} via {death}. "
+            f"Death found them as {_article_for(job)} {job} via {death}. "
             f"Arrival was {arrival} — {pocket} for inventory. {closer}"
         )
     elif shape == 3:
         text = (
-            f"An ordinary first life as a {job} ended with {death}. "
+            f"An ordinary first life as {_article_for(job)} {job} ended with {death}. "
             f"The next breath was air over {arrival}, and all they still owned was {pocket}. {closer}"
         )
     elif shape == 4:
         text = (
-            f"They did not grow up in this world. As a {job} they lived by modern schedules until {death} "
+            f"They did not grow up in this world. As {_article_for(job)} {job} they lived by modern schedules until {death} "
             f"cut that life short. Now they stand at {arrival} with {pocket}. {closer}"
         )
     else:
@@ -4916,6 +5017,86 @@ def quality_gate_backstory(
     }
 
 
+_FORMER_LIFE_LEAD_INS: tuple[str, ...] = (
+    "before the transfer they were",
+    "in their former life they were",
+    "in their former life they held",
+    "they used to be",
+    "they had been",
+    "they were once",
+    "they were",
+    "they worked as",
+    "they lived as",
+    "an ordinary first life as",
+    "former world:",
+)
+
+
+def former_life_phrase(story: str) -> str:
+    """The player's own former-life description, as a phrase that fits "they were a ...".
+
+    Returns "" when the opening sentence does not read like a life/vocation, so
+    callers fall back to the generated pools rather than stitching nonsense.
+    """
+    text = re.sub(r"\s+", " ", str(story or "").strip())
+    if not text:
+        return ""
+    first = re.split(r"(?<=[.!?])\s+", text)[0].strip().rstrip(".!?").strip()
+    if len(first) < 12:
+        return ""
+    low = first.lower()
+    for lead in _FORMER_LIFE_LEAD_INS:
+        if low.startswith(lead):
+            first = first[len(lead) :].strip()
+            low = first.lower()
+            break
+    for article in ("a ", "an ", "the "):
+        if low.startswith(article):
+            first = first[len(article) :].strip()
+            low = first.lower()
+            break
+    if not first or len(first) < 8 or len(first) > 200:
+        return ""
+    # A native fantasy plot is not a former *world* life -- rewriting those is the point.
+    if any(marker in low for marker in _NATIVE_FANTASY_PLOT_MARKERS):
+        return ""
+    if any(marker in low for marker in _BACKSTORY_SKILL_META_MARKERS):
+        return ""
+    return first[0].lower() + first[1:]
+
+
+def _article_for(phrase: str) -> str:
+    """"a" or "an" for a following phrase.
+
+    The former-life templates hardcoded "a {job}", which produced "a
+    apartment-building super" -- and player-supplied former lives can start with
+    any word at all.
+    """
+    word = re.sub(r"[^a-z]", "", str(phrase or "").strip().lower().split(" ")[0])
+    if not word:
+        return "a"
+    # "a university", "a used-car lot", "a one-room flat" sound out as consonants.
+    if word.startswith(("uni", "use", "usu", "eu", "ewe", "one", "once")):
+        return "a"
+    # "an hour", "an honest", "an heir" are silent-h.
+    if word.startswith(("hour", "honest", "honor", "honour", "heir")):
+        return "an"
+    return "an" if word[0] in "aeiou" else "a"
+
+
+def _backstory_seed(*parts: Any) -> int:
+    """Stable seed for a rewritten backstory.
+
+    Was ``abs(hash(text))``, which is randomized per process -- the same rejected
+    story produced a different replacement on every run, and none of it could be
+    reproduced from a save. It also keyed on the story alone, so every campaign
+    whose backstory failed the same way was handed the identical replacement.
+    Digesting the idea and world style too keeps different setups distinct.
+    """
+    payload = "|".join(str(p) for p in parts).encode("utf-8", "replace")
+    return int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "big") % (10**9)
+
+
 def ensure_isekai_arrival_beat(story: str, *, mode: str = "", idea: str = "", world_style: str = "") -> str:
     """
     For transmigrated mode: require former-world life + transport + arrival start.
@@ -4942,18 +5123,27 @@ def ensure_isekai_arrival_beat(story: str, *, mode: str = "", idea: str = "", wo
             old_story=text,
             idea=idea or "fresh ordinary life portal",
             world_style=world_style,
-            seed=abs(hash(text)) % (10**9) or 42,
+            seed=_backstory_seed(text, idea, world_style, "motif"),
         )
 
     score = transmigration_story_score(text)
     if score["ok"]:
         return text
 
+    # Keep the person the player wrote when the story already establishes a former
+    # world life and is only missing the transport / arrival beats. Replacing them
+    # wholesale turned "a maintenance technician in a near-future city" into
+    # "a kindergarten aide with glitter in every coat pocket".
+    keep = ""
+    if score.get("has_former_world") and not score.get("skill_meta") and score.get("native_fantasy_plot_hits", 0) < 2:
+        keep = former_life_phrase(text)
+
     return build_transmigration_backstory(
         old_story=text,
         idea=idea,
         world_style=world_style,
-        seed=(abs(hash(text)) % (10**9)) + 11,
+        seed=_backstory_seed(text, idea, world_style, "score"),
+        keep_former_life=keep,
     )
 
 def normalize_origin_package(

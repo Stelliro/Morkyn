@@ -197,8 +197,13 @@ def test_matrix_diverse_settings_runs_and_repairs():
                         pr = str(ab.get("prerequisites") or "")
                         assert pr not in {"[]", "locked=true"}
         if row["id"] == "cyberpunk_native":
-            # origin none clears abilities
-            assert fields.get("special_abilities") in ([], None) or fields.get("special_abilities") == []
+            # The Ability Origin selector was removed: list emptiness is now the
+            # source of truth, and a stale origin="none" must NOT wipe real ability
+            # cards (legacy saves, older model output). See setup_crosscheck.py.
+            abilities = fields.get("special_abilities")
+            assert isinstance(abilities, list) and len(abilities) == 1, abilities
+            assert abilities[0].get("name") == "Hack", abilities
+            assert fields.get("special_ability_origin") == "both", fields.get("special_ability_origin")
         if row["id"] == "wuxia_body_swap":
             assert str(fields.get("previous_life_age") or "") in {"28", "27", "late twenties"} or str(
                 fields.get("previous_life_age") or ""
@@ -227,7 +232,12 @@ def test_sanitize_setup_fields_attaches_crosscheck_report():
     assert fields.get("backstory_mode") == "transmigrated"
     assert "I was" not in str(fields.get("character_backstory") or "")
     assert str(fields.get("starter_equipment") or "").lower().count("hoodie") <= 1
-    assert fields.get("special_abilities") == []
+    # origin="none" no longer wipes the card; the list itself is authoritative and
+    # the stale origin field is normalized instead.
+    abilities = fields.get("special_abilities")
+    assert isinstance(abilities, list) and len(abilities) == 1, abilities
+    assert abilities[0].get("name") == "X", abilities
+    assert fields.get("special_ability_origin") == "both"
     assert isinstance(fields.get("_setup_crosscheck"), dict)
     assert "summary" in fields["_setup_crosscheck"]
 

@@ -18,6 +18,35 @@ Prose voice (readability first — reset after style experiments):
 - Sensory detail is good when it serves the beat; skip ornamental filler that does not change what the player can do next.
 - Keep paragraphs continuous and easy to follow: one clear beat per paragraph when possible.
 
+Resolve the action the player took (this is the most common failure):
+- The player already decided. Your job is to show what happens, not to ask them to decide again.
+  "I walk east" means they walk east and arrive somewhere — narrate the journey and where it ends.
+- Never end a scene with the choice restated as a menu: no "Do you approach X, or continue to Y?",
+  no "The choice is yours.", no "You could either... or...". That hands the turn back unplayed.
+- Hooks are good; menus are not. End on something that just happened, a new pressure, or a detail
+  the player can act on — then stop. Let them decide what to do with it in their own words.
+- If the action genuinely cannot complete (blocked, interrupted, they lack something), show the
+  obstacle happening. That is still a resolution. Standing still and deliberating is not.
+
+Populate the world with workers, not omens:
+- Most people have a job and a reason to be here: a carter, a net mender, an off-duty guard,
+  someone's apprentice. Give them that, not a hood and a stare.
+- "A hooded figure watches you" is the default a small model falls back on. Across a real run it
+  produced a world where 24 of 27 people were hooded strangers or cloaked locals. Ration it: at
+  most one genuinely mysterious watcher on screen, and only when the scene has earned it.
+- Ordinary people can still carry the plot — a baker who heard something, a ferryman who will not
+  cross tonight. Interest comes from what they want, not from concealment.
+- Vary how people are introduced. Not every arrival is at "the edge of your vision", not every
+  gaze "narrows", not every cloak "rustles".
+
+Point of view (fixed for the whole campaign — never drifts mid-scene or between turns):
+- Second person, present tense. The player is "you". Never narrate them in third person and never
+  use their name as the subject of narration: "you push the door open", not "Ashbound pushes the door open".
+- world_state.narrative_voice.player_pronouns is server truth for the player. Use only those pronouns
+  when a third-person reference is unavoidable (NPC dialogue, another character's viewpoint).
+  Do not guess a gender from the name, and do not switch pronouns between turns.
+- Every other character keeps the pronouns on their own record.
+
 Narrator personality (separate from rules / setup slogans):
 - You have a dry, grounded tabletop-DM voice: specific, lightly wry, never preachy.
 - Personality is independent of setup instructions: follow rules silently; never perform them as catchphrases.
@@ -27,6 +56,49 @@ Narrator personality (separate from rules / setup slogans):
 - If playthrough_options or session_theme over-index one word, under-use it on purpose.
 - Prefer scene nouns over abstract theme nouns when both would work.
 """.strip()
+
+
+def _protected_entity_words(context: dict[str, Any]) -> set[str]:
+    """
+    Names the model must keep using: cast, places, items, the player.
+
+    The avoid-list was built from raw word frequency, so a turn spent talking to
+    Larkcoil at Redmill Ford came back telling the model to stop saying
+    "larkcoil", "redmill", "ford". That fights continuity directly — it asks the
+    narrator to stop naming its own world.
+    """
+    words: set[str] = set()
+
+    def _add(value: Any) -> None:
+        for token in re.findall(r"[A-Za-z][A-Za-z'-]{2,}", str(value or "")):
+            words.add(token.lower())
+
+    player = context.get("player") if isinstance(context.get("player"), dict) else {}
+    for key in ("name", "public_name", "title"):
+        _add(player.get(key))
+    alias = context.get("active_player_alias")
+    if isinstance(alias, dict):
+        _add(alias.get("name"))
+    for alias in context.get("player_aliases") or []:
+        if isinstance(alias, dict):
+            _add(alias.get("name"))
+    current = context.get("current_location")
+    if isinstance(current, dict):
+        _add(current.get("name"))
+    for location in context.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        _add(location.get("name"))
+        for npc in location.get("npcs") or []:
+            if isinstance(npc, dict):
+                _add(npc.get("name"))
+    for npc in context.get("npcs") or []:
+        if isinstance(npc, dict):
+            _add(npc.get("name"))
+    for item in context.get("inventory") or []:
+        if isinstance(item, dict):
+            _add(item.get("name"))
+    return words
 
 
 def anti_repetition_block(context: dict[str, Any] | None) -> str:
@@ -70,11 +142,12 @@ def anti_repetition_block(context: dict[str, Any] | None) -> str:
         "across", "around", "toward", "towards", "between", "without", "another",
         "something", "someone", "nothing", "everything", "because", "though", "still",
     }
+    protected = _protected_entity_words(context)
     counts: dict[str, int] = {}
     for chunk in chunks[:4]:
         for token in re.findall(r"[A-Za-z][A-Za-z'-]{3,}", chunk):
             t = token.lower()
-            if t in stop:
+            if t in stop or t in protected:
                 continue
             counts[t] = counts.get(t, 0) + 1
     # Prefer words that already repeated or are distinctive long tokens
@@ -82,6 +155,17 @@ def anti_repetition_block(context: dict[str, Any] | None) -> str:
     avoid = [w for w, n in ranked if n >= 2 or len(w) >= 7][:12]
     if not avoid:
         avoid = [w for w, _ in ranked[:8]]
+    # Run-wide tics beat last-turn frequency: words like "hooded" or "shadows"
+    # recur about once per turn, which never trips a single-turn threshold but
+    # is exactly what makes 24 turns read the same.
+    tics = [
+        str(word).lower()
+        for word in (context.get("overused_words") or [])
+        if str(word).lower() not in protected
+    ]
+    if tics:
+        merged = tics[:8] + [w for w in avoid if w not in tics]
+        avoid = merged[:14]
     if not avoid:
         return ""
     return (
@@ -117,6 +201,7 @@ Continuity rules:
 - The database is authority. Prefer codes and listed state over invention. RNG and forced events are decided before prose.
 - Use compact entity codes whenever possible. NPCs use A-Z, then AA, AB, etc. Locations use L1, items use I1, events use E1.
 - In narration, always write the spoken name/title first, then the code: Sarah [[A]], the destroyed museum [[L2]], the machete [[I3]], the ambush incident [[E4]]. Never leave a blank subject or orphan possessive ("— is already", " 's boot"). Never use a code with no name in front of it. The UI makes [[codes]] clickable; the readable name must still be in the prose.
+- Every NPC needs a real name, not a description. Wrong: "Woman", "Old Man", "Hooded Figure", "Guard", "Stranger". Right: "Aria", "Thornrow", "Captain Vesk". Appearance and job belong in role/summary; the name field is a name. The app renames description-only NPCs automatically, so writing one just loses your choice.
 - Never treat clothing, tools, or inventory items as people or factions. Wrong: "travel-stained coat's rebels", "the satchel says". Right: name people (Mara [[A]]), describe gear as objects. Never invent a side named after the player's coat, boots, or inn furniture.
 - Keep compound item names whole (crossbow, not "cross, bow"). Place names stay places (Second Shadow Inn is a building, not a person who owns "allies" as a brand).
 - When referring to a past event, prefer a short natural event name plus its code (title [[E#]]), not only vague wording.
@@ -169,11 +254,17 @@ Continuity rules:
 - Changing an NPC's trust requires justification. Hurt their principles and trust should fall; help their principles and trust may rise.
 - Player karma is a broad moral/social reputation from -1000 to 1000. Use small karma changes only for meaningful actions with witnesses, consequences, or internal moral weight. Do not change karma for every turn.
 - Karma visibility can be "private", "local", "faction", or "public". Public/faction karma should affect NPC assumptions more than private karma.
-- Meaningful public events may add fame_score to events from 0 to 80. Never exceed 80. Ordinary private actions should use 0. Local witnessed deeds are usually 5-25; serious violence, city control, major rescue, or public supernatural events can be 30-80. fame_scope can be local, route, faction, regional, or public. rumor_summary should be what people might actually hear.
+- Meaningful public events may carry a fame_band. Ordinary private actions use "none". Local witnessed deeds are "small"; serious violence, city control, major rescue, or public supernatural events are "moderate" to "huge". The app converts the band to a score. fame_scope can be local, route, faction, regional, or public. rumor_summary should be what people might actually hear.
 - If the player claims another NPC granted permission or facts, search indexed conversations and events. If unsupported, add a response_draft with verdict "false" or "unverified" and an appropriate speech/lying check.
 - Do not make every scene gossip or lore. Include mundane texture: work, prices, weather, hunger, fatigue, queues, repairs, local rules, awkward pauses, smells, small risks, or chores.
 - Create locations only when entered, discovered, requested, or concretely mentioned.
 - Create NPCs only when they matter to the current scene or are directly mentioned by another NPC. Give each a practical local role (job/social identity: guard, merchant, gatekeeper, scribe). Never set role to a map landmark or terrain kind such as gate, road, ruins, dungeon, monolith, station, void, or water — those describe places, not people.
+- NUMBERS ARE NOT YOURS. You never decide how much or how many. Write a band and the app rolls dice for the amount, scaled by player level, difficulty, and growth settings.
+  Bands, smallest to largest: none, trivial, small, moderate, large, huge.
+  Use xp_band, gold_band, health_band, karma_band, quantity_band (items), trust_band (NPCs), fame_band (events), delta_band (skills).
+  A band is a judgement about the fiction ("that was a large reward"), never an amount. Do not write 25, 250, or "a few coins" — write "small".
+  Prefix a band with "-" (or use the lose/spend wording) when the change is a loss: "-small" gold means spending a little.
+  If you write a raw number anyway it is read as a band hint and re-rolled, so the band is the shorter and more reliable path.
 - Keep rewards, damage, skill gains, money, and inventory changes justified and small.
 - The DM may create items through inventory_changes when loot, crafted objects, purchased goods, gear, quest objects, containers, or equipment are actually introduced. Items should include useful weight, slot_size, item_type, rarity, stack_limit, enchantments, stat_modifiers, and granted_abilities when relevant. Equipment stat_modifiers and granted_abilities should describe what the item adds while equipped; the backend automatically removes those effects from player.effective_stats and abilities when the item is unequipped.
 - Respect playthrough_options.loot_rarity. Mundane loot can be common, but rare, enchanted, unique, or legendary items should match loot_rarity, risk, setting magic, and consequences.
@@ -213,22 +304,20 @@ Required JSON shape:
   ],
   "narration": "fallback joined prose if segments are not available",
   "player": {
-    "health_delta": 0,
-    "max_health_delta": 0,
-    "xp_delta": 0,
-    "gold_delta": 0,
-    "level_delta": 0,
+    "health_band": "none/trivial/small/moderate/large/huge, prefix - for damage",
+    "xp_band": "none/trivial/small/moderate/large/huge",
+    "gold_band": "none/trivial/small/moderate/large/huge, prefix - when spent or lost",
+    "karma_band": "none/trivial/small/moderate/large/huge, prefix - for wrongdoing",
     "move_to_location": null,
     "move_to_location_code": null,
-    "karma_delta": 0,
     "karma_reason": "why karma changed, or empty string",
     "karma_visibility": "private/local/faction/public"
   },
   "skill_changes": [
-    {"name": "earned skill name", "delta": 0, "notes": "why play, training, practice, discovery, or custom setup rules justify the change"}
+    {"name": "earned skill name", "delta_band": "none/trivial/small/moderate", "notes": "why play, training, practice, discovery, or custom setup rules justify the change"}
   ],
   "inventory_changes": [
-    {"name": "item name", "description": "short durable description", "quantity_delta": 1, "weight": 1.0, "slot_size": 1, "item_type": "misc/weapon/armor/backpack/ring/necklace/etc", "rarity": "common/uncommon/rare/epic/legendary/unique", "enchantments": [], "stat_modifiers": {"strength": 1}, "granted_abilities": [{"name": "item-granted ability", "description": "usable only while equipped", "cost": "", "prerequisites": "equip item"}], "stack_limit": 20, "carry_modifier": 1.0, "container_bonus_weight": 0, "container_bonus_slots": 0, "dimensional_space": false}
+    {"name": "item name", "description": "short durable description", "quantity_band": "trivial/small/moderate (prefix - when losing)", "weight": 1.0, "slot_size": 1, "item_type": "misc/weapon/armor/backpack/ring/necklace/etc", "rarity": "common/uncommon/rare/epic/legendary/unique", "enchantments": [], "stat_modifiers": {"strength": 1}, "granted_abilities": [{"name": "item-granted ability", "description": "usable only while equipped", "cost": "", "prerequisites": "equip item"}], "stack_limit": 20, "carry_modifier": 1.0, "container_bonus_weight": 0, "container_bonus_slots": 0, "dimensional_space": false}
   ],
   "equipment_slots": [
     {"code": null, "name": "slot name", "category": "ring/necklace/back/sheath/etc", "capacity": 1, "accepts": ["item type"], "source_item_code": "I1 or empty", "notes": "why this slot exists"}
@@ -267,7 +356,7 @@ Required JSON shape:
         "social": "rank or none",
         "special": "named skill/rank or none"
       },
-      "trust_delta": 0,
+      "trust_band": "none/trivial/small/moderate, prefix - when trust is lost",
       "known_fact": "one fact this NPC currently knows or implies",
       "mentioned_by": "npc code/name or null"
     }
@@ -292,7 +381,7 @@ Required JSON shape:
       "persistence": "persistent/temporary/recurring/traveling/background",
       "disappear_chance": 70,
       "respawn_chance": 0,
-      "fame_score": 0,
+      "fame_band": "none for private acts; small/moderate for witnessed deeds; large/huge only for public spectacle",
       "fame_scope": "local/route/faction/regional/public",
       "rumor_summary": "short version that could spread by rumor"
     }
@@ -378,6 +467,7 @@ Your task:
 - Verifiers have full code↔name maps in world_state.locations[].npcs, working_set/shells, and draft.npcs — use them to correct invented names and fill missing ones.
 - Verify NPC knowledge: NPCs must not know private player conversations unless indexed context supports it.
 - Verify inventory, stats, karma, skill, and location changes are justified by the narration.
+- Amounts are bands, not numbers. Fields like xp_band, gold_band, health_band, karma_band, quantity_band, trust_band, fame_band, and delta_band hold one of none/trivial/small/moderate/large/huge (a leading "-" marks a loss). Judge whether the *band* fits what happened and correct the band if it is too generous or too harsh. Never replace a band with a number — the app rolls the amount after verification.
 - If world_state.mechanics_context.combat.status is resolved_player_attack, verify the draft uses that weapon/equipment source and damage/health result instead of inventing different core attack math. Special abilities and consequences may add detail only when supported.
 - Verify inventory weight/slot limits, equipment slots, equipment changes, item rarity, enchantments, item stat_modifiers, item granted_abilities, and containers are plausible from the narration and playthrough options.
 - Verify new or materially observed NPCs have rank/stat_profile/skill_profile using rank letters or relative labels, not raw stat numbers.
@@ -403,7 +493,7 @@ Continue one player turn using world_state as source of truth. Keep continuity, 
 Rules:
 - If turn_kind is opening_scene, no player action has happened yet. Open with an immediate situation and a few concrete hooks without deciding what the player does.
 - If turn_kind is continue_scene, no new player action was supplied. Advance the current situation a little and leave the next choice open.
-- Create NPCs only when directly met or clearly needed. New NPCs must include name, race, location, role, summary, attitude, personality, likes, principles, dislikes, rank, stat_profile, skill_profile, trust_delta, known_fact. role is a job/social identity (guard, merchant, gatekeeper), never a map tile kind (gate, road, ruins, dungeon, monolith). NPC names are short proper names (Mara, Dockhand Kesh) — never clothing, gear, windows, or job sentences.
+- Create NPCs only when directly met or clearly needed. New NPCs must include name, race, location, role, summary, attitude, personality, likes, principles, dislikes, rank, stat_profile, skill_profile, trust_band, known_fact. role is a job/social identity (guard, merchant, gatekeeper), never a map tile kind (gate, road, ruins, dungeon, monolith). NPC names are short proper names (Mara, Dockhand Kesh) — never clothing, gear, windows, or job sentences.
 - NPC codes are assigned by the database, so new NPC code can be null. Existing references must use known codes.
 - Use rank letters/relative labels, not raw stat numbers. Typical ranks: F,E,D,C,B,A,S,SS,SSS.
 - Create/update items, locations, events, conversations, response_drafts, ability_updates, and index_updates only when justified.
@@ -414,7 +504,7 @@ Rules:
 - Respect active_player_alias. It is a gameplay persona with separate reputation, but it is not immunity: if disguised is false, bad reputation can leak to the true identity.
 - Respect world_races, race_magic_rules, and race_ability_rules. NPC race, spellcasting access, innate gifts, learned racial arts, and restrictions must fit setup.
 - Use recognition candidates only on initial or early NPC interaction. Cap recognition at recognition_chance_percent_cap and account for NPC role. Fame never means universal knowledge.
-- Meaningful witnessed events may include fame_score 0-80, fame_scope, and rumor_summary. Private/ordinary events should keep fame_score 0.
+- Meaningful witnessed events may include a fame_band, fame_scope, and rumor_summary. Private/ordinary events keep fame_band "none"; local witnessed deeds are "small"; public spectacle is "large" or "huge".
 - Event persistence: use persistent for durable local situations and public history, temporary for current-visit opportunities that should often vanish after leaving, recurring for low-frequency return hooks, traveling for rare moving visitors/merchants, and background for durable context not currently demanding action. Include disappear_chance and respawn_chance when useful.
 - Use gm_events for hidden between-turn consequences, off-screen reactions, clocks, or secrets based on player actions. They are private future context, not player-visible narration.
 - If the player claims permission or facts from another NPC, check conversations/events. If unsupported, add response_drafts with false or unverified plus a speech/lying/insight check.
@@ -425,6 +515,7 @@ Rules:
 - Use turn_plan as the focused scout packet: primary_intent tells you what kind of turn this is, explicit_references are hard refs, and verification_checks list the risky surfaces.
 - Use mechanics_context when present. For resolved combat, treat player_attack.weapon/equipment and resolution.damage/target_health_after as fixed app math. Do not recalculate the hit, damage, NPC health, or weapon source; narrate the result and only add special abilities or consequences when justified.
 - Use action_context as the read order for the scout packet. For normal turns, inspect only priority_segments and their source_slices plus hard references before adding consequences. Movement reads environment/carry limits and derived stats/abilities, combat reads player-vs-target matchup from effective_stats/skills/abilities, and ability use reads ability costs/locks plus target/environment limits.
+- Amounts are server-rolled. Never write a number for a reward, cost, count, damage, trust, or fame. Write a band: none, trivial, small, moderate, large, huge. Prefix "-" for a loss. Fields: xp_band, gold_band, health_band, karma_band, quantity_band, trust_band, fame_band, delta_band.
 - Include mundane scene texture. Do not only gossip or lore.
 - Use playthrough_options.narration_detail for fullness, but keep playable narration between 1000 and 2400 visible characters, with about 1500 characters as the normal target. Concise uses fewer focused beats; balanced/rich/expansive add more sensory detail, NPC reaction, consequence, and choice context — still in clear, direct prose.
 - Build scene_plan first with 1-6 player-visible focus_points, then write narration as continuous paragraphs guided by that plan. Do not put private lifecycle labels, hidden GM events, or secret outcomes in scene_plan text. narration_segments are compatibility paragraph chunks, not visible labeled sections. Mark known refs as [[A]], [[L1]], [[I1]], [[E1]].
@@ -437,12 +528,12 @@ scene_plan, narration_segments, player, self_check, turn_summary, scene_focus.
 Optional JSON keys, include only when changed/relevant:
 skill_changes, inventory_changes, equipment_slots, equipment_changes, inventory_capacity_modifiers, locations, npcs, relationships, events, gm_events, conversations, response_drafts, index_updates, ability_updates, journal.
 
-player fields: health_delta,max_health_delta,xp_delta,gold_delta,level_delta,move_to_location,move_to_location_code,karma_delta,karma_reason,karma_visibility.
-inventory_changes item: name,description,quantity_delta,weight,slot_size,item_type,rarity,enchantments,stat_modifiers,granted_abilities,stack_limit,carry_modifier,container_bonus_weight,container_bonus_slots,dimensional_space.
+player fields: health_band,xp_band,gold_band,karma_band,move_to_location,move_to_location_code,karma_reason,karma_visibility.
+inventory_changes item: name,description,quantity_band,weight,slot_size,item_type,rarity,enchantments,stat_modifiers,granted_abilities,stack_limit,carry_modifier,container_bonus_weight,container_bonus_slots,dimensional_space.
 equipment_slots item: code,name,category,capacity,accepts,source_item_code,notes.
 equipment_changes item: item_name,item_code,slot_code,slot_name,equip,notes.
 inventory_capacity_modifiers item: code,source,weight_bonus,slot_bonus,carry_modifier,dimensional_space,active,notes.
-event item: code,title,location_code,npc_code,summary,status,persistence,disappear_chance,respawn_chance,fame_score,fame_scope,rumor_summary.
+event item: code,title,location_code,npc_code,summary,status,persistence,disappear_chance,respawn_chance,fame_band,fame_scope,rumor_summary.
 gm_events item: trigger,summary,status,priority,location_code,npc_code,event_code.
 conversation item: npc_code,topic,summary,player_claims.
 self_check fields: passed,issues_found,corrections_made,reference_check,consistency_check.
@@ -458,6 +549,7 @@ Check draft_turn against world_state and player_input:
 - NPC recognition of the player uses recognition candidates, event distance, NPC role, and the 80% fame cap
 - active player alias, disguise state, alias reputation, and true identity reputation are handled consistently
 - inventory/player/karma/skill/location changes are justified
+- amount fields are bands (none/trivial/small/moderate/large/huge, "-" for a loss), not numbers; correct an unfitting band, never convert it to a number
 - resolved mechanics_context combat uses the listed weapon/equipment and damage/health result
 - inventory weight/slot limits, item metadata, rarity, enchantments, stat_modifiers, granted_abilities, equipment_slots, equipment_changes, and inventory_capacity_modifiers are plausible
 - observed NPCs have race, rank, stat_profile, skill_profile
@@ -531,6 +623,8 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
         "action_context": context.get("action_context"),
         "working_set": context.get("working_set"),
         "event_lifecycle": context.get("event_lifecycle"),
+        "movement_contract": context.get("movement_contract"),
+        "narrative_voice": context.get("narrative_voice"),
         "gm_events": context.get("gm_events", [])[:8],
         "skills": context.get("skills"),
         "abilities": context.get("abilities"),
@@ -552,6 +646,14 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
         "retrieval": context.get("retrieval"),
         "turn_summaries": context.get("turn_summaries", [])[:10],
     }
+    # The band vocabulary, not the dice behind it: showing the tables would
+    # invite the model to do the arithmetic itself.
+    try:
+        from app.rng import band_contract_block
+
+        compact_context["amount_contract"] = band_contract_block()
+    except Exception:
+        pass
     wait_extra = ""
     if turn_kind == "wait_scene":
         wait_extra = (
@@ -574,6 +676,7 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 "wait_scene = narrate spent time only using resolved rng. event_scene = narrate a decided world-event pack."
                 f"{wait_extra} "
                 "Use narration_detail for fullness; at least 1000 visible characters, about 1500 normal target. "
+                "Obey world_state.narrative_voice.rule and world_state.movement_contract.rule exactly. "
                 "Prefer existing codes. Database wins over invention."
             ),
         },

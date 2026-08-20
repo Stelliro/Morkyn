@@ -66,21 +66,21 @@ SUMMARY <compact memory line under 55 words, entity codes OK>
 SCENE <action|conversation|travel|survival|filler|lore|system>
 GOAL <one sentence scene goal>
 FOCUS <event|location|npc|risk|resource|choice|sensory> <short summary>
-NPC_NEW NAME "<name>" ROLE <role> LOC <location code or name> [ATTITUDE <word>] [RACE <word>] [RANK <letter>]
+NPC_NEW NAME "<real name, not a description>" ROLE <role> LOC <location code or name> [ATTITUDE <word>] [RACE <word>] [RANK <letter>]
 NPC_NOTE <code> "<durable fact>"
 TALK <npc_code> "<topic/summary of exchange>"
-GRANT "<item name>" QTY <n> [TYPE <type>] [DESC "<description>"] [RARITY <word>]
-TAKE "<item name>" QTY <n>
-GOLD <integer delta>
-XP <integer delta>
-HP <integer delta>
-KARMA <integer delta> [VIS <private|local|faction|public>] [REASON "<why>"]
-MOVE <location_code_or_name>
+GRANT "<item name>" QTY <band> [TYPE <type>] [DESC "<description>"] [RARITY <word>]
+TAKE "<item name>" QTY <band>
+GOLD <band>
+XP <band>
+HP <band>
+KARMA <band> [VIS <private|local|faction|public>] [REASON "<why>"]
+MOVE <place name — an existing one from movement_contract.known_places, or a new one you name>
 LOC_NEW "<name>" "<summary>"
 EVENT "<title>" [LOC <code>] [NPC <code>] [SUMMARY "<text>"]
 GM "<trigger>" "<private future note>"
 REL <source_code> <target_code> "<what source knows/thinks>"
-SKILL "<name>" DELTA <n> [NOTES "<why>"]
+SKILL "<name>" DELTA <band> [NOTES "<why>"]
 CLAIM "<claim text>" VERDICT <true|false|unverified> [SKILL <skill>] [NOTES "<why>"]
 JOURNAL <fact|quest|rumor|event|system> "<content>"
 INDEX <npc|location|item|event> <code> "<summary_append>"
@@ -88,6 +88,40 @@ NOTE "<short durable journal-style fact>"
 
 Rules:
 - Database/world_state is source of truth. Only propose justified changes.
+- Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
+  Write "XP small", "GOLD -moderate", "HP -small", "GRANT \"rope\" QTY small".
+  A leading "-" means a loss. The app rolls the actual amount; a bare number is
+  read as a band hint and re-rolled, so bands are shorter and more reliable.
+- NPC_NEW NAME must be a name ("Aria", "Thornrow", "Captain Vesk"), never a description
+  ("Woman", "Old Man", "Hooded Figure", "Guard"). The app overwrites description-only names.
+- NPC_NEW ROLE is an occupation — carter, net mender, baker, off-duty guard, ferryman.
+  It is not an appearance: "hooded stranger" and "cloaked local" are not jobs. Describe the
+  hood in ===NAR=== if it matters. At most one genuinely mysterious watcher on screen.
+- Movement is an op, not a description. If the prose ends with the player anywhere other than
+  world_state.movement_contract.current_location, ===OPS=== MUST contain a MOVE line.
+  Writing "you leave for the coast road" with no MOVE line leaves the player standing where they were,
+  and the next turn will contradict your prose.
+- MOVE takes a place NAME: MOVE Redmill Ford. A name already in movement_contract.known_places
+  goes back there; any other name creates that place. Name what the prose actually describes —
+  if the scene ends at a river camp, write MOVE Riverbend Camp, do not substitute a known town.
+  Never guess a location code: "MOVE L2" is discarded and the player does not move.
+- Going indoors is a MOVE. A shop, inn, forge or temple the player steps into is a place, not
+  scenery: write MOVE <that building's name>. Prefer a name from movement_contract.venues_here;
+  otherwise name the building and it is created. Stepping back outside is another MOVE, to
+  movement_contract.current_location's parent. A scene that walks the player into a shop with no
+  MOVE line leaves them standing in the street, and the shop stops existing the moment it scrolls
+  out of context.
+- Interiors are entered only from the place they stand in. A player two locations away cannot
+  MOVE straight into a shop — that move lands them outside it instead, and going in costs the next
+  turn. Do not narrate walking across the map and through a shop door in one turn.
+- A new place gets its own name, not a known one with a word added. If known_places has
+  "Riverbend Camp", do not invent "Riverbend Hillcrest Camp" — it is either the place you already
+  have, or it has a different name. The app folds those extensions back into the original.
+- Narrate in second person ("you"), and use world_state.narrative_voice.player_pronouns for the player.
+  Never switch to third person or the player's name as narration subject.
+- Resolve the player's action. They already chose; show what happens. Never end ===NAR=== with the
+  choice restated ("Do you approach X, or continue to Y?", "The choice is yours.") — that hands the
+  turn back unplayed. End on a consequence, a new pressure, or a concrete detail, then stop.
 - Opening/continue: establish or advance scene; do not invent player commands.
 - Keep rewards small. Empty ===OPS=== is allowed when nothing structured changes.
 - Never put private GM text in ===NAR===.
@@ -258,8 +292,48 @@ def split_nar_ops(text: str) -> tuple[str, str]:
     return content, ""
 
 
+# Near-misses seen from local models. A 7B wrote `MOV` once, and because an
+# unknown opcode raised, that single typo threw away every other op in the turn.
+OPCODE_ALIASES = {
+    "MOV": "MOVE",
+    "MOVETO": "MOVE",
+    "GOTO": "MOVE",
+    "TRAVEL": "MOVE",
+    "LOCNEW": "LOC_NEW",
+    "NEWLOC": "LOC_NEW",
+    "NEW_LOCATION": "LOC_NEW",
+    "LOCATION_NEW": "LOC_NEW",
+    "NPCNEW": "NPC_NEW",
+    "NEWNPC": "NPC_NEW",
+    "NPCNOTE": "NPC_NOTE",
+    "SUMM": "SUMMARY",
+    "SUM": "SUMMARY",
+    "GIVE": "GRANT",
+    "ITEM": "GRANT",
+    "REMOVE": "TAKE",
+    "DROP": "TAKE",
+    "HEALTH": "HP",
+    "GOLDS": "GOLD",
+    "COIN": "GOLD",
+    "MONEY": "GOLD",
+    "EXP": "XP",
+    "RELATION": "REL",
+    "RELATIONSHIP": "REL",
+}
+
+
+def normalize_opcode(opcode: str) -> str:
+    """Map a near-miss opcode onto the closed list, or return '' if unrecognized."""
+    token = str(opcode or "").strip().upper().replace("-", "_")
+    if token in OPCODES:
+        return token
+    return OPCODE_ALIASES.get(token, "")
+
+
 def parse_ops(ops_block: str) -> list[dict[str, Any]]:
     ops: list[dict[str, Any]] = []
+    seen_lines = 0
+    skipped: list[str] = []
     for line_no, line in enumerate(str(ops_block or "").splitlines(), start=1):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
@@ -267,9 +341,17 @@ def parse_ops(ops_block: str) -> list[dict[str, Any]]:
         opcode, positionals, flags = _tokenize_line(stripped)
         if not opcode:
             continue
-        if opcode not in OPCODES:
-            raise TurnDslError(f"Unknown opcode '{opcode}' on ops line {line_no}: {stripped[:120]}")
-        ops.append({"op": opcode, "args": positionals, "flags": flags, "line": line_no, "raw": stripped})
+        seen_lines += 1
+        canonical = normalize_opcode(opcode)
+        if not canonical:
+            # Drop the bad line, keep the turn. Losing one op the model fumbled
+            # beats losing the scene's whole state because of a typo.
+            skipped.append(stripped[:80])
+            continue
+        ops.append({"op": canonical, "args": positionals, "flags": flags, "line": line_no, "raw": stripped})
+    if seen_lines and not ops:
+        # Nothing at all parsed: this is not a typo, it is the wrong format.
+        raise TurnDslError(f"No recognizable opcodes in ops block: {'; '.join(skipped[:3])}")
     return ops
 
 
@@ -285,6 +367,49 @@ def _as_int(value: Any, default: int = 0) -> int:
         return int(float(str(value).strip()))
     except (TypeError, ValueError):
         return default
+
+
+def _amount(value: Any) -> tuple[str | None, int | None]:
+    """
+    Classify an amount token as either a band or a bare number.
+
+    Returns ``(band, number)`` with exactly one side set (or both None when
+    the token is empty). Bands are the documented form; bare integers stay
+    supported for hand-written ops and older prompts, and the world layer
+    re-rolls them as band hints. Nothing here decides an amount.
+    """
+    from app.rng import BAND_ALIASES, BAND_INDEX
+
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return None, None
+    negative = text.startswith("-")
+    body = text.lstrip("+-").strip().lower()
+    try:
+        number = int(float(body))
+    except (TypeError, ValueError):
+        if body not in BAND_INDEX and body not in BAND_ALIASES:
+            return None, None
+        return (("-" if negative else "") + body), None
+    return None, (-number if negative else number)
+
+
+def _apply_amount(
+    target: dict[str, Any],
+    *,
+    band_key: str,
+    number_key: str,
+    token: Any,
+    negate: bool = False,
+) -> None:
+    """Write an amount token onto a turn dict in whichever form it arrived."""
+    band, number = _amount(token)
+    if band is not None:
+        if negate and not band.startswith("-"):
+            band = f"-{band}"
+        target[band_key] = band
+    elif number is not None:
+        target[number_key] = -abs(number) if negate else number
 
 
 def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "") -> dict[str, Any]:
@@ -407,14 +532,20 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
             name = args[0] if args else flags.get("NAME", "")
             if not name:
                 raise TurnDslError(f"GRANT requires item name on line {entry['line']}")
-            qty = _as_int(flags.get("QTY"), 1)
-            if qty == 0 and len(args) > 1:
-                qty = _as_int(args[1], 1)
+            qty_token = flags.get("QTY")
+            if qty_token in (None, "") and len(args) > 1:
+                qty_token = args[1]
+            amount: dict[str, Any] = {}
+            _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token)
+            if not amount:
+                amount = {"quantity_band": "trivial"}
+            elif "quantity_delta" in amount:
+                amount["quantity_delta"] = abs(amount["quantity_delta"]) or 1
             turn["inventory_changes"].append(
                 {
                     "name": name[:120],
                     "description": flags.get("DESC", "")[:400],
-                    "quantity_delta": abs(qty) or 1,
+                    **amount,
                     "weight": 1.0,
                     "slot_size": 1,
                     "item_type": flags.get("TYPE", "misc")[:80],
@@ -431,14 +562,20 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
             )
         elif op == "TAKE":
             name = args[0] if args else ""
-            qty = _as_int(flags.get("QTY"), _as_int(args[1] if len(args) > 1 else 1, 1))
             if not name:
                 raise TurnDslError(f"TAKE requires item name on line {entry['line']}")
+            qty_token = flags.get("QTY")
+            if qty_token in (None, "") and len(args) > 1:
+                qty_token = args[1]
+            amount = {}
+            _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token, negate=True)
+            if not amount:
+                amount = {"quantity_band": "-trivial"}
             turn["inventory_changes"].append(
                 {
                     "name": name[:120],
                     "description": "",
-                    "quantity_delta": -abs(qty or 1),
+                    **amount,
                     "weight": 1.0,
                     "slot_size": 1,
                     "item_type": "misc",
@@ -454,13 +591,13 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
                 }
             )
         elif op == "GOLD":
-            turn["player"]["gold_delta"] = _as_int(args[0] if args else 0)
+            _apply_amount(turn["player"], band_key="gold_band", number_key="gold_delta", token=args[0] if args else None)
         elif op == "XP":
-            turn["player"]["xp_delta"] = _as_int(args[0] if args else 0)
+            _apply_amount(turn["player"], band_key="xp_band", number_key="xp_delta", token=args[0] if args else None)
         elif op == "HP":
-            turn["player"]["health_delta"] = _as_int(args[0] if args else 0)
+            _apply_amount(turn["player"], band_key="health_band", number_key="health_delta", token=args[0] if args else None)
         elif op == "KARMA":
-            turn["player"]["karma_delta"] = _as_int(args[0] if args else 0)
+            _apply_amount(turn["player"], band_key="karma_band", number_key="karma_delta", token=args[0] if args else None)
             turn["player"]["karma_visibility"] = (flags.get("VIS") or "private")[:40]
             turn["player"]["karma_reason"] = flags.get("REASON") or (" ".join(args[1:]) if len(args) > 1 else "")
         elif op == "MOVE":
@@ -523,11 +660,17 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
             )
         elif op == "SKILL":
             name = args[0] if args else flags.get("NAME", "")
-            delta = _as_int(flags.get("DELTA"), _as_int(args[1] if len(args) > 1 else 1, 1))
             if not name:
                 raise TurnDslError(f"SKILL requires name on line {entry['line']}")
+            delta_token = flags.get("DELTA")
+            if delta_token in (None, "") and len(args) > 1:
+                delta_token = args[1]
+            amount = {}
+            _apply_amount(amount, band_key="delta_band", number_key="delta", token=delta_token)
+            if not amount:
+                amount = {"delta_band": "small"}
             turn["skill_changes"].append(
-                {"name": name[:80], "delta": delta, "notes": flags.get("NOTES", "")[:240]}
+                {"name": name[:80], **amount, "notes": flags.get("NOTES", "")[:240]}
             )
         elif op == "CLAIM":
             claim = args[0] if args else ""
@@ -601,9 +744,18 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
         "opcode_list": sorted(OPCODES),
         "escape_policy": "Write raw Unicode in quotes. Do not percent-encode; the app encodes storage.",
     }
-    packet["instructions"] = [
+    instructions = [
         "Fill ===NAR=== with continuous playable prose.",
         "Fill ===OPS=== with zero or more closed opcodes only.",
         "Do not return JSON.",
     ]
+    # Required-op hint, next to the opcode list where the model looks for them.
+    # Only on travel turns, so ordinary turns do not pay for it.
+    contract = context.get("movement_contract") if isinstance(context, dict) else None
+    if isinstance(contract, dict) and contract.get("travel_intent"):
+        here = (contract.get("current_location") or {}).get("code") or "the current location"
+        instructions.append(
+            f"Travel turn: if the prose ends anywhere but {here}, ===OPS=== MUST contain a MOVE line."
+        )
+    packet["instructions"] = instructions
     return __import__("json").dumps(packet, ensure_ascii=True, separators=(",", ":"))

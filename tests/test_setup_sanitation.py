@@ -113,7 +113,23 @@ def test_llm_sanitize_setup_randomization_values():
     assert s["magic_level"] == "rare"
     assert s["game_system"] is True
     assert s["difficulty"] == "hard"
-    assert s["special_abilities"][0]["locked"] is True
+    # special_ability_origin is legacy and is popped before this sanitizer runs
+    # (app/llm.py), so it does not drive locks here -- per-card locks pass through.
+    assert s["special_abilities"][0]["locked"] is False
+    # Locking is decided once the whole batch exists. It is deliberately
+    # probabilistic for mild/moderate powers, but a strong power is always locked
+    # when it can be acquired rather than innate.
+    from app.llm import assign_ability_locks_after_creation
+
+    strong = {
+        "name": "Absolute Dominion",
+        "description": "Instantly kills any target, unlimited range, no cost, compounding forever.",
+        "locked": False,
+    }
+    for origin in ("acquired", "both"):
+        rolled = assign_ability_locks_after_creation([dict(strong)], origin=origin)
+        assert rolled[0]["locked"] is True, (origin, rolled)
+    assert assign_ability_locks_after_creation([dict(strong)], origin="innate")[0]["locked"] is False
     assert "Footprint Echo" in s["custom_skills"]
     assert "one-skill" not in s["custom_skills"].lower()
 

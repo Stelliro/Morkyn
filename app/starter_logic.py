@@ -443,6 +443,54 @@ def detect_world_register(
     return REGISTER_MIXED
 
 
+_LOCAL_STORY_MARKERS: tuple[str, ...] = (
+    "born in",
+    "grew up",
+    "village",
+    "compound",
+    "apprentice",
+    "guild",
+    "sect",
+    "raised in",
+    "this world",
+    "baker",
+    "farmer",
+    "militia",
+    "caravan",
+    "canal village",
+)
+
+# Markers that settle the question on their own. Everything else in the modern /
+# near-future lists is ambiguous in a fantasy setting ("office", "chrome", "drone",
+# "automated", "apartment", "college") and only counts by weight of evidence.
+_OFF_WORLD_DECISIVE_MARKERS: tuple[str, ...] = (
+    "near-future",
+    "near future",
+    "smartphone",
+    "smartphone era",
+    "subway",
+    "commute",
+    "salaryman",
+    "office worker",
+    "desk job",
+    "truck-kun",
+    "hit by a truck",
+    "modern city",
+    "present day",
+    "21st century",
+    "laptop",
+    "wifi",
+    "internet",
+    "email",
+    "tokyo",
+    "corporation",
+    "cyberdeck",
+    "megacity",
+    "netrunner",
+    "server farm",
+)
+
+
 def detect_origin_register(
     *,
     character_backstory: str = "",
@@ -457,31 +505,25 @@ def detect_origin_register(
     """
     story = " ".join([_norm(character_backstory), _norm(backstory_mode)])
     gear = " ".join([_norm(starter_equipment), _norm(appearance)])
-    local_story = any(
-        w in story
-        for w in (
-            "born in",
-            "grew up",
-            "village",
-            "compound",
-            "apprentice",
-            "guild",
-            "sect",
-            "raised in",
-            "this world",
-            "baker",
-            "farmer",
-            "militia",
-            "caravan",
-            "canal village",
-        )
-    )
-    if any(m in story for m in _NEAR_FUTURE_MARKERS):
+    # Scored, not first-hit. Modern markers used to be tested before local ones, so a
+    # single ambiguous word outvoted explicit local context: "a compound clerk who
+    # tallies grain fees at the gate office" matched "office" and was classified
+    # Earth-modern, which then rewrote a native character into a transmigrated one.
+    local_hits = [w for w in _LOCAL_STORY_MARKERS if w in story]
+    near_hits = [m for m in _NEAR_FUTURE_MARKERS if m in story]
+    modern_hits = [m for m in _MODERN_ORIGIN_MARKERS if m in story]
+    decisive = any(m in _OFF_WORLD_DECISIVE_MARKERS for m in (*near_hits, *modern_hits))
+
+    if near_hits and (decisive or len(near_hits) > len(local_hits)):
         return ORIGIN_NEAR_FUTURE
-    if any(m in story for m in _MODERN_ORIGIN_MARKERS):
+    if modern_hits and (decisive or len(modern_hits) > len(local_hits)):
         return ORIGIN_MODERN_EARTH
-    if local_story:
+    if local_hits:
         return ORIGIN_LOCAL_WORLD
+    if near_hits:
+        return ORIGIN_NEAR_FUTURE
+    if modern_hits:
+        return ORIGIN_MODERN_EARTH
     # No clear local life — modern gear language can still imply Earth-origin isekai kit.
     if any(
         w in gear
@@ -498,6 +540,24 @@ def detect_origin_register(
     ):
         return ORIGIN_MODERN_EARTH
     return ORIGIN_UNKNOWN
+
+
+def _sentence_join(head: str, tail: str) -> str:
+    """Join two sentences with exactly one terminator between them.
+
+    The localize path stripped the trailing period before appending and never put
+    one back, so generated backstories read "They kept to the yard gates Known
+    locally as an ordinary compound laborer."
+    """
+    head = str(head or "").strip()
+    tail = str(tail or "").strip()
+    if not head:
+        return tail
+    if not tail:
+        return head
+    if head[-1] not in ".!?":
+        head = head + "."
+    return f"{head} {tail}"
 
 
 def _pick_local_vocation(story: str, equipment: str, appearance: str) -> tuple[str, str]:
@@ -596,20 +656,22 @@ def _localize_backstory(
 
     core = seed
     if vocation and vocation not in core.lower():
-        core = f"{seed.rstrip('.')} Known locally as a {vocation}."
+        from app.setup_composer import _article_for
+
+        core = _sentence_join(seed, f"Known locally as {_article_for(vocation)} {vocation}.")
     if keep_faint_otherworld_memory:
-        core = (
-            f"{core.rstrip('.')} "
+        core = _sentence_join(
+            core,
             "Strange half-memories of another life's machines and glass towers still surface in dreams, "
-            "but the body and debts of this life are what matter at dawn."
+            "but the body and debts of this life are what matter at dawn.",
         )
     # Preserve short player-specific hooks if they were short and non-modern
     old = str(old_story or "").strip()
     if old and len(old) < 80 and not any(m in _norm(old) for m in _MODERN_ORIGIN_MARKERS + _NEAR_FUTURE_MARKERS):
-        return f"{core} Hook: {old}"[:1600]
+        return _sentence_join(core, f"Hook: {old}")[:1600]
     # Tag place once
     if place not in core.lower():
-        core = f"{core.rstrip('.')} Work and sleep are in {place}."
+        core = _sentence_join(core, f"Work and sleep are in {place}.")
     return core[:1600]
 
 
