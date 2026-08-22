@@ -286,6 +286,7 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "movement_contract",
     "narrative_voice",
     "naming_contract",
+    "recall_contract",
     "equipment_effects",
     "inventory_summary",
     "active_player_alias",
@@ -10724,7 +10725,8 @@ def _ensure_narration_quality(
         deep = _ensure_narration_depth(turn, context, player_input, system_prompt, timeout, usage, phase, trace)
     voiced = _ensure_narration_voice(deep, context, player_input, system_prompt, timeout, usage, phase, trace)
     answered = _ensure_answer_act(voiced, context, player_input, system_prompt, timeout, usage, phase, trace)
-    return _apply_menu_trim(answered)
+    recalled = _ensure_recall_specifics(answered, context, player_input, system_prompt, timeout, usage, phase, trace)
+    return _apply_menu_trim(recalled)
 
 
 def _voice_repair_enabled() -> bool:
@@ -10832,6 +10834,108 @@ def _retry_answer_act(
     if _answer_act_report(spliced, player_input).get("unanswered"):
         raise LlmError("Answer retry still did not cover what the player said they would say.")
     return spliced
+
+
+def _recall_report(turn: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        from app.world import check_recall_specifics
+
+        return check_recall_specifics(
+            (context or {}).get("recall_contract"), str(turn.get("narration") or "")
+        )
+    except Exception:
+        return {"required": False, "specifics": [], "stated": [], "missing": False}
+
+
+def _retry_recall_specifics(
+    context: dict[str, Any],
+    player_input: str,
+    turn: dict[str, Any],
+    report: dict[str, Any],
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Rewrite a scene that owed remembered specifics and stated none.
+
+    Unlike the answer-act retry there IS something deterministic to hand back:
+    the world already wrote this down, so the record goes into the instruction
+    verbatim. The model only has to place it in the prose.
+    """
+    contract = (context or {}).get("recall_contract") or {}
+    existing = str(turn.get("narration") or "")
+    specifics = ", ".join(str(s) for s in (report.get("specifics") or [])[:8])
+    record = str(contract.get("record") or "").strip()
+    line = str(player_input or "").strip()
+    instruction = "\n".join(
+        [
+            "Rewrite this scene so the player actually states what they already know.",
+            "Return ONLY the prose. No JSON, no headers, no markdown fences, no commentary.",
+            "",
+            f"The player's line was: {line}",
+            "This world has already recorded the answer:",
+            f"    {record[:400]}",
+            f"The scene as written never states: {specifics}.",
+            "Put those specifics into the player's own words in the scene. Echoing the",
+            "question back is not an answer.",
+            "",
+            "Keep everything else: same location, same characters, same events, same",
+            "[[CODE]] references, same second-person voice, similar length. Add the missing",
+            "detail into the scene; do not restart it.",
+            "",
+            "--- SCENE ---",
+            existing[:4000],
+        ]
+    )
+    raw = _chat_text(
+        system_prompt,
+        instruction,
+        timeout=timeout,
+        usage=usage,
+        phase=f"{phase}_recall",
+        max_tokens=max(_turn_max_tokens(context, "draft"), DEFAULT_RESPONSE_TOKEN_CAP),
+        trace=trace,
+    )
+    prose = _clean_retry_prose(raw)
+    if len(prose.strip()) < max(200, int(len(existing.strip()) * 0.5)):
+        raise LlmError("Recall retry returned too little prose to trust.")
+    spliced = _splice_prose_into_turn(turn, prose)
+    if _recall_report(spliced, context).get("missing"):
+        raise LlmError("Recall retry still did not state the remembered specifics.")
+    return spliced
+
+
+def _ensure_recall_specifics(
+    turn: dict[str, Any],
+    context: dict[str, Any],
+    player_input: str,
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """One prose pass when the prose owed a remembered name or amount and gave none."""
+    report = _recall_report(turn, context)
+    turn["_recall_check"] = report
+    if not report.get("missing") or not _answer_repair_enabled():
+        return turn
+    try:
+        fixed = _normalize_turn(
+            _retry_recall_specifics(
+                context, player_input, turn, report, system_prompt, timeout, usage, phase, trace
+            ),
+            context,
+        )
+        fixed["_recall_check"] = {**_recall_report(fixed, context), "repaired": True}
+        _append_trace(trace, {"phase": phase, "event": "recall_retry_ok", "before": report})
+        return fixed
+    except LlmError as exc:
+        usage.append({"phase": f"{phase}_recall_failed", "error": _trim_text(str(exc), 500)})
+        _append_trace(trace, {"phase": phase, "event": "recall_retry_failed", "error": str(exc)})
+    return turn
 
 
 def _ensure_answer_act(

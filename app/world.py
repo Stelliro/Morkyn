@@ -9,6 +9,7 @@ import random
 import re
 import shutil
 import sqlite3
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -5311,12 +5312,20 @@ def pronoun_set_for(key: str) -> dict[str, str]:
     return dict(PRONOUN_SETS.get(str(key or "").strip().lower() or "they", PRONOUN_SETS["they"]))
 
 
-def infer_npc_pronouns(name: str, narration: str) -> str:
+def infer_npc_pronouns(name: str, narration: str, others: Sequence[str] = ()) -> str:
     """Guess an NPC's pronoun key from the sentences that name them.
 
     Only sentences naming exactly this NPC count. A character window picks up
     whoever else is in the paragraph, which is precisely how a bargeman ends up
     counted as "her".
+
+    ``others`` is the rest of the known cast. Pass it whenever the roster is at
+    hand: the capitalised-token heuristic below cannot see a name in the one
+    position that matters most, the start of a sentence, and that is how
+
+        "Eldrin, the fishmonger, narrows his eyes ... around Cinderrow bundle"
+
+    pinned Cinderrow as "he" off Eldrin's three "his".
     """
     person = str(name or "").strip()
     text = str(narration or "")
@@ -5324,9 +5333,17 @@ def infer_npc_pronouns(name: str, narration: str) -> str:
         return ""
     sentences = re.split(r"(?<=[.!?])\s+", text)
     low_person = person.lower()
+    low_others = {
+        str(o).strip().lower()
+        for o in (others or ())
+        if str(o).strip() and str(o).strip().lower() != low_person
+    }
 
     def _names_someone_else(sentence: str) -> bool:
         """True when another character is named here, so its pronouns are not ours."""
+        low = sentence.lower()
+        if any(other in low for other in low_others):
+            return True
         for match in re.finditer(r"(?<![.!?]\s)(?<!^)\b([A-Z][a-z]{2,})\b", sentence):
             token = match.group(1)
             if token.lower() != low_person and token not in {"You", "Your"}:
@@ -5336,6 +5353,11 @@ def infer_npc_pronouns(name: str, narration: str) -> str:
     masc = fem = 0
     for index, sentence in enumerate(sentences):
         if low_person not in sentence.lower():
+            continue
+        # The sentence has to be about this NPC alone. Sharing it with another
+        # named character is how a weaver introduced beside "a young boy, Liora"
+        # got pinned masculine off the boy.
+        if _names_someone_else(sentence):
             continue
         # The naming sentence, plus the next one when it clearly continues about
         # the same person. Prose almost never puts the pronoun in the sentence
@@ -5370,12 +5392,19 @@ def bind_npc_pronouns(conn, narration: str, npcs: list[dict[str, Any]] | None = 
             rows = [dict(r) for r in conn.execute("SELECT id, name, pronouns FROM npcs")]
         except Exception:
             return bound
+    roster = [
+        str(r.get("name") or "").strip()
+        for r in (rows or [])
+        if isinstance(r, dict) and str(r.get("name") or "").strip()
+    ]
     for row in rows or []:
         if not isinstance(row, dict):
             continue
         if str(row.get("pronouns") or "").strip():
             continue
-        guess = infer_npc_pronouns(str(row.get("name") or ""), narration)
+        name = str(row.get("name") or "")
+        others = [n for n in roster if n.lower() != name.strip().lower()]
+        guess = infer_npc_pronouns(name, narration, others)
         if not guess:
             continue
         try:
@@ -5465,6 +5494,174 @@ def check_answer_act(player_input: str, narration: str) -> dict[str, Any]:
     hits = [w for w in topics if w in low or (w.endswith("s") and w[:-1] in low)]
     report["hits"] = hits[:12]
     report["unanswered"] = not hits and len(text) > 200
+    return report
+
+
+# Amounts spelled as words. A dodge drops the number as readily as the name, and
+# "eleven silver" is the half of "who I owe, how much" that digits never cover.
+_AMOUNT_WORDS = {
+    "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
+    "eighteen", "nineteen", "twenty", "thirty", "forty", "fifty", "sixty",
+    "seventy", "eighty", "ninety", "hundred", "thousand",
+}
+
+# Capitalised words that are never a proper noun worth demanding back.
+_NOT_A_NAME = {
+    "You", "Your", "Yours", "The", "This", "That", "These", "Those", "There",
+    "Here", "They", "Them", "Their", "He", "She", "His", "Her", "It", "Its",
+    "And", "But", "Nearby", "Across", "Somewhere", "Someone", "Nobody", "Then",
+    "When", "While", "After", "Before", "Now", "Still", "Even", "Every", "Both",
+}
+
+
+def _recall_stem(word: str) -> str:
+    return word[:-1] if len(word) > 3 and word.endswith("s") else word
+
+
+def _recall_topics(text: str) -> set[str]:
+    """Topic words, stemmed, so a question about "debts" matches a record of a "debt"."""
+    out: set[str] = set()
+    for word in re.findall(r"[a-z]{3,}", str(text or "").lower()):
+        stemmed = _recall_stem(word)
+        if word in _ANSWER_TOPIC_STOP or stemmed in _ANSWER_TOPIC_STOP:
+            continue
+        out.add(stemmed)
+    return out
+
+
+def recall_specifics(text: str) -> list[str]:
+    """The proper nouns and amounts in a record -- what a dodge leaves out.
+
+    Restricted to this class on purpose. Demanding topic words back catches
+    prose that answered in its own words; demanding a name or a number back
+    catches only prose that never committed to one.
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def _add(token: str) -> None:
+        key = token.lower()
+        if key not in seen:
+            seen.add(key)
+            found.append(token)
+
+    for sentence in re.split(r"(?<=[.!?])\s+", str(text or "")):
+        for match in re.finditer(r"(?<!^)\b([A-Z][a-z]{2,})\b", sentence):
+            token = match.group(1)
+            if token not in _NOT_A_NAME:
+                _add(token)
+    for match in re.finditer(r"\b(\d+)\b", str(text or "")):
+        _add(match.group(1))
+    for word in re.findall(r"[a-z]+", str(text or "").lower()):
+        if word in _AMOUNT_WORDS:
+            _add(word)
+    return found[:8]
+
+
+def _recall_records(state: dict[str, Any], sources: list[dict[str, Any]] | None = None) -> list[str]:
+    """Durable disclosures the world has already written down.
+
+    ``sources`` is the already-scored source_index retrieval, which reaches
+    further back than the conversation window does -- the plant that failed was
+    71 turns old.
+    """
+    out: list[str] = []
+    for row in (state.get("conversations") or [])[:80]:
+        if not isinstance(row, dict):
+            continue
+        text = f"{row.get('topic') or ''} {row.get('summary') or ''}".strip()
+        if text:
+            out.append(text)
+    for row in (state.get("response_drafts") or [])[:40]:
+        if isinstance(row, dict) and str(row.get("claim") or "").strip():
+            out.append(str(row["claim"]))
+    for row in (sources or [])[:24]:
+        if isinstance(row, dict) and str(row.get("text") or "").strip():
+            out.append(str(row["text"]))
+    return out
+
+
+def recall_contract(
+    state: dict[str, Any],
+    player_input: str,
+    threshold: float = 0.5,
+    sources: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """What the prose owes when the player answers a question the world can already answer.
+
+    Turn 88 of the 20260823 probe asked "who I owe, how much, and when". The
+    answer -- "eleven silver to a lender called Hask" -- was in that very
+    prompt six times over, and the narration still wrote only
+
+        You answer honestly: who you owe, how much, and when.
+
+    So this is not a retrieval problem and prompt text did not fix it. Same
+    remedy as the naming dodge: state the specifics as a contract, then check.
+
+    Scored against all 100 turns of that run it selects exactly one, the real
+    failure, at every threshold from 0.3 to 0.5. Kept at 0.5 for margin.
+    """
+    empty = {"required": False, "specifics": [], "record": "", "overlap": 0.0}
+    line = str(player_input or "")
+    if not line.strip() or not _ANSWER_ACT_RE.search(line):
+        return empty
+    wanted = _recall_topics(line)
+    if not wanted:
+        return empty
+
+    scored: list[tuple[float, str]] = []
+    for text in _recall_records(state, sources):
+        words = _recall_topics(text)
+        if not words:
+            continue
+        overlap = len(wanted & words) / len(wanted)
+        if overlap >= threshold:
+            scored.append((overlap, text))
+    scored.sort(key=lambda pair: -pair[0])
+
+    # The best match is often the question echoed back -- the world records the
+    # player's own line every turn, and it scores 1.0 against itself. Those carry
+    # no name and no number, so take the best match that actually has specifics
+    # rather than letting a self-echo win and report nothing.
+    for overlap, text in scored[:12]:
+        specifics = recall_specifics(text)
+        if not specifics:
+            continue
+        best_text, best_overlap = text, overlap
+        break
+    else:
+        return empty
+    return {
+        "required": True,
+        "specifics": specifics,
+        "record": best_text[:400],
+        "overlap": round(best_overlap, 3),
+        "rule": (
+            "The player is answering a question this world already has an answer to. "
+            "State these specifics in the prose; do not describe the answer being given."
+        ),
+    }
+
+
+def check_recall_specifics(contract: dict[str, Any] | None, narration: str) -> dict[str, Any]:
+    """Did the prose actually state any of the specifics it owed?
+
+    One is enough. Demanding all of them would fire on prose that answered well
+    but naturally, and a rewrite of good prose is a loss.
+    """
+    report = {"required": False, "specifics": [], "stated": [], "missing": False}
+    if not isinstance(contract, dict) or not contract.get("required"):
+        return report
+    specifics = [str(s) for s in (contract.get("specifics") or []) if str(s).strip()]
+    report["required"] = True
+    report["specifics"] = specifics
+    if not specifics:
+        return report
+    low = str(narration or "").lower()
+    stated = [s for s in specifics if s.lower() in low]
+    report["stated"] = stated
+    report["missing"] = not stated and len(str(narration or "")) > 200
     return report
 
 
@@ -6481,6 +6678,16 @@ def _naming_contract_for(state: dict[str, Any], player_input: str) -> dict[str, 
         return None
 
 
+def _recall_contract_for(
+    state: dict[str, Any], player_input: str, sources: list[dict[str, Any]] | None = None
+) -> dict[str, Any] | None:
+    try:
+        contract = recall_contract(state, player_input, sources=sources)
+    except Exception:
+        return None
+    return contract if contract.get("required") else None
+
+
 def _narration_text_of(result: dict[str, Any]) -> str:
     """The prose of a turn, wherever it happens to live.
 
@@ -6731,6 +6938,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "movement_contract": movement_contract(state, player_input, intent),
         "narrative_voice": narrative_voice_contract(state),
         "naming_contract": _naming_contract_for(state, player_input),
+        "recall_contract": _recall_contract_for(state, player_input, relevant_sources),
         "overused_words": _recent_narration_tics(),
         "retrieval": {
             "method": "sequential deterministic context planner plus mechanics context, action-specific player slices, active-location scoring, and source_index JSONL search",
@@ -10308,6 +10516,19 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     except Exception:
         naming_repair = None
 
+    # Was a remembered specific owed, and did the prose state it? Recomputed here
+    # rather than read off the turn dict: the handoff cleanups strip underscore
+    # keys, and this has to be true of the prose that actually shipped.
+    recall_check: dict[str, Any] | None = None
+    try:
+        _rc = check_recall_specifics(
+            (prompt_context or {}).get("recall_contract"), _narration_text_of(result)
+        )
+        if _rc.get("required"):
+            recall_check = _rc
+    except Exception:
+        recall_check = None
+
     # Pin each NPC's pronouns from the first prose that commits to them, so the
     # next turn's contract can state it instead of letting the model re-decide.
     try:
@@ -10401,6 +10622,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
             state.setdefault(key, value)
         if naming_repair:
             state.setdefault("naming", naming_repair)
+        if recall_check:
+            state.setdefault("recall", recall_check)
     debug_trace_path = _write_model_trace_file(
         _current_turn_number(),
         input_kind,
@@ -10501,6 +10724,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         # Which name answered a naming demand, where it came from, and whether
         # the prose had to be repaired to say it.
         "naming": (state or {}).get("naming") or {},
+        # Whether the prose owed a remembered name/amount and whether it stated it.
+        "recall": (state or {}).get("recall") or {},
         "travel_ready": bool(travel_ready),
         "travel": {
             "ready": bool(travel_ready),

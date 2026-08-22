@@ -122,6 +122,10 @@ Rules:
   naming_contract.name into the prose as plain text. Describing a name without
   stating it ("the name weighs on you") does not count and will be corrected.
   Never switch to third person or the player's name as narration subject.
+- If world_state.recall_contract is present, the player is answering a question this
+  world already has an answer to. Write recall_contract.specifics into the prose as
+  plain text. Echoing the question back ("you answer honestly: who you owe, how much,
+  and when") is not an answer and will be corrected.
 - Resolve the player's action. They already chose; show what happens. Never end ===NAR=== with the
   choice restated ("Do you approach X, or continue to Y?", "The choice is yours.") — that hands the
   turn back unplayed. End on a consequence, a new pressure, or a concrete detail, then stop.
@@ -166,6 +170,15 @@ def _decode_arg_escapes(text: str) -> str:
         return unquote(text)
     except Exception:
         return text
+
+
+# Opcodes whose leading free tokens are positional by definition, so they are
+# never read as flag keys. Both entries here are real collisions, not caution:
+# FOCUS takes a kind ("npc", "event"), and INDEX takes an entity type followed
+# by a code -- and "NPC" is also a flag key (EVENT ... NPC <code>). Without this,
+# "INDEX npc F \"...\"" parsed as flags={NPC: F} with one positional left, failed
+# INDEX's own arity check, and cost the turn every op on every other line.
+_LEADING_POSITIONALS = {"FOCUS": 1, "INDEX": 2}
 
 
 def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
@@ -213,8 +226,7 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
         "VERDICT",
         "SKILL",
     }
-    # First free token after FOCUS is always the kind (event/npc/risk/...), never a flag key.
-    force_positional_remaining = 1 if opcode == "FOCUS" else 0
+    force_positional_remaining = _LEADING_POSITIONALS.get(opcode, 0)
     i = 1
     while i < len(parts):
         token = parts[i]
@@ -415,6 +427,257 @@ def _apply_amount(
         target[number_key] = -abs(number) if negate else number
 
 
+def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
+    """
+    Apply one opcode to the turn under construction.
+
+    Raises TurnDslError for a malformed line. The caller isolates that to the
+    single line: dropping one op the model fumbled beats dropping the whole
+    scene's state, which is what happened before ops_to_turn caught nothing.
+    """
+    op = entry["op"]
+    args: list[str] = list(entry.get("args") or [])
+    flags: dict[str, str] = dict(entry.get("flags") or {})
+
+    if op == "SUMMARY":
+        turn["turn_summary"] = " ".join(args)[:700] or turn["turn_summary"]
+    elif op == "SCENE":
+        turn["scene_focus"] = (args[0] if args else "action")[:40]
+    elif op == "GOAL":
+        turn["scene_plan"]["goal"] = " ".join(args)[:400]
+    elif op == "FOCUS":
+        kind = (args[0] if args else "event")[:40]
+        summary = " ".join(args[1:]) if len(args) > 1 else flags.get("SUMMARY", "beat")
+        turn["scene_plan"]["focus_points"].append(
+            {
+                "kind": kind,
+                "summary": summary[:300],
+                "event_worthy": kind in {"event", "risk", "npc"},
+                "persistence": "temporary",
+            }
+        )
+    elif op == "NPC_NEW":
+        name = flags.get("NAME") or (args[0] if args else "")
+        if not name:
+            raise TurnDslError(f"NPC_NEW requires NAME on line {entry['line']}")
+        npc = {
+            "code": None,
+            "name": name[:120],
+            "race": flags.get("RACE", "human")[:80],
+            "location": flags.get("LOC") or (args[1] if len(args) > 1 else ""),
+            "role": flags.get("ROLE") or (args[2] if len(args) > 2 else "local")[:80],
+            "summary": flags.get("DESC") or f"Introduced this turn: {name}"[:400],
+            "attitude": flags.get("ATTITUDE", "neutral")[:40],
+            "personality": "",
+            "likes": "",
+            "principles": "",
+            "dislikes": "",
+            "rank": flags.get("RANK", "")[:8],
+            "stat_profile": {},
+            "skill_profile": {},
+            "trust_delta": 0,
+            "known_fact": "",
+            "mentioned_by": None,
+        }
+        turn["npcs"].append(npc)
+    elif op == "NPC_NOTE":
+        code = (args[0] if args else "").upper()
+        fact = args[1] if len(args) > 1 else " ".join(args[1:])
+        if not code or not fact:
+            raise TurnDslError(f"NPC_NOTE requires code and fact on line {entry['line']}")
+        turn["index_updates"].append(
+            {"entity_type": "npc", "code": code, "summary_append": fact[:400], "known_fact": fact[:400]}
+        )
+    elif op == "TALK":
+        code = (args[0] if args else "").upper()
+        topic = args[1] if len(args) > 1 else "conversation"
+        if not code:
+            raise TurnDslError(f"TALK requires npc code on line {entry['line']}")
+        turn["conversations"].append(
+            {
+                "npc_code": code,
+                "topic": topic[:120],
+                "summary": topic[:500],
+                "player_claims": [],
+            }
+        )
+    elif op == "GRANT":
+        name = args[0] if args else flags.get("NAME", "")
+        if not name:
+            raise TurnDslError(f"GRANT requires item name on line {entry['line']}")
+        qty_token = flags.get("QTY")
+        if qty_token in (None, "") and len(args) > 1:
+            qty_token = args[1]
+        amount: dict[str, Any] = {}
+        _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token)
+        if not amount:
+            amount = {"quantity_band": "trivial"}
+        elif "quantity_delta" in amount:
+            amount["quantity_delta"] = abs(amount["quantity_delta"]) or 1
+        turn["inventory_changes"].append(
+            {
+                "name": name[:120],
+                "description": flags.get("DESC", "")[:400],
+                **amount,
+                "weight": 1.0,
+                "slot_size": 1,
+                "item_type": flags.get("TYPE", "misc")[:80],
+                "rarity": flags.get("RARITY", "common")[:40],
+                "enchantments": [],
+                "stat_modifiers": {},
+                "granted_abilities": [],
+                "stack_limit": 20,
+                "carry_modifier": 1.0,
+                "container_bonus_weight": 0,
+                "container_bonus_slots": 0,
+                "dimensional_space": False,
+            }
+        )
+    elif op == "TAKE":
+        name = args[0] if args else ""
+        if not name:
+            raise TurnDslError(f"TAKE requires item name on line {entry['line']}")
+        qty_token = flags.get("QTY")
+        if qty_token in (None, "") and len(args) > 1:
+            qty_token = args[1]
+        amount = {}
+        _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token, negate=True)
+        if not amount:
+            amount = {"quantity_band": "-trivial"}
+        turn["inventory_changes"].append(
+            {
+                "name": name[:120],
+                "description": "",
+                **amount,
+                "weight": 1.0,
+                "slot_size": 1,
+                "item_type": "misc",
+                "rarity": "common",
+                "enchantments": [],
+                "stat_modifiers": {},
+                "granted_abilities": [],
+                "stack_limit": 20,
+                "carry_modifier": 1.0,
+                "container_bonus_weight": 0,
+                "container_bonus_slots": 0,
+                "dimensional_space": False,
+            }
+        )
+    elif op == "GOLD":
+        _apply_amount(turn["player"], band_key="gold_band", number_key="gold_delta", token=args[0] if args else None)
+    elif op == "XP":
+        _apply_amount(turn["player"], band_key="xp_band", number_key="xp_delta", token=args[0] if args else None)
+    elif op == "HP":
+        _apply_amount(turn["player"], band_key="health_band", number_key="health_delta", token=args[0] if args else None)
+    elif op == "KARMA":
+        _apply_amount(turn["player"], band_key="karma_band", number_key="karma_delta", token=args[0] if args else None)
+        turn["player"]["karma_visibility"] = (flags.get("VIS") or "private")[:40]
+        turn["player"]["karma_reason"] = flags.get("REASON") or (" ".join(args[1:]) if len(args) > 1 else "")
+    elif op == "MOVE":
+        dest = " ".join(args).strip()
+        if not dest:
+            raise TurnDslError(f"MOVE requires destination on line {entry['line']}")
+        if re.fullmatch(r"L\d+", dest, re.I):
+            turn["player"]["move_to_location_code"] = dest.upper()
+        else:
+            turn["player"]["move_to_location"] = dest[:120]
+    elif op == "LOC_NEW":
+        name = args[0] if args else ""
+        summary = args[1] if len(args) > 1 else f"Discovered location: {name}"
+        if not name:
+            raise TurnDslError(f"LOC_NEW requires name on line {entry['line']}")
+        turn["locations"].append({"name": name[:120], "summary": summary[:500]})
+    elif op == "EVENT":
+        title = args[0] if args else "Event"
+        turn["events"].append(
+            {
+                "code": None,
+                "title": title[:120],
+                "location_code": flags.get("LOC", ""),
+                "npc_code": flags.get("NPC", ""),
+                "summary": flags.get("SUMMARY") or title,
+                "status": "active",
+                "persistence": "temporary",
+                "disappear_chance": 70,
+                "respawn_chance": 0,
+                "fame_score": 0,
+                "fame_scope": "local",
+                "rumor_summary": "",
+            }
+        )
+    elif op == "GM":
+        trigger = args[0] if args else "offscreen"
+        summary = args[1] if len(args) > 1 else trigger
+        turn["gm_events"].append(
+            {
+                "trigger": trigger[:240],
+                "summary": summary[:500],
+                "status": "pending",
+                "priority": 3,
+                "location_code": flags.get("LOC", ""),
+                "npc_code": flags.get("NPC", ""),
+                "event_code": "",
+            }
+        )
+    elif op == "REL":
+        if len(args) < 3:
+            raise TurnDslError(f"REL requires source target summary on line {entry['line']}")
+        turn["relationships"].append(
+            {
+                "source_code": args[0].upper(),
+                "target_code": args[1].upper(),
+                "location": flags.get("LOC", ""),
+                "summary": " ".join(args[2:])[:400],
+                "weight_delta": 1,
+            }
+        )
+    elif op == "SKILL":
+        name = args[0] if args else flags.get("NAME", "")
+        if not name:
+            raise TurnDslError(f"SKILL requires name on line {entry['line']}")
+        delta_token = flags.get("DELTA")
+        if delta_token in (None, "") and len(args) > 1:
+            delta_token = args[1]
+        amount = {}
+        _apply_amount(amount, band_key="delta_band", number_key="delta", token=delta_token)
+        if not amount:
+            amount = {"delta_band": "small"}
+        turn["skill_changes"].append(
+            {"name": name[:80], **amount, "notes": flags.get("NOTES", "")[:240]}
+        )
+    elif op == "CLAIM":
+        claim = args[0] if args else ""
+        verdict = (flags.get("VERDICT") or (args[1] if len(args) > 1 else "unverified")).lower()
+        turn["response_drafts"].append(
+            {
+                "claim": claim[:240],
+                "verdict": verdict[:40],
+                "skill": flags.get("SKILL", "")[:40],
+                "difficulty_class": 12,
+                "result": "not_checked",
+                "notes": flags.get("NOTES", "")[:240],
+            }
+        )
+    elif op == "JOURNAL":
+        kind = (args[0] if args else "fact")[:40]
+        content = args[1] if len(args) > 1 else " ".join(args[1:])
+        turn["journal"].append({"kind": kind, "content": content[:1400]})
+    elif op == "INDEX":
+        if len(args) < 3:
+            raise TurnDslError(f"INDEX requires type code summary on line {entry['line']}")
+        turn["index_updates"].append(
+            {
+                "entity_type": args[0].lower()[:40],
+                "code": args[1].upper()[:20],
+                "summary_append": " ".join(args[2:])[:400],
+            }
+        )
+    elif op == "NOTE":
+        content = " ".join(args) if args else ""
+        if content:
+            turn["journal"].append({"kind": "fact", "content": content[:1400]})
+
+
 def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "") -> dict[str, Any]:
     """Deterministic transcoder: NAR+OPS → apply_turn-compatible dict."""
     narration = str(narration or "").strip()
@@ -464,248 +727,19 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         "_dsl": {"ops_count": len(ops), "source": "nar_ops"},
     }
 
+    malformed_ops: list[str] = []
     for entry in ops:
-        op = entry["op"]
-        args: list[str] = list(entry.get("args") or [])
-        flags: dict[str, str] = dict(entry.get("flags") or {})
-
-        if op == "SUMMARY":
-            turn["turn_summary"] = " ".join(args)[:700] or turn["turn_summary"]
-        elif op == "SCENE":
-            turn["scene_focus"] = (args[0] if args else "action")[:40]
-        elif op == "GOAL":
-            turn["scene_plan"]["goal"] = " ".join(args)[:400]
-        elif op == "FOCUS":
-            kind = (args[0] if args else "event")[:40]
-            summary = " ".join(args[1:]) if len(args) > 1 else flags.get("SUMMARY", "beat")
-            turn["scene_plan"]["focus_points"].append(
-                {
-                    "kind": kind,
-                    "summary": summary[:300],
-                    "event_worthy": kind in {"event", "risk", "npc"},
-                    "persistence": "temporary",
-                }
-            )
-        elif op == "NPC_NEW":
-            name = flags.get("NAME") or (args[0] if args else "")
-            if not name:
-                raise TurnDslError(f"NPC_NEW requires NAME on line {entry['line']}")
-            npc = {
-                "code": None,
-                "name": name[:120],
-                "race": flags.get("RACE", "human")[:80],
-                "location": flags.get("LOC") or (args[1] if len(args) > 1 else ""),
-                "role": flags.get("ROLE") or (args[2] if len(args) > 2 else "local")[:80],
-                "summary": flags.get("DESC") or f"Introduced this turn: {name}"[:400],
-                "attitude": flags.get("ATTITUDE", "neutral")[:40],
-                "personality": "",
-                "likes": "",
-                "principles": "",
-                "dislikes": "",
-                "rank": flags.get("RANK", "")[:8],
-                "stat_profile": {},
-                "skill_profile": {},
-                "trust_delta": 0,
-                "known_fact": "",
-                "mentioned_by": None,
-            }
-            turn["npcs"].append(npc)
-        elif op == "NPC_NOTE":
-            code = (args[0] if args else "").upper()
-            fact = args[1] if len(args) > 1 else " ".join(args[1:])
-            if not code or not fact:
-                raise TurnDslError(f"NPC_NOTE requires code and fact on line {entry['line']}")
-            turn["index_updates"].append(
-                {"entity_type": "npc", "code": code, "summary_append": fact[:400], "known_fact": fact[:400]}
-            )
-        elif op == "TALK":
-            code = (args[0] if args else "").upper()
-            topic = args[1] if len(args) > 1 else "conversation"
-            if not code:
-                raise TurnDslError(f"TALK requires npc code on line {entry['line']}")
-            turn["conversations"].append(
-                {
-                    "npc_code": code,
-                    "topic": topic[:120],
-                    "summary": topic[:500],
-                    "player_claims": [],
-                }
-            )
-        elif op == "GRANT":
-            name = args[0] if args else flags.get("NAME", "")
-            if not name:
-                raise TurnDslError(f"GRANT requires item name on line {entry['line']}")
-            qty_token = flags.get("QTY")
-            if qty_token in (None, "") and len(args) > 1:
-                qty_token = args[1]
-            amount: dict[str, Any] = {}
-            _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token)
-            if not amount:
-                amount = {"quantity_band": "trivial"}
-            elif "quantity_delta" in amount:
-                amount["quantity_delta"] = abs(amount["quantity_delta"]) or 1
-            turn["inventory_changes"].append(
-                {
-                    "name": name[:120],
-                    "description": flags.get("DESC", "")[:400],
-                    **amount,
-                    "weight": 1.0,
-                    "slot_size": 1,
-                    "item_type": flags.get("TYPE", "misc")[:80],
-                    "rarity": flags.get("RARITY", "common")[:40],
-                    "enchantments": [],
-                    "stat_modifiers": {},
-                    "granted_abilities": [],
-                    "stack_limit": 20,
-                    "carry_modifier": 1.0,
-                    "container_bonus_weight": 0,
-                    "container_bonus_slots": 0,
-                    "dimensional_space": False,
-                }
-            )
-        elif op == "TAKE":
-            name = args[0] if args else ""
-            if not name:
-                raise TurnDslError(f"TAKE requires item name on line {entry['line']}")
-            qty_token = flags.get("QTY")
-            if qty_token in (None, "") and len(args) > 1:
-                qty_token = args[1]
-            amount = {}
-            _apply_amount(amount, band_key="quantity_band", number_key="quantity_delta", token=qty_token, negate=True)
-            if not amount:
-                amount = {"quantity_band": "-trivial"}
-            turn["inventory_changes"].append(
-                {
-                    "name": name[:120],
-                    "description": "",
-                    **amount,
-                    "weight": 1.0,
-                    "slot_size": 1,
-                    "item_type": "misc",
-                    "rarity": "common",
-                    "enchantments": [],
-                    "stat_modifiers": {},
-                    "granted_abilities": [],
-                    "stack_limit": 20,
-                    "carry_modifier": 1.0,
-                    "container_bonus_weight": 0,
-                    "container_bonus_slots": 0,
-                    "dimensional_space": False,
-                }
-            )
-        elif op == "GOLD":
-            _apply_amount(turn["player"], band_key="gold_band", number_key="gold_delta", token=args[0] if args else None)
-        elif op == "XP":
-            _apply_amount(turn["player"], band_key="xp_band", number_key="xp_delta", token=args[0] if args else None)
-        elif op == "HP":
-            _apply_amount(turn["player"], band_key="health_band", number_key="health_delta", token=args[0] if args else None)
-        elif op == "KARMA":
-            _apply_amount(turn["player"], band_key="karma_band", number_key="karma_delta", token=args[0] if args else None)
-            turn["player"]["karma_visibility"] = (flags.get("VIS") or "private")[:40]
-            turn["player"]["karma_reason"] = flags.get("REASON") or (" ".join(args[1:]) if len(args) > 1 else "")
-        elif op == "MOVE":
-            dest = " ".join(args).strip()
-            if not dest:
-                raise TurnDslError(f"MOVE requires destination on line {entry['line']}")
-            if re.fullmatch(r"L\d+", dest, re.I):
-                turn["player"]["move_to_location_code"] = dest.upper()
-            else:
-                turn["player"]["move_to_location"] = dest[:120]
-        elif op == "LOC_NEW":
-            name = args[0] if args else ""
-            summary = args[1] if len(args) > 1 else f"Discovered location: {name}"
-            if not name:
-                raise TurnDslError(f"LOC_NEW requires name on line {entry['line']}")
-            turn["locations"].append({"name": name[:120], "summary": summary[:500]})
-        elif op == "EVENT":
-            title = args[0] if args else "Event"
-            turn["events"].append(
-                {
-                    "code": None,
-                    "title": title[:120],
-                    "location_code": flags.get("LOC", ""),
-                    "npc_code": flags.get("NPC", ""),
-                    "summary": flags.get("SUMMARY") or title,
-                    "status": "active",
-                    "persistence": "temporary",
-                    "disappear_chance": 70,
-                    "respawn_chance": 0,
-                    "fame_score": 0,
-                    "fame_scope": "local",
-                    "rumor_summary": "",
-                }
-            )
-        elif op == "GM":
-            trigger = args[0] if args else "offscreen"
-            summary = args[1] if len(args) > 1 else trigger
-            turn["gm_events"].append(
-                {
-                    "trigger": trigger[:240],
-                    "summary": summary[:500],
-                    "status": "pending",
-                    "priority": 3,
-                    "location_code": flags.get("LOC", ""),
-                    "npc_code": flags.get("NPC", ""),
-                    "event_code": "",
-                }
-            )
-        elif op == "REL":
-            if len(args) < 3:
-                raise TurnDslError(f"REL requires source target summary on line {entry['line']}")
-            turn["relationships"].append(
-                {
-                    "source_code": args[0].upper(),
-                    "target_code": args[1].upper(),
-                    "location": flags.get("LOC", ""),
-                    "summary": " ".join(args[2:])[:400],
-                    "weight_delta": 1,
-                }
-            )
-        elif op == "SKILL":
-            name = args[0] if args else flags.get("NAME", "")
-            if not name:
-                raise TurnDslError(f"SKILL requires name on line {entry['line']}")
-            delta_token = flags.get("DELTA")
-            if delta_token in (None, "") and len(args) > 1:
-                delta_token = args[1]
-            amount = {}
-            _apply_amount(amount, band_key="delta_band", number_key="delta", token=delta_token)
-            if not amount:
-                amount = {"delta_band": "small"}
-            turn["skill_changes"].append(
-                {"name": name[:80], **amount, "notes": flags.get("NOTES", "")[:240]}
-            )
-        elif op == "CLAIM":
-            claim = args[0] if args else ""
-            verdict = (flags.get("VERDICT") or (args[1] if len(args) > 1 else "unverified")).lower()
-            turn["response_drafts"].append(
-                {
-                    "claim": claim[:240],
-                    "verdict": verdict[:40],
-                    "skill": flags.get("SKILL", "")[:40],
-                    "difficulty_class": 12,
-                    "result": "not_checked",
-                    "notes": flags.get("NOTES", "")[:240],
-                }
-            )
-        elif op == "JOURNAL":
-            kind = (args[0] if args else "fact")[:40]
-            content = args[1] if len(args) > 1 else " ".join(args[1:])
-            turn["journal"].append({"kind": kind, "content": content[:1400]})
-        elif op == "INDEX":
-            if len(args) < 3:
-                raise TurnDslError(f"INDEX requires type code summary on line {entry['line']}")
-            turn["index_updates"].append(
-                {
-                    "entity_type": args[0].lower()[:40],
-                    "code": args[1].upper()[:20],
-                    "summary_append": " ".join(args[2:])[:400],
-                }
-            )
-        elif op == "NOTE":
-            content = " ".join(args) if args else ""
-            if content:
-                turn["journal"].append({"kind": "fact", "content": content[:1400]})
+        try:
+            _apply_op(turn, entry)
+        except TurnDslError as exc:
+            # One bad line must not cost the turn every other op it got right.
+            malformed_ops.append(str(exc))
+    if malformed_ops:
+        turn["self_check"]["issues_found"].extend(malformed_ops[:6])
+        turn["self_check"]["corrections_made"].append(
+            f"Skipped {len(malformed_ops)} malformed op line(s); kept the rest."
+        )
+        turn["_dsl"]["malformed_ops"] = len(malformed_ops)
 
     if not turn["turn_summary"]:
         intent = str(player_input or "").strip()[:80]

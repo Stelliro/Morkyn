@@ -500,6 +500,9 @@ def main() -> int:
             # Naming authority: which name answered, from where, and whether the
             # prose had to be repaired to say it.
             "naming": (payload or {}).get("naming") or {},
+            # Remembered specifics the prose owed this turn, and whether it said
+            # them. Distinct from "recall" below, which is the planted-fact probe.
+            "recall_contract": (payload or {}).get("recall") or {},
         }
         if recall_row:
             row["recall"] = {k: v for k, v in recall_row.items() if k != "narration"}
@@ -562,6 +565,14 @@ def main() -> int:
         1 for t in naming_turns if (t["naming"] or {}).get("source") in {"history", "ledger", "player"}
     )
     summary["naming_minted"] = sum(1 for t in naming_turns if (t["naming"] or {}).get("source") == "minted")
+    recall_turns = [t for t in report["turns"] if (t.get("recall_contract") or {}).get("required")]
+    summary["recall_contracts"] = len(recall_turns)
+    summary["recall_specifics_stated"] = sum(
+        1 for t in recall_turns if (t["recall_contract"] or {}).get("stated")
+    )
+    summary["recall_specifics_missing"] = sum(
+        1 for t in recall_turns if (t["recall_contract"] or {}).get("missing")
+    )
     summary["npcs_total"] = len(npc_rows)
     summary["npcs_pronouns_pinned"] = sum(1 for n in npc_rows if str(n.get("pronouns") or "").strip())
     summary["name_ledger"] = ledger_rows[:10]

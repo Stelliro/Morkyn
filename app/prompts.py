@@ -626,6 +626,7 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
         "movement_contract": context.get("movement_contract"),
         "narrative_voice": context.get("narrative_voice"),
         "naming_contract": context.get("naming_contract"),
+        "recall_contract": context.get("recall_contract"),
         "gm_events": context.get("gm_events", [])[:8],
         "skills": context.get("skills"),
         "abilities": context.get("abilities"),
@@ -681,6 +682,10 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 "When world_state.naming_contract is present the player asked for a name: "
                 "write naming_contract.name in the narration as plain text. Never describe a name "
                 "without giving it. "
+                "When world_state.recall_contract is present the player is answering something this "
+                "world already knows: write recall_contract.specifics into the narration as plain "
+                "text. Restating the question ('you answer honestly who you owe, how much') is not "
+                "an answer. "
                 "Prefer existing codes. Database wins over invention."
             ),
         },

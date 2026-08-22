@@ -81,6 +81,82 @@ class TestInference(unittest.TestCase):
         self.assertEqual(infer_npc_pronouns("Jetcoil", text), "")
 
 
+class TestSharedSentencesDoNotBleed(unittest.TestCase):
+    """Both of these pinned the wrong NPC in the 20260823 run.
+
+    infer_npc_pronouns' docstring already claimed sentences naming a second
+    character were excluded. Only the lookahead sentence was actually checked;
+    the naming sentence itself was not.
+    """
+
+    CAST = ["Eldrin", "Liora", "Bellrow", "Cinderrow"]
+
+    def test_a_neighbours_noun_does_not_gender_this_npc(self):
+        # Pinned Bellrow "he" off the boy standing next to her.
+        text = (
+            "A young boy, Liora, watches you with wide, curious eyes, and a "
+            "weaver named Bellrow nods at you from the edge of the crowd."
+        )
+        self.assertEqual(infer_npc_pronouns("Bellrow", text, self.CAST), "")
+
+    def test_a_sentence_initial_name_is_seen_when_the_roster_is_passed(self):
+        # Pinned Cinderrow "he" off Eldrin's three "his". The capitalised-token
+        # heuristic cannot see "Eldrin" here -- it is at the start of the
+        # sentence, where every sentence has a capital.
+        text = (
+            "Eldrin, the fishmonger, narrows his eyes at you from behind his "
+            "stall, his fingers tightening around Cinderrow bundle of dried fish."
+        )
+        self.assertEqual(infer_npc_pronouns("Cinderrow", text, self.CAST), "")
+        # And not for Eldrin either: the sentence names two of the cast, so it
+        # is evidence about neither. Eldrin pins from his own clean sentence a
+        # moment later. Declining costs a turn; pinning wrong costs the run.
+        self.assertEqual(infer_npc_pronouns("Eldrin", text, self.CAST), "")
+        self.assertEqual(
+            infer_npc_pronouns(
+                "Eldrin", "Eldrin leans against his stall, wiping scales off a catch.", self.CAST
+            ),
+            "he",
+        )
+
+    def test_a_clean_sentence_later_in_the_same_prose_still_pins(self):
+        # Sharing one sentence must not disqualify the character outright.
+        text = (
+            "The only people you notice are Hearthpost and Pikerest, both of "
+            "whom seem to be watching you closely. Pikerest, a wiry woman with "
+            "sharp eyes, stands near the riverbank, her hands folded behind her back."
+        )
+        self.assertEqual(infer_npc_pronouns("Pikerest", text, ["Hearthpost"]), "she")
+
+    def test_the_roster_is_optional(self):
+        # Callers without a roster keep the old heuristic behaviour.
+        text = "Bellrow works at the loom, her hands quick."
+        self.assertEqual(infer_npc_pronouns("Bellrow", text), "she")
+
+    def test_binding_passes_the_roster_for_us(self):
+        with connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO locations (id, code, name) VALUES (9, 'L9', 'Square')"
+            )
+            for code, name in (("BQ1", "Ashvale"), ("BQ2", "Rookmere")):
+                conn.execute(
+                    "INSERT INTO npcs (code, location_id, name, pronouns) VALUES (?, 9, ?, '')",
+                    (code, name),
+                )
+            rows = [
+                dict(r)
+                for r in conn.execute(
+                    "SELECT id, name, pronouns FROM npcs WHERE name IN ('Ashvale', 'Rookmere')"
+                )
+            ]
+            bound = bind_npc_pronouns(
+                conn,
+                "Ashvale, the smith, wipes his hands beside Rookmere at the anvil.",
+                rows,
+            )
+        self.assertEqual(bound, [], "a shared sentence must pin neither of them")
+
+
 class TestPinningIsWriteOnce(unittest.TestCase):
     def _npc(self, name: str, pronouns: str = ""):
         with connect() as conn:
