@@ -1462,11 +1462,41 @@ function stripLeakedEntityHtml(value) {
   return text;
 }
 
+/**
+ * Collapse the wire format "Name [[CODE]]" down to just "[[CODE]]".
+ *
+ * The server appends the code after the name on purpose — see
+ * `_inject_entity_codes_for_known_names` in app/llm.py, which rewrites
+ * "Low Gate Timber Arch" as "Low Gate Timber Arch [[L1]]" so the UI can link
+ * it. Expanding the code into a labelled button *and* linkifying the bare name
+ * sitting next to it rendered every reference twice:
+ * "Ash Road Cut Ash Road Cut", "soft shoes soft shoes".
+ *
+ * Runs before escapeHtml so raw labels can be compared without re-escaping.
+ */
+function collapseNameCodePairs(text, map) {
+  const raw = String(text ?? "");
+  if (!raw || !map || !map.size) return raw;
+  return raw.replace(
+    /([A-Za-z0-9][A-Za-z0-9'’.\- ]{0,63})(\[\[(?:[A-Z]+|L\d+|I\d+|E\d+)]])/gi,
+    (whole, before, token) => {
+      const found = map.get(token.slice(2, -2).toUpperCase());
+      if (!found) return whole;
+      const label = String(entityLabel(found.entity) || "").trim();
+      if (!label) return whole;
+      const head = before.replace(/\s+$/, "");
+      if (!head.toLowerCase().endsWith(label.toLowerCase())) return whole;
+      return head.slice(0, head.length - label.length) + token;
+    },
+  );
+}
+
 function linkifyText(value) {
   // Never feed already-rendered HTML back through linkify (causes button spam).
   const cleaned = stripLeakedEntityHtml(value ?? "");
-  const text = escapeHtml(cleaned);
   const map = getEntityMap();
+  // "Ash Road Cut [[L1]]" is one reference, not a name followed by a link.
+  const text = escapeHtml(collapseNameCodePairs(cleaned, map));
   // Track which codes we already linked so we don't double-wrap bare codes
   const linked = new Set();
   let html = text.replace(/\[\[([A-Z]+|L\d+|I\d+|E\d+)]]/gi, (_, rawCode) => {

@@ -27,6 +27,13 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
   - The default install filters `llama-cpp-python` out of `requirements.txt` rather than duplicating the pins. Its CUDA wheels are a large download that fails outright without a matching toolchain, and neither Ollama nor the cloud APIs need it. `--full` installs it.
 - `.gitattributes` pinning `*.sh` to LF. The repo is developed with `core.autocrlf=true`, which would otherwise check `start.sh` out with CRLF and break its shebang on Linux and macOS.
 
+### Fixed
+
+- **The shipped default configuration could not run a single turn through the model.** A default launch resolved `context_window=8192`, while `SYSTEM_PROMPT` alone estimates ~9143 tokens, so `enforce_token_budget` raised `Token budget exceeded: system prompt alone is ~9894 tokens for context_window=8192` on turn one and *every* turn fell back to deterministic prose. Players saw flat canned narration with nothing on screen explaining why. Every probe in `tools/` exports `OLLAMA_CONTEXT_TOKENS=32768`, which is precisely why no test ever caught it - `app/llm.py`, `app/launcher_prefs.py`
+  - `DEFAULT_CONTEXT_TOKENS` and the launcher's `llama_cpp_context` default are now `32768`, matching the context the README benchmarks and the playtest tools already assumed.
+  - New `fitting_system_prompts()` picks the largest system contract that fits the configured window, degrading to `COMPACT_SYSTEM_PROMPT` instead of hard-failing, so lowering the context costs richness rather than killing the turn. It says so once on the server console rather than degrading silently.
+- **Every entity reference rendered twice**: "Ash Road Cut Ash Road Cut", "soft shoes soft shoes". The server appends the code after the name on purpose (`_inject_entity_codes_for_known_names` writes `Low Gate Timber Arch [[L1]]`), and `linkifyText` expanded the `[[code]]` into a labelled button *and* separately linkified the bare name beside it. New `collapseNameCodePairs()` folds `Name [[CODE]]` into one reference before escaping - `static/app.js`
+
 ---
 
 ## [0.9.0] - 2026-08-20

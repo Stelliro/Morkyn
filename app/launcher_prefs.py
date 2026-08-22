@@ -24,7 +24,7 @@ def default_prefs() -> dict[str, Any]:
         "api_base_url": "https://api.x.ai/v1",
         "api_model": "grok-4.5",
         "api_preset": "xai",
-        "llama_cpp_context": 8192,
+        "llama_cpp_context": 32768,  # below ~12k the full system contract does not fit
         "llama_cpp_gpu_layers": -1,
         "soft_response_tokens": 1000,
         "hard_response_tokens": 1500,

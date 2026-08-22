@@ -98,7 +98,10 @@ _llm_runtime_lock = __import__("threading").Lock()
 
 
 DEFAULT_GGUF_MODEL = ""
-DEFAULT_CONTEXT_TOKENS = 8192
+# 8192 could not hold SYSTEM_PROMPT (~9100 tokens), so a default launch fell back
+# to deterministic prose on every turn. 32768 matches the context the README
+# benchmarks and the playtest tools in tools/ already use.
+DEFAULT_CONTEXT_TOKENS = 32768
 DEFAULT_RESPONSE_TOKEN_CAP = 1500
 DEFAULT_RESPONSE_HARD_CAP = 2000
 MIN_TURN_NARRATION_CHARS = 1000
@@ -772,6 +775,59 @@ def context_window_tokens(config: dict[str, Any] | None = None) -> int:
     if model_config.get("provider") == "llama_cpp":
         return _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
     return _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS)
+
+
+# Room a turn needs beyond the fixed system contract: the world packet plus the
+# reserved output. If the system prompt cannot leave this much, it does not fit.
+MIN_TURN_HEADROOM_TOKENS = 2048
+
+
+def fitting_system_prompts(config: dict[str, Any] | None = None) -> tuple[str, str, bool]:
+    """Pick the largest system contract that actually fits the context window.
+
+    Returns ``(system_prompt, verify_prompt, degraded)``.
+
+    A default Ollama launch ran with ``context_window=8192`` while
+    ``SYSTEM_PROMPT`` alone estimates ~9100 tokens. ``enforce_token_budget``
+    then raised "system prompt alone is ~N tokens", every turn fell back to
+    deterministic prose, and the player got canned narration with no obvious
+    cause. Degrading to the compact contract keeps the model in the loop; the
+    caller reports ``degraded`` so the reason is visible instead of silent.
+    """
+    model_config = config or get_model_config()
+    if model_config.get("provider") == "llama_cpp":
+        return COMPACT_SYSTEM_PROMPT, COMPACT_VERIFY_PROMPT, False
+    window = int(
+        model_config.get("context_window")
+        or context_window_tokens(model_config)
+        or DEFAULT_CONTEXT_TOKENS
+    )
+    if estimated_tokens(SYSTEM_PROMPT) + MIN_TURN_HEADROOM_TOKENS > window:
+        return COMPACT_SYSTEM_PROMPT, COMPACT_VERIFY_PROMPT, True
+    return SYSTEM_PROMPT, VERIFY_PROMPT, False
+
+
+_WARNED_COMPACT_CONTRACT = False
+
+
+def _warn_compact_contract_once(window: int) -> None:
+    """Say once, on the server console, why the compact contract is in use.
+
+    Silent degradation is what made this hard to diagnose in the first place:
+    the player saw flat narration with nothing anywhere explaining that the
+    context window could not hold the full contract.
+    """
+    global _WARNED_COMPACT_CONTRACT
+    if _WARNED_COMPACT_CONTRACT:
+        return
+    _WARNED_COMPACT_CONTRACT = True
+    print(
+        f"[morkyn] context window {window} is too small for the full system contract "
+        f"(~{estimated_tokens(SYSTEM_PROMPT)} tokens). Using the compact contract. "
+        f"Raise the context size in the launcher (Advanced -> context) for richer turns.",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def _response_token_settings(config: dict[str, Any] | None = None) -> tuple[int, int]:
@@ -10829,8 +10885,9 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     session_theme = session_theme if isinstance(session_theme, dict) else None
     # Optional hard routing: theme_model or theme_adapter_map[adapter_hint] → model name for this turn.
     config = apply_theme_model_routing(base_config, session_theme)
-    system_prompt = COMPACT_SYSTEM_PROMPT if config.get("provider") == "llama_cpp" else SYSTEM_PROMPT
-    verify_prompt = COMPACT_VERIFY_PROMPT if config.get("provider") == "llama_cpp" else VERIFY_PROMPT
+    system_prompt, verify_prompt, prompt_degraded = fitting_system_prompts(config)
+    if prompt_degraded:
+        _warn_compact_contract_once(context_window_tokens(config))
     theme_block = theme_prompt_block(session_theme, playthrough_options)
     dsl_system_prompt = DSL_SYSTEM_PROMPT
     is_opening = str(player_input or "").startswith("__opening_scene_request__")

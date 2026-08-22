@@ -196,7 +196,7 @@ Optional lock: `AI_RPG_AGENT_TOKEN`.
 Useful overrides:
 
 ```powershell
-$env:AI_RPG_LLAMA_CPP_CONTEXT="8192"
+$env:AI_RPG_LLAMA_CPP_CONTEXT="32768"   # keep >= 12288: the full system contract is ~9.1k tokens
 $env:AI_RPG_LLAMA_CPP_GPU_LAYERS="-1"
 $env:AI_RPG_MAX_RESPONSE_TOKENS="1500"
 $env:AI_RPG_RESPONSE_HARD_CAP_TOKENS="2000"
