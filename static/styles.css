@@ -1650,6 +1650,63 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
   color: var(--muted);
 }
 
+/* Venues on this square. Chips are clickable and draft an action into the
+   composer rather than sending one — the player still decides. */
+.venueLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 3px 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.venueLine.hidden {
+  display: none;
+}
+
+.venueLabel {
+  color: color-mix(in srgb, var(--muted) 70%, var(--neon, #6cf) 30%);
+  letter-spacing: 0.02em;
+}
+
+.venueChip {
+  padding: 0.1rem 0.42rem;
+  font: inherit;
+  color: var(--text, #e8e8e8);
+  background: color-mix(in srgb, var(--panel, #1a1a1f) 80%, var(--neon, #6cf) 20%);
+  border: 1px solid color-mix(in srgb, var(--neon, #6cf) 35%, transparent);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.venueChip:hover,
+.venueChip:focus-visible {
+  border-color: var(--neon, #6cf);
+  background: color-mix(in srgb, var(--panel, #1a1a1f) 65%, var(--neon, #6cf) 35%);
+}
+
+/* Closed is legible, not invisible: a shut door is still information. */
+.venueChip.venueClosed {
+  color: var(--muted);
+  border-style: dashed;
+  opacity: 0.75;
+}
+
+.venueShut {
+  font-size: 0.66rem;
+}
+
+.venueChip.venueExit {
+  border-color: color-mix(in srgb, var(--muted) 55%, transparent);
+  background: transparent;
+}
+
+.venueKeeper {
+  color: var(--muted);
+}
+
 .questStageEditor .questStageForm label {
   display: flex;
   flex-direction: column;

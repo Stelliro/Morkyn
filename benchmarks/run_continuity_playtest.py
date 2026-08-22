@@ -129,21 +129,28 @@ FACTS: list[dict] = [
 
 # Filler actions between plants and probes. Deliberately generic so they work in
 # any location the model invents, and varied so repetition is the model's doing.
+#
+# The first version of this list produced a world of five locations across 100
+# turns and read like a movement bug. It was not: 86% of travel-intent turns did
+# move the player. The script simply never asked to go anywhere -- "walk a short
+# way along the most promising path" correctly yields a short local step. The
+# committed travel lines are explicit about leaving, so world growth is actually
+# exercised instead of merely hoped for.
 FILLER = [
     "I survey where I am, noting exits, cover, and who is watching me.",
     "I ask someone nearby what trouble has been happening here lately.",
     "I count what I am carrying and secure anything valuable.",
     "I listen for rumors about the roads, debts, or sealed letters.",
-    "I walk a short way along the most promising path, staying alert.",
+    "I take the road out of here and travel until the country changes.",
     "I look for honest work a courier could take.",
     "I read any posted notice or mark and commit one detail to memory.",
     "I rest a while somewhere safer and watch the crowd.",
     "I try to learn one useful name or place connected to my errand.",
-    "I check my footing, my supplies, and how much daylight is left.",
+    "I follow the road onward to the next settlement and do not turn back.",
     "I approach the nearest person politely and introduce myself.",
     "I examine something here that does not quite belong.",
     "I ask directions toward the next settlement along my route.",
-    "I keep moving, watching the treeline as I go.",
+    "I leave this place behind and walk on until I reach somewhere new.",
     "I take stock of my injuries and how tired I am.",
     "I trade a small courtesy for a piece of local news.",
 ]
@@ -490,6 +497,9 @@ def main() -> int:
             "turn_summaries": len(state.get("turn_summaries") or []),
             "player_level": (state.get("player") or {}).get("level"),
             "player_gold": (state.get("player") or {}).get("gold"),
+            # Naming authority: which name answered, from where, and whether the
+            # prose had to be repaired to say it.
+            "naming": (payload or {}).get("naming") or {},
         }
         if recall_row:
             row["recall"] = {k: v for k, v in recall_row.items() if k != "narration"}
@@ -534,6 +544,10 @@ def main() -> int:
             str(r[0]) for r in conn.execute("SELECT content FROM journal WHERE kind='self_check'")
         ]
         journal_total = conn.execute("SELECT COUNT(*) FROM journal").fetchone()[0]
+        npc_rows = [dict(r) for r in conn.execute("SELECT name, pronouns FROM npcs")]
+        ledger_rows = [
+            dict(r) for r in conn.execute("SELECT subject, name, source FROM name_ledger")
+        ]
     passed = sum(1 for c in self_checks if '"passed": true' in c.lower())
 
     summary = _summarize(
@@ -541,6 +555,16 @@ def main() -> int:
         recall_results, fallback_count, error_count, t_run, len(narrations), target,
     )
     summary.update(_pronoun_consistency(narrations))
+    naming_turns = [t for t in report["turns"] if (t.get("naming") or {}).get("name")]
+    summary["naming_demands"] = len(naming_turns)
+    summary["naming_repaired"] = sum(1 for t in naming_turns if (t["naming"] or {}).get("repaired"))
+    summary["naming_from_history_or_ledger"] = sum(
+        1 for t in naming_turns if (t["naming"] or {}).get("source") in {"history", "ledger", "player"}
+    )
+    summary["naming_minted"] = sum(1 for t in naming_turns if (t["naming"] or {}).get("source") == "minted")
+    summary["npcs_total"] = len(npc_rows)
+    summary["npcs_pronouns_pinned"] = sum(1 for n in npc_rows if str(n.get("pronouns") or "").strip())
+    summary["name_ledger"] = ledger_rows[:10]
     summary["self_check_rows"] = len(self_checks)
     summary["self_check_passed"] = passed
     summary["journal_rows"] = journal_total

@@ -118,6 +118,9 @@ Rules:
   "Riverbend Camp", do not invent "Riverbend Hillcrest Camp" — it is either the place you already
   have, or it has a different name. The app folds those extensions back into the original.
 - Narrate in second person ("you"), and use world_state.narrative_voice.player_pronouns for the player.
+- If world_state.naming_contract is present, the player asked for a name. Write
+  naming_contract.name into the prose as plain text. Describing a name without
+  stating it ("the name weighs on you") does not count and will be corrected.
   Never switch to third person or the player's name as narration subject.
 - Resolve the player's action. They already chose; show what happens. Never end ===NAR=== with the
   choice restated ("Do you approach X, or continue to Y?", "The choice is yours.") — that hands the

@@ -285,6 +285,7 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     # silently — the same failure that stripped the band fields off `player`.
     "movement_contract",
     "narrative_voice",
+    "naming_contract",
     "equipment_effects",
     "inventory_summary",
     "active_player_alias",
@@ -10722,7 +10723,8 @@ def _ensure_narration_quality(
     else:
         deep = _ensure_narration_depth(turn, context, player_input, system_prompt, timeout, usage, phase, trace)
     voiced = _ensure_narration_voice(deep, context, player_input, system_prompt, timeout, usage, phase, trace)
-    return _apply_menu_trim(voiced)
+    answered = _ensure_answer_act(voiced, context, player_input, system_prompt, timeout, usage, phase, trace)
+    return _apply_menu_trim(answered)
 
 
 def _voice_repair_enabled() -> bool:
@@ -10763,6 +10765,111 @@ def _ensure_narration_voice(
         usage.append({"phase": f"{phase}_voice_failed", "error": _trim_text(str(exc), 500)})
         _append_trace(trace, {"phase": phase, "event": "voice_retry_failed", "error": str(exc)})
     return turn
+
+
+def _answer_act_report(turn: dict[str, Any], player_input: str) -> dict[str, Any]:
+    try:
+        from app.world import check_answer_act
+
+        return check_answer_act(player_input, str(turn.get("narration") or ""))
+    except Exception:
+        return {"answer_act": False, "topics": [], "hits": [], "unanswered": False}
+
+
+def _retry_answer_act(
+    context: dict[str, Any],
+    player_input: str,
+    turn: dict[str, Any],
+    report: dict[str, Any],
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Rewrite a scene that owed an explanation and never gave one.
+
+    Prose-only, like the voice repair. The substance is the model's job -- there
+    is nothing deterministic to substitute here, unlike a name -- so this asks
+    once and accepts the result. If the second pass still dodges, the turn
+    stands: inventing the player's own explanation would be worse than a thin
+    one.
+    """
+    existing = str(turn.get("narration") or "")
+    topics = ", ".join(str(t) for t in (report.get("topics") or [])[:8])
+    instruction = "\n".join(
+        [
+            "Rewrite this scene so it actually delivers what the player said they would say.",
+            "Return ONLY the prose. No JSON, no headers, no markdown fences, no commentary.",
+            "",
+            f'The player\'s line was: "{str(player_input or "").strip()}"',
+            "That line commits the player to explaining or telling something. The scene as",
+            "written never covers it.",
+            f"Cover it plainly, in the player's own words, on the subject of: {topics}." if topics else
+            "Cover it plainly, in the player's own words.",
+            "",
+            "Keep everything else: same location, same characters, same events, same",
+            "[[CODE]] references, same second-person voice, similar length. Add the missing",
+            "answer into the scene; do not restart it.",
+            "",
+            "--- SCENE ---",
+            existing[:4000],
+        ]
+    )
+    raw = _chat_text(
+        system_prompt,
+        instruction,
+        timeout=timeout,
+        usage=usage,
+        phase=f"{phase}_answer",
+        max_tokens=max(_turn_max_tokens(context, "draft"), DEFAULT_RESPONSE_TOKEN_CAP),
+        trace=trace,
+    )
+    prose = _clean_retry_prose(raw)
+    if len(prose.strip()) < max(200, int(len(existing.strip()) * 0.5)):
+        raise LlmError("Answer retry returned too little prose to trust.")
+    spliced = _splice_prose_into_turn(turn, prose)
+    if _answer_act_report(spliced, player_input).get("unanswered"):
+        raise LlmError("Answer retry still did not cover what the player said they would say.")
+    return spliced
+
+
+def _ensure_answer_act(
+    turn: dict[str, Any],
+    context: dict[str, Any],
+    player_input: str,
+    system_prompt: str,
+    timeout: int,
+    usage: list[dict[str, Any]],
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """One prose pass when the player promised an explanation and got none."""
+    report = _answer_act_report(turn, player_input)
+    turn["_answer_check"] = report
+    if not report.get("unanswered") or not _answer_repair_enabled():
+        return turn
+    try:
+        fixed = _normalize_turn(
+            _retry_answer_act(
+                context, player_input, turn, report, system_prompt, timeout, usage, phase, trace
+            ),
+            context,
+        )
+        fixed["_answer_check"] = {
+            **_answer_act_report(fixed, player_input),
+            "repaired": True,
+        }
+        _append_trace(trace, {"phase": phase, "event": "answer_retry_ok", "before": report})
+        return fixed
+    except LlmError as exc:
+        usage.append({"phase": f"{phase}_answer_failed", "error": _trim_text(str(exc), 500)})
+        _append_trace(trace, {"phase": phase, "event": "answer_retry_failed", "error": str(exc)})
+    return turn
+
+
+def _answer_repair_enabled() -> bool:
+    return str(os.getenv("AI_RPG_ANSWER_REPAIR", "1")).strip().lower() not in {"0", "false", "no"}
 
 
 def _retry_missing_narration(

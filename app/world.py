@@ -5261,11 +5261,22 @@ def narrative_voice_contract(state: dict[str, Any]) -> dict[str, Any]:
     sex = player.get("sex") or options.get("player_sex") or ""
     pronouns = player_pronouns(sex)
     name = str(player.get("public_name") or player.get("name") or "").strip()
+    cast = cast_pronoun_contract(state)
     return {
         "person": "second",
         "player_address": "you / your",
         "player_pronouns": pronouns,
         "player_name": name,
+        # Pinned per NPC, so the cast keeps the pronouns it was introduced with.
+        # Over one 100-turn run the same bargeman was "he" 41 times and "they"
+        # 128 times, because nothing ever stated which was right.
+        "cast_pronouns": cast,
+        "cast_rule": (
+            "Each named character keeps the pronouns listed in cast_pronouns for the whole "
+            "scene. Do not switch between he/she and they for the same character."
+            if cast
+            else ""
+        ),
         # Short on purpose: the full point-of-view rule lives in the system
         # prompt, which the server sends once and the runtime caches. This block
         # is per-turn packet text, so it carries only the campaign-specific facts.
@@ -5284,6 +5295,177 @@ _PRONOUN_COUNT_RE = {
     "she": re.compile(r"\b(she|her|hers|herself)\b", re.I),
     "they": re.compile(r"\b(they|them|their|theirs|themself|themselves)\b", re.I),
 }
+
+
+PRONOUN_SETS: dict[str, dict[str, str]] = {
+    "he": {"subject": "he", "object": "him", "possessive": "his"},
+    "she": {"subject": "she", "object": "her", "possessive": "her"},
+    "they": {"subject": "they", "object": "them", "possessive": "their"},
+}
+
+_MASC_WORDS = {"he", "him", "his", "man", "men", "boy", "father", "brother", "son", "sir", "lord"}
+_FEM_WORDS = {"she", "her", "hers", "woman", "women", "girl", "mother", "sister", "daughter", "lady"}
+
+
+def pronoun_set_for(key: str) -> dict[str, str]:
+    return dict(PRONOUN_SETS.get(str(key or "").strip().lower() or "they", PRONOUN_SETS["they"]))
+
+
+def infer_npc_pronouns(name: str, narration: str) -> str:
+    """Guess an NPC's pronoun key from the sentences that name them.
+
+    Only sentences naming exactly this NPC count. A character window picks up
+    whoever else is in the paragraph, which is precisely how a bargeman ends up
+    counted as "her".
+    """
+    person = str(name or "").strip()
+    text = str(narration or "")
+    if not person or not text:
+        return ""
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    low_person = person.lower()
+
+    def _names_someone_else(sentence: str) -> bool:
+        """True when another character is named here, so its pronouns are not ours."""
+        for match in re.finditer(r"(?<![.!?]\s)(?<!^)\b([A-Z][a-z]{2,})\b", sentence):
+            token = match.group(1)
+            if token.lower() != low_person and token not in {"You", "Your"}:
+                return True
+        return False
+
+    masc = fem = 0
+    for index, sentence in enumerate(sentences):
+        if low_person not in sentence.lower():
+            continue
+        # The naming sentence, plus the next one when it clearly continues about
+        # the same person. Prose almost never puts the pronoun in the sentence
+        # that introduces the name -- "Mara counts the coins. She frowns." -- so
+        # a one-sentence window pins virtually nothing.
+        window = [sentence]
+        nxt = sentences[index + 1] if index + 1 < len(sentences) else ""
+        if nxt and low_person not in nxt.lower() and not _names_someone_else(nxt):
+            window.append(nxt)
+        for part in window:
+            words = set(re.findall(r"[a-z]+", part.lower()))
+            masc += len(words & _MASC_WORDS)
+            fem += len(words & _FEM_WORDS)
+    if masc and not fem:
+        return "he"
+    if fem and not masc:
+        return "she"
+    return ""
+
+
+def bind_npc_pronouns(conn, narration: str, npcs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Pin each NPC's pronouns the first time the prose commits to them.
+
+    Write-once, like ``keeper_npc_id``. Re-inferring every turn is what let one
+    NPC be "he" in one scene and "they" in the next; once pinned the contract
+    states it and the model stops choosing afresh.
+    """
+    bound: list[dict[str, Any]] = []
+    rows = npcs
+    if rows is None:
+        try:
+            rows = [dict(r) for r in conn.execute("SELECT id, name, pronouns FROM npcs")]
+        except Exception:
+            return bound
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("pronouns") or "").strip():
+            continue
+        guess = infer_npc_pronouns(str(row.get("name") or ""), narration)
+        if not guess:
+            continue
+        try:
+            conn.execute("UPDATE npcs SET pronouns = ? WHERE id = ?", (guess, int(row.get("id") or 0)))
+        except Exception:
+            continue
+        bound.append({"id": row.get("id"), "name": row.get("name"), "pronouns": guess})
+    return bound
+
+
+def cast_pronoun_contract(state: dict[str, Any], limit: int = 8) -> list[dict[str, Any]]:
+    """Pronouns for the NPCs on stage, so the model does not re-decide each turn."""
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    current_id = (state.get("current_location") or {}).get("id")
+    for loc in state.get("locations") or []:
+        if not isinstance(loc, dict):
+            continue
+        if current_id and loc.get("id") != current_id:
+            continue
+        for npc in loc.get("npcs") or []:
+            if not isinstance(npc, dict):
+                continue
+            name = str(npc.get("name") or "").strip()
+            if not name or name.lower() in seen:
+                continue
+            seen.add(name.lower())
+            key = str(npc.get("pronouns") or "").strip().lower() or "they"
+            out.append({"name": name, "code": str(npc.get("code") or ""), **pronoun_set_for(key)})
+            if len(out) >= limit:
+                return out
+    return out
+
+
+# A line where the player commits to *producing content*: an explanation, an
+# answer, an account. The narration then owes that content, the same way a
+# naming demand owes a name.
+_ANSWER_ACT_RE = re.compile(
+    r"\bi\s+(?:explain|tell|answer|confess|admit|describe|recount|state)\b", re.I
+)
+
+# Words that carry no topic. Kept generous: a false "unanswered" verdict costs a
+# wasted model pass, so the bar for flagging has to stay high.
+_ANSWER_TOPIC_STOP = {
+    "explain", "tell", "tells", "answer", "answers", "confess", "admit", "describe",
+    "recount", "state", "says", "said", "that", "this", "them", "him", "her", "they",
+    "their", "there", "here", "what", "who", "whom", "why", "how", "with", "from",
+    "about", "exactly", "particular", "problem", "confusion", "honestly", "aloud",
+    "someone", "person", "people", "thing", "things", "much", "when", "which",
+    "before", "after", "just", "very", "also", "still", "then", "than", "into",
+}
+
+
+def check_answer_act(player_input: str, narration: str) -> dict[str, Any]:
+    """Did a turn where the player committed to an explanation actually deliver it?
+
+    A 100-turn probe asked the player to explain a fear of deep water. The
+    narration described kneeling at a marked spot while an NPC watched, and
+    never touched the subject -- it even mentioned the river without engaging.
+    Same family as the naming dodge: the model writes *around* the thing it owes.
+
+    Deliberately narrow. Only fires when the line is an explicit answer act and
+    **none** of its topic words survive into the narration; a partial answer is
+    left alone. Broader "did the narration respond to the action?" detection was
+    tried against 100 real turns and rejected -- a category-overlap version
+    flagged five turns of which at least three were plainly responsive ("You ask
+    about..." for a line about listening for rumours), and firing a rewrite on
+    responsive prose makes the turn worse, not better.
+    """
+    line = str(player_input or "")
+    text = str(narration or "")
+    report: dict[str, Any] = {"answer_act": False, "topics": [], "hits": [], "unanswered": False}
+    if not line.strip() or not _ANSWER_ACT_RE.search(line):
+        return report
+
+    topics = [
+        word
+        for word in re.findall(r"[a-z]{4,}", line.lower())
+        if word not in _ANSWER_TOPIC_STOP
+    ]
+    report["answer_act"] = True
+    report["topics"] = topics[:12]
+    if not topics:
+        return report
+
+    low = text.lower()
+    hits = [w for w in topics if w in low or (w.endswith("s") and w[:-1] in low)]
+    report["hits"] = hits[:12]
+    report["unanswered"] = not hits and len(text) > 200
+    return report
 
 
 def check_narrative_voice(narration: str, state: dict[str, Any]) -> dict[str, Any]:
@@ -6290,6 +6472,74 @@ def _recent_narration_tics() -> list[str]:
         return []
 
 
+def _naming_contract_for(state: dict[str, Any], player_input: str) -> dict[str, Any] | None:
+    try:
+        from app.naming import naming_contract
+
+        return naming_contract(resolve_turn_naming(state, player_input))
+    except Exception:
+        return None
+
+
+def _narration_text_of(result: dict[str, Any]) -> str:
+    """The prose of a turn, wherever it happens to live.
+
+    Model turns fill ``narration``; the deterministic fallback fills only
+    ``narration_segments``. Reading one and not the other is how a repair can
+    report success and change nothing the player ever sees.
+    """
+    text = str((result or {}).get("narration") or "").strip()
+    if text:
+        return text
+    segments = (result or {}).get("narration_segments") or []
+    parts = [
+        str(seg.get("text") or "").strip()
+        for seg in segments
+        if isinstance(seg, dict) and str(seg.get("text") or "").strip()
+    ]
+    return "\n\n".join(parts).strip()
+
+
+def _set_narration_text(result: dict[str, Any], text: str) -> None:
+    """Write prose back to both places, so nothing downstream reads a stale copy."""
+    value = str(text or "")
+    result["narration"] = value
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", value) if p.strip()]
+    result["narration_segments"] = [
+        {"label": "paragraph", "text": para} for para in (paragraphs or [value])
+    ]
+
+
+def resolve_turn_naming(state: dict[str, Any], player_input: str) -> dict[str, Any]:
+    """Answer a naming demand before the model writes, so the answer is fixed.
+
+    Resolving up front means the contract the model sees and the repair applied
+    afterwards agree on one name. Resolving twice would let them disagree, which
+    is how "the name is X" ends up next to a paragraph naming Y.
+    """
+    try:
+        from app.naming import resolve_name_demand
+
+        known: list[str] = []
+        for item in state.get("inventory") or []:
+            if isinstance(item, dict) and item.get("name"):
+                known.append(str(item["name"]))
+        for loc in state.get("locations") or []:
+            if not isinstance(loc, dict):
+                continue
+            for npc in loc.get("npcs") or []:
+                if isinstance(npc, dict) and npc.get("name"):
+                    known.append(str(npc["name"]))
+        turn = int((state.get("pacing") or {}).get("turn") or 0)
+        player_name = str((state.get("player") or {}).get("name") or "")
+        with connect() as conn:
+            return resolve_name_demand(
+                conn, player_input, known_names=known, turn=turn, player_name=player_name
+            )
+    except Exception:
+        return {"asked": False, "kind": "", "subject": "", "name": "", "source": ""}
+
+
 def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, Any]:
     _write_source_index(state)
     query = _tokens(player_input)
@@ -6480,6 +6730,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "event_lifecycle": event_lifecycle,
         "movement_contract": movement_contract(state, player_input, intent),
         "narrative_voice": narrative_voice_contract(state),
+        "naming_contract": _naming_contract_for(state, player_input),
         "overused_words": _recent_narration_tics(),
         "retrieval": {
             "method": "sequential deterministic context planner plus mechanics context, action-specific player slices, active-location scoring, and source_index JSONL search",
@@ -10030,6 +10281,41 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     except Exception:
         pass
 
+    # Naming repair. The contract above asks the model to state the name; this
+    # is what makes it true. A 100-turn probe showed the model will happily
+    # write "the name you read brings a weight to your chest" and never say it,
+    # so the answer is resolved server-side and appended when the prose dodges.
+    # Runs on the fallback path too -- deterministic narration dodges as well.
+    naming_repair: dict[str, Any] | None = None
+    try:
+        from app.naming import enforce_named_answer
+
+        _naming = resolve_turn_naming(context, model_input)
+        if _naming.get("asked") and _naming.get("name"):
+            # The prose may live in narration, in narration_segments, or both --
+            # the fallback path fills only the segments. Writing `narration`
+            # alone silently lost the repair: the payload and the journal are
+            # rebuilt from the segments.
+            fixed, repaired = enforce_named_answer(_narration_text_of(result), _naming)
+            if repaired:
+                _set_narration_text(result, fixed)
+            naming_repair = {
+                "subject": _naming.get("subject"),
+                "name": _naming.get("name"),
+                "source": _naming.get("source"),
+                "repaired": bool(repaired),
+            }
+    except Exception:
+        naming_repair = None
+
+    # Pin each NPC's pronouns from the first prose that commits to them, so the
+    # next turn's contract can state it instead of letting the model re-decide.
+    try:
+        with connect() as _conn_pron:
+            bind_npc_pronouns(_conn_pron, _narration_text_of(result))
+    except Exception:
+        pass
+
     actual_player_input = journal_input if journal_input is not None else player_input
     state = apply_turn(
         result,
@@ -10113,6 +10399,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     if isinstance(state, dict):
         for key, value in turn_telemetry.items():
             state.setdefault(key, value)
+        if naming_repair:
+            state.setdefault("naming", naming_repair)
     debug_trace_path = _write_model_trace_file(
         _current_turn_number(),
         input_kind,
@@ -10210,6 +10498,9 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         # server had to, or a travel turn resolved nowhere; plus point-of-view drift.
         "movement": (state or {}).get("movement") or {},
         "voice_check": (state or {}).get("voice_check") or {},
+        # Which name answered a naming demand, where it came from, and whether
+        # the prose had to be repaired to say it.
+        "naming": (state or {}).get("naming") or {},
         "travel_ready": bool(travel_ready),
         "travel": {
             "ready": bool(travel_ready),

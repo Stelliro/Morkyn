@@ -53,6 +53,7 @@ const waitPopover = document.querySelector("#waitPopover");
 const worldTimeLine = document.querySelector("#worldTimeLine");
 const weatherLine = document.querySelector("#weatherLine");
 const areaRepLine = document.querySelector("#areaRepLine");
+const venueLine = document.querySelector("#venueLine");
 const socialChoiceBar = document.querySelector("#socialChoiceBar");
 const socialChoiceLabel = document.querySelector("#socialChoiceLabel");
 const socialWalkAwayBtn = document.querySelector("#socialWalkAwayBtn");
@@ -6746,6 +6747,7 @@ function renderShell(nextState, options = {}) {
   updateWorldTimeLine(state.world_time);
   updateWeatherLine(state.weather);
   updateAreaRepLine(state);
+  updateVenueLine(state);
   updateMapStatusWorld();
   maybeShowSocialChoiceBar(state);
   renderHistory();
@@ -6787,6 +6789,97 @@ function updateWeatherLine(weather) {
   weatherLine.textContent = `Weather: ${label}${strTxt}`;
   weatherLine.title = `kind=${w.kind} strength=${w.strength ?? 0}`;
 }
+
+/**
+ * Shops, inns and forges on this square — and the way out when you are in one.
+ *
+ * The venue subsystem shipped server-side with no UI at all: entering a shop
+ * only changed the location name, so a player had no way to know a smithy was
+ * here, whether it was open, or that stepping outside was a move. Everything
+ * rendered below already rides in `current_location`; this just stops throwing
+ * it away.
+ */
+function updateVenueLine(nextState) {
+  if (!venueLine) return;
+  const st = nextState || state || {};
+  const loc = st.current_location || {};
+  const inside = Boolean(loc.inside_venue);
+  const venues = Array.isArray(loc.venues_here) ? loc.venues_here : [];
+
+  const parts = [];
+  if (inside) {
+    const keeper = loc.keeper && typeof loc.keeper === "object" ? loc.keeper : null;
+    const keeperName = keeper ? String(keeper.name || "").trim() : "";
+    if (keeperName) {
+      parts.push(
+        `<span class="venueKeeper">Behind the counter: ${escapeHtml(keeperName)}</span>`,
+      );
+    }
+    const exit = String(loc.exit_to || "").trim();
+    if (exit) {
+      parts.push(
+        `<button class="venueChip venueExit" type="button" data-venue-exit="${escapeHtml(exit)}">` +
+          `Step outside to ${escapeHtml(exit)}</button>`,
+      );
+    }
+  }
+
+  for (const venue of venues.slice(0, 8)) {
+    if (!venue || typeof venue !== "object") continue;
+    const name = String(venue.name || "").trim();
+    if (!name) continue;
+    // `open` may be absent on a venue with no hours; only say "closed" when the
+    // server actually said so, never by guessing from a missing field.
+    const isClosed = venue.open === false;
+    const hours = String(venue.hours || "").trim();
+    const kind = String(venue.kind || "").trim();
+    const titleBits = [kind, hours].filter(Boolean).join(" · ");
+    parts.push(
+      `<button class="venueChip${isClosed ? " venueClosed" : ""}" type="button" ` +
+        `data-venue-enter="${escapeHtml(name)}"${titleBits ? ` title="${escapeHtml(titleBits)}"` : ""}>` +
+        `${escapeHtml(name)}${isClosed ? " <span class=\"venueShut\">(closed)</span>" : ""}</button>`,
+    );
+  }
+
+  if (!parts.length) {
+    venueLine.innerHTML = "";
+    venueLine.classList.add("hidden");
+    venueLine.hidden = true;
+    venueLine.setAttribute("aria-hidden", "true");
+    return;
+  }
+  const label = inside ? "Inside:" : "Here:";
+  venueLine.innerHTML = `<span class="venueLabel">${label}</span> ${parts.join(" ")}`;
+  venueLine.classList.remove("hidden");
+  venueLine.hidden = false;
+  venueLine.setAttribute("aria-hidden", "false");
+}
+
+/** Drafting, not sending: the player still decides and can edit the line. */
+function draftVenueAction(text) {
+  if (!turnInput) return;
+  turnInput.value = String(text || "");
+  turnInput.focus();
+  const end = turnInput.value.length;
+  turnInput.setSelectionRange(end, end);
+}
+
+document.addEventListener("click", (event) => {
+  const enter = event.target.closest?.("[data-venue-enter]");
+  if (enter) {
+    const name = enter.getAttribute("data-venue-enter") || "";
+    if (enter.classList.contains("venueClosed")) {
+      draftVenueAction(`I try the door of the ${name}, though it looks closed.`);
+    } else {
+      draftVenueAction(`I step inside the ${name}.`);
+    }
+    return;
+  }
+  const exit = event.target.closest?.("[data-venue-exit]");
+  if (exit) {
+    draftVenueAction(`I step back outside to ${exit.getAttribute("data-venue-exit") || ""}.`);
+  }
+});
 
 function updateAreaRepLine(nextState) {
   if (!areaRepLine) return;

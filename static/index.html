@@ -1883,6 +1883,9 @@
                 <span id="weatherLine" class="weatherLine" title="In-world weather">Weather: Clear</span>
                 <span id="areaRepLine" class="areaRepLine" title="Standing in this place">Area: —</span>
               </div>
+              <!-- Venues on this square: shops, inns, forges you can walk into.
+                   Rendered by updateVenueLine(); hidden when there are none. -->
+              <p id="venueLine" class="venueLine hidden" hidden aria-hidden="true"></p>
               <!-- Travel / walk free lives in #mapTravelBanner under the map only -->
               <p id="travelStatusLine" class="travelStatusLine hidden" hidden aria-hidden="true"></p>
             </div>

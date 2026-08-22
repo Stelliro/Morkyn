@@ -119,6 +119,9 @@ def init_db() -> None:
                 defense INTEGER NOT NULL DEFAULT 0,
                 dodge INTEGER NOT NULL DEFAULT 0,
                 mentioned_by TEXT,
+                -- Pinned once from prose, then never re-inferred: the same NPC
+                -- was 'he' 41 times and 'they' 128 times across one 100-turn run.
+                pronouns TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(location_id, name),
                 FOREIGN KEY (location_id) REFERENCES locations(id) ON DELETE CASCADE
@@ -437,6 +440,18 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_dice_rolls_turn ON dice_rolls(turn);
 
+            -- Names the world has committed to, keyed by what they name.
+            -- A name given once must be the same name next time it is asked
+            -- for; an invented name that is not written down is just a
+            -- different kind of dodge. First writer wins.
+            CREATE TABLE IF NOT EXISTS name_ledger (
+                subject TEXT PRIMARY KEY,
+                name TEXT NOT NULL DEFAULT '',
+                source TEXT NOT NULL DEFAULT '',
+                turn INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
             -- Installed content packs (skills / powers / items / tables).
             CREATE TABLE IF NOT EXISTS content_packs (
                 id TEXT PRIMARY KEY,
@@ -557,6 +572,7 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("stat_profile", "'{}'"),
         ("skill_profile", "'{}'"),
         ("trust", "0"),
+        ("pronouns", "''"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} TEXT NOT NULL DEFAULT {default}" if column != "trust" else "ALTER TABLE npcs ADD COLUMN trust INTEGER NOT NULL DEFAULT 0")
