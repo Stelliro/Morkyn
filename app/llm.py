@@ -11082,8 +11082,18 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
 
     usage: list[dict[str, Any]] = []
     trace: list[dict[str, Any]] = []
-    timeout = _model_timeout(90, 900, "AI_RPG_TURN_DRAFT_TIMEOUT")
-    verify_timeout = _model_timeout(45, 480, "AI_RPG_TURN_VERIFY_TIMEOUT")
+    # A timeout is a ceiling, not a delay: raising it costs a fast machine
+    # nothing, and the cost of hitting it is the worst failure this app has --
+    # the turn silently falls back to canned deterministic prose.
+    #
+    # Measured on an RTX 4070 Ti with qwen3:8b and a ~9k-token packet, the draft
+    # call took 27-37s on an idle GPU and 75-100s with an ordinary desktop load
+    # on the card (a second model runner, a recorder, a browser). The old 90s
+    # default sat *inside* that range: a continuity probe timed out at exactly
+    # 90s, and a 100-turn run measured drafts at 99.7s. Anyone on slower hardware
+    # than this, or merely watching a video, was falling back every turn.
+    timeout = _model_timeout(300, 900, "AI_RPG_TURN_DRAFT_TIMEOUT")
+    verify_timeout = _model_timeout(150, 480, "AI_RPG_TURN_VERIFY_TIMEOUT")
     base_config = get_model_config(ignore_override=True)
     # Session theme bias: soft on-the-fly genre lean (isekai RPG etc.) while keeping DM core.
     playthrough_options = (

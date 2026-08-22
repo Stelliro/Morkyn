@@ -153,5 +153,62 @@ class TestSmallWindowDegradesInsteadOfFailing(unittest.TestCase):
         self.assertFalse(degraded, "llama_cpp uses the compact contract by design, not by degradation")
 
 
+class TestTurnTimeoutsAreNotTighterThanTheModel(unittest.TestCase):
+    """Same failure as the context default: a shipped number forcing the fallback.
+
+    Measured on an RTX 4070 Ti with qwen3:8b and a ~9k-token packet, the turn
+    draft took 27-37s on an idle GPU and 75-100s with an ordinary desktop load
+    on the card. The old 90s Ollama default sat inside that range -- a probe
+    timed out at exactly 90s and a 100-turn run measured a draft at 99.7s -- so
+    anyone on slower hardware, or merely watching a video, fell back every turn
+    to canned deterministic prose.
+
+    A timeout is a ceiling, not a delay. Nothing waits longer because of it.
+    """
+
+    def setUp(self):
+        self._saved = {k: os.environ.get(k) for k in (
+            "AI_RPG_TURN_DRAFT_TIMEOUT", "AI_RPG_TURN_VERIFY_TIMEOUT", "AI_RPG_OLLAMA_TIMEOUT",
+        )}
+        for key in self._saved:
+            os.environ.pop(key, None)
+
+    def tearDown(self):
+        for key, val in self._saved.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+
+    def _timeout(self, ollama_default: int, llama_default: int, env: str) -> int:
+        # Patch the config rather than writing one: this is about how the
+        # defaults resolve, not about the settings table.
+        original = llm.get_model_config
+        llm.get_model_config = lambda *a, **k: {"provider": "ollama"}
+        try:
+            return llm._model_timeout(ollama_default, llama_default, env)
+        finally:
+            llm.get_model_config = original
+
+    def _draft_timeout(self) -> int:
+        return self._timeout(300, 900, "AI_RPG_TURN_DRAFT_TIMEOUT")
+
+    def _verify_timeout(self) -> int:
+        return self._timeout(150, 480, "AI_RPG_TURN_VERIFY_TIMEOUT")
+
+    def test_draft_timeout_clears_the_measured_worst_case(self):
+        self.assertGreaterEqual(
+            self._draft_timeout(), 150,
+            "a 100-turn run measured a draft at 99.7s; leave real headroom above it",
+        )
+
+    def test_verify_timeout_clears_it_too(self):
+        self.assertGreaterEqual(self._verify_timeout(), 120)
+
+    def test_the_env_override_still_wins(self):
+        os.environ["AI_RPG_TURN_DRAFT_TIMEOUT"] = "42"
+        self.assertEqual(self._draft_timeout(), 42)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -319,6 +319,15 @@ def main() -> int:
         "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
         "OLLAMA_MODEL": model,
         "OLLAMA_THINK": os.getenv("OLLAMA_THINK", "0"),
+        # These are deliberately generous: the probe measures continuity, and a
+        # timeout here would silently swap a real turn for canned prose and
+        # corrupt the result. But be aware of what the override hides -- the
+        # shipped Ollama draft default was 90s, every run here used 900s, and so
+        # no probe ever noticed that real drafts on this hardware take 75-100s
+        # under ordinary desktop load. Players fell back every turn; the
+        # benchmark reported zero fallbacks. Same trap as the tools/ probes
+        # exporting OLLAMA_CONTEXT_TOKENS over a broken 8192 default.
+        # The shipped defaults are guarded by tests/test_context_budget.py.
         "AI_RPG_OLLAMA_TIMEOUT": os.getenv("AI_RPG_OLLAMA_TIMEOUT", "900"),
         "AI_RPG_TURN_DRAFT_TIMEOUT": os.getenv("AI_RPG_TURN_DRAFT_TIMEOUT", "900"),
         "AI_RPG_TURN_VERIFY_TIMEOUT": os.getenv("AI_RPG_TURN_VERIFY_TIMEOUT", "600"),
