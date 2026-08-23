@@ -132,6 +132,54 @@ class TestMalformedOpsAreIsolated(unittest.TestCase):
             parse_ops("this is prose\nso is this\nand this")
 
 
+class TestTheFallbackSummaryKeepsTheFact(unittest.TestCase):
+    """The auto-generated turn summary is long-term memory, not scratch text.
+
+    It becomes the turn_summary row and from there the consolidated fact. At 80
+    characters a 100-turn probe stored
+
+        player: I tie a red ribbon around my left wrist and explain that it is
+        a keepsake from m
+
+    cutting off "y sister Neve" mid-word. Sixty-four turns later the game was
+    asked who the ribbon came from and could not say -- the answer had been
+    destroyed at write time, where no retrieval can reach it. A planted debt lost
+    "comes due at the next full moon" the same way; the lender's name survived
+    only by sitting at character 70.
+    """
+
+    PLANT = (
+        "I tie a red ribbon around my left wrist and explain that it is a keepsake "
+        "from my sister Neve, who I have not seen in years."
+    )
+
+    def _summary(self, player_input: str) -> str:
+        return parse_dsl_turn(_draft("SCENE action"), player_input=player_input)["turn_summary"]
+
+    def test_the_whole_planted_fact_survives(self):
+        summary = self._summary(self.PLANT)
+        self.assertIn("Neve", summary)
+        self.assertIn("sister", summary)
+
+    def test_a_late_clause_is_not_cut(self):
+        summary = self._summary(
+            "I admit out loud that I owe eleven silver to a lender called Hask, "
+            "and that the debt comes due at the next full moon."
+        )
+        self.assertIn("Hask", summary)
+        self.assertIn("full moon", summary)
+
+    def test_a_model_supplied_summary_still_wins(self):
+        turn = parse_dsl_turn(
+            _draft('SUMMARY "The scribe refused to read the seal."'), player_input=self.PLANT
+        )
+        self.assertEqual(turn["turn_summary"], "The scribe refused to read the seal.")
+
+    def test_an_absurd_input_is_still_bounded(self):
+        summary = self._summary("I " + ("wander " * 400))
+        self.assertLessEqual(len(summary), 700)
+
+
 class TestTheRecordedFailure(unittest.TestCase):
     """The exact ops block from turn 84 of the 20260823 run."""
 

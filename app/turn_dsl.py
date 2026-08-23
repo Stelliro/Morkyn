@@ -742,7 +742,20 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         turn["_dsl"]["malformed_ops"] = len(malformed_ops)
 
     if not turn["turn_summary"]:
-        intent = str(player_input or "").strip()[:80]
+        # This summary is not scratch text: it becomes the turn_summary row and
+        # from there the consolidated fact, which IS the long-term memory of what
+        # the player said. Truncating it destroys the fact at write time, where no
+        # retrieval can ever get it back.
+        #
+        # At 80 characters a 100-turn probe stored
+        #     "player: I tie a red ribbon around my left wrist and explain that
+        #      it is a keepsake from m"
+        # cutting off "y sister Neve" -- and 64 turns later the game could not say
+        # who the ribbon came from. A planted debt lost "comes due at the next full
+        # moon" the same way; the lender's name survived only by sitting at
+        # character 70. The field is capped at 700 downstream, so the 80 bought
+        # nothing.
+        intent = str(player_input or "").strip()[:400]
         turn["turn_summary"] = f"player: {intent or 'acted'}. response: scene advanced with DSL ops."[:700]
     if not turn["scene_plan"]["goal"]:
         turn["scene_plan"]["goal"] = "Advance the immediate scene with justified local consequences."

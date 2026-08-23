@@ -199,6 +199,20 @@ def _second_person_rate(text: str) -> float:
 # and "you take out the letter you already carry". A first pass flagged 15 of
 # 100 turns and every single one was an idiom. So: acquisition-only verbs, or
 # take/accept with a determiner and a concrete object noun.
+def _token_present(token: str, low_text: str) -> bool:
+    """Whole-word match for a planted fact token.
+
+    Substring matching scored a run RECALLED because the planted name "Neve"
+    appeared inside "never" -- in a turn whose prose actually said the keepsake
+    came from "a lost love". A recall benchmark that counts accidental
+    substrings reports memory the game does not have.
+    """
+    needle = str(token or "").strip().lower()
+    if not needle:
+        return False
+    return re.search(rf"(?<![a-z]){re.escape(needle)}(?![a-z])", low_text) is not None
+
+
 _GAIN_RE = re.compile(
     r"\byou\s+(?:pick up|picks up|pockets?|are handed|now carry|receives?)\b"
     r"|\byou\s+(?:accepts?|takes?)\s+(?:the|a|an|his|her|their)\s+"
@@ -473,14 +487,14 @@ def main() -> int:
         if kind == "probe":
             fact = next(f for f in FACTS if f["id"] == fact_id)
             low = narration.lower()
-            hits = [t for t in fact["tokens"] if t.lower() in low]
+            hits = [t for t in fact["tokens"] if _token_present(t, low)]
             recall_row = {
                 "turn": turn,
                 "fact": fact_id,
                 "planted_turn": fact["plant_turn"],
                 "distance": turn - fact["plant_turn"],
                 "recalled": bool(hits),
-                "exact": fact["tokens"][0].lower() in low,
+                "exact": _token_present(fact["tokens"][0], low),
                 "hits": hits,
                 "narration": narration,
             }

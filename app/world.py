@@ -5516,6 +5516,14 @@ _NOT_A_NAME = {
 
 
 def _recall_stem(word: str) -> str:
+    """Plural folding only, so a question about "debts" matches a record of a "debt".
+
+    Verb-inflection stemming ("tied" -> "tie") was tried to reach a ribbon probe
+    that shares only "around/left/wrist" with its plant, and rejected: it never
+    matched that pair anyway, and it pulled the one true positive's overlap from
+    0.60 down to 0.50, onto the threshold. A looser metric that gains nothing and
+    narrows a working margin is a straight loss.
+    """
     return word[:-1] if len(word) > 3 and word.endswith("s") else word
 
 
@@ -5663,6 +5671,94 @@ def check_recall_specifics(contract: dict[str, Any] | None, narration: str) -> d
     report["stated"] = stated
     report["missing"] = not stated and len(str(narration or "")) > 200
     return report
+
+
+# Deliberately narrow verbs. "you take" is excluded: a 100-turn probe is full of
+# "you take a slow breath", "you take stock", "you take the road", and an earlier
+# grounding metric built on it was pure false positives. These verbs mean one
+# thing. "now carry" is excluded too -- it matched "the burden you now carry"
+# about the letter the player already held.
+_ACQUIRE_RE = re.compile(
+    r"\byou\s+(?:pick up|picks up|pocket|pockets|are handed|receive|receives)\s+"
+    r"(?:the|a|an|your|its)\s+([a-z][a-z'\- ]{2,40}?)\b"
+    r"(?=[,.;:]|\s+(?:and|its|it|from|with|then|as|in|on|for)\b)",
+    re.I,
+)
+
+# Nouns that are never an object you can carry away.
+_NOT_AN_ITEM = {
+    "moment", "chance", "time", "step", "breath", "path", "road", "way", "lead",
+    "risk", "turn", "look", "seat", "rest", "hint", "offer", "point", "measure",
+}
+
+
+def acquisition_claims(narration: str) -> list[str]:
+    """Objects the prose says the player just took.
+
+    Only claims naming a concrete object count. "You pocket it" is skipped on
+    purpose: the repair has to know what to grant, and guessing the referent is
+    how a scene about a dagger grants "it".
+    """
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _ACQUIRE_RE.finditer(str(narration or "")):
+        name = " ".join(match.group(1).split()).strip(" -'").lower()
+        if not name or name in _NOT_AN_ITEM or name in seen:
+            continue
+        head = name.rsplit(" ", 1)[-1]
+        if head in _NOT_AN_ITEM:
+            continue
+        seen.add(name)
+        found.append(name)
+    return found[:3]
+
+
+def _names_in_inventory_changes(turn: dict[str, Any]) -> set[str]:
+    out: set[str] = set()
+    for row in turn.get("inventory_changes") or []:
+        if isinstance(row, dict) and str(row.get("name") or "").strip():
+            out.add(str(row["name"]).strip().lower())
+    return out
+
+
+def ground_acquisitions(turn: dict[str, Any], narration: str, state: dict[str, Any]) -> list[str]:
+    """Grant what the prose says the player picked up and the ops forgot.
+
+    Same shape as the movement repair: the narration asserts a state change, the
+    model emitted no op for it, and the server makes the world match the story
+    rather than letting the two drift.
+
+    Over one 100-turn run the prose said the player pocketed something on seven
+    turns and emitted GRANT on one. The sign in that run was "picked up" on three
+    separate turns because it never left the ground.
+    """
+    claimed = acquisition_claims(narration)
+    if not claimed:
+        return []
+    have = _names_in_inventory_changes(turn)
+    for row in (state or {}).get("inventory") or []:
+        if isinstance(row, dict) and str(row.get("name") or "").strip():
+            have.add(str(row["name"]).strip().lower())
+
+    granted: list[str] = []
+    for name in claimed:
+        if any(name in existing or existing in name for existing in have):
+            continue
+        turn.setdefault("inventory_changes", []).append(
+            {
+                "name": name[:120],
+                "description": "Picked up in the scene.",
+                "quantity_band": "trivial",
+                "weight": 1.0,
+                "slot_size": 1,
+                "item_type": "misc",
+                "rarity": "common",
+                "enchantments": [],
+            }
+        )
+        have.add(name)
+        granted.append(name)
+    return granted
 
 
 def check_narrative_voice(narration: str, state: dict[str, Any]) -> dict[str, Any]:
@@ -10516,6 +10612,14 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     except Exception:
         naming_repair = None
 
+    # Prose says the player pocketed something and the ops never granted it.
+    # Injected before apply_turn so the ordinary inventory pipeline handles it.
+    acquisitions: list[str] = []
+    try:
+        acquisitions = ground_acquisitions(result, _narration_text_of(result), context)
+    except Exception:
+        acquisitions = []
+
     # Was a remembered specific owed, and did the prose state it? Recomputed here
     # rather than read off the turn dict: the handoff cleanups strip underscore
     # keys, and this has to be true of the prose that actually shipped.
@@ -10624,6 +10728,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
             state.setdefault("naming", naming_repair)
         if recall_check:
             state.setdefault("recall", recall_check)
+        if acquisitions:
+            state.setdefault("acquisitions", acquisitions)
     debug_trace_path = _write_model_trace_file(
         _current_turn_number(),
         input_kind,
@@ -10726,6 +10832,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         "naming": (state or {}).get("naming") or {},
         # Whether the prose owed a remembered name/amount and whether it stated it.
         "recall": (state or {}).get("recall") or {},
+        # Items the prose said the player took that the ops never granted.
+        "acquisitions": (state or {}).get("acquisitions") or [],
         "travel_ready": bool(travel_ready),
         "travel": {
             "ready": bool(travel_ready),
