@@ -758,7 +758,10 @@ class TestSeededNpcVariety(unittest.TestCase):
                 loc = self._place(name, summary)
                 with connect() as conn:
                     pool = _seed_role_pool(conn, loc)
-                self.assertIs(pool, _SEED_ROLE_POOLS[expected])
+                # Pools are indexed era-first now; these worlds have no
+                # tech_level set, so they resolve to preindustrial -- the shape
+                # every world used to get unconditionally.
+                self.assertIs(pool, _SEED_ROLE_POOLS["preindustrial"][expected])
 
     def test_a_passing_mention_of_the_road_does_not_make_a_town_wilderness(self):
         """Scored, not first-hit: town summaries mention roads constantly."""
@@ -766,7 +769,9 @@ class TestSeededNpcVariety(unittest.TestCase):
 
         loc = self._place("Ashford Gate", "A frontier gate-town where caravans wait by the road.")
         with connect() as conn:
-            self.assertIs(_seed_role_pool(conn, loc), _SEED_ROLE_POOLS["settlement"])
+            self.assertIs(
+                _seed_role_pool(conn, loc), _SEED_ROLE_POOLS["preindustrial"]["settlement"]
+            )
 
     def test_appearance_never_becomes_the_role(self):
         from app.world import _appearance_note, _seed_role_for

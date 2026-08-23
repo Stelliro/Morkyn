@@ -8801,36 +8801,189 @@ def _apply_conversations(conn, conversations: list[dict[str, Any]], turn: int) -
 #
 # A role is an occupation — what this person does here. Appearance belongs in the
 # summary, so a baker can still be wearing a hood.
-_SEED_ROLE_POOLS: dict[str, tuple[str, ...]] = {
-    "indoor": (
-        "patron", "server", "cook", "lodger", "card player", "musician",
-        "kitchen hand", "regular", "landlord's son", "wine seller",
-    ),
-    "water": (
-        "ferryman", "net mender", "boatwright", "mudlark", "dock hand",
-        "eel fisher", "bargeman", "salt carrier",
-    ),
-    "wilderness": (
-        "forager", "trapper", "charcoal burner", "pilgrim", "goatherd",
-        "woodcutter", "road warden", "peddler", "hermit", "surveyor",
-        "beekeeper", "deserter",
-    ),
-    "settlement": (
-        "carter", "baker", "tanner", "porter", "stablehand", "roofer",
-        "herbalist", "scribe", "cooper", "weaver", "drover", "toll keeper",
-        "off-duty guard", "apprentice", "message runner", "rag picker",
-        "well keeper", "chandler",
-    ),
+_SEED_ROLE_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
+    "preindustrial": {
+        "indoor": (
+            "patron", "server", "cook", "lodger", "card player", "musician",
+            "kitchen hand", "regular", "landlord's son", "wine seller",
+        ),
+        "water": (
+            "ferryman", "net mender", "boatwright", "mudlark", "dock hand",
+            "eel fisher", "bargeman", "salt carrier",
+        ),
+        "wilderness": (
+            "forager", "trapper", "charcoal burner", "pilgrim", "goatherd",
+            "woodcutter", "road warden", "peddler", "hermit", "surveyor",
+            "beekeeper", "deserter",
+        ),
+        "settlement": (
+            "carter", "baker", "tanner", "porter", "stablehand", "roofer",
+            "herbalist", "scribe", "cooper", "weaver", "drover", "toll keeper",
+            "off-duty guard", "apprentice", "message runner", "rag picker",
+            "well keeper", "chandler",
+        ),
+    },
+    "industrial": {
+        "indoor": (
+            "barkeep", "boarder", "card player", "piano player", "cook",
+            "travelling salesman", "night clerk", "regular", "kitchen hand",
+        ),
+        "water": (
+            "stevedore", "riverboat hand", "dock clerk", "crane hand",
+            "ferry clerk", "coal heaver", "harbour watchman",
+        ),
+        "wilderness": (
+            "prospector", "line rider", "trapper", "surveyor", "drover",
+            "teamster", "homesteader", "track walker", "hunter",
+        ),
+        "settlement": (
+            "rail hand", "telegraph clerk", "teamster", "farrier", "storekeeper",
+            "deputy", "freight agent", "printer", "assayer", "stable hand",
+            "millwright", "seamstress", "undertaker", "off-duty brakeman",
+        ),
+    },
+    "modern": {
+        "indoor": (
+            "customer", "server", "line cook", "cleaner", "night clerk",
+            "regular", "delivery driver", "barista", "off-shift nurse",
+        ),
+        "water": (
+            "dock worker", "boat mechanic", "harbour clerk", "crane operator",
+            "deckhand", "port inspector",
+        ),
+        "wilderness": (
+            "ranger", "surveyor", "scavenger", "line worker", "trucker",
+            "field tech", "hunter", "drifter",
+        ),
+        "settlement": (
+            "courier", "shop clerk", "mechanic", "paramedic", "security guard",
+            "street vendor", "dispatcher", "technician", "cab driver",
+            "building super", "scrap dealer", "off-duty officer",
+        ),
+    },
+    "future": {
+        "indoor": (
+            "off-shift crew", "mess server", "bunkmate", "galley hand",
+            "card player", "medtech", "systems intern", "night-cycle clerk",
+        ),
+        # Docks, bays, gantries: wherever things arrive.
+        "water": (
+            "cargo loader", "dock tech", "hull welder", "freight checker",
+            "gantry hand", "tug pilot", "manifest clerk",
+        ),
+        # Outside the hull: wastes, belts, wrecks.
+        "wilderness": (
+            "salvager", "prospector", "surveyor", "drone handler", "scrapper",
+            "hauler", "claim jumper", "rig hand",
+        ),
+        "settlement": (
+            "comms clerk", "hab technician", "quartermaster", "dock inspector",
+            "systems tech", "stall vendor", "courier", "medtech", "fabricator",
+            "recycler", "off-duty marshal", "data broker",
+        ),
+    },
 }
+
+# The canonical tech_level vocabulary (app/llm.py TECH LEVEL options).
+_TECH_LEVEL_ERA = {
+    "iron age": "preindustrial",
+    "medieval": "preindustrial",
+    "early industrial": "industrial",
+    "near future": "modern",
+    "spacefaring salvage": "future",
+}
+
+# Fallback when tech_level is unset or a player typed their own. Ordered
+# most-specific first so "near future" is not swallowed by "modern", and
+# "cyberpunk"/"arcology" land in the same pool as starships rather than in
+# the pre-industrial default.
+_ERA_TEXT_HINTS = (
+    ("future", (
+        "spacefaring", "starship", "interstellar", "orbital", "faster-than-light",
+        "colony ship", "far-future", "far future", "science fiction", "sci-fi",
+        "space opera", "cyberpunk", "megacity", "arcology", "space station",
+    )),
+    ("modern", (
+        "near future", "near-future", "modern", "contemporary", "present day",
+        "post-collapse", "post-apocalyptic", "apocalypse", "wasteland", "urban",
+    )),
+    ("industrial", (
+        "early industrial", "industrial", "steam", "victorian", "gaslight",
+        "railroad", "wild west", "weird west", "frontier west", "1880", "1890",
+    )),
+    ("preindustrial", (
+        "iron age", "medieval", "bronze age", "ancient", "feudal", "dark age",
+        "high fantasy", "sword and sorcery", "mythic",
+    )),
+)
+
+
+def resolve_world_era(tech_level: str = "", *style_text: str) -> str:
+    """Which technological era this world runs in.
+
+    Defaults to preindustrial, which is what every pool used to be
+    unconditionally: a space station was staffed with bargemen and coopers, and
+    a cyberpunk arcology got a well keeper, because occupation was chosen from
+    the location's name alone and the genre never entered the function.
+    """
+    tech = str(tech_level or "").strip().lower()
+    if tech in _TECH_LEVEL_ERA:
+        return _TECH_LEVEL_ERA[tech]
+    blob = " ".join(str(part or "") for part in (tech,) + style_text).lower()
+    for era, hints in _ERA_TEXT_HINTS:
+        if any(hint in blob for hint in hints):
+            return era
+    return "preindustrial"
+
+
+def _campaign_era(conn) -> str:
+    """Read the world's era from the campaign's own settings."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'playthrough_options'"
+        ).fetchone()
+        options = json.loads(row["value"]) if row and row["value"] else {}
+    except Exception:
+        options = {}
+    if not isinstance(options, dict):
+        return "preindustrial"
+    return resolve_world_era(
+        str(options.get("tech_level") or ""),
+        str(options.get("world_style") or ""),
+        str(options.get("custom_style") or ""),
+    )
+
+
 # Scored, not first-hit: a town summary that merely mentions "the road" used to
 # classify the place as wilderness and staff a gate-town with charcoal burners.
 # Ambiguous words ("road", "path") are deliberately absent — they appear
 # everywhere. Settlement is the default when nothing scores.
+# The place axis is era-independent -- "somewhere indoors", "where things
+# arrive", "outside the settled area", "the settled area itself" -- so each
+# keyword list carries the words for every era. A docking bay is a "water"
+# place in a starship world for the same reason a wharf is in a medieval one.
 _SEED_POOL_HINTS = (
-    ("indoor", ("inn", "tavern", "hall", "cellar", "kitchen", "chapel", "temple", "hearth", "common room", "taproom")),
-    ("water", ("ford", "river", "dock", "wharf", "harbor", "harbour", "riverbank", "beach", "shore", "bridge", "mill", "quay", "ferry")),
-    ("wilderness", ("forest", "woods", "woodland", "moor", "ridge", "cave", "ruins", "wilds", "clearing", "marsh", "thicket", "glade", "hollow", "wilderness")),
-    ("settlement", ("town", "village", "city", "market", "square", "gate", "street", "quarter", "district", "hamlet", "settlement", "keep", "fort", "caravan")),
+    ("indoor", (
+        "inn", "tavern", "hall", "cellar", "kitchen", "chapel", "temple", "hearth",
+        "common room", "taproom",
+        "mess", "galley", "bunk", "cabin", "lounge", "bar", "clinic", "office", "ward",
+    )),
+    ("water", (
+        "ford", "river", "dock", "wharf", "harbor", "harbour", "riverbank", "beach",
+        "shore", "bridge", "mill", "quay", "ferry",
+        "bay", "hangar", "gantry", "berth", "port", "airlock", "landing",
+    )),
+    ("wilderness", (
+        "forest", "woods", "woodland", "moor", "ridge", "cave", "ruins", "wilds",
+        "clearing", "marsh", "thicket", "glade", "hollow", "wilderness",
+        "wastes", "waste", "outland", "surface", "belt", "expanse", "wreck", "scrapyard",
+    )),
+    ("settlement", (
+        "town", "village", "city", "market", "square", "gate", "street", "quarter",
+        "district", "hamlet", "settlement", "keep", "fort", "caravan",
+        "station", "hab", "deck", "sublevel", "stack", "arcology", "concourse",
+        "block", "depot", "platform", "terminal",
+    )),
 )
 # Appearance words a model reaches for; kept out of the role column entirely.
 _APPEARANCE_WORDS = (
@@ -8853,7 +9006,9 @@ def _seed_role_pool(conn, location_id: int) -> tuple[str, ...]:
         for pool, keywords in _SEED_POOL_HINTS
     }
     best = max(scores, key=lambda pool: (scores[pool], pool == "settlement"))
-    return _SEED_ROLE_POOLS[best if scores[best] else "settlement"]
+    place = best if scores[best] else "settlement"
+    era = _campaign_era(conn)
+    return _SEED_ROLE_POOLS.get(era, _SEED_ROLE_POOLS["preindustrial"])[place]
 
 
 def _seed_role_for(conn, location_id: int, hint: str, index: int, salt: Any = "") -> str:

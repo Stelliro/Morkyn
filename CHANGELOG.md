@@ -45,6 +45,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Fixed
 
+- **Every setting was staffed as though it were medieval.** `_SEED_ROLE_POOLS` held pre-industrial occupations only, and `_seed_role_pool()` chose between them using the location's *name* alone - genre never entered the function. This is the server's own invention for a face the prose mentions without naming a job, so no model is involved and it reproduces on demand - `app/world.py`
+  - A futuristic world got: Docking Bay Seven -> **bargeman, boatwright, salt carrier**; Reactor Deck -> **scribe, weaver, tanner**; Neon Market District -> **scribe, scribe, well keeper**; Wreck Site Delta -> **roofer, toll keeper, roofer**.
+  - It survived four 100-turn playtests because every one of them ran the same world: `world_style: "frontier dark fantasy"`. Nothing had ever asked the game for a different setting.
+  - Pools are now indexed era-first (`preindustrial` / `industrial` / `modern` / `future`), then place. Era comes from the campaign's own `tech_level` - the canonical five-value vocabulary the setup UI offers - falling back to the style prose the player typed, so "far-future interstellar civilisation" and "cyberpunk megacity" both resolve without a tech_level set. Unknown worlds default to preindustrial, so existing campaigns produce byte-identical output.
+  - The place axis is unchanged and now era-independent: a docking bay is "where things arrive" for the same reason a wharf is, so it draws cargo loaders and gantry hands instead of ferrymen.
+
 - **The world's long-term memory of what the player said was truncated at 80 characters.** `parse_dsl_turn` synthesises a turn summary when the model emits no SUMMARY op, and that summary becomes the `turn_summaries` row and from there the consolidated fact - the durable memory. It cut the player's line at 80 characters, mid-word - `app/turn_dsl.py`
   - A 100-turn run stored `player: I tie a red ribbon around my left wrist and explain that it is a keepsake from m`, losing "y sister Neve". Sixty-four turns later the game was asked who the ribbon came from and could not say. A planted debt lost "comes due at the next full moon" the same way; the lender's name survived only by sitting at character 70.
   - The fact was destroyed at write time, so no amount of retrieval tuning could recover it. Raised to 400 (the field is capped at 700 downstream, so the 80 bought nothing).
