@@ -3766,6 +3766,13 @@ def _default_equip_slot_for_item(name: str, item_type: str = "") -> str:
     return ""
 
 
+# Written into the world only when the player named no start location AND the
+# themed picker in setup_composer could not be reached. Deliberately a common
+# noun: a last resort must not hand a space opera a fantasy toponym, which is
+# what the previous literal ("Mosswake Gate") did on every genre.
+_START_LOCATION_LAST_RESORT = "The Crossing"
+
+
 def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
     player_name = norm_name(str(options.get("player_name") or "Wanderer"))
     public_name = norm_name(str(options.get("player_public_name") or ""))
@@ -3787,7 +3794,11 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
     inventory_weight_limit = max(1, min(100000, int(_float(options.get("inventory_weight_limit"), 60))))
     inventory_slot_limit = max(1, min(10000, int(_float(options.get("inventory_slot_limit"), 24))))
     inventory_rules = str(options.get("inventory_rules") or "").strip()[:900]
-    start_location = norm_name(str(options.get("start_location") or "Mosswake Gate"))
+    # Empty means "nobody chose" -- pass it through so ensure_isekai_start_location
+    # picks from the pool for this world's own theme. Filling it with a literal
+    # here pre-empted that picker and opened every space opera at a fantasy
+    # gate-town; see _START_LOCATION_LAST_RESORT.
+    start_location = norm_name(str(options.get("start_location") or ""))
     # Isekai / transmigrated: play begins at NEW-WORLD arrival, never previous-life workplace
     try:
         from app.setup_composer import ensure_isekai_start_location
@@ -3802,9 +3813,13 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             character_backstory=str(options.get("character_backstory") or ""),
             session_theme=_sess_theme,
         )
-        start_location = norm_name(start_location or "Mosswake Gate")
+        start_location = norm_name(start_location or "")
     except Exception:
         pass
+    if not start_location:
+        # setup_composer unavailable and the player named nothing. Anything we
+        # write here goes in the world's mouth, so it must not carry a genre.
+        start_location = _START_LOCATION_LAST_RESORT
     skill_style = str(options.get("skill_style") or "standard")
     custom_skills = str(options.get("custom_skills") or "").strip()
     special_name = norm_name(str(options.get("special_ability_name") or "Unwritten Talent"))

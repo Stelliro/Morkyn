@@ -380,12 +380,14 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "player_name": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords"],
+        # No worked names here. A 7B reads a name in an instruction as a name to
+        # use, not as a placeholder -- the same trap that put "Riverbend" in 26%
+        # of every place this game has ever named. Describe the shape instead.
         "forbidden": (
-            "Personal/legal name only: given name or given + family "
-            "(e.g. Mara Ellison, Tomas Reed). Not a nickname, handle, callsign, "
-            "or epithet (Ash, River, Patch, the Red, Ashwalker, Wanderer)."
+            "Personal/legal name only: a given name, or a given name plus a family "
+            "name. Not a nickname, handle, callsign, epithet, or a byname built "
+            "from an adjective and a noun."
         ),
-        "examples": ["Mara Ellison", "Tomas Reed", "Elena Croft", "Kael Morin"],
     },
     "player_public_name": {
         "kind": "short_phrase",
@@ -428,19 +430,17 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "start_location": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords", "isekai"],
+        # Named no place and cited no city on purpose -- see player_name above.
+        # Theme-appropriate worked examples are built from this world's own
+        # arrival pool at prompt time (llm.py arrival_location_seeds), which is
+        # the pattern that survives: an example drawn from context costs nothing
+        # when the model copies it.
         "forbidden": (
             "Place name only for WHERE play begins. "
-            "If isekai/transmigrated: MUST be the new-world arrival site "
-            "(gate, dirt road, compound yard, pier) — NEVER the previous-life workplace "
-            "(Seoul warehouse, office, apartment, hospital ward)."
+            "If isekai/transmigrated: MUST be a threshold in the NEW world -- the spot "
+            "they arrive at -- and NEVER a place from the previous life, whether a "
+            "workplace, a home, a hospital, or any real-world address."
         ),
-        "examples": [
-            "Mosswake Gate",
-            "Outer Compound Yard",
-            "Ferry Landing Stone",
-            "Ash Road Cut",
-            "Red Lantern Dock",
-        ],
     },
     "special_abilities": {
         "kind": "abilities",
@@ -2597,6 +2597,70 @@ def mentioned_race_roots(text: str) -> set[str]:
     return found
 
 
+# "human" is the world_races default in app/main.py, applied whenever nobody
+# touches the box, and at the lint layer it cannot be told apart from a world
+# deliberately built with one people. Exactly the trap _DEFAULTED_MAGIC_LEVELS
+# and _DEFAULTED_TECH_LEVELS cover on their axes -- and this one bites harder,
+# because the lint does not merely misreport the world, it rewrites the race
+# rules to match, deleting the elves and dwarves the style asked for.
+_DEFAULTED_WORLD_RACES = {"human", "humans"}
+
+
+def is_defaulted_world_races(value: Any) -> bool:
+    """True when world_races holds only the silent default."""
+    labels = parse_world_races(value)
+    if not labels:
+        return True
+    return len(labels) == 1 and labels[0].strip().lower() in _DEFAULTED_WORLD_RACES
+
+
+def resolve_world_races(world_races: Any = "", *style_text: Any) -> str:
+    """The peoples this world actually contains.
+
+    An explicit, non-default world_races is player truth and wins untouched.
+    Otherwise the style prose speaks, because "human" is what the field holds
+    when nobody chose anything at all. Humans stay in the list either way --
+    widening never evicts the default, it only stops the default from evicting
+    everyone else.
+    """
+    recorded = ", ".join(parse_world_races(world_races))
+    if not is_defaulted_world_races(world_races):
+        return recorded
+    blob = " ".join(str(part or "") for part in style_text)
+    named = mentioned_race_roots(blob)
+    extra = [root for _pat, root in _RACE_MENTION_PATTERNS if root != "human" and root in named]
+    if not extra:
+        return recorded or "human"
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for label in ["human", *extra]:
+        if label in seen:
+            continue
+        seen.add(label)
+        ordered.append(label)
+    return ", ".join(ordered[:12])
+
+
+def coherent_world_races(fields: dict[str, Any] | None) -> str:
+    """The peoples the setup should record, given everything else the world says.
+
+    Returns the recorded value untouched unless it is the field's silent default
+    AND the style prose names peoples it excludes. Mirrors coherent_magic_level()
+    in app/world.py; the two defaults fail the same way for the same reason.
+    """
+    opts = fields if isinstance(fields, dict) else {}
+    if not is_defaulted_world_races(opts.get("world_races")):
+        return ", ".join(parse_world_races(opts.get("world_races")))
+    # Only player-authored setting prose may widen the roster. The race rule
+    # fields are the ones under audit here -- letting them vote would let
+    # invented peoples promote themselves into the world they were invented for.
+    return resolve_world_races(
+        opts.get("world_races"),
+        str(opts.get("world_style") or ""),
+        str(opts.get("custom_style") or ""),
+    )
+
+
 def race_rules_mismatch_reasons(world_races: Any, rules_text: Any) -> list[str]:
     """Flag race rule prose that invents peoples not listed in world_races."""
     text = _value_text(rules_text)
@@ -4020,9 +4084,6 @@ LOCATION_SEEDS_BY_THEME: dict[str, tuple[str, ...]] = {
     ),
 }
 
-# Default / legacy alias — fantasy pool (kept for imports that still reference it).
-ISEKAI_ARRIVAL_LOCATION_SEEDS: tuple[str, ...] = LOCATION_SEEDS_BY_THEME["fantasy"]
-
 # Name markers that force blank-map + movement-lock (heavens / divine prison).
 HEAVEN_PRISON_NAME_MARKERS: tuple[str, ...] = (
     "heaven",
@@ -5324,6 +5385,18 @@ def apply_consistency_lint(
         dirty.setdefault(field, []).extend(reasons)
 
     races_value = out.get("world_races", merged.get("world_races"))
+    # Resolve the contradiction in favour of what the player actually described.
+    # A silent "human" beside a style that names elves and dwarves is not a
+    # one-people world; treating it as one deleted those peoples from the rules
+    # below instead of admitting them to the roster.
+    if is_defaulted_world_races(races_value):
+        widened = coherent_world_races(merged)
+        if widened and widened != ", ".join(parse_world_races(races_value)):
+            out["world_races"] = widened
+            dirty.setdefault("world_races", []).append("world_races_widened_from_style")
+            races_value = widened
+            merged = {**(context or {}), **out}
+
     # When world_races changes, also repair race rules present in context so the form stays coherent.
     race_fields = ("race_magic_rules", "race_ability_rules")
     check_race_fields = [f for f in race_fields if f in out or "world_races" in out]
@@ -5358,6 +5431,23 @@ def apply_consistency_lint(
     return out, dirty
 
 
+def _invented_person_name(ctx: dict[str, Any]) -> str:
+    """A person name minted from this world, not copied from a prompt example."""
+    try:
+        from app.world import invent_person_name, name_seed
+
+        return invent_person_name(
+            seed=name_seed(
+                "setup_player_name",
+                str(ctx.get("world_style") or ""),
+                str(ctx.get("start_location") or ""),
+                str(ctx.get("character_backstory") or "")[:80],
+            )
+        )
+    except Exception:
+        return ""
+
+
 def structural_fallback(field: str, context: dict[str, Any] | None = None) -> Any:
     """Deterministic clean value when a structure field was contaminated."""
     ctx = context or {}
@@ -5370,6 +5460,22 @@ def structural_fallback(field: str, context: dict[str, Any] | None = None) -> An
     blob = f"{genre} {keywords} {ctx.get('start_location') or ''} {ctx.get('custom_style') or ''}".lower()
     coastal = any(k in blob for k in ("coast", "harbor", "harbour", "dock", "shallow", "sea", "fish", "port"))
     library = "library" in blob or "fragment" in blob
+
+    # Handled before the table so neither one is computed (and neither draws from
+    # the global RNG) on calls for other fields. Both used to fall through to
+    # examples[0] -- which is how a contaminated start_location became
+    # "Mosswake Gate" and a contaminated player_name became "Mara Ellison".
+    if field == "start_location":
+        return pick_isekai_arrival_location(
+            world_style=str(ctx.get("world_style") or ""),
+            genre=str(intent.get("genre") or ctx.get("world_style") or ""),
+            idea=str(ctx.get("_randomize_idea") or ctx.get("idea") or ""),
+            session_theme=ctx.get("session_theme") if isinstance(ctx.get("session_theme"), dict) else None,
+        )
+    if field == "player_name":
+        minted = _invented_person_name(ctx)
+        if minted:
+            return minted
 
     table: dict[str, Any] = {
         "quest_style": (

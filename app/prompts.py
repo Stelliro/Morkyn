@@ -463,7 +463,7 @@ Your task:
 - Use world_state.action_context.priority_segments as the read order for what facts matter. Do not require unrelated omitted records unless a hard reference points to them.
 - Verify all referenced entity codes exist in world_state or are created in the draft.
 - Naming authenticity: every NPC reference in narration must include a visible proper name (or clear title) that matches world_state or this turn's npcs entry for that code. Reject bare holes like "— is already", " leans against", or orphan "'s hologram". Prefer the form Name [[A]] so the UI can link the code. Codes alone are not enough if the spoken name is missing.
-- NPC and place **names** must be short proper labels (e.g. "Mara", "Dockhand Kesh", "Mosswake Gate") — never full sentences, system/job blurbs, or event titles such as "System pings a local job". Event titles may describe a job ping; the person offering it still needs a real name.
+- NPC and place **names** must be short proper labels — a personal name on its own, or a role word followed by a personal name, or a two-or-three-word place name — never full sentences, system/job blurbs, or event titles. An event title may describe a job ping; the person offering it still needs a real name.
 - Verifiers have full code↔name maps in world_state.locations[].npcs, working_set/shells, and draft.npcs — use them to correct invented names and fill missing ones.
 - Verify NPC knowledge: NPCs must not know private player conversations unless indexed context supports it.
 - Verify inventory, stats, karma, skill, and location changes are justified by the narration.
@@ -493,7 +493,7 @@ Continue one player turn using world_state as source of truth. Keep continuity, 
 Rules:
 - If turn_kind is opening_scene, no player action has happened yet. Open with an immediate situation and a few concrete hooks without deciding what the player does.
 - If turn_kind is continue_scene, no new player action was supplied. Advance the current situation a little and leave the next choice open.
-- Create NPCs only when directly met or clearly needed. New NPCs must include name, race, location, role, summary, attitude, personality, likes, principles, dislikes, rank, stat_profile, skill_profile, trust_band, known_fact. role is a job/social identity (guard, merchant, gatekeeper), never a map tile kind (gate, road, ruins, dungeon, monolith). NPC names are short proper names (Mara, Dockhand Kesh) — never clothing, gear, windows, or job sentences.
+- Create NPCs only when directly met or clearly needed. New NPCs must include name, race, location, role, summary, attitude, personality, likes, principles, dislikes, rank, stat_profile, skill_profile, trust_band, known_fact. role is a job/social identity (guard, merchant, gatekeeper), never a map tile kind (gate, road, ruins, dungeon, monolith). NPC names are short proper names — a personal name alone, or a role word plus a personal name — never clothing, gear, windows, or job sentences.
 - NPC codes are assigned by the database, so new NPC code can be null. Existing references must use known codes.
 - Use rank letters/relative labels, not raw stat numbers. Typical ranks: F,E,D,C,B,A,S,SS,SSS.
 - Create/update items, locations, events, conversations, response_drafts, ability_updates, and index_updates only when justified.

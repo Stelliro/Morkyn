@@ -2693,6 +2693,26 @@ def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
             if cleaned.lower() != forbid.strip().lower():
                 return cleaned
         return _sanitize_player_name("", forbidden=forbid)
+    if field == "start_location":
+        # SETUP_RANDOMIZER_FALLBACKS["start_location"] is one flat fantasy-leaning
+        # list, so the LLM-unavailable path handed a space opera "Mosswake Gate"
+        # or "Sect Outer Court Gate". Draw from this world's own theme bank
+        # instead -- the same picker the normal path uses.
+        try:
+            from app.setup_composer import pick_isekai_arrival_location
+
+            return pick_isekai_arrival_location(
+                world_style=str(current_setup.get("world_style") or ""),
+                genre=str(current_setup.get("world_style") or ""),
+                idea=str(current_setup.get("custom_style") or ""),
+                session_theme=(
+                    current_setup.get("session_theme")
+                    if isinstance(current_setup.get("session_theme"), dict)
+                    else None
+                ),
+            )
+        except Exception:
+            pass
     values = SETUP_RANDOMIZER_FALLBACKS.get(field)
     if values:
         value = random.choice(values)

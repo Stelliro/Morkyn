@@ -15333,7 +15333,7 @@ async function startGame(event) {
       narration_detail: setupValueText(formData, "narration_detail", "rich", 120),
       world_style: readListSetting(formData, "world_style", "frontier dark fantasy"),
       custom_style: textField(formData, "custom_style", "", 800),
-      start_location: textField(formData, "start_location", "Mosswake Gate", 100),
+      start_location: textField(formData, "start_location", "", 100),
       leveling_system: boolField(formData, "leveling_system"),
       game_system: boolField(formData, "game_system"),
       system_style: setupValueText(formData, "system_style", "subtle blue-window system", 120),

@@ -48,6 +48,7 @@ _ENV = {
 os.environ.update(_ENV)
 
 from app.turn_dsl import DSL_SYSTEM_PROMPT  # noqa: E402
+from app.setup_composer import FIELD_CONTRACTS, field_contract  # noqa: E402
 from app.world import _movement_rule_example, movement_contract  # noqa: E402
 
 # The names that leaked, plus the ones the earlier runs invented around them.
@@ -130,6 +131,70 @@ class TestTheExampleComesFromThisWorld(unittest.TestCase):
                     [],
                     f"unexpected proper noun in {example!r}",
                 )
+
+
+class TestTheSetupContractsNameNobody(unittest.TestCase):
+    """The same leak, one layer up: `FIELD_CONTRACTS` fed the setup prompts.
+
+    `app/llm.py` sends each contract's `forbidden` text on every path, and its
+    `examples` on the single-field path, labelled "Good examples for this field
+    (adapt, do not copy blindly)". Two fields carried invented proper nouns:
+
+        player_name     Mara Ellison, Tomas Reed, Elena Croft, Kael Morin
+                        -- in `examples` AND named again inside `forbidden`
+        start_location  Mosswake Gate, Outer Compound Yard, Ferry Landing Stone
+
+    Telling a 7B not to copy a name it has just been shown is the mitigation
+    that already failed once, at the top of this file. The rule survives; the
+    names do not. Theme-appropriate worked examples are still supplied for
+    start_location, but built from this world's own arrival pool at prompt time.
+    """
+
+    # Names that were shipped in the contracts, and the ones the leak invented.
+    LEAKED_PEOPLE = ("mara ellison", "tomas reed", "elena croft", "kael morin")
+
+    def _contract_text(self, field: str) -> str:
+        contract = field_contract(field)
+        parts = [str(contract.get("forbidden") or "")]
+        parts += [str(e) for e in (contract.get("examples") or [])]
+        return " ".join(parts).lower()
+
+    def test_the_player_name_contract_names_no_person(self):
+        text = self._contract_text("player_name")
+        for name in self.LEAKED_PEOPLE:
+            with self.subTest(name=name):
+                self.assertNotIn(name, text, f"{name!r} is still shipped to the prompt")
+
+    def test_the_player_name_contract_still_states_the_rule(self):
+        text = self._contract_text("player_name")
+        self.assertIn("family", text)
+        self.assertIn("nickname", text)
+
+    def test_the_start_location_contract_names_no_place(self):
+        text = self._contract_text("start_location")
+        for name in LEAKED_TOPONYMS:
+            with self.subTest(name=name):
+                self.assertNotIn(name, text, f"{name!r} is still shipped to the prompt")
+
+    def test_the_start_location_contract_cites_no_real_city(self):
+        # "Seoul warehouse" was named here as a counter-example while the repo
+        # separately ban-lists it as a motif the model keeps producing.
+        self.assertNotIn("seoul", self._contract_text("start_location"))
+
+    def test_the_start_location_contract_still_states_the_rule(self):
+        text = self._contract_text("start_location")
+        self.assertIn("arrive", text)
+        self.assertIn("previous life", text)
+
+    def test_no_setup_contract_ships_an_invented_toponym(self):
+        for field, contract in FIELD_CONTRACTS.items():
+            blob = " ".join(
+                [str(contract.get("forbidden") or "")]
+                + [str(e) for e in (contract.get("examples") or [])]
+            ).lower()
+            for name in LEAKED_TOPONYMS:
+                with self.subTest(field=field, name=name):
+                    self.assertNotIn(name, blob)
 
 
 if __name__ == "__main__":

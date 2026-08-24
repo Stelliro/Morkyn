@@ -207,7 +207,8 @@ SETUP_STRING_DEFAULTS = {
     "narration_detail": "rich",
     "world_style": "frontier dark fantasy",
     "custom_style": "",
-    "start_location": "Mosswake Gate",
+    # Empty = "nobody chose"; world.py picks from this world's themed pool.
+    "start_location": "",
     "system_style": "subtle blue-window system",
     "special_ability_origin": "none",
     "special_ability_name": "",
@@ -390,7 +391,7 @@ class SetupRequest(BaseModel):
     narration_detail: str = Field(default="rich", max_length=120)
     world_style: str = Field(default="frontier dark fantasy", max_length=120)
     custom_style: str = Field(default="", max_length=800)
-    start_location: str = Field(default="Mosswake Gate", max_length=100)
+    start_location: str = Field(default="", max_length=100)
     leveling_system: bool = True
     game_system: bool = False
     system_style: str = Field(default="subtle blue-window system", max_length=120)
