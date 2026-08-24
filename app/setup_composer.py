@@ -2330,6 +2330,21 @@ def coerce_typed_setup_fields(fields: dict[str, Any]) -> tuple[dict[str, Any], d
     return out, dirty
 
 
+# A bare snake_case token in a field the player reads. Idea-bank cards carry ids
+# like `style.low_fantasy_mud`, and a 7B told not to copy spark TITLES will copy
+# the id instead: a live randomize wrote world_style='low_fantasy_mud' and
+# tone='pastoral_curious' straight into the setup form. The ids are no longer
+# sent to the model (see idea_bank.prompt_sparks), and this is the backstop for
+# anything that reaches a display field looking like a handle rather than words.
+_CARD_SLUG_RE = re.compile(r"^[a-z0-9]+(?:[._][a-z0-9]+)+$")
+
+
+def looks_like_card_slug(text: Any) -> bool:
+    """True for `low_fantasy_mud` / `style.low_fantasy_mud`, false for real prose."""
+    value = _value_text(text).strip()
+    return bool(value) and " " not in value and bool(_CARD_SLUG_RE.match(value.lower()))
+
+
 def field_contamination_reasons(field: str, value: Any, idea: str = "") -> list[str]:
     """Return reasons a value is invalid for this field (empty = clean)."""
     text = _value_text(value)
@@ -2357,6 +2372,23 @@ def field_contamination_reasons(field: str, value: Any, idea: str = "") -> list[
 
     if is_instruction_echo(text) and kind in ("enum", "short_phrase", "prose"):
         reasons.append("instruction_echo")
+
+    if kind in ("enum", "short_phrase", "prose") and looks_like_card_slug(text):
+        reasons.append("raw_idea_card_id")
+
+    # start_location becomes a row in the locations table and a heading the
+    # player reads. A cold randomize returned "a broken cart axle starts the
+    # plot" -- the examples line of an idea card, pasted into the place field --
+    # ten times out of ten. The map already refuses that shape; the form should
+    # too, so the repair pass runs before it is ever written.
+    if field == "start_location":
+        try:
+            from app.world import is_plausible_place_name
+
+            if not is_plausible_place_name(text):
+                reasons.append("start_location_not_a_place_name")
+        except Exception:
+            pass
 
     if kind == "enum" or field == "magic_level":
         allowed = [str(a).lower() for a in (contract.get("allowed_values") or list(MAGIC_LEVEL_VALUES if field == "magic_level" else []))]

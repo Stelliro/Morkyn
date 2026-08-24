@@ -196,6 +196,35 @@ def idea_bank_stats() -> dict[str, Any]:
     }
 
 
+def _rank_and_sample(results: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """
+    Pick `limit` matches, favouring score but not fixing the answer.
+
+    Straight `sort(...)[:limit]` made the scored branch as repetitive as the
+    no-query branch used to be: the same idea returned the same four cards on
+    every roll, and a flat tie (a dozen cards all scoring 1.0) was broken by
+    title, so the alphabetically-last twelve won forever.
+
+    Relevance still gates the pool -- only cards scoring at least half the best
+    score are eligible, so a weak 0.35 substring match can never displace a
+    direct keyword hit. Inside that pool the choice is weighted by score, so a
+    3.0 is drawn about three times as often as a 1.0 but neither is guaranteed.
+    """
+    take = max(1, min(int(limit or 8), 24))
+    if len(results) <= take:
+        return sorted(results, key=lambda r: r["score"], reverse=True)
+    top = max(r["score"] for r in results)
+    pool = [r for r in results if r["score"] >= top * 0.5] or results
+    if len(pool) <= take:
+        return sorted(pool, key=lambda r: r["score"], reverse=True)
+    # Efraimidis-Spirakis: weighted sample without replacement.
+    keyed = [(random.random() ** (1.0 / max(r["score"], 0.01)), r) for r in pool]
+    keyed.sort(key=lambda pair: pair[0], reverse=True)
+    picked = [r for _, r in keyed[:take]]
+    picked.sort(key=lambda r: r["score"], reverse=True)
+    return picked
+
+
 def search_idea_bank(
     query: str,
     *,
@@ -266,8 +295,7 @@ def search_idea_bank(
                 score += 0.5
         results.append({**card, "score": round(score, 3)})
 
-    results.sort(key=lambda r: (r["score"], r.get("title") or ""), reverse=True)
-    return results[: max(1, min(int(limit or 8), 24))]
+    return _rank_and_sample(results, limit)
 
 
 def kinds_for_field(field: str) -> list[str]:
@@ -277,6 +305,51 @@ def kinds_for_field(field: str) -> list[str]:
         if field in fields:
             out.append(kind)
     return out or ["style", "tone"]
+
+
+def _intent_defaults() -> dict[str, Any]:
+    """The placeholder values `empty_intent()` hands out before the player types anything."""
+    try:
+        from app.setup_composer import DEFAULT_INTENT
+
+        return DEFAULT_INTENT
+    except Exception:  # pragma: no cover - setup_composer is always importable in app
+        return {}
+
+
+def _chosen(source: dict[str, Any] | None, key: str, *, group: str = "") -> str:
+    """
+    An intent value only when the player actually supplied it.
+
+    A cold randomize compiles `empty_intent()`, whose unset slots hold sentinel
+    strings rather than blanks: adapter_hint="default", start_power="ordinary",
+    growth="steady". Feeding those to the search built the query
+    "default ordinary steady" on EVERY cold roll, and those three words match
+    exactly two cards in the whole bank -- so `style.low_fantasy_mud` and
+    `ability.pulse_count` were pinned to the top of the sparks list forever.
+    Measured live: 10/10 randomizations returned some spelling of "low fantasy
+    mud and knives" as world_style.
+
+    This is the same class of bug as the field-name leak below: prompt input
+    that describes the FORM rather than the player's idea. Compared per key
+    against that key's own default, so a genuine tone of "steady" still counts
+    (tone defaults to ""); only a slot still holding its placeholder is dropped.
+    """
+    if not isinstance(source, dict):
+        return ""
+    value = source.get(key)
+    if not value:
+        return ""
+    text = str(value).strip()
+    if not text:
+        return ""
+    defaults = _intent_defaults()
+    if group:
+        defaults = defaults.get(group) if isinstance(defaults.get(group), dict) else {}
+    default = defaults.get(key) if isinstance(defaults, dict) else None
+    if isinstance(default, str) and text.lower() == default.strip().lower():
+        return ""
+    return text
 
 
 def build_query_from_setup(
@@ -293,13 +366,14 @@ def build_query_from_setup(
     if idea:
         parts.append(idea[:220])
     for key in ("genre", "tone", "adapter_hint", "edge"):
-        val = intent.get(key)
+        val = _chosen(intent, key)
         if val:
-            parts.append(str(val))
+            parts.append(val)
     pf = intent.get("power_fantasy") if isinstance(intent.get("power_fantasy"), dict) else {}
     for key in ("start_power", "growth", "skill_summary"):
-        if pf.get(key):
-            parts.append(str(pf[key]))
+        val = _chosen(pf, key, group="power_fantasy")
+        if val:
+            parts.append(val)
     kws = intent.get("keywords") if isinstance(intent.get("keywords"), list) else []
     parts.extend(str(k) for k in kws[:8] if k)
     for f in fields or []:
@@ -378,10 +452,55 @@ def idea_sparks_for_prompt(
         "sparks": sparks,
         "rules": [
             "These are IDEA SPARKS only — cold storage, not training weights.",
-            "Borrow wording, domains, or concrete hooks. Do not copy titles verbatim as final values.",
+            "Borrow wording, domains, or concrete hooks. Write your own phrase; do not lift one whole.",
             "Prefer one fresh combination over pasting a whole spark.",
             "Ignore sparks that fight locked_setup or the player's idea.",
             "Never invent god-mode openings from a spark that is only flavor.",
+        ],
+    }
+
+
+# What a spark carries into a prompt: the content, never the ready-made labels.
+#
+# `id` is an internal handle (`style.low_fantasy_mud`). `title` and `examples`
+# are pre-written phrases sized exactly like a setup field value. All three were
+# measured being pasted straight into the form:
+#
+#   world_style   = "low_fantasy_mud"                    (the id)
+#   tone          = "pastoral_curious"                   (the id)
+#   world_style   = "Low fantasy mud and knives"         (the title)
+#   start_location= "a broken cart axle starts the plot" (the examples line)
+#
+# `text` and `keywords` say the same thing without handing over a finished
+# answer -- "Magic is rumor; problems are hunger, weather, and people with
+# knives" is richer than its own title, and the model has to write a phrase
+# rather than copy one. Telling it not to copy did not work: the rule has said
+# "Do not copy titles verbatim as final values" the whole time, and 13 verbatim
+# titles still landed across 12 measured rolls.
+_PROMPT_SPARK_FIELDS = ("kind", "text", "keywords")
+
+
+def prompt_sparks(pkg: dict[str, Any] | None) -> dict[str, Any] | None:
+    """
+    The prompt-safe view of a spark package.
+
+    Callers that render sparks for a human (the search API, the setup UI) keep
+    using the full package; only what is serialized into a prompt goes through
+    here. Removing the fields is the whole fix -- the model cannot paste a
+    string it was never shown.
+    """
+    if not isinstance(pkg, dict):
+        return None
+    sparks = pkg.get("sparks")
+    if not isinstance(sparks, list):
+        return dict(pkg)
+    return {
+        **pkg,
+        "sparks": [
+            {k: v for k, v in card.items() if k in _PROMPT_SPARK_FIELDS}
+            if isinstance(card, dict)
+            else card
+            for card in sparks
         ],
     }
 

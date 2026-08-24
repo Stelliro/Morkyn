@@ -535,7 +535,10 @@ _BARE_DIRECTION_RE = re.compile(
 
 def is_plausible_place_name(name: str) -> bool:
     """Places can be multi-word, but not full system/event sentences or bare props."""
-    n = norm_name(str(name or ""))
+    # Unwrap first, so this holds whether or not the caller ran the name through
+    # humanize_place_name. The setup form calls it on raw model output, and a
+    # "[[L1]]" that is only judged inside _upsert_location is judged too late.
+    n = humanize_place_name(str(name or ""))
     if len(n) < 2 or len(n) > 60:
         return False
     # "East", "the far side", "ahead" — a heading, not a destination
@@ -543,6 +546,12 @@ def is_plausible_place_name(name: str) -> bool:
         return False
     words = n.split()
     if len(words) > 6:
+        return False
+    # Entity codes are not toponyms. L1/I2/E3 name rows; A..ZZ name NPCs. The
+    # person check has refused these for a while; places never did, so a bare
+    # code that survived humanize_place_name became a row on the player's map.
+    # Letters-then-digits only, plus all-caps stubs -- "Ys" and "Oz" are fine.
+    if re.fullmatch(r"[A-Za-z]{1,3}\d{1,4}", n) or re.fullmatch(r"[A-Z]{1,3}", n):
         return False
     if _NAME_VERB_RE.search(n) or _NAME_SYSTEM_RE.search(n):
         return False
@@ -7322,6 +7331,16 @@ def humanize_place_name(name: str) -> str:
     text = norm_name(str(name or ""))
     if not text:
         return text
+    # Strip entity-code brackets before anything else. A live space-opera run
+    # spent three of six turns at a location literally called "[[L1]]": the
+    # model answered MOVE with the code wrapper instead of a name, and every
+    # guard below reads the wrapper as an ordinary word. Unwrapped, "L1" hits
+    # the existing code check in _find_location_id and resolves to the real row.
+    unwrapped = re.fullmatch(r"[\[(<{]{1,2}\s*([^\[\]()<>{}]+?)\s*[\])>}]{1,2}", text)
+    if unwrapped:
+        text = norm_name(unwrapped.group(1))
+    if not text:
+        return text
     if re.search(r"[_]|(?<=[a-z])-(?=[a-z])", text):
         text = norm_name(re.sub(r"[_-]+", " ", text))
     if text and not any(ch.isupper() for ch in text):
@@ -7376,6 +7395,13 @@ _PLACE_TAIL_NOUNS = frozenset(
         "road", "path", "trail", "track", "way", "lane", "crossing", "bend",
         "edge", "side", "end", "gate", "entrance", "approach", "outskirts",
         "grounds", "quarter", "district", "square", "yard", "clearing",
+        # Bearings and storeys add no toponym. Replaying six recorded runs
+        # through _upsert_location, "Hills Beyond Mosswake Gate" was still
+        # followed onto the map by "Hills Beyond Mosswake Gate Eastward" --
+        # the same hills, one direction word longer, as its own row.
+        "north", "south", "east", "west", "northward", "southward",
+        "eastward", "westward", "upper", "lower", "level", "interior",
+        "annex", "beyond", "near", "nearby",
     }
 )
 
@@ -7411,6 +7437,44 @@ def _place_extension_target(conn, name: str):
         if len(existing) > best_len:
             best, best_len = row, len(existing)
     return best
+
+
+def _place_stem_target(conn, name: str):
+    """
+    The one existing place a bare stem is already the name of.
+
+    The mirror of _place_extension_target: the model drops the qualifier
+    instead of adding one. Replaying recorded runs, "Riverbend" arrived after
+    "Riverbend Camp" and "Mosswake" after "Mosswake Gate", and each opened a
+    second row for a place the player was already standing in.
+
+    Deliberately strict. Exactly one existing place may match, and the words it
+    adds must all be generic, so a real settlement keeps its own row when the
+    map holds "Riverbend Camp" AND "Riverbend Ford" -- there the stem names the
+    area rather than either place, and guessing between them would teleport the
+    player. The cost is the reverse case: a genuine town called "Mosswake"
+    beside its own "Mosswake Gate" folds into the gate. Rows are cheap to split
+    later; a player moved somewhere they did not go is not.
+    """
+    tokens = [t for t in re.split(r"\s+", humanize_place_name(name).lower()) if t]
+    if not tokens:
+        return None
+    try:
+        rows = conn.execute("SELECT id, name, summary FROM locations ORDER BY id").fetchall()
+    except Exception:
+        return None
+    matches = []
+    for row in rows:
+        existing = [t for t in re.split(r"\s+", str(row["name"] or "").lower()) if t]
+        if len(existing) <= len(tokens):
+            continue
+        if existing[: len(tokens)] != tokens:
+            continue
+        extra = existing[len(tokens):]
+        if len(extra) > 2 or not all(word in _PLACE_TAIL_NOUNS for word in extra):
+            continue
+        matches.append(row)
+    return matches[0] if len(matches) == 1 else None
 
 
 def _venue_parent_for_new_place(conn, kind: str) -> int:
@@ -7449,7 +7513,7 @@ def _upsert_location(conn, name: str, summary: str = "", *, parent_id: int | Non
         name = "Nearby street"
     existing = _match_location_by_name(conn, name)
     if existing is None:
-        existing = _place_extension_target(conn, name)
+        existing = _place_extension_target(conn, name) or _place_stem_target(conn, name)
     if existing:
         if summary and summary not in existing["summary"]:
             # Don't merge wall-of-setup-text into a place summary

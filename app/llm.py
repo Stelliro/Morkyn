@@ -17,7 +17,7 @@ import urllib.request
 from typing import Any, Iterator
 
 from app.db import connect
-from app.idea_bank import idea_sparks_for_prompt
+from app.idea_bank import idea_sparks_for_prompt, prompt_sparks
 from app.setup_composer import (
     COMPOSER_FIELD_ORDER,
     OVERUSED_SEED_DOMAINS,
@@ -5778,7 +5778,7 @@ def compose_setup_intent(idea: str, current: dict[str, Any] | None = None) -> di
                 for k in ("world_style", "difficulty", "game_system", "backstory_mode")
                 if current and k in current
             },
-            "idea_sparks": compose_sparks,
+            "idea_sparks": prompt_sparks(compose_sparks),
             "return_shape": {
                 "genre": "short genre/setting phrase",
                 "isekai": False,
@@ -5846,6 +5846,41 @@ def _resolve_setup_intent(current_setup: dict[str, Any]) -> dict[str, Any]:
     if idea:
         return apply_keyword_intent(idea)
     return empty_intent()
+
+
+def _field_contracts_for_prompt(return_fields: list[str]) -> dict[str, Any]:
+    """
+    The typed contract for each requested field, small enough to send.
+
+    A multi-field group roll used to ship `return_fields` as a bare name list
+    with no shape at all -- no return_shape, no contracts, nothing saying which
+    fields are closed enums. Measured live over eight rolls, the model answered
+    magic_level with "low", "Low", "low-magic", "post", and "Limited to arcane
+    crafters and guilds"; every one of those falls through
+    normalize_magic_level to its default, so the stored value was "rare" 12
+    times out of 12 and race_magic_enabled barely moved off False.
+
+    The contracts already existed and were already sent on the single-field and
+    repair paths. This just stops the group path from being the one caller that
+    asks a five-value enum an open question.
+    """
+    out: dict[str, Any] = {}
+    for field in return_fields:
+        try:
+            contract = field_contract(field)
+        except Exception:
+            continue
+        if not isinstance(contract, dict):
+            continue
+        slim = {"kind": contract.get("kind")}
+        allowed = contract.get("allowed_values")
+        if allowed:
+            slim["allowed_values"] = list(allowed)
+        forbidden = str(contract.get("forbidden") or "").strip()
+        if forbidden:
+            slim["forbidden"] = forbidden[:240]
+        out[field] = slim
+    return out
 
 
 def generate_setup_randomization(group: str, current: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -6193,7 +6228,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             },
             "field_intent": intent_slice_for_field(intent_plan, "special_abilities"),
             "field_contract": field_contract("special_abilities"),
-            "idea_sparks": idea_sparks_pkg,
+            "idea_sparks": prompt_sparks(idea_sparks_pkg),
             "rules": base_rules
             + [
                 "Do not return the current abilities unchanged. Invent new names and descriptions.",
@@ -6601,6 +6636,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "current_setup": prompt_current_setup,
             "locked_setup": locked_setup,
             "return_fields": return_fields,
+            "field_contracts": _field_contracts_for_prompt(return_fields),
             "character_identity_rules": [
                 "player_name is the character's personal/legal name (Given, or Given + family). Not a nickname, handle, callsign, or epithet. Examples: Mara Ellison, Tomas Reed, Elena. Bad: Ash, River, Patch, the Red, Ashwalker, Wanderer.",
                 "player_public_name is rare. Leave it blank by default; fill it only when the backstory implies an alias, public handle, former-world name, or name strangers would plausibly know. Nicknames and street names go here, not in player_name.",
@@ -6619,7 +6655,12 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "custom_skills must be one comma-separated string when present; never use bullets or newlines for proficiencies.",
                 "special_abilities: use each card's locked + prerequisites for learned vs starting powers. Empty list means no special powers.",
             ],
-            "rules": base_rules + ["Generate fields one at a time in the order requested. Later fields must fit earlier current_setup values."],
+            "rules": base_rules
+            + [
+                "Generate fields one at a time in the order requested. Later fields must fit earlier current_setup values.",
+                "field_contracts is binding. When a field lists allowed_values, return one of those strings EXACTLY as written -- lowercase, no synonyms, no free text. 'low', 'low-magic', and 'limited to guilds' are all wrong for a field whose allowed_values are rare/forbidden/common utility/cultivation/none; pick the closest listed value instead.",
+                "Boolean fields take true or false, not a label.",
+            ],
         }
     if text_mode:
         source_length = len(str(current_setup.get("_optimize_text") or ""))
@@ -6700,7 +6741,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
 
     if idea_sparks_pkg and isinstance(prompt, dict) and idea_sparks_pkg.get("sparks"):
         # Inject once for all field groups (abilities already set earlier; others get it here).
-        prompt.setdefault("idea_sparks", idea_sparks_pkg)
+        prompt.setdefault("idea_sparks", prompt_sparks(idea_sparks_pkg))
     try:
         result = _chat_json(
             "Return JSON only. Generate direct values. Do not explain. Do not echo the request.",
@@ -7266,6 +7307,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 )
     normalized = _normalize_previous_life_identity_fields(return_fields, current_setup, validated)
     normalized = _thin_optional_identity_fields(return_fields, current_setup, normalized)
+    if not text_mode:
+        normalized = _drop_echoed_custom_style(return_fields, current_setup, intent_plan, normalized)
     if "custom_skills" in normalized:
         normalized["custom_skills"] = _comma_separated_phrases(normalized.get("custom_skills"))
     if isinstance(normalized.get("special_abilities"), list):
@@ -7324,6 +7367,38 @@ def _normalize_sex_fields(
             # Soften intersex frequency on mundane worlds
             next_result[field] = random.choice(["female", "male"])
     return next_result
+
+
+def _drop_echoed_custom_style(
+    return_fields: list[str],
+    current_setup: dict[str, Any],
+    intent_plan: dict[str, Any],
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    custom_style must add something world_style did not already say.
+
+    Twice in twelve measured rolls the model put one idea-card title in both
+    slots -- world_style AND custom_style were each "Grimdark mud calculus",
+    then each "system-apocalypse UI weather". custom_style is the prose field
+    for world constraints and DM stance, so a verbatim restatement of the genre
+    phrase leaves the setup with nothing where its stance should be.
+
+    The structural fallback is a real improvement here rather than a downgrade:
+    it keeps the style as the setting frame and appends the stance the field
+    exists to carry.
+    """
+    if "custom_style" not in result:
+        return result
+    style = str(result.get("world_style") or current_setup.get("world_style") or "").strip().lower()
+    custom = str(result.get("custom_style") or "").strip().lower()
+    if not style or not custom or custom != style:
+        return result
+    context = {**current_setup, **result, "_compose_intent": intent_plan}
+    replacement = structural_fallback("custom_style", context)
+    if not replacement:
+        return result
+    return {**result, "custom_style": replacement}
 
 
 def _lint_and_repair_setup_fields(
