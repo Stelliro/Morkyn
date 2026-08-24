@@ -67,12 +67,14 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
   | setting | before | after |
   |---|---|---|
-  | space opera, genre words | 3/8 | **5/8** |
+  | space opera, genre words | 3/12 | **5/12**, and 6/12 on the repeat run |
   | space opera, `[[L1]]` turns | 3 of 6 | **0** |
   | high fantasy, genre words | 1/8 | **2/8** |
   | high fantasy, turns spent in "Riverbend" | 3 of 6 | **0** |
+  | out-of-genre prose / roles | - | 0 worlds, both axes |
+  | cross-world trigram overlap | - | 0.046 max, no shared NPC names |
 
-  High fantasy was re-measured before `coherent_magic_level()` landed; the exemplar fix alone moved it.
+  High fantasy was re-measured before `coherent_magic_level()` landed; the exemplar fix alone moved it. (Commit `2c8681d` quotes the space-opera figures as 3/8 and 5/8 — the counts are right, the denominator is 12: that genre carries twelve expected words where high fantasy carries eight.)
 
 - **A quarter of every place the game ever named came out of the prompt's own examples.** Two toponyms were hardcoded as worked examples in the movement rules -- "Riverbend Camp" in both `movement_contract()` and the DSL rule block, "Redmill Ford" in the DSL MOVE line -- and they shipped on every turn of every world - `app/world.py`, `app/turn_dsl.py`
   - Counted across the 42 recorded playtest databases still on disk: of 170 place names, **36 contain "Riverbend" and 8 contain "Redmill"**, and 21 of the 42 worlds carry at least one.
