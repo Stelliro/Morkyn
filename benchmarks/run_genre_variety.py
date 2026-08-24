@@ -179,9 +179,27 @@ def _overlap(a: str, b: str) -> float:
     return len(ta & tb) / len(ta | tb)
 
 
+# Ordinary English inflections, so a genre word still counts when the prose
+# declines it. Substring matching is still refused -- it scores "neve" inside
+# "never" -- but exact-form matching was scoring zero for real hits: a
+# high-fantasy run that wrote "nothing feels particularly MAGICAL" and "the
+# SPIRITS don't forgive what's owed" was recorded as 0/8 on its own vocabulary.
+# Rescoring every stored report, every world gained 1-3 words and the ordering
+# between runs changed, so this was not a rounding difference.
+#
+# "-ment" is deliberately absent: it would score "shipment" as the word "ship",
+# and a space-opera log says shipment constantly while meaning cargo. The only
+# expected word that wants it is "enchant", which still matches enchanted /
+# enchanting / enchants -- losing the bare noun is the cheaper error.
+_INFLECTIONS = r"(?:s|es|ed|ing|al|ers?)?"
+
+
 def _word_present(needle: str, low_text: str) -> bool:
-    """Whole-word-ish match. Substring matching scores "neve" inside "never"."""
-    return re.search(rf"(?<![a-z]){re.escape(needle.lower())}(?![a-z])", low_text) is not None
+    """Whole-word match, allowing ordinary inflections of the same word."""
+    return (
+        re.search(rf"(?<![a-z]){re.escape(needle.lower())}{_INFLECTIONS}(?![a-z])", low_text)
+        is not None
+    )
 
 
 def _lexicon_hits(text: str, words) -> list[tuple[str, str]]:

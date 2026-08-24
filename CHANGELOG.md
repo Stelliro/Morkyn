@@ -63,18 +63,47 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
   - `_place_possessive_target()` folds a name carrying two or more possessive links back into the longest existing place that is a literal prefix of it. One link is an ordinary toponym and is untouched - "Deadman's Hollow", "The Water's Edge Camp" and "The Sunken Colonnade's Shadow" were all recorded live and all survive. It only fires when there is an existing row to join, so a world that genuinely opens on "The Lord's Keeper's Tower" keeps it.
   - All three accretion guards were scored by replaying every place name in the 44 recorded playtest databases through `_upsert_location()`: **176 names in, 165 rows out**, 11 folds, and reading each one, every fold is a genuine duplicate and no distinct place was swallowed.
 
-  **Genre matrix, re-measured on the two settings that were failing:**
+  **Genre matrix, re-measured — and the earlier numbers in this entry corrected.**
+
+  The benchmark's genre-word detector was matching exact word forms only, so a
+  high-fantasy run that wrote *"nothing feels particularly **magical**"* and
+  *"the **spirits** don't forgive what's owed"* scored 0 of 8 on its own
+  vocabulary. `_word_present()` now allows ordinary inflections. Rescoring every
+  stored report with the corrected detector, **the genre-word improvements this
+  entry originally claimed do not hold up**:
 
   | setting | before | after |
   |---|---|---|
-  | space opera, genre words | 3/12 | **5/12**, and 6/12 on the repeat run |
-  | space opera, `[[L1]]` turns | 3 of 6 | **0** |
-  | high fantasy, genre words | 1/8 | **2/8** |
-  | high fantasy, turns spent in "Riverbend" | 3 of 6 | **0** |
-  | out-of-genre prose / roles | - | 0 worlds, both axes |
-  | cross-world trigram overlap | - | 0.046 max, no shared NPC names |
+  | high fantasy, genre words | 2/8 | 3/8, then 2/8 on the next run |
+  | space opera, genre words | 6/12 and 4/12 | 5/12 and 6/12 |
 
-  High fantasy was re-measured before `coherent_magic_level()` landed; the exemplar fix alone moved it. (Commit `2c8681d` quotes the space-opera figures as 3/8 and 5/8 — the counts are right, the denominator is 12: that genre carries twelve expected words where high fantasy carries eight.)
+  Both are inside run-to-run noise at six turns per world. The figures reported
+  earlier (high fantasy 1/8 → 2/8, space opera 3/12 → 5/12) were an artifact of
+  which inflection the model happened to reach for, not a real gain. `-ment` is
+  deliberately excluded from the inflection set: it would score "shipment" as
+  the word "ship", and a space-opera log says shipment constantly while meaning
+  cargo.
+
+  What does hold up is everything counted rather than matched — exact
+  place-name and location counts across the same runs:
+
+  | measure | before | after |
+  |---|---|---|
+  | medieval, turns spent at a Riverbend/Redmill place | **6 of 6** | 0 |
+  | high fantasy, turns at a Riverbend/Redmill place | 3 of 6 | 0 |
+  | space opera, turns at a place named `[[L1]]` | 3 of 6 | 0 |
+  | exemplar toponyms anywhere in prose | 4 | 0 |
+  | out-of-genre prose / roles | 0 worlds | 0 worlds |
+  | cross-world trigram overlap | — | 0.046 max, no shared NPC names |
+
+  Zero on every axis across the four worlds run after the fix. The medieval
+  world was the worst case and had not been measured before: it spent all six
+  of its turns at Redmill Ford, the name written into the DSL MOVE rule.
+
+  `coherent_magic_level()` is therefore justified on the contradiction itself —
+  a packet asserting `"magic_level": "rare"` beside a `world_style` of "open
+  magic" is wrong whatever the prose does with it — and not on a measured prose
+  improvement, which this probe is too small to show.
 
 - **A quarter of every place the game ever named came out of the prompt's own examples.** Two toponyms were hardcoded as worked examples in the movement rules -- "Riverbend Camp" in both `movement_contract()` and the DSL rule block, "Redmill Ford" in the DSL MOVE line -- and they shipped on every turn of every world - `app/world.py`, `app/turn_dsl.py`
   - Counted across the 42 recorded playtest databases still on disk: of 170 place names, **36 contain "Riverbend" and 8 contain "Redmill"**, and 21 of the 42 worlds carry at least one.
