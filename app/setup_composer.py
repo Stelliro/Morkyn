@@ -3739,6 +3739,11 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         "near-future",
         "synthwave city",
         "arcology",
+        "cybernetic",
+        "megacorp",
+        "corporate rule",
+        "corporate-run",
+        "street samurai",
     ),
     "steampunk": (
         "steampunk",
@@ -3764,6 +3769,15 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         "dead earth",
         "radioactive",
         "scrapyard world",
+        # "post-collapse settlement" is a shipped world_style and matched none
+        # of the above. Only the hyphen-or-space "post collapse" forms are
+        # listed: "after the collapse of the old empire" is a fantasy sentence,
+        # and bare "collapse" read it as a wasteland.
+        "post-collapse",
+        "post collapse",
+        "the wastes",
+        "irradiated",
+        "scavenger",
     ),
     "noir": (
         "noir",
@@ -3813,10 +3827,28 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         "starship",
         "space station",
         "colony ship",
+        "colony world",
         "void station",
         "sci-fi",
         "scifi",
         "science fiction",
+        # A player writing the genre out in plain words hit none of the above:
+        # "far-future interstellar civilisation, faster-than-light travel" was
+        # read as fantasy and opened at a gate-town.
+        "interstellar",
+        "faster-than-light",
+        "faster than light",
+        "far future",
+        "far-future",
+        "galactic",
+        "galaxy",
+        "space opera",
+        "star system",
+        "hyperspace",
+        "spaceport",
+        "starport",
+        "spacefaring",
+        "airlock",
     ),
     "fantasy": (
         "fantasy",

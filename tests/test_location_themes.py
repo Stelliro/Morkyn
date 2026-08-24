@@ -20,6 +20,77 @@ def test_theme_detection_keywords():
     assert detect_location_theme(world_style="frontier dark fantasy") == "fantasy"
 
 
+def test_theme_detection_reads_plain_english_not_just_jargon():
+    """The keyword sets only matched genre jargon, so ordinary prose fell to fantasy.
+
+    Every one of these is how a player actually writes the setting, and every
+    one of them was routed to the fantasy arrival bank -- including the space
+    opera in benchmarks/run_genre_variety.py, whose own world_style
+    ("far-future interstellar civilisation, faster-than-light travel") hit none
+    of "space", "orbital", "starship", "sci-fi".
+    """
+    space = (
+        "far-future interstellar civilisation, faster-than-light travel, no magic",
+        "a galaxy of trade routes and old warships",
+        "stranded on a colony world",
+        "hyperspace lanes and a dead starport",
+    )
+    for style in space:
+        assert detect_location_theme(world_style=style, genre=style) == "space", style
+
+    wasteland = (
+        "post-collapse settlement",
+        "post-collapse wasteland eighty years after the grid died",
+        "the wastes, eighty years after the bombs",
+        "irradiated scavenger convoys",
+    )
+    for style in wasteland:
+        assert detect_location_theme(world_style=style, genre=style) == "wasteland", style
+
+    cyber = ("megacorp arcology with chrome implants", "corporate-run city, street samurai")
+    for style in cyber:
+        assert detect_location_theme(world_style=style, genre=style) == "cyberpunk", style
+
+
+def test_a_collapsing_empire_is_still_fantasy():
+    """Bare "collapse" is deliberately not a wasteland keyword.
+
+    Old empires collapse in fantasy constantly; matching the word cost the
+    genre more often than it earned it.
+    """
+    for style in (
+        "after the collapse of the old empire, knights and ruins",
+        "high fantasy with open magic and old empires",
+        "grounded medieval realism, no magic",
+        "1880s frontier west with quiet, unexplained wrongness",
+    ):
+        assert detect_location_theme(world_style=style, genre=style) == "fantasy", style
+
+
+def test_every_genre_in_the_variety_matrix_opens_in_its_own_bank():
+    """The end-to-end shape of the fix, with no model in the loop."""
+    matrix = {
+        "grounded medieval realism, no magic": "fantasy",
+        "high fantasy with open magic and old empires": "fantasy",
+        "far-future interstellar civilisation, faster-than-light travel, no magic": "space",
+        "near-future cyberpunk megacity, corporate rule, street-level crime": "cyberpunk",
+        "post-collapse wasteland eighty years after the grid died": "wasteland",
+        "1880s frontier west with quiet, unexplained wrongness": "fantasy",
+    }
+    for style, want in matrix.items():
+        for _ in range(20):
+            loc, _changed = ensure_isekai_start_location(
+                "",
+                backstory_mode="",
+                idea="",
+                world_style=style,
+                genre=style,
+                character_backstory="",
+                session_theme=None,
+            )
+            assert loc in LOCATION_SEEDS_BY_THEME[want], f"{style} -> {loc}"
+
+
 def test_pick_respects_theme_pool():
     cyber = pick_isekai_arrival_location(world_style="cyberpunk neon sprawl", seed=42)
     assert cyber in LOCATION_SEEDS_BY_THEME["cyberpunk"]

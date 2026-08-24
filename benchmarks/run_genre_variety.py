@@ -23,6 +23,18 @@ What it reports
                      and NPCs differ, or does it tell one story every time
   randomizer         N live randomizations: distinct values per field, and
                      near-duplicate detection across whole setups
+  openings           where an UNSET start_location actually put the player, and
+                     whether that name came from the genre's own arrival bank.
+                     Deterministic, no model
+  silent axes        world_races / magic_level / tech_level as recorded, per
+                     world. Nothing sets these, so this is what a real player
+                     inherits -- a human-only space opera shows up here
+
+Deliberately does NOT set start_location. That field's shipped default put
+every world at the same fantasy gate-town, and an earlier version of this probe
+supplying an arrival name for all six genres is precisely why the matrix could
+not see it. Same reasoning as the context window below: if the probe configures
+the failure away, the probe cannot report it.
 
 Run from repo root (Ollama must be running):
   python benchmarks/run_genre_variety.py
@@ -73,7 +85,7 @@ GENRES: list[dict] = [
     {
         "id": "medieval",
         "world_style": "grounded medieval realism, no magic",
-        "start_location": "Aldbury Market Cross",
+        "arrival_theme": "fantasy",
         "backstory": "A wool merchant's factor walking the roads between market towns.",
         "expected": ("cart", "market", "road", "coin", "inn", "horse", "field", "smith"),
         "forbidden": (
@@ -85,7 +97,7 @@ GENRES: list[dict] = [
     {
         "id": "high_fantasy",
         "world_style": "high fantasy with open magic and old empires",
-        "start_location": "The Sunken Colonnade",
+        "arrival_theme": "fantasy",
         "backstory": "A hedge-mage carrying a debt to a spirit they cannot name.",
         "expected": ("magic", "spell", "rune", "spirit", "sigil", "ward", "arcane", "enchant"),
         "forbidden": (
@@ -96,7 +108,7 @@ GENRES: list[dict] = [
     {
         "id": "space_opera",
         "world_style": "far-future interstellar civilisation, faster-than-light travel, no magic",
-        "start_location": "Docking Bay Seven, Ceres Transfer Station",
+        "arrival_theme": "space",
         "backstory": "A courier running sealed data between stations, one jump ahead of a debt.",
         "expected": (
             "station", "ship", "airlock", "hull", "console", "deck", "system", "cargo",
@@ -114,7 +126,7 @@ GENRES: list[dict] = [
     {
         "id": "cyberpunk",
         "world_style": "near-future cyberpunk megacity, corporate rule, street-level crime",
-        "start_location": "Sublevel Four, Kowloon Stack",
+        "arrival_theme": "cyberpunk",
         "backstory": "A courier with a cranial data shunt and a debt to the wrong clinic.",
         "expected": (
             "corp", "data", "neon", "implant", "deck", "net", "chrome", "rain",
@@ -131,7 +143,7 @@ GENRES: list[dict] = [
     {
         "id": "post_apoc",
         "world_style": "post-collapse wasteland eighty years after the grid died",
-        "start_location": "The Overpass Camp",
+        "arrival_theme": "wasteland",
         "backstory": "A water-runner carrying a filter cartridge worth more than they are.",
         "expected": ("water", "rust", "scrap", "ruin", "camp", "filter", "dust", "salvage"),
         "forbidden": ("wizard", "dragon", "spellbook", "sorcerer", "starship", "hyperspace"),
@@ -139,7 +151,7 @@ GENRES: list[dict] = [
     {
         "id": "weird_west",
         "world_style": "1880s frontier west with quiet, unexplained wrongness",
-        "start_location": "Calico Junction Depot",
+        "arrival_theme": "fantasy",
         "backstory": "A line-rider carrying a letter nobody will sign for.",
         "expected": ("rail", "dust", "saloon", "revolver", "horse", "depot", "town", "rifle"),
         "forbidden": (
@@ -328,7 +340,11 @@ def main() -> int:
             "difficulty": "normal",
             "narration_detail": "balanced",
             "world_style": genre["world_style"],
-            "start_location": genre["start_location"],
+            # start_location is deliberately NOT set. It is the field whose
+            # shipped default ("Mosswake Gate") opened every world at the same
+            # fantasy gate-town, and this probe supplying one for all six genres
+            # is exactly why the matrix could not see it. Leaving it unset is
+            # what a player who never touches the box does.
             "leveling_system": True,
             "game_system": False,
             "skill_style": "standard",
@@ -358,8 +374,32 @@ def main() -> int:
             state = get_state(include_hidden=True)
             opening = _narration_of({}, state)
             world["opening"] = opening
-            _log(log, f"    opening {len(opening)} chars at "
-                      f"{(state.get('current_location') or {}).get('name')!r}")
+            opened_at = str((state.get("current_location") or {}).get("name") or "")
+            world["opened_at"] = opened_at
+            # Did the unset start_location land in this genre's own arrival bank?
+            # Deterministic, no model -- the same kind of check as seeded roles.
+            from app.setup_composer import (  # noqa: E402
+                LOCATION_SEEDS_BY_THEME,
+                detect_location_theme,
+            )
+
+            want = genre["arrival_theme"]
+            world["arrival_theme_expected"] = want
+            world["arrival_theme_detected"] = detect_location_theme(
+                world_style=genre["world_style"], genre=genre["world_style"]
+            )
+            world["opened_in_own_bank"] = opened_at in set(LOCATION_SEEDS_BY_THEME.get(want) or ())
+            # The axes nobody sets and everybody inherits. A space opera quietly
+            # running human-only at "rare" magic is a finding, not a footnote.
+            _opts = (state.get("settings") or {}).get("playthrough_options") or {}
+            world["silent_axes"] = {
+                key: str(_opts.get(key) or "")
+                for key in ("world_races", "magic_level", "tech_level")
+            }
+            _log(log, f"    opening {len(opening)} chars at {opened_at!r} "
+                      f"(theme want={want} got={world['arrival_theme_detected']} "
+                      f"in_bank={int(world['opened_in_own_bank'])})")
+            _log(log, f"    silent axes         : {world['silent_axes']}")
 
             for index in range(turns):
                 action = TURN_SCRIPT[index % len(TURN_SCRIPT)]
@@ -487,6 +527,32 @@ def _summarize(report: dict) -> dict:
     out["fidelity"] = fidelity
     out["worlds_with_out_of_genre_prose"] = sum(1 for w in worlds if w["forbidden_hits"])
     out["worlds_with_out_of_genre_roles"] = sum(1 for w in worlds if w["forbidden_roles"])
+
+    # Where an unset start_location actually put the player. This is the check
+    # the probe could not make while it supplied the arrival name itself.
+    out["openings"] = [
+        f"{w['label']:14s} {w.get('opened_at','')!r} "
+        f"theme want={w.get('arrival_theme_expected')} "
+        f"got={w.get('arrival_theme_detected')} "
+        f"in_bank={int(bool(w.get('opened_in_own_bank')))}"
+        for w in worlds
+    ]
+    out["worlds_opened_outside_own_bank"] = sum(
+        1 for w in worlds if not w.get("opened_in_own_bank")
+    )
+    out["worlds_with_mistyped_theme"] = sorted(
+        f"{w['label']}: want {w.get('arrival_theme_expected')}, "
+        f"detected {w.get('arrival_theme_detected')}"
+        for w in worlds
+        if w.get("arrival_theme_expected") != w.get("arrival_theme_detected")
+    )
+    out["distinct_opening_locations"] = (
+        f"{len({w.get('opened_at') for w in worlds})}/{len(worlds)}"
+    )
+    # Axes nobody set. Printed per world so a human-only space opera is visible.
+    out["silent_axes"] = [
+        f"{w['label']:14s} {w.get('silent_axes', {})}" for w in worlds
+    ]
 
     # Cross-genre prose overlap: two settings sharing language are one story.
     pairs = []

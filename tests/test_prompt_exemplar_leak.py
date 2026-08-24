@@ -48,6 +48,7 @@ _ENV = {
 os.environ.update(_ENV)
 
 from app.turn_dsl import DSL_SYSTEM_PROMPT  # noqa: E402
+from app.prompts import SYSTEM_PROMPT, VERIFY_PROMPT  # noqa: E402
 from app.setup_composer import FIELD_CONTRACTS, field_contract  # noqa: E402
 from app.world import _movement_rule_example, movement_contract  # noqa: E402
 
@@ -195,6 +196,71 @@ class TestTheSetupContractsNameNobody(unittest.TestCase):
             for name in LEAKED_TOPONYMS:
                 with self.subTest(field=field, name=name):
                     self.assertNotIn(name, blob)
+
+
+class TestTheNarrationPromptsNameNobody(unittest.TestCase):
+    """SYSTEM_PROMPT and VERIFY_PROMPT taught naming by minting names.
+
+        SYSTEM_PROMPT  "Sarah [[A]]" ... Right: "Aria", "Thornrow", "Captain Vesk"
+                       "name people (Mara [[A]])" ... "Second Shadow Inn"
+        VERIFY_PROMPT  short proper labels (e.g. "Mara", "Dockhand Kesh",
+                       "Mosswake Gate")
+
+    Six invented people and two invented places, shipped on every turn of every
+    world, in the four rules whose whole subject is what a name should look
+    like. That is the strongest possible position for a name to be copied out
+    of, and it is the same mistake as "Riverbend Camp" at the top of this file.
+
+    The rules are all still here -- the name goes before the code, a
+    description is not a name, gear is not a person, a place is not a brand --
+    stated as shapes rather than as examples. The counter-examples that are
+    generic nouns ("Woman", "Old Man", "Hooded Figure") are deliberately kept:
+    those are the anti-pattern itself, not a name waiting to be borrowed.
+    """
+
+    INVENTED = (
+        "sarah",
+        "aria",
+        "thornrow",
+        "vesk",
+        "mara",
+        "kesh",
+        "second shadow",
+    )
+
+    def test_the_system_prompt_mints_no_person(self):
+        low = SYSTEM_PROMPT.lower()
+        for name in self.INVENTED:
+            with self.subTest(name=name):
+                self.assertNotIn(name, low, f"{name!r} is still shipped in SYSTEM_PROMPT")
+
+    def test_the_verify_prompt_mints_no_person(self):
+        low = VERIFY_PROMPT.lower()
+        for name in self.INVENTED:
+            with self.subTest(name=name):
+                self.assertNotIn(name, low, f"{name!r} is still shipped in VERIFY_PROMPT")
+
+    def test_neither_narration_prompt_names_a_place(self):
+        for label, text in (("SYSTEM_PROMPT", SYSTEM_PROMPT), ("VERIFY_PROMPT", VERIFY_PROMPT)):
+            for name in LEAKED_TOPONYMS:
+                with self.subTest(prompt=label, name=name):
+                    self.assertNotIn(name, text.lower())
+
+    def test_the_code_placement_rule_survives(self):
+        # The format is the point of that line; losing it would cost the UI its links.
+        low = SYSTEM_PROMPT.lower()
+        self.assertIn("[[a]]", low)
+        self.assertIn("[[l2]]", low)
+        self.assertIn("name/title first", low)
+        self.assertIn("never use a code with no name in front of it", low)
+
+    def test_the_description_is_not_a_name_rule_survives(self):
+        low = SYSTEM_PROMPT.lower()
+        self.assertIn("real name, not a description", low)
+        # The generic-noun counter-examples stay: they are the anti-pattern.
+        for bad in ("woman", "old man", "hooded figure", "guard", "stranger"):
+            with self.subTest(bad=bad):
+                self.assertIn(bad, low)
 
 
 if __name__ == "__main__":

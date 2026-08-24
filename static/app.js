@@ -305,20 +305,6 @@ const RANDOM_SETUP = {
     "dead phone, wallet with useless cards, apartment keys, light jacket",
     "ID badge, lanyard, soft shoes, hoodie",
   ],
-  start_location: [
-    "Mosswake Gate",
-    "Outer Compound Yard",
-    "Ash Road Cut",
-    "Ferry Landing Stone",
-    "Red Lantern Dock",
-    "Blackwater Relay",
-    "Cinder Market Edge",
-    "Sect Outer Court Gate",
-    "Saltwind Pier",
-    "Iron Bell Crossroads",
-    "Pale Bridge Footing",
-    "Ration Yard Post",
-  ],
   skill_style: ["standard", "generous", "training-heavy", "strict"],
   proficiency_access: ["learned", "familiar actions free", "only expert tasks require training"],
   new_skill_frequency: ["normal", "very rare", "rare", "frequent", "very frequent"],
@@ -331,15 +317,7 @@ const RANDOM_SETUP = {
     "low magic mercantile city",
     "space frontier salvage",
   ],
-  start_location: [
-    "Mosswake Gate",
-    "Blackwater Relay",
-    "The Ninth Stair",
-    "Cinder Market",
-    "Ashford Clinic",
-    "Red Lantern Dock",
-    "Saint Vale Station",
-  ],
+  // start_location is not a flat list: see START_LOCATION_BANKS below.
   tone: ["grounded adventure", "survival pressure", "political intrigue", "mythic progression", "grim road story"],
   economy: ["scarce", "barter-heavy", "coin-driven", "guild-controlled"],
   loot_rarity: ["earned and uncommon", "scarce mundane", "generous adventuring", "high-magic loot"],
@@ -576,6 +554,62 @@ let RANDOM_FIELD_ORDER = [
   "start_location",
   "special_abilities",
 ];
+
+/**
+ * Client-side arrival banks, mirroring LOCATION_SEEDS_BY_THEME /
+ * LOCATION_THEME_KEYWORDS in app/setup_composer.py.
+ *
+ * RANDOM_SETUP used to hold one flat, fantasy-leaning start_location list --
+ * twice, in fact, so the first of the two never ran at all. Either way a space
+ * opera randomized offline got "Mosswake Gate" or "Sect Outer Court Gate".
+ *
+ * This is the offline path only. When the server is reachable it picks the
+ * arrival name itself and this is never consulted; a blank box is also fine,
+ * because empty start_location now means "choose one to suit the setting".
+ * Kept deliberately short: the server holds the full banks, and this only has
+ * to avoid being wrong about the genre.
+ */
+const START_LOCATION_BANKS = {
+  celestial: ["Cloud Terrace Step", "Gate of Judgement", "Pillar of Names"],
+  cyberpunk: ["Night-Bus Terminal Cage", "Black Market Data Alley", "Gutter Clinic Side Door", "Red Sector Firewall Gate"],
+  steampunk: ["Boiler Yard Gantry", "Airship Mooring Mast", "Clockwork Tram Stop"],
+  wasteland: ["Dead Rail Switchyard", "Bunker Hatch 17", "Collapsed Overpass Nest", "Silt Caravan Circle"],
+  space: ["Shuttle Bay Marking Paint", "Hydroponics Aisle 3", "Cargo Bay Zero-G Net", "Observation Cupola Deck"],
+  undersea: ["Pressure Lock Two", "Coral Shelf Landing", "Trench Lift Cage"],
+  arctic: ["Ice Road Marker", "Glacier Outpost Door", "Frozen Weir Crossing"],
+  desert: ["Dune Road Cairn", "Oasis Well Step", "Caravanserai Arch"],
+  gothic: ["Chapel Porch Steps", "Crypt Stair Landing", "Manor Gatehouse"],
+  noir: ["Rain-Slick Precinct Steps", "Dockside Warehouse Row", "All-Night Diner Counter"],
+  fantasy: ["Mosswake Gate", "Blackwater Relay", "Ferry Landing Stone", "Ash Road Cut", "Red Lantern Dock", "Iron Bell Crossroads"],
+};
+
+/** Priority order and keywords match detect_location_theme() on the server. */
+const START_LOCATION_THEME_KEYWORDS = [
+  ["celestial", ["heaven", "celestial", "paradise", "afterlife", "angel", "divine"]],
+  ["cyberpunk", ["cyber", "neon", "megacity", "megacorp", "corpo", "chrome", "sprawl", "near future", "near-future", "arcology", "implant", "street samurai"]],
+  ["steampunk", ["steampunk", "clockwork", "airship", "boiler", "brass"]],
+  ["wasteland", ["wasteland", "post-apoc", "post apoc", "postapoc", "post-collapse", "post collapse", "fallout", "scorched", "irradiated", "scavenger", "the wastes", "radioactive"]],
+  ["space", ["space", "orbital", "starship", "sci-fi", "scifi", "science fiction", "interstellar", "faster-than-light", "far future", "far-future", "galactic", "galaxy", "hyperspace", "starport", "spaceport", "colony world", "airlock"]],
+  ["undersea", ["undersea", "underwater", "abyssal", "trench", "coral"]],
+  ["arctic", ["arctic", "glacier", "tundra", "frozen north", "ice road"]],
+  ["desert", ["desert", "dune", "oasis", "sandsea", "caravanserai"]],
+  ["gothic", ["gothic", "vampire", "crypt", "manor", "haunted"]],
+  ["noir", ["noir", "hardboiled", "detective", "prohibition"]],
+];
+
+/** Best-guess theme id from whatever setting text the form currently holds. */
+function detectStartLocationTheme() {
+  const parts = [
+    ...[...(setupForm?.querySelectorAll('input[name="world_style"]:checked') || [])].map((i) => i.value),
+    setupForm?.querySelector('[name="world_style_custom"], [data-list-custom="world_style"]')?.value || "",
+    getFormFieldValue("custom_style") || "",
+  ];
+  const low = parts.join(" ").toLowerCase();
+  for (const [theme, keys] of START_LOCATION_THEME_KEYWORDS) {
+    if (keys.some((k) => low.includes(k))) return theme;
+  }
+  return "fantasy";
+}
 
 /**
  * Simple UI Confirm Randomize — only fields the Simple panel owns.
@@ -3141,7 +3175,7 @@ function fallbackRandomizeField(name, options = {}) {
     if (dropdown && count > 0) dropdown.open = true;
   } else if (setupForm.querySelector(`[data-list-setting="${name}"]`)) {
     fallbackRandomizeListField(name);
-  } else if (!fallbackRandomizeRadioField(name) && !fallbackRandomizeSelectField(name) && RANDOM_SETUP[name]) {
+  } else if (!fallbackRandomizeRadioField(name) && !fallbackRandomizeSelectField(name) && hasRandomSetupPool(name)) {
     if (name === "player_name") {
       const current = String(setupForm?.elements?.player_name?.value || "").trim();
       setField(name, sanitizePlayerNameClient(pickRandomSetupValue(name), current));
@@ -3200,8 +3234,17 @@ function sanitizePlayerNameClient(value, forbidden = "") {
 }
 
 /** Pick from RANDOM_SETUP avoiding the current form value when possible. */
+/** True when there is an offline pool for this field (themed or flat). */
+function hasRandomSetupPool(name) {
+  if (name === "start_location") return true;
+  return Boolean(RANDOM_SETUP[name]?.length);
+}
+
 function pickRandomSetupValue(name) {
-  const pool = RANDOM_SETUP[name] || [];
+  const pool =
+    name === "start_location"
+      ? START_LOCATION_BANKS[detectStartLocationTheme()] || START_LOCATION_BANKS.fantasy
+      : RANDOM_SETUP[name] || [];
   if (!pool.length) return "";
   const current = String(setupForm?.elements?.[name]?.value || "")
     .trim()
@@ -5276,7 +5319,7 @@ function readSetupValue(formData, name) {
   if (value === "random") {
     const options = availableSelectValues(name);
     if (options.length) return choice(options);
-    if (RANDOM_SETUP[name]?.length) return pickRandomSetupValue(name);
+    if (hasRandomSetupPool(name)) return pickRandomSetupValue(name);
   }
   return value;
 }
