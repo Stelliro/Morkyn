@@ -406,8 +406,15 @@ def main() -> int:
         rows: list[dict] = []
         for index in range(samples):
             try:
-                result = llm.generate_setup_randomization("world", {})
-                fields = (result or {}).get("fields") or {}
+                result = llm.generate_setup_randomization("world", {}) or {}
+                # Two shapes from one endpoint: the model path returns the
+                # fields at the top level, the deterministic fallback wraps
+                # them in {"fields": ...}. static/app.js coalesces the same way.
+                fields = result.get("fields") if isinstance(result.get("fields"), dict) else result
+                fields = {
+                    k: v for k, v in (fields or {}).items()
+                    if not k.startswith("_") and k not in {"fallback_used", "fallback_reason"}
+                }
                 rows.append(fields)
                 _log(log, f"    [{index + 1}/{samples}] style="
                           f"{str(fields.get('world_style'))[:56]!r}")

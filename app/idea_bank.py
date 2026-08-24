@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import re
 import time
 from pathlib import Path
@@ -209,15 +210,26 @@ def search_idea_bank(
     """
     cards = load_idea_cards()
     q_tokens = _tokens(query)
-    if not q_tokens and not kind and not kinds:
-        # no query: return a small random-ish slice of preferred kinds
+    if not q_tokens:
+        # No query: a genuinely varied slice of the preferred kinds.
+        #
+        # This branch used to be guarded by "and not kind and not kinds", which
+        # made its own kind-filtering unreachable, and it returned pool[:limit]
+        # -- the first N cards in load order -- despite promising "random-ish".
+        # A cold randomize therefore saw the same five cards out of 292 on every
+        # call, and the setup it produced was the same world nine times in ten.
         pool = cards
         if kind:
             pool = [c for c in pool if c["kind"] == kind.lower()]
         if kinds:
             allow = {k.lower() for k in kinds}
             pool = [c for c in pool if c["kind"] in allow]
-        return pool[: max(1, min(limit, 12))]
+        exclude = {str(x) for x in (exclude_ids or []) if x}
+        pool = [c for c in pool if c["id"] not in exclude]
+        take = max(1, min(int(limit or 8), 12))
+        if len(pool) <= take:
+            return list(pool)
+        return random.sample(pool, take)
 
     allow_kinds: set[str] | None = None
     if kind:
@@ -291,7 +303,11 @@ def build_query_from_setup(
     kws = intent.get("keywords") if isinstance(intent.get("keywords"), list) else []
     parts.extend(str(k) for k in kws[:8] if k)
     for f in fields or []:
-        parts.append(f.replace("_", " "))
+        # The field NAME is deliberately not a search term. Relevance by field
+        # is already handled by kinds_for_field(); adding "tone" or "world
+        # style" as free text matches every card whose *kind* shares the word,
+        # so a cold randomize searched for "world style tone custom style" and
+        # got five tone cards, identically, on every call.
         val = setup.get(f)
         if isinstance(val, str) and val.strip():
             parts.append(val[:80])

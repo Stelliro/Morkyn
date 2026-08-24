@@ -45,6 +45,12 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Fixed
 
+- **Randomize produced the same world nine times out of ten.** Ten live "world" randomizations returned `world_style: "Post-magic wasteland"` nine times, with `tone: "Intimate close"` and `custom_style: "Glow means leave"`. Those three strings are the title and example of two cards in `config/idea_bank/`, copied verbatim despite the spark rules telling the model not to - `app/idea_bank.py`
+  - **Cause 1:** `build_query_from_setup()` appended the *field name* to the search query, so a cold randomize searched the bank for `"world style tone custom style"`. The literal word "tone" matches every `tone.*` card, so all five sparks came back as tone cards and `world_style` got no style spark at all. Relevance by field is already handled by `kinds_for_field()`; the name only caused collisions.
+  - **Cause 2:** `search_idea_bank()`'s no-query branch promised "a small random-ish slice" and returned `pool[:limit]` - the first N cards in load order. It was also guarded by `and not kind and not kinds`, making its own kind-filtering unreachable, so a call *with* kinds fell through to the scoring loop and matched nothing.
+  - Net effect: the same 5 cards out of **292**, on every call, forever. Fixed, sparks now vary (25 distinct across 5 calls, was 5). Measured live afterwards: `custom_style` 2/10 -> 9/10 distinct, `character_backstory` and `special_abilities` 8/10, and no two randomized setups identical.
+  - **Still open:** `world_style` remains thin at 3/10 - the model keeps copying one spark's title verbatim - and a raw card id (`low_fantasy_mud`) reaches the field instead of its title. `magic_level` never varies from "rare".
+
 - **Every setting was staffed as though it were medieval.** `_SEED_ROLE_POOLS` held pre-industrial occupations only, and `_seed_role_pool()` chose between them using the location's *name* alone - genre never entered the function. This is the server's own invention for a face the prose mentions without naming a job, so no model is involved and it reproduces on demand - `app/world.py`
   - A futuristic world got: Docking Bay Seven -> **bargeman, boatwright, salt carrier**; Reactor Deck -> **scribe, weaver, tanner**; Neon Market District -> **scribe, scribe, well keeper**; Wreck Site Delta -> **roofer, toll keeper, roofer**.
   - It survived four 100-turn playtests because every one of them ran the same world: `world_style: "frontier dark fantasy"`. Nothing had ever asked the game for a different setting.
