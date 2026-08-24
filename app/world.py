@@ -4163,7 +4163,12 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             }
             if starter_logic_report
             else {},
-            "tech_level": options.get("tech_level") or "iron age",
+            # Never ship a tech level that contradicts the world the player
+            # described. A far-future setup that never touched the tech dropdown
+            # kept the field's "iron age" default, and the packet asserted
+            # "tech_level":"iron age" beside "far-future interstellar
+            # civilisation, faster-than-light travel" on every single turn.
+            "tech_level": coherent_tech_level(options),
             "tone": options.get("tone") or "grounded adventure",
             "npc_density": options.get("npc_density") or "moderate",
             "quest_style": options.get("quest_style") or "emergent",
@@ -8884,6 +8889,12 @@ _SEED_ROLE_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
     },
 }
 
+# Values that mean "nobody chose one". `tech_level` is a Pydantic field with
+# default="iron age" (app/main.py), so a recorded "iron age" cannot be told
+# apart from a deliberate pick -- and the style prose the player actually typed
+# is the stronger signal when the two disagree.
+_DEFAULTED_TECH_LEVELS = {"iron age"}
+
 # The canonical tech_level vocabulary (app/llm.py TECH LEVEL options).
 _TECH_LEVEL_ERA = {
     "iron age": "preindustrial",
@@ -8927,13 +8938,59 @@ def resolve_world_era(tech_level: str = "", *style_text: str) -> str:
     the location's name alone and the genre never entered the function.
     """
     tech = str(tech_level or "").strip().lower()
-    if tech in _TECH_LEVEL_ERA:
-        return _TECH_LEVEL_ERA[tech]
-    blob = " ".join(str(part or "") for part in (tech,) + style_text).lower()
+    blob = " ".join(str(part or "") for part in style_text).lower()
+    prose_era = ""
     for era, hints in _ERA_TEXT_HINTS:
         if any(hint in blob for hint in hints):
+            prose_era = era
+            break
+    # An explicit, non-default tech_level is server truth and wins.
+    if tech in _TECH_LEVEL_ERA and tech not in _DEFAULTED_TECH_LEVELS:
+        return _TECH_LEVEL_ERA[tech]
+    # Otherwise the style prose speaks first. "iron age" is the field's Pydantic
+    # default, applied whenever nobody chose one, and it is indistinguishable
+    # from a deliberate pick at this layer -- so a player who typed "far-future
+    # interstellar civilisation" and never touched the tech dropdown had their
+    # station staffed with boatwrights, and the packet told the model the world
+    # was iron age at the same time.
+    if prose_era:
+        return prose_era
+    if tech in _TECH_LEVEL_ERA:
+        return _TECH_LEVEL_ERA[tech]
+    for era, hints in _ERA_TEXT_HINTS:
+        if any(hint in tech for hint in hints):
             return era
     return "preindustrial"
+
+
+# The tech level to state as world truth, per era. Only used to replace a
+# defaulted value that contradicts the setting; an explicit pick is never
+# overridden.
+_ERA_TECH_LEVEL = {
+    "preindustrial": "iron age",
+    "industrial": "early industrial",
+    "modern": "near future",
+    "future": "spacefaring salvage",
+}
+
+
+def coherent_tech_level(options: dict[str, Any] | None) -> str:
+    """The tech level the packet should state, given everything else the world says.
+
+    Returns the recorded value untouched unless it is the field's silent default
+    AND the style prose describes a different era, in which case the prose wins
+    and the era's canonical tech level is stated instead.
+    """
+    opts = options if isinstance(options, dict) else {}
+    recorded = str(opts.get("tech_level") or "").strip()
+    if recorded and recorded.lower() not in _DEFAULTED_TECH_LEVELS:
+        return recorded
+    era = resolve_world_era(
+        recorded,
+        str(opts.get("world_style") or ""),
+        str(opts.get("custom_style") or ""),
+    )
+    return _ERA_TECH_LEVEL.get(era, recorded or "iron age")
 
 
 def _campaign_era(conn) -> str:

@@ -193,6 +193,27 @@ def _lexicon_hits(text: str, words) -> list[tuple[str, str]]:
     return hits
 
 
+def _narration_of(payload: dict, state: dict) -> str:
+    """Where the prose for a turn actually lives.
+
+    play_turn's payload does not carry it at the top level on every path, and
+    the opening scene is a journal row rather than a state key. Reading
+    payload["narration"] alone records an empty string for every turn and every
+    downstream metric silently measures nothing.
+    """
+    for key in ("narration", "latest_narration", "opening_narration"):
+        text = str((payload or {}).get(key) or "")
+        if text:
+            return text
+    turn = (payload or {}).get("turn")
+    if isinstance(turn, dict) and turn.get("narration"):
+        return str(turn["narration"])
+    for entry in reversed((state or {}).get("history") or []):
+        if str(entry.get("kind") or "") == "narration" and entry.get("content"):
+            return str(entry["content"])
+    return ""
+
+
 def _log(handle, message: str) -> None:
     print(message, flush=True)
     handle.write(message + "\n")
@@ -309,11 +330,7 @@ def main() -> int:
         try:
             start_playthrough_with_opening(setup)
             state = get_state(include_hidden=True)
-            opening = ""
-            for key in ("narration", "latest_narration", "opening_narration"):
-                if str(state.get(key) or "").strip():
-                    opening = str(state[key])
-                    break
+            opening = _narration_of({}, state)
             world["opening"] = opening
             _log(log, f"    opening {len(opening)} chars at "
                       f"{(state.get('current_location') or {}).get('name')!r}")
@@ -321,14 +338,15 @@ def main() -> int:
             for index in range(turns):
                 action = TURN_SCRIPT[index % len(TURN_SCRIPT)]
                 started = time.perf_counter()
+                payload = {}
                 try:
                     payload = play_turn(action)
-                    narration = str((payload or {}).get("narration") or "")
                     fallback = bool((payload or {}).get("used_fallback"))
                 except Exception as exc:  # pragma: no cover - live model
-                    narration, fallback = "", True
+                    fallback = True
                     _log(log, f"    turn {index + 1} ERROR {exc}")
                 state = get_state(include_hidden=True)
+                narration = _narration_of(payload, state)
                 world["turns"].append(
                     {
                         "action": action,

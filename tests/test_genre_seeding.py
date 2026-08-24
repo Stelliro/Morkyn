@@ -47,6 +47,7 @@ from app.db import connect, db_path, init_db  # noqa: E402
 from app.world import (  # noqa: E402
     _SEED_ROLE_POOLS,
     _seed_role_pool,
+    coherent_tech_level,
     resolve_world_era,
 )
 
@@ -115,6 +116,64 @@ class TestEraResolution(unittest.TestCase):
                 self.assertEqual(set(pools), places)
                 for place, roles in pools.items():
                     self.assertTrue(roles, f"{era}/{place} is empty")
+
+
+class TestTheSilentIronAgeDefault(unittest.TestCase):
+    """tech_level defaults to "iron age" whenever nobody picks one.
+
+    Found live: a space-opera setup that never touched the tech dropdown was
+    recorded as
+
+        tech_level  = 'iron age'
+        world_style = 'far-future interstellar civilisation, faster-than-light travel'
+
+    which staffed the docking bay with a boatwright *and* put
+    "tech_level":"iron age" into the prompt beside the far-future world_style on
+    every turn. The model was handed contradictory world truth all run.
+
+    A recorded "iron age" cannot be told apart from a deliberate pick at this
+    layer, so when it disagrees with the style the player actually typed, the
+    prose wins. An explicit non-default pick is never overridden.
+    """
+
+    def test_the_default_loses_to_contradicting_prose(self):
+        self.assertEqual(
+            resolve_world_era("iron age", "far-future interstellar civilisation"), "future"
+        )
+        self.assertEqual(
+            resolve_world_era("iron age", "near-future cyberpunk megacity"), "future"
+        )
+        self.assertEqual(resolve_world_era("iron age", "1880s frontier west"), "industrial")
+
+    def test_the_default_survives_when_nothing_contradicts_it(self):
+        self.assertEqual(resolve_world_era("iron age", ""), "preindustrial")
+        self.assertEqual(resolve_world_era("iron age", "grounded medieval realism"), "preindustrial")
+
+    def test_an_explicit_pick_is_never_overridden(self):
+        # Someone who deliberately chose "medieval" gets medieval, whatever
+        # else the style says. Only the silent default yields.
+        self.assertEqual(resolve_world_era("medieval", "far-future interstellar"), "preindustrial")
+        self.assertEqual(resolve_world_era("spacefaring salvage", "medieval villages"), "future")
+
+    def test_the_packet_states_a_coherent_tech_level(self):
+        self.assertEqual(
+            coherent_tech_level(
+                {"tech_level": "iron age", "world_style": "far-future interstellar civilisation"}
+            ),
+            "spacefaring salvage",
+        )
+        self.assertEqual(
+            coherent_tech_level({"tech_level": "iron age", "world_style": "1880s frontier west"}),
+            "early industrial",
+        )
+
+    def test_a_coherent_setup_is_passed_through_untouched(self):
+        self.assertEqual(
+            coherent_tech_level({"tech_level": "iron age", "world_style": "grounded medieval realism"}),
+            "iron age",
+        )
+        self.assertEqual(coherent_tech_level({"tech_level": "medieval"}), "medieval")
+        self.assertEqual(coherent_tech_level({}), "iron age")
 
 
 class TestSeededRolesMatchTheWorld(unittest.TestCase):
