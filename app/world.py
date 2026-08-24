@@ -5129,6 +5129,35 @@ def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
     return None
 
 
+def _movement_rule_example(known: list[dict[str, Any]], current_name: str = "") -> str:
+    """
+    The "do not extend a known name" rule, worked through this world's own map.
+
+    Hardcoding a toponym here taught it. "Riverbend Camp" sat in this rule and in
+    the DSL rules, and "Redmill Ford" in the DSL MOVE line; between them they
+    produced 44 of the 170 place names recorded across 42 runs and appeared in
+    half of all worlds -- including a high-fantasy campaign that was set up for
+    open magic and old empires and ended up at Riverbend Piers.
+    """
+    names = [str(entry.get("name") or "").strip() for entry in known]
+    # known_places excludes where the player is standing, so turn one has none.
+    # The current place is the right exemplar anyway: it is the name the model
+    # is most likely to extend, which is how "Mosswake Gate Market Square"
+    # happened.
+    names.append(str(current_name or "").strip())
+    for name in names:
+        if name:
+            return (
+                f'if the map already holds "{name}", the next place is neither '
+                f'"{name} East" nor "{name}" with its last word dropped. Either it IS '
+                f"{name}, or it has a genuinely different name."
+            )
+    return (
+        "a place is either one already in known_places, or one with a genuinely different "
+        "name — never a listed name with a word added or removed."
+    )
+
+
 def movement_contract(state: dict[str, Any], player_input: str, intent: str) -> dict[str, Any]:
     """Server-stated travel rule for the turn packet: where the player is, and what op moves them."""
     current = state.get("current_location") or {}
@@ -5159,15 +5188,23 @@ def movement_contract(state: dict[str, Any], player_input: str, intent: str) -> 
         # move_to_location resolves by name against existing places first, so a
         # name is safe for somewhere old and correct for somewhere new.
         "known_places": [entry["name"] for entry in known if entry.get("name")],
+        # The worked example uses this world's own first known place, never an
+        # invented one. Two hardcoded exemplars -- "Riverbend Camp" here and in
+        # the DSL rules, "Redmill Ford" in the DSL MOVE line -- accounted for 44
+        # of the 170 place names across 42 recorded runs, in half of all worlds.
+        # A high-fantasy world set up for "open magic and old empires" was handed
+        # "Riverbend Camp" on every turn and drifted into Riverbend Piers and
+        # Riverbend Village. An example named after a place that already exists
+        # here costs nothing when it is copied: the move simply resolves to that
+        # row instead of minting a river hamlet in someone's space opera.
         "rule": (
             "Location is state, not prose. Player ends the turn somewhere other than "
             f"{current_name or 'here'} => write that place's NAME in player.move_to_location. "
             "An existing name moves there; a new name creates it. Write the name the prose "
             "actually describes — never substitute a different known place, and never invent a "
             "location code (an unlisted code is discarded and the player does not move). "
-            "A new place needs its own name, not a known one with a word bolted on: if "
-            "known_places already has \"Riverbend Camp\", the next place is not \"Riverbend "
-            "Hillcrest Camp\". Either it IS Riverbend Camp, or it has a different name."
+            "A new place needs its own name, not a known one with a word bolted on and not a "
+            f"known one with its qualifier stripped off: {_movement_rule_example(known, current_name)}"
         ),
     }
     # Venues here, so the model works from what exists instead of conjuring a shop.

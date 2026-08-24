@@ -31,6 +31,8 @@ Env:
   GENRE_TURNS       turns per world (default 5)
   GENRE_MODEL       default qwen3:8b (or OLLAMA_MODEL)
   GENRE_RANDOMIZE   live randomizer samples (default 6, 0 to skip)
+  GENRE_ONLY        comma-separated genre ids; default all. Cross-genre overlap
+                    needs at least two, and the repeat run needs its own id.
   OLLAMA_BASE_URL   default http://127.0.0.1:11434
 
 Deliberately does NOT pin OLLAMA_CONTEXT_TOKENS: this run should reflect the
@@ -243,8 +245,14 @@ def main() -> int:
     _log(log, f" genre variety  model={model}  turns/world={turns}")
     _log(log, "=" * 72)
 
-    plan = [(g, 0) for g in GENRES]
-    repeat = next((g for g in GENRES if g["id"] == REPEAT_GENRE), None)
+    only = [p.strip() for p in (os.getenv("GENRE_ONLY") or "").split(",") if p.strip()]
+    selected = [g for g in GENRES if not only or g["id"] in only]
+    if only and not selected:
+        raise SystemExit(
+            f"GENRE_ONLY={only} matched nothing. Known ids: {[g['id'] for g in GENRES]}"
+        )
+    plan = [(g, 0) for g in selected]
+    repeat = next((g for g in selected if g["id"] == REPEAT_GENRE), None)
     if repeat:
         plan.append((repeat, 1))
 

@@ -101,9 +101,10 @@ Rules:
   world_state.movement_contract.current_location, ===OPS=== MUST contain a MOVE line.
   Writing "you leave for the coast road" with no MOVE line leaves the player standing where they were,
   and the next turn will contradict your prose.
-- MOVE takes a place NAME: MOVE Redmill Ford. A name already in movement_contract.known_places
-  goes back there; any other name creates that place. Name what the prose actually describes —
-  if the scene ends at a river camp, write MOVE Riverbend Camp, do not substitute a known town.
+- MOVE takes a place NAME, spelled the way the prose just spelled it. A name already in
+  movement_contract.known_places goes back there; any other name creates that place. Name what
+  the prose actually describes — if the scene ends at a river camp, MOVE to that camp under the
+  name you gave it, do not substitute a known town that is merely nearby.
   Never guess a location code: "MOVE L2" is discarded and the player does not move.
 - Going indoors is a MOVE. A shop, inn, forge or temple the player steps into is a place, not
   scenery: write MOVE <that building's name>. Prefer a name from movement_contract.venues_here;
@@ -114,9 +115,11 @@ Rules:
 - Interiors are entered only from the place they stand in. A player two locations away cannot
   MOVE straight into a shop — that move lands them outside it instead, and going in costs the next
   turn. Do not narrate walking across the map and through a shop door in one turn.
-- A new place gets its own name, not a known one with a word added. If known_places has
-  "Riverbend Camp", do not invent "Riverbend Hillcrest Camp" — it is either the place you already
-  have, or it has a different name. The app folds those extensions back into the original.
+- A new place gets its own name, not a known one with a word added, and not a known one with a
+  word removed. Whatever movement_contract.known_places holds, the next place is neither that name
+  plus a bearing or a storey, nor that name with its qualifier stripped off — it is either the
+  place you already have, or it has a genuinely different name. The app folds both back into the
+  original.
 - Narrate in second person ("you"), and use world_state.narrative_voice.player_pronouns for the player.
 - If world_state.naming_contract is present, the player asked for a name. Write
   naming_contract.name into the prose as plain text. Describing a name without
