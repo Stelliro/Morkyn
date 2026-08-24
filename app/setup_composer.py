@@ -3794,6 +3794,8 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         "hard-boiled",
         "rainy crime",
         "detective city",
+        "prohibition",
+        "speakeasy",
         "gumshoe",
     ),
     "undersea": (
@@ -3826,6 +3828,8 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         "gothic",
         "vampire",
         "haunted castle",
+        "haunted manor",
+        "haunted house",
         "dark romance",
         "blood court",
         "crypt",
@@ -3859,6 +3863,14 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         "spacefaring",
         "airlock",
     ),
+    # Fantasy is matched LAST in the priority order, so nothing here can steal a
+    # world from another theme -- and until "generic" existed, every unmatched
+    # world became fantasy anyway. Measured over 60 written settings, only 12 of
+    # the 33 that resolved to fantasy were real hits; the other 21 were silent
+    # fallthrough, and among them were "a dying king, three heirs", "a mage
+    # academy", "knights and ruins" and "mythic bronze age" -- genuinely fantasy
+    # worlds that had simply never matched a word. They must keep matching now
+    # that the fallthrough goes somewhere else.
     "fantasy": (
         "fantasy",
         "isekai",
@@ -3870,11 +3882,77 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         "medieval",
         "sword",
         "magic",
+        "mage",
+        "wizard",
+        "sorcer",
+        "witch",
+        "druid",
+        "necroman",
+        "alchemis",
+        "spell",
+        "rune",
+        "arcane",
+        "enchant",
+        "king",
+        "queen",
+        "knight",
+        "castle",
+        "kingdom",
+        "realm",
+        "dragon",
+        "elf",
+        "elves",
+        "elven",
+        "dwarf",
+        "dwarves",
+        "dwarven",
+        "goblin",
+        "orc",
+        "troll",
+        "beastfolk",
+        "tavern",
+        "dungeon",
+        "bronze age",
+        "iron age",
+        "feudal",
+        "mythic",
+        "myth",
+        "barbarian",
+        "peasant",
+        "warlord",
+        "shrine",
+        "temple",
+        "monastery",
+        "xianxia",
+        "qi ",
+        "spirit",
     ),
 }
 
 # Large per-theme arrival name pools.
 LOCATION_SEEDS_BY_THEME: dict[str, tuple[str, ...]] = {
+    # Nothing matched. Everything here reads the same in a superhero city, a
+    # pirate port, a dieselpunk trench or a school town -- which is the point.
+    # Handing those a fantasy gate-town is the bug this whole line of work is
+    # about, and a bland-but-placeless name is the honest answer to "we do not
+    # know what genre this is".
+    "generic": (
+        "The Crossing",
+        "The Old Junction",
+        "The Terminus",
+        "The Lower Landing",
+        "The Quiet Yard",
+        "The Far Platform",
+        "The Last Stop",
+        "The Grey Market",
+        "The Outer Wall",
+        "The Long Stair",
+        "The Back Lane",
+        "The Border Post",
+        "The Narrow Bridge",
+        "The Empty Lot",
+        "The Water Point",
+    ),
     "fantasy": (
         "Mosswake Gate",
         "Outer Compound Yard",
@@ -4152,6 +4230,37 @@ HEAVEN_PRISON_NAME_MARKERS: tuple[str, ...] = (
 )
 
 
+# "no magic" and "no fantasy at all" were being read as votes FOR magic and
+# fantasy, because the keyword was simply present in the string. A heist in a
+# modern city and a piece of Edo-period historical fiction both opened at a
+# fantasy gate on the strength of the words they used to rule it out.
+_NEGATED_GENRE_WORD_RE = re.compile(r"\b(?:no|not|never|without|zero|free of|devoid of)\s+([a-z][a-z-]*)")
+
+
+def _strip_negated_genre_words(low_text: str) -> str:
+    """Drop "no X" / "without X" so X does not count as a signal for X."""
+    return _NEGATED_GENRE_WORD_RE.sub(" ", low_text)
+
+
+# Keywords match at a word start, not anywhere in the string. Plain substring
+# matching read "picking" as "king" and sent a derelict-salvage space setting to
+# the fantasy bank, and it has always read "sector" as "sect". Suffixes are still
+# allowed on purpose -- "sorcer" must catch sorcery and sorcerer, "king" must
+# catch kings and kingdom -- so this anchors the front of the word only.
+_THEME_KEYWORD_RE_CACHE: dict[str, re.Pattern[str]] = {}
+
+
+def _theme_keyword_present(keyword: str, low_text: str) -> bool:
+    key = str(keyword or "")
+    if not key:
+        return False
+    pattern = _THEME_KEYWORD_RE_CACHE.get(key)
+    if pattern is None:
+        pattern = re.compile(r"(?<![a-z0-9])" + re.escape(key), re.I)
+        _THEME_KEYWORD_RE_CACHE[key] = pattern
+    return bool(pattern.search(low_text))
+
+
 def detect_location_theme(
     *,
     world_style: str = "",
@@ -4175,7 +4284,7 @@ def detect_location_theme(
             else "",
         ]
     )
-    low = re.sub(r"\s+", " ", blob.lower())
+    low = _strip_negated_genre_words(re.sub(r"\s+", " ", blob.lower()))
     # Priority order: niche themes before generic fantasy.
     priority = (
         "celestial",
@@ -4192,9 +4301,12 @@ def detect_location_theme(
     )
     for tid in priority:
         keys = LOCATION_THEME_KEYWORDS.get(tid) or ()
-        if any(k in low for k in keys):
+        if any(_theme_keyword_present(k, low) for k in keys):
             return tid
-    return "fantasy"
+    # Nothing matched. This used to return "fantasy", which is why a superhero
+    # game, a heist, a pirate voyage and a school-life story all opened at a
+    # damp fantasy gate-town: the default was a genre, not an absence of one.
+    return "generic"
 
 
 def location_special_flags_for(

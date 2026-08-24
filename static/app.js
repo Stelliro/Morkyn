@@ -581,6 +581,9 @@ const START_LOCATION_BANKS = {
   gothic: ["Chapel Porch Steps", "Crypt Stair Landing", "Manor Gatehouse"],
   noir: ["Rain-Slick Precinct Steps", "Dockside Warehouse Row", "All-Night Diner Counter"],
   fantasy: ["Mosswake Gate", "Blackwater Relay", "Ferry Landing Stone", "Ash Road Cut", "Red Lantern Dock", "Iron Bell Crossroads"],
+  // Nothing matched. Reads the same in a superhero city, a pirate port or a
+  // school town -- which beats handing any of them a fantasy gate-town.
+  generic: ["The Crossing", "The Old Junction", "The Terminus", "The Lower Landing", "The Quiet Yard", "The Far Platform", "The Last Stop", "The Border Post"],
 };
 
 /** Priority order and keywords match detect_location_theme() on the server. */
@@ -594,8 +597,38 @@ const START_LOCATION_THEME_KEYWORDS = [
   ["arctic", ["arctic", "glacier", "tundra", "frozen north", "ice road"]],
   ["desert", ["desert", "dune", "oasis", "sandsea", "caravanserai"]],
   ["gothic", ["gothic", "vampire", "crypt", "manor", "haunted"]],
-  ["noir", ["noir", "hardboiled", "detective", "prohibition"]],
+  ["noir", ["noir", "hardboiled", "detective", "prohibition", "speakeasy"]],
+  // Matched last, so it cannot steal from the themes above it.
+  ["fantasy", ["fantasy", "isekai", "wuxia", "cultivation", "sect", "compound", "frontier", "medieval",
+    "sword", "magic", "mage", "wizard", "sorcer", "witch", "druid", "spell", "rune", "arcane", "enchant",
+    "king", "queen", "knight", "castle", "kingdom", "realm", "dragon", "elf", "elves", "elven", "dwarf",
+    "dwarves", "goblin", "orc", "troll", "beastfolk", "tavern", "dungeon", "bronze age", "iron age",
+    "feudal", "mythic", "myth", "shrine", "temple", "monastery", "xianxia", "spirit"]],
 ];
+
+/**
+ * Mirrors _theme_keyword_present / _strip_negated_genre_words in
+ * app/setup_composer.py. Plain substring matching read "picking" as "king"
+ * and read the "magic" in "no magic" as a vote for magic.
+ */
+const NEGATED_GENRE_WORD_RE = /\b(?:no|not|never|without|zero|free of|devoid of)\s+([a-z][a-z-]*)/g;
+
+function stripNegatedGenreWords(lowText) {
+  return String(lowText || "").replace(NEGATED_GENRE_WORD_RE, " ");
+}
+
+const THEME_KEYWORD_RE_CACHE = new Map();
+
+function themeKeywordPresent(keyword, lowText) {
+  const key = String(keyword || "");
+  if (!key) return false;
+  let re = THEME_KEYWORD_RE_CACHE.get(key);
+  if (!re) {
+    re = new RegExp("(?<![a-z0-9])" + key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&"), "i");
+    THEME_KEYWORD_RE_CACHE.set(key, re);
+  }
+  return re.test(lowText);
+}
 
 /** Best-guess theme id from whatever setting text the form currently holds. */
 function detectStartLocationTheme() {
@@ -604,11 +637,11 @@ function detectStartLocationTheme() {
     setupForm?.querySelector('[name="world_style_custom"], [data-list-custom="world_style"]')?.value || "",
     getFormFieldValue("custom_style") || "",
   ];
-  const low = parts.join(" ").toLowerCase();
+  const low = stripNegatedGenreWords(parts.join(" ").toLowerCase());
   for (const [theme, keys] of START_LOCATION_THEME_KEYWORDS) {
-    if (keys.some((k) => low.includes(k))) return theme;
+    if (keys.some((k) => themeKeywordPresent(k, low))) return theme;
   }
-  return "fantasy";
+  return "generic";
 }
 
 /**

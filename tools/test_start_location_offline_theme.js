@@ -28,9 +28,28 @@ const vm = require("vm");
 const ROOT = path.resolve(__dirname, "..");
 const APP_JS = path.join(ROOT, "static", "app.js");
 
+function extractFunction(source, name) {
+  const start = source.indexOf(`
+function ${name}(`);
+  if (start < 0) throw new Error(`function ${name} not found in app.js`);
+  let i = source.indexOf("{", start);
+  let depth = 0;
+  for (; i < source.length; i += 1) {
+    const ch = source[i];
+    if (ch === "{") depth += 1;
+    else if (ch === "}") { depth -= 1; if (depth === 0) return source.slice(start, i + 1); }
+  }
+  throw new Error(`unbalanced braces extracting ${name}`);
+}
+
 function extractConst(source, name) {
   const start = source.indexOf(`\nconst ${name} = `);
   if (start < 0) throw new Error(`const ${name} not found in app.js`);
+  // Single-line declarations (regex literals, `new Map()`) carry no brackets
+  // to walk, so take the whole line.
+  const lineEnd = source.indexOf("\n", start + 1);
+  const firstLine = source.slice(start, lineEnd);
+  if (/;\s*$/.test(firstLine)) return firstLine;
   let i = source.indexOf("=", start);
   let depth = 0;
   let started = false;
@@ -78,9 +97,15 @@ vm.runInContext(
   [
     extractConst(source, "START_LOCATION_BANKS"),
     extractConst(source, "START_LOCATION_THEME_KEYWORDS"),
+    extractConst(source, "NEGATED_GENRE_WORD_RE"),
+    extractConst(source, "THEME_KEYWORD_RE_CACHE"),
+    extractFunction(source, "stripNegatedGenreWords"),
+    extractFunction(source, "themeKeywordPresent"),
     // `const` in a vm script is a lexical binding, not a sandbox property.
     "this.__banks = START_LOCATION_BANKS;",
     "this.__keywords = START_LOCATION_THEME_KEYWORDS;",
+    "this.__strip = stripNegatedGenreWords;",
+    "this.__present = themeKeywordPresent;",
   ].join("\n\n"),
   sandbox,
 );
@@ -90,11 +115,11 @@ const KEYWORDS = sandbox.__keywords;
 
 /** The body of detectStartLocationTheme(), fed text directly. */
 function themeFor(text) {
-  const low = String(text || "").toLowerCase();
+  const low = sandbox.__strip(String(text || "").toLowerCase());
   for (const [theme, keys] of KEYWORDS) {
-    if (keys.some((k) => low.includes(k))) return theme;
+    if (keys.some((k) => sandbox.__present(k, low))) return theme;
   }
-  return "fantasy";
+  return "generic";
 }
 
 // Same settings the server-side matrix uses, so the two stay in step.
@@ -110,6 +135,15 @@ const CASES = [
   ["megacorp arcology with chrome implants", "cyberpunk"],
   // Old empires collapse in fantasy; this must not read as a wasteland.
   ["after the collapse of the old empire, knights and ruins", "fantasy"],
+  ["a dying king, three heirs, and no good options", "fantasy"],
+  ["a mage academy where the faculty are the danger", "fantasy"],
+  // "picking" contains "king"; "no magic" is not a vote for magic.
+  ["derelict salvage crews picking over dead warships", "generic"],
+  ["a heist crew in a modern city, no magic", "generic"],
+  ["historical fiction, no fantasy at all, Edo period", "generic"],
+  // Genres with no bank of their own get a placeless name, not a fantasy one.
+  ["superheroes, street level, municipal politics", "generic"],
+  ["high school slice of life with a supernatural secret", "generic"],
 ];
 
 console.log("offline start_location picker:");

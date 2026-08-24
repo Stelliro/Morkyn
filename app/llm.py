@@ -6597,7 +6597,16 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                         "arctic": "ice road / glacier outpost arrival names",
                         "desert": "dune / oasis / caravanserai arrival names",
                         "gothic": "manor / crypt / chapel arrival names",
-                    }.get(theme_id, "fantasy gate/yard/pier/road-cut arrival names")
+                        "fantasy": "gate / yard / pier / road-cut arrival names",
+                        # No theme matched the setting. Do NOT hand this world a
+                        # fantasy hint -- that default is what opened superhero
+                        # and heist games at a gate-town. Ask for a name built
+                        # from the setting the player actually described.
+                        "generic": (
+                            "a plain threshold drawn from THIS setting's own vocabulary — "
+                            "wherever someone would first set foot in it"
+                        ),
+                    }.get(theme_id, "arrival names that fit the setting described")
                     prompt["rules"] = list(prompt.get("rules") or []) + [
                         "Isekai/transmigrated: start_location MUST be the NEW-WORLD arrival site "
                         f"matching theme '{theme_id}' ({theme_hint}) — NEVER Seoul/warehouse/office/"

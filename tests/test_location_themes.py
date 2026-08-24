@@ -52,6 +52,85 @@ def test_theme_detection_reads_plain_english_not_just_jargon():
         assert detect_location_theme(world_style=style, genre=style) == "cyberpunk", style
 
 
+def test_an_unknown_setting_gets_a_placeless_name_not_a_fantasy_one():
+    """The fallthrough used to be a genre, which is the whole bug.
+
+    Measured over 60 written settings, 33 resolved to "fantasy" and only 12 of
+    those were real keyword hits -- the other 21 had simply matched nothing.
+    That is why a superhero game, a heist, a pirate voyage and a school-life
+    story all opened at a damp fantasy gate-town.
+
+    Fantasy is still matched positively (see the keyword list, widened for
+    exactly this); what is left over now draws from a bank that reads the same
+    in any setting.
+    """
+    for style in (
+        "superheroes, street level, municipal politics",
+        "high school slice of life with a supernatural secret",
+        "a heist crew in a modern city, no magic",
+        "solarpunk commune politics after the transition",
+        "dieselpunk trench war between two tired empires",
+        "pirates, letters of marque, and a wet deck",
+    ):
+        assert detect_location_theme(world_style=style, genre=style) == "generic", style
+        for _ in range(10):
+            loc, _c = ensure_isekai_start_location(
+                "", backstory_mode="", idea="", world_style=style,
+                genre=style, character_backstory="", session_theme=None,
+            )
+            assert loc in LOCATION_SEEDS_BY_THEME["generic"], f"{style} -> {loc}"
+
+
+def test_real_fantasy_is_still_matched_positively():
+    """These fell through to the fantasy default and must now hit a keyword.
+
+    If they stopped matching, the generic fallback would quietly strip the
+    flavour off the commonest genre in the app -- which would be a worse bug
+    than the one it fixes.
+    """
+    for style in (
+        "a dying king, three heirs, and no good options",
+        "a mage academy where the faculty are the danger",
+        "after the collapse of the old empire, knights and ruins",
+        "mythic bronze age, gods who answer",
+        "dungeon crawler, delve economy, no overworld",
+        "modern-day urban fantasy, hidden courts in a real city",
+        "sword and sorcery, mercenary work, cursed loot",
+        "a tavern, a debt, and a road out of the valley",
+    ):
+        assert detect_location_theme(world_style=style, genre=style) == "fantasy", style
+
+
+def test_a_keyword_must_start_a_word():
+    """Substring matching read "picking" as "king" and "sector" as "sect"."""
+    assert (
+        detect_location_theme(world_style="derelict salvage crews picking over dead warships")
+        == "generic"
+    )
+    # The real words still match.
+    assert detect_location_theme(world_style="the king is dead") == "fantasy"
+    assert detect_location_theme(world_style="three kingdoms at war") == "fantasy"
+    assert detect_location_theme(world_style="orcs at the ford") == "fantasy"
+    # ...and the false friends do not.
+    for text in ("a shelf of himself", "working and picking and looking", "forced to the torch"):
+        assert detect_location_theme(world_style=text) == "generic", text
+
+
+def test_a_ruled_out_genre_does_not_count_as_that_genre():
+    """"no magic" and "no fantasy at all" were votes FOR magic and fantasy."""
+    assert detect_location_theme(world_style="a heist crew in a modern city, no magic") == "generic"
+    assert (
+        detect_location_theme(world_style="historical fiction, no fantasy at all, Edo period")
+        == "generic"
+    )
+    # A world that rules out magic but is otherwise plainly medieval still lands.
+    assert detect_location_theme(world_style="grounded medieval realism, no magic") == "fantasy"
+    # And ruling magic out must not disturb a setting that never mentioned it.
+    assert (
+        detect_location_theme(world_style="far-future interstellar travel, no magic") == "space"
+    )
+
+
 def test_a_metaphorical_scavenger_is_not_a_wasteland():
     """"scavenger" was a wasteland keyword for one commit and had to come out.
 
