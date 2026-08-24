@@ -186,5 +186,69 @@ class TestEntityCodesAreNotPlaces(PlaceCase):
         self.assertEqual(landed, here)
 
 
+class TestPossessiveChains(PlaceCase):
+    """One possessive is a toponym. Two is the model walking into its own phrase.
+
+    Recorded live in a high-fantasy run, once the prompt stopped handing it
+    somebody else's river to escape to:
+
+        The Sunken Colonnade
+        The Sunken Colonnade's Shadow
+        The Sunken Colonnade's Shadow's Heart
+        The Sunken Colonnade's Shadow's Heart Passage
+
+    Four rows for one place, the deepest unsayable. The token-prefix guard
+    cannot see it -- "colonnade's" is not the token "colonnade", so as far as
+    `_place_extension_target` is concerned the names share no prefix at all.
+    """
+
+    def test_the_recorded_chain_folds_back(self):
+        self.assertEqual(
+            self._add(
+                "The Sunken Colonnade",
+                "The Sunken Colonnade's Shadow",
+                "The Sunken Colonnade's Shadow's Heart",
+                "The Sunken Colonnade's Shadow's Heart Passage",
+            ),
+            ["The Sunken Colonnade", "The Sunken Colonnade's Shadow"],
+        )
+
+    def test_one_possessive_is_a_real_sub_place(self):
+        self.assertEqual(
+            self._add("The Sunken Colonnade", "The Sunken Colonnade's Shadow"),
+            ["The Sunken Colonnade", "The Sunken Colonnade's Shadow"],
+        )
+
+    def test_ordinary_possessive_toponyms_survive(self):
+        # Both recorded in live runs, both genuine places.
+        self.assertEqual(
+            self._add("Deadman's Hollow", "The Water's Edge Camp"),
+            ["Deadman's Hollow", "The Water's Edge Camp"],
+        )
+
+    def test_a_chain_with_nothing_to_fold_into_is_kept(self):
+        # Refusing a name outright is not this guard's job. With no existing
+        # prefix there is no row to join, so a florid opening name stands.
+        self.assertEqual(
+            self._add("The Lord's Keeper's Tower"), ["The Lord's Keeper's Tower"]
+        )
+
+    def test_a_curly_apostrophe_counts(self):
+        self.assertEqual(
+            self._add(
+                "The Sunken Colonnade",
+                "The Sunken Colonnade\u2019s Shadow",
+                "The Sunken Colonnade\u2019s Shadow\u2019s Heart",
+            ),
+            ["The Sunken Colonnade", "The Sunken Colonnade\u2019s Shadow"],
+        )
+
+    def test_an_unrelated_double_possessive_is_untouched(self):
+        self.assertEqual(
+            self._add("Mosswake Gate", "The Miller's Widow's Yard"),
+            ["Mosswake Gate", "The Miller's Widow's Yard"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

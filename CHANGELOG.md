@@ -45,6 +45,35 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Fixed
 
+- **The open-magic world was told on every turn that magic was rare.** `magic_level` defaults to `"rare"` in `app/main.py`, applied whenever nobody touches the dropdown, and at the packet layer that cannot be told apart from a deliberate pick. A campaign whose `world_style` reads *"high fantasy with open magic and old empires"*, with a hedge-mage protagonist and a spirit debt in its backstory, shipped `"magic_level": "rare"` beside that line every single turn. The prose obeyed the state rather than the style - `app/world.py`
+  - This is why high fantasy was the weakest of six settings in the genre matrix, at 1 of 8 on its own genre vocabulary. Nothing was wrong with the narration; it was told the world had almost no magic in it.
+  - Exactly the trap `_DEFAULTED_TECH_LEVELS` already covered on the technology axis, where an unset dropdown told a far-future starship world it was iron age. `coherent_magic_level()` mirrors `coherent_tech_level()`: the recorded value is returned untouched unless it is the silent default **and** the style prose describes a different world, and an explicit pick is never overridden. Hint order is most-specific first, so "no magic" beats the bare word "magic" and a cultivation blurb is not swallowed by the open-magic bucket.
+  - It ships in the turn packet and in the `race_rules` verification basis, so the verifier stops checking race magic against a level the world does not run at.
+
+- **A place name may carry one possessive, not a chain.** Once the movement rules stopped handing the model somebody else's river to escape to, a high-fantasy run walked into its own noun phrase instead - `app/world.py`
+
+    ```
+    The Sunken Colonnade
+    The Sunken Colonnade's Shadow
+    The Sunken Colonnade's Shadow's Heart
+    The Sunken Colonnade's Shadow's Heart Passage
+    ```
+
+  - Four rows for one place, the deepest one unsayable. The token-prefix guard cannot see this shape at all: `"colonnade's"` is not the token `"colonnade"`, so as far as `_place_extension_target()` is concerned the names share no prefix.
+  - `_place_possessive_target()` folds a name carrying two or more possessive links back into the longest existing place that is a literal prefix of it. One link is an ordinary toponym and is untouched - "Deadman's Hollow", "The Water's Edge Camp" and "The Sunken Colonnade's Shadow" were all recorded live and all survive. It only fires when there is an existing row to join, so a world that genuinely opens on "The Lord's Keeper's Tower" keeps it.
+  - All three accretion guards were scored by replaying every place name in the 44 recorded playtest databases through `_upsert_location()`: **176 names in, 165 rows out**, 11 folds, and reading each one, every fold is a genuine duplicate and no distinct place was swallowed.
+
+  **Genre matrix, re-measured on the two settings that were failing:**
+
+  | setting | before | after |
+  |---|---|---|
+  | space opera, genre words | 3/8 | **5/8** |
+  | space opera, `[[L1]]` turns | 3 of 6 | **0** |
+  | high fantasy, genre words | 1/8 | **2/8** |
+  | high fantasy, turns spent in "Riverbend" | 3 of 6 | **0** |
+
+  High fantasy was re-measured before `coherent_magic_level()` landed; the exemplar fix alone moved it.
+
 - **A quarter of every place the game ever named came out of the prompt's own examples.** Two toponyms were hardcoded as worked examples in the movement rules -- "Riverbend Camp" in both `movement_contract()` and the DSL rule block, "Redmill Ford" in the DSL MOVE line -- and they shipped on every turn of every world - `app/world.py`, `app/turn_dsl.py`
   - Counted across the 42 recorded playtest databases still on disk: of 170 place names, **36 contain "Riverbend" and 8 contain "Redmill"**, and 21 of the 42 worlds carry at least one.
   - This is what made high fantasy the weakest genre in the matrix. A campaign set up for "high fantasy with open magic and old empires", opening at The Sunken Colonnade, spent its second half in **Riverbend Piers** and **Riverbend Village** and scored 1 of 8 on its own genre vocabulary. It was handed a river hamlet's name on every single turn.

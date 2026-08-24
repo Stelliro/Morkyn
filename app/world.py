@@ -4129,7 +4129,10 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "system_style": options.get("system_style") or "subtle blue-window system",
             "death_rules": options.get("death_rules") or "downed, not deleted",
             "economy": options.get("economy") or "scarce",
-            "magic_level": options.get("magic_level") or "rare",
+            # Same reasoning as tech_level below: "rare" is what this field
+            # holds when nobody picked, and a world set up for "open magic"
+            # was told it had rare magic on every turn.
+            "magic_level": coherent_magic_level(options),
             "world_races": world_races or "human",
             "race_magic_enabled": bool(options.get("race_magic_enabled", False)),
             "race_magic_rarity": options.get("race_magic_rarity") or "same as world magic",
@@ -6376,7 +6379,7 @@ def _verification_scope_basis(context: dict[str, Any], check_name: str) -> dict[
     elif check_name == "race_rules":
         basis["race_rules"] = {
             "world_races": options.get("world_races"),
-            "magic_level": options.get("magic_level"),
+            "magic_level": coherent_magic_level(options),
             "race_magic_rules": options.get("race_magic_rules"),
             "race_ability_rules": options.get("race_ability_rules"),
         }
@@ -7514,6 +7517,53 @@ def _place_stem_target(conn, name: str):
     return matches[0] if len(matches) == 1 else None
 
 
+_POSSESSIVE_RE = re.compile(r"['\u2019]s\b", re.I)
+
+
+def _place_possessive_target(conn, name: str):
+    """
+    An existing place a possessive chain has wandered off the end of.
+
+    A place name carries at most one possessive. One is an ordinary toponym --
+    "Deadman's Hollow", "The Water's Edge Camp", "The Sunken Colonnade's
+    Shadow". Two is the model walking further into its own noun phrase, and a
+    live high-fantasy run walked all the way:
+
+        The Sunken Colonnade
+        The Sunken Colonnade's Shadow
+        The Sunken Colonnade's Shadow's Heart
+        The Sunken Colonnade's Shadow's Heart Passage
+
+    Four rows for one place, and the deepest one is unsayable. The token-prefix
+    guard cannot see it: "colonnade's" is not the token "colonnade", so the
+    names share no prefix as far as _place_extension_target is concerned.
+
+    Only fires when an existing place is a literal prefix of the new name, so a
+    world that genuinely opens on "The Lord's Keeper's Tower" keeps it -- there
+    is nothing to fold into, and refusing a name outright is not this
+    function's job.
+    """
+    value = humanize_place_name(name)
+    if len(_POSSESSIVE_RE.findall(value)) < 2:
+        return None
+    try:
+        rows = conn.execute("SELECT id, name, summary FROM locations ORDER BY id").fetchall()
+    except Exception:
+        return None
+    low = value.lower()
+    best = None
+    best_len = 0
+    for row in rows:
+        existing = str(row["name"] or "").strip()
+        if not existing or len(existing) >= len(value):
+            continue
+        if not low.startswith(existing.lower()):
+            continue
+        if len(existing) > best_len:
+            best, best_len = row, len(existing)
+    return best
+
+
 def _venue_parent_for_new_place(conn, kind: str) -> int:
     """Which place a newly named venue belongs to: where the player is standing.
 
@@ -7550,7 +7600,11 @@ def _upsert_location(conn, name: str, summary: str = "", *, parent_id: int | Non
         name = "Nearby street"
     existing = _match_location_by_name(conn, name)
     if existing is None:
-        existing = _place_extension_target(conn, name) or _place_stem_target(conn, name)
+        existing = (
+            _place_extension_target(conn, name)
+            or _place_stem_target(conn, name)
+            or _place_possessive_target(conn, name)
+        )
     if existing:
         if summary and summary not in existing["summary"]:
             # Don't merge wall-of-setup-text into a place summary
@@ -9092,6 +9146,80 @@ def coherent_tech_level(options: dict[str, Any] | None) -> str:
         str(opts.get("custom_style") or ""),
     )
     return _ERA_TECH_LEVEL.get(era, recorded or "iron age")
+
+
+# "rare" is the magic_level Pydantic default (app/main.py), applied whenever
+# nobody touches the dropdown, and at this layer it cannot be told apart from a
+# deliberate pick. Exactly the trap _DEFAULTED_TECH_LEVELS covers on the tech
+# axis: a world set up as "high fantasy with open magic and old empires" was
+# handed magic_level="rare" in its packet on every turn, and the prose obeyed
+# the state rather than the style. That world scored 1 of 8 on its own genre
+# vocabulary in the genre matrix -- the weakest of six settings.
+_DEFAULTED_MAGIC_LEVELS = {"rare"}
+
+# Ordered most-specific first. "no magic" must beat "magic", and "cultivation"
+# must beat the generic open-magic words that a xianxia blurb also contains.
+_MAGIC_TEXT_HINTS = (
+    ("none", (
+        "no magic", "magicless", "without magic", "non-magical", "nonmagical",
+        "grounded medieval realism", "mundane world",
+    )),
+    ("cultivation", (
+        "cultivation", "xianxia", "wuxia", "qi ", "sect politics", "immortal sect",
+        "spirit realm ladder",
+    )),
+    ("forbidden", (
+        "forbidden magic", "magic is banned", "banned magic", "outlawed magic",
+        "illegal magic", "witch hunt", "inquisition", "heresy", "post-magic",
+        "magic is taboo",
+    )),
+    ("common utility", (
+        "open magic", "high magic", "common magic", "everyday magic",
+        "magic is common", "magitech", "magepunk", "arcane industry",
+        "mage academy", "spell markets", "wizard city",
+    )),
+    ("rare", (
+        "low magic", "magic is rumor", "magic is rumour", "hedge magic",
+        "scarce magic", "magic is rare",
+    )),
+)
+
+
+def resolve_world_magic(magic_level: str = "", *style_text: str) -> str:
+    """The magic level this world actually runs at.
+
+    An explicit, non-default magic_level is server truth and wins. Otherwise
+    the style prose speaks, because "rare" is what the field holds when nobody
+    chose anything at all.
+    """
+    magic = str(magic_level or "").strip().lower()
+    blob = " ".join(str(part or "") for part in style_text).lower()
+    if magic and magic not in _DEFAULTED_MAGIC_LEVELS:
+        return magic
+    for level, hints in _MAGIC_TEXT_HINTS:
+        if any(hint in blob for hint in hints):
+            return level
+    return magic or "rare"
+
+
+def coherent_magic_level(options: dict[str, Any] | None) -> str:
+    """The magic level the packet should state, given everything else the world says.
+
+    Returns the recorded value untouched unless it is the field's silent
+    default AND the style prose describes a different world, in which case the
+    prose wins. Mirrors coherent_tech_level(); the two defaults failed the same
+    way for the same reason.
+    """
+    opts = options if isinstance(options, dict) else {}
+    recorded = str(opts.get("magic_level") or "").strip()
+    if recorded and recorded.lower() not in _DEFAULTED_MAGIC_LEVELS:
+        return recorded
+    return resolve_world_magic(
+        recorded,
+        str(opts.get("world_style") or ""),
+        str(opts.get("custom_style") or ""),
+        str(opts.get("race_magic_rules") or ""),
+    )
 
 
 def _campaign_era(conn) -> str:
