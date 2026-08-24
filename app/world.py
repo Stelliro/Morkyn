@@ -9085,12 +9085,20 @@ _ERA_TEXT_HINTS = (
         "space opera", "cyberpunk", "megacity", "arcology", "space station",
     )),
     ("modern", (
+        # "apocalyp" so that "apocalyptic" counts, not only "apocalypse".
         "near future", "near-future", "modern", "contemporary", "present day",
-        "post-collapse", "post-apocalyptic", "apocalypse", "wasteland", "urban",
+        "post-collapse", "post-apocalyptic", "apocalyp", "wasteland", "urban",
     )),
     ("industrial", (
+        # A live randomize returned tech_level "mechanical age with arcane
+        # enhancements" for a clockwork city and "broken automation" for a
+        # scaffold-city ruin; both fell to preindustrial and would have been
+        # staffed with coopers. Deliberately NOT "machinery": "medieval with
+        # arcane-powered machinery" is a preindustrial world and industrial is
+        # tested first.
         "early industrial", "industrial", "steam", "victorian", "gaslight",
         "railroad", "wild west", "weird west", "frontier west", "1880", "1890",
+        "clockwork", "mechanical age", "automation", "automata",
     )),
     ("preindustrial", (
         "iron age", "medieval", "bronze age", "ancient", "feudal", "dark age",

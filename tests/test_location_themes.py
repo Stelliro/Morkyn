@@ -52,6 +52,27 @@ def test_theme_detection_reads_plain_english_not_just_jargon():
         assert detect_location_theme(world_style=style, genre=style) == "cyberpunk", style
 
 
+def test_a_metaphorical_scavenger_is_not_a_wasteland():
+    """"scavenger" was a wasteland keyword for one commit and had to come out.
+
+    A live randomize produced the world "cliff shrine oracle" with the note
+    "After the sky broke, status windows arrived; training-heavy skills,
+    political scavengers, no free spikes." -- and the word "scavengers", used
+    figuratively about politics, routed a mountain shrine to a wasteland
+    arrival bank. "irradiated" already catches the literal case.
+    """
+    assert (
+        detect_location_theme(
+            world_style="cliff shrine oracle",
+            genre="cliff shrine oracle",
+            idea="After the sky broke, status windows arrived; training-heavy skills, political scavengers, no free spikes.",
+        )
+        == "fantasy"
+    )
+    # The literal wasteland still routes.
+    assert detect_location_theme(world_style="irradiated scavenger convoys") == "wasteland"
+
+
 def test_a_collapsing_empire_is_still_fantasy():
     """Bare "collapse" is deliberately not a wasteland keyword.
 

@@ -68,9 +68,16 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "world_races": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords"],
+        # Live rolls put jobs in here -- "human, samurai, ronin, merchant" and
+        # "human, islander, nomad, relic" -- and downstream every entry is
+        # treated as a people, so NPCs get generated as members of the merchant
+        # species. The rule named power labels and slogans but never said the
+        # word occupation.
         "forbidden": (
-            "Peoples/species list only (e.g. human; human, elf, beastfolk). "
-            "Never power labels like 'Low-Power Human' or skill/growth slogans."
+            "Peoples/species/ancestries only: what someone is born as, not what "
+            "they do. Never an occupation, class, rank, title, or way of life, "
+            "and never an object. Never power labels like 'Low-Power Human' or "
+            "skill/growth slogans."
         ),
         "examples": ["human", "human, elf, dwarf", "human, riverfolk, beastfolk"],
         "ban_growth_slogans": True,
@@ -3772,12 +3779,14 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         # "post-collapse settlement" is a shipped world_style and matched none
         # of the above. Only the hyphen-or-space "post collapse" forms are
         # listed: "after the collapse of the old empire" is a fantasy sentence,
-        # and bare "collapse" read it as a wasteland.
+        # and bare "collapse" read it as a wasteland. "scavenger" was tried and
+        # removed for the same reason -- a live randomize produced "cliff shrine
+        # oracle ... political scavengers" and got a wasteland arrival bank.
+        # "irradiated" already catches the literal case it was meant for.
         "post-collapse",
         "post collapse",
         "the wastes",
         "irradiated",
-        "scavenger",
     ),
     "noir": (
         "noir",

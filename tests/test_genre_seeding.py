@@ -109,6 +109,46 @@ class TestEraResolution(unittest.TestCase):
         self.assertEqual(resolve_world_era(""), "preindustrial")
         self.assertEqual(resolve_world_era("", "something nobody anticipated"), "preindustrial")
 
+    def test_the_free_form_tech_levels_the_randomizer_actually_returns(self):
+        """The canonical vocabulary is not what comes back from a live roll.
+
+        Fourteen live "world" randomizations on qwen3:8b returned fourteen
+        free-form tech_level phrases and not one canonical value. Two of them
+        fell through every hint to the preindustrial default, which is the pool
+        that staffs a place with coopers and charcoal burners:
+
+            "mechanical age with arcane enhancements"  clockwork city
+            "broken automation"                        apocalyptic scaffold cities
+        """
+        for tech, style, era in (
+            ("mechanical age with arcane enhancements", "clockwork city with guild-controlled magic", "industrial"),
+            ("broken automation", "apocalyptic scaffold cities", "modern"),
+            ("rusty automata and salvaged tech", "post-apocalyptic western frontier", "modern"),
+            ("post-scarcity with AI governance", "neon-drenched megacity", "future"),
+            ("late industrial", "School of the Arcane and the Social Ladder", "industrial"),
+        ):
+            with self.subTest(tech=tech):
+                self.assertEqual(resolve_world_era(tech, style), era)
+
+    def test_arcane_machinery_is_still_a_preindustrial_world(self):
+        """"machinery" is deliberately not an industrial hint.
+
+        Industrial is tested before preindustrial, so matching the bare word
+        would drag "medieval with arcane-powered machinery" -- a high-fantasy
+        court world from the same live run -- out of preindustrial.
+        """
+        self.assertEqual(
+            resolve_world_era(
+                "medieval with arcane-powered machinery",
+                "high fantasy with shining capitals and court intrigue",
+            ),
+            "preindustrial",
+        )
+
+    def test_apocalyptic_counts_as_much_as_apocalypse(self):
+        self.assertEqual(resolve_world_era("", "apocalyptic scaffold cities"), "modern")
+        self.assertEqual(resolve_world_era("", "the apocalypse and after"), "modern")
+
     def test_every_era_has_every_place(self):
         places = {"indoor", "water", "wilderness", "settlement"}
         for era, pools in _SEED_ROLE_POOLS.items():
