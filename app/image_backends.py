@@ -13,6 +13,7 @@ import os
 import re
 import socket
 import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -4299,6 +4300,24 @@ def build_portrait_prompt(
     return ", ".join(out)
 
 
+_WARNED_PIL_MISSING = False
+
+
+def _warn_pil_missing() -> None:
+    """Pillow is declared in requirements.txt; if it is gone, art checks are blind."""
+    global _WARNED_PIL_MISSING
+    if _WARNED_PIL_MISSING:
+        return
+    _WARNED_PIL_MISSING = True
+    print(
+        "[morkyn] Pillow is not installed, so generated art cannot be checked for "
+        "near-black or low-structure failures and those retries will not fire. "
+        "Install it with: pip install -r requirements.txt",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
 def _image_looks_abstract_failure(result: dict[str, Any] | None) -> bool:
     """
     Detect near-black / low-structure sludge that realistic models sometimes emit
@@ -4326,6 +4345,12 @@ def _image_looks_abstract_failure(result: dict[str, Any] | None) -> bool:
         edge_mean = float(ImageStat.Stat(edges).mean[0])
         if mean < 45 and edge_mean < 4.5:
             return True
+        return False
+    except ImportError:
+        # Pillow absent: we cannot judge the image. Returning False here is
+        # indistinguishable from "the image is fine", so the near-black retry
+        # simply never fires. Say so once rather than degrading in silence.
+        _warn_pil_missing()
         return False
     except Exception:
         return False
@@ -6163,15 +6188,6 @@ def _forge_raw_b64(image_b64: str) -> str:
     return raw
 
 
-def _pil_resample():
-    from PIL import Image
-
-    try:
-        return Image.Resampling.LANCZOS
-    except AttributeError:  # pragma: no cover — older Pillow
-        return Image.LANCZOS
-
-
 def _image_b64_size(raw_b64: str) -> tuple[int, int]:
     """Best-effort (width, height) for a raw base64 / data-URL PNG/JPEG."""
     try:
@@ -6297,62 +6313,8 @@ def _forge_extra_upscale(
         "Pick a real model like R-ESRGAN 4x+ or 4x-UltraSharp in Hires upscaler "
         "(not Latent — Latent only works with native txt2img hires fix). "
         "If every attempt is HTTP 422, Forge's extras endpoint may be broken under --nowebui; "
-        "img2img refine / PIL fallback will still run."
+        "the img2img refine pass will still run."
     )
-
-
-def _pil_upscale_b64(image_b64: str, scale: float) -> str:
-    """Guaranteed LANCZOS upscale so hires is never a no-op when Forge APIs fail."""
-    import base64
-    from io import BytesIO
-
-    from PIL import Image
-
-    raw_in = _forge_raw_b64(image_b64)
-    if not raw_in:
-        raise RuntimeError("No image for PIL upscale.")
-    scale_f = max(1.05, min(4.0, float(scale or 1.5)))
-    img = Image.open(BytesIO(base64.b64decode(raw_in)))
-    if img.mode not in ("RGB", "RGBA"):
-        img = img.convert("RGBA" if "A" in (img.mode or "") else "RGB")
-    tw = max(64, min(4096, int(round(img.size[0] * scale_f))))
-    th = max(64, min(4096, int(round(img.size[1] * scale_f))))
-    tw = max(64, (tw // 8) * 8)
-    th = max(64, (th // 8) * 8)
-    if tw <= img.size[0] and th <= img.size[1]:
-        tw = max(img.size[0] + 8, int(round(img.size[0] * 1.25)))
-        th = max(img.size[1] + 8, int(round(img.size[1] * 1.25)))
-        tw = max(64, (tw // 8) * 8)
-        th = max(64, (th // 8) * 8)
-    out = img.resize((tw, th), _pil_resample())
-    buf = BytesIO()
-    out.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
-
-
-def _pil_resize_b64(image_b64: str, width: int, height: int) -> str:
-    """Resize raw base64 image to exact canvas (used before img2img refine upscale)."""
-    import base64
-    from io import BytesIO
-
-    from PIL import Image
-
-    raw_in = _forge_raw_b64(image_b64)
-    if not raw_in:
-        raise RuntimeError("No image to resize.")
-    tw = max(64, min(4096, int(width)))
-    th = max(64, min(4096, int(height)))
-    tw = max(64, (tw // 8) * 8)
-    th = max(64, (th // 8) * 8)
-    img = Image.open(BytesIO(base64.b64decode(raw_in)))
-    if img.mode not in ("RGB", "RGBA"):
-        img = img.convert("RGBA" if "A" in (img.mode or "") else "RGB")
-    if img.size == (tw, th):
-        return raw_in
-    out = img.resize((tw, th), _pil_resample())
-    buf = BytesIO()
-    out.save(buf, format="PNG")
-    return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
 def _is_latent_upscaler(name: str) -> bool:

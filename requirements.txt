@@ -3,4 +3,5 @@ fastapi==0.136.1
 uvicorn[standard]==0.46.0
 pydantic==2.13.4
 numpy>=1.22,<2.4
+Pillow>=10.0,<12
 llama-cpp-python[server]==0.3.22
