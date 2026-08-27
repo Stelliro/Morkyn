@@ -274,6 +274,15 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "settings",
     "gm_notes",
     "player",
+    # The system prompt says "Honor world_state.world_time. Do not change
+    # day/hour unless the turn is a wait/travel..." -- and world_time was not
+    # in this set, so build_prompt_context built the clock, the handoff filter
+    # dropped it, and the packet carried `"world_time": null` on every path
+    # while the rule about it went out every turn. `turn` was lost the same
+    # way. Both are small: a flat seven-key dict and an int, roughly 140 bytes
+    # together, which is not where packet size goes.
+    "world_time",
+    "turn",
     "current_location",
     "mechanics_context",
     "verification_policy",
