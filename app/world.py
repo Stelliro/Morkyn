@@ -8077,6 +8077,58 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     return int(cursor.lastrowid)
 
 
+# Prose that says something actually arrived. Unambiguous transfer verbs only:
+# perception verbs go in _DISCOVER_GAIN_RE below, where they are held to a
+# higher bar.
+#
+# Two guards here were paid for by a real bug. A player inspecting a starting
+# item literally named "seed in hand" was given two more of it, and once the
+# owned-item hole was closed this pattern STILL matched: "turn the seed in hand
+# over" contains "hand ... over". Inflection is now required on `hand`. The same
+# narration also matched a bare `pocket` in "warm from your pocket", so that too
+# needs an inflection or an explicit "you pocket".
+_ACQUIRE_PROSE_RE = re.compile(
+    r"\b("
+    r"pick(?:s|ed)?\s+up|picking\s+up|"
+    # "take in the sight", "take note", "take stock" are perception, not gain.
+    r"(?:take[sn]?|took|taking)(?!\s+(?:in|note|stock|care|aim|cover|a\s+moment|your\s+time))|"
+    r"receiv\w+|accept\w*|claim\w*|"
+    r"hand(?:s|ed|ing)\s+(?:you|over|him|her|them)|"
+    r"give[sn]?\s+you|gave\s+you|giving\s+you|(?:is|are|was|were)\s+given|"
+    r"press(?:es|ed|ing)?\s+[\w\s]{0,20}?into\s+your|offer(?:s|ed|ing)?\s+you|"
+    r"buy|buys|bought|buying|purchas\w+|barter\w*|trade[sd]?\s+for|"
+    r"craft\w*|forag\w*|harvest\w*|gather\w*|collect\w*|scoop\w*|"
+    r"pocket(?:s|ed|ing)|you\s+pocket\s|stow(?:s|ed|ing)?|tuck(?:s|ed|ing)?\s+[\w\s]{0,20}?into|"
+    r"slip(?:s|ped)?\s+[\w\s]{0,20}?into|"
+    r"loot\w*|steal|steals|stole|"
+    r"add(?:s|ed)?\s+(?:it|them|\w+)?\s*to\s+your\s+(?:pack|bag|inventory|satchel|pouch)|"
+    r"now\s+(?:carry|carries|have|has|hold[s]?)"
+    r")\b"
+)
+
+# Ambiguous verbs. "You find a rusty nail" is an acquisition; "you find the husk
+# is dry" is not, and both start with the same word. The determiner separates
+# them: a NEW thing arrives with a/an/another/a number, while "the" refers to
+# something already in the scene. The item must also be named nearby.
+_DISCOVER_GAIN_RE = re.compile(
+    r"\b(?:find[s]?|found|discover(?:s|ed)?|unearth(?:s|ed)?|uncover(?:s|ed)?|spot(?:s|ted)?)"
+    r"\s+(?:a|an|another|more|some|several|two|three|four|five|six|seven|eight|nine|ten|\d+)\b"
+)
+_DISCOVER_NAME_WINDOW = 60
+
+
+def _prose_says_it_arrived(text: str, name_l: str, tokens: list[str]) -> bool:
+    """Does the prose actually describe this item arriving, as opposed to
+    merely mentioning it? Naming an item is not acquiring it."""
+    if _ACQUIRE_PROSE_RE.search(text):
+        return True
+    for match in _DISCOVER_GAIN_RE.finditer(text):
+        window = text[match.end() : match.end() + _DISCOVER_NAME_WINDOW]
+        if (name_l and name_l in window) or any(tok in window for tok in tokens):
+            return True
+    return False
+
+
 def _filter_inventory_changes(
     conn,
     changes: list[dict[str, Any]],
@@ -8086,11 +8138,20 @@ def _filter_inventory_changes(
     input_kind: str = "player",
 ) -> list[dict[str, Any]]:
     """
-    Drop positive inventory gains that invent items not already owned and not
-    mentioned in narration/input. Losses and updates to existing stacks always ok.
+    Drop positive inventory gains the prose does not actually describe happening.
+    Losses and metadata-only updates are always allowed.
 
     Server authority: the model cannot self-authorize gains via justified/source
     flags alone — prose or clear player acquisition intent is required.
+
+    A gain needs BOTH halves: the prose has to name *this item*, and it has to
+    say *something arrived*. Naming alone used to be enough, which is why a
+    player inspecting a seed they already carried was handed two more — the
+    narration was all about a seed, so the name test passed trivially.
+
+    Owned items used to skip the check entirely ("updates to existing stacks
+    always ok"). A quantity increase is a gain, not an update, and the item a
+    model is most likely to inflate is the one it is currently describing.
     """
     if not isinstance(changes, list):
         return []
@@ -8121,10 +8182,13 @@ def _filter_inventory_changes(
             change["quantity_delta"] = 99
             delta = 99
         existing = conn.execute("SELECT id, quantity FROM inventory WHERE name = ?", (name,)).fetchone()
-        # Removals / metadata-only always allowed
-        if delta <= 0 or existing:
-            # Strip dimensional_space promotions on existing items unless already set or named in prose
-            if existing and bool(change.get("dimensional_space")):
+
+        def _strip_unearned_dimensional(entry: dict[str, Any]) -> dict[str, Any]:
+            """A promotion to dimensional storage needs prose, on any path."""
+            if not bool(entry.get("dimensional_space")):
+                return entry
+            already = 0
+            if existing:
                 try:
                     row = conn.execute(
                         "SELECT dimensional_space FROM inventory WHERE id = ?",
@@ -8133,12 +8197,21 @@ def _filter_inventory_changes(
                     already = int(row["dimensional_space"] or 0) if row else 0
                 except Exception:
                     already = 0
-                if not already and "dimensional" not in text and "bag of holding" not in text:
-                    change = dict(change)
-                    change["dimensional_space"] = False
-            kept.append(change)
+            if already:
+                return entry
+            if "dimensional" in text or "bag of holding" in text or "void bag" in text:
+                return entry
+            entry = dict(entry)
+            entry["dimensional_space"] = False
+            return entry
+
+        # Removals and metadata-only edits are always allowed.
+        if delta <= 0:
+            kept.append(_strip_unearned_dimensional(change))
             continue
-        # New item gain: require prose grounding. Model flags alone never suffice.
+
+        # Everything below is a GAIN -- including a gain on something already
+        # owned, which used to be waved through without any check at all.
         name_l = name.lower()
         tokens = [tok for tok in re.findall(r"[a-z0-9']{4,}", name_l)]
         token_hits = sum(1 for tok in tokens if tok in text)
@@ -8151,18 +8224,19 @@ def _filter_inventory_changes(
             s in source for s in ("loot", "purchase", "craft", "gift", "quest", "reward", "found", "trade")
         )
         source_ok = acquire_intent and source_tag and (name_in_text or token_ok)
-        grounded = name_in_text or token_ok or source_ok
+        named = name_in_text or token_ok or source_ok
+        # The second half, and the one that was missing: the prose has to say
+        # something arrived. An item being described at length is not an item
+        # being acquired.
+        arrived = acquire_intent or _prose_says_it_arrived(text, name_l, tokens)
+        grounded = named and arrived
         # Never honor bare justified/true from the model
         # Opening: only trust what was already set up (no free combat kit)
         if input_kind == "opening" and not existing:
             grounded = False
-        # New items cannot start as dimensional storage without explicit prose
-        if grounded and bool(change.get("dimensional_space")):
-            if "dimensional" not in text and "bag of holding" not in text and "void bag" not in text:
-                change = dict(change)
-                change["dimensional_space"] = False
+        # Items cannot become dimensional storage without explicit prose
         if grounded:
-            kept.append(change)
+            kept.append(_strip_unearned_dimensional(change))
         else:
             try:
                 conn.execute(
@@ -8170,7 +8244,10 @@ def _filter_inventory_changes(
                     (
                         _turn_value(conn),
                         "inventory_reject",
-                        f"Rejected invented gain: {name} x{delta}"[:900],
+                        (
+                            f"Rejected unearned gain: {name} x{delta} "
+                            f"(named={named}, prose_says_arrived={arrived}, owned={bool(existing)})"
+                        )[:900],
                     ),
                 )
             except Exception:
