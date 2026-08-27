@@ -2,12 +2,13 @@
 
 All notable changes to **Mørkyn** (formerly Mørkyn) are documented here.
 
-This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/spec/v2.0.0.html), with one documented deviation for hotfix numbering.
 
 ### Version Number Guide
 - **MAJOR** (`x.0.0`) - Breaking changes to public APIs or saved data formats
 - **MINOR** (`0.x.0`) - New features, backward-compatible
 - **PATCH** (`0.0.x`) - Bug fixes, backward-compatible
+- **HOTFIX** (a digit appended to PATCH) - Appended to the patch number rather than added as a fourth component, so `0.9.1` and `0.9.10` name the same release: `0.9.11` is its first hotfix and `0.9.12` its second. This is the one place the scheme departs from strict SemVer, and it means a later `0.9.2` sorts *below* `0.9.11` in any tool that parses versions. Nothing in the project does - the launchers compare commits against `origin/<branch>` and `APP_VERSION` is only ever displayed - so the ordering is cosmetic. Do not "correct" a hotfix number to the next patch.
 
 ### Entry Format
 
