@@ -1333,18 +1333,29 @@ function helpTooltip() {
   return helpTooltipEl;
 }
 
-function positionHelpTooltip(target) {
-  const tooltip = helpTooltip();
+/**
+ * Place a fixed-position floating element under `target`, flipping above when
+ * there is no room below and clamping to the viewport on both axes.
+ *
+ * Shared by the help tooltip and the inventory item overlay. It has to unhide
+ * before measuring -- a display:none element has no height, so the flip
+ * decision would always pick "below".
+ */
+function positionFloatingOverlay(el, target) {
   const rect = target.getBoundingClientRect();
-  tooltip.classList.remove("hidden");
-  const tooltipRect = tooltip.getBoundingClientRect();
+  el.classList.remove("hidden");
+  const box = el.getBoundingClientRect();
   const margin = 12;
-  const left = Math.min(window.innerWidth - tooltipRect.width - margin, Math.max(margin, rect.left));
+  const left = Math.min(window.innerWidth - box.width - margin, Math.max(margin, rect.left));
   const below = rect.bottom + 7;
-  const above = rect.top - tooltipRect.height - 7;
-  const top = below + tooltipRect.height + margin <= window.innerHeight ? below : Math.max(margin, above);
-  tooltip.style.left = `${left}px`;
-  tooltip.style.top = `${top}px`;
+  const above = rect.top - box.height - 7;
+  const top = below + box.height + margin <= window.innerHeight ? below : Math.max(margin, above);
+  el.style.left = `${left}px`;
+  el.style.top = `${top}px`;
+}
+
+function positionHelpTooltip(target) {
+  positionFloatingOverlay(helpTooltip(), target);
 }
 
 function showHelpForTarget(target, options = {}) {
@@ -8265,23 +8276,125 @@ function rarityClass(value) {
   return `rarity-${String(value || "common").toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
 }
 
-function itemMeta(item) {
+// itemMeta() lived here: it flattened type, rarity, qty, weight, slots and
+// carried-state into one muted run-on line under each card. That line is what
+// made the quantity hard to find, and itemOverlayFacts replaces it with a
+// labelled grid. Removed rather than left dead; git has it.
+
+/*
+ * Inventory rows are name + quantity only. Everything else -- description,
+ * rarity, weight, slots, enchantments, stat modifiers, granted abilities --
+ * moves into a hover overlay.
+ *
+ * The old card put the quantity mid-sentence in a muted meta line
+ * ("misc · common · qty 3 · wt 1 · slots 1 · packed"), which is the one number
+ * a player actually scans for and the hardest one to find there.
+ *
+ * A custom overlay rather than the native `title` attribute: `title` cannot be
+ * styled, waits ~1s before appearing, and drops the rarity colour and the
+ * [[code]] links entirely.
+ */
+const inventoryRowIndex = new Map();
+let itemOverlayEl = null;
+let itemOverlayTarget = null;
+
+function inventoryRowKey(item, index) {
+  return String(item?.code || `${item?.name || "item"}#${index}`);
+}
+
+function itemOverlay() {
+  if (itemOverlayEl) return itemOverlayEl;
+  itemOverlayEl = document.createElement("div");
+  itemOverlayEl.className = "itemHoverOverlay hidden";
+  itemOverlayEl.setAttribute("role", "tooltip");
+  document.body.append(itemOverlayEl);
+  return itemOverlayEl;
+}
+
+function itemOverlayHtml(item) {
   const enchantments = Array.isArray(item.enchantments) ? item.enchantments.filter(Boolean) : [];
-  const statModifiers = profileLine(item.stat_modifiers);
-  const grantedAbilities = abilityNameList(item.granted_abilities);
-  return [
-    item.item_type || "misc",
-    item.rarity || "common",
-    `qty ${item.quantity ?? 0}`,
-    `wt ${item.weight ?? 0}`,
-    `slots ${item.slot_size ?? 0}`,
-    item.equipped_slot ? `equipped ${item.equipped_slot}` : "packed",
-    enchantments.length ? `enchanted: ${enchantments.join(", ")}` : "",
-    statModifiers ? `stats: ${statModifiers}` : "",
-    grantedAbilities ? `abilities: ${grantedAbilities}` : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const stats = profileLine(item.stat_modifiers);
+  const abilities = abilityNameList(item.granted_abilities);
+  const facts = [
+    ["Quantity", item.quantity ?? 0],
+    ["Type", item.item_type || "misc"],
+    ["Rarity", item.rarity || "common"],
+    ["Weight", item.weight ?? 0],
+    ["Slots", item.slot_size ?? 0],
+    ["Carried", item.equipped_slot ? `equipped · ${item.equipped_slot}` : "packed"],
+  ];
+  return `
+    <header class="itemOverlayHead ${rarityClass(item.rarity)}">
+      <strong>${escapeHtml(item.name)}</strong>
+      ${item.code ? `<span class="itemOverlayCode">${escapeHtml(item.code)}</span>` : ""}
+    </header>
+    <p class="itemOverlayDesc">${linkifyText(item.description || "No description.")}</p>
+    <dl class="itemOverlayFacts">
+      ${facts.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}
+    </dl>
+    ${enchantments.length ? `<div class="enchantmentLine">${enchantments.map((v) => `<span>${escapeHtml(v)}</span>`).join("")}</div>` : ""}
+    ${stats ? `<p class="itemOverlayExtra"><em>Stats</em> ${escapeHtml(stats)}</p>` : ""}
+    ${abilities ? `<p class="itemOverlayExtra"><em>Abilities</em> ${escapeHtml(abilities)}</p>` : ""}
+  `;
+}
+
+function showItemOverlay(target) {
+  const item = inventoryRowIndex.get(target?.dataset?.invKey || "");
+  if (!item) return;
+  const overlay = itemOverlay();
+  overlay.innerHTML = itemOverlayHtml(item);
+  itemOverlayTarget?.classList.remove("invRowActive");
+  itemOverlayTarget = target;
+  target.classList.add("invRowActive");
+  positionFloatingOverlay(overlay, target);
+}
+
+function hideItemOverlay() {
+  if (!itemOverlayTarget) return;
+  itemOverlayTarget.classList.remove("invRowActive");
+  itemOverlayTarget = null;
+  itemOverlayEl?.classList.add("hidden");
+}
+
+/*
+ * Delegated, and attached exactly once. The inventory panel is re-rendered by
+ * replacing innerHTML wholesale, so per-row listeners would be discarded on
+ * every state update and re-registered on every render.
+ */
+function attachItemOverlayHandlers() {
+  if (document.body.dataset.itemOverlayReady === "true") return;
+  document.body.dataset.itemOverlayReady = "true";
+
+  const rowFrom = (event) => event.target?.closest?.("[data-inv-key]") || null;
+
+  document.addEventListener("pointerover", (event) => {
+    const row = rowFrom(event);
+    if (row) {
+      if (row !== itemOverlayTarget) showItemOverlay(row);
+    } else if (itemOverlayTarget) {
+      hideItemOverlay();
+    }
+  });
+  // Touch has no hover: a tap opens the overlay, a second tap or a tap
+  // elsewhere closes it.
+  document.addEventListener("click", (event) => {
+    const row = rowFrom(event);
+    if (!row) return hideItemOverlay();
+    if (row === itemOverlayTarget) hideItemOverlay();
+    else showItemOverlay(row);
+  });
+  document.addEventListener("focusin", (event) => {
+    const row = rowFrom(event);
+    if (row) showItemOverlay(row);
+    else hideItemOverlay();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideItemOverlay();
+  });
+  // Fixed positioning is computed once from the row's viewport rect, so any
+  // scroll leaves the overlay stranded next to nothing.
+  document.addEventListener("scroll", hideItemOverlay, true);
+  window.addEventListener("resize", hideItemOverlay);
 }
 
 function renderInventory() {
@@ -8317,25 +8430,28 @@ function renderInventory() {
       `;
     })
     .join("");
-  const itemCard = (item) => {
-    const enchantments = Array.isArray(item.enchantments) ? item.enchantments.filter(Boolean) : [];
+  inventoryRowIndex.clear();
+  inventory.forEach((item, index) => inventoryRowIndex.set(inventoryRowKey(item, index), item));
+  const itemRow = (item, index) => {
     const equipped = Boolean(item.equipped_slot);
+    const quantity = Number(item.quantity ?? 0);
+    const stacked = quantity > 1;
     return `
-      <article class="inventoryItem ${rarityClass(item.rarity)}${equipped ? " isEquipped" : ""}">
-        <div>
-          <strong>${escapeHtml(item.name)}</strong>
-          <span>${escapeHtml(item.code || "")}${equipped ? " · worn" : ""}</span>
-        </div>
-        <p>${linkifyText(item.description || "No description.")}</p>
-        <div class="itemMeta">${escapeHtml(itemMeta(item))}</div>
-        ${enchantments.length ? `<div class="enchantmentLine">${enchantments.map((value) => `<span>${escapeHtml(value)}</span>`).join("")}</div>` : ""}
-      </article>
+      <button type="button"
+        class="invRow ${rarityClass(item.rarity)}${equipped ? " isEquipped" : ""}"
+        data-inv-key="${escapeHtml(inventoryRowKey(item, index))}"
+        aria-label="${escapeHtml(`${item.name}, quantity ${quantity}${equipped ? ", equipped" : ""}`)}">
+        <span class="invRowName">${escapeHtml(item.name)}</span>
+        <span class="invRowQty${stacked ? " isStack" : ""}">&times;${escapeHtml(quantity)}</span>
+      </button>
     `;
   };
+  // Index by position in the FULL inventory so both lists key the same object.
+  const rowFor = (item) => itemRow(item, inventory.indexOf(item));
   const carriedRows = packed.length
-    ? packed.map(itemCard).join("")
+    ? packed.map(rowFor).join("")
     : `<p class="empty">Pack is empty${equippedCount ? " (gear is equipped)." : "."}</p>`;
-  const allRows = inventory.length ? inventory.map(itemCard).join("") : "";
+  const allRows = inventory.length ? inventory.map(itemRow).join("") : "";
   const modifierRows = modifiers.length
     ? `<div class="capacityModifierList">${modifiers
         .map((modifier) => `<span>${escapeHtml(modifier.source)} · +${escapeHtml(modifier.weight_bonus || 0)} wt · +${escapeHtml(modifier.slot_bonus || 0)} slots${modifier.dimensional_space ? " · dimensional" : ""}</span>`)
@@ -20185,6 +20301,7 @@ updateComposerState();
 loadSkillCatalog().catch(() => {});
 bindPlayLayoutControls();
 applyPlayLayout();
+attachItemOverlayHandlers();
 // Boot: main menu first; setup only after "Start new game"
 // Never leave LLM modal open from a prior checkbox state / CSS race.
 closeModelModalFromUi();
