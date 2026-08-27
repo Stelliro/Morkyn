@@ -2203,6 +2203,60 @@ def normalize_magic_level(value: Any, *, default: str = "rare") -> str:
     return default
 
 
+_ENUM_SCALE_FAMILY: dict[str, str] = {
+    "xp_growth_speed": "speed",
+    "skill_growth_speed": "speed",
+    "proficiency_growth_speed": "speed",
+    "new_skill_frequency": "frequency",
+    "narration_detail": "detail",
+    "difficulty": "difficulty",
+}
+
+_ENUM_SCALE_SYNONYMS: dict[str, dict[str, str]] = {
+    "speed": {
+        "quick": "fast",
+        "rapid": "fast",
+        "swift": "fast",
+        "brisk": "fast",
+        "gradual": "slow",
+        "sluggish": "slow",
+        "glacial": "very slow",
+        "blistering": "very fast",
+    },
+    "frequency": {
+        "often": "frequent",
+        "common": "frequent",
+        "regular": "frequent",
+        "uncommon": "rare",
+        "seldom": "rare",
+        "constant": "very frequent",
+    },
+    "detail": {
+        "terse": "concise",
+        "brief": "concise",
+        "short": "concise",
+        "minimal": "concise",
+        "detailed": "rich",
+        "vivid": "rich",
+        "verbose": "expansive",
+        "wordy": "expansive",
+        "lengthy": "expansive",
+    },
+    "difficulty": {
+        "casual": "easy",
+        "forgiving": "easy",
+        "gentle": "easy",
+        "tough": "hard",
+        "challenging": "hard",
+        "difficult": "hard",
+        "deadly": "brutal",
+        "lethal": "brutal",
+        "punishing": "brutal",
+        "merciless": "brutal",
+    },
+}
+
+
 def clamp_setup_enum(
     field: str,
     value: Any,
@@ -2260,6 +2314,15 @@ def clamp_setup_enum(
         }
         if low in aliases:
             return aliases[low], ["enum_alias"]
+    # Ordinal scales: land on the nearest rung, not the middle one. Everything
+    # off-roster used to fall to `default_val`, so a model answering "quick"
+    # got normal growth, "verbose" got balanced narration and "deadly" got
+    # normal difficulty -- the randomizer's real range was narrower than its
+    # roster. Only words whose rung is unarguable are listed; "occasional" and
+    # "moderate" sit between two and keep falling to the default on purpose.
+    for word, canon in (_ENUM_SCALE_SYNONYMS.get(_ENUM_SCALE_FAMILY.get(field, ""), {})).items():
+        if low == word and canon.lower() in allowed_l:
+            return allowed_list[allowed_l.index(canon.lower())], ["enum_scale_synonym"]
     return default_val, ["not_an_allowed_enum"]
 
 
