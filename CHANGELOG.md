@@ -19,7 +19,17 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
-> Changes after `0.9.1-wip` live here.
+> Changes after `0.9.11` live here.
+
+---
+
+## [0.9.11] - 2026-08-27
+
+Patch on top of `0.9.1-wip`, cut while the first external playtest was already running. One UI fix; no gameplay change, no save-format change. Tag `v0.9.11`.
+
+### Fixed
+
+- [CLAUDE] The item hover overlay no longer hangs off the bottom of the screen. `positionFloatingOverlay` chose above-or-below and then clamped only the top edge, so a row sitting low in a scrolling inventory could open a ~240px card that ran past the viewport. The function was written for the one-line help tooltip, where a missing bottom clamp never showed. Now clamped on both edges, verified in the browser against a real save with the anchor at the top of the viewport, the middle, six pixels from the bottom, and past the bottom edge - `static/app.js`
 
 ---
 
