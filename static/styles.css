@@ -8370,17 +8370,161 @@ button.compactButton {
   min-width: 0;
 }
 
-.equipmentSlotGrid,
-.inventoryItemGrid {
+.equipmentSlotGrid {
   display: grid;
   gap: 8px;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   min-width: 0;
 }
 
-.inventoryItem.isEquipped {
+/* Name + quantity rows. Wider minimum than the old cards because a name now
+   has to fit on one line -- the rest moved into .itemHoverOverlay. */
+.inventoryItemGrid {
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  min-width: 0;
+}
+
+.invRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  margin: 0;
+  border: 1px solid rgba(170, 178, 174, 0.24);
+  border-left-width: 4px;
+  border-radius: 5px;
+  background: rgba(18, 20, 22, 0.62);
+  padding: 6px 9px;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: help;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.invRow:hover,
+.invRow.invRowActive,
+.invRow:focus-visible {
+  border-color: color-mix(in srgb, #d5b870 60%, var(--line));
+  background: rgba(213, 184, 112, 0.1);
+  outline: none;
+}
+
+.invRowName {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The number the player is actually scanning for: fixed column, tabular
+   figures so the digits line up down the list. */
+.invRowQty {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.invRowQty.isStack {
+  color: #ecd49e;
+  font-weight: 650;
+}
+
+.invRow.isEquipped {
   border-color: color-mix(in srgb, #d5b870 55%, var(--line));
   box-shadow: inset 0 0 0 1px rgba(213, 184, 112, 0.18);
+}
+
+.invRow.isEquipped .invRowName::after {
+  content: " · worn";
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.itemHoverOverlay {
+  position: fixed;
+  z-index: 130;
+  width: min(340px, calc(100vw - 28px));
+  border: 1px solid color-mix(in srgb, #d5b870 40%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-solid, #111518) 97%, #000);
+  padding: 10px 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  font-size: 12.5px;
+  line-height: 1.45;
+  /* Never let the overlay sit under the cursor: it would fire pointerover on
+     itself, hide, reappear, and flicker. */
+  pointer-events: none;
+}
+
+.itemHoverOverlay.hidden {
+  display: none !important;
+}
+
+.itemOverlayHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: -10px -12px 8px;
+  border-left: 4px solid transparent;
+  border-radius: 7px 7px 0 0;
+  border-bottom: 1px solid rgba(213, 184, 112, 0.18);
+  padding: 8px 12px;
+}
+
+.itemOverlayHead strong {
+  color: var(--text);
+  font-size: 13.5px;
+}
+
+.itemOverlayCode {
+  color: #d5b870;
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.itemOverlayDesc {
+  margin: 0 0 8px;
+  color: var(--text);
+}
+
+.itemOverlayFacts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 10px;
+  margin: 0;
+}
+
+.itemOverlayFacts dt {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.itemOverlayFacts dd {
+  margin: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.itemOverlayExtra {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.itemOverlayExtra em {
+  color: #d5b870;
+  font-style: normal;
+  font-weight: 600;
 }
 
 .inventoryAllGear {
@@ -8439,30 +8583,26 @@ button.compactButton {
   gap: 8px;
 }
 
-.equipmentSlot,
-.inventoryItem {
+.equipmentSlot {
   border: 1px solid rgba(170, 178, 174, 0.28);
   border-radius: 6px;
   background: rgba(18, 20, 22, 0.62);
   padding: 9px;
 }
 
-.equipmentSlot header,
-.inventoryItem > div:first-child {
+.equipmentSlot header {
   display: flex;
   justify-content: space-between;
   gap: 8px;
   align-items: baseline;
 }
 
-.equipmentSlot strong,
-.inventoryItem strong {
+.equipmentSlot strong {
   color: var(--text);
   font-size: 13px;
 }
 
-.equipmentSlot header span,
-.inventoryItem > div:first-child span {
+.equipmentSlot header span {
   color: #d5b870;
   font-size: 12px;
 }
@@ -8497,19 +8637,15 @@ button.compactButton {
   font-size: 12px;
 }
 
-.equipmentSlot p,
-.inventoryItem p,
-.itemMeta {
+.equipmentSlot p {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
 }
 
-.inventoryItem {
-  border-left-width: 4px;
-}
-
+/* Applied to .invRow and to .itemOverlayHead, both of which carry a 4px left
+   border for it to paint. */
 .rarity-common { border-left-color: #8f9a94; }
 .rarity-uncommon { border-left-color: #8fca9d; }
 .rarity-rare { border-left-color: #7fb4d8; }
@@ -8517,7 +8653,6 @@ button.compactButton {
 .rarity-legendary,
 .rarity-unique { border-left-color: #d5b870; }
 
-.itemMeta,
 .enchantmentLine {
   margin-top: 7px;
 }
@@ -9496,10 +9631,12 @@ button.compactButton {
   }
 
   .inventoryHeader,
-  .equipmentSlot header,
-  .inventoryItem > div:first-child {
+  .equipmentSlot header {
     display: grid;
   }
+
+  /* .invRow stays a flex row on narrow screens: name and quantity on one line
+     is the whole point, and it already ellipsises. */
 
   .statGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

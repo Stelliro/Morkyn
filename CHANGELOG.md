@@ -19,7 +19,21 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
-> Changes after `0.9.0` live here.
+> Changes after `0.9.1-wip` live here.
+
+---
+
+## [0.9.1-wip] - 2026-08-27
+
+Work-in-progress drop on the 0.9 line. Playable; not a stable 0.9.1. Tag `v0.9.1-wip`. GitHub release attaches **Windows `start.bat`** and **Linux / macOS `start.sh`**.
+
+### Added
+
+- [GROK] Inventory rows show name + quantity; type, rarity, weight, enchantments, and abilities move into a hover overlay so the count is scannable - `static/app.js`, `static/styles.css`
+
+### Fixed
+
+- [GROK] Inspecting an item no longer grants more of it. Looking at the seed in your hand was rolling `item_count` and stacking extras - `app/world.py`
 
 ### Added
 
