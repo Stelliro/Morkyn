@@ -6567,7 +6567,6 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             if isekaiish:
                 try:
                     from app.setup_composer import (
-                        LOCATION_SEEDS_BY_THEME,
                         detect_location_theme,
                         pick_isekai_arrival_location,
                     )
@@ -6579,15 +6578,19 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                         idea=str(idea_l or ""),
                         session_theme=intent_plan if isinstance(intent_plan, dict) else None,
                     )
-                    theme_pool = list(
-                        LOCATION_SEEDS_BY_THEME.get(theme_id) or LOCATION_SEEDS_BY_THEME["fantasy"]
-                    )
+                    # A theme id is a label, not a name to copy. The arrival
+                    # BANK deliberately does not ship: six real entries used to
+                    # go out as `arrival_location_seeds`, and ~44% of live
+                    # arrival names came back a verbatim member of the list the
+                    # model had just been shown. theme_hint below carries the
+                    # shape without naming a single place, and the banks stay
+                    # where they are load-bearing -- the offline floor below.
                     prompt["arrival_location_theme"] = theme_id
-                    prompt["arrival_location_seeds"] = random.sample(
-                        theme_pool, k=min(6, len(theme_pool))
-                    )
                     theme_hint = {
-                        "celestial": "heavens/afterlife names (prison of light — blank map, no free movement)",
+                        # "prison of light" was spelled out here and is itself a
+                        # literal entry in the celestial bank -- the hint was
+                        # leaking a name while the seeds key was being removed.
+                        "celestial": "heavens/afterlife names for a place of confinement, blank map, no free movement",
                         "cyberpunk": "neon megacity / corpo / undercity arrival names",
                         "steampunk": "brass, airship, gaslamp, clockwork arrival names",
                         "wasteland": "scrap, ash, bunker, radiation-fence arrival names",
@@ -6612,21 +6615,24 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                         f"matching theme '{theme_id}' ({theme_hint}) — NEVER Seoul/warehouse/office/"
                         "apartment/hospital on Earth.",
                         "Play begins the moment they arrive/die-and-wake — not mid previous-life shift.",
-                        f"Example arrival names (adapt, invent similar): {', '.join(prompt['arrival_location_seeds'][:4])}",
+                        "Build the arrival name out of this setting's own vocabulary: two to four "
+                        "words naming a threshold someone could stand in. Do not reuse a name from "
+                        "any other world you have seen.",
                     ]
                     if theme_id == "celestial":
                         prompt["rules"].append(
                             "Celestial/heavens starts: the player is confined — map is blank and "
                             "they cannot walk free until the story changes confinement."
                         )
-                    prompt["_fallback_arrival_location"] = pick_isekai_arrival_location(
-                        world_style=str(current_setup.get("world_style") or ""),
-                        genre=str(intent_plan.get("genre") or ""),
-                        idea=str(idea_l or ""),
-                        session_theme=intent_plan if isinstance(intent_plan, dict) else None,
-                        theme=theme_id,
-                        seed=prompt["diversity_seed"],
-                    )
+                    # There used to be a `prompt["_fallback_arrival_location"]`
+                    # here holding one real bank entry. Nothing ever read it --
+                    # grep found the write and no consumer anywhere in app/,
+                    # static/, tools/ or tests/. Its only effect was to put a
+                    # bank name in front of the model on every isekai roll. The
+                    # genuine offline floors are elsewhere and do not go through
+                    # the prompt at all: `_setup_field_fallback` (llm.py, the
+                    # LLM-unavailable path) and `resolve_start_location`
+                    # (setup_composer.py), both calling the same picker.
                 except Exception:
                     pass
         if field == "appearance":
