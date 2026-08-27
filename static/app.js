@@ -1349,9 +1349,13 @@ function positionFloatingOverlay(el, target) {
   const left = Math.min(window.innerWidth - box.width - margin, Math.max(margin, rect.left));
   const below = rect.bottom + 7;
   const above = rect.top - box.height - 7;
-  const top = below + box.height + margin <= window.innerHeight ? below : Math.max(margin, above);
+  const preferred = below + box.height + margin <= window.innerHeight ? below : above;
+  // Clamp on BOTH edges. Picking above-or-below alone leaves a tall overlay
+  // hanging off the bottom when its anchor sits low in a scrolling panel --
+  // the item overlay is ~240px, where the help tooltip was usually one line.
+  const maxTop = Math.max(margin, window.innerHeight - box.height - margin);
   el.style.left = `${left}px`;
-  el.style.top = `${top}px`;
+  el.style.top = `${Math.min(maxTop, Math.max(margin, preferred))}px`;
 }
 
 function positionHelpTooltip(target) {
