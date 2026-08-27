@@ -4660,9 +4660,14 @@ def _save_snapshot(conn, turn: int, result: dict[str, Any]) -> None:
                 _snapshot_row(conn, "inventory", "equipped_slot = ?", (slot["code"],), rows)
 
     for change in result.get("skill_changes") or []:
-        name = norm_name(str(change.get("name", ""))).lower()
+        # Must resolve the same way `_apply_skills` stores it, or the rewind
+        # snapshot silently misses the row it is meant to protect: the model
+        # sends "lockpicking", the table holds "Lockpicking", and a lowercased
+        # exact match finds neither. COLLATE NOCASE covers rows written before
+        # display names existed.
+        name = _display_skill_name(norm_name(str(change.get("name", ""))))
         if name:
-            _snapshot_row(conn, "player_skills", "name = ?", (name,), rows)
+            _snapshot_row(conn, "player_skills", "name = ? COLLATE NOCASE", (name,), rows)
 
     for event in result.get("events") or []:
         code = norm_name(str(event.get("code", "")))

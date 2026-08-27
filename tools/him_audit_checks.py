@@ -179,8 +179,15 @@ def main() -> int:
 
         skill_name = f"godmode skill {stamp}"
         _apply_skills(c, [{"name": skill_name, "delta": 100}])
-        sk = c.execute("SELECT value FROM player_skills WHERE name=?", (skill_name,)).fetchone()
-        assert sk and int(sk["value"]) <= 15, dict(sk)
+        # COLLATE NOCASE: `_apply_skills` stores a display name now, so
+        # "godmode skill 1234" comes back as "Godmode Skill 1234". This lock is
+        # about the value cap, not the spelling -- keep the assertion, widen the
+        # lookup. The row must still exist; a missing one is a real failure.
+        sk = c.execute(
+            "SELECT value FROM player_skills WHERE name=? COLLATE NOCASE", (skill_name,)
+        ).fetchone()
+        assert sk is not None, f"skill row missing for {skill_name!r}"
+        assert int(sk["value"]) <= 15, dict(sk)
         print("skill mint cap: ok")
 
     print("him_audit_checks: ALL PASSED")
