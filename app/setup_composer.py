@@ -876,6 +876,16 @@ def merge_intent_plans(base: dict[str, Any], llm_plan: dict[str, Any] | None) ->
             ):
                 continue
             out[key] = val.strip()[:200]
+    # A closed enum, so it is validated here rather than trusted into the plan.
+    # An illegal, empty or non-string answer is dropped outright: a value that
+    # is not in the set would only ever index a bank that does not exist, and
+    # dropping it leaves detect_location_theme on the keyword floor, which is
+    # the correct fallback. Never let a model string index a dict directly.
+    raw_theme = llm_plan.get("location_theme")
+    if isinstance(raw_theme, str) and not isinstance(raw_theme, bool):
+        candidate = raw_theme.strip().lower()
+        if candidate in LOCATION_THEME_IDS:
+            out["location_theme"] = candidate
     if "isekai" in llm_plan:
         out["isekai"] = bool(llm_plan["isekai"]) or bool(out.get("isekai"))
     # Re-assert adapter after isekai merge
@@ -1095,6 +1105,9 @@ def session_theme_from_intent(intent: dict[str, Any] | None) -> dict[str, Any]:
     return {
         "adapter_hint": str(intent.get("adapter_hint") or "default")[:80],
         "genre": str(intent.get("genre") or "")[:120],
+        # This dict literal is a gate: a key absent here is silently dropped on
+        # the way to the session theme, however carefully it was merged above.
+        "location_theme": str(intent.get("location_theme") or "")[:40],
         "isekai": bool(intent.get("isekai")),
         "dm_stance": str(intent.get("dm_stance") or DEFAULT_INTENT["dm_stance"])[:240],
         "power_fantasy": {
@@ -4297,6 +4310,14 @@ LOCATION_SEEDS_BY_THEME: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# The closed set of legal theme ids: what the model is asked to choose from,
+# and what an answer is validated against. Derived from the banks rather than
+# hand-copied, so a theme can never be offered that has nowhere to draw names
+# from, and the two cannot drift. Includes "generic", which is a correct answer
+# and not a failure value -- it is what a setting that fits none of the others
+# should resolve to.
+LOCATION_THEME_IDS: tuple[str, ...] = tuple(LOCATION_SEEDS_BY_THEME)
+
 # Name markers that force blank-map + movement-lock (heavens / divine prison).
 HEAVEN_PRISON_NAME_MARKERS: tuple[str, ...] = (
     "heaven",
@@ -4390,31 +4411,68 @@ def detect_location_theme(
     idea: str = "",
     session_theme: dict[str, Any] | None = None,
 ) -> str:
-    """Pick a location theme id from style / genre / session theme text."""
+    """Pick a location theme id, taking the sources in order of authority.
+
+    These used to be concatenated into ONE blob and keyword-matched together,
+    which quietly collapsed the difference between what the player wrote and
+    what the model wrote about it. Because the priority tuple then decided,
+    a model-authored word could outrank the player's own: measured live over 19
+    settings, the model's free text moved the answer on 15 of them, including
+    turning "hard sci-fi orbital station running out of water" -- where the
+    player wrote "sci-fi" themselves -- into `celestial`.
+
+    So the sources are now tried in order and the first hit wins:
+
+      1. the caller's own text (world_style / genre / idea). The player named a
+         genre; nothing downstream gets to overrule them.
+      2. session_theme.location_theme, the closed-enum classification. This is
+         the controlled channel for the model's opinion: a validated member of
+         a twelve-value set, not prose that happened to contain a keyword.
+      3. session_theme's free text, last. Kept as a floor rather than removed,
+         but it can no longer outrank either of the two above it.
+      4. generic.
+
+    Returning "generic" used to be "fantasy", which is why a superhero game, a
+    heist, a pirate voyage and a school-life story all opened at a damp fantasy
+    gate-town: the default was a genre, not an absence of one. A placeless name
+    is a recognisable miss; a wrong-genre name is a bug.
+    """
     theme = session_theme if isinstance(session_theme, dict) else {}
-    blob = " ".join(
-        [
-            str(world_style or ""),
-            str(genre or ""),
-            str(idea or ""),
-            str(theme.get("genre") or ""),
-            str(theme.get("adapter_hint") or ""),
-            str(theme.get("tone") or ""),
-            str(theme.get("style_notes") or ""),
-            " ".join(str(k) for k in (theme.get("keywords") or []) if k)
-            if isinstance(theme.get("keywords"), list)
-            else "",
-        ]
+
+    def _match(*parts: str) -> str:
+        blob = " ".join(str(p or "") for p in parts)
+        if not blob.strip():
+            return ""
+        low = _strip_negated_genre_words(re.sub(r"\s+", " ", blob.lower()))
+        for tid in LOCATION_THEME_PRIORITY:
+            keys = LOCATION_THEME_KEYWORDS.get(tid) or ()
+            if any(_theme_keyword_present(k, low) for k in keys):
+                return tid
+        return ""
+
+    hit = _match(world_style, genre, idea)
+    if hit:
+        return hit
+
+    # Validated here as well as in merge_intent_plans, because this function is
+    # reachable with a session_theme loaded from an old save or hand-edited
+    # settings, not only from a plan that just came through the merge.
+    explicit = theme.get("location_theme")
+    if isinstance(explicit, str) and not isinstance(explicit, bool):
+        candidate = explicit.strip().lower()
+        if candidate in LOCATION_THEME_IDS:
+            return candidate
+
+    hit = _match(
+        theme.get("genre"),
+        theme.get("adapter_hint"),
+        theme.get("tone"),
+        theme.get("style_notes"),
+        " ".join(str(k) for k in (theme.get("keywords") or []) if k)
+        if isinstance(theme.get("keywords"), list)
+        else "",
     )
-    low = _strip_negated_genre_words(re.sub(r"\s+", " ", blob.lower()))
-    for tid in LOCATION_THEME_PRIORITY:
-        keys = LOCATION_THEME_KEYWORDS.get(tid) or ()
-        if any(_theme_keyword_present(k, low) for k in keys):
-            return tid
-    # Nothing matched. This used to return "fantasy", which is why a superhero
-    # game, a heist, a pirate voyage and a school-life story all opened at a
-    # damp fantasy gate-town: the default was a genre, not an absence of one.
-    return "generic"
+    return hit or "generic"
 
 
 def location_special_flags_for(

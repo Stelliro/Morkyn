@@ -5780,6 +5780,63 @@ def coherence_review_setup(
     }
 
 
+def _setup_intent_prompt_shape() -> dict[str, Any]:
+    """The static half of the compose_setup_intent prompt: return_shape + rules.
+
+    Extracted so the shape can be asserted without a model call -- specifically
+    that `location_theme` is asked as a closed enum listing every legal id.
+
+    `location_theme` is a twelve-value enum and used to be inferred from the
+    free-text `genre` answer via the keyword table, which structurally cannot
+    reach a setting that describes a genre without naming it ("a generation
+    ship three hundred years from landfall"). The precedent for asking it
+    directly is `_field_contracts_for_prompt`, added because `magic_level` --
+    also an enum -- was asked an open question and came back as "low", "Low",
+    "low-magic", "post" and "Limited to arcane crafters and guilds", every one
+    of which fell through to the default.
+
+    `genre` stays: it is free text on purpose and feeds theme_prompt_block and
+    the session theme display. This adds a field, it does not replace one.
+    """
+    from app.setup_composer import LOCATION_THEME_IDS
+
+    theme_enum = " | ".join(LOCATION_THEME_IDS)
+    return {
+        "return_shape": {
+            "genre": "short genre/setting phrase",
+            "location_theme": theme_enum,
+            "isekai": False,
+            "portal_or_rebirth": "other_world | same_world_rebirth | ambiguous",
+            "difficulty": "easy | normal | hard | brutal",
+            "edge": "short edge/injury/loot pressure note",
+            "power_fantasy": {
+                "start_power": "near_useless | ordinary | strong",
+                "growth": "steady | compounding",
+                "system_ui": False,
+                "skill_summary": "optional short skill fantasy note",
+            },
+            "tone": "short tone phrase",
+            "keywords": ["up to 8 content keywords"],
+            "adapter_hint": "isekai_rpg | system_rpg | grimdark | default",
+            "dm_stance": "always keep fair DM player-agency stance",
+            "style_notes": "optional short style note",
+        },
+        "rules": [
+            "Return JSON only matching return_shape.",
+            "difficulty must be one of easy, normal, hard, brutal — never a slogan.",
+            f"location_theme must be exactly one of: {theme_enum}. It describes where a "
+            "traveller would first set foot in this setting, not its mood. Answer "
+            "'generic' when none of the others fits — that is a correct answer, not a "
+            "failure, and it is better than a confident wrong one.",
+            "isekai true when the idea implies another world, transmigration, reincarnation into fantasy, or isekai.",
+            "system_ui true when status windows, skill UI, levels, or game-system framing is requested.",
+            "dm_stance must always prioritize fair pressure and player agency over genre pastiche.",
+            "Do not write character backstory or ability lists here.",
+            "idea_sparks are optional cold-storage wording ideas only — not weighted training; borrow flavor words, do not copy titles as genre slogans.",
+        ],
+    }
+
+
 def compose_setup_intent(idea: str, current: dict[str, Any] | None = None) -> dict[str, Any]:
     """Compile Randomize idea into a structured intent plan (keyword + optional LLM refine)."""
     idea_text = str(idea or "").strip()[:400]
@@ -5808,33 +5865,7 @@ def compose_setup_intent(idea: str, current: dict[str, Any] | None = None) -> di
                 if current and k in current
             },
             "idea_sparks": prompt_sparks(compose_sparks),
-            "return_shape": {
-                "genre": "short genre/setting phrase",
-                "isekai": False,
-                "portal_or_rebirth": "other_world | same_world_rebirth | ambiguous",
-                "difficulty": "easy | normal | hard | brutal",
-                "edge": "short edge/injury/loot pressure note",
-                "power_fantasy": {
-                    "start_power": "near_useless | ordinary | strong",
-                    "growth": "steady | compounding",
-                    "system_ui": False,
-                    "skill_summary": "optional short skill fantasy note",
-                },
-                "tone": "short tone phrase",
-                "keywords": ["up to 8 content keywords"],
-                "adapter_hint": "isekai_rpg | system_rpg | grimdark | default",
-                "dm_stance": "always keep fair DM player-agency stance",
-                "style_notes": "optional short style note",
-            },
-            "rules": [
-                "Return JSON only matching return_shape.",
-                "difficulty must be one of easy, normal, hard, brutal — never a slogan.",
-                "isekai true when the idea implies another world, transmigration, reincarnation into fantasy, or isekai.",
-                "system_ui true when status windows, skill UI, levels, or game-system framing is requested.",
-                "dm_stance must always prioritize fair pressure and player agency over genre pastiche.",
-                "Do not write character backstory or ability lists here.",
-                "idea_sparks are optional cold-storage wording ideas only — not weighted training; borrow flavor words, do not copy titles as genre slogans.",
-            ],
+            **_setup_intent_prompt_shape(),
         }
         llm_plan = _chat_json(
             "Return JSON only. Compile setup intent. Do not explain.",
