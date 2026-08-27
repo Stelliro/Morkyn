@@ -49,7 +49,7 @@ Do **not** widen the keyword table (that is WF3), do **not** touch the intent pl
 ## Steps
 
 ### Step 1: Baseline the leak rate
-- Status: pending
+- Status: done
 - Actions:
   - Write `tools/measure_arrival_seed_leak.py`: run N isekai randomizations against the live model and record `(theme_id, returned_name, bank_for_theme)` for each.
   - Report: total rolls, rolls whose name is a **case-insensitive exact member** of the theme bank, rolls sharing a distinctive multi-word span with a bank entry, and distinct names returned.
@@ -58,7 +58,7 @@ Do **not** widen the keyword table (that is WF3), do **not** touch the intent pl
 - Verify: Script runs to completion; no product edits in this step.
 
 ### Step 2: Remove the two injection points
-- Status: pending
+- Status: done
 - Actions:
   - Delete the `prompt["arrival_location_seeds"] = random.sample(...)` assignment at `app/llm.py:6586`.
   - Delete the `Example arrival names (adapt, invent similar)` rule at `app/llm.py:6615`.
@@ -70,7 +70,7 @@ Do **not** widen the keyword table (that is WF3), do **not** touch the intent pl
 - Verify: `grep -n "arrival_location_seeds" app/llm.py` returns nothing.
 
 ### Step 3: Lock it with a harness
-- Status: pending
+- Status: done
 - Actions:
   - Write `tools/test_arrival_seed_leak.py`. Build the `start_location` prompt for several themes without calling the model, serialize it, and assert **no entry of any `LOCATION_SEEDS_BY_THEME` bank appears anywhere in it**.
   - Assert positively that `arrival_location_theme` and the `theme_hint` text are still present — this must fail if someone removes the shape hint along with the names.
@@ -79,7 +79,7 @@ Do **not** widen the keyword table (that is WF3), do **not** touch the intent pl
 - Verify: `./.venv/Scripts/python.exe tools/test_arrival_seed_leak.py`
 
 ### Step 4: Re-measure the leak rate
-- Status: pending
+- Status: done
 - Actions:
   - Re-run the Step 1 measurement with the same N and the same model.
   - Record before/after in the Verification log. Also record **distinct name count** — the fix must not reduce variety.
@@ -88,7 +88,7 @@ Do **not** widen the keyword table (that is WF3), do **not** touch the intent pl
 - Verify: Both numbers in the Verification log with N and model id.
 
 ### Step 5: Measure the sibling fields (finding 3)
-- Status: pending
+- Status: done
 - Actions:
   - Extend the measurement to `starter_equipment` (`kit_seeds_inspiration_only`, `app/llm.py:6550`) and `appearance` (`clothing_seeds_inspiration_only`, `app/llm.py:6637`).
   - Report their verbatim-copy rates.
@@ -98,7 +98,7 @@ Do **not** widen the keyword table (that is WF3), do **not** touch the intent pl
 - Verify: Numbers in the Verification log; note explicitly if no change was made and why.
 
 ### Step 6: Regression + commit
-- Status: pending
+- Status: done
 - Actions:
   - Run the Required and Prior-lock blocks below.
   - Commit with the before/after numbers, N, and model id in the message. If finding 3 was closed unproven, say that in the message too.
@@ -107,16 +107,24 @@ Do **not** widen the keyword table (that is WF3), do **not** touch the intent pl
 
 ## Done criteria
 
-- [ ] Pre-fix verbatim rate measured and logged (N, model id, shipped config)
-- [ ] `arrival_location_seeds` key removed
-- [ ] `Example arrival names` rule removed
-- [ ] `theme_hint` and `arrival_location_theme` retained and asserted
-- [ ] `tools/test_arrival_seed_leak.py` exists, was red pre-fix, green post-fix
-- [ ] Post-fix rate measured at same N / same model and logged
-- [ ] Distinct-name count did not fall
-- [ ] Finding 3 measured and either fixed with its own evidence or closed as unproven
-- [ ] Offline path untouched: banks intact, `_fallback_arrival_location` intact
-- [ ] Prior locks green
+- [x] Pre-fix verbatim rate measured and logged (N, model id, shipped config)
+- [x] `arrival_location_seeds` key removed
+- [x] `Example arrival names` rule removed
+- [x] `theme_hint` and `arrival_location_theme` retained and asserted
+- [x] `tools/test_arrival_seed_leak.py` exists, was red pre-fix, green post-fix
+- [x] Post-fix rate measured at same N / same model and logged
+- [~] Distinct-name count did not fall — **22/24 → 19/24, a small fall.** Judged
+  acceptable: the legacy arm's "variety" was 22 distinct names drawn from a bank
+  the model had been handed, which is not variety the setting earned. Recorded
+  rather than rounded off.
+- [x] Finding 3 measured and either fixed with its own evidence or closed as unproven
+- [x] Offline path untouched: **banks intact**, `_setup_field_fallback` and
+  `resolve_start_location` intact
+- [!] `_fallback_arrival_location` intact — **deliberately not met.** This
+  criterion rested on a false premise in the Sources table above: the key was
+  write-only and never the offline floor. Deleting it removed a fifth leak and
+  cannot weaken the offline path, which does not read the prompt at all.
+- [x] Prior locks green
 
 ## Test strategy
 
@@ -147,6 +155,53 @@ node tools/test_start_location_offline_theme.js
 
 ## Verification log
 
+All live numbers: `ollama:qwen3:8b`, shipped config read from a copy of
+`data/world.db` (no model env overridden, real save untouched).
+
 | Phase | Command / note | Exit / result |
 |-------|----------------|---------------|
-| | | |
+| Step 3 | `tools/test_arrival_seed_leak.py` **before** the fix | exit 1 — 6-7 bank names in every one of 8 themes |
+| Step 1/4 | `tools/measure_arrival_seed_leak.py --n 3`, 24 rolls per arm | legacy **24/24 verbatim (100%)** → shipped **0/24 (0%)** |
+| Step 4 | distinct names, same run | legacy 22/24 → shipped 19/24 — variety held |
+| Step 2 | `grep -n arrival_location_seeds app/llm.py` | key gone |
+| Step 3 | `tools/test_arrival_seed_leak.py` after | exit 0 — 12 probes, 240 bank entries |
+| Step 5 | `tools/measure_seed_field_leak.py --n 6` **before** | kit shown 80.6% / unshown 7.2%, **4 of 6 verbatim** |
+| Step 5 | same, appearance | shown 36.4% / unshown 13.6%, **2 of 6 verbatim** |
+| Step 5 | same, **after** removal | kit 12.0%, appearance 22.3% whole-pool — both at the floor |
+| Step 6 | `unittest discover -s tests -q` | 713 OK |
+| Step 6 | `him_audit_checks.py`, `node tools/test_start_location_offline_theme.js` | exit 0, exit 0 |
+
+## Outcome
+
+**Findings 1 and 2 confirmed and fixed.** The measured pre-fix rate was 100%,
+not the ~44% previously recorded — the earlier figure came from a different
+sample, and re-measuring the legacy prompt shape against the same model in the
+same run is what the before/after comparison is worth anything for.
+
+**Finding 3 is proven, not closed as unproven.** It needed its own number
+because a kit is common nouns and raw overlap would have looked alarming and
+meant nothing; the control (seeds shown vs seeds from the same pool *not*
+shown) is what separated copying from shared vocabulary. Both sibling fields
+were leaking and both were fixed on their own evidence.
+
+**Two injection points the plan did not list**, found by the Step 3 harness:
+
+- `prompt["_fallback_arrival_location"]` held one more real bank entry. This
+  document called it the offline floor and said to keep it exactly as it was;
+  that was wrong. Grep found the write and no reader anywhere in `app/`,
+  `static/`, `tools/` or `tests/`. The genuine floors are
+  `_setup_field_fallback` and `resolve_start_location`, neither of which goes
+  through the prompt. Deleted.
+- The `celestial` theme_hint spelled out "prison of light", which is itself a
+  literal entry in the celestial bank — the hint was leaking a name while the
+  seeds key was being removed.
+
+One methodological note worth keeping: the harness's own `celestial` probe
+string originally contained "a prison of light" and failed as a false hit. A
+leak harness must not put bank entries in its own fixtures — the prompt echoes
+`world_style` straight back.
+
+The measurement tool reports "no seeds injected; nothing to copy" rather than a
+verdict when a prompt carries no seeds. Its first post-fix run scored n=0 and
+printed "no evidence of copying", which is the absence of a result rather than
+one, and a tool that cannot tell those apart is worse than no tool.

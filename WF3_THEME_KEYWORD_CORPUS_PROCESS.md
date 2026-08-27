@@ -54,7 +54,7 @@ The corpus is the deliverable. The synonyms are the smaller half.
 ## Steps
 
 ### Step 1: Rebuild the corpus
-- Status: pending
+- Status: done
 - Actions:
   - Reconstruct the 60 hand-written settings used in the last sweep, spanning: high/low fantasy, space opera, hard sci-fi, cyberpunk, post-apocalyptic, western, gothic, noir, superhero, slice-of-life, historical, horror, xianxia/cultivation, undersea, arctic, desert.
   - Include the negation cases (`no magic`, `no fantasy at all`) and the false-positive traps (`picking`, `sector`, `after the collapse of the old empire`).
@@ -63,7 +63,7 @@ The corpus is the deliverable. The synonyms are the smaller half.
 - Verify: Manual read-through; every expectation defensible in one sentence.
 
 ### Step 2: Commit the corpus as a fixture
-- Status: pending
+- Status: done
 - Actions:
   - Write `tests/fixtures/setting_corpus.json` (or a Python module if that matches repo convention better — check the other fixtures first).
   - Shape: `{"setting": str, "expected_theme": str, "note": str, "ambiguous": bool}`.
@@ -74,7 +74,7 @@ The corpus is the deliverable. The synonyms are the smaller half.
 - Verify: `./.venv/Scripts/python.exe -m unittest tests.test_setting_corpus -v`
 
 ### Step 3: Add the JS mirror check
-- Status: pending
+- Status: done
 - Actions:
   - Extend `tools/test_start_location_offline_theme.js` to read the same fixture and run it through `detectStartLocationTheme`.
   - Any divergence between the Python and JS tables on any corpus setting is a failure.
@@ -83,7 +83,7 @@ The corpus is the deliverable. The synonyms are the smaller half.
 - Verify: `node tools/test_start_location_offline_theme.js`
 
 ### Step 4: Evaluate each candidate keyword, one at a time
-- Status: pending
+- Status: done
 - Actions:
   - For each of `generation ship`, `terraforming`, `survey world` / `survey vessel`:
     1. Add only that keyword.
@@ -97,7 +97,7 @@ The corpus is the deliverable. The synonyms are the smaller half.
 - Verify: `./.venv/Scripts/python.exe -m unittest tests.test_setting_corpus -v` after each candidate.
 
 ### Step 5: Stop
-- Status: pending
+- Status: done
 - Actions:
   - Do not extend the candidate list. If the corpus reveals more gaps, record them in the Verification log as **input to WF2**, not as more keywords.
   - Confirm the remaining `generic` settings still get placeless names, not wrong ones.
@@ -105,7 +105,7 @@ The corpus is the deliverable. The synonyms are the smaller half.
 - Verify: Verification log names them.
 
 ### Step 6: Regression + commit
-- Status: pending
+- Status: done
 - Actions:
   - Run Required and Prior-lock blocks.
   - Commit keywords separately from the corpus commit, with the accept/reject record for each candidate in the message.
@@ -114,17 +114,20 @@ The corpus is the deliverable. The synonyms are the smaller half.
 
 ## Done criteria
 
-- [ ] Corpus fixture committed **before** any keyword change
-- [ ] `tests/test_setting_corpus.py` green on unmodified `main`
-- [ ] Failure output names setting / expected / actual
-- [ ] Ambiguous entries marked and asserted loosely
-- [ ] JS mirror judged by the same corpus
-- [ ] Each candidate evaluated alone, accept or reject recorded
-- [ ] Rejected candidates carry an explanatory comment in the table
-- [ ] Every accepted keyword mirrored into `static/app.js`
-- [ ] Still-unreachable settings written down and handed to WF2
-- [ ] No loosening of `_theme_keyword_present`
-- [ ] Two commits: corpus, then keywords
+- [x] Corpus fixture committed **before** any keyword change
+- [x] `tests/test_setting_corpus.py` green on unmodified `main`
+- [x] Failure output names setting / expected / actual
+- [x] Ambiguous entries marked and asserted loosely
+- [x] JS mirror judged by the same corpus
+- [x] Each candidate evaluated alone, accept or reject recorded
+- [x] Rejected candidates carry an explanatory comment in the table — **vacuous:
+  nothing was rejected.** All three moved exactly their declared target and
+  nothing else. The existing `scavenger` / `after the collapse` rejection
+  comments are untouched.
+- [x] Every accepted keyword mirrored into `static/app.js`
+- [x] Still-unreachable settings written down and handed to WF2
+- [x] No loosening of `_theme_keyword_present`
+- [x] Two commits: corpus, then keywords
 
 ## Test strategy
 
@@ -158,4 +161,46 @@ node --check static/app.js
 
 | Phase | Command / note | Exit / result |
 |-------|----------------|---------------|
-| | | |
+| Step 1-2 | Corpus written: 63 settings, 5 marked `known_failing` | fixture + `tests/test_setting_corpus.py`, 11 tests |
+| Step 2 | `unittest tests.test_setting_corpus` on unmodified `main` | green, corpus commit `5f57435` |
+| Step 3 | Same fixture through the JS table | **5 mismatches on first run** |
+| Step 3 | Diffed the two tables directly | **10 of 11 themes had drifted** |
+| Step 3 | Regenerated `static/app.js` from the Python table | 0 mismatches, `node --check` ok |
+| Step 4 | `generation ship` alone, full corpus | ACCEPT — 1 setting moved, 0 collateral |
+| Step 4 | `terraforming` alone, full corpus | ACCEPT — 1 setting moved, 0 collateral |
+| Step 4 | `survey world` + `survey vessel` alone | ACCEPT — 1 setting moved, 0 collateral |
+| Step 4 | `sect`+`or` and `heaven`+`ly` suffix guards | both misfires fixed, 0 collateral |
+| Step 4 | JS mirror after the guards | **caught the guard missing in JS** — ported, then green |
+| Step 6 | `unittest discover -s tests -q` | 678 OK |
+| Step 6 | `tools/him_audit_checks.py`, `node tools/test_start_location_offline_theme.js` | exit 0, exit 0 |
+
+## Outcome
+
+**The corpus was the deliverable, and it paid for itself on day one.** Its first
+run through the JS mirror found that `static/app.js` and `app/setup_composer.py`
+had drifted apart on **ten of the eleven themes** — the JS copy still carried
+`scavenger`, the keyword the server had dropped with a written comment
+explaining why, and had independently broadened four others (`detective` for
+`detective city`, `haunted` and `manor` for `haunted manor`) while missing 40+
+the server had. Nothing had ever compared them.
+
+All three candidate keywords were accepted; none was rejected. Two extra
+misfires the corpus exposed were fixed with a narrow suffix guard: `sector` read
+as `sect` (a fantasy gate-town for an industrial setting) and `heavenly` read as
+`heaven` (the afterlife for a cultivation world).
+
+Deviations from the plan, both deliberate:
+
+- The corpus landed with five entries marked `known_failing`, asserted to *still
+  fail*, rather than being written to pass. That kept the gate independent of
+  the fixes it would later judge, and made removing each flag a visible one-line
+  change in the fix commit.
+- `LOCATION_THEME_PRIORITY` was hoisted out of `detect_location_theme` (it was a
+  local tuple) and is now asserted to cover the keyword table in both
+  directions. A theme added to one and not the other was a silent no-op.
+
+Handed to WF2 as keyword-unreachable, per Step 5: *a derelict hauler drifting
+past the third moon*, *a courier with a cranial shunt and bad debts*, *someone
+wakes up and does not recognise their own hands*, *a letter arrives that should
+have been delivered forty years ago*, *two rivals inherit the same failing
+business*. WF2 measured them and did **not** improve them — see its own log.
