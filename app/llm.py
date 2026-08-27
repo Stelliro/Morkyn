@@ -283,6 +283,12 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "event_lifecycle",
     # Server-stated contracts. Omitting a key here nulls it out of the packet
     # silently — the same failure that stripped the band fields off `player`.
+    # `skill_catalog` is here rather than in the OPTIONAL set because those are
+    # only merged in when broad_context is on: a skill check has to name a real
+    # skill on an ordinary turn too, and prompts.py points the model at
+    # `world_state.skill_catalog` by name. An absent key makes that a dead
+    # reference, which is worse than the open invitation it replaced.
+    "skill_catalog",
     "movement_contract",
     "narrative_voice",
     "naming_contract",
@@ -311,6 +317,11 @@ HANDOFF_OPTIONAL_CONTEXT_KEYS = {
     "turn_summaries",
 }
 HANDOFF_CONTEXT_LIST_LIMITS = {
+    # The catalogue is a fixed roster, not a feed to sample: the default limit
+    # of 8 silently cut 60 skill codes down to whichever 8 sorted first, which
+    # is worse than sending none -- the model would see a short list and treat
+    # it as complete. 80 covers the built-ins plus pack additions.
+    "skill_catalog": 80,
     "gm_events": 8,
     "skills": 12,
     "abilities": 12,

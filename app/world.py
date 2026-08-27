@@ -8614,6 +8614,31 @@ def _apply_inventory_capacity_modifiers(conn, modifiers: list[dict[str, Any]]) -
         )
 
 
+SKILL_NOTE_MAX_LEN = 160
+# Only a genuine stub gets replaced. "knives" is a stub; "Reads tracks and
+# weather." is a real description at 25 chars and must survive every later
+# gain, or the upgrade rule becomes the append bug wearing a different hat.
+SKILL_NOTE_STUB_LEN = 16
+
+
+def _short_skill_note(raw: Any) -> str:
+    """One short clause saying what a skill is, not a log of how it was earned.
+
+    Kept deliberately small: this field is re-sent in the turn packet on every
+    later turn, so anything stored here is paid for repeatedly. One sentence is
+    enough for the narrator to stay coherent about what the skill covers.
+    """
+    text = re.sub(r"\s+", " ", str(raw or "")).strip()
+    if not text:
+        return ""
+    if len(text) > SKILL_NOTE_MAX_LEN:
+        # Prefer a clean sentence break over a mid-word cut.
+        head = text[:SKILL_NOTE_MAX_LEN]
+        stop = max(head.rfind(". "), head.rfind("; "))
+        text = (head[: stop + 1] if stop > SKILL_NOTE_STUB_LEN else head.rsplit(" ", 1)[0]).strip()
+    return text[:SKILL_NOTE_MAX_LEN]
+
+
 def _apply_skills(conn, changes: list[dict[str, Any]]) -> None:
     settings = _settings(conn).get("playthrough_options", {})
     speed = settings.get("skill_growth_speed") or "normal"
@@ -8632,15 +8657,20 @@ def _apply_skills(conn, changes: list[dict[str, Any]]) -> None:
         raw_delta = clamp(int(change.get("delta") or 0), -5, 8)
         delta = _scaled_delta(raw_delta, str(speed), float(multiplier) if multiplier else None)
         delta = clamp(int(delta), -5, 12)
-        notes = str(change.get("notes") or "")[:700]
+        notes = _short_skill_note(change.get("notes"))
         existing = conn.execute(
             "SELECT id, value, notes FROM player_skills WHERE name = ? COLLATE NOCASE", (name,)
         ).fetchone()
         if existing:
             value = clamp(int(existing["value"]) + delta, -10, 100)
-            merged_notes = existing["notes"]
-            if notes and notes not in merged_notes:
-                merged_notes = f"{merged_notes} {notes}".strip()[:900]
+            # Fill a stub once; never append. Notes used to concatenate every
+            # gain up to 900 chars and truncate from the RIGHT, so a long
+            # campaign turned a skill's description into a run-on of unrelated
+            # turns cut mid-sentence -- and every one of those characters rode
+            # in the turn packet on every later turn, for a field the model
+            # only needs in order to know what the skill IS.
+            kept = str(existing["notes"] or "").strip()
+            merged_notes = kept if len(kept) >= SKILL_NOTE_STUB_LEN else (notes or kept)
             conn.execute(
                 "UPDATE player_skills SET value = ?, notes = ? WHERE id = ?",
                 (value, merged_notes, existing["id"]),

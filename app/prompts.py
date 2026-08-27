@@ -314,7 +314,7 @@ Required JSON shape:
     "karma_visibility": "private/local/faction/public"
   },
   "skill_changes": [
-    {"name": "earned skill name", "delta_band": "none/trivial/small/moderate", "notes": "why play, training, practice, discovery, or custom setup rules justify the change"}
+    {"name": "a code from world_state.skill_catalog when one fits, else a short plain skill name", "delta_band": "none/trivial/small/moderate", "notes": "ONE short clause naming what the skill covers, under 160 characters. Omit entirely when the skill already appears in world_state.skills — notes are a durable description, not a per-turn log, and are never appended to."}
   ],
   "inventory_changes": [
     {"name": "item name", "description": "short durable description", "quantity_band": "trivial/small/moderate (prefix - when losing)", "weight": 1.0, "slot_size": 1, "item_type": "misc/weapon/armor/backpack/ring/necklace/etc", "rarity": "common/uncommon/rare/epic/legendary/unique", "enchantments": [], "stat_modifiers": {"strength": 1}, "granted_abilities": [{"name": "item-granted ability", "description": "usable only while equipped", "cost": "", "prerequisites": "equip item"}], "stack_limit": 20, "carry_modifier": 1.0, "container_bonus_weight": 0, "container_bonus_slots": 0, "dimensional_space": false}
