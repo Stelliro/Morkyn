@@ -8621,6 +8621,34 @@ SKILL_NOTE_MAX_LEN = 160
 SKILL_NOTE_STUB_LEN = 16
 
 
+def _display_skill_name(raw: str) -> str:
+    """A name fit to render: the library's own for a code, humanized otherwise.
+
+    `static/app.js` prints this string straight into the skill card, so a raw
+    roster code lands in the UI as "lockpicking".
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    try:
+        from app.skill_checks import _codeify, _norm, humanize_skill_name, load_skill_library
+
+        # Exact code or exact name ONLY. `resolve_skill_code` is deliberately
+        # not used here: its last stage is the regex ACTION trigger table, which
+        # is right for "pick the lock" and badly wrong for a name -- it turned
+        # "Road Lore" into "Random Encounter". A name is not an action.
+        coded = _codeify(text)
+        normalized = _norm(text)
+        for skill in load_skill_library():
+            if not skill.get("name"):
+                continue
+            if skill.get("code") in (text, coded) or _norm(str(skill.get("name"))) == normalized:
+                return str(skill["name"])[:80]
+        return humanize_skill_name(text)
+    except Exception:
+        return text[:80]
+
+
 def _short_skill_note(raw: Any) -> str:
     """One short clause saying what a skill is, not a log of how it was earned.
 
@@ -8646,12 +8674,19 @@ def _apply_skills(conn, changes: list[dict[str, Any]]) -> None:
     if not isinstance(changes, list):
         return
     for change in changes[:12]:
-        # Store the name as written and match case-insensitively. It used to be
-        # lowercased on the way in and the read path does not re-case it, so a
-        # skill the model called "Road Lore" rendered in the UI as "road lore".
-        # COLLATE NOCASE keeps the de-duplication the lowercasing was there for,
-        # and matches the rows already stored in lower case.
-        name = norm_name(str(change.get("name", "")))
+        # Store a display name, and match case-insensitively.
+        #
+        # Two things fought here. The name used to be lowercased on the way in
+        # and the read path never re-cases it, so "Road Lore" rendered as
+        # "road lore". Then the schema started asking for a code out of
+        # enabled_skill_codes -- which is right for the roster and wrong for the
+        # UI, because codes are lowercase snake_case. A live run came back with
+        # a skill literally called "lockpicking".
+        #
+        # So: a code resolves to the library's own display name, and anything
+        # else is humanized. COLLATE NOCASE below keeps the de-duplication the
+        # lowercasing was there for.
+        name = _display_skill_name(norm_name(str(change.get("name", ""))))
         if not name:
             continue
         raw_delta = clamp(int(change.get("delta") or 0), -5, 8)
@@ -8659,7 +8694,7 @@ def _apply_skills(conn, changes: list[dict[str, Any]]) -> None:
         delta = clamp(int(delta), -5, 12)
         notes = _short_skill_note(change.get("notes"))
         existing = conn.execute(
-            "SELECT id, value, notes FROM player_skills WHERE name = ? COLLATE NOCASE", (name,)
+            "SELECT id, value, notes, name FROM player_skills WHERE name = ? COLLATE NOCASE", (name,)
         ).fetchone()
         if existing:
             value = clamp(int(existing["value"]) + delta, -10, 100)
@@ -8671,9 +8706,15 @@ def _apply_skills(conn, changes: list[dict[str, Any]]) -> None:
             # only needs in order to know what the skill IS.
             kept = str(existing["notes"] or "").strip()
             merged_notes = kept if len(kept) >= SKILL_NOTE_STUB_LEN else (notes or kept)
+            # Tidy a name saved before this: same skill, better formatting only.
+            # Guarded on a case-insensitive match so this can never rename one
+            # skill into another -- "lockpicking" becomes "Lockpicking" and
+            # nothing else moves.
+            stored = str(existing["name"] or "")
+            better = name if stored.lower() == name.lower() and stored != name else stored
             conn.execute(
-                "UPDATE player_skills SET value = ?, notes = ? WHERE id = ?",
-                (value, merged_notes, existing["id"]),
+                "UPDATE player_skills SET value = ?, notes = ?, name = ? WHERE id = ?",
+                (value, merged_notes, better, existing["id"]),
             )
         else:
             # New skills start modest — no free rank-100 mint
