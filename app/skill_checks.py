@@ -1232,8 +1232,8 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(talk|speak|ask|greet|address|approach .+ (and )?(talk|ask|speak)|say (hello|hi)|introduce)\b", "persuasion"),
     (r"\b(lie|bluff|deceive|con)\b", "deception"),
     (r"\b(intimidate|threaten|scare)\b", "intimidation"),
-    (r"\b(disguise|costume|impersonat|pretend to be)\b", "disguise"),
-    (r"\b(gambl|bet|wager|cards|dice game)\b", "gambling"),
+    (r"\b(disguise|costume|impersonat[a-z]*|pretend to be)\b", "disguise"),
+    (r"\b(gambl[a-z]*|bet|wager|cards|dice game)\b", "gambling"),
     (r"\b(symbol|rune|glyph|sigil|etch)\b", "symbol_lore"),
     (r"\b(read|inspect|examine|study|analyze)\b", "investigation"),
     (r"\b(search|look for|scan|look around)\b", "perception"),
@@ -1242,9 +1242,9 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(heal|bandage|medicine|first aid|triage|splint)\b", "healing"),
     (r"\b(rally|cover (me|them|him|her)|support (ally|friend)|buff)\b", "support"),
     (r"\b(summon|call (a |the )?(spirit|familiar|demon)|pact)\b", "summoning"),
-    (r"\b(necro|undead|bone (rite|command)|raise (dead|skeleton)|grave rite)\b", "necromancy"),
-    (r"\b(exorc|banish|cleanse spirit|salt circle)\b", "exorcism"),
-    (r"\b(alchem|brew potion|reagent|tincture)\b", "alchemy"),
+    (r"\b(necro[a-z]*|undead|bone (rite|command)|raise (dead|skeleton)|grave rite)\b", "necromancy"),
+    (r"\b(exorc[a-z]*|banish|cleanse spirit|salt circle)\b", "exorcism"),
+    (r"\b(alchem[a-z]*|brew potion|reagent|tincture)\b", "alchemy"),
     (r"\b(ritual|draw (a )?circle|ceremony)\b", "ritual"),
     (r"\b(weapon art|kata|form with (my |the )?(sword|spear|bow|axe))\b", "weapon_art"),
     (r"\b(medicine|first aid kit)\b", "medicine"),
@@ -1255,15 +1255,15 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(animal|mount|horse|herd|tame|calm the)\b", "animal_handling"),
     (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
     (r"\b(mine|ore|tunnel|dig (for|out|a))\b", "mining"),
-    (r"\b(map|chart|survey|cartograph)\b", "cartography"),
-    (r"\b(navigat|stars|compass|bearing|dead reckon)\b", "navigation"),
+    (r"\b(map|chart|survey|cartograph[a-z]*)\b", "cartography"),
+    (r"\b(navigat[a-z]*|stars|compass|bearing|dead reckon)\b", "navigation"),
     (r"\b(tinker|gadget|mechanism|jury[- ]?rig)\b", "tinkering"),
     (r"\b(drive|pilot|steer|sail)\b", "vehicles"),
     (r"\b(history|lineage|old war|who ruled)\b", "history"),
     (r"\b(nature|plant|beast ecology|weather pattern)\b", "nature"),
     (r"\b(religion|rite|omen|prayer|cult)\b", "religion"),
     (r"\b(arcana|magic theory|ward|spell residue)\b", "arcana"),
-    (r"\b(performance|sing|song|act|storytell)\b", "performance"),
+    (r"\b(performance|sing|song|act|storytell[a-z]*)\b", "performance"),
     (r"\b(etiquette|court manners|protocol|formal address)\b", "etiquette"),
     (r"\b(streetwise|fence|underworld|gang rumor)\b", "streetwise"),
     (r"\b(insight|read (him|her|them|the room)|sense motive)\b", "insight"),
@@ -1277,7 +1277,92 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
 Hoisted out of `infer_check_from_action` so the same table can resolve a skill
 string the model supplied directly. It used to be a local list, so the check
 path had no way to reuse it and minted a phantom skill instead.
+
+Every entry is anchored `\\b(...)\\b`. The trailing boundary is deliberate and
+must stay: without it "ready" matches read, "between" matches bet, "lieutenant"
+matches lie, "control" matches con and "maple" matches map. Inflected player
+text ("I'm sneaking past him") is handled by `_trigger_text_variants` below
+instead -- de-inflect the sentence, not the pattern.
+
+The `[a-z]*` stems (impersonat, gambl, necro, exorc, alchem, navigat,
+cartograph, storytell) were written as prefixes and the trailing `\\b` made
+them unmatchable: there is no word boundary between the "t" of "impersonat"
+and the "i" of "impersonating", so the entry only ever matched the literal
+non-word "impersonat". They are now spelled as the prefixes they always were.
 """
+
+# Emitted stems stop at three characters. Shorter than that is all noise, and
+# the "-er" rule that made three risky ("better" -> "bett" -> "bet") is
+# deliberately absent: -er/-ist/-or/-y forms are covered by the `[a-z]*` prefix
+# stems instead, which cannot reach across an unrelated word the way stripping
+# can. What survives at three -- bet, con, map, lie, act, ask, dig -- is only
+# reachable from a genuinely inflected form ("betting", "mapped", "asking"),
+# never from an unrelated word that merely contains those letters.
+_TRIGGER_STEM_MIN = 3
+# Doubling is not undone for these -- "stress" is not "stres", "call" is not
+# "cal" -- and undoing it there buys nothing anyway.
+_DOUBLE_KEEP = frozenset("slfz")
+_TRIGGER_WORD_RE = re.compile(r"[a-z]+")
+
+
+def _word_stems(word: str) -> list[str]:
+    """De-inflected forms of one lowercase word, longest-lived first.
+
+    Returns [] when nothing applies, which is the common case and the reason
+    this is cheap. Never strips a trailing "y": that is what keeps "ready" from
+    becoming "read".
+    """
+    if word.endswith("ing"):
+        base = word[:-3]
+    elif word.endswith(("ed", "es")):
+        base = word[:-2]
+    elif word.endswith("s") and not word.endswith("ss"):
+        base = word[:-1]
+    else:
+        return []
+    candidates = [
+        base,
+        # "persuad" -> "persuade", "hid" -> "hide": the dropped-e forms. This is
+        # why the floor is applied per candidate and not to `base` -- "hid" is
+        # too short to emit, but the "hide" built from it is the one we want.
+        base + "e",
+    ]
+    # "stabb" -> "stab", "swimm" -> "swim", "scann" -> "scan".
+    if len(base) > 1 and base[-1] == base[-2] and base[-1] not in _DOUBLE_KEEP:
+        candidates.append(base[:-1])
+    seen: list[str] = []
+    for candidate in candidates:
+        if len(candidate) >= _TRIGGER_STEM_MIN and candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
+def _trigger_text_variants(text: str) -> list[str]:
+    """The sentence, plus de-inflected rewrites of it.
+
+    Each variant is a whole coherent sentence rather than the original with
+    stems appended, because several triggers are phrases -- "look for",
+    "pick the", "cover me". Appending "look" after "looking" would leave
+    "looking look for" and the phrase would still not be adjacent; rewriting
+    the word in place gives "look for the key" and it matches.
+
+    The original is always first, so nothing that matches today can stop
+    matching: the variants only add reach.
+    """
+    variants = [text]
+    stems = {word: _word_stems(word) for word in set(_TRIGGER_WORD_RE.findall(text))}
+    if not any(stems.values()):
+        return variants
+    for depth in range(3):
+
+        def _pick(match: re.Match[str], _d: int = depth) -> str:
+            options = stems.get(match.group(0)) or []
+            return options[_d] if _d < len(options) else match.group(0)
+
+        rewritten = _TRIGGER_WORD_RE.sub(_pick, text)
+        if rewritten != text and rewritten not in variants:
+            variants.append(rewritten)
+    return variants
 
 
 def infer_check_from_action(player_input: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
@@ -1297,11 +1382,15 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         pack_pairs, disabled = [], set()
 
     skill = None
+    # Patterns outer, variants inner: table order still decides which skill
+    # wins, so a de-inflected match can never outrank an earlier pattern that
+    # matched the sentence as typed.
+    variants = _trigger_text_variants(text)
     for pattern, code in list(pack_pairs) + pairs:
         if code in disabled:
             continue
         try:
-            if re.search(pattern, text):
+            if any(re.search(pattern, variant) for variant in variants):
                 skill = code
                 break
         except re.error:
