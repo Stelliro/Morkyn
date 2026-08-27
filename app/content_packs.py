@@ -48,11 +48,19 @@ BUILTIN_PACK_DIR = ROOT / "content" / "packs"
 SECTIONS = ("skills", "powers", "items", "encounter_tables", "magnitude_tables")
 """The five content buckets a pack may define.
 
-UNUSED as of 2026-08-27: nothing outside this line references it. The real
-section handling is spelled out per-bucket inside `validate_pack`. Kept as a
-readable summary of the pack shape; delete it or wire `validate_pack` to it,
-but do not assume it is enforcing anything today.
+Now wired: `validate_pack` warns on any top-level key that is neither one of
+these nor a metadata field. It used to be referenced nowhere, and the cost of
+that was a specific silent failure -- a pack with `"skils"` installed happily,
+reported zero skills, and said nothing about why. `_as_list(payload.get(...))`
+returns [] for a missing key, so a typo and an empty section are the same thing
+to every other line of this function.
+
+A warning, not an error: packs carry their own extra metadata and refusing to
+install over an unrecognised key would be worse than the typo it catches.
 """
+
+PACK_METADATA_KEYS = ("format", "id", "label", "name", "version", "author", "description")
+"""Top-level keys that are pack metadata rather than content sections."""
 
 # Canonical attribute keys. Packs must use these; aliases are normalized.
 STAT_KEYS = (
@@ -75,21 +83,46 @@ STAT_ALIASES = {
 SKILL_CATEGORIES = (
     "physical", "mental", "social", "craft", "combat", "event", "encounter", "general",
 )
-"""Skill categories a pack may declare. Enforced as a WARNING, not an error.
+"""Skill categories a pack may declare. Still a WARNING, never an error.
 
-Deliberately soft -- `_validate_skill` appends to `warnings` and stores the
-value as written, so a pack declaring `category: "stealthy"` installs cleanly.
+Softness here is deliberate and stays: a category typo should not stop a pack
+installing. What does NOT stay is the silent consequence it used to carry.
 
-The consequence is worth knowing, because it is silent: `search_skills` and
-`gm_context_block` both filter on `enabled_categories`, which defaults to
-exactly these eight. A skill whose category is off-roster therefore never
-appears in skill search or in the GM context block -- the pack loads, the
-warning scrolls past, and the skill is simply invisible.
+`_validate_skill` used to store the off-roster value exactly as written, and
+`search_skills` and `gm_context_block` both filter on `enabled_categories`,
+which defaults to exactly these eight. So a pack declaring
+`category: "stealthy"` installed cleanly, emitted one warning that scrolled
+past, and its skill was then invisible to skill search and to the GM context
+block -- present in the database, absent from the game.
+
+`normalize_skill_category` now maps near-misses through SKILL_CATEGORY_ALIASES
+and falls back to "general" for anything still unrecognised, so an off-roster
+category costs the author their chosen label and nothing else. The warning
+still fires, and now says which category was actually stored.
 
 This list is duplicated as `skill_checks.CATEGORIES` (by `id`). The two are
 identical today and `tests/test_content_pack_rosters.py` locks them together;
 the attribute alias tables drifted exactly this way before being merged.
 """
+
+SKILL_CATEGORY_ALIASES = {
+    # The STAT_KEYS pattern: a roster is only as good as the synonym table its
+    # lookup actually consults. Everything here is a word a pack author would
+    # reasonably reach for first.
+    "body": "physical", "athletic": "physical", "physique": "physical",
+    "movement": "physical", "agility": "physical",
+    "mind": "mental", "intellect": "mental", "knowledge": "mental",
+    "lore": "mental", "academic": "mental", "arcane": "mental", "magic": "mental",
+    "social": "social", "charisma": "social", "speech": "social",
+    "interaction": "social", "influence": "social",
+    "crafting": "craft", "crafts": "craft", "trade": "craft", "profession": "craft",
+    "artisan": "craft", "technical": "craft",
+    "fighting": "combat", "martial": "combat", "war": "combat", "weapon": "combat",
+    "weapons": "combat", "defense": "combat",
+    "events": "event", "encounters": "encounter",
+    "misc": "general", "other": "general", "utility": "general", "generic": "general",
+}
+DEFAULT_SKILL_CATEGORY = "general"
 
 ACTIVATIONS = ("active", "passive", "triggered")
 """How a power fires. Enforced as a hard ERROR on anything else.
@@ -100,14 +133,31 @@ pack cannot install a power the engine has no rule for.
 """
 
 RESOURCE_KEYS = ("health", "energy", "mana", "fatigue", "gold")
-"""Resources a power may cost. Enforced as a hard ERROR on anything else.
+"""Resources a power may cost. Still a hard ERROR on anything unrecognised.
 
-Unlike `STAT_KEYS` there is no alias table here, so near-misses a pack author
-would consider obvious -- "stamina", "grit", "focus" -- are rejected outright
-rather than mapped. That is the safe direction (a refusal is visible, a silent
-remap is not), but it does mean the error message is the only guidance an
-author gets.
+There used to be no alias table here, so the near-misses a pack author reaches
+for first -- "stamina", "focus", "hp", "coin" -- were refused outright while
+`STAT_KEYS` mapped its equivalents happily. The error was visible, which is the
+right failure direction, but there is no reason "hp" should be an error when
+"str" is not.
+
+`normalize_resource_key` now maps RESOURCE_ALIASES and still returns "" for
+anything genuinely unknown, so a real mistake ("grit", "willpower") remains a
+hard error naming all five keys. Aliases are only for resources the engine
+already models under another name -- never invent a resource here.
 """
+
+RESOURCE_ALIASES = {
+    "hp": "health", "hitpoints": "health", "hits": "health", "vitality": "health",
+    "wounds": "health", "life": "health",
+    "stamina": "energy", "sp": "energy", "vigor": "energy", "vigour": "energy",
+    "endurance": "energy", "breath": "energy",
+    "mp": "mana", "magic": "mana", "focus": "mana", "spirit": "mana",
+    "essence": "mana", "power": "mana",
+    "exhaustion": "fatigue", "tiredness": "fatigue", "strain": "fatigue",
+    "coin": "gold", "coins": "gold", "money": "gold", "currency": "gold",
+    "silver": "gold", "credits": "gold",
+}
 
 _CACHE: dict[str, Any] = {}
 
@@ -128,6 +178,41 @@ def normalize_stat_key(value: Any) -> str:
     if text in STAT_KEYS:
         return text
     return STAT_ALIASES.get(text, "")
+
+
+def normalize_resource_key(value: Any) -> str:
+    """Canonical resource key, or "" when it is genuinely not one of ours.
+
+    Same shape as `normalize_stat_key`, which is the pattern the rest of this
+    module should have followed from the start: consult the roster's own
+    synonym table before refusing.
+    """
+    text = re.sub(r"[^a-z]", "", str(value or "").lower())
+    if text in RESOURCE_KEYS:
+        return text
+    return RESOURCE_ALIASES.get(text, "")
+
+
+def normalize_skill_category(value: Any) -> tuple[str, bool]:
+    """(category, was_recognised).
+
+    Never returns something outside SKILL_CATEGORIES. An unrecognised category
+    falls back to DEFAULT_SKILL_CATEGORY rather than being stored as written,
+    because a category off the roster is filtered out by `search_skills` and
+    `gm_context_block` and the skill silently disappears from the game.
+
+    The bool is what the caller warns on: the pack still installs, the author
+    still hears about it.
+    """
+    text = re.sub(r"[^a-z]", "", str(value or "").lower())
+    if not text:
+        return DEFAULT_SKILL_CATEGORY, True
+    if text in SKILL_CATEGORIES:
+        return text, True
+    mapped = SKILL_CATEGORY_ALIASES.get(text)
+    if mapped:
+        return mapped, True
+    return DEFAULT_SKILL_CATEGORY, False
 
 
 def _checksum(payload: dict[str, Any]) -> str:
@@ -226,8 +311,8 @@ def _validate_resource_cost(raw: Any, path: str, errors: list[dict[str, str]]) -
         _err(errors, path, "resource_cost must be an object", 'Use {"mana": 8}')
         return out
     for key, value in raw.items():
-        res = re.sub(r"[^a-z]", "", str(key).lower())
-        if res not in RESOURCE_KEYS:
+        res = normalize_resource_key(key)
+        if not res:
             _err(errors, f"{path}.{key}", f"unknown resource {key!r}", f"Use one of: {', '.join(RESOURCE_KEYS)}")
             continue
         try:
@@ -269,12 +354,19 @@ def _validate_skill(raw: Any, index: int, errors: list[dict[str, str]], warnings
         return None
     name = name or code.replace("_", " ").title()
 
-    category = str(raw.get("category") or "general").strip().lower()
-    if category not in SKILL_CATEGORIES:
+    category, recognised = normalize_skill_category(raw.get("category"))
+    if not recognised:
         warnings.append({
             "path": f"{path}.category",
-            "message": f"unusual category {category!r}",
-            "fix": f"Known categories: {', '.join(SKILL_CATEGORIES)}",
+            "message": (
+                f"unknown category {str(raw.get('category'))!r}; "
+                f"stored as {category!r}"
+            ),
+            "fix": (
+                f"Known categories: {', '.join(SKILL_CATEGORIES)}. An unknown one is "
+                f"filtered out of skill search and the GM context block, so it is "
+                f"mapped to {DEFAULT_SKILL_CATEGORY!r} rather than making the skill invisible."
+            ),
         })
 
     attribute = normalize_stat_key(raw.get("attribute"))
@@ -657,6 +749,23 @@ def validate_pack(payload: Any) -> dict[str, Any]:
                     "Each code must be unique within a pack",
                 )
             seen.add(code)
+
+    # Unrecognised top-level keys. `_as_list(payload.get("skills"))` returns []
+    # for a missing key, so without this a pack with "skils" installs happily,
+    # reports zero skills, and says nothing about why.
+    known_keys = set(SECTIONS) | set(PACK_METADATA_KEYS)
+    for key in payload:
+        if key in known_keys or str(key).startswith("_"):
+            continue
+        near = [s for s in SECTIONS if _codeify(key)[:4] == s[:4]]
+        warnings.append({
+            "path": str(key),
+            "message": f"unknown top-level key {str(key)!r}; nothing reads it",
+            "fix": (
+                f"Did you mean {near[0]!r}?" if near
+                else f"Content sections are: {', '.join(SECTIONS)}"
+            ),
+        })
 
     if not any((skills, powers, items, encounter_tables, magnitude_tables)):
         warnings.append({"path": "", "message": "pack defines no content", "fix": "Add at least one section"})
