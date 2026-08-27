@@ -11,7 +11,7 @@ The skill half is urgent: **every improvised skill currently rolls INTELLIGENCE*
 | 1 skill-attr | **high** | correctness | Every minted skill defaults `attribute="intelligence"`; lockpicking rolls INT |
 | 2 skill-desc | high | correctness | Minted skills inherit an unrelated description from a similarity score computed on defaulted fields |
 | 3 skill-name | med | correctness | Minted skill name is the raw model string (`pick_lock`, `hotwire the truck`), shown in the UI |
-| 4 skill-roster | high | correctness | The narrator is never shown the 60 built-in skills; only the player's own 12 reach the packet |
+| 4 skill-roster | ~~high~~ **WITHDRAWN** | correctness | ~~The narrator is never shown the 60 built-in skills~~ — FALSE. All 60 ship in every draft and verify prompt at `world_state.settings.playthrough_options.skill_check_settings.enabled_skill_codes`, inside `settings`, which is a base keep key. Only the prompt's *guidance* was wrong. |
 | 5 slot-accepts | med | correctness | `_slot_by_ref` is exact-match; the slot's own `accepts` list is never consulted |
 | 6 enum-centre | low | output quality | Off-roster enum synonyms collapse to the midpoint, not the nearest value |
 | 7 attr-drift | low | correctness | Two attribute alias tables disagree (`awareness`/`stamina` vs `perception`) |
@@ -200,3 +200,7 @@ Still minting, correctly or otherwise: `lying`, `patch the wound`, `hotwire the 
 | post Step 8 | `tools/him_audit_checks.py` | exit 0, ALL PASSED |
 | post Step 8 | `node --check static/app.js` | OK |
 | post Step 8 | `tools/audit_skills_8b.py`, `tools/probe_skill_math_8b.py` | STILL NOT RUN - need a live Ollama |
+| CORRECTION | finding 4 was false; verified by reading `user_prompt` out of a live trace | 60 codes present in draft+verify, always were |
+| CORRECTION | `skill_catalog` added, plumbed through 2 layers, then removed as duplication | net effect: prompt wording only |
+| CORRECTION | `model_input` in a trace is the player's action text (46 chars), NOT the packet | three false 'it never arrives' readings came from searching it |
+| post-correction | `unittest discover -s tests -q` | Ran 646 tests, OK |

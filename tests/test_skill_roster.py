@@ -209,73 +209,64 @@ class TestTheTriggerTableIsReusable(unittest.TestCase):
 
 
 class TestTheNarratorIsShownTheCatalogue(unittest.TestCase):
-    """Finding 4: the packet carried the player's 12 skills, never the roster."""
+    """The roster the model can actually see.
 
-    def test_the_packet_carries_the_skill_catalogue(self):
-        from app.llm import _compact_turn_context
+    WF4 finding 4 claimed the narrator was never shown the 60 built-in skills.
+    That was FALSE, and three commits were built on it. Reading the real
+    `user_prompt` out of a live trace shows all 60 codes have always shipped, at
 
-        compact = _compact_turn_context({"skills": [], "player": {}})
-        self.assertIn("skill_catalog", compact)
-        self.assertGreaterEqual(len(compact["skill_catalog"]), 40)
-        for code in ("stealth", "lockpicking", "persuasion"):
-            self.assertIn(code, compact["skill_catalog"])
+        world_state.settings.playthrough_options.skill_check_settings.enabled_skill_codes
+
+    in every draft and verify call. A `skill_catalog` key was added, plumbed
+    through two layers, and then removed again as pure duplication. What was
+    actually wrong was only ever the prompt's guidance: it offered
+    "lying/speech/insight/etc" while the real list sat further down the packet.
+    """
+
+    CATALOGUE_PATH = "settings.playthrough_options.skill_check_settings.enabled_skill_codes"
+
+    def test_the_shipped_settings_carry_every_enabled_code(self):
+        from app.skill_checks import default_check_settings
+
+        codes = default_check_settings().get("enabled_skill_codes") or []
+        self.assertGreaterEqual(len(codes), 40)
+        for code in ("stealth", "lockpicking", "persuasion", "athletics"):
+            self.assertIn(code, codes)
 
     def test_the_catalogue_survives_the_handoff_filter(self):
-        # The compactor adding a key proves nothing: `_clean_context_for_handoff`
-        # keeps an allowlist and drops everything else silently, so the first
-        # version of this change shipped a prompt pointing the model at
-        # `world_state.skill_catalog` while the packet had no such key. Ten live
-        # turns confirmed it: the only occurrence of the word in any trace was
-        # the instruction itself. Assert on what the model is handed.
-        from app.llm import _clean_context_for_handoff, _compact_turn_context
+        # It rides inside `settings`, which is a base keep key -- that is why it
+        # has always reached the model without anyone wiring it up.
+        from app.llm import HANDOFF_BASE_CONTEXT_KEYS
 
-        compact = _compact_turn_context({"skills": [], "player": {}})
-        cleaned = _clean_context_for_handoff(compact, "test")
-        self.assertIn(
-            "skill_catalog",
-            cleaned,
-            "skill_catalog was dropped by the handoff allowlist; prompts.py names it",
-        )
-        self.assertIn("stealth", cleaned["skill_catalog"])
+        self.assertIn("settings", HANDOFF_BASE_CONTEXT_KEYS)
+
+    def test_the_prompt_points_at_the_path_that_exists(self):
+        prompts = (ROOT / "app" / "prompts.py").read_text(encoding="utf-8", errors="replace")
+        self.assertNotIn('"skill": "lying/speech/insight/etc"', prompts)
+        self.assertNotIn("skill_catalog", prompts)
+        self.assertIn(self.CATALOGUE_PATH, prompts)
+
+    def test_no_dead_skill_catalog_plumbing_is_left_behind(self):
+        for rel in ("app/llm.py", "app/world.py"):
+            with self.subTest(file=rel):
+                self.assertNotIn("skill_catalog", (ROOT / rel).read_text(encoding="utf-8", errors="replace"))
 
     def test_the_prompt_only_names_packet_keys_that_exist(self):
-        # Guards the general case: a dead `world_state.<key>` reference is worse
-        # than no reference at all.
-        from app.llm import _clean_context_for_handoff, _compact_turn_context
+        # world_state.world_time: prompts.py:200 says "Honor world_state.world_time"
+        # unconditionally. The key IS built into prompt_context but the handoff
+        # filter drops it on every path (it is in neither allowlist), so the
+        # instruction is dead in effect. NOT fixed here -- wiring it through is a
+        # separate change. world_state.resources is written defensively and
+        # offers mechanics_context.resources, which the packet does carry.
+        from app.llm import HANDOFF_BASE_CONTEXT_KEYS, HANDOFF_OPTIONAL_CONTEXT_KEYS
 
-        # Two references predate this work and are NOT fixed here:
-        #   world_state.resources  -- written defensively ("if ... is present")
-        #                             and mechanics_context.resources, which the
-        #                             packet does carry, is offered alongside it.
-        #   world_state.world_time -- a real dead reference. `get_world_time()`
-        #                             exists in app/world.py and is served over
-        #                             the API, but nothing puts it in the turn
-        #                             packet, while prompts.py:200 tells the
-        #                             model unconditionally to honor it. Wiring
-        #                             it in is a separate change with its own
-        #                             token cost; this records it rather than
-        #                             hiding it.
         known_dead = {"resources", "world_time"}
         prompts = (ROOT / "app" / "prompts.py").read_text(encoding="utf-8", errors="replace")
         named = set(re.findall(r"world_state\.([a-z_]+)", prompts))
-        self.assertTrue(named, "expected prompts.py to reference world_state keys")
-        cleaned = _clean_context_for_handoff(_compact_turn_context({"skills": [], "player": {}}), "test")
-        known = set(cleaned) | HANDOFF_BASE_CONTEXT_KEYS | HANDOFF_OPTIONAL_CONTEXT_KEYS
+        self.assertTrue(named)
+        known = HANDOFF_BASE_CONTEXT_KEYS | HANDOFF_OPTIONAL_CONTEXT_KEYS
         missing = sorted(named - known - known_dead)
-        self.assertFalse(missing, f"prompts.py points the model at keys the packet never carries: {missing}")
-
-    def test_the_catalogue_is_cheap_enough_to_send(self):
-        # It rides in the packet, not SYSTEM_PROMPT: that prompt is already
-        # ~9152 tokens against a shipped 8192 context default.
-        from app.llm import _compact_turn_context, estimated_tokens
-
-        codes = _compact_turn_context({"skills": []})["skill_catalog"]
-        self.assertLess(estimated_tokens(", ".join(codes)), 400)
-
-    def test_the_schema_no_longer_invites_invention(self):
-        prompts = (ROOT / "app" / "prompts.py").read_text(encoding="utf-8", errors="replace")
-        self.assertNotIn('"skill": "lying/speech/insight/etc"', prompts)
-        self.assertIn("skill_catalog", prompts)
+        self.assertFalse(missing, f"prompts.py names keys the packet never carries: {missing}")
 
 
 class TestStatSpellingsResolve(unittest.TestCase):
@@ -485,7 +476,7 @@ class TestSkillNotesStayBounded(unittest.TestCase):
     def test_the_schema_asks_for_a_description_not_a_justification(self):
         prompts = (ROOT / "app" / "prompts.py").read_text(encoding="utf-8", errors="replace")
         self.assertNotIn("why play, training, practice, discovery", prompts)
-        self.assertIn("skill_catalog when one fits", prompts)
+        self.assertIn("enabled_skill_codes when one fits", prompts)
 
 
 if __name__ == "__main__":

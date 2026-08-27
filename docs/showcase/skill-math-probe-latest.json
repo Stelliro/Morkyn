@@ -1,255 +1,2259 @@
 {
-  "model": "qwen3:8b",
   "summary": {
-    "mean_overall_10": 8.1,
-    "mean_growth_math_10": 8.6,
-    "engine_all_ok": true,
+    "model": "qwen3:8b",
+    "packages": 5,
+    "mean_overall_10": 8.7,
+    "min_overall_10": 7.7,
+    "max_overall_10": 9.0,
     "by_id": {
-      "isekai_compound": 8.8,
-      "system_apoc": 8.7,
-      "grim_harbor": 8.3,
-      "cozy_river": 7.2,
-      "wuxia_sect": 7.6
-    }
+      "isekai_compound": 9.0,
+      "system_apoc": 8.8,
+      "grim_harbor": 8.8,
+      "cozy_river": 7.7,
+      "wuxia_sect": 9.0
+    },
+    "math_means": {
+      "growth_math": 8.7,
+      "engine_math": 9.5
+    },
+    "errors_total": 0
   },
   "packages": [
     {
       "id": "isekai_compound",
-      "overall": 8.8,
-      "avg_math": 8.3,
-      "engine_ok": true,
-      "dc_shift_ok": true,
-      "theme_score": 9.0,
+      "theme": "isekai_rpg",
+      "idea": "isekai, simple nearly useless seed skill with overpowered compounding growth, easy-medium difficulty, keep an edge, fair DM, no harem, no free OP start",
+      "fields": {
+        "difficulty": "normal",
+        "game_system": false,
+        "system_style": "subtle blue-window system",
+        "leveling_system": true,
+        "skill_levels_enabled": true,
+        "skill_growth_speed": "very fast",
+        "proficiency_growth_speed": "very fast",
+        "xp_growth_speed": "fast",
+        "new_skill_frequency": "normal",
+        "proficiency_system": true,
+        "skill_style": "standard",
+        "custom_skills": "weak seed skill: Wire Trace, rank F / level 1, compounding evolves toward network dominion under real strain, tracked via subtle blue-window system UI, XP earned through practice, mentor guidance, risk-taking, and breakthroughs, passives allowed as always-on ranks, no free second combat toolkit at Start, more powers may unlock later in play",
+        "dice_checks_enabled": true,
+        "check_difficulty": "normal",
+        "unskilled_mishaps": true,
+        "auto_check_on_risky_actions": true,
+        "show_rolls_in_ui": true,
+        "event_check_frequency": "normal",
+        "encounter_check_frequency": "normal",
+        "backstory_mode": "transmigrated",
+        "memory_policy": "remembers former life",
+        "start_location": "River Compound Fence Line",
+        "quest_style": "job board and personal mysteries",
+        "faction_pressure": "local disputes under guild pressure",
+        "economy": "scarce coin markets",
+        "npc_stat_scaling": "mostly weaker early, relative ranks later",
+        "npc_skill_frequency": "rare specialists and occasional trainers",
+        "world_races": "human",
+        "rank_scale": "F,E,D,C,B,A,S,SS,SSS",
+        "world_style": "isekai fantasy compound",
+        "death_rules": "Downed not deleted; limbs and stamina carry scars that change play.",
+        "tone": "Methodical, resilient, and cautiously optimistic",
+        "custom_style": "Isekai RPG lean: status/skill progression may be diegetic when the system UI is on. A readable game-system window can appear in-world without breaking immersion. Power fantasy: start weak, growth compounds through play, never auto-win. DM stance: always keep fair DM player-agency stance Focus on skill growth through hardship, not prophecy or luck",
+        "loot_rarity": "Loot is scarce and mostly practical\u2014rope, boots, permits\u2014not rainbow epics every turn.",
+        "special_abilities": [
+          {
+            "name": "Vein Pulse",
+            "description": "Channel surging vitality through your veins to unleash a burst of strength, but each use causes temporary nosebleeds and dizziness.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "1 minute of breathlessness and a nosebleed; once per scene",
+            "growth_math": "XP_to_next = 10 * rank_index^1.6; use 5-12 XP \u00d7 risk (1/2/3/5); soft cap after B \u00d70.6 until breakthrough; effect mult \u22481.15^ranks_above_F; +1 check/rank",
+            "power_type": "compounding",
+            "_opening_strength": "mild",
+            "resource_cost": {
+              "energy": 0,
+              "mana": 1,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "mild",
+            "_lock_score": 2
+          },
+          {
+            "name": "Bone Shiver",
+            "description": "Stimulate your bones to create a chilling shockwave that damages nearby foes, but each use drains your body heat for hours.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "10 minutes of heat drain and a brief nosebleed; once per rank/day",
+            "growth_math": "XP_to_next = 15 * rank_index^1.7; use 6-14 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.6 until breakthrough; effect mult \u22481.2^ranks_above_F; +1 check/rank",
+            "power_type": "compounding",
+            "_opening_strength": "moderate",
+            "resource_cost": {
+              "energy": 2,
+              "mana": 1,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "moderate",
+            "_lock_score": 14
+          },
+          {
+            "name": "Pack Order",
+            "description": "You can repack so the load rides quieter. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward dimensional pack logic \u2014 never as a free start.",
+            "locked": true,
+            "prerequisites": "Unlocks after a costly field discovery tied to this aptitude (tool, scar, or debt).",
+            "cost": "2 energy; 3 mana; 30m cooldown",
+            "growth_math": "thresholds F0 E120 D300 C600 B1200 A2400 S4800 SS10000 SSS22000; practice 5 XP, contested 12, mentor 18, life-risk 25; rank +1 check / +14\u201322% compound; breakthrough after B and A before S-tier; passives at C/A/S",
+            "power_type": "compounding",
+            "_fallback_source": "seed_domain_pool",
+            "_opening_strength": "moderate",
+            "_lock_score": 22,
+            "resource_cost": {
+              "energy": 2,
+              "mana": 3,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 30,
+              "debuffs": []
+            },
+            "_power_tier": "moderate",
+            "_resource_cost_diversified": true
+          }
+        ],
+        "starter_equipment": "clothes worn at arrival",
+        "_starter_logic": {
+          "arrival": {
+            "arrival": "isekai_arrival",
+            "isekai": true,
+            "modern_world": false,
+            "cyberpunk_world": false,
+            "fantasy_world": true,
+            "urban_fantasy": false,
+            "allows_this_life_gear": false,
+            "allows_old_world_pockets": true,
+            "minimal_only": false,
+            "notes": "Just arrived/summoned \u2014 only clothes/pockets from the moment of transport; fantasy arms wait until after Start."
+          },
+          "vibe": {
+            "register": "fantasy_lowtech",
+            "origin": "unknown",
+            "path": "already_local",
+            "localized": false,
+            "vocation": ""
+          },
+          "ordinary_start": false,
+          "latent_candidates": [
+            "clothes worn at arrival"
+          ],
+          "summary": "Arrival=isekai_arrival. Vibe=already_local. Kept 1, deferred 0, stripped 0. Latent candidates=1.",
+          "notes": [
+            "Just arrived/summoned \u2014 only clothes/pockets from the moment of transport; fantasy arms wait until after Start.",
+            "Latent candidates (DM-only later): clothes worn at arrival \u2014 may gain a hidden property deep in play if still held, only as a special event."
+          ],
+          "show_popup": false,
+          "popup_title": "",
+          "player_messages": [],
+          "deferred": [],
+          "stripped": [],
+          "gm_brief": "Starter gear fact-check: isekai_arrival. Just arrived/summoned \u2014 only clothes/pockets from the moment of transport; fantasy arms wait until after Start. Inventory at Start (only these): clothes worn at arrival LATENT (DM-only): if the player still holds one of these deep into the campaign, you MAY optionally reveal a hidden property as a special event (clothes worn at arrival). Never auto-power them at Start; never guarantee a reveal. Isekai/summon: opening is the moment of (or just after) arrival. No free fantasy arsenal. A god/system gift, if any, happens in-scene after Start."
+        },
+        "_setup_crosscheck": {
+          "ok": true,
+          "summary": {
+            "bugs": 0,
+            "wrong": 0,
+            "holes": 1,
+            "patterns": 1
+          },
+          "findings": [
+            {
+              "sev": "hole",
+              "code": "system_ui_in_skills_while_game_system_off",
+              "fields": [
+                "custom_skills",
+                "game_system"
+              ],
+              "detail": "custom_skills mentions system UI while game_system is off",
+              "repair": ""
+            },
+            {
+              "sev": "pattern",
+              "code": "abilities_without_origin_field",
+              "fields": [
+                "special_abilities"
+              ],
+              "detail": "special_abilities present; origin field is unused (per-card locks apply)",
+              "repair": "set_origin_both"
+            }
+          ]
+        }
+      },
+      "abilities": [
+        {
+          "name": "Vein Pulse",
+          "description": "Channel surging vitality through your veins to unleash a burst of strength, but each use causes temporary nosebleeds and dizziness.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "1 minute of breathlessness and a nosebleed; once per scene",
+          "growth_math": "XP_to_next = 10 * rank_index^1.6; use 5-12 XP \u00d7 risk (1/2/3/5); soft cap after B \u00d70.6 until breakthrough; effect mult \u22481.15^ranks_above_F; +1 check/rank",
+          "power_type": "compounding",
+          "_opening_strength": "mild",
+          "resource_cost": {
+            "energy": 0,
+            "mana": 1,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "mild",
+          "_lock_score": 2
+        },
+        {
+          "name": "Bone Shiver",
+          "description": "Stimulate your bones to create a chilling shockwave that damages nearby foes, but each use drains your body heat for hours.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "10 minutes of heat drain and a brief nosebleed; once per rank/day",
+          "growth_math": "XP_to_next = 15 * rank_index^1.7; use 6-14 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.6 until breakthrough; effect mult \u22481.2^ranks_above_F; +1 check/rank",
+          "power_type": "compounding",
+          "_opening_strength": "moderate",
+          "resource_cost": {
+            "energy": 2,
+            "mana": 1,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "moderate",
+          "_lock_score": 14
+        },
+        {
+          "name": "Pack Order",
+          "description": "You can repack so the load rides quieter. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward dimensional pack logic \u2014 never as a free start.",
+          "locked": true,
+          "prerequisites": "Unlocks after a costly field discovery tied to this aptitude (tool, scar, or debt).",
+          "cost": "2 energy; 3 mana; 30m cooldown",
+          "growth_math": "thresholds F0 E120 D300 C600 B1200 A2400 S4800 SS10000 SSS22000; practice 5 XP, contested 12, mentor 18, life-risk 25; rank +1 check / +14\u201322% compound; breakthrough after B and A before S-tier; passives at C/A/S",
+          "power_type": "compounding",
+          "_fallback_source": "seed_domain_pool",
+          "_opening_strength": "moderate",
+          "_lock_score": 22,
+          "resource_cost": {
+            "energy": 2,
+            "mana": 3,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 30,
+            "debuffs": []
+          },
+          "_power_tier": "moderate",
+          "_resource_cost_diversified": true
+        }
+      ],
+      "errors": [],
+      "timings_s": {
+        "compose": 24.7,
+        "field:world_style": 23.5,
+        "field:tone": 8.4,
+        "field:difficulty": 6.2,
+        "field:game_system": 8.9,
+        "field:skill_style": 9.1,
+        "field:custom_skills": 8.8,
+        "field:skill_growth_speed": 27.7,
+        "field:proficiency_growth_speed": 23.3,
+        "field:xp_growth_speed": 13.4,
+        "field:rank_scale": 7.6,
+        "field:death_rules": 28.2,
+        "field:loot_rarity": 23.8,
+        "special_abilities": 95.0
+      },
+      "source": "llm+keywords",
       "intent": {
-        "genre": "Fate of a Forgotten Seed",
-        "difficulty": "easy",
+        "genre": "Other-world survival with a fragile compounding skill",
+        "isekai": true,
+        "portal_or_rebirth": "other_world",
+        "difficulty": "normal",
+        "edge": "Injuries and resource scarcity enforce strategic risk-taking",
         "power_fantasy": {
           "start_power": "near_useless",
           "growth": "compounding",
           "system_ui": true,
-          "skill_summary": "the seed grows stronger with each failure, granting passive bonuses"
+          "skill_summary": "A seed skill that grows stronger with each use, but only when under real strain"
         },
-        "adapter": "isekai_rpg"
+        "tone": "Gritty, methodical, and slightly forgiving",
+        "keywords": [
+          "skill",
+          "isek, seed, compounding, edge, fair, sur"
+        ],
+        "adapter_hint": "isekai_rpg",
+        "dm_stance": "always keep fair DM player-agency stance",
+        "style_notes": "Focus on skill growth through hardship, not prophecy or luck",
+        "raw_idea": "isekai, simple nearly useless seed skill with overpowered compounding growth, easy-medium difficulty, keep an edge, fair DM, no harem, no free OP start"
       },
-      "fields": {
-        "difficulty": "easy",
-        "skill_style": "training-heavy",
+      "session_theme": {
+        "adapter_hint": "isekai_rpg",
+        "genre": "Other-world survival with a fragile compounding skill",
+        "isekai": true,
+        "dm_stance": "always keep fair DM player-agency stance",
+        "power_fantasy": {
+          "start_power": "near_useless",
+          "growth": "compounding",
+          "system_ui": true,
+          "skill_summary": "A seed skill that grows stronger with each use, but only when under real strain"
+        },
+        "tone": "Gritty, methodical, and slightly forgiving",
+        "edge": "Injuries and resource scarcity enforce strategic risk-taking",
+        "keywords": [
+          "skill",
+          "isek, seed, compounding, edge, fair, sur"
+        ],
+        "style_notes": "Focus on skill growth through hardship, not prophecy or luck",
+        "theme_model": ""
+      },
+      "field_overrides": {
+        "difficulty": "normal",
+        "game_system": true,
+        "system_style": "subtle blue-window system",
+        "leveling_system": true,
+        "skill_levels_enabled": true,
         "skill_growth_speed": "very fast",
+        "proficiency_growth_speed": "fast",
+        "xp_growth_speed": "fast",
+        "new_skill_frequency": "normal",
+        "proficiency_system": true,
+        "skill_style": "training-heavy",
+        "custom_skills": "OP_MC_FRAME: start with one weak seed power (domain chosen later; never default weather/observation); near-useless rank F / level 1; Growth Math must compound toward late OP (ladder through S/SS/SSS, risk mult, soft caps, breakthroughs, rank\u2192bonus, late multipliers); passives allowed as always-on ranks; more powers may unlock later via play \u2014 only the opening kit is thin; track via subtle system UI when on, else DM notes; no free second combat toolkit at Start",
+        "dice_checks_enabled": true,
+        "check_difficulty": "normal",
+        "unskilled_mishaps": true,
+        "auto_check_on_risky_actions": true,
+        "show_rolls_in_ui": true,
+        "event_check_frequency": "normal",
+        "encounter_check_frequency": "normal",
+        "backstory_mode": "transmigrated",
+        "memory_policy": "remembers former life",
+        "start_location": "River Compound Fence Line",
+        "quest_style": "job board and personal mysteries",
+        "faction_pressure": "local disputes under guild pressure",
+        "economy": "scarce coin markets",
+        "npc_stat_scaling": "mostly weaker early, relative ranks later",
+        "npc_skill_frequency": "rare specialists and occasional trainers",
+        "world_races": "human",
         "rank_scale": "F,E,D,C,B,A,S,SS,SSS",
-        "custom_skills": "ONE_SKILL_FRAME: exactly one weak seed skill/ability domain (domain chosen later; never default weather/observation); starts near-useless (rank F / level 1); compounds only through use, training, and risk; track ranks via subtle system UI when on, else DM notes; XP from practice, mentors, and high-risk successes; put calculable XP/rank formulas on the ability Growth Math field; soft caps until breakthroughs; no second combat/speech toolkit at start"
+        "world_style": "isekai fantasy compound",
+        "death_rules": "lasting injuries",
+        "tone": "Gritty, methodical, and slightly forgiving",
+        "custom_style": "Isekai RPG lean: status/skill progression may be diegetic when the system UI is on. A readable game-system window can appear in-world without breaking immersion. Power fantasy: start weak, growth compounds through play, never auto-win. DM stance: always keep fair DM player-agency stance Focus on skill growth through hardship, not prophecy or luck"
       },
-      "abilities": [
-        {
-          "name": "ONE_SKILL_FRAME: Seed Growth - a weak seed skill that compounds through use, training, and risk. XP ",
-          "score": 8.3,
-          "calc": true,
-          "template": true,
-          "growth_math": "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success \u00d72; soft cap at L6 (XP \u00d70.6 until setback recovery); effect magnitude +8% per level",
-          "desc": "ONE_SKILL_FRAME: Seed Growth - a weak seed skill that compounds through use, training, and risk. XP from practice, mentors, and high-risk su"
+      "dirty": {
+        "world_style": [
+          "slogan_world_style"
+        ],
+        "starter_equipment": [
+          "starter_logic_arrival"
+        ]
+      },
+      "scoring": {
+        "scores": {
+          "theme_alignment": 7.0,
+          "skill_settings": 10.0,
+          "growth_math": 10.0,
+          "custom_skills": 8.5,
+          "engine_math": 9.5
+        },
+        "overall_10": 9.0,
+        "notes": [
+          "custom_skills includes calculable math (good for seeds)"
+        ],
+        "math_details": [
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              10.0,
+              1.6,
+              5.0,
+              12.0,
+              1.0,
+              2.0,
+              3.0,
+              5.0,
+              0.6,
+              1.15,
+              1.0
+            ],
+            "text": "XP_to_next = 10 * rank_index^1.6; use 5-12 XP \u00d7 risk (1/2/3/5); soft cap after B \u00d70.6 until breakthrough; effect mult \u22481.15^ranks_above_F; +1 check/rank",
+            "ability": "Vein Pulse",
+            "description": "Channel surging vitality through your veins to unleash a burst of strength, but each use causes temporary nosebleeds and dizziness."
+          },
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              15.0,
+              1.7,
+              6.0,
+              14.0,
+              1.0,
+              2.0,
+              3.0,
+              4.0,
+              0.6,
+              1.2,
+              1.0
+            ],
+            "text": "XP_to_next = 15 * rank_index^1.7; use 6-14 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.6 until breakthrough; effect mult \u22481.2^ranks_above_F; +1 check/rank",
+            "ability": "Bone Shiver",
+            "description": "Stimulate your bones to create a chilling shockwave that damages nearby foes, but each use drains your body heat for hours."
+          },
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              20.0,
+              0.0,
+              0.0,
+              200.0,
+              400.0,
+              800.0,
+              0.0,
+              2000.0,
+              5.0,
+              12.0,
+              18.0,
+              25.0,
+              1.0,
+              14.0,
+              22.0
+            ],
+            "text": "thresholds F0 E120 D300 C600 B1200 A2400 S4800 SS10000 SSS22000; practice 5 XP, contested 12, mentor 18, life-risk 25; rank +1 check / +14\u201322% compound; breakthrough after B and A before S-tier; passives at C/A/S",
+            "ability": "Pack Order",
+            "description": "You can repack so the load rides quieter. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward dimensional pack logic \u2014 "
+          }
+        ],
+        "engine_samples": {
+          "symbol_lore": {
+            "natural": 4,
+            "total": 9,
+            "dc": 14,
+            "degree": "failure",
+            "outcome": "failure",
+            "attribute_mod": 2,
+            "skill_rank": 3,
+            "lines": [
+              "You rolled 4 with your base of 14 (intelligence) and a modifier of +5 (attr +2 + skill +3).",
+              "Total: 9  \u00b7  Base success (DC): 14"
+            ]
+          },
+          "melee_contested": {
+            "natural": 11,
+            "total": 12,
+            "dc": 23,
+            "dc_source": "contested",
+            "degree": "unskilled_mishap",
+            "unskilled": true,
+            "mishap": true
+          },
+          "melee_static_hard": {
+            "dc": 14,
+            "degree": "partial"
+          }
+        },
+        "intent_snapshot": {
+          "genre": "Other-world survival with a fragile compounding skill",
+          "difficulty": "normal",
+          "isekai": true,
+          "adapter_hint": "isekai_rpg",
+          "power_fantasy": {
+            "start_power": "near_useless",
+            "growth": "compounding",
+            "system_ui": true,
+            "skill_summary": "A seed skill that grows stronger with each use, but only when under real strain"
+          },
+          "tone": "Gritty, methodical, and slightly forgiving"
         }
-      ],
-      "engine_sample": {
-        "total": 9,
-        "natural": 4,
-        "attr_mod": 2,
-        "skill_rank": 3,
-        "dc": 12,
-        "degree": "partial",
-        "easy_dc": 10,
-        "hard_dc": 14
-      }
+      },
+      "wall_s": 308.6
     },
     {
       "id": "system_apoc",
-      "overall": 8.7,
-      "avg_math": 8.3,
-      "engine_ok": true,
-      "dc_shift_ok": true,
-      "theme_score": 8.5,
+      "theme": "system_rpg",
+      "idea": "system apocalypse after the sky broke; status windows; hard difficulty; training-heavy skills; no free power spikes; political scavenger factions",
+      "fields": {
+        "difficulty": "brutal",
+        "game_system": false,
+        "skill_growth_speed": "very fast",
+        "proficiency_growth_speed": "very fast",
+        "xp_growth_speed": "very fast",
+        "new_skill_frequency": "normal",
+        "skill_levels_enabled": true,
+        "proficiency_system": true,
+        "skill_style": "standard",
+        "custom_skills": "weak seed skill: System Static Whisper, rank F / level 1, compounding toward plague swarm crown through relentless UI training, track via subtle system UI, XP from practice, risk, and breakthroughs in scavenger factions, passives allowed as always-on domain expressions, no free second combat toolkit at Start",
+        "dice_checks_enabled": true,
+        "check_difficulty": "brutal",
+        "unskilled_mishaps": true,
+        "auto_check_on_risky_actions": true,
+        "show_rolls_in_ui": true,
+        "event_check_frequency": "frequent",
+        "encounter_check_frequency": "normal",
+        "tone": "Power is earned in mud and menus, never gifted",
+        "custom_style": "A readable game-system window can appear in-world without breaking immersion. Power fantasy: start weak, growth compounds through play, never auto-win. DM stance: always keep fair DM player-agency stance After the sky broke, status windows paint half-real quests on rust.",
+        "world_style": "frontier dark fantasy",
+        "rank_scale": "F,E,D,C,B,A,S,SS,SSS",
+        "death_rules": "Die once, lose all progress; revive through faction aid, but with permanent skill loss and reputation damage",
+        "loot_rarity": "Loot is scarce and mostly practical\u2014rope, boots, permits\u2014not rainbow epics every turn.",
+        "special_abilities": [
+          {
+            "name": "Status Window Overload",
+            "description": "Force all nearby status windows to display your health, stamina, and skill levels, revealing hidden weaknesses to allies and enemies. Lasts 10 seconds.",
+            "locked": true,
+            "prerequisites": "Unlocks after a witnessed oath or contract about using this carefully.",
+            "cost": "15 seconds of breathlessness; once per scene",
+            "growth_math": "Rank 1: 10 sec duration; Rank 2: 15 sec; Rank 3: 20 sec (soft cap at 30 sec). XP: 50 per rank.",
+            "power_type": "compounding",
+            "_opening_strength": "moderate",
+            "resource_cost": {
+              "energy": 2,
+              "mana": 1,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "moderate",
+            "_lock_score": 22
+          },
+          {
+            "name": "Quill Steady",
+            "description": "You can write one clean line under stress. It only answers cleanly when you have quill/ink. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward living contract script / word-binding \u2014 never as a free start.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "2 energy; 3 mana; 30m cooldown",
+            "growth_math": "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success \u00d72; soft cap at L6 (XP \u00d70.6 until setback recovery); effect magnitude +8% per level",
+            "power_type": "compounding",
+            "_fallback_source": "seed_domain_pool",
+            "_opening_strength": "moderate",
+            "_lock_score": 22,
+            "resource_cost": {
+              "energy": 2,
+              "mana": 3,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 30,
+              "debuffs": []
+            },
+            "_power_tier": "moderate",
+            "_resource_cost_diversified": true
+          },
+          {
+            "name": "Vein Echo",
+            "description": "Your touch leaves a faint, glowing mark on surfaces, revealing hidden pathways or dormant mechanisms. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward mapping the veins of the world.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "1 stamina per use",
+            "growth_math": "OP seed: F\u2192E@60 E\u2192D@140 D\u2192C@320 C\u2192B@700 B\u2192A@1500 A\u2192S@3200 S\u2192SS@7000 SS\u2192SSS@15000; use 6-14 XP \u00d7 risk (1/2/3/5); XP_to_next = 40 * rank_index^1.55; soft caps after each band \u00d70.55 until contested breakthrough; effect mult \u2248 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
+            "power_type": "passive",
+            "_opening_strength": "moderate",
+            "_dedupe_source": "rework",
+            "_lock_score": 12
+          }
+        ],
+        "backstory_mode": "known",
+        "memory_policy": "ordinary memory",
+        "world_races": "human",
+        "_starter_logic": {
+          "arrival": {
+            "arrival": "native_life",
+            "isekai": false,
+            "modern_world": false,
+            "cyberpunk_world": false,
+            "fantasy_world": true,
+            "urban_fantasy": false,
+            "allows_this_life_gear": true,
+            "allows_old_world_pockets": false,
+            "minimal_only": false,
+            "notes": "Player has lived in this world; gear must fit that life and tech."
+          },
+          "vibe": {
+            "register": "fantasy_lowtech",
+            "origin": "unknown",
+            "path": "already_local",
+            "localized": false,
+            "vocation": ""
+          },
+          "ordinary_start": true,
+          "latent_candidates": [],
+          "summary": "Arrival=native_life. Vibe=already_local. Kept 0, deferred 0, stripped 0.",
+          "notes": [
+            "Player has lived in this world; gear must fit that life and tech.",
+            "Ordinary this-life start: kit is mundane at Start (common, no enchantments/granted abilities)."
+          ],
+          "show_popup": false,
+          "popup_title": "",
+          "player_messages": [],
+          "deferred": [],
+          "stripped": [],
+          "gm_brief": "Starter gear fact-check: native_life. Player has lived in this world; gear must fit that life and tech. Inventory at Start (only these): (clothes on body only) Ordinary / this-life start: all starter items are mundane at Start (rarity=common, enchantments=[], granted_abilities=[]). Clothing must match vocation."
+        },
+        "_setup_crosscheck": {
+          "ok": true,
+          "summary": {
+            "bugs": 0,
+            "wrong": 0,
+            "holes": 1,
+            "patterns": 1
+          },
+          "findings": [
+            {
+              "sev": "hole",
+              "code": "system_ui_in_skills_while_game_system_off",
+              "fields": [
+                "custom_skills",
+                "game_system"
+              ],
+              "detail": "custom_skills mentions system UI while game_system is off",
+              "repair": ""
+            },
+            {
+              "sev": "pattern",
+              "code": "abilities_without_origin_field",
+              "fields": [
+                "special_abilities"
+              ],
+              "detail": "special_abilities present; origin field is unused (per-card locks apply)",
+              "repair": "set_origin_both"
+            }
+          ]
+        }
+      },
+      "abilities": [
+        {
+          "name": "Status Window Overload",
+          "description": "Force all nearby status windows to display your health, stamina, and skill levels, revealing hidden weaknesses to allies and enemies. Lasts 10 seconds.",
+          "locked": true,
+          "prerequisites": "Unlocks after a witnessed oath or contract about using this carefully.",
+          "cost": "15 seconds of breathlessness; once per scene",
+          "growth_math": "Rank 1: 10 sec duration; Rank 2: 15 sec; Rank 3: 20 sec (soft cap at 30 sec). XP: 50 per rank.",
+          "power_type": "compounding",
+          "_opening_strength": "moderate",
+          "resource_cost": {
+            "energy": 2,
+            "mana": 1,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "moderate",
+          "_lock_score": 22
+        },
+        {
+          "name": "Quill Steady",
+          "description": "You can write one clean line under stress. It only answers cleanly when you have quill/ink. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward living contract script / word-binding \u2014 never as a free start.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "2 energy; 3 mana; 30m cooldown",
+          "growth_math": "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success \u00d72; soft cap at L6 (XP \u00d70.6 until setback recovery); effect magnitude +8% per level",
+          "power_type": "compounding",
+          "_fallback_source": "seed_domain_pool",
+          "_opening_strength": "moderate",
+          "_lock_score": 22,
+          "resource_cost": {
+            "energy": 2,
+            "mana": 3,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 30,
+            "debuffs": []
+          },
+          "_power_tier": "moderate",
+          "_resource_cost_diversified": true
+        },
+        {
+          "name": "Vein Echo",
+          "description": "Your touch leaves a faint, glowing mark on surfaces, revealing hidden pathways or dormant mechanisms. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward mapping the veins of the world.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "1 stamina per use",
+          "growth_math": "OP seed: F\u2192E@60 E\u2192D@140 D\u2192C@320 C\u2192B@700 B\u2192A@1500 A\u2192S@3200 S\u2192SS@7000 SS\u2192SSS@15000; use 6-14 XP \u00d7 risk (1/2/3/5); XP_to_next = 40 * rank_index^1.55; soft caps after each band \u00d70.55 until contested breakthrough; effect mult \u2248 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
+          "power_type": "passive",
+          "_opening_strength": "moderate",
+          "_dedupe_source": "rework",
+          "_lock_score": 12
+        }
+      ],
+      "errors": [],
+      "timings_s": {
+        "compose": 12.4,
+        "field:world_style": 7.6,
+        "field:tone": 8.3,
+        "field:difficulty": 7.2,
+        "field:game_system": 8.4,
+        "field:skill_style": 7.7,
+        "field:custom_skills": 9.0,
+        "field:skill_growth_speed": 6.9,
+        "field:proficiency_growth_speed": 7.2,
+        "field:xp_growth_speed": 6.4,
+        "field:rank_scale": 7.6,
+        "field:death_rules": 1.0,
+        "field:loot_rarity": 1.1,
+        "special_abilities": 38.3
+      },
+      "source": "llm+keywords",
       "intent": {
-        "genre": "Post-Apocalyptic Tech Ruins",
-        "difficulty": "hard",
+        "genre": "System collapse survival RPG",
+        "isekai": false,
+        "portal_or_rebirth": "other_world",
+        "difficulty": "brutal",
+        "edge": "Resource scarcity and faction betrayal",
         "power_fantasy": {
           "start_power": "near_useless",
           "growth": "compounding",
           "system_ui": true,
-          "skill_summary": "Survival, hacking, and system manipulation"
+          "skill_summary": "Master UI-based skills through relentless training"
         },
-        "adapter": "system_rpg"
+        "tone": "Relentless logistics and UI pressure",
+        "keywords": [
+          "system",
+          "skill",
+          "status",
+          "system apocalypse",
+          "status windows",
+          "training",
+          "hard",
+          "scavenger factions",
+          "no power spikes",
+          "ruin",
+          "scaffold"
+        ],
+        "adapter_hint": "system_rpg",
+        "dm_stance": "always keep fair DM player-agency stance",
+        "style_notes": "After the sky broke, status windows paint half-real quests on rust.",
+        "raw_idea": "system apocalypse after the sky broke; status windows; hard difficulty; training-heavy skills; no free power spikes; political scavenger factions"
       },
-      "fields": {
-        "difficulty": "hard",
-        "skill_style": "training-heavy",
+      "session_theme": {
+        "adapter_hint": "system_rpg",
+        "genre": "System collapse survival RPG",
+        "isekai": false,
+        "dm_stance": "always keep fair DM player-agency stance",
+        "power_fantasy": {
+          "start_power": "near_useless",
+          "growth": "compounding",
+          "system_ui": true,
+          "skill_summary": "Master UI-based skills through relentless training"
+        },
+        "tone": "Relentless logistics and UI pressure",
+        "edge": "Resource scarcity and faction betrayal",
+        "keywords": [
+          "system",
+          "skill",
+          "status",
+          "system apocalypse",
+          "status windows",
+          "training",
+          "hard",
+          "scavenger factions",
+          "no power spikes",
+          "ruin",
+          "scaffold"
+        ],
+        "style_notes": "After the sky broke, status windows paint half-real quests on rust.",
+        "theme_model": ""
+      },
+      "field_overrides": {
+        "difficulty": "brutal",
+        "game_system": true,
         "skill_growth_speed": "very fast",
-        "rank_scale": null,
-        "custom_skills": "ONE_SKILL_FRAME: exactly one weak seed skill/ability domain (domain chosen later; never default weather/observation); starts near-useless (rank F / level 1); compounds only through use, training, and risk; track ranks via subtle system UI when on, else DM notes; XP from practice, mentors, and high-risk successes; put calculable XP/rank formulas on the ability Growth Math field; soft caps until breakthroughs; no second combat/speech toolkit at start"
+        "proficiency_growth_speed": "fast",
+        "xp_growth_speed": "fast",
+        "new_skill_frequency": "normal",
+        "skill_levels_enabled": true,
+        "proficiency_system": true,
+        "skill_style": "training-heavy",
+        "custom_skills": "OP_MC_FRAME: start with one weak seed power (domain chosen later; never default weather/observation); near-useless rank F / level 1; Growth Math must compound toward late OP (ladder through S/SS/SSS, risk mult, soft caps, breakthroughs, rank\u2192bonus, late multipliers); passives allowed as always-on ranks; more powers may unlock later via play \u2014 only the opening kit is thin; track via subtle system UI when on, else DM notes; no free second combat toolkit at Start",
+        "dice_checks_enabled": true,
+        "check_difficulty": "brutal",
+        "unskilled_mishaps": true,
+        "auto_check_on_risky_actions": true,
+        "show_rolls_in_ui": true,
+        "event_check_frequency": "frequent",
+        "encounter_check_frequency": "normal",
+        "tone": "Relentless logistics and UI pressure",
+        "custom_style": "A readable game-system window can appear in-world without breaking immersion. Power fantasy: start weak, growth compounds through play, never auto-win. DM stance: always keep fair DM player-agency stance After the sky broke, status windows paint half-real quests on rust."
       },
-      "abilities": [
-        {
-          "name": "System Overload: A weak seed skill in system manipulation. Rank F / Level 1. Compounds through use, ",
-          "score": 8.3,
-          "calc": true,
-          "template": true,
-          "growth_math": "rank F\u2192E@80 E\u2192D@200 D\u2192C@450 C\u2192B@900; domain use 5-12 skill XP \u00d7 risk (1 safe/2 contested/3 life-risk); XP_to_next = 50 * rank_index^1.4; after C practice XP \u00d70.5 until mentor breakthrough; +1 domain check per rank above F",
-          "desc": "System Overload: A weak seed skill in system manipulation. Rank F / Level 1. Compounds through use, training, and risk. XP from practice, me"
+      "dirty": {
+        "backstory_mode": [
+          "normalized_origin_mode"
+        ],
+        "memory_policy": [
+          "normalized_memory_policy"
+        ],
+        "world_style": [
+          "slogan_world_style"
+        ],
+        "world_races": [
+          "world_races_widened_from_style"
+        ]
+      },
+      "scoring": {
+        "scores": {
+          "theme_alignment": 7.0,
+          "skill_settings": 10.0,
+          "growth_math": 8.8,
+          "custom_skills": 8.5,
+          "engine_math": 9.5
+        },
+        "overall_10": 8.8,
+        "notes": [
+          "custom_skills includes calculable math (good for seeds)"
+        ],
+        "math_details": [
+          {
+            "score_10": 6.4,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": false,
+              "has_per_use": false,
+              "has_risk_mult": false,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              1.0,
+              10.0,
+              2.0,
+              15.0,
+              3.0,
+              20.0,
+              30.0,
+              50.0
+            ],
+            "text": "Rank 1: 10 sec duration; Rank 2: 15 sec; Rank 3: 20 sec (soft cap at 30 sec). XP: 50 per rank.",
+            "ability": "Status Window Overload",
+            "description": "Force all nearby status windows to display your health, stamina, and skill levels, revealing hidden weaknesses to allies and enemies. Lasts 10 seconds."
+          },
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              1.0,
+              10.0,
+              30.0,
+              12.0,
+              3.0,
+              8.0,
+              2.0,
+              0.6,
+              8.0
+            ],
+            "text": "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success \u00d72; soft cap at L6 (XP \u00d70.6 until setback recovery); effect magnitude +8% per level",
+            "ability": "Quill Steady",
+            "description": "You can write one clean line under stress. It only answers cleanly when you have quill/ink. At F rank the effect is brief, incomplete, or easy to miss. With pra"
+          },
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              60.0,
+              140.0,
+              320.0,
+              700.0,
+              1500.0,
+              3200.0,
+              7000.0,
+              15000.0,
+              6.0,
+              14.0,
+              1.0,
+              2.0,
+              3.0,
+              5.0,
+              40.0,
+              1.55,
+              0.55,
+              1.22,
+              1.0
+            ],
+            "text": "OP seed: F\u2192E@60 E\u2192D@140 D\u2192C@320 C\u2192B@700 B\u2192A@1500 A\u2192S@3200 S\u2192SS@7000 SS\u2192SSS@15000; use 6-14 XP \u00d7 risk (1/2/3/5); XP_to_next = 40 * rank_index^1.55; soft caps after each band \u00d70.55 until contested breakthrough; effect mult \u2248 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
+            "ability": "Vein Echo",
+            "description": "Your touch leaves a faint, glowing mark on surfaces, revealing hidden pathways or dormant mechanisms. At F rank the effect is brief, incomplete, or easy to miss"
+          }
+        ],
+        "engine_samples": {
+          "symbol_lore": {
+            "natural": 4,
+            "total": 9,
+            "dc": 18,
+            "degree": "bad_nothing",
+            "outcome": "failure",
+            "attribute_mod": 2,
+            "skill_rank": 3,
+            "lines": [
+              "You rolled 4 with your base of 14 (intelligence) and a modifier of +5 (attr +2 + skill +3).",
+              "Total: 9  \u00b7  Base success (DC): 18"
+            ]
+          },
+          "melee_contested": {
+            "natural": 11,
+            "total": 12,
+            "dc": 23,
+            "dc_source": "contested",
+            "degree": "unskilled_mishap",
+            "unskilled": true,
+            "mishap": true
+          },
+          "melee_static_hard": {
+            "dc": 14,
+            "degree": "partial"
+          }
+        },
+        "intent_snapshot": {
+          "genre": "System collapse survival RPG",
+          "difficulty": "brutal",
+          "isekai": false,
+          "adapter_hint": "system_rpg",
+          "power_fantasy": {
+            "start_power": "near_useless",
+            "growth": "compounding",
+            "system_ui": true,
+            "skill_summary": "Master UI-based skills through relentless training"
+          },
+          "tone": "Relentless logistics and UI pressure"
         }
-      ],
-      "engine_sample": {
-        "total": 9,
-        "natural": 4,
-        "attr_mod": 2,
-        "skill_rank": 3,
-        "dc": 16,
-        "degree": "bad_nothing",
-        "easy_dc": 10,
-        "hard_dc": 14
-      }
+      },
+      "wall_s": 129.2
     },
     {
       "id": "grim_harbor",
-      "overall": 8.3,
-      "avg_math": 8.3,
-      "engine_ok": true,
-      "dc_shift_ok": true,
-      "theme_score": 7.0,
-      "intent": {
-        "genre": "grim harbor dystopia",
+      "theme": "grimdark",
+      "idea": "I wake in a rationed harbor city after a desk-job death. No destiny. Work, debt, nearly useless filing habit that only compounds if I risk real mistakes. Hard but fair, lasting injuries, scarce loot.",
+      "fields": {
         "difficulty": "hard",
+        "skill_growth_speed": "fast",
+        "proficiency_growth_speed": "fast",
+        "xp_growth_speed": "fast",
+        "new_skill_frequency": "normal",
+        "skill_levels_enabled": true,
+        "proficiency_system": true,
+        "skill_style": "standard",
+        "custom_skills": "weak seed skill: Filing Clerk's Eye, rank F / level 1, compounding through real filing errors that cost rations/work/freedom, tracked via system UI, XP from practice, mentors, risk, breakthroughs, passives allowed as always-on ranks, no free second combat toolkit at Start, more powers may unlock later via play",
+        "death_rules": "Downed not deleted; limbs and stamina carry scars that change play.",
+        "tone": "Cynical, dry, and fair with lasting injuries that never fade",
+        "custom_style": "Power fantasy: start weak, growth compounds through play, never auto-win. DM stance: always keep fair DM player-agency stance Transmigration into dock labor; former desk life is a liability",
+        "world_style": "frontier dark fantasy",
+        "game_system": false,
+        "rank_scale": "F,E,D,C,B,A,S,SS,SSS",
+        "loot_rarity": "Rationed loot: permits, boots, and medicine are common; enchanted gear is a late-game rumor.",
+        "special_abilities": [
+          {
+            "name": "Ration Whisper",
+            "description": "Influence others to ration resources by subtly altering their perception of scarcity; each rank allows one new rationing effect, but the target may resist with a bureaucratic protest.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "1 hour of subtle influence per use; risk of a bureaucratic protest requiring 2 hours to resolve",
+            "growth_math": "XP: 55 per rank; breakthrough at rank 5 (rationing becomes a permanent condition).",
+            "power_type": "compounding",
+            "_opening_strength": "mild",
+            "resource_cost": {
+              "energy": 1,
+              "mana": 0,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "mild",
+            "_lock_score": 0
+          },
+          {
+            "name": "Grip Anchor",
+            "description": "You can press your palm against a surface and create a temporary tether, allowing you to pull yourself upward or across. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward a full-body grip that resists removal.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "A brief moment of vertigo and a sharp intake of breath",
+            "growth_math": "XP_to_next = 42 * rank_index^1.62 (F=1); use 6-12 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.58 until breakthrough; ladder F\u2026S/SS/SSS; each rank +1 check / +16\u201324% effect",
+            "power_type": "linear",
+            "_opening_strength": "moderate",
+            "_dedupe_source": "rework",
+            "_lock_score": 10,
+            "resource_cost": {
+              "energy": 2,
+              "mana": 1,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "moderate"
+          },
+          {
+            "name": "Solder Kiss",
+            "description": "You can cut one straight groove in soft stone or wood. It only answers cleanly when you have chisel. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward rune-cutting / earth-scribe \u2014 never as a free start Focuses on a different practical niche than the character's other powers.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "A brief headache and ringing in the ears",
+            "growth_math": "OP seed: F\u2192E@60 E\u2192D@140 D\u2192C@320 C\u2192B@700 B\u2192A@1500 A\u2192S@3200 S\u2192SS@7000 SS\u2192SSS@15000; use 6-14 XP \u00d7 risk (1/2/3/5); XP_to_next = 40 * rank_index^1.55; soft caps after each band \u00d70.55 until contested breakthrough; effect mult \u2248 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
+            "power_type": "linear",
+            "_dedupe_source": "local_remake",
+            "_opening_strength": "moderate",
+            "resource_cost": {
+              "energy": 1,
+              "mana": 4,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "moderate"
+          },
+          {
+            "name": "Camp Ash",
+            "description": "You can one constellation useful for rough direction. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward star-path stepping \u2014 never as a free start Focuses on a different practical niche than the character's other powers.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "2 energy; 3 mana; 30m cooldown",
+            "growth_math": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.55 until breakthrough; ladder F\u2026S/SS/SSS; each rank +1 check / +14\u201322% effect",
+            "power_type": "linear",
+            "_dedupe_source": "local_remake",
+            "_opening_strength": "moderate",
+            "resource_cost": {
+              "energy": 2,
+              "mana": 3,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 30,
+              "debuffs": []
+            },
+            "_power_tier": "moderate",
+            "_resource_cost_diversified": true
+          }
+        ],
+        "backstory_mode": "known",
+        "memory_policy": "ordinary memory",
+        "world_races": "human",
+        "_starter_logic": {
+          "arrival": {
+            "arrival": "native_life",
+            "isekai": false,
+            "modern_world": false,
+            "cyberpunk_world": false,
+            "fantasy_world": true,
+            "urban_fantasy": false,
+            "allows_this_life_gear": true,
+            "allows_old_world_pockets": false,
+            "minimal_only": false,
+            "notes": "Player has lived in this world; gear must fit that life and tech."
+          },
+          "vibe": {
+            "register": "fantasy_lowtech",
+            "origin": "unknown",
+            "path": "already_local",
+            "localized": false,
+            "vocation": ""
+          },
+          "ordinary_start": true,
+          "latent_candidates": [],
+          "summary": "Arrival=native_life. Vibe=already_local. Kept 0, deferred 0, stripped 0.",
+          "notes": [
+            "Player has lived in this world; gear must fit that life and tech.",
+            "Ordinary this-life start: kit is mundane at Start (common, no enchantments/granted abilities)."
+          ],
+          "show_popup": false,
+          "popup_title": "",
+          "player_messages": [],
+          "deferred": [],
+          "stripped": [],
+          "gm_brief": "Starter gear fact-check: native_life. Player has lived in this world; gear must fit that life and tech. Inventory at Start (only these): (clothes on body only) Ordinary / this-life start: all starter items are mundane at Start (rarity=common, enchantments=[], granted_abilities=[]). Clothing must match vocation."
+        },
+        "_setup_crosscheck": {
+          "ok": false,
+          "summary": {
+            "bugs": 0,
+            "wrong": 1,
+            "holes": 1,
+            "patterns": 1
+          },
+          "findings": [
+            {
+              "sev": "hole",
+              "code": "system_ui_in_skills_while_game_system_off",
+              "fields": [
+                "custom_skills",
+                "game_system"
+              ],
+              "detail": "custom_skills mentions system UI while game_system is off",
+              "repair": ""
+            },
+            {
+              "sev": "pattern",
+              "code": "abilities_without_origin_field",
+              "fields": [
+                "special_abilities"
+              ],
+              "detail": "special_abilities present; origin field is unused (per-card locks apply)",
+              "repair": "set_origin_both"
+            },
+            {
+              "sev": "wrong",
+              "code": "ability_near_duplicates",
+              "fields": [
+                "special_abilities"
+              ],
+              "detail": "Near-duplicate abilities: ['Splint Stick', 'Rapier Tip'] score=0.5",
+              "repair": "deduped_rounds=3"
+            }
+          ]
+        }
+      },
+      "abilities": [
+        {
+          "name": "Ration Whisper",
+          "description": "Influence others to ration resources by subtly altering their perception of scarcity; each rank allows one new rationing effect, but the target may resist with a bureaucratic protest.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "1 hour of subtle influence per use; risk of a bureaucratic protest requiring 2 hours to resolve",
+          "growth_math": "XP: 55 per rank; breakthrough at rank 5 (rationing becomes a permanent condition).",
+          "power_type": "compounding",
+          "_opening_strength": "mild",
+          "resource_cost": {
+            "energy": 1,
+            "mana": 0,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "mild",
+          "_lock_score": 0
+        },
+        {
+          "name": "Grip Anchor",
+          "description": "You can press your palm against a surface and create a temporary tether, allowing you to pull yourself upward or across. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward a full-body grip that resists removal.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "A brief moment of vertigo and a sharp intake of breath",
+          "growth_math": "XP_to_next = 42 * rank_index^1.62 (F=1); use 6-12 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.58 until breakthrough; ladder F\u2026S/SS/SSS; each rank +1 check / +16\u201324% effect",
+          "power_type": "linear",
+          "_opening_strength": "moderate",
+          "_dedupe_source": "rework",
+          "_lock_score": 10,
+          "resource_cost": {
+            "energy": 2,
+            "mana": 1,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "moderate"
+        },
+        {
+          "name": "Solder Kiss",
+          "description": "You can cut one straight groove in soft stone or wood. It only answers cleanly when you have chisel. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward rune-cutting / earth-scribe \u2014 never as a free start Focuses on a different practical niche than the character's other powers.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "A brief headache and ringing in the ears",
+          "growth_math": "OP seed: F\u2192E@60 E\u2192D@140 D\u2192C@320 C\u2192B@700 B\u2192A@1500 A\u2192S@3200 S\u2192SS@7000 SS\u2192SSS@15000; use 6-14 XP \u00d7 risk (1/2/3/5); XP_to_next = 40 * rank_index^1.55; soft caps after each band \u00d70.55 until contested breakthrough; effect mult \u2248 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
+          "power_type": "linear",
+          "_dedupe_source": "local_remake",
+          "_opening_strength": "moderate",
+          "resource_cost": {
+            "energy": 1,
+            "mana": 4,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "moderate"
+        },
+        {
+          "name": "Camp Ash",
+          "description": "You can one constellation useful for rough direction. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward star-path stepping \u2014 never as a free start Focuses on a different practical niche than the character's other powers.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "2 energy; 3 mana; 30m cooldown",
+          "growth_math": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.55 until breakthrough; ladder F\u2026S/SS/SSS; each rank +1 check / +14\u201322% effect",
+          "power_type": "linear",
+          "_dedupe_source": "local_remake",
+          "_opening_strength": "moderate",
+          "resource_cost": {
+            "energy": 2,
+            "mana": 3,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 30,
+            "debuffs": []
+          },
+          "_power_tier": "moderate",
+          "_resource_cost_diversified": true
+        }
+      ],
+      "errors": [],
+      "timings_s": {
+        "compose": 4.2,
+        "field:world_style": 1.0,
+        "field:tone": 0.9,
+        "field:difficulty": 0.6,
+        "field:game_system": 0.9,
+        "field:skill_style": 0.9,
+        "field:custom_skills": 2.2,
+        "field:skill_growth_speed": 0.8,
+        "field:proficiency_growth_speed": 0.7,
+        "field:xp_growth_speed": 0.7,
+        "field:rank_scale": 0.9,
+        "field:death_rules": 0.9,
+        "field:loot_rarity": 1.1,
+        "special_abilities": 70.9
+      },
+      "source": "llm+keywords",
+      "intent": {
+        "genre": "Bureaucratic Noir",
+        "isekai": false,
+        "portal_or_rebirth": "same_world_rebirth",
+        "difficulty": "hard",
+        "edge": "Filing errors cost rations, freedom, or work; injuries compound with every mistake.",
         "power_fantasy": {
           "start_power": "near_useless",
           "growth": "compounding",
           "system_ui": false,
-          "skill_summary": "file-based luck compounding"
+          "skill_summary": "Filing habits grow with risk, but mistakes cost dearly."
         },
-        "adapter": "grimdark"
+        "tone": "Grim, dry, and fair with no free destiny",
+        "keywords": [
+          "ration",
+          "filing",
+          "injury",
+          "desk",
+          "debt",
+          "harbor",
+          "bureaucracy",
+          "transmigration"
+        ],
+        "adapter_hint": "grimdark",
+        "dm_stance": "always keep fair DM player-agency stance",
+        "style_notes": "Transmigration into dock labor; former desk life is a liability",
+        "raw_idea": "I wake in a rationed harbor city after a desk-job death. No destiny. Work, debt, nearly useless filing habit that only compounds if I risk real mistakes. Hard but fair, lasting injuries, scarce loot."
       },
-      "fields": {
+      "session_theme": {
+        "adapter_hint": "grimdark",
+        "genre": "Bureaucratic Noir",
+        "isekai": false,
+        "dm_stance": "always keep fair DM player-agency stance",
+        "power_fantasy": {
+          "start_power": "near_useless",
+          "growth": "compounding",
+          "system_ui": false,
+          "skill_summary": "Filing habits grow with risk, but mistakes cost dearly."
+        },
+        "tone": "Grim, dry, and fair with no free destiny",
+        "edge": "Filing errors cost rations, freedom, or work; injuries compound with every mistake.",
+        "keywords": [
+          "ration",
+          "filing",
+          "injury",
+          "desk",
+          "debt",
+          "harbor",
+          "bureaucracy",
+          "transmigration"
+        ],
+        "style_notes": "Transmigration into dock labor; former desk life is a liability",
+        "theme_model": ""
+      },
+      "field_overrides": {
         "difficulty": "hard",
-        "skill_style": "training-heavy",
         "skill_growth_speed": "very fast",
-        "rank_scale": null,
-        "custom_skills": "ONE_SKILL_FRAME: exactly one weak seed skill/ability domain (domain chosen later; never default weather/observation); starts near-useless (rank F / level 1); compounds only through use, training, and risk; track ranks via subtle system UI when on, else DM notes; XP from practice, mentors, and high-risk successes; put calculable XP/rank formulas on the ability Growth Math field; soft caps until breakthroughs; no second combat/speech toolkit at start"
+        "proficiency_growth_speed": "fast",
+        "xp_growth_speed": "fast",
+        "new_skill_frequency": "normal",
+        "skill_levels_enabled": true,
+        "proficiency_system": true,
+        "skill_style": "training-heavy",
+        "custom_skills": "OP_MC_FRAME: start with one weak seed power (domain chosen later; never default weather/observation); near-useless rank F / level 1; Growth Math must compound toward late OP (ladder through S/SS/SSS, risk mult, soft caps, breakthroughs, rank\u2192bonus, late multipliers); passives allowed as always-on ranks; more powers may unlock later via play \u2014 only the opening kit is thin; track via subtle system UI when on, else DM notes; no free second combat toolkit at Start",
+        "death_rules": "lasting injuries",
+        "tone": "Grim, dry, and fair with no free destiny",
+        "custom_style": "Power fantasy: start weak, growth compounds through play, never auto-win. DM stance: always keep fair DM player-agency stance Transmigration into dock labor; former desk life is a liability"
       },
-      "abilities": [
-        {
-          "name": "ONE_SKILL_FRAME: File Compounding - A weak skill that allows the player to gain small advantages by ",
-          "score": 8.3,
-          "calc": true,
-          "template": true,
-          "growth_math": "XP_to_next = 40 * rank_index^1.5 (F=1); use grants 4-10 XP \u00d7 risk (1/2/3); soft cap after rank C practice \u00d70.5; each rank above F: +1 domain check",
-          "desc": "ONE_SKILL_FRAME: File Compounding - A weak skill that allows the player to gain small advantages by organizing documents, but only through r"
+      "dirty": {
+        "backstory_mode": [
+          "normalized_origin_mode"
+        ],
+        "memory_policy": [
+          "normalized_memory_policy"
+        ],
+        "world_style": [
+          "slogan_world_style"
+        ],
+        "world_races": [
+          "world_races_widened_from_style"
+        ],
+        "special_abilities": [
+          "setup_crosscheck"
+        ]
+      },
+      "scoring": {
+        "scores": {
+          "theme_alignment": 7.0,
+          "skill_settings": 10.0,
+          "growth_math": 9.1,
+          "custom_skills": 8.5,
+          "engine_math": 9.5
+        },
+        "overall_10": 8.8,
+        "notes": [
+          "custom_skills includes calculable math (good for seeds)"
+        ],
+        "math_details": [
+          {
+            "score_10": 6.4,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": false,
+              "has_per_use": false,
+              "has_risk_mult": false,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              55.0,
+              5.0
+            ],
+            "text": "XP: 55 per rank; breakthrough at rank 5 (rationing becomes a permanent condition).",
+            "ability": "Ration Whisper",
+            "description": "Influence others to ration resources by subtly altering their perception of scarcity; each rank allows one new rationing effect, but the target may resist with "
+          },
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              42.0,
+              1.62,
+              1.0,
+              6.0,
+              12.0,
+              1.0,
+              2.0,
+              3.0,
+              4.0,
+              0.58,
+              1.0,
+              16.0,
+              24.0
+            ],
+            "text": "XP_to_next = 42 * rank_index^1.62 (F=1); use 6-12 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.58 until breakthrough; ladder F\u2026S/SS/SSS; each rank +1 check / +16\u201324% effect",
+            "ability": "Grip Anchor",
+            "description": "You can press your palm against a surface and create a temporary tether, allowing you to pull yourself upward or across. At F rank the effect is brief, incomple"
+          },
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              60.0,
+              140.0,
+              320.0,
+              700.0,
+              1500.0,
+              3200.0,
+              7000.0,
+              15000.0,
+              6.0,
+              14.0,
+              1.0,
+              2.0,
+              3.0,
+              5.0,
+              40.0,
+              1.55,
+              0.55,
+              1.22,
+              1.0
+            ],
+            "text": "OP seed: F\u2192E@60 E\u2192D@140 D\u2192C@320 C\u2192B@700 B\u2192A@1500 A\u2192S@3200 S\u2192SS@7000 SS\u2192SSS@15000; use 6-14 XP \u00d7 risk (1/2/3/5); XP_to_next = 40 * rank_index^1.55; soft caps after each band \u00d70.55 until contested breakthrough; effect mult \u2248 1.22^ranks_above_F; +1 domain check/rank; S+ may unlock passives",
+            "ability": "Solder Kiss",
+            "description": "You can cut one straight groove in soft stone or wood. It only answers cleanly when you have chisel. At F rank the effect is brief, incomplete, or easy to miss."
+          },
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              36.0,
+              1.58,
+              1.0,
+              5.0,
+              11.0,
+              1.0,
+              2.0,
+              3.0,
+              4.0,
+              0.55,
+              1.0,
+              14.0,
+              22.0
+            ],
+            "text": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP \u00d7 risk (1/2/3/4); soft cap after C \u00d70.55 until breakthrough; ladder F\u2026S/SS/SSS; each rank +1 check / +14\u201322% effect",
+            "ability": "Camp Ash",
+            "description": "You can one constellation useful for rough direction. At F rank the effect is brief, incomplete, or easy to miss. With practice it may grow toward star-path ste"
+          }
+        ],
+        "engine_samples": {
+          "symbol_lore": {
+            "natural": 4,
+            "total": 9,
+            "dc": 16,
+            "degree": "bad_nothing",
+            "outcome": "failure",
+            "attribute_mod": 2,
+            "skill_rank": 3,
+            "lines": [
+              "You rolled 4 with your base of 14 (intelligence) and a modifier of +5 (attr +2 + skill +3).",
+              "Total: 9  \u00b7  Base success (DC): 16"
+            ]
+          },
+          "melee_contested": {
+            "natural": 11,
+            "total": 12,
+            "dc": 23,
+            "dc_source": "contested",
+            "degree": "unskilled_mishap",
+            "unskilled": true,
+            "mishap": true
+          },
+          "melee_static_hard": {
+            "dc": 14,
+            "degree": "partial"
+          }
+        },
+        "intent_snapshot": {
+          "genre": "Bureaucratic Noir",
+          "difficulty": "hard",
+          "isekai": false,
+          "adapter_hint": "grimdark",
+          "power_fantasy": {
+            "start_power": "near_useless",
+            "growth": "compounding",
+            "system_ui": false,
+            "skill_summary": "Filing habits grow with risk, but mistakes cost dearly."
+          },
+          "tone": "Grim, dry, and fair with no free destiny"
         }
-      ],
-      "engine_sample": {
-        "total": 9,
-        "natural": 4,
-        "attr_mod": 2,
-        "skill_rank": 3,
-        "dc": 16,
-        "degree": "bad_nothing",
-        "easy_dc": 10,
-        "hard_dc": 14
-      }
+      },
+      "wall_s": 86.8
     },
     {
       "id": "cozy_river",
-      "overall": 7.2,
-      "avg_math": 8.3,
-      "engine_ok": true,
-      "dc_shift_ok": true,
-      "theme_score": 7.0,
-      "intent": {
-        "genre": "Pastoral River Village Mystery",
+      "theme": "default",
+      "idea": "gentle pastoral mystery around a river village; soft danger, community ties, easy difficulty, low power fantasy, skills matter for craft and social reads",
+      "fields": {
         "difficulty": "easy",
+        "dice_checks_enabled": true,
+        "check_difficulty": "easy",
+        "unskilled_mishaps": true,
+        "auto_check_on_risky_actions": true,
+        "show_rolls_in_ui": true,
+        "event_check_frequency": "rare",
+        "encounter_check_frequency": "rare",
+        "death_rules": "Setbacks cost time, XP, and pride; the village aids recovery through communal support",
+        "tone": "Wistful and entangled with river secrets",
+        "custom_style": "DM stance: always keep fair DM player-agency stance Justice through truth, not violence; small town secrets and rivercraft",
+        "world_style": "frontier dark fantasy",
+        "game_system": false,
+        "skill_style": "generous discovery with practice",
+        "custom_skills": "Mastering this skill allows you to craft intricate illusions that mimic reality, requiring practice and mentorship to refine, gaining reputation through successful deceptions strengthens your ability to maintain complex illusions, studying advanced techniques enables you to create illusions that adapt to environmental changes",
+        "skill_growth_speed": "slow",
+        "proficiency_growth_speed": "slow",
+        "xp_growth_speed": "slow",
+        "rank_scale": "F,E,D,C,B,A,S,SS,SSS",
+        "loot_rarity": "Scarce practical items; rare enchanted tools and maps emerge from solving river secrets",
+        "special_abilities": [
+          {
+            "name": "River's Whisper",
+            "description": "You can hear the thoughts of nearby villagers through the river's current, gaining insight into their secrets and intentions. This ability lasts for 10 seconds per use, and you must be within 50 meters of the river to activate it.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "1 minute of breathlessness and a 10-second silence after use to avoid detection by villagers",
+            "growth_math": "10 XP to unlock; 50 XP per rank. Max rank 5. At rank 5, you can hear thoughts from 100 meters away, but the silence cost increases to 30 seconds.",
+            "power_type": "compounding",
+            "_opening_strength": "mild",
+            "resource_cost": {
+              "energy": 1,
+              "mana": 0,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "mild",
+            "_lock_score": 0
+          },
+          {
+            "name": "Village Harmony",
+            "description": "You can temporarily align the emotions of nearby villagers, creating a peaceful atmosphere that lasts for 3 minutes. This effect can be used to calm tensions or encourage collaboration during communal events.",
+            "locked": true,
+            "prerequisites": "Unlocks at a marked place of practice (range, shrine, yard, workshop) after repeated visits.",
+            "cost": "1 hour of social debt, which requires you to perform a favor for a villager in exchange for the ability's use",
+            "growth_math": "20 XP to unlock; 75 XP per rank. Max rank 3. At rank 3, the effect duration increases to 5 minutes, and the social debt cost becomes 2 hours.",
+            "power_type": "compounding",
+            "_opening_strength": "moderate",
+            "resource_cost": {
+              "energy": 2,
+              "mana": 1,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "moderate",
+            "_lock_score": 14
+          }
+        ],
+        "backstory_mode": "known",
+        "memory_policy": "ordinary memory",
+        "world_races": "human",
+        "_starter_logic": {
+          "arrival": {
+            "arrival": "native_life",
+            "isekai": false,
+            "modern_world": false,
+            "cyberpunk_world": false,
+            "fantasy_world": true,
+            "urban_fantasy": false,
+            "allows_this_life_gear": true,
+            "allows_old_world_pockets": false,
+            "minimal_only": false,
+            "notes": "Player has lived in this world; gear must fit that life and tech."
+          },
+          "vibe": {
+            "register": "fantasy_lowtech",
+            "origin": "unknown",
+            "path": "already_local",
+            "localized": false,
+            "vocation": ""
+          },
+          "ordinary_start": true,
+          "latent_candidates": [],
+          "summary": "Arrival=native_life. Vibe=already_local. Kept 0, deferred 0, stripped 0.",
+          "notes": [
+            "Player has lived in this world; gear must fit that life and tech.",
+            "Ordinary this-life start: kit is mundane at Start (common, no enchantments/granted abilities)."
+          ],
+          "show_popup": false,
+          "popup_title": "",
+          "player_messages": [],
+          "deferred": [],
+          "stripped": [],
+          "gm_brief": "Starter gear fact-check: native_life. Player has lived in this world; gear must fit that life and tech. Inventory at Start (only these): (clothes on body only) Ordinary / this-life start: all starter items are mundane at Start (rarity=common, enchantments=[], granted_abilities=[]). Clothing must match vocation."
+        },
+        "_setup_crosscheck": {
+          "ok": true,
+          "summary": {
+            "bugs": 0,
+            "wrong": 0,
+            "holes": 0,
+            "patterns": 1
+          },
+          "findings": [
+            {
+              "sev": "pattern",
+              "code": "abilities_without_origin_field",
+              "fields": [
+                "special_abilities"
+              ],
+              "detail": "special_abilities present; origin field is unused (per-card locks apply)",
+              "repair": "set_origin_both"
+            }
+          ]
+        }
+      },
+      "abilities": [
+        {
+          "name": "River's Whisper",
+          "description": "You can hear the thoughts of nearby villagers through the river's current, gaining insight into their secrets and intentions. This ability lasts for 10 seconds per use, and you must be within 50 meters of the river to activate it.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "1 minute of breathlessness and a 10-second silence after use to avoid detection by villagers",
+          "growth_math": "10 XP to unlock; 50 XP per rank. Max rank 5. At rank 5, you can hear thoughts from 100 meters away, but the silence cost increases to 30 seconds.",
+          "power_type": "compounding",
+          "_opening_strength": "mild",
+          "resource_cost": {
+            "energy": 1,
+            "mana": 0,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "mild",
+          "_lock_score": 0
+        },
+        {
+          "name": "Village Harmony",
+          "description": "You can temporarily align the emotions of nearby villagers, creating a peaceful atmosphere that lasts for 3 minutes. This effect can be used to calm tensions or encourage collaboration during communal events.",
+          "locked": true,
+          "prerequisites": "Unlocks at a marked place of practice (range, shrine, yard, workshop) after repeated visits.",
+          "cost": "1 hour of social debt, which requires you to perform a favor for a villager in exchange for the ability's use",
+          "growth_math": "20 XP to unlock; 75 XP per rank. Max rank 3. At rank 3, the effect duration increases to 5 minutes, and the social debt cost becomes 2 hours.",
+          "power_type": "compounding",
+          "_opening_strength": "moderate",
+          "resource_cost": {
+            "energy": 2,
+            "mana": 1,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "moderate",
+          "_lock_score": 14
+        }
+      ],
+      "errors": [],
+      "timings_s": {
+        "compose": 3.9,
+        "field:world_style": 0.7,
+        "field:tone": 0.7,
+        "field:difficulty": 0.6,
+        "field:game_system": 0.9,
+        "field:skill_style": 0.7,
+        "field:custom_skills": 2.3,
+        "field:skill_growth_speed": 0.6,
+        "field:proficiency_growth_speed": 0.7,
+        "field:xp_growth_speed": 0.7,
+        "field:rank_scale": 0.9,
+        "field:death_rules": 0.9,
+        "field:loot_rarity": 1.0,
+        "special_abilities": 20.6
+      },
+      "source": "llm+keywords",
+      "intent": {
+        "genre": "Pastoral mystery in a river village",
+        "isekai": false,
+        "portal_or_rebirth": "same_world_rebirth",
+        "difficulty": "easy",
+        "edge": "Small injuries and lost tools from mishandling river tasks",
         "power_fantasy": {
           "start_power": "ordinary",
           "growth": "steady",
           "system_ui": false,
-          "skill_summary": "Basic crafting and community interaction skills"
+          "skill_summary": "Crafting and social skills unlock village trust and resources"
         },
-        "adapter": "system_rpg"
+        "tone": "Cozy and investigative with soft peril",
+        "keywords": [
+          "skill",
+          "river",
+          "village",
+          "mystery",
+          "community",
+          "craft",
+          "social",
+          "cozy",
+          "soft danger"
+        ],
+        "adapter_hint": "system_rpg",
+        "dm_stance": "always keep fair DM player-agency stance",
+        "style_notes": "Justice through truth, not violence; small town secrets and rivercraft",
+        "raw_idea": "gentle pastoral mystery around a river village; soft danger, community ties, easy difficulty, low power fantasy, skills matter for craft and social reads"
       },
-      "fields": {
+      "session_theme": {
+        "adapter_hint": "system_rpg",
+        "genre": "Pastoral mystery in a river village",
+        "isekai": false,
+        "dm_stance": "always keep fair DM player-agency stance",
+        "power_fantasy": {
+          "start_power": "ordinary",
+          "growth": "steady",
+          "system_ui": false,
+          "skill_summary": "Crafting and social skills unlock village trust and resources"
+        },
+        "tone": "Cozy and investigative with soft peril",
+        "edge": "Small injuries and lost tools from mishandling river tasks",
+        "keywords": [
+          "skill",
+          "river",
+          "village",
+          "mystery",
+          "community",
+          "craft",
+          "social",
+          "cozy",
+          "soft danger"
+        ],
+        "style_notes": "Justice through truth, not violence; small town secrets and rivercraft",
+        "theme_model": ""
+      },
+      "field_overrides": {
         "difficulty": "easy",
-        "skill_style": null,
-        "skill_growth_speed": null,
-        "rank_scale": null,
-        "custom_skills": null
+        "dice_checks_enabled": true,
+        "check_difficulty": "easy",
+        "unskilled_mishaps": true,
+        "auto_check_on_risky_actions": true,
+        "show_rolls_in_ui": true,
+        "event_check_frequency": "rare",
+        "encounter_check_frequency": "rare",
+        "death_rules": "lasting injuries",
+        "tone": "Cozy and investigative with soft peril",
+        "custom_style": "DM stance: always keep fair DM player-agency stance Justice through truth, not violence; small town secrets and rivercraft"
       },
-      "abilities": [
-        {
-          "name": "River Craftsmanship, Community Harmony",
-          "score": 8.3,
-          "calc": true,
-          "template": true,
-          "growth_math": "rank F\u2192E@80 E\u2192D@200 D\u2192C@450 C\u2192B@900; domain use 5-12 skill XP \u00d7 risk (1 safe/2 contested/3 life-risk); XP_to_next = 50 * rank_index^1.4; after C practice XP \u00d70.5 until mentor breakthrough; +1 domain check per rank above F",
-          "desc": "River Craftsmanship, Community Harmony"
+      "dirty": {
+        "backstory_mode": [
+          "normalized_origin_mode"
+        ],
+        "memory_policy": [
+          "normalized_memory_policy"
+        ],
+        "world_style": [
+          "slogan_world_style"
+        ],
+        "world_races": [
+          "world_races_widened_from_style"
+        ]
+      },
+      "scoring": {
+        "scores": {
+          "theme_alignment": 7.0,
+          "skill_settings": 10.0,
+          "growth_math": 5.5,
+          "custom_skills": 6.5,
+          "engine_math": 9.5
+        },
+        "overall_10": 7.7,
+        "notes": [],
+        "math_details": [
+          {
+            "score_10": 5.5,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": false,
+              "has_per_use": false,
+              "has_risk_mult": false,
+              "has_soft_cap": false,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              10.0,
+              50.0,
+              5.0,
+              5.0,
+              100.0,
+              30.0
+            ],
+            "text": "10 XP to unlock; 50 XP per rank. Max rank 5. At rank 5, you can hear thoughts from 100 meters away, but the silence cost increases to 30 seconds.",
+            "ability": "River's Whisper",
+            "description": "You can hear the thoughts of nearby villagers through the river's current, gaining insight into their secrets and intentions. This ability lasts for 10 seconds "
+          },
+          {
+            "score_10": 5.5,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": false,
+              "has_per_use": false,
+              "has_risk_mult": false,
+              "has_soft_cap": false,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              20.0,
+              75.0,
+              3.0,
+              3.0,
+              5.0,
+              2.0
+            ],
+            "text": "20 XP to unlock; 75 XP per rank. Max rank 3. At rank 3, the effect duration increases to 5 minutes, and the social debt cost becomes 2 hours.",
+            "ability": "Village Harmony",
+            "description": "You can temporarily align the emotions of nearby villagers, creating a peaceful atmosphere that lasts for 3 minutes. This effect can be used to calm tensions or"
+          }
+        ],
+        "engine_samples": {
+          "symbol_lore": {
+            "natural": 4,
+            "total": 9,
+            "dc": 12,
+            "degree": "partial",
+            "outcome": "partial",
+            "attribute_mod": 2,
+            "skill_rank": 3,
+            "lines": [
+              "You rolled 4 with your base of 14 (intelligence) and a modifier of +5 (attr +2 + skill +3).",
+              "Total: 9  \u00b7  Base success (DC): 12"
+            ]
+          },
+          "melee_contested": {
+            "natural": 11,
+            "total": 12,
+            "dc": 23,
+            "dc_source": "contested",
+            "degree": "unskilled_mishap",
+            "unskilled": true,
+            "mishap": true
+          },
+          "melee_static_hard": {
+            "dc": 14,
+            "degree": "partial"
+          }
+        },
+        "intent_snapshot": {
+          "genre": "Pastoral mystery in a river village",
+          "difficulty": "easy",
+          "isekai": false,
+          "adapter_hint": "system_rpg",
+          "power_fantasy": {
+            "start_power": "ordinary",
+            "growth": "steady",
+            "system_ui": false,
+            "skill_summary": "Crafting and social skills unlock village trust and resources"
+          },
+          "tone": "Cozy and investigative with soft peril"
         }
-      ],
-      "engine_sample": {
-        "total": 9,
-        "natural": 4,
-        "attr_mod": 2,
-        "skill_rank": 3,
-        "dc": 12,
-        "degree": "partial",
-        "easy_dc": 10,
-        "hard_dc": 14
-      }
+      },
+      "wall_s": 35.1
     },
     {
       "id": "wuxia_sect",
-      "overall": 7.6,
-      "avg_math": 10.0,
-      "engine_ok": true,
-      "dc_shift_ok": true,
-      "theme_score": 7.0,
-      "intent": {
-        "genre": "Wuxia Sect Politics",
-        "difficulty": "normal",
-        "power_fantasy": {
-          "start_power": "ordinary",
-          "growth": "steady",
-          "system_ui": false,
-          "skill_summary": "Cultivation stages and faction reputation determine access to resources and influence"
-        },
-        "adapter": "system_rpg"
-      },
+      "theme": "default",
+      "idea": "wuxia sect politics and face culture; cultivation is slow and costly; normal difficulty; reputation and debts matter more than raw levels",
       "fields": {
         "difficulty": "normal",
-        "skill_style": null,
-        "skill_growth_speed": null,
-        "rank_scale": null,
-        "custom_skills": null
+        "skill_growth_speed": "very fast",
+        "proficiency_growth_speed": "fast",
+        "xp_growth_speed": "normal",
+        "new_skill_frequency": "normal",
+        "skill_levels_enabled": true,
+        "proficiency_system": true,
+        "skill_style": "standard",
+        "custom_skills": "weak seed skill: Shadow Weave, rank F / level 1, compounding toward umbral blade / shadow merge through reputation and debt milestones, tracked via subtle system UI or DM notes, XP earned through cultivation practice, mentor guidance, risk-taking, and breakthroughs in sect politics, passives allowed as always-on face currency expressions, no free second combat toolkit at Start, more powers may unlock later via play",
+        "dice_checks_enabled": true,
+        "check_difficulty": "normal",
+        "unskilled_mishaps": true,
+        "auto_check_on_risky_actions": true,
+        "show_rolls_in_ui": true,
+        "event_check_frequency": "normal",
+        "encounter_check_frequency": "normal",
+        "world_style": "frontier dark fantasy",
+        "tone": "Polite surfaces over sharp debts; reputation can hurt more than blades.",
+        "custom_style": "Power fantasy: start weak, growth compounds through play, never auto-win. DM stance: always keep fair DM player-agency stance Cultivation is a slow, costly ritual; face and debts shape your path.",
+        "game_system": false,
+        "rank_scale": "F,E,D,C,B,A,S,SS,SSS",
+        "death_rules": "Narrative setbacks replace deletion; time, gear, and pride are the reload fee.",
+        "loot_rarity": "Paper permits and forged chits: rare drops from solving sect disputes, unique from crafting reputation bonds, legendary from betraying allies.",
+        "special_abilities": [
+          {
+            "name": "Shadow Weave",
+            "description": "Weave a thin thread of shadow from your surroundings to bind a single object or person, momentarily slowing their movements. This effect fades after 3 rounds or when the shadow thread is broken.",
+            "locked": false,
+            "prerequisites": "",
+            "cost": "1 energy",
+            "growth_math": "XP_to_next = 42 * rank_index^1.62 (F=1); use 6-13 XP \u00d7 risk (1/2/3/5); soft cap after C \u00d70.58 until contested breakthrough; ladder F\u2192S/SS/SSS; each rank +1 check / +16\u201324% effect",
+            "power_type": "compounding",
+            "_opening_strength": "moderate",
+            "resource_cost": {
+              "energy": 1,
+              "mana": 0,
+              "fatigue": 0,
+              "health": 0,
+              "cooldown_minutes": 0,
+              "debuffs": []
+            },
+            "_power_tier": "moderate",
+            "_lock_score": 11
+          }
+        ],
+        "backstory_mode": "known",
+        "memory_policy": "ordinary memory",
+        "world_races": "human",
+        "_starter_logic": {
+          "arrival": {
+            "arrival": "native_life",
+            "isekai": false,
+            "modern_world": false,
+            "cyberpunk_world": false,
+            "fantasy_world": true,
+            "urban_fantasy": false,
+            "allows_this_life_gear": true,
+            "allows_old_world_pockets": false,
+            "minimal_only": false,
+            "notes": "Player has lived in this world; gear must fit that life and tech."
+          },
+          "vibe": {
+            "register": "fantasy_lowtech",
+            "origin": "unknown",
+            "path": "already_local",
+            "localized": false,
+            "vocation": ""
+          },
+          "ordinary_start": true,
+          "latent_candidates": [],
+          "summary": "Arrival=native_life. Vibe=already_local. Kept 0, deferred 0, stripped 0.",
+          "notes": [
+            "Player has lived in this world; gear must fit that life and tech.",
+            "Ordinary this-life start: kit is mundane at Start (common, no enchantments/granted abilities)."
+          ],
+          "show_popup": false,
+          "popup_title": "",
+          "player_messages": [],
+          "deferred": [],
+          "stripped": [],
+          "gm_brief": "Starter gear fact-check: native_life. Player has lived in this world; gear must fit that life and tech. Inventory at Start (only these): (clothes on body only) Ordinary / this-life start: all starter items are mundane at Start (rarity=common, enchantments=[], granted_abilities=[]). Clothing must match vocation."
+        },
+        "_setup_crosscheck": {
+          "ok": true,
+          "summary": {
+            "bugs": 0,
+            "wrong": 0,
+            "holes": 1,
+            "patterns": 1
+          },
+          "findings": [
+            {
+              "sev": "hole",
+              "code": "system_ui_in_skills_while_game_system_off",
+              "fields": [
+                "custom_skills",
+                "game_system"
+              ],
+              "detail": "custom_skills mentions system UI while game_system is off",
+              "repair": ""
+            },
+            {
+              "sev": "pattern",
+              "code": "abilities_without_origin_field",
+              "fields": [
+                "special_abilities"
+              ],
+              "detail": "special_abilities present; origin field is unused (per-card locks apply)",
+              "repair": "set_origin_both"
+            }
+          ]
+        }
       },
       "abilities": [
         {
-          "name": "Shadow Step",
-          "score": 10.0,
-          "calc": true,
-          "template": false,
-          "growth_math": "XP_to_next = 50 * rank_index^1.4 (F=1); use grants 5-12 XP \u00d7 risk (1/2/3); soft cap after rank C practice \u00d70.6; each rank above F: +1 domain check",
-          "desc": "Shadow Step"
-        },
-        {
-          "name": "Ink of Secrets",
-          "score": 10.0,
-          "calc": true,
-          "template": false,
-          "growth_math": "levels 1-10; XP_to_next = 35 + 15*level; successful use grants 4-9 XP; crit success \u00d72; soft cap at L7 (XP \u00d70.7 until setback recovery); effect magnitude +10% per level",
-          "desc": "Ink of Secrets"
+          "name": "Shadow Weave",
+          "description": "Weave a thin thread of shadow from your surroundings to bind a single object or person, momentarily slowing their movements. This effect fades after 3 rounds or when the shadow thread is broken.",
+          "locked": false,
+          "prerequisites": "",
+          "cost": "1 energy",
+          "growth_math": "XP_to_next = 42 * rank_index^1.62 (F=1); use 6-13 XP \u00d7 risk (1/2/3/5); soft cap after C \u00d70.58 until contested breakthrough; ladder F\u2192S/SS/SSS; each rank +1 check / +16\u201324% effect",
+          "power_type": "compounding",
+          "_opening_strength": "moderate",
+          "resource_cost": {
+            "energy": 1,
+            "mana": 0,
+            "fatigue": 0,
+            "health": 0,
+            "cooldown_minutes": 0,
+            "debuffs": []
+          },
+          "_power_tier": "moderate",
+          "_lock_score": 11
         }
       ],
-      "engine_sample": {
-        "total": 9,
-        "natural": 4,
-        "attr_mod": 2,
-        "skill_rank": 3,
-        "dc": 14,
-        "degree": "failure",
-        "easy_dc": 10,
-        "hard_dc": 14
-      }
+      "errors": [],
+      "timings_s": {
+        "compose": 4.3,
+        "field:world_style": 1.1,
+        "field:tone": 0.9,
+        "field:difficulty": 0.7,
+        "field:game_system": 1.3,
+        "field:skill_style": 1.0,
+        "field:custom_skills": 2.7,
+        "field:skill_growth_speed": 0.8,
+        "field:proficiency_growth_speed": 0.8,
+        "field:xp_growth_speed": 0.8,
+        "field:rank_scale": 1.0,
+        "field:death_rules": 1.0,
+        "field:loot_rarity": 1.2,
+        "special_abilities": 6.9
+      },
+      "source": "llm+keywords",
+      "intent": {
+        "genre": "Wuxia Sect Politics",
+        "isekai": false,
+        "portal_or_rebirth": "same_world_rebirth",
+        "difficulty": "normal",
+        "edge": "Reputation and debts can bar or open doors; face is currency.",
+        "power_fantasy": {
+          "start_power": "ordinary",
+          "growth": "compounding",
+          "system_ui": false,
+          "skill_summary": "Cultivation is a slow, costly ritual; face and debts shape your path."
+        },
+        "tone": "Grim and calculated",
+        "keywords": [
+          "sect",
+          "cultivation",
+          "wuxia",
+          "face",
+          "reputation",
+          "debt",
+          "slow",
+          "politics"
+        ],
+        "adapter_hint": "system_rpg",
+        "dm_stance": "always keep fair DM player-agency stance",
+        "style_notes": "Cultivation is a slow, costly ritual; face and debts shape your path.",
+        "raw_idea": "wuxia sect politics and face culture; cultivation is slow and costly; normal difficulty; reputation and debts matter more than raw levels"
+      },
+      "session_theme": {
+        "adapter_hint": "system_rpg",
+        "genre": "Wuxia Sect Politics",
+        "isekai": false,
+        "dm_stance": "always keep fair DM player-agency stance",
+        "power_fantasy": {
+          "start_power": "ordinary",
+          "growth": "compounding",
+          "system_ui": false,
+          "skill_summary": "Cultivation is a slow, costly ritual; face and debts shape your path."
+        },
+        "tone": "Grim and calculated",
+        "edge": "Reputation and debts can bar or open doors; face is currency.",
+        "keywords": [
+          "sect",
+          "cultivation",
+          "wuxia",
+          "face",
+          "reputation",
+          "debt",
+          "slow",
+          "politics"
+        ],
+        "style_notes": "Cultivation is a slow, costly ritual; face and debts shape your path.",
+        "theme_model": ""
+      },
+      "field_overrides": {
+        "difficulty": "normal",
+        "skill_growth_speed": "very fast",
+        "proficiency_growth_speed": "fast",
+        "xp_growth_speed": "fast",
+        "new_skill_frequency": "normal",
+        "skill_levels_enabled": true,
+        "proficiency_system": true,
+        "skill_style": "training-heavy",
+        "custom_skills": "OP_MC_FRAME: start with one weak seed power (domain chosen later; never default weather/observation); near-useless rank F / level 1; Growth Math must compound toward late OP (ladder through S/SS/SSS, risk mult, soft caps, breakthroughs, rank\u2192bonus, late multipliers); passives allowed as always-on ranks; more powers may unlock later via play \u2014 only the opening kit is thin; track via subtle system UI when on, else DM notes; no free second combat toolkit at Start",
+        "dice_checks_enabled": true,
+        "check_difficulty": "normal",
+        "unskilled_mishaps": true,
+        "auto_check_on_risky_actions": true,
+        "show_rolls_in_ui": true,
+        "event_check_frequency": "normal",
+        "encounter_check_frequency": "normal",
+        "world_style": "Wuxia Sect Politics",
+        "tone": "Grim and calculated",
+        "custom_style": "Power fantasy: start weak, growth compounds through play, never auto-win. DM stance: always keep fair DM player-agency stance Cultivation is a slow, costly ritual; face and debts shape your path."
+      },
+      "dirty": {
+        "backstory_mode": [
+          "normalized_origin_mode"
+        ],
+        "memory_policy": [
+          "normalized_memory_policy"
+        ],
+        "world_style": [
+          "slogan_world_style"
+        ],
+        "world_races": [
+          "world_races_widened_from_style"
+        ]
+      },
+      "scoring": {
+        "scores": {
+          "theme_alignment": 7.0,
+          "skill_settings": 10.0,
+          "growth_math": 10.0,
+          "custom_skills": 8.5,
+          "engine_math": 9.5
+        },
+        "overall_10": 9.0,
+        "notes": [
+          "custom_skills includes calculable math (good for seeds)"
+        ],
+        "math_details": [
+          {
+            "score_10": 10.0,
+            "checks": {
+              "has_digits": true,
+              "has_xp_curve": true,
+              "has_per_use": true,
+              "has_risk_mult": true,
+              "has_soft_cap": true,
+              "has_rank_bonus": true,
+              "not_vague": true,
+              "length_ok": true,
+              "calculable": true,
+              "thresholds_sensible": true
+            },
+            "numbers": [
+              42.0,
+              1.62,
+              1.0,
+              6.0,
+              13.0,
+              1.0,
+              2.0,
+              3.0,
+              5.0,
+              0.58,
+              1.0,
+              16.0,
+              24.0
+            ],
+            "text": "XP_to_next = 42 * rank_index^1.62 (F=1); use 6-13 XP \u00d7 risk (1/2/3/5); soft cap after C \u00d70.58 until contested breakthrough; ladder F\u2192S/SS/SSS; each rank +1 check / +16\u201324% effect",
+            "ability": "Shadow Weave",
+            "description": "Weave a thin thread of shadow from your surroundings to bind a single object or person, momentarily slowing their movements. This effect fades after 3 rounds or"
+          }
+        ],
+        "engine_samples": {
+          "symbol_lore": {
+            "natural": 4,
+            "total": 9,
+            "dc": 14,
+            "degree": "failure",
+            "outcome": "failure",
+            "attribute_mod": 2,
+            "skill_rank": 3,
+            "lines": [
+              "You rolled 4 with your base of 14 (intelligence) and a modifier of +5 (attr +2 + skill +3).",
+              "Total: 9  \u00b7  Base success (DC): 14"
+            ]
+          },
+          "melee_contested": {
+            "natural": 11,
+            "total": 12,
+            "dc": 23,
+            "dc_source": "contested",
+            "degree": "unskilled_mishap",
+            "unskilled": true,
+            "mishap": true
+          },
+          "melee_static_hard": {
+            "dc": 14,
+            "degree": "partial"
+          }
+        },
+        "intent_snapshot": {
+          "genre": "Wuxia Sect Politics",
+          "difficulty": "normal",
+          "isekai": false,
+          "adapter_hint": "system_rpg",
+          "power_fantasy": {
+            "start_power": "ordinary",
+            "growth": "compounding",
+            "system_ui": false,
+            "skill_summary": "Cultivation is a slow, costly ritual; face and debts shape your path."
+          },
+          "tone": "Grim and calculated"
+        }
+      },
+      "wall_s": 24.4
     }
   ]
 }
