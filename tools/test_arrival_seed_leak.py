@@ -37,7 +37,20 @@ os.environ.setdefault("AI_RPG_MODEL_TRACE_DIR", str(_TMP / "traces"))
 os.environ.setdefault("AI_RPG_SKILL_LIBRARY", str(_TMP / "skill_library.json"))
 
 from app import llm  # noqa: E402
-from app.setup_composer import LOCATION_SEEDS_BY_THEME  # noqa: E402
+from app.setup_composer import (  # noqa: E402
+    APPEARANCE_SEED_POOL,
+    LOCATION_SEEDS_BY_THEME,
+    STARTER_KIT_SEED_POOL,
+)
+
+# The other two fields that shipped their own pool into the prompt under an
+# "inspiration only" label. Measured on qwen3:8b: the kit came back a verbatim
+# copy of a shown seed 4 times in 6, the clothing 2 times in 6. Same shape, same
+# removal, each on its own evidence.
+SIBLING_FIELDS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "starter_equipment": ("kit_seeds_inspiration_only", STARTER_KIT_SEED_POOL),
+    "appearance": ("clothing_seeds_inspiration_only", APPEARANCE_SEED_POOL),
+}
 
 # One world_style per theme that detect_location_theme resolves to that theme.
 THEME_PROBES: dict[str, str] = {
@@ -54,20 +67,20 @@ THEME_PROBES: dict[str, str] = {
 }
 
 
-def _capture_prompt(world_style: str) -> dict:
+def _capture_prompt(world_style: str, field: str = "start_location") -> dict:
     """Run the real randomizer with the model stubbed; return the prompt dict."""
     seen: dict[str, object] = {}
 
     def _fake_chat_json(system, user, **kwargs):
         if kwargs.get("phase") == "setup_randomize":
             seen["prompt"] = json.loads(user)
-        return {"start_location": "Stub Arrival"}
+        return {field: "Stub"}
 
     real = llm._chat_json
     llm._chat_json = _fake_chat_json
     try:
         llm.generate_setup_randomization(
-            "field:start_location",
+            f"field:{field}",
             # backstory_mode alone makes this isekaiish. Deliberately NOT
             # putting "isekai" in the idea: it is itself a fantasy keyword and
             # would drag every probe to the fantasy theme.
@@ -132,6 +145,26 @@ def main() -> int:
             failures.append(f"{theme}: the theme rule no longer names the theme")
         if "arrival" not in rules:
             failures.append(f"{theme}: no arrival guidance left in rules at all")
+
+    # The same shape on the two sibling fields.
+    for field, (seed_key, pool) in SIBLING_FIELDS.items():
+        entries = [str(p).strip() for p in pool if len(str(p).strip()) >= 12]
+        for world_style in ("modern isekai coastal fantasy", "neon megacity under corporate rule"):
+            prompt = _capture_prompt(world_style, field=field)
+            if not prompt:
+                failures.append(f"{field}: randomizer never reached the model call")
+                continue
+            checked += 1
+            blob = json.dumps(prompt, ensure_ascii=True).lower()
+            if seed_key in prompt:
+                failures.append(f"{field}: prompt still carries a {seed_key} key")
+            hits = [e for e in entries if e.lower() in blob]
+            if hits:
+                failures.append(f"{field}: {len(hits)} pool entry/entries reached the prompt -> {hits[:3]}")
+            # Positive: the field must still be asked for with real guidance.
+            rules = " ".join(str(r) for r in (prompt.get("rules") or [])).lower()
+            if "diversity seed" not in rules:
+                failures.append(f"{field}: lost its diversity seed rule")
 
     if failures:
         print("arrival seed leak: FAILED")

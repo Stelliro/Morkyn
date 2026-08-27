@@ -6584,17 +6584,22 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "copper coins always",
                 "worn satchel + rain-slicked hoodie + scuffed sneakers stack",
             ]
-            try:
-                from app.setup_composer import STARTER_KIT_SEED_POOL
-
-                prompt["kit_seeds_inspiration_only"] = random.sample(
-                    list(STARTER_KIT_SEED_POOL), k=min(4, len(STARTER_KIT_SEED_POOL))
-                )
-            except Exception:
-                pass
+            # `kit_seeds_inspiration_only` used to ship four real entries out of
+            # STARTER_KIT_SEED_POOL, labelled "inspiration only". Measured on
+            # qwen3:8b over 6 rolls: 4 came back a VERBATIM copy of a shown
+            # seed, and span overlap with the seeds shown was 80.6% against
+            # 7.2% for the seeds not shown -- an 11x control ratio, so this was
+            # copying and not just what a kit looks like. Two rolls returned
+            # the identical kit, which is the thing the rule below spent its
+            # words asking the model not to do.
+            #
+            # The pool stays: pick_starter_kit_seed still draws from it on the
+            # LLM-unavailable path, where a repeated kit beats no kit.
             prompt["rules"] = list(prompt.get("rules") or []) + [
                 f"Diversity seed {prompt['diversity_seed']}: fresh mundane kit matching role; phones/keys/ID ok for modern isekai.",
-                "Do not return the same wrench+coins+satchel kit every time.",
+                "Build the kit from this character's own role and setting: three to six "
+                "ordinary things they would actually be carrying, and nothing generically "
+                "adventurous.",
             ]
         if field == "start_location":
             mode_l = str(current_setup.get("backstory_mode") or "").lower()
@@ -6676,19 +6681,19 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 except Exception:
                     pass
         if field == "appearance":
-            try:
-                from app.setup_composer import APPEARANCE_SEED_POOL
-
-                prompt["diversity_seed"] = random.randint(1000, 999999)
-                prompt["clothing_seeds_inspiration_only"] = random.sample(
-                    list(APPEARANCE_SEED_POOL), k=min(5, len(APPEARANCE_SEED_POOL))
-                )
-                prompt["rules"] = list(prompt.get("rules") or []) + [
-                    f"Diversity seed {prompt['diversity_seed']}: invent a fresh clothing set; "
-                    "use zone tags; inspiration_only is optional spice not a required menu.",
-                ]
-            except Exception:
-                pass
+            # Same removal as the kit above, on its own evidence rather than by
+            # analogy: 2 of 6 rolls came back a verbatim copy of a shown seed,
+            # with 36.4% span overlap against 13.6% for the seeds not shown.
+            # A weaker signal than the kit's, but two verbatim copies is not
+            # ambiguous, and "inspiration_only is optional spice not a required
+            # menu" is another instruction arguing with its own contents.
+            #
+            # APPEARANCE_SEED_POOL stays for pick_appearance_seed.
+            prompt["diversity_seed"] = random.randint(1000, 999999)
+            prompt["rules"] = list(prompt.get("rules") or []) + [
+                f"Diversity seed {prompt['diversity_seed']}: invent a fresh clothing set "
+                "from this character's own role, climate and means; use zone tags.",
+            ]
     else:
         prompt_current_setup = current_setup
         if group == "character":
