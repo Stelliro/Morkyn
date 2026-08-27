@@ -479,5 +479,87 @@ class TestSkillNotesStayBounded(unittest.TestCase):
         self.assertIn("enabled_skill_codes when one fits", prompts)
 
 
+class TestPlayerSkillNamesAreRenderable(unittest.TestCase):
+    """`static/app.js` prints player_skills.name straight into the skill card.
+
+    Live run, 16 turns of deliberate training: the model emitted
+    `SKILL "lockpicking"` -- a catalogue code, exactly as the schema now asks --
+    and the card read "lockpicking". Case preservation was fixed first, then the
+    prompt was changed to send something with no case to preserve.
+    """
+
+    def test_a_roster_code_becomes_its_library_display_name(self):
+        from app.world import _display_skill_name
+
+        for raw, want in (
+            ("lockpicking", "Lockpicking"),
+            ("stealth", "Stealth"),
+            ("sleight_of_hand", "Sleight of Hand"),
+            ("animal_handling", "Animal Handling"),
+        ):
+            with self.subTest(raw=raw):
+                self.assertEqual(_display_skill_name(raw), want)
+
+    def test_a_name_is_never_resolved_as_an_action(self):
+        # `resolve_skill_code` ends with the regex ACTION trigger table, which
+        # turned "Road Lore" into "Random Encounter". A name is not an action,
+        # so _display_skill_name matches on exact code or exact name only.
+        from app.world import _display_skill_name
+
+        for raw in ("Road Lore", "Short Blades", "Void Surgery"):
+            with self.subTest(raw=raw):
+                self.assertEqual(_display_skill_name(raw), raw)
+
+    def test_free_text_is_humanized_not_dropped(self):
+        from app.world import _display_skill_name
+
+        self.assertEqual(_display_skill_name("hotwire_engine"), "Hotwire Engine")
+        self.assertEqual(_display_skill_name("void surgery"), "Void Surgery")
+        self.assertEqual(_display_skill_name(""), "")
+
+    def test_a_legacy_lowercase_row_is_tidied_not_duplicated(self):
+        import sqlite3
+
+        import app.world as world
+        from app.world import _apply_skills
+
+        orig = world._settings
+        world._settings = lambda conn: {"playthrough_options": {}}
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("CREATE TABLE player_skills (id INTEGER PRIMARY KEY, name TEXT, value INT, notes TEXT)")
+            conn.execute("INSERT INTO player_skills (name,value,notes) VALUES ('lockpicking',3,'A note long enough to keep')")
+            _apply_skills(conn, [{"name": "lockpicking", "delta": 1, "notes": "ignored"}])
+            rows = [dict(r) for r in conn.execute("SELECT name, value FROM player_skills")]
+            self.assertEqual(len(rows), 1, rows)
+            self.assertEqual(rows[0]["name"], "Lockpicking")
+            self.assertEqual(rows[0]["value"], 4)
+        finally:
+            conn.close()
+            world._settings = orig
+
+    def test_the_live_run_input_reproduces(self):
+        import sqlite3
+
+        import app.world as world
+        from app.world import SKILL_NOTE_MAX_LEN, _apply_skills
+
+        orig = world._settings
+        world._settings = lambda conn: {"playthrough_options": {}}
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        try:
+            conn.execute("CREATE TABLE player_skills (id INTEGER PRIMARY KEY, name TEXT, value INT, notes TEXT)")
+            # verbatim from the trace: SKILL "lockpicking" DELTA moderate NOTES "..."
+            _apply_skills(conn, [{"name": "lockpicking", "delta": 1, "notes": "Practice on a stubborn lock"}])
+            row = conn.execute("SELECT name, notes FROM player_skills").fetchone()
+            self.assertEqual(row["name"], "Lockpicking")
+            self.assertLessEqual(len(row["notes"]), SKILL_NOTE_MAX_LEN)
+        finally:
+            conn.close()
+            world._settings = orig
+
+
 if __name__ == "__main__":
     unittest.main()
