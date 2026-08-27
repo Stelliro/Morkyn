@@ -41,6 +41,7 @@ Run:  python -m unittest tests.test_skill_roster
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 import unittest
@@ -60,6 +61,7 @@ _ENV = {
 }
 os.environ.update(_ENV)
 
+from app.llm import HANDOFF_BASE_CONTEXT_KEYS, HANDOFF_OPTIONAL_CONTEXT_KEYS  # noqa: E402
 from app.skill_checks import (  # noqa: E402
     BUILTIN_SKILLS,
     SKILL_TRIGGER_PATTERNS,
@@ -218,6 +220,50 @@ class TestTheNarratorIsShownTheCatalogue(unittest.TestCase):
         for code in ("stealth", "lockpicking", "persuasion"):
             self.assertIn(code, compact["skill_catalog"])
 
+    def test_the_catalogue_survives_the_handoff_filter(self):
+        # The compactor adding a key proves nothing: `_clean_context_for_handoff`
+        # keeps an allowlist and drops everything else silently, so the first
+        # version of this change shipped a prompt pointing the model at
+        # `world_state.skill_catalog` while the packet had no such key. Ten live
+        # turns confirmed it: the only occurrence of the word in any trace was
+        # the instruction itself. Assert on what the model is handed.
+        from app.llm import _clean_context_for_handoff, _compact_turn_context
+
+        compact = _compact_turn_context({"skills": [], "player": {}})
+        cleaned = _clean_context_for_handoff(compact, "test")
+        self.assertIn(
+            "skill_catalog",
+            cleaned,
+            "skill_catalog was dropped by the handoff allowlist; prompts.py names it",
+        )
+        self.assertIn("stealth", cleaned["skill_catalog"])
+
+    def test_the_prompt_only_names_packet_keys_that_exist(self):
+        # Guards the general case: a dead `world_state.<key>` reference is worse
+        # than no reference at all.
+        from app.llm import _clean_context_for_handoff, _compact_turn_context
+
+        # Two references predate this work and are NOT fixed here:
+        #   world_state.resources  -- written defensively ("if ... is present")
+        #                             and mechanics_context.resources, which the
+        #                             packet does carry, is offered alongside it.
+        #   world_state.world_time -- a real dead reference. `get_world_time()`
+        #                             exists in app/world.py and is served over
+        #                             the API, but nothing puts it in the turn
+        #                             packet, while prompts.py:200 tells the
+        #                             model unconditionally to honor it. Wiring
+        #                             it in is a separate change with its own
+        #                             token cost; this records it rather than
+        #                             hiding it.
+        known_dead = {"resources", "world_time"}
+        prompts = (ROOT / "app" / "prompts.py").read_text(encoding="utf-8", errors="replace")
+        named = set(re.findall(r"world_state\.([a-z_]+)", prompts))
+        self.assertTrue(named, "expected prompts.py to reference world_state keys")
+        cleaned = _clean_context_for_handoff(_compact_turn_context({"skills": [], "player": {}}), "test")
+        known = set(cleaned) | HANDOFF_BASE_CONTEXT_KEYS | HANDOFF_OPTIONAL_CONTEXT_KEYS
+        missing = sorted(named - known - known_dead)
+        self.assertFalse(missing, f"prompts.py points the model at keys the packet never carries: {missing}")
+
     def test_the_catalogue_is_cheap_enough_to_send(self):
         # It rides in the packet, not SYSTEM_PROMPT: that prompt is already
         # ~9152 tokens against a shipped 8192 context default.
@@ -363,6 +409,83 @@ class TestSlotsConsultTheirAcceptsList(unittest.TestCase):
             self.assertEqual(_slot_by_ref(conn, None, "Main Hand")["code"], "MAIN")
         finally:
             conn.close()
+
+
+class TestSkillNotesStayBounded(unittest.TestCase):
+    """Notes are a durable description, not a per-turn log.
+
+    They used to concatenate every gain up to 900 chars and truncate from the
+    RIGHT, so a long campaign turned a skill into a run-on of unrelated turns
+    cut mid-sentence -- and every character rode in the turn packet again on
+    every later turn, for a field the model only needs to know what the skill
+    covers.
+    """
+
+    def _conn(self):
+        import sqlite3
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("CREATE TABLE player_skills (id INTEGER PRIMARY KEY, name TEXT, value INT, notes TEXT)")
+        return conn
+
+    def setUp(self):
+        import app.world as world
+
+        self._orig = world._settings
+        world._settings = lambda conn: {"playthrough_options": {}}
+
+    def tearDown(self):
+        import app.world as world
+
+        world._settings = self._orig
+
+    def test_notes_do_not_grow_across_many_gains(self):
+        from app.world import SKILL_NOTE_MAX_LEN, _apply_skills
+
+        conn = self._conn()
+        try:
+            _apply_skills(conn, [{"name": "Road Lore", "delta": 2, "notes": "Reads tracks and weather."}])
+            for i in range(19):
+                _apply_skills(conn, [{
+                    "name": "Road Lore", "delta": 1,
+                    "notes": f"On turn {i} they followed a rut through the drifts and guessed the load right.",
+                }])
+            row = conn.execute("SELECT value, notes FROM player_skills").fetchone()
+            self.assertEqual(row["notes"], "Reads tracks and weather.")
+            self.assertLessEqual(len(row["notes"]), SKILL_NOTE_MAX_LEN)
+            self.assertEqual(row["value"], 21)  # the VALUE still accumulates
+        finally:
+            conn.close()
+
+    def test_a_stub_note_is_upgraded_once(self):
+        from app.world import _apply_skills
+
+        conn = self._conn()
+        try:
+            _apply_skills(conn, [{"name": "Short Blades", "delta": 1, "notes": "knives"}])
+            _apply_skills(conn, [{"name": "Short Blades", "delta": 1,
+                                  "notes": "Close work with knife and dirk; no reach, no armour."}])
+            row = conn.execute("SELECT notes FROM player_skills").fetchone()
+            self.assertEqual(row["notes"], "Close work with knife and dirk; no reach, no armour.")
+        finally:
+            conn.close()
+
+    def test_a_long_note_is_cut_at_a_clause_not_mid_word(self):
+        from app.world import SKILL_NOTE_MAX_LEN, _short_skill_note
+
+        long = ("Tracking carts through snow and reading the depth of a rut. " * 6).strip()
+        got = _short_skill_note(long)
+        self.assertLessEqual(len(got), SKILL_NOTE_MAX_LEN)
+        self.assertFalse(got.endswith(" "))
+        self.assertNotIn("  ", got)
+        # must not end mid-word
+        self.assertTrue(got.endswith(".") or long.startswith(got))
+
+    def test_the_schema_asks_for_a_description_not_a_justification(self):
+        prompts = (ROOT / "app" / "prompts.py").read_text(encoding="utf-8", errors="replace")
+        self.assertNotIn("why play, training, practice, discovery", prompts)
+        self.assertIn("skill_catalog when one fits", prompts)
 
 
 if __name__ == "__main__":
