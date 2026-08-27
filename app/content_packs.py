@@ -46,6 +46,13 @@ ROOT = Path(__file__).resolve().parent.parent
 BUILTIN_PACK_DIR = ROOT / "content" / "packs"
 
 SECTIONS = ("skills", "powers", "items", "encounter_tables", "magnitude_tables")
+"""The five content buckets a pack may define.
+
+UNUSED as of 2026-08-27: nothing outside this line references it. The real
+section handling is spelled out per-bucket inside `validate_pack`. Kept as a
+readable summary of the pack shape; delete it or wire `validate_pack` to it,
+but do not assume it is enforcing anything today.
+"""
 
 # Canonical attribute keys. Packs must use these; aliases are normalized.
 STAT_KEYS = (
@@ -68,8 +75,39 @@ STAT_ALIASES = {
 SKILL_CATEGORIES = (
     "physical", "mental", "social", "craft", "combat", "event", "encounter", "general",
 )
+"""Skill categories a pack may declare. Enforced as a WARNING, not an error.
+
+Deliberately soft -- `_validate_skill` appends to `warnings` and stores the
+value as written, so a pack declaring `category: "stealthy"` installs cleanly.
+
+The consequence is worth knowing, because it is silent: `search_skills` and
+`gm_context_block` both filter on `enabled_categories`, which defaults to
+exactly these eight. A skill whose category is off-roster therefore never
+appears in skill search or in the GM context block -- the pack loads, the
+warning scrolls past, and the skill is simply invisible.
+
+This list is duplicated as `skill_checks.CATEGORIES` (by `id`). The two are
+identical today and `tests/test_content_pack_rosters.py` locks them together;
+the attribute alias tables drifted exactly this way before being merged.
+"""
+
 ACTIVATIONS = ("active", "passive", "triggered")
+"""How a power fires. Enforced as a hard ERROR on anything else.
+
+`active` = spent deliberately, `passive` = always on, `triggered` = fires on a
+condition. An unknown value fails validation with a fix naming all three, so a
+pack cannot install a power the engine has no rule for.
+"""
+
 RESOURCE_KEYS = ("health", "energy", "mana", "fatigue", "gold")
+"""Resources a power may cost. Enforced as a hard ERROR on anything else.
+
+Unlike `STAT_KEYS` there is no alias table here, so near-misses a pack author
+would consider obvious -- "stamina", "grit", "focus" -- are rejected outright
+rather than mapped. That is the safe direction (a refusal is visible, a silent
+remap is not), but it does mean the error message is the only guidance an
+author gets.
+"""
 
 _CACHE: dict[str, Any] = {}
 
