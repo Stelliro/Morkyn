@@ -283,12 +283,6 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "event_lifecycle",
     # Server-stated contracts. Omitting a key here nulls it out of the packet
     # silently — the same failure that stripped the band fields off `player`.
-    # `skill_catalog` is here rather than in the OPTIONAL set because those are
-    # only merged in when broad_context is on: a skill check has to name a real
-    # skill on an ordinary turn too, and prompts.py points the model at
-    # `world_state.skill_catalog` by name. An absent key makes that a dead
-    # reference, which is worse than the open invitation it replaced.
-    "skill_catalog",
     "movement_contract",
     "narrative_voice",
     "naming_contract",
@@ -317,11 +311,6 @@ HANDOFF_OPTIONAL_CONTEXT_KEYS = {
     "turn_summaries",
 }
 HANDOFF_CONTEXT_LIST_LIMITS = {
-    # The catalogue is a fixed roster, not a feed to sample: the default limit
-    # of 8 silently cut 60 skill codes down to whichever 8 sorted first, which
-    # is worse than sending none -- the model would see a short list and treat
-    # it as complete. 80 covers the built-ins plus pack additions.
-    "skill_catalog": 80,
     "gm_events": 8,
     "skills": 12,
     "abilities": 12,
@@ -1168,20 +1157,6 @@ def _compact_turn_context(context: dict[str, Any]) -> dict[str, Any]:
     compact["verification_policy"] = _trim_strings(context.get("verification_policy"), 900)
     compact["action_context"] = _trim_strings(context.get("action_context"), 700)
     compact["skills"] = _compact_list(context.get("skills"), 12, 360)
-    # The player's own skills went in the packet; the catalogue of skills a
-    # check may name never did. So the narrator picked `skill` from the three
-    # words the schema happened to list ("lying/speech/insight/etc") and any
-    # miss minted a phantom that rolled INTELLIGENCE. ~158 tokens, and it lives
-    # in the packet rather than SYSTEM_PROMPT because that prompt is already
-    # 9152 tokens against a shipped 8192 context default.
-    try:
-        from app.skill_checks import load_skill_library
-
-        compact["skill_catalog"] = [
-            str(s.get("code")) for s in load_skill_library() if s.get("enabled", True) and s.get("code")
-        ][:80]
-    except Exception:
-        pass
     compact["abilities"] = _compact_list(context.get("abilities"), 10, 420)
     compact["player_aliases"] = _compact_list(context.get("player_aliases"), 6, 360)
     compact["active_player_alias"] = _trim_strings(context.get("active_player_alias"), 360)
