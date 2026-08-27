@@ -8480,6 +8480,27 @@ def _slot_by_ref(conn, slot_ref: Any, slot_name: Any = None) -> sqlite3.Row | No
         row = conn.execute("SELECT * FROM equipment_slots WHERE code = ? OR name = ?", (value, value)).fetchone()
         if row:
             return row
+    # Every slot carries the words it accepts -- FEET accepts "boots", HEAD
+    # accepts "helmet" -- and this lookup never read them, so the narrator
+    # writing `slot_name: "boots"` (which prompts.py invites with "slot name if
+    # code unknown") minted a second slot beside the one that already took it.
+    # 42 of the 43 words the shipped roster declares missed this way.
+    #
+    # Only an unambiguous accept resolves: MAIN and OFF both take "weapon",
+    # "tool" and "focus", and picking one of those is a coin flip. Ambiguous
+    # words fall through to the existing DM-created-slot path, which is a real
+    # feature and stays.
+    for value in values:
+        if not value:
+            continue
+        wanted = value.lower()
+        matches = [
+            row
+            for row in conn.execute("SELECT * FROM equipment_slots").fetchall()
+            if wanted in {str(a).strip().lower() for a in _json(row["accepts"] or "[]", [])}
+        ]
+        if len(matches) == 1:
+            return matches[0]
     return None
 
 
@@ -8600,14 +8621,21 @@ def _apply_skills(conn, changes: list[dict[str, Any]]) -> None:
     if not isinstance(changes, list):
         return
     for change in changes[:12]:
-        name = norm_name(str(change.get("name", ""))).lower()
+        # Store the name as written and match case-insensitively. It used to be
+        # lowercased on the way in and the read path does not re-case it, so a
+        # skill the model called "Road Lore" rendered in the UI as "road lore".
+        # COLLATE NOCASE keeps the de-duplication the lowercasing was there for,
+        # and matches the rows already stored in lower case.
+        name = norm_name(str(change.get("name", "")))
         if not name:
             continue
         raw_delta = clamp(int(change.get("delta") or 0), -5, 8)
         delta = _scaled_delta(raw_delta, str(speed), float(multiplier) if multiplier else None)
         delta = clamp(int(delta), -5, 12)
         notes = str(change.get("notes") or "")[:700]
-        existing = conn.execute("SELECT id, value, notes FROM player_skills WHERE name = ?", (name,)).fetchone()
+        existing = conn.execute(
+            "SELECT id, value, notes FROM player_skills WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
         if existing:
             value = clamp(int(existing["value"]) + delta, -10, 100)
             merged_notes = existing["notes"]

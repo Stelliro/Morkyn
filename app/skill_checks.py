@@ -337,7 +337,7 @@ def _library_path() -> Path:
 
 
 def _skill_row(raw: dict[str, Any], *, source: str = "built-in") -> dict[str, Any]:
-    name = str(raw.get("name") or raw.get("code") or "Skill").strip()[:80]
+    name = humanize_skill_name(str(raw.get("name") or raw.get("code") or "Skill").strip())
     code = str(raw.get("code") or _codeify(name))[:64]
     tags = raw.get("tags") or []
     if isinstance(tags, str):
@@ -435,9 +435,14 @@ def skill_similarity(a: dict[str, Any], b: dict[str, Any]) -> float:
         return 1.0
     if a.get("code") and a.get("code") == b.get("code"):
         return 1.0
-    if a.get("category") and a.get("category") == b.get("category"):
+    # `_skill_row` defaults category to "general" and attribute to
+    # "intelligence" for anything minted in play, so scoring those fields
+    # measured our own defaults rather than the skill: every new skill matched
+    # every general/intelligence skill at 0.45 against a 0.35 threshold. Only
+    # count them when the candidate actually chose them.
+    if a.get("category") and a.get("category") != "general" and a.get("category") == b.get("category"):
         score += 0.25
-    if a.get("attribute") and a.get("attribute") == b.get("attribute"):
+    if a.get("attribute") and a.get("attribute") != "intelligence" and a.get("attribute") == b.get("attribute"):
         score += 0.2
     tags_a = {_norm(t) for t in (a.get("tags") or []) if t}
     tags_b = {_norm(t) for t in (b.get("tags") or []) if t}
@@ -464,6 +469,82 @@ def find_similar_skills(candidate: dict[str, Any], library: list[dict[str, Any]]
     return scored[:limit]
 
 
+_NAME_SMALL_WORDS = {"of", "the", "a", "an", "in", "on", "at", "to", "and", "or", "for"}
+
+
+def humanize_skill_name(raw: str) -> str:
+    """Turn pick_lock into Pick Lock. Names that already carry case are left alone.
+
+    `resolve_check` mints with the model's raw string as the name, so the
+    library filled up with entries called "pick_lock" and "hotwire the truck" --
+    and the UI renders that name directly.
+    """
+    text = str(raw or "").replace("_", " ").strip()
+    if not text:
+        return "Skill"
+    if text != text.lower():
+        return text[:80]
+    words = [w for w in text.split() if w]
+    out = [w if i and w in _NAME_SMALL_WORDS else w[:1].upper() + w[1:] for i, w in enumerate(words)]
+    return " ".join(out)[:80]
+
+
+def _unambiguous_tag_index(library: list[dict[str, Any]]) -> dict[str, str]:
+    """Tag -> code, keeping only tags owned by exactly one skill.
+
+    Eight tags are shared (recall, ward, rite, omen, forge, map, ambush,
+    spirit). Letting a shared tag pick a winner is a coin flip presented as a
+    decision, so they are dropped instead.
+    """
+    owners: dict[str, set[str]] = {}
+    for skill in library:
+        code = skill.get("code")
+        if not code:
+            continue
+        for tag in skill.get("tags") or []:
+            owners.setdefault(_norm(str(tag)), set()).add(code)
+    return {tag: next(iter(codes)) for tag, codes in owners.items() if len(codes) == 1}
+
+
+def resolve_skill_code(text: Any, library: list[dict[str, Any]] | None = None) -> str | None:
+    """Canonical skill code for model-supplied text, or None if genuinely new.
+
+    The narrator writes this field as free prose and is never shown the
+    catalogue, so "pick the lock" used to miss `lockpicking` -- which was in the
+    library the whole time with "lock" among its tags -- and mint a phantom that
+    rolled INTELLIGENCE.
+
+    Whole-word matching only. The theme detector shipped `picking` matching
+    `king` and `sector` matching `sect`; that shortcut does not come back here.
+    Returns None rather than guessing: an honest miss mints a new skill, a
+    wrong guess rolls the wrong attribute forever.
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    lib = library if library is not None else load_skill_library()
+    by_code = {s.get("code"): s for s in lib if s.get("code")}
+    if raw in by_code:
+        return raw
+    coded = _codeify(raw)
+    if coded in by_code:
+        return coded
+    normalized = _norm(raw)
+    for skill in lib:
+        if normalized and _norm(str(skill.get("name") or "")) == normalized:
+            return skill.get("code")
+    tags = _unambiguous_tag_index(lib)
+    if normalized in tags:
+        return tags[normalized]
+    hits = {tags[word] for word in re.findall("[a-z0-9]+", normalized) if word in tags}
+    if len(hits) == 1:
+        return hits.pop()
+    inferred = infer_check_from_action(raw)
+    if inferred and inferred.get("skill_code") in by_code:
+        return str(inferred["skill_code"])
+    return None
+
+
 def register_or_adjust_skill(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Add a skill from play or settings. If similar skills exist, inherit base_dc /
@@ -488,8 +569,13 @@ def register_or_adjust_skill(payload: dict[str, Any]) -> dict[str, Any]:
         if not row.get("category") or row["category"] == "general":
             row["category"] = best.get("category") or row["category"]
         row["adjusted_from"] = str(best.get("code") or "")
-        if not row.get("description") and best.get("description"):
-            row["description"] = f"Related to {best.get('name')}: {best.get('description')}"[:400]
+        # No description graft. `best` is chosen by skill_similarity, which used
+        # to score category and attribute -- fields _skill_row had just
+        # defaulted to "general"/"intelligence". That is 0.45 against a 0.35
+        # threshold from the defaults alone, so every minted skill matched a
+        # general-category skill and inherited its text: "void_surgery" came out
+        # described as "Related to General Check: Fallback when no specialized
+        # skill fits." An empty description is honest; a borrowed one is not.
 
     existing = next((s for s in library if s.get("code") == row["code"]), None)
     if existing:
@@ -523,18 +609,52 @@ def set_skill_enabled(code: str, enabled: bool) -> dict[str, Any] | None:
 # --- resolution --------------------------------------------------------------
 
 
+# Aliases this module needs that `content_packs.STAT_ALIASES` does not carry.
+# The two tables used to be independent copies covering the same six stats with
+# different words -- content_packs had "awareness" and "stamina", this one had
+# "perception" -- so the same NPC stat key resolved differently depending on
+# which code path read it. content_packs is now the source and this is the
+# delta, so neither loses a word.
+_EXTRA_STAT_ALIASES = {"perception": "wisdom"}
+
+
+def _stat_alias_groups() -> dict[str, set[str]]:
+    """canonical stat -> every spelling that resolves to it."""
+    try:
+        from app.content_packs import STAT_ALIASES, STAT_KEYS
+
+        pairs = dict(STAT_ALIASES)
+        canon = list(STAT_KEYS)
+    except Exception:  # pragma: no cover - content_packs is optional at import
+        pairs, canon = {}, ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"]
+    pairs.update(_EXTRA_STAT_ALIASES)
+    groups = {c: {c} for c in canon}
+    for alias, target in pairs.items():
+        groups.setdefault(target, {target}).add(alias)
+    return groups
+
+
+def canonical_stat_key(key: str) -> str:
+    """Resolve a stat spelling onto one of the six canonical attributes.
+
+    The group table is keyed by canonical name and was only ever matched
+    against the *stats dict* keys, so a skill or pack declaring its attribute as
+    "awareness" or "stamina" matched nothing and scored the default 10 -- a
+    roster that existed but was never consulted from this direction.
+    """
+    low = str(key or "").strip().lower()
+    for canon, spellings in _stat_alias_groups().items():
+        if low == canon or low in spellings:
+            return canon
+    return low
+
+
 def _attr_score(stats: dict[str, Any] | None, key: str) -> int:
     if not isinstance(stats, dict):
         return 10
-    aliases = {
-        "strength": {"strength", "str", "might", "power"},
-        "dexterity": {"dexterity", "dex", "agility", "speed"},
-        "constitution": {"constitution", "con", "endurance", "vitality"},
-        "intelligence": {"intelligence", "int", "intellect", "mind"},
-        "wisdom": {"wisdom", "wis", "insight", "perception"},
-        "charisma": {"charisma", "cha", "presence", "speech"},
-    }
-    wanted = aliases.get((key or "").lower(), { (key or "").lower() })
+    aliases = _stat_alias_groups()
+    canon = canonical_stat_key(key)
+    wanted = aliases.get(canon, {canon})
     for name, value in stats.items():
         if str(name).strip().lower() in wanted or re.sub(r"[^a-z]", "", str(name).lower()) in wanted:
             try:
@@ -806,8 +926,13 @@ def resolve_check(
             "context_note": context_note,
         }
 
-    library = {s["code"]: s for s in load_skill_library()}
-    skill = library.get(skill_code) or library.get(_codeify(skill_code))
+    lib_rows = load_skill_library()
+    library = {s["code"]: s for s in lib_rows}
+    # Exact-code lookup only, before: the narrator writes this field as prose and
+    # never sees the catalogue, so "pick the lock" missed `lockpicking` and minted
+    # a phantom that rolled INTELLIGENCE instead of DEXTERITY.
+    resolved = resolve_skill_code(skill_code, lib_rows)
+    skill = library.get(resolved) if resolved else None
     if skill and not skill.get("enabled", True):
         # A pack switched this skill off: fall back to the generic check rather
         # than silently rolling a skill the campaign says does not exist.
@@ -1097,61 +1222,70 @@ def social_attitude_from_check(
     return "Dismissive"
 
 
+SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
+    (r"\b(attack|strike|slash|stab|swing|fight|melee)\b", "melee"),
+    (r"\b(shoot|fire|bow|gun|throw)\b", "ranged"),
+    (r"\b(sneak|hide|stealth|creep)\b", "stealth"),
+    (r"\b(persuade|convince|negotiate)\b", "persuasion"),
+    (r"\b(bargain|haggle|price|appraise|value of|worth)\b", "appraise"),
+    # Opening speech / ask / talk → charisma-backed persuasion
+    (r"\b(talk|speak|ask|greet|address|approach .+ (and )?(talk|ask|speak)|say (hello|hi)|introduce)\b", "persuasion"),
+    (r"\b(lie|bluff|deceive|con)\b", "deception"),
+    (r"\b(intimidate|threaten|scare)\b", "intimidation"),
+    (r"\b(disguise|costume|impersonat|pretend to be)\b", "disguise"),
+    (r"\b(gambl|bet|wager|cards|dice game)\b", "gambling"),
+    (r"\b(symbol|rune|glyph|sigil|etch)\b", "symbol_lore"),
+    (r"\b(read|inspect|examine|study|analyze)\b", "investigation"),
+    (r"\b(search|look for|scan|look around)\b", "perception"),
+    (r"\b(climb|jump|swim|lift|force|break|bash)\b", "athletics"),
+    (r"\b(lock|pick the|unlock)\b", "lockpicking"),
+    (r"\b(heal|bandage|medicine|first aid|triage|splint)\b", "healing"),
+    (r"\b(rally|cover (me|them|him|her)|support (ally|friend)|buff)\b", "support"),
+    (r"\b(summon|call (a |the )?(spirit|familiar|demon)|pact)\b", "summoning"),
+    (r"\b(necro|undead|bone (rite|command)|raise (dead|skeleton)|grave rite)\b", "necromancy"),
+    (r"\b(exorc|banish|cleanse spirit|salt circle)\b", "exorcism"),
+    (r"\b(alchem|brew potion|reagent|tincture)\b", "alchemy"),
+    (r"\b(ritual|draw (a )?circle|ceremony)\b", "ritual"),
+    (r"\b(weapon art|kata|form with (my |the )?(sword|spear|bow|axe))\b", "weapon_art"),
+    (r"\b(medicine|first aid kit)\b", "medicine"),
+    (r"\b(hack|console|terminal|decrypt)\b", "hacking"),
+    (r"\b(track|forage|camp|survive)\b", "survival"),
+    (r"\b(cook|meal|food|stew|roast)\b", "cooking"),
+    (r"\b(smith|forge|anvil|temper)\b", "smithing"),
+    (r"\b(animal|mount|horse|herd|tame|calm the)\b", "animal_handling"),
+    (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
+    (r"\b(mine|ore|tunnel|dig (for|out|a))\b", "mining"),
+    (r"\b(map|chart|survey|cartograph)\b", "cartography"),
+    (r"\b(navigat|stars|compass|bearing|dead reckon)\b", "navigation"),
+    (r"\b(tinker|gadget|mechanism|jury[- ]?rig)\b", "tinkering"),
+    (r"\b(drive|pilot|steer|sail)\b", "vehicles"),
+    (r"\b(history|lineage|old war|who ruled)\b", "history"),
+    (r"\b(nature|plant|beast ecology|weather pattern)\b", "nature"),
+    (r"\b(religion|rite|omen|prayer|cult)\b", "religion"),
+    (r"\b(arcana|magic theory|ward|spell residue)\b", "arcana"),
+    (r"\b(performance|sing|song|act|storytell)\b", "performance"),
+    (r"\b(etiquette|court manners|protocol|formal address)\b", "etiquette"),
+    (r"\b(streetwise|fence|underworld|gang rumor)\b", "streetwise"),
+    (r"\b(insight|read (him|her|them|the room)|sense motive)\b", "insight"),
+    (r"\b(acrobatics|balance|tumble|tightrope)\b", "acrobatics"),
+    (r"\b(sleight|pickpocket|palm|switch the)\b", "sleight_of_hand"),
+    (r"\b(tactics|ambush plan|formation)\b", "tactics"),
+    (r"\b(defense|parry|block|guard up)\b", "defense"),
+]
+"""Regex -> built-in skill code, for turning action text into a check.
+
+Hoisted out of `infer_check_from_action` so the same table can resolve a skill
+string the model supplied directly. It used to be a local list, so the check
+path had no way to reuse it and minted a phantom skill instead.
+"""
+
+
 def infer_check_from_action(player_input: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Pick a skill code + optional opposition for auto-checks on player actions."""
     text = (player_input or "").lower()
     if not text or text.startswith("__"):
         return None
-    pairs = [
-        (r"\b(attack|strike|slash|stab|swing|fight|melee)\b", "melee"),
-        (r"\b(shoot|fire|bow|gun|throw)\b", "ranged"),
-        (r"\b(sneak|hide|stealth|creep)\b", "stealth"),
-        (r"\b(persuade|convince|negotiate)\b", "persuasion"),
-        (r"\b(bargain|haggle|price|appraise|value of|worth)\b", "appraise"),
-        # Opening speech / ask / talk → charisma-backed persuasion
-        (r"\b(talk|speak|ask|greet|address|approach .+ (and )?(talk|ask|speak)|say (hello|hi)|introduce)\b", "persuasion"),
-        (r"\b(lie|bluff|deceive|con)\b", "deception"),
-        (r"\b(intimidate|threaten|scare)\b", "intimidation"),
-        (r"\b(disguise|costume|impersonat|pretend to be)\b", "disguise"),
-        (r"\b(gambl|bet|wager|cards|dice game)\b", "gambling"),
-        (r"\b(symbol|rune|glyph|sigil|etch)\b", "symbol_lore"),
-        (r"\b(read|inspect|examine|study|analyze)\b", "investigation"),
-        (r"\b(search|look for|scan|look around)\b", "perception"),
-        (r"\b(climb|jump|swim|lift|force|break|bash)\b", "athletics"),
-        (r"\b(lock|pick the|unlock)\b", "lockpicking"),
-        (r"\b(heal|bandage|medicine|first aid|triage|splint)\b", "healing"),
-        (r"\b(rally|cover (me|them|him|her)|support (ally|friend)|buff)\b", "support"),
-        (r"\b(summon|call (a |the )?(spirit|familiar|demon)|pact)\b", "summoning"),
-        (r"\b(necro|undead|bone (rite|command)|raise (dead|skeleton)|grave rite)\b", "necromancy"),
-        (r"\b(exorc|banish|cleanse spirit|salt circle)\b", "exorcism"),
-        (r"\b(alchem|brew potion|reagent|tincture)\b", "alchemy"),
-        (r"\b(ritual|draw (a )?circle|ceremony)\b", "ritual"),
-        (r"\b(weapon art|kata|form with (my |the )?(sword|spear|bow|axe))\b", "weapon_art"),
-        (r"\b(medicine|first aid kit)\b", "medicine"),
-        (r"\b(hack|console|terminal|decrypt)\b", "hacking"),
-        (r"\b(track|forage|camp|survive)\b", "survival"),
-        (r"\b(cook|meal|food|stew|roast)\b", "cooking"),
-        (r"\b(smith|forge|anvil|temper)\b", "smithing"),
-        (r"\b(animal|mount|horse|herd|tame|calm the)\b", "animal_handling"),
-        (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
-        (r"\b(mine|ore|tunnel|dig (for|out|a))\b", "mining"),
-        (r"\b(map|chart|survey|cartograph)\b", "cartography"),
-        (r"\b(navigat|stars|compass|bearing|dead reckon)\b", "navigation"),
-        (r"\b(tinker|gadget|mechanism|jury[- ]?rig)\b", "tinkering"),
-        (r"\b(drive|pilot|steer|sail)\b", "vehicles"),
-        (r"\b(history|lineage|old war|who ruled)\b", "history"),
-        (r"\b(nature|plant|beast ecology|weather pattern)\b", "nature"),
-        (r"\b(religion|rite|omen|prayer|cult)\b", "religion"),
-        (r"\b(arcana|magic theory|ward|spell residue)\b", "arcana"),
-        (r"\b(performance|sing|song|act|storytell)\b", "performance"),
-        (r"\b(etiquette|court manners|protocol|formal address)\b", "etiquette"),
-        (r"\b(streetwise|fence|underworld|gang rumor)\b", "streetwise"),
-        (r"\b(insight|read (him|her|them|the room)|sense motive)\b", "insight"),
-        (r"\b(acrobatics|balance|tumble|tightrope)\b", "acrobatics"),
-        (r"\b(sleight|pickpocket|palm|switch the)\b", "sleight_of_hand"),
-        (r"\b(tactics|ambush plan|formation)\b", "tactics"),
-        (r"\b(defense|parry|block|guard up)\b", "defense"),
-    ]
+    pairs = list(SKILL_TRIGGER_PATTERNS)
     # Pack triggers are checked first so a campaign can route "pole the barge"
     # to its own skill instead of falling through to a built-in near-match.
     try:

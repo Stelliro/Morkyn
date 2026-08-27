@@ -409,7 +409,7 @@ Required JSON shape:
     {
       "claim": "can have weapon",
       "verdict": "true/false/unverified",
-      "skill": "lying/speech/insight/etc",
+      "skill": "a code from world_state.skill_catalog, or a short plain name if none fits",
       "difficulty_class": 12,
       "result": "pass/fail/not_checked",
       "notes": "why the NPC believes, doubts, rejects, or checks it"

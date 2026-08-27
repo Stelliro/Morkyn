@@ -1157,6 +1157,20 @@ def _compact_turn_context(context: dict[str, Any]) -> dict[str, Any]:
     compact["verification_policy"] = _trim_strings(context.get("verification_policy"), 900)
     compact["action_context"] = _trim_strings(context.get("action_context"), 700)
     compact["skills"] = _compact_list(context.get("skills"), 12, 360)
+    # The player's own skills went in the packet; the catalogue of skills a
+    # check may name never did. So the narrator picked `skill` from the three
+    # words the schema happened to list ("lying/speech/insight/etc") and any
+    # miss minted a phantom that rolled INTELLIGENCE. ~158 tokens, and it lives
+    # in the packet rather than SYSTEM_PROMPT because that prompt is already
+    # 9152 tokens against a shipped 8192 context default.
+    try:
+        from app.skill_checks import load_skill_library
+
+        compact["skill_catalog"] = [
+            str(s.get("code")) for s in load_skill_library() if s.get("enabled", True) and s.get("code")
+        ][:80]
+    except Exception:
+        pass
     compact["abilities"] = _compact_list(context.get("abilities"), 10, 420)
     compact["player_aliases"] = _compact_list(context.get("player_aliases"), 6, 360)
     compact["active_player_alias"] = _trim_strings(context.get("active_player_alias"), 360)
