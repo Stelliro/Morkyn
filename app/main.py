@@ -154,7 +154,7 @@ from app.world import (
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 MEDIA_DIR = ROOT / "Media"
-APP_VERSION = "V0.9.1-wip"
+APP_VERSION = "V0.9.11"
 
 app = FastAPI(title="Mørkyn")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

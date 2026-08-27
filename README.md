@@ -4,7 +4,7 @@
   <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
 </p>
 
-**Version `0.9.1-wip`** · work-in-progress on the 0.9 line. Last stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.9.11`** · work-in-progress on the 0.9 line. Last stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
 **Mørkyn** is a local-first browser RPG. A local LLM narrates turns and proposes structured world changes, while SQLite remains the source of truth for the player, inventory, NPCs, events, summaries, and long-running continuity.
 
@@ -12,15 +12,15 @@ It is still pre-1.0 software, but it has enough systems to be a playable prototy
 
 ## Download
 
-This drop is **[`v0.9.1-wip`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.1-wip)**. One file, empty folder, run it. The launcher clones the repo, builds a private `.venv`, installs dependencies, and starts the game.
+This drop is **[`v0.9.11`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.11)**. One file, empty folder, run it. The launcher clones the repo, builds a private `.venv`, installs dependencies, and starts the game.
 
 | OS | File | Download |
 | --- | --- | --- |
-| **Windows** | `start.bat` | **[Download start.bat](https://github.com/Stelliro/Morkyn/releases/download/v0.9.1-wip/start.bat)** — double-click |
-| **Linux** | `start.sh` | **[Download start.sh](https://github.com/Stelliro/Morkyn/releases/download/v0.9.1-wip/start.sh)** — `bash start.sh` |
-| **macOS** | `start.sh` | **[Download start.sh](https://github.com/Stelliro/Morkyn/releases/download/v0.9.1-wip/start.sh)** — same script as Linux |
+| **Windows** | `start.bat` | **[Download start.bat](https://github.com/Stelliro/Morkyn/releases/download/v0.9.11/start.bat)** — double-click |
+| **Linux** | `start.sh` | **[Download start.sh](https://github.com/Stelliro/Morkyn/releases/download/v0.9.11/start.sh)** — `bash start.sh` |
+| **macOS** | `start.sh` | **[Download start.sh](https://github.com/Stelliro/Morkyn/releases/download/v0.9.11/start.sh)** — same script as Linux |
 
-Release page (notes + both files): [**Mørkyn 0.9.1-wip**](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.1-wip)
+Release page (notes + both files): [**Mørkyn 0.9.11**](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.11)
 
 ```text
 Windows        double-click start.bat
@@ -137,7 +137,7 @@ Morkyn/
 - Optional adaptive narration pipeline and agent bridge endpoints.
 - Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
 
-### New in 0.9.1-wip
+### New in 0.9.11
 
 - **Venues show in the play UI.** Shops on this square render as chips with open/closed state and a way out.
 - **Inspect no longer duplicates the thing you looked at.** Looking at the seed in your hand does not mint two more.
@@ -271,7 +271,7 @@ python benchmarks/run_dual_role_playtest.py
 | Field | Value |
 | --- | --- |
 | Product | **Mørkyn** |
-| Version | **0.9.1-wip** |
+| Version | **0.9.11** |
 | GitHub | https://github.com/Stelliro/Morkyn |
 
 Formerly published as AI RPG Consistency Prototype (`ai-rpg-consistency-prototype`).

@@ -15,7 +15,7 @@
 - **Primary Languages:** Python, JavaScript, HTML, CSS
 - **Key Frameworks / Libraries:** FastAPI, Pydantic, SQLite, Uvicorn, llama-cpp-python server, Ollama-compatible APIs
 - **Target Platforms:** Windows local development, browser UI at localhost or trusted local-network phone/tablet browsers
-- **Current Version:** 0.9.1-wip
+- **Current Version:** 0.9.11
 - **Status:** Active development / prototype
 - **Brand assets:** `Media/` (logo + key art)
 
