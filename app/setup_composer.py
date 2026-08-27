@@ -3925,6 +3925,14 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
         "starport",
         "spacefaring",
         "airlock",
+        # Compositional phrases, not missing genre names. Each was added alone
+        # and judged against tests/fixtures/setting_corpus.json: each moved
+        # exactly the one setting it was meant to and nothing else.
+        # "colony ship" was already here and "generation ship" was not.
+        "generation ship",
+        "terraforming",
+        "survey world",
+        "survey vessel",
     ),
     # Fantasy is matched LAST in the priority order, so nothing here can steal a
     # world from another theme -- and until "generic" existed, every unmatched
@@ -4335,6 +4343,32 @@ def _strip_negated_genre_words(low_text: str) -> str:
 # catch kings and kingdom -- so this anchors the front of the word only.
 _THEME_KEYWORD_RE_CACHE: dict[str, re.Pattern[str]] = {}
 
+# The anchor above guards the LEFT of a keyword only, so a keyword can still run
+# into the middle of a longer word. That is wanted almost everywhere -- it is
+# how "sorcer" catches sorcery and "king" catches kingdom -- but two suffixes
+# turn a keyword into a different word entirely, and both were misfiring:
+#
+#   sect + or     "an industrial sector" opened at a fantasy gate-town. The
+#                 word-start anchor was added for exactly this class of bug and
+#                 its own comment admits it never fixed this case.
+#   heaven + ly   "heavenly" is xianxia's most common adjective ("heavenly
+#                 tribulation", "heavenly lightning"), and celestial is tested
+#                 before fantasy, so a cultivation world opened in the afterlife.
+#
+# The cost of the second one is that a genuine heaven setting phrased only as
+# "a heavenly court" now falls through. That is accepted: as a noun the place is
+# near-always written "heaven", "heavens", "paradise", "afterlife" or "divine
+# court", all of which still match, while the adjective is overwhelmingly
+# decoration on some other genre.
+#
+# Keep this table small. It is an exception list, not a second keyword table --
+# anything that needs more than a suffix guard is a keyword problem, and the
+# corpus is where it gets judged.
+_THEME_KEYWORD_BLOCKED_SUFFIXES: dict[str, tuple[str, ...]] = {
+    "sect": ("or",),
+    "heaven": ("ly",),
+}
+
 
 def _theme_keyword_present(keyword: str, low_text: str) -> bool:
     key = str(keyword or "")
@@ -4342,7 +4376,9 @@ def _theme_keyword_present(keyword: str, low_text: str) -> bool:
         return False
     pattern = _THEME_KEYWORD_RE_CACHE.get(key)
     if pattern is None:
-        pattern = re.compile(r"(?<![a-z0-9])" + re.escape(key), re.I)
+        blocked = _THEME_KEYWORD_BLOCKED_SUFFIXES.get(key.lower()) or ()
+        guard = ("(?!" + "|".join(re.escape(s) for s in blocked) + ")") if blocked else ""
+        pattern = re.compile(r"(?<![a-z0-9])" + re.escape(key) + guard, re.I)
         _THEME_KEYWORD_RE_CACHE[key] = pattern
     return bool(pattern.search(low_text))
 
