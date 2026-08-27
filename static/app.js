@@ -587,23 +587,54 @@ const START_LOCATION_BANKS = {
 };
 
 /** Priority order and keywords match detect_location_theme() on the server. */
+// Mirror of LOCATION_THEME_KEYWORDS in app/setup_composer.py, in the order
+// of the `priority` tuple in detect_location_theme(). Python is the source
+// of truth. These two drifted apart badly before anything compared them --
+// this copy still carried "scavenger" months after the server dropped it --
+// so tests/fixtures/setting_corpus.json is now run through BOTH tables and
+// tools/test_start_location_offline_theme.js fails on any divergence.
 const START_LOCATION_THEME_KEYWORDS = [
-  ["celestial", ["heaven", "celestial", "paradise", "afterlife", "angel", "divine"]],
-  ["cyberpunk", ["cyber", "neon", "megacity", "megacorp", "corpo", "chrome", "sprawl", "near future", "near-future", "arcology", "implant", "street samurai"]],
-  ["steampunk", ["steampunk", "clockwork", "airship", "boiler", "brass"]],
-  ["wasteland", ["wasteland", "post-apoc", "post apoc", "postapoc", "post-collapse", "post collapse", "fallout", "scorched", "irradiated", "scavenger", "the wastes", "radioactive"]],
-  ["space", ["space", "orbital", "starship", "sci-fi", "scifi", "science fiction", "interstellar", "faster-than-light", "far future", "far-future", "galactic", "galaxy", "hyperspace", "starport", "spaceport", "colony world", "airlock"]],
-  ["undersea", ["undersea", "underwater", "abyssal", "trench", "coral"]],
-  ["arctic", ["arctic", "glacier", "tundra", "frozen north", "ice road"]],
-  ["desert", ["desert", "dune", "oasis", "sandsea", "caravanserai"]],
-  ["gothic", ["gothic", "vampire", "crypt", "manor", "haunted"]],
-  ["noir", ["noir", "hardboiled", "detective", "prohibition", "speakeasy"]],
+  ["celestial", [
+    "heaven", "heavens", "celestial", "paradise", "afterlife", "angel", "divine court", "empyrean", "limbo",
+    "sky realm", "judgment hall", "choir of", "prison of light",
+  ]],
+  ["cyberpunk", [
+    "cyber", "cyberpunk", "neon", "megacity", "corpo", "netrunner", "chrome", "sprawl", "near future",
+    "near-future", "synthwave city", "arcology", "cybernetic", "megacorp", "corporate rule", "corporate-run",
+    "street samurai",
+  ]],
+  ["steampunk", [
+    "steampunk", "steam-punk", "clockwork", "airship", "brass", "gaslamp", "gas lamp", "victorian industrial",
+    "aether engine", "cogwork",
+  ]],
+  ["wasteland", [
+    "wasteland", "post-apoc", "post apoc", "postapoc", "fallout", "scorched", "ashland", "ruined world",
+    "dead earth", "radioactive", "scrapyard world", "post-collapse", "post collapse", "the wastes", "irradiated",
+  ]],
+  ["space", [
+    "space", "orbital", "starship", "space station", "colony ship", "colony world", "void station", "sci-fi",
+    "scifi", "science fiction", "interstellar", "faster-than-light", "faster than light", "far future",
+    "far-future", "galactic", "galaxy", "space opera", "star system", "hyperspace", "spaceport", "starport",
+    "spacefaring", "airlock",
+  ]],
+  ["undersea", ["undersea", "underwater", "aquatic", "sunken", "abyssal", "ocean depth", "coral city"]],
+  ["arctic", ["arctic", "tundra", "frozen", "glacier", "icebound", "permafrost", "snow waste"]],
+  ["desert", ["desert", "sand sea", "dune", "oasis", "badlands", "salt flat"]],
+  ["gothic", [
+    "gothic", "vampire", "haunted castle", "haunted manor", "haunted house", "dark romance", "blood court", "crypt",
+  ]],
+  ["noir", [
+    "noir", "hardboiled", "hard-boiled", "rainy crime", "detective city", "prohibition", "speakeasy", "gumshoe",
+  ]],
   // Matched last, so it cannot steal from the themes above it.
-  ["fantasy", ["fantasy", "isekai", "wuxia", "cultivation", "sect", "compound", "frontier", "medieval",
-    "sword", "magic", "mage", "wizard", "sorcer", "witch", "druid", "spell", "rune", "arcane", "enchant",
-    "king", "queen", "knight", "castle", "kingdom", "realm", "dragon", "elf", "elves", "elven", "dwarf",
-    "dwarves", "goblin", "orc", "troll", "beastfolk", "tavern", "dungeon", "bronze age", "iron age",
-    "feudal", "mythic", "myth", "shrine", "temple", "monastery", "xianxia", "spirit"]],
+  ["fantasy", [
+    "fantasy", "isekai", "wuxia", "cultivation", "sect", "compound", "frontier", "medieval", "sword", "magic",
+    "mage", "wizard", "sorcer", "witch", "druid", "necroman", "alchemis", "spell", "rune", "arcane", "enchant",
+    "king", "queen", "knight", "castle", "kingdom", "realm", "dragon", "elf", "elves", "elven", "dwarf", "dwarves",
+    "dwarven", "goblin", "orc", "troll", "beastfolk", "tavern", "dungeon", "bronze age", "iron age", "feudal",
+    "mythic", "myth", "barbarian", "peasant", "warlord", "shrine", "temple", "monastery", "xianxia", "qi ",
+    "spirit",
+  ]],
 ];
 
 /**

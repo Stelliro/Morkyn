@@ -155,6 +155,35 @@ for (const [style, want] of CASES) {
   console.log(`  ${got.padEnd(10)} ${style.slice(0, 52)}`);
 }
 
+// --- the committed corpus, judged by the JS table too --------------------
+// tests/test_setting_corpus.py runs these same settings through the Python
+// table. Asserting the identical expectations on both sides is what makes a
+// divergence between the two impossible to miss: whichever table drifts, one
+// of the two suites goes red. `known_failing` entries are asserted to fail
+// here as well -- the invariant is that the mirrors agree, bugs included.
+{
+  const corpusPath = path.join(ROOT, "tests", "fixtures", "setting_corpus.json");
+  const corpus = JSON.parse(fs.readFileSync(corpusPath, "utf8")).settings;
+  let mismatches = 0;
+  for (const entry of corpus) {
+    const got = themeFor(entry.setting);
+    const label = JSON.stringify(entry.setting.slice(0, 46));
+    if (entry.known_failing) {
+      if (got === entry.expected) {
+        mismatches += 1;
+        check(`corpus ${label}`, false, `JS now returns ${got}; Python still fails. Tables diverged.`);
+      }
+      continue;
+    }
+    const allowed = entry.allowed || [entry.expected];
+    if (!allowed.includes(got)) {
+      mismatches += 1;
+      check(`corpus ${label}`, false, `want ${allowed.join("|")}, got ${got}`);
+    }
+  }
+  console.log(`\ncorpus: ${corpus.length} settings, ${mismatches} mismatch(es) against the JS table`);
+}
+
 // No bank may borrow another's names -- that is the whole point.
 {
   const fantasy = new Set(BANKS.fantasy || []);

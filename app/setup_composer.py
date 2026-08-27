@@ -3992,6 +3992,29 @@ LOCATION_THEME_KEYWORDS: dict[str, tuple[str, ...]] = {
     ),
 }
 
+# The order themes are tested in: niche themes before generic fantasy, and
+# fantasy last so it can never steal a world from another theme.
+#
+# Hoisted out of detect_location_theme, where it was a local tuple. A theme
+# added to LOCATION_THEME_KEYWORDS but forgotten here would simply never match
+# -- no error, no warning, the keywords just sit there dead. That is the same
+# silent-drop shape as the closed rosters whose lookups ignored their own
+# synonym data, so tests/test_setting_corpus.py asserts the two agree, in both
+# directions. static/app.js mirrors this order as its Map insertion order.
+LOCATION_THEME_PRIORITY: tuple[str, ...] = (
+    "celestial",
+    "cyberpunk",
+    "steampunk",
+    "wasteland",
+    "space",
+    "undersea",
+    "arctic",
+    "desert",
+    "gothic",
+    "noir",
+    "fantasy",
+)
+
 # Large per-theme arrival name pools.
 LOCATION_SEEDS_BY_THEME: dict[str, tuple[str, ...]] = {
     # Nothing matched. Everything here reads the same in a superhero city, a
@@ -4348,21 +4371,7 @@ def detect_location_theme(
         ]
     )
     low = _strip_negated_genre_words(re.sub(r"\s+", " ", blob.lower()))
-    # Priority order: niche themes before generic fantasy.
-    priority = (
-        "celestial",
-        "cyberpunk",
-        "steampunk",
-        "wasteland",
-        "space",
-        "undersea",
-        "arctic",
-        "desert",
-        "gothic",
-        "noir",
-        "fantasy",
-    )
-    for tid in priority:
+    for tid in LOCATION_THEME_PRIORITY:
         keys = LOCATION_THEME_KEYWORDS.get(tid) or ()
         if any(_theme_keyword_present(k, low) for k in keys):
             return tid
