@@ -10983,6 +10983,13 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                     context_note=str(item.get("context_note") or item.get("note") or model_input)[:400],
                     weapon_or_tool=str(item.get("weapon_or_tool") or item.get("weapon") or ""),
                 )
+                # LEGACY, deliberate: `resolve_check` returns `skill` as a dict
+                # and has never returned a `skill_code` key, so the right-hand
+                # side of this `or` is always False. Kept as-is by decision --
+                # `infer_check_from_action` sets social=True for all seven codes
+                # listed below (verified), so the left-hand side already covers
+                # every case and "fixing" this would change behaviour for no
+                # gain. Do not tidy it without re-measuring that.
                 if item.get("social") or str(resolved.get("skill_code") or "") in {
                     "persuasion",
                     "deception",
