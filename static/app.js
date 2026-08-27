@@ -593,6 +593,12 @@ const START_LOCATION_BANKS = {
 // this copy still carried "scavenger" months after the server dropped it --
 // so tests/fixtures/setting_corpus.json is now run through BOTH tables and
 // tools/test_start_location_offline_theme.js fails on any divergence.
+// Mirror of LOCATION_THEME_KEYWORDS in app/setup_composer.py, in the order
+// of the `priority` tuple in detect_location_theme(). Python is the source
+// of truth. These two drifted apart badly before anything compared them --
+// this copy still carried "scavenger" months after the server dropped it --
+// so tests/fixtures/setting_corpus.json is now run through BOTH tables and
+// tools/test_start_location_offline_theme.js fails on any divergence.
 const START_LOCATION_THEME_KEYWORDS = [
   ["celestial", [
     "heaven", "heavens", "celestial", "paradise", "afterlife", "angel", "divine court", "empyrean", "limbo",
@@ -615,7 +621,7 @@ const START_LOCATION_THEME_KEYWORDS = [
     "space", "orbital", "starship", "space station", "colony ship", "colony world", "void station", "sci-fi",
     "scifi", "science fiction", "interstellar", "faster-than-light", "faster than light", "far future",
     "far-future", "galactic", "galaxy", "space opera", "star system", "hyperspace", "spaceport", "starport",
-    "spacefaring", "airlock",
+    "spacefaring", "airlock", "generation ship", "terraforming", "survey world", "survey vessel",
   ]],
   ["undersea", ["undersea", "underwater", "aquatic", "sunken", "abyssal", "ocean depth", "coral city"]],
   ["arctic", ["arctic", "tundra", "frozen", "glacier", "icebound", "permafrost", "snow waste"]],
@@ -650,12 +656,21 @@ function stripNegatedGenreWords(lowText) {
 
 const THEME_KEYWORD_RE_CACHE = new Map();
 
+// Mirrors _THEME_KEYWORD_BLOCKED_SUFFIXES in app/setup_composer.py. The anchor
+// below guards the left of a keyword only, which is wanted -- "sorcer" must
+// catch sorcery -- but "sect" ran into "sector" and sent an industrial setting
+// to a fantasy gate-town, and "heaven" ran into "heavenly", xianxia's most
+// common adjective, so a cultivation world opened in the afterlife.
+const THEME_KEYWORD_BLOCKED_SUFFIXES = new Map([["sect", ["or"]], ["heaven", ["ly"]]]);
+
 function themeKeywordPresent(keyword, lowText) {
   const key = String(keyword || "");
   if (!key) return false;
   let re = THEME_KEYWORD_RE_CACHE.get(key);
   if (!re) {
-    re = new RegExp("(?<![a-z0-9])" + key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&"), "i");
+    const blocked = THEME_KEYWORD_BLOCKED_SUFFIXES.get(key.toLowerCase()) || [];
+    const guard = blocked.length ? `(?!${blocked.join("|")})` : "";
+    re = new RegExp("(?<![a-z0-9])" + key.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&") + guard, "i");
     THEME_KEYWORD_RE_CACHE.set(key, re);
   }
   return re.test(lowText);

@@ -99,6 +99,7 @@ vm.runInContext(
     extractConst(source, "START_LOCATION_THEME_KEYWORDS"),
     extractConst(source, "NEGATED_GENRE_WORD_RE"),
     extractConst(source, "THEME_KEYWORD_RE_CACHE"),
+    extractConst(source, "THEME_KEYWORD_BLOCKED_SUFFIXES"),
     extractFunction(source, "stripNegatedGenreWords"),
     extractFunction(source, "themeKeywordPresent"),
     // `const` in a vm script is a lexical binding, not a sandbox property.
