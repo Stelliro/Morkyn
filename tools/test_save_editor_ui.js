@@ -125,6 +125,9 @@ try {
     extractFunction(source, "saveEditorIsScalar"),
     extractFunction(source, "saveEditorRowWhere"),
     extractFunction(source, "saveEditorVisibleRows"),
+    extractConst(source, "SAVE_EDITOR_MIN_COLUMN"),
+    extractConst(source, "SAVE_EDITOR_MAX_DEFAULT_COLUMN"),
+    extractFunction(source, "saveEditorDefaultWidth"),
     extractFunction(source, "saveEditorCoerce"),
     extractFunction(source, "saveEditorBuildEdits"),
     extractFunction(source, "saveEditorChangeLines"),
@@ -148,6 +151,8 @@ try {
     "this.api = {",
     "  rowWhere: saveEditorRowWhere,",
     "  visible: saveEditorVisibleRows,",
+    "  defaultWidth: saveEditorDefaultWidth,",
+    "  maxDefault: () => SAVE_EDITOR_MAX_DEFAULT_COLUMN,",
     "  coerce: saveEditorCoerce,",
     "  build: saveEditorBuildEdits,",
     "  lines: saveEditorChangeLines,",
@@ -238,6 +243,31 @@ console.log("filtering rows without moving the target");
   same("any column can match", api.visible(rows, "I4").map((e) => e.index), [1]);
   same("no match is an empty list, not everything", api.visible(rows, "zzz").map((e) => e.index), []);
   check("a row with a null column does not blow up the filter", api.visible([{ id: 1, note: null }], "1").length === 1);
+}
+
+// --- 1c. starting column widths ------------------------------------------
+console.log("choosing a column's starting width");
+{
+  const rows = [
+    { id: 1, name: "threadbare scarf", description: "Starting gear (this_life_worn): ordinary threadbare scarf." },
+    { id: 2, name: "frayed leather satchel", description: "Starting gear (this_life_common): a satchel." },
+  ];
+  const id = api.defaultWidth("id", rows);
+  const name = api.defaultWidth("name", rows);
+  const description = api.defaultWidth("description", rows);
+  check("a short column stays narrow", id === 84, String(id));
+  check("a name column fits its longest name", name > id && name < 260, String(name));
+  check("a paragraph column is capped, not unbounded", description === api.maxDefault(), String(description));
+  check("wider content means a wider column", name > id);
+  check("the header alone sets a floor for an empty column", api.defaultWidth("enchantments", []) >= 84);
+}
+{
+  // model_logs runs to thousands of rows. Scanning every one of them to pick a
+  // width would be paid on every render, including every keystroke in the
+  // filter box.
+  const many = Array.from({ length: 500 }, (_, i) => ({ note: i < 60 ? "short" : "x".repeat(300) }));
+  const width = api.defaultWidth("note", many);
+  check("only the first rows are sampled", width < 120, `${width}px — it read past row 60`);
 }
 
 // --- 2. what type a value keeps ------------------------------------------

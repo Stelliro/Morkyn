@@ -7979,10 +7979,94 @@ let saveEditorRowPage = 0;
 let saveEditorAdding = false;
 let saveEditorApplied = "";
 let saveEditorFilter = "";
+let saveEditorRenderedTable = "";
 const SAVE_EDITOR_ROWS_PER_PAGE = 20;
 const SAVE_EDITOR_LONG_VALUE = 90;
 // Tried in order when looking for something unique to aim an edit at.
 const SAVE_EDITOR_ID_COLUMNS = ["id", "code", "key", "slug", "name"];
+const SAVE_EDITOR_COLUMN_KEY = "morkyn-save-editor-columns";
+const SAVE_EDITOR_MIN_COLUMN = 60;
+const SAVE_EDITOR_MAX_DEFAULT_COLUMN = 340;
+const SAVE_EDITOR_ACTIONS_COLUMN = 92;
+
+function readSaveEditorColumnWidths() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SAVE_EDITOR_COLUMN_KEY) || "{}");
+    return raw && typeof raw === "object" ? raw : {};
+  } catch {
+    return {};
+  }
+}
+
+// Kept by table rather than by save: the columns of `inventory` are the same
+// wherever it is, so a width set once is right for every character.
+let saveEditorColumnWidths = readSaveEditorColumnWidths();
+
+function storeSaveEditorColumnWidths() {
+  try {
+    localStorage.setItem(SAVE_EDITOR_COLUMN_KEY, JSON.stringify(saveEditorColumnWidths));
+  } catch {
+    // A blocked or full store is not worth interrupting an edit over.
+  }
+}
+
+/**
+ * How wide a column starts out: its widest value, within reason.
+ *
+ * Sampled rather than scanned. model_logs runs to thousands of rows, and the
+ * first sixty say as much about the shape of a column as all of them.
+ */
+function saveEditorDefaultWidth(column, rows) {
+  let longest = String(column).length;
+  for (const row of (rows || []).slice(0, 60)) {
+    const value = row?.[column];
+    if (value === null || value === undefined) continue;
+    longest = Math.max(longest, String(value).length);
+  }
+  return Math.min(SAVE_EDITOR_MAX_DEFAULT_COLUMN, Math.max(84, Math.round(longest * 6.6) + 28));
+}
+
+function saveEditorWidthFor(table, column, rows) {
+  const stored = saveEditorColumnWidths?.[table]?.[column];
+  return Number.isFinite(stored) && stored >= SAVE_EDITOR_MIN_COLUMN
+    ? stored
+    : saveEditorDefaultWidth(column, rows);
+}
+
+function setSaveEditorWidth(table, column, px) {
+  const width = Math.max(SAVE_EDITOR_MIN_COLUMN, Math.round(px));
+  if (!saveEditorColumnWidths[table]) saveEditorColumnWidths[table] = {};
+  saveEditorColumnWidths[table][column] = width;
+  storeSaveEditorColumnWidths();
+  return width;
+}
+
+let saveEditorMeasureCanvas = null;
+
+/**
+ * The width that fits the column's contents, for a double-click on the grip.
+ *
+ * Measured against the cell's own font rather than guessed from a character
+ * count, and only the first line of each value -- a wrapped paragraph would
+ * otherwise ask for four thousand pixels.
+ */
+function saveEditorFitWidth(column, rows) {
+  const probe = document.querySelector(".saveEditorCell input, .saveEditorCell textarea");
+  const style = probe ? getComputedStyle(probe) : null;
+  const font = style
+    ? `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`
+    : "12px sans-serif";
+  if (!saveEditorMeasureCanvas) saveEditorMeasureCanvas = document.createElement("canvas");
+  const ctx = saveEditorMeasureCanvas.getContext("2d");
+  ctx.font = font;
+  let widest = ctx.measureText(String(column)).width;
+  for (const row of (rows || []).slice(0, 200)) {
+    const value = row?.[column];
+    if (value === null || value === undefined) continue;
+    widest = Math.max(widest, ctx.measureText(String(value).split("\n")[0]).width);
+  }
+  return Math.min(900, Math.max(SAVE_EDITOR_MIN_COLUMN, Math.round(widest) + 34));
+}
 
 function saveEditorIsScalar(value) {
   return value === null || ["string", "number", "boolean"].includes(typeof value);
@@ -8231,6 +8315,20 @@ function renderSaveEditor() {
     return;
   }
 
+  // Every render replaces the whole editor, which resets the scroll of anything
+  // inside it. The table list must keep its place -- scrolling down to click
+  // player_skills and being thrown back to abilities makes the list unusable --
+  // and so must the grid, or a column dragged at 800px scrolls back to zero.
+  // The grid starts fresh only when the table itself changed, since a different
+  // table's columns are a different place.
+  const sameTable = saveEditorRenderedTable === saveEditorTable;
+  const keep = {
+    tables: host.querySelector(".saveEditorTables")?.scrollTop || 0,
+    gridLeft: sameTable ? host.querySelector(".saveEditorGridScroll")?.scrollLeft || 0 : 0,
+    gridTop: sameTable ? host.querySelector(".saveEditorGridScroll")?.scrollTop || 0 : 0,
+  };
+  saveEditorRenderedTable = saveEditorTable;
+
   const tables = saveEditorData.tables || {};
   const names = Object.keys(tables).sort();
   const rows = Array.isArray(tables[saveEditorTable]) ? tables[saveEditorTable] : [];
@@ -8269,7 +8367,20 @@ function renderSaveEditor() {
   } else if (!visible.length) {
     grid = `<p class="empty">No row in “${escapeHtml(saveEditorTable)}” matches “${escapeHtml(saveEditorFilter)}”.</p>`;
   } else {
-    const head = `<tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}<th class="saveEditorRowActions">Row</th></tr>`;
+    // Explicit widths in a colgroup with table-layout: fixed. Auto layout
+    // divides the panel between however many columns there are, which is how
+    // "threadbare scarf" became "threadbare sca…", and gives nothing to drag.
+    const widths = columns.map((column) => saveEditorWidthFor(saveEditorTable, column, rows));
+    const total = widths.reduce((sum, width) => sum + width, 0) + SAVE_EDITOR_ACTIONS_COLUMN;
+    const colgroup = `<colgroup>${widths
+      .map((width) => `<col style="width:${width}px" />`)
+      .join("")}<col style="width:${SAVE_EDITOR_ACTIONS_COLUMN}px" /></colgroup>`;
+    const head = `<tr>${columns
+      .map(
+        (column) =>
+          `<th><span class="saveEditorColLabel">${escapeHtml(column)}</span><span class="saveEditorColGrip" data-editor-grip="${escapeHtml(column)}" title="Drag to resize · double-click to fit the contents"></span></th>`,
+      )
+      .join("")}<th class="saveEditorRowActions">Row</th></tr>`;
     const body = pageRows
       .map(({ row, index }) => {
         const where = saveEditorRowWhere(row, rows);
@@ -8289,9 +8400,13 @@ function renderSaveEditor() {
         return `<tr class="${removed ? "isDeleted" : ""}">${cells}<td class="saveEditorRowActions">${action}</td></tr>`;
       })
       .join("");
-    grid = `<div class="saveEditorGridScroll"><table class="saveEditorGrid"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+    grid = `<div class="saveEditorGridScroll"><table class="saveEditorGrid" style="width:${total}px">${colgroup}<thead>${head}</thead><tbody>${body}</tbody></table></div>`;
   }
 
+  const resized = Object.keys(saveEditorColumnWidths[saveEditorTable] || {}).length;
+  const resetWidths = resized
+    ? `<button type="button" class="chipBtn secondaryButton" data-editor-reset-widths="1" title="Put every column in this table back to its starting width">Reset widths</button>`
+    : "";
   const shown = saveEditorFilter.trim() ? `${visible.length} of ${rows.length}` : `${rows.length}`;
   const rowPager =
     pageCount > 1
@@ -8337,11 +8452,18 @@ function renderSaveEditor() {
           <input type="search" id="saveEditorFilterInput" value="${escapeHtml(saveEditorFilter)}" placeholder="e.g. seed, coat, a code" autocomplete="off" />
         </label>
         ${grid}
-        <div class="saveEditorGridFoot">${rowPager}${addForm}</div>
+        <div class="saveEditorGridFoot">${rowPager}<span class="saveEditorFootActions">${resetWidths}${addForm}</span></div>
         <div id="saveEditorQueue" class="saveEditorQueueBox"></div>
       </div>
     </div>
   `;
+  const tablesEl = host.querySelector(".saveEditorTables");
+  if (tablesEl) tablesEl.scrollTop = keep.tables;
+  const gridEl = host.querySelector(".saveEditorGridScroll");
+  if (gridEl) {
+    gridEl.scrollLeft = keep.gridLeft;
+    gridEl.scrollTop = keep.gridTop;
+  }
   renderSaveEditorQueue();
 }
 
@@ -8573,6 +8695,55 @@ function bindSaveEditorOnce() {
     if (field) saveEditorCellChanged(field);
   });
 
+  // Column resizing. The width is written straight to the <col> during the
+  // drag rather than re-rendering the grid on every mousemove -- a re-render
+  // would rebuild every input and throw away whatever was being typed.
+  host.addEventListener("mousedown", (event) => {
+    const grip = event.target.closest("[data-editor-grip]");
+    if (!grip) return;
+    event.preventDefault();
+    const column = grip.getAttribute("data-editor-grip");
+    const table = host.querySelector(".saveEditorGrid");
+    const columns = (saveEditorData?.columns || {})[saveEditorTable] || [];
+    const cols = [...(table?.querySelectorAll("colgroup col") || [])];
+    const col = cols[columns.indexOf(column)];
+    const head = grip.closest("th");
+    if (!col || !head) return;
+
+    const startX = event.clientX;
+    const startWidth = head.getBoundingClientRect().width;
+    let width = startWidth;
+    grip.classList.add("isDragging");
+    document.body.classList.add("isResizingColumn");
+
+    const onMove = (moveEvent) => {
+      width = Math.max(SAVE_EDITOR_MIN_COLUMN, Math.round(startWidth + (moveEvent.clientX - startX)));
+      col.style.width = `${width}px`;
+      table.style.width = `${cols.reduce((sum, one) => sum + (parseFloat(one.style.width) || 0), 0)}px`;
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      grip.classList.remove("isDragging");
+      document.body.classList.remove("isResizingColumn");
+      setSaveEditorWidth(saveEditorTable, column, width);
+      // Only now, so the Reset widths button appears.
+      renderSaveEditor();
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+
+  host.addEventListener("dblclick", (event) => {
+    const grip = event.target.closest("[data-editor-grip]");
+    if (!grip) return;
+    event.preventDefault();
+    const column = grip.getAttribute("data-editor-grip");
+    const rows = (saveEditorData?.tables || {})[saveEditorTable] || [];
+    setSaveEditorWidth(saveEditorTable, column, saveEditorFitWidth(column, rows));
+    renderSaveEditor();
+  });
+
   host.addEventListener("input", (event) => {
     if (event.target?.id !== "saveEditorFilterInput") return;
     saveEditorFilter = event.target.value;
@@ -8615,6 +8786,12 @@ function bindSaveEditorOnce() {
       saveEditorEdits = saveEditorEdits.filter(
         (entry) => !(entry.op === "delete" && entry.table === saveEditorTable && entry.rowIndex === index),
       );
+      renderSaveEditor();
+      return;
+    }
+    if (event.target.closest("[data-editor-reset-widths]")) {
+      delete saveEditorColumnWidths[saveEditorTable];
+      storeSaveEditorColumnWidths();
       renderSaveEditor();
       return;
     }
