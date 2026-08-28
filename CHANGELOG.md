@@ -20,7 +20,13 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
-> Changes after `0.9.11` live here.
+> Changes after `0.9.12` live here.
+
+---
+
+## [0.9.12] - 2026-08-28
+
+Second hotfix on the 0.9.1 line, cut from the first external playtest. Five fixes, all from things a player actually saw. No save-format change; existing saves carry over. Tag `v0.9.12`.
 
 ### Fixed
 
