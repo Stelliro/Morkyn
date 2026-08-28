@@ -3192,6 +3192,9 @@ FRAME_VISIBLE_ZONES: dict[str, frozenset[str]] = {
 }
 
 # Keyword → (category, zone). First match wins; order matters (more specific first).
+# Exported: app/world.py checks narration against this same vocabulary when it
+# asks whether the prose just gave the player gear they do not have. A second
+# copy of these words is exactly how the theme keyword tables drifted apart.
 _WARDROBE_KEYWORD_MAP: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("hair", "haired", "braid", "ponytail", "bun"), "hair", "hair"),
     (("hat", "cap", "helmet", "hood", "crown", "helm", "beret"), "headwear", "head"),
@@ -3260,6 +3263,10 @@ _WARDROBE_KEYWORD_MAP: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (("ration", "bread", "food", "water skin", "waterskin", "flask", "drink"), "consumable", "skip"),
     (("coin", "coins", "gold", "copper", "silver", "currency"), "currency", "skip"),
 )
+
+# Public name for the same table. Importing this module costs nothing on a box
+# without Pillow -- every PIL import here is inside a function.
+WARDROBE_KEYWORD_MAP = _WARDROBE_KEYWORD_MAP
 
 _ZONE_ALIASES = {
     "hair": "hair",
