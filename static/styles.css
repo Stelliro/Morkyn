@@ -6270,10 +6270,11 @@ button.chipBtn {
 
 .saveEditorGrid {
   border-collapse: collapse;
-  /* Size columns to their contents and scroll sideways, rather than dividing
-     the panel between twenty-two of them until every name reads "threadbare
-     sca…". min-width keeps a two-column table filling the panel. */
-  width: max-content;
+  /* Fixed layout with an explicit colgroup: auto layout divides the panel
+     between however many columns there are — which is how "threadbare scarf"
+     became "threadbare sca…" — and leaves nothing to drag. The table's own
+     width is the sum of its columns, set alongside them. */
+  table-layout: fixed;
   min-width: 100%;
   font-size: 0.8rem;
 }
@@ -6291,6 +6292,60 @@ button.chipBtn {
   letter-spacing: 0.04em;
   color: var(--neon-2);
   white-space: nowrap;
+}
+
+.saveEditorColLabel {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.saveEditorColGrip {
+  position: absolute;
+  top: 0;
+  right: -4px;
+  width: 9px;
+  height: 100%;
+  z-index: 2;
+  cursor: col-resize;
+  user-select: none;
+}
+
+.saveEditorColGrip::after {
+  content: "";
+  position: absolute;
+  top: 15%;
+  left: 3px;
+  width: 2px;
+  height: 70%;
+  border-radius: 2px;
+  background: var(--line-strong, var(--line));
+}
+
+.saveEditorColGrip:hover::after,
+.saveEditorColGrip.isDragging::after {
+  background: var(--neon-2);
+  top: 0;
+  height: 100%;
+}
+
+/* While dragging, the pointer must not turn into a text caret over the cells
+   it passes, and a stray selection must not be painted behind the drag. */
+body.isResizingColumn {
+  cursor: col-resize;
+  user-select: none;
+}
+
+body.isResizingColumn .saveEditorCell input,
+body.isResizingColumn .saveEditorCell textarea {
+  pointer-events: none;
+}
+
+.saveEditorFootActions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
 }
 
 .saveEditorGrid td {
