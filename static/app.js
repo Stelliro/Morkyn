@@ -8373,7 +8373,7 @@ function renderSaveEditor() {
   // table's columns are a different place.
   const sameTable = saveEditorRenderedTable === saveEditorTable;
   const keep = {
-    tables: host.querySelector(".saveEditorTables")?.scrollTop || 0,
+    tables: host.querySelector(".saveEditorTablesList")?.scrollTop || 0,
     gridLeft: sameTable ? host.querySelector(".saveEditorGridScroll")?.scrollLeft || 0 : 0,
     gridTop: sameTable ? host.querySelector(".saveEditorGridScroll")?.scrollTop || 0 : 0,
   };
@@ -8477,26 +8477,17 @@ function renderSaveEditor() {
     grid = `<div class="saveEditorGridScroll"><table class="saveEditorGrid" style="width:${total}px">${colgroup}<thead>${head}</thead><tbody>${body}</tbody></table></div>`;
   }
 
-  // What the search found, and — when it found nothing here — where it did.
+  // What the search found. The list of tables sits directly under this and
+  // carries a count on each one, so the tally is the whole summary -- a row of
+  // jump buttons repeating those names would say it twice.
   let searchSummary = "";
   if (matches) {
     const totals = saveEditorMatchTotals(matches);
     if (!totals.rows) {
-      searchSummary = `<span class="saveEditorSearchNote isMiss">Nothing in this save matches “${escapeHtml(saveEditorFilter.trim())}”.</span>`;
+      searchSummary = `<p class="saveEditorSearchNote isMiss">No table holds “${escapeHtml(clipText(saveEditorFilter.trim(), 24))}”.</p>`;
     } else {
       const here = matches[saveEditorTable] || 0;
-      const elsewhere = Object.keys(matches).filter((name) => name !== saveEditorTable);
-      const jumps = elsewhere
-        .slice(0, 6)
-        .map(
-          (name) =>
-            `<button type="button" class="chipBtn saveEditorJump" data-editor-table="${escapeHtml(name)}">${escapeHtml(name)} <span class="saveEditorCount">${matches[name]}</span></button>`,
-        )
-        .join("");
-      const lead = here
-        ? `${here} here`
-        : `<strong>none here</strong>`;
-      searchSummary = `<span class="saveEditorSearchNote">${lead} · ${totals.rows} row${totals.rows === 1 ? "" : "s"} in ${totals.tables} table${totals.tables === 1 ? "" : "s"}${jumps ? ` · ${jumps}` : ""}${elsewhere.length > 6 ? ` +${elsewhere.length - 6} more` : ""}</span>`;
+      searchSummary = `<p class="saveEditorSearchNote"><strong>${totals.rows}</strong> row${totals.rows === 1 ? "" : "s"} in <strong>${totals.tables}</strong> table${totals.tables === 1 ? "" : "s"}${here ? ` · ${here} here` : " · none in this one"}</p>`;
     }
   }
 
@@ -8538,24 +8529,28 @@ function renderSaveEditor() {
   host.innerHTML = `
     <div class="saveEditorLayout">
       <aside class="saveEditorTables">
-        <h3 class="saveEditorHeading">Tables</h3>
-        <div class="saveEditorTabs">${tabs}</div>
-        ${blocked ? `<p class="saveEditorTabsGap">Not editable</p><div class="saveEditorTabs">${blocked}</div>` : ""}
+        <div class="saveEditorTablesHead">
+          <label class="saveEditorFilter">
+            <span>Search every table</span>
+            <input type="search" id="saveEditorFilterInput" value="${escapeHtml(saveEditorFilter)}" placeholder="seed, coat, a code" autocomplete="off" />
+          </label>
+          ${searchSummary}
+          <h3 class="saveEditorHeading">Tables</h3>
+        </div>
+        <div class="saveEditorTablesList">
+          <div class="saveEditorTabs">${tabs}</div>
+          ${blocked ? `<p class="saveEditorTabsGap">Not editable</p><div class="saveEditorTabs">${blocked}</div>` : ""}
+        </div>
       </aside>
       <div class="saveEditorMain">
         <ul class="saveEditorNotes">${notes}</ul>
-        <label class="saveEditorFilter">
-          <span>Search the save</span>
-          <input type="search" id="saveEditorFilterInput" value="${escapeHtml(saveEditorFilter)}" placeholder="e.g. seed, coat, a code — every table is searched" autocomplete="off" />
-          ${searchSummary}
-        </label>
         ${grid}
         <div class="saveEditorGridFoot">${rowPager}<span class="saveEditorFootActions">${resetWidths}${addForm}</span></div>
         <div id="saveEditorQueue" class="saveEditorQueueBox"></div>
       </div>
     </div>
   `;
-  const tablesEl = host.querySelector(".saveEditorTables");
+  const tablesEl = host.querySelector(".saveEditorTablesList");
   if (tablesEl) tablesEl.scrollTop = keep.tables;
   const gridEl = host.querySelector(".saveEditorGridScroll");
   if (gridEl) {

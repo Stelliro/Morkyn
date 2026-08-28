@@ -6129,7 +6129,7 @@ button.chipBtn {
 
 .saveEditorLayout {
   display: grid;
-  grid-template-columns: 200px minmax(0, 1fr);
+  grid-template-columns: 230px minmax(0, 1fr);
   gap: 14px;
   height: 100%;
   min-height: 0;
@@ -6138,16 +6138,33 @@ button.chipBtn {
 .saveEditorTables {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   min-height: 0;
+  padding-right: 8px;
+  border-right: 1px solid var(--line);
+}
+
+/* The search stays put; only the table list under it scrolls. Searching and
+   then having to scroll back up to type again would undo the point of putting
+   the box where the answer is. */
+.saveEditorTablesHead {
+  flex: none;
+  display: grid;
+  gap: 6px;
+}
+
+.saveEditorTablesList {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   overflow-y: auto;
   /* Reserve the scrollbar's lane so it sits beside the buttons instead of on
      top of them, and keep it reserved whether the bar is showing or not so the
      list does not shift width when a save has fewer tables. */
   scrollbar-gutter: stable;
   overflow-x: hidden;
-  padding-right: 8px;
-  border-right: 1px solid var(--line);
 }
 
 .saveEditorTables .saveEditorTabs {
@@ -6195,9 +6212,13 @@ button.chipBtn {
   }
 
   .saveEditorTables {
-    overflow: visible;
     border-right: 0;
     padding-right: 0;
+  }
+
+  .saveEditorTablesList {
+    overflow: visible;
+    scrollbar-gutter: auto;
   }
 
   .saveEditorTables .saveEditorTabs {
@@ -6267,23 +6288,25 @@ button.chipBtn {
   color: var(--muted);
 }
 
+/* Stacked, not side by side: the column is 230px wide. */
 .saveEditorFilter {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  font-size: 0.78rem;
+  display: grid;
+  gap: 4px;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
 }
 
 .saveEditorSearchNote {
-  flex: 1 1 100%;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-size: 0.75rem;
+  margin: 0;
+  font-size: 0.74rem;
   color: var(--muted);
+}
+
+.saveEditorSearchNote strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .saveEditorSearchNote.isMiss {
@@ -6293,10 +6316,6 @@ button.chipBtn {
 .saveEditorSearchNote strong {
   color: var(--warn, #c4a46a);
   font-weight: 600;
-}
-
-.saveEditorJump {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* A table holding a hit, and one that does not, in the side list. */
