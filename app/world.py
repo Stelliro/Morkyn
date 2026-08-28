@@ -5937,6 +5937,40 @@ def worn_gear_index(state: dict[str, Any] | None) -> dict[str, Any]:
     }
 
 
+PROMPT_INVENTORY_CODE_CAP = 40
+
+
+def inventory_codes_for_prompt(
+    inventory: list[dict[str, Any]] | None, cap: int = PROMPT_INVENTORY_CODE_CAP
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """
+    The short inventory index for the packet, and a note when it is short.
+
+    The system prompt treats this list as the gear the player holds and tells
+    the narrator that nothing outside it exists when the player searches their
+    own pockets. Past the cap that instruction is false, and the cost is the
+    opposite of the usual one: the player owns the thing and is told they do
+    not. It is reachable rather than theoretical -- ``_inventory_summary`` sets
+    ``slot_capacity`` to None once a dimensional container is equipped, so
+    nothing bounds how many items a pack can hold.
+
+    The cap stays, because the whole point of this list is to be small. What
+    changes is that a shortened list now says so, and names the complete record.
+    """
+    rows = [item for item in (inventory or []) if isinstance(item, dict)]
+    codes = [
+        {"code": item.get("code"), "name": item.get("name"), "qty": item.get("quantity")}
+        for item in rows
+    ]
+    if len(codes) <= cap:
+        return codes, None
+    return codes[:cap], {
+        "shown": cap,
+        "total": len(codes),
+        "complete_list": "world_state.inventory",
+    }
+
+
 def check_unowned_gear(narration: str, index: dict[str, Any] | None) -> dict[str, Any]:
     """
     Find worn gear the prose gave the player that the record does not have.
@@ -11282,12 +11316,10 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                     for c in skill_check_results
                     if c.get("social_attitude")
                 ]
-                inv = context.get("inventory") or []
-                mechanics_context["player_inventory_codes"] = [
-                    {"code": i.get("code"), "name": i.get("name"), "qty": i.get("quantity")}
-                    for i in inv
-                    if isinstance(i, dict)
-                ][:40]
+                codes, truncated = inventory_codes_for_prompt(context.get("inventory"))
+                mechanics_context["player_inventory_codes"] = codes
+                if truncated:
+                    mechanics_context["player_inventory_truncated"] = truncated
                 context["mechanics_context"] = mechanics_context
     except Exception:
         skill_check_results = []
