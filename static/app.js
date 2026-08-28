@@ -1541,8 +1541,12 @@ function linkifyKnownEntityNames(html, map) {
   entries.sort((a, b) => b.label.length - a.label.length);
   if (!entries.length) return html;
 
-  // Only rewrite plain-text segments — never inside existing entity buttons/tags
-  const parts = String(html).split(/(<button\b[^>]*>[\s\S]*?<\/button>|<[^>]+>)/gi);
+  // Only rewrite plain-text segments — never inside an entity link we already
+  // made. A whole link has to be one atomic part, label included: matching only
+  // its tags leaves the label as plain text and wraps it a second time.
+  const parts = String(html).split(
+    /(<span\b[^>]*\bentityLink\b[^>]*>[\s\S]*?<\/span>|<button\b[^>]*\bentityLink\b[^>]*>[\s\S]*?<\/button>|<[^>]+>)/gi,
+  );
   return parts
     .map((part) => {
       if (!part || part.startsWith("<")) return part;
