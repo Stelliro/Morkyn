@@ -28,6 +28,18 @@ DEFAULT_MAX_PAIR_EDITS = 2
 OVERLAP_REJECT = 0.48
 OVERLAP_DROP = 0.62
 
+# A sentence is only policed for repetition once it is substantial enough that
+# saying it twice reads as a mistake. Short lines -- "She waited.", '"I know."'
+# -- echo on purpose, and a model that writes two similar beats is not doing
+# the thing this guard exists to stop.
+REPEAT_MIN_CHARS = 45
+# Verbatim reuse is the common case; this catches the one-word reskin of it.
+REPEAT_NEAR_MATCH = 0.85
+# Two sentences can share a long clause and still measure as different, because
+# one of them wraps it in extra words. Twelve consecutive identical words is not
+# something two independently written sentences do by accident.
+REPEAT_SHARED_RUN_WORDS = 12
+
 # --- env helpers -------------------------------------------------------------
 
 
@@ -619,6 +631,93 @@ def jaccard(a: set[str], b: set[str]) -> float:
     return len(a & b) / max(1, len(a | b))
 
 
+# House idiom, matching app/world.py and app/setup_composer.py. It deliberately
+# under-splits a sentence that ends inside a quotation mark ('He said "go."'),
+# which costs a detection now and then and never mangles the prose.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_SENTENCE_NORM_RE = re.compile(r"[^a-z0-9 ]+")
+_BLOCK_SPLIT_RE = re.compile(r"\n\s*\n")
+
+
+def split_sentences(text: str) -> list[str]:
+    return [s for s in (part.strip() for part in _SENTENCE_SPLIT_RE.split(text or "")) if s]
+
+
+def _sentence_key(sentence: str) -> str:
+    """Compare on words alone, so punctuation and casing cannot hide a repeat."""
+    return " ".join(_SENTENCE_NORM_RE.sub(" ", (sentence or "").lower()).split())
+
+
+def _shared_runs(sentence_key: str) -> set[str]:
+    """Every REPEAT_SHARED_RUN_WORDS-word run in a sentence, for clause reuse."""
+    words = sentence_key.split()
+    if len(words) < REPEAT_SHARED_RUN_WORDS:
+        return set()
+    return {
+        " ".join(words[i : i + REPEAT_SHARED_RUN_WORDS])
+        for i in range(len(words) - REPEAT_SHARED_RUN_WORDS + 1)
+    }
+
+
+def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Remove any sentence already said earlier in the same turn, however far back.
+
+    The pair walker above only ever compares a paragraph with the one directly
+    above it, and it scores whole paragraphs. Both choices miss the shape that
+    actually reaches players: a paragraph that repeats one sentence verbatim and
+    then adds a fresh one, which dilutes the paragraph-level overlap below the
+    reject bar while reading as an obvious stutter.
+
+    Returns (paragraphs, dropped_sentences). The first list is the same length
+    as the input, with "" where a paragraph was nothing but repeats, so callers
+    holding parallel data (segment labels) stay aligned.
+    """
+    seen_keys: set[str] = set()
+    seen_tokens: list[set[str]] = []
+    seen_runs: set[str] = set()
+    kept_paragraphs: list[str] = []
+    dropped: list[str] = []
+
+    for para in paragraphs:
+        kept_blocks: list[str] = []
+        # Paragraph breaks inside a single segment are structure, not noise.
+        for block in _BLOCK_SPLIT_RE.split(str(para or "")):
+            kept_sentences: list[str] = []
+            for sentence in split_sentences(block):
+                key = _sentence_key(sentence)
+                if len(key) < REPEAT_MIN_CHARS:
+                    kept_sentences.append(sentence)
+                    continue
+                if key in seen_keys:
+                    dropped.append(sentence)
+                    continue
+                tokens = token_set(sentence)
+                if any(jaccard(tokens, prev) >= REPEAT_NEAR_MATCH for prev in seen_tokens):
+                    dropped.append(sentence)
+                    continue
+                runs = _shared_runs(key)
+                if runs & seen_runs:
+                    dropped.append(sentence)
+                    continue
+                seen_keys.add(key)
+                seen_tokens.append(tokens)
+                seen_runs |= runs
+                kept_sentences.append(sentence)
+            block_text = " ".join(kept_sentences).strip()
+            if block_text:
+                kept_blocks.append(block_text)
+        kept_paragraphs.append("\n\n".join(kept_blocks).strip())
+
+    # A turn that repeated itself end to end still has to say something.
+    if paragraphs and not any(p.strip() for p in kept_paragraphs):
+        first = str(paragraphs[0] or "").strip()
+        if first:
+            return [first] + [""] * (len(paragraphs) - 1), []
+
+    return kept_paragraphs, dropped
+
+
 def check_adjacent_paragraphs(earlier: str, later: str) -> dict[str, Any]:
     """
     Deterministic pair check. Returns pass/issues/edit_ops.
@@ -766,15 +865,29 @@ def consolidate_scene_heuristic(paragraphs: list[str], ledger: NarrationLedger) 
             )
             continue
         if cleaned:
-            ov = jaccard(token_set(cleaned[-1]), token_set(text))
-            if ov >= OVERLAP_DROP or (len(text) > 40 and text in cleaned[-1]) or (len(cleaned[-1]) > 40 and cleaned[-1] in text):
+            # Against every earlier paragraph, not just the previous one. A
+            # paragraph that repeats the opening is no better than one that
+            # repeats its neighbour, and the model reaches back more than one
+            # step whenever a scene runs long.
+            tokens = token_set(text)
+            duplicate_of = None
+            best_overlap = 0.0
+            for earlier in cleaned:
+                ov = jaccard(token_set(earlier), tokens)
+                contained = (len(text) > 40 and text in earlier) or (len(earlier) > 40 and earlier in text)
+                if ov >= OVERLAP_DROP or contained:
+                    duplicate_of = earlier
+                    best_overlap = max(best_overlap, ov)
+                    break
+                best_overlap = max(best_overlap, ov)
+            if duplicate_of is not None:
                 ledger.record_attempt(
                     "consolidate",
                     len(cleaned),
-                    {"drop_duplicate_of": cleaned[-1][:120], "overlap": round(ov, 3)},
+                    {"drop_duplicate_of": duplicate_of[:120], "overlap": round(best_overlap, 3)},
                     text,
                     "rejected",
-                    issues=["duplicate_of_previous"],
+                    issues=["duplicate_of_earlier"],
                 )
                 continue
             # Strip leading echo of previous opener (first 8 words)

@@ -59,6 +59,7 @@ from app.turn_dsl import (
     parse_dsl_turn,
 )
 from app.narration_pipeline import (
+    drop_repeated_sentences,
     ops_summary_from_turn,
     parse_consolidated_paragraphs,
     pipeline_enabled,
@@ -9722,6 +9723,58 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
     return result
 
 
+def _drop_repeated_sentences_in_turn(result: dict[str, Any]) -> dict[str, Any]:
+    """
+    Strike sentences the turn has already said.
+
+    Reported from play: a caravanserai scene wrote four paragraphs, and the last
+    two were built almost entirely out of sentences already used above them --
+    the same potboy, the same merchant's scales, the same clause about Darien at
+    the hearth, word for word.
+
+    Runs on the assembled turn rather than inside the pipeline, because the
+    pipeline is opt-in and this failure is not.
+    """
+    segments = result.get("narration_segments")
+    if isinstance(segments, list) and segments:
+        texts = [str(seg.get("text") or "") if isinstance(seg, dict) else "" for seg in segments]
+        kept, dropped = drop_repeated_sentences(texts)
+        if not dropped:
+            return result
+        new_segments = [
+            {**seg, "text": kept[index]}
+            for index, seg in enumerate(segments)
+            if isinstance(seg, dict) and kept[index].strip()
+        ]
+        joined = "\n\n".join(str(seg.get("text") or "") for seg in new_segments).strip()
+        if not joined:
+            # Never trade a repetitive turn for no turn at all.
+            return result
+        result["narration_segments"] = new_segments
+        result["narration"] = joined[:5600]
+    else:
+        text = str(result.get("narration") or "")
+        if not text.strip():
+            return result
+        kept, dropped = drop_repeated_sentences(text.split("\n\n"))
+        if not dropped:
+            return result
+        joined = "\n\n".join(part for part in kept if part.strip()).strip()
+        if not joined:
+            return result
+        result["narration"] = joined[:5600]
+
+    # A silent rejection is as bad as the repetition it replaced.
+    self_check = result.get("self_check")
+    if isinstance(self_check, dict):
+        corrections = self_check.setdefault("corrections_made", [])
+        if isinstance(corrections, list):
+            corrections.append(
+                f"Dropped {len(dropped)} sentence(s) already said earlier this turn."
+            )
+    return result
+
+
 def _normalize_turn(result: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     result = _turn_payload(result)
     segments = _narration_segments_from_result(result)
@@ -9754,6 +9807,11 @@ def _normalize_turn(result: dict[str, Any], context: dict[str, Any] | None = Non
     result.setdefault("turn_summary", "")
     # Always run name repair (uses draft npcs even without full context)
     result = _repair_entity_names_in_turn(result, context)
+    # ...and always drop sentences the turn has already said. The pipeline has
+    # its own repeat passes, but pipeline_enabled() is False unless the launcher
+    # turns it on, so a player running the server directly had no repeat guard
+    # at all. This one is deterministic and cheap, so it runs on every path.
+    result = _drop_repeated_sentences_in_turn(result)
     return result
 
 
