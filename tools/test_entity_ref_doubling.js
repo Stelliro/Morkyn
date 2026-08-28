@@ -69,9 +69,20 @@ function extractFunction(source, name) {
     if (ch === "/" && next === "/") { inLineComment = true; i += 1; continue; }
     if (ch === "/" && next === "*") { inBlockComment = true; i += 1; continue; }
     if (ch === '"' || ch === "'" || ch === "`") { inString = ch; continue; }
-    if (ch === "/" && /[(,=:[!&|?{};\n]/.test(String(prev || "").trim() || prev || "\n")) {
-      inRegex = true;
-      continue;
+    // Is this `/` a regex literal or a division? Look back past whitespace to
+    // the last real character: a regex wrapped onto its own line is preceded by
+    // indentation, and testing only the single previous character reads that
+    // space as division. The `'` inside the next character class then opened a
+    // string, the extraction ran on for 14,000 lines until it swallowed a
+    // top-level document.addEventListener, and the whole file reported
+    // "document is not defined" instead of a test result.
+    if (ch === "/") {
+      let back = i - 1;
+      while (back >= 0 && /\s/.test(source[back])) back -= 1;
+      if (back < 0 || /[(,=:[!&|?{};]/.test(source[back])) {
+        inRegex = true;
+        continue;
+      }
     }
     if (ch === "{") depth += 1;
     else if (ch === "}") {
@@ -90,6 +101,7 @@ function buildSandbox() {
     "entityLabel",
     "getEntityMap",
     "stripLeakedEntityHtml",
+    "entityLinkHtml",
     "linkifyKnownEntityNames",
     "linkifyText",
   ];
@@ -168,6 +180,18 @@ function main() {
   // 3. Every reference is still clickable — the fix must not drop the link.
   for (const code of ["L1", "I1", "I2"]) {
     if (!html.includes(`data-code="${code}"`)) failures.push(`${code} lost its entity button`);
+  }
+
+  // 3b. One link per reference, not a link inside a link. Doubling does not
+  // have to show as repeated text: when the pass that linkifies bare names
+  // cannot see the links already made, it wraps their labels a second time and
+  // the name still reads correctly on screen while the markup nests.
+  for (const [where, markup] of [["narration", html]]) {
+    const nested = /<(span|button)\b[^>]*\bentityLink\b[^>]*>(?:(?!<\/\1>)[\s\S])*?<(span|button)\b[^>]*\bentityLink\b/i;
+    if (nested.test(markup)) failures.push(`${where}: an entity link is wrapped inside another entity link`);
+    const opens = (markup.match(/\bentityLink\b/g) || []).length;
+    const codes = (markup.match(/data-code="/g) || []).length;
+    if (opens !== codes) failures.push(`${where}: ${opens} entityLink markers for ${codes} codes`);
   }
 
   // 4. A name NOT followed by its own code still linkifies (existing behaviour).
