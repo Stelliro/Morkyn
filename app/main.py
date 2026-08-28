@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import os
@@ -8,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
@@ -701,9 +702,68 @@ def startup() -> None:
         print(f"[content-packs] load skipped: {exc}")
 
 
+BUNDLE_ASSETS: tuple[str, ...] = ("app.js", "styles.css")
+BUNDLE_PLACEHOLDER = "__BUNDLE__"
+_bundle_cache: dict[str, Any] = {"stamp": None, "token": "", "html": ""}
+
+
+def _bundle_stamp() -> tuple[tuple[float, int], ...]:
+    """Cheap change detector: (mtime, size) per asset, no hashing."""
+    stamp: list[tuple[float, int]] = []
+    for name in (*BUNDLE_ASSETS, "index.html"):
+        try:
+            info = (STATIC_DIR / name).stat()
+            stamp.append((info.st_mtime, info.st_size))
+        except OSError:
+            stamp.append((0.0, 0))
+    return tuple(stamp)
+
+
+def bundle_token() -> str:
+    """
+    A cache-busting token computed from what app.js and styles.css actually
+    contain, rather than copied from the version by hand.
+
+    The hand-written token is what withheld 0.9.11 from every browser that had
+    already loaded the game: index.html still asked for `app.js?v=v0-9-1-wip`,
+    the URL each of them already had cached, so the release arrived as nothing.
+    Deriving it here means the URL changes whenever the file changes, which is
+    the only version of this that cannot be forgotten.
+    """
+    digest = hashlib.sha256()
+    for name in BUNDLE_ASSETS:
+        try:
+            digest.update((STATIC_DIR / name).read_bytes())
+        except OSError:
+            # A missing asset must not take the page down. Fall back to the
+            # version, which is what this replaced and is better than nothing.
+            return APP_VERSION.lower().replace(".", "-")
+    return digest.hexdigest()[:16]
+
+
+def index_html() -> tuple[str, str]:
+    """(html, token), recomputed only when a file on disk actually changes."""
+    stamp = _bundle_stamp()
+    if _bundle_cache["stamp"] != stamp:
+        token = bundle_token()
+        raw = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        _bundle_cache.update(
+            {"stamp": stamp, "token": token, "html": raw.replace(BUNDLE_PLACEHOLDER, token)}
+        )
+    return str(_bundle_cache["html"]), str(_bundle_cache["token"])
+
+
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def index() -> HTMLResponse:
+    html, token = index_html()
+    # no-cache means revalidate, not "do not store". The page itself must never
+    # be served from cache without checking, or the browser keeps an old copy
+    # naming an old token and the whole scheme buys nothing. The assets it
+    # points at stay freely cacheable, because their URLs change with them.
+    return HTMLResponse(
+        html,
+        headers={"Cache-Control": "no-cache", "ETag": f'W/"{token}"'},
+    )
 
 
 @app.get("/api/updates/status")
