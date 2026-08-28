@@ -1623,6 +1623,40 @@ def is_overused_seed_domain(name: str) -> bool:
     return False
 
 
+# Lanes whose seeds are supernatural rather than merely obscure. A world with
+# magic switched off must not roll these at all; a high-magic world should roll
+# them more often than the flat 1-in-9 the lane die would otherwise give.
+SUPERNATURAL_LANES = frozenset({"arcane", "summon", "necro", "hybrid"})
+_GROUNDED_LANE_DIE = ["mundane", "tool", "weapon", "support", "tech"]
+_SUPERNATURAL_LANE_DIE = ["arcane", "summon", "necro", "hybrid"]
+MAGIC_LANE_DIE: dict[str, list[str]] = {
+    "off": _GROUNDED_LANE_DIE,
+    "rare": _GROUNDED_LANE_DIE + _SUPERNATURAL_LANE_DIE,
+    "common": _GROUNDED_LANE_DIE + _SUPERNATURAL_LANE_DIE * 3,
+}
+
+
+def _magic_flag_on(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return bool(value)
+
+
+def magic_lane_stance(magic_level: Any = "", race_magic_enabled: Any = None) -> str:
+    """How available the supernatural lanes are: "off" | "rare" | "common".
+
+    Unset magic_level keeps the historical mix ("rare"), so callers that do not
+    know the setup behave exactly as they did before this argument existed.
+    """
+    ml = str(magic_level or "").strip().lower()
+    if any(x in ml for x in ("none", "no magic", "off", "absent", "zero", "disabled")):
+        # Ambient magic can be none while some ancestry still has access.
+        return "rare" if _magic_flag_on(race_magic_enabled) else "off"
+    if any(x in ml for x in ("cultivat", "common", "high", "abundant", "ubiquit")):
+        return "common"
+    return "rare"
+
+
 def pick_seed_skill_domain(
     *,
     avoid: list[str] | None = None,
@@ -1632,8 +1666,10 @@ def pick_seed_skill_domain(
     salt: str = "",
     prefer_lane: str = "",
     prefer_tier: str = "",
+    magic_level: str = "",
+    race_magic_enabled: Any = None,
 ) -> dict[str, str]:
-    """Pick a fresh weak-seed domain. Biases lightly by world_style / lane / tier."""
+    """Pick a fresh weak-seed domain. Biases by magic_level, world_style, lane, tier."""
     r = rng or random.Random()
     if salt:
         # Stable-but-different pick when salt changes (setup rolls, map seeds).
@@ -1651,6 +1687,13 @@ def pick_seed_skill_domain(
     if not pool:
         pool = [d for d in SEED_SKILL_DOMAIN_POOL if d.get("name")]
 
+    # A no-magic world gets no supernatural seeds, whatever the style says.
+    stance = magic_lane_stance(magic_level, race_magic_enabled)
+    if stance == "off":
+        grounded = [d for d in pool if str(d.get("lane") or "").lower() not in SUPERNATURAL_LANES]
+        if grounded:
+            pool = grounded
+
     style = f"{world_style} {genre}".lower()
     preferred: list[dict[str, str]] = []
 
@@ -1665,20 +1708,8 @@ def pick_seed_skill_domain(
     # ~half the time roll a random lane so wild combos show up even in "normal" worlds.
     if prefer_lane:
         preferred = _lane(prefer_lane)
-    elif r.random() < 0.42:
-        lane_roll = r.choice(
-            [
-                "mundane",
-                "tool",
-                "weapon",
-                "support",
-                "summon",
-                "necro",
-                "arcane",
-                "hybrid",
-                "tech",
-            ]
-        )
+    elif r.random() < (0.62 if stance == "common" else 0.42):
+        lane_roll = r.choice(MAGIC_LANE_DIE[stance])
         preferred = _lane(lane_roll)
     elif any(w in style for w in ("necro", "undead", "grave", "gothic", "death")):
         preferred = _lane("necro", "summon", "hybrid")
@@ -1701,6 +1732,16 @@ def pick_seed_skill_domain(
         preferred = _lane("arcane", "summon", "support", "hybrid")
     elif any(w in style for w in ("war", "soldier", "knight", "gladiator", "military")):
         preferred = _lane("weapon", "support")
+
+    # A high-magic world keeps its style flavour, but a style branch must not be
+    # able to hand back an all-mundane shortlist — that is what made "cultivation"
+    # roll the same kits as "none".
+    if (
+        stance == "common"
+        and preferred
+        and not any(str(d.get("lane") or "").lower() in SUPERNATURAL_LANES for d in preferred)
+    ):
+        preferred = preferred + _lane(*_SUPERNATURAL_LANE_DIE)
 
     # Tier spice: sometimes force simple obscure, sometimes advanced crazy.
     tier_pick = (prefer_tier or "").lower()
@@ -1852,6 +1893,8 @@ def weak_skill_seed_spec(
         domain = pick_seed_skill_domain(
             world_style=str(opts.get("world_style") or theme.get("genre") or ""),
             genre=str(theme.get("genre") or ""),
+            magic_level=str(opts.get("magic_level") or ""),
+            race_magic_enabled=opts.get("race_magic_enabled"),
             salt=f"{time.time_ns()}|{custom[:40]}|{opts.get('player_name') or ''}",
         )
         name = str(domain.get("name") or "Digging")

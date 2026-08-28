@@ -642,6 +642,7 @@ SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
     {
         "name": "Echo Step",
         "description": "A short burst of awkward repositioning — half a pace that should not fit, useful only for clumsy escapes.",
+        "lane": "arcane",
         "locked": False,
         "prerequisites": "",
         "cost": "brief fatigue after repeated use",
@@ -650,6 +651,7 @@ SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
     {
         "name": "Ashen Oath",
         "description": "Can sense when someone nearby is hiding a binding promise or unpaid debt — a pressure, not a transcript.",
+        "lane": "arcane",
         "locked": True,
         "prerequisites": "Awakens after witnessing a broken oath with real consequences.",
         "cost": "mental strain when pushed",
@@ -658,6 +660,7 @@ SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
     {
         "name": "Rust Touch",
         "description": "Slightly accelerates wear on a single tool or lock with prolonged contact—barely useful at first.",
+        "lane": "hybrid",
         "locked": True,
         "prerequisites": "Needs a full night of handling scrap metal without rest.",
         "cost": "numb fingers for hours",
@@ -714,6 +717,7 @@ SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
     {
         "name": "Residue Glow",
         "description": "Faint unreliable sense of spent magic on objects — often wrong at F rank.",
+        "lane": "arcane",
         "locked": True,
         "prerequisites": "Awakens after touching a spent ward or failed charm.",
         "cost": "migraine after forced use",
@@ -730,6 +734,7 @@ SETUP_RANDOMIZER_ABILITY_FALLBACKS = [
     {
         "name": "Ward Itch",
         "description": "Skin itches near crude wards and hex-lines; sophisticated magic feels like nothing yet.",
+        "lane": "arcane",
         "locked": True,
         "prerequisites": "Needs a night sleeping against a marked threshold.",
         "cost": "rash if pushed",
@@ -3101,6 +3106,8 @@ def _enforce_ability_count(
                     forbidden_names=names,
                     origin=str((current_setup or {}).get("special_ability_origin") or "both"),
                     world_style=str((current_setup or {}).get("world_style") or ""),
+                    magic_level=str((current_setup or {}).get("magic_level") or ""),
+                    race_magic_enabled=(current_setup or {}).get("race_magic_enabled"),
                 )
                 n = sanitize_ability_name(pad_one.get("name")) or "Quiet Craft"
                 pad_one["name"] = n
@@ -3141,7 +3148,17 @@ def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str,
         "weak",
     }
     count = _roll_ability_count(field_context, one_skillish=one_skillish)
+    from app.setup_composer import SUPERNATURAL_LANES, magic_lane_stance
+
+    magic_level = str(current_setup.get("magic_level") or "")
+    race_magic = current_setup.get("race_magic_enabled")
+    stance = magic_lane_stance(magic_level, race_magic)
     pool = list(SETUP_RANDOMIZER_ABILITY_FALLBACKS)
+    if stance == "off":
+        # No ambient magic and no racial access: the supernatural entries are off the table.
+        grounded = [a for a in pool if str(a.get("lane") or "").lower() not in SUPERNATURAL_LANES]
+        if grounded:
+            pool = grounded
     random.shuffle(pool)
     # Avoid reusing whatever is already on the form when possible
     existing = current_setup.get("special_abilities") if isinstance(current_setup.get("special_abilities"), list) else []
@@ -3165,6 +3182,8 @@ def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str,
         dom = pick_seed_skill_domain(
             avoid=[str(a.get("name") or "") for a in ordered if isinstance(a, dict)],
             world_style=str(current_setup.get("world_style") or ""),
+            magic_level=magic_level,
+            race_magic_enabled=race_magic,
             salt=f"fallback|{time.time_ns()}|{random.randint(1, 1_000_000)}",
         )
         ordered.insert(
@@ -4924,6 +4943,8 @@ def _local_remake_ability(
     forbidden_names: set[str],
     origin: str = "",
     world_style: str = "",
+    magic_level: str = "",
+    race_magic_enabled: Any = None,
 ) -> dict[str, Any]:
     """Deterministic distinct ability when LLM rework/remake fails."""
     from app.setup_composer import player_facing_domain_description, pick_seed_skill_domain
@@ -4932,6 +4953,8 @@ def _local_remake_ability(
     dom = pick_seed_skill_domain(
         avoid=avoid,
         world_style=world_style,
+        magic_level=magic_level,
+        race_magic_enabled=race_magic_enabled,
         salt=f"dedupe_remake|{time.time_ns()}|{random.randint(1, 99999)}",
     )
     name = _unique_ability_display_name(
@@ -5076,6 +5099,8 @@ def ensure_distinct_abilities(
     origin: str = "",
     one_skillish: bool = False,
     world_style: str = "",
+    magic_level: str = "",
+    race_magic_enabled: Any = None,
     max_rounds: int = ABILITY_DEDUPE_MAX_ROUNDS,
     use_llm: bool = True,
 ) -> dict[str, Any]:
@@ -5159,6 +5184,8 @@ def ensure_distinct_abilities(
                 forbidden_names=forbidden,
                 origin=origin,
                 world_style=world_style,
+                magic_level=magic_level,
+                race_magic_enabled=race_magic_enabled,
             )
             entry["actions"].append("local_remake")
             # If local remake still collides (rare), pick a fully distinct name + niche note — no bare numbers.
@@ -5253,6 +5280,8 @@ def _fallback_custom_skills_from_domain(
     if not name or is_overused_seed_domain(name):
         dom = domain or pick_seed_skill_domain(
             world_style=str(current_setup.get("world_style") or ""),
+            magic_level=str(current_setup.get("magic_level") or ""),
+            race_magic_enabled=current_setup.get("race_magic_enabled"),
             salt=f"cs_fallback|{time.time_ns()}",
         )
         name = str(dom.get("name") or "Digging")
@@ -5377,6 +5406,7 @@ def diversify_ability_costs(
     abilities: list[Any] | None,
     *,
     force: bool = False,
+    magic_ok: bool = True,
 ) -> list[dict[str, Any]]:
     """
     If two or more abilities share the same cost *structure* (especially the
@@ -5441,11 +5471,13 @@ def diversify_ability_costs(
         out.append(next_ab)
     # Also diversify structured resource_cost shapes (mana/energy/fatigue/CD)
     try:
-        from app.player_resources import diversify_resource_costs, magic_allows_mana
+        from app.player_resources import diversify_resource_costs
 
-        magic_ok = magic_allows_mana(str((out[0] if out else {}).get("_magic_level") or ""), None)
-        # Prefer caller context via env of first ability if stamped later; default True
-        out = diversify_resource_costs(out, magic_ok=True, force=force)
+        # magic_ok arrives from the caller's setup. This used to read a per-ability
+        # "_magic_level" key that nothing has ever written, so it evaluated False in
+        # every world and the call compensated by passing a hardcoded True — which
+        # left mana costs on abilities in worlds with magic switched off.
+        out = diversify_resource_costs(out, magic_ok=magic_ok, force=force)
     except Exception:
         pass
     # Prerequisite variety (same mentor/field line on every card)
@@ -6783,6 +6815,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 avoid=[ability_name] if ability_name else None,
                 world_style=str(current_setup.get("world_style") or ""),
                 genre=str((intent_plan.get("genre") if isinstance(intent_plan, dict) else "") or ""),
+                magic_level=str(current_setup.get("magic_level") or ""),
+                race_magic_enabled=current_setup.get("race_magic_enabled"),
                 salt=f"custom_skills|{time.time_ns()}|{current_setup.get('player_name') or ''}",
             )
             prompt["task"] = (
@@ -7156,7 +7190,13 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         abilities_out = validated.get("special_abilities")
         if isinstance(abilities_out, list):
             # Always break clone costs (meditation-hour spam) before further polish.
-            abilities_out = diversify_ability_costs(abilities_out, force=False)
+            from app.player_resources import magic_allows_mana as _magic_allows_mana
+
+            abilities_out = diversify_ability_costs(
+                abilities_out,
+                force=False,
+                magic_ok=_magic_allows_mana(str(current_setup.get("magic_level") or ""), current_setup),
+            )
             # Fallback path may already have math; LLM path must already be calculable.
             force_fill = quality_source == "fallback_seed_pool"
             polished = _ensure_ability_growth_math(abilities_out, force_fill=force_fill)
@@ -7189,6 +7229,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                     origin=origin,
                     one_skillish=one_skillish,
                     world_style=str(current_setup.get("world_style") or ""),
+                    magic_level=str(current_setup.get("magic_level") or ""),
+                    race_magic_enabled=current_setup.get("race_magic_enabled"),
                     max_rounds=ABILITY_DEDUPE_MAX_ROUNDS,
                     use_llm=True,
                 )

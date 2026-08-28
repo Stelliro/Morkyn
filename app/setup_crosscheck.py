@@ -283,12 +283,14 @@ def check_ability_duplicates(fields: dict[str, Any]) -> tuple[dict[str, Any], li
                         repair="diversify_ability_costs",
                     )
                 )
-                abs_list = diversify_ability_costs(abs_list, force=True)
+                from app.player_resources import magic_allows_mana
+
+                magic_ok = magic_allows_mana(str(out.get("magic_level") or ""), out)
+                abs_list = diversify_ability_costs(abs_list, force=True, magic_ok=magic_ok)
                 try:
-                    from app.player_resources import diversify_resource_costs, magic_allows_mana
+                    from app.player_resources import diversify_resource_costs
                     from app.llm import diversify_ability_prerequisites
 
-                    magic_ok = magic_allows_mana(str(out.get("magic_level") or ""), out)
                     abs_list = diversify_resource_costs(abs_list, magic_ok=magic_ok, force=True)
                     abs_list = diversify_ability_prerequisites(
                         abs_list,
@@ -330,6 +332,8 @@ def check_ability_duplicates(fields: dict[str, Any]) -> tuple[dict[str, Any], li
             origin=origin,
             use_llm=False,  # board sanitize is deterministic; LLM path runs at generate-time
             world_style=str(out.get("world_style") or ""),
+            magic_level=str(out.get("magic_level") or ""),
+            race_magic_enabled=out.get("race_magic_enabled"),
             max_rounds=3,
         )
         if isinstance(dedupe.get("abilities"), list) and dedupe["abilities"]:
@@ -337,7 +341,13 @@ def check_ability_duplicates(fields: dict[str, Any]) -> tuple[dict[str, Any], li
             try:
                 from app.llm import diversify_ability_costs
 
-                out["special_abilities"] = diversify_ability_costs(dedupe["abilities"], force=False)
+                from app.player_resources import magic_allows_mana
+
+                out["special_abilities"] = diversify_ability_costs(
+                    dedupe["abilities"],
+                    force=False,
+                    magic_ok=magic_allows_mana(str(out.get("magic_level") or ""), out),
+                )
             except Exception:
                 out["special_abilities"] = dedupe["abilities"]
             findings[-1]["repair"] = f"deduped_rounds={dedupe.get('rounds')}"
