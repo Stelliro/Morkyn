@@ -8342,7 +8342,9 @@ function renderSaveEditor() {
     .map((name) => {
       const count = Array.isArray(tables[name]) ? tables[name].length : 0;
       const active = name === saveEditorTable ? " isActive" : "";
-      return `<button type="button" class="saveEditorTab${active}" data-editor-table="${escapeHtml(name)}">${escapeHtml(name)}<span class="saveEditorCount">${count}</span></button>`;
+      // title as well as label: inventory_capacity_modifiers is wider than the
+      // column, so the label truncates and the tooltip carries the full name.
+      return `<button type="button" class="saveEditorTab${active}" data-editor-table="${escapeHtml(name)}" title="${escapeHtml(name)} · ${count} row${count === 1 ? "" : "s"}"><span class="saveEditorTabName">${escapeHtml(name)}</span><span class="saveEditorCount">${count}</span></button>`;
     })
     .join("");
 
@@ -8351,7 +8353,7 @@ function renderSaveEditor() {
   const blocked = (saveEditorData.blocked || [])
     .map(
       (entry) =>
-        `<span class="saveEditorTab isBlocked" title="${escapeHtml(entry.reason || "not editable here")}">${escapeHtml(entry.table)}<span class="saveEditorCount">${escapeHtml(entry.rows)}</span></span>`,
+        `<span class="saveEditorTab isBlocked" title="${escapeHtml(entry.table)} — ${escapeHtml(entry.reason || "not editable here")}"><span class="saveEditorTabName">${escapeHtml(entry.table)}</span><span class="saveEditorCount">${escapeHtml(entry.rows)}</span></span>`,
     )
     .join("");
 
@@ -8372,15 +8374,20 @@ function renderSaveEditor() {
     // "threadbare scarf" became "threadbare sca…", and gives nothing to drag.
     const widths = columns.map((column) => saveEditorWidthFor(saveEditorTable, column, rows));
     const total = widths.reduce((sum, width) => sum + width, 0) + SAVE_EDITOR_ACTIONS_COLUMN;
+    // The last column has no width of its own. A table narrower than the panel
+    // is stretched to fill it, and the slack has to land somewhere: without
+    // this it was shared out across the real columns, so a header rendered far
+    // wider than the width recorded for it and the first pixel of a drag
+    // snapped the column to whatever it had been stretched to.
     const colgroup = `<colgroup>${widths
       .map((width) => `<col style="width:${width}px" />`)
-      .join("")}<col style="width:${SAVE_EDITOR_ACTIONS_COLUMN}px" /></colgroup>`;
+      .join("")}<col style="width:${SAVE_EDITOR_ACTIONS_COLUMN}px" /><col /></colgroup>`;
     const head = `<tr>${columns
       .map(
         (column) =>
           `<th><span class="saveEditorColLabel">${escapeHtml(column)}</span><span class="saveEditorColGrip" data-editor-grip="${escapeHtml(column)}" title="Drag to resize · double-click to fit the contents"></span></th>`,
       )
-      .join("")}<th class="saveEditorRowActions">Row</th></tr>`;
+      .join("")}<th class="saveEditorRowActions">Row</th><th class="saveEditorSpacer" aria-hidden="true"></th></tr>`;
     const body = pageRows
       .map(({ row, index }) => {
         const where = saveEditorRowWhere(row, rows);
@@ -8397,7 +8404,7 @@ function renderSaveEditor() {
         } else {
           action = `<button type="button" class="chipBtn secondaryButton" data-editor-delete="${index}">Delete</button>`;
         }
-        return `<tr class="${removed ? "isDeleted" : ""}">${cells}<td class="saveEditorRowActions">${action}</td></tr>`;
+        return `<tr class="${removed ? "isDeleted" : ""}">${cells}<td class="saveEditorRowActions">${action}</td><td class="saveEditorSpacer"></td></tr>`;
       })
       .join("");
     grid = `<div class="saveEditorGridScroll"><table class="saveEditorGrid" style="width:${total}px">${colgroup}<thead>${head}</thead><tbody>${body}</tbody></table></div>`;
@@ -8711,7 +8718,10 @@ function bindSaveEditorOnce() {
     if (!col || !head) return;
 
     const startX = event.clientX;
-    const startWidth = head.getBoundingClientRect().width;
+    // The width recorded for the column, not the width it happens to be drawn
+    // at: the drag writes to the former, and starting from the latter would
+    // move the border by the difference between them on the first mousemove.
+    const startWidth = parseFloat(col.style.width) || head.getBoundingClientRect().width;
     let width = startWidth;
     grip.classList.add("isDragging");
     document.body.classList.add("isResizingColumn");

@@ -6141,18 +6141,42 @@ button.chipBtn {
   gap: 6px;
   min-height: 0;
   overflow-y: auto;
-  padding-right: 4px;
+  /* Reserve the scrollbar's lane so it sits beside the buttons instead of on
+     top of them, and keep it reserved whether the bar is showing or not so the
+     list does not shift width when a save has fewer tables. */
+  scrollbar-gutter: stable;
+  overflow-x: hidden;
+  padding-right: 8px;
   border-right: 1px solid var(--line);
 }
 
 .saveEditorTables .saveEditorTabs {
   flex-direction: column;
   align-items: stretch;
+  /* nowrap matters: a wrapping column container sizes its flex line to the
+     widest item, so the buttons stretched to fit inventory_capacity_modifiers
+     and hung past the list — and under its scrollbar — instead of shrinking. */
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 
 .saveEditorTables .saveEditorTab {
   justify-content: space-between;
   border-radius: 8px;
+  /* A flex item will not shrink below its content unless told to, which is how
+     inventory_capacity_modifiers pushed a sideways scrollbar into the list. */
+  min-width: 0;
+}
+
+.saveEditorTabName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.saveEditorTables .saveEditorCount {
+  flex: none;
 }
 
 .saveEditorMain {
@@ -6178,6 +6202,9 @@ button.chipBtn {
 
   .saveEditorTables .saveEditorTabs {
     flex-direction: row;
+    /* Back to wrapping: nowrap is only there to stop a column layout sizing
+       its line to the widest button, and a row of twenty-two must wrap. */
+    flex-wrap: wrap;
   }
 }
 
@@ -6410,6 +6437,12 @@ body.isResizingColumn .saveEditorCell textarea {
 .saveEditorRowActions {
   white-space: nowrap;
   text-align: right;
+}
+
+/* Holds the slack when the columns do not fill the panel, so the header band
+   still spans it and no real column is stretched away from its own width. */
+.saveEditorSpacer {
+  padding: 0;
 }
 
 .saveEditorNote {
