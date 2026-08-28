@@ -125,6 +125,9 @@ try {
     extractFunction(source, "saveEditorIsScalar"),
     extractFunction(source, "saveEditorRowWhere"),
     extractFunction(source, "saveEditorVisibleRows"),
+    extractFunction(source, "buildSaveEditorHaystack"),
+    extractFunction(source, "saveEditorMatchCounts"),
+    extractFunction(source, "saveEditorMatchTotals"),
     extractConst(source, "SAVE_EDITOR_MIN_COLUMN"),
     extractConst(source, "SAVE_EDITOR_MAX_DEFAULT_COLUMN"),
     extractFunction(source, "saveEditorDefaultWidth"),
@@ -151,6 +154,9 @@ try {
     "this.api = {",
     "  rowWhere: saveEditorRowWhere,",
     "  visible: saveEditorVisibleRows,",
+    "  haystack: buildSaveEditorHaystack,",
+    "  counts: saveEditorMatchCounts,",
+    "  totals: saveEditorMatchTotals,",
     "  defaultWidth: saveEditorDefaultWidth,",
     "  maxDefault: () => SAVE_EDITOR_MAX_DEFAULT_COLUMN,",
     "  coerce: saveEditorCoerce,",
@@ -243,6 +249,62 @@ console.log("filtering rows without moving the target");
   same("any column can match", api.visible(rows, "I4").map((e) => e.index), [1]);
   same("no match is an empty list, not everything", api.visible(rows, "zzz").map((e) => e.index), []);
   check("a row with a null column does not blow up the filter", api.visible([{ id: 1, note: null }], "1").length === 1);
+}
+
+// --- 1d. searching the whole save ----------------------------------------
+console.log("searching every table, not just the open one");
+
+const SEARCH_SAVE = {
+  tables: {
+    inventory: [
+      { id: 1, code: "I1", name: "frayed sailor coat" },
+      { id: 2, code: "I4", name: "single seed in hand" },
+    ],
+    journal: [{ id: 1, entry: "Planted the seed by the wall." }, { id: 2, entry: "Rain all day." }],
+    npcs: [{ id: 1, name: "Ordwin" }],
+    empty: [],
+  },
+};
+
+{
+  const hay = api.haystack(SEARCH_SAVE);
+  const counts = api.counts(hay, "seed");
+  same("every table holding the term is counted", counts, { inventory: 1, journal: 1 });
+  check("a table without it is left out entirely", !("npcs" in counts));
+  same("the totals add up", api.totals(counts), { tables: 2, rows: 2 });
+  same("case does not matter", api.counts(hay, "SEED"), counts);
+  same("a code is as searchable as a word", api.counts(hay, "I4"), { inventory: 1 });
+  same("a term nothing holds counts nothing", api.counts(hay, "zzz"), {});
+  check("an empty term means no search at all, not a search for nothing", api.counts(hay, "") === null);
+  check("whitespace is not a search either", api.counts(hay, "   ") === null);
+}
+{
+  // The property that matters. The side list says a table holds two matches,
+  // you go there, and the grid decides for itself which rows to show. If those
+  // two disagree the count sends you to an empty table.
+  const hay = api.haystack(SEARCH_SAVE);
+  for (const term of ["seed", "I4", "coat", "rain", "zzz", "o"]) {
+    const counts = api.counts(hay, term) || {};
+    for (const [table, rows] of Object.entries(SEARCH_SAVE.tables)) {
+      const shown = api.visible(rows, term).length;
+      check(
+        `"${term}" in ${table}: the count is what the grid will show`,
+        (counts[table] || 0) === shown,
+        `counted ${counts[table] || 0}, grid shows ${shown}`,
+      );
+    }
+  }
+}
+{
+  // The two must not drift apart at the join between columns either: the grid
+  // tests each value on its own, so the count must too.
+  const spanning = { tables: { t: [{ a: "single seed", b: "in hand" }] } };
+  const counts = api.counts(api.haystack(spanning), "seed in hand");
+  same("a term is not matched across two columns", counts, {});
+  check(
+    "and the grid agrees",
+    api.visible(spanning.tables.t, "seed in hand").length === 0,
+  );
 }
 
 // --- 1c. starting column widths ------------------------------------------
