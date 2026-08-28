@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import gzip
 import hashlib
 import json
@@ -2943,6 +2943,120 @@ def list_campaign_slots() -> list[dict[str, Any]]:
 
 AUTOSAVE_SLOT = "last"
 
+# Per-turn history, kept per character rather than per game. `campaign_seed` is
+# minted once per playthrough, wiped by _clear_playthrough, and travels with the
+# world on export -- so a loaded save keeps writing history under the same id.
+AUTOSAVE_HISTORY_KEEP = 10
+AUTOSAVE_ARCHIVED_KEEP = 5
+AUTOSAVE_ARCHIVE_AFTER_DAYS = 90
+AUTOSAVE_PREFIX = "auto"
+_AUTOSAVE_SLOT_RE = re.compile(rf"{AUTOSAVE_PREFIX}-([0-9a-f]{{8}})-t(\d{{1,9}})\Z")
+
+
+def campaign_id(conn: sqlite3.Connection | None = None) -> str:
+    """Short stable id for the character currently loaded."""
+    from app.rng import campaign_seed
+
+    return f"{campaign_seed(conn) & 0xFFFFFFFF:08x}"
+
+
+def autosave_slot_name(cid: str, turn: int) -> str:
+    # Zero padded so the slot names sort in turn order as text, which is how
+    # the directory listing and every human reading it will sort them.
+    return f"{AUTOSAVE_PREFIX}-{cid}-t{max(0, int(turn)):05d}"
+
+
+def parse_autosave_slot(name: str) -> tuple[str, int] | None:
+    match = _AUTOSAVE_SLOT_RE.fullmatch(str(name or ""))
+    return (match.group(1), int(match.group(2))) if match else None
+
+
+def _slot_timestamp(slot: dict[str, Any]) -> datetime:
+    for key in ("saved_at", "modified"):
+        raw = str(slot.get(key) or "")
+        if not raw:
+            continue
+        try:
+            stamp = datetime.fromisoformat(raw)
+        except ValueError:
+            continue
+        return stamp if stamp.tzinfo else stamp.replace(tzinfo=timezone.utc)
+    return datetime.fromtimestamp(0, tz=timezone.utc)
+
+
+def list_autosaves(cid: str | None = None) -> list[dict[str, Any]]:
+    """Per-turn autosaves, newest turn first. Ordinary saves are not included."""
+    found: list[dict[str, Any]] = []
+    for slot in list_campaign_slots():
+        parsed = parse_autosave_slot(slot.get("slot"))
+        if not parsed:
+            continue
+        slot_cid, turn = parsed
+        if cid and slot_cid != cid:
+            continue
+        found.append({**slot, "campaign_id": slot_cid, "auto_turn": turn})
+    found.sort(key=lambda item: int(item.get("auto_turn") or 0), reverse=True)
+    return found
+
+
+def prune_autosaves(cid: str, keep: int = AUTOSAVE_HISTORY_KEEP) -> dict[str, Any]:
+    """Hold a character to its most recent `keep` turns."""
+    saves = list_autosaves(cid)
+    doomed = saves[max(0, int(keep)):]
+    removed: list[str] = []
+    for save in doomed:
+        name = str(save.get("slot") or "")
+        if not parse_autosave_slot(name):
+            continue
+        shutil.rmtree(campaign_slots_dir() / name, ignore_errors=True)
+        removed.append(name)
+    blobs = gc_campaign_blobs() if removed else None
+    return {"campaign_id": cid, "kept": len(saves) - len(removed), "removed": removed, "blobs": blobs}
+
+
+def _mark_archived(slot_name: str, archived: bool = True) -> None:
+    path = campaign_slots_dir() / slot_name / "metadata.json"
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    meta["archived"] = bool(archived)
+    try:
+        path.write_text(json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def archive_idle_campaigns(
+    now: datetime | None = None,
+    days: int = AUTOSAVE_ARCHIVE_AFTER_DAYS,
+    keep: int = AUTOSAVE_ARCHIVED_KEEP,
+) -> dict[str, Any]:
+    """
+    Thin characters nobody has played for months down to their last few turns.
+
+    Archived saves stay listed and stay loadable -- the point is to reclaim room
+    from a character you have finished with, not to hide them. Only per-turn
+    autosaves are touched; a save you named yourself is yours and is never
+    pruned by age.
+    """
+    moment = now or datetime.now(timezone.utc)
+    cutoff = moment - timedelta(days=max(1, int(days)))
+    by_campaign: dict[str, list[dict[str, Any]]] = {}
+    for save in list_autosaves():
+        by_campaign.setdefault(str(save.get("campaign_id") or ""), []).append(save)
+
+    archived: list[dict[str, Any]] = []
+    for cid, saves in sorted(by_campaign.items()):
+        newest = max((_slot_timestamp(save) for save in saves), default=None)
+        if newest is None or newest > cutoff:
+            continue
+        report = prune_autosaves(cid, keep=keep)
+        for save in list_autosaves(cid):
+            _mark_archived(str(save.get("slot") or ""))
+        archived.append({**report, "last_played": newest.isoformat()})
+    return {"cutoff": cutoff.isoformat(), "archived": archived}
+
 
 def save_campaign_slot(slot_name: str) -> dict[str, Any]:
     safe = _safe_slot_name(slot_name)
@@ -2984,20 +3098,71 @@ def save_campaign_slot(slot_name: str) -> dict[str, Any]:
         "history_count": snap.get("history_count") or 0,
         "has_map": bool(snap.get("has_map")),
         "active_world_map_id": snap.get("active_world_map_id") or "",
+        # Which character this belongs to, so per-turn history can be grouped
+        # and pruned per character rather than per game.
+        "campaign_id": campaign_id(),
     }
     (slot_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
     return metadata
 
 
 def autosave_campaign() -> dict[str, Any] | None:
-    """Persist current world to the continue-game slot. Safe to call after every turn."""
+    """
+    Persist the world after a turn: one per-turn history entry, plus the
+    continue-game slot.
+
+    The turn slot is written first and copied to "last" rather than exporting
+    the world twice -- export_world builds the whole 5 MB payload, and copying
+    the finished files is about 160 KB.
+    """
     try:
         state = get_state(include_hidden=False)
         if not state.get("setup_complete"):
             return None
-        return save_campaign_slot(AUTOSAVE_SLOT)
+        cid = campaign_id()
+        turn_meta = save_campaign_slot(autosave_slot_name(cid, 0))
+        turn = int(turn_meta.get("turn") or 0)
+        if turn != 0:
+            # The turn number is only known after the export; rename to match.
+            wanted = autosave_slot_name(cid, turn)
+            source = campaign_slots_dir() / autosave_slot_name(cid, 0)
+            target = campaign_slots_dir() / wanted
+            shutil.rmtree(target, ignore_errors=True)
+            source.replace(target)
+            turn_meta = {**turn_meta, "slot": wanted}
+            _rewrite_slot_metadata(wanted, {"slot": wanted, "autosave": True})
+        prune_autosaves(cid)
+        return _copy_slot(str(turn_meta.get("slot") or ""), AUTOSAVE_SLOT)
     except Exception:
         return None
+
+
+def _rewrite_slot_metadata(slot_name: str, patch: dict[str, Any]) -> dict[str, Any]:
+    path = campaign_slots_dir() / slot_name / "metadata.json"
+    try:
+        meta = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        meta = {}
+    meta.update(patch)
+    try:
+        path.write_text(json.dumps(meta, ensure_ascii=True, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    return meta
+
+
+def _copy_slot(source_name: str, target_name: str) -> dict[str, Any] | None:
+    """Duplicate a written slot. Both point at the same blobs; nothing is re-exported."""
+    source = campaign_slots_dir() / source_name
+    if not source_name or not (source / "world.json").exists():
+        return None
+    target = campaign_slots_dir() / _safe_slot_name(target_name)
+    target.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source / "world.json", target / "world.json")
+    shutil.copy2(source / "metadata.json", target / "metadata.json")
+    return _rewrite_slot_metadata(
+        target.name, {"slot": target.name, "autosave": target.name == AUTOSAVE_SLOT}
+    )
 
 
 def resume_snapshot(state: dict[str, Any] | None = None) -> dict[str, Any]:
