@@ -225,3 +225,152 @@ def test_sanitize_rejects_noble_festival_transmigrated_story():
     assert "guest right" not in story
     assert "disgraced noble" not in story
     assert "former life" in story or "worked" in story or "job" in story or "city" in story
+
+
+# --- reincarnated is not transmigrated --------------------------------------
+#
+# `harmonize_identity_to_world_vibe` accepted the caller's arrival classification
+# and never read it, then hardcoded mode="transmigrated" into
+# `ensure_isekai_arrival_beat` -- walking past that helper's own guard, which
+# returns the story untouched for a reincarnated life. A reincarnated character
+# with a modern CV came out byte-identical to a transmigrated one: "Before the
+# transfer they were a hospital logistics technician... when awareness returned
+# they were at Sect Outer Court", while backstory_mode still read "reincarnated".
+#
+# reincarnated = born into this world, grows up here, carries former-life fragments.
+# transmigrated = dies elsewhere, arrives already formed.
+
+# Deliberately free of every `lived_here_long` story marker ("years as", "grew up",
+# "raised", "child", "village", "born in"), which is what let this reach the
+# transmigration branch in the first place. "technician" makes it a modern resume.
+_MODERN_CV = (
+    "A hospital logistics technician in Osaka. She worked nights, kept the roster board tidy, "
+    "and lived alone in a small flat above a laundromat."
+)
+_WORLD = dict(
+    world_style="low fantasy kingdom of feuding baronies",
+    tech_level="medieval",
+    magic_level="rare",
+)
+
+
+def _harmonize(mode):
+    from app.starter_logic import harmonize_identity_to_world_vibe
+
+    return harmonize_identity_to_world_vibe(
+        character_backstory=_MODERN_CV,
+        backstory_mode=mode,
+        memory_policy="",
+        starter_equipment="hoodie, phone, lanyard",
+        appearance="short dark hair",
+        intent={"isekai": True, "raw_idea": "reborn into a feuding barony"},
+        **_WORLD,
+    )
+
+
+_ARRIVAL_LANGUAGE = (
+    "before the transfer",
+    "awareness returned",
+    "another world",
+    "did not grow up in this world",
+    "arrival",
+    "arrived",
+    "transport",
+    "woke",
+)
+
+
+def test_reincarnated_and_transmigrated_are_different_packages():
+    reinc = _harmonize("reincarnated")
+    trans = _harmonize("transmigrated")
+    assert reinc.get("character_backstory") != trans.get("character_backstory")
+    assert reinc.get("path") != trans.get("path")
+
+
+def test_a_reincarnated_life_gets_a_local_life_not_an_arrival_beat():
+    """Both halves matter: no arrival stamped, AND a real local life built.
+
+    Asserting only the absence of arrival language passes vacuously when the
+    character falls through every branch untouched, which is what happens if
+    the mode stops settling residence on its own.
+    """
+    reinc = _harmonize("reincarnated")
+    story = str(reinc.get("character_backstory") or "")
+    low = story.lower()
+
+    found = [w for w in _ARRIVAL_LANGUAGE if w in low]
+    assert not found, f"reincarnated backstory describes an arrival: {found} in {low[:160]!r}"
+
+    # A package was actually built, not merely left alone.
+    assert reinc.get("path") == "localize_origin_to_world", f"path={reinc.get('path')!r}"
+    assert story != _MODERN_CV, "the modern CV was left standing instead of being localized"
+    assert "osaka" not in low and "laundromat" not in low, f"modern life kept: {low[:160]!r}"
+    assert "reincarnat" in str(reinc.get("backstory_mode") or "")
+    assert "fragment" in str(reinc.get("memory_policy") or "").lower()
+
+    notes = " ".join(str(n) for n in (reinc.get("notes") or [])).lower()
+    assert "transmigrated package enforced" not in notes
+    assert "local life" in notes
+
+
+def test_a_stray_arrival_sentence_does_not_beat_the_reincarnated_mode():
+    """Rebirth is the claim; a leftover "woke in another world" line is not.
+
+    Without the exemption this falls through every branch and keeps the arrival
+    prose sitting under a mode that says the character was born here.
+    """
+    from app.starter_logic import harmonize_identity_to_world_vibe
+
+    res = harmonize_identity_to_world_vibe(
+        character_backstory=(
+            "A hospital logistics technician in Osaka. Then a truck took her, "
+            "and she woke in another world."
+        ),
+        backstory_mode="reincarnated",
+        memory_policy="",
+        starter_equipment="hoodie, phone",
+        appearance="short dark hair",
+        intent={"isekai": True},
+        **_WORLD,
+    )
+    low = str(res.get("character_backstory") or "").lower()
+    assert res.get("path") == "localize_origin_to_world", f"path={res.get('path')!r}"
+    assert "woke in another world" not in low, f"arrival prose survived: {low[:160]!r}"
+    assert "osaka" not in low
+
+
+def test_a_transmigrated_life_still_gets_its_arrival_beat():
+    """The fix must not mute transmigration, which is the case this branch is for."""
+    trans = _harmonize("transmigrated")
+    story = str(trans.get("character_backstory") or "").lower()
+    assert any(w in story for w in _ARRIVAL_LANGUAGE), f"no arrival beat: {story[:160]!r}"
+    assert trans.get("path") == "stitch_arrival_keep_former_life"
+    assert "transmigrat" in str(trans.get("backstory_mode") or "")
+
+
+def test_the_arrival_classification_passed_in_is_actually_read():
+    """`arrival=` was accepted and dropped; a reincarnated classification must land."""
+    from app.starter_logic import ARRIVAL_REINCARNATED, harmonize_identity_to_world_vibe
+
+    res = harmonize_identity_to_world_vibe(
+        character_backstory=_MODERN_CV,
+        backstory_mode="",  # mode says nothing; only the classification does
+        memory_policy="",
+        starter_equipment="hoodie, phone",
+        appearance="short dark hair",
+        intent={"isekai": True},
+        arrival={"arrival": ARRIVAL_REINCARNATED},
+        **_WORLD,
+    )
+    story = str(res.get("character_backstory") or "").lower()
+    found = [w for w in _ARRIVAL_LANGUAGE if w in story]
+    assert not found, f"classification ignored, arrival stamped anyway: {found}"
+
+
+def test_the_stitch_branch_never_sees_a_reincarnated_mode():
+    """Guards the invariant the branch's hardcoded transmigration prose relies on."""
+    for mode in ("reincarnated", "reborn", "reincarnated childhood"):
+        res = _harmonize(mode)
+        assert res.get("path") != "stitch_arrival_keep_former_life", (
+            f"{mode!r} reached the transmigration branch"
+        )

@@ -764,8 +764,20 @@ def harmonize_identity_to_world_vibe(
         ("died" in story_low or "death" in story_low or "accident" in story_low or "crash" in story_low)
         and any(m in story_low for m in ("woke", "wake", "opened", "found themselves", "found themself", "now in"))
     )
+    # "reincarnated" asserts they were born into this world and grew up in it
+    # (app/llm.py: "reincarnated = grew up in this world + former-life fragments").
+    # The mode is authoritative, so it settles residence on its own rather than
+    # waiting for the story to also say "village" or "childhood" — a reincarnated
+    # character whose backstory is still a modern CV is exactly the case that
+    # needs rewriting, and requiring the local marker up front excluded it.
+    # `arrival` is the classification the caller already computed for us.
+    reincarnated_mode = (
+        "reincarnat" in mode
+        or "reborn" in mode
+        or str(arrival.get("arrival") or "") == ARRIVAL_REINCARNATED
+    )
     # Long this-life residence (reincarnation / grew up here) — not a same-day drop.
-    lived_here_long = any(
+    lived_here_long = reincarnated_mode or any(
         m in story_low
         for m in (
             "grew up",
@@ -778,9 +790,6 @@ def harmonize_identity_to_world_vibe(
             "years ago",
             "since childhood",
         )
-    ) or (
-        ("reincarnat" in mode or "reborn" in mode)
-        and any(m in story_low for m in ("village", "born in", "raised", "apprentice", "child"))
     )
     modern_resume = modern_origin and any(
         m in story_low
@@ -817,15 +826,20 @@ def harmonize_identity_to_world_vibe(
         fantasy_dest
         and modern_origin
         and lived_here_long
-        and not arrival_framing
+        # A reincarnated life is rewritten local even when the prose picked up a
+        # stray arrival sentence: rebirth is the claim, arrival is the leftover.
+        and (reincarnated_mode or not arrival_framing)
         and modern_resume
     )
     # Transmigrated mode + modern CV + no arrival sentence → stitch arrival; do not erase the CV.
+    # Never reincarnated: they did not arrive, they were born here, and this branch
+    # builds a transport-and-arrival package that would contradict the mode.
     stitch_arrival = bool(
         fantasy_dest
         and modern_origin
         and not arrival_framing
         and not lived_here_long
+        and not reincarnated_mode
         and ("transmigrat" in mode or bool(intent.get("isekai")) or modern_resume)
     )
     # Modern gear on an already-local life: map/drop gear only, never rewrite origin story.
@@ -902,7 +916,11 @@ def harmonize_identity_to_world_vibe(
         # Build a proper transmigration package: former life + transport + arrival start.
         # Never bolt a generic line onto a native fantasy plot (noble/festival/etc.).
         path = "stitch_arrival_keep_former_life"
-        out_mode = "transmigrated" if "reincarnat" not in mode else "reincarnated"
+        # `stitch_arrival` excludes reincarnated_mode, so this branch is only ever
+        # a transmigration. Everything below it — the arrival beat, the fallback
+        # prose, the note — describes a transport, and a reincarnated life reaching
+        # here would be handed a contradiction rather than a package.
+        out_mode = "transmigrated"
         if _norm(out_memory) in {"", "known", "ordinary memory"}:
             out_memory = "former life fragments"
         try:
@@ -917,7 +935,10 @@ def harmonize_identity_to_world_vibe(
             else:
                 out_story = ensure_isekai_arrival_beat(
                     story,
-                    mode="transmigrated",
+                    # Not the literal "transmigrated": the helper refuses to stamp an
+                    # arrival beat on a reincarnated life, and hardcoding the mode
+                    # here walked straight past that guard.
+                    mode=out_mode,
                     idea=str(intent.get("raw_idea") or intent.get("genre") or ""),
                     world_style=world_style,
                 )
