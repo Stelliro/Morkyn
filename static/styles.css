@@ -140,6 +140,21 @@ html[data-theme="ash"] {
   box-sizing: border-box;
 }
 
+/*
+ * The `hidden` attribute must actually hide.
+ *
+ * The browser's own rule for it is `[hidden] { display: none }` at the lowest
+ * possible weight, so any class here that sets `display` beats it and the
+ * element stays on screen while `el.hidden === true`. Three places were doing
+ * exactly that: the save browser's list and footer both showed through the save
+ * editor, and the setup wizard's system-style field stayed visible with the
+ * game system switched off. Every one of them sets `.hidden = true` meaning
+ * "go away", so the attribute wins here.
+ */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   min-height: 100vh;
