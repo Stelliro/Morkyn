@@ -35,10 +35,18 @@ OVERLAP_DROP = 0.62
 REPEAT_MIN_CHARS = 45
 # Verbatim reuse is the common case; this catches the one-word reskin of it.
 REPEAT_NEAR_MATCH = 0.85
-# Two sentences can share a long clause and still measure as different, because
-# one of them wraps it in extra words. Twelve consecutive identical words is not
-# something two independently written sentences do by accident.
-REPEAT_SHARED_RUN_WORDS = 12
+# Two sentences can share a clause and still measure as different, because one
+# of them wraps it in extra words or re-skins the rest. A run of identical
+# consecutive words is what a reader actually notices.
+#
+# Set from measurement, not taste. Two reported turns:
+#   "a rusted chain, still attached to a wooden crate"    9 words, jaccard 0.54
+#   "thick with the scent of oil and metal"               8 words, jaccard 0.34
+# Both read as obvious repeats and both sit far under the near-match bar, so a
+# first guess of twelve caught neither. Eight catches both, and the shortest
+# innocent collision found while checking -- "leans against the counter and",
+# two different people at the same bar -- is five.
+REPEAT_SHARED_RUN_WORDS = 8
 
 # --- env helpers -------------------------------------------------------------
 

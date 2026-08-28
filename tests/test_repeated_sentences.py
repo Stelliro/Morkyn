@@ -147,6 +147,52 @@ class DropRepeatedSentencesTests(unittest.TestCase):
         self.assertEqual(drop_repeated_sentences([]), ([], []))
 
 
+SHED_AIR_FIRST = (
+    "You stand before a rusted shed at the edge of a quiet village, its lock stiff with age "
+    "and neglect, the air inside thick with the scent of oil and metal."
+)
+SHED_AIR_AGAIN = (
+    "The air inside the shed is thick with the scent of oil and metal, the silence broken "
+    "only by the faint creak of shifting tools."
+)
+SHED_CHAIN_FIRST = (
+    "A faint glint catches your eye near the back — a rusted chain, still attached to a "
+    "wooden crate, its surface marked with initials you don't recognize."
+)
+SHED_CHAIN_AGAIN = (
+    "A rusted chain, still attached to a wooden crate, glints in the dim light, its surface "
+    "etched with initials you don't recognize."
+)
+
+
+class ParaphrasedRepeatTests(unittest.TestCase):
+    """
+    A second reported turn, and the one that set the shared-run threshold.
+
+    Nothing here is reused verbatim: the model re-skins the sentence around the
+    clause it is repeating. Whole-sentence and near-match rules both miss it --
+    these pairs measure 0.34 and 0.54 token overlap against a 0.85 bar -- and
+    the shared runs are only 8 and 9 words, so a threshold of twelve caught
+    neither.
+    """
+
+    def test_a_reskinned_scent_line_is_a_repeat(self):
+        kept, dropped = drop_repeated_sentences([SHED_AIR_FIRST, SHED_AIR_AGAIN])
+        self.assertEqual(len(dropped), 1)
+        self.assertEqual(kept[0], SHED_AIR_FIRST, "the first telling survives")
+
+    def test_a_reskinned_chain_line_is_a_repeat(self):
+        kept, dropped = drop_repeated_sentences([SHED_CHAIN_FIRST, SHED_CHAIN_AGAIN])
+        self.assertEqual(len(dropped), 1)
+
+    def test_the_new_detail_in_that_paragraph_is_kept(self):
+        """Dropping the echo must not cost the sentence that carried news."""
+        crate = "The crate itself is sealed, but the tools around it wait for someone to pick up where the last user left off."
+        kept, _ = drop_repeated_sentences([SHED_CHAIN_FIRST, f"{SHED_CHAIN_AGAIN} {crate}"])
+        self.assertIn("The crate itself is sealed", kept[1])
+        self.assertNotIn("glints in the dim light", kept[1])
+
+
 class ConsolidatorReachTests(unittest.TestCase):
     def test_consolidator_compares_against_every_earlier_paragraph(self):
         """A paragraph duplicating paragraph 1 is as bad as one duplicating paragraph 3."""
