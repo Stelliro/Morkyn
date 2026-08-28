@@ -7518,11 +7518,26 @@ function setSaveBrowserStatus(message, kind = "") {
 }
 
 function closeSaveBrowser() {
+  // Closing on top of a queue would throw the changes away without saying so.
+  if (saveBrowserView === "editor" && saveEditorEdits.length && !leaveSaveEditor()) return;
   document.querySelector("#saveBrowserModal")?.classList.add("hidden");
   setSaveBrowserStatus("");
   saveBrowserView = "characters";
   saveBrowserCharacter = "";
   saveBrowserPage = 0;
+  saveEditorEdits = [];
+  saveEditorInvalid = new Set();
+  saveEditorData = null;
+  saveEditorApplied = "";
+}
+
+/** The back button means "up one level", and the editor is a level. */
+function saveBrowserGoBack() {
+  if (saveBrowserView === "editor") {
+    leaveSaveEditor();
+    return;
+  }
+  backToSaveBrowserCharacters();
 }
 
 async function fetchCampaignSlots() {
@@ -7579,7 +7594,25 @@ function updateSaveBrowserChrome() {
   const pager = document.querySelector("#saveBrowserPager");
   const inSaves = saveBrowserView === "saves" && saveBrowserCharacter;
 
-  if (back) back.classList.toggle("hidden", !inSaves);
+  if (saveBrowserView === "editor") {
+    if (back) {
+      back.classList.remove("hidden");
+      back.textContent = "← Saves";
+    }
+    if (title) title.textContent = `Edit · ${saveEditorSlot}`;
+    if (sub) {
+      sub.textContent =
+        "Change what is inside this save. Nothing is written until you apply, and a backup is taken first.";
+    }
+    if (footer) footer.hidden = true;
+    if (pager) pager.classList.add("hidden");
+    return;
+  }
+
+  if (back) {
+    back.textContent = "← Characters";
+    back.classList.toggle("hidden", !inSaves);
+  }
 
   if (saveBrowserMode === "save") {
     if (title) title.textContent = inSaves ? `Save · ${saveBrowserCharacter}` : "Save game";
@@ -7626,6 +7659,21 @@ function renderSaveBrowserList() {
   const listEl = document.querySelector("#saveBrowserList");
   const emptyEl = document.querySelector("#saveBrowserEmpty");
   if (!listEl || !emptyEl) return;
+
+  const editorEl = document.querySelector("#saveEditorView");
+  // A grid of rows needs more room than a list of save cards.
+  document.querySelector(".saveBrowserPanel")?.classList.toggle("isEditing", saveBrowserView === "editor");
+  if (saveBrowserView === "editor") {
+    listEl.hidden = true;
+    emptyEl.hidden = true;
+    if (editorEl) editorEl.hidden = false;
+    updateSaveBrowserChrome();
+    return;
+  }
+  if (editorEl) {
+    editorEl.hidden = true;
+    editorEl.innerHTML = "";
+  }
 
   updateSaveBrowserChrome();
 
@@ -7715,6 +7763,7 @@ function renderSaveBrowserList() {
                 ? `<button type="button" class="chipBtn" data-save-load="${escapeHtml(name)}">Load</button>`
                 : `<button type="button" class="chipBtn" data-save-overwrite="${escapeHtml(name)}">Overwrite</button>`
             }
+            <button type="button" class="chipBtn secondaryButton" data-save-edit="${escapeHtml(name)}" title="Change what is inside this save">Edit</button>
             <button type="button" class="chipBtn secondaryButton" data-save-delete="${escapeHtml(name)}" title="Delete this slot">Delete</button>
           </div>
         </article>
@@ -7901,15 +7950,700 @@ async function deleteCampaignSlotByName(slotName) {
   await refreshContinueButton();
 }
 
+/* ---------------------------------------------------------------------------
+ * Save editor
+ *
+ * Nothing here decides what may be edited -- /api/save-editor does, and an
+ * agent driving those same two endpoints gets the same answers. This is only
+ * the part a person can see and click.
+ * ------------------------------------------------------------------------- */
+
+let saveEditorSlot = "";
+let saveEditorData = null;
+let saveEditorTable = "";
+let saveEditorEdits = [];
+let saveEditorInvalid = new Set();
+let saveEditorRowPage = 0;
+let saveEditorAdding = false;
+let saveEditorApplied = "";
+let saveEditorFilter = "";
+const SAVE_EDITOR_ROWS_PER_PAGE = 20;
+const SAVE_EDITOR_LONG_VALUE = 90;
+// Tried in order when looking for something unique to aim an edit at.
+const SAVE_EDITOR_ID_COLUMNS = ["id", "code", "key", "slug", "name"];
+
+function saveEditorIsScalar(value) {
+  return value === null || ["string", "number", "boolean"].includes(typeof value);
+}
+
+function saveEditorFieldKey(table, rowIndex, column) {
+  return `${table} ${rowIndex} ${column}`;
+}
+
+/**
+ * The narrowest `where` clause that picks out exactly this row, or null.
+ *
+ * The API applies a `set` to every row the clause matches, so a clause that
+ * matches two rows would quietly change the wrong one. A row with no unique
+ * clause is shown read-only rather than edited on a guess.
+ */
+function saveEditorRowWhere(row, rows) {
+  if (!row || typeof row !== "object") return null;
+  const matches = (where) =>
+    rows.filter((other) =>
+      other && typeof other === "object"
+        ? Object.entries(where).every(([key, value]) => String(other[key]) === String(value))
+        : false,
+    ).length;
+
+  for (const column of SAVE_EDITOR_ID_COLUMNS) {
+    if (!(column in row)) continue;
+    const value = row[column];
+    if (value === null || value === "" || !saveEditorIsScalar(value)) continue;
+    const where = { [column]: value };
+    if (matches(where) === 1) return where;
+  }
+
+  // Nothing single is unique; try the whole row, minus anything long enough to
+  // bloat the request.
+  const wide = {};
+  for (const [key, value] of Object.entries(row)) {
+    if (value === null || !saveEditorIsScalar(value)) continue;
+    if (String(value).length > 120) continue;
+    wide[key] = value;
+  }
+  if (Object.keys(wide).length && matches(wide) === 1) return wide;
+  return null;
+}
+
+/**
+ * Keep a column's type. Every field in the grid hands back a string, and
+ * writing "1" where the save held 1 would turn a number column into strings
+ * one edit at a time. A value that cannot keep its type is refused rather than
+ * converted, so the field can be marked instead of silently changing shape.
+ */
+function saveEditorCoerce(original, text) {
+  const raw = String(text ?? "");
+  if (typeof original === "number") {
+    if (!raw.trim()) return { error: "this is a number field, so it needs a number" };
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return { error: `"${raw}" is not a number` };
+    return { value: parsed };
+  }
+  if (typeof original === "boolean") {
+    const flag = raw.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(flag)) return { value: true };
+    if (["false", "0", "no", "off"].includes(flag)) return { value: false };
+    return { error: `"${raw}" is not true or false` };
+  }
+  if (original === null || original === undefined) return { value: raw === "" ? null : raw };
+  return { value: raw };
+}
+
+/**
+ * Turn the queue into the API's edit list.
+ *
+ * Several columns changed on one row become one `set`, because the API reports
+ * a before/after per edit and three edits against one row would read as three
+ * separate changes. A queued delete drops the sets for that same row: sending
+ * both would set values on a row that is about to go.
+ */
+function saveEditorBuildEdits(pending) {
+  const rowKey = (entry) => `${entry.table} ${JSON.stringify(entry.where)}`;
+  const deleted = new Set(pending.filter((e) => e.op === "delete").map(rowKey));
+  const grouped = new Map();
+  const out = [];
+  for (const entry of pending) {
+    if (entry.op === "insert") {
+      out.push({ table: entry.table, insert: entry.values });
+      continue;
+    }
+    if (entry.op === "delete") {
+      out.push({ table: entry.table, where: entry.where, delete: true });
+      continue;
+    }
+    const key = rowKey(entry);
+    if (deleted.has(key)) continue;
+    let edit = grouped.get(key);
+    if (!edit) {
+      edit = { table: entry.table, where: entry.where, set: {} };
+      grouped.set(key, edit);
+      out.push(edit);
+    }
+    edit.set[entry.column] = entry.value;
+  }
+  return out;
+}
+
+/** One readable line per queued change, for the queue list and the confirm. */
+function saveEditorChangeLines(pending) {
+  const show = (value) => (value === null || value === undefined || value === "" ? "(empty)" : String(value));
+  const clause = (where) =>
+    Object.entries(where || {})
+      .slice(0, 2)
+      .map(([key, value]) => `${key}=${clipText(show(value), 24)}`)
+      .join(", ");
+  return pending.map((entry) => {
+    if (entry.op === "insert") {
+      const bits = Object.entries(entry.values)
+        .slice(0, 3)
+        .map(([key, value]) => `${key}=${clipText(show(value), 24)}`);
+      return `${entry.table} · add row · ${bits.join(", ")}`;
+    }
+    if (entry.op === "delete") return `${entry.table} · delete row · ${clause(entry.where)}`;
+    return `${entry.table} · ${clause(entry.where)} · ${entry.column}: ${clipText(show(entry.before), 28)} → ${clipText(show(entry.value), 28)}`;
+  });
+}
+
+/**
+ * What a person needs to know before changing a save file.
+ *
+ * The first note is the one that stops a bug report: the live game runs off
+ * data/world.db, so an edit to a slot does nothing until that slot is loaded.
+ */
+function saveEditorWarnings(slot) {
+  const notes = [
+    "This changes the save file, not the game you are playing. Load this save afterwards for the change to reach your character.",
+  ];
+  const record = saveBrowserSlots.find((entry) => String(entry?.slot) === String(slot));
+  if (record?.autosave || slot === "last") {
+    notes.push(
+      "This is an autosave. If you keep playing this character the next turn writes over it — save to a named slot and edit that instead.",
+    );
+  }
+  return notes;
+}
+
+/**
+ * Rows matching the filter box, each keeping the index it has in the table.
+ *
+ * The index is what an edit is queued against, so it has to survive filtering
+ * and paging -- an edit aimed at "the third row on screen" would move when the
+ * filter changed.
+ */
+function saveEditorVisibleRows(rows, filter) {
+  const needle = String(filter || "").trim().toLowerCase();
+  const all = rows.map((row, index) => ({ row, index }));
+  if (!needle) return all;
+  return all.filter(({ row }) =>
+    Object.values(row || {}).some((value) =>
+      String(value === null || value === undefined ? "" : value)
+        .toLowerCase()
+        .includes(needle),
+    ),
+  );
+}
+
+function saveEditorPendingSet(table, rowIndex, column) {
+  return saveEditorEdits.find(
+    (entry) =>
+      entry.op === "set" && entry.table === table && entry.rowIndex === rowIndex && entry.column === column,
+  );
+}
+
+function saveEditorRowDeleted(table, rowIndex) {
+  return saveEditorEdits.some(
+    (entry) => entry.op === "delete" && entry.table === table && entry.rowIndex === rowIndex,
+  );
+}
+
+function saveEditorCellHtml(table, rowIndex, column, row, editable) {
+  const original = row?.[column];
+  if (original !== undefined && !saveEditorIsScalar(original)) {
+    const shown = clipText(JSON.stringify(original), 60);
+    return `<td class="saveEditorCell isFrozen" title="Nested values are stored as JSON in this format and are not editable here."><span class="saveEditorFrozen">${escapeHtml(shown)}</span></td>`;
+  }
+  const pending = saveEditorPendingSet(table, rowIndex, column);
+  const shown = pending ? pending.value : original;
+  const text = shown === null || shown === undefined ? "" : String(shown);
+  const classes = ["saveEditorCell"];
+  if (pending) classes.push("isChanged");
+  if (saveEditorInvalid.has(saveEditorFieldKey(table, rowIndex, column))) classes.push("isInvalid");
+  const attrs =
+    `data-editor-cell="1" data-table="${escapeHtml(table)}" data-row="${rowIndex}" data-column="${escapeHtml(column)}"` +
+    (editable ? "" : " disabled");
+  const field =
+    text.length > SAVE_EDITOR_LONG_VALUE
+      ? `<textarea rows="2" ${attrs}>${escapeHtml(text)}</textarea>`
+      : `<input type="text" value="${escapeHtml(text)}" ${attrs} />`;
+  return `<td class="${classes.join(" ")}">${field}</td>`;
+}
+
+function renderSaveEditorQueue() {
+  const host = document.querySelector("#saveEditorQueue");
+  if (!host) return;
+  const count = saveEditorEdits.length;
+  const lines = saveEditorChangeLines(saveEditorEdits);
+  const list = count
+    ? `<ul class="saveEditorQueueList">${lines
+        .map(
+          (line, index) =>
+            `<li><span>${escapeHtml(line)}</span><button type="button" class="chipBtn secondaryButton" data-editor-drop="${index}">Remove</button></li>`,
+        )
+        .join("")}</ul>`
+    : `<p class="saveBrowserSub">Nothing queued. Change a field, delete a row or add one, and it shows up here before anything is written.</p>`;
+  const blocked = saveEditorInvalid.size
+    ? `<p class="saveEditorBad">${saveEditorInvalid.size} field${saveEditorInvalid.size === 1 ? "" : "s"} still need${saveEditorInvalid.size === 1 ? "s" : ""} fixing before this can be applied.</p>`
+    : "";
+  const ready = count > 0 && saveEditorInvalid.size === 0;
+  const loadRow =
+    saveEditorApplied && saveEditorApplied === saveEditorSlot
+      ? `<p class="saveEditorApplied">Written to disk. <button type="button" class="chipBtn" data-editor-load="1">Load this save now</button> to bring it into the game.</p>`
+      : "";
+  host.innerHTML = `
+    <h3 class="saveEditorHeading">Queued changes${count ? ` (${count})` : ""}</h3>
+    ${list}
+    ${blocked}
+    <div class="saveEditorApplyRow">
+      <button type="button" class="chipBtn" data-editor-preview="1" ${ready ? "" : "disabled"}>Preview</button>
+      <button type="button" class="mainMenuPrimary" data-editor-apply="1" ${ready ? "" : "disabled"}>Apply changes</button>
+      <button type="button" class="chipBtn secondaryButton" data-editor-discard="1" ${count ? "" : "disabled"}>Discard</button>
+    </div>
+    ${loadRow}
+    <div id="saveEditorPreview" class="saveEditorPreview" hidden></div>
+  `;
+}
+
+function renderSaveEditor() {
+  const host = document.querySelector("#saveEditorView");
+  if (!host) return;
+  if (!saveEditorData) {
+    host.innerHTML = `<p class="empty">Reading the save…</p>`;
+    return;
+  }
+
+  const tables = saveEditorData.tables || {};
+  const names = Object.keys(tables).sort();
+  const rows = Array.isArray(tables[saveEditorTable]) ? tables[saveEditorTable] : [];
+  const columns = (saveEditorData.columns || {})[saveEditorTable] || [];
+
+  const notes = saveEditorWarnings(saveEditorSlot)
+    .map((note) => `<li>${escapeHtml(note)}</li>`)
+    .join("");
+
+  const tabs = names
+    .map((name) => {
+      const count = Array.isArray(tables[name]) ? tables[name].length : 0;
+      const active = name === saveEditorTable ? " isActive" : "";
+      return `<button type="button" class="saveEditorTab${active}" data-editor-table="${escapeHtml(name)}">${escapeHtml(name)}<span class="saveEditorCount">${count}</span></button>`;
+    })
+    .join("");
+
+  // Named with their row counts rather than hidden: a table you cannot see is
+  // indistinguishable from a table that is not there.
+  const blocked = (saveEditorData.blocked || [])
+    .map(
+      (entry) =>
+        `<span class="saveEditorTab isBlocked" title="${escapeHtml(entry.reason || "not editable here")}">${escapeHtml(entry.table)}<span class="saveEditorCount">${escapeHtml(entry.rows)}</span></span>`,
+    )
+    .join("");
+
+  const visible = saveEditorVisibleRows(rows, saveEditorFilter);
+  const pageCount = Math.max(1, Math.ceil(visible.length / SAVE_EDITOR_ROWS_PER_PAGE));
+  saveEditorRowPage = Math.min(Math.max(0, saveEditorRowPage), pageCount - 1);
+  const start = saveEditorRowPage * SAVE_EDITOR_ROWS_PER_PAGE;
+  const pageRows = visible.slice(start, start + SAVE_EDITOR_ROWS_PER_PAGE);
+
+  let grid = "";
+  if (!columns.length) {
+    grid = `<p class="empty">“${escapeHtml(saveEditorTable || "—")}” has no rows in this save.</p>`;
+  } else if (!visible.length) {
+    grid = `<p class="empty">No row in “${escapeHtml(saveEditorTable)}” matches “${escapeHtml(saveEditorFilter)}”.</p>`;
+  } else {
+    const head = `<tr>${columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}<th class="saveEditorRowActions">Row</th></tr>`;
+    const body = pageRows
+      .map(({ row, index }) => {
+        const where = saveEditorRowWhere(row, rows);
+        const removed = saveEditorRowDeleted(saveEditorTable, index);
+        const editable = Boolean(where) && !removed;
+        const cells = columns
+          .map((column) => saveEditorCellHtml(saveEditorTable, index, column, row, editable))
+          .join("");
+        let action;
+        if (!where) {
+          action = `<span class="saveEditorNote" title="No column on this row is unique to it, so an edit here could change a different row. Give it a unique id or code first.">read-only</span>`;
+        } else if (removed) {
+          action = `<button type="button" class="chipBtn secondaryButton" data-editor-undelete="${index}">Undo</button>`;
+        } else {
+          action = `<button type="button" class="chipBtn secondaryButton" data-editor-delete="${index}">Delete</button>`;
+        }
+        return `<tr class="${removed ? "isDeleted" : ""}">${cells}<td class="saveEditorRowActions">${action}</td></tr>`;
+      })
+      .join("");
+    grid = `<div class="saveEditorGridScroll"><table class="saveEditorGrid"><thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  const shown = saveEditorFilter.trim() ? `${visible.length} of ${rows.length}` : `${rows.length}`;
+  const rowPager =
+    pageCount > 1
+      ? `<nav class="saveEditorPager">
+           <button type="button" class="chipBtn secondaryButton" data-editor-row-page="prev" ${saveEditorRowPage <= 0 ? "disabled" : ""}>Prev</button>
+           <span>Rows ${start + 1}–${Math.min(start + SAVE_EDITOR_ROWS_PER_PAGE, visible.length)} of ${shown}</span>
+           <button type="button" class="chipBtn secondaryButton" data-editor-row-page="next" ${saveEditorRowPage >= pageCount - 1 ? "disabled" : ""}>Next</button>
+         </nav>`
+      : `<p class="saveBrowserSub">${shown} row${visible.length === 1 && !saveEditorFilter.trim() ? "" : "s"}</p>`;
+
+  const addForm = saveEditorAdding
+    ? `<div class="saveEditorAdd">
+         <p class="saveBrowserSub">A new row in <strong>${escapeHtml(saveEditorTable)}</strong>. Leave a field blank to leave that column out.</p>
+         <div class="saveEditorAddGrid">
+           ${columns
+             .map(
+               (column) =>
+                 `<label><span>${escapeHtml(column)}</span><input type="text" data-editor-new="${escapeHtml(column)}" /></label>`,
+             )
+             .join("")}
+         </div>
+         <div class="saveEditorAddActions">
+           <button type="button" class="chipBtn" data-editor-add-confirm="1">Queue this row</button>
+           <button type="button" class="chipBtn secondaryButton" data-editor-add-cancel="1">Cancel</button>
+         </div>
+       </div>`
+    : `<button type="button" class="chipBtn" data-editor-add="1" ${columns.length ? "" : "disabled"}>Add a row</button>`;
+
+  host.innerHTML = `
+    <ul class="saveEditorNotes">${notes}</ul>
+    <div class="saveEditorTabs">${tabs}${blocked ? `<span class="saveEditorTabsGap">not editable:</span>${blocked}` : ""}</div>
+    <label class="saveEditorFilter">
+      <span>Find a row</span>
+      <input type="search" id="saveEditorFilterInput" value="${escapeHtml(saveEditorFilter)}" placeholder="e.g. seed, coat, a code" autocomplete="off" />
+    </label>
+    ${grid}
+    <div class="saveEditorGridFoot">${rowPager}${addForm}</div>
+    <div id="saveEditorQueue" class="saveEditorQueueBox"></div>
+  `;
+  renderSaveEditorQueue();
+}
+
+async function fetchSaveEditorData(slot) {
+  const response = await fetch(`/api/save-editor/${encodeURIComponent(slot)}`, { cache: "no-store" });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+  saveEditorData = data;
+  const names = Object.keys(data.tables || {});
+  if (!names.includes(saveEditorTable)) {
+    // Inventory first: it is what people come here to fix.
+    saveEditorTable = names.includes("inventory") ? "inventory" : names[0] || "";
+  }
+  return data;
+}
+
+async function postSaveEdits(edits, dryRun) {
+  const response = await fetch(`/api/save-editor/${encodeURIComponent(saveEditorSlot)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ edits, dry_run: Boolean(dryRun) }),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
+  return data;
+}
+
+async function openSaveEditor(name) {
+  const slot = String(name || "").trim();
+  if (!slot) return;
+  saveEditorSlot = slot;
+  saveEditorData = null;
+  saveEditorTable = "";
+  saveEditorEdits = [];
+  saveEditorInvalid = new Set();
+  saveEditorRowPage = 0;
+  saveEditorAdding = false;
+  saveEditorApplied = "";
+  saveEditorFilter = "";
+  saveBrowserView = "editor";
+  renderSaveBrowserList();
+  renderSaveEditor();
+  setSaveBrowserStatus(`Reading “${slot}”…`);
+  await fetchSaveEditorData(slot);
+  renderSaveEditor();
+  const count = Object.keys(saveEditorData.tables || {}).length;
+  setSaveBrowserStatus(`${count} editable table${count === 1 ? "" : "s"} in “${slot}”`, "ok");
+}
+
+function leaveSaveEditor() {
+  if (
+    saveEditorEdits.length &&
+    !window.confirm(
+      `Discard ${saveEditorEdits.length} change${saveEditorEdits.length === 1 ? "" : "s"} you have not applied?`,
+    )
+  ) {
+    return false;
+  }
+  saveEditorEdits = [];
+  saveEditorInvalid = new Set();
+  saveEditorData = null;
+  saveEditorApplied = "";
+  saveBrowserView = saveBrowserCharacter ? "saves" : "characters";
+  renderSaveBrowserList();
+  setSaveBrowserStatus("");
+  return true;
+}
+
+function saveEditorCellChanged(field) {
+  const table = field.getAttribute("data-table");
+  const index = Number(field.getAttribute("data-row"));
+  const column = field.getAttribute("data-column");
+  const rows = (saveEditorData?.tables || {})[table] || [];
+  const row = rows[index];
+  if (!row) return;
+
+  const key = saveEditorFieldKey(table, index, column);
+  const original = row[column];
+  const result = saveEditorCoerce(original, field.value);
+  saveEditorEdits = saveEditorEdits.filter(
+    (entry) =>
+      !(entry.op === "set" && entry.table === table && entry.rowIndex === index && entry.column === column),
+  );
+
+  const cell = field.closest("td");
+  if (result.error) {
+    saveEditorInvalid.add(key);
+    cell?.classList.add("isInvalid");
+    cell?.classList.remove("isChanged");
+    setSaveBrowserStatus(`${table} · ${column}: ${result.error}.`, "error");
+    renderSaveEditorQueue();
+    return;
+  }
+  saveEditorInvalid.delete(key);
+  cell?.classList.remove("isInvalid");
+
+  const untouched =
+    result.value === original || (original === undefined && (result.value === null || result.value === ""));
+  if (untouched) {
+    cell?.classList.remove("isChanged");
+    renderSaveEditorQueue();
+    setSaveBrowserStatus(saveEditorEdits.length ? `${saveEditorEdits.length} change${saveEditorEdits.length === 1 ? "" : "s"} queued` : "");
+    return;
+  }
+
+  const where = saveEditorRowWhere(row, rows);
+  if (!where) {
+    setSaveBrowserStatus("That row has nothing unique to identify it, so it cannot be edited safely.", "error");
+    renderSaveEditor();
+    return;
+  }
+  saveEditorEdits.push({
+    op: "set",
+    table,
+    rowIndex: index,
+    column,
+    where,
+    value: result.value,
+    before: original === undefined ? null : original,
+  });
+  cell?.classList.add("isChanged");
+  renderSaveEditorQueue();
+  setSaveBrowserStatus(`${saveEditorEdits.length} change${saveEditorEdits.length === 1 ? "" : "s"} queued`, "");
+}
+
+function saveEditorQueueDelete(index) {
+  const rows = (saveEditorData?.tables || {})[saveEditorTable] || [];
+  const row = rows[index];
+  const where = saveEditorRowWhere(row, rows);
+  if (!where) {
+    setSaveBrowserStatus("That row has nothing unique to identify it, so it cannot be deleted safely.", "error");
+    return;
+  }
+  saveEditorEdits.push({ op: "delete", table: saveEditorTable, rowIndex: index, where });
+  renderSaveEditor();
+  setSaveBrowserStatus("Row queued for deletion. Nothing is written until you apply.", "");
+}
+
+function saveEditorQueueInsert() {
+  const values = {};
+  document.querySelectorAll("#saveEditorView [data-editor-new]").forEach((input) => {
+    const column = input.getAttribute("data-editor-new");
+    const text = String(input.value ?? "");
+    if (!text.trim()) return;
+    // A new row has no old value to take a type from, so follow the column:
+    // the first row that carries it decides whether "3" means 3 or "3".
+    const rows = (saveEditorData?.tables || {})[saveEditorTable] || [];
+    const sample = rows.find((row) => row && row[column] !== undefined && row[column] !== null);
+    const result = saveEditorCoerce(sample ? sample[column] : null, text);
+    values[column] = result.error ? text : result.value;
+  });
+  if (!Object.keys(values).length) {
+    setSaveBrowserStatus("Fill in at least one field for the new row.", "error");
+    return;
+  }
+  saveEditorEdits.push({ op: "insert", table: saveEditorTable, values });
+  saveEditorAdding = false;
+  renderSaveEditor();
+  setSaveBrowserStatus("New row queued. Nothing is written until you apply.", "");
+}
+
+async function saveEditorRunPreview() {
+  const report = await postSaveEdits(saveEditorBuildEdits(saveEditorEdits), true);
+  const el = document.querySelector("#saveEditorPreview");
+  if (!el) return report;
+  const pair = (obj) =>
+    Object.entries(obj || {})
+      .map(([key, value]) => `${key}=${value === null ? "∅" : value}`)
+      .join(", ");
+  const lines = (report.edits || []).map((entry) => {
+    if (entry.action === "set") {
+      const before = (entry.before || []).map(pair).join(" | ");
+      return `${entry.table}: ${entry.matched} row${entry.matched === 1 ? "" : "s"} matched · ${before || "already that value"} → ${pair(entry.after)}`;
+    }
+    return `${entry.table}: ${entry.action} · ${entry.changed} row${entry.changed === 1 ? "" : "s"}`;
+  });
+  el.hidden = false;
+  el.innerHTML = `<p class="saveBrowserSub"><strong>${report.rows_changed}</strong> row${report.rows_changed === 1 ? "" : "s"} would change. Nothing has been written.</p><ul>${lines
+    .map((line) => `<li>${escapeHtml(line)}</li>`)
+    .join("")}</ul>`;
+  return report;
+}
+
+async function saveEditorApply() {
+  if (!saveEditorEdits.length) return;
+  if (saveEditorInvalid.size) {
+    setSaveBrowserStatus("Fix the highlighted fields first.", "error");
+    return;
+  }
+  const edits = saveEditorBuildEdits(saveEditorEdits);
+  setSaveBrowserStatus("Checking what this would do…");
+  // The confirm is built from the server's own dry run rather than from what
+  // the page believes, so the count in the dialog is the count that lands.
+  const preview = await saveEditorRunPreview();
+  if (!preview.rows_changed) {
+    setSaveBrowserStatus("Nothing would change — every value is already what you typed.", "");
+    return;
+  }
+  const lines = saveEditorChangeLines(saveEditorEdits).map((line) => `  ${line}`);
+  const ok = window.confirm(
+    `Apply ${preview.rows_changed} change${preview.rows_changed === 1 ? "" : "s"} to save “${saveEditorSlot}”?\n\n` +
+      `${lines.join("\n")}\n\n` +
+      "A backup of the save file is written first.",
+  );
+  if (!ok) {
+    setSaveBrowserStatus("Nothing was changed.", "");
+    return;
+  }
+  setSaveBrowserStatus("Writing…");
+  const report = await postSaveEdits(edits, false);
+  saveEditorEdits = [];
+  saveEditorInvalid = new Set();
+  saveEditorApplied = saveEditorSlot;
+  await fetchSaveEditorData(saveEditorSlot);
+  renderSaveEditor();
+  setSaveBrowserStatus(
+    `Applied · ${report.rows_changed} row${report.rows_changed === 1 ? "" : "s"} changed · backup ${report.backup}`,
+    "ok",
+  );
+}
+
+function bindSaveEditorOnce() {
+  const host = document.querySelector("#saveEditorView");
+  if (!host) return;
+  const fail = (error) => setSaveBrowserStatus(error.message || String(error), "error");
+
+  host.addEventListener("change", (event) => {
+    const field = event.target.closest("[data-editor-cell]");
+    if (field) saveEditorCellChanged(field);
+  });
+
+  host.addEventListener("input", (event) => {
+    if (event.target?.id !== "saveEditorFilterInput") return;
+    saveEditorFilter = event.target.value;
+    saveEditorRowPage = 0;
+    renderSaveEditor();
+    // Re-rendering the grid replaces the box being typed into.
+    const box = document.querySelector("#saveEditorFilterInput");
+    if (box) {
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+    }
+  });
+
+  host.addEventListener("click", (event) => {
+    const tab = event.target.closest("[data-editor-table]");
+    if (tab) {
+      saveEditorTable = tab.getAttribute("data-editor-table") || "";
+      saveEditorRowPage = 0;
+      saveEditorAdding = false;
+      // A filter typed for one table means nothing in the next one, and an
+      // empty grid reads as an empty table.
+      saveEditorFilter = "";
+      renderSaveEditor();
+      return;
+    }
+    const page = event.target.closest("[data-editor-row-page]");
+    if (page) {
+      saveEditorRowPage += page.getAttribute("data-editor-row-page") === "next" ? 1 : -1;
+      renderSaveEditor();
+      return;
+    }
+    const del = event.target.closest("[data-editor-delete]");
+    if (del) {
+      saveEditorQueueDelete(Number(del.getAttribute("data-editor-delete")));
+      return;
+    }
+    const undel = event.target.closest("[data-editor-undelete]");
+    if (undel) {
+      const index = Number(undel.getAttribute("data-editor-undelete"));
+      saveEditorEdits = saveEditorEdits.filter(
+        (entry) => !(entry.op === "delete" && entry.table === saveEditorTable && entry.rowIndex === index),
+      );
+      renderSaveEditor();
+      return;
+    }
+    if (event.target.closest("[data-editor-add]")) {
+      saveEditorAdding = true;
+      renderSaveEditor();
+      return;
+    }
+    if (event.target.closest("[data-editor-add-cancel]")) {
+      saveEditorAdding = false;
+      renderSaveEditor();
+      return;
+    }
+    if (event.target.closest("[data-editor-add-confirm]")) {
+      saveEditorQueueInsert();
+      return;
+    }
+    const drop = event.target.closest("[data-editor-drop]");
+    if (drop) {
+      saveEditorEdits.splice(Number(drop.getAttribute("data-editor-drop")), 1);
+      saveEditorInvalid = new Set();
+      renderSaveEditor();
+      return;
+    }
+    if (event.target.closest("[data-editor-discard]")) {
+      if (!window.confirm(`Discard ${saveEditorEdits.length} queued change${saveEditorEdits.length === 1 ? "" : "s"}?`)) return;
+      saveEditorEdits = [];
+      saveEditorInvalid = new Set();
+      renderSaveEditor();
+      setSaveBrowserStatus("Queue cleared. The save was never touched.", "");
+      return;
+    }
+    if (event.target.closest("[data-editor-preview]")) {
+      setSaveBrowserStatus("Checking…");
+      saveEditorRunPreview()
+        .then(() => setSaveBrowserStatus("Preview only — nothing has been written.", "ok"))
+        .catch(fail);
+      return;
+    }
+    if (event.target.closest("[data-editor-apply]")) {
+      saveEditorApply().catch(fail);
+      return;
+    }
+    if (event.target.closest("[data-editor-load]")) {
+      loadCampaignSlotByName(saveEditorSlot).catch(fail);
+    }
+  });
+}
+
 function bindSaveBrowserOnce() {
   if (saveBrowserBound) return;
   saveBrowserBound = true;
   const modal = document.querySelector("#saveBrowserModal");
   document.querySelector("#closeSaveBrowser")?.addEventListener("click", () => closeSaveBrowser());
-  document.querySelector("#saveBrowserBack")?.addEventListener("click", () => backToSaveBrowserCharacters());
+  document.querySelector("#saveBrowserBack")?.addEventListener("click", () => saveBrowserGoBack());
   modal?.addEventListener("click", (event) => {
     if (event.target?.id === "saveBrowserModal") closeSaveBrowser();
   });
+  bindSaveEditorOnce();
   document.querySelector("#saveBrowserConfirmSave")?.addEventListener("click", () => {
     const name = document.querySelector("#saveBrowserNameInput")?.value || saveBrowserSelected;
     saveCampaignSlotByName(name).catch((error) => setSaveBrowserStatus(error.message || String(error), "error"));
@@ -7962,6 +8696,14 @@ function bindSaveBrowserOnce() {
       if (window.confirm(`Overwrite save “${name}”?`)) {
         saveCampaignSlotByName(name).catch((error) => setSaveBrowserStatus(error.message || String(error), "error"));
       }
+      return;
+    }
+    const editBtn = event.target.closest("[data-save-edit]");
+    if (editBtn) {
+      event.preventDefault();
+      openSaveEditor(editBtn.getAttribute("data-save-edit")).catch((error) =>
+        setSaveBrowserStatus(error.message || String(error), "error"),
+      );
       return;
     }
     const delBtn = event.target.closest("[data-save-delete]");
