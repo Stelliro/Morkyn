@@ -8186,6 +8186,8 @@ function renderSaveEditorQueue() {
   if (!host) return;
   const count = saveEditorEdits.length;
   const lines = saveEditorChangeLines(saveEditorEdits);
+  // Empty, this box is a heading, a paragraph and three dead buttons taking
+  // 180px off the table. It stays one line until there is something in it.
   const list = count
     ? `<ul class="saveEditorQueueList">${lines
         .map(
@@ -8193,7 +8195,7 @@ function renderSaveEditorQueue() {
             `<li><span>${escapeHtml(line)}</span><button type="button" class="chipBtn secondaryButton" data-editor-drop="${index}">Remove</button></li>`,
         )
         .join("")}</ul>`
-    : `<p class="saveBrowserSub">Nothing queued. Change a field, delete a row or add one, and it shows up here before anything is written.</p>`;
+    : "";
   const blocked = saveEditorInvalid.size
     ? `<p class="saveEditorBad">${saveEditorInvalid.size} field${saveEditorInvalid.size === 1 ? "" : "s"} still need${saveEditorInvalid.size === 1 ? "s" : ""} fixing before this can be applied.</p>`
     : "";
@@ -8202,15 +8204,20 @@ function renderSaveEditorQueue() {
     saveEditorApplied && saveEditorApplied === saveEditorSlot
       ? `<p class="saveEditorApplied">Written to disk. <button type="button" class="chipBtn" data-editor-load="1">Load this save now</button> to bring it into the game.</p>`
       : "";
+  host.classList.toggle("isEmpty", !count);
   host.innerHTML = `
-    <h3 class="saveEditorHeading">Queued changes${count ? ` (${count})` : ""}</h3>
-    ${list}
-    ${blocked}
     <div class="saveEditorApplyRow">
+      <h3 class="saveEditorHeading">${
+        count
+          ? `Queued change${count === 1 ? "" : "s"} (${count})`
+          : "Nothing queued yet — edit a field, delete a row or add one"
+      }</h3>
       <button type="button" class="chipBtn" data-editor-preview="1" ${ready ? "" : "disabled"}>Preview</button>
-      <button type="button" class="mainMenuPrimary" data-editor-apply="1" ${ready ? "" : "disabled"}>Apply changes</button>
+      <button type="button" class="chipBtn saveEditorApplyBtn" data-editor-apply="1" ${ready ? "" : "disabled"}>Apply changes</button>
       <button type="button" class="chipBtn secondaryButton" data-editor-discard="1" ${count ? "" : "disabled"}>Discard</button>
     </div>
+    ${list}
+    ${blocked}
     ${loadRow}
     <div id="saveEditorPreview" class="saveEditorPreview" hidden></div>
   `;
@@ -8313,16 +8320,27 @@ function renderSaveEditor() {
        </div>`
     : `<button type="button" class="chipBtn" data-editor-add="1" ${columns.length ? "" : "disabled"}>Add a row</button>`;
 
+  // Tables down the side rather than wrapped across the top: twenty-two chips
+  // took three rows and 114px off the height of the thing people came to look
+  // at, and a panel this wide has the column to spare.
   host.innerHTML = `
-    <ul class="saveEditorNotes">${notes}</ul>
-    <div class="saveEditorTabs">${tabs}${blocked ? `<span class="saveEditorTabsGap">not editable:</span>${blocked}` : ""}</div>
-    <label class="saveEditorFilter">
-      <span>Find a row</span>
-      <input type="search" id="saveEditorFilterInput" value="${escapeHtml(saveEditorFilter)}" placeholder="e.g. seed, coat, a code" autocomplete="off" />
-    </label>
-    ${grid}
-    <div class="saveEditorGridFoot">${rowPager}${addForm}</div>
-    <div id="saveEditorQueue" class="saveEditorQueueBox"></div>
+    <div class="saveEditorLayout">
+      <aside class="saveEditorTables">
+        <h3 class="saveEditorHeading">Tables</h3>
+        <div class="saveEditorTabs">${tabs}</div>
+        ${blocked ? `<p class="saveEditorTabsGap">Not editable</p><div class="saveEditorTabs">${blocked}</div>` : ""}
+      </aside>
+      <div class="saveEditorMain">
+        <ul class="saveEditorNotes">${notes}</ul>
+        <label class="saveEditorFilter">
+          <span>Find a row</span>
+          <input type="search" id="saveEditorFilterInput" value="${escapeHtml(saveEditorFilter)}" placeholder="e.g. seed, coat, a code" autocomplete="off" />
+        </label>
+        ${grid}
+        <div class="saveEditorGridFoot">${rowPager}${addForm}</div>
+        <div id="saveEditorQueue" class="saveEditorQueueBox"></div>
+      </div>
+    </div>
   `;
   renderSaveEditorQueue();
 }

@@ -6091,15 +6091,28 @@ button.chipBtn {
 
 /* --- save editor ------------------------------------------------------- */
 
-/* A grid of rows needs more room than a list of save cards. */
+/* A grid of twenty-odd columns needs the screen, not a 640px dialog. */
 .saveBrowserPanel.isEditing {
-  width: min(1080px, 97vw);
+  width: min(1900px, 96vw);
+  max-height: 94vh;
 }
 
+/* The table is the part worth space, so it takes what the rest does not.
+   Laid out as a grid inside a fixed-height body it got whatever was left after
+   the notes, tabs, filter, footer and queue — 197px, about four rows. */
 .saveEditor {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
-  align-content: start;
+  height: 100%;
+  min-height: 0;
+  overflow: auto;
+}
+
+.saveBrowserPanel.isEditing .saveBrowserBody {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
 }
 
 .saveEditorNotes {
@@ -6112,6 +6125,60 @@ button.chipBtn {
   background: color-mix(in srgb, var(--warn, #e0a83a) 10%, transparent);
   font-size: 0.8rem;
   color: var(--text);
+}
+
+.saveEditorLayout {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 14px;
+  height: 100%;
+  min-height: 0;
+}
+
+.saveEditorTables {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  border-right: 1px solid var(--line);
+}
+
+.saveEditorTables .saveEditorTabs {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.saveEditorTables .saveEditorTab {
+  justify-content: space-between;
+  border-radius: 8px;
+}
+
+.saveEditorMain {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+/* Narrow enough that a sidebar would leave no room for the grid: back to a
+   wrapped row across the top. */
+@media (max-width: 900px) {
+  .saveEditorLayout {
+    grid-template-columns: minmax(0, 1fr);
+    overflow-y: auto;
+  }
+
+  .saveEditorTables {
+    overflow: visible;
+    border-right: 0;
+    padding-right: 0;
+  }
+
+  .saveEditorTables .saveEditorTabs {
+    flex-direction: row;
+  }
 }
 
 .saveEditorTabs {
@@ -6152,12 +6219,17 @@ button.chipBtn {
   border-style: dashed;
 }
 
+/* Its own row: appended to the end of the editable tabs the label was orphaned
+   at a line break, reading as a heading for whatever wrapped after it. */
+.saveEditorBlockedRow {
+  margin-top: -4px;
+}
+
 .saveEditorTabsGap {
-  margin-left: 6px;
   font-size: 0.72rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--muted);
+  color: var(--muted-2, var(--muted));
 }
 
 .saveEditorCount {
@@ -6189,15 +6261,20 @@ button.chipBtn {
 }
 
 .saveEditorGridScroll {
+  flex: 1 1 auto;
+  min-height: 150px;
   overflow: auto;
-  max-height: 46vh;
   border: 1px solid var(--line);
   border-radius: 10px;
 }
 
 .saveEditorGrid {
   border-collapse: collapse;
-  width: 100%;
+  /* Size columns to their contents and scroll sideways, rather than dividing
+     the panel between twenty-two of them until every name reads "threadbare
+     sca…". min-width keeps a two-column table filling the panel. */
+  width: max-content;
+  min-width: 100%;
   font-size: 0.8rem;
 }
 
@@ -6232,7 +6309,7 @@ button.chipBtn {
 .saveEditorCell input,
 .saveEditorCell textarea {
   width: 100%;
-  min-width: 6rem;
+  min-width: 8rem;
   padding: 5px 7px;
   border-radius: 6px;
   border: 1px solid transparent;
@@ -6386,6 +6463,40 @@ button.chipBtn {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.saveEditorApplyRow .saveEditorHeading {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The accent of a primary button without mainMenuPrimary's width: 100%, which
+   stretched this to 947px and wrapped a one-line toolbar onto three. */
+.saveEditorApplyBtn,
+button.saveEditorApplyBtn {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--neon) 70%, #fff), var(--accent));
+  color: var(--on-accent);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+.saveEditorApplyBtn:disabled,
+button.saveEditorApplyBtn:disabled {
+  background: var(--surface-3);
+  color: var(--muted);
+  border-color: var(--line);
+}
+
+.saveEditorQueueBox.isEmpty {
+  background: transparent;
+  border-style: dashed;
+}
+
+.saveEditorQueueBox.isEmpty .saveEditorHeading {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
+  color: var(--muted);
 }
 
 .saveEditorApplyRow button:disabled {
