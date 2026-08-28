@@ -8119,26 +8119,30 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         loc_name = str(loc_obj.get("name") or location or "the road").strip()
         loc_code = str(loc_obj.get("code") or "L1").strip().upper() or "L1"
         place_ref = f"{loc_name} [[{loc_code}]]" if loc_name else f"[[{loc_code}]]"
+        named_items = [
+            it
+            for it in (context.get("inventory") or [])
+            if isinstance(it, dict) and str(it.get("name") or "").strip()
+        ]
         inv_bits: list[str] = []
-        for it in (context.get("inventory") or [])[:6]:
-            if not isinstance(it, dict):
-                continue
+        for it in named_items[:6]:
             iname = str(it.get("name") or "").strip()
             icode = str(it.get("code") or "").strip().upper()
-            if iname and icode:
-                inv_bits.append(f"{iname} [[{icode}]]")
-            elif iname:
-                inv_bits.append(iname)
+            inv_bits.append(f"{iname} [[{icode}]]" if icode else iname)
         gear_bit = ""
         if inv_bits:
+            # "is plain" tells the player this is the whole pack. The cap above
+            # exists to keep the sentence readable, not to describe the pack, so
+            # only make the claim when the list really is all of it.
+            lead = (
+                " What you still carry is plain: "
+                if len(inv_bits) == len(named_items)
+                else " Among what you still carry: "
+            )
             if len(inv_bits) == 1:
-                gear_bit = f" What you still carry is plain: {inv_bits[0]}."
+                gear_bit = f"{lead}{inv_bits[0]}."
             else:
-                gear_bit = (
-                    " What you still carry is plain: "
-                    + ", ".join(inv_bits[:-1])
-                    + f", and {inv_bits[-1]}."
-                )
+                gear_bit = lead + ", ".join(inv_bits[:-1]) + f", and {inv_bits[-1]}."
         npc_bits: list[str] = []
         for npc in (context.get("npcs") or [])[:4]:
             if not isinstance(npc, dict):
