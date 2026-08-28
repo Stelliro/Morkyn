@@ -5867,6 +5867,133 @@ def check_narrative_voice(narration: str, state: dict[str, Any]) -> dict[str, An
     }
 
 
+# Garment categories worth policing when the prose hands the player gear they
+# do not have. Hair, face and neck accessories are excluded on purpose: "your
+# beard" and "your scar" are anatomy, not equipment. Bags are excluded because
+# having an inventory at all implies something to carry it in.
+POLICED_GEAR_CATEGORIES: frozenset[str] = frozenset(
+    {"gloves", "headwear", "footwear", "outerwear", "armor", "bottom", "belt"}
+)
+
+_APPEARANCE_ZONE_RE = re.compile(r"([a-z][a-z ]*?)\s*:\s*([^;]+)")
+# The three words after "your", scanned rather than positioned: a pattern that
+# tries to point at the noun gets it wrong either way round. Greedy, "your
+# gloves catch" reads the noun as "catch"; lazy, "your thick leather gloves"
+# reads it as "thick". Take the window and look up every word in it.
+_YOUR_GEAR_RE = re.compile(r"\byour\s+((?:[\w'-]+\s+){0,2}[\w'-]+)", re.I)
+
+
+def _wardrobe_tables() -> tuple[dict[str, tuple[str, str]], dict[str, set[str]]]:
+    """
+    (noun -> (category, body zone), category -> every noun in it).
+
+    Sourced from the image pipeline's wardrobe table rather than a second list
+    of garment words, because a second list is how the theme keyword tables
+    drifted apart. Importing that module is cheap: its Pillow imports all sit
+    inside functions, so this stays safe on an install without Pillow.
+    """
+    from app.image_backends import WARDROBE_KEYWORD_MAP
+
+    by_noun: dict[str, tuple[str, str]] = {}
+    by_category: dict[str, set[str]] = {}
+    for words, category, zone in WARDROBE_KEYWORD_MAP:
+        for word in words:
+            by_noun.setdefault(word.lower(), (category, zone))
+            by_category.setdefault(category, set()).add(word.lower())
+    return by_noun, by_category
+
+
+def worn_gear_index(state: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    What the record says the player actually has on and in hand.
+
+    Three sources, because clothing is not inventory here: the zone-tagged
+    ``appearance`` string written at setup ("torso: patched overshirt; feet:
+    scuffed boots"), the ``starter_equipment`` list, and the live inventory.
+
+    ``structured`` reports whether appearance parsed into zone tags at all. It
+    gates the check below: only when setup wrote a real wardrobe list does the
+    absence of a zone mean the player is bare there, rather than mean nobody
+    ever wrote it down.
+    """
+    options = ((state or {}).get("settings") or {}).get("playthrough_options") or {}
+    appearance = str(options.get("appearance") or "")
+    starter = str(options.get("starter_equipment") or "")
+    names: list[str] = []
+    for item in (state or {}).get("inventory") or []:
+        if isinstance(item, dict) and item.get("name"):
+            names.append(str(item.get("name")))
+
+    zones: set[str] = set()
+    for zone, _description in _APPEARANCE_ZONE_RE.findall(appearance.lower()):
+        cleaned = zone.strip()
+        if cleaned:
+            zones.add(cleaned)
+
+    return {
+        "zones": sorted(zones),
+        "text": " ".join([appearance, starter, " ".join(names)]).lower(),
+        "structured": bool(zones),
+    }
+
+
+def check_unowned_gear(narration: str, index: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Find worn gear the prose gave the player that the record does not have.
+
+    Reported from play: "the cold metal biting through your gloves", written for
+    a character wearing ``torso: patched overshirt; feet: scuffed boots; bag:
+    leather satchel``. Nothing on the hands, and nothing in the turn packet ever
+    said so -- the packet lists what you carry and never states that the list is
+    all there is.
+
+    Reports only. No prose is rewritten here, for the same reason
+    ``check_narrative_voice`` counts pronouns without correcting them: cutting a
+    clause out of a finished sentence breaks more prose than it fixes, and the
+    honest repair is to stop the model writing it in the first place.
+    """
+    text = str(narration or "")
+    if not text or not isinstance(index, dict) or not index.get("structured"):
+        return {"checked": False, "findings": [], "unowned": False}
+
+    by_noun, by_category = _wardrobe_tables()
+    zones = set(index.get("zones") or [])
+    have = str(index.get("text") or "")
+    findings: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    for match in _YOUR_GEAR_RE.finditer(text):
+        entry = None
+        noun = ""
+        # Last match wins, so "leather gloves" is gloves and not leather.
+        for word in reversed([w.lower() for w in match.group(1).split()]):
+            entry = by_noun.get(word) or by_noun.get(word.rstrip("s"))
+            if entry:
+                noun = word
+                break
+        if not entry:
+            continue
+        category, zone = entry
+        if category not in POLICED_GEAR_CATEGORIES or zone in zones:
+            continue
+        # Owned outright, or something else in the same category is.
+        if any(word in have for word in by_category.get(category, {noun})):
+            continue
+        if noun in seen:
+            continue
+        seen.add(noun)
+        findings.append(
+            {
+                "phrase": match.group(0).strip(),
+                "noun": noun,
+                "category": category,
+                "zone": zone,
+            }
+        )
+
+    return {"checked": True, "findings": findings, "unowned": bool(findings)}
+
+
 # Terrain/settlement head nouns worth minting a place from when the model
 # relocated the player in prose but never named where.
 _PLACE_HEAD_NOUNS = (
@@ -10733,6 +10860,9 @@ def apply_turn(
         # Measurable: a playtest can count model / repaired / unresolved travel turns.
         state["movement"] = {**movement_report, "turn": turn}
         state["voice_check"] = check_narrative_voice(narration, state)
+        # Measurable the same way: how often the prose dresses the player in
+        # something the record never gave them. Reported, never rewritten.
+        state["gear_check"] = check_unowned_gear(narration, worn_gear_index(state))
     return state
 
 
