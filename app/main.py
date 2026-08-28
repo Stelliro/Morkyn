@@ -3399,6 +3399,46 @@ def api_list_campaign_slots():
     return {"slots": list_campaign_slots(), "autosave_slot": AUTOSAVE_SLOT}
 
 
+class SaveEditRequest(BaseModel):
+    edits: list[dict[str, Any]] = Field(default_factory=list)
+    dry_run: bool = False
+
+
+@app.get("/api/save-editor/{slot}")
+def api_read_save(slot: str):
+    """
+    The editable contents of a save.
+
+    Same endpoint for the browser editor and for an agent, on purpose: two
+    implementations of "what may be edited" would eventually disagree, and the
+    one that disagreed quietly would be the one writing to a save file.
+    """
+    from app.save_editor import SaveEditError, read_save
+
+    try:
+        return read_save(slot)
+    except SaveEditError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/save-editor/{slot}")
+def api_edit_save(slot: str, payload: SaveEditRequest):
+    """
+    Apply edits to a save. All or nothing, and a backup is written first.
+
+    Pass dry_run to see exactly what would change, including the previous
+    values, without writing anything.
+    """
+    from app.save_editor import SaveEditError, apply_edits
+
+    try:
+        return apply_edits(slot, payload.edits, dry_run=payload.dry_run)
+    except SaveEditError as exc:
+        # The message names the offending edit and what was wrong with it, and
+        # is written to be shown to whoever asked rather than logged.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/playthrough/continue")
 def api_playthrough_continue_status():
     """Whether the main-menu Continue button should be enabled."""
