@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import gzip
 import hashlib
 import json
 import math
@@ -2784,6 +2785,143 @@ def _safe_slot_name(name: str) -> str:
     return cleaned
 
 
+# --- campaign blob store -----------------------------------------------------
+#
+# A campaign save is 4.9 MB and almost none of it is the playthrough. Measured
+# on a real save:
+#
+#     world_maps        3.85 MB   (tiles_json, ~133 KB per row, 25 rows)
+#     player_fullbody    705 KB   (base64 character art)
+#     player_portrait    516 KB   (base64 character art)
+#     everything else    ~25 KB   (player, inventory, journal, npcs, locations)
+#
+# The map was byte-identical between two saves of the same character taken two
+# hours apart. Copying it again every turn is what makes per-turn autosaves
+# expensive, and no retention rule fixes a cost that should not exist: at 4.9 MB
+# a ten-turn history is 49 MB per character, and at ~25 KB it is a quarter of one
+# save today.
+#
+# So large strings are stored once, keyed by the hash of their contents, and the
+# save keeps a reference. Identical art and unchanged maps collapse to a single
+# copy no matter how many saves point at them. Blobs are gzipped on the way in
+# (4.8x on this data, 0.04s) which is worth having but is the smaller lever.
+
+BLOB_MIN_BYTES = 32_768
+BLOB_REF_KEY = "__blob__"
+BLOB_DIR_NAME = "_blobs"
+
+
+def campaign_blobs_dir() -> Path:
+    return campaign_slots_dir() / BLOB_DIR_NAME
+
+
+def _blob_path(digest: str) -> Path:
+    # Sharded by the first byte: one flat directory of thousands of files is
+    # slow to list on Windows, and listing is what the collector does.
+    return campaign_blobs_dir() / digest[:2] / f"{digest}.gz"
+
+
+def _store_blob(text: str) -> str:
+    data = text.encode("utf-8")
+    digest = hashlib.sha256(data).hexdigest()
+    path = _blob_path(digest)
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Write and rename, so a save interrupted midway cannot leave a
+        # truncated blob that every future save happily reuses.
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_bytes(gzip.compress(data, 6))
+        tmp.replace(path)
+    return digest
+
+
+def _read_blob(digest: str, slot: str = "") -> str:
+    path = _blob_path(digest)
+    try:
+        return gzip.decompress(path.read_bytes()).decode("utf-8")
+    except (OSError, EOFError, gzip.BadGzipFile) as exc:
+        where = f" for slot '{slot}'" if slot else ""
+        raise ValueError(
+            f"Campaign save{where} references stored data {digest[:12]} that is "
+            f"missing or unreadable at {path}."
+        ) from exc
+
+
+def externalise_blobs(node: Any) -> Any:
+    """Replace every large string with a reference to its stored contents."""
+    if isinstance(node, str):
+        return {BLOB_REF_KEY: _store_blob(node)} if len(node) >= BLOB_MIN_BYTES else node
+    if isinstance(node, list):
+        return [externalise_blobs(item) for item in node]
+    if isinstance(node, dict):
+        return {key: externalise_blobs(value) for key, value in node.items()}
+    return node
+
+
+def internalise_blobs(node: Any, slot: str = "") -> Any:
+    """Put the stored contents back, so callers never see a reference."""
+    if isinstance(node, dict):
+        if len(node) == 1 and BLOB_REF_KEY in node:
+            return _read_blob(str(node[BLOB_REF_KEY]), slot)
+        return {key: internalise_blobs(value, slot) for key, value in node.items()}
+    if isinstance(node, list):
+        return [internalise_blobs(item, slot) for item in node]
+    return node
+
+
+def _collect_blob_refs(node: Any, out: set[str]) -> None:
+    if isinstance(node, dict):
+        if len(node) == 1 and BLOB_REF_KEY in node:
+            out.add(str(node[BLOB_REF_KEY]))
+            return
+        for value in node.values():
+            _collect_blob_refs(value, out)
+    elif isinstance(node, list):
+        for item in node:
+            _collect_blob_refs(item, out)
+
+
+def gc_campaign_blobs() -> dict[str, Any]:
+    """
+    Delete stored data no save refers to any more.
+
+    Refuses to delete anything if a single save cannot be read. An unreadable
+    save is exactly the one whose references cannot be counted, and deleting on
+    a partial census would quietly destroy the data another save depends on.
+    """
+    blobs_dir = campaign_blobs_dir()
+    if not blobs_dir.exists():
+        return {"removed": 0, "freed_bytes": 0, "kept": 0}
+
+    used: set[str] = set()
+    for path in campaign_slots_dir().glob("*/world.json"):
+        try:
+            _collect_blob_refs(json.loads(path.read_text(encoding="utf-8")), used)
+        except (OSError, json.JSONDecodeError) as exc:
+            return {
+                "removed": 0,
+                "freed_bytes": 0,
+                "kept": 0,
+                "skipped": f"could not read {path.parent.name}: {exc}",
+            }
+
+    removed = 0
+    freed = 0
+    kept = 0
+    for path in blobs_dir.rglob("*.gz"):
+        if path.stem in used:
+            kept += 1
+            continue
+        try:
+            size = path.stat().st_size
+            path.unlink()
+        except OSError:
+            continue
+        removed += 1
+        freed += size
+    return {"removed": removed, "freed_bytes": freed, "kept": kept}
+
+
 def list_campaign_slots() -> list[dict[str, Any]]:
     campaign_slots_dir().mkdir(parents=True, exist_ok=True)
     slots: list[dict[str, Any]] = []
@@ -2812,7 +2950,10 @@ def save_campaign_slot(slot_name: str) -> dict[str, Any]:
     slot_dir = campaign_slots_dir() / safe
     slot_dir.mkdir(parents=True, exist_ok=True)
     world_path = slot_dir / "world.json"
-    world_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+    # Store the heavy strings once and keep a reference. Written before the
+    # save file, so a save can never point at a blob that is not on disk yet.
+    stored = externalise_blobs(payload)
+    world_path.write_text(json.dumps(stored, ensure_ascii=True, indent=2), encoding="utf-8")
     state = get_state(include_hidden=False)
     player = state.get("player") or {}
     location = state.get("current_location") or {}
@@ -2971,7 +3112,9 @@ def load_campaign_slot(slot_name: str) -> dict[str, Any]:
         raise ValueError(f"Failed to read campaign slot '{safe}': {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"Campaign slot '{safe}' is not a valid world export object.")
-    return import_world(data)
+    # Saves written before the blob store contain their data inline; those pass
+    # through untouched, because a save with no references has nothing to fetch.
+    return import_world(internalise_blobs(data, safe))
 
 
 def delete_campaign_slot(slot_name: str) -> dict[str, Any]:
@@ -2980,7 +3123,8 @@ def delete_campaign_slot(slot_name: str) -> dict[str, Any]:
     if not slot_dir.exists():
         raise ValueError(f"Campaign slot '{safe}' was not found.")
     shutil.rmtree(slot_dir)
-    return {"deleted": safe}
+    # Data the deleted save was the last to reference is now unreachable.
+    return {"deleted": safe, "blobs": gc_campaign_blobs()}
 
 
 def get_context_health() -> dict[str, Any]:
