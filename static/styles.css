@@ -8691,6 +8691,16 @@ button.compactButton {
   color: var(--accent-2);
   font-weight: 750;
   line-height: inherit;
+  /* Inline references render as <span role="link"> rather than <button> so a
+     drag-selection can pass through them -- Chrome will not select text inside
+     a form control, which quietly cut every name out of a copied scene. */
+  cursor: pointer;
+}
+
+.entityLink:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+  border-radius: 2px;
 }
 
 .entityLink.subtle {

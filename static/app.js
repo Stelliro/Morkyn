@@ -1561,7 +1561,7 @@ function linkifyKnownEntityNames(html, map) {
           // Already inside a data-code attribute chunk
           const windowBefore = s.slice(Math.max(0, at - 32), at);
           if (/data-code=["'][^"']*$/.test(windowBefore) || /<[^>]*$/.test(windowBefore)) return match;
-          return `<button class="entityLink" data-code="${escapeHtml(code)}" type="button">${match}</button>`;
+          return entityLinkHtml(code, match);
         });
       }
       return out;
@@ -1577,7 +1577,9 @@ function refToken(type, code) {
 function stripLeakedEntityHtml(value) {
   let text = String(value ?? "");
   if (!text.includes("<") && !/type\s*=\s*["']?button/i.test(text)) return text;
-  // Full buttons → keep inner label
+  // Full links → keep inner label. Spans are what we render now; buttons are
+  // still matched because history written before the change is full of them.
+  text = text.replace(/<span\b[^>]*\bentityLink\b[^>]*>([\s\S]*?)<\/span>/gi, "$1");
   text = text.replace(/<button\b[^>]*\bentityLink\b[^>]*>([\s\S]*?)<\/button>/gi, "$1");
   // Broken: Name Name" type="button">Name
   text = text.replace(
@@ -1620,6 +1622,25 @@ function collapseNameCodePairs(text, map) {
   );
 }
 
+/**
+ * One inline entity reference.
+ *
+ * A <span role="link">, deliberately not a <button>. Chrome's selection engine
+ * treats form controls as atomic: dragging a selection across a paragraph picks
+ * up the prose and silently skips every name inside it, so copying a scene came
+ * back as "You step into the , ... and find already waiting by the hearth" —
+ * holes exactly where the names were, and nowhere else. A span selects and
+ * copies like the text it sits in.
+ *
+ * `labelHtml` is already HTML-escaped by every caller, because one of them
+ * matches against text that has been escaped already and must not be escaped
+ * twice.
+ */
+function entityLinkHtml(code, labelHtml, extraClass = "") {
+  const cls = extraClass ? `entityLink ${extraClass}` : "entityLink";
+  return `<span class="${cls}" role="link" tabindex="0" data-code="${escapeHtml(code)}">${labelHtml}</span>`;
+}
+
 function linkifyText(value) {
   // Never feed already-rendered HTML back through linkify (causes button spam).
   const cleaned = stripLeakedEntityHtml(value ?? "");
@@ -1637,7 +1658,7 @@ function linkifyText(value) {
       return `<span class="entityLink unresolved" title="Unknown entity ${escapeHtml(code)}">${escapeHtml(code)}</span>`;
     }
     const label = entityLabel(found.entity) || code;
-    return `<button class="entityLink" data-code="${escapeHtml(code)}" type="button">${escapeHtml(label)}</button>`;
+    return entityLinkHtml(code, escapeHtml(label));
   });
 
   // Bare L1 / I2 / E3 (not already wrapped)
@@ -1651,7 +1672,7 @@ function linkifyText(value) {
     const found = map.get(code);
     if (!found) return rawCode;
     linked.add(code);
-    return `<button class="entityLink subtle" data-code="${escapeHtml(code)}" type="button">${escapeHtml(entityLabel(found.entity) || rawCode)}</button>`;
+    return entityLinkHtml(code, escapeHtml(entityLabel(found.entity) || rawCode), "subtle");
   });
 
   // Plain names → same clickable buttons (opening often writes names without [[codes]])
@@ -16640,6 +16661,15 @@ document.addEventListener("click", (event) => {
 
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") closeHelpPopovers();
+  // Entity references are spans so they can be selected and copied, which costs
+  // the free keyboard activation a <button> came with. Hand it back.
+  if (event.key === "Enter" || event.key === " " || event.key === "Spacebar") {
+    const link = event.target?.closest?.(".entityLink[role='link']");
+    if (link) {
+      event.preventDefault();
+      showEntity(link.dataset.code);
+    }
+  }
 });
 
 indexTabs?.addEventListener("click", (event) => {
