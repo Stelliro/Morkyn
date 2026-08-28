@@ -22,6 +22,13 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > Changes after `0.9.11` live here.
 
+### Fixed
+
+- [CLAUDE] A turn no longer says the same sentence twice. A reported caravanserai scene wrote four paragraphs whose last two were built almost entirely from sentences already used above them; 838 of its 1587 characters were repeats. The existing guard caught none of it, because it compares a paragraph only with the one directly above it and scores whole paragraphs — two paragraphs sharing a forty-word clause verbatim still measured 45%, under the 48% bar. The new pass works on sentences, against everything said so far in the turn, and counts twelve consecutive shared words as a repeat even when no whole sentence matches - `app/narration_pipeline.py`, `app/llm.py`
+  - It runs in `_normalize_turn` rather than in the narration pipeline, because `pipeline_enabled()` is `False` unless the launcher sets `AI_RPG_NARRATION_PIPELINE` — anyone running the server directly had no repeat guard at all.
+- [CLAUDE] Entity names copy along with the prose around them. Copying a scene returned the paragraph with holes exactly where the location and NPC names were, those being the only words rendered as `<button>` elements. Inline references are now `<span role="link">`, which selects like the text on either side of it; Enter/Space activation is handed back explicitly - `static/app.js`, `static/styles.css`
+- [CLAUDE] The `?v=` cache token on `app.js` and `styles.css` now moves with `APP_VERSION`, and a test fails the build if it stops doing so. It was a hand-written copy of the version in `static/index.html`, which is served without templating, and it did not follow the bump to 0.9.11 — so returning browsers kept serving the bundle they had already cached and the release reached them as nothing. The overlay clamp in `78e9164` never arrived for anyone who had loaded the game before it - `static/index.html`, `tests/test_asset_cache_token.py`
+
 ---
 
 ## [0.9.11] - 2026-08-27
