@@ -6269,10 +6269,69 @@ button.chipBtn {
 
 .saveEditorFilter {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   font-size: 0.78rem;
   color: var(--muted);
+}
+
+.saveEditorSearchNote {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.saveEditorSearchNote.isMiss {
+  color: var(--warn, #c4a46a);
+}
+
+.saveEditorSearchNote strong {
+  color: var(--warn, #c4a46a);
+  font-weight: 600;
+}
+
+.saveEditorJump {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* A table holding a hit, and one that does not, in the side list. */
+.saveEditorTab.hasMatches {
+  border-color: color-mix(in srgb, var(--warn, #c4a46a) 60%, var(--line));
+  color: var(--text);
+}
+
+.saveEditorTab.hasMatches .saveEditorCount {
+  background: color-mix(in srgb, var(--warn, #c4a46a) 42%, transparent);
+  color: var(--text);
+}
+
+.saveEditorTab.noMatches {
+  opacity: 0.4;
+}
+
+/* The matched cell, the rest of its row for context, and the column that says
+   which row it is. */
+.saveEditorGrid tr.isHitRow {
+  background: color-mix(in srgb, var(--warn, #c4a46a) 8%, transparent);
+}
+
+.saveEditorCell.isHit input,
+.saveEditorCell.isHit textarea,
+.saveEditorCell.isHit .saveEditorFrozen {
+  background: color-mix(in srgb, var(--warn, #c4a46a) 26%, transparent);
+  border-color: color-mix(in srgb, var(--warn, #c4a46a) 55%, var(--line));
+}
+
+.saveEditorGrid tr.isHitRow .saveEditorCell.isKeyCell input,
+.saveEditorGrid tr.isHitRow .saveEditorCell.isKeyCell textarea {
+  border-color: color-mix(in srgb, var(--neon-2) 65%, var(--line));
+  color: var(--neon-2);
+  font-weight: 600;
 }
 
 .saveEditorFilter input {

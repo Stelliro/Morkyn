@@ -7980,6 +7980,7 @@ let saveEditorAdding = false;
 let saveEditorApplied = "";
 let saveEditorFilter = "";
 let saveEditorRenderedTable = "";
+let saveEditorHaystack = null;
 const SAVE_EDITOR_ROWS_PER_PAGE = 20;
 const SAVE_EDITOR_LONG_VALUE = 90;
 // Tried in order when looking for something unique to aim an edit at.
@@ -8073,7 +8074,7 @@ function saveEditorIsScalar(value) {
 }
 
 function saveEditorFieldKey(table, rowIndex, column) {
-  return `${table} ${rowIndex} ${column}`;
+  return `${table}\u0000${rowIndex}\u0000${column}`;
 }
 
 /**
@@ -8145,7 +8146,7 @@ function saveEditorCoerce(original, text) {
  * both would set values on a row that is about to go.
  */
 function saveEditorBuildEdits(pending) {
-  const rowKey = (entry) => `${entry.table} ${JSON.stringify(entry.where)}`;
+  const rowKey = (entry) => `${entry.table}\u0000${JSON.stringify(entry.where)}`;
   const deleted = new Set(pending.filter((e) => e.op === "delete").map(rowKey));
   const grouped = new Map();
   const out = [];
@@ -8230,6 +8231,49 @@ function saveEditorVisibleRows(rows, filter) {
   );
 }
 
+/**
+ * One lowercase string per row, per table, so searching every table on every
+ * keystroke costs a substring test rather than a walk over every value.
+ * Rebuilt whenever the save is read, which is also whenever it changes.
+ */
+function buildSaveEditorHaystack(data) {
+  const out = {};
+  for (const [table, rows] of Object.entries(data?.tables || {})) {
+    out[table] = (Array.isArray(rows) ? rows : []).map((row) =>
+      Object.values(row || {})
+        .map((value) => (value === null || value === undefined ? "" : String(value)))
+        // A separator no value contains, so a term cannot match across the
+        // join of two columns and claim a row that has neither.
+        .join("\u0000")
+        .toLowerCase(),
+    );
+  }
+  return out;
+}
+
+/**
+ * How many rows match in each table, across the whole save.
+ *
+ * The search box used to filter only the table you happened to be looking at,
+ * which answers "is it here" when the question is "where is it".
+ */
+function saveEditorMatchCounts(haystack, term) {
+  const needle = String(term || "").trim().toLowerCase();
+  if (!needle) return null;
+  const counts = {};
+  for (const [table, rows] of Object.entries(haystack || {})) {
+    let found = 0;
+    for (const hay of rows) if (hay.includes(needle)) found += 1;
+    if (found) counts[table] = found;
+  }
+  return counts;
+}
+
+function saveEditorMatchTotals(counts) {
+  const tables = Object.keys(counts || {});
+  return { tables: tables.length, rows: tables.reduce((sum, t) => sum + counts[t], 0) };
+}
+
 function saveEditorPendingSet(table, rowIndex, column) {
   return saveEditorEdits.find(
     (entry) =>
@@ -8243,17 +8287,23 @@ function saveEditorRowDeleted(table, rowIndex) {
   );
 }
 
-function saveEditorCellHtml(table, rowIndex, column, row, editable) {
+function saveEditorCellHtml(table, rowIndex, column, row, editable, marks = {}) {
   const original = row?.[column];
+  const needle = String(marks.term || "").trim().toLowerCase();
+  const hit = needle && String(original ?? "").toLowerCase().includes(needle);
   if (original !== undefined && !saveEditorIsScalar(original)) {
     const shown = clipText(JSON.stringify(original), 60);
-    return `<td class="saveEditorCell isFrozen" title="Nested values are stored as JSON in this format and are not editable here."><span class="saveEditorFrozen">${escapeHtml(shown)}</span></td>`;
+    return `<td class="saveEditorCell isFrozen${hit ? " isHit" : ""}" title="Nested values are stored as JSON in this format and are not editable here."><span class="saveEditorFrozen">${escapeHtml(shown)}</span></td>`;
   }
   const pending = saveEditorPendingSet(table, rowIndex, column);
   const shown = pending ? pending.value : original;
   const text = shown === null || shown === undefined ? "" : String(shown);
   const classes = ["saveEditorCell"];
   if (pending) classes.push("isChanged");
+  if (hit) classes.push("isHit");
+  // The column that identifies the row, so a match has something to be read
+  // against: "seed" on its own says nothing about which row it is in.
+  if (marks.keyColumns?.has(column)) classes.push("isKeyCell");
   if (saveEditorInvalid.has(saveEditorFieldKey(table, rowIndex, column))) classes.push("isInvalid");
   const attrs =
     `data-editor-cell="1" data-table="${escapeHtml(table)}" data-row="${rowIndex}" data-column="${escapeHtml(column)}"` +
@@ -8338,13 +8388,22 @@ function renderSaveEditor() {
     .map((note) => `<li>${escapeHtml(note)}</li>`)
     .join("");
 
+  // Searching marks every table that holds a hit, so a term typed while
+  // looking at `abilities` still says where in the save it lives.
+  const matches = saveEditorMatchCounts(saveEditorHaystack, saveEditorFilter);
   const tabs = names
     .map((name) => {
       const count = Array.isArray(tables[name]) ? tables[name].length : 0;
+      const hits = matches ? matches[name] || 0 : 0;
       const active = name === saveEditorTable ? " isActive" : "";
+      const found = matches ? (hits ? " hasMatches" : " noMatches") : "";
+      const badge = matches && hits ? `${hits}` : `${count}`;
+      const title = matches
+        ? `${name} · ${hits ? `${hits} match${hits === 1 ? "" : "es"}` : "no matches"} of ${count} row${count === 1 ? "" : "s"}`
+        : `${name} · ${count} row${count === 1 ? "" : "s"}`;
       // title as well as label: inventory_capacity_modifiers is wider than the
       // column, so the label truncates and the tooltip carries the full name.
-      return `<button type="button" class="saveEditorTab${active}" data-editor-table="${escapeHtml(name)}" title="${escapeHtml(name)} · ${count} row${count === 1 ? "" : "s"}"><span class="saveEditorTabName">${escapeHtml(name)}</span><span class="saveEditorCount">${count}</span></button>`;
+      return `<button type="button" class="saveEditorTab${active}${found}" data-editor-table="${escapeHtml(name)}" title="${escapeHtml(title)}"><span class="saveEditorTabName">${escapeHtml(name)}</span><span class="saveEditorCount">${escapeHtml(badge)}</span></button>`;
     })
     .join("");
 
@@ -8393,8 +8452,16 @@ function renderSaveEditor() {
         const where = saveEditorRowWhere(row, rows);
         const removed = saveEditorRowDeleted(saveEditorTable, index);
         const editable = Boolean(where) && !removed;
+        const marks = { term: saveEditorFilter, keyColumns: new Set(Object.keys(where || {})) };
+        const hitRow =
+          Boolean(saveEditorFilter.trim()) &&
+          columns.some((column) =>
+            String(row?.[column] ?? "")
+              .toLowerCase()
+              .includes(saveEditorFilter.trim().toLowerCase()),
+          );
         const cells = columns
-          .map((column) => saveEditorCellHtml(saveEditorTable, index, column, row, editable))
+          .map((column) => saveEditorCellHtml(saveEditorTable, index, column, row, editable, marks))
           .join("");
         let action;
         if (!where) {
@@ -8404,10 +8471,33 @@ function renderSaveEditor() {
         } else {
           action = `<button type="button" class="chipBtn secondaryButton" data-editor-delete="${index}">Delete</button>`;
         }
-        return `<tr class="${removed ? "isDeleted" : ""}">${cells}<td class="saveEditorRowActions">${action}</td><td class="saveEditorSpacer"></td></tr>`;
+        return `<tr class="${removed ? "isDeleted" : ""}${hitRow ? " isHitRow" : ""}">${cells}<td class="saveEditorRowActions">${action}</td><td class="saveEditorSpacer"></td></tr>`;
       })
       .join("");
     grid = `<div class="saveEditorGridScroll"><table class="saveEditorGrid" style="width:${total}px">${colgroup}<thead>${head}</thead><tbody>${body}</tbody></table></div>`;
+  }
+
+  // What the search found, and — when it found nothing here — where it did.
+  let searchSummary = "";
+  if (matches) {
+    const totals = saveEditorMatchTotals(matches);
+    if (!totals.rows) {
+      searchSummary = `<span class="saveEditorSearchNote isMiss">Nothing in this save matches “${escapeHtml(saveEditorFilter.trim())}”.</span>`;
+    } else {
+      const here = matches[saveEditorTable] || 0;
+      const elsewhere = Object.keys(matches).filter((name) => name !== saveEditorTable);
+      const jumps = elsewhere
+        .slice(0, 6)
+        .map(
+          (name) =>
+            `<button type="button" class="chipBtn saveEditorJump" data-editor-table="${escapeHtml(name)}">${escapeHtml(name)} <span class="saveEditorCount">${matches[name]}</span></button>`,
+        )
+        .join("");
+      const lead = here
+        ? `${here} here`
+        : `<strong>none here</strong>`;
+      searchSummary = `<span class="saveEditorSearchNote">${lead} · ${totals.rows} row${totals.rows === 1 ? "" : "s"} in ${totals.tables} table${totals.tables === 1 ? "" : "s"}${jumps ? ` · ${jumps}` : ""}${elsewhere.length > 6 ? ` +${elsewhere.length - 6} more` : ""}</span>`;
+    }
   }
 
   const resized = Object.keys(saveEditorColumnWidths[saveEditorTable] || {}).length;
@@ -8455,8 +8545,9 @@ function renderSaveEditor() {
       <div class="saveEditorMain">
         <ul class="saveEditorNotes">${notes}</ul>
         <label class="saveEditorFilter">
-          <span>Find a row</span>
-          <input type="search" id="saveEditorFilterInput" value="${escapeHtml(saveEditorFilter)}" placeholder="e.g. seed, coat, a code" autocomplete="off" />
+          <span>Search the save</span>
+          <input type="search" id="saveEditorFilterInput" value="${escapeHtml(saveEditorFilter)}" placeholder="e.g. seed, coat, a code — every table is searched" autocomplete="off" />
+          ${searchSummary}
         </label>
         ${grid}
         <div class="saveEditorGridFoot">${rowPager}<span class="saveEditorFootActions">${resetWidths}${addForm}</span></div>
@@ -8479,6 +8570,7 @@ async function fetchSaveEditorData(slot) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
   saveEditorData = data;
+  saveEditorHaystack = buildSaveEditorHaystack(data);
   const names = Object.keys(data.tables || {});
   if (!names.includes(saveEditorTable)) {
     // Inventory first: it is what people come here to fix.
@@ -8773,9 +8865,9 @@ function bindSaveEditorOnce() {
       saveEditorTable = tab.getAttribute("data-editor-table") || "";
       saveEditorRowPage = 0;
       saveEditorAdding = false;
-      // A filter typed for one table means nothing in the next one, and an
-      // empty grid reads as an empty table.
-      saveEditorFilter = "";
+      // The search term survives the switch: it is what sent you to this table,
+      // and clearing it would drop you into the full contents having lost the
+      // thing you were looking for.
       renderSaveEditor();
       return;
     }
