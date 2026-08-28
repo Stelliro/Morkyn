@@ -7471,7 +7471,7 @@ function isCompactModeEnabled() {
   }
 }
 
-let saveBrowserMode = "load"; // "load" | "save"
+let saveBrowserMode = "load"; // "load" | "save" | "edit"
 let saveBrowserSlots = [];
 let saveBrowserSelected = "";
 let saveBrowserBound = false;
@@ -7622,6 +7622,14 @@ function updateSaveBrowserChrome() {
         : "Pick a character to browse their saves, or type a new slot name below.";
     }
     if (footer) footer.hidden = false;
+  } else if (saveBrowserMode === "edit") {
+    if (title) title.textContent = inSaves ? `Edit · ${saveBrowserCharacter}` : "Edit a save";
+    if (sub) {
+      sub.textContent = inSaves
+        ? "Newest first · 10 per page. Pick the save to open."
+        : "Choose whose save you want to change.";
+    }
+    if (footer) footer.hidden = true;
   } else {
     if (title) title.textContent = inSaves ? saveBrowserCharacter : "Load game";
     if (sub) {
@@ -7684,7 +7692,9 @@ function renderSaveBrowserList() {
     emptyEl.textContent =
       saveBrowserMode === "save"
         ? "No saves yet. Enter a slot name below and save this run."
-        : "No saves found. Start a game, or use Continue if an autosave exists.";
+        : saveBrowserMode === "edit"
+          ? "No saves to edit yet. Play a turn or save a slot, and it will show up here."
+          : "No saves found. Start a game, or use Continue if an autosave exists.";
     return;
   }
 
@@ -7761,9 +7771,11 @@ function renderSaveBrowserList() {
             ${
               saveBrowserMode === "load"
                 ? `<button type="button" class="chipBtn" data-save-load="${escapeHtml(name)}">Load</button>`
-                : `<button type="button" class="chipBtn" data-save-overwrite="${escapeHtml(name)}">Overwrite</button>`
+                : saveBrowserMode === "save"
+                  ? `<button type="button" class="chipBtn" data-save-overwrite="${escapeHtml(name)}">Overwrite</button>`
+                  : ""
             }
-            <button type="button" class="chipBtn secondaryButton" data-save-edit="${escapeHtml(name)}" title="Change what is inside this save">Edit</button>
+            <button type="button" class="chipBtn${saveBrowserMode === "edit" ? "" : " secondaryButton"}" data-save-edit="${escapeHtml(name)}" title="Change what is inside this save">Edit</button>
             <button type="button" class="chipBtn secondaryButton" data-save-delete="${escapeHtml(name)}" title="Delete this slot">Delete</button>
           </div>
         </article>
@@ -7860,7 +7872,7 @@ async function refreshSaveBrowser() {
 }
 
 function openSaveBrowser(mode = "load") {
-  saveBrowserMode = mode === "save" ? "save" : "load";
+  saveBrowserMode = mode === "save" || mode === "edit" ? mode : "load";
   saveBrowserView = "characters";
   saveBrowserCharacter = "";
   saveBrowserPage = 0;
@@ -8717,6 +8729,14 @@ function bindSaveBrowserOnce() {
     const card = event.target.closest("[data-slot]");
     if (card) {
       saveBrowserSelected = card.getAttribute("data-slot") || "";
+      // Opened from the main menu to edit: the row has one thing to do, so the
+      // row itself does it rather than making the button the only target.
+      if (saveBrowserMode === "edit") {
+        openSaveEditor(saveBrowserSelected).catch((error) =>
+          setSaveBrowserStatus(error.message || String(error), "error"),
+        );
+        return;
+      }
       const input = document.querySelector("#saveBrowserNameInput");
       if (input && saveBrowserMode === "save") input.value = saveBrowserSelected;
       renderSaveBrowserList();
@@ -8741,6 +8761,8 @@ function bindSaveBrowserOnce() {
     const name = card.getAttribute("data-slot");
     if (saveBrowserMode === "load") {
       loadCampaignSlotByName(name).catch((error) => setSaveBrowserStatus(error.message || String(error), "error"));
+    } else if (saveBrowserMode === "edit") {
+      openSaveEditor(name).catch((error) => setSaveBrowserStatus(error.message || String(error), "error"));
     } else {
       saveBrowserSelected = name || "";
       const input = document.querySelector("#saveBrowserNameInput");
@@ -20984,6 +21006,14 @@ document.querySelector("#menuContinue")?.addEventListener("click", (event) => {
 document.querySelector("#menuLoadGame")?.addEventListener("click", () => {
   try {
     openSaveBrowser("load");
+  } catch (error) {
+    const status = document.querySelector("#mainMenuStatus");
+    if (status) status.textContent = error.message || String(error);
+  }
+});
+document.querySelector("#menuEditSave")?.addEventListener("click", () => {
+  try {
+    openSaveBrowser("edit");
   } catch (error) {
     const status = document.querySelector("#mainMenuStatus");
     if (status) status.textContent = error.message || String(error);
