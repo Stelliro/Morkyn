@@ -701,6 +701,21 @@ def startup() -> None:
     except Exception as exc:  # never block startup on optional content
         print(f"[content-packs] load skipped: {exc}")
 
+    # Thin the per-turn history of characters nobody has played for months.
+    # Once per launch: it walks every slot, and nothing about it is urgent
+    # enough to pay for on a turn.
+    try:
+        from app.world import archive_idle_campaigns
+
+        report = archive_idle_campaigns()
+        for entry in report.get("archived") or []:
+            print(
+                f"[saves] archived {entry.get('campaign_id')}: kept {entry.get('kept')} turns, "
+                f"dropped {len(entry.get('removed') or [])} (last played {entry.get('last_played')})"
+            )
+    except Exception as exc:  # a housekeeping pass must never block startup
+        print(f"[saves] archive pass skipped: {exc}")
+
 
 BUNDLE_ASSETS: tuple[str, ...] = ("app.js", "styles.css")
 BUNDLE_PLACEHOLDER = "__BUNDLE__"
