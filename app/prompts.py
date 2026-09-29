@@ -648,6 +648,8 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
         "relevant_sources": context.get("relevant_sources", [])[:10],
         "retrieval": context.get("retrieval"),
         "turn_summaries": context.get("turn_summaries", [])[:10],
+        "active_quests": context.get("active_quests", []),
+        "npc_player_relationships": context.get("npc_player_relationships", []),
     }
     # The band vocabulary, not the dice behind it: showing the tables would
     # invite the model to do the arithmetic itself.
@@ -655,6 +657,14 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
         from app.rng import band_contract_block
 
         compact_context["amount_contract"] = band_contract_block()
+    except Exception:
+        pass
+    # Inject world context for LLM consistency
+    try:
+        from app.world_context import naming_context_block, loot_context_block, ability_context_block
+        compact_context["world_naming_guide"] = naming_context_block()
+        compact_context["world_loot_reference"] = loot_context_block()
+        compact_context["world_ability_reference"] = ability_context_block()
     except Exception:
         pass
     wait_extra = ""

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from app.llm import _sanitize_setup_randomization_values
 from app.setup_composer import (
+    _normalize_difficulty,
+    clamp_setup_enum,
     coerce_setup_bool,
     coerce_typed_setup_fields,
     coerce_typed_setup_value,
@@ -70,6 +72,26 @@ def test_coerce_typed_enums_and_bools():
     assert out["xp_growth_speed"] == "very slow"
     assert "compound" not in str(out["proficiency_access"]).lower()
     assert dirty
+
+
+def test_negated_enum_is_not_the_named_rung():
+    """_strip_negated_genre_words exists so "no X" is not a signal for X.
+
+    clamp_setup_enum / _normalize_difficulty still substring-matched the
+    allowed token inside "not easy" / "not hard", so the form stored the
+    negated value (easy/hard) instead of falling through to normal.
+    """
+    easy, _ = clamp_setup_enum("difficulty", "not easy")
+    hard, _ = clamp_setup_enum("difficulty", "not hard")
+    brutal, _ = clamp_setup_enum("difficulty", "never brutal")
+    assert easy != "easy", easy
+    assert hard != "hard", hard
+    assert brutal != "brutal", brutal
+    assert easy == "normal"
+    assert _normalize_difficulty("not easy") != "easy"
+    assert _normalize_difficulty("not hard") != "hard"
+    assert _normalize_difficulty("easy") == "easy"
+    assert _normalize_difficulty("hard") == "hard"
 
 
 def test_sanitize_setup_fields_clamps_8b_slop():

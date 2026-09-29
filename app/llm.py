@@ -302,6 +302,7 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "active_player_alias",
     "relevant_sources",
     "retrieval",
+    "relevant_asks",
 }
 HANDOFF_OPTIONAL_CONTEXT_KEYS = {
     "gm_events",
@@ -2348,7 +2349,7 @@ def test_model_connection() -> dict[str, Any]:
             url = f"{base_url}/v1/models"
         elif provider == "openai":
             base_url = str(config.get("api_base_url") or "https://api.x.ai/v1").rstrip("/")
-            url = f"{base_url}/models"
+            url = _join_openai_v1(base_url, "/models")
             api_key = resolve_api_key(config)
             if not api_key:
                 return {
@@ -8267,21 +8268,22 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         turn_summary = f"continue: advanced the current scene around {location} without a player action."
         journal_content = event_summary
     else:
-        intent = _trim_text(player_input, 260)
-        narration = (
-            f"You take a careful moment in {location}. The world does not leap to answer all at once: "
-            "someone coughs behind a shutter, damp air clings to your sleeves, and your last choice hangs in the street. "
-            "The immediate surroundings answer with small, grounded details rather than a perfect result: a shift in posture, a sound from the side, "
-            "a hint of opportunity, and the quiet cost of being observed while you decide what comes next.\n\n"
-            f"Your intent was clear: {intent}. The place gives you a response that is playable but cautious. If you press forward, you can turn that intent into a direct confrontation, "
-            "a careful investigation, a practical search for tools or exits, or a conversation that tests who here is willing to help. If you hold back, the scene still has texture: "
-            "weather, distance, witnesses, and uncertainty all matter. For now, the world leaves the next move in your hands instead of inventing one for you. "
-            "The safest next step is not obvious, but several playable paths are close enough to reach."
-        )
-        event_summary = f"The player paused to act deliberately: {player_input}"
-        event_title = "A cautious pause"
-        turn_summary = f"player: acted cautiously in current location. response: fallback pause around {location}."
-        journal_content = f"The player acted in {location}: {player_input}"
+        # Quoting the player's line here made a failed call look like the action
+        # happened ("take off my shoes", "punch them") while state did not follow.
+        from app.world import player_fallback_narration
+
+        narration = player_fallback_narration(context, player_input, location)
+        if "not worn" in narration:
+            event_title = "Gear removed"
+            event_summary = "Worn gear the player took off was packed. The model did not resolve anything else."
+        elif "server roll" in narration:
+            event_title = "Server combat roll"
+            event_summary = "The model wrote no scene. Only the server combat roll was applied."
+        else:
+            event_title = "Action not resolved"
+            event_summary = "The model did not resolve the player action, so it was not treated as a success."
+        turn_summary = event_summary
+        journal_content = event_summary
     return {
         "scene_plan": {
             "goal": "Keep the current location playable without forcing a player action.",
@@ -8333,7 +8335,7 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             "issues_found": [],
             "corrections_made": [],
             "reference_check": "Fallback used no indexed references.",
-            "consistency_check": "Fallback does not alter player state.",
+            "consistency_check": "Fallback states only a server-applied gear or combat result. It does not invent a scene success.",
         },
         "turn_summary": turn_summary,
         "journal": [{"kind": "event", "content": journal_content}],
@@ -8955,6 +8957,30 @@ def _chat_content_unlocked(
     return content
 
 
+def _join_openai_v1(base_url: str, path: str) -> str:
+    """Join an OpenAI-compatible base with a /v1 resource without doubling /v1.
+
+    Presets store ``https://api.x.ai/v1``. Appending ``/v1/chat/completions``
+    requested ``https://api.x.ai/v1/v1/chat/completions``, which xAI answers
+    with HTTP 404 and "check the URL". The models probe already uses the base
+    as the /v1 root (``{base}/models``). Chat has to use that same root.
+    A base that does not already end in ``/v1`` still gets one ``/v1`` inserted.
+    """
+    base = str(base_url or "").rstrip("/")
+    rel = str(path or "").strip()
+    if not rel.startswith("/"):
+        rel = "/" + rel
+    low_rel = rel.lower()
+    if low_rel.startswith("/v1/"):
+        resource = rel[3:]
+    elif low_rel == "/v1":
+        resource = ""
+    else:
+        resource = rel
+    root = base if base.lower().endswith("/v1") else base + "/v1"
+    return root + resource
+
+
 def _chat_content_openai_compatible(
     config: dict[str, Any],
     system_prompt: str,
@@ -8978,7 +9004,7 @@ def _chat_content_openai_compatible(
         label = "llama.cpp"
 
     def post_json(path: str, body: dict[str, Any]) -> dict[str, Any]:
-        url = f"{base_url}{path}"
+        url = _join_openai_v1(base_url, path)
 
         def make_request() -> urllib.request.Request:
             headers = {"Content-Type": "application/json"}
@@ -9057,6 +9083,11 @@ def _chat_content_openai_compatible(
         "max_tokens": max_tokens or _env_int("AI_RPG_MAX_RESPONSE_TOKENS", DEFAULT_RESPONSE_TOKEN_CAP),
         "stream": False,
     }
+    # grok-4.7 thinks at "high" unless told otherwise, which is most of the wait
+    # before any narration appears. "low" is the latency setting xAI documents.
+    effort = _grok_reasoning_effort(model) if provider == "openai" else None
+    if effort:
+        body["reasoning_effort"] = effort
     # Local llama often wants stop tokens; cloud APIs usually do not.
     if managed_llama and provider != "openai":
         body["stop"] = ["<|im_end|>"]
@@ -9069,7 +9100,14 @@ def _chat_content_openai_compatible(
     )
     if use_json_format:
         body["response_format"] = {"type": "json_object"}
-    payload = post_json("/v1/chat/completions", body)
+    try:
+        payload = post_json("/v1/chat/completions", body)
+    except LlmError as exc:
+        if body.get("reasoning_effort") and "reasoning" in str(exc).lower():
+            body.pop("reasoning_effort", None)
+            payload = post_json("/v1/chat/completions", body)
+        else:
+            raise
 
     content = payload.get("choices", [{}])[0].get("message", {}).get("content", "")
     if isinstance(content, list):
@@ -10026,6 +10064,44 @@ def _narration_char_count(turn: dict[str, Any]) -> int:
     return len(str(turn.get("narration") or ""))
 
 
+def _grok_reasoning_effort(model: str) -> str | None:
+    """How hard grok-4 should think. Default low so a scene turn is not a math proof."""
+    name = str(model or "").strip().lower()
+    if not name.startswith("grok-4"):
+        return None
+    effort = os.getenv("AI_RPG_REASONING_EFFORT", "low").strip().lower()
+    if effort in {"low", "medium", "high", "xhigh"}:
+        return effort
+    return "low"
+
+
+def _is_light_question(player_input: str) -> bool:
+    """A short ask that should not pay for a second full verifier call."""
+    text = str(player_input or "").strip()
+    # The resolver footer is for the model. It must not hide a trailing "?"
+    # or push a short ask over the length cap.
+    head, sep, _tail = text.partition("\n\nResolved player references:")
+    if sep:
+        text = head.strip()
+    if not text or len(text) > 280:
+        return False
+    if re.search(
+        r"\b(attack|hit|stab|shoot|cast|give|take|equip|unequip|drop|buy|sell|trade|kill|punch|strike)\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return False
+    if text.endswith("?"):
+        return True
+    return bool(
+        re.match(
+            r"^(who|what|where|when|why|how|which|do you|can you|could you|tell me|ask)\b",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
 def _turn_kind_from_player_input(player_input: str) -> str:
     if str(player_input).startswith("__opening_scene_request__"):
         return "opening_scene"
@@ -10251,11 +10327,15 @@ def _verification_policy(context: dict[str, Any], player_input: str, draft: dict
         deterministic.append("npc_stats")
         certainty += 0.08
 
-    if turn_kind in {"opening_scene", "continue_scene"}:
+    light_question = _is_light_question(player_input)
+    safe_question = light_question and not any(
+        name in blockers for name in ("high_risk_state_changes", "player_state_delta", "unresolved_entity_references")
+    )
+    if turn_kind in {"opening_scene", "continue_scene"} and not safe_question:
         blockers.append("intent_requires_model_verifier")
         remaining.extend(checks or ["intent_specific_consistency"])
         certainty -= 0.2
-    elif intent in VERIFY_REQUIRED_INTENTS:
+    elif intent in VERIFY_REQUIRED_INTENTS and not safe_question:
         required_remaining = [check for check in checks if check not in deterministic]
         if required_remaining:
             blockers.append("intent_requires_model_verifier")
@@ -10276,13 +10356,29 @@ def _verification_policy(context: dict[str, Any], player_input: str, draft: dict
     deterministic = list(dict.fromkeys(deterministic))
     remaining_checks = list(dict.fromkeys([check for check in [*checks, *remaining] if check not in deterministic]))
     blockers = list(dict.fromkeys(blockers))
+    if safe_question:
+        blockers = [name for name in blockers if name != "draft_self_check_not_passed"]
+        remaining_checks = [
+            name
+            for name in remaining_checks
+            if name
+            not in {
+                "self_check",
+                "narration_depth",
+                "npc_knowledge",
+                "relationship_consistency",
+                "intent_specific_consistency",
+            }
+        ]
+        certainty = min(1.0, certainty + 0.5)
+        reasons.append("Light question with no state change; skip the model verifier.")
     threshold = max(0.0, min(1.0, _env_float("AI_RPG_VERIFY_SKIP_CERTAINTY", DEFAULT_VERIFY_SKIP_CERTAINTY)))
     certainty = max(0.0, min(1.0, round(certainty, 3)))
     fast_enabled = _env_bool("AI_RPG_FAST_VERIFICATION", True)
     mode = "full_model_verifier"
     if fast_enabled and not blockers and not remaining_checks and certainty >= threshold:
         mode = "skip_model_verifier"
-    elif deterministic:
+    elif deterministic and not safe_question:
         mode = "targeted_model_verifier"
     return {
         "version": VERIFICATION_POLICY_VERSION,
@@ -11279,8 +11375,14 @@ def _try_dsl_draft(
         return None
     active_context = _clean_context_for_handoff(context, "planner_to_dsl_draft", trace)
     dsl_prompt = build_dsl_user_prompt(active_context, player_input)
-    max_tokens = min(_turn_max_tokens(active_context, "draft"), 1400)
+    light = _is_light_question(player_input)
+    max_tokens = 420 if light else min(_turn_max_tokens(active_context, "draft"), 1400)
     dsl_system = system_prompt or DSL_SYSTEM_PROMPT
+    if light:
+        dsl_system = (
+            dsl_system.rstrip()
+            + "\n\nThis player turn is a short question. Answer it directly in 2-5 sentences. Do not pad the narration."
+        )
     try:
         raw = _chat_text(
             dsl_system,
@@ -11386,7 +11488,7 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     progress_begin(
         "opening" if is_opening else "turn",
         total_steps=6,
-        detail="Preparing context for the local model…",
+        detail="Preparing context for the model…",
     )
     progress_update(
         "start",
@@ -11488,7 +11590,7 @@ def _generate_turn_body(
     active_context = _clean_context_for_handoff(context, "planner_to_draft", trace)
     progress_update(
         "draft",
-        "Asking the local model for the scene draft…",
+        "Asking the model for the scene draft…",
         step=2,
         line="Model draft call in progress (this is usually the longest step).",
     )
@@ -11526,10 +11628,12 @@ def _generate_turn_body(
                 line="Low-risk draft — skipping model verifier.",
             )
             result = _mark_draft_verified_by_policy(draft, verification_policy)
-            # Only expand narration if clearly short; avoid expensive depth retries when DSL already wrote prose.
-            result = _ensure_narration_quality(
-                result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_dsl_retry", trace
-            )
+            # A plain question should not pay for a second call that pads the
+            # answer out to a full scene.
+            if not _is_light_question(player_input):
+                result = _ensure_narration_quality(
+                    result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_dsl_retry", trace
+                )
             result = _clean_turn_for_handoff(result, "dsl_to_world", trace)
             result["_verification_policy"] = verification_policy
             result["_draft_mode"] = "dsl"
@@ -11649,7 +11753,7 @@ def _generate_turn_body(
     draft_prompt = build_user_prompt(active_context, player_input)
     progress_update(
         "draft_json",
-        "Asking the local model for a full scene draft…",
+        "Asking the model for a full scene draft…",
         step=2,
         line="JSON draft call in progress.",
     )

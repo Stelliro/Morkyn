@@ -1948,17 +1948,19 @@ def roll_travel_encounter(
 
     try:
         from app import encounters as encounters_mod
+        from app.skill_checks import player_with_gear_scores
 
         snapshot = encounters_mod.player_snapshot()
         if world_time is None:
             from app.world import get_world_time
 
             world_time = get_world_time()
+        aware = player_with_gear_scores(snapshot.get("player"))
         assessment = encounters_mod.assess_danger(
             terrain=state,
             weather=weather,
             world_time=world_time,
-            player=snapshot.get("player"),
+            player=aware,
             skills=snapshot.get("skills"),
             resources=snapshot.get("resources"),
             inventory_summary=snapshot.get("inventory_summary"),
@@ -1973,7 +1975,7 @@ def roll_travel_encounter(
             assessment,
             minutes=minutes,
             seed=seed,
-            player=snapshot.get("player"),
+            player=aware,
             skills=snapshot.get("skills"),
             options=snapshot.get("options"),
         )

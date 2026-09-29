@@ -4,7 +4,7 @@
   <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
 </p>
 
-**Version `0.9.12`** · the current stable release on the 0.9 line. Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.10.0-wip`** · WIP — not stable, not yet tagged. Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
 **Mørkyn** is a local-first browser RPG. A local LLM narrates turns and proposes structured world changes, while SQLite remains the source of truth for the player, inventory, NPCs, events, summaries, and long-running continuity.
 
@@ -136,6 +136,20 @@ Morkyn/
 - Local-only, LAN/phone, and trusted VPN launch modes.
 - Optional adaptive narration pipeline and agent bridge endpoints.
 - Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
+
+### New in 0.10.0-wip
+
+- **Fight / combat state.** NPCs can be initiated into combat from the UI or via `initiate_fight`. Ambient `fight_nearby` events fire as full combat turns during Wait and Rest — `app/world.py`.
+- **Quest / Objectives system.** Active quests appear in the Quests tab with step-by-step objectives, a progress bar, difficulty-scaled rewards, optional timers, and hidden sub-tasks. Up to 6 steps per quest. The backend manages creation, step advancement, timer auto-fail, and reward payment — `app/quests.py`, `/api/quests`.
+- **In-browser quest creation form.** Author new quests entirely in the UI — no API calls needed.
+- **NPC relationship tracking.** Every NPC tracks three axes toward the player: affinity (−100 to +100), fear (0–100), and respect (0–100). Preset deltas for 12 common events (combat, quests, intimidation, betrayal, etc.). Bands are injected into the LLM context each turn — `app/relationships.py`, `/api/relationships`.
+- **Relationship badges.** NPC cards in the People tab show affinity, fear, and respect band chips inline.
+- **LLM context enrichment.** Each turn includes a cultural naming guide, a named loot reference, and an ability registry so the model produces consistent, world-appropriate names and items — `app/world_context.py`.
+- **Autonomous player agent.** `player_agent.py` runs a full session with the same 8B Ollama model playing both narrator and player. The player sees only narrative + character sheet. Includes a Lore Bible (entity tracker built from narrative), a goal directive, and a debug command blocker.
+- **Save editor.** World save files can be viewed and edited cell-by-cell in the browser. Any table except `world_maps` and `settings` is editable; changes are all-or-nothing with a backup written first — `app/save_editor.py`.
+- **Titles system** *(in progress)* — earnable titles with stat bonuses; award logic and UI pending.
+- **Party system** *(in progress)* — invite/remove NPCs, morale, combat bonuses; morale propagation pending.
+- **Hidden NPC psychology** *(in progress)* — narrator-only private feelings, agendas, family ties; context injection pending.
 
 ### New in 0.9.12
 
@@ -279,7 +293,7 @@ python benchmarks/run_dual_role_playtest.py
 | Field | Value |
 | --- | --- |
 | Product | **Mørkyn** |
-| Version | **0.9.12** |
+| Version | **0.10.0-wip** |
 | GitHub | https://github.com/Stelliro/Morkyn |
 
 Formerly published as AI RPG Consistency Prototype (`ai-rpg-consistency-prototype`).

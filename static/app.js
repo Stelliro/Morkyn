@@ -38,7 +38,7 @@ const setupMoreToggle = document.querySelector("#setupMoreToggle");
 const setupActionsMore = document.querySelector("#setupActionsMore");
 const saveSetupSettingsButton = document.querySelector("#saveSetupSettings");
 const setupSettingsFile = document.querySelector("#setupSettingsFile");
-const randomizeSetup = document.querySelector("#randomizeSetup");
+const randomizeSetup = document.querySelector("#simpleOpenRandomize") || document.querySelector("#randomizeSetup");
 const legalModal = document.querySelector("#legalModal");
 const legalModalTitle = document.querySelector("#legalModalTitle");
 const legalModalSubtitle = document.querySelector("#legalModalSubtitle");
@@ -92,6 +92,9 @@ const systemOptions = document.querySelector("#systemOptions");
 const formerLifeIdentity = document.querySelector("#formerLifeIdentity");
 const entityMenu = document.querySelector("#entityMenu");
 const closeEntityMenu = document.querySelector("#closeEntityMenu");
+let entityDialogReturn = null;
+let rosterDialogReturn = null;
+let menuDialogReturn = null;
 const entityTitle = document.querySelector("#entityTitle");
 const entityMeta = document.querySelector("#entityMeta");
 const entityBody = document.querySelector("#entityBody");
@@ -487,13 +490,14 @@ const SYSTEM_STYLE_DESCRIPTIONS = {
   custom: "Write exactly how the system interface should appear and what it is allowed to reveal.",
 };
 
+// Section buttons stay. These lists are Optional fields only — Primary names are not here.
 const RANDOM_GROUPS = {
-  character: ["backstory_mode", "memory_policy", "character_backstory", "hair", "facial_features", "appearance", "starter_equipment", "player_name", "player_public_name", "player_title", "player_age", "player_sex", "previous_life_age", "previous_life_sex", "special_abilities"],
+  character: ["memory_policy", "character_backstory", "starter_equipment", "player_public_name", "player_title", "player_age", "player_sex", "previous_life_age", "previous_life_sex", "special_abilities"],
   // Powers step: ability cards + custom skill rules (compounding / XP / tracking live here)
   powers: ["special_abilities", "custom_skills"],
-  world: ["world_style", "magic_level", "world_races", "race_magic_enabled", "race_magic_rarity", "tech_level", "tone", "economy", "start_location", "custom_style", "race_magic_rules", "race_ability_rules"],
+  world: ["world_style", "magic_level", "world_races", "race_magic_enabled", "race_magic_rarity", "tech_level", "tone", "economy", "start_location", "race_magic_rules", "race_ability_rules"],
   people: ["npc_density", "quest_style", "faction_pressure", "npc_stat_scaling", "npc_skill_frequency", "rank_scale"],
-  rules: ["difficulty", "death_rules", "narration_detail", "loot_rarity", "inventory_weight_limit", "inventory_slot_limit", "inventory_rules", "leveling_system", "game_system", "proficiency_system", "skill_levels_enabled", "skill_style", "proficiency_access", "new_skill_frequency", "xp_growth_speed", "skill_growth_speed", "proficiency_growth_speed", "system_style", "custom_skills"],
+  rules: ["death_rules", "narration_detail", "loot_rarity", "inventory_weight_limit", "inventory_slot_limit", "inventory_rules", "leveling_system", "game_system", "proficiency_system", "skill_levels_enabled", "skill_style", "proficiency_access", "new_skill_frequency", "xp_growth_speed", "skill_growth_speed", "proficiency_growth_speed", "system_style", "custom_skills"],
   checks: ["dice_checks_enabled", "dice_sides", "check_difficulty", "event_check_frequency", "encounter_check_frequency", "partial_on_specialized_skill", "negative_outcomes", "show_rolls_in_ui", "attribute_floor_for_partial", "specialized_skill_partial_threshold", "custom_check_notes"],
 };
 
@@ -696,6 +700,17 @@ function detectStartLocationTheme() {
  * later by expandSimpleSetupDepth() on Start, not during Simple randomize.
  * Order still follows world → rules → identity → powers.
  */
+/** Header Randomize fills only these Primary controls. Optional stays as the person left it. */
+const PRIMARY_RANDOM_FIELD_ORDER = [
+  "player_name",
+  "backstory_mode",
+  "difficulty",
+  "custom_style",
+  "hair",
+  "facial_features",
+  "appearance",
+];
+
 const SIMPLE_RANDOM_FIELD_ORDER = [
   "world_style",
   "custom_style",
@@ -759,20 +774,17 @@ function randomizeMode() {
 
 /** Field walk for Confirm Randomize (Simple surface vs full Advanced). */
 function randomizeFieldOrderForMode(mode = randomizeMode()) {
-  if (mode === "simple") {
-    // Keep SIMPLE order; if composer later renames fields, still prefer known simple list.
-    const known = new Set(RANDOM_FIELD_ORDER);
-    return SIMPLE_RANDOM_FIELD_ORDER.filter((f) => known.has(f) || SIMPLE_RANDOM_FIELD_ORDER.includes(f));
-  }
+  if (mode === "simple") return PRIMARY_RANDOM_FIELD_ORDER.slice();
   return RANDOM_FIELD_ORDER.slice();
 }
 
 function filterIntentOverridesForMode(overrides, mode = randomizeMode()) {
   if (!overrides || typeof overrides !== "object") return {};
   if (mode !== "simple") return { ...overrides };
+  const allow = new Set(PRIMARY_RANDOM_FIELD_ORDER);
   const out = {};
   for (const [k, v] of Object.entries(overrides)) {
-    if (SIMPLE_INTENT_OVERRIDE_KEYS.has(k)) out[k] = v;
+    if (allow.has(k)) out[k] = v;
   }
   return out;
 }
@@ -1130,12 +1142,10 @@ const ACTION_HELP_TARGETS = [
   ["#setupModelButton", "Open the local LLM connection settings used for setup randomization, AI text fill, suggestions, and gameplay turns."],
   ["#saveSetupSettings", "Download the current setup form, ability cards, locks, and custom rules as a reusable JSON settings file."],
   ["#loadSetupSettingsButton", "Load a previously saved setup settings JSON file back into the setup form."],
-  ["#randomizeSetup", "Opens the Randomize idea box. Nothing is rolled until you press Confirm randomize. Locked fields are skipped."],
+  ["#simpleOpenRandomize", "Opens the Randomize idea box. Confirm fills Primary only. Optional stays as you left it. Locked Primary fields are skipped."],
   ["#randomizeSetupPrompt", "Optional idea (tone, genre, hook). Used only when you Confirm randomize."],
-  ["#randomizePopoverConfirm", "Runs full setup Randomize using the idea above (and any selected director seed idea)."],
-  ["#simplePresetConfirmRandomize", "Runs full setup Randomize from the selected preset / Simple idea (same as Confirm in the Randomize box)."],
-  ["#advancedPresetConfirmRandomize", "Runs full setup Randomize from the selected director seed / Advanced idea."],
-  ["#directorPresets", "Director seeds: pick a vibe to fill the Randomize idea. Press Confirm randomize to apply a full roll."],
+  ["#randomizePopoverConfirm", "Confirm randomize. Fills Primary only. Optional stays as you left it."],
+  ["#directorPresets", "Director seeds: pick a vibe to fill the Randomize idea. Press Confirm randomize to fill Primary only."],
   [".setupModeBtn", "Simple = short new-game form. Advanced = full multi-step board (everything you had before)."],
   [".imageModeBtn", "Simple image = generate face/body from identity. Advanced = engine prompts, LoRAs, checkpoint, tests."],
   // Intent summary help is attached to the title in renderIntentSummary (not the whole bar).
@@ -1148,23 +1158,24 @@ const ACTION_HELP_TARGETS = [
   ["#sendButton", "Submit the typed player input. If the text box is empty, this acts as Continue and lets the LLM advance the scene."],
   ["#continueButton", "Continue the scene without typing an action — the DM advances from the current moment."],
   ["#undoTurnButton", "Undo the last turn (rewind to the previous snapshot)."],
-  ["#redoTurnButton", "Redo / re-roll the last turn narration (regenerate from the last input)."],
+  ["#redoTurnButton", "Write a new narration for the last turn. This does not restore an undone turn."],
   ["#suggestButton", "Ask the LLM for three concise player-input suggestions based on the current scene and known world state."],
   ["#regenSuggestionsButton", "Regenerate the three suggestions, optionally using the instruction typed beside this button."],
-  ["#newGameButton", "Return to setup so you can start a new playthrough. This does not erase exported files."],
-  ["#regenerateButton", "Restore the latest pre-turn snapshot and ask the LLM to rewrite that same opening, player, or continue response."],
-  ["#rewindButton", "Rewind to the latest saved rewind point, usually the previous turn snapshot."],
+  ["#newGameButton", "Leave for the main menu. This session is kept and can be resumed with Continue."],
+  ["#regenerateButton", "Rewrite the last turn’s narration. Asks before replacing it. The old narration is not kept."],
+  ["#rewindButton", "Undo the last turn, back to the previous snapshot."],
   ["#exportButton", "Download the current world state as JSON so it can be backed up or imported later."],
-  ["#importButton", "Choose a previously exported world JSON file and load it into the app."],
+  ["#importButton", "Import an exported world file. Asks first, because this replaces the current session."],
   ["#modelButton", "Open the model/settings tab in the side panel during play."],
   ["#refreshButton", "Reload the current world state from the backend without taking a turn."],
   ["#closeModelModal", "Close the LLM settings dialog without changing any unsaved values."],
   ["#closeEntityMenu", "Close the selected entity details panel."],
-  ["#insertEntityRef", "Insert the selected entity reference token into the player input box."],
+  ["#insertEntityRef", "Link puts this in What will you do?. Delete it there to undo."],
   ["#aliasForm button[type='submit']", "Save an alias for the selected indexed entity, making future references easier to recognize."],
-  ["#playerAliasForm button[type='submit']", "Create an in-game alias for the player after play has started. It gets its own reputation track."],
+  ["#playerAliasForm button[type='submit']", "Optional. Create turns the name on. It gets its own reputation track. Remove deletes it."],
   [".playerAliasActivate", "Use this player alias in gameplay. Its reputation is tracked separately from the true identity."],
-  [".playerAliasDeactivate", "Stop using the active player alias."],
+  [".playerAliasDeactivate", "Stop turns this alias off."],
+  [".playerAliasRemove", "Delete this gameplay alias."],
   [".playerAliasStateForm button[type='submit']", "Save whether the alias is protected by the worn disguise or presentation described here."],
   ["#modelForm button[type='submit']", "Save the selected model path and server URL used by the app."],
   [".selectModelFile", "Open a file picker to choose a local GGUF model file."],
@@ -1173,7 +1184,8 @@ const ACTION_HELP_TARGETS = [
   [".testModelConnection", "Check whether the configured local LLM server is reachable and listing models."],
   ["#searchForm button[type='submit']", "Search indexed world memory for matching player, location, NPC, item, event, and journal facts."],
   [".useSuggestionButton", "Copy this suggestion into the player input box. It does not submit the turn until you press Send."],
-  [".rewindPointButton", "Rewind to this specific saved turn snapshot."],
+  [".rewindPointButton", "Goes back to this turn. This cannot be undone."],
+  [".invLinkBtn", "Puts this item in What will you do?. Close the sheet to edit or delete it."],
   [".insertRefButton", "Insert this entity reference token into the player input box."],
   [".randomizeOneAbility", "Replace this single ability card with a local preset."],
   [".addAbilityAfter", "Insert a blank ability card directly below this one."],
@@ -1184,10 +1196,10 @@ const ACTION_HELP_TARGETS = [
 ];
 
 const RANDOM_GROUP_HELP = {
-  character: "Randomize character-related setup fields, including past, memory rules, name, title, and abilities.",
-  world: "Randomize setting fields, including genre, magic, races, economy, start location, and race rules.",
+  character: "Randomize optional identity fields only: public name, title, age, sex, memory, backstory, gear, and abilities. Name, origin, and look stay in Primary.",
+  world: "Randomize optional setting fields: genre, magic, races, economy, start location, and race rules. World vibe stays in Primary.",
   people: "Randomize social-world pressure, factions, quest style, NPC density, NPC ranks, and skill frequency.",
-  rules: "Randomize progression, risk, death, leveling, systems, skills, proficiency rules, and narration detail.",
+  rules: "Randomize optional progression, death, leveling, systems, skills, proficiency, and narration. World difficulty stays in Primary.",
 };
 
 const SETUP_STEP_HELP = [
@@ -1385,7 +1397,7 @@ function ensureHelpForTarget(target, text, options = {}) {
   if (!target || !text || target.dataset.helpAttached === "true") return;
   target.dataset.helpAttached = "true";
   target.dataset.helpText = text;
-  target.classList.add("helpText");
+  if (!target.closest("#playMenuDrawer")) target.classList.add("helpText");
   if (!target.title) target.title = text;
   if (!target.matches("button, input, select, textarea, a, label, [tabindex]")) target.tabIndex = 0;
 }
@@ -1503,6 +1515,13 @@ function getEntityMap() {
   for (const npc of state?.npcs || []) {
     if (npc?.code) add("npc", npc);
   }
+  for (const skill of state?.skills || []) {
+    if (!skill) continue;
+    const code = String(skill.code || (skill.id != null ? `SK${skill.id}` : "")).toUpperCase();
+    if (!code) continue;
+    add("skill", { ...skill, code });
+  }
+  for (const ability of state?.abilities || []) add("ability", ability);
   return map;
 }
 
@@ -1573,7 +1592,64 @@ function linkifyKnownEntityNames(html, map) {
     .join("");
 }
 
+const MENTION_KIND = { npc: "C", item: "I", location: "L", event: "E", skill: "S", ability: "A" };
+
+function mentionSlug(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+}
+
+function mentionToken(kind, name) {
+  const slug = mentionSlug(name);
+  if (!kind || !slug) return "";
+  return `@${kind}${slug}`;
+}
+
+function mentionEntries() {
+  const out = [];
+  const seen = new Set();
+  const push = (kind, entity) => {
+    if (!kind || !entity) return;
+    const name = String(entityLabel(entity) || "").trim();
+    const slug = mentionSlug(name);
+    if (!slug) return;
+    const code = String(entity.code || "").toUpperCase();
+    const key = `${kind}:${code || slug}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({ kind, name, code, slug, token: `@${kind}${slug}` });
+  };
+  for (const found of getEntityMap().values()) {
+    push(MENTION_KIND[found.type], found.entity);
+  }
+  return out;
+}
+
+function uniqueMention(kind, fragment) {
+  const pool = mentionEntries().filter((entry) => entry.kind === kind);
+  const exact = pool.filter((entry) => entry.slug === fragment);
+  if (exact.length === 1) return exact[0];
+  if (String(fragment || "").length < 4) return null;
+  const starts = pool.filter((entry) => entry.slug.startsWith(fragment));
+  return starts.length === 1 ? starts[0] : null;
+}
+
+function mentionMatches(fragment, query) {
+  const needle = mentionSlug(query || fragment);
+  const entries = mentionEntries();
+  if (!needle) return entries;
+  return entries.filter((entry) => entry.slug.startsWith(needle) || entry.slug.includes(needle) || mentionSlug(entry.name).includes(needle));
+}
+
 function refToken(type, code) {
+  const found = getEntityMap().get(String(code || "").toUpperCase());
+  const kind = MENTION_KIND[type] || MENTION_KIND[found?.type];
+  const name = entityLabel(found?.entity);
+  const token = mentionToken(kind, name);
+  if (token) return token;
   return `${PREFIX[type] || ""}${code}`;
 }
 
@@ -1642,7 +1718,14 @@ function collapseNameCodePairs(text, map) {
  */
 function entityLinkHtml(code, labelHtml, extraClass = "") {
   const cls = extraClass ? `entityLink ${extraClass}` : "entityLink";
-  return `<span class="${cls}" role="link" tabindex="0" data-code="${escapeHtml(code)}">${labelHtml}</span>`;
+  const found = getEntityMap().get(String(code || "").toUpperCase());
+  const kind = MENTION_KIND[found?.type] || "";
+  const name = entityLabel(found?.entity);
+  const token = mentionToken(kind, name);
+  const drag = token
+    ? ` draggable="true" data-link-token="${escapeHtml(token)}" title="Drag into the input, or click for the bible"`
+    : "";
+  return `<span class="${cls}" role="link" tabindex="0" data-code="${escapeHtml(code)}"${drag}>${labelHtml}</span>`;
 }
 
 function linkifyText(value) {
@@ -1835,7 +1918,7 @@ function showTurnWaitPanel(title, kind = "turn") {
   if (!latestOutput) return;
   const startedAt = Date.now();
   latestOutput.innerHTML = `
-    <div class="turnWaitPanel" role="status" aria-live="polite">
+    <div class="turnWaitPanel">
       <div class="turnWaitPulse" aria-hidden="true"><span></span><span></span><span></span></div>
       <div class="turnWaitCopy">
         <strong>${escapeHtml(title)}</strong>
@@ -3670,28 +3753,33 @@ function loadImageUiMode() {
   }
 }
 
+function mountOneSetupPage() {
+  const host = document.querySelector("#setupOptionalSections");
+  const sections = document.querySelector("#setupSections");
+  if (host && sections && sections.parentElement !== host) host.appendChild(sections);
+  sections?.classList.remove("setupAdvancedOnly");
+  document.querySelectorAll(".setupSection").forEach((section) => section.classList.add("active"));
+}
+
 function setSetupUiMode(mode, options = {}) {
-  setupUiMode = mode === "advanced" ? "advanced" : "simple";
+  // One new-game page. The old Simple / Advanced toggle is gone.
+  setupUiMode = "simple";
   try {
     localStorage.setItem(SETUP_MODE_KEY, setupUiMode);
   } catch (_) {
     /* ignore */
   }
-  document.body.classList.toggle("setup-mode-simple", setupUiMode === "simple");
-  document.body.classList.toggle("setup-mode-advanced", setupUiMode === "advanced");
-  document.querySelectorAll(".setupModeBtn").forEach((btn) => {
-    btn.classList.toggle("isActive", btn.getAttribute("data-setup-mode") === setupUiMode);
-  });
+  document.body.classList.add("setup-mode-simple", "setup-one-page");
+  document.body.classList.remove("setup-mode-advanced");
   const simplePanel = document.querySelector("#setupSimplePanel");
-  if (simplePanel) simplePanel.hidden = setupUiMode !== "simple";
-  if (setupUiMode === "simple") {
-    pullFormToSimple();
-    renderDirectorPresets();
-  } else if (options.fromSimple) {
-    pushSimpleToForm();
-  }
+  if (simplePanel) simplePanel.hidden = false;
+  mountOneSetupPage();
+  placeSetupStepsNav();
+  pullFormToSimple();
+  renderDirectorPresets();
   placeCharacterArtCard();
   placeAbilityBuilder();
+  if (options && options.fromSimple) pushSimpleToForm();
   // When mode flips, refresh Randomize idea from active preset's matching idea text
   if (selectedDirectorPresetId) {
     const p = findPreset(selectedDirectorPresetId);
@@ -3758,20 +3846,27 @@ function setWorldStyleSimple(text) {
   if (!setupForm) return;
   // Simple "world vibe" → world_style custom + custom_style note — never start_location (that was Mosswake Gate leakage).
   const custom = setupForm.querySelector('[name="world_style_custom"], [data-list-custom="world_style"]');
+  const styleEl = setupForm.querySelector('[name="custom_style"]');
+  const customRadio = setupForm.querySelector('input[name="world_style"][value="custom"]');
+  const prevCustom = custom ? String(custom.value || "").trim() : "";
   if (custom) {
     custom.value = t.slice(0, 120);
   }
-  const customRadio = setupForm.querySelector('input[name="world_style"][value="custom"]');
+  const styleCur = styleEl ? String(styleEl.value || "").trim() : "";
+  const styleIsSeed = !styleCur || styleCur === prevCustom || (prevCustom && styleCur.slice(0, 120) === prevCustom);
   if (t) {
     setupForm.querySelectorAll('input[name="world_style"]').forEach((inp) => {
       inp.checked = inp.value === "custom";
     });
     if (customRadio) customRadio.checked = true;
-    // Also keep a short freeform style note for the composer
-    const styleEl = setupForm.querySelector('[name="custom_style"]');
-    if (styleEl && !String(styleEl.value || "").trim()) {
-      styleEl.value = t.slice(0, 200);
+    // Keep the Simple vibe in custom_style when it is still the prior seed (not a longer Advanced note).
+    if (styleEl && styleIsSeed) {
+      const cap = Number(styleEl.maxLength) > 0 ? Number(styleEl.maxLength) : 800;
+      styleEl.value = t.slice(0, cap);
     }
+  } else {
+    if (customRadio) customRadio.checked = false;
+    if (styleEl && styleIsSeed) styleEl.value = "";
   }
 }
 
@@ -3842,44 +3937,33 @@ function pullFormRulesToSimple() {
 function pushSimpleToForm() {
   if (!setupForm) return;
   const name = document.querySelector("#simplePlayerName")?.value?.trim();
-  const age = document.querySelector("#simplePlayerAge")?.value?.trim();
-  const sex = document.querySelector("#simplePlayerSex")?.value || "";
+  const ageEl = document.querySelector("#simplePlayerAge");
+  const sexEl = document.querySelector("#simplePlayerSex");
   const hair = document.querySelector("#simpleHair")?.value?.trim() || "";
   const face = document.querySelector("#simpleFace")?.value?.trim() || "";
   const look = document.querySelector("#simpleLook")?.value?.trim() || "";
   const origin = document.querySelector("#simpleOrigin")?.value || "known";
   const difficulty = document.querySelector("#simpleDifficulty")?.value || "normal";
-  const backstory = document.querySelector("#simpleBackstory")?.value?.trim() || "";
+  const backstoryEl = document.querySelector("#simpleBackstory");
   const world = document.querySelector("#simpleWorld")?.value?.trim() || "";
-  if (name) setFormFieldValue("player_name", name);
-  setFormFieldValue("player_age", age || "");
-  setFormFieldValue("player_sex", sex);
-  // Match Advanced: hair / face / clothing are separate art inputs
+  setFormFieldValue("player_name", name || "");
+  if (ageEl) setFormFieldValue("player_age", ageEl.value.trim());
+  if (sexEl) setFormFieldValue("player_sex", sexEl.value || "");
   setFormFieldValue("hair", hair);
   setFormFieldValue("facial_features", face);
   setFormFieldValue("appearance", look);
   setFormFieldValue("backstory_mode", origin);
-  if (origin === "reincarnated" || origin === "transmigrated") {
-    setFormFieldValue("memory_policy", "remembers former life");
-  } else if (origin === "amnesia" || origin === "hidden") {
-    setFormFieldValue("memory_policy", "slow reveal");
-  } else {
-    setFormFieldValue("memory_policy", "known");
-  }
   setFormFieldValue("difficulty", difficulty);
-  setFormFieldValue("character_backstory", backstory);
-  if (world) setWorldStyleSimple(world);
-  pushSimpleRulesToForm();
+  if (backstoryEl) setFormFieldValue("character_backstory", backstoryEl.value.trim());
+  setWorldStyleSimple(world);
+  if (document.querySelector("#simpleLeveling")) pushSimpleRulesToForm();
 
-  // Powers live in shared #abilityList (reparented)
-  const abilities = collectAbilities();
-  // Gear → starter_equipment structured text
+  // Gear → starter_equipment (empty list clears randomized leftovers)
   const gearText = gearItemsToStarterEquipment(collectGearItems());
-  if (gearText) setFormFieldValue("starter_equipment", gearText);
-  // Simple extra look → advanced extra field for art rebuilds
-  const simpleExtra = document.querySelector("#setupArtExtraSimple")?.value?.trim() || "";
+  setFormFieldValue("starter_equipment", gearText);
+  const simpleExtraEl = document.querySelector("#setupArtExtraSimple");
   const advExtra = document.querySelector("#setupArtExtra");
-  if (advExtra && simpleExtra) advExtra.value = simpleExtra;
+  if (advExtra && simpleExtraEl) advExtra.value = simpleExtraEl.value.trim();
   updateConditionalSetup?.();
   updateAbilityOriginControls?.();
 }
@@ -3903,11 +3987,13 @@ function pullFormToSimple() {
   set("#simpleOrigin", getFormFieldValue("backstory_mode") || "known");
   set("#simpleDifficulty", getFormFieldValue("difficulty") || "normal");
   set("#simpleBackstory", getFormFieldValue("character_backstory"));
+  const worldEl = document.querySelector("#simpleWorld");
   const worldCustom =
     setupForm?.querySelector('[name="world_style_custom"], [data-list-custom="world_style"]')?.value ||
     getFormFieldValue("custom_style") ||
     "";
-  set("#simpleWorld", worldCustom);
+  // World vibe is custom_style. Don't replace a longer note with the short genre-custom mirror.
+  if (worldEl && worldEl.name !== "custom_style") set("#simpleWorld", worldCustom);
   pullFormRulesToSimple();
 
   // Gear list from starter_equipment if empty
@@ -3970,16 +4056,12 @@ function runConfirmedRandomize() {
   if (setupUiMode === "simple") pushSimpleToForm();
   closeRandomizePopover();
   const idea = setupRandomizeIdea();
-  const mode = randomizeMode();
-  const fieldOrder = randomizeFieldOrderForMode(mode);
-  const label =
-    mode === "simple"
-      ? idea
-        ? "Randomizing Simple fields from your idea..."
-        : "Randomizing Simple fields..."
-      : idea
-        ? "Randomizing full Advanced setup from your idea..."
-        : "Randomizing full Advanced setup...";
+  // The one Confirm fills Primary only. It does not roll Optional.
+  const mode = "simple";
+  const fieldOrder = PRIMARY_RANDOM_FIELD_ORDER.slice();
+  const label = idea
+    ? "Randomizing Primary fields from your idea..."
+    : "Randomizing Primary fields...";
   const promptInput = document.querySelector("#randomizeSetupPrompt");
   if (randomizeSetup) randomizeSetup.disabled = true;
   if (promptInput) promptInput.disabled = true;
@@ -4555,8 +4637,8 @@ function syncPresetEditorFromSelection() {
     return;
   }
   labelEl.value = preset.label;
-  simpleEl.value = preset.simple_idea || "";
-  advEl.value = preset.advanced_idea || "";
+  simpleEl.value = preset.simple_idea || preset.advanced_idea || "";
+  advEl.value = simpleEl.value;
   // Built-ins: ideas editable as session overrides when saved → duplicates to user copy
   const isBuiltin = Boolean(preset.builtin);
   labelEl.disabled = isBuiltin;
@@ -4615,9 +4697,9 @@ function saveSelectedPresetFromEditor() {
   }
   const label = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
   const simple_idea = String(document.querySelector("#presetSimpleIdea")?.value || "").trim().slice(0, 400);
-  const advanced_idea = String(document.querySelector("#presetAdvancedIdea")?.value || "").trim().slice(0, 600);
-  if (!simple_idea && !advanced_idea) {
-    window.alert("Add at least one idea (Simple or Advanced).");
+  const advanced_idea = simple_idea;
+  if (!simple_idea) {
+    window.alert("Add a randomize idea.");
     return;
   }
   let list = loadUserPresets();
@@ -4667,22 +4749,9 @@ function deleteSelectedUserPreset() {
 
 function placeCharacterArtCard() {
   const card = document.querySelector("#characterPortraitCard");
-  if (!card) return;
-  const simpleMount = document.querySelector("#setupSimpleArtMount");
-  const advMount = document.querySelector("#setupAdvancedArtMount");
-  if (setupUiMode === "simple" && simpleMount) {
-    if (card.parentElement !== simpleMount) simpleMount.appendChild(card);
-    // Start collapsed in simple unless user already expanded
-    if (!card.dataset.userExpanded) {
-      card.classList.add("isCollapsed");
-      const body = document.querySelector("#setupArtBody");
-      const btn = document.querySelector("#setupArtCollapseBtn");
-      if (body) body.hidden = true;
-      if (btn) btn.setAttribute("aria-expanded", "false");
-    }
-  } else if (advMount) {
-    if (card.parentElement !== advMount) advMount.appendChild(card);
-  }
+  const mount = document.querySelector("#setupSimpleArtMount");
+  if (!card || !mount) return;
+  if (card.parentElement !== mount) mount.appendChild(card);
 }
 
 async function randomizeAllSetup(options = {}) {
@@ -4736,8 +4805,8 @@ async function randomizeAllSetup(options = {}) {
   for (const name of walkOrder) {
     normalizeRandomizerDependencies();
     if (!randomizeFieldApplies(name)) continue;
-    // Simple mode: never LLM-fill advanced-only fields even if walkOrder drifts.
-    if (mode === "simple" && !SIMPLE_RANDOM_FIELD_ORDER.includes(name)) continue;
+    // One page: header Randomize fills Primary only, even if walkOrder drifts.
+    if (mode === "simple" && !PRIMARY_RANDOM_FIELD_ORDER.includes(name)) continue;
     // Skip fields already set by deterministic intent overrides (still re-roll unlocked if empty).
     if (intent && options.skipOverrideFields !== false) {
       // Always re-walk text-heavy / identity fields so LLM can enrich; keep hard overrides for enums/bools.
@@ -4891,7 +4960,7 @@ async function runSetupCoherencePass(options = {}) {
   return payload;
 }
 
-const SETUP_STEP_LABELS = ["Identity", "Powers", "World", "People", "Rules", "Checks"];
+const SETUP_STEP_LABELS = ["Identity", "Powers", "World", "People", "Rules", "Checks & Dice"];
 
 function setupStepLabel(index) {
   const name = SETUP_STEP_LABELS[index] || `Step ${index + 1}`;
@@ -4923,12 +4992,26 @@ function openSetupStepFlyout() {
  * Mount step picker into the active section header (flyout), or beside sections (pinned rail).
  * Row: [2 · Powers ▾] [Pin]  description…  [Randomize …]
  */
+function parkSetupStepsOffSectionHeaders(nav, panel) {
+  nav.classList.remove("isInlineInSection");
+  const anchor = panel.querySelector("#setupSimplePanel");
+  if (!anchor || anchor.parentElement !== panel) return;
+  if (nav.parentElement === panel && nav.nextElementSibling === anchor) return;
+  panel.insertBefore(nav, anchor);
+}
+
 function placeSetupStepsNav() {
   const nav = document.querySelector("#setupSteps");
   const panel = document.querySelector("#setupForm") || document.querySelector(".setupPanel");
   if (!nav || !panel) return;
   const sections = panel.querySelector(".setupSections");
   const pinned = nav.classList.contains("isPinned");
+
+  // This page hides the steps chip. Mounting it into a header would also hide that section's name.
+  if (document.body.classList.contains("setup-one-page")) {
+    parkSetupStepsOffSectionHeaders(nav, panel);
+    return;
+  }
 
   if (pinned) {
     nav.classList.remove("isInlineInSection");
@@ -4945,8 +5028,10 @@ function placeSetupStepsNav() {
   if (host) {
     if (nav.parentElement !== host) host.appendChild(nav);
     nav.classList.add("isInlineInSection");
-  } else if (sections && nav.parentElement !== panel) {
+  } else if (sections && sections.parentElement === panel && nav.parentElement !== panel) {
     panel.insertBefore(nav, sections);
+    nav.classList.remove("isInlineInSection");
+  } else {
     nav.classList.remove("isInlineInSection");
   }
 }
@@ -4982,8 +5067,12 @@ function applySetupNavMode(mode) {
 }
 
 function setSetupStep(nextStep) {
-  setupStep = Math.max(0, Math.min(setupSections.length - 1, nextStep));
-  setupSections.forEach((section, index) => section.classList.toggle("active", index === setupStep));
+  const last = Math.max(setupSections.length - 1, 0);
+  setupStep = Math.max(0, Math.min(last, nextStep));
+  const onePage = document.body.classList.contains("setup-one-page");
+  setupSections.forEach((section, index) => {
+    section.classList.toggle("active", onePage || index === setupStep);
+  });
   document.querySelectorAll("[data-setup-step]").forEach((button) => {
     const idx = Number(button.dataset.setupStep);
     button.classList.toggle("active", idx === setupStep);
@@ -5142,7 +5231,13 @@ function setActiveTab(tabId, options = {}) {
   renderIndex();
   if (activeTab === "bible") loadBible().catch((error) => (indexContent.innerHTML = paragraphs(error.message)));
   if (activeTab === "model") loadModelConfig().catch((error) => (indexContent.innerHTML = paragraphs(error.message)));
-  if (activeTab === "quests") loadQuestStages().catch((error) => (indexContent.innerHTML = paragraphs(error.message)));
+  if (activeTab === "quests") {
+    loadQuestStages().catch((error) => (indexContent.innerHTML = paragraphs(error.message)));
+    loadPlayerQuests().catch(() => {});
+  }
+  if (activeTab === "npcs") {
+    loadNpcRelationships().then(() => { if (activeTab === "npcs") renderIndex(); }).catch(() => {});
+  }
 }
 
 function applyTabNavMode(mode) {
@@ -5190,6 +5285,7 @@ function decorateSetupFields() {
   setupForm.querySelectorAll("label").forEach((label) => {
     if (label.closest("fieldset")) return;
     if (label.classList.contains("simpleSetupField")) return;
+    if (label.hidden || label.closest("[hidden]")) return;
     const field = label.querySelector("input[name], select[name], textarea[name]");
     const name = field?.name;
     if (!name || !SETTING_INFO[name] || label.querySelector(".settingDescription")) return;
@@ -5239,7 +5335,22 @@ function decorateSimpleSetupFields() {
     if (!name || label.querySelector(`[data-setting-controls="${name}"]`)) return;
     label.classList.add("settingField");
     ensureSettingControls(label, name);
-    // World vibe also locks the multi-select world_style so full randomize skips genre.
+    if (field.tagName === "SELECT") {
+      ensureSelectUtilityOptions(field);
+      const host = label.closest(".settingFieldShell") || label;
+      const hasCustom = Array.from(field.options || []).some((option) => option.value === "custom");
+      if (hasCustom && SETTING_INFO[name] && !host.querySelector(`[data-custom-input="${name}"]`)) {
+        const custom = document.createElement("textarea");
+        custom.className = "customSettingInput";
+        custom.dataset.customInput = name;
+        custom.rows = 2;
+        custom.maxLength = SETTING_LIMITS[name] || 160;
+        custom.placeholder =
+          SETTING_INFO[name].customPlaceholder || `Write your own ${name.replaceAll("_", " ")}.`;
+        host.append(custom);
+      }
+    }
+    // World vibe also locks the multi-select world_style so a locked vibe is not retagged.
     const alsoLock = String(field.dataset.simpleAlsoLock || "")
       .split(",")
       .map((s) => s.trim())
@@ -5835,8 +5946,12 @@ function parseStarterEquipmentToGear(text) {
     .map((line) => {
       const slotM = line.match(/\(([^)]+)\)/);
       const typeM = line.match(/\[(look_only|stat|ability|compounding|mixed)\]/i);
-      const effectM = line.split(/—|–|-/).slice(1).join("-").trim();
-      let name = line.replace(/\([^)]+\)/g, "").replace(/\[[^\]]+\]/g, "").split(/—|–/)[0].trim();
+      // Em dash / spaced hyphen only. A bare "-" is part of the item name
+      // ("travel-stained coat", "3-day rations"); splitting on it stamped
+      // effect_type mixed and rewrote the line on the next Simple push.
+      const effectSplit = /\s*[—–]\s*|\s+-\s+/;
+      const effectM = line.split(effectSplit).slice(1).join(" - ").trim();
+      let name = line.replace(/\([^)]+\)/g, "").replace(/\[[^\]]+\]/g, "").split(effectSplit)[0].trim();
       return {
         name: name || line.slice(0, 40),
         slot: slotM ? slotM[1] : "",
@@ -5849,19 +5964,36 @@ function parseStarterEquipmentToGear(text) {
 function placeAbilityBuilder() {
   const block = document.querySelector("#abilityOptions");
   if (!block) return;
-  const simpleMount = document.querySelector("#setupSimplePowersMount");
-  const advMount = document.querySelector("#setupAdvancedPowersMount");
-  if (setupUiMode === "simple" && simpleMount) {
-    if (block.parentElement !== simpleMount) simpleMount.appendChild(block);
-  } else if (advMount) {
-    if (block.parentElement !== advMount) advMount.appendChild(block);
-  }
+  const home = document.querySelector("#setupAdvancedPowersMount");
+  if (home && block.parentElement !== home) home.appendChild(block);
 }
 
 function updateSystemStyleDescription() {
   const description = document.querySelector("#systemStyleDescription");
   const value = setupForm.elements.system_style?.value;
   if (description) description.textContent = SYSTEM_STYLE_DESCRIPTIONS[value] || "";
+}
+
+function placeContinueButton(available) {
+  const cont = document.querySelector("#menuContinue");
+  const primary = document.querySelector("#mainMenuPrimaryGroup");
+  const start = document.querySelector("#menuNewGame");
+  if (!cont || !primary) return;
+  const load = document.querySelector("#menuLoadGame");
+  if (load && load.parentElement === primary) primary.insertBefore(cont, load);
+  else primary.appendChild(cont);
+  cont.classList.remove("mainMenuGhost");
+  if (available) {
+    cont.classList.remove("mainMenuSecondary");
+    cont.classList.add("mainMenuPrimary");
+    start?.classList.remove("mainMenuPrimary");
+    start?.classList.add("mainMenuSecondary");
+    return;
+  }
+  cont.classList.remove("mainMenuPrimary");
+  cont.classList.add("mainMenuSecondary");
+  start?.classList.remove("mainMenuSecondary");
+  start?.classList.add("mainMenuPrimary");
 }
 
 async function refreshContinueButton() {
@@ -5872,16 +6004,19 @@ async function refreshContinueButton() {
     const res = await fetch("/api/playthrough/continue", { cache: "no-store" });
     const info = await res.json().catch(() => ({}));
     const ok = Boolean(info.ok);
+    const name = String(info.player_name || "").trim();
     cont.hidden = false;
     cont.disabled = !ok;
     cont.classList.toggle("mainMenuDisabled", !ok);
     cont.setAttribute("aria-disabled", ok ? "false" : "true");
+    placeContinueButton(ok);
+    cont.textContent = ok ? (name ? `Continue ${name}` : "Continue") : "Continue playthrough";
     cont.title = ok
-      ? `Continue ${info.player_name || "run"} @ ${info.location || "?"} (turn ${info.turn ?? "?"})`
+      ? `Continue ${name || "run"} @ ${info.location || "?"} (turn ${info.turn ?? "?"})`
       : "No previous playthrough found";
     if (status) {
       status.textContent = ok
-        ? `Continue available: ${info.player_name || "player"} · ${info.location || "somewhere"} · turn ${info.turn ?? 0}${info.source === "slot" ? " (autosave)" : ""}`
+        ? `Continue available: ${name || "player"} · ${info.location || "somewhere"} · turn ${info.turn ?? 0}${info.source === "slot" ? " (autosave)" : ""}`
         : "Ready. Start a new game or load a save.";
     }
     return info;
@@ -5889,6 +6024,8 @@ async function refreshContinueButton() {
     cont.disabled = true;
     cont.hidden = false;
     cont.classList.add("mainMenuDisabled");
+    cont.textContent = "Continue playthrough";
+    placeContinueButton(false);
     if (status) status.textContent = "Could not check for a previous game.";
     return null;
   }
@@ -5903,20 +6040,86 @@ function showMainMenu() {
 
 let characterSheetOpen = false;
 let characterSheetCategory = "you";
+let characterSheetInnerTab = "character";
 
 function sheetTitleForCategory(cat) {
-  if (cat === "history") return { title: "History", sub: "Turn log — also available from the ☰ menu." };
+  if (cat === "history") return { title: "History", sub: HISTORY_UNDO_LINE };
   if (cat === "world") return { title: "World", sub: "Bible, places, factions." };
   if (cat === "people") return { title: "People", sub: "NPCs and social threads." };
   if (cat === "tools") return { title: "Tools", sub: "Quests, model, meta." };
   return { title: "Character", sub: "Art, stats, inventory, and self." };
 }
 
+function defaultSheetInnerTab(cat) {
+  if (cat === "history") return "history";
+  if (cat === "world") return "bible";
+  if (cat === "people") return "npcs";
+  if (cat === "tools") return "quests";
+  return "character";
+}
+
+function sheetFloatTab() {
+  if (characterSheetCategory === "history") return "history";
+  if (characterSheetCategory === "you") return "character";
+  const cat = TAB_CATEGORIES.find((c) => c.id === characterSheetCategory);
+  const tabs = cat?.tabs || [];
+  if (tabs.some((t) => t.id === characterSheetInnerTab)) return characterSheetInnerTab;
+  return defaultSheetInnerTab(characterSheetCategory);
+}
+
+function popOutCurrentSheet() {
+  const tab = sheetFloatTab();
+  const options = { pinned: true };
+  if (tab === "history") {
+    const chat = document.querySelector("#chatColumn");
+    const box = chat?.getBoundingClientRect();
+    const width = 380;
+    let left = box ? Math.round(box.right + 12) : Math.round(window.innerWidth * 0.46);
+    left = Math.min(Math.max(12, left), Math.max(12, window.innerWidth - width - 12));
+    options.left = left;
+    options.top = Math.max(56, Math.round(box?.top || 64));
+    options.width = width;
+    options.height = Math.min(520, Math.max(280, Math.round(window.innerHeight * 0.62)));
+  }
+  openTabPopout(tab, "float", options);
+  if (tab !== "history") return;
+  const panel = document.querySelector('.floatPanel[data-float-tab="history"]');
+  if (panel && options.left != null) {
+    panel.style.left = `${options.left}px`;
+    panel.style.top = `${options.top}px`;
+    applyFloatPanelSize(panel, options.width, options.height);
+    if (floatWindowState?.history) {
+      floatWindowState.history.left = options.left;
+      floatWindowState.history.top = options.top;
+      floatWindowState.history.width = options.width;
+      floatWindowState.history.height = options.height;
+      floatWindowState.history.pinned = true;
+      floatWindowState.history.collapsed = false;
+      floatWindowState.history.open = true;
+    }
+    persistFloatPanel("history", panel);
+  }
+  closeCharacterSheet();
+}
+
+function setPlayStageInert(on) {
+  const stage = document.querySelector("#playGrid");
+  if (stage) stage.inert = Boolean(on);
+}
+
+function clearHiddenTabsCopy() {
+  const tabsPanel = document.querySelector("#tabsPanel");
+  if (!indexContent) return;
+  if (!tabsPanel || tabsPanel.hasAttribute("hidden")) indexContent.replaceChildren();
+}
+
 function openCharacterSheet(category = "you") {
-  characterSheetOpen = true;
-  characterSheetCategory = category || "you";
-  closePlayMenu();
+  const next = category || "you";
   const drawer = document.querySelector("#characterSheetDrawer");
+  if (next !== characterSheetCategory) characterSheetInnerTab = defaultSheetInnerTab(next);
+  characterSheetOpen = true;
+  characterSheetCategory = next;
+  closePlayMenu();
   if (!drawer) return;
   drawer.classList.remove("hidden");
   drawer.setAttribute("aria-hidden", "false");
@@ -5925,51 +6128,120 @@ function openCharacterSheet(category = "you") {
   const subEl = document.querySelector("#characterSheetSubtitle");
   if (titleEl) titleEl.textContent = meta.title;
   if (subEl) subEl.textContent = meta.sub;
-  document.querySelectorAll("[data-sheet-tab]").forEach((btn) => {
-    btn.toggleAttribute("data-sheet-active", btn.getAttribute("data-sheet-tab") === characterSheetCategory);
+  drawer.querySelectorAll("[data-sheet-tab]").forEach((btn) => {
+    const on = btn.getAttribute("data-sheet-tab") === characterSheetCategory;
+    btn.toggleAttribute("data-sheet-active", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
   });
+  setPlayStageInert(true);
   paintCharacterSheet();
+  window.requestAnimationFrame(() => drawer.querySelector("[data-sheet-tab][data-sheet-active]")?.focus());
+}
+
+function historyHomeEl() {
+  return document.querySelector("#historyPanel .historyPane");
+}
+
+function parkHistoryList() {
+  const home = historyHomeEl();
+  if (!historyEl || !home || historyEl.parentElement === home) return;
+  home.appendChild(historyEl);
+}
+
+function mountLiveHistory(body) {
+  if (!body) return;
+  if (!historyEl) {
+    body.innerHTML = `<div class="sheetHistoryMount"><p class="empty">No history yet.</p></div>`;
+    return;
+  }
+  let mount = body.querySelector(":scope > .sheetHistoryMount");
+  if (mount && historyEl.parentElement === mount && body.childElementCount === 1) {
+    renderHistory();
+    return;
+  }
+  if (body.contains(historyEl)) parkHistoryList();
+  body.replaceChildren();
+  mount = document.createElement("div");
+  mount.className = "sheetHistoryMount";
+  body.appendChild(mount);
+  mount.appendChild(historyEl);
+  renderHistory();
+}
+
+function playSurfaceError(anchor, error) {
+  const host = anchor?.closest?.("#characterSheetBody, .floatPanelBody, .popoutTabInner") || indexContent;
+  if (!host) return;
+  const note = document.createElement("p");
+  note.className = "bad";
+  note.textContent = error?.message || String(error || "");
+  host.appendChild(note);
+}
+
+function playActionSurface(node) {
+  return node?.closest?.("#characterSheetBody, .floatPanelBody, .popoutTabInner, #indexContent") || document;
+}
+
+function listenPlaySurface(type, handler) {
+  indexContent?.addEventListener(type, handler);
+  document.querySelector("#characterSheetDrawer")?.addEventListener(type, handler);
+  document.querySelector("#floatLayer")?.addEventListener(type, handler);
+  document.querySelector("#globalFloatLayer")?.addEventListener(type, handler);
 }
 
 function closeCharacterSheet() {
   characterSheetOpen = false;
+  parkHistoryList();
   const drawer = document.querySelector("#characterSheetDrawer");
   drawer?.classList.add("hidden");
   drawer?.setAttribute("aria-hidden", "true");
+  const body = document.querySelector("#characterSheetBody");
+  if (body) body.replaceChildren();
+  const note = document.querySelector("#sheetSceneNote");
+  if (note) {
+    note.hidden = true;
+    note.textContent = "";
+  }
+  setPlayStageInert(false);
+  hideItemOverlay();
 }
 
-function paintCharacterSheet() {
+function focusPlayMenu() {
+  document.querySelector("#playMenuToggle")?.focus();
+}
+
+function paintCharacterSheet(options = {}) {
   const body = document.querySelector("#characterSheetBody");
   if (!body) return;
+  const fetchRemote = options.load !== false;
+  clearHiddenTabsCopy();
   const cat = characterSheetCategory || "you";
   if (cat === "history") {
-    renderHistory();
-    const hist = document.querySelector("#history");
-    body.innerHTML = `<div class="sheetHistoryMount">${hist ? hist.innerHTML : "<p class='empty'>No history yet.</p>"}</div>`;
+    characterSheetInnerTab = "history";
+    mountLiveHistory(body);
     return;
   }
+  parkHistoryList();
   if (cat === "you") {
+    characterSheetInnerTab = "character";
     body.innerHTML = renderCharacter();
     return;
   }
-  // World / people / tools: render first tab of that category (bible, npcs, etc.)
+  // World / people / tools: keep the inner tab the player already opened.
   const catDef = TAB_CATEGORIES.find((c) => c.id === cat) || TAB_CATEGORIES[0];
   const tabs = catDef.tabs || [];
-  const prefer =
-    cat === "world"
-      ? "bible"
-      : cat === "people"
-        ? "npcs"
-        : cat === "tools"
-          ? "quests"
-          : tabs[0]?.id;
-  const tabId = tabs.some((t) => t.id === prefer) ? prefer : tabs[0]?.id || "character";
+  const prefer = defaultSheetInnerTab(cat);
+  const tabId = tabs.some((t) => t.id === characterSheetInnerTab)
+    ? characterSheetInnerTab
+    : tabs.some((t) => t.id === prefer)
+      ? prefer
+      : tabs[0]?.id || "character";
+  characterSheetInnerTab = tabId;
   const renderers = TAB_RENDERERS();
   const render = renderers[tabId] || renderCharacter;
   const tabButtons = tabs
     .map(
       (t) =>
-        `<button type="button" class="chipBtn secondaryButton sheetInnerTab${t.id === tabId ? " isActive" : ""}" data-sheet-inner-tab="${escapeHtml(t.id)}">${escapeHtml(t.label)}</button>`,
+        `<button type="button" class="chipBtn secondaryButton sheetInnerTab${t.id === tabId ? " isActive" : ""}" data-sheet-inner-tab="${escapeHtml(t.id)}" aria-pressed="${t.id === tabId ? "true" : "false"}">${escapeHtml(t.label)}</button>`,
     )
     .join("");
   body.innerHTML = `
@@ -5979,20 +6251,160 @@ function paintCharacterSheet() {
   body.querySelectorAll("[data-sheet-inner-tab]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const id = btn.getAttribute("data-sheet-inner-tab");
+      characterSheetInnerTab = id;
       const r = TAB_RENDERERS()[id];
       const content = body.querySelector(".sheetInnerContent");
       if (content && r) content.innerHTML = r();
       body.querySelectorAll("[data-sheet-inner-tab]").forEach((b) => {
-        b.classList.toggle("isActive", b === btn);
+        const on = b === btn;
+        b.classList.toggle("isActive", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
       });
       if (id === "bible") loadBible().catch(() => {});
       if (id === "model") loadModelConfig().catch(() => {});
-      if (id === "quests") loadQuestStages().catch(() => {});
+      if (id === "quests") { loadQuestStages().catch(() => {}); loadPlayerQuests().catch(() => {}); }
+      if (id === "npcs") { loadNpcRelationships().then(() => { if (activeTab === "npcs") renderIndex(); }).catch(() => {}); }
     });
   });
+  if (!fetchRemote) return;
   if (tabId === "bible") loadBible().catch(() => {});
   if (tabId === "model") loadModelConfig().catch(() => {});
-  if (tabId === "quests") loadQuestStages().catch(() => {});
+  if (tabId === "quests") { loadQuestStages().catch(() => {}); loadPlayerQuests().catch(() => {}); }
+  if (tabId === "npcs") { loadNpcRelationships().then(() => { if (activeTab === "npcs") renderIndex(); }).catch(() => {}); }
+}
+
+function playMenuTabStops(drawer) {
+  if (!drawer) return [];
+  return Array.from(drawer.querySelectorAll("button, a[href], input, select, textarea")).filter((el) => {
+    if (el.disabled || el.getAttribute("aria-hidden") === "true" || el.tabIndex < 0) return false;
+    return el.getClientRects().length > 0;
+  });
+}
+
+function syncPlayMenuThumb() {
+  const nav = document.querySelector(".playMenuNav");
+  const lane = document.querySelector(".playMenuLane");
+  const thumb = document.querySelector(".playMenuThumb");
+  if (!nav || !lane || !thumb) return;
+  const max = Math.max(0, nav.scrollHeight - nav.clientHeight);
+  const laneH = lane.clientHeight || 1;
+  const thumbH = max <= 1 ? laneH : Math.max(36, Math.round((nav.clientHeight / nav.scrollHeight) * laneH));
+  const travel = Math.max(0, laneH - thumbH);
+  const y = max <= 1 ? 0 : Math.round((nav.scrollTop / max) * travel);
+  thumb.style.height = `${Math.min(laneH, thumbH)}px`;
+  thumb.style.transform = `translateY(${y}px)`;
+}
+
+function bindPlayMenuLane() {
+  const nav = document.querySelector(".playMenuNav");
+  const lane = document.querySelector(".playMenuLane");
+  const thumb = document.querySelector(".playMenuThumb");
+  if (!nav || !lane || !thumb || nav.dataset.laneBound === "1") return;
+  nav.dataset.laneBound = "1";
+  nav.addEventListener("scroll", () => syncPlayMenuThumb(), { passive: true });
+  window.addEventListener("resize", () => syncPlayMenuColumns());
+  thumb.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startY = event.clientY;
+    const startTop = nav.scrollTop;
+    const move = (ev) => {
+      const max = Math.max(0, nav.scrollHeight - nav.clientHeight);
+      const laneH = lane.clientHeight || 1;
+      const thumbH = thumb.getBoundingClientRect().height || 1;
+      const travel = Math.max(1, laneH - thumbH);
+      nav.scrollTop = startTop + ((ev.clientY - startY) / travel) * max;
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  });
+}
+
+function playMenuListOverflows(nav) {
+  const items = nav.querySelectorAll(".playMenuItem");
+  const last = items[items.length - 1];
+  if (!last) return false;
+  nav.scrollTop = 0;
+  const padBottom = parseFloat(getComputedStyle(nav).paddingBottom) || 0;
+  const visibleBottom = nav.getBoundingClientRect().top + nav.clientTop + nav.clientHeight - padBottom;
+  return last.getBoundingClientRect().bottom > visibleBottom + 1;
+}
+
+function playMenuColumnWidth(nav) {
+  const probe = document.createElement("span");
+  probe.style.cssText = "position:fixed;left:0;top:0;visibility:hidden;white-space:nowrap;pointer-events:none;";
+  document.body.appendChild(probe);
+  let text = 0;
+  let chrome = 0;
+  nav.querySelectorAll(".playMenuItem").forEach((btn) => {
+    const cs = getComputedStyle(btn);
+    probe.style.fontStyle = cs.fontStyle;
+    probe.style.fontWeight = cs.fontWeight;
+    probe.style.fontSize = cs.fontSize;
+    probe.style.fontFamily = cs.fontFamily;
+    probe.style.letterSpacing = cs.letterSpacing;
+    const labels = [(btn.textContent || "").replace(/\s+/g, " ").trim()];
+    // This row swaps between the two labels. Size for the longer one.
+    if (btn.id === "resetPlayLayoutBtn") labels.push("Customize layout", "Reset layout");
+    labels.forEach((label) => {
+      probe.textContent = label;
+      text = Math.max(text, probe.getBoundingClientRect().width);
+    });
+    chrome = Math.max(
+      chrome,
+      (parseFloat(cs.paddingLeft) || 0) +
+        (parseFloat(cs.paddingRight) || 0) +
+        (parseFloat(cs.borderLeftWidth) || 0) +
+        (parseFloat(cs.borderRightWidth) || 0),
+    );
+  });
+  probe.remove();
+  return Math.ceil(text + chrome);
+}
+
+function playMenuSplitWidthPx(nav) {
+  const drawer = nav.closest(".playMenuDrawer");
+  const col = playMenuColumnWidth(nav);
+  const navCs = getComputedStyle(nav);
+  const navPad = (parseFloat(navCs.paddingLeft) || 0) + (parseFloat(navCs.paddingRight) || 0);
+  const lane = drawer?.querySelector(".playMenuLane");
+  let laneOuter = 22;
+  if (lane) {
+    const laneCs = getComputedStyle(lane);
+    laneOuter =
+      lane.getBoundingClientRect().width +
+      (parseFloat(laneCs.marginLeft) || 0) +
+      (parseFloat(laneCs.marginRight) || 0);
+  }
+  const drawerCs = drawer ? getComputedStyle(drawer) : null;
+  const border = drawerCs
+    ? (parseFloat(drawerCs.borderLeftWidth) || 0) + (parseFloat(drawerCs.borderRightWidth) || 0)
+    : 0;
+  return Math.ceil(border + navPad + 8 + col * 2 + laneOuter + 8);
+}
+
+function syncPlayMenuColumns() {
+  const nav = document.querySelector(".playMenuNav");
+  const drawer = document.querySelector("#playMenuDrawer");
+  if (!nav || !drawer || drawer.classList.contains("hidden")) return;
+  const wasSplit = document.body.classList.contains("play-menu-split");
+  document.body.classList.remove("play-menu-split");
+  document.documentElement.style.removeProperty("--play-menu-width");
+  if (!playMenuListOverflows(nav)) {
+    if (wasSplit) nav.scrollTop = 0;
+    syncPlayMenuThumb();
+    return;
+  }
+  const cap = Math.max(320, Math.floor(window.innerWidth * 0.92));
+  const width = Math.min(cap, Math.max(320, playMenuSplitWidthPx(nav)));
+  document.documentElement.style.setProperty("--play-menu-width", `min(${width}px, 92vw)`);
+  document.body.classList.add("play-menu-split");
+  if (!wasSplit) nav.scrollTop = 0;
+  syncPlayMenuThumb();
 }
 
 function openPlayMenu() {
@@ -6005,18 +6417,24 @@ function openPlayMenu() {
   backdrop?.setAttribute("aria-hidden", "false");
   toggle?.setAttribute("aria-expanded", "true");
   document.body.classList.add("play-menu-open");
+  bindPlayMenuLane();
+  document.querySelector("#playMenuClose")?.focus();
+  syncPlayMenuColumns();
+  window.requestAnimationFrame(() => syncPlayMenuColumns());
 }
 
 function closePlayMenu() {
   const drawer = document.querySelector("#playMenuDrawer");
   const backdrop = document.querySelector("#playMenuBackdrop");
   const toggle = document.querySelector("#playMenuToggle");
+  const wasOpen = !!drawer && !drawer.classList.contains("hidden");
   drawer?.classList.add("hidden");
   backdrop?.classList.add("hidden");
   drawer?.setAttribute("aria-hidden", "true");
   backdrop?.setAttribute("aria-hidden", "true");
   toggle?.setAttribute("aria-expanded", "false");
   document.body.classList.remove("play-menu-open");
+  if (wasOpen) toggle?.focus();
 }
 
 function togglePlayMenu() {
@@ -6029,6 +6447,7 @@ function bindPlaySideRail() {
   if (document.body.dataset.playRailBound === "1") return;
   document.body.dataset.playRailBound = "1";
 
+  bindPlayMenuLane();
   document.querySelector("#playMenuToggle")?.addEventListener("click", () => togglePlayMenu());
   document.querySelector("#playMenuClose")?.addEventListener("click", () => closePlayMenu());
   document.querySelector("#playMenuBackdrop")?.addEventListener("click", () => closePlayMenu());
@@ -6078,23 +6497,56 @@ function bindPlaySideRail() {
     else if (action === "history") openCharacterSheet("history");
   });
 
-  document.querySelector("#characterSheetClose")?.addEventListener("click", () => closeCharacterSheet());
-  document.querySelector("#characterSheetPopout")?.addEventListener("click", () => {
-    if (characterSheetCategory === "history") {
-      openTabPopout("history", "float");
-      return;
-    }
-    openTabPopout(characterSheetCategory === "you" ? "character" : "bible", "float");
+  document.querySelector("#characterSheetClose")?.addEventListener("click", () => {
+    closeCharacterSheet();
+    focusPlayMenu();
   });
   document.querySelector("#characterSheetDrawer")?.addEventListener("click", (event) => {
     const tab = event.target.closest("[data-sheet-tab]");
     if (!tab) return;
     openCharacterSheet(tab.getAttribute("data-sheet-tab") || "you");
   });
+  document.addEventListener("click", (event) => {
+    const pop = event.target.closest("[data-sheet-popout]");
+    if (!pop) return;
+    event.preventDefault();
+    popOutCurrentSheet();
+  });
 
   document.addEventListener("keydown", (event) => {
+    const drawer = document.querySelector("#playMenuDrawer");
+    const open = !!drawer && !drawer.classList.contains("hidden");
     if (event.key === "Escape") {
-      closePlayMenu();
+      if (open) {
+        closePlayMenu();
+        return;
+      }
+      const sheet = document.querySelector("#characterSheetDrawer");
+      const sheetOpen = characterSheetOpen && sheet && !sheet.classList.contains("hidden");
+      if (sheetOpen) {
+        event.preventDefault();
+        closeCharacterSheet();
+        focusPlayMenu();
+        return;
+      }
+      return;
+    }
+    if (!open || event.key !== "Tab") return;
+    const stops = playMenuTabStops(drawer);
+    if (!stops.length) return;
+    const first = stops[0];
+    const last = stops[stops.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || !drawer.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+      return;
+    }
+    if (active === last || !drawer.contains(active)) {
+      event.preventDefault();
+      first.focus();
     }
   });
 }
@@ -6210,17 +6662,19 @@ function restoreLastTurnPanels(resume = null) {
   const snap = resume && typeof resume === "object" ? resume : {};
   const narrationText =
     String(snap.last_narration || "").trim() ||
-    String(lastHistoryEntry(["narration"])?.content || "").trim() ||
-    String(snap.last_summary || "").trim() ||
-    String((state?.turn_summaries || [])[0]?.summary || "").trim();
+    String(lastHistoryEntry(["narration"])?.content || "").trim();
   const inputEntry = lastHistoryEntry(["player", "opening", "continue", "regenerate", "wait"]);
   const inputText =
     String(snap.last_input || "").trim() ||
     String(inputEntry?.content || "").trim();
   const inputKind = String(snap.last_input_kind || inputEntry?.kind || "").trim();
+  const kindKey = inputKind.toLowerCase();
+  const playerLine = String(lastHistoryEntry(["player"])?.content || "").trim();
 
   if (latestInput) {
-    if (inputText) {
+    if (kindKey === "opening" && !playerLine) {
+      latestInput.innerHTML = paragraphs("No action yet.");
+    } else if (inputText) {
       const label =
         inputKind === "opening"
           ? "Opening"
@@ -6241,8 +6695,10 @@ function restoreLastTurnPanels(resume = null) {
     if (narrationText) {
       latestOutput.innerHTML = `<article class="turnNarration">${paragraphs(narrationText)}</article>`;
     } else {
-      latestOutput.innerHTML = paragraphs("Scene rewound. What do you do?");
+      latestOutput.innerHTML = paragraphs("No scene text for this turn.");
     }
+    const narrationEntry = lastHistoryEntry(["narration"]);
+    appendAsksForTurn(narrationEntry?.turn);
   }
 
   // Force history list even if renderShell ran before state was fully assigned.
@@ -6289,6 +6745,31 @@ async function enterPlayFromSave(nextState, options = {}) {
   setSceneFocus(true, { scroll: true, focusInput: true, smooth: true });
 }
 
+function linkLatestHistory() {
+  const newest = document.querySelector("#history details.historyTurn");
+  const buttons = newest?.querySelectorAll(".insertRefButton");
+  const button = buttons?.length ? buttons[buttons.length - 1] : document.querySelector("#history .insertRefButton");
+  button?.click();
+  document.title = "LINK-READY";
+}
+
+async function revealLatestHistory() {
+  const button = document.querySelector("#menuContinue");
+  if (button) {
+    button.disabled = false;
+    button.setAttribute("aria-disabled", "false");
+  }
+  const gameHidden = document.querySelector("#gameView")?.classList.contains("hidden");
+  if (gameHidden) await continuePlaythrough();
+  openCharacterSheet("history");
+  const newest = document.querySelector("#history details.historyTurn");
+  if (newest) {
+    newest.setAttribute("open", "");
+    newest.scrollIntoView({ block: "center" });
+  }
+  document.title = "HISTORY-READY";
+}
+
 async function continuePlaythrough() {
   const status = document.querySelector("#mainMenuStatus");
   const cont = document.querySelector("#menuContinue");
@@ -6311,7 +6792,7 @@ async function continuePlaythrough() {
   }
 }
 
-const SETUP_TUTORIAL_KEY = "morkyn-setup-tutorial-v8";
+const SETUP_TUTORIAL_KEY = "morkyn-setup-tutorial-v10";
 let setupTourIndex = -1;
 let setupTourActive = false;
 let setupTourKeepFlyoutOpen = false;
@@ -6347,31 +6828,34 @@ function fieldControl(name, kind) {
   return null;
 }
 
+function primaryNameShell() {
+  const field = document.querySelector("#simplePlayerName");
+  return field?.closest(".settingFieldShell") || field;
+}
+
 /**
  * Guided tour: keep enough stops for clarity, with full context in each tip.
  * (User feedback: short compacted text was hard to follow — not that there were too many stops.)
  */
+function tourBlockHeading(id) {
+  const block = document.querySelector(id);
+  const heading = block?.querySelector("h2.sectionHeaderTitle");
+  if (!heading || isSetupTourTargetHidden(heading)) return null;
+  return heading;
+}
+
 function getSetupTourSteps() {
-  const openMenu = () => {
-    applySetupNavMode("flyout");
-    setupTourKeepFlyoutOpen = true;
-    openSetupStepFlyout();
-  };
   return [
     {
       id: "steps-chip",
-      title: "Setup pages",
+      title: "Primary",
       text:
-        "This control opens your setup pages. Setup is split into short sections so you never face one endless form. " +
-        "Tap it anytime to jump: Identity, Powers, World, People, Rules, and Checks. " +
-        "On phones it drops down over the form so the page stays full-width.",
-      shape: "pill",
-      select: () => document.querySelector("#setupNavToggle"),
-      before: () => {
-        applySetupNavMode("flyout");
-        setupTourKeepFlyoutOpen = false;
-        closeSetupStepFlyout();
-      },
+        "This is the Primary group — the setup on this page. " +
+        "Name, origin, world difficulty, world vibe, and look sit together. " +
+        "Nothing in Primary is required. Optional, below, holds every other setting.",
+      shape: "rect",
+      beside: true,
+      select: () => document.querySelector("#setupPrimaryGroup"),
     },
     {
       id: "llm",
@@ -6395,37 +6879,33 @@ function getSetupTourSteps() {
     },
     {
       id: "randomize-all",
-      title: "Randomize (whole setup)",
+      title: "Randomize",
       text:
-        "Fills every unlocked field in a sensible order (character → world → people → rules). " +
-        "Optional idea box next to it steers the overall concept (tone, genre, hook). " +
-        "Safe to spam: it won’t touch fields you’ve Locked.",
+        "Fills Primary only: name, origin, world difficulty, world vibe, hair, face, and clothes. " +
+        "Optional stays as you left it. Locked Primary fields are skipped. " +
+        "Confirm fills Primary only.",
       shape: "rect",
-      select: () => document.querySelector(".setupRandomizeAll") || document.querySelector("#randomizeSetup"),
+      select: () => document.querySelector("#simpleOpenRandomize"),
     },
     {
       id: "menu-open",
-      title: "Step menu",
+      title: "Optional",
       text:
-        "Here’s the full page list, grouped so it’s easier to scan:\n" +
-        "• You — Identity (who you are) and Powers (optional abilities)\n" +
-        "• Setting — World (genre, map, magic) and People (NPCs, factions)\n" +
-        "• System — Rules (difficulty, death, loot) and Checks (dice)\n" +
-        "Next we’ll point at each page name once so the map sticks.",
+        "This heading is the second group. " +
+        "Identity details, Powers, World, People, Rules, and Checks & Dice are all on this page under Optional. " +
+        "Skip the group, or open only the block you care about. Randomize does not fill it.",
       shape: "rect",
-      select: () => document.querySelector("#setupStepFlyout") || document.querySelector("#setupStepGroups"),
-      before: openMenu,
+      select: () => document.querySelector("#setupOptionalHeading"),
     },
     {
       id: "step-0",
       title: "Identity",
       text:
-        "Who you are on paper: name, titles, age, sex, backstory mode, and memory rules. " +
-        "This is what the model treats as the hero’s baseline. " +
-        "You don’t need a novel — even a short name and tone already steer the opening scene.",
-      shape: "pill",
-      select: () => document.querySelector('[data-setup-step="0"]'),
-      before: openMenu,
+        "The rest of who you are: public name, age, sex, memory, backstory, and starter equipment. " +
+        "Name and origin are up in Primary, not here. " +
+        "Nothing on the page is required.",
+      shape: "rect",
+      select: () => tourBlockHeading("#setupBlockIdentity"),
     },
     {
       id: "step-1",
@@ -6433,21 +6913,19 @@ function getSetupTourSteps() {
       text:
         "Optional starting abilities (none is fine). " +
         "Base ability text is locked once play begins so the model can’t quietly rewrite what you defined. " +
-        "Skip this page if you want a grounded, low-magic start.",
-      shape: "pill",
-      select: () => document.querySelector('[data-setup-step="1"]'),
-      before: openMenu,
+        "Leave this block alone for a grounded, low-magic start.",
+      shape: "rect",
+      select: () => tourBlockHeading("#setupBlockPowers"),
     },
     {
       id: "step-2",
       title: "World",
       text:
-        "Genre, map, start location, tone, magic, races, and economy. " +
-        "This is the stage the model improvises inside — change it and the whole story’s texture changes. " +
+        "Genre tags, map, start location, tone, magic, races, and economy. " +
+        "World vibe itself is in Primary. This block is the rest of the stage. " +
         "Generate a map here if you want travel and terrain later.",
-      shape: "pill",
-      select: () => document.querySelector('[data-setup-step="2"]'),
-      before: openMenu,
+      shape: "rect",
+      select: () => tourBlockHeading("#setupBlockWorld"),
     },
     {
       id: "step-3",
@@ -6456,79 +6934,74 @@ function getSetupTourSteps() {
         "How crowded and political the social world is: NPC density, factions, ranks, and quest style. " +
         "Sparse worlds feel lonely and hard; dense worlds throw names and plots at you faster. " +
         "Pick what kind of social pressure you want the model to keep up.",
-      shape: "pill",
-      select: () => document.querySelector('[data-setup-step="3"]'),
-      before: openMenu,
+      shape: "rect",
+      select: () => tourBlockHeading("#setupBlockPeople"),
     },
     {
       id: "step-4",
       title: "Rules",
       text:
-        "Risk and progression: difficulty, death, loot, inventory limits, skills, and whether an in-world “system” UI appears. " +
-        "These are the guardrails the model should respect when it narrates outcomes. " +
-        "If combat or failure feels wrong later, this page is usually why.",
-      shape: "pill",
-      select: () => document.querySelector('[data-setup-step="4"]'),
-      before: openMenu,
+        "Risk and progression: death, loot, inventory limits, skills, and whether an in-world system UI appears. " +
+        "World difficulty is in Primary. These are the other guardrails. " +
+        "If combat or failure feels wrong later, this block is usually why.",
+      shape: "rect",
+      select: () => tourBlockHeading("#setupBlockRules"),
     },
     {
       id: "step-5",
-      title: "Checks",
+      title: "Checks & Dice",
       text:
         "Optional dice for speech, strength, lore, and encounters. " +
         "When on, the game can roll openly so success isn’t pure fiat. " +
         "Turn them off if you want pure narrative; leave them on if you like fair risk.",
-      shape: "pill",
-      select: () => document.querySelector('[data-setup-step="5"]'),
-      before: openMenu,
+      shape: "rect",
+      select: () => tourBlockHeading("#setupBlockChecks"),
     },
     {
       id: "name-field",
-      title: "A normal field",
+      title: "Name",
       text:
-        "Every page is made of fields like this. Type whatever you want — nothing is required beyond a name. " +
-        "We’ll stay on Identity for the next few tips so the screen doesn’t jump. " +
-        "The same Randomize / Lock / AI controls appear on most free-text and choice fields.",
+        "This is the Name field. Type whatever you want — nothing on the page is required, including the name. " +
+        "Randomize, Lock, and AI sit on this field. " +
+        "The same kind of controls show up on other text fields.",
       shape: "rect",
-      select: () => fieldControl("player_name", "input")?.closest("label") || fieldControl("player_name", "input"),
-      before: () => {
-        setupTourKeepFlyoutOpen = false;
-        closeSetupStepFlyout();
-        setSetupStep(0);
-      },
+      select: () => primaryNameShell(),
     },
     {
       id: "name-random",
       title: "Field Randomize",
       text:
         "Rolls only this one setting, using the rest of your setup as context (so a title can match a grim world, etc.). " +
-        "Different from the big top-bar Randomize, which walks the whole form. " +
+        "Different from the top-bar Randomize, which fills Primary only. " +
         "Use this when one line feels blank but you like everything else.",
       shape: "pill",
-      select: () => fieldControl("player_name", "randomize"),
-      before: () => setSetupStep(0),
+      select: () =>
+        primaryNameShell()?.querySelector('[data-randomize-field="player_name"]') ||
+        fieldControl("player_name", "randomize"),
     },
     {
       id: "name-lock",
       title: "Lock",
       text:
-        "When locked, full Randomize and bulk rolls skip this field so your choice stays put. " +
+        "When locked, Randomize skips this field so your choice stays put. " +
         "Unlock anytime. " +
-        "Handy after you get a name or rule you love and still want to re-roll the rest of the world.",
+        "Handy after you get a name you love and still want to re-roll the rest of Primary.",
       shape: "pill",
-      select: () => fieldControl("player_name", "lock"),
-      before: () => setSetupStep(0),
+      select: () =>
+        primaryNameShell()?.querySelector('[data-lock-setting="player_name"]')?.closest("label") ||
+        fieldControl("player_name", "lock"),
     },
     {
       id: "name-ai",
-      title: "AI fill",
+      title: "AI",
       text:
-        "Opens a small prompt box so the model can write this field for you (needs a working LLM under Settings). " +
-        "You can ask for a name, a backstory beat, or custom world rules. " +
-        "Optional — typing by hand always works; AI is just a helper when you want a draft.",
+        "This AI button opens a small prompt so the model can draft the Name field (needs LLM Settings connected). " +
+        "You can ask for a name, or ignore it and type. " +
+        "Nothing on the page is required.",
       shape: "pill",
-      select: () => fieldControl("player_name", "ai"),
-      before: () => setSetupStep(0),
+      select: () =>
+        primaryNameShell()?.querySelector("[data-text-ai-open]") ||
+        fieldControl("player_name", "ai"),
     },
     {
       id: "art-card",
@@ -6541,11 +7014,8 @@ function getSetupTourSteps() {
         "• Studio & Image Library — only unlock after Forge is online (browse/pick gens)\n" +
         "If you already know image tools, you only need the labels — not a full tutorial.",
       shape: "rect",
-      select: () => document.querySelector("#characterPortraitCard") || document.querySelector("#setupArtCollapseBtn"),
+      select: () => document.querySelector("#setupArtCollapseBtn") || document.querySelector("#characterPortraitCard"),
       before: () => {
-        setupTourKeepFlyoutOpen = false;
-        closeSetupStepFlyout();
-        setSetupStep(0);
         applySetupArtCollapsed(false, { persist: false });
         showSetupArtGuide({ force: true });
       },
@@ -6560,7 +7030,6 @@ function getSetupTourSteps() {
       shape: "pill",
       select: () => document.querySelector("#setupArtOpenImageSettings"),
       before: () => {
-        setSetupStep(0);
         applySetupArtCollapsed(false, { persist: false });
       },
     },
@@ -6573,10 +7042,6 @@ function getSetupTourSteps() {
         "You can still Randomize earlier pages or Load a saved setup later if you want a different tone.",
       shape: "pill",
       select: () => document.querySelector("#setupStart"),
-      before: () => {
-        setupTourKeepFlyoutOpen = false;
-        closeSetupStepFlyout();
-      },
     },
   ];
 }
@@ -6593,10 +7058,35 @@ function openSetupTutorial() {
   document.querySelector("#setupTutorialContinue")?.focus();
 }
 
+function setSetupTourScrollLock(on) {
+  document.documentElement.classList.toggle("isSetupTourLocked", Boolean(on));
+}
+
+function setupTourFieldIsTyping(target) {
+  const el = target?.closest?.("input, textarea, select, [contenteditable='true']");
+  return Boolean(el && (el.closest(".setupTourTarget") || el.closest("#setupTourTip")));
+}
+
+function setupTourKeyShouldYield(target) {
+  const node = target?.nodeType === 1 ? target : target?.parentElement;
+  if (!node || typeof node.closest !== "function") return false;
+  const el = node.closest("textarea, select, input, [contenteditable='true']");
+  if (!el || !(el.closest(".setupTourTarget") || el.closest("#setupTourTip"))) return false;
+  if (el.matches("input")) {
+    const type = (el.getAttribute("type") || "text").toLowerCase();
+    if (["button", "checkbox", "radio", "submit", "reset", "file", "hidden", "color", "range", "image"].includes(type)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function endSetupTour(remember = true) {
   setupTourActive = false;
   setupTourKeepFlyoutOpen = false;
   setupTourIndex = -1;
+  document.body.classList.remove("isTourBesidePrimary");
+  setSetupTourScrollLock(false);
   document.querySelector("#setupTourLayer")?.classList.add("hidden");
   document.querySelector("#setupTutorial")?.classList.add("hidden");
   document.querySelector("#setupTutorial")?.classList.remove("isTouring");
@@ -6612,115 +7102,200 @@ function clearSetupTourHighlight() {
   document.querySelectorAll(".setupTourTarget").forEach((el) => el.classList.remove("setupTourTarget"));
 }
 
+function isSetupTourTargetHidden(target) {
+  if (!target || !target.isConnected) return true;
+  for (let node = target; node && node !== document.documentElement; node = node.parentElement) {
+    const style = getComputedStyle(node);
+    if (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse") return true;
+  }
+  const rect = target.getBoundingClientRect();
+  return rect.width < 2 || rect.height < 2;
+}
+
+function hideSetupTourSpot() {
+  const hole = document.querySelector("#setupTourHole");
+  const arrow = document.querySelector("#setupTourArrow");
+  if (hole) {
+    hole.setAttribute("hidden", "");
+    hole.style.left = "-9999px";
+    hole.style.top = "-9999px";
+    hole.style.width = "0px";
+    hole.style.height = "0px";
+  }
+  if (arrow) {
+    arrow.setAttribute("hidden", "");
+    arrow.style.left = "-9999px";
+    arrow.style.top = "-9999px";
+  }
+}
+
+function scrollTourTarget(target) {
+  let node = target.parentElement;
+  while (node && node !== document.documentElement) {
+    const style = getComputedStyle(node);
+    const oy = style.overflowY;
+    const scrollable = (oy === "auto" || oy === "scroll") && node.scrollHeight > node.clientHeight + 8;
+    if (scrollable) {
+      const host = node.getBoundingClientRect();
+      const rect = target.getBoundingClientRect();
+      // Leave room under the control so the tip can sit below it and the arrow can touch it.
+      const desired = host.top + Math.min(140, Math.max(72, host.height * 0.16));
+      const delta = rect.top - desired;
+      if (Math.abs(delta) > 6) node.scrollTop += delta;
+      return;
+    }
+    node = node.parentElement;
+  }
+}
+
 function positionSetupTour(target, options = {}) {
   const hole = document.querySelector("#setupTourHole");
   const arrow = document.querySelector("#setupTourArrow");
   const tip = document.querySelector("#setupTourTip");
   if (!hole || !arrow || !tip || !target) return;
+  if (isSetupTourTargetHidden(target)) {
+    hideSetupTourSpot();
+    return;
+  }
+  if (options.scroll) scrollTourTarget(target);
+  if (isSetupTourTargetHidden(target)) {
+    hideSetupTourSpot();
+    return;
+  }
 
   const rect = target.getBoundingClientRect();
-  const shape = options.shape || "circle";
-  const padX = shape === "rect" || shape === "pill" ? 10 : 14;
-  const padY = shape === "rect" || shape === "pill" ? 8 : 14;
-  const w = Math.max(40, rect.width + padX * 2);
-  const h = Math.max(40, rect.height + padY * 2);
-  const cx = rect.left + rect.width / 2;
-  const cy = rect.top + rect.height / 2;
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
-  const margin = 12;
-  const gap = 10;
-  const arrowW = 40;
-  const arrowH = 56;
+  if (rect.width < 2 || rect.height < 2) {
+    hideSetupTourSpot();
+    return;
+  }
+  hole.removeAttribute("hidden");
+  arrow.removeAttribute("hidden");
+  hole.style.transition = "none";
+  arrow.style.transition = "none";
+  tip.style.transition = "none";
 
-  // Spotlight on the control
+  const shape = options.shape || "circle";
+  const padX = shape === "rect" || shape === "pill" ? 8 : 12;
+  const padY = shape === "rect" || shape === "pill" ? 6 : 12;
+  const w = rect.width + padX * 2;
+  const h = rect.height + padY * 2;
   hole.style.width = `${w}px`;
   hole.style.height = `${h}px`;
-  hole.style.left = `${cx - w / 2}px`;
-  hole.style.top = `${cy - h / 2}px`;
+  hole.style.left = `${rect.left - padX}px`;
+  hole.style.top = `${rect.top - padY}px`;
   hole.style.borderRadius = shape === "rect" ? "12px" : shape === "pill" ? "999px" : "50%";
 
-  // Measure tip (follow target — not docked at bottom)
   tip.classList.remove("isDocked");
   tip.style.bottom = "auto";
   tip.style.transform = "none";
   tip.style.visibility = "hidden";
   tip.classList.remove("hidden");
-  // Force layout so we get real size for placement
   const tipRect = tip.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const margin = 12;
+  const gap = 6;
+  const arrowW = 48;
+  const arrowH = 72;
   const tipW = Math.min(tipRect.width || 420, vw - margin * 2);
-  const tipH = tipRect.height || 200;
+  const tipH = tipRect.height || 180;
+  const cx = rect.left + Math.min(rect.width, 180) / 2;
+  // SVG point is y=70 in a 72px box. After rotate(180) that point is 2px from the top edge.
+  const bite = 26;
+  const tipInset = 2;
+  const headingTarget = Boolean(target.matches?.("h1, h2, h3"));
+  const headingOverlap = headingTarget ? Math.min(8, Math.max(0, rect.height / 2)) : 0;
+  const headingArrowTop = (which) => {
+    if (which === "below") return rect.bottom - headingOverlap - tipInset;
+    if (which === "above") return rect.top + headingOverlap - (arrowH - tipInset);
+    return rect.top + rect.height / 2 - arrowH / 2;
+  };
 
   const spaceBelow = vh - rect.bottom - margin;
   const spaceAbove = rect.top - margin;
-  const needBelow = tipH + arrowH + gap * 2;
-  const needAbove = tipH + arrowH + gap * 2;
-
-  // Prefer: tip under highlight (arrow between, pointing up at control)
-  // Else: tip above (arrow pointing down)
-  // Else: tip to the side of the highlight
+  const need = tipH + 16;
   let place = "below";
-  if (spaceBelow >= needBelow) place = "below";
-  else if (spaceAbove >= needAbove) place = "above";
-  else if (vw - rect.right - margin >= tipW + gap) place = "right";
-  else if (rect.left - margin >= tipW + gap) place = "left";
+  if (options.beside && !headingTarget) {
+    const spaceRight = vw - rect.right - margin;
+    const spaceLeft = rect.left - margin;
+    place = spaceRight >= spaceLeft ? "right" : "left";
+  } else if (spaceBelow >= need) place = "below";
+  else if (spaceAbove >= need) place = "above";
+  else if (vw - rect.right - margin >= tipW + arrowW + gap) place = "right";
+  else if (rect.left - margin >= tipW + arrowW + gap) place = "left";
   else place = spaceBelow >= spaceAbove ? "below" : "above";
+  if (headingTarget && place !== "below" && place !== "above") {
+    place = spaceBelow >= spaceAbove ? "below" : "above";
+  }
 
   let tipLeft = cx - tipW / 2;
-  let tipTop = 0;
+  let tipTop = margin;
   let arrowLeft = cx - arrowW / 2;
-  let arrowTop = 0;
+  let arrowTop = headingTarget ? headingArrowTop("below") : rect.bottom - bite;
 
+  arrow.classList.remove("isAbove", "isBelow", "isPointLeft", "isPointRight");
   if (place === "below") {
-    // [highlight] → arrow (point up) → tip card
     arrow.classList.add("isBelow");
-    arrow.classList.remove("isAbove");
-    arrowTop = rect.bottom + gap;
+    arrowTop = headingTarget ? headingArrowTop("below") : rect.bottom - bite;
     tipTop = arrowTop + arrowH + gap;
-    if (tipTop + tipH > vh - margin) tipTop = Math.max(margin, vh - margin - tipH);
   } else if (place === "above") {
-    // tip card → arrow (point down) → [highlight]
     arrow.classList.add("isAbove");
-    arrow.classList.remove("isBelow");
-    tipTop = rect.top - gap - arrowH - gap - tipH;
-    if (tipTop < margin) tipTop = margin;
-    arrowTop = tipTop + tipH + gap;
-    // Keep arrow just above the control if clamp pushed tip
-    if (arrowTop + arrowH > rect.top - 4) arrowTop = Math.max(margin, rect.top - arrowH - gap);
+    arrowTop = headingTarget ? headingArrowTop("above") : rect.top - arrowH + bite;
+    tipTop = arrowTop - gap - tipH;
   } else if (place === "right") {
-    arrow.classList.add("isAbove");
-    arrow.classList.remove("isBelow");
-    tipLeft = rect.right + gap + arrowW;
-    tipTop = Math.max(margin, Math.min(cy - tipH / 2, vh - margin - tipH));
-    arrowLeft = rect.right + gap;
-    arrowTop = Math.max(margin, cy - arrowH / 2);
+    arrow.classList.add("isPointLeft");
+    arrowLeft = rect.right - bite;
+    arrowTop = rect.top + rect.height / 2 - arrowH / 2;
+    tipLeft = rect.right + arrowW + gap;
+    tipTop = rect.top + rect.height / 2 - tipH / 2;
   } else {
-    // left
-    arrow.classList.add("isAbove");
-    arrow.classList.remove("isBelow");
-    tipLeft = rect.left - gap - arrowW - tipW;
-    tipTop = Math.max(margin, Math.min(cy - tipH / 2, vh - margin - tipH));
-    arrowLeft = rect.left - gap - arrowW;
-    arrowTop = Math.max(margin, cy - arrowH / 2);
+    arrow.classList.add("isPointRight");
+    arrowLeft = rect.left - arrowW + bite;
+    arrowTop = rect.top + rect.height / 2 - arrowH / 2;
+    tipLeft = arrowLeft - gap - tipW;
+    tipTop = rect.top + rect.height / 2 - tipH / 2;
+  }
+
+  if (options.beside && (place === "right" || place === "left")) {
+    tipTop = Math.max(rect.top, margin);
+    const aim = Math.min(rect.bottom - 8, Math.max(rect.top + 36, margin + 36));
+    arrowTop = aim - arrowH / 2;
   }
 
   tipLeft = Math.max(margin, Math.min(tipLeft, vw - margin - tipW));
+  tipTop = Math.max(margin, Math.min(tipTop, vh - margin - tipH));
   arrowLeft = Math.max(margin, Math.min(arrowLeft, vw - margin - arrowW));
   arrowTop = Math.max(margin, Math.min(arrowTop, vh - margin - arrowH));
+  if (headingTarget && (place === "below" || place === "above")) {
+    const touchTop = headingArrowTop(place);
+    if (touchTop >= margin - 8 && touchTop <= vh - arrowH - margin + 8) arrowTop = touchTop;
+  } else if (place === "below" || place === "above") {
+    const headY = place === "below" ? arrowTop : arrowTop + arrowH;
+    const edgeY = place === "below" ? rect.bottom : rect.top;
+    if (Math.abs(headY - edgeY) > 28) {
+      arrowTop = place === "below" ? rect.bottom - bite : rect.top - arrowH + bite;
+    }
+  }
 
-  // Prefer aligning tip under the control center when above/below
-  if (place === "below" || place === "above") {
-    tipLeft = Math.max(margin, Math.min(cx - tipW / 2, vw - margin - tipW));
+  if (options.beside) {
+    const overlaps =
+      tipLeft < rect.right - 2 &&
+      tipLeft + tipW > rect.left + 2 &&
+      tipTop < rect.bottom - 2 &&
+      tipTop + tipH > rect.top + 2;
+    if (overlaps) {
+      if (place === "right") tipLeft = rect.right + gap;
+      else if (place === "left") tipLeft = rect.left - gap - tipW;
+      else if (place === "below") tipTop = rect.bottom + gap;
+      else tipTop = rect.top - gap - tipH;
+    }
   }
 
   tip.style.left = `${tipLeft}px`;
   tip.style.top = `${tipTop}px`;
   tip.style.visibility = "visible";
-
   arrow.style.left = `${arrowLeft}px`;
   arrow.style.top = `${arrowTop}px`;
-
-  target.scrollIntoView({ block: "center", inline: "nearest", behavior: "smooth" });
 }
 
 async function showSetupTourStep(index) {
@@ -6732,6 +7307,7 @@ async function showSetupTourStep(index) {
   setupTourActive = true;
   setupTourIndex = index;
   const step = steps[index];
+  document.body.classList.toggle("isTourBesidePrimary", Boolean(step.beside));
 
   document.querySelector("#setupTutorial")?.classList.add("isTouring");
   document.querySelector("#setupTutorialIntro")?.classList.add("hidden");
@@ -6745,12 +7321,13 @@ async function showSetupTourStep(index) {
   await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
 
   clearSetupTourHighlight();
+  hideSetupTourSpot();
   let target = step.select?.();
-  if (!target || (target.offsetParent === null && getComputedStyle(target).display === "none")) {
+  if (isSetupTourTargetHidden(target)) {
     await new Promise((r) => setTimeout(r, 50));
     target = step.select?.();
   }
-  if (!target) {
+  if (isSetupTourTargetHidden(target)) {
     showSetupTourStep(index + 1);
     return;
   }
@@ -6775,8 +7352,16 @@ async function showSetupTourStep(index) {
   if (nextBtn) nextBtn.textContent = index >= steps.length - 1 ? "Finish" : "Next";
   if (backBtn) backBtn.disabled = index <= 0;
 
-  positionSetupTour(target, { shape: step.shape || "circle" });
-  window.setTimeout(() => positionSetupTour(target, { shape: step.shape || "circle" }), 320);
+  setSetupTourScrollLock(true);
+  const shape = step.shape || "circle";
+  const beside = Boolean(step.beside);
+  positionSetupTour(target, { shape, scroll: true, beside });
+  const placeAgain = () => {
+    if (!setupTourActive || setupTourIndex !== index) return;
+    const live = document.querySelector(".setupTourTarget");
+    if (live?.isConnected) positionSetupTour(live, { shape, scroll: false, beside });
+  };
+  [80, 240, 600].forEach((ms) => window.setTimeout(placeAgain, ms));
 }
 
 function startSetupTour() {
@@ -6811,26 +7396,44 @@ function bindSetupTutorialOnce() {
     if (event.key === "Escape") {
       event.preventDefault();
       endSetupTour(true);
-    } else if (event.key === "Enter" && setupTourActive) {
+      return;
+    }
+    if (!setupTourActive) return;
+    const tourKey =
+      event.key === "Enter" ||
+      event.key === "ArrowLeft" ||
+      event.key === "ArrowRight" ||
+      event.key === "ArrowUp" ||
+      event.key === "ArrowDown";
+    const keyOwner = setupTourKeyShouldYield(event.target) ? event.target : document.activeElement;
+    if (tourKey && setupTourKeyShouldYield(keyOwner)) return;
+    if (event.key === "Enter" && event.target?.closest?.("#setupTourTip button")) return;
+    if (event.key === "Enter" || event.key === "ArrowRight") {
       event.preventDefault();
       advanceSetupTour();
-    } else if (event.key === "ArrowLeft" && setupTourActive) {
+    } else if (event.key === "ArrowLeft") {
       event.preventDefault();
       retreatSetupTour();
-    } else if (event.key === "ArrowRight" && setupTourActive) {
-      event.preventDefault();
-      advanceSetupTour();
     }
   });
   if (!setupTourResizeBound) {
     setupTourResizeBound = true;
-    window.addEventListener("resize", () => {
+    const followTour = () => {
       if (!setupTourActive) return;
       const target = document.querySelector(".setupTourTarget");
-      const steps = getSetupTourSteps();
-      const step = steps[setupTourIndex];
-      if (target) positionSetupTour(target, { shape: step?.shape || "circle" });
-    });
+      const step = getSetupTourSteps()[setupTourIndex];
+      if (target) positionSetupTour(target, { shape: step?.shape || "circle", scroll: false, beside: Boolean(step?.beside) });
+    };
+    window.addEventListener("resize", followTour);
+    window.addEventListener("scroll", followTour, true);
+    window.addEventListener("wheel", (event) => {
+      if (!setupTourActive || setupTourFieldIsTyping(event.target)) return;
+      event.preventDefault();
+    }, { passive: false, capture: true });
+    window.addEventListener("touchmove", (event) => {
+      if (!setupTourActive || setupTourFieldIsTyping(event.target)) return;
+      event.preventDefault();
+    }, { passive: false, capture: true });
   }
 }
 
@@ -6923,6 +7526,7 @@ function renderShell(nextState, options = {}) {
   });
   refreshLocalMap();
   refreshNpcStage();
+  paintPlayDock();
   pushAllPopouts();
   queueAutoNpcPortraits();
 }
@@ -7142,15 +7746,19 @@ function showAmbientMoveLine(text) {
   else latestOutput.appendChild(wrap);
 }
 
-function closeWaitPopover() {
+function closeWaitPopover(options = {}) {
+  const wasOpen = Boolean(waitPopover && !waitPopover.classList.contains("hidden"));
   waitPopover?.classList.add("hidden");
   waitButton?.setAttribute("aria-expanded", "false");
+  if (options.restoreFocus && wasOpen) waitButton?.focus();
 }
 
 function openWaitPopover() {
   if (!waitPopover) return;
   waitPopover.classList.remove("hidden");
   waitButton?.setAttribute("aria-expanded", "true");
+  const firstDuration = waitPopover.querySelector(".waitDurationBtn");
+  if (firstDuration instanceof HTMLElement) firstDuration.focus();
 }
 
 function waitKindLabel(kind) {
@@ -7209,6 +7817,18 @@ async function requestWait(minutes, kind = "wait") {
       latestOutput.innerHTML = paragraphs(payload.narration);
     }
   }
+  // Fight scenes from fight_nearby wait events fire as separate scene turns.
+  // Display each one after the ambient wait narration so the player sees the
+  // fight open as a distinct scene rather than a collapsed event mention.
+  if (Array.isArray(payload?.fight_scenes) && payload.fight_scenes.length > 0) {
+    for (const scene of payload.fight_scenes) {
+      try {
+        displayTurnPayload(scene, { animateNarration: true });
+      } catch (_) {
+        /* scene display failure should not break the wait response */
+      }
+    }
+  }
   if (payload?.wait?.rng || payload?.wait?.after) {
     const n = payload.wait?.rng?.event_count ?? 0;
     const after = payload.wait?.after?.label || "";
@@ -7257,7 +7877,105 @@ function renderSuggestions(suggestions) {
 
 function updateComposerState() {
   if (!sendButton || !turnInput) return;
-  sendButton.textContent = turnInput.value.trim() ? "Send" : "Continue";
+  // Stay "Send". An empty box still continues on submit, but the separate
+  // Continue button is the one that should say so.
+  sendButton.textContent = "Send";
+  renderMentionChips();
+}
+
+let mentionHighlight = 0;
+let mentionKind = "";
+
+function mentionQueryAtCaret() {
+  if (!turnInput) return null;
+  const caret = turnInput.selectionStart ?? turnInput.value.length;
+  const before = turnInput.value.slice(0, caret);
+  const match = before.match(/@([CILSAE])([a-z0-9_]*)$/i);
+  if (!match) return null;
+  return { kind: match[1].toUpperCase(), fragment: match[2].toLowerCase(), start: caret - match[0].length, end: caret };
+}
+
+function filteredMentions() {
+  const live = mentionQueryAtCaret();
+  if (!live) return [];
+  const search = document.querySelector("#mentionSearch");
+  const query = search && document.activeElement === search ? search.value : live.fragment;
+  const needle = mentionSlug(query || live.fragment);
+  return mentionEntries().filter((entry) => {
+    if (entry.kind !== live.kind) return false;
+    if (!needle) return true;
+    return entry.slug.startsWith(needle) || entry.slug.includes(needle);
+  });
+}
+
+function hideMentionMenu() {
+  const menu = document.querySelector("#mentionMenu");
+  if (!menu) return;
+  menu.classList.add("hidden");
+  menu.hidden = true;
+  mentionKind = "";
+}
+
+function renderMentionMenu() {
+  const menu = document.querySelector("#mentionMenu");
+  const list = document.querySelector("#mentionList");
+  const search = document.querySelector("#mentionSearch");
+  const live = mentionQueryAtCaret();
+  if (!menu || !list || !live) {
+    hideMentionMenu();
+    return;
+  }
+  const opened = mentionKind !== live.kind;
+  mentionKind = live.kind;
+  const rows = filteredMentions();
+  if (mentionHighlight >= rows.length) mentionHighlight = 0;
+  const labels = { C: "Characters", I: "Items", L: "Places", S: "Skills", A: "Abilities", E: "Events" };
+  list.innerHTML = rows.length
+    ? rows
+        .map(
+          (entry, index) =>
+            `<button type="button" role="option" data-mention-token="${escapeHtml(entry.token)}" data-mention-code="${escapeHtml(entry.code)}" aria-selected="${index === mentionHighlight ? "true" : "false"}"><span>${escapeHtml(entry.name)}</span><span>@${escapeHtml(entry.kind)}</span></button>`,
+        )
+        .join("")
+    : `<p class="empty">No ${escapeHtml(labels[live.kind] || "matches")}.</p>`;
+  menu.classList.remove("hidden");
+  menu.hidden = false;
+  if (search && opened) {
+    search.value = live.fragment.replace(/_/g, " ");
+    search.placeholder = `Search ${labels[live.kind] || "names"}`;
+    search.focus();
+  }
+}
+
+function completeMention(token) {
+  const live = mentionQueryAtCaret();
+  if (!turnInput || !live || !token) return;
+  const next = `${turnInput.value.slice(0, live.start)}${token} ${turnInput.value.slice(live.end)}`;
+  turnInput.value = next;
+  const caret = live.start + token.length + 1;
+  turnInput.focus();
+  turnInput.setSelectionRange(caret, caret);
+  hideMentionMenu();
+  updateComposerState();
+}
+
+function renderMentionChips() {
+  const host = document.querySelector("#mentionChips");
+  if (!host || !turnInput) return;
+  const chips = [];
+  const seen = new Set();
+  for (const match of turnInput.value.matchAll(/@([CILSAE])([a-z0-9_]+)/gi)) {
+    const kind = match[1].toUpperCase();
+    const fragment = match[2].toLowerCase();
+    const hit = uniqueMention(kind, fragment);
+    const key = match[0].toLowerCase();
+    if (!hit || seen.has(key)) continue;
+    seen.add(key);
+    chips.push(
+      `<a class="mentionChip" href="#${escapeHtml(hit.code || hit.slug)}" data-code="${escapeHtml(hit.code)}" data-mention-name="${escapeHtml(hit.name)}">${escapeHtml(hit.name)}</a>`,
+    );
+  }
+  host.innerHTML = chips.join("");
 }
 
 function historyOpenState() {
@@ -7276,10 +7994,59 @@ function saveHistoryOpenState(value) {
   }
 }
 
+const HISTORY_LINK_LINE = "Add to What will you do? It is optional. Close lets you edit or delete it.";
+const HISTORY_UNDO_LINE = "To undo the last turn, choose Menu, then Undo last turn. This cannot be put back.";
+
+function historyRowSkipped(entry) {
+  const kind = String(entry?.kind || "").toLowerCase();
+  return kind === "setup" || kind === "debug";
+}
+
+function historyCheckIssue(data, raw) {
+  const found = data ? data.issues_found : null;
+  const list = Array.isArray(found) ? found : typeof found === "string" ? [found] : [];
+  for (const item of list) {
+    if (typeof item !== "string") continue;
+    const clean = item.replace(/\s+/g, " ").trim();
+    if (clean) return clean;
+  }
+  if (data) return "";
+  const match = String(raw || "").match(/"issues_found"\s*:\s*\[\s*"((?:\\.|[^"\\])*)"/);
+  if (!match) return "";
+  try {
+    return String(JSON.parse(`"${match[1]}"`) || "").replace(/\s+/g, " ").trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+function historyCheckLine(entry) {
+  const raw = String(entry?.content || "");
+  let data = null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") data = parsed;
+  } catch (_) {
+    data = null;
+  }
+  const passed = data
+    ? data.passed === true || data.ok === true
+    : /"passed"\s*:\s*true/.test(raw) || /"ok"\s*:\s*true/.test(raw);
+  if (passed) return "Story check passed. Nothing to do.";
+  const issue = historyCheckIssue(data, raw);
+  return issue ? `Story check found a problem: ${issue}` : "Story check found a problem.";
+}
+
+function isStorytellerStart(entry) {
+  return String(entry?.kind || "").toLowerCase() === "system"
+    && String(entry?.content || "").trim().startsWith("Initialization phase pending");
+}
+
 function historyGroups() {
   const groups = [];
   const byTurn = new Map();
   for (const entry of state?.history || []) {
+    if (historyRowSkipped(entry)) continue;
     const turn = entry.turn ?? "?";
     const key = `turn:${turn}`;
     if (!byTurn.has(key)) {
@@ -7292,17 +8059,62 @@ function historyGroups() {
   return groups;
 }
 
+function historyKindLabel(kind) {
+  const key = String(kind || "").toLowerCase();
+  if (key === "player") return "You";
+  if (key === "opening") return "Opening";
+  if (key === "narration") return "Narration";
+  if (key === "continue") return "Continue";
+  if (key === "wait" || key === "meditate" || key === "sleep") return "Wait";
+  if (key === "dice") return "Dice";
+  if (key === "ask") return "Ask";
+  if (key === "note" || key === "fact" || key === "system" || key === "rumor" || key === "backstory") return "Note";
+  const plain = key.replace(/[_-]+/g, " ").replace(/\s+/g, " ").trim();
+  if (!plain) return "Note";
+  return plain.charAt(0).toUpperCase() + plain.slice(1);
+}
+
+function historyPlainText(text) {
+  return String(text || "").replace(/\s+/g, " ").trim();
+}
+
 function historySnippet(group) {
-  const preferred = group.entries.find((entry) => entry.kind === "narration") || group.entries[0];
-  const text = String(preferred?.content || "").replace(/\s+/g, " ").trim();
-  return text ? `${text.slice(0, 150)}${text.length > 150 ? "..." : ""}` : "No visible text.";
+  const entries = group.entries || [];
+  const preferred = entries.find((entry) => String(entry?.kind || "").toLowerCase() === "narration")
+    || entries.find((entry) => String(entry?.kind || "").toLowerCase() !== "self_check")
+    || entries[0];
+  if (String(preferred?.kind || "").toLowerCase() === "self_check") return historyCheckLine(preferred);
+  if (isStorytellerStart(preferred)) return "Storyteller start note. Nothing for you to do.";
+  const text = historyPlainText(preferred?.content);
+  return text || "No visible text.";
 }
 
 function historyEntryHtml(entry) {
+  const kind = String(entry?.kind || "entry");
+  const turn = entry?.turn ?? "?";
+  if (kind.toLowerCase() === "self_check") {
+    return `
+      <section class="historyEntry">
+        <p>${escapeHtml(historyCheckLine(entry))}</p>
+      </section>
+    `;
+  }
+  if (isStorytellerStart(entry)) {
+    return `
+      <section class="historyEntry">
+        <p>Storyteller start note. Nothing for you to do.</p>
+      </section>
+    `;
+  }
+  const token = `journal T${turn} ${kind}`;
+  const label = historyKindLabel(kind);
   return `
-    <section class="historyEntry">
-      <strong>${escapeHtml(entry.kind || "entry")}</strong>
+    <section class="historyEntry" draggable="true" data-link-token="${escapeHtml(token)}">
+      <strong>${escapeHtml(label)}</strong>
       <p>${linkifyText(entry.content || "")}</p>
+      <div class="miniActions">
+        <button class="insertRefButton" type="button" data-link-token="${escapeHtml(token)}" title="${escapeHtml(HISTORY_LINK_LINE)}" aria-label="${escapeHtml(HISTORY_LINK_LINE)}">${escapeHtml(HISTORY_LINK_LINE)}</button>
+      </div>
     </section>
   `;
 }
@@ -7326,20 +8138,20 @@ function renderHistory() {
   const openState = historyOpenState();
   const newestKey = groups[0]?.key;
   const pageGroups = groups.slice(historyPage * HISTORY_PAGE_SIZE, historyPage * HISTORY_PAGE_SIZE + HISTORY_PAGE_SIZE);
+  const keepScroll = historyEl.scrollTop;
   historyEl.innerHTML = groups.length
     ? `
+        <p class="historySubtitle">${escapeHtml(HISTORY_LINK_LINE)}</p>
+        <p class="historySubtitle">${escapeHtml(HISTORY_UNDO_LINE)}</p>
         ${historyPagerHtml(pageCount)}
         ${pageGroups
           .map((group) => {
             const selected = Object.prototype.hasOwnProperty.call(openState, group.key) ? Boolean(openState[group.key]) : group.key === newestKey;
             const entries = [...group.entries].reverse().map(historyEntryHtml).join("");
+            const snippet = historySnippet(group);
             return `
               <details class="historyItem historyTurn" data-history-key="${escapeHtml(group.key)}" ${selected ? "open" : ""}>
-                <summary>
-                  <strong>Turn ${escapeHtml(group.turn)}</strong>
-                  <span>${escapeHtml(group.entries.length)} entries</span>
-                  <p>${escapeHtml(historySnippet(group))}</p>
-                </summary>
+                <summary><strong>Turn ${escapeHtml(group.turn)}</strong><span>${escapeHtml(group.entries.length)} entries</span><p title="${escapeHtml(snippet)}"><span class="historySnippetText">${escapeHtml(snippet)}</span></p></summary>
                 <div class="historyEntries">${entries}</div>
               </details>
             `;
@@ -7348,6 +8160,45 @@ function renderHistory() {
         ${historyPagerHtml(pageCount)}
       `
     : `<p class="empty">No history yet.</p>`;
+  historyEl.scrollTop = keepScroll;
+}
+
+let historyViewLock = false;
+
+function publishHistory(focusKey) {
+  if (historyViewLock) return;
+  historyViewLock = true;
+  try {
+    const keep = historyEl ? historyEl.scrollTop : 0;
+    renderHistory();
+    pushPopoutUpdate("history");
+    if (historyEl) historyEl.scrollTop = keep;
+    if (focusKey && historyEl) {
+      const safe = window.CSS?.escape ? CSS.escape(String(focusKey)) : String(focusKey).replace(/"/g, "");
+      historyEl.querySelector(`details[data-history-key="${safe}"] summary`)?.focus();
+    }
+  } finally {
+    historyViewLock = false;
+  }
+}
+
+function applyHistoryPager(direction) {
+  const groups = historyGroups();
+  const pageCount = Math.max(1, Math.ceil(groups.length / HISTORY_PAGE_SIZE));
+  if (direction === "prev") historyPage = Math.max(0, historyPage - 1);
+  if (direction === "next") historyPage = Math.min(pageCount - 1, historyPage + 1);
+  publishHistory();
+}
+
+function applyHistoryToggle(key, open, focusLive) {
+  const name = String(key || "");
+  if (!name || historyViewLock) return;
+  const openState = historyOpenState();
+  const next = Boolean(open);
+  if (Object.prototype.hasOwnProperty.call(openState, name) && Boolean(openState[name]) === next) return;
+  openState[name] = next;
+  saveHistoryOpenState(openState);
+  publishHistory(focusLive ? name : "");
 }
 
 function statCard(label, value) {
@@ -7382,22 +8233,134 @@ function abilityNameList(abilities) {
     .join(", ");
 }
 
-function insertRef(type, code) {
-  const token = refToken(type, code);
-  const start = turnInput.selectionStart ?? turnInput.value.length;
-  const end = turnInput.selectionEnd ?? turnInput.value.length;
-  const before = turnInput.value.slice(0, start);
-  const after = turnInput.value.slice(end);
+let fieldEditSilent = 0;
+
+function spacedEdit(value, start, end, text) {
+  const before = value.slice(0, start);
+  const after = value.slice(end);
   const leftSpace = before && !before.endsWith(" ") && !before.endsWith("\n") ? " " : "";
   const rightSpace = after && !after.startsWith(" ") && !after.startsWith("\n") ? " " : "";
-  turnInput.value = `${before}${leftSpace}${token}${rightSpace}${after}`;
-  const nextPos = before.length + leftSpace.length + token.length + rightSpace.length;
-  turnInput.focus();
-  turnInput.setSelectionRange(nextPos, nextPos);
+  return `${leftSpace}${text}${rightSpace}`;
 }
 
-function entityCard(type, entity, body, meta = "") {
+// Assigning .value clears the box undo stack. insertText keeps it.
+function insertFieldTextUndoable(field, text, start, end) {
+  if (!field) return false;
+  const value = String(field.value ?? "");
+  const from = Math.max(0, Math.min(Number.isFinite(start) ? start : value.length, value.length));
+  const to = Math.max(from, Math.min(Number.isFinite(end) ? end : from, value.length));
+  const chunk = String(text ?? "");
+  const expected = value.slice(0, from) + chunk + value.slice(to);
+  fieldEditSilent += 1;
+  try {
+    try {
+      field.focus({ preventScroll: true });
+    } catch (_) {
+      field.focus();
+    }
+    if (document.activeElement === field) {
+      try {
+        field.setSelectionRange(from, to);
+      } catch (_) {
+        /* selection can fail on some input types */
+      }
+      try {
+        document.execCommand("insertText", false, chunk);
+      } catch (_) {
+        /* fall through */
+      }
+    }
+    if (field.value !== expected) {
+      if (field.value !== value) field.value = value;
+      if (typeof field.setRangeText === "function") {
+        try {
+          field.setRangeText(chunk, from, to, "end");
+        } catch (_) {
+          /* direct value below */
+        }
+      }
+      if (field.value !== expected) {
+        field.value = expected;
+        try {
+          field.setSelectionRange(from + chunk.length, from + chunk.length);
+        } catch (_) {
+          /* caret can wait */
+        }
+      }
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    }
+  } finally {
+    fieldEditSilent -= 1;
+  }
+  return field.value === expected;
+}
+
+function insertRawToken(token, options = {}) {
+  const text = String(token || "").trim();
+  if (!text || !turnInput) return;
+  const sheet = document.querySelector("#characterSheetDrawer");
+  const sheetOpen = !!(characterSheetOpen && sheet && !sheet.classList.contains("hidden"));
+  const active = document.activeElement;
+  const start = turnInput.selectionStart ?? turnInput.value.length;
+  const end = turnInput.selectionEnd ?? turnInput.value.length;
+  const chunk = spacedEdit(turnInput.value, start, end, text);
+  insertFieldTextUndoable(turnInput, chunk, start, end);
+  const nextPos = start + chunk.length;
+  const note = document.querySelector("#sheetSceneNote");
+  if (sheetOpen && note) {
+    note.hidden = false;
+    note.textContent = /^journal\s+\S/i.test(text)
+      ? `Added "${text}" to What will you do? It is optional. Close lets you edit or delete it.`
+      : options.inventory
+        ? "Added to What will you do?. Close the sheet to edit or delete it."
+        : "Added to the scene box. Close the sheet to edit it.";
+  }
+  const restoreSheet = sheetOpen && active instanceof HTMLElement && active !== turnInput && sheet.contains(active) && document.contains(active);
+  if (restoreSheet) {
+    try {
+      turnInput.setSelectionRange(nextPos, nextPos);
+    } catch (_) {
+      /* caret can wait until the sheet closes */
+    }
+    try {
+      active.focus({ preventScroll: true });
+    } catch (_) {
+      active.focus();
+    }
+  } else {
+    turnInput.focus();
+    try {
+      turnInput.setSelectionRange(nextPos, nextPos);
+    } catch (_) {
+      /* caret can wait */
+    }
+  }
+  updateComposerState();
+}
+
+function linkTokenFrom(source) {
+  if (!source) return "";
+  if (source.dataset?.linkToken) return String(source.dataset.linkToken);
+  const code = source.dataset?.linkCode || source.dataset?.code || "";
+  const type = source.dataset?.linkType || source.dataset?.type || "";
+  if (!code) return "";
+  if (type || source.classList?.contains("entityCard") || source.classList?.contains("insertRefButton")) {
+    return refToken(type || "item", code);
+  }
+  return "";
+}
+
+function insertRef(type, code, options) {
+  insertRawToken(refToken(type, code), options);
+}
+
+function entityCard(type, entity, body, meta = "", extra = "") {
   const token = refToken(type, entity.code);
+  // Fight button appears only on NPC cards; hostile/wary NPCs show it prominently.
+  const fightBtn =
+    type === "npc"
+      ? `<button class="initiateFightButton secondaryButton" type="button" data-npc-code="${escapeHtml(entity.code)}" data-npc-name="${escapeHtml(entityLabel(entity))}" title="Start a fight with ${escapeHtml(entityLabel(entity))}">⚔ Fight</button>`
+      : "";
   return `
     <article class="card entityCard" draggable="true" data-type="${escapeHtml(type)}" data-code="${escapeHtml(entity.code)}">
       <strong>
@@ -7406,8 +8369,10 @@ function entityCard(type, entity, body, meta = "") {
       </strong>
       ${meta ? `<div class="meta">${meta}</div>` : ""}
       ${body ? `<p>${linkifyText(body)}</p>` : ""}
+      ${extra}
       <div class="miniActions">
         <button class="insertRefButton" data-type="${escapeHtml(type)}" data-code="${escapeHtml(entity.code)}" type="button">${escapeHtml(token)}</button>
+        ${fightBtn}
       </div>
     </article>
   `;
@@ -7425,23 +8390,15 @@ function card(title, body, meta = "") {
 
 function renderBudgetCard() {
   const budget = state.model_budget || {};
-  const logs = state.model_logs || [];
-  const body =
-    logs
-      .slice(0, 8)
-      .map((entry) => `T${entry.turn} ${entry.phase}: ~${entry.estimated_tokens} tokens`)
-      .join(" | ") || "No model calls logged yet.";
-  const warning = budget.warning
-    ? `<p class="budgetWarning">Prompt budget warning: latest call is ~${escapeHtml(budget.latest_estimated_tokens)} / ${escapeHtml(budget.context_window)} tokens.</p>`
-    : "";
-  const memoryLine = `summaries ${escapeHtml(budget.turn_summaries ?? "?")} | consolidated facts ${escapeHtml(budget.consolidated_facts ?? 0)}`;
+  const latest = Number(budget.latest_estimated_tokens || 0);
+  const threshold = Number(budget.warning_threshold || 0);
+  const full = Boolean(budget.warning) || (threshold > 0 && latest >= threshold);
+  const sentence = full ? "Memory is getting full." : "Memory is fine.";
   return `
     <article class="card contextHealthCard">
       <strong>Context Health</strong>
-      <div class="meta">window ${escapeHtml(budget.context_window || "?")} · warn @ ${escapeHtml(budget.warning_threshold || "?")} · latest ~${escapeHtml(budget.latest_estimated_tokens || 0)}</div>
-      <p>${escapeHtml(memoryLine)}</p>
-      <p>${escapeHtml(body)}</p>
-      ${warning}
+      <p class="meta">Optional</p>
+      <p>${sentence}</p>
       <div class="contextHealthActions">
         <button id="consolidateMemoryButton" class="secondaryButton" type="button">Consolidate Memory</button>
         <button id="refreshHealthButton" class="secondaryButton" type="button">Refresh Health</button>
@@ -7459,7 +8416,11 @@ function applyCompactMode(enabled) {
     /* ignore */
   }
   if (compactModeButton) {
-    compactModeButton.textContent = enabled ? "Comfort" : "Compact";
+    compactModeButton.textContent = "Compact layout";
+    compactModeButton.setAttribute("aria-pressed", enabled ? "true" : "false");
+    compactModeButton.title = enabled
+      ? "Compact layout is on. Click again for the roomier layout."
+      : "Compact layout is off. Click to tighten spacing.";
   }
 }
 
@@ -7517,9 +8478,76 @@ function setSaveBrowserStatus(message, kind = "") {
   el.classList.toggle("isOk", kind === "ok");
 }
 
-function closeSaveBrowser() {
+function dialogTabStops(root) {
+  if (!root) return [];
+  return Array.from(root.querySelectorAll("button, a[href], input, select, textarea, [tabindex]")).filter((el) => {
+    if (el.disabled || el.getAttribute("aria-hidden") === "true" || el.tabIndex < 0) return false;
+    if (el.closest("[hidden]")) return false;
+    return el.getClientRects().length > 0;
+  });
+}
+
+function rememberMenuDialogOpener(explicit) {
+  const opener = explicit instanceof HTMLElement ? explicit : document.activeElement;
+  if (!(opener instanceof HTMLElement) || opener === document.body) return;
+  if (opener.closest("#saveBrowserModal, #appSettingsModal")) return;
+  menuDialogReturn = opener;
+}
+
+function focusWhenShown(el) {
+  if (!(el instanceof HTMLElement) || el.disabled) return;
+  const hiddenHost = el.closest("[hidden]");
+  if (hiddenHost && hiddenHost !== el) hiddenHost.hidden = false;
+  el.focus();
+  if (document.activeElement === el) return;
+  window.requestAnimationFrame(() => {
+    if (el.isConnected) el.focus();
+  });
+}
+
+function restoreMenuDialogFocus() {
+  const back = menuDialogReturn;
+  menuDialogReturn = null;
+  if (!(back instanceof HTMLElement) || !document.contains(back) || back.disabled) return;
+  const game = document.querySelector("#gameView");
+  if (back.closest("#playMenuDrawer") && game && !game.classList.contains("hidden")) openPlayMenu();
+  focusWhenShown(back);
+}
+
+function topMenuDialog() {
+  const save = document.querySelector("#saveBrowserModal");
+  const settings = document.querySelector("#appSettingsModal");
+  if (save && !save.classList.contains("hidden")) return save;
+  if (settings && !settings.classList.contains("hidden")) return settings;
+  return null;
+}
+
+function trapDialogTab(event, modal) {
+  const stops = dialogTabStops(modal);
+  if (!stops.length) {
+    event.preventDefault();
+    return;
+  }
+  const first = stops[0];
+  const last = stops[stops.length - 1];
+  const active = document.activeElement;
+  const inside = modal.contains(active);
+  if (event.shiftKey) {
+    if (!inside || active === first) {
+      event.preventDefault();
+      last.focus();
+    }
+    return;
+  }
+  if (!inside || active === last) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function closeSaveBrowser(options = {}) {
   // Closing on top of a queue would throw the changes away without saying so.
-  if (saveBrowserView === "editor" && saveEditorEdits.length && !leaveSaveEditor()) return;
+  if (saveBrowserView === "editor" && saveEditorEdits.length && !leaveSaveEditor()) return false;
   document.querySelector("#saveBrowserModal")?.classList.add("hidden");
   setSaveBrowserStatus("");
   saveBrowserView = "characters";
@@ -7529,6 +8557,9 @@ function closeSaveBrowser() {
   saveEditorInvalid = new Set();
   saveEditorData = null;
   saveEditorApplied = "";
+  if (options.restoreFocus) restoreMenuDialogFocus();
+  else menuDialogReturn = null;
+  return true;
 }
 
 /** The back button means "up one level", and the editor is a level. */
@@ -7871,7 +8902,9 @@ async function refreshSaveBrowser() {
   }
 }
 
-function openSaveBrowser(mode = "load") {
+function openSaveBrowser(mode = "load", opener = null) {
+  rememberMenuDialogOpener(opener);
+  closePlayMenu();
   saveBrowserMode = mode === "save" || mode === "edit" ? mode : "load";
   saveBrowserView = "characters";
   saveBrowserCharacter = "";
@@ -7880,10 +8913,14 @@ function openSaveBrowser(mode = "load") {
   const modal = document.querySelector("#saveBrowserModal");
   modal?.classList.remove("hidden");
   bindSaveBrowserOnce();
-  refreshSaveBrowser();
   if (saveBrowserMode === "save") {
-    document.querySelector("#saveBrowserNameInput")?.focus();
+    const footer = document.querySelector("#saveBrowserFooter");
+    if (footer) footer.hidden = false;
+    focusWhenShown(document.querySelector("#saveBrowserNameInput"));
+  } else {
+    focusWhenShown(document.querySelector("#closeSaveBrowser"));
   }
+  refreshSaveBrowser();
 }
 
 async function loadCampaignSlotByName(slotName) {
@@ -8942,10 +9979,10 @@ function bindSaveBrowserOnce() {
   if (saveBrowserBound) return;
   saveBrowserBound = true;
   const modal = document.querySelector("#saveBrowserModal");
-  document.querySelector("#closeSaveBrowser")?.addEventListener("click", () => closeSaveBrowser());
+  document.querySelector("#closeSaveBrowser")?.addEventListener("click", () => closeSaveBrowser({ restoreFocus: true }));
   document.querySelector("#saveBrowserBack")?.addEventListener("click", () => saveBrowserGoBack());
   modal?.addEventListener("click", (event) => {
-    if (event.target?.id === "saveBrowserModal") closeSaveBrowser();
+    if (event.target?.id === "saveBrowserModal") closeSaveBrowser({ restoreFocus: true });
   });
   bindSaveEditorOnce();
   document.querySelector("#saveBrowserConfirmSave")?.addEventListener("click", () => {
@@ -9098,6 +10135,7 @@ function renderRewindCard() {
   return `
     <article class="card">
       <strong>Rewind</strong>
+      <p>Goes back to this turn. This cannot be undone.</p>
       <div class="rewindList">${buttons}</div>
     </article>
   `;
@@ -9121,6 +10159,7 @@ function renderPlayerAliases() {
               <div class="miniActions">
                 <button class="playerAliasActivate" data-player-alias-id="${escapeHtml(alias.id)}" type="button" ${isActive ? "disabled" : ""}>Use</button>
                 ${isActive ? `<button class="playerAliasDeactivate" type="button">Stop</button>` : ""}
+                <button class="playerAliasRemove" data-player-alias-id="${escapeHtml(alias.id)}" type="button" aria-label="Remove ${escapeHtml(alias.alias)}">Remove</button>
               </div>
               <form class="playerAliasStateForm" data-player-alias-id="${escapeHtml(alias.id)}">
                 <label class="inlineCheck"><input name="disguised" type="checkbox" ${disguised ? "checked" : ""} /> Disguised</label>
@@ -9138,9 +10177,17 @@ function renderPlayerAliases() {
         <strong>Gameplay Aliases</strong>
         <span>${activeAlias ? `Active: ${escapeHtml(activeAlias.alias)}` : "No active alias"}</span>
       </header>
+      <p class="aliasOptionalNote">Optional. Leave this blank.</p>
+      <p class="playerAliasHelp">Optional. Create turns the name on. Stop turns it off.</p>
       <form id="playerAliasForm" class="playerAliasForm">
-        <input name="alias" maxlength="80" placeholder="New player alias" />
-        <input name="notes" maxlength="900" placeholder="Optional context" />
+        <label>
+          <span>Alias</span>
+          <input name="alias" maxlength="80" autocomplete="off" />
+        </label>
+        <label>
+          <span>Context (optional)</span>
+          <input name="notes" maxlength="900" autocomplete="off" />
+        </label>
         <button type="submit">Create</button>
       </form>
       <div class="playerAliasList">${rows}</div>
@@ -9169,6 +10216,10 @@ function playerFullbodyUrl() {
   );
 }
 
+function playerArtEmptyFrameHtml() {
+  return `<div class="npcPortraitPlaceholder">Drop an image or use Generate.</div>`;
+}
+
 function playerPortraitHtml() {
   const face = playerFaceUrl();
   const body = playerFullbodyUrl();
@@ -9177,41 +10228,127 @@ function playerPortraitHtml() {
   return `
     <section class="playerPortraitCard playerArtCard">
       <div class="playerArtPair">
-        <div class="playerFaceChip artDropZone ${face ? "hasArt" : ""}" id="playerFaceFrame" data-art-slot="player-face" title="Face — drop image or generate">
-          ${
-            face
-              ? `${artClearButtonHtml("player-face")}<img src="${face}" alt="Player face" draggable="true" />`
-              : `<div class="npcPortraitPlaceholder"><span>Face</span><small>drop / gen</small></div>`
-          }
+        <div class="playerArtFigure">
+          <div class="playerFaceChip artDropZone ${face ? "hasArt" : ""}" id="playerFaceFrame" data-art-slot="player-face" title="Drop an image or use Generate." aria-label="Face. Drop an image or use Generate.">
+            ${
+              face
+                ? `<img src="${face}" alt="Player face" draggable="true" />`
+                : playerArtEmptyFrameHtml()
+            }
+          </div>
+          ${face ? `<div class="playerArtClear">${artClearButtonHtml("player-face")}</div>` : ""}
         </div>
-        <div class="playerFullbodyFrame artDropZone ${body || face ? "hasArt" : ""}" id="playerFullbodyFrame" data-art-slot="player-fullbody" title="Full body — drop image or generate">
-          ${
-            body
-              ? `${artClearButtonHtml("player-fullbody")}<img src="${body}" alt="Player full body" draggable="true" />`
-              : face
-                ? `${artClearButtonHtml("player-fullbody")}<img src="${face}" alt="Player (face only so far)" class="playerArtFallback" draggable="true" />`
-                : `<div class="npcPortraitPlaceholder"><span>Full body</span><small>drop / gen</small></div>`
-          }
+        <div class="playerArtFigure">
+          <div class="playerFullbodyFrame artDropZone ${body || face ? "hasArt" : ""}" id="playerFullbodyFrame" data-art-slot="player-fullbody" title="Drop an image or use Generate." aria-label="Full body. Drop an image or use Generate.">
+            ${
+              body
+                ? `<img src="${body}" alt="Player full body" draggable="true" />`
+                : face
+                  ? `<img src="${face}" alt="Player (face only so far)" class="playerArtFallback" draggable="true" />`
+                  : playerArtEmptyFrameHtml()
+            }
+          </div>
+          ${body || face ? `<div class="playerArtClear">${artClearButtonHtml("player-fullbody")}</div>` : ""}
         </div>
       </div>
       <div class="playerPortraitMeta">
         <strong>Character art</strong>
+        <p class="playerArtOptionalNote">Optional. Remove clears that picture.</p>
         <p class="empty">Player only — not covered by NPC auto-gen. ${stale ? "<em>Gear/level changed — regenerate recommended.</em>" : ""}</p>
-        <p class="empty" id="playerArtStatus" hidden></p>
-        <div class="npcStageActions artKindActions">
-          <select id="playerArtGenKind" class="artGenSelect" title="What to generate">
-            <option value="both" selected>Face + body</option>
-            <option value="face">Face only</option>
-            <option value="fullbody">Body only</option>
-          </select>
-          <button type="button" class="secondaryButton compactButton" id="playerPortraitRegen" data-player-portrait-regen>Generate</button>
-          <button type="button" class="secondaryButton compactButton" data-requires-forge-image data-open-image-studio data-title-online="Image Studio" title="Image Studio">Studio…</button>
-          <button type="button" class="secondaryButton compactButton" data-requires-forge-image data-open-image-browser data-title-online="Image Library" title="Image Library">Library ⧉</button>
-          <button type="button" class="secondaryButton compactButton" data-popout="player">Pop out ⧉</button>
+        <p class="empty" id="playerArtStatus" data-player-art-status hidden></p>
+        <div class="playerArtActions">
+          <div class="npcStageActions artKindActions" role="group" aria-label="Kind and generate">
+            <select id="playerArtGenKind" class="artGenSelect" title="What to generate" aria-label="What to generate">
+              <option value="both" selected>Face + body</option>
+              <option value="face">Face only</option>
+              <option value="fullbody">Body only</option>
+            </select>
+            <button type="button" class="secondaryButton" id="playerPortraitRegen" data-player-portrait-regen>Generate</button>
+          </div>
+          <div class="npcStageActions artKindActions artKindOptional" role="group" aria-labelledby="playerArtOptionalLabel">
+            <span id="playerArtOptionalLabel" class="artOptionalLabel">Optional</span>
+            <button type="button" class="secondaryButton" data-requires-forge-image data-open-image-studio data-title-online="Image Studio" title="Image Studio">Studio</button>
+            <button type="button" class="secondaryButton" data-requires-forge-image data-open-image-browser data-title-online="Image library" title="Image library">Image library</button>
+          </div>
         </div>
       </div>
     </section>
   `;
+}
+
+function knownSheetLabel(value, whenKnown) {
+  const text = String(value || "").trim();
+  if (text.toLowerCase() === "known") return whenKnown;
+  return text;
+}
+
+function renderIdentityCard(player, formerLifeParts) {
+  const line = [player.name ? `Name: ${player.name}` : "", player.age ? `Age: ${player.age}` : "", player.sex ? `Sex: ${player.sex}` : ""]
+    .filter(Boolean)
+    .join(" · ");
+  const extras = [
+    player.public_name ? `Known as: ${player.public_name}` : "",
+    player.title ? `Title: ${player.title}` : "",
+    formerLifeParts.length ? `Former life: ${formerLifeParts.join(", ")}` : "",
+    player.backstory_mode ? `Backstory: ${knownSheetLabel(player.backstory_mode, "Known past")}` : "",
+    player.memory_policy ? `Memory: ${knownSheetLabel(player.memory_policy, "Known to player")}` : "",
+  ].filter(Boolean);
+  const notes = String(player.backstory || "").trim();
+  if (!line && !extras.length && !notes) return card("Identity", "No identity details recorded.");
+  return `
+    <article class="card identityCard">
+      <strong>Identity</strong>
+      ${line ? `<p>${linkifyText(line)}</p>` : ""}
+      ${extras.map((part) => `<p>${linkifyText(part)}</p>`).join("")}
+      ${notes ? `<p class="identityNotes"><strong>Notes</strong> ${linkifyText(notes)}</p>` : ""}
+    </article>
+  `;
+}
+
+function renderPlayerTitles() {
+  const titles = state.player_titles || [];
+  if (!titles.length) return "";
+  const chips = titles
+    .map((t) => {
+      const bonusParts = Object.entries(t.stat_bonuses || {})
+        .filter(([, v]) => v !== 0)
+        .map(([k, v]) => `${k} ${v > 0 ? "+" : ""}${v}`);
+      const bonusStr = bonusParts.length ? ` (${bonusParts.join(", ")})` : "";
+      const tooltip = `${escapeHtml(t.description)}${bonusStr ? " · Bonuses: " + escapeHtml(bonusStr) : ""} · Earned turn ${t.acquired_turn}`;
+      return `<span class="titleChip" title="${tooltip}">${escapeHtml(t.name)}</span>`;
+    })
+    .join("");
+  return `<div class="playerTitlesRow"><span class="playerTitlesLabel">Titles</span>${chips}</div>`;
+}
+
+function renderPartyPanel() {
+  const party = state.party || [];
+  if (!party.length) {
+    return `<p class="empty">No companions. Talk to Friendly+ NPCs and use the Invite button on their card.</p>`;
+  }
+  return party
+    .map((m) => {
+      const moraleColor = m.morale >= 60 ? "var(--neon-2, #3af)" : m.morale >= 30 ? "#e6a817" : "#e74c3c";
+      const moraleLabel = m.morale >= 60 ? "Good" : m.morale >= 30 ? "Shaken" : "Low";
+      return `
+        <article class="card partyMemberCard">
+          <strong>${escapeHtml(m.npc_name)}</strong>
+          <div class="meta">${escapeHtml(m.role)} · rank ${escapeHtml(m.rank)} · +${escapeHtml(m.combat_bonus)} combat</div>
+          <div class="partyMoraleRow">
+            <span class="partyMoraleLabel" style="color:${moraleColor}">${escapeHtml(moraleLabel)}</span>
+            <div class="partyMoraleBar"><span style="width:${m.morale}%;background:${moraleColor}"></span></div>
+            <span class="partyMoraleNum">${escapeHtml(m.morale)}</span>
+          </div>
+          <div class="miniActions">
+            <button class="partyRemoveButton secondaryButton" type="button"
+              data-npc-id="${escapeHtml(m.npc_id)}" data-npc-name="${escapeHtml(m.npc_name)}">
+              Dismiss
+            </button>
+          </div>
+        </article>
+      `;
+    })
+    .join("");
 }
 
 function renderPlayer() {
@@ -9226,17 +10363,6 @@ function renderPlayer() {
   const formerLifeParts = [
     player.previous_life_age || options.previous_life_age ? `age ${player.previous_life_age || options.previous_life_age}` : "",
     player.previous_life_sex || options.previous_life_sex ? `sex ${player.previous_life_sex || options.previous_life_sex}` : "",
-  ].filter(Boolean);
-  const identityParts = [
-    player.name ? `Name: ${player.name}` : "",
-    player.public_name ? `Known as: ${player.public_name}` : "",
-    player.title ? `Title: ${player.title}` : "",
-    player.age ? `Age: ${player.age}` : "",
-    player.sex ? `Sex: ${player.sex}` : "",
-    formerLifeParts.length ? `Former life: ${formerLifeParts.join(", ")}` : "",
-    player.backstory_mode ? `Backstory: ${player.backstory_mode}` : "",
-    player.memory_policy ? `Memory: ${player.memory_policy}` : "",
-    player.backstory ? `Notes: ${player.backstory}` : "",
   ].filter(Boolean);
   const conditions = (state.conditions || [])
     .map((c) => (typeof c === "string" ? c : c.name || c.summary || ""))
@@ -9271,7 +10397,7 @@ function renderPlayer() {
       ${statCard("Karma", player.karma ?? 0)}
     </div>
     ${collapseNote ? card("Condition", collapseNote, collapse.band || "strain") : ""}
-    ${card("Identity", identityParts.join(" | ") || "No identity details recorded.")}
+    ${renderIdentityCard(player, formerLifeParts)}
     ${conditions ? card("Conditions", conditions) : ""}
     ${effectiveStats || equipmentAbilityNames ? card("Effective Equipment Effects", [effectiveStats ? `Stats: ${effectiveStats}` : "", equipmentAbilityNames ? `Abilities: ${equipmentAbilityNames}` : ""].filter(Boolean).join(" | "), "Active while equipped") : ""}
     ${renderPlayerAliases()}
@@ -9285,6 +10411,7 @@ function renderPlayer() {
     )}
     ${renderBudgetCard()}
     ${renderRewindCard()}
+    ${renderPlayerTitles()}
     ${skills.map((skill) => card(escapeHtml(skill.name), skill.notes || "", `Value ${escapeHtml(skill.value)}`)).join("")}
     ${abilities
       .map((ability) => {
@@ -9335,6 +10462,10 @@ function renderCharacter() {
         ${renderPlayer()}
       </section>
       <section class="characterSheetSection">
+        <h3 class="characterSheetSectionTitle">Party</h3>
+        ${renderPartyPanel()}
+      </section>
+      <section class="characterSheetSection">
         <h3 class="characterSheetSectionTitle">Inventory</h3>
         ${renderInventory()}
       </section>
@@ -9382,6 +10513,7 @@ function rarityClass(value) {
 const inventoryRowIndex = new Map();
 let itemOverlayEl = null;
 let itemOverlayTarget = null;
+let itemOverlayArmedByHover = false;
 
 function inventoryRowKey(item, index) {
   return String(item?.code || `${item?.name || "item"}#${index}`);
@@ -9390,6 +10522,7 @@ function inventoryRowKey(item, index) {
 function itemOverlay() {
   if (itemOverlayEl) return itemOverlayEl;
   itemOverlayEl = document.createElement("div");
+  itemOverlayEl.id = "itemDetailsOverlay";
   itemOverlayEl.className = "itemHoverOverlay hidden";
   itemOverlayEl.setAttribute("role", "tooltip");
   document.body.append(itemOverlayEl);
@@ -9423,21 +10556,26 @@ function itemOverlayHtml(item) {
   `;
 }
 
-function showItemOverlay(target) {
+function showItemOverlay(target, { arm = false } = {}) {
   const item = inventoryRowIndex.get(target?.dataset?.invKey || "");
-  if (!item) return;
+  if (!item || !target) return;
   const overlay = itemOverlay();
   overlay.innerHTML = itemOverlayHtml(item);
-  itemOverlayTarget?.classList.remove("invRowActive");
+  if (itemOverlayTarget && itemOverlayTarget !== target) {
+    itemOverlayTarget.classList.remove("invRowActive");
+  }
+  const changed = itemOverlayTarget !== target;
   itemOverlayTarget = target;
   target.classList.add("invRowActive");
+  target.setAttribute("aria-describedby", "itemDetailsOverlay");
+  if (changed) itemOverlayArmedByHover = Boolean(arm);
   positionFloatingOverlay(overlay, target);
 }
 
 function hideItemOverlay() {
-  if (!itemOverlayTarget) return;
-  itemOverlayTarget.classList.remove("invRowActive");
+  if (itemOverlayTarget) itemOverlayTarget.classList.remove("invRowActive");
   itemOverlayTarget = null;
+  itemOverlayArmedByHover = false;
   itemOverlayEl?.classList.add("hidden");
 }
 
@@ -9449,32 +10587,44 @@ function hideItemOverlay() {
 function attachItemOverlayHandlers() {
   if (document.body.dataset.itemOverlayReady === "true") return;
   document.body.dataset.itemOverlayReady = "true";
+  itemOverlay();
 
   const rowFrom = (event) => event.target?.closest?.("[data-inv-key]") || null;
 
   document.addEventListener("pointerover", (event) => {
     const row = rowFrom(event);
     if (row) {
-      if (row !== itemOverlayTarget) showItemOverlay(row);
+      if (row !== itemOverlayTarget) showItemOverlay(row, { arm: true });
     } else if (itemOverlayTarget) {
       hideItemOverlay();
     }
   });
-  // Touch has no hover: a tap opens the overlay, a second tap or a tap
-  // elsewhere closes it.
+  // Hover opens the details. The click that follows that hover is not a
+  // second activation, so it must not close the overlay.
   document.addEventListener("click", (event) => {
     const row = rowFrom(event);
     if (!row) return hideItemOverlay();
-    if (row === itemOverlayTarget) hideItemOverlay();
-    else showItemOverlay(row);
+    if (row === itemOverlayTarget) {
+      if (itemOverlayArmedByHover) {
+        itemOverlayArmedByHover = false;
+        return;
+      }
+      hideItemOverlay();
+      return;
+    }
+    showItemOverlay(row, { arm: false });
   });
   document.addEventListener("focusin", (event) => {
     const row = rowFrom(event);
-    if (row) showItemOverlay(row);
-    else hideItemOverlay();
+    if (row) {
+      if (row !== itemOverlayTarget) showItemOverlay(row, { arm: true });
+    } else hideItemOverlay();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape") hideItemOverlay();
+    if (event.key !== "Escape" || !itemOverlayTarget) return;
+    hideItemOverlay();
+    event.preventDefault();
+    event.stopImmediatePropagation();
   });
   // Fixed positioning is computed once from the row's viewport rect, so any
   // scroll leaves the overlay stranded next to nothing.
@@ -9501,16 +10651,42 @@ function renderInventory() {
   const equippedSlots = slots
     .map((slot) => {
       const items = slotItems.get(slot.code) || [];
-      const names = items.map((item) => `${item.name} x${item.quantity}`).join("\n");
-      const source = slot.source_item_code ? ` · from ${escapeHtml(slot.source_item_code)}` : "";
+      const sourceCode = String(slot.source_item_code || "").trim();
+      const sourceName = sourceCode
+        ? inventory.find((item) => item.code === sourceCode)?.name || sourceCode
+        : "";
+      if (!items.length) {
+        const stateText = sourceName ? `Empty · From ${sourceName}` : "Empty";
+        return `<p class="equipmentSlotEmpty"><span class="equipmentSlotName">${escapeHtml(slot.name)}</span><span class="equipmentSlotState">${escapeHtml(stateText)}</span></p>`;
+      }
+      const names = items.map((item) => `${item.name} ×${item.quantity}`).join("\n");
+      const sourceNote = sourceName ? `<p>From ${escapeHtml(sourceName)}</p>` : "";
+      const slotToken = items
+        .map((item) => (item.code ? refToken("item", item.code) : String(item.name || "")))
+        .filter(Boolean)
+        .join(" ");
+      const worn = items
+        .map((item) => {
+          const quantity = Number(item.quantity ?? 0);
+          const stacked = quantity > 1;
+          const token = item.code ? refToken("item", item.code) : String(item.name || "");
+          const drag = item.code
+            ? `draggable="true" data-link-type="item" data-link-code="${escapeHtml(item.code)}"`
+            : `draggable="true" data-link-token="${escapeHtml(token)}"`;
+          const link = item.code
+            ? `<button type="button" class="insertRefButton invLinkBtn" data-type="item" data-code="${escapeHtml(item.code)}" aria-label="Link ${escapeHtml(item.name)} into the scene input">Link</button>`
+            : `<button type="button" class="insertRefButton invLinkBtn" data-link-token="${escapeHtml(token)}" aria-label="Link ${escapeHtml(item.name)} into the scene input">Link</button>`;
+          return `<div class="slotWornLine"><span class="slotWornItem" ${drag}>${escapeHtml(item.name)} <span class="invRowQty${stacked ? " isStack" : ""}">&times;${escapeHtml(quantity)}</span></span>${link}</div>`;
+        })
+        .join("");
       return `
-        <article class="equipmentSlot" title="${escapeHtml(names || slot.notes || "Empty")}">
+        <article class="equipmentSlot"${slotToken ? ` draggable="true" data-link-token="${escapeHtml(slotToken)}"` : ""} title="${escapeHtml(names || slot.name)}">
           <header>
             <strong>${escapeHtml(slot.name)}</strong>
             <span>${escapeHtml(items.length)} / ${escapeHtml(slot.capacity || 1)}</span>
           </header>
-          <div class="slotSocket${items.length ? " filled" : ""}">${items.length ? items.map((item) => `<span>${escapeHtml(item.name)}</span>`).join("") : "Empty"}</div>
-          <p>${escapeHtml(slot.category || "gear")}${source}</p>
+          <div class="slotSocket filled">${worn}</div>
+          ${sourceNote}
         </article>
       `;
     })
@@ -9521,14 +10697,26 @@ function renderInventory() {
     const equipped = Boolean(item.equipped_slot);
     const quantity = Number(item.quantity ?? 0);
     const stacked = quantity > 1;
+    const token = item.code ? refToken("item", item.code) : String(item.name || "");
+    const dragAttrs = item.code
+      ? `draggable="true" data-link-type="item" data-link-code="${escapeHtml(item.code)}"`
+      : `draggable="true" data-link-token="${escapeHtml(token)}"`;
+    const linkBtn = item.code
+      ? `<button type="button" class="insertRefButton invLinkBtn" data-type="item" data-code="${escapeHtml(item.code)}" aria-label="Link ${escapeHtml(item.name)} into the scene input">Link</button>`
+      : `<button type="button" class="insertRefButton invLinkBtn" data-link-token="${escapeHtml(token)}" aria-label="Link ${escapeHtml(item.name)} into the scene input">Link</button>`;
     return `
-      <button type="button"
-        class="invRow ${rarityClass(item.rarity)}${equipped ? " isEquipped" : ""}"
-        data-inv-key="${escapeHtml(inventoryRowKey(item, index))}"
-        aria-label="${escapeHtml(`${item.name}, quantity ${quantity}${equipped ? ", equipped" : ""}`)}">
-        <span class="invRowName">${escapeHtml(item.name)}</span>
-        <span class="invRowQty${stacked ? " isStack" : ""}">&times;${escapeHtml(quantity)}</span>
-      </button>
+      <div class="invRowLine" ${dragAttrs}>
+        <button type="button"
+          class="invRow ${rarityClass(item.rarity)}${equipped ? " isEquipped" : ""}"
+          ${dragAttrs}
+          data-inv-key="${escapeHtml(inventoryRowKey(item, index))}"
+          aria-describedby="itemDetailsOverlay"
+          aria-label="${escapeHtml(`${item.name}, quantity ${quantity}${equipped ? ", equipped" : ""}`)}">
+          <span class="invRowName">${escapeHtml(item.name)}</span>
+          <span class="invRowQty${stacked ? " isStack" : ""}">&times;${escapeHtml(quantity)}</span>
+        </button>
+        ${linkBtn}
+      </div>
     `;
   };
   // Index by position in the FULL inventory so both lists key the same object.
@@ -9544,6 +10732,7 @@ function renderInventory() {
     : "";
   return `
     <section class="inventoryWindow playerInventory">
+      <p class="inventoryLinkHint">Select a name to read it. Link puts it in What will you do? Delete that text to undo. Both are optional.</p>
       <header class="inventoryHeader">
         <div>
           <strong>Player inventory</strong>
@@ -9581,6 +10770,73 @@ function renderInventory() {
   `;
 }
 
+/** Build HTML for quest step fields (1–6 steps). */
+function buildQuestStepFields(count) {
+  let html = "";
+  for (let i = 1; i <= count; i++) {
+    html += `<fieldset class="questStepFields" style="border:1px solid var(--border,#ccc);border-radius:4px;padding:6px 10px;margin:6px 0">
+      <legend style="font-size:0.85em;font-weight:600">Step ${i}</legend>
+      <label>Task <input name="step_${i}_title" maxlength="80" placeholder="Reach the old mill" autocomplete="off" /></label>
+      <label>Description <textarea name="step_${i}_desc" rows="2" maxlength="300" placeholder="Find the stolen goods inside…"></textarea></label>
+      <label class="checkboxRow"><input name="step_${i}_hidden" type="checkbox" /> Hidden until revealed</label>
+    </fieldset>`;
+  }
+  return html;
+}
+
+/** NPC-player relationship cache keyed by NPC id. Populated by loadNpcRelationships(). */
+let npcRelationshipCache = {};
+
+async function loadNpcRelationships() {
+  try {
+    const res = await fetch("/api/relationships", { cache: "no-store" });
+    if (!res.ok) return;
+    const data = await res.json();
+    const cache = {};
+    for (const rel of data.relationships || []) {
+      if (rel.npc_id != null) cache[rel.npc_id] = rel;
+    }
+    npcRelationshipCache = cache;
+  } catch (_) {
+    // Non-fatal; cards just won't show relationship data.
+  }
+}
+
+const NPC_AFFINITY_COLORS = {
+  "Hostile":    "#e74c3c",
+  "Unfriendly": "#e67e22",
+  "Neutral":    "#95a5a6",
+  "Friendly":   "#27ae60",
+  "Trusted":    "#2980b9",
+  "Devoted":    "#8e44ad",
+};
+
+function npcRelationshipBadge(npc) {
+  const rel = npcRelationshipCache[npc.id];
+  if (!rel) return "";
+  const color = NPC_AFFINITY_COLORS[rel.affinity_band] || "#95a5a6";
+  return `<div class="npcRelBadge">` +
+    `<span class="relBand" style="color:${color}" title="Affinity: ${escapeHtml(String(rel.affinity))}">${escapeHtml(rel.affinity_band)}</span>` +
+    `<span class="relStat" title="Fear">☠ ${escapeHtml(String(rel.fear))}</span>` +
+    `<span class="relStat" title="Respect">★ ${escapeHtml(String(rel.respect))}</span>` +
+    `</div>`;
+}
+
+function npcPartyExtra(npc) {
+  const party = state.party || [];
+  const inParty = party.some((m) => m.npc_id === npc.id);
+  if (inParty) {
+    return `<div class="npcPartyRow"><span class="npcInPartyBadge">In Party</span></div>`;
+  }
+  const rel = npcRelationshipCache[npc.id];
+  const affinity = rel ? Number(rel.affinity) : 0;
+  if (affinity >= 40) {
+    return `<div class="npcPartyRow"><button class="npcInviteButton secondaryButton" type="button"
+      data-npc-id="${escapeHtml(npc.id)}" data-npc-name="${escapeHtml(npc.name || "")}">+ Party</button></div>`;
+  }
+  return "";
+}
+
 function renderNpcs() {
   const npcs = (state.locations || []).flatMap((location) =>
     (location.npcs || []).map((npc) => ({ ...npc, place: `${location.code} ${location.name}` })),
@@ -9593,7 +10849,8 @@ function renderNpcs() {
             `${escapeHtml(npc.race || "human")} · ${escapeHtml(npc.role)} · rank ${escapeHtml(npc.rank || "F")} · ${escapeHtml(npc.attitude)} · trust ${escapeHtml(npc.trust ?? 0)} · ${escapeHtml(npc.place)}`,
             combat ? escapeHtml(combat) : "",
           ].filter(Boolean).join(" · ");
-          return entityCard("npc", npc, npc.summary || "No notes.", meta);
+          const extra = npcRelationshipBadge(npc) + npcPartyExtra(npc);
+          return entityCard("npc", npc, npc.summary || "No notes.", meta, extra);
         })
         .join("")
     : `<p class="empty">No NPCs indexed.</p>`;
@@ -9668,6 +10925,52 @@ function renderDrafts() {
 /** Quest stage editor (tools) — reached stages + queue force beats. */
 let questStageData = null;
 
+/** Player-facing quest log — active quests from /api/quests. */
+let playerQuestData = null;
+
+async function loadPlayerQuests() {
+  try {
+    const response = await fetch("/api/quests");
+    if (!response.ok) return;
+    const payload = await response.json();
+    playerQuestData = payload.quests || [];
+    if (activeTab === "quests") renderIndex();
+  } catch (_) {
+    // Silently ignore — the quest system may not be seeded yet.
+  }
+}
+
+function renderPlayerQuestSection() {
+  if (!playerQuestData || playerQuestData.length === 0) {
+    return `<p class="empty">No active quests. Use <strong>Seed starter quests</strong> below to add a few, or quests will appear as you play.</p>
+      <div class="composerActions" style="margin-bottom:0.5rem">
+        <button type="button" class="chipBtn secondaryButton" id="seedQuestsBtn">Seed starter quests</button>
+      </div>`;
+  }
+  const cards = playerQuestData.map((q) => {
+    const stepPct = Math.round((q.current_step / Math.max(q.total_steps, 1)) * 100);
+    const timerNote = q.turns_remaining ? ` · ⏱ ${q.turns_remaining} turns left` : "";
+    const stepList = (q.steps || []).map((s) => {
+      const done = s.status === "completed";
+      const active = s.status === "active";
+      return `<li class="${done ? "questStepDone" : active ? "questStepActive" : "questStepPending"}">${escapeHtml(s.title || `Step ${s.step_number}`)}: ${escapeHtml(s.description || "")}</li>`;
+    }).join("");
+    return `
+      <article class="card questCard">
+        <header>
+          <strong>${escapeHtml(q.code)} — ${escapeHtml(q.title)}</strong>
+          <span class="meta">${escapeHtml(q.difficulty || "normal")} · ${escapeHtml(q.reward || "")}${timerNote}</span>
+        </header>
+        <div class="questProgressBar" title="${stepPct}% complete"><div class="questProgressFill" style="width:${stepPct}%"></div></div>
+        <ul class="questStepList">${stepList}</ul>
+        <div class="composerActions">
+          <button type="button" class="chipBtn secondaryButton" data-advance-quest="${q.id}">Advance step</button>
+        </div>
+      </article>`;
+  }).join("");
+  return cards + `<div class="composerActions" style="margin-top:0.5rem"><button type="button" class="chipBtn secondaryButton" id="seedQuestsBtn" title="Add a handful of starter quests">Seed starter quests</button></div>`;
+}
+
 function renderQuests() {
   const data = questStageData;
   const turn = data?.turn ?? state?.turn ?? "—";
@@ -9706,6 +11009,36 @@ function renderQuests() {
     : `<p class="empty">No pending quest bus events.</p>`;
   return `
     <div class="questStageEditor">
+      <h3 class="settingsSubhead">Active quests</h3>
+      <div class="playerQuestList">${renderPlayerQuestSection()}</div>
+      <h3 class="settingsSubhead">Create quest</h3>
+      <details class="questCreateDetails">
+        <summary class="chipBtn secondaryButton" style="cursor:pointer;display:inline-block;margin-bottom:0.5rem">＋ New quest</summary>
+        <form id="questCreateForm" class="questStageForm modelForm" style="margin-top:0.5rem">
+          <label>Title <input name="title" maxlength="120" required placeholder="Retrieve the stolen map" autocomplete="off" /></label>
+          <label>Description <textarea name="description" rows="2" maxlength="800" placeholder="A merchant asks you to recover goods taken by bandits…"></textarea></label>
+          <label>Difficulty
+            <select name="difficulty" id="questDifficultySelect">
+              <option value="easy">Easy (×0.75 reward)</option>
+              <option value="normal" selected>Medium (×1.0 reward)</option>
+              <option value="hard">Hard (×1.5 reward)</option>
+              <option value="legendary">Legendary (×2.5 reward)</option>
+            </select>
+          </label>
+          <label>Reward gold <input name="reward_gold" type="number" min="0" max="10000" placeholder="auto" /></label>
+          <label>Reward XP <input name="reward_xp" type="number" min="0" max="10000" placeholder="auto" /></label>
+          <label>Reward item (optional) <input name="reward_item" maxlength="120" placeholder="Silver dagger" autocomplete="off" /></label>
+          <label>Steps (1–6) <input name="step_count" type="number" min="1" max="6" value="2" id="questStepCount" /></label>
+          <div id="questStepsContainer">${buildQuestStepFields(2)}</div>
+          <label>Timer (turns, 0 = none) <input name="timer_turns" type="number" min="0" max="200" value="0" /></label>
+          <div class="composerActions">
+            <button type="submit" class="chipBtn">Create quest</button>
+            <button type="reset" class="chipBtn secondaryButton">Reset</button>
+          </div>
+          <p id="questCreateStatus" class="empty" hidden></p>
+        </form>
+      </details>
+      <h3 class="settingsSubhead">GM stage tools</h3>
       <p class="empty">Current turn <strong>${escapeHtml(turn)}</strong>. Force stages fire on the next Continue / Wait / action once due (player is the trigger).</p>
       <form id="questStageForm" class="questStageForm modelForm">
         <h3 class="settingsSubhead">Mark stage</h3>
@@ -9757,6 +11090,7 @@ async function loadQuestStages() {
     pending_events: payload.pending_events || [],
   };
   if (activeTab === "quests") renderIndex();
+  if (characterSheetOpen) paintCharacterSheet({ load: false });
   return questStageData;
 }
 
@@ -9790,6 +11124,7 @@ async function submitQuestStage(form) {
     await loadQuestStages();
   }
   if (activeTab === "quests") renderIndex();
+  if (payload.quest && characterSheetOpen) paintCharacterSheet({ load: false });
   return payload;
 }
 
@@ -9812,7 +11147,20 @@ function renderBible() {
     ${card("Player", `Health ${data.player?.health}/${data.player?.max_health}; karma ${data.player?.karma}; gold ${data.player?.gold}`)}
     ${data.important_npcs?.map((npc) => entityCard("npc", npc, npc.summary || "No notes.", `trust ${npc.trust ?? 0}`)).join("") || ""}
     ${data.active_events?.map((event) => entityCard("event", event, event.summary || "No summary.", event.status)).join("") || ""}
-    ${(data.journal_highlights || []).map((entry) => card(`Turn ${escapeHtml(entry.turn)}`, entry.summary)).join("")}
+    ${(data.journal_highlights || [])
+      .map((entry) => {
+        const token = `journal T${entry.turn ?? "?"}`;
+        return `
+          <article class="card entityCard" draggable="true" data-link-token="${escapeHtml(token)}">
+            <strong>Turn ${escapeHtml(entry.turn)}</strong>
+            <p>${linkifyText(entry.summary || "")}</p>
+            <div class="miniActions">
+              <button class="insertRefButton" type="button" data-link-token="${escapeHtml(token)}" aria-label="Link journal ${escapeHtml(token)} into the scene input">Link into input</button>
+            </div>
+          </article>
+        `;
+      })
+      .join("")}
   `;
 }
 
@@ -10563,6 +11911,7 @@ const TAB_LABELS = {
   talk: "Talk",
   drafts: "Checks",
   quests: "Quests",
+  history: "History",
   imageStudio: "Image Studio",
   art: "Image Studio",
   imageBrowser: "Image Browser",
@@ -11109,14 +12458,16 @@ function updatePlayLayoutChrome() {
     }
   }
   if (resetBtn) {
-    resetBtn.textContent = playLayout.custom ? "Layout●" : "Layout";
+    resetBtn.textContent = playLayout.custom ? "Reset layout" : "Customize layout";
     resetBtn.title = playLayout.custom
-      ? "Custom layout active — click to reset auto layout"
-      : "Drag panel headers: drop on top/bottom to stack, left/right to place beside. Drag edges to resize.";
+      ? "A custom layout is on. Click to reset the automatic scene and map layout."
+      : "Customize layout: drag panels and edges. This becomes Reset layout once a custom layout is on.";
   }
   if (idle && playLayout.custom && !gameView?.classList.contains("isGenerating")) {
     idle.textContent = multiRow ? "Custom stacked layout" : "Custom layout (auto focus off)";
   }
+  syncStageFocusControls();
+  syncPlayMenuColumns();
 }
 
 function markCustomPlayLayout() {
@@ -11295,6 +12646,47 @@ function placePlayPanel(fromId, toId, edge) {
  * Used on Continue/load and when reading/acting; map-primary is the idle travel view.
  * Skipped automatically when the player has a custom layout.
  */
+const STAGE_FOCUS_LOCK_TITLE = "Custom layout is on. Reset layout to change the stage.";
+
+function setStageFocusLockTitle(el, locked) {
+  if (!el) return;
+  if (locked) {
+    if (!Object.prototype.hasOwnProperty.call(el.dataset, "stageTitle")) el.dataset.stageTitle = el.title || "";
+    el.title = STAGE_FOCUS_LOCK_TITLE;
+    return;
+  }
+  if (Object.prototype.hasOwnProperty.call(el.dataset, "stageTitle")) {
+    el.title = el.dataset.stageTitle;
+    delete el.dataset.stageTitle;
+  }
+}
+
+function syncStageFocusControls() {
+  const custom = hasCustomPlayLayout();
+  const sceneOn = Boolean(gameView?.classList.contains("sceneFocus"));
+  const sceneRow = document.querySelector('#playMenuDrawer [data-play-menu="scene"]');
+  const mapRow = document.querySelector('#playMenuDrawer [data-play-menu="map"]');
+  const headerScene = document.querySelector("#sceneFocusChatBtnHeader");
+  const headerMap = document.querySelector("#sceneFocusMapBtnHeader");
+  const panelScene = document.querySelector("#mapFocusChatBtn");
+  const panelMap = document.querySelector("#sceneFocusMapBtn");
+  [
+    [sceneRow, sceneOn],
+    [mapRow, !sceneOn],
+    [headerScene, sceneOn],
+    [headerMap, !sceneOn],
+    [panelScene, sceneOn],
+    [panelMap, !sceneOn],
+  ].forEach(([el, on]) => {
+    if (!el) return;
+    const pressed = !custom && on;
+    el.disabled = custom;
+    el.setAttribute("aria-pressed", pressed ? "true" : "false");
+    if (el.classList.contains("chipBtn")) el.classList.toggle("activeChip", pressed);
+    setStageFocusLockTitle(el, custom);
+  });
+}
+
 function setSceneFocus(on, options = {}) {
   const enabled = Boolean(on);
   if (hasCustomPlayLayout() && !options.force) {
@@ -11307,6 +12699,7 @@ function setSceneFocus(on, options = {}) {
       latestOutput?.scrollTo?.({ top: 0, behavior: "smooth" });
     }
     if (enabled && options.focusInput) turnInput?.focus();
+    syncStageFocusControls();
     return;
   }
   gameView?.classList.toggle("sceneFocus", enabled);
@@ -11323,6 +12716,7 @@ function setSceneFocus(on, options = {}) {
   const mapBtn = document.querySelector("#sceneFocusMapBtn");
   if (sceneBtn) sceneBtn.classList.toggle("activeChip", enabled);
   if (mapBtn) mapBtn.classList.toggle("activeChip", !enabled);
+  syncStageFocusControls();
   if (enabled && options.scroll !== false) {
     document.querySelector("#chatColumn")?.scrollIntoView({ behavior: options.smooth === false ? "auto" : "smooth", block: "nearest" });
     latestOutput?.scrollTo?.({ top: 0, behavior: "smooth" });
@@ -11576,6 +12970,7 @@ function bindPlayLayoutControls() {
     if (playLayout.custom) {
       if (window.confirm("Reset play layout to automatic scene/map focus?")) resetPlayLayout();
     } else {
+      closePlayMenu();
       playLayout = normalizePlayLayout({
         custom: true,
         rows: activeLayoutRows().map((r) => ({
@@ -11652,6 +13047,16 @@ function bindPlayLayoutControls() {
 }
 
 window.renderTabHtmlForPopout = function renderTabHtmlForPopout(tab) {
+  if (tab === "history") {
+    try {
+      renderHistory();
+      const hist = document.querySelector("#history");
+      const html = hist?.innerHTML || `<p class="empty">No history yet.</p>`;
+      return `<div class="popoutTabInner" data-popout-tab="history">${html}</div>`;
+    } catch (error) {
+      return `<p class="empty">${escapeHtml(error.message || String(error))}</p>`;
+    }
+  }
   if (tab === "imageStudio" || tab === "art") {
     try {
       return `<div class="popoutTabInner" data-popout-tab="imageStudio">${renderImageStudioHtml()}</div>`;
@@ -11821,9 +13226,13 @@ function applyFloatPanelChrome(panel, key) {
     pinBtn.title = pinned ? "Unpin (return to hover-expand chip)" : "Pin open (stay expanded)";
   }
   if (collapseBtn) {
-    collapseBtn.textContent = collapsed ? "▢" : "—";
-    collapseBtn.title = collapsed ? "Collapsed — hover to expand, or click to pin open" : "Collapse to chip";
+    collapseBtn.textContent = "Collapse";
+    collapseBtn.title = collapsed ? "Collapsed — hover to expand, or click to pin open" : "Collapse";
   }
+  const windowBtn = panel.querySelector("[data-float-window]");
+  if (windowBtn) windowBtn.textContent = "New window";
+  const closeFloatBtn = panel.querySelector("[data-float-close]");
+  if (closeFloatBtn) closeFloatBtn.textContent = "Close";
 }
 
 function openTabFloat(tab, options = {}) {
@@ -11835,10 +13244,27 @@ function openTabFloat(tab, options = {}) {
     // Re-parent if the panel was created under an old layer
     if (existing.parentElement !== layer) layer.appendChild(existing);
     raiseFloatPanel(existing);
-    if (options.pinned) {
-      existing.classList.add("isPinned");
-      existing.classList.remove("isCollapsed");
+    if (options.expanded) {
+      floatWindowState[key] = {
+        ...(floatWindowState[key] || {}),
+        open: true,
+        collapsed: false,
+        pinned: false,
+      };
       applyFloatPanelChrome(existing, key);
+      persistFloatPanel(key, existing);
+      return existing;
+    }
+    if (options.pinned) {
+      floatWindowState[key] = {
+        ...(floatWindowState[key] || {}),
+        open: true,
+        pinned: true,
+        collapsed: false,
+      };
+      applyFloatPanelChrome(existing, key);
+      persistFloatPanel(key, existing);
+      return existing;
     } else {
       // Peek-expand on re-open click
       existing.classList.add("isHoverExpand");
@@ -11848,25 +13274,42 @@ function openTabFloat(tab, options = {}) {
   }
   if (!floatWindowState[key] || options.forceDefaults) {
     floatWindowState[key] = defaultFloatPlacement(Object.keys(floatPanels).length);
-    // Default: collapsed chip — callers like Image Library can force pin + size
-    floatWindowState[key].collapsed = options.pinned ? false : true;
+    // Default: collapsed chip — callers like Image Library can force pin + size.
+    // Sheet Pop out opens pinned, not as a chip.
+    floatWindowState[key].collapsed = options.pinned || options.expanded ? false : true;
     floatWindowState[key].pinned = Boolean(options.pinned);
     if (options.width) floatWindowState[key].width = options.width;
     if (options.height) floatWindowState[key].height = options.height;
     if (options.left != null) floatWindowState[key].left = options.left;
     if (options.top != null) floatWindowState[key].top = options.top;
+  } else if (options.pinned) {
+    floatWindowState[key] = {
+      ...floatWindowState[key],
+      open: true,
+      pinned: true,
+      collapsed: false,
+    };
+  } else if (options.expanded) {
+    floatWindowState[key] = {
+      ...floatWindowState[key],
+      open: true,
+      collapsed: false,
+      pinned: false,
+    };
   }
   const panel = document.createElement("section");
-  panel.className = options.pinned ? "floatPanel isPinned" : "floatPanel isCollapsed";
+  const startPinned = Boolean(floatWindowState[key]?.pinned);
+  const startCollapsed = !startPinned && floatWindowState[key]?.collapsed !== false;
+  panel.className = `floatPanel${startPinned ? " isPinned" : ""}${startCollapsed ? " isCollapsed" : ""}`;
   panel.dataset.floatTab = key;
   panel.innerHTML = `
     <header class="floatPanelHeader" data-float-drag>
       <strong title="${escapeHtml(TAB_LABELS[key] || key)}">${escapeHtml(TAB_LABELS[key] || key)}</strong>
       <div class="floatPanelActions">
-        <button type="button" class="chipBtn secondaryButton" data-float-collapse title="Collapse / expand">—</button>
+        <button type="button" class="chipBtn secondaryButton" data-float-collapse title="Collapse">Collapse</button>
         <button type="button" class="chipBtn secondaryButton" data-float-pin title="Pin open (stay expanded)">Pin</button>
-        <button type="button" class="chipBtn secondaryButton" data-float-window title="Open as browser window">↗</button>
-        <button type="button" class="chipBtn secondaryButton" data-float-close title="Close">×</button>
+        <button type="button" class="chipBtn secondaryButton" data-float-window title="Open as browser window">New window</button>
+        <button type="button" class="chipBtn secondaryButton" data-float-close title="Close">Close</button>
       </div>
     </header>
     <div class="floatPanelBody" data-float-body></div>
@@ -12086,9 +13529,9 @@ function restoreSavedFloatWindows() {
   });
 }
 
-function openTabPopout(tab, mode = "float") {
+function openTabPopout(tab, mode = "float", options = {}) {
   if (mode === "window") return openTabWindow(tab);
-  return openTabFloat(tab);
+  return openTabFloat(tab, options);
 }
 
 function pushPopoutUpdate(tab) {
@@ -12131,8 +13574,17 @@ function renderIndex() {
   });
   const catSelect = document.querySelector("#tabCategorySelect");
   if (catSelect) catSelect.value = categoryForTab(activeTab).id;
-  indexContent.innerHTML = renderers[activeTab]();
-  decorateFunctionHelp(indexContent);
+  const tabsPanel = document.querySelector("#tabsPanel");
+  const tabsHidden = !tabsPanel || tabsPanel.hasAttribute("hidden");
+  if (indexContent) {
+    if (tabsHidden) {
+      // Offstage tabs panel must not keep a second live copy of sheet controls.
+      indexContent.replaceChildren();
+    } else {
+      indexContent.innerHTML = renderers[activeTab]();
+      decorateFunctionHelp(indexContent);
+    }
+  }
   markPoppedTabs();
   pushAllPopouts();
   // Re-apply Forge gate after player/art tab HTML rebuild
@@ -12235,8 +13687,11 @@ function showImageMissingModal(detail) {
   window.alert(`${body}${hintLines}`);
 }
 
-function setPlayerArtStatus(text, { bad = false } = {}) {
-  const el = document.querySelector("#playerArtStatus");
+function setPlayerArtStatus(text, { bad = false, root = null } = {}) {
+  const scope = root && typeof root.querySelector === "function" ? root : null;
+  const el = scope
+    ? scope.querySelector("[data-player-art-status], #playerArtStatus")
+    : document.querySelector("[data-player-art-status], #playerArtStatus");
   if (!el) return;
   if (!text) {
     el.hidden = true;
@@ -12353,7 +13808,9 @@ function formatArtReadinessMessage(gate) {
   return bits.length ? `Blocked: ${bits.join(" · ")}` : gate.message || "Not ready.";
 }
 
-async function regeneratePlayerPortrait(kindOrKinds = "both") {
+async function regeneratePlayerPortrait(kindOrKinds = "both", scope = null) {
+  const root = scope && typeof scope.querySelector === "function" ? scope : null;
+  const artQuery = (selector) => (root || document).querySelector(selector);
   const localGate = assessLocalArtReadiness(
     {
       name: state?.player?.name || "",
@@ -12366,7 +13823,7 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
     { subject: "player" },
   );
   if (!localGate.can_generate) {
-    setPlayerArtStatus(formatArtReadinessMessage(localGate), { bad: true });
+    setPlayerArtStatus(formatArtReadinessMessage(localGate), { bad: true, root });
     showImageMissingModal(localGate);
     return;
   }
@@ -12377,15 +13834,15 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
   else if (raw === "both") kinds = ["face", "fullbody"];
 
   return enqueueGpuTask(async () => {
-    const faceFrame = document.querySelector("#playerFaceFrame");
-    const bodyFrame = document.querySelector("#playerFullbodyFrame");
+    const faceFrame = artQuery("#playerFaceFrame");
+    const bodyFrame = artQuery("#playerFullbodyFrame");
     if (kinds.includes("face") && faceFrame) {
       faceFrame.innerHTML = `<div class="npcPortraitPlaceholder"><span>Face…</span><small>starting</small></div>`;
     }
     if (kinds.includes("fullbody") && bodyFrame) {
       bodyFrame.innerHTML = `<div class="npcPortraitPlaceholder"><span>Body…</span><small>${kinds.includes("face") ? "after face" : "ref face"}</small></div>`;
     }
-    setPlayerArtStatus("Hook Forge/Comfy if running; start only if offline…");
+    setPlayerArtStatus("Hook Forge/Comfy if running; start only if offline…", { root });
     try {
       const faceRef = playerFaceUrl() || "";
       // Ensure latest LoRA/hires toggles are on the server before gen (must await).
@@ -12395,6 +13852,7 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
       if (hr.forge_enable_hr) {
         setPlayerArtStatus(
           `Generating with hires ×${hr.forge_hr_scale} (${hr.forge_hr_upscaler})…`,
+          { root },
         );
       }
       const res = await fetch("/api/image/character-set", {
@@ -12449,10 +13907,19 @@ async function regeneratePlayerPortrait(kindOrKinds = "both") {
         : hr.forge_enable_hr
           ? " · hires on (no note)"
           : "";
-      setPlayerArtStatus(`Done (${Math.round((data.elapsed_ms || 0) / 1000)}s) — ${kinds.join(" + ")}${ref}${dimBit}${hrBit}.`);
+      const doneMessage = `Done (${Math.round((data.elapsed_ms || 0) / 1000)}s) — ${kinds.join(" + ")}${ref}${dimBit}${hrBit}.`;
+      const clickedFloat = root?.closest?.(".floatPanel");
+      const floatKey = clickedFloat?.getAttribute("data-float-tab") || "";
       renderIndex();
+      if (characterSheetOpen && !clickedFloat) paintCharacterSheet();
+      let card = root?.isConnected ? root : null;
+      if (!card && /^[A-Za-z0-9]+$/.test(floatKey)) {
+        card = document.querySelector(`.floatPanel[data-float-tab="${floatKey}"] .playerPortraitCard`);
+      }
+      if (!card && characterSheetOpen) card = document.querySelector("#characterSheetBody .playerPortraitCard");
+      setPlayerArtStatus(doneMessage, { root: card || root });
     } catch (error) {
-      setPlayerArtStatus(error.message || String(error), { bad: true });
+      setPlayerArtStatus(error.message || String(error), { bad: true, root });
       if (faceFrame && kinds.includes("face") && !playerFaceUrl()) {
         faceFrame.innerHTML = `<div class="npcPortraitPlaceholder"><span>${escapeHtml(error.message || String(error))}</span><small>Images settings</small></div>`;
       }
@@ -12468,6 +13935,7 @@ async function loadBible() {
   if (!response.ok) throw new Error(await response.text());
   bible = await response.json();
   renderIndex();
+  if (characterSheetOpen) paintCharacterSheet({ load: false });
 }
 
 async function loadModelConfig() {
@@ -12475,6 +13943,7 @@ async function loadModelConfig() {
   if (!response.ok) throw new Error(await response.text());
   modelConfig = await response.json();
   renderIndex();
+  if (characterSheetOpen) paintCharacterSheet({ load: false });
 }
 
 async function loadImageConfig({ applyToQualityBar = true } = {}) {
@@ -13275,7 +14744,7 @@ function defaultLoraWeight(entry) {
 }
 
 /**
- * Only LoRAs the user has checked in the UI.
+ * Only LoRAs the user has checked in the UI (visible rows + offlist stash).
  * Never auto-enables from saved config — empty when nothing is checked.
  */
 function collectSetupLoras() {
@@ -13824,7 +15293,7 @@ async function applyNativePortraitToSlot(name, slot = "face") {
         setArtFrameContent(playFace, {
           slot: "player-face",
           hasArt: true,
-          html: `${artClearButtonHtml("player-face")}<img src="${dataUrl}" alt="Player face" draggable="true" />`,
+          html: `<img src="${dataUrl}" alt="Player face" draggable="true" />`,
         });
       }
       setSetupArtStatus?.(`Applied ${id} as face.`);
@@ -13852,7 +15321,7 @@ async function applyNativePortraitToSlot(name, slot = "face") {
         setArtFrameContent(playBody, {
           slot: "player-fullbody",
           hasArt: true,
-          html: `${artClearButtonHtml("player-fullbody")}<img src="${dataUrl}" alt="Player full body" draggable="true" />`,
+          html: `<img src="${dataUrl}" alt="Player full body" draggable="true" />`,
         });
       }
       setSetupArtStatus?.(`Applied ${id} as full body.`);
@@ -13912,28 +15381,49 @@ function renderSetupLoraList(filter = "") {
       selected.set(name, Number.isFinite(w) ? w : NaN);
     }
   }
-  const items = (setupArtLoraCatalog || [])
-    .filter((l) => {
-      const name = String(l.name || l.alias || "");
-      const act = String(l.activation_text || (l.keywords || []).join(" ") || "");
-      const desc = String(l.description || "");
-      const blob = `${name} ${act} ${desc}`.toLowerCase();
-      return !q || blob.includes(q);
-    })
-    .slice(0, 120);
-  if (!items.length) {
-    const emptyMsg =
-      setupArtBackendTab === "comfyui"
-        ? "ComfyUI LoRA list is limited here — wire LoRAs in your workflow, or use ForgeSD for extra-network style picks."
-        : setupArtLoraCatalog.length
-          ? "No LoRAs match filter."
-          : "No LoRAs found — set Forge install root and/or custom LoRA folders in Images settings, then Refresh catalog. Disk scan works offline.";
+  const pool = setupArtLoraCatalog || [];
+  const rowName = (l) => String(l?.name || l?.alias || "");
+  const matchesFilter = (l) => {
+    const name = rowName(l);
+    const act = String(l.activation_text || (l.keywords || []).join(" ") || "");
+    const desc = String(l.description || "");
+    const blob = `${name} ${act} ${desc}`.toLowerCase();
+    return !q || blob.includes(q);
+  };
+  // Pin already-selected catalog rows before the 120-cap so a quality flush
+  // cannot drop checked LoRAs the user did not uncheck (filter / cap).
+  const selectedRows = [];
+  const seenSel = new Set();
+  for (const l of pool) {
+    const name = rowName(l);
+    if (!name || !selected.has(name) || seenSel.has(name)) continue;
+    seenSel.add(name);
+    selectedRows.push(l);
+  }
+  const restMatched = [];
+  for (const l of pool) {
+    const name = rowName(l);
+    if (!name || seenSel.has(name) || !matchesFilter(l)) continue;
+    restMatched.push(l);
+  }
+  const items = [...selectedRows, ...restMatched].slice(0, 120);
+  const shown = new Set(items.map((l) => rowName(l)).filter(Boolean));
+  const hiddenSelected = [];
+  for (const [name, weight] of selected) {
+    if (name && !shown.has(name)) hiddenSelected.push({ name, weight });
+  }
+  const emptyMsg =
+    setupArtBackendTab === "comfyui"
+      ? "ComfyUI LoRA list is limited here — wire LoRAs in your workflow, or use ForgeSD for extra-network style picks."
+      : pool.length
+        ? "No LoRAs match filter."
+        : "No LoRAs found — set Forge install root and/or custom LoRA folders in Images settings, then Refresh catalog. Disk scan works offline.";
+  if (!items.length && !hiddenSelected.length) {
     host.innerHTML = `<span class="empty">${emptyMsg}</span>`;
     updateSetupLoraSummary();
     return;
   }
-  host.innerHTML = items
-    .map((l) => {
+  const rowHtml = (l) => {
       const name = String(l.name || l.alias || "");
       const checked = selected.has(name) ? "checked" : "";
       const pref = defaultLoraWeight(l);
@@ -13973,8 +15463,21 @@ function renderSetupLoraList(filter = "") {
         </span>
         <input class="loraWeight" type="number" min="${wMin}" max="${wMax}" step="${wStep}" value="${weight}" data-lora-weight="${escapeHtml(name)}" title="Strength (sidecar preferred: ${pref})" />
       </label>`;
-    })
-    .join("");
+  };
+  const visibleHtml = items.length
+    ? items.map(rowHtml).join("")
+    : `<span class="empty">${emptyMsg}</span>`;
+  const offlistHtml = hiddenSelected.length
+    ? `<div class="loraOfflistStash" aria-hidden="true">${hiddenSelected
+        .map(({ name, weight }) => {
+          const entry = findLoraCatalogEntry(name);
+          const pref = defaultLoraWeight(entry);
+          const w = Number.isFinite(weight) ? weight : pref;
+          return `<input type="checkbox" data-lora-name="${escapeHtml(name)}" data-lora-offlist="1" checked tabindex="-1" /><input type="hidden" data-lora-weight="${escapeHtml(name)}" value="${w}" />`;
+        })
+        .join("")}</div>`
+    : "";
+  host.innerHTML = visibleHtml + offlistHtml;
   // When user enables a LoRA, snap weight to preferred if still at default 1,
   // then write <lora:…> + trigger keywords into the engine prompt boxes.
   host.querySelectorAll("input[data-lora-name]").forEach((box) => {
@@ -14062,18 +15565,15 @@ function syncLorasIntoEnginePrompts() {
     if (!el) return;
     const base = stripLoraBits(el.value);
     if (!fragment) {
-      if (el.value !== base) {
-        el.value = base;
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-      }
+      if (el.value !== base) el.value = base;
       return;
     }
-    // If base empty, still show LoRA tags so enable is visible
+    // If base empty, still show LoRA tags so enable is visible.
+    // Do not dispatch `input`: these textareas use data-engine-prompt, and a
+    // bubbling input marks them hand-edited. Auto update (force:false) then
+    // skips identity rebuilds. Rebuild re-appends LoRA tags after it writes.
     const next = base ? `${base}, ${fragment}` : fragment;
-    if (el.value.trim() !== next.trim()) {
-      el.value = next;
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-    }
+    if (el.value.trim() !== next.trim()) el.value = next;
   };
   apply(faceEl);
   apply(bodyEl);
@@ -14659,15 +16159,47 @@ function pushStudioCandidate(kind, resultPart, meta = {}) {
 }
 
 function artClearButtonHtml(slot) {
-  return `<button type="button" class="artClearBtn" data-art-clear="${escapeHtml(slot)}" title="Remove image" aria-label="Remove image">×</button>`;
+  const key = String(slot || "");
+  let label = "";
+  if (key === "player-face") label = "Remove face";
+  else if (key === "player-fullbody") label = "Remove body";
+  else if (key.startsWith("player") || key === "npc") label = "Remove";
+  const named = Boolean(label);
+  const aria = named ? label : "Remove";
+  return `<button type="button" class="artClearBtn${named ? " artClearBtnWord" : ""}" data-art-clear="${escapeHtml(slot)}" title="${escapeHtml(aria)}" aria-label="${escapeHtml(aria)}">${named ? escapeHtml(label) : "×"}</button>`;
+}
+
+function playerArtSlotFor(frame, slot) {
+  if (slot === "player-face" || slot === "player-fullbody") return slot;
+  if (frame?.id === "playerFaceFrame") return "player-face";
+  if (frame?.id === "playerFullbodyFrame") return "player-fullbody";
+  return "";
+}
+
+function syncPlayerArtClear(frame, slot, hasArt) {
+  if (!frame || !slot) return;
+  const next = frame.nextElementSibling;
+  if (!hasArt) {
+    if (next?.classList.contains("playerArtClear")) next.remove();
+    return;
+  }
+  let holder = next?.classList.contains("playerArtClear") ? next : null;
+  if (!holder) {
+    holder = document.createElement("div");
+    holder.className = "playerArtClear";
+    frame.insertAdjacentElement("afterend", holder);
+  }
+  holder.innerHTML = artClearButtonHtml(slot);
 }
 
 function setArtFrameContent(frame, { badge = "", html = "", hasArt = false, slot = "" } = {}) {
   if (!frame) return;
   const badgeHtml = badge ? `<span class="visionBadge">${escapeHtml(badge)}</span>` : "";
-  const clear = hasArt && slot ? artClearButtonHtml(slot) : "";
+  const playerSlot = playerArtSlotFor(frame, slot);
+  const clear = hasArt && slot && !playerSlot ? artClearButtonHtml(slot) : "";
   frame.innerHTML = `${badgeHtml}${clear}${html}`;
   frame.classList.toggle("hasArt", !!hasArt);
+  if (playerSlot) syncPlayerArtClear(frame, playerSlot, hasArt);
 }
 
 function setupFacePlaceholderHtml() {
@@ -14774,7 +16306,7 @@ function clearArtSlot(slot) {
     if (pf) {
       setArtFrameContent(pf, {
         hasArt: false,
-        html: `<div class="npcPortraitPlaceholder"><span>Face</span><small>drop / gen</small></div>`,
+        html: playerArtEmptyFrameHtml(),
       });
     }
     setSetupArtStatus("Face image removed.");
@@ -14797,7 +16329,7 @@ function clearArtSlot(slot) {
     if (pb) {
       setArtFrameContent(pb, {
         hasArt: false,
-        html: `<div class="npcPortraitPlaceholder"><span>Full body</span><small>drop / gen</small></div>`,
+        html: playerArtEmptyFrameHtml(),
       });
     }
     setSetupArtStatus("Full body image removed.");
@@ -14830,7 +16362,7 @@ function clearArtSlot(slot) {
     if (frame) {
       setArtFrameContent(frame, {
         hasArt: false,
-        html: `<div class="npcPortraitPlaceholder"><span>${escapeHtml((npcKey || "?").slice(0, 1).toUpperCase())}</span><br/><small>drop / gen</small></div>`,
+        html: npcPortraitEmptyHtml(),
       });
       frame.setAttribute("data-art-slot", "npc");
       if (npcKey) frame.setAttribute("data-npc-key", npcKey);
@@ -15989,12 +17521,32 @@ function showEntity(code) {
     body = `<p>${escapeHtml(entity.summary || "No summary.")}</p><p><strong>Status:</strong> ${escapeHtml(entity.status)} · <strong>Location:</strong> ${escapeHtml(entity.location_code || "?")} · <strong>NPC:</strong> ${escapeHtml(entity.npc_code || "?")}</p>`;
   } else if (type === "location") {
     body = `<p>${escapeHtml(entity.summary || "No summary.")}</p><p><strong>Visits:</strong> ${escapeHtml(entity.visit_count)} · <strong>NPCs:</strong> ${escapeHtml(entity.npcs?.length || 0)}</p>`;
+  } else if (type === "skill") {
+    body = `<p>${escapeHtml(entity.notes || entity.description || entity.summary || "No notes.")}</p><p><strong>Value:</strong> ${escapeHtml(entity.value ?? "?")}</p>`;
+  } else if (type === "ability") {
+    body = `<p>${escapeHtml(entity.description || "No description.")}</p><p><strong>Type:</strong> ${escapeHtml(entity.power_type || "ability")}</p>`;
   } else {
     body = `<p>${escapeHtml(entity.description || "No description.")}</p><p><strong>Quantity:</strong> ${escapeHtml(entity.quantity || 0)}</p>`;
   }
   entityBody.innerHTML = body;
   aliasInput.value = "";
+  const opening = entityMenu.classList.contains("hidden");
+  if (opening) {
+    const opener = document.activeElement;
+    entityDialogReturn = opener instanceof HTMLElement && opener !== document.body && !entityMenu.contains(opener)
+      ? opener
+      : null;
+  }
   entityMenu.classList.remove("hidden");
+  document.querySelector("#closeEntityMenu")?.focus();
+}
+
+function closeEntityDialog() {
+  if (!entityMenu || entityMenu.classList.contains("hidden")) return;
+  entityMenu.classList.add("hidden");
+  const back = entityDialogReturn;
+  entityDialogReturn = null;
+  if (back && document.contains(back)) back.focus();
 }
 
 function updateConditionalSetup() {
@@ -16762,10 +18314,145 @@ async function startGame(event) {
   });
 }
 
+function askNoteHtml(question, answer, extra = "") {
+  return `<p class="askNoteKind">Ask, no turn</p><p class="askQuestion">${escapeHtml(question)}</p><div class="askAnswer">${paragraphs(answer || "")}${extra ? `<p>${escapeHtml(extra)}</p>` : ""}</div>`;
+}
+
+function showAskEmptyNote() {
+  const hint = document.querySelector("#askEmptyNote");
+  if (!hint) return;
+  hint.textContent = "Type a question first.";
+  hint.hidden = false;
+}
+
+function hideAskEmptyNote() {
+  const hint = document.querySelector("#askEmptyNote");
+  if (hint) hint.hidden = true;
+}
+
+function appendAskNote(question, answer, extra = "") {
+  if (!latestOutput) return;
+  const note = document.createElement("article");
+  note.className = "askNote";
+  note.innerHTML = askNoteHtml(question, answer, extra);
+  latestOutput.appendChild(note);
+  note.scrollIntoView({ block: "nearest" });
+}
+
+function appendAsksForTurn(turnNumber) {
+  if (!latestOutput || turnNumber == null) return;
+  const asks = (state?.history || []).filter(
+    (entry) => String(entry?.kind || "") === "ask" && String(entry?.turn) === String(turnNumber),
+  );
+  for (const entry of [...asks].reverse()) {
+    const raw = String(entry.content || "");
+    const question = raw.replace(/^Q:\s*/i, "").split("\n")[0] || "Ask";
+    const answer = raw.includes("\nA:") ? raw.split("\nA:").slice(1).join("\nA:").trim() : raw;
+    appendAskNote(question, answer);
+  }
+}
+
+async function requestAsk(text) {
+  const cleanText = String(text || "").trim();
+  if (!cleanText) {
+    showAskEmptyNote();
+    turnInput?.focus();
+    return;
+  }
+  hideAskEmptyNote();
+  const banner = document.querySelector("#chatThinkingBanner");
+  setGeneratingUi(true);
+  if (banner) {
+    banner.classList.remove("hidden");
+    banner.hidden = false;
+    const title = document.querySelector("#chatThinkingTitle");
+    if (title) title.textContent = "Asking…";
+  }
+  if (turnInput) {
+    turnInput.value = "";
+    updateComposerState();
+  }
+  let payload = null;
+  try {
+    const response = await fetch("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: cleanText }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    payload = await response.json();
+  } finally {
+    setGeneratingUi(false);
+    if (banner) {
+      banner.classList.add("hidden");
+      banner.hidden = true;
+    }
+  }
+  const remembered = payload.remembered ? "Noted on the record." : payload.edited ? "Description updated." : "";
+  appendAskNote(cleanText, payload.answer || "", remembered);
+}
+
+function appendComposerNote(title, body) {
+  if (!latestOutput) return;
+  const note = document.createElement("article");
+  note.className = "askNote";
+  note.innerHTML = `<p class="askQuestion">${escapeHtml(title)}</p><div class="askAnswer">${paragraphs(body || "")}</div>`;
+  latestOutput.appendChild(note);
+  note.scrollIntoView({ block: "nearest" });
+}
+
+async function requestCommand(text) {
+  const cleanText = String(text || "").trim();
+  if (!cleanText) return;
+  const localHelp = cleanText.toLowerCase() === "/help";
+  if (!localHelp) showTurnWaitPanel("Command", "command");
+  if (turnInput) {
+    turnInput.value = "";
+    updateComposerState();
+  }
+  let payload = null;
+  try {
+    const response = await fetch("/api/command", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: cleanText }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    payload = await response.json();
+  } finally {
+    clearTurnWaitTimer();
+  }
+  if (payload.refresh) {
+    try {
+      const next = await fetch("/api/state").then((response) => response.json());
+      if (next) renderShell(next, { forceGame: true });
+    } catch (_) {
+      /* the note still shows */
+    }
+  }
+  appendComposerNote(cleanText, payload.answer || "");
+}
+
 async function submitTurn(event) {
   event.preventDefault();
   if (aiBusy) return;
   const text = turnInput.value.trim();
+  if (text.toLowerCase() === "/help") {
+    openHelpPanel();
+    if (turnInput) turnInput.value = "";
+    return;
+  }
+  if (text.startsWith("/")) {
+    await enqueueAiTask(async () => {
+      try {
+        await requestCommand(text);
+      } catch (error) {
+        appendComposerNote(text, error.message || String(error));
+      }
+    }, "Command…");
+    turnInput.focus();
+    return;
+  }
   await enqueueAiTask(async () => {
     try {
       await requestTurn(text);
@@ -16775,6 +18462,119 @@ async function submitTurn(event) {
   }, text ? "AI is writing the turn..." : "AI is continuing...");
   turnInput.focus();
 }
+
+document.querySelector("#helpButton")?.addEventListener("click", () => openHelpPanel());
+document.querySelector("#helpPanelClose")?.addEventListener("click", () => closeHelpPanel());
+function portraitSizeButton(frame) {
+  if (!frame) return null;
+  if (frame.id === "youFrame") return document.querySelector("#youPortraitSizeBtn");
+  if (frame.id === "npcPortraitFrame") return document.querySelector("#npcPortraitSizeBtn");
+  return null;
+}
+
+const PORTRAIT_EMPTY_TEXT = "No portrait. Paste an image, or use Make portrait.";
+
+function portraitCaptionName(frame) {
+  if (!frame) return "";
+  const clean = (value) => {
+    const text = String(value || "").trim();
+    if (!text || text === "—" || text === "-") return "";
+    return text;
+  };
+  if (frame.id === "youFrame") {
+    return clean(document.querySelector("#youName")?.textContent) || clean(state?.player?.name) || "You";
+  }
+  if (frame.id === "npcPortraitFrame") {
+    return clean(document.querySelector("#npcStageName")?.textContent);
+  }
+  return "";
+}
+
+function syncPortraitFrameName(frame, hasArt) {
+  if (!frame) return;
+  frame.tabIndex = 0;
+  const named = portraitCaptionName(frame);
+  const person = named || (frame.id === "youFrame" ? "You" : "Present");
+  frame.setAttribute("aria-label", hasArt ? `${person} portrait` : `${person}. ${PORTRAIT_EMPTY_TEXT}`);
+  frame.title = hasArt ? "Show the portrait larger" : PORTRAIT_EMPTY_TEXT;
+}
+
+function syncPortraitSizeButton(frame) {
+  if (!frame) return;
+  const open = frame.classList.contains("isExpanded");
+  frame.setAttribute("aria-expanded", open ? "true" : "false");
+  const button = portraitSizeButton(frame);
+  if (!button) return;
+  const word = open ? "Smaller" : "Larger";
+  button.textContent = word;
+  button.setAttribute("aria-expanded", open ? "true" : "false");
+  const name = portraitCaptionName(frame);
+  if (name) button.setAttribute("aria-label", `${word} portrait, ${name}`);
+  else button.removeAttribute("aria-label");
+}
+
+function togglePortraitFrame(frame) {
+  if (!frame) return;
+  frame.classList.toggle("isExpanded");
+  syncPortraitSizeButton(frame);
+}
+
+document.querySelector("#youFrame")?.addEventListener("click", () => {
+  togglePortraitFrame(document.querySelector("#youFrame"));
+});
+document.querySelector("#youPortraitSizeBtn")?.addEventListener("click", () => {
+  togglePortraitFrame(document.querySelector("#youFrame"));
+});
+document.querySelector("#npcPortraitFrame")?.addEventListener("click", (event) => {
+  if (event.target.closest("button")) return;
+  togglePortraitFrame(document.querySelector("#npcPortraitFrame"));
+});
+document.querySelector("#npcPortraitSizeBtn")?.addEventListener("click", () => {
+  togglePortraitFrame(document.querySelector("#npcPortraitFrame"));
+});
+syncPortraitFrameName(document.querySelector("#youFrame"), false);
+syncPortraitFrameName(document.querySelector("#npcPortraitFrame"), false);
+syncPortraitSizeButton(document.querySelector("#youFrame"));
+syncPortraitSizeButton(document.querySelector("#npcPortraitFrame"));
+document.querySelector("#sceneCastList")?.addEventListener("click", (event) => {
+  const details = event.target.closest(".castDetailsBtn, .castCard");
+  const code = details?.dataset.code;
+  if (!code) return;
+  showEntity(code);
+});
+document.querySelector("#miniInventory")?.addEventListener("click", (event) => {
+  if (event.target.closest("[data-pack-rest]")) {
+    packListExpanded = true;
+    paintPlayDock();
+    return;
+  }
+  const details = event.target.closest(".miniDetailsBtn, .miniItem");
+  const code = details?.dataset.code;
+  if (!code) return;
+  showEntity(code);
+});
+document.querySelector("#askButton")?.addEventListener("click", () => {
+  if (aiBusy) return;
+  const text = turnInput?.value.trim() || "";
+  if (!text) {
+    showAskEmptyNote();
+    turnInput?.focus();
+    return;
+  }
+  hideAskEmptyNote();
+  enqueueAiTask(async () => {
+    try {
+      await requestAsk(text);
+    } catch (error) {
+      if (latestOutput) {
+        const note = document.createElement("p");
+        note.className = "bad";
+        note.textContent = error.message || String(error);
+        latestOutput.appendChild(note);
+      }
+    }
+  }, "Asking…");
+});
 
 async function saveAlias(event) {
   event.preventDefault();
@@ -16818,6 +18618,29 @@ async function updatePlayerAliasState(payload) {
   renderShell(await response.json());
 }
 
+async function deletePlayerAlias(aliasId) {
+  const response = await fetch("/api/player-alias/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ alias_id: aliasId }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  renderShell(await response.json());
+}
+
+function writeRewindError(error) {
+  const text = String(error?.message || error || "Rewind failed");
+  if (latestOutput) latestOutput.innerHTML = `<p class="bad">${escapeHtml(text)}</p>`;
+  else window.alert(text);
+  const sheet = document.querySelector("#characterSheetDrawer");
+  const note = document.querySelector("#sheetSceneNote");
+  const sheetOpen = !!(characterSheetOpen && sheet && !sheet.classList.contains("hidden"));
+  if (sheetOpen && note) {
+    note.hidden = false;
+    note.textContent = text;
+  }
+}
+
 async function rewindTurn(snapshotId = null) {
   const options = snapshotId
     ? {
@@ -16837,12 +18660,20 @@ async function rewindTurn(snapshotId = null) {
   renderShell(payload, { forceGame: true });
   const resume = payload.resume && typeof payload.resume === "object" ? payload.resume : null;
   restoreLastTurnPanels(resume);
-  // Brief confirm in chat hint, not replacing narration
+  // The sheet covers the scene hint, so the same result has to sit on the sheet.
+  const turn = payload.rewound_turn ? ` (turn ${payload.rewound_turn})` : "";
+  const undone = `Undid last turn${turn}`;
+  const sheet = document.querySelector("#characterSheetDrawer");
+  const sheetOpen = !!(characterSheetOpen && sheet && !sheet.classList.contains("hidden"));
+  const sheetNote = document.querySelector("#sheetSceneNote");
+  if (sheetOpen && sheetNote) {
+    sheetNote.hidden = false;
+    sheetNote.textContent = undone;
+  }
   const hint = document.querySelector("#chatIdleHint");
   if (hint) {
-    const turn = payload.rewound_turn ? ` (turn ${payload.rewound_turn})` : "";
     const prev = hint.textContent;
-    hint.textContent = `Undid last turn${turn}`;
+    hint.textContent = undone;
     window.setTimeout(() => {
       if (hint.textContent.startsWith("Undid last turn")) {
         hint.textContent = prev || "Map is main while idle";
@@ -16907,6 +18738,7 @@ async function runSearch(query) {
   if (!response.ok) throw new Error(await response.text());
   searchResults = await response.json();
   renderIndex();
+  if (characterSheetOpen) paintCharacterSheet({ load: false });
 }
 
 ["beforeinput", "input", "change", "click", "keydown", "pointerdown", "submit"].forEach((eventName) => {
@@ -17006,7 +18838,70 @@ setupForm.addEventListener("input", (event) => {
   }
   if (event.target.matches('textarea[name="character_backstory"], [data-custom-input="backstory_mode"], [data-custom-input="memory_policy"]')) updateConditionalSetup();
 });
-turnInput?.addEventListener("input", updateComposerState);
+turnInput?.addEventListener("input", () => {
+  mentionHighlight = 0;
+  if (turnInput.value.trim()) hideAskEmptyNote();
+  updateComposerState();
+  if (fieldEditSilent) {
+    hideMentionMenu();
+    return;
+  }
+  renderMentionMenu();
+});
+turnInput?.addEventListener("keyup", (event) => {
+  if (event.key === "Escape") hideMentionMenu();
+});
+turnInput?.addEventListener("keydown", (event) => {
+  const menu = document.querySelector("#mentionMenu");
+  if (!menu || menu.hidden) return;
+  const rows = filteredMentions();
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    mentionHighlight = Math.min(rows.length - 1, mentionHighlight + 1);
+    renderMentionMenu();
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    mentionHighlight = Math.max(0, mentionHighlight - 1);
+    renderMentionMenu();
+  } else if (event.key === "Enter" && rows[mentionHighlight]) {
+    event.preventDefault();
+    completeMention(rows[mentionHighlight].token);
+  }
+});
+document.querySelector("#mentionSearch")?.addEventListener("input", () => {
+  mentionHighlight = 0;
+  renderMentionMenu();
+});
+document.querySelector("#mentionSearch")?.addEventListener("keydown", (event) => {
+  const rows = filteredMentions();
+  if (event.key === "ArrowDown") {
+    event.preventDefault();
+    mentionHighlight = Math.min(rows.length - 1, mentionHighlight + 1);
+    renderMentionMenu();
+  } else if (event.key === "ArrowUp") {
+    event.preventDefault();
+    mentionHighlight = Math.max(0, mentionHighlight - 1);
+    renderMentionMenu();
+  } else if (event.key === "Enter") {
+    event.preventDefault();
+    if (rows[mentionHighlight]) completeMention(rows[mentionHighlight].token);
+  } else if (event.key === "Escape") {
+    hideMentionMenu();
+    turnInput?.focus();
+  }
+});
+document.querySelector("#mentionList")?.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-mention-token]");
+  if (!button) return;
+  event.preventDefault();
+  completeMention(button.dataset.mentionToken);
+});
+document.querySelector("#mentionChips")?.addEventListener("click", (event) => {
+  const chip = event.target.closest(".mentionChip");
+  if (!chip) return;
+  event.preventDefault();
+  if (chip.dataset.code) showEntity(chip.dataset.code);
+});
 setupForm.addEventListener("click", (event) => {
   const textAiOpen = event.target.closest("[data-text-ai-open]");
   if (textAiOpen) {
@@ -17178,7 +19073,13 @@ setupForm?.addEventListener("change", (event) => {
   const card = field.closest(".abilitySetupCard");
   if (card) refreshAbilityCardSummary(card);
 });
-setupForm.addEventListener("submit", startGame);
+setupForm.addEventListener("submit", (event) => {
+  if (setupTourActive) {
+    event.preventDefault();
+    return;
+  }
+  startGame(event);
+});
 setupForm.addEventListener("blur", (event) => {
   if (event.target?.name === "custom_skills") event.target.value = commaSeparatedPhrases(event.target.value);
 }, true);
@@ -17263,6 +19164,16 @@ document.querySelector("#presetNewBtn")?.addEventListener("click", () => createU
 document.querySelector("#presetSaveBtn")?.addEventListener("click", () => saveSelectedPresetFromEditor());
 document.querySelector("#presetDeleteBtn")?.addEventListener("click", () => deleteSelectedUserPreset());
 document.querySelector("#addGearItemBtn")?.addEventListener("click", () => addGearItem({}));
+document.querySelector("#simpleGearList")?.addEventListener("input", () => {
+  const gearText = gearItemsToStarterEquipment(collectGearItems());
+  setFormFieldValue("starter_equipment", gearText);
+});
+setupForm?.elements?.starter_equipment?.addEventListener("input", () => {
+  const list = document.querySelector("#simpleGearList");
+  if (!list || list.matches(":focus-within")) return;
+  list.replaceChildren();
+  parseStarterEquipmentToGear(getFormFieldValue("starter_equipment")).forEach((item) => addGearItem(item));
+});
 document.querySelector("#calcAllGrowthMathBtn")?.addEventListener("click", () => {
   const n = calculateAllAbilityGrowthMath({ force: true });
   window.alert(
@@ -17289,6 +19200,7 @@ document.addEventListener("click", (event) => {
   if (event.target.closest(".removeGearItem")) {
     event.preventDefault();
     event.target.closest(".gearSetupCard")?.remove();
+    setFormFieldValue("starter_equipment", gearItemsToStarterEquipment(collectGearItems()));
     return;
   }
 });
@@ -17472,16 +19384,13 @@ document.querySelector("#undoTurnButton")?.addEventListener("click", () => {
     try {
       await rewindTurn();
     } catch (error) {
-      if (latestOutput) {
-        latestOutput.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
-      } else {
-        window.alert(error.message || String(error));
-      }
+      writeRewindError(error);
     }
   }, "Undoing last turn…").catch(() => {});
 });
 document.querySelector("#redoTurnButton")?.addEventListener("click", () => {
   if (aiBusy) return;
+  if (!window.confirm("Rewrite the last turn? This replaces that narration. The old narration is not kept.")) return;
   closeWaitPopover();
   enqueueAiTask(async () => {
     try {
@@ -17495,7 +19404,7 @@ document.querySelector("#redoTurnButton")?.addEventListener("click", () => {
         window.alert(error.message || String(error));
       }
     }
-  }, "Redoing last turn…").catch(() => {});
+  }, "Rewriting the last turn…").catch(() => {});
 });
 socialWalkAwayBtn?.addEventListener("click", () => {
   if (aiBusy) return;
@@ -17511,6 +19420,13 @@ waitButton?.addEventListener("click", (event) => {
   if (waitPopover?.classList.contains("hidden")) openWaitPopover();
   else closeWaitPopover();
 });
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (!waitPopover || waitPopover.classList.contains("hidden")) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  closeWaitPopover({ restoreFocus: true });
+}, true);
 waitPopover?.addEventListener("click", (event) => {
   const kindBtn = event.target.closest("[data-wait-kind]");
   if (kindBtn) {
@@ -17567,13 +19483,21 @@ suggestionInstruction?.addEventListener("keydown", (event) => {
 refreshButton.addEventListener("click", () => loadState().catch((error) => (latestOutput.innerHTML = paragraphs(error.message))));
 regenerateButton?.addEventListener("click", () => {
   if (aiBusy) return;
+  if (!window.confirm("Rewrite the last turn? This replaces that narration. The old narration is not kept.")) return;
+  closePlayMenu();
   enqueueAiTask(() => regenerateTurn(), "AI is regenerating...").catch((error) => {
     latestOutput.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
   });
 });
-rewindButton.addEventListener("click", () => rewindTurn().catch((error) => (latestOutput.innerHTML = paragraphs(error.message))));
+rewindButton.addEventListener("click", () => {
+  closePlayMenu();
+  rewindTurn().catch((error) => writeRewindError(error));
+});
 exportButton.addEventListener("click", () => exportWorld().catch((error) => (latestOutput.innerHTML = paragraphs(error.message))));
-importButton.addEventListener("click", () => importFile.click());
+importButton.addEventListener("click", () => {
+  if (!window.confirm("Import a world file? This replaces the session you are playing.")) return;
+  importFile.click();
+});
 saveSlotButton?.addEventListener("click", () => {
   saveCampaignSlotPrompt().catch((error) => (latestOutput.innerHTML = paragraphs(error.message || String(error))));
 });
@@ -17586,19 +19510,24 @@ compactModeButton?.addEventListener("click", () => {
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof Element)) return;
-  if (target.id === "consolidateMemoryButton") {
-    const statusEl = document.querySelector("#contextHealthStatus");
+  const consolidateBtn = target.closest("#consolidateMemoryButton");
+  if (consolidateBtn) {
+    if (!window.confirm("Older turns are shortened into facts, and this cannot be undone.")) return;
+    const statusEl =
+      consolidateBtn.closest(".contextHealthCard")?.querySelector("#contextHealthStatus") ||
+      document.querySelector("#contextHealthStatus");
     consolidateMemoryNow(statusEl).catch((error) => {
       if (statusEl) statusEl.textContent = error.message || String(error);
       latestOutput.innerHTML = paragraphs(error.message || String(error));
     });
   }
-  if (target.id === "refreshHealthButton") {
+  if (target.closest("#refreshHealthButton")) {
     loadState().catch((error) => (latestOutput.innerHTML = paragraphs(error.message || String(error))));
   }
 });
 applyCompactMode(isCompactModeEnabled());
 async function openModelModalFromUi() {
+  closePlayMenu();
   if (modelModalToggle) modelModalToggle.checked = true;
   modelModal?.classList.remove("hidden");
   // Always load live settings content when opened from UI.
@@ -17654,11 +19583,14 @@ importFile.addEventListener("change", () => {
   importFile.value = "";
 });
 newGameButton.addEventListener("click", () => {
-  if (window.confirm("Return to the main menu?")) {
-    showMainMenu();
-  }
+  if (!window.confirm("Go to the main menu? This session is kept and can be resumed with Continue.")) return;
+  closePlayMenu();
+  showMainMenu();
+  const cont = document.querySelector("#menuContinue");
+  if (cont && !cont.disabled) cont.focus();
+  else document.querySelector("#menuNewGame")?.focus();
 });
-closeEntityMenu.addEventListener("click", () => entityMenu.classList.add("hidden"));
+closeEntityMenu.addEventListener("click", () => closeEntityDialog());
 insertEntityRef.addEventListener("click", () => {
   if (selectedEntity) insertRef(selectedEntity.type, selectedEntity.entity.code);
 });
@@ -17707,7 +19639,8 @@ document.addEventListener("click", (event) => {
   }
   const rewindPoint = event.target.closest(".rewindPointButton");
   if (rewindPoint) {
-    rewindTurn(rewindPoint.dataset.snapshotId).catch((error) => (latestOutput.innerHTML = paragraphs(error.message)));
+    if (!window.confirm("Rewind to this turn? This cannot be undone.")) return;
+    rewindTurn(rewindPoint.dataset.snapshotId).catch((error) => writeRewindError(error));
     return;
   }
   const link = event.target.closest(".entityLink");
@@ -17715,8 +19648,95 @@ document.addEventListener("click", (event) => {
     showEntity(link.dataset.code);
     return;
   }
+  const pageButton = event.target.closest("button[data-history-page]");
+  if (pageButton) {
+    event.preventDefault();
+    if (!pageButton.disabled) applyHistoryPager(pageButton.dataset.historyPage);
+    return;
+  }
   const insert = event.target.closest(".insertRefButton");
-  if (insert) insertRef(insert.dataset.type, insert.dataset.code);
+  if (insert) {
+    event.preventDefault();
+    const options = insert.classList.contains("invLinkBtn") ? { inventory: true } : undefined;
+    if (insert.dataset.linkToken) insertRawToken(insert.dataset.linkToken, options);
+    else insertRef(insert.dataset.type, insert.dataset.code, options);
+  }
+
+  const fightBtn = event.target.closest(".initiateFightButton");
+  if (fightBtn) {
+    event.preventDefault();
+    const code = fightBtn.dataset.npcCode || "";
+    const name = fightBtn.dataset.npcName || code;
+    if (!code) return;
+    // Use existing requestTurn so the result renders exactly like a normal turn.
+    // "attack [[CODE]]" reliably triggers intent=combat + full mechanics context.
+    enqueueAiTask(
+      () => requestTurn(`attack ${name} [[${code}]]`, { displayText: `⚔ Attack ${name}` }),
+      `Starting fight with ${name}…`
+    ).catch((err) => console.error("Fight initiation failed:", err));
+  }
+
+  const inviteBtn = event.target.closest(".npcInviteButton");
+  if (inviteBtn) {
+    event.preventDefault();
+    const npcId = parseInt(inviteBtn.dataset.npcId, 10);
+    const npcName = inviteBtn.dataset.npcName || String(npcId);
+    if (!npcId) return;
+    inviteBtn.disabled = true;
+    inviteBtn.textContent = "Inviting…";
+    fetch("/api/party/invite", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ npc_id: npcId, role: "companion" }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) {
+          inviteBtn.textContent = "Joined!";
+          loadState().catch(() => {});
+        } else {
+          const msg = (data.detail && typeof data.detail === "string") ? data.detail : (data.error || "Could not invite NPC");
+          inviteBtn.disabled = false;
+          inviteBtn.textContent = "+ Party";
+          inviteBtn.title = msg;
+          latestOutput.innerHTML = paragraphs(msg);
+        }
+      })
+      .catch(() => {
+        inviteBtn.disabled = false;
+        inviteBtn.textContent = "+ Party";
+      });
+  }
+
+  const dismissBtn = event.target.closest(".partyRemoveButton");
+  if (dismissBtn) {
+    event.preventDefault();
+    const npcId = parseInt(dismissBtn.dataset.npcId, 10);
+    const npcName = dismissBtn.dataset.npcName || String(npcId);
+    if (!npcId) return;
+    dismissBtn.disabled = true;
+    dismissBtn.textContent = "Dismissing…";
+    fetch("/api/party/remove", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ npc_id: npcId }),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) {
+          loadState().catch(() => {});
+        } else {
+          const msg = (data.detail && typeof data.detail === "string") ? data.detail : (data.error || "Could not dismiss");
+          dismissBtn.disabled = false;
+          dismissBtn.textContent = "Dismiss";
+          latestOutput.innerHTML = paragraphs(msg);
+        }
+      })
+      .catch(() => {
+        dismissBtn.disabled = false;
+        dismissBtn.textContent = "Dismiss";
+      });
+  }
 });
 
 document.addEventListener("keydown", (event) => {
@@ -17752,12 +19772,13 @@ indexTabs?.addEventListener("click", (event) => {
   setActiveTab(button.dataset.tab);
 });
 
-indexContent.addEventListener("click", (event) => {
+listenPlaySurface("click", (event) => {
   const ensureBtn = event.target.closest("[data-llm-ensure]");
   if (ensureBtn) {
     event.preventDefault();
-    const form = ensureBtn.closest("form") || document.querySelector("#modelForm");
-    const status = document.querySelector("[data-model-status]");
+    const surface = playActionSurface(ensureBtn);
+    const form = ensureBtn.closest("form") || surface.querySelector("#modelForm");
+    const status = surface.querySelector("[data-model-status]");
     (async () => {
       if (form) {
         await fetch("/api/model-config", {
@@ -17789,8 +19810,9 @@ indexContent.addEventListener("click", (event) => {
   const recycleBtn = event.target.closest("[data-llm-soft-recycle]");
   if (recycleBtn) {
     event.preventDefault();
-    const form = recycleBtn.closest("form") || document.querySelector("#modelForm");
-    const status = document.querySelector("[data-model-status]");
+    const surface = playActionSurface(recycleBtn);
+    const form = recycleBtn.closest("form") || surface.querySelector("#modelForm");
+    const status = surface.querySelector("[data-model-status]");
     (async () => {
       if (form) {
         await fetch("/api/model-config", {
@@ -17833,8 +19855,12 @@ indexContent.addEventListener("click", (event) => {
   const playerArt = event.target.closest("[data-player-portrait-regen], #playerPortraitRegen");
   if (playerArt) {
     event.preventDefault();
-    const kind = document.querySelector("#playerArtGenKind")?.value || playerArt.getAttribute("data-player-art-kind") || "both";
-    regeneratePlayerPortrait(kind);
+    const card = playerArt.closest(".playerPortraitCard") || indexContent;
+    const kind =
+      card.querySelector("select.artGenSelect, #playerArtGenKind")?.value ||
+      playerArt.getAttribute("data-player-art-kind") ||
+      "both";
+    regeneratePlayerPortrait(kind, card);
   }
 });
 
@@ -17846,29 +19872,38 @@ document.querySelector("#sceneFocusMapBtn")?.addEventListener("click", () => {
   document.querySelector("#mapMain")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
 
-historyEl.addEventListener("click", (event) => {
-  const pageButton = event.target.closest("button[data-history-page]");
-  if (!pageButton) return;
-  const groups = historyGroups();
-  const pageCount = Math.max(1, Math.ceil(groups.length / HISTORY_PAGE_SIZE));
-  if (pageButton.dataset.historyPage === "prev") historyPage = Math.max(0, historyPage - 1);
-  if (pageButton.dataset.historyPage === "next") historyPage = Math.min(pageCount - 1, historyPage + 1);
-  renderHistory();
-});
-
-historyEl.addEventListener("toggle", (event) => {
-  const details = event.target.closest("details[data-history-key]");
-  if (!details) return;
-  const openState = historyOpenState();
-  openState[details.dataset.historyKey] = details.open;
-  saveHistoryOpenState(openState);
+document.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof Element) || !details.matches("details[data-history-key]")) return;
+  const live = Boolean(historyEl && historyEl.contains(details));
+  applyHistoryToggle(details.dataset.historyKey, details.open, live);
 }, true);
 
-indexContent.addEventListener("submit", (event) => {
+window.addEventListener("message", (event) => {
+  if (event.origin !== window.location.origin) return;
+  const data = event.data;
+  if (!data || data.type !== "morkyn-popout-action") return;
+  const known = Object.values(popoutWindows).some((win) => win === event.source);
+  if (!known) return;
+  if (data.action === "history-page") {
+    applyHistoryPager(data.dir);
+    return;
+  }
+  if (data.action === "history-toggle") {
+    applyHistoryToggle(data.key, data.open);
+    return;
+  }
+  if (data.action === "insert-ref") {
+    if (data.linkToken) insertRawToken(data.linkToken);
+    else if (data.linkType && data.linkCode) insertRef(data.linkType, data.linkCode);
+  }
+});
+
+listenPlaySurface("submit", (event) => {
   const playerAliasForm = event.target.closest("#playerAliasForm");
   if (playerAliasForm) {
     event.preventDefault();
-    createPlayerAlias(playerAliasForm).catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+    createPlayerAlias(playerAliasForm).catch((error) => playSurfaceError(playerAliasForm, error));
     return;
   }
   const playerAliasStateForm = event.target.closest(".playerAliasStateForm");
@@ -17878,13 +19913,76 @@ indexContent.addEventListener("submit", (event) => {
       alias_id: Number(playerAliasStateForm.dataset.playerAliasId),
       disguised: Boolean(playerAliasStateForm.querySelector('[name="disguised"]')?.checked),
       disguise_description: playerAliasStateForm.querySelector('[name="disguise_description"]')?.value.trim() || "",
-    }).catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+    }).catch((error) => playSurfaceError(playerAliasStateForm, error));
     return;
   }
   const modelForm = event.target.closest("#modelForm");
   if (modelForm) {
     event.preventDefault();
-    saveModelConfig(modelForm).catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+    saveModelConfig(modelForm)
+      .then(() => {
+        const status = modelForm.closest("#characterSheetBody, .floatPanelBody, .popoutTabInner")?.querySelector("[data-model-status]");
+        if (status) status.innerHTML = `<p class="good">Model settings saved.</p>`;
+      })
+      .catch((error) => playSurfaceError(modelForm, error));
+    return;
+  }
+  const questCreateForm = event.target.closest("#questCreateForm");
+  if (questCreateForm) {
+    event.preventDefault();
+    const status = questCreateForm.querySelector("#questCreateStatus");
+    const fd = new FormData(questCreateForm);
+    const stepCount = Math.max(1, Math.min(6, Number(fd.get("step_count")) || 1));
+    const steps = [];
+    for (let i = 1; i <= stepCount; i++) {
+      steps.push({
+        title: String(fd.get(`step_${i}_title`) || `Step ${i}`),
+        description: String(fd.get(`step_${i}_desc`) || ""),
+        hidden: fd.get(`step_${i}_hidden`) === "on",
+        timer: Number(fd.get(`step_${i}_timer`) || 0),
+      });
+    }
+    const rewardGold = fd.get("reward_gold") ? Number(fd.get("reward_gold")) : null;
+    const rewardXp = fd.get("reward_xp") ? Number(fd.get("reward_xp")) : null;
+    const diffMap = { easy: "easy", "normal (medium)": "normal", hard: "hard", legendary: "legendary" };
+    const difficulty = String(fd.get("difficulty") || "normal");
+    const payload = {
+      title: String(fd.get("title") || "").trim(),
+      description: String(fd.get("description") || "").trim(),
+      difficulty,
+      steps,
+      reward_gold: rewardGold,
+      reward_xp: rewardXp,
+      reward_item: String(fd.get("reward_item") || "").trim(),
+      timer_turns: Number(fd.get("timer_turns") || 0),
+    };
+    if (!payload.title) {
+      if (status) { status.hidden = false; status.textContent = "Title is required."; status.classList.add("bad"); }
+      return;
+    }
+    if (status) { status.hidden = false; status.textContent = "Creating quest…"; status.classList.remove("bad"); }
+    const submitBtn = questCreateForm.querySelector("[type=submit]");
+    if (submitBtn) submitBtn.disabled = true;
+    fetch("/api/quests", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.ok) {
+          if (status) { status.textContent = `Quest created (ID ${data.quest_id}).`; }
+          questCreateForm.reset();
+          // Re-render step fields
+          const container = questCreateForm.querySelector("#questStepsContainer");
+          if (container) container.innerHTML = buildQuestStepFields(1);
+          loadPlayerQuests().catch(() => {});
+        } else {
+          if (status) { status.textContent = data.error || "Failed."; status.classList.add("bad"); }
+        }
+      })
+      .catch((err) => { if (status) { status.textContent = String(err); status.classList.add("bad"); } })
+      .finally(() => { if (submitBtn) submitBtn.disabled = false; });
     return;
   }
   const questStageForm = event.target.closest("#questStageForm");
@@ -17905,7 +20003,7 @@ indexContent.addEventListener("submit", (event) => {
           status.textContent = error.message || String(error);
           status.classList.add("bad");
         } else {
-          indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`;
+          playSurfaceError(questStageForm, error);
         }
       });
     return;
@@ -17914,23 +20012,61 @@ indexContent.addEventListener("submit", (event) => {
   if (!form) return;
   event.preventDefault();
   const query = form.querySelector("#searchInput")?.value.trim();
-  if (query) runSearch(query).catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+  if (query) runSearch(query).catch((error) => playSurfaceError(form, error));
 });
 
-indexContent.addEventListener("click", (event) => {
+listenPlaySurface("click", (event) => {
   const activateAlias = event.target.closest(".playerAliasActivate");
   if (activateAlias) {
-    updatePlayerAliasState({ alias_id: Number(activateAlias.dataset.playerAliasId), active: true }).catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+    updatePlayerAliasState({ alias_id: Number(activateAlias.dataset.playerAliasId), active: true }).catch((error) => playSurfaceError(activateAlias, error));
     return;
   }
   const deactivateAlias = event.target.closest(".playerAliasDeactivate");
   if (deactivateAlias) {
-    updatePlayerAliasState({ alias_id: null }).catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+    updatePlayerAliasState({ alias_id: null }).catch((error) => playSurfaceError(deactivateAlias, error));
+    return;
+  }
+  const removeAlias = event.target.closest(".playerAliasRemove");
+  if (removeAlias) {
+    event.preventDefault();
+    deletePlayerAlias(Number(removeAlias.dataset.playerAliasId)).catch((error) => playSurfaceError(removeAlias, error));
     return;
   }
   if (event.target.closest("#questStageRefresh")) {
     event.preventDefault();
-    loadQuestStages().catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`));
+    loadQuestStages().catch((error) => playSurfaceError(event.target, error));
+    loadPlayerQuests().catch(() => {});
+    return;
+  }
+  if (event.target.closest("#seedQuestsBtn")) {
+    event.preventDefault();
+    const btn = event.target.closest("#seedQuestsBtn");
+    btn.disabled = true;
+    fetch("/api/quests/seed", { method: "POST" })
+      .then(() => loadPlayerQuests())
+      .catch((error) => playSurfaceError(btn, error))
+      .finally(() => { btn.disabled = false; });
+    return;
+  }
+  const advanceQuestBtn = event.target.closest("[data-advance-quest]");
+  if (advanceQuestBtn) {
+    event.preventDefault();
+    const qid = Number(advanceQuestBtn.getAttribute("data-advance-quest"));
+    if (qid) {
+      advanceQuestBtn.disabled = true;
+      fetch(`/api/quests/${qid}/advance`, { method: "POST" })
+        .then((r) => r.json())
+        .then((payload) => {
+          if (payload.completed) {
+            const gold = payload.reward_gold || 0;
+            const xp = payload.reward_xp || 0;
+            playSurfaceError(advanceQuestBtn, `Quest complete! +${gold}g +${xp}xp`);
+          }
+          loadPlayerQuests();
+        })
+        .catch((error) => playSurfaceError(advanceQuestBtn, error))
+        .finally(() => { advanceQuestBtn.disabled = false; });
+    }
     return;
   }
   const questCancel = event.target.closest("[data-quest-cancel]");
@@ -17940,7 +20076,7 @@ indexContent.addEventListener("click", (event) => {
     if (id) {
       questCancel.disabled = true;
       cancelQuestEvent(id)
-        .catch((error) => (indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message)}</p>`))
+        .catch((error) => playSurfaceError(questCancel, error))
         .finally(() => {
           questCancel.disabled = false;
         });
@@ -17950,10 +20086,9 @@ indexContent.addEventListener("click", (event) => {
   const testConnection = event.target.closest(".testModelConnection");
   if (testConnection) {
     testConnection.disabled = true;
-    testModelConnection(indexContent)
-      .catch((error) => {
-        indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
-      })
+    const surface = playActionSurface(testConnection);
+    testModelConnection(surface)
+      .catch((error) => playSurfaceError(testConnection, error))
       .finally(() => {
         testConnection.disabled = false;
       });
@@ -17965,9 +20100,7 @@ indexContent.addEventListener("click", (event) => {
   if (!form) return;
   selectFile.disabled = true;
   selectModelFile(form)
-    .catch((error) => {
-      indexContent.innerHTML += `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
-    })
+    .catch((error) => playSurfaceError(selectFile, error))
     .finally(() => {
       selectFile.disabled = false;
     });
@@ -18742,20 +20875,29 @@ document.addEventListener("change", (event) => {
   }
 });
 
-indexContent.addEventListener("dragstart", (event) => {
-  const card = event.target.closest(".entityCard");
-  if (!card) return;
-  event.dataTransfer.setData("text/plain", refToken(card.dataset.type, card.dataset.code));
+document.addEventListener("dragstart", (event) => {
+  const source = event.target.closest?.("[data-link-token], [data-link-code], .entityCard, .insertRefButton");
+  if (!source) return;
+  const token = linkTokenFrom(source);
+  if (!token) return;
+  event.dataTransfer.setData("text/plain", token);
+  try {
+    event.dataTransfer.setData("text/morkyn-ref", token);
+  } catch (_) {
+    /* Some browsers only allow text/plain on drag. */
+  }
+  event.dataTransfer.effectAllowed = "copy";
 });
 
-turnInput.addEventListener("dragover", (event) => event.preventDefault());
+turnInput.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+});
 turnInput.addEventListener("drop", (event) => {
   event.preventDefault();
-  const token = event.dataTransfer.getData("text/plain");
+  const token = event.dataTransfer.getData("text/morkyn-ref") || event.dataTransfer.getData("text/plain");
   if (!token) return;
-  const start = turnInput.selectionStart ?? turnInput.value.length;
-  turnInput.value = `${turnInput.value.slice(0, start)} ${token} ${turnInput.value.slice(start)}`.replace(/\s+/g, " ").trimStart();
-  turnInput.focus();
+  insertRawToken(token);
 });
 
 function hideScriptGate() {
@@ -18913,6 +21055,7 @@ function wireUpdatesPanel() {
 
 function bindUpdatesClick(el) {
   el?.addEventListener("click", () => {
+    closePlayMenu();
     showUpdatesModal().catch((error) => {
       openLegalModal("Updates", "", `<p class="bad">${escapeHtml(error.message || String(error))}</p>`);
     });
@@ -18928,6 +21071,7 @@ legalModal?.addEventListener("click", (event) => {
 initUiTheme();
 hydrateNpcPortraitCache();
 bindArtDropZones();
+bindFieldPaste();
 initArtAutoUpdateToggle();
 initSetupArtCollapse();
 setArtPromptTab("face");
@@ -19455,6 +21599,8 @@ const npcPortraitCache = {};
 let movementLocked = false;
 let mapBlank = false;
 
+const WALK_FOCUS_NOTE = "Arrow keys walk only when What will you do? is not focused.";
+
 function updateTravelStatus(ready, opts) {
   const o = opts && typeof opts === "object" ? opts : {};
   if ("movement_locked" in o) movementLocked = o.movement_locked === true;
@@ -19486,9 +21632,9 @@ function updateTravelStatus(ready, opts) {
       ? `${label}: map blank · movement locked`
       : `${label}: movement locked · no free walk`;
   } else if (travelReady) {
-    text = "Walk free: arrows / pad · click adjacent tiles · long trips open";
+    text = `${WALK_FOCUS_NOTE} The pad walks any time. Click a neighbor tile. Long trips are open.`;
   } else {
-    text = "Walk free: arrows / pad · long trips locked until scene clears";
+    text = `${WALK_FOCUS_NOTE} The pad walks any time. Long trips wait until the scene clears.`;
   }
   if (line) {
     line.textContent = text;
@@ -19512,6 +21658,13 @@ function isTypingInFormField(target) {
   return Boolean(target.closest?.("input, textarea, select, [contenteditable='true']"));
 }
 
+function focusBlocksArrowWalk(target) {
+  if (isTypingInFormField(target)) return true;
+  const el = target && target.nodeType === 1 ? target : target?.parentElement;
+  if (!el || typeof el.closest !== "function") return false;
+  return Boolean(el.closest("button, a, [role='link'], [role='button'], [tabindex]"));
+}
+
 function applyTravelMoveFeedback(data) {
   if (!data || typeof data !== "object") return;
   if (data.state?.world_time) updateWorldTimeLine(data.state.world_time);
@@ -19533,7 +21686,7 @@ function applyTravelMoveFeedback(data) {
   if (tr.ruler?.name) parts.push(`authority: ${tr.ruler.name}`);
   if (tr.scene_fired || data.scene_turn) parts.push("scene!");
   if (banner && parts.length) {
-    banner.textContent = `Walk ${parts.join(" · ")} · arrows free, long trips may wait on scene`;
+    banner.textContent = `Walk ${parts.join(" · ")}. ${WALK_FOCUS_NOTE}`;
   }
   // Ambient DM line — does NOT lock movement or require a choice
   const ambient = data.ambient || tr.ambient || "";
@@ -19637,7 +21790,15 @@ function bindMapMovement() {
   document.body.dataset.mapKeysBound = "1";
   window.addEventListener("keydown", (event) => {
     if (event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey) return;
-    if (isTypingInFormField(event.target)) return;
+    if (focusBlocksArrowWalk(event.target)) return;
+    const waitOpen = waitPopover && !waitPopover.classList.contains("hidden");
+    if (
+      waitOpen &&
+      (event.key === "ArrowUp" || event.key === "ArrowDown" || event.key === "ArrowLeft" || event.key === "ArrowRight")
+    ) {
+      event.preventDefault();
+      return;
+    }
     const gameView = document.querySelector("#gameView");
     if (!gameView || gameView.classList.contains("hidden")) return;
     if (getComputedStyle(gameView).display === "none") return;
@@ -20395,6 +22556,9 @@ function bindMapAvatarTools() {
       if (!document.querySelector("#mapOverlay")?.classList.contains("hidden")) await refreshFullMap();
     });
   }
+  document.querySelector("#mapAvatarUploadBtn")?.addEventListener("click", () => {
+    document.querySelector("#mapAvatarUpload")?.click();
+  });
   document.querySelector("#mapAvatarFromPortrait")?.addEventListener("click", () => {
     mapAvatarFromPortrait().catch((e) => window.alert(e.message || e));
   });
@@ -20547,6 +22711,7 @@ async function walkToTile(x, y) {
 function openMapOverlay() {
   const overlay = document.querySelector("#mapOverlay");
   if (!overlay) return;
+  closePlayMenu();
   overlay.classList.remove("hidden");
   overlay.setAttribute("aria-hidden", "false");
   refreshFullMap();
@@ -20709,6 +22874,109 @@ function localNpcsFromState() {
   return out;
 }
 
+let packListExpanded = false;
+
+function npcPortraitEmptyHtml() {
+  return `<div class="npcPortraitPlaceholder"><span class="portraitEmptyLabel">${PORTRAIT_EMPTY_TEXT}</span></div>`;
+}
+
+const DOCK_LINK_HINT = "Details opens this, and Link puts it in What will you do?. Delete it there to undo.";
+
+function dockChipAttrs(label) {
+  const safe = escapeHtml(`${label}. ${DOCK_LINK_HINT}`);
+  return `title="${safe}"`;
+}
+
+function dockLinkButtons(type, code, token, name) {
+  const safeName = escapeHtml(name);
+  const safeCode = escapeHtml(code || "");
+  const safeToken = escapeHtml(token || "");
+  const detailsClass = type === "npc" ? "castDetailsBtn" : "miniDetailsBtn";
+  const linkClass = type === "npc" ? "castLinkBtn" : "miniLinkBtn";
+  return `<button type="button" class="${detailsClass}" data-code="${safeCode}" aria-label="Details for ${safeName}.">Details</button><button type="button" class="${linkClass} insertRefButton" draggable="true" data-type="${escapeHtml(type)}" data-code="${safeCode}" data-link-token="${safeToken}" aria-label="Link ${safeName}. ${escapeHtml(DOCK_LINK_HINT)}">Link</button>`;
+}
+
+function paintPlayDock() {
+  const nameEl = document.querySelector("#youName");
+  const vitalsEl = document.querySelector("#youVitals");
+  const portrait = document.querySelector("#youPortrait");
+  const mark = document.querySelector("#youPortraitMark");
+  const castEl = document.querySelector("#sceneCastList");
+  const packEl = document.querySelector("#miniInventory");
+  const player = state?.player || {};
+  if (nameEl) nameEl.textContent = player.name || "You";
+  if (vitalsEl) {
+    const bits = [];
+    if (player.health != null) bits.push(`HP ${player.health}/${player.max_health ?? player.health}`);
+    if (player.gold != null) bits.push(`Gold ${player.gold}`);
+    if (player.level != null) bits.push(`Lv ${player.level}`);
+    vitalsEl.textContent = bits.join(" · ");
+  }
+  const face = state?.player_portrait?.data_url || "";
+  if (mark) mark.textContent = PORTRAIT_EMPTY_TEXT;
+  if (portrait) {
+    if (face) {
+      portrait.src = face;
+      portrait.hidden = false;
+      if (mark) mark.hidden = true;
+    } else {
+      portrait.hidden = true;
+      if (mark) mark.hidden = false;
+    }
+  }
+  const scene = state?.settings?.active_scene || {};
+  const talking = new Set((scene.interacting || []).map((code) => String(code).toUpperCase()));
+  const nearby = new Set([...(scene.present || []), ...(scene.interacting || [])].map((code) => String(code).toUpperCase()));
+  const npcs = typeof localNpcsFromState === "function" ? localNpcsFromState() : [];
+  const cast = npcs.filter((npc) => nearby.has(String(npc.code || "").toUpperCase()));
+  const shown = cast.length ? cast : npcs.slice(0, 4);
+  if (castEl) {
+    castEl.innerHTML = shown.length
+      ? shown
+          .map((npc) => {
+            const code = String(npc.code || "");
+            const token = code ? refToken("npc", code) : "";
+            const talkingNow = talking.has(code.toUpperCase());
+            const name = npc.name || code || "Someone";
+            const shownName = `${name}${talkingNow ? " · talking" : ""}`;
+            return `<div class="castCard${talkingNow ? " isTalking" : ""}"><span class="castMark" aria-hidden="true">${escapeHtml(String(name).slice(0, 1))}</span><span class="castCardName" ${dockChipAttrs(shownName)}>${escapeHtml(shownName)}</span>${dockLinkButtons("npc", code, token, name)}</div>`;
+          })
+          .join("")
+      : `<p class="empty">No one in focus.</p>`;
+  }
+  const sortedItems = [...(state?.inventory || [])].sort((a, b) => Number(Boolean(b.equipped_slot)) - Number(Boolean(a.equipped_slot)));
+  const items = packListExpanded ? sortedItems : sortedItems.slice(0, 8);
+  const restCount = sortedItems.length - items.length;
+  if (packEl) {
+    const chips = items
+      .map((item) => {
+        const token = item.code ? refToken("item", item.code) : String(item.name || "");
+        const name = item.name || item.code || "Item";
+        return `<div class="miniItem"><span class="miniItemName" ${dockChipAttrs(name)}>${escapeHtml(name)}</span>${dockLinkButtons("item", item.code || "", token, name)}</div>`;
+      });
+    if (restCount > 0) {
+      chips.push(`<button type="button" class="miniItem miniItemMore" data-pack-rest="1" ${dockChipAttrs(`${restCount} more`)}>${restCount} more</button>`);
+    }
+    packEl.innerHTML = chips.length ? chips.join("") : `<p class="empty">Pack is empty.</p>`;
+  }
+  syncPortraitFrameName(document.querySelector("#youFrame"), Boolean(face));
+  syncPortraitSizeButton(document.querySelector("#youFrame"));
+}
+
+function openHelpPanel() {
+  const panel = document.querySelector("#helpPanel");
+  if (!panel) return;
+  panel.classList.remove("hidden");
+  panel.hidden = false;
+}
+
+function closeHelpPanel() {
+  const panel = document.querySelector("#helpPanel");
+  if (!panel) return;
+  panel.classList.add("hidden");
+  panel.hidden = true;
+}
+
 function refreshNpcStage() {
   const select = document.querySelector("#npcStageSelect");
   const npcs = localNpcsFromState();
@@ -20740,14 +23008,22 @@ function setNpcStageFocus(npc) {
     if (sumEl) sumEl.textContent = "No NPCs at this location.";
     if (frame) {
       frame.classList.add("artDropZone");
+      frame.classList.remove("hasArt");
       frame.setAttribute("data-art-slot", "npc");
-      frame.innerHTML = `<div class="npcPortraitPlaceholder"><span>No one in focus</span><small>drop image</small></div>`;
+      frame.innerHTML = npcPortraitEmptyHtml();
+      syncPortraitFrameName(frame, false);
     }
+    syncPortraitSizeButton(document.querySelector("#npcPortraitFrame"));
     return;
   }
   focusedNpcCode = npc.code || npc.name || "";
   if (nameEl) nameEl.textContent = npc.name || "Unknown";
-  if (roleEl) roleEl.textContent = [npc.race, npc.role, npc.rank].filter(Boolean).join(" · ");
+  const rank = String(npc.rank ?? "").trim();
+  if (roleEl) {
+    roleEl.textContent = [npc.race, npc.role, rank ? `Rank ${rank}` : ""]
+      .filter((part) => String(part ?? "").trim())
+      .join(" · ");
+  }
   if (sumEl) sumEl.textContent = npc.summary || npc.personality || "No notes yet.";
   const cached = npcPortraitCache[focusedNpcCode];
   if (frame) {
@@ -20763,10 +23039,12 @@ function setNpcStageFocus(npc) {
     } else {
       setArtFrameContent(frame, {
         hasArt: false,
-        html: `<div class="npcPortraitPlaceholder"><span>${escapeHtml((npc.name || "?").slice(0, 1).toUpperCase())}</span><br/><small>drop / gen</small></div>`,
+        html: npcPortraitEmptyHtml(),
       });
     }
+    syncPortraitFrameName(frame, Boolean(cached));
   }
+  syncPortraitSizeButton(document.querySelector("#npcPortraitFrame"));
 }
 
 /** Infer a player-facing visibility note from NPC fields (no inventing a full look). */
@@ -20986,6 +23264,7 @@ async function applyDroppedArtImage(slot, dataUrl) {
       html: `<img src="${dataUrl}" alt="Player face" draggable="true" />`,
     });
     setPlayerArtStatus("Face set from drop.");
+    paintPlayDock();
     return;
   }
   if (slot === "player-fullbody") {
@@ -21023,12 +23302,62 @@ async function applyDroppedArtImage(slot, dataUrl) {
   }
 }
 
+function insertTextAtCursor(field, text) {
+  const start = field.selectionStart ?? field.value.length;
+  const end = field.selectionEnd ?? start;
+  field.value = field.value.slice(0, start) + text + field.value.slice(end);
+  const caret = start + text.length;
+  field.setSelectionRange?.(caret, caret);
+  field.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function pasteTargetField(target) {
+  const field = target?.closest?.("textarea, input");
+  if (!field || field.readOnly || field.disabled) return null;
+  const blocked = ["button", "checkbox", "radio", "file", "submit", "reset", "range", "color", "hidden"];
+  if (blocked.includes(String(field.type || "").toLowerCase())) return null;
+  return field;
+}
+
+function bindFieldPaste() {
+  if (document.body.dataset.fieldPasteBound === "1") return;
+  document.body.dataset.fieldPasteBound = "1";
+  document.addEventListener(
+    "paste",
+    (event) => {
+      const field = pasteTargetField(event.target);
+      if (!field) return;
+      const text = event.clipboardData?.getData("text/plain");
+      if (!text) return;
+      if (!event.defaultPrevented) return;
+      insertTextAtCursor(field, text);
+    },
+    true,
+  );
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.altKey || event.shiftKey) return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (String(event.key || "").toLowerCase() !== "v") return;
+      const field = pasteTargetField(event.target);
+      if (!field) return;
+      const text = event.clipboardData?.getData?.("text/plain");
+      if (!text) return;
+      if (event.defaultPrevented) {
+        insertTextAtCursor(field, text);
+      }
+    },
+    true,
+  );
+}
+
 function bindArtDropZones() {
   if (document.body.dataset.artDropBound === "1") return;
   document.body.dataset.artDropBound = "1";
 
   document.addEventListener("dragover", (event) => {
-    const zone = event.target.closest?.(".artDropZone, [data-art-slot], #npcPortraitFrame, [data-setup-face], [data-setup-fullbody], #playerFaceFrame, #playerFullbodyFrame");
+    const zone = event.target.closest?.(".artDropZone, [data-art-slot], #npcPortraitFrame, #youFrame, [data-setup-face], [data-setup-fullbody], #playerFaceFrame, #playerFullbodyFrame");
     if (!zone) return;
     event.preventDefault();
     zone.classList.add("artDropHover");
@@ -21039,10 +23368,42 @@ function bindArtDropZones() {
     if (zone) zone.classList.remove("artDropHover");
   });
 
-  document.addEventListener("drop", (event) => {
-    const zone = event.target.closest?.(
-      ".artDropZone, [data-art-slot], #npcPortraitFrame, [data-setup-face], [data-setup-fullbody], #playerFaceFrame, #playerFullbodyFrame",
+  const artZoneSelector =
+    ".artDropZone, [data-art-slot], #npcPortraitFrame, [data-setup-face], [data-setup-fullbody], #playerFaceFrame, #playerFullbodyFrame, #youFrame";
+
+  function artSlotFromZone(zone) {
+    if (!zone) return "";
+    return (
+      zone.getAttribute("data-art-slot") ||
+      (zone.matches("[data-setup-face]") ? "face" : "") ||
+      (zone.matches("[data-setup-fullbody]") ? "fullbody" : "") ||
+      (zone.id === "playerFaceFrame" ? "player-face" : "") ||
+      (zone.id === "playerFullbodyFrame" ? "player-fullbody" : "") ||
+      (zone.id === "youFrame" ? "player-face" : "") ||
+      (zone.id === "npcPortraitFrame" ? "npc" : "")
     );
+  }
+
+  document.addEventListener("paste", (event) => {
+    const typing = event.target.closest?.("input, textarea, select, [contenteditable='true']");
+    if (typing) return;
+    const zone =
+      event.target.closest?.(artZoneSelector) ||
+      document.querySelector(`${artZoneSelector.split(",")[0]}.artDropHover`) ||
+      document.querySelector(".artDropHover");
+    if (!zone) return;
+    const item = [...(event.clipboardData?.items || [])].find((entry) => entry.type.startsWith("image/"));
+    const file = item?.getAsFile?.();
+    if (!file) return;
+    event.preventDefault();
+    const slot = artSlotFromZone(zone);
+    readFileAsDataUrl(file)
+      .then((url) => applyDroppedArtImage(slot, url))
+      .catch((err) => window.alert(err.message || String(err)));
+  });
+
+  document.addEventListener("drop", (event) => {
+    const zone = event.target.closest?.(artZoneSelector);
     if (!zone) return;
     event.preventDefault();
     zone.classList.remove("artDropHover");
@@ -21052,6 +23413,7 @@ function bindArtDropZones() {
       (zone.matches("[data-setup-fullbody]") ? "fullbody" : "") ||
       (zone.id === "playerFaceFrame" ? "player-face" : "") ||
       (zone.id === "playerFullbodyFrame" ? "player-fullbody" : "") ||
+      (zone.id === "youFrame" ? "player-face" : "") ||
       (zone.id === "npcPortraitFrame" ? "npc" : "");
     const file = [...(event.dataTransfer?.files || [])].find((f) => f.type.startsWith("image/"));
     const portraitId =
@@ -21143,6 +23505,15 @@ function bindArtDropZones() {
   });
 }
 
+function closeEveryoneDialog() {
+  const modal = document.querySelector("#npcRosterModal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  modal.classList.add("hidden");
+  const back = rosterDialogReturn;
+  rosterDialogReturn = null;
+  if (back && document.contains(back)) back.focus();
+}
+
 function openNpcRoster() {
   const modal = document.querySelector("#npcRosterModal");
   const list = document.querySelector("#npcRosterList");
@@ -21154,11 +23525,11 @@ function openNpcRoster() {
           const key = n.code || n.name;
           const img = npcPortraitCache[key];
           return `
-          <article class="npcRosterCard" data-npc-key="${escapeHtml(key)}">
-            <div class="thumb">${img ? `<img src="${img}" alt="" />` : escapeHtml((n.name || "?").slice(0, 1))}</div>
+          <button type="button" class="npcRosterCard" data-npc-key="${escapeHtml(key)}">
+            <span class="thumb">${img ? `<img src="${img}" alt="" />` : escapeHtml((n.name || "?").slice(0, 1))}</span>
             <strong>${escapeHtml(n.name || key)}</strong>
             <span class="empty">${escapeHtml([n.race, n.role].filter(Boolean).join(" · ") || "local")}</span>
-          </article>`;
+          </button>`;
         })
         .join("")
     : `<p class="empty">No NPCs at this location.</p>`;
@@ -21171,13 +23542,25 @@ function openNpcRoster() {
         if (select) select.value = key;
         setNpcStageFocus(npc);
       }
-      modal.classList.add("hidden");
+      closeEveryoneDialog();
     });
   });
+  const opening = modal.classList.contains("hidden");
+  if (opening) {
+    const opener = document.activeElement;
+    rosterDialogReturn = opener instanceof HTMLElement && opener !== document.body && !modal.contains(opener)
+      ? opener
+      : null;
+  }
   modal.classList.remove("hidden");
+  document.querySelector("#closeNpcRoster")?.focus();
 }
 
 document.querySelector("#openMapOverlayBtn")?.addEventListener("click", () => openMapOverlay());
+document.querySelector("#whoIsHereJump")?.addEventListener("click", () => {
+  document.querySelector("#whoIsHereHeading")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  document.querySelector("#sceneCastList .castDetailsBtn")?.focus();
+});
 document.querySelector("#sideOpenMapBtn")?.addEventListener("click", () => openMapOverlay());
 document.querySelector("#closeMapOverlayBtn")?.addEventListener("click", () => closeMapOverlay());
 document.querySelector("#settlementDetailClose")?.addEventListener("click", () => {
@@ -21195,16 +23578,38 @@ document.querySelector("#npcPortraitBtn")?.addEventListener("click", () => {
 document.querySelector("#npcTalkBtn")?.addEventListener("click", () => {
   const npc = localNpcsFromState().find((n) => (n.code || n.name) === focusedNpcCode);
   if (!npc || !turnInput) return;
-  turnInput.value = `I speak with ${npc.name}.`;
+  const name = String(npc.name || "").trim() || "Unknown";
+  const line = `I speak with ${name}.`;
+  const start = turnInput.selectionStart ?? turnInput.value.length;
+  const end = turnInput.selectionEnd ?? start;
+  const caret = turnInput.selectionDirection === "backward" ? start : end;
+  const chunk = spacedEdit(turnInput.value, caret, caret, line);
+  insertFieldTextUndoable(turnInput, chunk, caret, caret);
+  const nextPos = caret + chunk.length;
   turnInput.focus();
+  try {
+    turnInput.setSelectionRange(nextPos, nextPos);
+  } catch (_) {
+    /* caret can wait */
+  }
+  updateComposerState();
 });
 document.querySelector("#npcRosterBtn")?.addEventListener("click", () => openNpcRoster());
-document.querySelector("#closeNpcRoster")?.addEventListener("click", () => {
-  document.querySelector("#npcRosterModal")?.classList.add("hidden");
-});
+document.querySelector("#closeNpcRoster")?.addEventListener("click", () => closeEveryoneDialog());
 document.querySelector("#npcRosterModal")?.addEventListener("click", (event) => {
-  if (event.target?.id === "npcRosterModal") event.target.classList.add("hidden");
+  if (event.target?.id === "npcRosterModal") closeEveryoneDialog();
 });
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  const roster = document.querySelector("#npcRosterModal");
+  const rosterOpen = roster && !roster.classList.contains("hidden");
+  const entityOpen = entityMenu && !entityMenu.classList.contains("hidden");
+  if (!rosterOpen && !entityOpen) return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (rosterOpen) closeEveryoneDialog();
+  else closeEntityDialog();
+}, true);
 bindFullMapHover();
 
 // Patch displayTurnPayload travel flag
@@ -21250,22 +23655,29 @@ async function loadAppSettingsForm() {
   }
 }
 
-function openAppSettings() {
+function openAppSettings(opener = null) {
+  rememberMenuDialogOpener(opener);
   const modal = document.querySelector("#appSettingsModal");
-  if (!modal) return;
+  if (!modal) {
+    menuDialogReturn = null;
+    return;
+  }
   modal.classList.remove("hidden");
   // Ensure visibility even if an old stylesheet omitted :not(.hidden) rules
   if (getComputedStyle(modal).display === "none") {
     modal.style.display = "grid";
   }
+  focusWhenShown(document.querySelector("#closeAppSettings"));
   loadAppSettingsForm();
 }
 
-function closeAppSettings() {
+function closeAppSettings(options = {}) {
   const modal = document.querySelector("#appSettingsModal");
   if (!modal) return;
   modal.classList.add("hidden");
   modal.style.display = "";
+  if (options.restoreFocus) restoreMenuDialogFocus();
+  else menuDialogReturn = null;
 }
 
 function resetSetupTutorialFromSettings() {
@@ -21295,17 +23707,17 @@ document.querySelector("#menuContinue")?.addEventListener("click", (event) => {
   if (event.currentTarget?.disabled) return;
   continuePlaythrough();
 });
-document.querySelector("#menuLoadGame")?.addEventListener("click", () => {
+document.querySelector("#menuLoadGame")?.addEventListener("click", (event) => {
   try {
-    openSaveBrowser("load");
+    openSaveBrowser("load", event.currentTarget);
   } catch (error) {
     const status = document.querySelector("#mainMenuStatus");
     if (status) status.textContent = error.message || String(error);
   }
 });
-document.querySelector("#menuEditSave")?.addEventListener("click", () => {
+document.querySelector("#menuEditSave")?.addEventListener("click", (event) => {
   try {
-    openSaveBrowser("edit");
+    openSaveBrowser("edit", event.currentTarget);
   } catch (error) {
     const status = document.querySelector("#mainMenuStatus");
     if (status) status.textContent = error.message || String(error);
@@ -21313,12 +23725,26 @@ document.querySelector("#menuEditSave")?.addEventListener("click", () => {
 });
 document.querySelector("#menuSettings")?.addEventListener("click", (event) => {
   event.preventDefault();
-  openAppSettings();
+  openAppSettings(event.currentTarget);
 });
-document.querySelector("#closeAppSettings")?.addEventListener("click", () => closeAppSettings());
+document.querySelector("#closeAppSettings")?.addEventListener("click", () => closeAppSettings({ restoreFocus: true }));
 document.querySelector("#appSettingsModal")?.addEventListener("click", (event) => {
-  if (event.target?.id === "appSettingsModal") closeAppSettings();
+  if (event.target?.id === "appSettingsModal") closeAppSettings({ restoreFocus: true });
 });
+document.addEventListener("keydown", (event) => {
+  const modal = topMenuDialog();
+  if (!modal) return;
+  if (event.key === "Tab") {
+    trapDialogTab(event, modal);
+    event.stopPropagation();
+    return;
+  }
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (modal.id === "saveBrowserModal") closeSaveBrowser({ restoreFocus: true });
+  else closeAppSettings({ restoreFocus: true });
+}, true);
 document.querySelector("#settingsOpenLlm")?.addEventListener("click", () => {
   closeAppSettings();
   openModelModalFromUi().catch((error) => {
@@ -21392,6 +23818,14 @@ try {
 } catch (_) {
   document.body.classList.add("setup-mode-simple", "image-mode-simple");
 }
+// Quest create form: re-render step fields when step count changes.
+listenPlaySurface("change", (event) => {
+  if (event.target.id !== "questStepCount") return;
+  const count = Math.max(1, Math.min(6, Number(event.target.value) || 1));
+  const container = event.target.closest("form")?.querySelector("#questStepsContainer");
+  if (container) container.innerHTML = buildQuestStepFields(count);
+});
+
 decorateFunctionHelp();
 bindSetupNavExtras();
 bindSetupMoreTools();

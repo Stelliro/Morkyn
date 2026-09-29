@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mørkyn — Popout</title>
-    <link rel="stylesheet" href="/static/styles.css?v=v0-9-0" />
+    <link rel="stylesheet" href="/static/styles.css?v=history-log" />
     <style>
       html, body { min-height: 100%; }
       body.popoutBody {
@@ -94,6 +94,7 @@
           events: "Events",
           talk: "Talk",
           drafts: "Checks",
+          history: "History",
         };
         document.title = "Mørkyn — " + (titles[tab] || tab);
         document.getElementById("popoutTitle").textContent = titles[tab] || tab;
@@ -199,6 +200,41 @@
             .replace(/>/g, "&gt;")
             .replace(/"/g, "&quot;");
         }
+
+        function forwardToOpener(payload) {
+          const opener = window.opener;
+          if (!opener || opener.closed) return;
+          opener.postMessage(Object.assign({ type: "morkyn-popout-action" }, payload), location.origin);
+        }
+
+        content.addEventListener("click", (event) => {
+          if (tab !== "history") return;
+          const pageBtn = event.target.closest("button[data-history-page]");
+          const linkBtn = event.target.closest(".insertRefButton");
+          if (!pageBtn && !linkBtn) return;
+          if (pageBtn && pageBtn.disabled) return;
+          event.preventDefault();
+          if (pageBtn) {
+            forwardToOpener({ action: "history-page", dir: pageBtn.getAttribute("data-history-page") || "" });
+            return;
+          }
+          forwardToOpener({
+            action: "insert-ref",
+            linkToken: linkBtn.getAttribute("data-link-token") || "",
+            linkType: linkBtn.getAttribute("data-type") || "",
+            linkCode: linkBtn.getAttribute("data-code") || "",
+          });
+        });
+
+        content.addEventListener("toggle", (event) => {
+          const details = event.target;
+          if (!details || details.nodeType !== 1 || !details.getAttribute("data-history-key")) return;
+          forwardToOpener({
+            action: "history-toggle",
+            key: details.getAttribute("data-history-key"),
+            open: !!details.open,
+          });
+        }, true);
 
         function tick() {
           if (!renderFromParent()) renderFromApi();

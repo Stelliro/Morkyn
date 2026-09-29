@@ -283,6 +283,23 @@ def get_image_config() -> dict[str, Any]:
     return merged
 
 
+def clamp_slider_lora_weight(weight: Any, *, default: float = 1.0) -> float:
+    """Image LoRA strength. Age-style sliders use -5..5; near-zero is not a silent 0."""
+    try:
+        w = float(default if weight is None else weight)
+    except (TypeError, ValueError):
+        w = float(default)
+    if w != w or w == float("inf") or w == float("-inf"):
+        w = float(default)
+    if w > 5.0:
+        w = 5.0
+    elif w < -5.0:
+        w = -5.0
+    if abs(w) < 0.01:
+        w = 0.01 if w >= 0 else -0.01
+    return w
+
+
 def _as_bool(value: Any, *, default: bool = False) -> bool:
     """Strict bool parse — bool('false') is True in Python, which must not enable hires."""
     if isinstance(value, bool):
@@ -403,11 +420,12 @@ def update_image_config(payload: dict[str, Any]) -> dict[str, Any]:
                         nm = str(item.get("name") or "").strip()
                         if not nm:
                             continue
-                        try:
-                            wt = float(item.get("weight", 1.0))
-                        except (TypeError, ValueError):
-                            wt = 1.0
-                        cleaned.append({"name": nm[:200], "weight": max(0.05, min(2.0, wt))})
+                        cleaned.append(
+                            {
+                                "name": nm[:200],
+                                "weight": clamp_slider_lora_weight(item.get("weight", 1.0)),
+                            }
+                        )
                     elif isinstance(item, str) and item.strip():
                         cleaned.append({"name": item.strip()[:200], "weight": 1.0})
             next_cfg[key] = cleaned
@@ -4551,11 +4569,10 @@ def resolve_active_loras(
             name = str(entry.get("name") or entry.get("alias") or "").strip()
             if not name:
                 continue
-            try:
-                weight = float(entry.get("weight") if entry.get("weight") is not None else 1.0)
-            except (TypeError, ValueError):
-                weight = 1.0
-            out.append({"name": name, "weight": max(0.05, min(2.0, weight))})
+            weight = clamp_slider_lora_weight(
+                entry.get("weight") if entry.get("weight") is not None else 1.0
+            )
+            out.append({"name": name, "weight": weight})
         elif isinstance(entry, str) and entry.strip():
             out.append({"name": entry.strip(), "weight": 1.0})
     return out
@@ -4596,9 +4613,7 @@ def format_lora_tags(loras: list[Any] | None) -> str:
             tags.append(name)
             continue
         # Allow slider LoRAs outside 0–2 (e.g. age sliders); soft clamp
-        weight = max(-5.0, min(5.0, weight))
-        if abs(weight) < 0.01:
-            weight = 0.01 if weight >= 0 else -0.01
+        weight = clamp_slider_lora_weight(weight)
         tags.append(f"<lora:{name}:{weight:g}>")
         if activation:
             # Keep activation as short comma list, not re-underscored here (user keywords)

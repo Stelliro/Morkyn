@@ -118,6 +118,23 @@ class TestBands(unittest.TestCase):
         self.assertEqual(rng.normalize_band(None), "none")
         self.assertEqual(rng.normalize_band("gibberish"), "none")
 
+    def test_short_aliases_are_exact_not_substrings(self):
+        """'no'/'0'/'low' must not fire inside longer junk.
+
+        World treats normalize_band(..., default='') == '' as 'the model
+        meant something' and rolls small. Substring 'no' inside 'unknown'
+        used to return 'none' and silently delete the change. Same trap:
+        '0' in '10', 'low' in 'slow'.
+        """
+        self.assertEqual(rng.normalize_band("no"), "none")
+        self.assertEqual(rng.normalize_band("low"), "small")
+        self.assertEqual(rng.normalize_band("0"), "none")
+        self.assertEqual(rng.normalize_band("unknown", default=""), "")
+        self.assertEqual(rng.normalize_band("notable", default=""), "")
+        self.assertEqual(rng.normalize_band("slow", default=""), "")
+        self.assertEqual(rng.normalize_band("fresh", default=""), "")
+        self.assertEqual(rng.normalize_band("a tiny reward"), "trivial")
+
     def test_bands_are_monotonic(self):
         """A larger band must not produce a smaller average amount."""
         averages = []
@@ -189,6 +206,14 @@ class TestTurnBandResolution(unittest.TestCase):
         with connect() as conn:
             resolve_turn_bands(conn, turn, turn=2, options={})
         self.assertLess(turn["player"]["health_delta"], 0)
+
+    def test_unknown_band_word_rolls_small_not_none(self):
+        """'unknown' contains 'no'; substring aliases used to wipe the amount."""
+        turn = {"player": {"xp_band": "unknown"}}
+        with connect() as conn:
+            resolve_turn_bands(conn, turn, turn=8, options={})
+        self.assertGreater(turn["player"]["xp_delta"], 0)
+        self.assertNotIn("xp_band", turn["player"])
 
     def test_raw_numbers_are_rerolled_onto_the_curve(self):
         turn = {"player": {"xp_delta": 5000}}

@@ -498,6 +498,113 @@ def init_db() -> None:
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 meta_json TEXT NOT NULL DEFAULT '{}'
             );
+
+            CREATE TABLE IF NOT EXISTS quests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE DEFAULT '',
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                current_step INTEGER NOT NULL DEFAULT 1,
+                total_steps INTEGER NOT NULL DEFAULT 1,
+                reward_gold INTEGER NOT NULL DEFAULT 0,
+                reward_xp INTEGER NOT NULL DEFAULT 0,
+                reward_items TEXT NOT NULL DEFAULT '[]',
+                difficulty TEXT NOT NULL DEFAULT 'normal',
+                timer_turns INTEGER NOT NULL DEFAULT 0,
+                turns_remaining INTEGER NOT NULL DEFAULT 0,
+                giver_npc_id INTEGER,
+                target_location_id INTEGER,
+                created_turn INTEGER NOT NULL DEFAULT 0,
+                completed_turn INTEGER NOT NULL DEFAULT 0,
+                failed_turn INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS quest_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quest_id INTEGER NOT NULL,
+                step_number INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                location_code TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                hidden INTEGER NOT NULL DEFAULT 0,
+                revealed_at_step INTEGER NOT NULL DEFAULT 0,
+                completed_turn INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                UNIQUE(quest_id, step_number),
+                FOREIGN KEY (quest_id) REFERENCES quests(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS npc_player_relationships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                npc_id INTEGER NOT NULL UNIQUE,
+                affinity INTEGER NOT NULL DEFAULT 0,
+                fear INTEGER NOT NULL DEFAULT 0,
+                respect INTEGER NOT NULL DEFAULT 0,
+                last_interaction TEXT NOT NULL DEFAULT '',
+                interaction_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (npc_id) REFERENCES npcs(id) ON DELETE CASCADE
+            );
+
+            -- Hidden NPC psychology layer (narrator-only; never player-facing).
+            -- Three tables hold the deep inner life of NPCs: private emotional states,
+            -- hidden agendas, and family bonds between existing NPCs.
+
+            CREATE TABLE IF NOT EXISTS npc_private_feelings (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                npc_id           INTEGER NOT NULL,
+                feeling_type     TEXT    NOT NULL,
+                intensity        INTEGER NOT NULL DEFAULT 0,
+                target_id        INTEGER,          -- -1 = player; else another npcs.id
+                trigger_event    TEXT    NOT NULL DEFAULT '',
+                turn_triggered   INTEGER NOT NULL DEFAULT 0,
+                is_revealed      INTEGER NOT NULL DEFAULT 0,
+                updated_at       TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(npc_id, feeling_type, target_id),
+                FOREIGN KEY (npc_id) REFERENCES npcs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_private_feelings_npc
+            ON npc_private_feelings(npc_id);
+
+            CREATE TABLE IF NOT EXISTS npc_agendas (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                npc_id       INTEGER NOT NULL,
+                agenda_type  TEXT    NOT NULL,
+                target_id    INTEGER,              -- -1 = player; else another npcs.id
+                priority     INTEGER NOT NULL DEFAULT 5,
+                state        TEXT    NOT NULL DEFAULT 'ACTIVE',
+                created_turn INTEGER NOT NULL DEFAULT 0,
+                context_json TEXT    NOT NULL DEFAULT '{}',
+                updated_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (npc_id) REFERENCES npcs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agendas_npc
+            ON npc_agendas(npc_id, state);
+
+            CREATE TABLE IF NOT EXISTS npc_family_ties (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                npc_id              INTEGER NOT NULL,
+                relative_id         INTEGER NOT NULL,
+                relationship_type   TEXT    NOT NULL,
+                is_known_to_player  INTEGER NOT NULL DEFAULT 0,
+                created_at          TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(npc_id, relative_id),
+                FOREIGN KEY (npc_id)      REFERENCES npcs(id) ON DELETE CASCADE,
+                FOREIGN KEY (relative_id) REFERENCES npcs(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_family_ties_npc
+            ON npc_family_ties(npc_id);
+
+            CREATE INDEX IF NOT EXISTS idx_family_ties_relative
+            ON npc_family_ties(relative_id);
             """
         )
 
@@ -713,14 +820,84 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         if column not in inventory_columns:
             conn.execute(f"ALTER TABLE inventory ADD COLUMN {column} {definition}")
 
+    # Blank codes used to be filled from the row id (L2, or alpha B for id 2).
+    # That collides when the id-derived code is already taken, and init_db
+    # then dies on UNIQUE. Probe for a free code instead.
     for table, prefix in (("locations", "L"), ("inventory", "I"), ("events", "E")):
-        rows = conn.execute(f"SELECT id FROM {table} WHERE code = '' OR code IS NULL ORDER BY id").fetchall()
-        for row in rows:
-            conn.execute(f"UPDATE {table} SET code = ? WHERE id = ?", (f"{prefix}{row['id']}", row["id"]))
+        _fill_blank_prefixed_codes(conn, table, prefix)
+    _fill_blank_alpha_codes(conn, "npcs")
 
-    rows = conn.execute("SELECT id FROM npcs WHERE code = '' OR code IS NULL ORDER BY id").fetchall()
-    for row in rows:
-        conn.execute("UPDATE npcs SET code = ? WHERE id = ?", (_alpha_code(row["id"]), row["id"]))
+    # Quest tables (added in 0.9.13)
+    _existing_tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+    if "quests" not in _existing_tables:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS quests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE DEFAULT '',
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'active',
+                current_step INTEGER NOT NULL DEFAULT 1,
+                total_steps INTEGER NOT NULL DEFAULT 1,
+                reward_gold INTEGER NOT NULL DEFAULT 0,
+                reward_xp INTEGER NOT NULL DEFAULT 0,
+                reward_items TEXT NOT NULL DEFAULT '[]',
+                difficulty TEXT NOT NULL DEFAULT 'normal',
+                timer_turns INTEGER NOT NULL DEFAULT 0,
+                turns_remaining INTEGER NOT NULL DEFAULT 0,
+                giver_npc_id INTEGER,
+                target_location_id INTEGER,
+                created_turn INTEGER NOT NULL DEFAULT 0,
+                completed_turn INTEGER NOT NULL DEFAULT 0,
+                failed_turn INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS quest_steps (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quest_id INTEGER NOT NULL,
+                step_number INTEGER NOT NULL,
+                title TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                location_code TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                hidden INTEGER NOT NULL DEFAULT 0,
+                revealed_at_step INTEGER NOT NULL DEFAULT 0,
+                completed_turn INTEGER NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                UNIQUE(quest_id, step_number),
+                FOREIGN KEY (quest_id) REFERENCES quests(id) ON DELETE CASCADE
+            );
+        """)
+    if "npc_player_relationships" not in _existing_tables:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS npc_player_relationships (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                npc_id INTEGER NOT NULL UNIQUE,
+                affinity INTEGER NOT NULL DEFAULT 0,
+                fear INTEGER NOT NULL DEFAULT 0,
+                respect INTEGER NOT NULL DEFAULT 0,
+                last_interaction TEXT NOT NULL DEFAULT '',
+                interaction_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (npc_id) REFERENCES npcs(id) ON DELETE CASCADE
+            );
+        """)
+
+    # Titles system (added in 0.9.13)
+    try:
+        from app.titles import init_titles
+        init_titles(conn)
+    except Exception:
+        pass
+
+    # Party system (added in 0.9.13)
+    try:
+        from app.party import init_party
+        init_party(conn)
+    except Exception:
+        pass
 
 
 def _alpha_code(number: int) -> str:
@@ -731,6 +908,47 @@ def _alpha_code(number: int) -> str:
         result = chr(65 + (n % 26)) + result
         n //= 26
     return result
+
+
+def _used_codes(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(
+        f"SELECT code FROM {table} WHERE code IS NOT NULL AND TRIM(code) != ''"
+    ).fetchall()
+    return {str(row["code"]) for row in rows}
+
+
+def _fill_blank_prefixed_codes(conn: sqlite3.Connection, table: str, prefix: str) -> None:
+    rows = conn.execute(
+        f"SELECT id FROM {table} WHERE code IS NULL OR TRIM(code) = '' ORDER BY id"
+    ).fetchall()
+    if not rows:
+        return
+    used = _used_codes(conn, table)
+    n = 1
+    for row in rows:
+        while f"{prefix}{n}" in used:
+            n += 1
+        code = f"{prefix}{n}"
+        used.add(code)
+        n += 1
+        conn.execute(f"UPDATE {table} SET code = ? WHERE id = ?", (code, int(row["id"])))
+
+
+def _fill_blank_alpha_codes(conn: sqlite3.Connection, table: str) -> None:
+    rows = conn.execute(
+        f"SELECT id FROM {table} WHERE code IS NULL OR TRIM(code) = '' ORDER BY id"
+    ).fetchall()
+    if not rows:
+        return
+    used = _used_codes(conn, table)
+    n = 1
+    for row in rows:
+        while _alpha_code(n) in used:
+            n += 1
+        code = _alpha_code(n)
+        used.add(code)
+        n += 1
+        conn.execute(f"UPDATE {table} SET code = ? WHERE id = ?", (code, int(row["id"])))
 
 
 def _seed_tile_catalog(conn: sqlite3.Connection) -> None:

@@ -462,7 +462,10 @@ def ensure_player_resources(
     if isinstance(player, dict):
         cur = {**cur, **{k: v for k, v in player.items() if v is not None}}
     if stats is None and isinstance(cur.get("effective_stats"), dict):
-        stats = cur.get("effective_stats")
+        # effective_stats is an equipment bonus map, not a 1..30 score.
+        from app.skill_checks import scores_from_gear_bonuses
+
+        stats = scores_from_gear_bonuses(cur.get("effective_stats"))
     caps = default_resource_caps(options, player=cur, stats=stats)
 
     me = max(_int(cur.get("max_energy"), 0), caps["max_energy"])
@@ -788,12 +791,12 @@ def stamp_resource_cost(
         if re.search(r"\b(\d+)\s*(hp|health|life)\b", text_cost):
             m = re.search(r"\b(\d+)\s*(hp|health|life)\b", text_cost)
             cost["health"] = max(cost["health"], _int(m.group(1), 0) if m else 0)
-        if re.search(r"\b(\d+)\s*m(in(ute)?s?)?\s*cooldown\b", text_cost):
-            m = re.search(r"\b(\d+)\s*m", text_cost)
-            cost["cooldown_minutes"] = max(cost["cooldown_minutes"], _int(m.group(1), 0) if m else 0)
-        if re.search(r"\b(\d+)\s*h(our)?s?\s*cooldown\b", text_cost):
-            m = re.search(r"\b(\d+)\s*h", text_cost)
-            cost["cooldown_minutes"] = max(cost["cooldown_minutes"], _int(m.group(1), 0) * 60 if m else 0)
+        m = re.search(r"\b(\d+)\s*m(in(ute)?s?)?\s*cooldown\b", text_cost)
+        if m:
+            cost["cooldown_minutes"] = max(cost["cooldown_minutes"], _int(m.group(1), 0))
+        m = re.search(r"\b(\d+)\s*h(our)?s?\s*cooldown\b", text_cost)
+        if m:
+            cost["cooldown_minutes"] = max(cost["cooldown_minutes"], _int(m.group(1), 0) * 60)
 
         if not any(cost[k] for k in ("energy", "mana", "fatigue", "health", "cooldown_minutes")):
             magic_words = (
@@ -1294,7 +1297,7 @@ def match_ability_from_input(
     player_input: str,
     abilities: list[dict[str, Any]] | None,
 ) -> dict[str, Any] | None:
-    """Longest-name match of an ability mentioned in player text."""
+    """Longest-name match of an ability mentioned as a whole token."""
     text = str(player_input or "").strip().lower()
     if not text or not abilities:
         return None
@@ -1305,7 +1308,7 @@ def match_ability_from_input(
         name = str(ab.get("name") or "").strip()
         if len(name) < 3:
             continue
-        if name.lower() in text:
+        if re.search(r"(?<!\w)" + re.escape(name.lower()) + r"(?!\w)", text):
             candidates.append((len(name), ab))
     if not candidates:
         # verb + "my power/ability/spell" alone → first unlocked active
