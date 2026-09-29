@@ -4,7 +4,7 @@ Copyright (c) 2026 Stelliro / Mørkyn contributors.
 
 This project is licensed under the PolyForm Noncommercial License 1.0.0.
 
-Full license terms: https://polyformproject.org/licenses/noncommercial/1.0.0/
+Full license terms: https://polyformproject.org/licenses/noncommercial/1.0.0
 
 ## Plain-Language Summary
 
