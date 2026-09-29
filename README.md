@@ -59,13 +59,13 @@ python benchmarks/run_dual_role_playtest.py
 
 ## Interface
 
-| Setup | Play | Model / context health |
+| Main menu | Play | Quests |
 | --- | --- | --- |
-| <img src="Media/screen-setup.png" alt="Mørkyn setup" width="100%"> | <img src="Media/screen-play.png" alt="Mørkyn play" width="100%"> | <img src="Media/screen-play-model.png" alt="Mørkyn model tab" width="100%"> |
+| <img src="Media/screen-menu.png" alt="Mørkyn main menu" width="100%"> | <img src="Media/screen-play.png" alt="Mørkyn play view with scene and map" width="100%"> | <img src="Media/screen-play-quests.png" alt="Mørkyn quest log" width="100%"> |
 
-| World setup | LLM settings | Compact mode |
+| New game setup | LLM settings | Play menu |
 | --- | --- | --- |
-| <img src="Media/screen-setup-world.png" alt="Mørkyn world setup" width="100%"> | <img src="Media/screen-model-settings.png" alt="Mørkyn LLM settings" width="100%"> | <img src="Media/screen-play-compact.png" alt="Mørkyn compact mode" width="100%"> |
+| <img src="Media/screen-setup.png" alt="Mørkyn new game setup" width="100%"> | <img src="Media/screen-model-settings.png" alt="Mørkyn LLM settings" width="100%"> | <img src="Media/screen-play-menu.png" alt="Mørkyn play menu" width="100%"> |
 
 Assets: [`Media/`](Media/).
 
