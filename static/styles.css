@@ -43,6 +43,8 @@
   --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.35);
   --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.22);
   --font: "Segoe UI", Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
+  /* Single column. A short window widens this only while the list is split. */
+  --play-menu-width: min(320px, 92vw);
   --btn-bg: rgba(255, 255, 255, 0.035);
   --btn-bg-hover: rgba(255, 255, 255, 0.06);
   --btn-border: rgba(255, 255, 255, 0.08);
@@ -973,11 +975,17 @@ label span,
   display: none;
 }
 
+html.isSetupTourLocked,
+html.isSetupTourLocked body {
+  overflow: hidden !important;
+}
+
 .setupTourLayer {
   position: fixed;
   inset: 0;
   z-index: 60;
   pointer-events: none;
+  isolation: isolate;
 }
 
 .setupTourLayer.hidden {
@@ -987,6 +995,10 @@ label span,
 .setupTourHole {
   position: fixed;
   z-index: 61;
+  left: -9999px;
+  top: -9999px;
+  width: 0;
+  height: 0;
   pointer-events: none;
   box-shadow:
     0 0 0 9999px rgba(5, 7, 12, 0.78),
@@ -1006,14 +1018,25 @@ label span,
 .setupTourArrow {
   position: fixed;
   z-index: 63;
+  left: -9999px;
+  top: -9999px;
+  width: 48px;
+  height: 72px;
   color: var(--neon);
   filter: drop-shadow(0 0 10px var(--neon-dim));
   pointer-events: none;
   transition: left 0.18s ease, top 0.18s ease;
 }
 
+.setupTourArrow svg {
+  display: block;
+  width: 48px;
+  height: 72px;
+}
+
 /* SVG tip is at the bottom by default.
-   Above target → point down. Below target → point up. */
+   Above target → point down. Below target → point up.
+   Beside the target → point toward it. */
 .setupTourArrow.isAbove svg {
   transform: none;
 }
@@ -1022,10 +1045,18 @@ label span,
   transform: rotate(180deg);
 }
 
+.setupTourArrow.isPointLeft svg {
+  transform: rotate(90deg);
+}
+
+.setupTourArrow.isPointRight svg {
+  transform: rotate(-90deg);
+}
+
 /* Tip follows the spotlight + arrow (not fixed to the bottom) */
 .setupTourTip {
   position: fixed;
-  z-index: 64;
+  z-index: 80;
   width: min(440px, calc(100vw - 24px));
   max-height: min(46vh, 340px);
   padding: 16px 18px 14px;
@@ -1083,6 +1114,8 @@ label span,
   min-height: 36px;
   padding-inline: 14px;
   font-size: 0.85rem;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--neon) 70%, #fff), var(--accent));
+  color: var(--on-accent);
 }
 
 .setupTourTipActions .chipBtn:disabled {
@@ -1200,6 +1233,30 @@ body.setup-mode-advanced .setupHeaderUtility {
   line-height: 1.4;
 }
 
+.setupFactGroup {
+  margin: 0 0 14px;
+  padding: 12px 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--line) 75%, var(--neon) 18%);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+}
+
+.setupFactGroupOptional {
+  background: transparent;
+}
+
+.setupFactGroupHead h2 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.setupFactGroupHead p {
+  margin: 0 0 10px;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
 /* Form left · character art right (desktop) */
 .setupSimpleLayout {
   display: grid;
@@ -1212,6 +1269,120 @@ body.setup-mode-advanced .setupHeaderUtility {
 .setupSimpleMain {
   min-width: 0;
   min-height: 0;
+  container-type: inline-size;
+  container-name: setupmain;
+}
+
+.setupPrimaryGrid {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+}
+
+/* Beside the art column the form is too narrow for three header rows.
+   Wide screens (the maximized window) keep Name, Origin, and World difficulty together. */
+@media (max-width: 1499px) {
+  .setupPrimaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .setupPrimaryGrid .settingFieldHeader {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .setupPrimaryGrid .settingFieldTitle {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .setupPrimaryGrid .settingControls {
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+}
+
+@container setupmain (max-width: 860px) {
+  .setupPrimaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .setupPrimaryGrid .settingFieldHeader {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+
+  .setupPrimaryGrid .settingFieldTitle {
+    flex: 1 1 8rem;
+    min-width: 0;
+  }
+
+  .setupPrimaryGrid .settingControls {
+    margin-left: auto;
+    flex: 0 0 auto;
+  }
+
+  .setupOptionalSections .setupGrid,
+  .setupOptionalSections .conditional {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container setupmain (min-width: 861px) {
+  .setupOptionalSections .setupGrid,
+  .setupOptionalSections .conditional {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1499px) {
+  .setupOptionalSections .setupGrid,
+  .setupOptionalSections .conditional {
+    grid-template-columns: 1fr;
+  }
+}
+
+.setupOptionalSections .setupGrid > .optionSet,
+.setupOptionalSections .setupGrid > .wide,
+.setupOptionalSections .conditional > .optionSet {
+  grid-column: 1 / -1;
+}
+
+.setupOptionalSections .settingFieldHeader {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 4px;
+}
+
+.setupOptionalSections .settingFieldTitle {
+  flex: 1 1 7rem;
+  min-width: 0;
+  white-space: normal;
+}
+
+.setupOptionalSections .setupSections {
+  margin-top: 8px;
+  overflow: visible;
+  flex: none;
+  min-height: 0;
+}
+
+body.setup-one-page .setupOptionalSections .setupSection,
+body.setup-one-page .setupSection.active {
+  display: block;
+}
+
+body.setup-one-page .setupAdvancedOnly {
+  display: none !important;
+}
+
+.setupOptionalSections .setupSection {
+  margin: 0 0 12px;
+  padding: 8px 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 10px;
+}
+
+.setupGrid > .setupSimpleGear {
+  grid-column: 1 / -1;
 }
 
 .setupSimpleArtCol {
@@ -1231,6 +1402,24 @@ body.setup-mode-advanced .setupHeaderUtility {
 .setupSimpleArtMount .characterArtCard {
   margin: 0;
   height: auto;
+}
+
+/* Collapsed art is a full-width row above the form. The side column is only for the open card. */
+.setupSimpleLayout:has(#characterPortraitCard.isCollapsed) {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.setupSimpleLayout:has(#characterPortraitCard.isCollapsed) .setupSimpleArtCol {
+  position: static;
+  top: auto;
+  max-height: none;
+  overflow: visible;
+  order: -1;
+}
+
+/* Primary tour step: a clear band so the tip sits beside the fields, not on them. */
+body.isTourBesidePrimary .setupSimpleLayout:has(#characterPortraitCard.isCollapsed) #setupPrimaryGroup {
+  margin-right: min(540px, 44vw);
 }
 
 /* Expanded art: stack frames vertically in the side column */
@@ -1269,6 +1458,32 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
   gap: 10px 12px;
   align-items: start;
   max-width: none;
+}
+
+/* Must follow .setupSimpleGrid — same element has both classes, and the later rule wins. */
+.setupSimpleGrid.setupPrimaryGrid {
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+}
+
+.setupPrimaryGrid .setupPrimaryFace {
+  grid-column: span 2;
+}
+
+@media (max-width: 1499px) {
+  .setupSimpleGrid.setupPrimaryGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* The two-class grid above beats a one-class container rule. Narrow forms stack. */
+@container setupmain (max-width: 860px) {
+  .setupSimpleGrid.setupPrimaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .setupPrimaryGrid .setupPrimaryFace {
+    grid-column: auto;
+  }
 }
 
 @media (max-width: 720px) {
@@ -1406,9 +1621,27 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
 
 .setupSimpleRulesGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
   gap: 0.65rem 0.85rem;
   margin-top: 0.45rem;
+}
+
+/* Title and Randomize were one nowrap row, so "Proficiencies" ran into Randomize. */
+.setupSimpleRulesGrid .settingFieldHeader {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 4px;
+}
+
+.setupSimpleRulesGrid .settingFieldTitle {
+  flex: 1 1 100%;
+  min-width: 0;
+  white-space: normal;
+}
+
+.setupSimpleRulesGrid .settingFieldHeader .settingControls {
+  flex: 1 1 100%;
+  justify-content: flex-start;
 }
 
 .setupSimpleRulesGrid > label.simpleSetupField {
@@ -1778,6 +2011,62 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
   font-size: 0.8rem;
 }
 
+/* Player quest log (0.9.13) */
+.playerQuestList {
+  margin-bottom: 1rem;
+}
+.questCard {
+  margin-bottom: 0.75rem;
+  border-left: 3px solid var(--neon, #6cf);
+  padding-left: 0.5rem;
+}
+.questCard header {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  align-items: baseline;
+  margin-bottom: 0.25rem;
+}
+.questCard .meta {
+  opacity: 0.75;
+  font-size: 0.8rem;
+}
+.questProgressBar {
+  height: 4px;
+  background: var(--line, rgba(255,255,255,0.12));
+  border-radius: 2px;
+  margin: 0.35rem 0;
+  overflow: hidden;
+}
+.questProgressFill {
+  height: 100%;
+  background: var(--neon, #6cf);
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+.questStepList {
+  list-style: none;
+  padding: 0;
+  margin: 0.35rem 0;
+  font-size: 0.85rem;
+}
+.questStepList li {
+  padding: 0.15rem 0;
+  opacity: 0.8;
+}
+.questStepDone {
+  text-decoration: line-through;
+  opacity: 0.5 !important;
+}
+.questStepActive {
+  font-weight: 600;
+  opacity: 1 !important;
+  color: var(--neon, #6cf);
+}
+.questStepPending {
+  opacity: 0.5 !important;
+}
+
 .socialChoiceBar {
   display: flex;
   flex-wrap: wrap;
@@ -2100,6 +2389,9 @@ body.image-mode-simple .imageAdvancedOnly,
   overflow: auto;
   padding-right: 4px;
 }
+.loraPickList .loraOfflistStash {
+  display: none !important;
+}
 .loraPickRow {
   display: grid;
   grid-template-columns: auto 40px minmax(0, 1fr) 58px;
@@ -2128,12 +2420,26 @@ body.image-mode-simple .imageSimpleOnly,
   gap: 8px;
 }
 
-.setupArtSimpleActions {
+.setupArtDisclosure {
   margin-top: 8px;
-  padding: 10px;
+  padding: 8px 10px 10px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--line) 80%, var(--neon) 15%);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+}
+
+.setupArtDisclosure > summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 0.9rem;
+  margin-bottom: 8px;
+}
+
+.setupArtSimpleActions {
+  margin-top: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
 }
 
 .artActionsRow {
@@ -2242,7 +2548,7 @@ body.image-mode-simple .imageSimpleOnly,
 
 .setupHeaderTop {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px 16px;
@@ -2271,15 +2577,19 @@ body.image-mode-simple .imageSimpleOnly,
 /* Right cluster: mode · theme · tools · settings · randomize · start */
 .setupHeaderPrimary {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
   margin: 0 0 0 auto;
   max-width: none;
   order: unset;
   min-width: 0;
+}
+
+.setupHeaderPrimary #setupModelButton {
+  white-space: nowrap;
 }
 
 /* Theme · Updates · Save · Load — same row, no stretch, no second-line float */
@@ -2439,6 +2749,26 @@ body.image-mode-simple .imageSimpleOnly,
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
+  gap: 6px;
+}
+
+.setupPresetRow {
+  width: 100%;
+  min-width: 0;
+  margin: 8px 0 0;
+}
+
+.setupHeader .setupPresetRow .setupSimpleVibe {
+  width: 100%;
+  max-width: none;
+}
+
+.setupPresetRow .setupSimpleVibeHead {
+  justify-content: flex-start;
+}
+
+.setupHeader .setupPresetRow p {
+  max-width: none;
 }
 
 .setupDirectorBar {
@@ -3122,9 +3452,14 @@ body.image-mode-simple .imageSimpleOnly,
   min-width: 0;
 }
 
-/* When steps sit in the header, the chip already names the step — keep the blurb only */
-.sectionHeader:has(.setupSteps.isInlineInSection) .sectionHeaderTitle {
+/* When the steps chip is actually shown in the header, it already names the step. */
+body:not(.setup-one-page):not(.setup-mode-simple) .sectionHeader:has(.setupSteps.isInlineInSection) .sectionHeaderTitle {
   display: none;
+}
+
+/* One page hides the steps chip, so the block name has to stay visible. */
+body.setup-one-page .sectionHeader:has(.setupSteps.isInlineInSection) .sectionHeaderTitle {
+  display: block;
 }
 
 .sectionHeaderText p {
@@ -3313,6 +3648,16 @@ fieldset.settingField > .settingControls {
 .settingFieldHeader .miniButton,
 .settingControls .miniButton {
   opacity: 0.55;
+}
+
+.settingFieldHeader [data-randomize-field].miniButton,
+.settingControls [data-randomize-field].miniButton {
+  color: var(--label);
+  opacity: 1;
+  min-height: 24px;
+  font-size: 13px;
+  line-height: 24px;
+  text-decoration: none;
 }
 
 .settingFieldHeader:hover .miniButton,
@@ -3766,7 +4111,27 @@ textarea:focus {
 
 .mainMenuActions {
   display: grid;
+  gap: 14px;
+}
+
+.mainMenuPrimaryGroup,
+.mainMenuQuiet {
+  display: grid;
   gap: 10px;
+}
+
+.mainMenuQuiet {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.mainMenuGroupLabel {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
 }
 
 .mainMenuPrimary,
@@ -3821,6 +4186,13 @@ a.mainMenuGhost {
 a.mainMenuGhost:hover {
   border-color: color-mix(in srgb, var(--neon) 45%, var(--line));
   color: var(--text);
+}
+
+.mainMenuPrimary:hover {
+  background: linear-gradient(135deg, color-mix(in srgb, var(--neon) 70%, #fff), var(--accent));
+  color: var(--on-accent);
+  border-color: transparent;
+  box-shadow: 0 0 22px var(--neon-dim);
 }
 
 .mainMenuFoot {
@@ -3981,12 +4353,14 @@ a.mainMenuGhost:hover {
 }
 
 .gameView.sceneFocus:not(.customLayout) .mapMainCanvas {
-  /* Scene focus: keep map readable but secondary */
-  max-width: min(100%, 360px) !important;
-  max-height: min(42vh, 360px) !important;
+  /* Same square as the stage. Auto width letterboxed the circle. */
+  width: 100% !important;
+  height: 100% !important;
+  aspect-ratio: auto;
+  max-width: none !important;
+  max-height: none !important;
   min-width: 0 !important;
-  width: auto !important;
-  height: auto !important;
+  min-height: 0 !important;
 }
 
 .gameView.sceneFocus:not(.customLayout) #chatIdleHint,
@@ -4020,9 +4394,10 @@ a.mainMenuGhost:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 42px;
+  gap: 8px;
+  width: auto;
   height: 36px;
-  padding: 0;
+  padding: 0 10px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, var(--neon) 40%, var(--line));
   background: color-mix(in srgb, var(--neon-dim) 28%, var(--surface));
@@ -4061,7 +4436,7 @@ a.mainMenuGhost:hover {
   right: 0;
   bottom: 0;
   z-index: 90;
-  width: min(320px, 92vw);
+  width: var(--play-menu-width);
   display: flex;
   flex-direction: column;
   background: color-mix(in srgb, var(--surface-solid, var(--surface)) 97%, #000);
@@ -4069,30 +4444,88 @@ a.mainMenuGhost:hover {
   box-shadow: -16px 0 48px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
+/* 92vw is the full-bleed drawer. A fixed-width drawer leaves a stage beside it. */
+@media (min-width: 348px) {
+  body.play-menu-open .playBody {
+    padding-right: var(--play-menu-width);
+  }
+}
 .playMenuDrawer.hidden {
   display: none !important;
 }
 .playMenuHeader {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
   padding: 14px 16px;
   border-bottom: 1px solid var(--line);
   flex: 0 0 auto;
 }
+
+#playMenuClose {
+  flex: none;
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 0.92rem;
+  line-height: 1.2;
+}
 .playMenuHeader h2 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 1.1rem;
   color: var(--neon);
 }
+.playMenuScroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+}
 .playMenuNav {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 10px 12px 24px;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  max-height: 100%;
+  /* Native bars overlay and vanish on this window. The lane beside the list
+     stays visible. The end spacer lets the last Optional row scroll fully into view. */
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  padding: 10px 8px 16px 12px;
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+.playMenuNav::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+.playMenuLane {
+  flex: 0 0 14px;
+  width: 14px;
+  margin: 12px 8px 12px 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 28%, var(--surface-solid));
+  position: relative;
+}
+.playMenuThumb {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  top: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--neon) 78%, white);
+  min-height: 36px;
+  touch-action: none;
+}
+.playMenuNav::after {
+  content: "";
+  flex: 0 0 64px;
+  height: 64px;
 }
 .playMenuGroupLabel {
   margin: 12px 4px 4px;
@@ -4100,10 +4533,12 @@ a.mainMenuGhost:hover {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--muted);
+  flex: 0 0 auto;
 }
 .playMenuItem {
   display: block;
   width: 100%;
+  flex: 0 0 auto;
   text-align: left;
   padding: 10px 12px;
   border-radius: 10px;
@@ -4117,6 +4552,48 @@ a.mainMenuGhost:hover {
   border-color: color-mix(in srgb, var(--neon) 35%, var(--line));
   background: color-mix(in srgb, var(--neon-dim) 22%, transparent);
   color: var(--neon);
+}
+.playMenuItem[aria-pressed="true"] {
+  border-color: color-mix(in srgb, var(--neon) 55%, var(--line));
+  background: color-mix(in srgb, var(--neon-dim) 32%, transparent);
+  color: var(--neon);
+  box-shadow: inset 3px 0 0 var(--neon);
+}
+.playMenuItem:disabled,
+#sceneFocusMapBtnHeader:disabled,
+#sceneFocusChatBtnHeader:disabled {
+  cursor: not-allowed;
+}
+.playMenuItem:disabled:hover {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text);
+  box-shadow: none;
+}
+/* Short window: two columns so Optional stays on screen. Labels keep 0.92rem. */
+body.play-menu-split .playMenuNav {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-content: start;
+  column-gap: 8px;
+}
+body.play-menu-split .playMenuGroupLabel {
+  grid-column: 1 / -1;
+}
+body.play-menu-split .playMenuNav::after {
+  content: none;
+}
+.playMenuDrawer button:focus-visible {
+  outline: 2px solid var(--neon-2);
+  outline-offset: 2px;
+}
+/* Focus tooltip stays. These rows are buttons, not help links. */
+.playMenuDrawer .helpText,
+.playMenuDrawer .helpText:hover,
+.playMenuDrawer .helpText:focus,
+.playMenuDrawer .helpTextActive {
+  text-decoration: none;
+  cursor: pointer;
 }
 
 .playPanelOffstage {
@@ -4165,25 +4642,27 @@ a.mainMenuGhost:hover {
   flex: 0 0 auto;
 }
 
-/* —— Present: horizontal strip above map —— */
+/* Present strip sits with the place line, under the dock. */
 .presentStrip {
   flex: 0 0 auto;
+  min-height: min-content;
+  flex-shrink: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--neon-2) 22%, var(--line));
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, #000), color-mix(in srgb, var(--surface) 70%, #0a0d12));
-  min-height: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 .presentStripInner,
 .npcStageHorizontal {
   display: flex;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 8px 12px;
-  min-height: 72px;
-  max-height: 96px;
-  overflow: hidden;
+  min-height: min-content;
+  max-height: none;
+  overflow: visible;
 }
 .presentStripHead {
   display: flex;
@@ -4217,14 +4696,16 @@ a.mainMenuGhost:hover {
   height: 100%;
   object-fit: cover;
 }
-.npcPortraitFrameCompact .npcPortraitPlaceholder {
-  font-size: 0.62rem;
+.npcPortraitFrameCompact .npcPortraitPlaceholder,
+.presentStrip .portraitEmptyLabel {
+  font-size: 0.95rem;
+  line-height: 1.2;
   padding: 4px;
   text-align: center;
   display: grid;
   place-items: center;
   height: 100%;
-  color: var(--muted);
+  color: var(--text);
 }
 .presentStripMeta {
   flex: 1 1 auto;
@@ -4252,16 +4733,51 @@ a.mainMenuGhost:hover {
 .presentStripActions {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  flex: 0 0 auto;
+  align-items: flex-start;
+  gap: 12px 16px;
+  flex: 1 1 16rem;
+}
+.presentActionPrimary,
+.presentActionOptional {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  min-width: 0;
+}
+.presentActionOptional {
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.presentOptionalLabel {
+  margin: 0;
+  font: inherit;
+  font-weight: 700;
+}
+#npcTalkBtn,
+#npcPortraitBtn,
+#npcRosterBtn {
+  min-height: 34px;
+  padding: 0 13px;
+  font-size: inherit;
+  line-height: normal;
+}
+.presentActionNote {
+  margin: 0;
+  padding: 0 12px 8px;
+  color: var(--text);
+  font-size: inherit;
+  line-height: 1.35;
+  font-weight: 500;
 }
 
 /* —— Map location / world status strip —— */
 .mapStatusStrip {
   flex: 0 0 auto;
   display: grid;
-  gap: 4px;
-  padding: 10px 14px 12px;
+  gap: 2px;
+  padding: 6px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--neon) 28%, var(--line));
   background:
     linear-gradient(135deg, color-mix(in srgb, var(--neon-dim) 35%, #0c1018), #0a0d12 70%);
@@ -4373,10 +4889,10 @@ a.mainMenuGhost:hover {
   opacity: 0.9;
 }
 
-/* Side sheet — full stage overlay from the right (hamburger tabs) */
+/* Side sheet covers the whole play stage. A left inset left Scene and Send showing. */
 .characterSheetDrawer {
   position: absolute;
-  inset: 0 0 0 min(12%, 80px);
+  inset: 0;
   z-index: 40;
   display: flex;
   flex-direction: column;
@@ -4422,6 +4938,32 @@ a.mainMenuGhost:hover {
   color: var(--neon);
 }
 
+/* Header tabs and the art row were inheriting chip/compact hit-size overrides.
+   Restore the base button min-height here only. Link and Remove match that size. */
+.characterSheetHeader .characterSheetActions button,
+.characterSheetDrawer .playerPortraitCard .artKindActions button,
+.characterSheetDrawer .sheetInnerNav .sheetInnerTab,
+.characterSheetDrawer .playerArtClear .artClearBtn,
+.characterSheetDrawer .playerAliasRow .miniActions button {
+  min-height: 34px !important;
+  padding: 0 13px !important;
+  font-size: inherit !important;
+  line-height: normal !important;
+}
+
+.characterSheetDrawer .invLinkBtn {
+  min-height: 34px !important;
+  padding: 0 13px !important;
+  font-size: 1rem !important;
+  line-height: normal !important;
+}
+
+.sheetSceneNote {
+  margin: 0;
+  padding: 8px 14px 0;
+  color: var(--text);
+}
+
 .characterSheetBody {
   flex: 1 1 auto;
   min-height: 0;
@@ -4436,7 +4978,8 @@ a.mainMenuGhost:hover {
   grid-template-columns: 1fr;
 }
 
-@media (min-width: 900px) {
+/* One column unless the window can show You and Inventory without clipping notes or lower slots. */
+@media (min-width: 1400px) and (min-height: 860px) {
   .characterSheetCombined {
     grid-template-columns: 1fr 1fr;
     align-items: start;
@@ -4468,7 +5011,7 @@ a.mainMenuGhost:hover {
     inset: 0;
   }
   .presentStripInner {
-    max-height: 88px;
+    max-height: none;
     padding: 6px 8px;
     gap: 8px;
   }
@@ -4522,6 +5065,19 @@ a.mainMenuGhost:hover {
   max-width: 100%;
   position: relative;
   overflow: hidden;
+}
+
+/* The map column fills the row. The square yields; the list under it scrolls.
+   A plain .playPanel would clip both. */
+.playRow > .mapMain {
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+}
+
+/* Default column matches the circle. Custom resize can make the column wider. */
+.gameView:not(.customLayout) .playRow > .mapMain {
+  max-width: min(100%, max(12.5rem, 40vh));
 }
 
 /* Column-local stack: map above narrator only occupies that column */
@@ -4826,6 +5382,9 @@ button.chipBtn.activeChip {
 .chatOutputBlock .singleBox {
   height: 100%;
   max-height: none;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .chatComposer textarea {
@@ -4833,10 +5392,98 @@ button.chipBtn.activeChip {
   font-size: 0.9rem;
 }
 
-.mapMain {
+.composerField {
+  position: relative;
+}
+
+.turnInputLabel {
+  display: block;
+  margin: 0 0 6px;
+  color: var(--text);
+  font-weight: 650;
+}
+
+.mentionMenu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 30;
   display: grid;
-  /* present strip · status · header · canvas · footer · settlements */
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto auto;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel, #12161c) 94%, black);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.35);
+}
+
+.mentionMenu.hidden {
+  display: none;
+}
+
+.mentionMenu input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+#mentionList button {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+#mentionList button[aria-selected="true"],
+#mentionList button:hover {
+  background: color-mix(in srgb, var(--neon, #7dffa6) 16%, transparent);
+}
+
+.mentionChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.mentionChips:empty {
+  display: none;
+}
+
+.askNote {
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 0.92rem;
+}
+
+.askQuestion {
+  opacity: 0.7;
+  margin-bottom: 4px;
+}
+
+.mentionChip {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.entityLink[draggable="true"] {
+  cursor: grab;
+}
+
+.mapMain {
+  display: flex;
+  flex-direction: column;
+  /* Header and pad stay. The square shrinks. The list under them scrolls. */
+  height: 100%;
   min-height: 0;
   min-width: 0;
   background:
@@ -4844,10 +5491,32 @@ button.chipBtn.activeChip {
     #0a0d12;
   border-right: 1px solid color-mix(in srgb, var(--neon-edge) 25%, var(--line));
   overflow: hidden;
+  padding-bottom: 0;
 }
+
+.mapMain > .mapMainHeader,
+.mapMain > .mapMainFooter {
+  flex: 0 0 auto;
+}
+
+/* 40vh is a cap, not a floor, so a short window can give the list room. */
+.mapSquareSlot {
+  flex: 0 1 40vh;
+  min-height: 0;
+  max-height: 40vh;
+  width: 100%;
+  min-width: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  container-type: size;
+}
+
+/* Source order is the screen order. Do not flex-order these children. */
 
 .mapMainHeader {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
@@ -4875,46 +5544,57 @@ button.chipBtn.activeChip {
 }
 
 .mapMainStage {
+  /* Largest square that fits the slot, which itself can be under 40vh. */
   position: relative;
+  width: min(100cqw, 100cqh);
+  height: min(100cqw, 100cqh);
+  aspect-ratio: 1;
   min-height: 0;
-  flex: 1 1 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 100%;
+  margin-inline: auto;
+  padding: 0;
+  display: grid;
+  place-items: stretch;
   overflow: hidden;
-  background:
-    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--neon-dim) 18%, transparent), transparent 62%),
-    #070a10;
+  background: transparent;
+}
+
+@media (max-height: 900px) {
+  .mapMainFooter { padding: 2px 8px 4px; gap: 2px; }
+  .mapStatusStrip { padding: 4px 10px; }
+  #playSideDock.playSideDock { gap: 4px; padding: 4px 8px 4px; }
+  .mapSquareSlot {
+    flex-basis: min(40vh, 22vh);
+    max-height: min(40vh, 22vh);
+  }
 }
 
 .mapMainCanvas {
-  /* Full circular map — larger stage footprint, follows player */
-  width: auto !important;
-  height: auto !important;
-  max-width: min(100%, 720px) !important;
-  max-height: min(100%, 720px) !important;
-  min-width: min(100%, 360px);
-  min-height: min(100%, 360px);
+  width: 100% !important;
+  height: 100% !important;
+  max-width: none !important;
+  max-height: none !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--neon) 45%, var(--line));
   box-shadow:
     0 0 0 1px rgba(0, 0, 0, 0.55),
-    0 0 28px var(--neon-dim),
-    inset 0 0 40px rgba(0, 0, 0, 0.35);
+    0 0 18px var(--neon-dim);
   image-rendering: pixelated;
   background: #080b10;
-  flex: 0 0 auto;
-  aspect-ratio: 1;
-  object-fit: contain;
+  aspect-ratio: auto;
+  object-fit: fill;
+  display: block;
 }
 
 .mapMainFooter {
-  padding: 8px 10px;
+  padding: 4px 10px 6px;
   border-top: 1px solid var(--line);
   display: grid;
-  gap: 8px;
-  min-height: 0;
+  gap: 4px;
 }
 
 .mapMoveRow {
@@ -4927,9 +5607,9 @@ button.chipBtn.activeChip {
 
 .mapDpad {
   display: grid;
-  grid-template-columns: repeat(3, 34px);
-  grid-template-rows: repeat(3, 30px);
-  gap: 3px;
+  grid-template-columns: repeat(3, minmax(34px, max-content));
+  grid-template-rows: repeat(3, minmax(34px, max-content));
+  gap: 6px;
   flex: 0 0 auto;
   user-select: none;
 }
@@ -4943,14 +5623,17 @@ button.chipBtn.activeChip {
 .mapDpadBtn {
   display: grid;
   place-items: center;
+  box-sizing: border-box;
   margin: 0;
-  padding: 0;
+  padding: 4px 8px;
+  min-width: 34px;
+  min-height: 34px;
+  white-space: nowrap;
   border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--neon) 40%, var(--line));
   background: color-mix(in srgb, var(--surface-3) 80%, #000);
   color: var(--neon);
-  font-size: 0.75rem;
-  line-height: 1;
+  line-height: 1.2;
   cursor: pointer;
   box-shadow: 0 0 8px color-mix(in srgb, var(--neon-dim) 40%, transparent);
 }
@@ -4990,9 +5673,15 @@ button.chipBtn.activeChip {
 }
 
 .mapSettlementStrip {
-  padding: 0 10px 10px;
-  max-height: 140px;
-  overflow: auto;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  padding: 8px 10px 10px;
+  min-height: min-content;
+  max-height: none;
+  overflow: visible;
+  flex-shrink: 0;
+  border-top: 1px solid color-mix(in srgb, var(--neon-edge) 30%, var(--line));
 }
 
 .settlementListHorizontal {
@@ -5019,6 +5708,21 @@ button.chipBtn.activeChip {
 
 .presentPanel {
   grid-template-rows: minmax(0, 1fr);
+}
+
+/* Inside the map column this is a strip, not a stretched side panel.
+   A single 1fr row collapses the people and leaves only the note. */
+.mapMain > .presentStrip.presentPanel {
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+  height: auto;
+  min-height: min-content;
+}
+
+.mapMain > .presentStrip .npcStage {
+  height: auto;
+  overflow: visible;
 }
 
 .tabsPanel {
@@ -5355,6 +6059,7 @@ button.chipBtn {
 
 .floatPanelHeader {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
@@ -5380,8 +6085,10 @@ button.chipBtn {
 
 .floatPanelActions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   flex-shrink: 0;
+  justify-content: flex-end;
 }
 
 .floatPanelBody {
@@ -5402,8 +6109,8 @@ button.chipBtn {
   min-width: 0;
   min-height: 0;
   height: auto !important;
-  max-height: 42px;
-  max-width: min(280px, 70vw);
+  max-height: 84px;
+  max-width: min(480px, 92vw);
   grid-template-rows: auto;
   border-radius: 999px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
@@ -5695,6 +6402,94 @@ button.chipBtn {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+/* Present on the play map is one row. .npcStage above is a tall vertical
+   grid, and .npcPortraitFrame's 120px min-height was clipping the name
+   and the portrait actions out of the strip. */
+.presentStrip .npcStage.npcStageHorizontal {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  grid-template-rows: none;
+  gap: 12px;
+  min-height: min-content;
+  max-height: none;
+  padding: 8px 12px;
+  overflow: visible;
+}
+
+.presentStrip .npcPortraitFrame {
+  width: 56px;
+  height: 56px;
+  min-height: 0;
+  flex: 0 0 56px;
+  cursor: zoom-in;
+}
+
+.presentStrip .npcPortraitFrame:not(.hasArt):not(.isExpanded) {
+  width: auto;
+  height: auto;
+  min-width: 7.5rem;
+  max-width: 16rem;
+  min-height: 56px;
+  flex: 0 1 auto;
+  overflow: visible;
+  padding: 6px 8px;
+}
+
+.presentStrip .npcPortraitFrame:not(.hasArt) .npcPortraitPlaceholder,
+.presentStrip .npcPortraitFrame:not(.hasArt) .portraitEmptyLabel {
+  height: auto;
+  display: block;
+  white-space: normal;
+}
+
+#npcPortraitFrame:focus-visible {
+  outline: 2px solid var(--neon-2);
+  outline-offset: 2px;
+}
+
+.presentStrip .npcPortraitFrame.isExpanded {
+  width: 160px;
+  height: 140px;
+  flex-basis: 160px;
+}
+
+.presentStrip .npcPortraitFrame.isExpanded.hasArt {
+  height: auto;
+  min-height: 140px;
+}
+
+.presentStrip .npcPortraitFrame.hasArt {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  width: auto;
+  height: auto;
+  min-width: 56px;
+  overflow: visible;
+  gap: 4px;
+}
+
+.presentStrip .npcPortraitFrame.hasArt img {
+  width: 56px;
+  height: 56px;
+  flex: 0 0 auto;
+}
+
+.presentStrip .npcPortraitFrame.isExpanded.hasArt img {
+  width: 160px;
+  height: 140px;
+}
+
+.presentStrip:has(.npcPortraitFrame.isExpanded),
+.presentStrip:has(.npcPortraitFrame.isExpanded) .presentStripInner,
+.presentStrip:has(.npcPortraitFrame.isExpanded) .npcStage.npcStageHorizontal {
+  max-height: none;
+  overflow: visible;
 }
 
 .scenePanel {
@@ -6718,6 +7513,14 @@ button.saveEditorApplyBtn:disabled {
   cursor: pointer;
 }
 
+button.npcRosterCard {
+  width: 100%;
+  margin: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
 .npcRosterCard:hover {
   border-color: color-mix(in srgb, var(--neon) 40%, var(--line));
   box-shadow: 0 0 14px var(--neon-dim);
@@ -6764,8 +7567,10 @@ button.saveEditorApplyBtn:disabled {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 0 auto;
   font-size: 0.75rem;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 .mapTilePx select {
@@ -6902,6 +7707,32 @@ button.saveEditorApplyBtn:disabled {
   flex: 0 0 auto;
 }
 
+.playerArtFigure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.playerArtActions {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  width: 100%;
+}
+
+.artOptionalLabel {
+  color: var(--muted);
+  font-size: inherit;
+}
+
+.artKindOptional {
+  width: 100%;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+}
+
 .playerFaceChip {
   width: 88px;
   height: 88px;
@@ -6920,6 +7751,47 @@ button.saveEditorApplyBtn:disabled {
   object-position: center top;
   display: block;
   border-radius: 50%;
+}
+
+/* Empty face is a readable frame. The circle clip stays only once a picture is in it. */
+.playerFaceChip:not(.hasArt) {
+  width: 120px;
+  height: auto;
+  min-height: 96px;
+  border-radius: 12px;
+  overflow: visible;
+  display: grid;
+  place-items: center;
+}
+
+.playerArtOptionalNote,
+.inventoryLinkHint,
+.aliasOptionalNote {
+  margin: 0;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.playerArtOptionalNote,
+.inventoryLinkHint {
+  margin-bottom: 8px;
+}
+
+.playerFaceChip .npcPortraitPlaceholder,
+.playerFullbodyFrame .npcPortraitPlaceholder {
+  font-size: 1rem;
+  line-height: 1.35;
+  padding: 8px;
+}
+
+.playerFullbodyFrame .npcPortraitPlaceholder {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  display: grid;
+  place-items: center;
 }
 
 .playerFullbodyFrame {
@@ -7363,6 +8235,15 @@ button.saveEditorApplyBtn:disabled {
   min-width: 0;
 }
 
+.playerArtActions > .artKindActions:not(.artKindOptional) {
+  flex-wrap: nowrap;
+}
+
+.playerArtActions .artGenSelect {
+  width: auto;
+  flex: 0 1 220px;
+}
+
 .artGenSelect {
   min-width: 150px;
   max-width: 220px;
@@ -7505,6 +8386,38 @@ button.saveEditorApplyBtn:disabled {
 .playerFullbodyFrame.hasArt .artClearBtn,
 #npcPortraitFrame.hasArt .artClearBtn {
   display: inline-flex;
+}
+
+.artClearBtn.artClearBtnWord {
+  width: auto;
+  height: auto;
+  min-height: 24px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.playerArtClear .artClearBtn.artClearBtnWord {
+  position: static;
+  display: inline-flex;
+  width: auto;
+  height: auto;
+  min-height: 34px;
+  padding: 0 13px;
+  font-size: inherit;
+  line-height: normal;
+  border-radius: var(--radius-pill);
+}
+
+#npcPortraitFrame .artClearBtn.artClearBtnWord {
+  position: static;
+  width: auto;
+  height: auto;
+  min-height: 34px;
+  padding: 0 10px;
+  font-size: inherit;
+  line-height: normal;
+  border-radius: 8px;
 }
 
 .artClearBtn:hover {
@@ -7958,7 +8871,7 @@ button.saveEditorApplyBtn:disabled {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   gap: 12px;
-  align-items: center;
+  align-items: start;
   margin-bottom: 12px;
   padding: 10px;
   border-radius: var(--radius-md);
@@ -8071,6 +8984,12 @@ button.saveEditorApplyBtn:disabled {
 .mutedBox {
   color: var(--accent-2);
   background: var(--surface-3);
+}
+
+#latestInput:focus-visible,
+#latestOutput:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
 }
 
 .singleBox p {
@@ -8457,7 +9376,292 @@ button.compactButton {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.composerActionsMain {
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.composerOptional {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.composerGroupLabel {
+  margin: 0;
+  flex: 0 0 auto;
+  font-size: 0.85em;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.composerOptional .askButton,
+.composerOptional .helpButton {
+  flex: 0 1 auto;
+  width: auto;
+  margin-left: 0;
+}
+
+.composerAskHint {
+  flex: 1 0 100%;
+  margin: 0;
+  color: var(--text);
+}
+
+.askNoteKind {
+  margin: 0 0 4px;
+  font-weight: 650;
+}
+
+.helpPanel {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: calc(100% + 8px);
+  z-index: 25;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--neon-2) 35%, var(--line));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel, #12161c) 96%, black);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  /* Sit over the scene, not in the flow, so a short window cannot clip the list. */
+  max-height: min(52vh, 440px);
+  overflow: auto;
+}
+
+.helpPanel.hidden { display: none; }
+
+.helpPanelHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.helpPanel h3 {
+  margin: 10px 0 4px;
+  font-size: 0.78rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--neon-2);
+}
+
+.helpKeys {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.helpKeys li {
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 0.82rem;
+}
+
+.helpAskBlock {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--neon-2);
+  background: color-mix(in srgb, var(--neon-2) 10%, transparent);
+}
+
+.helpCommands { margin: 6px 0 0; }
+.helpCommands div { margin: 0 0 6px; }
+.helpCommands dt { font-weight: 700; }
+.helpCommands dd { margin: 0; color: var(--muted); }
+
+.chatInputBlock .singleBox {
+  max-height: 4.6rem;
+  overflow: auto;
+}
+
+#playSideDock.playSideDock {
+  flex: none;
+  min-height: 0;
+  max-height: none;
+  overflow: visible;
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 8px 10px 12px;
+  border-top: 1px solid color-mix(in srgb, var(--neon-edge) 30%, var(--line));
+}
+
+/* Everything under the map, including Who is here, Pack, and Present. */
+.mapColumnList {
+  flex: 1 1 0;
+  min-height: 0;
+  height: 0;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--text) 70%, var(--line)) color-mix(in srgb, #10141a 88%, var(--line));
+}
+
+.dockLabel {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.dockYou {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.dockHint {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: inherit;
+  line-height: 1.35;
+  font-weight: 500;
+}
+
+.portraitSlot {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.portraitSlot > .portraitSizeBtn {
+  min-height: 34px;
+  padding: 0 13px;
+  font-size: inherit;
+  line-height: normal;
+}
+
+.youFrame {
+  display: grid;
+  place-items: center;
+  width: 72px;
+  height: 72px;
+  padding: 0;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: #0c1016;
+  color: var(--muted);
+  cursor: zoom-in;
+}
+
+.youFrame.isExpanded {
+  width: min(100%, 280px);
+  height: 220px;
+}
+
+.youFrame:focus-visible {
+  outline: 2px solid var(--neon-2);
+  outline-offset: 2px;
+}
+
+.youFrame:not(.isExpanded):not(:has(img:not([hidden]))) {
+  width: auto;
+  max-width: min(100%, 16rem);
+  height: auto;
+  min-width: 7.5rem;
+  min-height: 56px;
+  overflow: visible;
+  padding: 6px 8px;
+}
+
+#youPortraitMark {
+  display: block;
+  text-align: center;
+  line-height: 1.3;
+  color: var(--text);
+}
+
+.youFrame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.sceneCastList, .miniInventory {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.miniInventory {
+  flex-wrap: wrap;
+  overflow: visible;
+}
+
+.miniItem {
+  flex: 0 0 auto;
+}
+
+.castCard, .miniItem {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  cursor: default;
+}
+
+.castCardName,
+.miniItemName {
+  font-size: inherit;
+  line-height: 1.3;
+}
+
+.castDetailsBtn,
+.castLinkBtn,
+.miniDetailsBtn,
+.miniLinkBtn,
+button.miniItemMore {
+  min-height: 32px;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.castCard.isTalking {
+  border-color: color-mix(in srgb, var(--neon-2) 65%, var(--line));
+}
+
+.castMark {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 0.72rem;
+  background: color-mix(in srgb, var(--neon) 20%, #10141b);
 }
 
 .composerActions > button {
@@ -8695,11 +9899,32 @@ button.compactButton {
 .historyTurn summary {
   cursor: pointer;
   list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.65em;
   padding: 10px;
 }
 
 .historyTurn summary::-webkit-details-marker {
   display: none;
+}
+
+.historyTurn summary::marker {
+  content: none;
+}
+
+.historyTurn summary::before {
+  content: "Open";
+}
+
+.historyTurn[open] summary::before {
+  content: "Close";
+}
+
+.historyTurn summary strong {
+  display: inline;
+  margin-bottom: 0;
 }
 
 .historyTurn summary span {
@@ -8708,7 +9933,26 @@ button.compactButton {
 }
 
 .historyTurn summary p {
+  flex-basis: 100%;
+  min-width: 0;
+  max-width: 100%;
   margin-top: 4px;
+}
+
+.historyTurn summary p .historySnippetText {
+  white-space: normal;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+/* Closed turn only: three wrapping lines. The opened entry stays the full text. */
+.historyTurn:not([open]) > summary p .historySnippetText {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
+  width: 100%;
 }
 
 .historyEntries {
@@ -8721,6 +9965,35 @@ button.compactButton {
 .historyEntry {
   border-left: 2px solid rgba(145, 184, 216, 0.38);
   padding-left: 9px;
+}
+
+.historyItem {
+  min-width: 0;
+}
+
+.historyEntry,
+.historyItem p {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.historySubtitle {
+  margin: 0;
+}
+
+.historyEntry .miniActions {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.historyEntry .miniActions button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: start;
+  height: auto;
+  max-width: 100%;
+  padding: 6px 8px;
+  line-height: 1.35;
 }
 
 .historyPager {
@@ -8754,6 +10027,14 @@ button.compactButton {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.45;
+}
+
+.identityCard .identityNotes {
+  margin-top: 8px;
+}
+
+.identityCard .identityNotes strong {
+  color: var(--text);
 }
 
 .tabs {
@@ -8828,6 +10109,54 @@ button.compactButton {
   color: var(--text);
 }
 
+.playerAliasHelp {
+  margin: 0;
+}
+
+.equipmentSlotEmpty {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--text);
+  font-size: 1rem;
+  line-height: 1.4;
+}
+
+.equipmentSlotEmpty .equipmentSlotState {
+  flex: 0 0 auto;
+  color: var(--muted);
+}
+
+.slotWornItem .invRowQty {
+  display: inline;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.slotWornItem .invRowQty.isStack {
+  color: #ecd49e;
+  font-weight: 650;
+}
+
+.playerAliasRow .miniActions {
+  flex-wrap: wrap;
+}
+
+.playerAliasRow .miniActions button {
+  min-height: 34px;
+  padding: 0 13px;
+  font-size: inherit;
+}
+
 .playerAliasForm,
 .playerAliasStateForm {
   display: grid;
@@ -8836,6 +10165,16 @@ button.compactButton {
 
 .playerAliasForm {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.playerAliasForm label {
+  min-width: 0;
+}
+
+.playerAliasForm [data-alias-status] {
+  grid-column: 1 / -1;
+  margin: 0;
 }
 
 .playerAliasList {
@@ -9004,8 +10343,7 @@ button.compactButton {
   min-width: 0;
 }
 
-/* Name + quantity rows. Wider minimum than the old cards because a name now
-   has to fit on one line -- the rest moved into .itemHoverOverlay. */
+/* Name + quantity rows. The name wraps; the quantity stays on the row. */
 .inventoryItemGrid {
   display: grid;
   gap: 4px;
@@ -9013,9 +10351,48 @@ button.compactButton {
   min-width: 0;
 }
 
+.invRowLine {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 0;
+}
+
+.invRowLine > .invRow {
+  flex: 1 1 auto;
+}
+
+.invLinkBtn {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-height: 34px;
+  padding: 0 13px;
+  font-size: 1rem;
+  line-height: normal;
+}
+
+.slotWornLine {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.slotWornItem {
+  gap: 6px;
+  align-items: center;
+  max-width: 100%;
+}
+
 .invRow {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
   width: 100%;
@@ -9045,15 +10422,16 @@ button.compactButton {
 .invRowName {
   flex: 1 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow: visible;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 /* The number the player is actually scanning for: fixed column, tabular
    figures so the digits line up down the list. */
 .invRowQty {
   flex: 0 0 auto;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -9346,6 +10724,23 @@ button.compactButton {
   cursor: grab;
 }
 
+.npcRelBadge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 2px;
+  font-size: 0.8em;
+}
+
+.relBand {
+  font-weight: 600;
+}
+
+.relStat {
+  color: var(--muted, #888);
+  font-size: 0.9em;
+}
+
 .miniActions {
   display: flex;
   gap: 8px;
@@ -9394,6 +10789,11 @@ button.compactButton {
   line-height: 1.5;
 }
 
+#entityBody:focus {
+  outline: 2px solid var(--neon-2);
+  outline-offset: 2px;
+}
+
 .entityBody strong {
   color: var(--text);
 }
@@ -9407,8 +10807,15 @@ button.compactButton {
 
 .aliasForm {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 8px;
+  align-items: center;
+}
+
+.aliasForm label {
+  font: inherit;
+  font-weight: 600;
+  color: var(--text);
 }
 
 .searchForm {
@@ -10012,14 +11419,16 @@ button.compactButton {
     grid-column: unset;
   }
 
-  /* Start lives in bottom bar on phones */
+  /* One page: Start stays in the header. The old bottom step bar is not the form. */
   .setupStartDesktop,
   .setupHeaderPrimary #setupStart {
-    display: none !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
   }
 
   .setupStartMobile {
-    display: inline-flex !important;
+    display: none !important;
     align-items: center;
     justify-content: center;
     min-height: 44px;
@@ -10272,8 +11681,7 @@ button.compactButton {
     display: grid;
   }
 
-  /* .invRow stays a flex row on narrow screens: name and quantity on one line
-     is the whole point, and it already ellipsises. */
+  /* .invRow stays a flex row on narrow screens: the name wraps, quantity stays. */
 
   .statGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -10835,7 +12243,7 @@ body.compact-mode .indexContent {
   opacity: 0.75;
 }
 
-.playMapCanvas {
+.playMapPane .playMapCanvas {
   max-height: 160px;
   border-radius: 6px;
 }
@@ -11072,6 +12480,122 @@ body.compact-mode .indexContent {
   place-items: center;
   color: var(--muted-2);
   font-size: 10px;
+}
+
+/* ── Titles system ─────────────────────────────────────────────────────────── */
+
+.playerTitlesRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 4px;
+}
+
+.playerTitlesLabel {
+  font-size: 0.75em;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted, #888);
+  flex-shrink: 0;
+}
+
+.titleChip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.72em;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--neon-2, #3af) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--neon-2, #3af) 40%, transparent);
+  color: var(--neon-2, #3af);
+  cursor: default;
+  white-space: nowrap;
+  transition: background 0.15s;
+}
+
+.titleChip:hover {
+  background: color-mix(in srgb, var(--neon-2, #3af) 22%, transparent);
+}
+
+/* ── Party system ──────────────────────────────────────────────────────────── */
+
+.partyMemberCard {
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.partyMemberCard strong {
+  display: block;
+  font-size: 0.95em;
+  margin-bottom: 2px;
+}
+
+.partyMemberCard .meta {
+  font-size: 0.78em;
+  color: var(--muted, #888);
+  margin-bottom: 6px;
+}
+
+.partyMoraleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.partyMoraleLabel {
+  font-size: 0.75em;
+  font-weight: 600;
+  min-width: 46px;
+}
+
+.partyMoraleBar {
+  flex: 1;
+  height: 6px;
+  background: var(--card-bg-2, #1a1d22);
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--line, #2a2d33);
+}
+
+.partyMoraleBar span {
+  display: block;
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.partyMoraleNum {
+  font-size: 0.72em;
+  color: var(--muted, #888);
+  min-width: 22px;
+  text-align: right;
+}
+
+/* NPC card party controls */
+.npcPartyRow {
+  margin-top: 4px;
+}
+
+.npcInviteButton {
+  font-size: 0.75em;
+  padding: 2px 10px;
+  border-radius: 10px;
+}
+
+.npcInPartyBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 0.72em;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--neon-1, #0f8) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--neon-1, #0f8) 35%, transparent);
+  color: var(--neon-1, #0f8);
 }
 
 @media (max-width: 900px) {

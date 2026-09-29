@@ -140,12 +140,16 @@ def venue_kind_from_name(name: str) -> str:
 
 
 def normalize_settlement_size(value: str) -> str:
-    text = str(value or "").strip().lower()
+    text = re.sub(r"[^a-z ]+", " ", str(value or "").strip().lower())
+    text = re.sub(r"\s+", " ", text).strip()
     if text in SETTLEMENT_ORDER:
         return text
+    # Word tokens only. Substring "port" in "portal" / "opportunity" classified
+    # a portal camp as a town and then allowed apothecaries a hamlet cannot have.
     for size, words in _SETTLEMENT_WORDS.items():
-        if any(word in text for word in words):
-            return size
+        for word in words:
+            if re.search(rf"(?:^|\s){re.escape(word)}(?:\s|$)", text):
+                return size
     return ""
 
 

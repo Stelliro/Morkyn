@@ -37,10 +37,10 @@ Aliases accepted for provider: `openai`, `xai`, `grok`, `spacexai`, `api`, `open
 | LiteLLM / custom proxy | `http://127.0.0.1:4000/v1` | `AI_RPG_API_KEY` |
 | Local agent gateway | your `/v1` URL | optional |
 
-Mørkyn calls:
+Mørkyn calls chat completions on the `/v1` root. The xAI preset base is already `https://api.x.ai/v1`, so the request is `POST https://api.x.ai/v1/chat/completions`. A base that does not end in `/v1` gets exactly one `/v1` inserted. Appending `/v1` again 404s.
 
 ```http
-POST {api_base_url}/v1/chat/completions
+POST https://api.x.ai/v1/chat/completions
 Authorization: Bearer {api_key}
 ```
 

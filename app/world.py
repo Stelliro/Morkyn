@@ -660,6 +660,17 @@ def clamp(value: int, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
+def _gear_scores(bonuses: Any) -> dict[str, int]:
+    """Equipment attribute bonuses as 1..30 scores centered on 10.
+
+    ``effective_stats`` stays the bonus map for combat. Score-centered
+    callers pass this instead of reading a +2 as a score of 2.
+    """
+    from app.skill_checks import scores_from_gear_bonuses
+
+    return scores_from_gear_bonuses(bonuses if isinstance(bonuses, dict) else None)
+
+
 def _scaled_delta(delta: int, speed: str, multiplier: float | None = None) -> int:
     if delta == 0:
         return 0
@@ -1501,6 +1512,26 @@ def _time_of_day_crowd_mods(
     }
 
 
+# Place-name cues for wait crowd/danger. Matched as whole tokens after
+# punctuation is stripped — never as substrings (see _local_crowd_danger).
+_WILD_PLACE_WORDS = frozenset({
+    "dungeon", "ruin", "ruins", "ruined", "wild", "wilderness",
+    "waste", "wastes", "wasteland", "ash", "ashen",
+})
+_SETTLEMENT_PLACE_WORDS = frozenset({
+    "market", "marketplace", "gate", "gates", "ward", "wards",
+    "harbor", "harbour", "pier", "piers", "town", "city",
+})
+_MARKET_PLACE_WORDS = frozenset({
+    "market", "marketplace", "bazaar", "forum", "plaza", "square",
+})
+
+
+def _location_name_tokens(name: Any) -> set[str]:
+    text = re.sub(r"[^a-z]+", " ", str(name or "").lower())
+    return {tok for tok in text.split() if tok}
+
+
 def _local_crowd_danger(context: dict[str, Any] | None = None) -> dict[str, float]:
     """0–1 crowd and danger from setup + local NPCs + map tile + time-of-day."""
     context = context or {}
@@ -1560,12 +1591,15 @@ def _local_crowd_danger(context: dict[str, Any] | None = None) -> dict[str, floa
             danger = max(danger, min(1.0, float(sm["danger_index"])))
         except (TypeError, ValueError):
             pass
-    name = str(loc.get("name") or "").lower()
-    market_like = any(w in name for w in ("market", "bazaar", "forum", "plaza", "square"))
-    if any(w in name for w in ("dungeon", "ruin", "wild", "waste", "ash")):
+    # Whole tokens only. Substring "ash" in "Flash", "city" in "Scarcity",
+    # and "ward" in "Warden"/"Forward" flipped settlement_like and moved
+    # wait/night danger the wrong way.
+    name_tokens = _location_name_tokens(loc.get("name"))
+    market_like = bool(name_tokens & _MARKET_PLACE_WORDS)
+    if name_tokens & _WILD_PLACE_WORDS:
         danger = min(1.0, danger + 0.1)
         settlement_like = False
-    if any(w in name for w in ("market", "gate", "ward", "harbor", "pier", "town", "city")):
+    if name_tokens & _SETTLEMENT_PLACE_WORDS:
         crowd = min(1.0, crowd + 0.1)
         danger = max(0.05, danger - 0.05)
         settlement_like = True
@@ -1599,13 +1633,14 @@ def _local_crowd_danger(context: dict[str, Any] | None = None) -> dict[str, floa
     # computed above — how many people are around is not about the player.
     try:
         from app import encounters as encounters_mod
+        from app.skill_checks import player_with_gear_scores
 
         snapshot = encounters_mod.player_snapshot()
         assessment = encounters_mod.assess_danger(
             terrain=tile_state or ("town" if settlement_like else "plains"),
             weather=context.get("weather") if isinstance(context.get("weather"), dict) else get_weather(),
             world_time=context.get("world_time") if isinstance(context.get("world_time"), dict) else {"hour": hour},
-            player=snapshot.get("player"),
+            player=player_with_gear_scores(snapshot.get("player")),
             skills=snapshot.get("skills"),
             resources=snapshot.get("resources"),
             inventory_summary=snapshot.get("inventory_summary"),
@@ -3687,11 +3722,12 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         from app.player_resources import ensure_player_resources
 
         with connect() as res_conn:
+            raw_bonus = (player or {}).get("effective_stats") if isinstance(player, dict) else None
             resources = ensure_player_resources(
                 res_conn,
                 opts,
                 player=player,
-                stats=(player or {}).get("effective_stats") if isinstance(player, dict) else None,
+                stats=_gear_scores(raw_bonus) if isinstance(raw_bonus, dict) else None,
             )
         if isinstance(player, dict) and resources:
             for key in (
@@ -3851,6 +3887,39 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         "turn": turn_number,
         "weather": get_weather(conn),
     }
+    # Quest and relationship context for LLM injection
+    try:
+        from app.quests import quest_context_for_llm
+        state["active_quests"] = quest_context_for_llm(conn)
+    except Exception:
+        state["active_quests"] = []
+    try:
+        from app.relationships import all_relationships_for_llm
+        state["npc_player_relationships"] = all_relationships_for_llm(conn)
+    except Exception:
+        state["npc_player_relationships"] = []
+    # Player titles
+    try:
+        from app.titles import get_entity_titles, title_stat_bonuses_for_player
+        state["player_titles"] = get_entity_titles(1, "player", include_hidden=False, conn=conn)
+        # Merge title stat bonuses into player effective_stats when titles enabled
+        titles_on = settings.get("titles_enabled")
+        if titles_on != "false" and titles_on is not False and state["player_titles"]:
+            bonuses = title_stat_bonuses_for_player(conn=conn)
+            if bonuses and isinstance(state.get("player"), dict):
+                eff = dict(state["player"].get("effective_stats") or {})
+                for stat, val in bonuses.items():
+                    eff[stat] = int(eff.get(stat) or 0) + val
+                state["player"]["effective_stats"] = eff
+                state["title_stat_bonuses"] = bonuses
+    except Exception:
+        state["player_titles"] = []
+    # Party
+    try:
+        from app.party import get_party
+        state["party"] = get_party(conn=conn)
+    except Exception:
+        state["party"] = []
     raw_conditions = settings.get("player_conditions")
     if isinstance(raw_conditions, list):
         state["conditions"] = raw_conditions
@@ -3917,6 +3986,44 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         state["gm_events"] = gm_events
         state["verification_memory"] = verification_memory
     return state
+
+
+def _apply_scene_cast(conn, cast: Any) -> None:
+    """Merge the model's present / interacting toggles. Absent cast leaves the scene alone."""
+    if not isinstance(cast, dict):
+        return
+    current = _settings(conn).get("active_scene")
+    if not isinstance(current, dict):
+        current = {}
+    present = [str(code).upper() for code in current.get("present") or [] if str(code).strip()]
+    interacting = [str(code).upper() for code in current.get("interacting") or [] if str(code).strip()]
+    keywords = [str(word).lower() for word in current.get("keywords") or [] if str(word).strip()]
+
+    def add(bucket: list[str], codes: Any) -> None:
+        for code in codes or []:
+            token = str(code).upper().strip()
+            if token and token not in bucket:
+                bucket.append(token)
+
+    add(present, cast.get("present"))
+    add(interacting, cast.get("interacting"))
+    for code in cast.get("interacting") or []:
+        token = str(code).upper().strip()
+        if token and token not in present:
+            present.append(token)
+    for code in cast.get("off") or []:
+        token = str(code).upper().strip()
+        present = [item for item in present if item != token]
+        interacting = [item for item in interacting if item != token]
+    for word in cast.get("keywords") or []:
+        token = re.sub(r"[^a-z0-9'-]+", "", str(word).lower())[:40]
+        if len(token) >= 3 and token not in keywords:
+            keywords.append(token)
+    _set_setting(
+        conn,
+        "active_scene",
+        {"present": present[:24], "interacting": interacting[:8], "keywords": keywords[:24]},
+    )
 
 
 def _set_setting(conn, key: str, value: Any) -> None:
@@ -7387,6 +7494,16 @@ def resolve_turn_naming(state: dict[str, Any], player_input: str) -> dict[str, A
         return {"asked": False, "kind": "", "subject": "", "name": "", "source": ""}
 
 
+def _ask_relevant_to_input(content: str, player_l: str) -> bool:
+    """An Ask is context only when the next action names the same thing."""
+    question = content
+    if content.lower().startswith("q:"):
+        question = content.split("\n", 1)[0][2:]
+    skip = {"what", "when", "where", "your", "this", "that", "about", "with", "from", "have", "does", "tell", "look", "like"}
+    words = [word for word in re.findall(r"[a-z0-9]{4,}", question.lower()) if word not in skip]
+    return any(word in player_l for word in words)
+
+
 def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, Any]:
     _write_source_index(state)
     query = _tokens(player_input)
@@ -7539,14 +7656,20 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     }
     event_lifecycle = _event_lifecycle_context(state)
     # Recent narration for anti-repetition (history itself is stripped from the packet).
+    # Ask notes stay off the next turn unless the player actually names that record.
     last_narration = ""
+    relevant_asks: list[str] = []
+    player_l = str(player_input or "").lower()
     for row in state.get("history") or []:
         if not isinstance(row, dict):
             continue
-        if str(row.get("kind") or "") != "narration":
-            continue
-        last_narration = str(row.get("content") or "").strip()
-        if last_narration:
+        kind = str(row.get("kind") or "")
+        content = str(row.get("content") or "").strip()
+        if kind == "narration" and content and not last_narration:
+            last_narration = content
+        elif kind == "ask" and content and _ask_relevant_to_input(content, player_l):
+            relevant_asks.append(content[:500])
+        if last_narration and len(relevant_asks) >= 3:
             break
 
     prompt_context = {
@@ -7571,6 +7694,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "recognition": recognition[:limits["recognition"]],
         "history": [],
         "last_narration": last_narration,
+        "relevant_asks": relevant_asks,
         "turn_plan": turn_plan,
         "action_context": action_context,
         "working_set": _working_set(current_code, locations, relevant_sources),
@@ -8547,6 +8671,19 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     return int(cursor.lastrowid)
 
 
+# "take stock / take a look / take in" are perception, not pickup. Shared by
+# prose grounding and player-input acquire_intent — a bare \\btake\\b on
+# "I take stock of my injuries" used to mark every named item as arrived.
+_TAKE_PERCEPTION_TAIL = (
+    r"(?:in|note|stock|care|aim|cover|"
+    r"a\s+(?:look|gander|peek|moment|breath|step)|"
+    r"your\s+time)"
+)
+_TAKE_PERCEPTION_RE = re.compile(
+    rf"\b(?:take[sn]?|took|taking)\s+{_TAKE_PERCEPTION_TAIL}\b",
+    re.I,
+)
+
 # Prose that says something actually arrived. Unambiguous transfer verbs only:
 # perception verbs go in _DISCOVER_GAIN_RE below, where they are held to a
 # higher bar.
@@ -8560,8 +8697,8 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
 _ACQUIRE_PROSE_RE = re.compile(
     r"\b("
     r"pick(?:s|ed)?\s+up|picking\s+up|"
-    # "take in the sight", "take note", "take stock" are perception, not gain.
-    r"(?:take[sn]?|took|taking)(?!\s+(?:in|note|stock|care|aim|cover|a\s+moment|your\s+time))|"
+    # "take in the sight", "take note", "take stock", "take a look" are perception.
+    rf"(?:take[sn]?|took|taking)(?!\s+{_TAKE_PERCEPTION_TAIL})|"
     r"receiv\w+|accept\w*|claim\w*|"
     r"hand(?:s|ed|ing)\s+(?:you|over|him|her|them)|"
     r"give[sn]?\s+you|gave\s+you|giving\s+you|(?:is|are|was|were)\s+given|"
@@ -8627,11 +8764,13 @@ def _filter_inventory_changes(
         return []
     text = f"{narration}\n{player_input}".lower()
     player_l = str(player_input or "").lower()
+    # Strip perception-takes so "I take stock / a look" cannot authorize gains.
+    player_l_intent = _TAKE_PERCEPTION_RE.sub(" ", player_l)
     acquire_intent = bool(
         re.search(
             r"\b(buy|bought|purchase|loot|pick(?:ed)?\s+up|take|took|steal|stole|"
             r"craft|forage|find|found|receive|received|accept|gift|reward|claim|trade)\b",
-            player_l,
+            player_l_intent,
         )
     )
     kept: list[dict[str, Any]] = []
@@ -9075,6 +9214,238 @@ def _slot_capacity_cap(category: str) -> int:
     return 1
 
 
+def _fold_gear_text(value: str) -> str:
+    text = str(value or "").lower().replace("\u2019", "'").replace("'", "")
+    text = re.sub(r"[-_/]+", " ", text)
+    text = re.sub(r"[^a-z0-9\s]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+# "take off my non-slip shoes" is an inventory order, not a scene suggestion.
+# The DSL draft never emits equipment_changes, and the fallback used to quote
+# the sentence without clearing the worn slot.
+_UNEQUIP_CUE_RE = re.compile(
+    r"\b(?:unequip(?:ping|ped)?|doff(?:ing|ed)?|unwear(?:ing)?"
+    r"|(?:take|taking|took|pull|pulling|pulled|slip|slipping|slipped|"
+    r"peel|peeling|peeled|kick|kicking|kicked|strip|stripping|stripped|"
+    r"shrug|shrugging|shrugged)(?:\s+\w+){0,6}\s+off)\b"
+)
+_REMOVE_GEAR_RE = re.compile(r"\bremove(?:s|d|ing)?\b")
+_NEGATED_GEAR_RE = re.compile(r"\b(?:dont|do not|never|wont|will not|not going to)\b")
+_ALL_WORN_RE = re.compile(
+    r"\b(?:everything|all of it|all my (?:gear|clothes|clothing|equipment)|my clothes|my gear)\b"
+)
+_UNEQUIP_SAID_RE = re.compile(
+    r"\b(?:take off|takes off|took off|pull off|slip off|remove|removed|unequip|unequipped|"
+    r"not worn|no longer worn|in your pack)\b"
+)
+
+
+def _unequip_requested(player_input: str) -> bool:
+    folded = _fold_gear_text(player_input)
+    match = _UNEQUIP_CUE_RE.search(folded) or _REMOVE_GEAR_RE.search(folded)
+    if match is None:
+        return False
+    window = folded[max(0, match.start() - 48) : match.start()]
+    return _NEGATED_GEAR_RE.search(window) is None
+
+
+def _item_codes_in_text(player_input: str) -> set[str]:
+    found: set[str] = set()
+    for match in re.finditer(r"(?:!|\[\[)\s*(I\d+)\s*\]?", str(player_input or ""), re.IGNORECASE):
+        found.add(match.group(1).upper())
+    return found
+
+
+def _slot_accept_words(equipment_slots: list[dict[str, Any]] | None) -> dict[str, list[str]]:
+    accepts_by_code: dict[str, list[str]] = {}
+    for slot in equipment_slots or []:
+        if not isinstance(slot, dict):
+            continue
+        code = str(slot.get("code") or "").strip().upper()
+        if not code:
+            continue
+        raw = slot.get("accepts") or []
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raw = []
+        words = [_fold_gear_text(word) for word in raw if _fold_gear_text(str(word or ""))]
+        if words:
+            accepts_by_code[code] = words
+    if accepts_by_code:
+        return accepts_by_code
+    return {
+        code: [_fold_gear_text(word) for word in accepts]
+        for code, _name, _category, _capacity, accepts, _sort in DEFAULT_EQUIPMENT_SLOTS
+    }
+
+
+def _gear_name_in_text(name: str, folded_input: str) -> bool:
+    folded_name = _fold_gear_text(name)
+    if len(folded_name) < 3:
+        return False
+    return f" {folded_name} " in f" {folded_input} "
+
+
+def worn_unequip_targets(
+    inventory: list[dict[str, Any]] | None,
+    equipment_slots: list[dict[str, Any]] | None,
+    player_input: str,
+) -> list[dict[str, str]]:
+    """Worn rows the player told us to take off. Empty when the line is not an unequip."""
+    if not _unequip_requested(player_input):
+        return []
+    equipped: list[dict[str, Any]] = []
+    for item in inventory or []:
+        if not isinstance(item, dict):
+            continue
+        slot = str(item.get("equipped_slot") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not slot or not name:
+            continue
+        quantity = item.get("quantity")
+        if quantity is not None and int(_float(quantity, 0)) <= 0:
+            continue
+        equipped.append(item)
+    if not equipped:
+        return []
+    folded = _fold_gear_text(player_input)
+    codes = _item_codes_in_text(player_input)
+    named = [
+        item
+        for item in equipped
+        if str(item.get("code") or "").upper() in codes or _gear_name_in_text(str(item.get("name") or ""), folded)
+    ]
+    if not named:
+        accepts = _slot_accept_words(equipment_slots)
+        words_in_input = set(folded.split())
+        named = []
+        for item in equipped:
+            slot = str(item.get("equipped_slot") or "").strip().upper()
+            for word in accepts.get(slot, []):
+                if len(word) >= 4 and word in words_in_input:
+                    named.append(item)
+                    break
+    if not named and _ALL_WORN_RE.search(folded):
+        named = list(equipped)
+    seen: set[str] = set()
+    targets: list[dict[str, str]] = []
+    for item in named:
+        code = str(item.get("code") or "").strip().upper()
+        marker = code or str(item.get("name") or "")
+        if marker in seen:
+            continue
+        seen.add(marker)
+        targets.append(
+            {
+                "code": code,
+                "name": str(item.get("name") or "").strip(),
+                "equipped_slot": str(item.get("equipped_slot") or "").strip().upper(),
+            }
+        )
+    return targets
+
+
+def narration_records_unequip(narration: str, name: str) -> bool:
+    folded = _fold_gear_text(narration)
+    folded_name = _fold_gear_text(name)
+    if not folded_name:
+        return False
+    if folded_name not in folded:
+        last = folded_name.split()[-1]
+        if len(last) < 4 or last not in folded.split():
+            return False
+    return _UNEQUIP_SAID_RE.search(folded) is not None
+
+
+def resolve_worn_unequip(conn, result: dict[str, Any], player_input: str) -> dict[str, Any]:
+    """Append unequip ops the model (and the DSL) did not emit. Idempotent to apply."""
+    rows = rows_to_dicts(
+        conn.execute("SELECT code, name, equipped_slot, quantity FROM inventory").fetchall()
+    )
+    slots = rows_to_dicts(conn.execute("SELECT code, name, accepts FROM equipment_slots").fetchall())
+    targets = worn_unequip_targets(rows, slots, player_input)
+    if not targets:
+        return {"status": "none", "items": []}
+    changes = result.get("equipment_changes")
+    if not isinstance(changes, list):
+        changes = []
+        result["equipment_changes"] = changes
+    names: list[str] = []
+    for target in targets:
+        changes.append(
+            {
+                "item_code": target["code"],
+                "item_name": target["name"],
+                "slot_code": target["equipped_slot"],
+                "equip": False,
+                "action": "unequip",
+                "notes": "Player took worn gear off; server cleared the slot.",
+            }
+        )
+        names.append(target["name"])
+    return {"status": "unequipped", "items": names}
+
+
+def _combat_fallback_line(combat: dict[str, Any]) -> str:
+    status = str(combat.get("status") or "")
+    if status in {"", "not_combat"}:
+        return ""
+    if status != "resolved_player_attack":
+        return (
+            "The model did not resolve this action. No attack was applied, "
+            "and this fallback does not treat the attempt as a success."
+        )
+    resolution = combat.get("resolution") if isinstance(combat.get("resolution"), dict) else {}
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+    attack = combat.get("player_attack") if isinstance(combat.get("player_attack"), dict) else {}
+    name = str(target.get("name") or target.get("code") or "the target")
+    outcome = str(resolution.get("outcome") or "unresolved")
+    damage = max(0, _int_from_any(resolution.get("damage"), 0))
+    weapon = str(attack.get("weapon") or "unarmed")
+    before = resolution.get("target_health_before")
+    after = resolution.get("target_health_after")
+    health = ""
+    if before is not None and after is not None:
+        health = f" Health {before} -> {after}."
+    if outcome in {"hit", "glancing_hit"} and damage > 0:
+        return (
+            f"The model wrote no scene. The server roll landed ({outcome}): {weapon} deals {damage} to {name}.{health} "
+            "That health change is the only result. Nothing beyond this roll happened."
+        )
+    return (
+        f"The model wrote no scene. The server roll did not land ({outcome}): {weapon} against {name} deals {damage}.{health} "
+        "The attack did not succeed."
+    )
+
+
+def player_fallback_narration(context: dict[str, Any], player_input: str, location: str) -> str:
+    """Say what a failed model call actually changed. Do not quote the action as if it worked."""
+    inventory = context.get("inventory") if isinstance(context.get("inventory"), list) else []
+    slots = context.get("equipment_slots") if isinstance(context.get("equipment_slots"), list) else []
+    removed = worn_unequip_targets(inventory, slots, player_input)
+    mechanics = context.get("mechanics_context") if isinstance(context.get("mechanics_context"), dict) else {}
+    combat = mechanics.get("combat") if isinstance(mechanics.get("combat"), dict) else {}
+    parts: list[str] = []
+    if removed:
+        names = ", ".join(item["name"] for item in removed if item.get("name"))
+        parts.append(
+            f"You take off {names}. They are in your pack now, not worn. "
+            "The model did not answer, so this is only that gear change — nothing else in the scene succeeded."
+        )
+    combat_line = _combat_fallback_line(combat if isinstance(combat, dict) else {})
+    if combat_line:
+        parts.append(combat_line)
+    elif not removed:
+        parts.append(
+            f"The model did not resolve that action in {location}. "
+            "It was not carried out: no gear change, no combat result, and no scene success."
+        )
+    return "\n\n".join(parts)
+
+
 def _apply_equipment_changes(conn, changes: list[dict[str, Any]]) -> None:
     for change in changes:
         if not isinstance(change, dict):
@@ -9284,7 +9655,12 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     settings = _settings(conn).get("playthrough_options", {})
     # Per-turn caps: stop model minting (economy / progression). Totals still hard-capped below.
     max_health = clamp(int(player["max_health"]) + clamp(int(player_patch.get("max_health_delta") or 0), -50, 20), 1, 999)
-    health = clamp(int(player["health"]) + clamp(int(player_patch.get("health_delta") or 0), -200, 100), 0, max_health)
+    health_delta = clamp(int(player_patch.get("health_delta") or 0), -200, 100)
+    if _settings(conn).get("debug_godmode") in (True, "true", "1", 1):
+        health_delta = max(0, health_delta)
+    health = clamp(int(player["health"]) + health_delta, 0, max_health)
+    if _settings(conn).get("debug_godmode") in (True, "true", "1", 1):
+        health = max_health
     level_delta = (
         clamp(int(player_patch.get("level_delta") or 0), 0, 1)
         if settings.get("leveling_system", True)
@@ -10397,6 +10773,41 @@ def _write_verification_memory(
         )
 
 
+def _apply_turn_npc_relationship_deltas(conn, result: dict[str, Any], player_input: str) -> None:
+    """Apply NPC-player relationship deltas based on trade interactions this turn.
+
+    Combat deltas are handled directly in _apply_deterministic_combat.
+    Quest-completion deltas are handled in the API advance-quest endpoint.
+    This function handles trade: if gold changed and the turn was a trade intent,
+    apply a small positive delta to the NPC the player talked with.
+    """
+    from app.relationships import update_relationship, RELATIONSHIP_EVENTS
+
+    player_patch = result.get("player") or {}
+    gold_delta = int(player_patch.get("gold_delta") or 0)
+    if gold_delta == 0:
+        return
+    intent, _ = _turn_intent(player_input)
+    if intent != "trade":
+        return
+    conversations = result.get("conversations") or []
+    for convo in conversations:
+        npc_code = str(convo.get("npc_code") or convo.get("npc") or "").strip()
+        if not npc_code:
+            continue
+        npc_row = conn.execute("SELECT id FROM npcs WHERE code = ?", (npc_code,)).fetchone()
+        if npc_row:
+            try:
+                update_relationship(
+                    conn, int(npc_row["id"]),
+                    reason="Player traded with this NPC",
+                    **RELATIONSHIP_EVENTS["traded_npc"],
+                )
+            except Exception:
+                pass
+            break  # one delta per trade turn
+
+
 def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None:
     if not isinstance(combat, dict) or combat.get("status") != "resolved_player_attack":
         return
@@ -10404,6 +10815,14 @@ def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None
     resolution = combat.get("resolution") if isinstance(combat.get("resolution"), dict) else {}
     target_code = norm_name(str(target.get("code") or ""))
     damage = max(0, _int_from_any(resolution.get("damage"), 0))
+    # Add party combat bonus to damage (each member contributes based on rank/role)
+    try:
+        from app.party import party_combat_bonus
+        p_bonus = party_combat_bonus(conn=conn)
+        if p_bonus > 0:
+            damage = damage + p_bonus
+    except Exception:
+        pass
     if not target_code:
         return
     row = conn.execute("SELECT id, name, health, max_health FROM npcs WHERE code = ?", (target_code,)).fetchone()
@@ -10425,6 +10844,44 @@ def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None
             f"Deterministic combat: {weapon} vs {target_code} {row['name']} resolved as {outcome}; damage {damage}; health {current_health}->{next_health}/{max_health}."[:1400],
         ),
     )
+    # Relationship deltas: attacking an NPC lowers affinity/respect and raises fear.
+    # If the NPC is killed, nearby NPCs lose affinity toward the player.
+    try:
+        from app.relationships import update_relationship, RELATIONSHIP_EVENTS
+        npc_id = int(row["id"])
+        update_relationship(
+            conn, npc_id,
+            reason=f"Player attacked {row['name']}",
+            **RELATIONSHIP_EVENTS["attacked_npc"],
+        )
+        if next_health <= 0:
+            nearby_rows = conn.execute(
+                "SELECT id FROM npcs WHERE location_id = (SELECT location_id FROM npcs WHERE id = ?) AND id != ? LIMIT 6",
+                (npc_id, npc_id),
+            ).fetchall()
+            for nearby_row in nearby_rows:
+                try:
+                    update_relationship(
+                        conn, int(nearby_row["id"]),
+                        reason=f"Player killed {row['name']} nearby",
+                        **RELATIONSHIP_EVENTS["killed_npc_friend"],
+                    )
+                except Exception:
+                    pass
+
+            # --- Family-tie resentment cascade ---
+            # Check npc_family_ties for relatives of the killed NPC.
+            # Surviving relatives get RESENTMENT feeling + REVENGE agenda seeded.
+            try:
+                from app.npc_psychology import on_npc_killed, init_psychology_tables
+
+                init_psychology_tables(conn)
+                on_npc_killed(conn, npc_id, turn)
+            except Exception:
+                pass
+            # ----------------------------------------
+    except Exception:
+        pass
 
 
 def _public_path(path: Path) -> str:
@@ -10597,6 +11054,25 @@ def update_player_alias_state(alias_id: int | None, active: bool | None = None, 
     return _state_with_refreshed_source_index()
 
 
+def delete_player_alias(alias_id: int) -> dict[str, Any]:
+    try:
+        alias_id = int(alias_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Unknown gameplay alias.") from exc
+    with connect() as conn:
+        turn = _turn_value(conn)
+        alias = conn.execute("SELECT * FROM player_aliases WHERE id = ?", (alias_id,)).fetchone()
+        if alias is None:
+            raise ValueError("Unknown gameplay alias.")
+        name = str(alias["alias"] or "")
+        conn.execute("DELETE FROM player_aliases WHERE id = ?", (alias_id,))
+        conn.execute(
+            "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+            (turn, "alias", f"Player removed gameplay alias '{name}'."[:1400]),
+        )
+    return _state_with_refreshed_source_index()
+
+
 def _alias_reputation_leak_delta(delta: int, visibility: str, disguised: bool) -> tuple[int, str]:
     if not delta:
         return 0, ""
@@ -10667,7 +11143,190 @@ def add_alias(alias: str, entity_type: str, entity_code: str) -> dict[str, Any]:
     return _state_with_refreshed_source_index()
 
 
+def _mention_slug(name: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "_", str(name or "").lower()).strip("_")
+    return slug[:48]
+
+
+def _mention_catalog(context: dict[str, Any]) -> list[dict[str, str]]:
+    """Named things the player can point at with @C, @I, @L, @S, @A, or @E."""
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def push(kind: str, name: str, code: str, label: str) -> None:
+        slug = _mention_slug(name)
+        if not kind or not slug:
+            return
+        key = f"{kind}:{code or slug}"
+        if key in seen:
+            return
+        seen.add(key)
+        rows.append({"kind": kind, "name": name.strip(), "code": code, "slug": slug, "label": label})
+
+    def walk_npc(npc: dict[str, Any]) -> None:
+        if isinstance(npc, dict):
+            push("C", str(npc.get("name") or ""), str(npc.get("code") or ""), "NPC")
+
+    current = context.get("current_location")
+    if isinstance(current, dict):
+        push("L", str(current.get("name") or ""), str(current.get("code") or ""), "location")
+        for npc in current.get("npcs") or []:
+            walk_npc(npc)
+    for location in context.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        push("L", str(location.get("name") or ""), str(location.get("code") or ""), "location")
+        for npc in location.get("npcs") or []:
+            walk_npc(npc)
+        for event in location.get("events") or []:
+            if isinstance(event, dict):
+                push("E", str(event.get("title") or event.get("name") or ""), str(event.get("code") or ""), "event")
+    for npc in context.get("npcs") or []:
+        walk_npc(npc)
+    for item in context.get("inventory") or []:
+        if isinstance(item, dict):
+            push("I", str(item.get("name") or ""), str(item.get("code") or ""), "item")
+    for event in context.get("events") or []:
+        if isinstance(event, dict):
+            push("E", str(event.get("title") or event.get("name") or ""), str(event.get("code") or ""), "event")
+    for skill in context.get("skills") or []:
+        if isinstance(skill, dict):
+            push("S", str(skill.get("name") or ""), str(skill.get("code") or ""), "skill")
+    for ability in context.get("abilities") or []:
+        if isinstance(ability, dict):
+            push("A", str(ability.get("name") or ""), str(ability.get("code") or ""), "ability")
+    return rows
+
+
+def _pick_mention(rows: list[dict[str, str]], kind: str, fragment: str) -> dict[str, str] | None:
+    fragment = str(fragment or "").lower().strip("_")
+    if not fragment:
+        return None
+    pool = [row for row in rows if row["kind"] == kind.upper()]
+    exact = [row for row in pool if row["slug"] == fragment]
+    if len(exact) == 1:
+        return exact[0]
+    # A one-to-three character tail is an alias or a multi-letter code, not a name prefix.
+    if len(fragment) < 4:
+        return None
+    starts = [row for row in pool if row["slug"].startswith(fragment)]
+    if len(starts) == 1:
+        return starts[0]
+    return None
+
+
+def _active_scene(context: dict[str, Any]) -> dict[str, Any]:
+    settings = context.get("settings") if isinstance(context.get("settings"), dict) else {}
+    scene = settings.get("active_scene") if isinstance(settings, dict) else None
+    if not isinstance(scene, dict):
+        scene = {}
+    return {
+        "present": [str(code).upper() for code in scene.get("present") or [] if str(code).strip()],
+        "interacting": [str(code).upper() for code in scene.get("interacting") or [] if str(code).strip()],
+        "keywords": [str(word).lower() for word in scene.get("keywords") or [] if str(word).strip()],
+    }
+
+
+def _legacy_at_tokens(context: dict[str, Any]) -> set[str]:
+    """Exact @codes and @aliases. Mention parsing must not rewrite these."""
+    tokens: set[str] = set()
+    for location in context.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        for npc in location.get("npcs") or []:
+            if isinstance(npc, dict) and npc.get("code"):
+                tokens.add("@" + str(npc["code"]).lower())
+    for npc in context.get("npcs") or []:
+        if isinstance(npc, dict) and npc.get("code"):
+            tokens.add("@" + str(npc["code"]).lower())
+    for alias in context.get("aliases") or []:
+        if isinstance(alias, dict) and str(alias.get("entity_type") or "") == "npc" and alias.get("alias"):
+            tokens.add("@" + str(alias["alias"]).lower())
+    return tokens
+
+
+_BARE_NAME_SKIP = {
+    "the", "and", "for", "are", "was", "how", "your", "you", "what", "who", "when", "where", "why",
+    "can", "could", "tell", "ask", "have", "has", "had", "open", "day", "this", "that", "with", "from",
+}
+
+
+def _bare_name_notes(text: str, rows: list[dict[str, str]], scene: dict[str, Any]) -> list[str]:
+    """Match a bare first name or item name. Scene members win when several rows share it."""
+    masked = re.sub(r"@[A-Za-z0-9_]+", " ", text)
+    scene_codes = set(scene.get("present") or []) | set(scene.get("interacting") or [])
+    notes: list[str] = []
+    seen: set[str] = set()
+    for word in re.findall(r"[A-Za-z][A-Za-z'’-]{2,40}", masked):
+        key = word.lower().replace("’", "'")
+        if key in _BARE_NAME_SKIP or key in seen:
+            continue
+        hits = []
+        for row in rows:
+            first = str(row["name"]).split()[0].lower().replace("’", "'") if row.get("name") else ""
+            if key == first or key == row["slug"] or key.replace("-", "_") == row["slug"]:
+                hits.append(row)
+        if not hits:
+            continue
+        preferred = [row for row in hits if row.get("code") in scene_codes]
+        chosen = preferred if preferred else hits
+        if len(chosen) != 1:
+            continue
+        hit = chosen[0]
+        seen.add(key)
+        notes.append(f"{word} = {hit['name']} (@{hit['kind']}{hit['slug']}, {hit['code'] or 'no code'}, {hit['label']})")
+    return notes
+
+
+def _scene_speaker_note(rows: list[dict[str, str]], scene: dict[str, Any]) -> str:
+    by_code = {row["code"]: row for row in rows if row.get("code")}
+
+    def label(code: str) -> str:
+        row = by_code.get(code)
+        if not row:
+            return code
+        return f"{row['name']} [[{code}]]"
+
+    interacting = [label(code) for code in scene.get("interacting") or []]
+    present_only = [label(code) for code in scene.get("present") or [] if code not in set(scene.get("interacting") or [])]
+    if not interacting and not present_only:
+        return ""
+    parts = []
+    if interacting:
+        parts.append("interacting (replies to the player): " + ", ".join(interacting))
+    else:
+        parts.append("interacting: nobody")
+    if present_only:
+        parts.append("present (nearby, does not answer): " + ", ".join(present_only))
+    return "Active scene — " + "; ".join(parts) + ". A follow-up is for the interacting character only."
+
+
 def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
+    text = str(player_input or "")
+    rows = _mention_catalog(context)
+    scene = _active_scene(context)
+    resolved_notes: list[str] = []
+    resolved_notes.extend(_bare_name_notes(text, rows, scene))
+    speaker = _scene_speaker_note(rows, scene)
+    if speaker:
+        resolved_notes.append(speaker)
+    legacy_at = _legacy_at_tokens(context)
+
+    def replace_mention(match: re.Match[str]) -> str:
+        if match.group(0).lower() in legacy_at:
+            return match.group(0)
+        kind = match.group(1).upper()
+        hit = _pick_mention(rows, kind, match.group(2))
+        if not hit:
+            return match.group(0)
+        name = hit["name"]
+        code = hit["code"]
+        shown = f"{name} [[{code}]]" if code else name
+        resolved_notes.append(f"@{kind}{hit['slug']} = {name} ({code or 'no code'}, {hit['label']})")
+        return shown
+
+    text = re.sub(r"@([CILSAE])([a-z0-9_]+)", replace_mention, text, flags=re.IGNORECASE)
+
     refs: dict[str, str] = {}
     for location in context.get("locations", []):
         refs[f"#{location['code']}"] = f"{location['name']} ({location['code']}, location)"
@@ -10682,11 +11341,13 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
         if prefix:
             refs[f"{prefix}{alias['alias']}"] = f"{alias['entity_code']} ({alias['entity_type']} alias: {alias['alias']})"
 
-    found = {token: label for token, label in refs.items() if re.search(rf"(?<!\w){re.escape(token)}(?!\w)", player_input, re.IGNORECASE)}
-    if not found:
-        return player_input
-    expansions = "; ".join(f"{token} = {label}" for token, label in sorted(found.items()))
-    return f"{player_input}\n\nResolved player references: {expansions}"
+    found = {token: label for token, label in refs.items() if re.search(rf"(?<!\w){re.escape(token)}(?!\w)", text, re.IGNORECASE)}
+    notes = list(resolved_notes)
+    notes.extend(f"{token} = {label}" for token, label in sorted(found.items()))
+    if not notes:
+        return text
+    expansions = "; ".join(notes)
+    return f"{text}\n\nResolved player references: {expansions}"
 
 
 # Which turn fields are amounts, and which magnitude table rolls each one.
@@ -10958,6 +11619,9 @@ def apply_turn(
     input_kind: str = "player",
     prompt_context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    # Name repair rebinds `result` to a new dict. Gear and narration updates
+    # after that have to land on the object the caller returns as the turn.
+    caller_result = result
     with connect() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         next_turn = int(row["value"]) + 1 if row else 1
@@ -11116,6 +11780,20 @@ def apply_turn(
         )
         result["inventory_changes"] = inv_changes
         _apply_inventory(conn, inv_changes)
+        gear_report: dict[str, Any] = {"status": "none", "items": []}
+        try:
+            gear_report = resolve_worn_unequip(conn, result, player_input)
+            missing = [name for name in gear_report.get("items") or [] if not narration_records_unequip(narration, name)]
+            if missing:
+                sentence = (
+                    "You take off "
+                    + ", ".join(missing)
+                    + ". They are in your pack now, not worn."
+                )
+                _set_narration_text(result, (narration.rstrip() + "\n\n" + sentence).strip())
+                narration = _narration_text(result)
+        except Exception as exc:
+            gear_report = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200], "items": []}
         _apply_equipment_slots(conn, result.get("equipment_slots") or [])
         _apply_equipment_changes(conn, result.get("equipment_changes") or [])
         _apply_inventory_capacity_modifiers(conn, result.get("inventory_capacity_modifiers") or [])
@@ -11128,10 +11806,73 @@ def apply_turn(
         _apply_index_updates(conn, result.get("index_updates") or [])
         _apply_ability_updates(conn, result.get("ability_updates") or [])
         _apply_deterministic_combat(conn, result.get("_deterministic_combat") or {}, turn)
+        try:
+            _apply_turn_npc_relationship_deltas(conn, result, player_input)
+        except Exception:
+            pass
+
+        # --- Hidden agenda trigger check ------------------------------------
+        # After the turn applies, evaluate whether any scene NPC's active agenda
+        # fires this turn. If it does, inject a hint into the next turn's context
+        # via the journal so the narrator can pick it up on the following turn.
+        try:
+            from app.npc_psychology import check_agenda_triggers, init_psychology_tables
+
+            init_psychology_tables(conn)
+            _cur_loc_row = conn.execute(
+                "SELECT current_location_id FROM player WHERE id = 1"
+            ).fetchone()
+            _cur_loc_id = int(_cur_loc_row["current_location_id"]) if _cur_loc_row and _cur_loc_row["current_location_id"] else None
+            if _cur_loc_id:
+                _scene_npcs = conn.execute(
+                    "SELECT id FROM npcs WHERE location_id = ? LIMIT 12", (_cur_loc_id,)
+                ).fetchall()
+                _trigger_state = {"player": {"current_location_id": _cur_loc_id}}
+                for _srow in _scene_npcs:
+                    _should_act, _action_desc = check_agenda_triggers(
+                        conn, int(_srow["id"]), _trigger_state, turn
+                    )
+                    if _should_act and _action_desc:
+                        conn.execute(
+                            "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                            (turn, "narrator_hint", f"[AGENDA TRIGGER] {_action_desc}"[:1400]),
+                        )
+        except Exception:
+            pass  # agenda triggers must never block turn application
+        # --------------------------------------------------------------------
+
         _write_turn_summary(conn, turn, result, player_input)
         _write_model_usage(conn, turn, result)
         _write_verification_memory(conn, turn, result, prompt_context, used_fallback)
         _maybe_spawn_offscreen_gm_event(conn, turn)
+        _apply_scene_cast(conn, result.get("scene_cast"))
+        try:
+            from app.quests import tick_quest_timers
+            tick_quest_timers(conn, turn=turn)
+        except Exception:
+            pass
+        # Check and award newly-earned titles for the player
+        try:
+            from app.titles import check_and_award_titles
+            _new_titles = check_and_award_titles(1, "player", conn=conn)
+            for _t in _new_titles:
+                conn.execute(
+                    "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                    (turn, "fact", f"Title earned: {_t['name']} — {_t['description']}"[:1400]),
+                )
+        except Exception:
+            pass
+        # Tick party morale each turn
+        try:
+            from app.party import tick_party_morale
+            _departed = tick_party_morale(result, conn=conn)
+            for _m in _departed:
+                conn.execute(
+                    "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                    (turn, "fact", f"Party member left: {_m.get('npc_name', '?')} — {_m.get('reason', '')}"[:1400]),
+                )
+        except Exception:
+            pass
 
         conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (turn, input_kind[:40] or "player", player_input[:2000]))
         conn.execute(
@@ -11158,6 +11899,17 @@ def apply_turn(
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                 (turn, "system", "Travel action with no MOVE op and no resolvable destination; player stayed put."),
+            )
+        if gear_report.get("status") == "unequipped" and gear_report.get("items"):
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (
+                    turn,
+                    "system",
+                    "Player took worn gear off; server cleared "
+                    + ", ".join(str(name) for name in gear_report["items"])
+                    + ".",
+                ),
             )
         # Keep the dice visible: the player can always ask why they got 7 gold.
         if band_report.get("lines"):
@@ -11206,6 +11958,9 @@ def apply_turn(
         # Measurable the same way: how often the prose dresses the player in
         # something the record never gave them. Reported, never rewritten.
         state["gear_check"] = check_unowned_gear(narration, worn_gear_index(state))
+    if result is not caller_result:
+        caller_result.clear()
+        caller_result.update(result)
     return state
 
 
@@ -11457,7 +12212,7 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                 akind = action_kind_from_text(model_input)
                 opts = ((context.get("settings") or {}).get("playthrough_options") or {})
                 player = context.get("player") if isinstance(context.get("player"), dict) else {}
-                stats = player.get("effective_stats") if isinstance(player.get("effective_stats"), dict) else None
+                stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
                 with connect() as c_act:
                     action_spend_pack = apply_action_spend(
                         c_act,
@@ -11512,7 +12267,12 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         )
         if check_cfg.get("dice_checks_enabled") and input_kind == "player":
             player = context.get("player") or {}
-            stats = player.get("effective_stats") or player.get("stats") or {}
+            raw_bonus = player.get("effective_stats")
+            if isinstance(raw_bonus, dict):
+                stats = _gear_scores(raw_bonus)
+            else:
+                raw_stats = player.get("stats")
+                stats = raw_stats if isinstance(raw_stats, dict) else {}
             skills = context.get("skills") or []
             pending: list[dict[str, Any]] = []
             if check_cfg.get("auto_check_on_risky_actions") or check_cfg.get("auto_social_on_talk"):
@@ -11528,6 +12288,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                     dc=item.get("dc"),
                     player_stats=stats if isinstance(stats, dict) else {},
                     player_skills=skills if isinstance(skills, list) else [],
+                    inventory=context.get("inventory") if isinstance(context.get("inventory"), list) else None,
+                    abilities=context.get("abilities") if isinstance(context.get("abilities"), list) else None,
                     opposition=item.get("opposition"),
                     settings=check_cfg,
                     context_note=str(item.get("context_note") or item.get("note") or model_input)[:400],
@@ -11634,6 +12396,44 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         skill_check_results = []
 
     prompt_context = build_prompt_context(context, model_input)
+
+    # --- Hidden NPC psychology: narrator-only block --------------------------
+    # Fetch psychology context for all NPCs currently in the scene and attach it
+    # to prompt_context under "npc_psychology_context". The LLM prompt builder
+    # passes this through to the narrator system prompt only (never the player
+    # brain). If the tables don't exist yet or any NPC lookup fails, we skip
+    # silently — psychology must never block a turn.
+    try:
+        from app.npc_psychology import get_scene_psychology_context, init_psychology_tables
+
+        with connect() as _psy_conn:
+            init_psychology_tables(_psy_conn)
+            _scene_npc_ids: list[int] = []
+            for _loc in prompt_context.get("locations") or []:
+                if not isinstance(_loc, dict):
+                    continue
+                _loc_code = _loc.get("code")
+                _cur_code = (prompt_context.get("current_location") or {}).get("code")
+                if _loc_code != _cur_code:
+                    continue
+                for _npc in _loc.get("npcs") or []:
+                    if not isinstance(_npc, dict):
+                        continue
+                    _npc_code = str(_npc.get("code") or "").strip()
+                    if _npc_code:
+                        _npc_row = _psy_conn.execute(
+                            "SELECT id FROM npcs WHERE code = ?", (_npc_code,)
+                        ).fetchone()
+                        if _npc_row:
+                            _scene_npc_ids.append(int(_npc_row["id"]))
+            if _scene_npc_ids:
+                _psy_block = get_scene_psychology_context(_psy_conn, _scene_npc_ids)
+                if _psy_block:
+                    prompt_context["npc_psychology_context"] = _psy_block
+    except Exception:
+        pass  # psychology never blocks a turn
+    # -------------------------------------------------------------------------
+
     try:
         result = generate_turn(prompt_context, model_input)
     except LlmError as exc:
@@ -11669,7 +12469,12 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
             result = apply_check_to_turn(result, resolved)
         if check_cfg.get("dice_checks_enabled") and input_kind == "player":
             player = context.get("player") or {}
-            stats = player.get("effective_stats") or player.get("stats") or {}
+            raw_bonus = player.get("effective_stats")
+            if isinstance(raw_bonus, dict):
+                stats = _gear_scores(raw_bonus)
+            else:
+                raw_stats = player.get("stats")
+                stats = raw_stats if isinstance(raw_stats, dict) else {}
             skills = context.get("skills") or []
             for item in list(result.get("skill_checks") or [])[:4]:
                 if not isinstance(item, dict):
@@ -11685,6 +12490,8 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                     dc=item.get("dc"),
                     player_stats=stats if isinstance(stats, dict) else {},
                     player_skills=skills if isinstance(skills, list) else [],
+                    inventory=context.get("inventory") if isinstance(context.get("inventory"), list) else None,
+                    abilities=context.get("abilities") if isinstance(context.get("abilities"), list) else None,
                     opposition=item.get("opposition"),
                     settings=check_cfg,
                     context_note=str(item.get("context_note") or model_input)[:400],
@@ -12330,6 +13137,41 @@ def play_world_event_turn(event_pack: dict[str, Any], *, input_kind: str = "even
     return result
 
 
+def initiate_fight(npc_code: str) -> dict[str, Any]:
+    """
+    Player-initiated combat with a specific NPC by code (e.g. "A", "B").
+
+    Pre-warms the NPC's combat profile so the first turn already has a full
+    mechanics_context with resolved HP/attack/defense, then fires play_turn()
+    with a combat-tagged input.  The result shape is identical to a normal
+    ``/api/turn`` response so the UI can display it without special casing.
+    """
+    code = str(npc_code or "").strip().upper()
+    if not code:
+        raise ValueError("npc_code is required")
+
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone()
+    if row is None:
+        raise ValueError(f"NPC {code!r} not found")
+
+    npc = row_to_dict(row)
+    name = npc.get("name") or code
+
+    # Craft an input that fires intent="combat" and resolves to this NPC via
+    # explicit [[code]] reference, so _combat_target_candidates picks it up.
+    player_input = f"attack {name} [[{code}]]"
+
+    # Pre-initialise combat stats on the NPC row so the first turn has
+    # resolved mechanics (HP, attack range, defense, dodge) immediately.
+    state = get_state(include_hidden=False)
+    _ensure_combat_profiles_for_input(state, player_input)
+
+    result = play_turn(player_input, input_kind="player")
+    result["fight_initiated"] = {"npc_code": code, "npc_name": name}
+    return result
+
+
 def _maybe_apply_event_help_reputation(
     *,
     kind: str,
@@ -12673,7 +13515,7 @@ def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any]
                     except (TypeError, ValueError):
                         pass
                 player = (context or {}).get("player") if isinstance((context or {}).get("player"), dict) else {}
-                stats = player.get("effective_stats") if isinstance(player.get("effective_stats"), dict) else None
+                stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
                 # Dry-run via apply with hard_block; spend only if ok (transaction-like)
                 before_res = get_player_resources(conn, opts)
                 spend_preview = apply_travel_spend(
@@ -12736,7 +13578,7 @@ def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any]
                 kind = str((wx or {}).get("kind") or "clear")
                 wmult = float(WEATHER_TRAVEL_MULT.get(kind, 1.0))
                 player = (context or {}).get("player") if isinstance((context or {}).get("player"), dict) else {}
-                stats = player.get("effective_stats") if isinstance(player.get("effective_stats"), dict) else None
+                stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
                 spend = apply_travel_spend(
                     conn,
                     terrain=str(travel.get("terrain") or ""),
@@ -13002,9 +13844,42 @@ def play_wait_turn(minutes: int, kind: str = "wait") -> dict[str, Any]:
         except Exception:
             regen_pack = {}
 
+    # Separate fight_nearby events: they fire as full combat scene turns (like
+    # travel ambushes) rather than being folded into ambient wait narration.
+    fight_events = [ev for ev in (rng_pack.get("events") or []) if ev.get("kind") == "fight_nearby"]
+    ambient_events = [ev for ev in (rng_pack.get("events") or []) if ev.get("kind") != "fight_nearby"]
+
+    fight_scenes: list[dict[str, Any]] = []
+    for fev in fight_events:
+        npc_code = fev.get("npc_code") or ""
+        npc_name = fev.get("npc_name") or npc_code or "unknown"
+        shell_bits = f"{npc_code}:{npc_name}" if npc_code else ""
+        fight_pack = {
+            "kind": "wait_fight",
+            "summary": f"A fight breaks out nearby involving {npc_name or 'someone'}.",
+            "trigger": "fight_nearby during wait/rest",
+            "payload": {
+                "kind": "wait_fight",
+                "hostile_default": True,
+                "npc_code": npc_code,
+                "participant_tier": fev.get("participant_tier", "nameless"),
+                "shells": [{"code": npc_code, "name": npc_name}] if npc_code else [],
+                "shell_bits": shell_bits,
+                "outcome_seed": fev.get("outcome_seed"),
+                "force": False,
+                "immutable": False,
+            },
+        }
+        try:
+            scene = play_world_event_turn(fight_pack, input_kind="event")
+            fight_scenes.append(scene)
+        except Exception:
+            # If the scene turn fails, fall back to including it in ambient narration
+            ambient_events.append(fev)
+
     # Structured model input — outcomes already decided
     event_lines = []
-    for ev in rng_pack.get("events") or []:
+    for ev in ambient_events:
         bit = f"{ev.get('kind')}:{ev.get('participant_tier')}"
         if ev.get("npc_code"):
             bit += f"@{ev.get('npc_code')}"
@@ -13049,6 +13924,9 @@ def play_wait_turn(minutes: int, kind: str = "wait") -> dict[str, Any]:
         "resources": res_after,
         "resource_regen": res_delta,
     }
+    # Attach any fight scenes that fired as separate scene turns
+    if fight_scenes:
+        payload["fight_scenes"] = fight_scenes
     # Refresh state time on payload if nested
     if isinstance(payload.get("state"), dict):
         payload["state"]["world_time"] = after

@@ -1,12 +1,12 @@
 {
   "benchmark": "benchmarks dual-role (GM + player, no local LLM)",
-  "finished_at": "2026-08-16T16:09:15",
+  "finished_at": "2026-09-29T10:17:28",
   "summary": {
     "completed_turns": 100,
     "target_turns": 100,
     "errors": 0,
-    "elapsed_seconds": 9.666,
-    "mean_apply_ms": 89.23,
+    "elapsed_seconds": 2.022,
+    "mean_apply_ms": 15.93,
     "unique_locations": [
       "Ashcut Alley",
       "Mosswake Gate",
@@ -19,10 +19,10 @@
       "health": 19,
       "max_health": 20,
       "level": 1,
-      "xp": 220,
-      "gold": 22,
+      "xp": 209,
+      "gold": 21,
       "location": "Outer Clearing",
-      "inventory_count": 3,
+      "inventory_count": 2,
       "event_count": 7,
       "location_count": 6,
       "turn_summaries": 80
@@ -42,7 +42,7 @@
       "kind": "survey",
       "player": "I survey Mosswake Gate, note exits, cover, and watchers.",
       "location": "Mosswake Gate",
-      "narration_preview": "You survey Mosswake Gate with courier patience. Exits resolve first: the gate road, the market lane, a darker alley that holds smoke and boot-scrape. Cover is imperfect\u2014crates, a cart wheel, a doorway recess\u2014but better than open mud.\n\nWatchers exist. One is obvious (Eldrin or som"
+      "narration_preview": "You survey Mosswake Gate with courier patience. Exits resolve first: the gate road, the market lane, a darker alley that holds smoke and boot-scrape. Cover is imperfect\u2014crates, a cart wheel, a doorway recess\u2014but better than open mud.\n\nWatchers exist. One is obvious (Eldrin [[A]] "
     },
     {
       "turn": 10,

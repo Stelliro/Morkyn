@@ -8,12 +8,12 @@
 | --- | --- |
 | Turns completed | **100** / 100 |
 | Errors | **0** |
-| Wall time | **9.666s** |
-| Mean apply | **89.23 ms** / turn |
+| Wall time | **2.022s** |
+| Mean apply | **15.93 ms** / turn |
 | Unique locations | 5 |
 | Final location | Outer Clearing |
-| Final level / XP | 1 / 220 |
-| Inventory items | 3 |
+| Final level / XP | 1 / 209 |
+| Inventory items | 2 |
 | Events tracked | 7 |
 
 ## Premise
@@ -47,7 +47,7 @@ Excerpts from the long road — not every turn, just the spine of the story.
 ```
 You survey Mosswake Gate with courier patience. Exits resolve first: the gate road, the market lane, a darker alley that holds smoke and boot-scrape. Cover is imperfect—crates, a cart wheel, a doorway recess—but better than open mud.
 
-Watchers exist. One is obvious (Eldrin or som
+Watchers exist. One is obvious (Eldrin [[A]] 
 ```
 
 ### Turn 10 — `work` @ Quiet Yard
@@ -128,4 +128,4 @@ Cycle 5 of the long road continues. The letter is still sealed. The debts are st
 
 Raw machine reports stay local under `benchmarks/reports/` (gitignored). This teaser is the shareable presentation slice.
 
-_Generated 2026-08-16T16:09:15 · backend `apply_turn/SQLite`._
+_Generated 2026-09-29T10:17:28 · backend `apply_turn/SQLite`._

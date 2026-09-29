@@ -125,6 +125,29 @@ class TestOwnedItemsAreNotExempt(unittest.TestCase):
         kept = _run("brass key", 1, owned=1, narration="Done.", player_input="I take the brass key")
         self.assertEqual(len(kept), 1)
 
+    def test_take_stock_is_not_acquire_intent(self):
+        # Continuity probes use "I take stock of my injuries". Bare \\btake\\b
+        # on player_input used to set arrived=True for every named item, so
+        # inspecting a seed while taking stock minted more of it.
+        kept = _run(
+            "seed in hand",
+            2,
+            owned=1,
+            narration=INSPECT_SEED,
+            player_input="I take stock of my injuries and how tired I am.",
+        )
+        self.assertEqual(kept, [], "take stock is perception, not a pickup")
+
+    def test_take_a_look_is_not_acquire_intent(self):
+        kept = _run(
+            "seed in hand",
+            2,
+            owned=1,
+            narration=INSPECT_SEED,
+            player_input="I take a look at the seed in hand",
+        )
+        self.assertEqual(kept, [], "take a look is perception, not a pickup")
+
 
 class TestLossesAndMetadataAreUntouched(unittest.TestCase):
     def test_a_loss_needs_no_grounding(self):
@@ -144,6 +167,7 @@ class TestPerceptionIsNotAcquisition(unittest.TestCase):
             "You find the husk of the seed is drier than you remember.",
             "You take in the sight of the iron sword on the rack.",
             "You take stock of the seed and decide to wait.",
+            "You take a look at the iron sword on the rack.",
             "You found the map you were already carrying was water-damaged.",
             "You spot the lantern's wick has burned down to a stub.",
         ):

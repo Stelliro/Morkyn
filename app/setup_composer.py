@@ -669,6 +669,10 @@ def _normalize_difficulty(value: str) -> str:
     text = str(value or "").strip().lower()
     if not text:
         return "normal"
+    # "not easy" / "never brutal" must not count as the named rung.
+    text = _strip_negated_genre_words(text)
+    if not text.strip():
+        return "normal"
     if "brutal" in text or "deadly" in text:
         return "brutal"
     if re.search(r"\bhard\b", text) or "difficult" in text:
@@ -2343,12 +2347,17 @@ def clamp_setup_enum(
     if low in allowed_l:
         # Preserve canonical casing from allowed list
         return allowed_list[allowed_l.index(low)], []
+    # "not easy" / "no hard" must not fuzzy-match the negated token (same
+    # rule as _strip_negated_genre_words on location themes).
+    low_pos = _strip_negated_genre_words(low)
+    if not str(low_pos or "").strip():
+        return default_val, ["negated_enum"]
     # Prefix / contains match (e.g. "very slow growth" → "very slow")
     for idx, a in enumerate(allowed_l):
-        if low == a or low.startswith(a) or a.startswith(low):
+        if low_pos == a or low_pos.startswith(a) or a.startswith(low_pos):
             return allowed_list[idx], ["enum_fuzzy_match"]
     for idx, a in enumerate(allowed_l):
-        if a in low or low in a:
+        if a in low_pos or low_pos in a:
             return allowed_list[idx], ["enum_fuzzy_match"]
     # special_ability_origin aliases handled elsewhere; still clamp
     if field == "special_ability_origin":

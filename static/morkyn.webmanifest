@@ -1,0 +1,10 @@
+{
+  "name": "Morkyn",
+  "short_name": "Morkyn",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0e13",
+  "theme_color": "#0b0e13",
+  "description": "Morkyn. The same app opens in any normal browser, or in its own window."
+}

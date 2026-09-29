@@ -73,6 +73,10 @@ BAND_ALIASES: dict[str, str] = {
     "epic": "huge",
 }
 
+# Immediately previous underscore-token. Not an antonym table: "lose"/"spend"
+# stay sign prefixes in world._resolve_amount, not band negators.
+_BAND_NEGATORS = frozenset({"not", "no", "non", "un", "in", "im", "dis"})
+
 
 def normalize_band(value: Any, default: str = "none") -> str:
     """Coerce anything band-ish into a canonical band name."""
@@ -85,12 +89,28 @@ def normalize_band(value: Any, default: str = "none") -> str:
         return text
     if text in BAND_ALIASES:
         return BAND_ALIASES[text]
-    # "small_gain", "moderate xp" and friends
+    # Whole underscore-tokens only, `(^|_)token(_|$)`. Short aliases
+    # (no, 0, low, mid) stay exact-only: "no" in "unknown" used to return
+    # none. A negator immediately before the token ("not_large", "non_trivial",
+    # "in_significant") is not that band; if every hit is ignored, return default.
+    tokens = [tok for tok in text.split("_") if tok]
     for band in BANDS:
-        if band in text:
+        for index, token in enumerate(tokens):
+            if token != band:
+                continue
+            prev = tokens[index - 1] if index else ""
+            if prev in _BAND_NEGATORS:
+                continue
             return band
     for alias, band in BAND_ALIASES.items():
-        if alias and alias in text:
+        if not alias or len(alias) < 4:
+            continue
+        for index, token in enumerate(tokens):
+            if token != alias:
+                continue
+            prev = tokens[index - 1] if index else ""
+            if prev in _BAND_NEGATORS:
+                continue
             return band
     return default
 

@@ -664,6 +664,58 @@ def _attr_score(stats: dict[str, Any] | None, key: str) -> int:
     return 10
 
 
+_CANON_SCORE_ATTRIBUTES = (
+    "strength",
+    "dexterity",
+    "constitution",
+    "intelligence",
+    "wisdom",
+    "charisma",
+)
+
+
+def scores_from_gear_bonuses(bonuses: dict[str, Any] | None) -> dict[str, int]:
+    """Turn an equipment bonus map into 1..30 scores centered on 10.
+
+    Missing attributes are omitted so score readers keep their default of 10.
+    Defense, dodge, and notes are not ability scores and are dropped. Callers
+    that already hold absolute scores must not pass them through here.
+    """
+    if not isinstance(bonuses, dict) or not bonuses:
+        return {}
+    groups = _stat_alias_groups()
+    spell_to_canon: dict[str, str] = {}
+    for canon in _CANON_SCORE_ATTRIBUTES:
+        for spelling in groups.get(canon, {canon}):
+            spell_to_canon[str(spelling).strip().lower()] = canon
+    totals: dict[str, float] = {}
+    for raw_key, raw_value in bonuses.items():
+        if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+            continue
+        key = str(raw_key or "").strip().lower().replace(" ", "_")
+        canon = spell_to_canon.get(key)
+        if not canon:
+            continue
+        totals[canon] = totals.get(canon, 0.0) + float(raw_value)
+    out: dict[str, int] = {}
+    for canon, bonus in totals.items():
+        out[canon] = max(1, min(30, int(round(10 + bonus))))
+    return out
+
+
+def player_with_gear_scores(player: dict[str, Any] | None) -> dict[str, Any]:
+    """Copy of a player dict whose effective_stats are scores, not bonuses.
+
+    The caller's map is left alone so combat and carry weight still see the
+    raw strength bonus. Only encounter awareness should use the copy.
+    """
+    view = dict(player) if isinstance(player, dict) else {}
+    bonuses = view.get("effective_stats")
+    if isinstance(bonuses, dict):
+        view["effective_stats"] = scores_from_gear_bonuses(bonuses)
+    return view
+
+
 def _skill_rank(skills: list[dict[str, Any]] | None, code_or_name: str) -> int:
     if not skills:
         return 0
@@ -1230,11 +1282,15 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(bargain|haggle|price|appraise|value of|worth)\b", "appraise"),
     # Opening speech / ask / talk → charisma-backed persuasion
     (r"\b(talk|speak|ask|greet|address|approach .+ (and )?(talk|ask|speak)|say (hello|hi)|introduce)\b", "persuasion"),
-    (r"\b(lie|bluff|deceive|con)\b", "deception"),
+    # Reclining "lie down/back/low/still/awake/asleep" is rest, not a bluff.
+    # The lookahead also sees stemmed variants ("lies down" -> "lie down").
+    (r"\b(lie\b(?!\s+(?:down|back|low|still|awake|asleep)\b)|bluff|deceive|con)\b", "deception"),
     (r"\b(intimidate|threaten|scare)\b", "intimidation"),
     (r"\b(disguise|costume|impersonat[a-z]*|pretend to be)\b", "disguise"),
     (r"\b(gambl[a-z]*|bet|wager|cards|dice game)\b", "gambling"),
     (r"\b(symbol|rune|glyph|sigil|etch)\b", "symbol_lore"),
+    # Before bare "read": "read him/her/them/the room" is insight; "read the letter" is not.
+    (r"\b(insight|read (him|her|them|the room)|sense motive)\b", "insight"),
     (r"\b(read|inspect|examine|study|analyze)\b", "investigation"),
     (r"\b(search|look for|scan|look around)\b", "perception"),
     (r"\b(climb|jump|swim|lift|force|break|bash)\b", "athletics"),
@@ -1266,7 +1322,6 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(performance|sing|song|act|storytell[a-z]*)\b", "performance"),
     (r"\b(etiquette|court manners|protocol|formal address)\b", "etiquette"),
     (r"\b(streetwise|fence|underworld|gang rumor)\b", "streetwise"),
-    (r"\b(insight|read (him|her|them|the room)|sense motive)\b", "insight"),
     (r"\b(acrobatics|balance|tumble|tightrope)\b", "acrobatics"),
     (r"\b(sleight|pickpocket|palm|switch the)\b", "sleight_of_hand"),
     (r"\b(tactics|ambush plan|formation)\b", "tactics"),

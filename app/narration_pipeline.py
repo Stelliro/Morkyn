@@ -256,12 +256,9 @@ def _location_match_keys(loc: dict[str, Any]) -> set[str]:
 def _npc_at_location(npc: dict[str, Any], loc_keys: set[str]) -> bool:
     if not loc_keys:
         return True
-    probe = {
-        "id": npc.get("location_id"),
-        "code": npc.get("location_code") or npc.get("code"),
-        "name": npc.get("location_name"),
-    }
-    # location_code on npc is the place code; code on npc is entity code — prefer location_* fields.
+    # location_code / location_name / location_id are get_state joins.
+    # DSL + JSON schema store the place on `location` (code or name). Never treat
+    # npc.code (entity A/B/…) as a place code.
     probe_keys = set()
     if npc.get("location_id") is not None:
         probe_keys.add(f"id:{npc.get('location_id')}")
@@ -269,6 +266,10 @@ def _npc_at_location(npc: dict[str, Any], loc_keys: set[str]) -> bool:
         probe_keys.add(f"code:{str(npc.get('location_code')).strip().upper()}")
     if npc.get("location_name"):
         probe_keys.add(f"name:{str(npc.get('location_name')).strip().lower()}")
+    loc_field = str(npc.get("location") or "").strip()
+    if loc_field:
+        probe_keys.add(f"code:{loc_field.upper()}")
+        probe_keys.add(f"name:{loc_field.lower()}")
     return bool(probe_keys & loc_keys) if probe_keys else False
 
 
@@ -309,7 +310,14 @@ def collect_local_npcs(context: dict[str, Any]) -> list[dict[str, Any]]:
         if isinstance(npc, dict) and _npc_at_location(npc, loc_keys):
             _add(npc)
 
-    # Prompt-context working sets
+    def _add_code(code: Any) -> None:
+        token = str(code or "").strip()
+        if token:
+            _add({"code": token})
+
+    # Prompt-context working sets. world._working_set ships nearby_npc_codes,
+    # not a `npcs` list; world._action_context ships local_focus_codes.nearby_npcs.
+    # Focused handoff may drop locations[], so these code lists are the local cast.
     for key in ("local_npcs", "nearby_npcs"):
         for npc in context.get(key) or []:
             _add(npc)
@@ -317,9 +325,17 @@ def collect_local_npcs(context: dict[str, Any]) -> list[dict[str, Any]]:
     for key in ("local_npcs", "nearby_npcs", "npcs"):
         for npc in action.get(key) or []:
             _add(npc)
+    focus = action.get("local_focus_codes") if isinstance(action.get("local_focus_codes"), dict) else {}
+    for code in focus.get("nearby_npcs") or []:
+        _add_code(code)
+    targets = action.get("target_codes") if isinstance(action.get("target_codes"), dict) else {}
+    for code in targets.get("npcs") or []:
+        _add_code(code)
     working = context.get("working_set") if isinstance(context.get("working_set"), dict) else {}
     for npc in working.get("npcs") or []:
         _add(npc)
+    for code in working.get("nearby_npc_codes") or []:
+        _add_code(code)
 
     return found
 
@@ -495,17 +511,20 @@ def should_skip_consolidator(paragraph_count: int, density_score: int) -> bool:
 
 
 def _beat_roles(count: int) -> list[str]:
+    # Last beat is pressure, not "choice". PROSE_VOICE / DSL_SYSTEM_PROMPT
+    # forbid ending on a restated option menu ("The choice is yours") — that
+    # hands the turn back unplayed. End on consequence or new pressure.
     if count <= 1:
         return ["act"]
     if count == 2:
-        return ["establish", "choice"]
+        return ["establish", "pressure"]
     if count == 3:
-        return ["establish", "act", "choice"]
+        return ["establish", "act", "pressure"]
     if count == 4:
-        return ["establish", "act", "consequence", "choice"]
+        return ["establish", "act", "consequence", "pressure"]
     if count == 5:
-        return ["establish", "act", "react", "consequence", "choice"]
-    return ["establish", "act", "react", "consequence", "pressure", "choice"][:count]
+        return ["establish", "act", "react", "consequence", "pressure"]
+    return ["establish", "act", "react", "consequence", "pressure", "hook"][:count]
 
 
 # --- surgical edits ----------------------------------------------------------
@@ -933,8 +952,11 @@ def build_paragraph_briefs(
         cover = []
         if must_pool:
             cover.append(must_pool[index % len(must_pool)])
-        if role == "choice" and player_input:
-            cover.append("Leave at least one concrete next choice open.")
+        if role in {"pressure", "hook"} and player_input and not str(player_input).startswith("__"):
+            cover.append(
+                "End on a consequence, new pressure, or concrete detail. "
+                "Do not restate the player's options as a menu."
+            )
         briefs.append(
             {
                 "beat_index": index + 1,
@@ -1019,8 +1041,9 @@ def default_paragraph_writer(brief: dict[str, Any], previous_paragraph: str, led
         "act": f"Action takes hold in {loc}." + (f" Intent: {intent}." if intent and not intent.startswith("__") else ""),
         "react": f"The place answers: a shift in posture, a sound, or an NPC response that confirms the world noticed.",
         "consequence": f"A concrete consequence lands without undoing prior facts—cost, opportunity, or a new constraint.",
-        "pressure": f"Pressure tightens around {loc}: time, witnesses, or competing needs force a sharper choice.",
-        "choice": f"The moment leaves clear next moves: press, wait, speak, withdraw, or reassess with what is now known.",
+        "pressure": f"Pressure tightens around {loc}: time, witnesses, or a new constraint lands.",
+        "hook": f"A concrete detail in {loc} remains unresolved — not a menu of options, a fact the player can act on.",
+        "choice": f"A concrete detail in {loc} remains unresolved — not a menu of options, a fact the player can act on.",
     }
     text = templates.get(role, templates["act"])
     if cover:

@@ -99,8 +99,10 @@ from app.idea_bank import (
 from app.starter_logic import fact_check_starter_loadout
 from app.skill_checks import (
     catalog_public,
+    player_with_gear_scores,
     register_or_adjust_skill,
     resolve_check,
+    scores_from_gear_bonuses,
     set_skill_enabled,
     settings_from_setup,
 )
@@ -112,8 +114,10 @@ from app.world import (
     TURN_CONTEXT_PLANNER_VERSION,
     add_alias,
     autosave_campaign,
+    initiate_fight,
     consolidate_memory,
     create_player_alias,
+    delete_player_alias,
     delete_campaign_slot,
     export_world,
     get_context_health,
@@ -501,6 +505,10 @@ class PlayerAliasStateRequest(BaseModel):
     disguise_description: str = Field(default="", max_length=300)
 
 
+class PlayerAliasDeleteRequest(BaseModel):
+    alias_id: int
+
+
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1, max_length=300)
 
@@ -527,6 +535,9 @@ class ModelConfigRequest(BaseModel):
     response_token_hard_cap: int = Field(default=2000, ge=64, le=100000)
     # Optional: adapter_hint → Ollama model / API model / GGUF path for turn-time routing.
     theme_adapter_map: dict[str, str] = Field(default_factory=dict)
+    # UI posts these on Save. Omitting them made the LoRA fields look saved, then vanish.
+    theme_llm_lora_map: dict[str, Any] = Field(default_factory=dict)
+    lora_path: str = Field(default="", max_length=1000)
 
 
 class ImageConfigRequest(BaseModel):
@@ -838,7 +849,9 @@ def api_model_config():
 
 @app.post("/api/model-config")
 def api_update_model_config(request: ModelConfigRequest):
-    return update_model_config(request.model_dump())
+    # Only keys the client sent. A full dump would reset lora_path / theme maps
+    # to empty defaults on partial posts (Ensure adapter, older clients).
+    return update_model_config(request.model_dump(exclude_unset=True))
 
 
 class SessionThemeRequest(BaseModel):
@@ -1153,7 +1166,8 @@ def api_image_installable_install(request: ImageInstallRequest):
 
 class LoraWeight(BaseModel):
     name: str = Field(default="", max_length=200)
-    weight: float = Field(default=1.0, ge=0.05, le=2.0)
+    # Same range as the setup slider and format_lora_tags (age sliders sit outside 0–2).
+    weight: float = Field(default=1.0, ge=-5.0, le=5.0)
 
 
 class CharacterSetRequest(BaseModel):
@@ -2631,8 +2645,17 @@ def api_skill_check_resolve(request: SkillCheckRequest):
         options = ((state.get("settings") or {}).get("playthrough_options") or {}) if isinstance(state, dict) else {}
         settings = request.settings or options.get("skill_check_settings") or options
         player = (state.get("player") or {}) if isinstance(state, dict) else {}
-        stats = request.player_stats or player.get("effective_stats") or player.get("stats") or {}
+        explicit = request.player_stats if isinstance(request.player_stats, dict) else {}
+        if explicit:
+            stats = explicit
+        elif isinstance(player.get("effective_stats"), dict):
+            stats = scores_from_gear_bonuses(player.get("effective_stats"))
+        else:
+            raw_stats = player.get("stats")
+            stats = raw_stats if isinstance(raw_stats, dict) else {}
         skills = request.player_skills or (state.get("skills") if isinstance(state, dict) else []) or []
+        inventory = state.get("inventory") if isinstance(state, dict) else None
+        abilities = state.get("abilities") if isinstance(state, dict) else None
         return resolve_check(
             skill_code=request.skill_code or "general",
             difficulty=request.difficulty or None,
@@ -2643,6 +2666,8 @@ def api_skill_check_resolve(request: SkillCheckRequest):
             settings=settings if isinstance(settings, dict) else {},
             context_note=request.context_note,
             weapon_or_tool=request.weapon_or_tool or "",
+            inventory=inventory if isinstance(inventory, list) else None,
+            abilities=abilities if isinstance(abilities, list) else None,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -2802,7 +2827,7 @@ def api_danger():
             terrain=terrain,
             weather=get_weather(),
             world_time=get_world_time(),
-            player=snapshot.get("player"),
+            player=player_with_gear_scores(snapshot.get("player")),
             skills=snapshot.get("skills"),
             resources=snapshot.get("resources"),
             inventory_summary=snapshot.get("inventory_summary"),
@@ -3167,8 +3192,45 @@ def api_setup_starter_logic(request: StarterLogicRequest):
     )
 
 
+class AskRequest(BaseModel):
+    text: str = Field(default="", max_length=500)
+
+
+class CommandRequest(BaseModel):
+    text: str = Field(default="", max_length=2000)
+
+
+@app.post("/api/command")
+def api_command(request: CommandRequest):
+    """Debug and help commands. Does not play a scene."""
+    from app.debug_commands import handle_command
+
+    result = handle_command(request.text)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "Command failed."))
+    return result
+
+
+@app.post("/api/ask")
+def api_ask(request: AskRequest):
+    """Look something up. Does not advance the turn."""
+    from app.ask import ask_about
+
+    result = ask_about(request.text)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "Ask failed."))
+    return result
+
+
 @app.post("/api/turn")
 def api_turn(request: TurnRequest):
+    if request.text.strip().startswith("/"):
+        from app.debug_commands import handle_command
+
+        result = handle_command(request.text)
+        if not result.get("ok"):
+            raise HTTPException(status_code=400, detail=str(result.get("error") or "Command failed."))
+        return result
     if not request.text.strip():
         return play_continue_turn()
     return play_turn(request.text)
@@ -3177,6 +3239,28 @@ def api_turn(request: TurnRequest):
 @app.post("/api/continue")
 def api_continue():
     return play_continue_turn()
+
+
+class InitiateFightRequest(BaseModel):
+    npc_code: str = Field(max_length=10)
+
+
+@app.post("/api/initiate-fight")
+def api_initiate_fight(request: InitiateFightRequest):
+    """
+    Player explicitly starts a fight with an NPC by code.
+    Pre-warms NPC combat stats, then fires a full combat turn.
+    Response shape is identical to /api/turn.
+    """
+    code = request.npc_code.strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="npc_code is required")
+    try:
+        return initiate_fight(code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
 
 
 class WaitRequest(BaseModel):
@@ -3361,6 +3445,14 @@ def api_player_alias_state(request: PlayerAliasStateRequest):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/player-alias/delete")
+def api_player_alias_delete(request: PlayerAliasDeleteRequest):
+    try:
+        return delete_player_alias(request.alias_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/rewind")
 def api_rewind(request: RewindRequest | None = None):
     try:
@@ -3534,3 +3626,274 @@ def api_gm_notes(request: GmNotesRequest):
 @app.get("/api/gm-notes")
 def api_get_gm_notes():
     return get_state(include_hidden=True).get("gm_notes", {"content": ""})
+
+
+# ---------------------------------------------------------------------------
+# Quest endpoints (0.9.13)
+# ---------------------------------------------------------------------------
+
+class RelationshipUpdateRequest(BaseModel):
+    affinity_delta: int = 0
+    fear_delta: int = 0
+    respect_delta: int = 0
+    reason: str = ""
+
+
+@app.get("/api/quests")
+def api_get_quests():
+    from app.quests import get_active_quests
+    from app.db import connect
+    with connect() as conn:
+        quests = get_active_quests(conn)
+    return {"ok": True, "quests": quests}
+
+
+@app.post("/api/quests/{quest_id}/advance")
+def api_advance_quest(quest_id: int):
+    from app.quests import advance_quest_step
+    from app.db import connect
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+        turn = int(row["value"]) if row else 0
+        result = advance_quest_step(conn, quest_id, turn=turn)
+        if result.get("completed"):
+            try:
+                conn.execute(
+                    "UPDATE player SET gold = gold + ?, xp = xp + ? WHERE id = 1",
+                    (result["reward_gold"], result["reward_xp"]),
+                )
+            except Exception:
+                pass
+            # Apply quest completion relationship delta to the giver NPC
+            try:
+                quest_row = conn.execute(
+                    "SELECT giver_npc_id FROM quests WHERE id = ?", (quest_id,)
+                ).fetchone()
+                giver_npc_id = int(quest_row["giver_npc_id"]) if quest_row and quest_row["giver_npc_id"] else None
+                if giver_npc_id:
+                    from app.relationships import update_relationship, RELATIONSHIP_EVENTS
+                    update_relationship(
+                        conn, giver_npc_id,
+                        reason=f"Player completed quest {quest_id}",
+                        **RELATIONSHIP_EVENTS["quest_complete_for_npc"],
+                    )
+            except Exception:
+                pass
+    return result
+
+
+class QuestCreateRequest(BaseModel):
+    title: str = Field(max_length=120)
+    description: str = Field(default="", max_length=800)
+    difficulty: str = Field(default="normal", max_length=40)
+    steps: list[dict] = Field(default_factory=list)
+    reward_gold: int | None = None
+    reward_xp: int | None = None
+    reward_item: str = Field(default="", max_length=120)
+    giver_npc_id: int | None = None
+    timer_turns: int = Field(default=0)
+
+
+@app.post("/api/quests")
+def api_create_quest(request: QuestCreateRequest):
+    from app.quests import create_quest
+    from app.db import connect
+
+    difficulty_map = {"easy": "easy", "medium": "normal", "hard": "hard", "legendary": "deadly", "normal": "normal", "trivial": "trivial", "deadly": "deadly"}
+    difficulty = difficulty_map.get(str(request.difficulty or "normal").lower(), "normal")
+
+    steps = request.steps or []
+    if not steps:
+        return {"ok": False, "error": "At least one step is required"}
+    if len(steps) > 6:
+        return {"ok": False, "error": "At most 6 steps allowed"}
+
+    reward_items = [request.reward_item] if request.reward_item else []
+
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+        turn = int(row["value"]) if row else 0
+        try:
+            quest_id = create_quest(
+                conn,
+                title=request.title,
+                description=request.description,
+                steps=steps,
+                reward_gold=request.reward_gold,
+                reward_xp=request.reward_xp,
+                reward_items=reward_items,
+                difficulty=difficulty,
+                timer_turns=request.timer_turns or 0,
+                giver_npc_id=request.giver_npc_id,
+                created_turn=turn,
+            )
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+    return {"ok": True, "quest_id": quest_id}
+
+
+@app.post("/api/quests/seed")
+def api_seed_quests():
+    from app.quests import seed_starter_quests
+    from app.db import connect
+    with connect() as conn:
+        seed_starter_quests(conn)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# NPC relationship endpoints (0.9.13)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/relationships")
+def api_get_relationships():
+    from app.relationships import all_relationships_for_llm
+    from app.db import connect
+    with connect() as conn:
+        rels = all_relationships_for_llm(conn)
+    return {"ok": True, "relationships": rels}
+
+
+@app.get("/api/relationships/{npc_id}")
+def api_get_npc_relationship(npc_id: int):
+    from app.relationships import get_relationship_summary
+    from app.db import connect
+    with connect() as conn:
+        rel = get_relationship_summary(conn, npc_id)
+    return {"ok": True, "relationship": rel}
+
+
+@app.post("/api/relationships/{npc_id}/update")
+def api_update_npc_relationship(npc_id: int, request: RelationshipUpdateRequest):
+    from app.relationships import update_relationship
+    from app.db import connect
+    with connect() as conn:
+        rel = update_relationship(
+            conn,
+            npc_id,
+            affinity_delta=request.affinity_delta,
+            fear_delta=request.fear_delta,
+            respect_delta=request.respect_delta,
+            reason=request.reason,
+        )
+    return {"ok": True, "relationship": rel}
+
+
+# ── Titles ────────────────────────────────────────────────────────────────────
+
+
+@app.get("/api/titles")
+def api_player_titles():
+    """Player's currently earned titles with stat bonuses."""
+    from app.titles import get_entity_titles
+    from app.db import connect
+    with connect() as conn:
+        titles = get_entity_titles(1, "player", include_hidden=False, conn=conn)
+    return {"ok": True, "titles": titles}
+
+
+@app.get("/api/titles/all")
+def api_all_titles():
+    """Full title catalogue with requirements (for reference)."""
+    from app.titles import get_all_titles
+    from app.db import connect
+    with connect() as conn:
+        titles = get_all_titles(conn=conn)
+    return {"ok": True, "titles": titles}
+
+
+class TitlesSettingRequest(BaseModel):
+    enabled: bool = True
+
+
+@app.post("/api/settings/titles")
+def api_titles_setting(request: TitlesSettingRequest):
+    """Toggle the titles system on/off for this playthrough."""
+    from app.db import connect
+    with connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('titles_enabled', ?)",
+            ("true" if request.enabled else "false",),
+        )
+    return {"ok": True, "titles_enabled": request.enabled}
+
+
+# ── Party ─────────────────────────────────────────────────────────────────────
+
+
+@app.get("/api/party")
+def api_get_party():
+    """Current party members with morale and combat bonus."""
+    from app.party import get_party
+    from app.db import connect
+    with connect() as conn:
+        members = get_party(conn=conn)
+    return {"ok": True, "party": members}
+
+
+class PartyInviteRequest(BaseModel):
+    npc_id: int
+    role: str = Field(default="companion", max_length=20)
+
+
+@app.post("/api/party/invite")
+def api_party_invite(request: PartyInviteRequest):
+    """Invite an NPC to the party (requires affinity >= Friendly / 40)."""
+    from app.party import invite_npc_to_party
+    from app.db import connect
+    with connect() as conn:
+        result = invite_npc_to_party(request.npc_id, role=request.role, conn=conn)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "Could not invite NPC")
+    return result
+
+
+class PartyRemoveRequest(BaseModel):
+    npc_id: int
+
+
+@app.post("/api/party/remove")
+def api_party_remove(request: PartyRemoveRequest):
+    """Remove an NPC from the party (applies affinity −10)."""
+    from app.party import remove_from_party
+    from app.db import connect
+    with connect() as conn:
+        result = remove_from_party(request.npc_id, conn=conn)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error") or "NPC not in party")
+    return result
+
+
+# [NARRATOR ONLY] — This endpoint exposes hidden NPC psychology for debugging
+# and narrator LLM inspection. It must NEVER be wired into any player-facing UI.
+# The player sees only affinity/fear/respect from /api/relationships/{npc_id}.
+@app.get("/api/npc/{npc_id}/psychology")
+def api_npc_psychology(npc_id: int):
+    """
+    [NARRATOR ONLY] Full hidden psychology dump for one NPC.
+    Returns private feelings, active agendas, family ties, and a compact narrator text block.
+    Never expose this to the player-facing interface.
+    """
+    from app.npc_psychology import get_full_psychology_dump, init_psychology_tables
+    from app.db import connect
+    with connect() as conn:
+        init_psychology_tables(conn)
+        dump = get_full_psychology_dump(conn, npc_id)
+    if "error" in dump:
+        raise HTTPException(status_code=404, detail=dump["error"])
+    return {"ok": True, **dump}
+
+
+@app.post("/api/npc/psychology/seed-demo")
+def api_npc_psychology_seed_demo():
+    """
+    [NARRATOR ONLY] Seed the three demonstration psychology scenarios.
+    Idempotent — skips any scenario that already has the relevant feeling/agenda.
+    """
+    from app.npc_psychology import seed_demo_psychology, init_psychology_tables
+    from app.db import connect
+    with connect() as conn:
+        init_psychology_tables(conn)
+        report = seed_demo_psychology(conn)
+    return {"ok": True, **report}

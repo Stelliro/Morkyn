@@ -40,6 +40,7 @@ OPCODES = {
     "JOURNAL",
     "INDEX",
     "NOTE",
+    "CAST",
 }
 
 NAR_MARKERS = ("===NAR===", "===NARRATION===", "@NAR")
@@ -85,8 +86,17 @@ CLAIM "<claim text>" VERDICT <true|false|unverified> [SKILL <skill>] [NOTES "<wh
 JOURNAL <fact|quest|rumor|event|system> "<content>"
 INDEX <npc|location|item|event> <code> "<summary_append>"
 NOTE "<short durable journal-style fact>"
+CAST present <npc_code>
+CAST interacting <npc_code>
+CAST off <npc_code>
+CAST keyword <one scene word>
 
 Rules:
+CAST is the only way to change who is in the active scene.
+interacting = the character who replies to the player. present = nearby and relevant, but not the one who answers.
+If nobody is interacting, do not invent a speaker. If you want someone to address the player, CAST interacting that code.
+A later "how was your day?" is for the interacting character, not everyone marked present.
+Leave CAST out when the scene cast does not change.
 - Database/world_state is source of truth. Only propose justified changes.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
   Write "XP small", "GOLD -moderate", "HP -small", "GRANT \"rope\" QTY small".
@@ -485,7 +495,9 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         turn["npcs"].append(npc)
     elif op == "NPC_NOTE":
         code = (args[0] if args else "").upper()
-        fact = args[1] if len(args) > 1 else " ".join(args[1:])
+        # Join every token after the code. A quoted fact is one arg; an unquoted
+        # fact is many. Taking only args[1] stored "the" and dropped the rest.
+        fact = " ".join(args[1:]).strip()
         if not code or not fact:
             raise TurnDslError(f"NPC_NOTE requires code and fact on line {entry['line']}")
         turn["index_updates"].append(
@@ -493,7 +505,7 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         )
     elif op == "TALK":
         code = (args[0] if args else "").upper()
-        topic = args[1] if len(args) > 1 else "conversation"
+        topic = " ".join(args[1:]).strip() if len(args) > 1 else "conversation"
         if not code:
             raise TurnDslError(f"TALK requires npc code on line {entry['line']}")
         turn["conversations"].append(
@@ -610,7 +622,7 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         )
     elif op == "GM":
         trigger = args[0] if args else "offscreen"
-        summary = args[1] if len(args) > 1 else trigger
+        summary = " ".join(args[1:]).strip() if len(args) > 1 else trigger
         turn["gm_events"].append(
             {
                 "trigger": trigger[:240],
@@ -662,9 +674,19 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             }
         )
     elif op == "JOURNAL":
-        kind = (args[0] if args else "fact")[:40]
-        content = args[1] if len(args) > 1 else " ".join(args[1:])
-        turn["journal"].append({"kind": kind, "content": content[:1400]})
+        # Kind is only the closed token. A bare quote, or an unquoted sentence
+        # after the kind, used to keep one word (or park the whole fact in kind
+        # with empty content) and the journal row lost the memory.
+        known_kinds = {"fact", "quest", "rumor", "event", "system"}
+        head = str(args[0] if args else "").strip()
+        if head.lower() in known_kinds and len(args) > 1:
+            kind = head.lower()[:40]
+            content = " ".join(args[1:]).strip()
+        else:
+            kind = "fact"
+            content = " ".join(args).strip() if args else ""
+        if content:
+            turn["journal"].append({"kind": kind, "content": content[:1400]})
     elif op == "INDEX":
         if len(args) < 3:
             raise TurnDslError(f"INDEX requires type code summary on line {entry['line']}")
@@ -679,6 +701,18 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         content = " ".join(args) if args else ""
         if content:
             turn["journal"].append({"kind": "fact", "content": content[:1400]})
+    elif op == "CAST":
+        slot = str(args[0] if args else "").strip().lower()
+        value = " ".join(args[1:]).strip() if len(args) > 1 else ""
+        cast = turn.setdefault("scene_cast", {"present": [], "interacting": [], "off": [], "keywords": []})
+        if slot in {"present", "interacting", "off"} and value:
+            code = value.split()[0].upper()[:20]
+            if code and code not in cast[slot]:
+                cast[slot].append(code)
+        elif slot == "keyword" and value:
+            word = re.sub(r"[^A-Za-z0-9'-]+", "", value.split()[0]).lower()[:40]
+            if len(word) >= 3 and word not in cast["keywords"]:
+                cast["keywords"].append(word)
 
 
 def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "") -> dict[str, Any]:
@@ -705,6 +739,7 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         },
         "skill_changes": [],
         "inventory_changes": [],
+        "scene_cast": {"present": [], "interacting": [], "off": [], "keywords": []},
         "equipment_slots": [],
         "equipment_changes": [],
         "inventory_capacity_modifiers": [],

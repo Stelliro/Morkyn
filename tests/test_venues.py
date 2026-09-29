@@ -121,6 +121,19 @@ class TestCommonality(unittest.TestCase):
         self.assertEqual(counts, sorted(counts))
         self.assertLess(counts[0], counts[-1])
 
+    def test_settlement_words_are_tokens_not_substrings(self):
+        """'port' in 'portal' used to classify a portal camp as a town.
+
+        kind_allowed then permitted apothecaries the hamlet comment forbids.
+        Same trap as venue_kind_from_name already avoids with word boundaries.
+        """
+        self.assertEqual(venues.normalize_settlement_size("Brimmer Port"), "town")
+        self.assertEqual(venues.normalize_settlement_size("market town"), "town")
+        self.assertNotEqual(venues.normalize_settlement_size("The Portal"), "town")
+        self.assertNotEqual(venues.settlement_size_from_name("Portal Hollow"), "town")
+        self.assertEqual(venues.settlement_size_from_name("Opportunity Camp"), "hamlet")
+        self.assertFalse(venues.kind_allowed("apothecary", venues.settlement_size_from_name("The Portal")))
+
 
 class _WorldCase(unittest.TestCase):
     """Each test gets a clean world; these touch the locations table directly."""
