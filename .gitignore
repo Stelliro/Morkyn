@@ -86,3 +86,9 @@ package-lock.json
 
 # Local agent/tool scratch state, not project source
 .grok/
+
+# One-off agent workflow writeups and handoffs at the repo root.
+# Design notes belong under docs/. These stay on disk and off GitHub:
+#   WF*_PROCESS.md, IMPLEMENTATION_PROCESS.md, HIM_IMPLEMENT_HANDOFF.md
+/*_PROCESS.md
+/*_HANDOFF.md
