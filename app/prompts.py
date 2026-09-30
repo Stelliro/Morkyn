@@ -233,7 +233,8 @@ Continuity rules:
 - Use world_state.recognition when an NPC first interacts with the player. recognition_chance_percent_cap is capped at 80, so even famous events never mean everyone knows the player. Distance and NPC role matter: guards, merchants, officials, gossips, faction agents, and innkeepers are more likely to know rumors; isolated or uninterested NPCs are less likely.
 - If an NPC recognizes the player from fame/infamy, mention it subtly and tie it to a listed recognition event. If the chance is low or the NPC role is poor for rumors, they should not know.
 - NPCs have personality, likes, principles, dislikes, attitude, and trust. Use those constraints. A kind NPC should object to pointless cruelty; a fearful NPC may avoid confrontation; a proud NPC may resist insults; a corrupt NPC may tolerate harm if paid or protected.
-- NPCs and enemies have durable rank-based stats after first meaningful contact. Use rank letters from rank_scale, normally F, E, D, C, B, A, S, SS, SSS. Do not use raw stat numbers. A rank means relative capability versus the player: higher rank is proportionally stronger, lower rank is weaker. Use difficulty as enemy scaling: easy makes higher enemy ranks uncommon, normal mixes near-player ranks, hard/brutal makes higher ranks and specialized skills more common.
+- NPCs and enemies have durable rank-based stats after first meaningful contact. Use the rungs named in playthrough_options.setting_templates.rank_scale when that rule is present; otherwise use rank_scale, normally F, E, D, C, B, A, S, SS, SSS. Do not use raw stat numbers. A rank means relative capability versus the player: higher rank is proportionally stronger, lower rank is weaker. Use difficulty as enemy scaling: easy makes higher enemy ranks uncommon, normal mixes near-player ranks, hard/brutal makes higher ranks and specialized skills more common.
+- playthrough_options.setting_templates holds the written rule for each setup choice. The short field is only the selection. The matching template rule is what that selection means in this playthrough. Obey it for the rank ladder, economy, quests, factions, magic, loot, and the other stored rules. Do not invent a second ladder or a second economy.
 - stat_profile must use clear relative labels or rank letters, such as {"strength":"C/high vs player","speed":"E/low vs player","endurance":"D/near player","threat":"C"}. skill_profile must list notable NPC/enemy skills by rank or state "none/common training" when ordinary.
 - Generate or update NPC stat_profile and skill_profile when the player first meets, sizes up, fights, negotiates with, or materially observes that NPC. If the NPC is only vaguely mentioned, you may leave stats minimal until contact.
 - If npc_skill_frequency says few/no NPCs have special skills, keep skill_profile ordinary unless role or story requires it. If it says many/most have skills, assign appropriate ranked skills more often.
@@ -496,7 +497,7 @@ Rules:
 - If turn_kind is continue_scene, no new player action was supplied. Advance the current situation a little and leave the next choice open.
 - Create NPCs only when directly met or clearly needed. New NPCs must include name, race, location, role, summary, attitude, personality, likes, principles, dislikes, rank, stat_profile, skill_profile, trust_band, known_fact. role is a job/social identity (guard, merchant, gatekeeper), never a map tile kind (gate, road, ruins, dungeon, monolith). NPC names are short proper names — a personal name alone, or a role word plus a personal name — never clothing, gear, windows, or job sentences.
 - NPC codes are assigned by the database, so new NPC code can be null. Existing references must use known codes.
-- Use rank letters/relative labels, not raw stat numbers. Typical ranks: F,E,D,C,B,A,S,SS,SSS.
+- Use rank letters/relative labels, not raw stat numbers. When playthrough_options.setting_templates.rank_scale is present, use only the rungs named there. Otherwise typical ranks are F,E,D,C,B,A,S,SS,SSS. The other setting_templates rules are what the short setup choices mean.
 - Create/update items, locations, events, conversations, response_drafts, ability_updates, and index_updates only when justified.
 - Create/update inventory items only when actually gained, lost, bought, crafted, discovered, or equipped. Include weight, slot_size, item_type, rarity, enchantments, stat_modifiers, granted_abilities, stack_limit, and container/dimensional fields when useful. Equipment-granted powers belong on granted_abilities, not permanent ability_updates.
 - Respect inventory_summary weight/slot limits. Backpacks mainly add packed slots or modest carry_modifier; use inventory_capacity_modifiers for spells/abilities/effects that change carrying capacity; dimensional_space can make slots effectively infinite and multiply weight capacity, but should be rare.
@@ -690,6 +691,17 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 "not a straight line or a solid block, and each cell contains an internal grid of at most 128 by 128. "
                 "One step does not cross the inside of a city."
             )
+        leaning = map_space.get("people_leaning") if isinstance(map_space.get("people_leaning"), dict) else None
+        if leaning:
+            map_clause += (
+                " map_space.people_leaning.majority is who most inhabitants are when anyone lives in this world. "
+                "A kind is a leaning, not a census: dwarven may be dwarves or a people near that idea, "
+                "darkling may be creatures that keep to the dark or a people near that idea. "
+                "The local kind may be empty, and even a named kind may be absent from the scene. "
+                "Do not treat the label as a race that must be spoken."
+            )
+        if map_space.get("materials"):
+            map_clause += " map_space.materials are what this land's ground and goods are made of."
     wait_extra = ""
     if turn_kind == "wait_scene":
         wait_extra = (
@@ -726,6 +738,9 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 "world already knows: write recall_contract.specifics into the narration as plain "
                 "text. Restating the question ('you answer honestly who you owe, how much') is not "
                 "an answer. "
+                "When world_state.settings.playthrough_options.setting_templates is present, "
+                "those written rules define the chosen rank scale, economy, quests, and the other listed settings. "
+                "Follow the stored rule. "
                 "Prefer existing codes. Database wins over invention."
             ),
         },
@@ -783,7 +798,7 @@ def build_verify_prompt(context: dict[str, Any], player_input: str, draft: dict[
             "turn_kind": turn_kind,
             "player_input": player_input,
             "draft_turn": draft,
-            "instruction": "Return a corrected, checked full turn JSON. If world_state.verification_policy exists, focus on remaining_checks and blockers; treat deterministically_verified checks as already cleared unless the draft contradicts them. Otherwise prioritize world_state.turn_plan.verification_checks and world_state.action_context.priority_segments when checking the draft. If turn_kind is opening_scene or continue_scene, do not invent a player action. Preserve or expand useful continuous narration detail unless it contradicts state or exceeds the configured narration_detail; final narration should be at least 1000 visible characters and normally about 1500. Keep scene_plan high-level with 1-6 focus_points, event persistence metadata plausible, and gm_events hidden. Do not add unsupported facts.",
+            "instruction": "Return a corrected, checked full turn JSON. If world_state.verification_policy exists, focus on remaining_checks and blockers; treat deterministically_verified checks as already cleared unless the draft contradicts them. Otherwise prioritize world_state.turn_plan.verification_checks and world_state.action_context.priority_segments when checking the draft. If turn_kind is opening_scene or continue_scene, do not invent a player action. Preserve or expand useful continuous narration detail unless it contradicts state or exceeds the configured narration_detail; final narration should be at least 1000 visible characters and normally about 1500. Keep scene_plan high-level with 1-6 focus_points, event persistence metadata plausible, and gm_events hidden. Do not add unsupported facts. If playthrough_options.setting_templates is present, those written rules define the setup choices. Do not replace the stored rank ladder or the other template rules.",
         },
         ensure_ascii=True,
         separators=(",", ":"),

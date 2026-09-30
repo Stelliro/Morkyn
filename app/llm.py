@@ -8692,6 +8692,93 @@ def _turn_token_default(context: dict[str, Any], phase: str, config: dict[str, A
     return defaults.get(detail, defaults["rich"])
 
 
+
+_DRAFT_KEY_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*")
+_DRAFT_JSON_KEYS = (
+    *TURN_SHAPE_KEYS,
+    "goal", "focus_points", "kind", "summary", "event_worthy", "persistence",
+    "label", "text", "health_band", "xp_band", "gold_band", "karma_band",
+    "move_to_location", "move_to_location_code", "karma_reason", "karma_visibility",
+    "name", "delta_band", "notes", "description", "quantity_band", "weight",
+    "slot_size", "item_type", "rarity", "enchantments", "stat_modifiers",
+    "granted_abilities", "stack_limit", "carry_modifier", "container_bonus_weight",
+    "container_bonus_slots", "dimensional_space", "code", "category", "capacity",
+    "accepts", "source_item_code", "item_name", "item_code", "slot_code",
+    "slot_name", "equip", "source", "weight_bonus", "slot_bonus", "active",
+    "race", "location", "role", "attitude", "personality", "likes", "principles",
+    "dislikes", "rank", "stat_profile", "strength", "speed", "endurance",
+    "threat", "skill_profile", "combat", "social", "special", "trust_band",
+    "known_fact", "mentioned_by", "source_code", "target_code", "weight_delta",
+    "title", "location_code", "npc_code", "status", "disappear_chance",
+    "respawn_chance", "fame_band", "fame_scope", "rumor_summary", "trigger",
+    "priority", "event_code", "topic", "player_claims", "claim", "verdict",
+    "skill", "difficulty_class", "result", "entity_type", "summary_append",
+    "addition", "cost", "prerequisites", "growth_math", "passed",
+    "issues_found", "corrections_made", "reference_check", "consistency_check",
+    "content",
+)
+
+
+def _draft_json_keep_words() -> set[str]:
+    words: set[str] = set()
+    for key in _DRAFT_JSON_KEYS:
+        for match in _DRAFT_KEY_WORD_RE.finditer(str(key)):
+            word = match.group(0).lower()
+            if len(word) >= 2:
+                words.add(word)
+    return words
+
+
+def _recent_narration_texts(context: dict[str, Any] | None) -> list[str]:
+    # Journal narrations when readable. Otherwise the packet.
+    from app.narration_pipeline import WORD_COUNT_LOOKBACK
+
+    lookback = WORD_COUNT_LOOKBACK
+    try:
+        conn = connect()
+        try:
+            rows = conn.execute(
+                "SELECT content FROM journal WHERE kind = 'narration' ORDER BY id DESC LIMIT ?",
+                (lookback,),
+            ).fetchall()
+        finally:
+            conn.close()
+        texts = [str(row["content"] or "").strip() for row in rows]
+        texts = [text for text in texts if text]
+        if texts:
+            return texts[:lookback]
+    except Exception:
+        pass
+    packet = context if isinstance(context, dict) else {}
+    found: list[str] = []
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text not in found:
+            found.append(text)
+
+    add(packet.get("last_narration"))
+    add(packet.get("previous_narration"))
+    for row in packet.get("history") or []:
+        if len(found) >= lookback:
+            break
+        if not isinstance(row, dict) or str(row.get("kind") or "") != "narration":
+            continue
+        add(row.get("content") or row.get("text"))
+    return found[:lookback]
+
+
+def _narration_sample_cover(context: dict[str, Any] | None) -> tuple[list[str], list[str]]:
+    # Hide list for one narration draft, plus words that stay choosable.
+    from app.narration_pipeline import count_content_words, narration_keep_words, words_past_cap
+
+    texts = _recent_narration_texts(context)
+    names, titles = narration_keep_words(context if isinstance(context, dict) else None)
+    hide = words_past_cap(count_content_words(texts), names=names, titles=titles)
+    keep = set(names) | set(titles) | _draft_json_keep_words()
+    return list(hide), sorted(keep)
+
+
 def _chat_text(
     system_prompt: str,
     user_prompt: str,
@@ -8701,6 +8788,8 @@ def _chat_text(
     max_tokens: int | None = None,
     trace: list[dict[str, Any]] | None = None,
     temperature: float = 0.7,
+    hide_words: list[str] | None = None,
+    keep_words: list[str] | None = None,
 ) -> str:
     """Plain-text model call (no JSON response_format). Used for NAR+OPS drafts."""
     started_at = time.time()
@@ -8736,6 +8825,8 @@ def _chat_text(
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=None,
+            hide_words=hide_words,
+            keep_words=keep_words,
         )
     except LlmError as exc:
         _append_trace(
@@ -8769,6 +8860,8 @@ def _chat_json(
     phase: str = "draft",
     max_tokens: int | None = None,
     trace: list[dict[str, Any]] | None = None,
+    hide_words: list[str] | None = None,
+    keep_words: list[str] | None = None,
 ) -> dict[str, Any]:
     started_at = time.time()
     system_prompt, user_prompt, budget_diag = enforce_token_budget(system_prompt, user_prompt)
@@ -8795,7 +8888,14 @@ def _chat_json(
         },
     )
     try:
-        content = _chat_content(system_prompt, user_prompt, timeout=timeout, max_tokens=max_tokens)
+        content = _chat_content(
+            system_prompt,
+            user_prompt,
+            timeout=timeout,
+            max_tokens=max_tokens,
+            hide_words=hide_words,
+            keep_words=keep_words,
+        )
     except LlmError as exc:
         response_cap = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
         _, hard_cap = _response_token_settings(config)
@@ -8939,6 +9039,8 @@ def _chat_content(
     temperature: float = 0.75,
     max_tokens: int | None = None,
     response_format: str | None = "json",
+    hide_words: list[str] | None = None,
+    keep_words: list[str] | None = None,
 ) -> str:
     from app.gpu_gate import gpu_session
 
@@ -8952,6 +9054,8 @@ def _chat_content(
             temperature=temperature,
             max_tokens=max_tokens,
             response_format=response_format,
+            hide_words=hide_words,
+            keep_words=keep_words,
         )
 
 
@@ -8962,6 +9066,8 @@ def _chat_content_unlocked(
     temperature: float = 0.75,
     max_tokens: int | None = None,
     response_format: str | None = "json",
+    hide_words: list[str] | None = None,
+    keep_words: list[str] | None = None,
 ) -> str:
     config = get_model_config()
     response_tokens = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
@@ -8990,6 +9096,8 @@ def _chat_content_unlocked(
             temperature=temperature,
             max_tokens=response_tokens,
             response_format=response_format,
+            hide_words=hide_words,
+            keep_words=keep_words,
         )
     except MleNotReady as exc:
         raise LlmError(str(exc)) from exc
@@ -10883,6 +10991,7 @@ def _make_pipeline_paragraph_writer(
     usage: list[dict[str, Any]],
     trace: list[dict[str, Any]] | None,
     timeout: int,
+    context: dict[str, Any] | None = None,
 ):
     from app.narration_pipeline import polish_paragraph
 
@@ -10897,6 +11006,8 @@ def _make_pipeline_paragraph_writer(
         "Always finish every sentence completely — never stop mid-word or mid-clause. "
         + PROSE_VOICE
     )
+
+    hide_words, keep_words = _narration_sample_cover(context)
 
     def writer(brief: dict[str, Any], previous_paragraph: str, ledger: Any) -> str:
         limits = brief.get("model_limits") if isinstance(brief.get("model_limits"), dict) else {}
@@ -10932,6 +11043,8 @@ def _make_pipeline_paragraph_writer(
             trace=trace,
             # Slightly warmer than rigid JSON calls so wording varies without chaos.
             temperature=0.82,
+            hide_words=hide_words,
+            keep_words=keep_words,
         )
         # Strip accidental multi-paragraph / fences
         text = raw.strip()
@@ -11039,7 +11152,7 @@ def _apply_narration_pipeline(
             config=config,
             ops_summary=ops_summary,
             turn_number=turn_number,
-            writer=_make_pipeline_paragraph_writer(usage, trace, timeout),
+            writer=_make_pipeline_paragraph_writer(usage, trace, timeout, context),
             consolidator=consolidator_fn,
         )
     except Exception as exc:
@@ -11389,6 +11502,7 @@ def _retry_missing_narration(
             "For opening_scene or continue_scene, do not invent a player action.",
         ],
     }
+    hide_words, keep_words = _narration_sample_cover(context)
     return _chat_json(
         system_prompt,
         json.dumps(prompt, ensure_ascii=True, separators=(",", ":")),
@@ -11397,6 +11511,8 @@ def _retry_missing_narration(
         phase=phase,
         max_tokens=_turn_max_tokens(context, "draft", compact=True),
         trace=trace,
+        hide_words=hide_words,
+        keep_words=keep_words,
     )
 
 
@@ -11422,6 +11538,7 @@ def _try_dsl_draft(
             + "\n\nThis player turn is a short question. Answer it directly in 2-5 sentences. Do not pad the narration."
         )
     try:
+        hide_words, keep_words = _narration_sample_cover(active_context)
         raw = _chat_text(
             dsl_system,
             dsl_prompt,
@@ -11430,6 +11547,8 @@ def _try_dsl_draft(
             phase="draft_dsl",
             max_tokens=max_tokens,
             trace=trace,
+            hide_words=hide_words,
+            keep_words=keep_words,
         )
     except LlmError as exc:
         _append_trace(trace, {"phase": "draft_dsl", "event": "failed", "error": str(exc)})
@@ -11799,6 +11918,7 @@ def _generate_turn_body(
         line="JSON draft call in progress.",
     )
     try:
+        hide_words, keep_words = _narration_sample_cover(active_context)
         draft = _chat_json(
             system_prompt,
             draft_prompt,
@@ -11807,6 +11927,8 @@ def _generate_turn_body(
             phase="draft",
             max_tokens=_turn_max_tokens(active_context, "draft"),
             trace=trace,
+            hide_words=hide_words,
+            keep_words=keep_words,
         )
     except MalformedJsonError as exc:
         try:
@@ -11819,6 +11941,7 @@ def _generate_turn_body(
                 retry_prompt = build_user_prompt(compact_context, player_input)
                 retry_system_prompt = f"{system_prompt}\n\nThe previous draft was malformed JSON and could not be repaired in time. Return one valid compact JSON object only."
                 active_context = compact_context
+                hide_words, keep_words = _narration_sample_cover(active_context)
                 draft = _chat_json(
                     retry_system_prompt,
                     retry_prompt,
@@ -11827,6 +11950,8 @@ def _generate_turn_body(
                     phase="draft_parse_retry",
                     max_tokens=_turn_max_tokens(active_context, "draft", compact=True),
                     trace=trace,
+                    hide_words=hide_words,
+                    keep_words=keep_words,
                 )
             except LlmError as retry_exc:
                 raise _attach_model_usage(retry_exc, usage, trace)
@@ -11838,6 +11963,7 @@ def _generate_turn_body(
         if _is_context_length_error(exc):
             active_context = _clean_context_for_handoff(_compact_turn_context(context), "planner_to_draft_compact_retry", trace)
             try:
+                hide_words, keep_words = _narration_sample_cover(active_context)
                 draft = _chat_json(
                     system_prompt,
                     build_user_prompt(active_context, player_input),
@@ -11846,11 +11972,14 @@ def _generate_turn_body(
                     phase="draft_compact_retry",
                     max_tokens=_turn_max_tokens(active_context, "draft", compact=True),
                     trace=trace,
+                    hide_words=hide_words,
+                    keep_words=keep_words,
                 )
             except LlmError as retry_exc:
                 raise _attach_model_usage(retry_exc, usage, trace)
         else:
             try:
+                hide_words, keep_words = _narration_sample_cover(active_context)
                 draft = _chat_json(
                     system_prompt,
                     draft_prompt,
@@ -11859,9 +11988,11 @@ def _generate_turn_body(
                     phase="draft_retry",
                     max_tokens=_turn_max_tokens(active_context, "draft"),
                     trace=trace,
+                    hide_words=hide_words,
+                    keep_words=keep_words,
                 )
             except LlmError as retry_exc:
-                    raise _attach_model_usage(retry_exc, usage, trace)
+                raise _attach_model_usage(retry_exc, usage, trace)
     try:
         draft = _clean_turn_for_handoff(
             _normalize_turn(draft, active_context), "draft_to_verify", trace

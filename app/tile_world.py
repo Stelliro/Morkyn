@@ -720,6 +720,7 @@ def generate_map(
                 start[1],
                 json.dumps(
                     {
+                        "scale": "board",
                         "landmarks": placed,
                         "settlements_meta": settlements_meta,
                         "hidden_bases": hidden_bases,
@@ -742,6 +743,9 @@ def generate_map(
         )
     payload["visited"] = [f"{start[0]},{start[1]}"]
     payload["knowledge"] = {"settlements": [], "danger": [], "notes": [], "sources": []}
+    payload["scale"] = "board"
+    payload["map_role"] = "legacy"
+    payload["legacy"] = True
     # Standing vision on spawn (radius 1, LOS-aware).
     mark_visited(payload, start[0], start[1], radius=DEFAULT_VISION_RADIUS, save=True)
     return payload
@@ -788,6 +792,9 @@ def generate_scaled_world(
         "revealed": list(world.get("revealed") or []),
         "notice_percent": world.get("notice_percent"),
         "notice_source": world.get("notice_source") or "",
+        "terrain_bands": world.get("terrain_bands") if isinstance(world.get("terrain_bands"), dict) else {},
+        "materials": list(world.get("materials") or []),
+        "people_profile": world.get("people_profile") if isinstance(world.get("people_profile"), dict) else {},
     }
     conn = connect()
     try:
@@ -903,6 +910,7 @@ def get_map(map_id: str | None = None, conn=None) -> dict[str, Any] | None:
     width = int(item.get("width") or 0)
     height = int(item.get("height") or 0)
     scale = str(meta.get("scale") or "")
+    map_role = "world" if scale == "world" else "legacy"
     grid: list[list[dict[str, Any]]] = []
     if scale == "world":
         tiles = []
@@ -931,6 +939,8 @@ def get_map(map_id: str | None = None, conn=None) -> dict[str, Any] | None:
         "run_id": item.get("id"),
         "created_at": item.get("created_at"),
         "scale": scale,
+        "map_role": map_role,
+        "legacy": map_role == "legacy",
         "cities": meta.get("cities") if isinstance(meta.get("cities"), list) else [],
         "roads": meta.get("roads") if isinstance(meta.get("roads"), list) else [],
         "density_percent": meta.get("density_percent"),
@@ -941,12 +951,39 @@ def get_map(map_id: str | None = None, conn=None) -> dict[str, Any] | None:
         "revealed": list(meta.get("revealed") or []) if isinstance(meta.get("revealed"), list) else [],
         "notice_percent": meta.get("notice_percent"),
         "notice_source": str(meta.get("notice_source") or ""),
+        "terrain_bands": meta.get("terrain_bands") if isinstance(meta.get("terrain_bands"), dict) else {},
+        "materials": list(meta.get("materials") or []) if isinstance(meta.get("materials"), list) else [],
+        "people_profile": meta.get("people_profile") if isinstance(meta.get("people_profile"), dict) else {},
     }
     if scale == "world":
         from app.world_scale import index_cities
 
         loaded["cell_index"] = index_cities(loaded["cities"])
     return loaded
+
+
+def get_legacy_map() -> dict[str, Any] | None:
+    """Newest small stored board, not the active world.
+
+    The setup screen used to open whichever map was active. Before world-sized
+    maps, that was one of these boards. Does not change the active map.
+    """
+    conn = connect()
+    try:
+        rows = conn.execute(
+            """
+            SELECT id
+            FROM world_maps
+            WHERE COALESCE(json_extract(meta_json, '$.scale'), '') != 'world'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        ).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return None
+    return get_map(str(rows[0]["id"]))
 
 
 def list_maps(limit: int = 20) -> list[dict[str, Any]]:
@@ -1123,6 +1160,9 @@ def _save_map_payload(map_data: dict[str, Any], conn=None) -> None:
         meta["allows_slavery"] = bool(map_data.get("allows_slavery"))
         meta["notice_percent"] = map_data.get("notice_percent")
         meta["notice_source"] = map_data.get("notice_source") or ""
+        meta["terrain_bands"] = map_data.get("terrain_bands") if isinstance(map_data.get("terrain_bands"), dict) else {}
+        meta["materials"] = list(map_data.get("materials") or [])
+        meta["people_profile"] = map_data.get("people_profile") if isinstance(map_data.get("people_profile"), dict) else {}
     payload = (
         json.dumps(tiles, ensure_ascii=True),
         int(player.get("x") or 0),
@@ -2591,6 +2631,14 @@ def suggest_tile_prompt(state_id: str, *, quality: str = "8bit", preset_id: str 
         bits.append(", ".join(tags))
     if preset:
         bits.append(f"world age {preset.get('age')}, environment {preset.get('environment')}")
+        from app.world_scale import art_look_for, materials_for
+
+        look = art_look_for(str(preset.get("id") or preset_id))
+        mats = materials_for(str(preset.get("id") or preset_id))
+        if look:
+            bits.append(look)
+        if mats:
+            bits.append("materials: " + ", ".join(mats))
     return ", ".join(bits)
 
 
@@ -3306,4 +3354,14 @@ def spatial_contract(map_data: dict[str, Any] | None) -> dict[str, Any] | None:
         payload["density_percent"] = map_data.get("density_percent")
         payload["city_cell_max"] = 128
         payload["city_span_max"] = 9
+        from app.world_scale import materials_for, people_leaning
+
+        materials = map_data.get("materials")
+        if not isinstance(materials, list) or not materials:
+            materials = materials_for(str(map_data.get("preset_id") or ""))
+        if materials:
+            payload["materials"] = [str(item) for item in materials[:8]]
+        leaning = people_leaning(map_data, px, py, terrain=str(here.get("state") or ""))
+        if leaning:
+            payload["people_leaning"] = leaning
     return payload

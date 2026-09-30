@@ -353,38 +353,45 @@
                 <button type="button" id="setupModelButton" class="secondaryButton setupPrimarySettings chipBtn">LLM Settings</button>
                 <div class="randomizeMenuWrap">
                   <button id="simpleOpenRandomize" class="secondaryButton chipBtn" type="button" aria-expanded="false" aria-controls="randomizePopover" title="Open idea box. Confirm fills Primary only.">Randomize ▾</button>
-                  <button type="button" class="mainMenuPrimary chipBtn" id="randomizePopoverConfirm" title="Fill Primary only. Optional stays as you left it.">Confirm randomize</button>
+                  <button type="button" class="secondaryButton chipBtn confirmRandomizeBtn" id="randomizePopoverConfirm" data-confirm-randomize title="Fill Primary only. Optional stays as you left it.">Confirm randomize</button>
                 </div>
                 <button id="setupStart" class="setupStartDesktop" type="submit">Start</button>
               </div>
             </div>
             <div class="setupPresetRow" id="setupPresetRow">
-              <div class="setupSimpleVibe wide">
-                <div class="setupSimpleVibeHead">
-                  <span class="setupSimpleVibeLabel">Presets</span>
+              <p id="setupRandomizeStatus" class="setupRandomizeStatus" role="status" aria-live="polite" hidden></p>
+              <aside class="characterArtCard setupPresetCard" id="setupPresetCard" aria-label="Presets">
+                <div class="characterArtHead">
+                  <button type="button" class="characterArtToggle" id="setupPresetToggle" aria-expanded="true" aria-controls="setupPresetBody" title="Show or hide preset ideas">
+                    <span class="characterArtTitle">Presets</span>
+                    <span class="characterArtToggleMeta" id="setupPresetCollapseMeta">Expanded · pick an idea, then Confirm randomize</span>
+                    <span class="characterArtChevron" aria-hidden="true">▸</span>
+                  </button>
                   <div class="setupSimpleVibeActions">
                     <button type="button" class="chipBtn secondaryButton" id="presetNewBtn" title="Create a custom preset">New</button>
                     <button type="button" class="chipBtn secondaryButton" id="presetSaveBtn" title="Save edits to selected custom preset">Save</button>
                     <button type="button" class="chipBtn secondaryButton" id="presetDeleteBtn" title="Delete selected custom preset">Delete</button>
                   </div>
                 </div>
-                <p class="empty">Pick a preset and edit the one idea. <strong>Confirm randomize</strong> sits next to Randomize and fills Primary only.</p>
-                <div id="simpleDirectorPresets" class="directorPresets simpleDirectorPresets"></div>
-                <div class="presetEditor" id="presetEditor">
-                  <label>
-                    <span>Preset name</span>
-                    <input id="presetLabelInput" type="text" maxlength="40" placeholder="My preset" />
-                  </label>
-                  <label class="wide">
-                    <span>Randomize idea</span>
-                    <textarea id="presetSimpleIdea" rows="2" maxlength="400" placeholder="Short steer for Primary: tone, genre, hook…"></textarea>
-                  </label>
-                  <label class="wide" hidden>
-                    <span>Extra preset notes</span>
-                    <textarea id="presetAdvancedIdea" rows="3" maxlength="600" placeholder="Kept in sync with Randomize idea. Not a second form."></textarea>
-                  </label>
+                <div class="characterArtBody" id="setupPresetBody">
+                  <p class="empty">Pick a preset and edit the one idea. <strong>Confirm randomize</strong> sits next to Randomize and fills Primary only.</p>
+                  <div id="simpleDirectorPresets" class="directorPresets simpleDirectorPresets"></div>
+                  <div class="presetEditor" id="presetEditor">
+                    <label>
+                      <span>Preset name</span>
+                      <input id="presetLabelInput" type="text" maxlength="40" placeholder="My preset" />
+                    </label>
+                    <label class="wide">
+                      <span>Randomize idea</span>
+                      <textarea id="presetSimpleIdea" rows="2" maxlength="400" placeholder="Short steer for Primary: tone, genre, hook…"></textarea>
+                    </label>
+                    <label class="wide" hidden>
+                      <span>Extra preset notes</span>
+                      <textarea id="presetAdvancedIdea" rows="3" maxlength="600" placeholder="Kept in sync with Randomize idea. Not a second form."></textarea>
+                    </label>
+                  </div>
                 </div>
-              </div>
+              </aside>
             </div>
             <!-- Legacy id kept empty/hidden for any old selectors; tools live in setupHeaderUtility -->
             <div class="setupActions setupActionsMore" id="setupActionsMore" hidden aria-hidden="true"></div>
@@ -403,6 +410,7 @@
               <p class="empty randomizePopoverHint">Nothing is rolled until you confirm. Confirm fills Primary only. Optional stays as you left it.</p>
               <div class="randomizePopoverActions">
                 <button type="button" class="secondaryButton chipBtn" id="randomizePopoverCancel">Cancel</button>
+                <button type="button" class="secondaryButton chipBtn confirmRandomizeBtn" id="randomizePopoverConfirmInline" data-confirm-randomize title="Fill Primary only. Optional stays as you left it.">Confirm randomize</button>
               </div>
             </div>
           </header>
@@ -863,20 +871,35 @@
                   </label>
                   <label class="mapToolField">
                     <span>Seed</span>
-                    <input id="mapSeedInput" type="number" placeholder="random" />
+                    <input id="mapSeedInput" type="number" placeholder="rolled on Start new game" title="Start new game rolls this. Generate rebuilds the world from this number, or rolls one if the box is empty." />
                   </label>
                   <div class="visionActions mapToolActions">
                     <button type="button" class="secondaryButton" id="mapRegenBtn">Generate</button>
+                    <button type="button" class="secondaryButton" id="mapLegacyBtn" title="Show the old 36 by 36 letter map this screen used to open. It is not this new game's world.">Legacy map</button>
                     <button type="button" class="secondaryButton" id="mapLibraryBtn">Tile library</button>
                   </div>
                 </div>
                 <div class="mapFrame" id="mapFrame">
-                  <span class="visionBadge">flat · 2 elevations</span>
-                  <canvas id="mapCanvas" class="mapCanvas" width="320" height="200" aria-label="Color map preview"></canvas>
-                  <pre class="mapAscii" id="mapAscii">Loading map…</pre>
+                  <div class="mapPane" id="mapColorPane">
+                    <p class="mapPaneLabel">
+                      <span class="mapPaneName">Color grid</span>
+                      <span class="mapPaneHint">Colored squares of the ground. The red square is you.</span>
+                    </p>
+                    <div class="mapPaneView">
+                      <span class="visionBadge">Not rolled yet</span>
+                      <canvas id="mapCanvas" class="mapCanvas" width="320" height="200" aria-label="Color grid. Colored squares of the ground. The red square is you."></canvas>
+                    </div>
+                  </div>
+                  <div class="mapPane" id="mapLetterPane">
+                    <p class="mapPaneLabel">
+                      <span class="mapPaneName">Letter map</span>
+                      <span class="mapPaneHint">The same ground, written as letters. @ is you, T is trees, n is hills, c is cavern, m is mushrooms, ~ is water, # is a city.</span>
+                    </p>
+                    <pre class="mapAscii mapPaneView" id="mapAscii" aria-label="Letter map. The same ground written as letters. @ is you.">A new map is rolled when you start a new game.</pre>
+                  </div>
                 </div>
                 <div class="mapMeta" id="mapMeta">
-                  <p>Color blocks = terrain. Red = you. Generate a board, then use Tile library for art later.</p>
+                  <p>Start new game rolls a fresh seed and builds a new world. Legacy map is the old 36×36 letter map this screen used to open.</p>
                 </div>
               </aside>
               <div id="tileLibraryPanel" class="tileLibraryPanel hidden" aria-label="Tile image library">

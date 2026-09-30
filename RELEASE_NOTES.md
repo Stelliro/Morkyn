@@ -1,5 +1,7 @@
 # Mørkyn 0.10.1-wip — Release Notes
 
+Notes extended 2026-10-01. Still untagged.
+
 **Status:** WIP release — systems under active development, not stable. Not yet tagged. Builds on `0.10.0-wip`, which builds on the [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12) stable release.
 
 ---
@@ -12,7 +14,7 @@ The local story slot loads a GGUF inside the game process and returns that compl
 
 Lookup order: an existing file path, `data/mle-models/<name>.gguf`, `MLE_GGUF`, then the single `.gguf` in that folder. Weights in `data/` stay off GitHub. Context follows `AI_RPG_CONTEXT_TOKENS` and retries once at 8192 if the larger window will not load.
 
-A call may pass words to hide for that sample only. The mask hits a token when the decoded piece is the whole word. Split pieces, single letters, digits, codes such as `L1`, punctuation, structure words, and keep-words stay choosable. The finished sentence is not edited, and the weight file is not rewritten. The turn loop does not yet send the overused-word list into that call.
+A call may pass words to hide for that sample only. The mask hits a token when the decoded piece is the whole word. Split pieces, single letters, digits, codes such as `L1`, punctuation, structure words, and keep-words stay choosable. The finished sentence is not edited, and the weight file is not rewritten. Narration drafts send the overused-word list into that call. Names, job titles, and the draft's JSON keys stay choosable.
 
 llama.cpp, Forge, ComfyUI, and cloud APIs stay.
 
@@ -29,6 +31,18 @@ Directions, shop stalls, notice boards, and personal-quest clocks are engine dat
 ### Encounter board
 
 A fight tracks named people who are the target, who step in, or who are already listed. A crowd is not a combatant list. A move the player has not seen is stored as what was seen, with no effectiveness attached.
+
+### Setup rules
+
+The choice you pick stays short. Before the first scene, the save stores a written rule for that choice: the rank ladder, the economy, how quests appear, and the other setup picks in that catalog. A game can start with no model call. Those prepared sentences are already in the save. When the story provider is a cloud model with a key, it may replace a sentence once, and only if its reply names the choice you made.
+
+A list you type is a preset for each label. `common, uncommon, rare, epic, legendary, unique and unknown` is seven rungs, from ordinary at the bottom to unknown at the top. The word "and" separates the last two. A built-in phrase such as "earned and uncommon" stays one choice. If a model reply drops a label, or treats two neighboring rungs as one, the prepared sentence is the one that is kept.
+
+### World themes
+
+The theme changes the ground, what that ground is made of, and who usually lives there. Deep Caverns is cavern, mushroom, crystal, lava, water, and cliff. Most people there, when a stretch is lived in, are creatures that lurk in the dark, and dwarves. Other themes have their own ground and their own usual people. A stretch can be empty. A kind is a leaning, not a head count. A map that already has its ground stored keeps that ground.
+
+The world-preset card folds. The two map views are labeled. Starting a new game rolls a new map seed. The older small board remains as the legacy map.
 
 ---
 

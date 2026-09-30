@@ -936,6 +936,14 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         except Exception:
             pass
 
+    # Written rules for short setup choices (rank ladder and the other selections).
+    try:
+        from app.setting_templates import ensure_setting_template_table
+
+        ensure_setting_template_table(conn)
+    except Exception:
+        pass
+
     # Titles system (added in 0.9.13)
     try:
         from app.titles import init_titles

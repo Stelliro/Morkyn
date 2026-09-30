@@ -12,8 +12,9 @@ Each of those cells has its own internal grid, at most 128 by 128. The center
 cell of a city that needs more than one cell is 128. Outer cells are smaller.
 9 × 128 is 1,152, the widest fine span a city can reach.
 
-The only input the engine takes from a theme or a model is a density percent.
-City counts and sizes are rolled from that number. Prose does not place cities.
+City counts and sizes are rolled from a density percent. Prose does not place cities.
+The preset chooses the wilderness, what that ground is made of, and which peoples
+are usual when anyone lives there. A people-kind is a leaning, not a census.
 """
 
 from __future__ import annotations
@@ -1111,6 +1112,332 @@ def value_noise(seed: int, x: int, y: int, scale: int = 9) -> float:
     return v00 * (1 - sx) * (1 - sy) + v10 * sx * (1 - sy) + v01 * (1 - sx) * sy + v11 * sx * sy
 
 
+# One noise field, six roles. Each preset names the tile that fills a role,
+# so a cavern world is not a forest with the label changed.
+_PRESET_BANDS: dict[str, dict[str, Any]] = {
+    "deep_caverns": {
+        "sink": "water", "sink_at": 0.12,
+        "wall": "cliff", "wall_at": 0.90,
+        "rise": "crystal", "rise_at": 0.78,
+        "damp": "mushroom", "damp_at": 0.72,
+        "dry": "lava", "dry_at": 0.10,
+        "ground": "cavern",
+    },
+    "forest_march": {
+        "sink": "water", "sink_at": 0.14,
+        "wall": "mountain", "wall_at": 0.90,
+        "rise": "hill", "rise_at": 0.78,
+        "damp": "forest", "damp_at": 0.36,
+        "dry": "plains", "dry_at": 0.16,
+        "ground": "forest",
+    },
+    "coastal_scrap": {
+        "sink": "water", "sink_at": 0.40,
+        "wall": "cliff", "wall_at": 0.90,
+        "rise": "beach", "rise_at": 0.72,
+        "damp": "ruins", "damp_at": 0.78,
+        "dry": "plains", "dry_at": 0.0,
+        "ground": "plains",
+    },
+    "ash_plain": {
+        "sink": "ash", "sink_at": 0.16,
+        "wall": "mountain", "wall_at": 0.84,
+        "rise": "hill", "rise_at": 0.74,
+        "damp": "ruins", "damp_at": 0.80,
+        "dry": "ash", "dry_at": 0.35,
+        "ground": "plains",
+    },
+    "mountain_pass": {
+        "sink": "water", "sink_at": 0.08,
+        "wall": "mountain", "wall_at": 0.58,
+        "rise": "cliff", "rise_at": 0.46,
+        "damp": "forest", "damp_at": 0.82,
+        "dry": "ice", "dry_at": 0.28,
+        "ground": "hill",
+    },
+    "orbital_belt": {
+        "sink": "void", "sink_at": 0.0,
+        "wall": "asteroid", "wall_at": 0.88,
+        "rise": "asteroid", "rise_at": 0.80,
+        "damp": "nebula", "damp_at": 0.72,
+        "dry": "void", "dry_at": 0.55,
+        "ground": "void",
+    },
+    "star_lane": {
+        "sink": "void", "sink_at": 0.0,
+        "wall": "asteroid", "wall_at": 0.94,
+        "rise": "nebula", "rise_at": 0.86,
+        "damp": "nebula", "damp_at": 0.90,
+        "dry": "void", "dry_at": 0.0,
+        "ground": "void",
+    },
+    "frontier_any": {
+        "sink": "water", "sink_at": 0.20,
+        "wall": "mountain", "wall_at": 0.86,
+        "rise": "hill", "rise_at": 0.74,
+        "damp": "forest", "damp_at": 0.70,
+        "dry": "desert", "dry_at": 0.20,
+        "ground": "plains",
+    },
+}
+
+_PRESET_MATERIALS: dict[str, tuple[str, ...]] = {
+    "deep_caverns": ("wet limestone", "glow-fungus", "raw crystal", "basalt", "black water"),
+    "forest_march": ("oak", "loam", "river stone", "thatch", "ironwood"),
+    "coastal_scrap": ("salt timber", "rusted plate", "sand", "tar", "barnacle stone"),
+    "ash_plain": ("ash", "cinder", "obsidian", "scrap iron", "dried clay"),
+    "mountain_pass": ("granite", "ice", "pine", "slate", "wool"),
+    "orbital_belt": ("hull alloy", "regolith", "vacuum glass", "sealant", "ice"),
+    "star_lane": ("star-metal", "nebula dust", "hull ceramic", "cold iron"),
+    "frontier_any": ("mixed timber", "local stone", "road dust", "trade cloth"),
+}
+
+_PRESET_ART: dict[str, str] = {
+    "deep_caverns": "underground cavern tile, damp stone, bioluminescent fungus, no sky and no trees",
+    "forest_march": "temperate forest floor tile, oak shade, moss and loam",
+    "coastal_scrap": "industrial coast tile, salt, rust, sand and scrap",
+    "ash_plain": "ash waste tile, cinders and dead ground, no green canopy",
+    "mountain_pass": "high alpine tile, granite, ice and sparse pine",
+    "orbital_belt": "airless orbital tile, rock, hull metal and starfield",
+    "star_lane": "deep-space tile, black vacuum and faint nebula",
+    "frontier_any": "mixed frontier tile, road dust and whatever ground is local",
+}
+
+# A kind is a leaning. "Dwarven" may be dwarves or a people near that idea.
+_KINDS: dict[str, dict[str, Any]] = {
+    "human": {
+        "leaning": "human",
+        "says": "humans, or a people who would pass for human",
+        "terrains": frozenset({"plains", "road", "town", "city", "village", "farm", "beach", "ash", "ruins", "forest"}),
+    },
+    "elven": {
+        "leaning": "elven",
+        "says": "elves, or a people near that idea who are not necessarily elves",
+        "terrains": frozenset({"forest", "hill"}),
+    },
+    "dwarven": {
+        "leaning": "dwarven",
+        "says": "dwarves, or a stone-living people near that idea",
+        "terrains": frozenset({"mountain", "hill", "cliff", "cavern", "crystal", "dungeon", "road"}),
+    },
+    "smallfolk": {
+        "leaning": "smallfolk",
+        "says": "halflings, or a smaller people near that idea",
+        "terrains": frozenset({"plains", "farm", "village"}),
+    },
+    "orcish": {
+        "leaning": "orcish",
+        "says": "orcs, or a hardy people near that idea",
+        "terrains": frozenset({"ash", "ruins", "cliff", "lava", "mountain"}),
+    },
+    "scaled": {
+        "leaning": "scaled",
+        "says": "a scaled people, or something near that, not one fixed species",
+        "terrains": frozenset({"water", "swamp", "lava", "beach"}),
+    },
+    "deep": {
+        "leaning": "deep-elven",
+        "says": "a deep-elven people, or something only near elves of the dark",
+        "terrains": frozenset({"cavern", "mushroom", "crystal", "dungeon"}),
+    },
+    "darkling": {
+        "leaning": "darkling",
+        "says": "creatures that lurk in the dark, or a people near that idea, not one fixed monster",
+        "terrains": frozenset({"cavern", "mushroom", "dungeon", "ruins", "water", "lava"}),
+    },
+    "spacer": {
+        "leaning": "spacer",
+        "says": "people built for ships and vacuum, often human, or a people near that",
+        "terrains": frozenset({"void", "asteroid", "nebula", "station", "colony"}),
+    },
+}
+
+_PRESET_PEOPLE: dict[str, dict[str, Any]] = {
+    "deep_caverns": {
+        "majority": ("dwarven", "darkling"),
+        "minority": ("deep", "scaled", "human"),
+        "majority_share": 0.82,
+        "says": (
+            "When this land is lived in, most inhabitants are creatures that lurk in the dark, "
+            "and dwarves or a stone-living people near that idea. Other peoples are uncommon."
+        ),
+    },
+    "forest_march": {
+        "majority": ("human",),
+        "minority": ("elven", "smallfolk", "dwarven"),
+        "majority_share": 0.72,
+        "says": "When this land is lived in, most inhabitants are human or a people who would pass for human. Elves, smaller folk, and stone-folk turn up, especially off the roads.",
+    },
+    "coastal_scrap": {
+        "majority": ("human",),
+        "minority": ("dwarven", "scaled"),
+        "majority_share": 0.78,
+        "says": "When this land is lived in, most inhabitants are human. Stone-folk and scaled people are the uncommon ones.",
+    },
+    "ash_plain": {
+        "majority": ("human",),
+        "minority": ("orcish",),
+        "majority_share": 0.7,
+        "says": "When this land is lived in, most inhabitants are human remnants. A hardy people near the orcish idea is uncommon.",
+    },
+    "mountain_pass": {
+        "majority": ("dwarven",),
+        "minority": ("human", "elven"),
+        "majority_share": 0.74,
+        "says": "When this land is lived in, most inhabitants are dwarves or a stone-living people near that idea. Humans and elves are uncommon.",
+    },
+    "orbital_belt": {
+        "majority": ("spacer",),
+        "minority": ("human",),
+        "majority_share": 0.8,
+        "says": "When this belt is lived in, most inhabitants are people built for ships and vacuum. Unadapted humans are uncommon.",
+    },
+    "star_lane": {
+        "majority": ("spacer",),
+        "minority": ("human",),
+        "majority_share": 0.84,
+        "says": "When this lane is lived in, most inhabitants are people built for ships and vacuum.",
+    },
+    "frontier_any": {
+        "majority": ("human",),
+        "minority": ("elven", "dwarven", "orcish", "smallfolk"),
+        "majority_share": 0.62,
+        "says": "When this land is lived in, humans are the largest share. Other peoples are ordinary chances, not visitors from nowhere.",
+    },
+}
+
+PROVINCE = 48
+
+
+def bands_for_preset(preset_id: str) -> dict[str, Any]:
+    raw = _PRESET_BANDS.get(str(preset_id or ""))
+    return dict(raw) if raw else {}
+
+
+def bands_for_world(world: dict[str, Any]) -> dict[str, Any]:
+    stored = world.get("terrain_bands")
+    if isinstance(stored, dict) and stored.get("ground"):
+        return stored
+    return bands_for_preset(str(world.get("preset_id") or ""))
+
+
+def materials_for(preset_id: str) -> list[str]:
+    return list(_PRESET_MATERIALS.get(str(preset_id or ""), ()))
+
+
+def art_look_for(preset_id: str) -> str:
+    return str(_PRESET_ART.get(str(preset_id or ""), ""))
+
+
+def people_profile_for(preset_id: str) -> dict[str, Any]:
+    raw = _PRESET_PEOPLE.get(str(preset_id or ""))
+    if not raw:
+        return {}
+    return {
+        "majority": list(raw["majority"]),
+        "minority": list(raw["minority"]),
+        "majority_share": float(raw["majority_share"]),
+        "says": str(raw["says"]),
+    }
+
+
+def terrain_from_bands(bands: dict[str, Any], seed: int, x: int, y: int) -> str:
+    height = value_noise(seed, x, y, 9)
+    moist = value_noise(seed + 17, x, y, 13)
+    if height < float(bands.get("sink_at") or 0):
+        return str(bands.get("sink") or "water")
+    if height > float(bands.get("wall_at") or 1):
+        return str(bands.get("wall") or "mountain")
+    if height > float(bands.get("rise_at") or 1):
+        return str(bands.get("rise") or "hill")
+    if moist > float(bands.get("damp_at") or 1):
+        return str(bands.get("damp") or "forest")
+    if moist < float(bands.get("dry_at") or 0):
+        return str(bands.get("dry") or "plains")
+    return str(bands.get("ground") or "plains")
+
+
+def _terrain_salt(terrain: str) -> int:
+    total = 0
+    for ch in str(terrain or ""):
+        total = (total + ord(ch) * 17) & 0xFFFF
+    return total or 1
+
+
+def _kind_weight(kind_id: str, terrain: str, majority: bool) -> int:
+    spec = _KINDS.get(kind_id) or {}
+    terrains = spec.get("terrains") or frozenset()
+    return (6 if majority else 1) + (4 if terrain in terrains else 0)
+
+
+def _pick_kind(pool: list[tuple[str, bool]], terrain: str, roll: int) -> str:
+    weights = [(kind_id, _kind_weight(kind_id, terrain, majority)) for kind_id, majority in pool]
+    total = sum(weight for _, weight in weights) or 1
+    cursor = int(roll) % total
+    for kind_id, weight in weights:
+        if cursor < weight:
+            return kind_id
+        cursor -= weight
+    return pool[0][0]
+
+
+def people_leaning(world: dict[str, Any], x: int, y: int, terrain: str | None = None) -> dict[str, Any]:
+    """Who might live on this stretch. Empty means the stretch can be empty.
+
+    The same ground inside one province shares a kind. A kind is not a census:
+    the model may use it, skip it, or treat it as a people near the idea.
+    """
+    profile = world.get("people_profile")
+    if not isinstance(profile, dict) or not profile.get("majority"):
+        profile = people_profile_for(str(world.get("preset_id") or ""))
+    if not profile:
+        return {}
+    seed = int(world.get("seed") or 1)
+    if terrain is None:
+        bands = bands_for_world(world)
+        if bands:
+            terrain = terrain_from_bands(bands, seed, int(x), int(y))
+        else:
+            terrain = terrain_state(str(world.get("theme") or "mixed"), seed, int(x), int(y))
+    terrain = str(terrain or "")
+    density = int(world.get("density_percent") or 20)
+    px, py = int(x) // PROVINCE, int(y) // PROVINCE
+    salt = _terrain_salt(terrain)
+    chance = max(0.08, min(0.82, 0.08 + 0.9 * (max(0, min(100, density)) / 100)))
+    majority = [str(item) for item in profile.get("majority") or []]
+    result = {
+        "majority": majority,
+        "majority_says": str(profile.get("says") or ""),
+        "province": [px, py],
+        "kind": "",
+        "option": (
+            "This stretch has no local people-kind. It may be empty. "
+            "If someone must live here, they are usually the world's majority, and they may still be absent."
+        ),
+    }
+    unit = mix_hash(seed, px, py, 70 + salt) / 0xFFFFFFFF
+    if unit > chance:
+        return result
+    share = float(profile.get("majority_share") or 0.75)
+    gate = mix_hash(seed, px, py, 80 + salt) / 0xFFFFFFFF
+    minority = [str(item) for item in profile.get("minority") or []]
+    if gate <= share or not minority:
+        pool = [(kind_id, True) for kind_id in majority]
+    else:
+        pool = [(kind_id, False) for kind_id in minority]
+    pool = [(kind_id, flag) for kind_id, flag in pool if kind_id in _KINDS]
+    if not pool:
+        return result
+    kind_id = _pick_kind(pool, terrain, mix_hash(seed, px, py, 90 + salt))
+    spec = _KINDS[kind_id]
+    result["kind"] = str(spec["leaning"])
+    result["option"] = (
+        f"If this stretch needs inhabitants, they may be {spec['says']}. "
+        "They may also be absent. The word is a leaning, not a census and not a name that must be spoken."
+    )
+    return result
+
+
 def terrain_state(theme: str, seed: int, x: int, y: int) -> str:
     height = value_noise(seed, x, y, 9)
     moist = value_noise(seed + 17, x, y, 13)
@@ -1174,7 +1501,12 @@ def world_cell(world: dict[str, Any], x: int, y: int) -> dict[str, Any] | None:
     if _on_road(x, y, world.get("roads") or []):
         state = "road"
     else:
-        state = terrain_state(str(world.get("theme") or "mixed"), int(world.get("seed") or 1), x, y)
+        bands = bands_for_world(world)
+        seed = int(world.get("seed") or 1)
+        if bands:
+            state = terrain_from_bands(bands, seed, x, y)
+        else:
+            state = terrain_state(str(world.get("theme") or "mixed"), seed, x, y)
     return {
         "x": x,
         "y": y,
@@ -1273,6 +1605,9 @@ def build_world(
         "age": str((preset or {}).get("age") or ""),
         "environment": str((preset or {}).get("environment") or ""),
         "theme": theme,
+        "terrain_bands": bands_for_preset(str((preset or {}).get("id") or "")),
+        "materials": materials_for(str((preset or {}).get("id") or "")),
+        "people_profile": people_profile_for(str((preset or {}).get("id") or "")),
         "density_percent": density,
         "density_source": source,
         "scale_plan": plan,
@@ -1315,9 +1650,13 @@ def preview_window(world: dict[str, Any], radius: int = 24) -> dict[str, Any]:
     x1 = min(width - 1, x0 + radius * 2)
     y1 = min(height - 1, y0 + radius * 2)
     tiles = []
-    glyphs = {"water": "~", "plains": ".", "forest": "T", "mountain": "^", "hill": "n",
-              "city": "#", "town": "o", "village": "v", "road": "-", "ash": ",", "ruins": "x",
-              "desert": ":", "void": " ", "asteroid": "*"}
+    glyphs = {
+        "water": "~", "plains": ".", "forest": "T", "mountain": "^", "hill": "n",
+        "city": "#", "town": "o", "village": "v", "road": "-", "ash": ",", "ruins": "x",
+        "desert": ":", "void": " ", "asteroid": "*", "cavern": "c", "mushroom": "m",
+        "crystal": "y", "lava": "=", "cliff": "|", "ice": "+", "nebula": "%",
+        "beach": "b", "dungeon": "D",
+    }
     lines = []
     for y in range(y0, y1 + 1):
         chars = []

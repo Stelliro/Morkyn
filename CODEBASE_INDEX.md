@@ -1,7 +1,7 @@
 # CODEBASE INDEX - Mørkyn
 
 > Single source of truth for project structure, conventions, and architecture.
-> Last updated: 2026-07-19 (repo layout: root launchers/docs, tests/, benchmarks/, privacy/updates, narration pipeline)
+> Last updated: 2026-10-01 (setting rules, theme wilderness, setup map views)
 
 > Use this file before making architecture, schema, API, prompt-contract, launcher, or major UI changes. Update it whenever those facts change.
 
@@ -15,7 +15,7 @@
 - **Primary Languages:** Python, JavaScript, HTML, CSS
 - **Key Frameworks / Libraries:** FastAPI, Pydantic, SQLite, Uvicorn, llama-cpp-python server, MLE (Morkyn LLM Engine)
 - **Target Platforms:** Windows local development, browser UI at localhost or trusted local-network phone/tablet browsers
-- **Current Version:** 0.9.12
+- **Current Version:** 0.10.1-wip. `APP_VERSION` in `app/main.py` is `V0.10.1-wip`. The tagged stable release is still 0.9.12.
 - **Status:** Active development / prototype
 - **Brand assets:** `Media/` (logo + key art)
 
@@ -43,12 +43,17 @@ Morkyn/
 |   |-- content_packs.py             # JSON packs: skills/powers/items/tables + authoring spec
 |   |-- db.py                        # SQLite connection, schema, migrations
 |   |-- encounters.py                # Danger model + encounter resolution
+|   |-- encounter_board.py           # Named people on a fight board
 |   |-- llm.py                       # Model config, JSON chat, token budget, traces, fallbacks
+|   |-- local_intel.py               # Directions, heard cells, stalls, notices, quest clocks
+|   |-- mle.py                       # In-process GGUF story completion
+|   |-- setting_templates.py         # Written rules for short setup choices
 |   |-- main.py                      # FastAPI routes (turns, slots, diagnostics, model)
 |   |-- narration_pipeline.py        # Adaptive paragraph quality pipeline
 |   |-- prompts.py                   # System/verifier prompts + agentic CoD steps
 |   |-- rng.py                       # Dice, magnitude bands, deterministic seeds, roll audit
 |   |-- venues.py                    # Shop/inn kinds, opening hours, settlement commonality
+|   |-- world_scale.py               # Seeded wilderness, theme ground, materials, people leanings
 |   |-- turn_dsl.py                  # NAR+OPS draft language
 |   |-- updates.py                   # Optional GitHub update/rollback
 |   `-- world.py                     # State, planner, memory consolidation, slots, index
@@ -108,6 +113,24 @@ Morkyn/
 - **Consumers:** `app.main` model endpoints and `app.world` turn flow.
 - **Dependencies:** `app.prompts`, `urllib`, environment variables, local llama.cpp or MLE.
 - **Design Notes:** LLM output is JSON-first. Turn generation consumes the focused turn planner packet, runs deterministic handoff cleanup before the draft, performs a draft pass, cleans the draft payload before verification, validates usable narration, scores a selective verification policy, then either skips the model verifier for high-certainty low-risk drafts or runs the verifier focused on remaining checks. The policy treats matching `verification_memory` rows as already-cleared checks when their confidence meets `AI_RPG_VERIFY_MEMORY_CERTAINTY` (default 0.86), so repeated verified facts can make later matching turns draft-only when no risky state changes are present. The policy only skips when the draft has enough narration, valid entity references, a sane scene-plan shape, a passing self-check, no high-risk state changes, and all planner verification checks have been deterministically or previously cleared; `AI_RPG_FAST_VERIFICATION` toggles this path and `AI_RPG_VERIFY_SKIP_CERTAINTY` sets the default 0.88 skip threshold. Verified payloads are cleaned again before world application, and valid turns below the 1000-character narration floor get one depth retry before returning. Normal turn narration targets about 1500 visible characters and stays below 2400 characters / 700 words; deterministic fallback turns follow the same depth expectation. Context-overflow failures trigger compact turn-context retries before deterministic fallback narration. The context window must hold the system contract: `SYSTEM_PROMPT` estimates ~9143 tokens, so `fitting_system_prompts()` selects `COMPACT_SYSTEM_PROMPT` (~3041 tokens) whenever the window cannot also spare `MIN_TURN_HEADROOM_TOKENS` (2048) for the packet and output, and warns once on the server console. `DEFAULT_CONTEXT_TOKENS` is 32768 because the previous 8192 default could not fit the full contract at all and silently forced deterministic fallback on every turn; anything below ~12288 degrades to the compact contract. llama.cpp turn draft/verify timeouts are phase-specific through `AI_RPG_TURN_DRAFT_TIMEOUT` and `AI_RPG_TURN_VERIFY_TIMEOUT`, with longer local defaults for slow first-scene generation; setup randomization and suggestions use `AI_RPG_SETUP_RANDOMIZER_TIMEOUT` and `AI_RPG_SUGGESTION_TIMEOUT`. Input suggestions are clipped near 100 visible characters, with a 120-character maximum. Each turn writes a JSON trace file under `AI_RPG_MODEL_TRACE_DIR` (default `data/model_traces`) containing focused prompt context, deterministic handoff cleanup records, prompts, raw model outputs, parsed JSON, verification-memory hits, verification-policy scores, verifier/self-check data, timing/error records, fallback decisions, and the final turn payload; `AI_RPG_MODEL_TRACE_KEEP` limits retained files and `AI_RPG_TRACE_VALUE_LIMIT` caps individual string values. These traces capture observable model artifacts, not hidden chain-of-thought the model never returned. Model settings default to the llama.cpp-compatible provider unless `AI_RPG_MODEL_PROVIDER=mle` or the UI explicitly selects MLE. They store a soft response token target (`response_token_cap`, default 1500) and a hard response token cap (`response_token_hard_cap`, default 2000); repair calls use at least the soft target while all response requests are clamped by the hard cap and remaining context. No machine-specific GGUF path is embedded in defaults; set `AI_RPG_GGUF_MODEL` or use the Model settings UI to choose a local model. `/api/model-status` checks the configured provider and, for llama.cpp with a saved GGUF path, starts a managed `llama_cpp.server` process when the configured `/v1/models` endpoint is refused. Generation requests to llama.cpp also start the managed server and retry once when `/v1/chat/completions` or `/v1/completions` is refused, so setup/opening generation does not depend on pressing Test first. Timeout errors include the failed phase, timeout seconds, approximate prompt tokens, configured soft response target, configured repair cap, and configured hard cap so caps are not mistaken for actual token usage. Refused model-server connections are classified as transport failures, skip generic draft retry, and state that no model response was generated and no token cap was hit. When deterministic fallback is used, any collected model usage rows are still written to `model_logs` for later diagnosis. Turn normalization accepts common narration/segment aliases, hidden `gm_events`, and reuses valid draft narration when the verifier omits it. Malformed JSON repair uses a larger repair token budget so full turn objects are less likely to fall through to deterministic fallback; if draft JSON repair still times out but the raw draft contains readable narration, the adapter recovers narration only, ignores unparseable state changes, and continues through verification instead of immediately using deterministic fallback. Setup randomization includes current age/sex and previous-life age/sex, normalizes `custom_skills` into comma-separated phrases so AI-filled Custom Proficiencies match the setup UI contract, and falls back to deterministic backend values when model output is unavailable or invalid. **Setup randomization.** A group roll ships `field_contracts` for every requested field — kind, `allowed_values`, and the field's own forbidden line — because the group path used to be the one caller sending a bare `return_fields` name list with no shape at all. Asked openly, the model answered `magic_level` with "low", "low-magic" and "Limited to arcane crafters and guilds"; every one falls through `normalize_magic_level()` to its default, so the stored value was "rare" on 12 rolls out of 12 and looked like a model preference rather than a silent default. Idea sparks reach prompts through `idea_bank.prompt_sparks()`, which sends `kind`/`text`/`keywords` only: `id`, `title` and `examples` are all shaped exactly like a setup field value and all three were measured being pasted in verbatim (`world_style: "low_fantasy_mud"`, `world_style: "Low fantasy mud and knives"`, `start_location: "a broken cart axle starts the plot"`). Telling the model not to copy titles was in the rules the whole time and produced 13 verbatim pastes across 12 rolls; removing the field produced 0. `looks_like_card_slug()` and a `start_location` check against `is_plausible_place_name()` are the backstops in `field_contamination_reasons()`, and `_drop_echoed_custom_style()` refuses a `custom_style` that only restates `world_style`.
+
+#### Setting Templates
+
+- **Files:** `app/setting_templates.py`
+- **Purpose:** Writes one durable rule per short setup choice before the opening scene. The setup field stays the short selection. The rule says what that selection means.
+- **Key API:** `choice_parts()`, `fallback_rule()`, `store_setting_templates()`, `overlay_setting_templates()`, `refresh_setting_templates_from_model()`
+- **Consumers:** `app.world` at playthrough start and in `get_state()`, `app.prompts`, `app.turn_dsl`.
+- **Dependencies:** `app.db`. A cloud rewrite uses `app.llm` only when the story provider is OpenAI-compatible and a key is present.
+- **Design Notes:** Table `setting_templates` holds `key`, `choice`, `rule`, `source` (`llm` or `fallback`), and `created_at`. A fallback is always stored. `AI_RPG_SETTING_TEMPLATES=0` skips the model call. The cloud call does not start MLE, llama.cpp, Forge, or ComfyUI. A custom list splits on commas and on the word `and`. `common, uncommon, rare, epic, legendary, unique and unknown` is seven rank rungs. A built-in phrase such as `earned and uncommon` stays one label. A model rule is kept only when it names every label. For ranks, neighboring rungs glued with `and` are discarded. Combat labels in `app.world._rank_labels` use the same split. Boolean setup values are stored as `on` or `off`.
+
+#### Wilderness Scale
+
+- **Files:** `app/world_scale.py`
+- **Purpose:** Grows the seeded land, theme ground, materials, and the usual people of a stretch.
+- **Key API:** `bands_for_preset()`, `bands_for_world()`, `generate_scaled_world()`
+- **Consumers:** `app.tile_world`, map save and load, prompt map clauses.
+- **Dependencies:** stdlib only for the band tables. Map persistence goes through `app.tile_world` and `app.world`.
+- **Design Notes:** A city stays a connected clump inside a 9 by 9 neighborhood. The center cell is 128 by 128. Outer cells are smaller. The widest fine span is 1,152. Theme bands are separate from that city math. Deep Caverns uses cavern, mushroom, crystal, lava, water, and cliff. Its usual people are dark-dwelling creatures and dwarves. A kind is a leaning for a province of ground, not a census, and a stretch may be empty. Stored `terrain_bands` win over the theme. A world with none falls back to the theme's bands. The model does not place cities, notices, or coordinates.
 
 #### Dice Authority
 
@@ -466,8 +489,10 @@ The current world export table set is defined in `app/world.py` as `WORLD_TABLES
 - `journal`
 - `pacing`
 - `settings`
+- `setting_templates`
 - `gm_notes`
 - `gm_events`
+- `world_maps`
 
 `turn_snapshots` is used for rewind state but is intentionally not part of the normal `WORLD_TABLES` export list.
 
@@ -482,6 +507,8 @@ The `player` table stores setup identity fields including `public_name`, `title`
 The `npcs` table stores durable combat columns `health`, `max_health`, `attack_min`, `attack_max`, `defense`, and `dodge`. These are additive fields initialized lazily for combat-relevant NPCs from player level, playthrough difficulty/scaling, NPC rank/stat_profile, and equipment-derived player stats; deterministic player-attack damage updates NPC health directly in SQLite and writes a `mechanics` journal row.
 
 `verification_memory` stores scoped verifier wins by check name, intent, turn kind, entity codes, confidence, source, and context signature. It is included in export/import and rewind snapshots, cleared on new playthroughs, and used only when the current planner scope matches so cached checks do not make unrelated risky turns skip verification.
+
+`setting_templates` stores the written rule for a short setup choice. The choice text stays on the playthrough. Export and import carry the rows. An older save with no such table is left without those rows rather than invented. The save editor may edit this table. `world_maps` is tile payload and stays blocked there, with `settings`.
 
 ### Event Lifecycle Columns
 

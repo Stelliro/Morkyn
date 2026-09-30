@@ -159,7 +159,7 @@ from app.world import (
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 MEDIA_DIR = ROOT / "Media"
-APP_VERSION = "V0.9.12"
+APP_VERSION = "V0.10.1-wip"
 
 app = FastAPI(title="Mørkyn")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -1940,14 +1940,23 @@ def api_tile_maps():
 
 
 @app.get("/api/tiles/map")
-def api_tile_map(map_id: str = ""):
+def api_tile_map(map_id: str = "", legacy: bool = False):
     runtime = _location_special_runtime()
-    if runtime.get("map_blank"):
+    if runtime.get("map_blank") and not legacy:
         return _blank_map_payload()
-    data = get_map(map_id or None)
+    if legacy:
+        from app.tile_world import get_legacy_map
+
+        data = get_legacy_map()
+    else:
+        data = get_map(map_id or None)
     if not data:
         # Soft empty payload so the UI can boot without a hard 404.
-        return {"id": None, "tiles": [], "ascii": "", "empty": True}
+        payload = {"id": None, "tiles": [], "ascii": "", "empty": True}
+        if legacy:
+            payload["legacy"] = True
+            payload["map_role"] = "legacy"
+        return payload
     if data.get("scale") == "world":
         from app.world_scale import preview_window
 

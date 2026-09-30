@@ -1464,7 +1464,7 @@ try {
     } else {
         Write-Host "Provider is MLE (Morkyn LLM Engine)."
         Write-Host "Model name: $([string]$prefs.mle_model)"
-        Write-Host "The welding rig is not connected yet. Local MLE turns will say so until that lands."
+        Write-Host "MLE loads a local GGUF in-process."
     }
 
     Write-Host ""

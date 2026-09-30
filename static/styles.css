@@ -2748,14 +2748,79 @@ body.image-mode-simple .imageSimpleOnly,
 .randomizeMenuWrap {
   display: inline-flex;
   flex: 0 0 auto;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
+}
+
+.setupHeader button.confirmRandomizeBtn,
+.randomizePopover button.confirmRandomizeBtn {
+  width: auto;
+  max-width: 100%;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 92%, white), var(--accent));
+  color: var(--on-accent);
+  border-color: transparent;
+  font-weight: 650;
+}
+
+.setupHeader button.confirmRandomizeBtn:hover,
+.randomizePopover button.confirmRandomizeBtn:hover {
+  filter: brightness(1.06);
+  color: var(--on-accent);
+}
+
+.setupRandomizeStatus {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--neon) 35%, var(--line));
+  background: color-mix(in srgb, var(--surface-inset) 80%, transparent);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.setupRandomizeStatus[hidden] {
+  display: none !important;
 }
 
 .setupPresetRow {
   width: 100%;
   min-width: 0;
   margin: 8px 0 0;
+}
+
+.setupPresetRow.isCollapsed #setupPresetBody {
+  display: none !important;
+}
+
+.setupPresetCard {
+  margin-top: 8px;
+}
+
+.setupPresetCard .characterArtHead .setupSimpleVibeActions {
+  flex: 0 0 auto;
+}
+
+/* Header chips use two :not(#id) selectors, which outrank a class-only reset.
+   Keep this title row flat the way Character art is: no fill, no pill, no press nudge. */
+.setupHeader .setupPresetCard button.characterArtToggle,
+.setupHeader .setupPresetCard button.characterArtToggle:hover,
+.setupHeader .setupPresetCard button.characterArtToggle:active {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  color: inherit;
+  font-weight: inherit;
+  box-shadow: none;
+  min-height: 0;
+  transform: none;
 }
 
 .setupHeader .setupPresetRow .setupSimpleVibe {
@@ -3006,7 +3071,7 @@ body.image-mode-simple .imageSimpleOnly,
 
   .setupHeaderTop {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     width: 100%;
@@ -3018,10 +3083,12 @@ body.image-mode-simple .imageSimpleOnly,
   }
 
   .setupHeaderPrimary {
-    flex: 0 0 auto;
+    flex: 1 1 280px;
     margin-left: auto;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     justify-content: flex-end;
+    min-width: 0;
+    max-width: 100%;
   }
 
   .setupHeaderUtility {
@@ -10251,7 +10318,7 @@ button.miniItemMore {
 }
 
 /* Undo old rule that painted every setup header button as primary */
-.setupHeader button:not(#setupStart):not(#setupStartMobile):not(.primaryButton) {
+.setupHeader button:not(#setupStart):not(#setupStartMobile):not(.primaryButton):not(#setupPresetToggle) {
   background: var(--btn-bg);
   color: var(--btn-text);
   border-color: var(--btn-border);
@@ -11816,9 +11883,12 @@ button.miniItemMore {
   }
 
   .setupHeaderPrimary {
-    flex: 0 0 auto;
-    flex-wrap: nowrap;
+    flex: 1 1 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 6px;
+    max-width: 100%;
+    min-width: 0;
   }
 
   .setupHeaderPrimary .setupPrimarySettings,
@@ -12609,15 +12679,104 @@ body.compact-mode .indexContent {
 
 .worldMapCard .mapFrame {
   width: 100%;
-  min-height: 220px;
+  min-height: 0;
   max-height: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+  grid-template-rows: auto;
+  align-items: stretch;
+  justify-items: stretch;
+  gap: 10px 12px;
+  aspect-ratio: auto;
+  overflow: hidden;
+  background: transparent;
+}
+
+.worldMapCard .mapPane {
   display: flex;
   flex-direction: column;
-  align-items: stretch;
-  place-items: stretch;
-  aspect-ratio: auto;
-  overflow: auto;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.worldMapCard .mapPaneLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  min-height: 3.5em;
+}
+
+.worldMapCard .mapPaneName {
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--label);
+}
+
+.worldMapCard .mapPaneHint {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+
+.worldMapCard .mapPaneView {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 180px;
+  max-height: 240px;
+  overflow: hidden;
   background: #0e1218;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.worldMapCard .mapPaneView > .mapCanvas {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  min-width: 0;
+  object-fit: contain;
+  border: none;
+}
+
+.worldMapCard .mapAscii.mapPaneView {
+  height: auto;
+  max-height: 240px;
+  min-height: 180px;
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 720px) {
+  .worldMapCard .mapFrame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .worldMapCard .mapPaneView,
+  .worldMapCard .mapAscii.mapPaneView {
+    min-height: 140px;
+    max-height: 200px;
+  }
+}
+
+@container setupmain (max-width: 640px) {
+  .worldMapCard .mapFrame {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .worldMapCard .mapPaneView,
+  .worldMapCard .mapAscii.mapPaneView {
+    min-height: 140px;
+    max-height: 200px;
+  }
 }
 
 .worldMapCard .mapMeta,

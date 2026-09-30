@@ -2421,22 +2421,34 @@ function setupRandomizationLocked() {
   return setupRandomizeLockDepth > 0;
 }
 
+function setSetupRandomizeStatus(text) {
+  const el = document.querySelector("#setupRandomizeStatus");
+  if (!el) return;
+  const msg = String(text || "").trim();
+  el.textContent = msg;
+  el.hidden = !msg;
+}
+
 function setSetupRandomizationLocked(locked, label = "Randomizing setup...") {
   setupRandomizeLockDepth = Math.max(0, setupRandomizeLockDepth + (locked ? 1 : -1));
   const isLocked = setupRandomizationLocked();
-  setupForm.classList.toggle("setupRandomizing", isLocked);
-  setupForm.dataset.randomizeLockLabel = isLocked ? label : "";
-  if (isLocked) {
-    setupForm.setAttribute("aria-busy", "true");
-    if (setupForm.contains(document.activeElement)) document.activeElement.blur();
-  } else {
-    setupForm.removeAttribute("aria-busy");
+  try {
+    setupForm.classList.toggle("setupRandomizing", isLocked);
+    setupForm.dataset.randomizeLockLabel = isLocked ? label : "";
+    if (isLocked) {
+      setupForm.setAttribute("aria-busy", "true");
+      if (setupForm.contains(document.activeElement)) document.activeElement.blur();
+    } else {
+      setupForm.removeAttribute("aria-busy");
+    }
+    if ("inert" in setupForm) setupForm.inert = isLocked;
+    updateAbilityOriginControls();
+    updateTextOptimizeControls();
+    // Show logo modal even if this path runs without enqueueAiTask wrapping
+    syncLlmBusyChrome(isLocked ? label : aiBusy ? llmBusyLabel || "Working…" : "");
+  } catch (err) {
+    console.warn("setup randomize lock", err);
   }
-  if ("inert" in setupForm) setupForm.inert = isLocked;
-  updateAbilityOriginControls();
-  updateTextOptimizeControls();
-  // Show logo modal even if this path runs without enqueueAiTask wrapping
-  syncLlmBusyChrome(isLocked ? label : aiBusy ? llmBusyLabel || "Working…" : "");
 }
 
 function withSetupRandomizationLock(task, label = "Randomizing setup...", fallback = null, options = {}) {
@@ -2452,7 +2464,13 @@ function withSetupRandomizationLock(task, label = "Randomizing setup...", fallba
       }
     } finally {
       setSetupRandomizationLocked(false);
-      if (options.updateConditionals) updateConditionalSetup();
+      if (options.updateConditionals) {
+        try {
+          updateConditionalSetup();
+        } catch (err) {
+          console.warn("setup conditionals", err);
+        }
+      }
     }
   };
 }
@@ -3335,7 +3353,9 @@ function availableRadioValues(name) {
 function fallbackRandomizeSelectField(name) {
   const values = availableSelectValues(name);
   if (!values.length) return false;
-  setField(name, choice(values));
+  const current = String(setupForm.elements[name]?.value || "");
+  const pool = values.filter((value) => value !== current);
+  setField(name, choice(pool.length ? pool : values));
   return true;
 }
 
@@ -4016,6 +4036,8 @@ function pullFormToSimple() {
 function openRandomizePopover(fromEl) {
   const pop = document.querySelector("#randomizePopover");
   if (!pop) return;
+  // Leave the setup panel so backdrop-filter / overflow cannot clip or shift this dialog.
+  if (pop.parentElement !== document.body) document.body.appendChild(pop);
   const anchor =
     fromEl ||
     document.querySelector(setupUiMode === "simple" ? "#simpleOpenRandomize" : "#randomizeSetup") ||
@@ -4028,17 +4050,33 @@ function openRandomizePopover(fromEl) {
     let left = rect.right - width;
     left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
     let top = rect.bottom + 6;
-    const estHeight = 220;
+    const estHeight = 260;
     if (top + estHeight > window.innerHeight - 8) {
       top = Math.max(8, rect.top - estHeight - 6);
     }
     pop.style.position = "fixed";
+    pop.style.width = `${width}px`;
     pop.style.top = `${top}px`;
     pop.style.left = `${left}px`;
     pop.style.right = "auto";
     pop.style.zIndex = "120";
   }
   pop.classList.remove("hidden");
+  const confirmBtn = document.querySelector("#randomizePopoverConfirm");
+  if (confirmBtn && anchor !== confirmBtn) {
+    const popRect = pop.getBoundingClientRect();
+    const confirmRect = confirmBtn.getBoundingClientRect();
+    const overlaps =
+      popRect.left < confirmRect.right &&
+      popRect.right > confirmRect.left &&
+      popRect.top < confirmRect.bottom &&
+      popRect.bottom > confirmRect.top;
+    if (overlaps) {
+      const below = confirmRect.bottom + 6;
+      if (below + popRect.height < window.innerHeight - 8) pop.style.top = `${below}px`;
+      else pop.style.left = `${Math.max(8, confirmRect.left - popRect.width - 8)}px`;
+    }
+  }
   document.querySelector("#simpleOpenRandomize")?.setAttribute("aria-expanded", "true");
   document.querySelector("#randomizeSetup")?.setAttribute("aria-expanded", "true");
   document.querySelector("#randomizeSetupPrompt")?.focus();
@@ -4051,8 +4089,20 @@ function closeRandomizePopover() {
   document.querySelector("#randomizeSetup")?.setAttribute("aria-expanded", "false");
 }
 
-function runConfirmedRandomize() {
-  if (isSetupActionSuppressed()) return;
+function runConfirmedRandomize(event) {
+  if (event?.preventDefault) event.preventDefault();
+  if (event?.stopPropagation) event.stopPropagation();
+  const fromConfirm = Boolean(event?.target?.closest?.("[data-confirm-randomize]"));
+  const fromHotkey = event?.key === "Enter";
+  const explicitConfirm = fromConfirm || fromHotkey || !event;
+  if (!explicitConfirm && isSetupActionSuppressed()) {
+    setSetupRandomizeStatus("Click Confirm randomize again.");
+    return;
+  }
+  if (setupRandomizationLocked()) {
+    setSetupRandomizeStatus("Already filling Primary…");
+    return;
+  }
   if (setupUiMode === "simple") pushSimpleToForm();
   closeRandomizePopover();
   const idea = setupRandomizeIdea();
@@ -4062,15 +4112,19 @@ function runConfirmedRandomize() {
   const label = idea
     ? "Randomizing Primary fields from your idea..."
     : "Randomizing Primary fields...";
+  setSetupRandomizeStatus(label);
   const promptInput = document.querySelector("#randomizeSetupPrompt");
   if (randomizeSetup) randomizeSetup.disabled = true;
   if (promptInput) promptInput.disabled = true;
+  let usedFallback = false;
   enqueueAiTask(
     withSetupRandomizationLock(
       () => randomizeAllSetup({ idea, mode, fieldOrder }),
       label,
       (error) => {
+        usedFallback = true;
         fallbackRandomizeSequence(fieldOrder);
+        setSetupRandomizeStatus("Model unavailable. Filled Primary from the local list.");
         latestOutput.innerHTML = paragraphs(
           `Model randomizer unavailable; used local fallback. ${error.message || error}`,
         );
@@ -4080,6 +4134,10 @@ function runConfirmedRandomize() {
   )
     .then(() => {
       if (setupUiMode === "simple") pullFormToSimple();
+      if (!usedFallback) setSetupRandomizeStatus("Primary filled. Optional was left as you set it.");
+    })
+    .catch(() => {
+      if (!usedFallback) setSetupRandomizeStatus("Could not fill Primary. Try Confirm randomize again.");
     })
     .finally(() => {
       if (randomizeSetup) randomizeSetup.disabled = false;
@@ -4105,6 +4163,21 @@ async function generateSetupPortraitSimple(kind) {
   }
 }
 
+function randomizedPayloadFields(payload) {
+  if (payload?.fields && typeof payload.fields === "object" && !Array.isArray(payload.fields)) return payload.fields;
+  if (payload && typeof payload === "object" && !Array.isArray(payload)) return payload;
+  return {};
+}
+
+function randomizedFieldIsBlank(payload, name) {
+  const fields = randomizedPayloadFields(payload);
+  if (!Object.prototype.hasOwnProperty.call(fields, name)) return true;
+  const raw = fields[name];
+  if (raw === undefined || raw === null) return true;
+  if (typeof raw === "boolean" || typeof raw === "number") return false;
+  return String(raw).trim() === "";
+}
+
 async function randomizeField(name, options = {}) {
   if (!options.ignoreLock && isSettingLocked(name)) return;
   const current = currentSetupSnapshot(name);
@@ -4118,7 +4191,10 @@ async function randomizeField(name, options = {}) {
     body: JSON.stringify({ group: `field:${name}`, current }),
   });
   if (!response.ok) throw new Error(await response.text());
-  applyRandomizedSetup(await response.json());
+  const payload = await response.json();
+  applyRandomizedSetup(payload);
+  // A 200 with an empty field used to leave the control untouched. Fill it locally.
+  if (randomizedFieldIsBlank(payload, name)) fallbackRandomizeField(name, options);
 }
 
 async function ensureComposerOrder() {
@@ -4654,10 +4730,70 @@ function syncPresetEditorFromSelection() {
   }
 }
 
+const SETUP_PRESETS_COLLAPSED_KEY = "morkyn-setup-presets-collapsed";
+
+function setSetupPresetsCollapsed(collapsed, persist = true) {
+  const row = document.querySelector("#setupPresetRow");
+  const card = document.querySelector("#setupPresetCard");
+  const body = document.querySelector("#setupPresetBody");
+  const btn = document.querySelector("#setupPresetToggle");
+  const meta = document.querySelector("#setupPresetCollapseMeta");
+  const on = Boolean(collapsed);
+  row?.classList.toggle("isCollapsed", on);
+  card?.classList.toggle("isCollapsed", on);
+  if (body) {
+    if (on) body.setAttribute("hidden", "");
+    else body.removeAttribute("hidden");
+    body.style.display = on ? "none" : "";
+  }
+  if (btn) {
+    btn.setAttribute("aria-expanded", on ? "false" : "true");
+    btn.title = on ? "Show preset ideas" : "Hide preset ideas";
+  }
+  if (meta) {
+    meta.textContent = on
+      ? "Collapsed · click to expand presets"
+      : "Expanded · pick an idea, then Confirm randomize";
+  }
+  if (!persist) return;
+  try {
+    localStorage.setItem(SETUP_PRESETS_COLLAPSED_KEY, on ? "1" : "0");
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function bindSetupPresetCollapse() {
+  let collapsed = false;
+  try {
+    collapsed = localStorage.getItem(SETUP_PRESETS_COLLAPSED_KEY) === "1";
+  } catch (_) {
+    collapsed = false;
+  }
+  setSetupPresetsCollapsed(collapsed, false);
+  const card = document.querySelector("#setupPresetCard");
+  if (!card || card.dataset.collapseBound === "1") return;
+  card.dataset.collapseBound = "1";
+  card.addEventListener("click", (event) => {
+    const t = event.target;
+    if (!(t instanceof Element)) return;
+    if (t.closest("#presetNewBtn, #presetSaveBtn, #presetDeleteBtn")) return;
+    if (
+      t.closest("#setupPresetToggle") ||
+      (t.closest(".characterArtHead") && !t.closest("button.secondaryButton"))
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      setSetupPresetsCollapsed(!card.classList.contains("isCollapsed"));
+    }
+  });
+}
+
 function applyDirectorPreset(presetId, { runRandomize = false } = {}) {
   const preset = findPreset(presetId);
   if (!preset) return;
   selectedDirectorPresetId = preset.id;
+  setSetupPresetsCollapsed(false);
   const idea = ideaForActivePreset(preset);
   const ideaInput = document.querySelector("#randomizeSetupPrompt");
   if (ideaInput) ideaInput.value = idea.slice(0, 400);
@@ -4769,6 +4905,7 @@ async function randomizeAllSetup(options = {}) {
         ? RANDOM_FIELD_ORDER.slice()
         : fieldOrder;
   let intent = null;
+  let appliedOverrideKeys = new Set();
   // Tree root: compile intent, apply deterministic overrides, then walk dependent fields.
   if (idea) {
     const composed = await composeSetupIntent(idea);
@@ -4781,6 +4918,11 @@ async function randomizeAllSetup(options = {}) {
     if (overrides && typeof overrides === "object" && Object.keys(overrides).length) {
       applyRandomizedSetup({ fields: overrides });
       normalizeRandomizerDependencies();
+      appliedOverrideKeys = new Set(
+        Object.entries(overrides)
+          .filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== "")
+          .map(([key]) => key),
+      );
     }
     // Stash full intent overrides for expandSimpleSetupDepth / Start (not applied to form yet in Simple).
     if (mode === "simple" && rawOverrides && typeof rawOverrides === "object") {
@@ -4807,6 +4949,12 @@ async function randomizeAllSetup(options = {}) {
     if (!randomizeFieldApplies(name)) continue;
     // One page: header Randomize fills Primary only, even if walkOrder drifts.
     if (mode === "simple" && !PRIMARY_RANDOM_FIELD_ORDER.includes(name)) continue;
+    // World difficulty and origin have HTML defaults. Skip the model only when this
+    // idea's compose actually set them, then roll the select locally so Confirm changes them.
+    if (mode === "simple" && (name === "difficulty" || name === "backstory_mode")) {
+      if (!isSettingLocked(name) && !appliedOverrideKeys.has(name)) fallbackRandomizeSelectField(name);
+      continue;
+    }
     // Skip fields already set by deterministic intent overrides (still re-roll unlocked if empty).
     if (intent && options.skipOverrideFields !== false) {
       // Always re-walk text-heavy / identity fields so LLM can enrich; keep hard overrides for enums/bools.
@@ -4844,14 +4992,19 @@ async function randomizeAllSetup(options = {}) {
         "auto_check_on_risky_actions",
         "show_rolls_in_ui",
       ]);
-      if (hardOverrideFields.has(name) && !isSettingLocked(name)) {
-        // Already applied via overrides; skip LLM so difficulty never becomes a slogan.
-        const formData = new FormData(setupForm);
-        const currentVal = setupSnapshotValue(formData, name);
-        if (currentVal !== "" && currentVal !== null && currentVal !== undefined) continue;
+      if (hardOverrideFields.has(name) && appliedOverrideKeys.has(name) && !isSettingLocked(name)) {
+        // Compose already set this enum. Skip the model so it cannot turn it into a slogan.
+        continue;
       }
     }
     await randomizeField(name, idea ? { idea, intent } : { intent });
+  }
+  if (mode === "simple") {
+    for (const name of ["player_name", "custom_style", "hair", "facial_features", "appearance"]) {
+      if (isSettingLocked(name) || appliedOverrideKeys.has(name)) continue;
+      if (String(setupForm.elements[name]?.value || "").trim()) continue;
+      fallbackRandomizeField(name);
+    }
   }
   // Full-package coherence pass: Advanced only (Simple package is intentionally thin until Start).
   if (mode === "advanced" && options.coherencePass !== false) {
@@ -7451,6 +7604,13 @@ function showSetupWizard(options = {}) {
   setImageUiMode(imageUiMode);
   renderDirectorPresets();
   renderSimpleDirectorPresets();
+  newGameRollStarted = true;
+  const mapStatus = document.querySelector("#mapAscii");
+  if (mapStatus) mapStatus.textContent = "Rolling a new map…";
+  rollNewGameMap().catch((error) => {
+    const asciiEl = document.querySelector("#mapAscii");
+    if (asciiEl) asciiEl.textContent = `Could not roll a new map: ${error.message || error}`;
+  });
   // New game: character art always starts collapsed (user can expand anytime).
   loadImageConfig()
     .catch(() => {})
@@ -18225,6 +18385,22 @@ async function startGame(event) {
   const startLabel = "Starting playthrough...";
   showStartSplash();
   await enqueueAiTask(withSetupRandomizationLock(async () => {
+    if (newGameMapPromise) {
+      addStartSplashLine?.("Finishing the new world map…");
+      try {
+        await newGameMapPromise;
+      } catch (_) {
+        /* rollNewGameMap reports the failure below */
+      }
+    }
+    if (!newGameMap || mapIsLegacy(newGameMap)) {
+      addStartSplashLine?.("Rolling a new world map…");
+      await rollNewGameMap();
+    }
+    if (!newGameMap || mapIsLegacy(newGameMap)) {
+      throw new Error("Could not roll a new world map. The legacy map was left as-is.");
+    }
+    renderMapPreview(newGameMap);
     if (setupUiMode === "simple") {
       latestOutput.innerHTML = paragraphs("Expanding Simple setup toward full playthrough depth...");
       addStartSplashLine?.("Expanding Simple setup to Advanced-depth fields…");
@@ -19162,18 +19338,24 @@ function toggleRandomizePopover(fromEl) {
   if (pop && !pop.classList.contains("hidden")) closeRandomizePopover();
   else openRandomizePopover(fromEl);
 }
-randomizeSetup?.addEventListener("click", (event) => {
-  event.preventDefault();
-  event.stopPropagation();
-  toggleRandomizePopover(event.currentTarget);
-});
-document.querySelector("#simpleOpenRandomize")?.addEventListener("click", (event) => {
-  event.preventDefault();
-  event.stopPropagation();
-  toggleRandomizePopover(event.currentTarget);
+const randomizeOpeners = new Set(
+  [randomizeSetup, document.querySelector("#simpleOpenRandomize"), document.querySelector("#randomizeSetup")].filter(Boolean),
+);
+randomizeOpeners.forEach((btn) => {
+  btn.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleRandomizePopover(event.currentTarget);
+  });
 });
 document.querySelector("#randomizePopoverCancel")?.addEventListener("click", () => closeRandomizePopover());
-document.querySelector("#randomizePopoverConfirm")?.addEventListener("click", () => runConfirmedRandomize());
+document.addEventListener("click", (event) => {
+  const confirmBtn = event.target?.closest?.("[data-confirm-randomize]");
+  if (!confirmBtn) return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  runConfirmedRandomize(event);
+});
 function syncSelectedPresetIdeaToPrompt() {
   const preset = findPreset(selectedDirectorPresetId);
   if (!preset) return;
@@ -19205,7 +19387,7 @@ document.querySelector("#randomizeSetupPrompt")?.addEventListener("keydown", (ev
 document.addEventListener("click", (event) => {
   const pop = document.querySelector("#randomizePopover");
   if (!pop || pop.classList.contains("hidden")) return;
-  if (event.target.closest("#randomizePopover, #randomizeSetup, #simpleOpenRandomize")) return;
+  if (event.target.closest("#randomizePopover, #randomizeSetup, #simpleOpenRandomize, [data-confirm-randomize]")) return;
   closeRandomizePopover();
 });
 document.querySelector("#directorPresets")?.addEventListener("click", (event) => {
@@ -19218,6 +19400,7 @@ document.querySelector("#simpleDirectorPresets")?.addEventListener("click", (eve
   if (!btn) return;
   applyDirectorPreset(btn.dataset.directorPreset, { runRandomize: false });
 });
+bindSetupPresetCollapse();
 document.querySelector("#presetNewBtn")?.addEventListener("click", () => createUserPreset());
 document.querySelector("#presetSaveBtn")?.addEventListener("click", () => saveSelectedPresetFromEditor());
 document.querySelector("#presetDeleteBtn")?.addEventListener("click", () => deleteSelectedUserPreset());
@@ -21188,6 +21371,12 @@ loadImageConfig()
 let worldPresets = [];
 let tileStates = [];
 let activeMap = null;
+let newGameMap = null;
+let newGameMapPromise = null;
+let newGameRollStarted = false;
+let newGameRollSerial = 0;
+let worldMapUiReady = Promise.resolve();
+let mapRenderToken = 0;
 let tileLibSelection = new Set();
 /** Preferred sprite size for map cells: 16 or 32 (pixel art). Declared early for init. */
 let mapTilePx = Number(localStorage.getItem("morkyn-map-tile-px") || 32) === 16 ? 16 : 32;
@@ -21210,7 +21399,27 @@ bindMapMovement();
 bindLocalMapClick();
 hideScriptGate();
 
+function mapIsLegacy(mapData) {
+  if (!mapData || typeof mapData !== "object") return true;
+  if (mapData.legacy === true || mapData.map_role === "legacy") return true;
+  return mapData.scale !== "world";
+}
+
+function rollMapSeed() {
+  let value = 0;
+  try {
+    const buf = new Uint32Array(1);
+    crypto.getRandomValues(buf);
+    value = buf[0] >>> 0;
+  } catch (_) {
+    value = Math.floor(Math.random() * 2147483646);
+  }
+  const seed = value % 2147483647;
+  return seed > 0 ? seed : 1;
+}
+
 async function initWorldMapUi() {
+  const run = (async () => {
   const presetSel = document.querySelector("#mapPresetSelect");
   const stateSel = document.querySelector("#tileLibState");
   const asciiEl = document.querySelector("#mapAscii");
@@ -21254,27 +21463,12 @@ async function initWorldMapUi() {
         .map((s) => `<option value="${escapeHtml(s.id)}">${escapeHtml(s.label)} (${escapeHtml(s.id)})</option>`)
         .join("");
   }
-  // Restore last map; if none, auto-generate so the board is visible.
-  try {
-    const res = await fetch("/api/tiles/map");
-    if (res.ok) {
-      const data = await res.json();
-      if (data && !data.empty && data.id) {
-        activeMap = data;
-        renderMapPreview(activeMap);
-        return;
-      }
-    }
-  } catch (_) {
-    /* none yet */
+  if (asciiEl && !newGameMap && !newGameRollStarted) {
+    asciiEl.textContent = "A new map is rolled when you start a new game.";
   }
-  if (worldPresets.length) {
-    try {
-      await generateWorldMap();
-    } catch (error) {
-      if (asciiEl) asciiEl.textContent = `Auto-generate failed: ${error.message || error}. Press Generate.`;
-    }
-  }
+  })();
+  worldMapUiReady = run;
+  return run;
 }
 
 const MAP_STATE_COLORS = {
@@ -21300,7 +21494,19 @@ const MAP_STATE_COLORS = {
   swamp: "#3d5c3a",
   beach: "#d2c08a",
   dungeon: "#3a3040",
-  cavern: "#4a3f4a",
+  cavern: "#2c2836",
+  mushroom: "#c6d36a",
+  crystal: "#c9b6ff",
+  nebula: "#6b4c9a",
+  volcano: "#8a4030",
+  harbor: "#4c8ca8",
+  gate: "#c46b4a",
+  waterfall: "#7ec8e3",
+  wreck: "#6a5a48",
+  farm: "#8aaa55",
+  colony: "#8eb4c9",
+  shipyard: "#7a8ea0",
+  anomaly: "#d27cff",
 };
 
 function paintMapCanvas(mapData, canvas) {
@@ -21371,8 +21577,11 @@ function renderMapPreview(mapData) {
   if (playAscii) playAscii.textContent = ascii;
   paintMapCanvas(mapData, canvas);
   paintMapCanvas(mapData, playCanvas);
+  const legacy = mapIsLegacy(mapData);
   if (badge) {
-    badge.textContent = `${mapData.preset_id || "map"} · seed ${mapData.seed}`;
+    badge.textContent = legacy
+      ? `Legacy map · ${mapData.width}×${mapData.height} · seed ${mapData.seed}`
+      : `${mapData.preset_id || "map"} · seed ${mapData.seed}`;
   }
   if (metaEl) {
     const stats = mapData.stats || {};
@@ -21388,8 +21597,9 @@ function renderMapPreview(mapData) {
       · you @ (${mapData.player?.x}, ${mapData.player?.y})
       · art ${stats.image_assigned || 0}/${stats.cells || 0}</p>
       <div class="mapStats">${top}</div>
-      <p class="mapLegend">Red cell = you · color blocks = terrain states · ASCII backup below.</p>
-      ${mapData.scale === "world" ? `<p>World grid ${mapData.width}×${mapData.height}. This preview is the ground around you. A city is a clump of those cells, and each cell holds its own internal grid.</p>` : ""}
+      <p class="mapLegend">Color grid: colored squares, red is you. Letter map: the same ground as letters — @ you, T trees, n hills, c cavern, m mushrooms, y crystal, ~ water, # city, . open ground, ^ mountain, - road.</p>
+      ${legacy ? `<p>${isSavedLegacyBoard(mapData) ? "Legacy map. This is the old 36×36 letter map this screen used to open." : "Legacy map. This is a saved small board."}</p>` : ""}
+      ${mapData.scale === "world" && !legacy ? `<p>World grid ${mapData.width}×${mapData.height}. This preview is the ground around you. A city is a clump of those cells, and each cell holds its own internal grid.</p>` : ""}
       ${missing ? `<p class="empty">No art yet for: ${escapeHtml(missing)}. Use Tile library → Generate.</p>` : ""}
     `;
   }
@@ -21400,6 +21610,7 @@ function renderMapPreview(mapData) {
 }
 
 async function generateWorldMap() {
+  const token = ++mapRenderToken;
   const preset = document.querySelector("#mapPresetSelect")?.value || "forest_march";
   const seedRaw = document.querySelector("#mapSeedInput")?.value;
   const seed = seedRaw === "" || seedRaw == null ? null : Number(seedRaw);
@@ -21416,8 +21627,77 @@ async function generateWorldMap() {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.detail || data.error || "Map generation failed");
+  if (token !== mapRenderToken) return data;
+  if (!mapIsLegacy(data)) {
+    newGameMap = data;
+    const input = document.querySelector("#mapSeedInput");
+    if (input && data.seed != null && (seedRaw === "" || seedRaw == null)) input.value = String(data.seed);
+  }
   renderMapPreview(data);
   return data;
+}
+
+async function rollNewGameMap() {
+  newGameRollStarted = true;
+  const serial = ++newGameRollSerial;
+  const run = (async () => {
+    await worldMapUiReady;
+    if (serial !== newGameRollSerial) return newGameMap;
+    const input = document.querySelector("#mapSeedInput");
+    const seed = rollMapSeed();
+    if (input) input.value = String(seed);
+    return generateWorldMap();
+  })();
+  newGameMapPromise = run;
+  try {
+    return await run;
+  } finally {
+    if (newGameMapPromise === run) newGameMapPromise = null;
+  }
+}
+
+function isPreviousBoard(mapData) {
+  if (!mapData || mapData.empty || !mapData.id) return false;
+  const id = String(mapData.id);
+  const scale = String(mapData.scale || "");
+  if (scale === "world" || id.startsWith("world-")) return false;
+  const width = Number(mapData.width || 0);
+  const height = Number(mapData.height || 0);
+  return width > 0 && height > 0 && width <= 96 && height <= 96;
+}
+
+// The letter map the setup screen used to open: 36×36, seed 1935480396.
+const LEGACY_MAP_SEED = 1935480396;
+
+function isSavedLegacyBoard(mapData) {
+  return isPreviousBoard(mapData)
+    && Number(mapData.seed) === LEGACY_MAP_SEED
+    && Number(mapData.width) === 36
+    && Number(mapData.height) === 36;
+}
+
+async function showLegacyDebugMap() {
+  await worldMapUiReady;
+  const asciiEl = document.querySelector("#mapAscii");
+  const badge = document.querySelector("#mapFrame .visionBadge");
+  const listed = await fetch("/api/tiles/maps").then((res) => res.json()).catch(() => ({}));
+  const boards = (listed.maps || []).filter(isPreviousBoard);
+  const chosen = boards.find(isSavedLegacyBoard) || boards[0];
+  if (!chosen?.id) {
+    if (asciiEl) asciiEl.textContent = "No legacy map is saved.";
+    if (badge) badge.textContent = "No legacy map";
+    return null;
+  }
+  const res = await fetch(`/api/tiles/map?map_id=${encodeURIComponent(chosen.id)}`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !isPreviousBoard(data)) {
+    if (asciiEl) asciiEl.textContent = "No legacy map is saved.";
+    if (badge) badge.textContent = "No legacy map";
+    return null;
+  }
+  const view = { ...data, legacy: true, map_role: "legacy" };
+  renderMapPreview(view);
+  return view;
 }
 
 function openTileLibrary() {
@@ -21542,6 +21822,12 @@ async function generateTileArtForSelectedState() {
 
 document.querySelector("#mapRegenBtn")?.addEventListener("click", () => {
   generateWorldMap().catch((error) => {
+    const asciiEl = document.querySelector("#mapAscii");
+    if (asciiEl) asciiEl.textContent = `Error: ${error.message || error}`;
+  });
+});
+document.querySelector("#mapLegacyBtn")?.addEventListener("click", () => {
+  showLegacyDebugMap().catch((error) => {
     const asciiEl = document.querySelector("#mapAscii");
     if (asciiEl) asciiEl.textContent = `Error: ${error.message || error}`;
   });
@@ -22061,8 +22347,46 @@ function getPixelTileSprite(state, size = 16) {
     ctx.fillRect(0, s / 2 - step * 2, s, step * 4);
     ctx.fillStyle = "#c4b08a";
     ctx.fillRect(0, s / 2 - step, s, step * 2);
+  } else if (state === "cavern" || state === "dungeon") {
+    ctx.fillStyle = "#241f2c";
+    ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = "#4a4458";
+    ctx.fillRect(step, step * 3, s - step * 2, step);
+    ctx.fillRect(step * 2, step * 8, step * 4, step);
+    ctx.fillStyle = "#1a1620";
+    ctx.fillRect(0, s - step * 3, s, step * 3);
+  } else if (state === "mushroom") {
+    ctx.fillStyle = "#243028";
+    ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = "#d6e07a";
+    ctx.fillRect(step * 3, step * 2, step * 4, step * 2);
+    ctx.fillRect(step * 8, step * 7, step * 3, step * 2);
+    ctx.fillStyle = "#8a6a48";
+    ctx.fillRect(step * 4, step * 4, step, step * 4);
+    ctx.fillRect(step * 9, step * 9, step, step * 3);
+  } else if (state === "crystal") {
+    ctx.fillStyle = "#2a2438";
+    ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = "#d7c6ff";
+    ctx.beginPath();
+    ctx.moveTo(s / 2, step);
+    ctx.lineTo(s / 2 + step * 2, s / 2);
+    ctx.lineTo(s / 2, s - step * 2);
+    ctx.lineTo(s / 2 - step * 2, s / 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = "#8f7ad4";
+    ctx.fillRect(step * 2, step * 6, step, step * 3);
+  } else if (state === "lava") {
+    ctx.fillStyle = "#3a221c";
+    ctx.fillRect(0, 0, s, s);
+    ctx.fillStyle = "#e05a28";
+    ctx.fillRect(step, s / 2, s - step * 2, step * 2);
+    ctx.fillRect(s / 2, step * 2, step * 2, s - step * 4);
+    ctx.fillStyle = "#ffd27a";
+    ctx.fillRect(s / 2, s / 2, step, step);
   } else if (state === "void" || state === "nebula") {
-    ctx.fillStyle = "#05060a";
+    ctx.fillStyle = state === "nebula" ? "#2a1848" : "#05060a";
     ctx.fillRect(0, 0, s, s);
     ctx.fillStyle = "#fff";
     for (let i = 0; i < 6; i += 1) {

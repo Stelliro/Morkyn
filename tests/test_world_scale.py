@@ -239,6 +239,8 @@ class WorldScaleTests(unittest.TestCase):
         self.assertEqual(len(made["preview"]["tiles"]), made["preview"]["width"] * made["preview"]["height"])
         loaded = get_map(made["id"])
         self.assertEqual(loaded["scale"], "world")
+        self.assertEqual(loaded["map_role"], "world")
+        self.assertFalse(loaded["legacy"])
         self.assertEqual(loaded["tiles"], [])
         self.assertEqual(len(loaded["cities"]), len(made["cities"]))
         self.assertEqual(loaded["cities"][0]["name"], made["cities"][0]["name"])
@@ -247,3 +249,119 @@ class WorldScaleTests(unittest.TestCase):
         again = get_map(made["id"])
         self.assertEqual(len(again["cities"]), len(made["cities"]))
         self.assertIn(f"{before[0]},{before[1]}", again["visited"])
+
+    def test_saved_board_stays_legacy_and_lookup_does_not_change_the_active_map(self):
+        init_db()
+        from app.db import connect
+        from app.tile_world import get_legacy_map
+
+        conn = connect()
+        try:
+            with conn:
+                conn.execute(
+                    """
+                    INSERT INTO world_maps
+                      (id, preset_id, seed, width, height, tiles_json, player_x, player_y, meta_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("board-old", "forest_march", 3, 12, 12, "[]", 1, 1, "{}"),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO world_maps
+                      (id, preset_id, seed, width, height, tiles_json, player_x, player_y, meta_json)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("world-new", "ash_plain", 9, 16383, 16383, "[]", 2, 2, '{"scale":"world","cities":[]}'),
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_world_map_id', ?)",
+                    ("world-new",),
+                )
+        finally:
+            conn.close()
+        board = get_map("board-old")
+        self.assertTrue(board["legacy"])
+        self.assertEqual(board["map_role"], "legacy")
+        world = get_map("world-new")
+        self.assertFalse(world["legacy"])
+        self.assertEqual(world["map_role"], "world")
+        found = get_legacy_map()
+        self.assertEqual(found["id"], "board-old")
+        self.assertTrue(found["legacy"])
+        still = get_map(None)
+        self.assertEqual(still["id"], "world-new")
+
+    def test_presets_grow_different_ground_and_name_a_majority_people(self):
+        from app.world_scale import people_leaning, world_cell
+
+        def preset(preset_id, age, environment):
+            return {"id": preset_id, "age": age, "environment": environment}
+
+        def counts(preset_id, age, environment):
+            world = build_world(preset(preset_id, age, environment), 11, density_percent=20)
+            found = Counter()
+            for y in range(0, 4000, 80):
+                for x in range(0, 4000, 80):
+                    state = str((world_cell(world, x, y) or {}).get("state") or "")
+                    if state in {"road", "city", "town", "village"}:
+                        continue
+                    found[state] += 1
+            return found, world
+
+        caverns, cavern_world = counts("deep_caverns", "timeless", "subterranean")
+        woods, _woods_world = counts("forest_march", "medieval", "terrestrial")
+        coast, _coast_world = counts("coastal_scrap", "industrial", "coastal")
+        belt, _belt_world = counts("orbital_belt", "far_future", "orbital")
+        self.assertGreater(caverns["cavern"], caverns.get("mushroom", 0))
+        self.assertTrue({"mushroom", "crystal", "lava", "water"} & set(caverns))
+        for banned in ("forest", "plains", "desert", "hill", "mountain"):
+            self.assertNotIn(banned, caverns)
+        self.assertIn("forest", woods)
+        self.assertNotIn("cavern", woods)
+        self.assertGreater(coast["water"], coast.get("forest", 0))
+        self.assertNotIn("forest", coast)
+        self.assertIn("void", belt)
+        self.assertNotIn("plains", belt)
+        self.assertNotIn("forest", belt)
+        self.assertEqual(cavern_world["materials"][1], "glow-fungus")
+        self.assertEqual(cavern_world["people_profile"]["majority"], ["dwarven", "darkling"])
+        self.assertIn("dark", cavern_world["people_profile"]["says"])
+        self.assertIn("dwarves", cavern_world["people_profile"]["says"])
+
+        kinds = []
+        dense = dict(cavern_world)
+        dense["density_percent"] = 45
+        for i in range(80):
+            leaning = people_leaning(dense, i * 48 + 4, 90, terrain="cavern")
+            if leaning.get("kind"):
+                kinds.append(leaning["kind"])
+            self.assertIn("absent", leaning["option"])
+        self.assertGreater(len(kinds), 20)
+        majority = sum(1 for kind in kinds if kind in {"dwarven", "darkling"})
+        self.assertGreater(majority / len(kinds), 0.6)
+
+        hills = people_leaning(cavern_world, 10, 12, terrain="hill")
+        again = people_leaning(cavern_world, 40, 20, terrain="hill")
+        self.assertEqual(hills["kind"], again["kind"])
+        self.assertEqual(hills["province"], again["province"])
+
+        sparse = build_world(preset("deep_caverns", "timeless", "subterranean"), 11, density_percent=8)
+        empty = 0
+        for i in range(40):
+            leaning = people_leaning(sparse, i * 48, 30, terrain="cavern")
+            if not leaning.get("kind"):
+                empty += 1
+        self.assertGreater(empty, 8)
+
+        init_db()
+        made = generate_scaled_world(preset_id="deep_caverns", seed=11, density_percent=18)
+        loaded = get_map(made["id"])
+        self.assertEqual(loaded["terrain_bands"]["ground"], "cavern")
+        self.assertIn("glow-fungus", loaded["materials"])
+        self.assertEqual(loaded["people_profile"]["majority"], ["dwarven", "darkling"])
+        contract = spatial_contract(loaded)
+        self.assertEqual(contract["people_leaning"]["majority"], ["dwarven", "darkling"])
+        self.assertIn("limestone", " ".join(contract["materials"]))
+        sample = world_cell(loaded, 200, 200)
+        self.assertIn(sample["state"], {"cavern", "mushroom", "crystal", "lava", "water", "cliff", "road", "city", "town", "village"})

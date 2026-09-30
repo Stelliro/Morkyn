@@ -100,6 +100,7 @@ If nobody is interacting, do not invent a speaker. If you want someone to addres
 A later "how was your day?" is for the interacting character, not everyone marked present.
 Leave CAST out when the scene cast does not change.
 - Database/world_state is source of truth. Only propose justified changes.
+- playthrough_options.setting_templates are the written rules for this playthrough's setup choices. Follow each rule. The short choice is only the selection. For RANK, use only the rungs named in the rank_scale rule.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
   Write "XP small", "GOLD -moderate", "HP -small", "GRANT \"rope\" QTY small".
   A leading "-" means a loss. The app rolls the actual amount; a bare number is
@@ -924,6 +925,16 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     if isinstance(offers, list) and offers:
         instructions.append(
             "open_offers are posted and not yet taken. They can be accepted. Do not invent extra jobs."
+        )
+    options = {}
+    if isinstance(context, dict):
+        options = ((context.get("settings") or {}).get("playthrough_options") or {})
+    templates = options.get("setting_templates") if isinstance(options, dict) else None
+    if isinstance(templates, dict) and templates:
+        instructions.append(
+            "setting_templates are the written rules for this playthrough's setup choices. "
+            "Follow each rule. The short choice is only the selection. "
+            "For rank_scale, use only the rungs named in that rule."
         )
     packet["instructions"] = instructions
     return __import__("json").dumps(packet, ensure_ascii=True, separators=(",", ":"))

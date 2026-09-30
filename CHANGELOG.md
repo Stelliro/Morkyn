@@ -18,7 +18,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ---
 
-## [0.10.1-wip] - 2026-09-30
+## [0.10.1-wip] - 2026-10-01
 
 > WIP release — systems under active development, not stable. Builds on `0.10.0-wip`. Not yet tagged.
 
@@ -26,13 +26,19 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 - [GROK] MLE (Morkyn LLM Engine) loads a local GGUF in-process and returns that completion only. `status` is ok only after the file has loaded. A missing file raises `MleNotReady` and names the path to set. Resolution order is an existing file path, `data/mle-models/<name>.gguf`, `MLE_GGUF`, then the single `.gguf` in that folder. Context comes from `AI_RPG_CONTEXT_TOKENS` (default 32768) and retries once at 8192 if that load fails. Weights are not rewritten — `app/mle.py`, `app/llm.py`, `app/launcher_prefs.py`, `Morkyn.ps1`
   - A call can pass `hide_words` and `keep_words`. The mask applies while the next token is chosen, and only when the decoded piece is the whole word. A split piece stays visible. Length-1 pieces, digits, letter-digit codes, punctuation, structure words, and keep-words stay choosable. The returned text is not edited afterwards.
-  - The turn caller does not yet hand MLE the overused-word list. `words_past_cap` still builds that list for the sampler: names and job titles are counted and are never on it — `app/narration_pipeline.py`, `tests/test_word_count.py`, `tests/test_mle_provider.py`
+  - Narration drafts pass that list as `hide_words`. `keep_words` carries names, job titles, and the draft JSON keys — `app/llm.py`, `app/narration_pipeline.py`, `tests/test_mle_provider.py`
 - [GROK] Seeded wilderness on a 16,383-cell side. A city is a connected clump inside a 9 by 9 neighborhood, at most 81 cells, and a one-cell-wide line of that length is rejected. The center cell is 128 by 128; outer cells are smaller. The widest fine span is 1,152. The only theme input is a density percent. The model does not place cities, notices, or coordinates — `app/world_scale.py`, `app/tile_world.py`, `tests/test_world_scale.py`, `tests/test_map_walk.py`
 - [GROK] Local intel. The engine owns directions, heard-about cells, shop stalls, notice boards, and personal-quest clocks. Heard cells stay separate from walked cells. A mark is refused on a cell in neither set. Black-market answers fail closed. An offer does not appear on the first day of its 30-day month — `app/local_intel.py`, `app/world.py`, `app/main.py`, `tests/test_local_intel.py`
 - [GROK] Encounter board. A fight tracks named people who are the target, who step in, or who are already on the board. A crowd is not a combatant list. A move the player has not seen is stored as what was seen, with no effectiveness attached — `app/encounter_board.py`, `app/world.py`, `tests/test_encounter_board.py`
+- [GROK] Setting rules, written before the opening scene. The setup field stays the short choice. SQLite `setting_templates` stores the sentence that says what that choice means, and the same text is copied onto the playthrough. A new game always stores a fallback. A cloud story provider may replace that fallback once, before the first scene, and only when the returned rule names the choice. `AI_RPG_SETTING_TEMPLATES=0` keeps the fallback and does not call a model. Local model servers are not started for this write — `app/setting_templates.py`, `app/world.py`, `app/db.py`, `app/prompts.py`, `app/turn_dsl.py`, `tests/test_setting_templates.py`
+  - A player list is one preset per label. `common, uncommon, rare, epic, legendary, unique and unknown` is seven rungs, low to high. The word `and` splits labels. A built-in phrase such as `earned and uncommon` stays one choice. A model rule that drops a label, or glues two neighboring rungs with `and`, is discarded and the engine preset is stored. Combat ranks use the same split.
+  - The catalog covers rank, economy, quests, factions, NPC stats and skills, density, difficulty, loot, magic, death, narration, skill style, tone, tech, check difficulty, system style, leveling, the in-world window, proficiencies, dice checks, event checks, encounter checks, new-skill frequency, proficiency access, and world peoples.
+- [GROK] Each world theme grows its own ground. Deep Caverns is cavern, mushroom, crystal, lava, water, and cliff, with wet limestone, glow-fungus, raw crystal, basalt, and black water. The other themes have their own bands and materials. A people-kind is a leaning for a stretch of ground, not a census, and a stretch may be empty. Deep Caverns leans toward creatures that lurk in the dark and dwarves. A saved map keeps the bands it was given. A map with none uses the theme's bands — `app/world_scale.py`, `app/tile_world.py`, `static/app.js`, `tests/test_world_scale.py`
+- [GROK] Setup screen. The world-preset card folds the same way character art does. The two world-map views are labeled, side by side on a wide window and stacked on a phone. Start new game rolls a seed and asks for a map at that seed. The older 36 by 36 board stays available as the legacy map — `static/index.html`, `static/app.js`, `static/styles.css`
 
 ### Changed
 
+- [GROK] The version string the game shows is `V0.10.1-wip`. The tagged stable release remains `v0.9.12` — `app/main.py`
 - [GROK] The local story provider id is `mle`, and the model field is `mle_model` (default `qwen3:8b`). A saved model name from the previous local engine is copied into `mle_model` when that field is empty, and those old keys are dropped from the in-memory config. Launcher prefs for this machine are already `mle`. llama.cpp, Forge, ComfyUI, and cloud APIs stay — `app/llm.py`, `app/launcher_prefs.py`, `Morkyn.ps1`, `static/index.html`, `static/app.js`
 
 ## [0.10.0-wip] - 2026-09-29

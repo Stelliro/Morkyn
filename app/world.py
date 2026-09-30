@@ -81,6 +81,7 @@ WORLD_TABLES = [
     "journal",
     "pacing",
     "settings",
+    "setting_templates",
     "gm_notes",
     "gm_events",
     # Tile overworld (not FK-linked to locations); must round-trip with Continue/load.
@@ -172,6 +173,7 @@ RESTORE_ORDER = [
     "journal",
     "pacing",
     "settings",
+    "setting_templates",
     "gm_notes",
     "gm_events",
     "world_maps",
@@ -1814,9 +1816,36 @@ def _playthrough_options(state: dict[str, Any]) -> dict[str, Any]:
     return ((state.get("settings") or {}).get("playthrough_options") or {})
 
 
+def _setup_flag_enabled(options: Any, key: str, default: bool = True) -> bool:
+    """Missing setup flags stay at the shipped default, which is on."""
+    if not isinstance(options, dict) or key not in options:
+        return default
+    value = options.get(key)
+    if value is None or value == "":
+        return default
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return default
+    return bool(value)
+
+
+def _play_system_enabled(conn, key: str, default: bool = True) -> bool:
+    try:
+        options = _settings(conn).get("playthrough_options")
+    except Exception:
+        return default
+    return _setup_flag_enabled(options, key, default)
+
+
 def _rank_labels(options: dict[str, Any]) -> list[str]:
     raw = str(options.get("rank_scale") or "F,E,D,C,B,A,S,SS,SSS")
-    labels = [part.strip().upper() for part in raw.split(",") if part.strip()]
+    from app.setting_templates import choice_parts
+
+    labels = [part.strip().upper() for part in choice_parts(raw) if part.strip()]
     return labels or ["F", "E", "D", "C", "B", "A", "S", "SS", "SSS"]
 
 
@@ -2015,7 +2044,7 @@ def _clear_combat_target(state: dict[str, Any], player_input: str, refs: dict[st
 
 def _ensure_combat_profiles_for_input(state: dict[str, Any], player_input: str) -> bool:
     intent, _secondary = _turn_intent(player_input)
-    if intent != "combat":
+    if intent != "combat" or not _setup_flag_enabled(_playthrough_options(state), "fighting_enabled", True):
         return False
     refs = _explicit_turn_references(player_input)
     candidates = _combat_target_candidates(state, player_input, refs)[:4]
@@ -2196,7 +2225,7 @@ def _build_mechanics_context(state: dict[str, Any], player_input: str) -> dict[s
             "fatigue_stamina_mult": resources.get("fatigue_stamina_mult"),
             "mana_enabled": resources.get("mana_enabled"),
         }
-    if intent != "combat":
+    if intent != "combat" or not _setup_flag_enabled(_playthrough_options(state), "fighting_enabled", True):
         mechanics["combat"] = {"status": "not_combat"}
         return mechanics
     refs = _explicit_turn_references(player_input)
@@ -3562,6 +3591,12 @@ def _sanitize_stored_entity_names(conn) -> None:
 def get_state(include_hidden: bool = False) -> dict[str, Any]:
     with connect() as conn:
         settings = _settings(conn)
+        try:
+            from app.setting_templates import overlay_setting_templates
+
+            overlay_setting_templates(conn, settings)
+        except Exception:
+            pass
         if settings.get("setup_complete") == "true" or settings.get("setup_complete") is True:
             has_slots = conn.execute("SELECT 1 FROM equipment_slots LIMIT 1").fetchone()
             if has_slots is None:
@@ -4122,6 +4157,13 @@ def _clear_playthrough(conn) -> None:
         conn.execute("DELETE FROM dice_rolls")
     except Exception:
         pass
+    try:
+        from app.setting_templates import ensure_setting_template_table
+
+        ensure_setting_template_table(conn)
+        conn.execute("DELETE FROM setting_templates")
+    except Exception:
+        pass
 
     for table in (
         "response_drafts",
@@ -4488,7 +4530,7 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             starter_logic_report = {}
 
         starter_items: list[str] = []
-        if starter_raw:
+        if starter_raw and _setup_flag_enabled(options, "items_enabled", True):
             for part in re.split(r"[,;|]+", starter_raw):
                 name_item = _sanitize_item_name(part)
                 if name_item and name_item.lower() not in {s.lower() for s in starter_items}:
@@ -4585,6 +4627,9 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "custom_style": custom_style,
             "leveling_system": bool(options.get("leveling_system", True)),
             "game_system": bool(options.get("game_system", False)),
+            "relationships_enabled": _setup_flag_enabled(options, "relationships_enabled", True),
+            "fighting_enabled": _setup_flag_enabled(options, "fighting_enabled", True),
+            "items_enabled": _setup_flag_enabled(options, "items_enabled", True),
             "system_style": options.get("system_style") or "subtle blue-window system",
             "death_rules": options.get("death_rules") or "downed, not deleted",
             "economy": options.get("economy") or "scarce",
@@ -4783,6 +4828,20 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                 (0, "backstory", f"{backstory_mode}/{memory_policy}: {character_backstory}"[:1800]),
             )
+        try:
+            conn.execute("SAVEPOINT setting_templates")
+            from app.setting_templates import store_setting_templates
+
+            packed = store_setting_templates(conn, stored_options)
+            if packed:
+                stored_options["setting_templates"] = packed
+                _set_setting(conn, "playthrough_options", stored_options)
+            conn.execute("RELEASE SAVEPOINT setting_templates")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK TO SAVEPOINT setting_templates")
+            except Exception:
+                pass
 
     # Lived-area map intel: natives / long-lived travelers know towns & danger without
     # having walked every tile. Amnesia starts colder.
@@ -9095,6 +9154,8 @@ def _derive_item_links(
 
 
 def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
+    if not _play_system_enabled(conn, "items_enabled", True):
+        return
     for change in changes:
         name = _sanitize_item_name(str(change.get("name", "")))
         if not name:
@@ -9282,6 +9343,8 @@ def _slot_by_ref(conn, slot_ref: Any, slot_name: Any = None) -> sqlite3.Row | No
 
 
 def _apply_equipment_slots(conn, slots: list[dict[str, Any]]) -> None:
+    if not _play_system_enabled(conn, "items_enabled", True):
+        return
     for slot in slots:
         if isinstance(slot, dict):
             _upsert_equipment_slot(conn, slot)
@@ -9533,6 +9596,8 @@ def player_fallback_narration(context: dict[str, Any], player_input: str, locati
 
 
 def _apply_equipment_changes(conn, changes: list[dict[str, Any]]) -> None:
+    if not _play_system_enabled(conn, "items_enabled", True):
+        return
     for change in changes:
         if not isinstance(change, dict):
             continue
@@ -9573,6 +9638,8 @@ def _apply_equipment_changes(conn, changes: list[dict[str, Any]]) -> None:
 
 
 def _apply_inventory_capacity_modifiers(conn, modifiers: list[dict[str, Any]]) -> None:
+    if not _play_system_enabled(conn, "items_enabled", True):
+        return
     if not isinstance(modifiers, list):
         return
     # Cap model spam / infinite storage exploits per turn
@@ -9917,6 +9984,8 @@ def _refresh_arrived_location_events(conn, location_id: int, turn: int) -> None:
 
 
 def _apply_relationships(conn, relationships: list[dict[str, Any]]) -> None:
+    if not _play_system_enabled(conn, "relationships_enabled", True):
+        return
     for rel in relationships:
         source_ref = rel.get("source_code") or rel.get("source")
         target_ref = rel.get("target_code") or rel.get("target")
@@ -10867,6 +10936,8 @@ def _apply_turn_npc_relationship_deltas(conn, result: dict[str, Any], player_inp
     This function handles trade: if gold changed and the turn was a trade intent,
     apply a small positive delta to the NPC the player talked with.
     """
+    if not _play_system_enabled(conn, "relationships_enabled", True):
+        return
     from app.relationships import update_relationship, RELATIONSHIP_EVENTS
 
     player_patch = result.get("player") or {}
@@ -10895,6 +10966,8 @@ def _apply_turn_npc_relationship_deltas(conn, result: dict[str, Any], player_inp
 
 
 def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None:
+    if not _play_system_enabled(conn, "fighting_enabled", True):
+        return
     if not isinstance(combat, dict) or combat.get("status") != "resolved_player_attack":
         return
     target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
@@ -10932,6 +11005,8 @@ def _apply_deterministic_combat(conn, combat: dict[str, Any], turn: int) -> None
     )
     # Relationship deltas: attacking an NPC lowers affinity/respect and raises fear.
     # If the NPC is killed, nearby NPCs lose affinity toward the player.
+    if not _play_system_enabled(conn, "relationships_enabled", True):
+        return
     try:
         from app.relationships import update_relationship, RELATIONSHIP_EVENTS
         npc_id = int(row["id"])
@@ -11961,19 +12036,20 @@ def apply_turn(
         result["inventory_changes"] = inv_changes
         _apply_inventory(conn, inv_changes)
         gear_report: dict[str, Any] = {"status": "none", "items": []}
-        try:
-            gear_report = resolve_worn_unequip(conn, result, player_input)
-            missing = [name for name in gear_report.get("items") or [] if not narration_records_unequip(narration, name)]
-            if missing:
-                sentence = (
-                    "You take off "
-                    + ", ".join(missing)
-                    + ". They are in your pack now, not worn."
-                )
-                _set_narration_text(result, (narration.rstrip() + "\n\n" + sentence).strip())
-                narration = _narration_text(result)
-        except Exception as exc:
-            gear_report = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200], "items": []}
+        if _play_system_enabled(conn, "items_enabled", True):
+            try:
+                gear_report = resolve_worn_unequip(conn, result, player_input)
+                missing = [name for name in gear_report.get("items") or [] if not narration_records_unequip(narration, name)]
+                if missing:
+                    sentence = (
+                        "You take off "
+                        + ", ".join(missing)
+                        + ". They are in your pack now, not worn."
+                    )
+                    _set_narration_text(result, (narration.rstrip() + "\n\n" + sentence).strip())
+                    narration = _narration_text(result)
+            except Exception as exc:
+                gear_report = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200], "items": []}
         _apply_equipment_slots(conn, result.get("equipment_slots") or [])
         _apply_equipment_changes(conn, result.get("equipment_changes") or [])
         _apply_inventory_capacity_modifiers(conn, result.get("inventory_capacity_modifiers") or [])
@@ -12000,23 +12076,24 @@ def apply_turn(
         _apply_index_updates(conn, result.get("index_updates") or [])
         _apply_ability_updates(conn, result.get("ability_updates") or [])
         _apply_deterministic_combat(conn, result.get("_deterministic_combat") or {}, turn)
-        try:
-            from app.encounter_board import record_encounter_turn
+        if _play_system_enabled(conn, "fighting_enabled", True):
+            try:
+                from app.encounter_board import record_encounter_turn
 
-            move_status = str(movement_report.get("status") or "")
-            origin = str(movement_report.get("from") or "").strip().lower()
-            destination = str(movement_report.get("destination") or "").strip().lower()
-            left_the_place = move_status in {"model", "repaired"} and bool(destination) and destination != origin
-            record_encounter_turn(
-                conn,
-                turn=turn,
-                player_input=player_input,
-                narration=narration,
-                combat=result.get("_deterministic_combat") or {},
-                moved=left_the_place,
-            )
-        except Exception:
-            pass
+                move_status = str(movement_report.get("status") or "")
+                origin = str(movement_report.get("from") or "").strip().lower()
+                destination = str(movement_report.get("destination") or "").strip().lower()
+                left_the_place = move_status in {"model", "repaired"} and bool(destination) and destination != origin
+                record_encounter_turn(
+                    conn,
+                    turn=turn,
+                    player_input=player_input,
+                    narration=narration,
+                    combat=result.get("_deterministic_combat") or {},
+                    moved=left_the_place,
+                )
+            except Exception:
+                pass
         try:
             _apply_turn_npc_relationship_deltas(conn, result, player_input)
         except Exception:
@@ -14299,6 +14376,12 @@ def play_wait_turn(minutes: int, kind: str = "wait") -> dict[str, Any]:
 
 def start_playthrough_with_opening(options: dict[str, Any]) -> dict[str, Any]:
     state = start_playthrough(options)
+    try:
+        from app.setting_templates import refresh_setting_templates_from_model
+
+        refresh_setting_templates_from_model()
+    except Exception:
+        pass
     opening = play_opening_turn()
     # Surface gear fact-check to the UI (popup when items were stripped/deferred)
     try:

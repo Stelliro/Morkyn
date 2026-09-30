@@ -139,10 +139,12 @@ Morkyn/
 
 ### New in 0.10.1-wip
 
-- **MLE (Morkyn LLM Engine).** The local story model loads a GGUF in-process. A missing file says so instead of answering. A listed word can be hidden while the next token is chosen; the weights file and the finished sentence stay as they are — `app/mle.py`.
+- **MLE (Morkyn LLM Engine).** The local story model loads a GGUF in-process. A missing file says so instead of answering. Narration drafts can hide an overused word while the next token is chosen. Names, job titles, and the draft's JSON keys stay choosable. The weights file and the finished sentence stay as they are — `app/mle.py`.
 - **Wilderness map.** The land is a seeded 16,383-cell grid. Cities are clumps inside a 9 by 9 neighborhood, not a one-cell line. The model does not place them — `app/world_scale.py`.
 - **Local intel.** Directions, heard-about cells, notice boards, and quest clocks belong to the engine — `app/local_intel.py`.
 - **Encounter board.** A fight tracks the named people in it, and a move is stored as what the player saw — `app/encounter_board.py`.
+- **Setup rules.** The short choice stays short. The save stores a written rule for it before the first scene. A typed list such as common, uncommon, rare, epic, legendary, unique, and unknown becomes one rung per label — `app/setting_templates.py`.
+- **World themes.** Deep Caverns grows cavern, mushroom, crystal, lava, water, and cliff, and leans toward dark-dwelling creatures and dwarves. Other themes have their own ground and usual people. A new game rolls its own map seed. The older small board stays as the legacy map — `app/world_scale.py`.
 
 ### New in 0.10.0-wip
 
