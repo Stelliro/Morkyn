@@ -1,6 +1,34 @@
-# Mørkyn 0.10.0-wip — Release Notes
+# Mørkyn 0.10.1-wip — Release Notes
 
-**Status:** WIP release — systems under active development, not stable. Not yet tagged. Builds on the [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12) stable release.
+**Status:** WIP release — systems under active development, not stable. Not yet tagged. Builds on `0.10.0-wip`, which builds on the [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12) stable release.
+
+---
+
+## What's new in 0.10.1-wip
+
+### MLE (Morkyn LLM Engine)
+
+The local story slot loads a GGUF inside the game process and returns that completion only. `status` is ok only after the file has loaded. If no file is resolved, chat stops and names the path to set.
+
+Lookup order: an existing file path, `data/mle-models/<name>.gguf`, `MLE_GGUF`, then the single `.gguf` in that folder. Weights in `data/` stay off GitHub. Context follows `AI_RPG_CONTEXT_TOKENS` and retries once at 8192 if the larger window will not load.
+
+A call may pass words to hide for that sample only. The mask hits a token when the decoded piece is the whole word. Split pieces, single letters, digits, codes such as `L1`, punctuation, structure words, and keep-words stay choosable. The finished sentence is not edited, and the weight file is not rewritten. The turn loop does not yet send the overused-word list into that call.
+
+llama.cpp, Forge, ComfyUI, and cloud APIs stay.
+
+### Wilderness map
+
+The land is a seeded grid, 16,383 cells on a side. A city is a connected clump inside a 9 by 9 neighborhood. Eighty-one cells is the most a metropolis holds, and that same count stretched into a one-cell line is rejected. The center cell is 128 by 128. Outer cells are smaller. The widest fine span is 1,152. Density is the only theme input. The model does not place cities, notices, or coordinates.
+
+The play map can show remembered tiles, heard-about cells, and marks for intel, quests, and NPCs.
+
+### Local intel
+
+Directions, shop stalls, notice boards, and personal-quest clocks are engine data. Heard cells are separate from cells the player has walked. A mark on any other cell is refused. Black-market answers fail closed. A personal offer does not appear on the first day of its 30-day month.
+
+### Encounter board
+
+A fight tracks named people who are the target, who step in, or who are already listed. A crowd is not a combatant list. A move the player has not seen is stored as what was seen, with no effectiveness attached.
 
 ---
 
@@ -117,3 +145,16 @@ See [README.md](README.md) for full setup.
 | `README.md` | Bumped version to 0.10.0-wip, updated feature highlights |
 | `CHANGELOG.md` | [Unreleased] promoted to [0.10.0-wip], new entries added |
 | `RELEASE_NOTES.md` | This file |
+
+### Files touched for 0.10.1-wip
+
+| File | Change |
+| --- | --- |
+| `app/mle.py` | New — in-process GGUF load and sample-time word mask |
+| `app/world_scale.py` | New — seeded land grid and city-clump rules |
+| `app/local_intel.py` | New — directions, notices, heard cells, quest clocks |
+| `app/encounter_board.py` | New — named fight participants and seen moves |
+| `app/tile_world.py` | World-scale map preview and city shape |
+| `app/llm.py`, `app/launcher_prefs.py`, `Morkyn.ps1` | Local provider is `mle` |
+| `static/app.js`, `static/index.html` | MLE in model settings; map marks on the play screen |
+| `README.md`, `CHANGELOG.md`, `RELEASE_NOTES.md` | Version set to 0.10.1-wip |

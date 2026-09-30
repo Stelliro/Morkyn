@@ -4,7 +4,7 @@
   <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
 </p>
 
-**Version `0.10.0-wip`** · WIP — not stable, not yet tagged. Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.10.1-wip`** · WIP — not stable, not yet tagged. Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
 **Mørkyn** is a local-first browser RPG. A local LLM narrates turns and proposes structured world changes, while SQLite remains the source of truth for the player, inventory, NPCs, events, summaries, and long-running continuity.
 
@@ -136,6 +136,13 @@ Morkyn/
 - Local-only, LAN/phone, and trusted VPN launch modes.
 - Optional adaptive narration pipeline and agent bridge endpoints.
 - Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
+
+### New in 0.10.1-wip
+
+- **MLE (Morkyn LLM Engine).** The local story model loads a GGUF in-process. A missing file says so instead of answering. A listed word can be hidden while the next token is chosen; the weights file and the finished sentence stay as they are — `app/mle.py`.
+- **Wilderness map.** The land is a seeded 16,383-cell grid. Cities are clumps inside a 9 by 9 neighborhood, not a one-cell line. The model does not place them — `app/world_scale.py`.
+- **Local intel.** Directions, heard-about cells, notice boards, and quest clocks belong to the engine — `app/local_intel.py`.
+- **Encounter board.** A fight tracks the named people in it, and a move is stored as what the player saw — `app/encounter_board.py`.
 
 ### New in 0.10.0-wip
 
@@ -293,7 +300,7 @@ python benchmarks/run_dual_role_playtest.py
 | Field | Value |
 | --- | --- |
 | Product | **Mørkyn** |
-| Version | **0.10.0-wip** |
+| Version | **0.10.1-wip** |
 | GitHub | https://github.com/Stelliro/Morkyn |
 
 Formerly published as AI RPG Consistency Prototype (`ai-rpg-consistency-prototype`).

@@ -18,6 +18,23 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ---
 
+## [0.10.1-wip] - 2026-09-30
+
+> WIP release — systems under active development, not stable. Builds on `0.10.0-wip`. Not yet tagged.
+
+### Added
+
+- [GROK] MLE (Morkyn LLM Engine) loads a local GGUF in-process and returns that completion only. `status` is ok only after the file has loaded. A missing file raises `MleNotReady` and names the path to set. Resolution order is an existing file path, `data/mle-models/<name>.gguf`, `MLE_GGUF`, then the single `.gguf` in that folder. Context comes from `AI_RPG_CONTEXT_TOKENS` (default 32768) and retries once at 8192 if that load fails. Weights are not rewritten — `app/mle.py`, `app/llm.py`, `app/launcher_prefs.py`, `Morkyn.ps1`
+  - A call can pass `hide_words` and `keep_words`. The mask applies while the next token is chosen, and only when the decoded piece is the whole word. A split piece stays visible. Length-1 pieces, digits, letter-digit codes, punctuation, structure words, and keep-words stay choosable. The returned text is not edited afterwards.
+  - The turn caller does not yet hand MLE the overused-word list. `words_past_cap` still builds that list for the sampler: names and job titles are counted and are never on it — `app/narration_pipeline.py`, `tests/test_word_count.py`, `tests/test_mle_provider.py`
+- [GROK] Seeded wilderness on a 16,383-cell side. A city is a connected clump inside a 9 by 9 neighborhood, at most 81 cells, and a one-cell-wide line of that length is rejected. The center cell is 128 by 128; outer cells are smaller. The widest fine span is 1,152. The only theme input is a density percent. The model does not place cities, notices, or coordinates — `app/world_scale.py`, `app/tile_world.py`, `tests/test_world_scale.py`, `tests/test_map_walk.py`
+- [GROK] Local intel. The engine owns directions, heard-about cells, shop stalls, notice boards, and personal-quest clocks. Heard cells stay separate from walked cells. A mark is refused on a cell in neither set. Black-market answers fail closed. An offer does not appear on the first day of its 30-day month — `app/local_intel.py`, `app/world.py`, `app/main.py`, `tests/test_local_intel.py`
+- [GROK] Encounter board. A fight tracks named people who are the target, who step in, or who are already on the board. A crowd is not a combatant list. A move the player has not seen is stored as what was seen, with no effectiveness attached — `app/encounter_board.py`, `app/world.py`, `tests/test_encounter_board.py`
+
+### Changed
+
+- [GROK] The local story provider id is `mle`, and the model field is `mle_model` (default `qwen3:8b`). A saved model name from the previous local engine is copied into `mle_model` when that field is empty, and those old keys are dropped from the in-memory config. Launcher prefs for this machine are already `mle`. llama.cpp, Forge, ComfyUI, and cloud APIs stay — `app/llm.py`, `app/launcher_prefs.py`, `Morkyn.ps1`, `static/index.html`, `static/app.js`
+
 ## [0.10.0-wip] - 2026-09-29
 
 > WIP release — systems under active development, not stable. Builds on `0.9.12`. Not yet tagged.
@@ -62,10 +79,6 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
   - Three decisions are made in the page before anything is sent, and each can be wrong in a way the server cannot see. Which row an edit points at: the API applies a `set` to every row its `where` matches, so a clause fitting two rows changes the wrong one and reports success — a row with nothing unique about it is shown read-only rather than guessed at. What type a value keeps: every field hands back a string, and writing `"1"` where the save held `1` would turn a number column into strings one edit at a time, so a value that cannot keep its type is refused and the field marked rather than converted. And what the confirm says. The harness covers all three, and each is checked by breaking it on purpose: eleven deliberate regressions, eleven caught.
   - Two warnings sit above the grid because both are ways to believe an edit landed when it did not. Editing a save does not change the game in progress — the live world is `data/world.db` and the slot has to be loaded — so a **Load this save now** button appears once a write succeeds. And an autosave slot is overwritten by the next turn, so it says to use a named slot instead.
   - Verified end to end against a copy of a real save: 22 editable tables, both generated tables blocked with their row counts, quantity written back as `7` and not `"7"`, a backup holding the value from before, all 25 `world_maps` rows and their 133,337-character tiles intact afterwards, and every other table byte-identical.
-
-### Changed
-
-- [GROK] The local story slot is MLE (Morkyn LLM Engine). A saved model name from the previous local engine is copied into `mle_model` once, and those old keys are dropped on the next save. A chat through MLE says the engine has no model loaded until the welding rig is connected. Forge, ComfyUI, llama.cpp, and cloud APIs stay — `app/mle.py`, `app/llm.py`, `app/launcher_prefs.py`, `Morkyn.ps1`
 
 ### Fixed
 
