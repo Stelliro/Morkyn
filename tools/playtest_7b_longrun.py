@@ -13,9 +13,8 @@ byte size of every context slice, then reports trends across the run.
     python tools/playtest_7b_longrun.py
 
 Env:
-    PLAYTEST_OLLAMA_MODEL   default qwen2.5:7b-instruct
+    PLAYTEST_MLE_MODEL   default qwen2.5:7b-instruct
     PLAYTEST_TURNS          default 30
-    OLLAMA_BASE_URL         default http://127.0.0.1:11434
 """
 from __future__ import annotations
 
@@ -150,7 +149,7 @@ def _third_means(values: list[float]) -> tuple[float, float]:
 
 
 def main() -> int:
-    model = os.getenv("PLAYTEST_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+    model = os.getenv("PLAYTEST_MLE_MODEL", "qwen2.5:7b-instruct")
     turns = int(os.getenv("PLAYTEST_TURNS", "30"))
     temp = Path(tempfile.mkdtemp(prefix="morkyn_longrun_"))
     trace_dir = temp / "traces"
@@ -163,12 +162,10 @@ def main() -> int:
         "AI_RPG_MODEL_TRACE_DIR": str(trace_dir),
         "AI_RPG_PACK_DIR": str(temp / "packs"),
         "AI_RPG_SKILL_LIBRARY": str(temp / "skill_library.json"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": model,
-        "OLLAMA_CONTEXT_TOKENS": os.getenv("OLLAMA_CONTEXT_TOKENS", "32768"),
-        "OLLAMA_THINK": "0",
-        "AI_RPG_OLLAMA_TIMEOUT": "600",
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": model,
+        "AI_RPG_CONTEXT_TOKENS": os.getenv("AI_RPG_CONTEXT_TOKENS", "32768"),
+        "AI_RPG_MLE_TIMEOUT": "600",
         "AI_RPG_TURN_DRAFT_TIMEOUT": "600",
         "AI_RPG_TURN_VERIFY_TIMEOUT": "480",
         # Keep every trace: the whole point is comparing turn 1 with turn N.
@@ -186,9 +183,8 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": model,
+            "provider": "mle",
+            "mle_model": model,
             # App defaults, not the smoke script's low caps: the verify and
             # depth-retry passes emit a whole turn JSON and truncate under 1200.
             "response_token_cap": int(os.getenv("PLAYTEST_TOKEN_CAP", "1500")),

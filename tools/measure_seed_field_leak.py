@@ -113,7 +113,7 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = llm.get_model_config()
-    print(f"model: {cfg.get('provider')}:{cfg.get('ollama_model')}  (shipped config)")
+    print(f"model: {cfg.get('provider')}:{cfg.get('mle_model')}  (shipped config)")
     print(f"{args.n} rolls per field\n")
     started = time.time()
     verdicts: dict[str, tuple[int, float, float, int]] = {}

@@ -4,26 +4,38 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mørkyn — Popout</title>
-    <link rel="stylesheet" href="/static/styles.css?v=history-log" />
+    <link rel="stylesheet" href="/static/styles.css?v=popout-fill-2" />
     <style>
-      html, body { min-height: 100%; }
+      html, body { height: 100%; min-height: 100%; }
       body.popoutBody {
         margin: 0;
-        min-height: 100vh;
+        height: 100%;
+        min-height: 100%;
+        display: flex;
         background:
           radial-gradient(900px 420px at 10% -10%, var(--neon-2-dim), transparent 55%),
           radial-gradient(700px 360px at 100% 0%, var(--neon-dim), transparent 50%),
           var(--bg);
       }
       .popoutShell {
-        max-width: 920px;
-        margin: 0 auto;
-        padding: 18px 18px 28px;
-        display: grid;
-        gap: 14px;
+        width: 100%;
+        max-width: none;
+        min-height: 100%;
+        margin: 0;
+        padding: 12px 16px 16px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .popoutBodyContent {
+        flex: 1 1 auto;
+        min-height: 0;
+        width: 100%;
       }
       .popoutHeader {
         display: flex;
+        flex-wrap: wrap;
         justify-content: space-between;
         align-items: start;
         gap: 12px;

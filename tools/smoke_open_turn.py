@@ -1,4 +1,4 @@
-"""Minimal smoke: opening + one turn against local Ollama."""
+"""Minimal smoke: opening + one turn against MLE."""
 from __future__ import annotations
 
 import json
@@ -21,12 +21,10 @@ def main() -> int:
         "AI_RPG_CONSOLIDATED_FACTS": str(temp / "facts.jsonl"),
         "AI_RPG_CAMPAIGN_SLOTS": str(temp / "slots"),
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": os.getenv("PLAYTEST_OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b")),
-        "OLLAMA_CONTEXT_TOKENS": os.getenv("OLLAMA_CONTEXT_TOKENS", "32768"),
-        "OLLAMA_THINK": os.getenv("OLLAMA_THINK", "0"),
-        "AI_RPG_OLLAMA_TIMEOUT": os.getenv("AI_RPG_OLLAMA_TIMEOUT", "300"),
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": os.getenv("PLAYTEST_MLE_MODEL", os.getenv("MLE_MODEL", "qwen3:8b")),
+        "AI_RPG_CONTEXT_TOKENS": os.getenv("AI_RPG_CONTEXT_TOKENS", "32768"),
+        "AI_RPG_MLE_TIMEOUT": os.getenv("AI_RPG_MLE_TIMEOUT", "300"),
         "AI_RPG_TURN_DRAFT_TIMEOUT": os.getenv("AI_RPG_TURN_DRAFT_TIMEOUT", "300"),
         "AI_RPG_TURN_VERIFY_TIMEOUT": os.getenv("AI_RPG_TURN_VERIFY_TIMEOUT", "240"),
     }.items():
@@ -42,9 +40,8 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": os.environ["OLLAMA_MODEL"],
+            "provider": "mle",
+            "mle_model": os.environ["MLE_MODEL"],
             "response_token_cap": 800,
             "response_token_hard_cap": 1200,
         }

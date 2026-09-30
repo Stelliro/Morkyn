@@ -19,16 +19,15 @@ What it reports:
   voice         second-person rate, narration length drift
   health        fallback rate, self-check pass rate, latency and context growth
 
-Run from repo root (Ollama must be running):
+Run from repo root (MLE must have a model loaded):
   python benchmarks/run_continuity_playtest.py
 
 Env:
   CONTINUITY_TURNS      default 100
-  CONTINUITY_MODEL      default qwen3:8b (or OLLAMA_MODEL)
-  OLLAMA_BASE_URL       default http://127.0.0.1:11434
+  CONTINUITY_MODEL      default qwen3:8b (or MLE_MODEL)
   CONTINUITY_ABORT      consecutive hard failures before abort (default 6)
 
-Deliberately does NOT pin OLLAMA_CONTEXT_TOKENS: this run should reflect the
+Deliberately does NOT pin AI_RPG_CONTEXT_TOKENS: this run should reflect the
 context a real player gets from the shipped default.
 """
 from __future__ import annotations
@@ -311,7 +310,7 @@ def _log(handle, line: str) -> None:
 def main() -> int:
     target = _env_int("CONTINUITY_TURNS", 100)
     abort_after = _env_int("CONTINUITY_ABORT", 6)
-    model = os.getenv("CONTINUITY_MODEL") or os.getenv("OLLAMA_MODEL") or "qwen3:8b"
+    model = os.getenv("CONTINUITY_MODEL") or os.getenv("MLE_MODEL") or "qwen3:8b"
 
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -329,20 +328,18 @@ def main() -> int:
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
         "AI_RPG_PACK_DIR": str(temp / "packs"),
         "AI_RPG_SKILL_LIBRARY": str(temp / "skill_library.json"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": model,
-        "OLLAMA_THINK": os.getenv("OLLAMA_THINK", "0"),
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": model,
         # These are deliberately generous: the probe measures continuity, and a
         # timeout here would silently swap a real turn for canned prose and
         # corrupt the result. But be aware of what the override hides -- the
-        # shipped Ollama draft default was 90s, every run here used 900s, and so
+        # shipped local draft default was 90s, every run here used 900s, and so
         # no probe ever noticed that real drafts on this hardware take 75-100s
         # under ordinary desktop load. Players fell back every turn; the
         # benchmark reported zero fallbacks. Same trap as the tools/ probes
-        # exporting OLLAMA_CONTEXT_TOKENS over a broken 8192 default.
+        # exporting AI_RPG_CONTEXT_TOKENS over a broken 8192 default.
         # The shipped defaults are guarded by tests/test_context_budget.py.
-        "AI_RPG_OLLAMA_TIMEOUT": os.getenv("AI_RPG_OLLAMA_TIMEOUT", "900"),
+        "AI_RPG_MLE_TIMEOUT": os.getenv("AI_RPG_MLE_TIMEOUT", "900"),
         "AI_RPG_TURN_DRAFT_TIMEOUT": os.getenv("AI_RPG_TURN_DRAFT_TIMEOUT", "900"),
         "AI_RPG_TURN_VERIFY_TIMEOUT": os.getenv("AI_RPG_TURN_VERIFY_TIMEOUT", "600"),
     }.items():
@@ -386,16 +383,15 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": model,
+            "provider": "mle",
+            "mle_model": model,
             "response_token_cap": 1200,
             "response_token_hard_cap": 1600,
         }
     )
 
     context_window = llm.context_window_tokens()
-    system_prompt, _verify, degraded = llm.fitting_system_prompts({"provider": "ollama"})
+    system_prompt, _verify, degraded = llm.fitting_system_prompts({"provider": "mle"})
 
     report: dict = {
         "benchmark": "continuity",

@@ -206,18 +206,14 @@
             <label>
               <span>Engine</span>
               <select name="model_provider">
-                <option value="ollama">Ollama</option>
+                <option value="mle">MLE</option>
                 <option value="llama_cpp">llama.cpp / GGUF</option>
                 <option value="openai">Cloud / agent API</option>
               </select>
             </label>
             <label>
-              <span>Ollama model</span>
-              <input name="ollama_model" value="qwen3:8b" maxlength="200" />
-            </label>
-            <label>
-              <span>Ollama URL</span>
-              <input name="ollama_base_url" value="http://127.0.0.1:11434" maxlength="300" />
+              <span>MLE model</span>
+              <input name="mle_model" value="qwen3:8b" maxlength="200" />
             </label>
             <label>
               <span>GGUF path</span>
@@ -1485,7 +1481,7 @@
                 <span>Provider</span>
                 <select name="provider">
                   <option value="llama_cpp" selected>llama.cpp / GGUF (local)</option>
-                  <option value="ollama">Ollama (local)</option>
+                  <option value="mle">MLE (Morkyn LLM Engine)</option>
                   <option value="openai">Cloud / agent API (OpenAI-compatible)</option>
                 </select>
               </label>
@@ -1521,12 +1517,8 @@
                 <input name="llama_cpp_base_url" value="http://localhost:8080" maxlength="300" />
               </label>
               <label>
-                <span>Ollama URL</span>
-                <input name="ollama_base_url" value="http://localhost:11434" maxlength="300" />
-              </label>
-              <label>
-                <span>Ollama Model</span>
-                <input name="ollama_model" value="llama3.1" maxlength="200" />
+                <span>MLE model</span>
+                <input name="mle_model" value="qwen3:8b" maxlength="200" />
               </label>
               <div class="modelTokenGrid">
                 <label>
@@ -1544,7 +1536,7 @@
               </div>
             </form>
             <div class="modelStatus" data-model-status></div>
-            <p class="empty">Select the local model file and the URL of the compatible LLM server that will run it.</p>
+            <p class="empty">MLE keeps a model name. llama.cpp uses a GGUF file and its server URL. Cloud uses the API fields.</p>
           </div>
         </section>
       </div>
@@ -1558,6 +1550,8 @@
           <div class="topActions topActionsCompact topActionsPlay">
             <button id="sceneFocusMapBtnHeader" type="button" class="chipBtn secondaryButton activeChip" title="Focus map" aria-pressed="true">Map</button>
             <button id="sceneFocusChatBtnHeader" type="button" class="chipBtn secondaryButton" title="Focus scene" aria-pressed="false">Scene</button>
+            <button id="encounterOpenBtn" type="button" class="chipBtn secondaryButton hidden" hidden title="Who is in the fight">Fight</button>
+            <button id="playLayoutResetTop" type="button" class="chipBtn secondaryButton hidden" hidden title="Reset the scene and map layout">Reset layout</button>
             <button id="playMenuToggle" type="button" class="playMenuToggle" aria-expanded="false" aria-controls="playMenuDrawer" title="Open menu — character, history, tools">
               <span class="playMenuBars" aria-hidden="true"><span></span><span></span><span></span></span>
               <span>Menu</span>
@@ -1608,6 +1602,14 @@
           <span class="llmRuntimeDot" aria-hidden="true"></span>
           <span id="llmRuntimeText">LLM ready</span>
         </div>
+
+        <p id="playLayoutHint" class="playLayoutHint hidden" role="status" hidden>
+          <span id="playLayoutHintText">Custom layout — drop ⋮⋮ on top/bottom of a panel to stack in that column only (e.g. map above narrator). Left/right = side-by-side. Drag edges to resize.</span>
+          <span class="playLayoutHintActions">
+            <button type="button" class="chipBtn secondaryButton" id="playLayoutHintReset">Reset layout</button>
+            <button type="button" class="chipBtn secondaryButton" id="playLayoutHintDismiss">Dismiss</button>
+          </span>
+        </p>
 
         <div class="playBody">
         <!-- Legacy rail kept hidden for any old layout code paths -->
@@ -1772,6 +1774,7 @@
                 <button type="button" class="chipBtn secondaryButton" id="mapFocusChatBtn" title="Make narration the main view">Scene</button>
               </div>
             </header>
+            <p id="mapMemoryLine" class="mapMemoryLine">No map yet</p>
             <div class="mapSquareSlot">
               <div class="mapMainStage">
                 <canvas id="playMapCanvas" class="mapCanvas playMapCanvas mapMainCanvas" width="480" height="480" aria-label="Main map"></canvas>
@@ -1779,6 +1782,8 @@
               </div>
             </div>
             <div class="mapColumnList" id="mapColumnList">
+            <section class="mapSection" aria-labelledby="mapMoveHeading">
+              <h3 class="mapSectionTitle" id="mapMoveHeading">Move</h3>
             <div class="mapMainFooter">
               <div class="mapMoveRow">
                 <div class="mapDpad" id="mapDpad" role="group" aria-label="Map movement. Arrow keys walk when What will you do? is not focused.">
@@ -1808,8 +1813,10 @@
               </div>
               <p id="mapTravelBanner" class="mapTravelBanner">Arrow keys walk only when What will you do? is not focused. The pad walks any time. Long trips may wait on the scene.</p>
             </div>
+            </section>
             <aside class="playSideDock" id="playSideDock" aria-label="You, inventory, and who is here">
-              <section class="dockYou">
+              <section class="mapSection dockYou" aria-labelledby="mapYouHeading">
+                <h3 class="mapSectionTitle" id="mapYouHeading">You</h3>
                 <div class="portraitSlot">
                   <div class="youFrame" id="youFrame" tabindex="0" role="group" aria-expanded="false" aria-label="You. No portrait. Paste an image, or use Make portrait.">
                     <img id="youPortrait" alt="" hidden />
@@ -1822,35 +1829,48 @@
                   <p id="youVitals"></p>
                 </div>
               </section>
-              <section>
+              <section class="mapSection" aria-labelledby="whoIsHereHeading">
                 <h3 class="dockLabel" id="whoIsHereHeading">Who is here</h3>
                 <p class="dockHint">Details opens this, and Link puts it in What will you do?. Delete it there to undo.</p>
                 <div id="sceneCastList" class="sceneCastList"></div>
               </section>
-              <section>
-                <h3 class="dockLabel">Pack</h3>
+              <section class="mapSection" aria-labelledby="mapPackHeading">
+                <h3 class="dockLabel" id="mapPackHeading">Pack</h3>
                 <p class="dockHint">Details opens this, and Link puts it in What will you do?. Delete it there to undo.</p>
                 <div id="miniInventory" class="miniInventory"></div>
               </section>
-            <div class="mapStatusStrip" id="mapStatusStrip" aria-label="Location and world status">
-              <div class="mapStatusPrimary">
-                <p id="locationLine" class="mapStatusLocation">Loading</p>
-                <span id="playMapMeta" class="playMapMeta mapStatusTileMeta">No map yet</span>
-              </div>
-              <div class="mapStatusSecondary">
-                <span id="worldTimeLine" class="worldTimeLine" title="In-world clock">Day — · --:--</span>
-              </div>
-              <div class="mapStatusMeta">
-                <span id="weatherLine" class="weatherLine" title="In-world weather">Weather: Clear</span>
-                <span id="areaRepLine" class="areaRepLine" title="Standing in this place">Area: —</span>
+            </aside>
+            <section class="mapSection mapPlaceCard" id="mapStatusStrip" aria-labelledby="mapPlaceHeading">
+              <h3 class="mapSectionTitle" id="mapPlaceHeading">This place</h3>
+              <div class="mapPlaceGrid">
+                <div class="mapPlaceRow">
+                  <span class="mapPlaceLabel">Location</span>
+                  <p id="locationLine" class="mapStatusLocation">Loading</p>
+                </div>
+                <div class="mapPlaceRow">
+                  <span class="mapPlaceLabel">Tile</span>
+                  <span id="playMapMeta" class="playMapMeta mapStatusTileMeta">No map yet</span>
+                </div>
+                <div class="mapPlaceRow">
+                  <span class="mapPlaceLabel">Clock</span>
+                  <span id="worldTimeLine" class="worldTimeLine" title="In-world clock">Day — · --:--</span>
+                </div>
+                <div class="mapPlaceRow">
+                  <span class="mapPlaceLabel">Weather</span>
+                  <span id="weatherLine" class="weatherLine" title="In-world weather">Weather: Clear</span>
+                </div>
+                <div class="mapPlaceRow">
+                  <span class="mapPlaceLabel">Standing</span>
+                  <span id="areaRepLine" class="areaRepLine" title="Standing in this place">Area: —</span>
+                </div>
               </div>
               <!-- Venues on this square: shops, inns, forges you can walk into.
                    Rendered by updateVenueLine(); hidden when there are none. -->
               <p id="venueLine" class="venueLine hidden" hidden aria-hidden="true"></p>
               <!-- Travel / walk free lives in #mapTravelBanner under the map only -->
               <p id="travelStatusLine" class="travelStatusLine hidden" hidden aria-hidden="true"></p>
-            </div>
-            <aside class="presentStrip" id="presentPanel" aria-label="Present NPCs">
+            </section>
+            <aside class="mapSection presentStrip" id="presentPanel" aria-label="Present NPCs">
               <div class="presentStripInner npcStage npcStageHorizontal" id="npcStage">
                 <div class="presentStripHead">
                   <strong class="presentStripLabel">Present</strong>
@@ -1883,7 +1903,7 @@
               <p class="presentActionNote">Portrait is optional. Write a line inserts at the cursor in What will you do?. Undo or delete it there.</p>
             </aside>
             <!-- Compact settlement strip (also in map details overlay) -->
-            <div class="mapSettlementStrip">
+            <div class="mapSection mapSettlementStrip">
               <h3 class="dockLabel" id="placesLabel">Places</h3>
               <div id="settlementList" class="settlementList settlementListHorizontal" aria-labelledby="placesLabel"></div>
               <div id="settlementDetail" class="settlementDetail hidden">
@@ -1896,7 +1916,6 @@
                 <button type="button" id="settlementWalkBtn" class="secondaryButton chipBtn">Walk here</button>
               </div>
             </div>
-            </aside>
             </div>
           </section>
 
@@ -1959,10 +1978,28 @@
         </aside>
         </div><!-- /.playBody -->
 
-        <p id="playLayoutHint" class="playLayoutHint hidden" role="status">
-          <span id="playLayoutHintText">Custom layout — drag ⋮⋮ onto top/bottom to stack, left/right to place beside.</span>
-          <button type="button" class="chipBtn secondaryButton" id="playLayoutHintReset">Reset layout</button>
-        </p>
+        <dialog id="encounterDialog" class="encounterDialog" aria-labelledby="encounterTitle">
+          <header class="encounterHeader">
+            <h2 id="encounterTitle">Fight</h2>
+            <button type="button" class="chipBtn secondaryButton" id="encounterClose">Close</button>
+          </header>
+          <p id="encounterOutcome" class="encounterOutcome" hidden></p>
+          <p id="encounterScale" class="encounterScale" hidden></p>
+          <div class="encounterColumns">
+            <section aria-labelledby="encounterAlliesHeading">
+              <h3 id="encounterAlliesHeading">Our side</h3>
+              <div id="encounterAllies"></div>
+            </section>
+            <section aria-labelledby="encounterFoesHeading">
+              <h3 id="encounterFoesHeading">Their side</h3>
+              <div id="encounterFoes"></div>
+            </section>
+          </div>
+          <section id="encounterSeenWrap" hidden>
+            <h3>Moves not tied to one person</h3>
+            <div id="encounterSeen"></div>
+          </section>
+        </dialog>
 
         <!-- In-page floating / collapsible tab windows -->
         <div id="floatLayer" class="floatLayer" aria-label="Floating tab windows"></div>

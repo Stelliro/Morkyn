@@ -87,7 +87,7 @@ That opens a **simple** pre-play menu. Click a row (or press its number), then *
 | --- | --- |
 | **Play** / `1` | Start |
 | **Where** / `2` | Cycle local / LAN / VPN |
-| **Engine** / `3` | Cycle ollama / llama_cpp / cloud API |
+| **Engine** / `3` | Cycle mle / llama_cpp / cloud API |
 | **Pipeline** / `4` | Toggle narration pipeline |
 | **Advanced** / `9` | Full Gatehouse board |
 | **Quit** / `0` | Exit |
@@ -129,7 +129,7 @@ Morkyn/
 
 - FastAPI backend with a plain browser UI (no frontend build step).
 - SQLite world state stored locally under `data/`.
-- Local LLM support (Ollama / llama.cpp) and optional OpenAI-compatible cloud APIs.
+- Local LLM support (MLE / llama.cpp) and optional OpenAI-compatible cloud APIs.
 - Character and world setup, action-focused turn context, deterministic NPC combat profiles.
 - Hierarchical memory consolidation, token budget guard, campaign save slots.
 - Context health panel, compact mode, entity codes, visual history, World Bible, rewind.
@@ -145,7 +145,7 @@ Morkyn/
 - **NPC relationship tracking.** Every NPC tracks three axes toward the player: affinity (−100 to +100), fear (0–100), and respect (0–100). Preset deltas for 12 common events (combat, quests, intimidation, betrayal, etc.). Bands are injected into the LLM context each turn — `app/relationships.py`, `/api/relationships`.
 - **Relationship badges.** NPC cards in the People tab show affinity, fear, and respect band chips inline.
 - **LLM context enrichment.** Each turn includes a cultural naming guide, a named loot reference, and an ability registry so the model produces consistent, world-appropriate names and items — `app/world_context.py`.
-- **Autonomous player agent.** `player_agent.py` runs a full session with the same 8B Ollama model playing both narrator and player. The player sees only narrative + character sheet. Includes a Lore Bible (entity tracker built from narrative), a goal directive, and a debug command blocker.
+- **Autonomous player agent.** `player_agent.py` runs a full session with the same local 8B model playing both narrator and player. The player sees only narrative + character sheet. Includes a Lore Bible (entity tracker built from narrative), a goal directive, and a debug command blocker.
 - **Save editor.** World save files can be viewed and edited cell-by-cell in the browser. Any table except `world_maps` and `settings` is editable; changes are all-or-nothing with a backup written first — `app/save_editor.py`.
 - **Titles system** *(in progress)* — earnable titles with stat bonuses; award logic and UI pending.
 - **Party system** *(in progress)* — invite/remove NPCs, morale, combat bonuses; morale propagation pending.
@@ -198,13 +198,13 @@ Mørkyn is **local-first**: no analytics, no metrics, no automatic phone-home.
 
 ## Model setup
 
-### Local (GGUF / Ollama)
+### Local (GGUF / MLE)
 
 ```powershell
 $env:AI_RPG_GGUF_MODEL="D:\path\to\model.gguf"
-# or Ollama:
-$env:AI_RPG_MODEL_PROVIDER="ollama"
-$env:OLLAMA_MODEL="qwen3:8b"
+# or MLE:
+$env:AI_RPG_MODEL_PROVIDER="mle"
+$env:MLE_MODEL="qwen3:8b"
 ```
 
 ### Cloud / agents (xAI Grok, OpenAI, any OpenAI-compatible gateway)
@@ -243,7 +243,7 @@ $env:AI_RPG_GM_OFFSCREEN_INTERVAL="8"
 
 ## Local 8B turn times
 
-Measured on **Ollama `qwen3:8b`** (Q4_K_M, 32k context, thinking off). Times are wall-clock for a full turn pipeline on the machine under test.
+Measured on **local `qwen3:8b`** (Q4_K_M, 32k context). Times are wall-clock for a full turn pipeline on the machine under test.
 
 | Step | Time |
 | --- | ---: |

@@ -1149,7 +1149,7 @@ const ACTION_HELP_TARGETS = [
   [".setupModeBtn", "Simple = short new-game form. Advanced = full multi-step board (everything you had before)."],
   [".imageModeBtn", "Simple image = generate face/body from identity. Advanced = engine prompts, LoRAs, checkpoint, tests."],
   // Intent summary help is attached to the title in renderIntentSummary (not the whole bar).
-  ["input[name='session_theme_model']", "Optional model for this playthrough only (Ollama tag, API model, or GGUF path). Wins over the adapter map. Save Model applies it; blank clears."],
+  ["input[name='session_theme_model']", "Optional model for this playthrough only (MLE model name, API model, or GGUF path). Wins over the adapter map. Save Model applies it; blank clears."],
   ["#setupStart", "Start the playthrough with the current setup and ask the LLM to write the opening scene before the player acts."],
   ["#setupPrev", "Move to the previous setup step without changing any filled values."],
   ["#setupNext", "Move to the next setup step. On the final step, this starts the playthrough."],
@@ -6035,6 +6035,7 @@ function showMainMenu() {
   mainMenuView?.classList.remove("hidden");
   setupView?.classList.add("hidden");
   gameView?.classList.add("hidden");
+  releaseEncounterForMenu();
   refreshContinueButton();
 }
 
@@ -8361,6 +8362,14 @@ function entityCard(type, entity, body, meta = "", extra = "") {
     type === "npc"
       ? `<button class="initiateFightButton secondaryButton" type="button" data-npc-code="${escapeHtml(entity.code)}" data-npc-name="${escapeHtml(entityLabel(entity))}" title="Start a fight with ${escapeHtml(entityLabel(entity))}">⚔ Fight</button>`
       : "";
+  // Watch-pin button: lets the player track an NPC on the map (purple 📌 marker).
+  const watchBtn =
+    type === "npc" && entity.id
+      ? (() => {
+          const isWatched = _watchedNpcIds.has(String(entity.id));
+          return `<button class="npcWatchButton secondaryButton${isWatched ? " npcWatchActive" : ""}" type="button" data-npc-id="${escapeHtml(String(entity.id))}" title="${isWatched ? "Stop watching this NPC on the map" : "Pin this NPC to the map"}">📌</button>`;
+        })()
+      : "";
   return `
     <article class="card entityCard" draggable="true" data-type="${escapeHtml(type)}" data-code="${escapeHtml(entity.code)}">
       <strong>
@@ -8373,6 +8382,7 @@ function entityCard(type, entity, body, meta = "", extra = "") {
       <div class="miniActions">
         <button class="insertRefButton" data-type="${escapeHtml(type)}" data-code="${escapeHtml(entity.code)}" type="button">${escapeHtml(token)}</button>
         ${fightBtn}
+        ${watchBtn}
       </div>
     </article>
   `;
@@ -11773,7 +11783,7 @@ function renderThemeAdapterMapFields(config) {
   return `
     <details class="themeAdapterMap" open>
       <summary>Theme models + LLM LoRAs (optional)</summary>
-      <p class="empty">When a playthrough has <code>session_theme.adapter_hint</code>, turns can use a different Ollama/API model (or GGUF path for llama.cpp). Leave blank to keep the main model.</p>
+      <p class="empty">When a playthrough has <code>session_theme.adapter_hint</code>, turns can use a different MLE model name, API model, or GGUF path for llama.cpp. Leave blank to keep the main model.</p>
       ${rows}
       <label class="sessionThemeModelField">
         <span>This session theme model</span>
@@ -11794,7 +11804,7 @@ function renderThemeAdapterMapFields(config) {
         <button type="button" class="secondaryButton" data-llm-ensure>Ensure LLM adapter now</button>
         <button type="button" class="secondaryButton" data-llm-soft-recycle title="Restart only the LLM process">Soft-recycle LLM</button>
       </div>
-      <p class="empty">Ollama users: map each theme to a model that already includes the adapter (Modelfile <code>ADAPTER</code>), not a raw GGUF LoRA path.</p>
+      <p class="empty">MLE: map each theme to a model name the engine will load. A GGUF LoRA path is for llama.cpp.</p>
     </details>`;
 }
 
@@ -11811,7 +11821,7 @@ function renderModelForm() {
         <span>Provider</span>
         <select name="provider">
           <option value="llama_cpp" ${provider === "llama_cpp" ? "selected" : ""}>llama.cpp / GGUF (local)</option>
-          <option value="ollama" ${provider === "ollama" ? "selected" : ""}>Ollama (local)</option>
+          <option value="mle" ${provider === "mle" ? "selected" : ""}>MLE (Morkyn LLM Engine)</option>
           <option value="openai" ${provider === "openai" ? "selected" : ""}>Cloud / agent API (OpenAI-compatible)</option>
         </select>
       </label>
@@ -11847,12 +11857,8 @@ function renderModelForm() {
         <input name="llama_cpp_base_url" value="${escapeHtml(config.llama_cpp_base_url || "http://localhost:8080")}" maxlength="300" />
       </label>
       <label>
-        <span>Ollama URL</span>
-        <input name="ollama_base_url" value="${escapeHtml(config.ollama_base_url || "http://localhost:11434")}" maxlength="300" />
-      </label>
-      <label>
-        <span>Ollama Model</span>
-        <input name="ollama_model" value="${escapeHtml(config.ollama_model || "llama3.1")}" maxlength="200" />
+        <span>MLE model</span>
+        <input name="mle_model" value="${escapeHtml(config.mle_model || "qwen3:8b")}" maxlength="200" />
       </label>
       <div class="modelTokenGrid">
         <label>
@@ -11871,7 +11877,7 @@ function renderModelForm() {
       </div>
     </form>
     <div class="modelStatus" data-model-status></div>
-    <p class="empty">Local: llama.cpp / Ollama. Cloud or agents: pick OpenAI-compatible (xAI Grok default). External agents can POST to <code>/api/agent/turn</code>.</p>
+    <p class="empty">Local: MLE (Morkyn LLM Engine) or llama.cpp. Cloud or agents: pick OpenAI-compatible (xAI Grok default). External agents can POST to <code>/api/agent/turn</code>.</p>
     <hr class="settingsDivider" />
     ${renderImageForm()}
   `;
@@ -12444,18 +12450,44 @@ function applyPlayLayout(options = {}) {
   updatePlayLayoutChrome();
 }
 
+const LAYOUT_HINT_DISMISS_KEY = "morkyn-layout-hint-dismissed";
+
+function layoutHintDismissed() {
+  try {
+    return localStorage.getItem(LAYOUT_HINT_DISMISS_KEY) === "1";
+  } catch (_) {
+    return false;
+  }
+}
+
+function setLayoutHintDismissed(dismissed) {
+  try {
+    if (dismissed) localStorage.setItem(LAYOUT_HINT_DISMISS_KEY, "1");
+    else localStorage.removeItem(LAYOUT_HINT_DISMISS_KEY);
+  } catch (_) {
+    /* private mode */
+  }
+}
+
 function updatePlayLayoutChrome() {
   const hint = document.querySelector("#playLayoutHint");
   const idle = document.querySelector("#chatIdleHint");
   const resetBtn = document.querySelector("#resetPlayLayoutBtn");
+  const topReset = document.querySelector("#playLayoutResetTop");
   const multiRow = (playLayout.rows || []).length > 1;
   const hintText = document.querySelector("#playLayoutHintText");
+  const showHint = Boolean(playLayout.custom) && !layoutHintDismissed();
   if (hint) {
-    hint.classList.toggle("hidden", !playLayout.custom);
-    if (hintText && playLayout.custom) {
+    hint.classList.toggle("hidden", !showHint);
+    hint.hidden = !showHint;
+    if (hintText && showHint) {
       hintText.textContent =
         "Custom layout — drop ⋮⋮ on top/bottom of a panel to stack in that column only (e.g. map above narrator). Left/right = side-by-side. Drag edges to resize.";
     }
+  }
+  if (topReset) {
+    topReset.classList.toggle("hidden", !playLayout.custom);
+    topReset.hidden = !playLayout.custom;
   }
   if (resetBtn) {
     resetBtn.textContent = playLayout.custom ? "Reset layout" : "Customize layout";
@@ -12978,12 +13010,34 @@ function bindPlayLayoutControls() {
           panels: r.panels.map((p) => ({ ...p })),
         })),
       });
+      setLayoutHintDismissed(false);
       savePlayLayoutState();
       applyPlayLayout();
-      document.querySelector("#playLayoutHint")?.classList.remove("hidden");
     }
   });
   document.querySelector("#playLayoutHintReset")?.addEventListener("click", () => resetPlayLayout());
+  document.querySelector("#playLayoutHintDismiss")?.addEventListener("click", () => {
+    setLayoutHintDismissed(true);
+    updatePlayLayoutChrome();
+  });
+  document.querySelector("#playLayoutResetTop")?.addEventListener("click", () => {
+    if (playLayout.custom && window.confirm("Reset play layout to automatic scene/map focus?")) resetPlayLayout();
+  });
+  window.addEventListener("resize", () => {
+    Object.entries(floatPanels).forEach(([key, panel]) => {
+      const chip = panel.classList.contains("isCollapsed") && !panel.classList.contains("isPinned");
+      if (chip) return;
+      const st = floatWindowState[key] || {};
+      applyFloatPanelSize(panel, Number(st.width) || panel.offsetWidth, Number(st.height) || panel.offsetHeight);
+      const width = Number.parseFloat(String(panel.style.getPropertyValue("--float-w")).replace("px", "")) || panel.offsetWidth;
+      const maxX = Math.max(0, window.innerWidth - width);
+      const maxY = Math.max(0, window.innerHeight - 40);
+      const left = Math.min(maxX, Math.max(0, Number.parseFloat(panel.style.left) || 0));
+      const top = Math.min(maxY, Math.max(0, Number.parseFloat(panel.style.top) || 0));
+      panel.style.left = `${left}px`;
+      panel.style.top = `${top}px`;
+    });
+  });
 
   grid.addEventListener("keydown", (event) => {
     const colSplit = event.target.closest(".playSplitterCol");
@@ -13113,7 +13167,11 @@ function openTabWindow(tab) {
     return popoutWindows[key];
   }
   const url = `/static/popout.html?tab=${encodeURIComponent(key)}`;
-  const win = window.open(url, `morkyn-popout-${key}`, "width=720,height=900,menubar=no,toolbar=no,location=no,status=no");
+  const availW = window.screen?.availWidth || 1280;
+  const availH = window.screen?.availHeight || 900;
+  const width = Math.max(720, Math.min(availW - 48, 1280));
+  const height = Math.max(640, Math.min(availH - 80, 1000));
+  const win = window.open(url, `morkyn-popout-${key}`, `width=${width},height=${height},menubar=no,toolbar=no,location=no,status=no`);
   if (!win) {
     window.alert("External window blocked. Use ⧉ to float on this page instead.");
     return openTabFloat(key);
@@ -13145,6 +13203,16 @@ function defaultFloatPlacement(index = 0) {
   };
 }
 
+function floatPanelLimits(key) {
+  const inventoryish = key === "inventory" || key === "player";
+  return {
+    minW: inventoryish ? 300 : 260,
+    minH: inventoryish ? 220 : 180,
+    maxW: Math.max(260, window.innerWidth - 16),
+    maxH: Math.max(180, window.innerHeight - 16),
+  };
+}
+
 function floatPanelStoredSize(panel, key) {
   /** Prefer CSS vars / saved state — never chip offsetWidth when collapsed. */
   const st = floatWindowState[key] || {};
@@ -13161,28 +13229,19 @@ function floatPanelStoredSize(panel, key) {
     if (!Number.isFinite(w) || w < 120) w = panel.offsetWidth || 360;
     if (!Number.isFinite(h) || h < 80) h = panel.offsetHeight || 420;
   }
-  const large = key === "imageBrowser" || key === "imageStudio";
-  const inventoryish = key === "inventory" || key === "player";
-  const maxW = large ? Math.min(1100, window.innerWidth * 0.96) : inventoryish ? Math.min(720, window.innerWidth * 0.94) : Math.min(640, window.innerWidth * 0.94);
-  const maxH = large ? Math.min(900, window.innerHeight * 0.9) : inventoryish ? Math.min(780, window.innerHeight * 0.88) : Math.min(720, window.innerHeight * 0.88);
-  const minW = inventoryish ? 300 : 260;
-  const minH = inventoryish ? 220 : 180;
+  const limits = floatPanelLimits(key);
   return {
-    width: Math.min(maxW, Math.max(minW, Math.round(w))),
-    height: Math.min(maxH, Math.max(minH, Math.round(h))),
+    width: Math.min(limits.maxW, Math.max(limits.minW, Math.round(w))),
+    height: Math.min(limits.maxH, Math.max(limits.minH, Math.round(h))),
   };
 }
 
 function applyFloatPanelSize(panel, width, height) {
   if (!panel) return;
   const key = panel.getAttribute("data-float-tab") || "";
-  const inventoryish = key === "inventory" || key === "player";
-  const minW = inventoryish ? 300 : 260;
-  const minH = inventoryish ? 220 : 180;
-  const maxW = Math.min(window.innerWidth - 16, key === "imageBrowser" || key === "imageStudio" ? 1100 : inventoryish ? 720 : 640);
-  const maxH = Math.min(window.innerHeight - 16, key === "imageBrowser" || key === "imageStudio" ? 900 : inventoryish ? 780 : 720);
-  const w = Math.min(maxW, Math.max(minW, Math.round(Number(width) || 360)));
-  const h = Math.min(maxH, Math.max(minH, Math.round(Number(height) || 420)));
+  const limits = floatPanelLimits(key);
+  const w = Math.min(limits.maxW, Math.max(limits.minW, Math.round(Number(width) || 360)));
+  const h = Math.min(limits.maxH, Math.max(limits.minH, Math.round(Number(height) || 420)));
   panel.style.setProperty("--float-w", `${w}px`);
   panel.style.setProperty("--float-h", `${h}px`);
   // Keep inline sizes in sync for non-!important paths; collapsed chip ignores them via CSS.
@@ -13421,7 +13480,8 @@ function enableFloatDrag(panel, key) {
   let dragging = false;
   const onMove = (event) => {
     if (!dragging) return;
-    const maxX = Math.max(8, window.innerWidth - 64);
+    const boxW = panel.offsetWidth || 64;
+    const maxX = Math.max(0, window.innerWidth - Math.min(boxW, window.innerWidth));
     const maxY = Math.max(8, window.innerHeight - 40);
     const nx = Math.min(maxX, Math.max(0, ox + (event.clientX - sx)));
     const ny = Math.min(maxY, Math.max(0, oy + (event.clientY - sy)));
@@ -13460,12 +13520,11 @@ function enableFloatResize(panel, key) {
   let resizing = false;
   const onMove = (event) => {
     if (!resizing) return;
-    const large = key === "imageBrowser" || key === "imageStudio";
-    const inventoryish = key === "inventory" || key === "player";
-    const maxW = Math.min(window.innerWidth - 16, large ? 1100 : inventoryish ? 720 : 640);
-    const maxH = Math.min(window.innerHeight - 16, large ? 900 : inventoryish ? 780 : 720);
-    const minW = inventoryish ? 300 : 260;
-    const minH = inventoryish ? 220 : 180;
+    const limits = floatPanelLimits(key);
+    const maxW = limits.maxW;
+    const maxH = limits.maxH;
+    const minW = limits.minW;
+    const minH = limits.minH;
     let w = sw;
     let h = sh;
     if (mode === "x" || mode === "both") {
@@ -14232,8 +14291,7 @@ function modelPayloadFromForm(form) {
     provider: formData.get("provider") || "llama_cpp",
     gguf_model_path: formData.get("gguf_model_path"),
     llama_cpp_base_url: formData.get("llama_cpp_base_url"),
-    ollama_model: formData.get("ollama_model") || "llama3.1",
-    ollama_base_url: formData.get("ollama_base_url") || "http://localhost:11434",
+    mle_model: formData.get("mle_model") || "qwen3:8b",
     api_preset: preset,
     api_base_url: apiBase,
     api_model: apiModel,
@@ -19708,6 +19766,32 @@ document.addEventListener("click", (event) => {
       });
   }
 
+  const watchBtn = event.target.closest(".npcWatchButton");
+  if (watchBtn) {
+    event.preventDefault();
+    const npcId = watchBtn.dataset.npcId || "";
+    if (!npcId) return;
+    watchBtn.disabled = true;
+    fetch(`/api/npc/${encodeURIComponent(npcId)}/watch`, { method: "POST" })
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.watching) {
+          _watchedNpcIds.add(npcId);
+        } else {
+          _watchedNpcIds.delete(npcId);
+        }
+        watchBtn.classList.toggle("npcWatchActive", !!data.watching);
+        watchBtn.title = data.watching
+          ? "Stop watching this NPC on the map"
+          : "Pin this NPC to the map";
+        watchBtn.disabled = false;
+        // Refresh map markers so the purple pin appears/disappears immediately
+        refreshLocalMap?.();
+        if (!document.querySelector("#mapOverlay")?.classList.contains("hidden")) refreshFullMap?.();
+      })
+      .catch(() => { watchBtn.disabled = false; });
+  }
+
   const dismissBtn = event.target.closest(".partyRemoveButton");
   if (dismissBtn) {
     event.preventDefault();
@@ -21221,11 +21305,18 @@ const MAP_STATE_COLORS = {
 
 function paintMapCanvas(mapData, canvas) {
   if (!canvas || !mapData) return;
-  const width = Number(mapData.width || 0);
-  const height = Number(mapData.height || 0);
-  let tiles = Array.isArray(mapData.tiles) ? mapData.tiles : [];
+  const preview = mapData.preview && Array.isArray(mapData.preview.tiles) ? mapData.preview : null;
+  const width = Number(preview ? preview.width : mapData.width || 0);
+  const height = Number(preview ? preview.height : mapData.height || 0);
+  let tiles = preview ? preview.tiles : (Array.isArray(mapData.tiles) ? mapData.tiles : []);
   if ((!tiles.length || !width || !height) && Array.isArray(mapData.grid)) {
     tiles = mapData.grid.flat();
+  }
+  // A world grid is 16383 on a side. Never walk that rectangle; draw the tiles in hand.
+  if (width > 512 || height > 512) {
+    canvas.width = 8;
+    canvas.height = 8;
+    return;
   }
   if (!width || !height || !tiles.length) {
     canvas.width = 8;
@@ -21252,8 +21343,8 @@ function paintMapCanvas(mapData, canvas) {
       ctx.fillRect(x * cell, y * cell, cell, cell);
     }
   }
-  const px = Number(mapData.player?.x);
-  const py = Number(mapData.player?.y);
+  const px = Number(preview ? preview.player?.x : mapData.player?.x);
+  const py = Number(preview ? preview.player?.y : mapData.player?.y);
   if (Number.isFinite(px) && Number.isFinite(py)) {
     ctx.fillStyle = "#ff4d6d";
     ctx.fillRect(px * cell, py * cell, cell, cell);
@@ -21298,6 +21389,7 @@ function renderMapPreview(mapData) {
       · art ${stats.image_assigned || 0}/${stats.cells || 0}</p>
       <div class="mapStats">${top}</div>
       <p class="mapLegend">Red cell = you · color blocks = terrain states · ASCII backup below.</p>
+      ${mapData.scale === "world" ? `<p>World grid ${mapData.width}×${mapData.height}. This preview is the ground around you. A city is a clump of those cells, and each cell holds its own internal grid.</p>` : ""}
       ${missing ? `<p class="empty">No art yet for: ${escapeHtml(missing)}. Use Tile library → Generate.</p>` : ""}
     `;
   }
@@ -21818,6 +21910,28 @@ function bindLocalMapClick() {
   const canvas = document.querySelector("#playMapCanvas");
   if (!canvas || canvas.dataset.clickMoveBound === "1") return;
   canvas.dataset.clickMoveBound = "1";
+  // Quest marker tooltip on hover
+  canvas.addEventListener("mousemove", (event) => {
+    if (!localMapView || !canvas._mapMeta || !_lastQuestMarkers?.length) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const cell = canvas._mapMeta.cell || mapTilePx || 32;
+    const relX = Math.floor(((event.clientX - rect.left) * scaleX) / cell) + canvas._mapMeta.minX;
+    const relY = Math.floor(((event.clientY - rect.top) * scaleY) / cell) + canvas._mapMeta.minY;
+    const px = Number(localMapView.player?.x ?? 0);
+    const py = Number(localMapView.player?.y ?? 0);
+    const gx = relX + px;
+    const gy = relY + py;
+    const qm = _lastQuestMarkers.find(
+      (m) => Math.round(Number(m.coords?.x)) === gx && Math.round(Number(m.coords?.y)) === gy,
+    );
+    // Use a simple title tooltip — no persistent tip element on the local map
+    canvas.title = qm
+      ? `❗ ${qm.quest_name}${qm.location_name ? ` → ${qm.location_name}` : ""}${qm.step_description ? `\n${qm.step_description}` : ""}`
+      : "";
+  });
+  canvas.addEventListener("mouseleave", () => { canvas.title = ""; });
   canvas.addEventListener("click", (event) => {
     if (!localMapView || !canvas._mapMeta) return;
     const rect = canvas.getBoundingClientRect();
@@ -22128,6 +22242,165 @@ function drawMapIntelMarker(ctx, dx, dy, cell, marker) {
   ctx.stroke();
 }
 
+/**
+ * Draw a yellow quest exclamation marker at canvas pixel position (dx, dy).
+ * cell is the pixel size of one map tile.
+ */
+function drawQuestMarker(ctx, dx, dy, cell) {
+  if (!ctx) return;
+  const cx = dx + cell / 2;
+  const cy = dy + cell / 2;
+  const r = Math.max(4, cell * 0.28);
+  // Outer glow
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.15, r, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffdd00";
+  ctx.globalAlpha = 0.18;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  // Pin circle
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.15, r * 0.72, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffcc00";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(0,0,0,0.85)";
+  ctx.lineWidth = Math.max(1, cell / 16);
+  ctx.stroke();
+  // Exclamation mark
+  ctx.fillStyle = "#1a1200";
+  ctx.font = `bold ${Math.max(8, Math.round(r * 0.85))}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("!", cx, cy - r * 0.2);
+  // Pin stem
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + r * 0.52);
+  ctx.lineTo(cx, dy + cell - 1);
+  ctx.strokeStyle = "#ffcc00";
+  ctx.lineWidth = Math.max(1, cell / 14);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * Overlay quest markers onto an already-painted canvas.
+ * questMarkers: array from /api/quests/markers
+ * playerPos: {x, y} in grid coords (used for local/circular maps with rel coords)
+ * mode: "local" (rel coords) or "full" (abs coords)
+ */
+function drawQuestMarkersOnCanvas(canvas, questMarkers, playerPos, mode) {
+  if (!canvas || !questMarkers?.length) return;
+  const meta = canvas._mapMeta;
+  if (!meta) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  for (const qm of questMarkers) {
+    const gx = Number(qm.coords?.x ?? 0);
+    const gy = Number(qm.coords?.y ?? 0);
+    let relX, relY;
+    if (mode === "local") {
+      // Local circular map uses rel coordinates (offset from player)
+      relX = gx - Number(playerPos?.x ?? 0);
+      relY = gy - Number(playerPos?.y ?? 0);
+    } else {
+      // Full map uses absolute coordinates
+      relX = gx;
+      relY = gy;
+    }
+    const px = (relX - meta.minX) * meta.cell;
+    const py = (relY - meta.minY) * meta.cell;
+    // Only draw if within canvas bounds
+    if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) continue;
+    drawQuestMarker(ctx, px, py, meta.cell);
+  }
+}
+
+/**
+ * Draw an NPC map marker at canvas pixel position (dx, dy).
+ * markerType: "vendor" (blue 🛒), "quest_npc" (orange 👤), "watched" (purple 📌)
+ * cell: pixel size of one map tile
+ */
+function drawNpcMarker(ctx, dx, dy, markerType, cell) {
+  if (!ctx) return;
+  const cx = dx + cell / 2;
+  const cy = dy + cell / 2;
+  const r = Math.max(4, cell * 0.26);
+
+  // Colour scheme per type
+  const colours = {
+    vendor:    { bg: "#1e90ff", border: "#005fcc", text: "#fff", glyph: "🛒" },
+    quest_npc: { bg: "#ff8c00", border: "#b85c00", text: "#1a0900", glyph: "👤" },
+    watched:   { bg: "#9b30ff", border: "#5e0099", text: "#fff", glyph: "📌" },
+  };
+  const col = colours[markerType] || colours.vendor;
+
+  ctx.save();
+
+  // Outer glow
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.15, r, 0, Math.PI * 2);
+  ctx.fillStyle = col.bg;
+  ctx.globalAlpha = 0.18;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+
+  // Pin circle
+  ctx.beginPath();
+  ctx.arc(cx, cy - r * 0.15, r * 0.72, 0, Math.PI * 2);
+  ctx.fillStyle = col.bg;
+  ctx.fill();
+  ctx.strokeStyle = col.border;
+  ctx.lineWidth = Math.max(1, cell / 16);
+  ctx.stroke();
+
+  // Glyph inside circle
+  ctx.font = `${Math.max(7, Math.round(r * 0.72))}px sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(col.glyph, cx, cy - r * 0.18);
+
+  // Pin stem
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + r * 0.52);
+  ctx.lineTo(cx, dy + cell - 1);
+  ctx.strokeStyle = col.bg;
+  ctx.lineWidth = Math.max(1, cell / 14);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+/**
+ * Overlay NPC markers onto an already-painted canvas.
+ * npcMarkers: array from /api/map/npc-markers
+ * playerPos: {x, y} in grid coords
+ * mode: "local" (rel coords) or "full" (abs coords)
+ */
+function drawNpcMarkersOnCanvas(canvas, npcMarkers, playerPos, mode) {
+  if (!canvas || !npcMarkers?.length) return;
+  const meta = canvas._mapMeta;
+  if (!meta) return;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  for (const nm of npcMarkers) {
+    const gx = Number(nm.coords?.x ?? 0);
+    const gy = Number(nm.coords?.y ?? 0);
+    let relX, relY;
+    if (mode === "local") {
+      relX = gx - Number(playerPos?.x ?? 0);
+      relY = gy - Number(playerPos?.y ?? 0);
+    } else {
+      relX = gx;
+      relY = gy;
+    }
+    const px = (relX - meta.minX) * meta.cell;
+    const py = (relY - meta.minY) * meta.cell;
+    if (px < 0 || py < 0 || px >= canvas.width || py >= canvas.height) continue;
+    drawNpcMarker(ctx, px, py, nm.marker_type, meta.cell);
+  }
+}
+
 async function paintTileGrid(canvas, tiles, options = {}) {
   if (!canvas || !tiles?.length) return;
   const fog = Boolean(options.fog);
@@ -22135,7 +22408,7 @@ async function paintTileGrid(canvas, tiles, options = {}) {
   const tilePx = options.tilePx === 16 ? 16 : options.tilePx === 32 ? 32 : mapTilePx;
   // Display scale: each logical tile is tilePx art, optionally scaled for full map
   const scale = options.scale || (options.mode === "full" ? 1 : Math.max(1, Math.floor((options.cell || 32) / tilePx)));
-  const cell = tilePx * scale;
+  let cell = tilePx * scale;
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
@@ -22150,8 +22423,16 @@ async function paintTileGrid(canvas, tiles, options = {}) {
   });
   if (!Number.isFinite(minX)) return;
   // Circular local maps: force a square footprint so the clip is a true circle.
+  // A short explored box grows by √2 so its corner tiles stay inside the ring.
+  // The play circle then caps that window. Farther remembered tiles stay in the
+  // payload and are marked on the rim; fitting the whole journey into this slot
+  // shrunk the ground under the token to a speck.
+  const LOCAL_PLAY_EXTENT = 5;
+  let playExtent = 0;
   if (circle) {
-    const extent = Math.max(Math.abs(minX), Math.abs(maxX), Math.abs(minY), Math.abs(maxY), 1);
+    let extent = Math.max(Math.abs(minX), Math.abs(maxX), Math.abs(minY), Math.abs(maxY), 1);
+    if (options.memory) extent = Math.min(LOCAL_PLAY_EXTENT, Math.ceil(extent * Math.SQRT2) + 1);
+    playExtent = extent;
     minX = -extent;
     minY = -extent;
     maxX = extent;
@@ -22159,6 +22440,9 @@ async function paintTileGrid(canvas, tiles, options = {}) {
   }
   const w = maxX - minX + 1;
   const h = maxY - minY + 1;
+  if (options.memory && w * cell > 960) {
+    cell = Math.max(8, Math.floor(960 / w));
+  }
   canvas.width = w * cell;
   canvas.height = h * cell;
   const ctx = canvas.getContext("2d");
@@ -22192,23 +22476,32 @@ async function paintTileGrid(canvas, tiles, options = {}) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
   }
 
+  const distant = [];
   for (const t of tiles) {
-    const x = Number(t.rel_x != null ? t.rel_x : t.x) - minX;
-    const y = Number(t.rel_y != null ? t.rel_y : t.y) - minY;
+    const relX = Number(t.rel_x != null ? t.rel_x : t.x);
+    const relY = Number(t.rel_y != null ? t.rel_y : t.y);
+    if (circle && options.memory && playExtent && Math.max(Math.abs(relX), Math.abs(relY)) > playExtent) {
+      if ((t.visited || t.revealed) && !t.fog && !t.is_player) distant.push(t);
+      continue;
+    }
+    const x = relX - minX;
+    const y = relY - minY;
     const dx = x * cell;
     const dy = y * cell;
     const state = String(t.state || "?");
-    const isFogged = (fog || circle) && (t.fog || !t.visited) && !t.is_player;
+    const isFogged = (fog || circle) && (t.fog || (!t.visited && !t.revealed)) && !t.is_player;
+    const heard = Boolean(t.revealed) && !t.visited && !t.is_player;
     const isUnknown = state === "unknown" || state === "?" || !state;
 
     if (isFogged || isUnknown) {
       // True fog — no terrain leak for unseen land
-      ctx.fillStyle = circle ? "#0d121a" : "#0a0e14";
+      ctx.fillStyle = circle ? "#1a2433" : "#141c28";
       ctx.fillRect(dx, dy, cell, cell);
       ctx.strokeStyle = "rgba(70, 90, 110, 0.14)";
       ctx.lineWidth = 1;
       ctx.strokeRect(dx + 0.5, dy + 0.5, cell - 1, cell - 1);
     } else {
+      if (heard) ctx.globalAlpha = 0.75;
       const archive = t.image_data_url ? _imageCache.get(t.image_data_url) : null;
       if (archive) {
         ctx.drawImage(archive, dx, dy, cell, cell);
@@ -22216,6 +22509,7 @@ async function paintTileGrid(canvas, tiles, options = {}) {
         const sprite = getPixelTileSprite(state, tilePx);
         ctx.drawImage(sprite, dx, dy, cell, cell);
       }
+      if (heard) ctx.globalAlpha = 1;
     }
     if (t.is_settlement && !isFogged) {
       ctx.strokeStyle = "#ffd56a";
@@ -22269,11 +22563,33 @@ async function paintTileGrid(canvas, tiles, options = {}) {
     ctx.lineWidth = 2;
     ctx.stroke();
   }
+  if (circle && distant.length) {
+    // The circle is CSS-scaled into a small slot, so a bitmap-sized speck disappears.
+    const shown = Math.max(80, canvas.clientWidth || canvas.getBoundingClientRect().width || 180);
+    const pxScale = canvas.width / shown;
+    const blip = Math.max(6, Math.round(8 * pxScale));
+    const rimR = Math.max(blip + 2, circleR - blip - 2);
+    for (const t of distant) {
+      const relX = Number(t.rel_x != null ? t.rel_x : t.x);
+      const relY = Number(t.rel_y != null ? t.rel_y : t.y);
+      const ang = Math.atan2(relY, relX);
+      const px = cxCanvas + Math.cos(ang) * rimR;
+      const py = cyCanvas + Math.sin(ang) * rimR;
+      ctx.beginPath();
+      ctx.arc(px, py, blip, 0, Math.PI * 2);
+      ctx.fillStyle = "#f4f7fb";
+      ctx.fill();
+      ctx.lineWidth = Math.max(2, Math.round(pxScale));
+      ctx.strokeStyle = MAP_STATE_COLORS[String(t.state || "")] || "#d7e2ea";
+      ctx.stroke();
+    }
+  }
 
   canvas._mapMeta = {
     minX,
     minY,
     cell,
+    extent: playExtent,
     mode: options.mode || "local",
     tilePx,
     circle,
@@ -22282,12 +22598,37 @@ async function paintTileGrid(canvas, tiles, options = {}) {
   };
 }
 
+let _lastQuestMarkers = [];
+let _lastNpcMarkers = [];
+/** NPC ids the player has pinned to watch (string ids matching API response). */
+const _watchedNpcIds = new Set();
+
 async function refreshLocalMap() {
   const canvas = document.querySelector("#playMapCanvas");
   const meta = document.querySelector("#playMapMeta");
+  const memoryLine = document.querySelector("#mapMemoryLine");
+  const showMapLine = (text) => {
+    if (meta) meta.textContent = text;
+    if (memoryLine) memoryLine.textContent = text;
+  };
   try {
-    // Larger circular viewport; vision is still 1-tile LOS server-side.
-    const res = await fetch("/api/tiles/map/local?radius=6", { cache: "no-store" });
+    // Nearby ground stays large. Every explored tile is still returned; far ones mark the rim.
+    const [res, qmRes, nmRes] = await Promise.all([
+      fetch("/api/tiles/map/local?radius=6", { cache: "no-store" }),
+      fetch("/api/quests/markers", { cache: "no-store" }).catch(() => null),
+      fetch("/api/map/npc-markers", { cache: "no-store" }).catch(() => null),
+    ]);
+    if (qmRes?.ok) {
+      try { _lastQuestMarkers = await qmRes.json(); } catch (_) { _lastQuestMarkers = []; }
+    }
+    if (nmRes?.ok) {
+      try {
+        const nms = await nmRes.json();
+        _lastNpcMarkers = nms;
+        // Sync local watched set from server
+        for (const nm of nms) if (nm.marker_type === "watched") _watchedNpcIds.add(nm.npc_id);
+      } catch (_) { _lastNpcMarkers = []; }
+    }
     const data = await res.json();
     if (data?.map_blank || data?.movement_locked) {
       mapBlank = !!data.map_blank;
@@ -22299,16 +22640,15 @@ async function refreshLocalMap() {
       });
     }
     if (!res.ok || data.empty) {
-      if (meta) {
-        if (data?.map_blank || data?.confinement) {
-          meta.textContent =
-            data.confinement?.label ||
+      if (data?.map_blank || data?.confinement) {
+        showMapLine(
+          data.confinement?.label ||
             data.location_special_flags?.label ||
-            "Bound — map blank · cannot move";
-          if (data.confinement?.hint) meta.title = data.confinement.hint;
-        } else {
-          meta.textContent = "No map yet — generate on World setup.";
-        }
+            "Bound — map blank · cannot move",
+        );
+        if (meta && data.confinement?.hint) meta.title = data.confinement.hint;
+      } else {
+        showMapLine("No map yet — generate on World setup.");
       }
       // Clear canvas for prison / blank map
       if (canvas && (data?.map_blank || data?.empty)) {
@@ -22353,27 +22693,49 @@ async function refreshLocalMap() {
       scale: displayScale,
       fog: true,
       circle: true,
+      memory: Boolean(data.memory),
       mode: "local",
       avatarUrl: mapAvatarUrl,
     });
-    if (meta) {
-      const vision = data.vision_radius != null ? data.vision_radius : 1;
-      const marks = (data.markers || []).length;
-      meta.textContent = `@(${data.player?.x},${data.player?.y}) · vision ${vision} · visited ${data.visited_count || 0}${marks ? ` · intel ${marks}` : ""}`;
-    }
+    drawQuestMarkersOnCanvas(canvas, _lastQuestMarkers, data.player, "local");
+    drawNpcMarkersOnCanvas(canvas, _lastNpcMarkers, data.player, "local");
+    const vision = data.vision_radius != null ? data.vision_radius : 1;
+    const remembered = data.explored_tiles != null ? data.explored_tiles : (data.visited_count || 0);
+    const heard = Number(data.revealed_count || 0);
+    const bounds = data.bounds || {};
+    const mapW = bounds.width || data.width || "?";
+    const mapH = bounds.height || data.height || "?";
+    const marks = (data.markers || []).length;
+    const qmarks = (_lastQuestMarkers || []).length;
+    const nmarks = (_lastNpcMarkers || []).length;
+    showMapLine(`@(${data.player?.x},${data.player?.y}) · remembers ${remembered}${heard ? ` · heard ${heard}` : ""} · map ${mapW}×${mapH} · vision ${vision}${marks ? ` · intel ${marks}` : ""}${qmarks ? ` · quests ${qmarks}` : ""}${nmarks ? ` · npcs ${nmarks}` : ""}`);
     // Settlement strip: only places the player knows
     if (data.settlements_nearby) {
       renderSettlementList(data.settlements_nearby);
     }
   } catch (error) {
-    if (meta) meta.textContent = `Map error: ${error.message || error}`;
+    showMapLine(`Map error: ${error.message || error}`);
   }
 }
 
 async function refreshFullMap() {
   const canvas = document.querySelector("#fullMapCanvas");
   try {
-    const res = await fetch("/api/tiles/map/full", { cache: "no-store" });
+    const [res, qmRes, nmRes] = await Promise.all([
+      fetch("/api/tiles/map/full", { cache: "no-store" }),
+      fetch("/api/quests/markers", { cache: "no-store" }).catch(() => null),
+      fetch("/api/map/npc-markers", { cache: "no-store" }).catch(() => null),
+    ]);
+    if (qmRes?.ok) {
+      try { _lastQuestMarkers = await qmRes.json(); } catch (_) { /* keep existing */ }
+    }
+    if (nmRes?.ok) {
+      try {
+        const nms = await nmRes.json();
+        _lastNpcMarkers = nms;
+        for (const nm of nms) if (nm.marker_type === "watched") _watchedNpcIds.add(nm.npc_id);
+      } catch (_) { /* keep existing */ }
+    }
     const data = await res.json();
     if (data?.map_blank) {
       mapBlank = true;
@@ -22423,6 +22785,8 @@ async function refreshFullMap() {
       mode: "full",
       avatarUrl: mapAvatarUrl,
     });
+    drawQuestMarkersOnCanvas(canvas, _lastQuestMarkers, data.player, "full");
+    drawNpcMarkersOnCanvas(canvas, _lastNpcMarkers, data.player, "full");
     renderSettlementList(data.settlements || []);
     // Scroll so the player is in view (local map still follows; this view pans freely)
     const wrap = document.querySelector(".mapOverlayCanvasWrap");
@@ -22745,17 +23109,22 @@ function bindFullMapHover() {
     const marker = (fullMapView.markers || []).find(
       (m) => Number(m.x) === cx && Number(m.y) === cy,
     );
-    if ((!tile || (tile.fog && !tile.visited && !tile.is_player)) && !marker && !settle) {
+    const questMark = (_lastQuestMarkers || []).find(
+      (qm) => Math.round(Number(qm.coords?.x)) === cx && Math.round(Number(qm.coords?.y)) === cy,
+    );
+    if ((!tile || (tile.fog && !tile.visited && !tile.is_player)) && !marker && !settle && !questMark) {
       tip?.classList.add("hidden");
       return;
     }
-    const label = settle
-      ? `${settle.name} (${settle.state || "settlement"})`
-      : marker
-        ? `${marker.label || "Known place"} · ${marker.kind || "intel"}`
-        : tile?.fog
-          ? "Unknown ground"
-          : `${tile?.state || "tile"}${tile?.visited ? " · visited" : ""}`;
+    const label = questMark
+      ? `❗ ${questMark.quest_name}${questMark.location_name ? ` → ${questMark.location_name}` : ""}`
+      : settle
+        ? `${settle.name} (${settle.state || "settlement"})`
+        : marker
+          ? `${marker.label || "Known place"} · ${marker.kind || "intel"}`
+          : tile?.fog
+            ? "Unknown ground"
+            : `${tile?.state || "tile"}${tile?.visited ? " · visited" : ""}`;
     if (tip) {
       tip.textContent = `${label} · (${cx},${cy})`;
       tip.style.left = `${event.clientX - rect.left + 12}px`;
@@ -22896,6 +23265,135 @@ function dockLinkButtons(type, code, token, name) {
   return `<button type="button" class="${detailsClass}" data-code="${safeCode}" aria-label="Details for ${safeName}.">Details</button><button type="button" class="${linkClass} insertRefButton" draggable="true" data-type="${escapeHtml(type)}" data-code="${safeCode}" data-link-token="${safeToken}" aria-label="Link ${safeName}. ${escapeHtml(DOCK_LINK_HINT)}">Link</button>`;
 }
 
+let encounterDismissedTurn = 0;
+let encounterSeenTurn = 0;
+let encounterBoot = true;
+let encounterDialogBound = false;
+let encounterIgnoreClose = false;
+
+function releaseEncounterForMenu() {
+  const dialog = document.querySelector("#encounterDialog");
+  if (dialog?.open) {
+    encounterIgnoreClose = true;
+    try {
+      dialog.close();
+    } finally {
+      encounterIgnoreClose = false;
+    }
+  }
+  if (encounterDismissedTurn <= 0) {
+    encounterBoot = true;
+    encounterSeenTurn = 0;
+  }
+}
+
+function bindEncounterDialog() {
+  if (encounterDialogBound) return;
+  const dialog = document.querySelector("#encounterDialog");
+  const openBtn = document.querySelector("#encounterOpenBtn");
+  const closeBtn = document.querySelector("#encounterClose");
+  if (!dialog || !openBtn) return;
+  encounterDialogBound = true;
+  dialog.addEventListener("close", () => {
+    if (encounterIgnoreClose) return;
+    const turn = Number(dialog.dataset.turn || 0);
+    if (turn > encounterDismissedTurn) encounterDismissedTurn = turn;
+  });
+  closeBtn?.addEventListener("click", () => dialog.close());
+  openBtn.addEventListener("click", () => {
+    if (!dialog.open && typeof dialog.showModal === "function") dialog.showModal();
+  });
+}
+
+function encounterHealthText(person) {
+  if (!person?.health_known) return "Health not known yet";
+  return `Health ${person.health}/${person.max_health}`;
+}
+
+function encounterAbilityHtml(ability) {
+  const name = escapeHtml(ability?.name || "Move");
+  if (ability?.known) {
+    const detail = ability.detail ? `<span class="encounterAbilityDetail">${escapeHtml(ability.detail)}</span>` : "";
+    const effect = escapeHtml(ability.effectiveness || "Known ability. The sheet has the effect.");
+    return `<li><strong>${name}</strong> <span class="encounterKnown">Known</span>${detail}<span class="encounterEffect">${effect}</span></li>`;
+  }
+  const seen = ability?.seen ? `<span class="encounterAbilityDetail">${escapeHtml(ability.seen)}</span>` : "";
+  return `<li><strong>${name}</strong> <span class="encounterUnknown">Effectiveness not known yet</span>${seen}</li>`;
+}
+
+function encounterPersonHtml(person) {
+  const notes = Array.isArray(person?.notes) ? person.notes : [];
+  const abilities = Array.isArray(person?.abilities) ? person.abilities : [];
+  const meta = [person?.role, person?.attitude].filter((part) => String(part || "").trim()).join(" · ");
+  return `<article class="encounterPerson"><header><strong>${escapeHtml(person?.name || "Unknown")}</strong><span>${escapeHtml(encounterHealthText(person))}</span></header>${meta ? `<p class="encounterMeta">${escapeHtml(meta)}</p>` : ""}${person?.detail ? `<p class="encounterDetail">${escapeHtml(person.detail)}</p>` : ""}${notes.length ? `<ul class="encounterNotes">${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>` : ""}${abilities.length ? `<ul class="encounterAbilities">${abilities.map(encounterAbilityHtml).join("")}</ul>` : ""}</article>`;
+}
+
+function paintEncounter() {
+  bindEncounterDialog();
+  const board = state?.active_encounter;
+  const dialog = document.querySelector("#encounterDialog");
+  const openBtn = document.querySelector("#encounterOpenBtn");
+  const worth = Boolean(board && (board.active || board.closed_turn || (board.foes || []).length));
+  if (openBtn) {
+    openBtn.classList.toggle("hidden", !worth);
+    openBtn.hidden = !worth;
+    openBtn.classList.toggle("activeChip", Boolean(board?.active));
+  }
+  if (!worth || !dialog) {
+    if (dialog?.open) dialog.close();
+    return;
+  }
+  const allies = document.querySelector("#encounterAllies");
+  const foes = document.querySelector("#encounterFoes");
+  const outcome = document.querySelector("#encounterOutcome");
+  const scale = document.querySelector("#encounterScale");
+  const seenWrap = document.querySelector("#encounterSeenWrap");
+  const seen = document.querySelector("#encounterSeen");
+  const title = document.querySelector("#encounterTitle");
+  if (title) title.textContent = board.active ? "Fight" : "Fight over";
+  if (outcome) {
+    const text = String(board.outcome || "").trim();
+    outcome.textContent = text;
+    outcome.hidden = !text;
+  }
+  if (scale) {
+    const text = String(board.scale_note || "").trim();
+    scale.textContent = text;
+    scale.hidden = !text;
+  }
+  if (allies) {
+    const rows = board.allies || [];
+    allies.innerHTML = rows.length ? rows.map(encounterPersonHtml).join("") : `<p class="empty">No one listed on your side.</p>`;
+  }
+  if (foes) {
+    const rows = board.foes || [];
+    foes.innerHTML = rows.length
+      ? rows.map(encounterPersonHtml).join("")
+      : `<p class="empty">${escapeHtml(board.outcome || "No one person is listed on their side yet.")}</p>`;
+  }
+  const loose = Array.isArray(board.seen_moves) ? board.seen_moves : [];
+  if (seenWrap && seen) {
+    seen.innerHTML = loose.length ? `<ul class="encounterAbilities">${loose.map(encounterAbilityHtml).join("")}</ul>` : "";
+    seenWrap.hidden = !loose.length;
+  }
+  const turn = Number(board.updated_turn) || 0;
+  dialog.dataset.turn = String(turn);
+  const gameVisible = Boolean(gameView && !gameView.classList.contains("hidden"));
+  if (!gameVisible) return;
+  const boot = encounterBoot;
+  const advanced = !boot && turn > encounterSeenTurn;
+  encounterBoot = false;
+  encounterSeenTurn = turn;
+  const dismissed = turn <= encounterDismissedTurn;
+  if (!dismissed && !dialog.open && typeof dialog.showModal === "function" && ((board.active && (boot || advanced)) || (!board.active && advanced))) {
+    try {
+      dialog.showModal();
+    } catch (_) {
+      /* already open, or the dialog is not in the document yet */
+    }
+  }
+}
+
 function paintPlayDock() {
   const nameEl = document.querySelector("#youName");
   const vitalsEl = document.querySelector("#youVitals");
@@ -22961,6 +23459,7 @@ function paintPlayDock() {
   }
   syncPortraitFrameName(document.querySelector("#youFrame"), Boolean(face));
   syncPortraitSizeButton(document.querySelector("#youFrame"));
+  paintEncounter();
 }
 
 function openHelpPanel() {
@@ -23768,8 +24267,7 @@ document.querySelector("#appSettingsForm")?.addEventListener("submit", async (ev
     launch_mode: fd.get("launch_mode"),
     app_port: Number(fd.get("app_port") || 8000),
     model_provider: fd.get("model_provider"),
-    ollama_model: fd.get("ollama_model"),
-    ollama_base_url: fd.get("ollama_base_url"),
+    mle_model: fd.get("mle_model"),
     gguf_model_path: fd.get("gguf_model_path"),
     api_base_url: fd.get("api_base_url"),
     api_model: fd.get("api_model"),

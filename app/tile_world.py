@@ -69,14 +69,17 @@ def list_world_presets() -> list[dict[str, Any]]:
 
 
 def get_world_preset(preset_id: str) -> dict[str, Any] | None:
-    with connect() as conn:
+    conn = connect()
+    try:
         row = conn.execute(
             "SELECT * FROM world_presets WHERE id = ?",
             (preset_id,),
         ).fetchone()
-    if not row:
+        item = row_to_dict(row) if row else None
+    finally:
+        conn.close()
+    if not item:
         return None
-    item = row_to_dict(row) or {}
     item["weights"] = json.loads(item.get("weights_json") or "{}")
     item["features"] = json.loads(item.get("features_json") or "{}")
     item.pop("weights_json", None)
@@ -140,9 +143,12 @@ def search_tile_images(
         LIMIT ?
     """
     params.append(limit)
-    with connect() as conn:
+    conn = connect()
+    try:
         rows = conn.execute(sql, params).fetchall()
-    return rows_to_dicts(rows)
+        return rows_to_dicts(rows)
+    finally:
+        conn.close()
 
 
 def add_tile_image(
@@ -741,6 +747,97 @@ def generate_map(
     return payload
 
 
+def generate_scaled_world(
+    *,
+    preset_id: str = "forest_march",
+    seed: int | None = None,
+    density_percent: int | None = None,
+    notice_percent: int | None = None,
+    assign_images: bool = False,
+) -> dict[str, Any]:
+    """Persist a 16,383 world. Tiles are not stored. assign_images is ignored on purpose."""
+    del assign_images
+    from app.world_scale import build_world, preview_window
+
+    preset = get_world_preset(preset_id) or get_world_preset("frontier_any")
+    if not preset:
+        raise ValueError("No world presets available.")
+    seed = int(seed if seed is not None else (time.time_ns() % (2**31 - 1)))
+    world = build_world(preset, seed, density_percent, notice_percent)
+    run_id = f"world-{seed}-{uuid.uuid4().hex[:8]}"
+    world["id"] = run_id
+    world["run_id"] = run_id
+    player = world.get("player") or {}
+    meta = {
+        "scale": "world",
+        "landmarks": [],
+        "settlements_meta": world.get("settlements_meta") or [],
+        "hidden_bases": [],
+        "stats": world.get("stats") or {},
+        "visited": world.get("visited") or [],
+        "features": {},
+        "knowledge": world.get("knowledge") or {},
+        "place_anchors": {},
+        "density_percent": world.get("density_percent"),
+        "density_source": world.get("density_source") or "",
+        "theme": world.get("theme") or "",
+        "scale_plan": world.get("scale_plan") or {},
+        "cities": world.get("cities") or [],
+        "roads": world.get("roads") or [],
+        "allows_slavery": bool(world.get("allows_slavery")),
+        "revealed": list(world.get("revealed") or []),
+        "notice_percent": world.get("notice_percent"),
+        "notice_source": world.get("notice_source") or "",
+    }
+    conn = connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO world_maps
+              (id, preset_id, seed, width, height, age, environment, tiles_json, player_x, player_y, meta_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                run_id,
+                world.get("preset_id") or preset.get("id") or "",
+                seed,
+                int(world["width"]),
+                int(world["height"]),
+                world.get("age") or "",
+                world.get("environment") or "",
+                "[]",
+                int(player.get("x") or 0),
+                int(player.get("y") or 0),
+                json.dumps(meta, ensure_ascii=True),
+            ),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_world_map_id', ?)",
+            (run_id,),
+        )
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)",
+            (json.dumps(True),),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    mark_visited(
+        world,
+        int(player.get("x") or 0),
+        int(player.get("y") or 0),
+        radius=DEFAULT_VISION_RADIUS,
+        save=True,
+    )
+    preview = preview_window(world)
+    world["preview"] = preview
+    world["ascii"] = preview.get("ascii") or ""
+    world["tiles"] = []
+    world["grid"] = []
+    world.pop("cell_index", None)
+    return world
+
+
 def _count_states(tiles: list[list[dict[str, Any]]]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for row in tiles:
@@ -777,28 +874,42 @@ def _pick_start(
     return (width // 2, height // 2)
 
 
-def get_map(map_id: str | None = None) -> dict[str, Any] | None:
-    with connect() as conn:
-        if not map_id:
-            row = conn.execute(
+def get_map(map_id: str | None = None, conn=None) -> dict[str, Any] | None:
+    def _read(connection):
+        chosen = str(map_id or "")
+        if not chosen:
+            found = connection.execute(
                 "SELECT value FROM settings WHERE key = 'active_world_map_id'"
             ).fetchone()
-            map_id = str(row["value"]) if row else ""
-        if not map_id:
+            chosen = str(found["value"]) if found else ""
+        if not chosen:
             return None
-        row = conn.execute("SELECT * FROM world_maps WHERE id = ?", (map_id,)).fetchone()
-    if not row:
+        return connection.execute("SELECT * FROM world_maps WHERE id = ?", (chosen,)).fetchone()
+
+    if conn is not None:
+        row = _read(conn)
+        item = row_to_dict(row) if row else None
+    else:
+        owned = connect()
+        try:
+            row = _read(owned)
+            item = row_to_dict(row) if row else None
+        finally:
+            owned.close()
+    if not item:
         return None
-    item = row_to_dict(row) or {}
     tiles = json.loads(item.get("tiles_json") or "[]")
     meta = json.loads(item.get("meta_json") or "{}")
     width = int(item.get("width") or 0)
     height = int(item.get("height") or 0)
+    scale = str(meta.get("scale") or "")
     grid: list[list[dict[str, Any]]] = []
-    if width and height and len(tiles) == width * height:
+    if scale == "world":
+        tiles = []
+    elif width and height and len(tiles) == width * height:
         for y in range(height):
             grid.append(tiles[y * width : (y + 1) * width])
-    return {
+    loaded = {
         "id": item.get("id"),
         "preset_id": item.get("preset_id"),
         "seed": item.get("seed"),
@@ -816,9 +927,26 @@ def get_map(map_id: str | None = None) -> dict[str, Any] | None:
         "visited": meta.get("visited") or [],
         "features": meta.get("features") or {},
         "knowledge": meta.get("knowledge") or {"settlements": [], "danger": [], "notes": []},
+        "place_anchors": meta.get("place_anchors") if isinstance(meta.get("place_anchors"), dict) else {},
         "run_id": item.get("id"),
         "created_at": item.get("created_at"),
+        "scale": scale,
+        "cities": meta.get("cities") if isinstance(meta.get("cities"), list) else [],
+        "roads": meta.get("roads") if isinstance(meta.get("roads"), list) else [],
+        "density_percent": meta.get("density_percent"),
+        "density_source": str(meta.get("density_source") or ""),
+        "theme": str(meta.get("theme") or ""),
+        "scale_plan": meta.get("scale_plan") if isinstance(meta.get("scale_plan"), dict) else {},
+        "allows_slavery": bool(meta.get("allows_slavery")),
+        "revealed": list(meta.get("revealed") or []) if isinstance(meta.get("revealed"), list) else [],
+        "notice_percent": meta.get("notice_percent"),
+        "notice_source": str(meta.get("notice_source") or ""),
     }
+    if scale == "world":
+        from app.world_scale import index_cities
+
+        loaded["cell_index"] = index_cities(loaded["cities"])
+    return loaded
 
 
 def list_maps(limit: int = 20) -> list[dict[str, Any]]:
@@ -954,15 +1082,19 @@ def _rebuild_grid(map_data: dict[str, Any]) -> list[list[dict[str, Any]]]:
     return []
 
 
-def _save_map_payload(map_data: dict[str, Any]) -> None:
-    """Persist player position, visited, tiles back to world_maps."""
+def _save_map_payload(map_data: dict[str, Any], conn=None) -> None:
+    """Persist player position, visited, tiles back to world_maps.
+
+    Pass the caller's connection when a turn transaction is already open.
+    A second connection cannot write while that transaction holds the lock.
+    """
     map_id = str(map_data.get("id") or "")
     if not map_id:
         return
     width = int(map_data.get("width") or 0)
     height = int(map_data.get("height") or 0)
     tiles = map_data.get("tiles") or []
-    if not tiles:
+    if not tiles and str(map_data.get("scale") or "") != "world":
         grid = _rebuild_grid(map_data)
         tiles = [cell for row in grid for cell in row]
     player = map_data.get("player") or {}
@@ -977,28 +1109,51 @@ def _save_map_payload(map_data: dict[str, Any]) -> None:
         "visited": map_data.get("visited") or [],
         "features": (map_data.get("features") or {}),
         "knowledge": knowledge,
+        "place_anchors": map_data.get("place_anchors") if isinstance(map_data.get("place_anchors"), dict) else {},
+        "revealed": list(map_data.get("revealed") or []),
     }
-    with connect() as conn:
-        conn.execute(
-            """
-            UPDATE world_maps
-            SET tiles_json = ?, player_x = ?, player_y = ?, meta_json = ?
-            WHERE id = ?
-            """,
-            (
-                json.dumps(tiles, ensure_ascii=True),
-                int(player.get("x") or 0),
-                int(player.get("y") or 0),
-                json.dumps(meta, ensure_ascii=True),
-                map_id,
-            ),
-        )
+    if str(map_data.get("scale") or "") == "world":
+        meta["scale"] = "world"
+        meta["density_percent"] = map_data.get("density_percent")
+        meta["density_source"] = map_data.get("density_source") or ""
+        meta["theme"] = map_data.get("theme") or ""
+        meta["scale_plan"] = map_data.get("scale_plan") or {}
+        meta["cities"] = map_data.get("cities") or []
+        meta["roads"] = map_data.get("roads") or []
+        meta["allows_slavery"] = bool(map_data.get("allows_slavery"))
+        meta["notice_percent"] = map_data.get("notice_percent")
+        meta["notice_source"] = map_data.get("notice_source") or ""
+    payload = (
+        json.dumps(tiles, ensure_ascii=True),
+        int(player.get("x") or 0),
+        int(player.get("y") or 0),
+        json.dumps(meta, ensure_ascii=True),
+        map_id,
+    )
+    sql = """
+        UPDATE world_maps
+        SET tiles_json = ?, player_x = ?, player_y = ?, meta_json = ?
+        WHERE id = ?
+    """
+    if conn is not None:
+        conn.execute(sql, payload)
+        return
+    owned = connect()
+    try:
+        owned.execute(sql, payload)
+        owned.commit()
+    finally:
+        owned.close()
 
 
 # Terrain that stops line-of-sight past the first ridge (you can see the face, not past it).
 SIGHT_BLOCKERS = frozenset({"mountain", "cliff", "volcano"})
 # Default ground vision: Chebyshev radius 1 → player tile + immediate ring (no long scouting).
 DEFAULT_VISION_RADIUS = 1
+# One story turn may cross this many tiles. A world-scale map is 16,383 cells on a side.
+STEP_BUDGET = 4
+SETTLEMENT_HORIZON = 16
+BLOCKED_STATES = frozenset({"void", "water", "lava", "cliff"})
 
 
 def _ensure_knowledge(map_data: dict[str, Any]) -> dict[str, Any]:
@@ -1548,100 +1703,146 @@ def list_settlements(map_data: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def local_map_view(map_data: dict[str, Any], *, radius: int = 6) -> dict[str, Any]:
-    """Circular viewport around the player (follows player).
+    """Remembered land around the journey, not a sliding window that forgets.
 
-    Display radius is the canvas footprint; actual *vision* is visited tiles only
-    (default mark_visited radius 1 + LOS). Unvisited cells are pure fog; intel
-    markers (towns / danger from locals or lived life) can still show through.
+    Every visited tile stays in the payload, plus a one-tile in-bounds fringe of
+    unknown ground so the edge of what you have seen stays visible. Tiles you
+    have never reached are omitted. Nothing already in ``visited`` is removed.
+    ``radius`` remains the standing-vision hint the client used to request; it
+    no longer clips memory.
     """
-    grid = _rebuild_grid(map_data)
-    if not grid:
-        return {"empty": True, "tiles": [], "radius": radius}
-    width = len(grid[0])
-    height = len(grid)
+    world_scale = str(map_data.get("scale") or "") == "world"
+    grid = None if world_scale else _rebuild_grid(map_data)
+    if world_scale:
+        width = int(map_data.get("width") or 0)
+        height = int(map_data.get("height") or 0)
+    elif not grid:
+        return {"empty": True, "tiles": [], "radius": radius, "memory": True}
+    else:
+        width = len(grid[0])
+        height = len(grid)
+    if width <= 0 or height <= 0:
+        return {"empty": True, "tiles": [], "radius": radius, "memory": True}
     px = int((map_data.get("player") or {}).get("x") or 0)
     py = int((map_data.get("player") or {}).get("y") or 0)
-    # Viewport size for the circular UI (not vision range).
-    radius = max(3, min(14, int(radius or 6)))
-    # Standing vision: 1 tile around the player with mountain LOS.
+    radius = max(1, min(14, int(radius or 6)))
     before_visit = set(str(v) for v in (map_data.get("visited") or []))
     mark_visited(map_data, px, py, radius=DEFAULT_VISION_RADIUS, save=False)
     visited = set(str(v) for v in (map_data.get("visited") or []))
+    if f"{px},{py}" not in visited:
+        visited.add(f"{px},{py}")
+        map_data["visited"] = sorted(visited)
     if visited != before_visit:
         _save_map_payload(map_data)
+    revealed = {str(item) for item in (map_data.get("revealed") or [])}
+    include = set(visited) | revealed
+    fringe: set[str] = set()
+    for key in include:
+        try:
+            vx, vy = (int(part) for part in key.split(",", 1))
+        except (TypeError, ValueError):
+            continue
+        for dy in (-1, 0, 1):
+            for dx in (-1, 0, 1):
+                nx, ny = vx + dx, vy + dy
+                if not (0 <= nx < width and 0 <= ny < height):
+                    continue
+                nkey = f"{nx},{ny}"
+                if nkey not in include:
+                    fringe.add(nkey)
     markers = knowledge_markers_for_view(map_data)
     markers_by_pos = {
         f"{int(m.get('x') or 0)},{int(m.get('y') or 0)}": m
         for m in markers
         if m.get("x") is not None and m.get("y") is not None
     }
+    art_cache: dict[str, dict[str, Any]] = {}
+    run_id = str(map_data.get("run_id") or map_data.get("id") or "")
+
+    def _art_for(state: str) -> dict[str, Any]:
+        if state in art_cache:
+            return art_cache[state]
+        found: dict[str, Any] = {}
+        try:
+            img = pick_image_for_state(state, run_id=run_id)
+            if img:
+                found = img
+        except Exception:
+            found = {}
+        art_cache[state] = found
+        return found
 
     local: list[dict[str, Any]] = []
-    r2 = (radius + 0.35) ** 2
-    for y in range(max(0, py - radius), min(height, py + radius + 1)):
-        for x in range(max(0, px - radius), min(width, px + radius + 1)):
-            dx, dy = x - px, y - py
-            if (dx * dx + dy * dy) > r2:
-                continue
-            key = f"{x},{y}"
-            is_player = x == px and y == py
-            is_visited = key in visited or is_player
-            base = grid[y][x] if isinstance(grid[y][x], dict) else {}
-            cell: dict[str, Any] = {
-                "x": x,
-                "y": y,
-                "rel_x": dx,
-                "rel_y": dy,
-                "visited": is_visited,
-                "is_player": is_player,
-                "fog": not is_visited,
-                "in_circle": True,
+
+    def _key_xy(item: str) -> tuple[int, int] | None:
+        try:
+            xs, ys = item.split(",", 1)
+            return int(xs), int(ys)
+        except (TypeError, ValueError):
+            return None
+
+    ordered = sorted(
+        (key for key in (include | fringe) if _key_xy(key) is not None),
+        key=lambda item: ( _key_xy(item)[1], _key_xy(item)[0] ),
+    )
+    for key in ordered:
+        x, y = (int(part) for part in key.split(",", 1))
+        if not (0 <= x < width and 0 <= y < height):
+            continue
+        is_player = x == px and y == py
+        is_visited = key in visited or is_player
+        is_revealed = key in revealed and not is_visited
+        known = is_visited or is_revealed
+        base = _cell_at(map_data, x, y, grid) or {}
+        cell: dict[str, Any] = {
+            "x": x,
+            "y": y,
+            "rel_x": x - px,
+            "rel_y": y - py,
+            "visited": is_visited,
+            "revealed": key in revealed,
+            "is_player": is_player,
+            "fog": not known,
+            "in_circle": True,
+        }
+        marker = markers_by_pos.get(key)
+        if marker:
+            cell["marker"] = {
+                "kind": marker.get("kind") or "note",
+                "label": marker.get("label") or "",
+                "source": marker.get("source") or "",
             }
-            marker = markers_by_pos.get(key)
-            if marker:
-                cell["marker"] = {
-                    "kind": marker.get("kind") or "note",
-                    "label": marker.get("label") or "",
-                    "source": marker.get("source") or "",
+        if known:
+            cell.update(
+                {
+                    "state": base.get("state"),
+                    "walkable": base.get("walkable", True),
+                    "elevation": base.get("elevation"),
+                    "settlement_id": base.get("settlement_id"),
+                    "is_settlement": str(base.get("state") or "") in SETTLEMENT_STATES,
+                    "image_id": base.get("image_id"),
+                    "image_path": base.get("image_path") or "",
+                    "image_data_url": base.get("image_data_url") or "",
                 }
-            if is_visited:
-                cell.update(
-                    {
-                        "state": base.get("state"),
-                        "walkable": base.get("walkable", True),
-                        "elevation": base.get("elevation"),
-                        "settlement_id": base.get("settlement_id"),
-                        "is_settlement": str(base.get("state") or "") in SETTLEMENT_STATES,
-                        "image_id": base.get("image_id"),
-                        "image_path": base.get("image_path") or "",
-                        "image_data_url": base.get("image_data_url") or "",
-                    }
-                )
-                if not cell.get("image_data_url") and not cell.get("image_path"):
-                    try:
-                        img = pick_image_for_state(
-                            str(cell.get("state") or ""),
-                            run_id=str(map_data.get("run_id") or map_data.get("id") or ""),
-                        )
-                        if img:
-                            cell["image_id"] = img.get("id")
-                            cell["image_path"] = img.get("path") or ""
-                            cell["image_data_url"] = img.get("data_url") or ""
-                    except Exception:
-                        pass
-            else:
-                # Fog: no terrain leak. Markers may still identify a known town/danger.
-                cell["state"] = "unknown"
-                cell["walkable"] = None
-                cell["is_settlement"] = bool(
-                    marker and str(marker.get("kind") or "") in {"settlement", "town", "city"}
-                )
-            local.append(cell)
+            )
+            if not cell.get("image_data_url") and not cell.get("image_path"):
+                img = _art_for(str(cell.get("state") or ""))
+                if img:
+                    cell["image_id"] = img.get("id")
+                    cell["image_path"] = img.get("path") or ""
+                    cell["image_data_url"] = img.get("data_url") or ""
+        else:
+            cell["state"] = "unknown"
+            cell["walkable"] = None
+            cell["is_settlement"] = bool(
+                marker and str(marker.get("kind") or "") in {"settlement", "town", "city"}
+            )
+        local.append(cell)
+    emitted = {f"{int(t['x'])},{int(t['y'])}" for t in local}
     known_settlements = [
         s
         for s in filter_settlements_for_player(map_data)
-        if abs(int(s.get("x") or 0) - px) <= radius + 2
-        and abs(int(s.get("y") or 0) - py) <= radius + 2
+        if f"{int(s.get('x') or 0)},{int(s.get('y') or 0)}" in emitted
     ]
     return {
         "empty": False,
@@ -1649,11 +1850,15 @@ def local_map_view(map_data: dict[str, Any], *, radius: int = 6) -> dict[str, An
         "vision_radius": DEFAULT_VISION_RADIUS,
         "shape": "circle",
         "follow_player": True,
+        "memory": True,
         "player": {"x": px, "y": py},
         "width": width,
         "height": height,
+        "bounds": {"width": width, "height": height},
         "tiles": local,
         "visited_count": len(visited),
+        "revealed_count": len(revealed),
+        "explored_tiles": len(visited),
         "tile_style": "pixel-16-32",
         "markers": markers,
         "settlements_nearby": known_settlements,
@@ -1665,13 +1870,20 @@ def full_map_view(map_data: dict[str, Any]) -> dict[str, Any]:
     """Full map for the detailed overlay: pan around; fog hides unvisited terrain.
 
     Known settlements / danger from intel appear as markers on the fog.
+    A world-scale map returns only remembered cells. It does not allocate the 16,383 grid.
     """
+    if str(map_data.get("scale") or "") == "world":
+        remembered = local_map_view(map_data, radius=1)
+        remembered["shape"] = "full"
+        remembered["follow_player"] = False
+        return remembered
     grid = _rebuild_grid(map_data)
     width = int(map_data.get("width") or (len(grid[0]) if grid else 0))
     height = int(map_data.get("height") or len(grid))
     px = int((map_data.get("player") or {}).get("x") or 0)
     py = int((map_data.get("player") or {}).get("y") or 0)
     visited = set(str(v) for v in (map_data.get("visited") or []))
+    revealed = {str(item) for item in (map_data.get("revealed") or [])}
     if f"{px},{py}" not in visited:
         mark_visited(map_data, px, py, radius=DEFAULT_VISION_RADIUS, save=True)
         visited = set(str(v) for v in (map_data.get("visited") or []))
@@ -1688,13 +1900,16 @@ def full_map_view(map_data: dict[str, Any]) -> dict[str, Any]:
             key = f"{x},{y}"
             is_player = x == px and y == py
             is_visited = key in visited or is_player
+            is_revealed = key in revealed and not is_visited
+            known = is_visited or is_revealed
             base = cell if isinstance(cell, dict) else {"state": "?", "x": x, "y": y}
             c: dict[str, Any] = {
                 "x": x,
                 "y": y,
                 "visited": is_visited,
+                "revealed": key in revealed,
                 "is_player": is_player,
-                "fog": not is_visited,
+                "fog": not known,
             }
             marker = markers_by_pos.get(key)
             if marker:
@@ -1703,7 +1918,7 @@ def full_map_view(map_data: dict[str, Any]) -> dict[str, Any]:
                     "label": marker.get("label") or "",
                     "source": marker.get("source") or "",
                 }
-            if is_visited:
+            if known:
                 c["state"] = base.get("state")
                 c["walkable"] = base.get("walkable", True)
                 c["elevation"] = base.get("elevation")
@@ -1745,6 +1960,7 @@ def full_map_view(map_data: dict[str, Any]) -> dict[str, Any]:
         "knowledge": _ensure_knowledge(map_data),
         "visited": sorted(visited),
         "visited_count": len(visited),
+        "revealed_count": len(revealed),
         "vision_radius": DEFAULT_VISION_RADIUS,
         "stats": map_data.get("stats") or {},
         "ascii": ascii_preview(map_data),
@@ -2376,3 +2592,718 @@ def suggest_tile_prompt(state_id: str, *, quality: str = "8bit", preset_id: str 
     if preset:
         bits.append(f"world age {preset.get('age')}, environment {preset.get('environment')}")
     return ", ".join(bits)
+
+
+# ---------------------------------------------------------------------------
+# Story walks: the generated grid is the whole land, and a turn crosses few tiles.
+# ---------------------------------------------------------------------------
+
+_DIRECTIONS: dict[str, tuple[int, int]] = {
+    "north": (0, -1),
+    "northeast": (1, -1),
+    "east": (1, 0),
+    "southeast": (1, 1),
+    "south": (0, 1),
+    "southwest": (-1, 1),
+    "west": (-1, 0),
+    "northwest": (-1, -1),
+}
+_DIRECTION_COMPACT = {
+    "n": "north",
+    "s": "south",
+    "e": "east",
+    "w": "west",
+    "ne": "northeast",
+    "nw": "northwest",
+    "se": "southeast",
+    "sw": "southwest",
+    "north": "north",
+    "south": "south",
+    "east": "east",
+    "west": "west",
+    "northeast": "northeast",
+    "northwest": "northwest",
+    "southeast": "southeast",
+    "southwest": "southwest",
+}
+_DIRECTION_RE = re.compile(
+    r"\b(north[\s-]?east|north[\s-]?west|south[\s-]?east|south[\s-]?west|"
+    r"northeast|northwest|southeast|southwest|north|south|east|west)\b",
+    re.I,
+)
+# Clockwise from north. Fallback steps use the first walkable tile in this order.
+NEIGHBOR_ORDER: tuple[tuple[str, int, int], ...] = tuple(
+    (name, _DIRECTIONS[name][0], _DIRECTIONS[name][1]) for name in (
+        "north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest",
+    )
+)
+_GENERIC_PLACE_LABELS = frozenset({
+    "town", "city", "village", "harbor", "colony", "station", "ruins", "dungeon",
+    "settlement", "landmark", "road", "camp",
+})
+
+
+def canonical_direction(text: str) -> str:
+    raw = re.sub(r"[\s_\-]+", "", str(text or "").strip().lower())
+    return _DIRECTION_COMPACT.get(raw, "")
+
+
+def clamp_steps(value: Any, default: int = STEP_BUDGET) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(STEP_BUDGET, n))
+
+
+def direction_in_text(text: str) -> str:
+    match = _DIRECTION_RE.search(str(text or ""))
+    if not match:
+        return ""
+    return canonical_direction(match.group(1))
+
+
+def heading_name(dx: int, dy: int) -> str:
+    if dx == 0 and dy == 0:
+        return ""
+    ax, ay = abs(int(dx)), abs(int(dy))
+    sx = 0 if dx == 0 else (1 if dx > 0 else -1)
+    sy = 0 if dy == 0 else (1 if dy > 0 else -1)
+    if ax > ay * 2:
+        sy = 0
+    elif ay > ax * 2:
+        sx = 0
+    for name, (hx, hy) in _DIRECTIONS.items():
+        if hx == sx and hy == sy:
+            return name
+    return ""
+
+
+def tile_walkable(cell: dict[str, Any] | None) -> bool:
+    if not isinstance(cell, dict):
+        return False
+    if str(cell.get("state") or "") in BLOCKED_STATES:
+        return False
+    return bool(cell.get("walkable", True))
+
+
+def _player_xy(map_data: dict[str, Any]) -> tuple[int, int]:
+    player = map_data.get("player") or {}
+    return int(player.get("x") or 0), int(player.get("y") or 0)
+
+
+def _walk_report(
+    map_data: dict[str, Any],
+    *,
+    direction: str,
+    requested: int,
+    taken: int,
+    stopped: str,
+    start: tuple[int, int],
+    end: tuple[int, int],
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "direction": direction,
+        "steps_requested": requested,
+        "steps_taken": taken,
+        "stopped": stopped,
+        "from": [start[0], start[1]],
+        "to": [end[0], end[1]],
+        "visited_count": len(map_data.get("visited") or []),
+    }
+
+
+def _cell_at(
+    map_data: dict[str, Any],
+    x: int,
+    y: int,
+    grid: list[list[dict[str, Any]]] | None = None,
+) -> dict[str, Any] | None:
+    """One cell. World-scale maps sample the seed instead of indexing a stored grid."""
+    if str(map_data.get("scale") or "") == "world":
+        from app.world_scale import world_cell
+
+        return world_cell(map_data, x, y)
+    if grid is None:
+        grid = _rebuild_grid(map_data)
+    if not grid:
+        return None
+    height = len(grid)
+    width = len(grid[0]) if height else 0
+    if not (0 <= int(x) < width and 0 <= int(y) < height):
+        return None
+    cell = grid[int(y)][int(x)]
+    return cell if isinstance(cell, dict) else None
+
+
+def walk_steps(map_data: dict[str, Any], direction: str, steps: Any, *, save: bool = False) -> dict[str, Any]:
+    """Step one tile at a time. Stop at the edge or at ground you cannot cross.
+
+    Visited tiles are only added. A blocked step leaves the token and the memory where they were.
+    """
+    heading = canonical_direction(direction)
+    dx, dy = _DIRECTIONS.get(heading, (0, 0))
+    budget = clamp_steps(steps)
+    start = _player_xy(map_data)
+    if not heading:
+        return _walk_report(
+            map_data, direction="", requested=budget, taken=0, stopped="bad_direction", start=start, end=start,
+        )
+    grid = None if str(map_data.get("scale") or "") == "world" else _rebuild_grid(map_data)
+    if grid:
+        height = len(grid)
+        width = len(grid[0]) if height else 0
+    else:
+        width = int(map_data.get("width") or 0)
+        height = int(map_data.get("height") or 0)
+    if width <= 0 or height <= 0:
+        return _walk_report(
+            map_data, direction=heading, requested=budget, taken=0, stopped="no_grid", start=start, end=start,
+        )
+    px, py = start
+    taken = 0
+    stopped = ""
+    for _ in range(budget):
+        nx, ny = px + dx, py + dy
+        if not (0 <= nx < width and 0 <= ny < height):
+            stopped = "edge"
+            break
+        if not tile_walkable(_cell_at(map_data, nx, ny, grid)):
+            stopped = "blocked"
+            break
+        px, py = nx, ny
+        map_data["player"] = {"x": px, "y": py}
+        mark_visited(map_data, px, py, radius=DEFAULT_VISION_RADIUS, save=False)
+        taken += 1
+    if not stopped:
+        stopped = "budget" if taken else "none"
+    if save and taken:
+        _save_map_payload(map_data)
+    return _walk_report(
+        map_data, direction=heading, requested=budget, taken=taken, stopped=stopped, start=start, end=(px, py),
+    )
+
+
+def walk_toward(
+    map_data: dict[str, Any],
+    tx: int,
+    ty: int,
+    *,
+    budget: int = STEP_BUDGET,
+    save: bool = False,
+) -> dict[str, Any]:
+    """Greedy walk that reduces Chebyshev distance. Stop when the next step cannot."""
+    budget = clamp_steps(budget)
+    start = _player_xy(map_data)
+    grid = None if str(map_data.get("scale") or "") == "world" else _rebuild_grid(map_data)
+    if grid:
+        height = len(grid)
+        width = len(grid[0]) if height else 0
+    else:
+        width = int(map_data.get("width") or 0)
+        height = int(map_data.get("height") or 0)
+    if width <= 0 or height <= 0:
+        return _walk_report(
+            map_data, direction="", requested=budget, taken=0, stopped="no_grid", start=start, end=start,
+        )
+    px, py = start
+    tx, ty = int(tx), int(ty)
+    taken = 0
+    stopped = ""
+    while taken < budget and (px != tx or py != ty):
+        here = max(abs(tx - px), abs(ty - py))
+        options: list[tuple[int, int, int, int, int]] = []
+        for _name, dx, dy in NEIGHBOR_ORDER:
+            nx, ny = px + dx, py + dy
+            if not (0 <= nx < width and 0 <= ny < height):
+                continue
+            cell = _cell_at(map_data, nx, ny, grid)
+            if not tile_walkable(cell):
+                continue
+            cheb = max(abs(tx - nx), abs(ty - ny))
+            if cheb >= here:
+                continue
+            manh = abs(tx - nx) + abs(ty - ny)
+            road = 0 if str((cell or {}).get("state") or "") in {"road", "bridge"} else 1
+            options.append((cheb, manh, road, nx, ny))
+        if not options:
+            stopped = "blocked"
+            break
+        options.sort()
+        _cheb, _manh, _road, nx, ny = options[0]
+        px, py = nx, ny
+        map_data["player"] = {"x": px, "y": py}
+        mark_visited(map_data, px, py, radius=DEFAULT_VISION_RADIUS, save=False)
+        taken += 1
+    if not stopped:
+        stopped = "arrived" if (px == tx and py == ty) else "budget"
+    direction = heading_name(px - start[0], py - start[1])
+    if save and taken:
+        _save_map_payload(map_data)
+    return _walk_report(
+        map_data, direction=direction, requested=budget, taken=taken, stopped=stopped, start=start, end=(px, py),
+    )
+
+
+def remember_place(
+    map_data: dict[str, Any],
+    *,
+    code: str = "",
+    name: str = "",
+    x: int,
+    y: int,
+    parent_id: int = 0,
+) -> None:
+    """Pin an outdoor place to a tile. An existing pin does not move, and a room is not pinned."""
+    if int(parent_id or 0):
+        return
+    code_s = str(code or "").strip()
+    name_s = str(name or "").strip()
+    if not code_s and not name_s:
+        return
+    anchors = map_data.get("place_anchors")
+    if not isinstance(anchors, dict):
+        anchors = {}
+        map_data["place_anchors"] = anchors
+    existing = None
+    if code_s and code_s.upper() in anchors:
+        existing = anchors.get(code_s.upper())
+    elif name_s and name_s.lower() in anchors:
+        existing = anchors.get(name_s.lower())
+    if isinstance(existing, dict) and existing.get("x") is not None:
+        return
+    record = {"code": code_s, "name": name_s, "x": int(x), "y": int(y)}
+    if code_s:
+        anchors[code_s.upper()] = record
+    if name_s:
+        anchors[name_s.lower()] = record
+
+
+def _anchor_at(map_data: dict[str, Any], code: str, name: str) -> dict[str, Any] | None:
+    anchors = map_data.get("place_anchors")
+    if not isinstance(anchors, dict):
+        return None
+    if code and isinstance(anchors.get(str(code).upper()), dict):
+        return anchors[str(code).upper()]
+    if name and isinstance(anchors.get(str(name).strip().lower()), dict):
+        return anchors[str(name).strip().lower()]
+    return None
+
+
+def _place_names(dest: dict[str, Any] | None, movement_report: dict[str, Any] | None) -> list[str]:
+    names: list[str] = []
+    for value in (
+        (dest or {}).get("name"),
+        (dest or {}).get("code"),
+        (movement_report or {}).get("destination"),
+    ):
+        text = str(value or "").strip()
+        if text and text not in names:
+            names.append(text)
+    return names
+
+
+def _names_match(want: str, label: str) -> bool:
+    left = str(want or "").strip().lower()
+    right = str(label or "").strip().lower()
+    if not left or not right:
+        return False
+    if right in _GENERIC_PLACE_LABELS and left != right:
+        return False
+    if left == right:
+        return True
+    return len(right) >= 4 and (right in left or left in right)
+
+
+def _settlement_match(map_data: dict[str, Any], names: list[str], px: int, py: int) -> tuple[int, int] | None:
+    best: tuple[int, int, int] | None = None
+    for settlement in list_settlements(map_data):
+        label = str(settlement.get("name") or "")
+        if not any(_names_match(name, label) for name in names):
+            continue
+        try:
+            sx, sy = int(settlement.get("x")), int(settlement.get("y"))
+        except (TypeError, ValueError):
+            continue
+        cheb = max(abs(sx - px), abs(sy - py))
+        if cheb > SETTLEMENT_HORIZON:
+            continue
+        if best is None or cheb < best[0]:
+            best = (cheb, sx, sy)
+    if best is None or best[0] == 0:
+        return None
+    return best[1], best[2]
+
+
+def _nearest_other_settlement(map_data: dict[str, Any], px: int, py: int) -> tuple[int, int] | None:
+    best: tuple[int, int, int] | None = None
+    for settlement in list_settlements(map_data):
+        try:
+            sx, sy = int(settlement.get("x")), int(settlement.get("y"))
+        except (TypeError, ValueError):
+            continue
+        cheb = max(abs(sx - px), abs(sy - py))
+        if cheb == 0 or cheb > SETTLEMENT_HORIZON:
+            continue
+        if best is None or cheb < best[0]:
+            best = (cheb, sx, sy)
+    if best is None:
+        return None
+    return best[1], best[2]
+
+
+def _same_place(origin: dict[str, Any] | None, dest: dict[str, Any] | None) -> bool:
+    if not origin or not dest:
+        return True
+    oid = int(origin.get("id") or 0)
+    did = int(dest.get("id") or 0)
+    if oid and did:
+        return oid == did
+    oc = str(origin.get("code") or "").upper()
+    dc = str(dest.get("code") or "").upper()
+    return bool(oc) and oc == dc
+
+
+_DOORWAY_RE = re.compile(
+    r"\b(?:step|go|walk|head|slip|duck|come|move)\s+(?:back\s+)?(?:into|inside|in)\b"
+    r"|\benter(?:s|ed|ing)?\b"
+    r"|\b(?:exit|leave|leaving)\s+(?:the\s+)?(?:shop|room|inn|tavern|watchhouse|building|house|hall|door)\b"
+    r"|\b(?:go|step|walk|head)\s+(?:back\s+)?(?:out|outside)\b",
+    re.I,
+)
+
+
+def _hike_despite_door(player_input: str) -> bool:
+    """A journey still crosses ground when the scene happens to stop indoors.
+
+    Stepping into a room does not. A compass direction does, even in the same sentence.
+    """
+    text = str(player_input or "")
+    if direction_in_text(text):
+        return True
+    if _DOORWAY_RE.search(text):
+        return False
+    return True
+
+
+def _is_door(origin: dict[str, Any] | None, dest: dict[str, Any] | None) -> bool:
+    """Entering, leaving, or crossing between rooms of the same outdoor place."""
+    if _same_place(origin, dest):
+        return False
+    op = int((origin or {}).get("parent_id") or 0)
+    dp = int((dest or {}).get("parent_id") or 0)
+    oid = int((origin or {}).get("id") or 0)
+    did = int((dest or {}).get("id") or 0)
+    if dp and oid and dp == oid:
+        return True
+    if op and did and op == did:
+        return True
+    if op and dp and op == dp:
+        return True
+    return False
+
+
+def _direction_from_inputs(
+    player_input: str,
+    movement_report: dict[str, Any] | None,
+    dest: dict[str, Any] | None,
+) -> str:
+    for text in (
+        player_input,
+        str((movement_report or {}).get("destination") or ""),
+        str((dest or {}).get("name") or ""),
+    ):
+        found = direction_in_text(text)
+        if found:
+            return found
+    return ""
+
+
+def normalize_map_walk(raw: Any) -> dict[str, Any] | None:
+    if not isinstance(raw, dict):
+        return None
+    direction = canonical_direction(str(raw.get("direction") or ""))
+    if not direction:
+        return None
+    steps = raw.get("steps")
+    return {"direction": direction, "steps": clamp_steps(steps if steps is not None else STEP_BUDGET)}
+
+
+def plan_story_walk(
+    map_data: dict[str, Any],
+    *,
+    player_input: str = "",
+    input_kind: str = "player",
+    movement_report: dict[str, Any] | None = None,
+    map_walk: Any = None,
+    origin: dict[str, Any] | None = None,
+    dest: dict[str, Any] | None = None,
+    travel: bool = False,
+) -> dict[str, Any]:
+    """Decide whether this turn steps the grid. Does not move the token."""
+    explicit = normalize_map_walk(map_walk)
+    if explicit:
+        return {
+            "action": "steps",
+            "direction": explicit["direction"],
+            "steps": explicit["steps"],
+            "reason": "explicit",
+        }
+    if str(input_kind or "player") != "player":
+        return {"action": "skip", "reason": "not_player"}
+    if _is_door(origin, dest) and not (travel and _hike_despite_door(player_input)):
+        return {"action": "skip", "reason": "door"}
+    report = movement_report if isinstance(movement_report, dict) else {}
+    status = str(report.get("status") or "")
+    outdoor = status in {"model", "repaired"} and not _same_place(origin, dest)
+    if outdoor:
+        px, py = _player_xy(map_data)
+        names = _place_names(dest, report)
+        for name in names:
+            anchor = _anchor_at(map_data, name if re.fullmatch(r"L\d+", name, re.I) else "", name)
+            if anchor is None and re.fullmatch(r"L\d+", name, re.I):
+                anchor = _anchor_at(map_data, name, "")
+            if isinstance(anchor, dict):
+                ax, ay = int(anchor.get("x") or 0), int(anchor.get("y") or 0)
+                if (ax, ay) != (px, py):
+                    return {"action": "toward", "x": ax, "y": ay, "reason": "outdoor_anchor"}
+        settlement = _settlement_match(map_data, names, px, py)
+        if settlement is not None:
+            return {"action": "toward", "x": settlement[0], "y": settlement[1], "reason": "outdoor_anchor"}
+        direction = _direction_from_inputs(player_input, report, dest)
+        if direction:
+            return {"action": "steps", "direction": direction, "steps": STEP_BUDGET, "reason": "outdoor_direction"}
+        return {"action": "fallback", "reason": "outdoor_fallback"}
+    direction = _direction_from_inputs(player_input, report, dest)
+    if direction and (travel or status == "unresolved"):
+        return {"action": "steps", "direction": direction, "steps": STEP_BUDGET, "reason": "unresolved_direction"}
+    return {"action": "skip", "reason": "no_step"}
+
+
+def _fallback_step(map_data: dict[str, Any]) -> dict[str, Any]:
+    px, py = _player_xy(map_data)
+    target = _nearest_other_settlement(map_data, px, py)
+    if target is not None:
+        return walk_toward(map_data, target[0], target[1], budget=STEP_BUDGET, save=False)
+    grid = _rebuild_grid(map_data)
+    height = len(grid)
+    width = len(grid[0]) if height else 0
+    roads: list[str] = []
+    opens: list[str] = []
+    for name, dx, dy in NEIGHBOR_ORDER:
+        nx, ny = px + dx, py + dy
+        if not (0 <= nx < width and 0 <= ny < height):
+            continue
+        cell = grid[ny][nx] if isinstance(grid[ny][nx], dict) else None
+        if not tile_walkable(cell):
+            continue
+        if str((cell or {}).get("state") or "") in {"road", "bridge"}:
+            roads.append(name)
+        else:
+            opens.append(name)
+    heading = roads[0] if roads else (opens[0] if opens else "")
+    if not heading:
+        start = (px, py)
+        return _walk_report(
+            map_data, direction="", requested=1, taken=0, stopped="blocked", start=start, end=start,
+        )
+    return walk_steps(map_data, heading, 1, save=False)
+
+
+def walk_journal_line(report: dict[str, Any]) -> str:
+    steps = int(report.get("steps_taken") or 0)
+    if steps <= 0:
+        return ""
+    to = report.get("to") or [0, 0]
+    direction = str(report.get("direction") or "")
+    if not direction:
+        frm = report.get("from") or to
+        direction = heading_name(int(to[0]) - int(frm[0]), int(to[1]) - int(frm[1]))
+    word = "tile" if steps == 1 else "tiles"
+    return (
+        f"Walked {direction} {steps} {word} to ({int(to[0])},{int(to[1])}). "
+        f"The map remembers {int(report.get('visited_count') or 0)} tiles."
+    )
+
+
+def apply_story_map_walk(
+    map_data: dict[str, Any],
+    *,
+    player_input: str = "",
+    input_kind: str = "player",
+    movement_report: dict[str, Any] | None = None,
+    map_walk: Any = None,
+    origin: dict[str, Any] | None = None,
+    dest: dict[str, Any] | None = None,
+    travel: bool = False,
+    save: bool = False,
+) -> dict[str, Any]:
+    """Move the token for one story turn and pin outdoor places to the tiles they occupy."""
+    plan = plan_story_walk(
+        map_data,
+        player_input=player_input,
+        input_kind=input_kind,
+        movement_report=movement_report,
+        map_walk=map_walk,
+        origin=origin,
+        dest=dest,
+        travel=travel,
+    )
+    if plan.get("action") == "skip":
+        return {"status": "skipped", "reason": plan.get("reason") or "no_step", "steps_taken": 0}
+    start = _player_xy(map_data)
+    if origin and not int(origin.get("parent_id") or 0):
+        remember_place(
+            map_data,
+            code=str(origin.get("code") or ""),
+            name=str(origin.get("name") or ""),
+            x=start[0],
+            y=start[1],
+            parent_id=0,
+        )
+    action = plan.get("action")
+    if action == "steps":
+        report = walk_steps(map_data, str(plan.get("direction") or ""), plan.get("steps") or STEP_BUDGET, save=False)
+    elif action == "toward":
+        report = walk_toward(map_data, int(plan.get("x") or 0), int(plan.get("y") or 0), save=False)
+    else:
+        report = _fallback_step(map_data)
+    end = _player_xy(map_data)
+    moved_place = not _same_place(origin, dest)
+    if int(report.get("steps_taken") or 0) and moved_place and dest and not int(dest.get("parent_id") or 0):
+        remember_place(
+            map_data,
+            code=str(dest.get("code") or ""),
+            name=str(dest.get("name") or ""),
+            x=end[0],
+            y=end[1],
+            parent_id=0,
+        )
+    report["status"] = "walked" if int(report.get("steps_taken") or 0) else "blocked"
+    report["reason"] = plan.get("reason") or ""
+    report["journal"] = walk_journal_line(report)
+    if save and (int(report.get("steps_taken") or 0) or map_data.get("place_anchors")):
+        _save_map_payload(map_data)
+    return report
+
+
+def spatial_contract(map_data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The finite land the story model is allowed to walk this turn."""
+    if not isinstance(map_data, dict):
+        return None
+    world_scale = str(map_data.get("scale") or "") == "world"
+    grid = None if world_scale else _rebuild_grid(map_data)
+    if world_scale:
+        width = int(map_data.get("width") or 0)
+        height = int(map_data.get("height") or 0)
+    elif not grid:
+        return None
+    else:
+        height = len(grid)
+        width = len(grid[0]) if height else 0
+    if width <= 0 or height <= 0:
+        return None
+    px, py = _player_xy(map_data)
+    px = min(max(px, 0), max(0, width - 1))
+    py = min(max(py, 0), max(0, height - 1))
+    here = _cell_at(map_data, px, py, grid) or {}
+    exits: dict[str, dict[str, Any]] = {}
+    for name, dx, dy in NEIGHBOR_ORDER:
+        nx, ny = px + dx, py + dy
+        if not (0 <= nx < width and 0 <= ny < height):
+            exits[name] = {"status": "edge"}
+            continue
+        cell = _cell_at(map_data, nx, ny, grid) or {}
+        terrain = str(cell.get("state") or "")
+        if tile_walkable(cell):
+            exits[name] = {"status": "walkable", "terrain": terrain}
+        else:
+            exits[name] = {"status": "blocked", "terrain": terrain}
+    places: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if world_scale:
+        ranked: list[tuple[int, str, dict[str, Any]]] = []
+        for city in map_data.get("cities") or []:
+            if not isinstance(city, dict):
+                continue
+            try:
+                sx, sy = int(city.get("x")), int(city.get("y"))
+            except (TypeError, ValueError):
+                continue
+            cheb = max(abs(sx - px), abs(sy - py))
+            label = str(city.get("name") or "city")
+            if cheb == 0 or not label.strip() or label.strip().lower() in seen:
+                continue
+            ranked.append((cheb, label, city))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        for cheb, label, city in ranked[:6]:
+            seen.add(label.strip().lower())
+            places.append(
+                {
+                    "name": label,
+                    "direction": heading_name(int(city["x"]) - px, int(city["y"]) - py),
+                    "distance": cheb,
+                    "x": int(city["x"]),
+                    "y": int(city["y"]),
+                    "band": city.get("band") or "",
+                }
+            )
+    for settlement in ([] if world_scale else list_settlements(map_data)):
+        try:
+            sx, sy = int(settlement.get("x")), int(settlement.get("y"))
+        except (TypeError, ValueError):
+            continue
+        cheb = max(abs(sx - px), abs(sy - py))
+        if cheb == 0 or cheb > SETTLEMENT_HORIZON:
+            continue
+        label = str(settlement.get("name") or settlement.get("state") or "place")
+        key = label.strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        places.append(
+            {
+                "name": label,
+                "direction": heading_name(sx - px, sy - py),
+                "distance": cheb,
+                "x": sx,
+                "y": sy,
+            }
+        )
+    places.sort(key=lambda item: (int(item["distance"]), str(item["name"])))
+    places = places[:6]
+    explored = len(map_data.get("visited") or [])
+    rule = (
+        f"The land is this fixed {width}×{height} map. You are on tile ({px},{py}). "
+        f"One turn walks at most {STEP_BUDGET} tiles, using WALK <direction> STEPS <1-{STEP_BUDGET}>. "
+        "Directions are north, south, east, west, and the compounds. "
+        "Stop at exits marked edge or blocked. "
+        "MOVE names the place the scene stops in, inside this walk. "
+        "Do not invent countryside past the step budget or the map edge. "
+        "A shop, inn, or room entered from the current place is a door, not a hike."
+    )
+    if world_scale:
+        rule += (
+            " Each step is one world cell. A city is at most 9 by 9 connected cells, "
+            "not a one-cell-wide line or a solid square, and each of those cells has an internal grid of at most 128 by 128. "
+            "One step does not cross the streets inside a city."
+        )
+    payload = {
+        "width": width,
+        "height": height,
+        "player": {"x": px, "y": py, "terrain": str(here.get("state") or "")},
+        "step_budget": STEP_BUDGET,
+        "exits": exits,
+        "places_in_reach": places,
+        "explored_tiles": explored,
+        "rule": rule,
+    }
+    if world_scale:
+        payload["scale"] = "world"
+        payload["density_percent"] = map_data.get("density_percent")
+        payload["city_cell_max"] = 128
+        payload["city_span_max"] = 9
+    return payload

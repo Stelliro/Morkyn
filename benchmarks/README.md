@@ -6,7 +6,7 @@ Harnesses live here. Generated run output goes under `benchmarks/reports/` (giti
 
 | Path | Purpose |
 | --- | --- |
-| `run_dual_role_playtest.py` | **Preferred:** dual-role GM + player over Mørkyn `apply_turn`/SQLite. No Ollama. Fast. |
+| `run_dual_role_playtest.py` | **Preferred:** dual-role GM + player over Mørkyn `apply_turn`/SQLite. No local model call. Fast. |
 | `run_long_playtest.py` | Optional stress path: real local LLM as GM, scripted player. Slow on 8B. |
 | `compare_narration_pipeline.py` | Compare narration pipeline on / off |
 | `reports/` | JSON + live logs from each run (gitignored artifacts) |
@@ -43,7 +43,7 @@ python benchmarks/run_dual_role_playtest.py
 python benchmarks/run_long_playtest.py
 ```
 
-Uses Ollama as GM. On 8B, plan on multi-minute turns.
+Uses MLE as GM. On 8B, plan on multi-minute turns. The welding rig is not connected yet.
 
 ## Narration pipeline
 

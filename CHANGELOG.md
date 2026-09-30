@@ -41,7 +41,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 - [CLAUDE] Relationship badges on NPC entity cards. The People tab now shows relationship band badges inline on each NPC card — coloured chips for affinity, fear, and respect bands — so the player can see standing at a glance without opening the API — `static/app.js`, `static/styles.css`
 - [CLAUDE] LLM context enrichment. Every turn now includes three additional blocks from `app/world_context.py`: a cultural naming guide (Nordic, Eastern, medieval English, Arabic, Slavic patterns with sample names), a named loot reference (28 items across four rarities, each with a flavour description), and an ability registry (20 abilities across combat, social, stealth, craft, medicine, survival, and arcane domains). The intent is to reduce invented names that drift between turns and keep generated loot and abilities consistent with the world's existing vocabulary — `app/world_context.py`, `app/prompts.py`
 - [CLAUDE] Quest timer tick wired into `apply_turn`. `tick_quest_timers` is now called at the end of every turn so timed quests auto-fail when `turns_remaining` reaches zero. The call is in a `try/except` so a missing table on an older DB does not break the turn — `app/world.py`
-- [CLAUDE] Autonomous player agent (`player_agent.py`). A standalone script that runs a full play session using the same 8B Ollama model in both roles: the server narrates, and the agent acts as the player, seeing only the narrative text and its character sheet. The player role receives no world-state JSON, no entity codes, and no GM context — `player_agent.py`
+- [CLAUDE] Autonomous player agent (`player_agent.py`). A standalone script that runs a full play session using the same local 8B model in both roles: the server narrates, and the agent acts as the player, seeing only the narrative text and its character sheet. The player role receives no world-state JSON, no entity codes, and no GM context — `player_agent.py`
 - [CLAUDE] Lore Bible in player agent. The agent maintains an entity tracker built from the narrative it has seen. Each turn it parses the narration for named people, places, and objects and accumulates them into a running "What you know so far:" block injected into the player's context. The agent knows only what the prose has told it — `player_agent.py`
 - [CLAUDE] Player agent goal directive and debug command blocker. The agent receives a goal directive at session start and pursues it across turns. A command filter blocks meta-commands and debug strings from appearing in the agent's player action output, so the narrator never receives OOC text — `player_agent.py`
 
@@ -62,6 +62,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
   - Three decisions are made in the page before anything is sent, and each can be wrong in a way the server cannot see. Which row an edit points at: the API applies a `set` to every row its `where` matches, so a clause fitting two rows changes the wrong one and reports success — a row with nothing unique about it is shown read-only rather than guessed at. What type a value keeps: every field hands back a string, and writing `"1"` where the save held `1` would turn a number column into strings one edit at a time, so a value that cannot keep its type is refused and the field marked rather than converted. And what the confirm says. The harness covers all three, and each is checked by breaking it on purpose: eleven deliberate regressions, eleven caught.
   - Two warnings sit above the grid because both are ways to believe an edit landed when it did not. Editing a save does not change the game in progress — the live world is `data/world.db` and the slot has to be loaded — so a **Load this save now** button appears once a write succeeds. And an autosave slot is overwritten by the next turn, so it says to use a named slot instead.
   - Verified end to end against a copy of a real save: 22 editable tables, both generated tables blocked with their row counts, quantity written back as `7` and not `"7"`, a backup holding the value from before, all 25 `world_maps` rows and their 133,337-character tiles intact afterwards, and every other table byte-identical.
+
+### Changed
+
+- [GROK] The local story slot is MLE (Morkyn LLM Engine). A saved model name from the previous local engine is copied into `mle_model` once, and those old keys are dropped on the next save. A chat through MLE says the engine has no model loaded until the welding rig is connected. Forge, ComfyUI, llama.cpp, and cloud APIs stay — `app/mle.py`, `app/llm.py`, `app/launcher_prefs.py`, `Morkyn.ps1`
 
 ### Fixed
 
@@ -137,7 +141,7 @@ Work-in-progress drop on the 0.9 line. Playable; not a stable 0.9.1. Tag `v0.9.1
 ### Added
 
 - One-file bootstrappers `start.bat` (Windows) and `start.sh` (Linux / macOS), published as assets on the `v0.9.0` release. Dropped into an empty folder they clone the repo, build a private `.venv`, install dependencies and start the game; on later runs they check GitHub, **ask before updating**, and start the existing copy when the answer is no, when the machine is offline, or when the checkout has local changes. Flags: `--full`, `--update`, `--no-update`, `--help`; Windows passes anything else through to `Morkyn.bat`.
-  - The default install filters `llama-cpp-python` out of `requirements.txt` rather than duplicating the pins. Its CUDA wheels are a large download that fails outright without a matching toolchain, and neither Ollama nor the cloud APIs need it. `--full` installs it.
+  - The default install filters `llama-cpp-python` out of `requirements.txt` rather than duplicating the pins. Its CUDA wheels are a large download that fails outright without a matching toolchain, and neither the local engine nor the cloud APIs need it. `--full` installs it.
 - `.gitattributes` pinning `*.sh` to LF. The repo is developed with `core.autocrlf=true`, which would otherwise check `start.sh` out with CRLF and break its shebang on Linux and macOS.
 
 ### Added
@@ -279,11 +283,11 @@ Work-in-progress drop on the 0.9 line. Playable; not a stable 0.9.1. Tag `v0.9.1
   - Eight of nine pins in that run came out "he", including a weaver the prose called "her" seven times and "they" six times and never once "he". The harness metric, which implements the rule correctly, disagreed with the database - that mismatch is what exposed it.
   - `bind_npc_pronouns()` now passes the rest of the cast as `others`, because the capitalised-token heuristic cannot see a name at the start of a sentence, which is exactly where the second character often sits. Replayed over the run, correct pins go from 6/8 to 8/8, Bellrow flips to "she", and Pikerest gets pinned at all.
 
-- **The shipped turn-draft timeout was inside the range real drafts take.** The Ollama default was 90s (llama_cpp already had 900s). Measured on an RTX 4070 Ti with qwen3:8b and a ~9k-token packet, the draft call takes 27-37s on an idle GPU and **75-100s under ordinary desktop load** - a second model runner, a recorder, a browser. A probe timed out at exactly 90s, and a 100-turn run measured a draft at 99.7s. Anyone on slower hardware, or merely watching a video, was falling back to canned deterministic prose every turn - `app/llm.py`
+- **The shipped turn-draft timeout was inside the range real drafts take.** The local engine default was 90s (llama_cpp already had 900s). Measured on an RTX 4070 Ti with qwen3:8b and a ~9k-token packet, the draft call takes 27-37s on an idle GPU and **75-100s under ordinary desktop load** - a second model runner, a recorder, a browser. A probe timed out at exactly 90s, and a 100-turn run measured a draft at 99.7s. Anyone on slower hardware, or merely watching a video, was falling back to canned deterministic prose every turn - `app/llm.py`
   - Raised to 300s (verify 45s -> 150s). A timeout is a ceiling, not a delay: nothing waits longer because of it, and the cost of hitting it is the worst failure this app has.
   - **Invisible for the same reason the context bug was.** `benchmarks/run_continuity_playtest.py` exports `AI_RPG_TURN_DRAFT_TIMEOUT=900`, so every 100-turn run reported zero fallbacks while a real player on that machine fell back constantly. That override is still there - the probe measures continuity, and a timeout would corrupt the result - but it is now documented as the trap it is, and the shipped defaults are pinned by `tests/test_context_budget.py`.
 
-- **The shipped default configuration could not run a single turn through the model.** A default launch resolved `context_window=8192`, while `SYSTEM_PROMPT` alone estimates ~9143 tokens, so `enforce_token_budget` raised `Token budget exceeded: system prompt alone is ~9894 tokens for context_window=8192` on turn one and *every* turn fell back to deterministic prose. Players saw flat canned narration with nothing on screen explaining why. Every probe in `tools/` exports `OLLAMA_CONTEXT_TOKENS=32768`, which is precisely why no test ever caught it - `app/llm.py`, `app/launcher_prefs.py`
+- **The shipped default configuration could not run a single turn through the model.** A default launch resolved `context_window=8192`, while `SYSTEM_PROMPT` alone estimates ~9143 tokens, so `enforce_token_budget` raised `Token budget exceeded: system prompt alone is ~9894 tokens for context_window=8192` on turn one and *every* turn fell back to deterministic prose. Players saw flat canned narration with nothing on screen explaining why. Every probe in `tools/` exports `AI_RPG_CONTEXT_TOKENS=32768`, which is precisely why no test ever caught it - `app/llm.py`, `app/launcher_prefs.py`
   - `DEFAULT_CONTEXT_TOKENS` and the launcher's `llama_cpp_context` default are now `32768`, matching the context the README benchmarks and the playtest tools already assumed.
   - New `fitting_system_prompts()` picks the largest system contract that fits the configured window, degrading to `COMPACT_SYSTEM_PROMPT` instead of hard-failing, so lowering the context costs richness rather than killing the turn. It says so once on the server console rather than degrading silently.
 - **Every entity reference rendered twice**: "Ash Road Cut Ash Road Cut", "soft shoes soft shoes". The server appends the code after the name on purpose (`_inject_entity_codes_for_known_names` writes `Low Gate Timber Arch [[L1]]`), and `linkifyText` expanded the `[[code]]` into a labelled button *and* separately linkified the bare name beside it. New `collapseNameCodePairs()` folds `Name [[CODE]]` into one reference before escaping - `static/app.js`
@@ -326,14 +330,14 @@ location name only.
 ### Fixed
 
 - [CLAUDE] Negative magnitudes were clamped to zero on tables with a floor of 0 (`damage`, `heal`, `item_count`, `fame`), which would have made every band-expressed health loss, item loss, and cost a silent no-op. The magnitude is now clamped before negation.
-- [CLAUDE] Band fields were stripped by the handoff cleanup allowlist (`HANDOFF_PLAYER_FIELDS`) before the world layer could roll them, so amounts the model asked for silently vanished. Found on a live Ollama 7B run: drafted-op survival was 20% against a 100% baseline; now 100%.
+- [CLAUDE] Band fields were stripped by the handoff cleanup allowlist (`HANDOFF_PLAYER_FIELDS`) before the world layer could roll them, so amounts the model asked for silently vanished. Found on a live local 7B run: drafted-op survival was 20% against a 100% baseline; now 100%.
 - [CLAUDE] Server-computed amounts were re-rolled as if the model had guessed them — a skill-check injury of −1 HP was re-read as a band hint and rolled into an unrelated number. Amounts the server already rolled are marked `_server_authored` and pass through untouched.
 - [CLAUDE] An unrecognized band word (a 7B wrote `"health_band": "fresh"`) normalized to `none` and silently deleted the change. Unknown words now resolve as `small`, since the model clearly intended something to happen.
 - [CLAUDE] Turn dice were attached to the discarded `result` dict rather than the returned state, so no caller could ever read them. They now surface as `state.dice_rolls` and at the top level of the `play_turn` payload beside `skill_checks`.
 
 ### Changed — local-model turn pipeline
 
-Measured on Ollama `qwen2.5:7b-instruct` over 30-turn runs. The JSON verify and
+Measured on local `qwen2.5:7b-instruct` over 30-turn runs. The JSON verify and
 depth-retry passes never once succeeded on a 7B, yet consumed 89% of wall-clock.
 
 - [CLAUDE] Short narration no longer blocks the verification skip. The consistency verifier cannot lengthen prose — that is the depth retry's job — so forcing it there cost ~26s per turn to accomplish nothing. The certainty penalty is retained.
@@ -477,7 +481,7 @@ facts, so all three moved to the server.
 
 ### Fixed — found by live 7B testing
 
-Six 24-turn runs on Ollama `qwen2.5:7b-instruct`. Every item below is a defect the
+Six 24-turn runs on local `qwen2.5:7b-instruct`. Every item below is a defect the
 harness caught, not a speculative hardening.
 
 - [CLAUDE] **`movement_contract` and `narrative_voice` never reached the model.** `HANDOFF_BASE_CONTEXT_KEYS` is an allowlist, and keys missing from it are nulled out of the packet — the prompt literally read `"movement_contract":null`. Identical in kind to the band-field bug fixed earlier in this release. Adding the two keys took model-emitted `MOVE` ops from 0 to 3 in a five-turn smoke test.
@@ -513,7 +517,7 @@ being reinvented under slightly different labels.
 
 ### Verified
 
-- [CLAUDE] Live run on Ollama `qwen2.5:7b-instruct` (7.6B Q4_K_M): opening + 6 turns, **0 fallbacks, 0 errors**, 100% band compliance across 80 emitted amount fields, 16 server rolls. Harnesses: `tools/playtest_7b_bands.py`, `tools/check_trace_ops_survival.py`, `tools/playtest_ops_baseline.py`.
+- [CLAUDE] Live run on local `qwen2.5:7b-instruct` (7.6B Q4_K_M): opening + 6 turns, **0 fallbacks, 0 errors**, 100% band compliance across 80 emitted amount fields, 16 server rolls. Harnesses: `tools/playtest_7b_bands.py`, `tools/check_trace_ops_survival.py`, `tools/playtest_ops_baseline.py`.
 - [CLAUDE] 30-turn consistency run, before → after the pipeline changes above:
 
   | metric | before | after |
@@ -627,7 +631,7 @@ being reinvented under slightly different labels.
 
 Notes from the 0.7 line retained for history:
 
-- [LLM] NAR+OPS draft DSL, adaptive narration pipeline design, Ollama `think: false`
+- [LLM] NAR+OPS draft DSL, adaptive narration pipeline design, local model with thinking off
 - [DOCS] Turn metrics, ConnectAPIs, pipeline docs
 
 ### Changed
@@ -736,7 +740,7 @@ Notes from the 0.7 line retained for history:
 ### Added
 - [ARCH] Established FastAPI backend with plain browser UI served from `/` - app shell
 - [DATA] Added SQLite world database with persistent locations, player, NPCs, relationships, inventory, skills, abilities, events, conversations, aliases, karma history, summaries, model logs, journal, settings, and GM notes - world state
-- [LLM] Added local LLM integration for Ollama-compatible and llama.cpp-compatible JSON generation - model adapter
+- [LLM] Added local LLM integration for a local engine and llama.cpp-compatible JSON generation - model adapter
 - [LLM] Added draft plus verifier turn flow with JSON repair and fallback narration - turn generation
 - [GPLAY] Added configurable playthrough setup for character identity, backstory, world style, rules, abilities, economy, magic, tech, quests, NPC density, factions, skills, and progression - setup system
 - [GPLAY] Added structured turn application for player stats, karma, skills, inventory, equipment, capacity modifiers, locations, NPCs, relationships, events, conversations, claim checks, and journal entries - world engine

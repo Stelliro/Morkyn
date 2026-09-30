@@ -1,7 +1,8 @@
 """Isekai feel smoke: Start with system+weak seed → opening → up to 3 turns.
 
-Uses local Ollama when available. Without Ollama, still verifies setup seeding
-(weak skill, dice defaults) and exit 0 after offline checks.
+Uses MLE when a model is loaded. Until the welding rig is connected, MLE
+reports not ready and this smoke still checks the weak-skill seed and dice
+defaults, then exits 0.
 """
 
 from __future__ import annotations
@@ -11,19 +12,9 @@ import os
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-
-
-def ollama_up(base: str) -> bool:
-    try:
-        with urllib.request.urlopen(f"{base.rstrip('/')}/api/tags", timeout=2) as resp:
-            return resp.status == 200
-    except Exception:
-        return False
 
 
 def narration_from(payload: dict, state: dict) -> str:
@@ -40,8 +31,7 @@ def narration_from(payload: dict, state: dict) -> str:
 def main() -> int:
     temp = Path(tempfile.mkdtemp(prefix="morkyn_isekai_smoke_"))
     print("temp", temp, flush=True)
-    ollama_base = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-    model = os.getenv("PLAYTEST_OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b"))
+    model = os.getenv("PLAYTEST_MLE_MODEL", os.getenv("MLE_MODEL", "qwen3:8b"))
     for key, val in {
         "AI_RPG_DB": str(temp / "world.db"),
         "AI_RPG_SOURCE_INDEX": str(temp / "source_index"),
@@ -49,12 +39,10 @@ def main() -> int:
         "AI_RPG_CONSOLIDATED_FACTS": str(temp / "facts.jsonl"),
         "AI_RPG_CAMPAIGN_SLOTS": str(temp / "slots"),
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": ollama_base,
-        "OLLAMA_MODEL": model,
-        "OLLAMA_CONTEXT_TOKENS": os.getenv("OLLAMA_CONTEXT_TOKENS", "32768"),
-        "OLLAMA_THINK": os.getenv("OLLAMA_THINK", "0"),
-        "AI_RPG_OLLAMA_TIMEOUT": os.getenv("AI_RPG_OLLAMA_TIMEOUT", "300"),
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": model,
+        "AI_RPG_CONTEXT_TOKENS": os.getenv("AI_RPG_CONTEXT_TOKENS", "32768"),
+        "AI_RPG_MLE_TIMEOUT": os.getenv("AI_RPG_MLE_TIMEOUT", "300"),
         "AI_RPG_TURN_DRAFT_TIMEOUT": os.getenv("AI_RPG_TURN_DRAFT_TIMEOUT", "300"),
         "AI_RPG_TURN_VERIFY_TIMEOUT": os.getenv("AI_RPG_TURN_VERIFY_TIMEOUT", "240"),
     }.items():
@@ -126,9 +114,8 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": ollama_base,
-            "ollama_model": model,
+            "provider": "mle",
+            "mle_model": model,
             "response_token_cap": 900,
             "response_token_hard_cap": 1400,
         }
@@ -136,7 +123,7 @@ def main() -> int:
 
     notes: list[str] = []
     print("ISEKAI setup seed check...", flush=True)
-    # Start always runs opening; if Ollama down, may fallback.
+    # Start always runs opening. If MLE has no model yet, the opening may fall back.
     t0 = time.perf_counter()
     opening = start_playthrough_with_opening(setup)
     t_open = time.perf_counter() - t0
@@ -162,14 +149,16 @@ def main() -> int:
         # Soft note — model may phrase differently
         notes.append("NOTE: opening narration may lack diegetic system window wording")
 
-    live = ollama_up(ollama_base)
+    from app.mle import status as mle_status
+
+    live = bool(mle_status(model).get("ok"))
     turns = [
         "I stay still and carefully look around the gate, trying to use that faint Observation sense.",
         "I ask a nearby worker what this place is called and how a stranger finds cheap shelter.",
         "I check whether any notice board or job posting is safe to approach without looking rich.",
     ]
     if not live:
-        notes.append("SKIP: Ollama not reachable — only offline seed checks ran")
+        notes.append("SKIP: MLE has no model loaded — only offline seed checks ran")
         print("\n".join(notes), flush=True)
         report = {"ok": seed_ok and dice_ok, "notes": notes, "opening_len": len(open_narr), "live": False}
         (temp / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

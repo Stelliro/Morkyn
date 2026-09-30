@@ -116,8 +116,7 @@ if db_path.exists():
                     "provider": str(raw.get("provider") or ""),
                     "gguf_model_path": str(raw.get("gguf_model_path") or ""),
                     "llama_cpp_base_url": str(raw.get("llama_cpp_base_url") or ""),
-                    "ollama_base_url": str(raw.get("ollama_base_url") or ""),
-                    "ollama_model": str(raw.get("ollama_model") or ""),
+                    "mle_model": str(raw.get("mle_model") or raw.get("ollama_model") or ""),
                 }
     except Exception:
         result = {}
@@ -207,10 +206,8 @@ function New-DefaultPrefs {
     [ordered]@{
         launch_mode              = "local"
         app_port                 = 8000
-        model_provider           = "ollama"
-        ollama_model             = "qwen3:8b"
-        ollama_base_url          = "http://127.0.0.1:11434"
-        ollama_think             = $false
+        model_provider           = "mle"
+        mle_model                = "qwen3:8b"
         gguf_model_path          = ""
         api_base_url             = "https://api.x.ai/v1"
         api_model                = "grok-4.5"
@@ -233,22 +230,29 @@ function New-DefaultPrefs {
 
 function Load-Prefs {
     $prefs = New-DefaultPrefs
+    $raw = $null
     if (Test-Path -LiteralPath $PrefsPath) {
         try {
             $raw = Get-Content -LiteralPath $PrefsPath -Raw -Encoding UTF8 | ConvertFrom-Json
-            foreach ($key in $prefs.Keys) {
+            foreach ($key in @($prefs.Keys)) {
                 if ($null -ne $raw.$key) { $prefs[$key] = $raw.$key }
+            }
+            # A prefs file from before MLE stored the model name on the old key.
+            if (-not [string]$prefs.mle_model -and $raw.ollama_model) {
+                $prefs.mle_model = [string]$raw.ollama_model
             }
         } catch { }
     }
-    # Seed from env / saved model when empty
     if ($env:AI_RPG_LAUNCH_MODE) { $prefs.launch_mode = $env:AI_RPG_LAUNCH_MODE.Trim().ToLowerInvariant() }
     if ($env:AI_RPG_APP_PORT) { $prefs.app_port = [int]$env:AI_RPG_APP_PORT }
     if ($env:AI_RPG_MODEL_PROVIDER) { $prefs.model_provider = $env:AI_RPG_MODEL_PROVIDER.Trim().ToLowerInvariant() }
-    if ($env:OLLAMA_MODEL) { $prefs.ollama_model = $env:OLLAMA_MODEL }
+    if ($env:MLE_MODEL) { $prefs.mle_model = $env:MLE_MODEL.Trim() }
     if ($env:AI_RPG_NARRATION_PIPELINE) {
         $prefs.narration_pipeline = @("1", "true", "yes", "on") -contains $env:AI_RPG_NARRATION_PIPELINE.Trim().ToLowerInvariant()
     }
+    $prov = ([string]$prefs.model_provider).Trim().ToLowerInvariant()
+    if ($prov -notin @("mle", "llama_cpp", "openai")) { $prov = "mle" }
+    $prefs.model_provider = $prov
     return $prefs
 }
 
@@ -265,10 +269,13 @@ function Apply-PrefsToEnvironment {
     if ($mode -in @("lan", "web", "phone")) { $mode = "network" }
     $env:AI_RPG_LAUNCH_MODE = $mode
     $env:AI_RPG_APP_PORT = [string][int]$Prefs.app_port
-    $env:AI_RPG_MODEL_PROVIDER = [string]$Prefs.model_provider
-    $env:OLLAMA_MODEL = [string]$Prefs.ollama_model
-    $env:OLLAMA_BASE_URL = [string]$Prefs.ollama_base_url
-    $env:OLLAMA_THINK = if ($Prefs.ollama_think) { "1" } else { "0" }
+    $prov = ([string]$Prefs.model_provider).Trim().ToLowerInvariant()
+    if ($prov -notin @("mle", "llama_cpp", "openai")) { $prov = "mle" }
+    $env:AI_RPG_MODEL_PROVIDER = $prov
+    $env:MLE_MODEL = [string]$Prefs.mle_model
+    foreach ($gone in @("OLLAMA_MODEL", "OLLAMA_BASE_URL", "OLLAMA_THINK", "OLLAMA_CONTEXT_TOKENS")) {
+        Remove-Item "Env:$gone" -ErrorAction SilentlyContinue
+    }
     if ($Prefs.api_base_url) { $env:AI_RPG_API_BASE_URL = [string]$Prefs.api_base_url }
     if ($Prefs.api_model) { $env:AI_RPG_API_MODEL = [string]$Prefs.api_model }
     if ($Prefs.api_preset) { $env:AI_RPG_API_PRESET = [string]$Prefs.api_preset }
@@ -286,7 +293,7 @@ function Apply-PrefsToEnvironment {
     $env:AI_RPG_FAST_VERIFICATION = if ($Prefs.fast_verification) { "1" } else { "0" }
     $env:AI_RPG_DSL_SKIP_VERIFY = if ($Prefs.dsl_skip_verify) { "1" } else { "0" }
     $env:AI_RPG_LLM_STARTUP_TIMEOUT = [string][int]$Prefs.llm_startup_timeout
-    $env:OLLAMA_CONTEXT_TOKENS = [string][int]$Prefs.llama_cpp_context
+    $env:AI_RPG_CONTEXT_TOKENS = [string][int]$Prefs.llama_cpp_context
     if (-not $Prefs.open_browser) { $env:AI_RPG_NO_BROWSER = "1" }
     else { Remove-Item Env:AI_RPG_NO_BROWSER -ErrorAction SilentlyContinue }
 }
@@ -903,7 +910,6 @@ function Show-Gatehouse {
     $cons = Lamp ([bool]$Prefs.narration_consolidate)
     $fast = Lamp ([bool]$Prefs.fast_verification)
     $skip = Lamp ([bool]$Prefs.dsl_skip_verify)
-    $think = Lamp ([bool]$Prefs.ollama_think)
     $flash = Lamp ([bool]$Prefs.llama_cpp_flash_attn)
     $browser = Lamp ([bool]$Prefs.open_browser)
 
@@ -956,14 +962,12 @@ function Show-Gatehouse {
     Write-Rule
     Write-TuiLine -Width $w -Text "MODEL" -Color DarkYellow
     Write-Row "B" "Provider" $provider
-    Write-Row "M" "Ollama model" ([string]$Prefs.ollama_model)
-    Write-Row "U" "Ollama URL" ([string]$Prefs.ollama_base_url)
+    Write-Row "M" "MLE model" ([string]$Prefs.mle_model)
     Write-Row "F" "GGUF path" $ggufShort "DarkGray"
     Write-Row "C" "Context tokens" ([string]$Prefs.llama_cpp_context)
     Write-Row "G" "GPU layers" ([string]$Prefs.llama_cpp_gpu_layers)
     Write-LampRow "H" "Flash attention" $flash
     Write-Row "L" "LLM logs" ([string]$Prefs.llm_log_mode)
-    Write-LampRow "T" "Ollama think" $think "Qwen3: keep OFF"
     Write-Rule
     Write-TuiLine -Width $w -Text "STORY ENGINE" -Color DarkYellow
     Write-Row "D" "Draft mode" $draft
@@ -1005,7 +1009,7 @@ function Show-Help {
     Write-TuiLine -Width $w -Text "  VPN    Tailscale / WireGuard / ZeroTier style" -Color Gray
     Write-TuiHRule -Width $w
     Write-TuiLine -Width $w -Text "Provider" -Color Cyan
-    Write-TuiLine -Width $w -Text "  ollama / llama_cpp / openai (cloud-compatible API)" -Color Gray
+    Write-TuiLine -Width $w -Text "  mle (Morkyn LLM Engine) / llama_cpp / openai (cloud-compatible API)" -Color Gray
     Write-TuiHRule -Width $w
     Write-TuiLine -Width $w -Text "Story engine" -Color Cyan
     Write-TuiLine -Width $w -Text "  dsl draft · narration pipeline · consolidate · verify" -Color Gray
@@ -1046,7 +1050,7 @@ function Show-SimpleMenu {
     $pipe = if ($pipeOn) { "ON" } else { "OFF" }
     $pipeColor = if ($pipeOn) { "Green" } else { "DarkGray" }
     $prov = [string]$Prefs.model_provider
-    $modelHint = if ($prov -eq "ollama") { [string]$Prefs.ollama_model }
+    $modelHint = if ($prov -eq "mle") { [string]$Prefs.mle_model }
         elseif ($prov -eq "openai") { [string]$Prefs.api_model }
         else { "GGUF / llama.cpp" }
 
@@ -1086,7 +1090,7 @@ function Show-SimpleMenu {
     }
     Write-Action "1" "Play                  start with current settings" "Green"
     Write-Action "2" "Cycle where           local / LAN / VPN" "Cyan"
-    Write-Action "3" "Cycle engine          ollama / llama_cpp / cloud" "Cyan"
+    Write-Action "3" "Cycle engine          mle / llama_cpp / cloud" "Cyan"
     Write-Action "4" "Toggle pipeline       narration quality pass" "Cyan"
     Write-Action "9" "Advanced settings...  full Gatehouse board" "DarkYellow"
     Write-Action "0" "Quit" "DarkGray"
@@ -1122,7 +1126,7 @@ function Invoke-SimpleMenu {
                 continue
             }
             if ($c -eq "3") {
-                $Prefs.model_provider = Cycle-Value -Current $Prefs.model_provider -Options @("ollama", "llama_cpp", "openai")
+                $Prefs.model_provider = Cycle-Value -Current $Prefs.model_provider -Options @("mle", "llama_cpp", "openai")
                 Save-Prefs -Prefs $Prefs
                 $msg = "engine -> $($Prefs.model_provider)"
                 continue
@@ -1184,18 +1188,13 @@ function Invoke-GatehouseMenu {
                 else { $msg = "port unchanged" }
             }
             "B" {
-                $Prefs.model_provider = Cycle-Value -Current $Prefs.model_provider -Options @("ollama", "llama_cpp", "openai")
+                $Prefs.model_provider = Cycle-Value -Current $Prefs.model_provider -Options @("mle", "llama_cpp", "openai")
                 $msg = "provider -> $($Prefs.model_provider)"
             }
             "M" {
                 Write-Host ""
-                $v = Read-HostSafe "  Ollama model [$($Prefs.ollama_model)]"
-                if ($v) { $Prefs.ollama_model = $v.Trim(); $msg = "model -> $($Prefs.ollama_model)" }
-            }
-            "U" {
-                Write-Host ""
-                $v = Read-HostSafe "  Ollama base URL [$($Prefs.ollama_base_url)]"
-                if ($v) { $Prefs.ollama_base_url = $v.Trim(); $msg = "ollama url set" }
+                $v = Read-HostSafe "  MLE model [$($Prefs.mle_model)]"
+                if ($v) { $Prefs.mle_model = $v.Trim(); $msg = "model -> $($Prefs.mle_model)" }
             }
             "F" {
                 Write-Host ""
@@ -1218,7 +1217,6 @@ function Invoke-GatehouseMenu {
                 $Prefs.llm_log_mode = Cycle-Value -Current $Prefs.llm_log_mode -Options @("quiet", "console")
                 $msg = "llm logs -> $($Prefs.llm_log_mode)"
             }
-            "T" { $Prefs.ollama_think = -not [bool]$Prefs.ollama_think; $msg = "ollama think toggled" }
             "D" {
                 $Prefs.draft_mode = Cycle-Value -Current $Prefs.draft_mode -Options @("dsl", "json")
                 $msg = "draft mode -> $($Prefs.draft_mode)"
@@ -1271,20 +1269,15 @@ if ($savedModelConfig) {
     if (-not $prefs.gguf_model_path -and $savedModelConfig.gguf_model_path) {
         $prefs.gguf_model_path = [string]$savedModelConfig.gguf_model_path
     }
-    if ($savedModelConfig.provider -and -not $env:AI_RPG_MODEL_PROVIDER) {
-        # only seed provider from DB if prefs still default-ish
-        if ($prefs.model_provider -eq "ollama" -and $savedModelConfig.provider -eq "llama_cpp") {
-            # keep prefs unless user never saved launcher prefs
-            if (-not (Test-Path -LiteralPath $PrefsPath) -and $savedModelConfig.provider) {
-                $prefs.model_provider = [string]$savedModelConfig.provider
-            }
+    if (-not (Test-Path -LiteralPath $PrefsPath)) {
+        if ($savedModelConfig.provider -and -not $env:AI_RPG_MODEL_PROVIDER) {
+            $seedProv = ([string]$savedModelConfig.provider).Trim().ToLowerInvariant()
+            if ($seedProv -notin @("mle", "llama_cpp", "openai")) { $seedProv = "mle" }
+            $prefs.model_provider = $seedProv
         }
-    }
-    if ($savedModelConfig.ollama_model -and $prefs.ollama_model -eq "qwen3:8b" -and -not (Test-Path -LiteralPath $PrefsPath)) {
-        $prefs.ollama_model = [string]$savedModelConfig.ollama_model
-    }
-    if ($savedModelConfig.ollama_base_url -and -not (Test-Path -LiteralPath $PrefsPath)) {
-        $prefs.ollama_base_url = [string]$savedModelConfig.ollama_base_url
+        if ($savedModelConfig.mle_model -and $prefs.mle_model -eq "qwen3:8b") {
+            $prefs.mle_model = [string]$savedModelConfig.mle_model
+        }
     }
 }
 
@@ -1407,11 +1400,8 @@ Write-Host "  Close this terminal to stop the app and managed LLM server." -Fore
 Write-Host ""
 
 $env:LLAMA_CPP_BASE_URL = $baseUrl
-$env:OLLAMA_CONTEXT_TOKENS = "$ctxTokens"
-if ($prefs.model_provider -eq "ollama") {
-    $env:OLLAMA_BASE_URL = [string]$prefs.ollama_base_url
-    $env:OLLAMA_MODEL = [string]$prefs.ollama_model
-}
+$env:AI_RPG_CONTEXT_TOKENS = "$ctxTokens"
+$env:MLE_MODEL = [string]$prefs.mle_model
 
 $managedProcesses = @()
 $llmProcess = $null
@@ -1424,11 +1414,10 @@ try {
         Write-Host "Base: $([string]$prefs.api_base_url)  model: $([string]$prefs.api_model)"
         Write-Host "Set XAI_API_KEY / OPENAI_API_KEY / AI_RPG_API_KEY (or key in LLM Settings)."
         Write-Host "Agent bridge: POST http://127.0.0.1:$appPort/api/agent/turn"
-    }
-    if ($useManagedLlama) {
+    } elseif ($useManagedLlama) {
         if (-not $modelPath) {
             Write-Host "No GGUF model path configured for llama_cpp."
-            Write-Host "Set path in Gatehouse [F] or LLM Settings; Ollama can still be used if you switch provider."
+            Write-Host "Set path in Gatehouse [F] or LLM Settings. Switch the provider to MLE if you are not using a GGUF file."
         } elseif (-not (Test-Path -LiteralPath $modelPath)) {
             Write-Host "Model file not found: $modelPath"
         } elseif (Test-PortOpen -HostName $llmHost -Port $llmPort) {
@@ -1473,13 +1462,9 @@ try {
             Wait-LlmServerReady -BaseUrl $baseUrl -Process $llmProcess -TimeoutSeconds $llmStartupTimeout
         }
     } else {
-        Write-Host "Provider is Ollama - not starting managed llama.cpp."
-        Write-Host "Expecting Ollama at $([string]$prefs.ollama_base_url) model $([string]$prefs.ollama_model)"
-        if (Test-HttpReady -Url "$($prefs.ollama_base_url.TrimEnd('/'))/api/tags" -TimeoutMilliseconds 2000) {
-            Write-Host "Ollama responded to /api/tags."
-        } else {
-            Write-Host "Warning: Ollama did not respond yet. Start it before playing if generation is empty." -ForegroundColor DarkYellow
-        }
+        Write-Host "Provider is MLE (Morkyn LLM Engine)."
+        Write-Host "Model name: $([string]$prefs.mle_model)"
+        Write-Host "The welding rig is not connected yet. Local MLE turns will say so until that lands."
     }
 
     Write-Host ""

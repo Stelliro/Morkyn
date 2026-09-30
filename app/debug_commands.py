@@ -49,6 +49,9 @@ Put a link or a name first, then a statement for the model:
 /npc <@C or name> <what to change>
 /cast interacting|present|off <@C or name>
 /give <item name> [quantity]
+/reveal x y [radius] [label]   open cells the player has not walked
+/mark x y <label>               pin a walked or heard-about cell
+/mark here <label>              pin the cell you are standing on
 """.strip()
 
 COMMAND_SYSTEM = """You apply one debug command in an RPG. You do not narrate a scene and you do not advance time.
@@ -279,6 +282,10 @@ def handle_command(text: str) -> dict[str, Any]:
         return {"ok": False, "error": "Empty command. Type /help.", "advanced_turn": False}
     if name in {"help", "?"} or raw.strip() == "/help":
         return _note(HELP_TEXT, command="/help")
+    if name in {"mark", "reveal"}:
+        from app.local_intel import run_map_command
+
+        return run_map_command(name, rest)
 
     context = get_state(include_hidden=True)
     if name == "godmode" and rest.lower() in {"", "on", "off", "toggle"}:

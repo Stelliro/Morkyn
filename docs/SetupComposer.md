@@ -94,13 +94,13 @@ At **turn** time (not setup Randomize), Morkyn resolves:
 
 1. `session_theme.theme_model` if set (per-playthrough override)  
 2. else `theme_adapter_map[session_theme.adapter_hint]` if non-empty  
-3. else the main Ollama / API / GGUF model  
+3. else the main MLE / API / GGUF model  
 
 Provider behavior:
 
 | Provider | Override applies to |
 |----------|---------------------|
-| Ollama | `ollama_model` |
+| MLE | `mle_model` |
 | OpenAI-compatible | `api_model` |
 | llama.cpp | `gguf_model_path` when the value looks like a path / `.gguf`; otherwise recorded as label only |
 
@@ -112,7 +112,7 @@ Edit the map in the Model modal under **Theme adapter models (optional)**.
 
 In the same Model modal block:
 
-- **This session theme model** — Ollama tag / API model / GGUF path for **this** playthrough only.  
+- **This session theme model** — MLE model name, API model, or GGUF path for **this** playthrough only.  
 - Wins over `theme_adapter_map`.  
 - Setup: stored in client `lastSessionTheme` and sent at **Start**.  
 - Mid-run: **Save Model** POSTs `/api/session-theme` `{ "theme_model": "…" }` (blank clears).

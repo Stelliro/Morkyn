@@ -1,4 +1,4 @@
-"""Unit checks for session theme → model adapter routing (no Ollama)."""
+"""Unit checks for session theme → model adapter routing (no live model)."""
 
 from __future__ import annotations
 
@@ -47,18 +47,18 @@ def test_resolve_empty_when_unmapped():
     assert model == ""
 
 
-def test_apply_routing_ollama_swaps_model():
+def test_apply_routing_mle_swaps_model():
     cfg = {
-        "provider": "ollama",
-        "ollama_model": "qwen3:8b",
+        "provider": "mle",
+        "mle_model": "qwen3:8b",
         "theme_adapter_map": {"isekai_rpg": "morkyn-isekai-dm"},
     }
     out = apply_theme_model_routing(cfg, {"adapter_hint": "isekai_rpg"})
-    assert out["ollama_model"] == "morkyn-isekai-dm"
+    assert out["mle_model"] == "morkyn-isekai-dm"
     assert out["theme_model_active"] == "morkyn-isekai-dm"
     assert "theme_adapter_map" in out
     # Base config object not mutated.
-    assert cfg["ollama_model"] == "qwen3:8b"
+    assert cfg["mle_model"] == "qwen3:8b"
 
 
 def test_apply_routing_openai_swaps_api_model():
@@ -83,10 +83,10 @@ def test_apply_routing_llama_cpp_path():
 
 def test_model_config_scope_overrides_get_model_config():
     base = get_model_config(ignore_override=True)
-    themed = {**base, "ollama_model": "theme-only-for-scope", "provider": "ollama"}
-    assert get_model_config().get("ollama_model") != "theme-only-for-scope" or base.get("ollama_model") == "theme-only-for-scope"
+    themed = {**base, "mle_model": "theme-only-for-scope", "provider": "mle"}
+    assert get_model_config().get("mle_model") != "theme-only-for-scope" or base.get("mle_model") == "theme-only-for-scope"
     with model_config_scope(themed):
-        assert get_model_config()["ollama_model"] == "theme-only-for-scope"
+        assert get_model_config()["mle_model"] == "theme-only-for-scope"
     # Cleared after scope.
     after = get_model_config()
-    assert after.get("ollama_model") != "theme-only-for-scope" or base.get("ollama_model") == "theme-only-for-scope"
+    assert after.get("mle_model") != "theme-only-for-scope" or base.get("mle_model") == "theme-only-for-scope"

@@ -277,7 +277,7 @@ def main() -> int:
         print(f"FAIL: cannot reach Morkyn at {BASE}: {exc}")
         return 2
     provider = health.get("provider") or health.get("llm_provider") or "?"
-    model = health.get("ollama_model") or health.get("api_model") or health.get("model") or "?"
+    model = health.get("mle_model") or health.get("api_model") or health.get("model") or "?"
     print(f"model-config provider={provider} model={model}", flush=True)
 
     try:

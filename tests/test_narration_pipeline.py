@@ -1,4 +1,4 @@
-"""Unit checks for adaptive narration pipeline (no Ollama)."""
+"""Unit checks for adaptive narration pipeline (no live model)."""
 from __future__ import annotations
 
 import sys
@@ -26,11 +26,11 @@ from app.narration_pipeline import (
 
 
 def test_tier_small_for_8b() -> None:
-    assert infer_model_tier({"ollama_model": "qwen3:8b", "context_window": 8192, "response_token_cap": 800}) == "small"
+    assert infer_model_tier({"mle_model": "qwen3:8b", "context_window": 8192, "response_token_cap": 800}) == "small"
 
 
 def test_tier_large_for_big_ctx() -> None:
-    assert infer_model_tier({"ollama_model": "qwen3:32b", "context_window": 65536, "response_token_cap": 2000}) == "large"
+    assert infer_model_tier({"mle_model": "qwen3:32b", "context_window": 65536, "response_token_cap": 2000}) == "large"
 
 
 def test_budget_small_low_density() -> None:
@@ -41,7 +41,7 @@ def test_budget_small_low_density() -> None:
         "inventory": [],
         "settings": {"playthrough_options": {"narration_detail": "concise"}},
     }
-    budget = plan_paragraph_budget(ctx, "I look around.", {"ollama_model": "qwen3:8b", "context_window": 8192, "response_token_cap": 800})
+    budget = plan_paragraph_budget(ctx, "I look around.", {"mle_model": "qwen3:8b", "context_window": 8192, "response_token_cap": 800})
     assert budget["tier"] == "small"
     assert 2 <= budget["paragraphs"] <= 4
     assert budget["soft_total_chars"] >= 900
@@ -107,7 +107,7 @@ def test_budget_rises_with_density() -> None:
     budget = plan_paragraph_budget(
         ctx,
         "I attack the bandit and flee toward the alley and buy a ration",
-        {"ollama_model": "qwen3:32b", "context_window": 65536, "response_token_cap": 2000},
+        {"mle_model": "qwen3:32b", "context_window": 65536, "response_token_cap": 2000},
     )
     assert dense["score"] >= 7
     assert budget["paragraphs"] >= 3
@@ -177,7 +177,7 @@ def test_pipeline_end_to_end_deterministic() -> None:
         result = run_narration_pipeline(
             ctx,
             "I ask Eldrin about trouble on the road.",
-            config={"ollama_model": "qwen3:8b", "context_window": 8192, "response_token_cap": 800},
+            config={"mle_model": "qwen3:8b", "context_window": 8192, "response_token_cap": 800},
             turn_number=7,
             ledger_path=path,
         )

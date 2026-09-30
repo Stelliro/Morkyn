@@ -5,7 +5,7 @@ Quests are chains of up to 6 location steps. Each quest has:
 - title, description, reward (gold/XP/items)
 - optional timer
 - optional hidden sub-tasks revealed on arrival
-- status: active | completed | failed | abandoned
+- status: active | offered | completed | failed | abandoned | expired
 
 Reward scales with length (steps) and difficulty.
 """
@@ -15,6 +15,32 @@ import json
 from typing import Any
 
 from app.db import connect
+
+
+def _snap_to_settlement(location_name: str) -> dict[str, float] | None:
+    """
+    Return grid coords {"x": float, "y": float} if a settlement with a
+    name matching *location_name* (case-insensitive) exists on the active map.
+    Returns None if no map is loaded or no matching settlement is found.
+    """
+    if not location_name:
+        return None
+    try:
+        from app.tile_world import get_map, list_settlements
+
+        map_data = get_map()
+        if not map_data:
+            return None
+        name_lower = location_name.strip().lower()
+        for s in list_settlements(map_data):
+            if str(s.get("name") or "").strip().lower() == name_lower:
+                x = s.get("x")
+                y = s.get("y")
+                if x is not None and y is not None:
+                    return {"x": float(x), "y": float(y)}
+    except Exception:
+        pass
+    return None
 
 DIFFICULTY_MULTIPLIERS = {
     "trivial": 0.5,
@@ -49,12 +75,19 @@ def create_quest(
     target_location_id: int | None = None,
     created_turn: int = 0,
     notes: str = "",
+    status: str = "active",
 ) -> int:
-    """Create a quest with its steps. Returns the quest id."""
+    """Create a quest with its steps. Returns the quest id.
+
+    ``offered`` is posted and not yet taken. Every older caller stays ``active``.
+    """
     if not steps:
         raise ValueError("Quest must have at least one step")
     if len(steps) > 6:
         raise ValueError("Quest may have at most 6 steps")
+    status = str(status or "active").strip().lower()
+    if status not in {"active", "offered"}:
+        status = "active"
 
     mult = DIFFICULTY_MULTIPLIERS.get(difficulty, 1.0)
     n_steps = len(steps)
@@ -72,11 +105,12 @@ def create_quest(
            reward_gold, reward_xp, reward_items, difficulty,
            timer_turns, turns_remaining, giver_npc_id, target_location_id,
            created_turn, notes)
-        VALUES (?, ?, 'active', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             str(title),
             str(description),
+            status,
             int(n_steps),
             int(reward_gold),
             int(reward_xp),
@@ -95,12 +129,21 @@ def create_quest(
     conn.execute("UPDATE quests SET code = ? WHERE id = ?", (code, quest_id))
 
     for i, step in enumerate(steps, 1):
+        loc_name = str(step.get("location_name", "") or "")
+        # Town snapping: if location_name matches a known settlement, use its coords
+        loc_coords_raw = step.get("location_coords")
+        if loc_name and loc_coords_raw is None:
+            snapped = _snap_to_settlement(loc_name)
+            if snapped is not None:
+                loc_coords_raw = snapped
+        loc_coords_str = json.dumps(loc_coords_raw) if loc_coords_raw else ""
         conn.execute(
             """
             INSERT INTO quest_steps
               (quest_id, step_number, title, description, location_code,
+               location_name, location_coords,
                status, hidden, revealed_at_step, notes)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 quest_id,
@@ -108,6 +151,8 @@ def create_quest(
                 str(step.get("title", f"Step {i}")),
                 str(step.get("description", "")),
                 str(step.get("location_code", "")),
+                loc_name,
+                loc_coords_str,
                 "active" if i == 1 else "pending",
                 1 if step.get("hidden", False) and i > 1 else 0,
                 int(step.get("revealed_at_step", 0)),
@@ -241,6 +286,24 @@ def seed_starter_quests(conn, *, turn: int = 0) -> None:
     if existing > 0:
         return
 
+    # Discover what towns actually exist on the map (if any) for snapping
+    _town_names: list[str] = []
+    try:
+        from app.tile_world import get_map, list_settlements
+        _md = get_map()
+        if _md:
+            _town_names = [
+                str(s.get("name") or "")
+                for s in list_settlements(_md)
+                if s.get("name") and s.get("x") is not None and s.get("y") is not None
+            ]
+    except Exception:
+        pass
+    # Pick up to two town names for seeded quest destinations (falls back to
+    # generic empty location_name when no map exists yet)
+    _dest1 = _town_names[0] if len(_town_names) > 0 else ""
+    _dest2 = _town_names[1] if len(_town_names) > 1 else _dest1
+
     # Quest 1: Simple delivery
     create_quest(
         conn,
@@ -248,8 +311,8 @@ def seed_starter_quests(conn, *, turn: int = 0) -> None:
         description="A dying courier pressed a sealed letter into your hands. Find out who it is addressed to and deliver it.",
         steps=[
             {"title": "Read the letter", "description": "Examine the sealed letter to find the recipient's name.", "location_code": ""},
-            {"title": "Find the recipient", "description": "Locate the person named on the letter.", "location_code": ""},
-            {"title": "Deliver the letter", "description": "Hand it over — and decide whether you mention the courier's fate.", "location_code": ""},
+            {"title": "Find the recipient", "description": "Locate the person named on the letter.", "location_code": "", "location_name": _dest1},
+            {"title": "Deliver the letter", "description": "Hand it over — and decide whether you mention the courier's fate.", "location_code": "", "location_name": _dest1},
         ],
         reward_gold=30,
         reward_xp=60,
@@ -263,10 +326,10 @@ def seed_starter_quests(conn, *, turn: int = 0) -> None:
         title="The Missing Grain",
         description="Half a shipment of grain has gone missing between the mill and the market. The miller blames the carter. The carter blames the miller.",
         steps=[
-            {"title": "Talk to the miller", "description": "Get the miller's side of the story.", "location_code": ""},
-            {"title": "Talk to the carter", "description": "Get the carter's account. Note any contradictions.", "location_code": ""},
+            {"title": "Talk to the miller", "description": "Get the miller's side of the story.", "location_code": "", "location_name": _dest1},
+            {"title": "Talk to the carter", "description": "Get the carter's account. Note any contradictions.", "location_code": "", "location_name": _dest2},
             {"title": "Find the grain", "description": "Investigate what actually happened.", "location_code": "", "hidden": True, "revealed_at_step": 2},
-            {"title": "Settle the dispute", "description": "Bring what you found back to the parties.", "location_code": "", "hidden": True, "revealed_at_step": 3},
+            {"title": "Settle the dispute", "description": "Bring what you found back to the parties.", "location_code": "", "location_name": _dest1, "hidden": True, "revealed_at_step": 3},
         ],
         reward_gold=50,
         reward_xp=80,
@@ -280,8 +343,8 @@ def seed_starter_quests(conn, *, turn: int = 0) -> None:
         title="Before the Gate Closes",
         description="A traveller needs a specific herb from the market before the east gate closes at dusk. They cannot walk that far.",
         steps=[
-            {"title": "Buy the herb", "description": "Find it at the apothecary or the market stalls.", "location_code": ""},
-            {"title": "Return before dusk", "description": "Deliver the herb before the gate closes.", "location_code": ""},
+            {"title": "Buy the herb", "description": "Find it at the apothecary or the market stalls.", "location_code": "", "location_name": _dest2},
+            {"title": "Return before dusk", "description": "Deliver the herb before the gate closes.", "location_code": "", "location_name": _dest1},
         ],
         reward_gold=20,
         reward_xp=35,

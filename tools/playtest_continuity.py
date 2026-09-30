@@ -10,9 +10,8 @@ fix that quietly flattened the prose would still show up.
     python tools/playtest_continuity.py
 
 Env:
-    PLAYTEST_OLLAMA_MODEL   default qwen2.5:7b-instruct
+    PLAYTEST_MLE_MODEL   default qwen2.5:7b-instruct
     PLAYTEST_TURNS          default 24
-    OLLAMA_BASE_URL         default http://127.0.0.1:11434
     PLAYTEST_OUT            optional path for the JSON report
 """
 from __future__ import annotations
@@ -176,7 +175,7 @@ def _trend(values: list[float]) -> float:
 
 
 def main() -> int:
-    model = os.getenv("PLAYTEST_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+    model = os.getenv("PLAYTEST_MLE_MODEL", "qwen2.5:7b-instruct")
     turns = int(os.getenv("PLAYTEST_TURNS", "24"))
     temp = Path(tempfile.mkdtemp(prefix="morkyn_continuity_"))
     trace_dir = temp / "traces"
@@ -189,12 +188,10 @@ def main() -> int:
         "AI_RPG_MODEL_TRACE_DIR": str(trace_dir),
         "AI_RPG_PACK_DIR": str(temp / "packs"),
         "AI_RPG_SKILL_LIBRARY": str(temp / "skill_library.json"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": model,
-        "OLLAMA_CONTEXT_TOKENS": os.getenv("OLLAMA_CONTEXT_TOKENS", "32768"),
-        "OLLAMA_THINK": "0",
-        "AI_RPG_OLLAMA_TIMEOUT": "600",
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": model,
+        "AI_RPG_CONTEXT_TOKENS": os.getenv("AI_RPG_CONTEXT_TOKENS", "32768"),
+        "AI_RPG_MLE_TIMEOUT": "600",
         "AI_RPG_TURN_DRAFT_TIMEOUT": "600",
         "AI_RPG_TURN_VERIFY_TIMEOUT": "480",
         "AI_RPG_MODEL_TRACE_KEEP": str(turns + 10),
@@ -211,9 +208,8 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": model,
+            "provider": "mle",
+            "mle_model": model,
             "response_token_cap": int(os.getenv("PLAYTEST_TOKEN_CAP", "1500")),
             "response_token_hard_cap": int(os.getenv("PLAYTEST_TOKEN_HARD_CAP", "2000")),
         }

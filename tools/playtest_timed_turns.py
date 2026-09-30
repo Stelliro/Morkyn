@@ -1,5 +1,5 @@
 """
-Timed multi-turn playtest against a local Ollama model.
+Timed multi-turn playtest against the local story model.
 Writes a JSON report under data/playtest_reports/.
 """
 from __future__ import annotations
@@ -33,15 +33,13 @@ def main() -> int:
     os.environ["AI_RPG_CONSOLIDATED_FACTS"] = str(facts)
     os.environ["AI_RPG_CAMPAIGN_SLOTS"] = str(slots)
     os.environ["AI_RPG_MODEL_TRACE_DIR"] = str(traces)
-    os.environ["AI_RPG_MODEL_PROVIDER"] = "ollama"
-    os.environ["OLLAMA_BASE_URL"] = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
-    os.environ["OLLAMA_MODEL"] = os.getenv("PLAYTEST_OLLAMA_MODEL", "qwen3:8b")
+    os.environ["AI_RPG_MODEL_PROVIDER"] = "mle"
+    os.environ["MLE_MODEL"] = os.getenv("PLAYTEST_MLE_MODEL", "qwen3:8b")
     # Local 8B models commonly support larger windows than the 8k default.
-    os.environ.setdefault("OLLAMA_CONTEXT_TOKENS", "32768")
+    os.environ.setdefault("AI_RPG_CONTEXT_TOKENS", "32768")
     # Qwen3-style models otherwise fill message.thinking and leave content empty.
-    os.environ.setdefault("OLLAMA_THINK", "0")
     # Keep timeouts generous for local 8B
-    os.environ.setdefault("AI_RPG_OLLAMA_TIMEOUT", "600")
+    os.environ.setdefault("AI_RPG_MLE_TIMEOUT", "600")
     os.environ.setdefault("AI_RPG_TURN_DRAFT_TIMEOUT", "600")
     os.environ.setdefault("AI_RPG_TURN_VERIFY_TIMEOUT", "480")
 
@@ -54,9 +52,8 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": os.environ["OLLAMA_MODEL"],
+            "provider": "mle",
+            "mle_model": os.environ["MLE_MODEL"],
             "response_token_cap": 1200,
             "response_token_hard_cap": 1800,
         }

@@ -57,7 +57,7 @@ echo   Offline    : skips the update check and starts what is already on disk.
 echo.
 echo Options:
 echo   --full         also install llama-cpp-python (only needed for the
-echo                  built-in GGUF server; Ollama and cloud APIs do not need it)
+echo                  built-in GGUF server; MLE and cloud APIs do not need it)
 echo   --update       apply an available update without asking
 echo   --no-update    skip the update check entirely
 echo   --help         show this text
@@ -220,7 +220,7 @@ if "%WANT_FULL%"=="1" goto install_full
 
 REM llama-cpp-python is only needed for the built-in GGUF server, and its CUDA
 REM wheels are a large download that fails outright on machines with no matching
-REM toolchain. Ollama and cloud APIs need none of it, so the default install
+REM toolchain. MLE and cloud APIs need none of it, so the default install
 REM filters it out of the project's own pins rather than keeping a second copy
 REM of the version numbers here. --full keeps it.
 set "TRIMMED=%TEMP%\morkyn-requirements-%RANDOM%.txt"

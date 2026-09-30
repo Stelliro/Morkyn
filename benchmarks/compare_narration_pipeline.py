@@ -2,7 +2,7 @@
 Compare baseline generate_turn vs AI_RPG_NARRATION_PIPELINE=1 on opening + N turns.
 
 Writes under benchmarks/reports/.
-Requires local Ollama.
+Requires MLE with a model loaded.
 
   python benchmarks/compare_narration_pipeline.py
 """
@@ -84,12 +84,10 @@ def _run_mode(label: str, pipeline_on: bool, turns: int) -> dict:
         "AI_RPG_CONSOLIDATED_FACTS": str(temp / "facts.jsonl"),
         "AI_RPG_CAMPAIGN_SLOTS": str(temp / "slots"),
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": os.getenv("GROK_BENCH_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b")),
-        "OLLAMA_CONTEXT_TOKENS": os.getenv("OLLAMA_CONTEXT_TOKENS", "32768"),
-        "OLLAMA_THINK": os.getenv("OLLAMA_THINK", "0"),
-        "AI_RPG_OLLAMA_TIMEOUT": os.getenv("AI_RPG_OLLAMA_TIMEOUT", "600"),
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": os.getenv("GROK_BENCH_MODEL", os.getenv("MLE_MODEL", "qwen3:8b")),
+        "AI_RPG_CONTEXT_TOKENS": os.getenv("AI_RPG_CONTEXT_TOKENS", "32768"),
+        "AI_RPG_MLE_TIMEOUT": os.getenv("AI_RPG_MLE_TIMEOUT", "600"),
         "AI_RPG_TURN_DRAFT_TIMEOUT": os.getenv("AI_RPG_TURN_DRAFT_TIMEOUT", "600"),
         "AI_RPG_TURN_VERIFY_TIMEOUT": os.getenv("AI_RPG_TURN_VERIFY_TIMEOUT", "480"),
         "AI_RPG_NARRATION_PIPELINE": "1" if pipeline_on else "0",
@@ -116,16 +114,15 @@ def _run_mode(label: str, pipeline_on: bool, turns: int) -> dict:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": os.environ["OLLAMA_MODEL"],
+            "provider": "mle",
+            "mle_model": os.environ["MLE_MODEL"],
             "response_token_cap": int(os.getenv("AI_RPG_MAX_RESPONSE_TOKENS", "1000")),
             "response_token_hard_cap": int(os.getenv("AI_RPG_RESPONSE_HARD_CAP_TOKENS", "1500")),
         }
     )
     conn = test_model_connection()
     print(f"\n=== MODE {label} pipeline={pipeline_on} pipeline_enabled()={llm_mod.pipeline_enabled()} ===", flush=True)
-    print(f"connection ok={conn.get('ok')} model={get_model_config().get('ollama_model')}", flush=True)
+    print(f"connection ok={conn.get('ok')} model={get_model_config().get('mle_model')}", flush=True)
     if not conn.get("ok"):
         return {"label": label, "error": "model connection failed", "connection": conn, "temp": str(temp)}
 
@@ -227,7 +224,7 @@ def main() -> int:
     out_path = REPORT_DIR / f"compare-pipeline-{stamp}.json"
 
     print("benchmarks narration pipeline comparison", flush=True)
-    print(f"turns_after_opening={turns} model={os.getenv('GROK_BENCH_MODEL', os.getenv('OLLAMA_MODEL', 'qwen3:8b'))}", flush=True)
+    print(f"turns_after_opening={turns} model={os.getenv('GROK_BENCH_MODEL', os.getenv('MLE_MODEL', 'qwen3:8b'))}", flush=True)
 
     baseline = _run_mode("baseline", pipeline_on=False, turns=turns)
     pipeline = _run_mode("pipeline", pipeline_on=True, turns=turns)

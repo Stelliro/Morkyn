@@ -148,7 +148,7 @@ def main() -> int:
     args = ap.parse_args()
 
     cfg = llm.get_model_config()
-    model_id = f"{cfg.get('provider')}:{cfg.get('ollama_model')}"
+    model_id = f"{cfg.get('provider')}:{cfg.get('mle_model')}"
     print(f"model: {model_id}  (shipped config, read from a copy of data/world.db)")
     print(f"n per theme per arm: {args.n}\n")
 

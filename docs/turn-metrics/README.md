@@ -1,15 +1,14 @@
 # Turn metrics (local models)
 
-Measured wall-clock times for Mørkyn turns against a **local Ollama** host. Hardware and load vary; treat these as order-of-magnitude guidance, not guarantees.
+Measured wall-clock times for Mørkyn turns against a **local qwen3:8b**. Hardware and load vary; treat these as order-of-magnitude guidance, not guarantees.
 
 ## qwen3:8b (Q4_K_M) — 2026-07-17
 
 | Setting | Value |
 | --- | --- |
-| Provider | Ollama `http://127.0.0.1:11434` |
+| Provider | local model |
 | Model | `qwen3:8b` (8.2B, Q4_K_M) |
-| Context | `OLLAMA_CONTEXT_TOKENS=32768` |
-| Thinking | `OLLAMA_THINK=0` (required so content is not empty) |
+| Context | 32768 tokens |
 | Draft mode at test time | Legacy JSON draft + verify + repair loops |
 | Response caps | soft 1200 / hard 1800 tokens |
 

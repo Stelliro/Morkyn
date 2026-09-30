@@ -36,18 +36,17 @@ supplying an arrival name for all six genres is precisely why the matrix could
 not see it. Same reasoning as the context window below: if the probe configures
 the failure away, the probe cannot report it.
 
-Run from repo root (Ollama must be running):
+Run from repo root (MLE must have a model loaded):
   python benchmarks/run_genre_variety.py
 
 Env:
   GENRE_TURNS       turns per world (default 5)
-  GENRE_MODEL       default qwen3:8b (or OLLAMA_MODEL)
+  GENRE_MODEL       default qwen3:8b (or MLE_MODEL)
   GENRE_RANDOMIZE   live randomizer samples (default 6, 0 to skip)
   GENRE_ONLY        comma-separated genre ids; default all. Cross-genre overlap
                     needs at least two, and the repeat run needs its own id.
-  OLLAMA_BASE_URL   default http://127.0.0.1:11434
 
-Deliberately does NOT pin OLLAMA_CONTEXT_TOKENS: this run should reflect the
+Deliberately does NOT pin AI_RPG_CONTEXT_TOKENS: this run should reflect the
 context a real player gets from the shipped default.
 """
 from __future__ import annotations
@@ -255,7 +254,7 @@ def _log(handle, message: str) -> None:
 def main() -> int:
     turns = _env_int("GENRE_TURNS", 5)
     samples = _env_int("GENRE_RANDOMIZE", 6)
-    model = os.getenv("GENRE_MODEL") or os.getenv("OLLAMA_MODEL") or "qwen3:8b"
+    model = os.getenv("GENRE_MODEL") or os.getenv("MLE_MODEL") or "qwen3:8b"
     stamp = time.strftime("%Y%m%d-%H%M%S")
     REPORT_DIR.mkdir(parents=True, exist_ok=True)
     report_path = REPORT_DIR / f"genre-report-{stamp}.json"
@@ -298,14 +297,12 @@ def main() -> int:
             "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
             "AI_RPG_PACK_DIR": str(temp / "packs"),
             "AI_RPG_SKILL_LIBRARY": str(temp / "skill_library.json"),
-            "AI_RPG_MODEL_PROVIDER": "ollama",
-            "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-            "OLLAMA_MODEL": model,
-            "OLLAMA_THINK": os.getenv("OLLAMA_THINK", "0"),
+            "AI_RPG_MODEL_PROVIDER": "mle",
+            "MLE_MODEL": model,
             # Generous, for the same reason the continuity probe is: a timeout
             # here would swap a real turn for canned prose and corrupt the
             # measurement. The shipped defaults are pinned by unit tests.
-            "AI_RPG_OLLAMA_TIMEOUT": "900",
+            "AI_RPG_MLE_TIMEOUT": "900",
             "AI_RPG_TURN_DRAFT_TIMEOUT": "900",
             "AI_RPG_TURN_VERIFY_TIMEOUT": "600",
         }.items():
@@ -323,9 +320,8 @@ def main() -> int:
         init_db()
         llm.update_model_config(
             {
-                "provider": "ollama",
-                "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-                "ollama_model": model,
+                "provider": "mle",
+                "mle_model": model,
                 "response_token_cap": 1200,
                 "response_token_hard_cap": 1600,
             }

@@ -39,8 +39,10 @@ def rows_to_dicts(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
 
 
 def init_db() -> None:
-    with connect() as conn:
-        conn.executescript(
+    conn = connect()
+    try:
+        with conn:
+            conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS locations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -529,6 +531,8 @@ def init_db() -> None:
                 title TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 location_code TEXT NOT NULL DEFAULT '',
+                location_name TEXT NOT NULL DEFAULT '',
+                location_coords TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'pending',
                 hidden INTEGER NOT NULL DEFAULT 0,
                 revealed_at_step INTEGER NOT NULL DEFAULT 0,
@@ -641,9 +645,25 @@ def init_db() -> None:
         conn.execute("INSERT OR IGNORE INTO pacing (key, value) VALUES ('turn', '0')")
         conn.execute("INSERT OR IGNORE INTO settings (key, value) VALUES ('setup_complete', 'false')")
         conn.execute("INSERT OR IGNORE INTO gm_notes (id, content) VALUES (1, '')")
+        conn.commit()
+    finally:
+        conn.close()
 
 
 def _migrate_columns(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS quest_clocks (
+            subject_key TEXT PRIMARY KEY,
+            offers INTEGER NOT NULL,
+            chance INTEGER NOT NULL,
+            phase TEXT NOT NULL,
+            phase_day INTEGER NOT NULL,
+            quest_id INTEGER NOT NULL DEFAULT 0,
+            last_day INTEGER NOT NULL DEFAULT 0
+        )
+        """
+    )
     table_columns = {
         table: {row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
         for table in ("locations", "npcs", "inventory", "events", "player", "abilities")
@@ -697,6 +717,13 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("power_rank", "INTEGER NOT NULL DEFAULT 10"),
         ("portrait_eligible", "INTEGER NOT NULL DEFAULT 1"),
         ("shell", "INTEGER NOT NULL DEFAULT 0"),
+        # Map position for NPC markers (-1 = not yet placed on map)
+        ("map_x", "REAL NOT NULL DEFAULT -1"),
+        ("map_y", "REAL NOT NULL DEFAULT -1"),
+        # 1 = wandering/moving NPC whose position updates each turn
+        ("is_moving", "INTEGER NOT NULL DEFAULT 0"),
+        # Turn on which position was last updated (for throttling movement)
+        ("last_moved_turn", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
@@ -860,6 +887,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
                 title TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL DEFAULT '',
                 location_code TEXT NOT NULL DEFAULT '',
+                location_name TEXT NOT NULL DEFAULT '',
+                location_coords TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'pending',
                 hidden INTEGER NOT NULL DEFAULT 0,
                 revealed_at_step INTEGER NOT NULL DEFAULT 0,
@@ -884,6 +913,28 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
                 FOREIGN KEY (npc_id) REFERENCES npcs(id) ON DELETE CASCADE
             );
         """)
+
+    if "watched_npcs" not in _existing_tables:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS watched_npcs (
+                npc_id INTEGER PRIMARY KEY,
+                added_turn INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (npc_id) REFERENCES npcs(id) ON DELETE CASCADE
+            );
+        """)
+
+    # quest_steps location columns (added in 0.9.13+)
+    qs_cols = {row["name"] for row in conn.execute("PRAGMA table_info(quest_steps)").fetchall()}
+    if "location_name" not in qs_cols:
+        try:
+            conn.execute("ALTER TABLE quest_steps ADD COLUMN location_name TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
+    if "location_coords" not in qs_cols:
+        try:
+            conn.execute("ALTER TABLE quest_steps ADD COLUMN location_coords TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
 
     # Titles system (added in 0.9.13)
     try:

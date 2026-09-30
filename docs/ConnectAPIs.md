@@ -4,7 +4,7 @@ Mørkyn can run on:
 
 | Provider | Best for |
 | --- | --- |
-| `ollama` | Local models via Ollama |
+| `mle` | MLE, the Morkyn LLM Engine. A model name is stored here. The welding rig is not connected yet. |
 | `llama_cpp` | Local GGUF + managed llama.cpp server |
 | `openai` | **Cloud / agents** — any OpenAI-compatible Chat Completions API |
 
@@ -82,7 +82,7 @@ The GM still runs through Mørkyn’s normal turn pipeline (DSL/JSON, optional n
 
 Simple menu **[3] Change engine** cycles:
 
-`ollama` → `llama_cpp` → `openai` (cloud)
+`mle` → `llama_cpp` → `openai` (cloud)
 
 Advanced Gatehouse **[B] Provider** does the same. Cloud keys still come from env or LLM Settings.
 

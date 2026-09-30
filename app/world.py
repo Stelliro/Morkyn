@@ -846,6 +846,13 @@ def advance_world_time(conn, minutes: int) -> dict[str, Any]:
     _pacing_set(conn, "world_minute", new_minute)
     after = get_world_time(conn)
     weather_tick = tick_weather(conn, minutes_advanced=add, time_after=after)
+    if days_add > 0:
+        try:
+            from app.local_intel import tick_quest_clocks
+
+            tick_quest_clocks(conn, from_day=int(before["day"]), to_day=int(new_day))
+        except Exception:
+            pass
     return {
         "before": before,
         "after": after,
@@ -1779,6 +1786,12 @@ def create_shell_npc(
             shell,
         ),
     )
+    try:
+        from app.local_intel import ensure_npc_clock
+
+        ensure_npc_clock(conn, int(cur.lastrowid), role=str(role or ""), shell=bool(shell))
+    except Exception:
+        pass
     row = conn.execute("SELECT * FROM npcs WHERE id = ?", (cur.lastrowid,)).fetchone()
     return row_to_dict(row) if row else {"code": code, "name": name, "presence": presence, "power_rank": power_rank, "shell": shell}
 
@@ -3920,6 +3933,21 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         state["party"] = get_party(conn=conn)
     except Exception:
         state["party"] = []
+    try:
+        from app.encounter_board import load_encounter
+
+        state["active_encounter"] = load_encounter(conn)
+    except Exception:
+        state["active_encounter"] = {
+            "active": False,
+            "updated_turn": 0,
+            "closed_turn": 0,
+            "outcome": "",
+            "scale_note": "",
+            "allies": [],
+            "foes": [],
+            "seen_moves": [],
+        }
     raw_conditions = settings.get("player_conditions")
     if isinstance(raw_conditions, list):
         state["conditions"] = raw_conditions
@@ -5597,7 +5625,25 @@ def _movement_rule_example(known: list[dict[str, Any]], current_name: str = "") 
     )
 
 
-def movement_contract(state: dict[str, Any], player_input: str, intent: str) -> dict[str, Any]:
+def _map_space_for_prompt() -> dict[str, Any] | None:
+    """Finite grid for this turn, or None when no chart has been generated."""
+    try:
+        from app.tile_world import get_map, spatial_contract
+
+        chart = get_map(None)
+        if not chart:
+            return None
+        return spatial_contract(chart)
+    except Exception:
+        return None
+
+
+def movement_contract(
+    state: dict[str, Any],
+    player_input: str,
+    intent: str,
+    map_space: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Server-stated travel rule for the turn packet: where the player is, and what op moves them."""
     current = state.get("current_location") or {}
     current_code = str(current.get("code") or "")
@@ -5702,13 +5748,31 @@ def movement_contract(state: dict[str, Any], player_input: str, intent: str) -> 
         )
 
     # Only worth the tokens on turns that might actually move: most turns are not travel.
-    if travel:
-        contract["expectation"] = (
-            "This input is travel. The player already decided to go; complete the journey in prose "
-            "and end the scene somewhere specific. Do not end still deciding, and do not offer the "
-            "trip back as a choice. Name where they end up in player.move_to_location — if the "
-            "scene reaches somewhere not in known_places, invent a fitting name for it."
+    if isinstance(map_space, dict) and map_space.get("width") and map_space.get("height"):
+        budget = int(map_space.get("step_budget") or 4)
+        contract["rule"] += (
+            f" The wilderness is the fixed {map_space['width']}×{map_space['height']} map in map_space. "
+            f"A new place name can only be as far as {budget} tiles this turn."
         )
+    if travel:
+        if isinstance(map_space, dict) and map_space.get("width") and map_space.get("height"):
+            budget = int(map_space.get("step_budget") or 4)
+            contract["expectation"] = (
+                "This input is travel. The land is the fixed map in map_space "
+                f"({map_space['width']}×{map_space['height']}). "
+                f"One turn walks at most {budget} tiles. Complete the journey in prose and end the scene "
+                "where that walk stops. Do not invent a place beyond the step budget or past the map edge. "
+                "Name the stopping place in player.move_to_location, and write "
+                "WALK <direction> STEPS <n> for the tiles crossed. "
+                "A shop or room off this place is a door, not a hike across the map."
+            )
+        else:
+            contract["expectation"] = (
+                "This input is travel. The player already decided to go; complete the journey in prose "
+                "and end the scene somewhere specific. Do not end still deciding, and do not offer the "
+                "trip back as a choice. Name where they end up in player.move_to_location — if the "
+                "scene reaches somewhere not in known_places, invent a fitting name for it."
+            )
     return contract
 
 
@@ -7672,6 +7736,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         if last_narration and len(relevant_asks) >= 3:
             break
 
+    map_space = _map_space_for_prompt()
     prompt_context = {
         **state,
         "player": context_player,
@@ -7699,7 +7764,8 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "action_context": action_context,
         "working_set": _working_set(current_code, locations, relevant_sources),
         "event_lifecycle": event_lifecycle,
-        "movement_contract": movement_contract(state, player_input, intent),
+        "movement_contract": movement_contract(state, player_input, intent, map_space=map_space),
+        "map_space": map_space,
         "narrative_voice": narrative_voice_contract(state),
         "naming_contract": _naming_contract_for(state, player_input),
         "recall_contract": _recall_contract_for(state, player_input, relevant_sources),
@@ -7716,6 +7782,8 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             "source_hits": len(relevant_sources),
         },
     }
+    if not map_space:
+        prompt_context.pop("map_space", None)
     try:
         from app.skill_checks import gm_context_block, merge_check_settings
 
@@ -7731,6 +7799,17 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     prompt_context["turn_plan"]["included_counts"]["verification_memory_hits"] = len(verification_memory.get("entries") or [])
     prompt_context["retrieval"]["verification_memory_hits"] = len(verification_memory.get("entries") or [])
     prompt_context["retrieval"]["verification_memory_covered_checks"] = verification_memory.get("covered_checks") or []
+    try:
+        from app.local_intel import direction_hint_for_prompt, list_open_offers
+
+        hint = direction_hint_for_prompt(state, player_input)
+        if hint:
+            prompt_context["direction_hint"] = hint
+        offers = list_open_offers()
+        if offers:
+            prompt_context["open_offers"] = offers
+    except Exception:
+        pass
     return prompt_context
 
 
@@ -8668,7 +8747,14 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
             shell,
         ),
     )
-    return int(cursor.lastrowid)
+    new_id = int(cursor.lastrowid)
+    try:
+        from app.local_intel import ensure_npc_clock
+
+        ensure_npc_clock(conn, new_id, role=str(role or ""), shell=bool(shell))
+    except Exception:
+        pass
+    return new_id
 
 
 # "take stock / take a look / take in" are perception, not pickup. Shared by
@@ -11611,6 +11697,99 @@ def resolve_turn_bands(
     }
 
 
+def _location_brief(conn, location_id: int) -> dict[str, Any] | None:
+    row = _location_row(conn, int(location_id or 0))
+    if row is None:
+        return None
+    return {
+        "id": int(row["id"] or 0),
+        "code": str(row["code"] or ""),
+        "name": str(row["name"] or ""),
+        "parent_id": int(row["parent_id"] or 0),
+    }
+
+
+def _location_brief_by_code(conn, code: str) -> dict[str, Any] | None:
+    token = str(code or "").strip()
+    if not token:
+        return None
+    try:
+        row = conn.execute(
+            "SELECT id, code, name, parent_id FROM locations WHERE upper(code) = upper(?)",
+            (token,),
+        ).fetchone()
+    except Exception:
+        return None
+    if row is None:
+        return None
+    return {
+        "id": int(row["id"] or 0),
+        "code": str(row["code"] or ""),
+        "name": str(row["name"] or ""),
+        "parent_id": int(row["parent_id"] or 0),
+    }
+
+
+def _map_is_locked(conn) -> bool:
+    settings = _settings(conn)
+    loc_flags = settings.get("location_special_flags")
+    if isinstance(loc_flags, str) and loc_flags.strip():
+        try:
+            loc_flags = json.loads(loc_flags)
+        except Exception:
+            loc_flags = {}
+    if not isinstance(loc_flags, dict):
+        loc_flags = {}
+
+    def _flag(key: str) -> bool:
+        raw = settings.get(key)
+        if isinstance(raw, bool):
+            return raw
+        if raw is not None and str(raw).strip() != "":
+            return str(raw).lower() in {"1", "true", "yes", "on"}
+        return bool(loc_flags.get(key))
+
+    return _flag("movement_locked") or _flag("map_blank")
+
+
+def _apply_story_map_walk(
+    conn,
+    result: dict[str, Any],
+    player_input: str,
+    input_kind: str,
+    movement_report: dict[str, Any],
+) -> dict[str, Any]:
+    """Step the tile token after the location row has already changed.
+
+    Uses the open turn connection so the map write is part of the same save.
+    """
+    if _map_is_locked(conn):
+        return {"status": "locked", "steps_taken": 0, "reason": "locked"}
+    from app.tile_world import _save_map_payload, apply_story_map_walk, get_map
+
+    chart = get_map(None, conn=conn)
+    if not chart:
+        return {"status": "no_map", "steps_taken": 0, "reason": "no_map"}
+    origin = _location_brief_by_code(conn, str((movement_report or {}).get("from") or ""))
+    here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    dest_id = int(here["current_location_id"] or 0) if here and here["current_location_id"] else 0
+    dest = _location_brief(conn, dest_id)
+    report = apply_story_map_walk(
+        chart,
+        player_input=player_input,
+        input_kind=input_kind,
+        movement_report=movement_report if isinstance(movement_report, dict) else {},
+        map_walk=result.get("map_walk") if isinstance(result, dict) else None,
+        origin=origin,
+        dest=dest,
+        travel=travel_intent(player_input) or str((movement_report or {}).get("status") or "") == "unresolved",
+        save=False,
+    )
+    if report.get("status") in {"walked", "blocked"}:
+        _save_map_payload(chart, conn=conn)
+    return report
+
+
 def apply_turn(
     result: dict[str, Any],
     player_input: str,
@@ -11622,6 +11801,7 @@ def apply_turn(
     # Name repair rebinds `result` to a new dict. Gear and narration updates
     # after that have to land on the object the caller returns as the turn.
     caller_result = result
+    map_report: dict[str, Any] = {"status": "skipped", "steps_taken": 0}
     with connect() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         next_turn = int(row["value"]) + 1 if row else 1
@@ -11799,6 +11979,20 @@ def apply_turn(
         _apply_inventory_capacity_modifiers(conn, result.get("inventory_capacity_modifiers") or [])
         _apply_skills(conn, result.get("skill_changes") or [])
         _apply_player(conn, result.get("player") or {})
+        try:
+            map_report = _apply_story_map_walk(
+                conn,
+                result,
+                player_input,
+                input_kind,
+                movement_report if isinstance(movement_report, dict) else {},
+            )
+        except Exception as exc:
+            map_report = {
+                "status": "error",
+                "steps_taken": 0,
+                "error": f"{type(exc).__name__}: {exc}"[:200],
+            }
         _apply_events(conn, result.get("events") or [], turn)
         _apply_gm_events(conn, result.get("gm_events") or [], turn)
         _apply_conversations(conn, result.get("conversations") or [], turn)
@@ -11806,6 +12000,23 @@ def apply_turn(
         _apply_index_updates(conn, result.get("index_updates") or [])
         _apply_ability_updates(conn, result.get("ability_updates") or [])
         _apply_deterministic_combat(conn, result.get("_deterministic_combat") or {}, turn)
+        try:
+            from app.encounter_board import record_encounter_turn
+
+            move_status = str(movement_report.get("status") or "")
+            origin = str(movement_report.get("from") or "").strip().lower()
+            destination = str(movement_report.get("destination") or "").strip().lower()
+            left_the_place = move_status in {"model", "repaired"} and bool(destination) and destination != origin
+            record_encounter_turn(
+                conn,
+                turn=turn,
+                player_input=player_input,
+                narration=narration,
+                combat=result.get("_deterministic_combat") or {},
+                moved=left_the_place,
+            )
+        except Exception:
+            pass
         try:
             _apply_turn_npc_relationship_deltas(conn, result, player_input)
         except Exception:
@@ -11896,10 +12107,30 @@ def apply_turn(
                 ),
             )
         elif movement_report.get("status") == "unresolved":
+            if int(map_report.get("steps_taken") or 0):
+                unresolved_note = "Travel action had no resolvable place name; the map token still walked."
+            else:
+                unresolved_note = "Travel action with no MOVE op and no resolvable destination; player stayed put."
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
-                (turn, "system", "Travel action with no MOVE op and no resolvable destination; player stayed put."),
+                (turn, "system", unresolved_note),
             )
+        if map_report.get("journal"):
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (turn, "system", str(map_report.get("journal") or "")[:1400]),
+            )
+        try:
+            from app.local_intel import apply_turn_intel
+
+            intel_note = apply_turn_intel(conn, player_input, turn)
+            if intel_note:
+                conn.execute(
+                    "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                    (turn, "system", intel_note[:1400]),
+                )
+        except Exception:
+            pass
         if gear_report.get("status") == "unequipped" and gear_report.get("items"):
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
@@ -11954,6 +12185,14 @@ def apply_turn(
     if isinstance(state, dict):
         # Measurable: a playtest can count model / repaired / unresolved travel turns.
         state["movement"] = {**movement_report, "turn": turn}
+        state["map_walk"] = {
+            "status": map_report.get("status"),
+            "reason": map_report.get("reason") or "",
+            "steps_taken": int(map_report.get("steps_taken") or 0),
+            "direction": map_report.get("direction") or "",
+            "to": map_report.get("to"),
+            "visited_count": map_report.get("visited_count"),
+        }
         state["voice_check"] = check_narrative_voice(narration, state)
         # Measurable the same way: how often the prose dresses the player in
         # something the record never gave them. Reported, never rewritten.
@@ -12001,6 +12240,125 @@ def _fallback_notice(reason: str) -> str:
     if clean_reason:
         return f"The visible prose is deterministic fallback narration. The local model response could not be used: {clean_reason}"[:900]
     return "The visible prose is deterministic fallback narration because the local model response could not be used."
+
+
+# ---------------------------------------------------------------------------
+# NPC map position management
+# ---------------------------------------------------------------------------
+
+# Role keywords that indicate a wandering/mobile NPC
+_MOVING_ROLE_KEYWORDS = frozenset({
+    "merchant", "trader", "peddler", "wanderer", "courier", "scout",
+    "herald", "pilgrim", "patrol", "itinerant", "tinker", "hawker",
+    "wandering", "roaming", "travelling", "traveling", "roamer",
+})
+
+# Tile states that an NPC cannot walk onto
+_BLOCKED_TILE_STATES = frozenset({"water", "mountain", "cliff", "void", "ocean", "lava", "chasm"})
+
+
+def update_npc_map_positions(conn) -> None:  # type: ignore[no-untyped-def]
+    """Assign and update NPC positions on the world map.
+
+    Called lazily from the /api/map/npc-markers endpoint so it runs alongside
+    map refreshes rather than blocking every game turn.
+
+    - Unplaced NPCs (map_x < 0) at the player's current location receive the
+      player's tile position plus a small deterministic jitter.
+    - NPCs whose role matches _MOVING_ROLE_KEYWORDS are flagged is_moving=1
+      and take a one-tile random-walk step per turn.
+    """
+    import random as _random
+
+    try:
+        from app.tile_world import get_map as _get_map
+        map_data = _get_map(None)
+    except Exception:
+        map_data = None
+
+    if not map_data:
+        return
+
+    px = int((map_data.get("player") or {}).get("x") or 0)
+    py = int((map_data.get("player") or {}).get("y") or 0)
+
+    # Build tile walkability dict  {(x, y): True}
+    tile_ok: dict[tuple[int, int], bool] = {}
+    for t in (map_data.get("tiles") or []):
+        tx = int(t.get("x") or 0)
+        ty = int(t.get("y") or 0)
+        state = str(t.get("state") or "?")
+        tile_ok[(tx, ty)] = state not in _BLOCKED_TILE_STATES
+
+    # Map bounds
+    max_x = max((k[0] for k in tile_ok), default=px) if tile_ok else px
+    max_y = max((k[1] for k in tile_ok), default=py) if tile_ok else py
+
+    # Current turn
+    turn_row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+    turn = int(turn_row["value"] or 0) if turn_row else 0
+
+    # Player's current location
+    p_row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    player_loc_id = int(p_row["current_location_id"] or 0) if p_row and p_row["current_location_id"] else 0
+
+    # Fetch all non-shell NPCs with their current position state
+    try:
+        npcs = conn.execute(
+            "SELECT id, role, map_x, map_y, is_moving, last_moved_turn, location_id FROM npcs WHERE shell = 0"
+        ).fetchall()
+    except Exception:
+        # Shell column may not exist on very old DBs
+        npcs = conn.execute(
+            "SELECT id, role, map_x, map_y, is_moving, last_moved_turn, location_id FROM npcs"
+        ).fetchall()
+
+    rng = _random.Random(turn * 7919 + 13)  # deterministic per turn
+
+    for npc in npcs:
+        npc_id = int(npc["id"])
+        role = str(npc["role"] or "").lower()
+        map_x = float(npc["map_x"] if npc["map_x"] is not None else -1)
+        map_y = float(npc["map_y"] if npc["map_y"] is not None else -1)
+        is_moving = int(npc["is_moving"] if npc["is_moving"] is not None else 0)
+        last_moved = int(npc["last_moved_turn"] if npc["last_moved_turn"] is not None else 0)
+        loc_id = int(npc["location_id"] or 0)
+
+        # Determine if the NPC should be flagged as moving
+        should_move = any(kw in role for kw in _MOVING_ROLE_KEYWORDS)
+        if bool(should_move) != bool(is_moving):
+            conn.execute("UPDATE npcs SET is_moving = ? WHERE id = ?", (1 if should_move else 0, npc_id))
+            is_moving = 1 if should_move else 0
+
+        # Assign initial position if NPC is unplaced and at the player's location
+        if map_x < 0 and player_loc_id > 0 and loc_id == player_loc_id:
+            jitter_x = (npc_id % 3) - 1   # -1, 0, or 1
+            jitter_y = ((npc_id // 3) % 3) - 1
+            nx, ny = px + jitter_x, py + jitter_y
+            if tile_ok.get((nx, ny), True):
+                map_x, map_y = float(nx), float(ny)
+            else:
+                map_x, map_y = float(px), float(py)
+            conn.execute("UPDATE npcs SET map_x = ?, map_y = ? WHERE id = ?", (map_x, map_y, npc_id))
+
+        # Advance moving NPCs by one tile per turn (throttled)
+        if is_moving and map_x >= 0 and last_moved < turn:
+            dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+            rng.shuffle(dirs)
+            moved = False
+            for dx, dy in dirs:
+                nx = int(map_x) + dx
+                ny = int(map_y) + dy
+                # Stay within known map bounds; prefer walkable tiles
+                if 0 <= nx <= max_x and 0 <= ny <= max_y and tile_ok.get((nx, ny), True):
+                    map_x, map_y = float(nx), float(ny)
+                    moved = True
+                    break
+            if moved:
+                conn.execute(
+                    "UPDATE npcs SET map_x = ?, map_y = ?, last_moved_turn = ? WHERE id = ?",
+                    (map_x, map_y, turn, npc_id),
+                )
 
 
 def play_turn(player_input: str, input_kind: str = "player", journal_input: str | None = None) -> dict[str, Any]:

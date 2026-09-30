@@ -217,7 +217,7 @@ def infer_model_tier(config: dict[str, Any] | None = None) -> str:
     cfg = config or {}
     name = " ".join(
         str(cfg.get(key) or "")
-        for key in ("ollama_model", "gguf_model_path", "model", "model_name")
+        for key in ("mle_model", "gguf_model_path", "model", "model_name")
     ).lower()
     try:
         context = int(cfg.get("context_window") or cfg.get("n_ctx") or 0)
@@ -684,6 +684,135 @@ def _shared_runs(sentence_key: str) -> set[str]:
         " ".join(words[i : i + REPEAT_SHARED_RUN_WORDS])
         for i in range(len(words) - REPEAT_SHARED_RUN_WORDS + 1)
     }
+
+
+# Closed-class words, plus the few verbs that only hold a sentence together.
+# A job title is not in this set. Titles are counted and then kept.
+_STRUCTURE_WORDS = frozenset({
+    "a", "an", "the",
+    "and", "but", "or", "nor", "yet", "so",
+    "if", "as", "because", "although", "though", "while", "when", "where",
+    "whether", "once", "unless", "until",
+    "of", "to", "in", "on", "at", "for", "with", "from", "by", "into",
+    "over", "under", "about", "after", "before", "between", "through",
+    "without", "within", "across", "around", "toward", "towards", "upon",
+    "onto", "off", "out", "up", "down", "than", "then",
+    "that", "this", "these", "those",
+    "it", "its", "is", "are", "was", "were", "be", "been", "being", "am",
+    "do", "does", "did", "have", "has", "had",
+    "will", "would", "could", "should", "may", "might", "must", "can",
+    "not", "no",
+    "you", "your", "yours", "we", "our", "ours", "they", "them", "their",
+    "he", "she", "him", "her", "his", "hers", "i", "me", "my",
+    "who", "whom", "what", "which", "there", "here",
+    "said", "says", "asked", "ask", "replied", "told",
+})
+_CONTENT_WORD_RE = re.compile(r"[A-Za-z][A-Za-z'-]*")
+# Uses already on the page before a later copy is removed.
+WORD_REPEAT_CAP = 3
+WORD_COUNT_LOOKBACK = 8
+
+
+def count_content_words(texts: list[str]) -> dict[str, int]:
+    """How many times each content word appears. Glue words are not counted."""
+    counts: dict[str, int] = {}
+    for text in texts:
+        for match in _CONTENT_WORD_RE.finditer(str(text or "")):
+            word = match.group(0).lower()
+            if len(word) < 2 or word in _STRUCTURE_WORDS:
+                continue
+            counts[word] = counts.get(word, 0) + 1
+    return counts
+
+
+def narration_keep_words(
+    context: dict[str, Any] | None,
+    result: dict[str, Any] | None = None,
+) -> tuple[set[str], set[str]]:
+    """
+    Names are never filtered. Job titles are counted elsewhere and also never
+    filtered. A title is not a link to one record.
+    """
+    names: set[str] = set()
+    titles: set[str] = set()
+
+    def add_name(value: Any) -> None:
+        for match in _CONTENT_WORD_RE.finditer(str(value or "")):
+            word = match.group(0).lower()
+            if len(word) >= 2:
+                names.add(word)
+
+    def add_title(value: Any) -> None:
+        for match in _CONTENT_WORD_RE.finditer(str(value or "")):
+            word = match.group(0).lower()
+            if len(word) >= 2 and word not in _STRUCTURE_WORDS:
+                titles.add(word)
+
+    packets: list[dict[str, Any]] = []
+    if isinstance(context, dict):
+        packets.append(context)
+    if isinstance(result, dict):
+        packets.append(result)
+    for packet in packets:
+        player = packet.get("player") if isinstance(packet.get("player"), dict) else {}
+        for key in ("name", "public_name"):
+            add_name(player.get(key))
+        add_title(player.get("title"))
+        alias = packet.get("active_player_alias")
+        if isinstance(alias, dict):
+            add_name(alias.get("name"))
+        for alias in packet.get("player_aliases") or []:
+            if isinstance(alias, dict):
+                add_name(alias.get("name"))
+        current = packet.get("current_location")
+        if isinstance(current, dict):
+            add_name(current.get("name"))
+        for location in packet.get("locations") or []:
+            if not isinstance(location, dict):
+                continue
+            add_name(location.get("name"))
+            for npc in location.get("npcs") or []:
+                if isinstance(npc, dict):
+                    add_name(npc.get("name"))
+                    add_title(npc.get("role"))
+        for npc in packet.get("npcs") or []:
+            if isinstance(npc, dict):
+                add_name(npc.get("name"))
+                add_title(npc.get("role"))
+        for item in packet.get("inventory") or []:
+            if isinstance(item, dict):
+                add_name(item.get("name"))
+        for item in packet.get("inventory_changes") or []:
+            if isinstance(item, dict):
+                add_name(item.get("name"))
+    return names, titles
+
+
+def words_past_cap(
+    counts: dict[str, int] | None,
+    *,
+    names: set[str] | None = None,
+    titles: set[str] | None = None,
+    cap: int = WORD_REPEAT_CAP,
+) -> list[str]:
+    """
+    Content words the middle should hide on the next reply.
+
+    This list is for the sampler, before a word is chosen. It does not edit
+    a reply that has already been written. Names and job titles are never
+    on the list. A title still counts; it is just never hidden.
+    """
+    kept_names = {word.lower() for word in (names or set())}
+    kept_titles = {word.lower() for word in (titles or set())}
+    blocked: list[str] = []
+    for word, seen in sorted((counts or {}).items(), key=lambda item: (-item[1], item[0])):
+        low = str(word or "").lower()
+        if seen <= cap or not low:
+            continue
+        if low in _STRUCTURE_WORDS or low in kept_names or low in kept_titles:
+            continue
+        blocked.append(low)
+    return blocked
 
 
 def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]]:
