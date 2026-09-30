@@ -105,6 +105,25 @@ DEFAULT_GGUF_MODEL = ""
 DEFAULT_CONTEXT_TOKENS = 32768
 DEFAULT_RESPONSE_TOKEN_CAP = 1500
 DEFAULT_RESPONSE_HARD_CAP = 2000
+# Local check budgets (7B/8B and other on-device models) stay at the table below.
+# API hosts need a higher ceiling: a rich verify of 1300 tokens cut grok-4.7 off
+# mid-JSON, and the repair then dropped the state operations.
+API_RESPONSE_HARD_CAP_TOKENS = 4800
+LOCAL_VERIFY_TOKENS = {
+    "concise": 700,
+    "balanced": 950,
+    "rich": 1300,
+    "expansive": 1800,
+}
+API_VERIFY_TOKENS = {
+    "concise": 1800,
+    "balanced": 2800,
+    "rich": 3600,
+    "expansive": 4800,
+}
+# Size token that is not the tail of a larger count ("7b" yes, "70b"/"14b" no).
+_SMALL_LOCAL_MODEL_RE = re.compile(r"(?<![\d.])(?:0\.5|1\.5|[1-8])b\b", re.IGNORECASE)
+_SMALL_LOCAL_HINT_RE = re.compile(r"\b(?:tiny|phi-?3)\b", re.IGNORECASE)
 MIN_TURN_NARRATION_CHARS = 1000
 TARGET_TURN_NARRATION_CHARS = 1500
 MAX_TURN_NARRATION_CHARS = 2400
@@ -246,6 +265,7 @@ TURN_SHAPE_KEYS = {
     "ability_updates",
     "gm_events",
     "journal",
+    "map_walk",
 }
 TURN_SHAPE_ORDER = (
     "scene_plan",
@@ -270,6 +290,7 @@ TURN_SHAPE_ORDER = (
     "ability_updates",
     "gm_events",
     "journal",
+    "map_walk",
 )
 HANDOFF_BASE_CONTEXT_KEYS = {
     "settings",
@@ -294,6 +315,9 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     # Server-stated contracts. Omitting a key here nulls it out of the packet
     # silently — the same failure that stripped the band fields off `player`.
     "movement_contract",
+    "map_space",
+    "direction_hint",
+    "open_offers",
     "narrative_voice",
     "naming_contract",
     "recall_contract",
@@ -791,8 +815,8 @@ def _int_value(value: Any, default: int) -> int:
 def context_window_tokens(config: dict[str, Any] | None = None) -> int:
     model_config = config or get_model_config()
     if model_config.get("provider") == "llama_cpp":
-        return _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
-    return _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS)
+        return _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("AI_RPG_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
+    return _env_int("AI_RPG_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS)
 
 
 # Room a turn needs beyond the fixed system contract: the world packet plus the
@@ -805,7 +829,7 @@ def fitting_system_prompts(config: dict[str, Any] | None = None) -> tuple[str, s
 
     Returns ``(system_prompt, verify_prompt, degraded)``.
 
-    A default Ollama launch ran with ``context_window=8192`` while
+    A default local launch ran with ``context_window=8192`` while
     ``SYSTEM_PROMPT`` alone estimates ~9100 tokens. ``enforce_token_budget``
     then raised "system prompt alone is ~N tokens", every turn fell back to
     deterministic prose, and the player got canned narration with no obvious
@@ -857,10 +881,48 @@ def _response_token_settings(config: dict[str, Any] | None = None) -> tuple[int,
     return soft_cap, hard_cap
 
 
+def model_check_profile(config: dict[str, Any] | None = None) -> str:
+    """Which check budget a model uses: api, local_small, or local.
+
+    OpenAI-compatible hosts (xAI / Grok included) are ``api`` even when the
+    model name says mini. A local 7B/8B name, including a GGUF path, is
+    ``local_small``. Other on-device models are ``local`` and share the small
+    check budget; they do not inherit the API ceiling.
+    """
+    cfg = config if config is not None else get_model_config()
+    if _normalize_provider(cfg.get("provider")) == "openai":
+        return "api"
+    blob = " ".join(
+        str(cfg.get(key) or "")
+        for key in ("mle_model", "gguf_model_path", "model", "model_name")
+    )
+    if _SMALL_LOCAL_MODEL_RE.search(blob) or _SMALL_LOCAL_HINT_RE.search(blob):
+        return "local_small"
+    return "local"
+
+
+def _profile_response_ceiling(config: dict[str, Any], configured_hard_cap: int) -> int:
+    """Hard cap actually applied to a completion.
+
+    The shipped local cap is 2000. That is what clipped API checks. An explicit
+    hard cap (env, or any saved value other than the default) is left alone.
+    """
+    if model_check_profile(config) != "api":
+        return configured_hard_cap
+    if os.getenv("AI_RPG_API_RESPONSE_HARD_CAP_TOKENS"):
+        return max(64, _env_int("AI_RPG_API_RESPONSE_HARD_CAP_TOKENS", API_RESPONSE_HARD_CAP_TOKENS))
+    if os.getenv("AI_RPG_RESPONSE_HARD_CAP_TOKENS") or os.getenv("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS"):
+        return configured_hard_cap
+    if configured_hard_cap != DEFAULT_RESPONSE_HARD_CAP:
+        return configured_hard_cap
+    return API_RESPONSE_HARD_CAP_TOKENS
+
+
 def _configured_response_tokens(config: dict[str, Any], max_tokens: int | None) -> int:
     soft_cap, hard_cap = _response_token_settings(config)
+    ceiling = _profile_response_ceiling(config, hard_cap)
     requested = _int_value(max_tokens, soft_cap) if max_tokens is not None else soft_cap
-    return max(1, min(requested, hard_cap))
+    return max(1, min(requested, ceiling))
 
 
 def _response_token_cap(config: dict[str, Any], system_prompt: str, user_prompt: str, max_tokens: int | None) -> int:
@@ -875,9 +937,10 @@ def _response_token_cap(config: dict[str, Any], system_prompt: str, user_prompt:
 
 def _json_repair_token_cap(config: dict[str, Any], max_tokens: int | None) -> int:
     soft_cap, hard_cap = _response_token_settings(config)
+    ceiling = _profile_response_ceiling(config, hard_cap)
     requested = max(_int_value(max_tokens, soft_cap) if max_tokens is not None else soft_cap, soft_cap, 700)
-    repair_hard_cap = _env_int("AI_RPG_JSON_REPAIR_TOKENS", hard_cap)
-    return max(1, min(requested, hard_cap, repair_hard_cap))
+    repair_hard_cap = _env_int("AI_RPG_JSON_REPAIR_TOKENS", ceiling)
+    return max(1, min(requested, ceiling, repair_hard_cap))
 
 
 def _is_context_length_error(exc: Exception) -> bool:
@@ -1307,9 +1370,9 @@ def _clean_context_for_handoff(context: dict[str, Any], phase: str, trace: list[
     return cleaned
 
 
-def _turn_max_tokens(context: dict[str, Any], phase: str, compact: bool = False) -> int:
+def _turn_max_tokens(context: dict[str, Any], phase: str, compact: bool = False, config: dict[str, Any] | None = None) -> int:
     env_name = "AI_RPG_TURN_VERIFY_TOKENS" if phase == "verify" else "AI_RPG_TURN_DRAFT_TOKENS"
-    requested_tokens = _env_int(env_name, _turn_token_default(context, phase))
+    requested_tokens = _env_int(env_name, _turn_token_default(context, phase, config))
     if not compact:
         return requested_tokens
     compact_default = 700 if phase == "verify" else 900
@@ -1317,14 +1380,14 @@ def _turn_max_tokens(context: dict[str, Any], phase: str, compact: bool = False)
     return min(requested_tokens, _env_int(compact_env, compact_default))
 
 
-def _model_timeout(default_ollama: int, default_llama_cpp: int, env_name: str = "") -> int:
+def _model_timeout(default_mle: int, default_llama_cpp: int, env_name: str = "") -> int:
     config = get_model_config()
-    default = default_llama_cpp if config.get("provider") == "llama_cpp" else default_ollama
+    default = default_llama_cpp if config.get("provider") == "llama_cpp" else default_mle
     if env_name and os.getenv(env_name):
         return _env_int(env_name, default)
     if config.get("provider") == "llama_cpp":
         return _env_int("AI_RPG_LLAMA_CPP_TIMEOUT", default_llama_cpp)
-    return _env_int("AI_RPG_OLLAMA_TIMEOUT", default_ollama)
+    return _env_int("AI_RPG_MLE_TIMEOUT", default_mle)
 
 
 # OpenAI-compatible cloud / agent backends (xAI Grok, OpenAI, custom gateways).
@@ -1362,9 +1425,10 @@ def _normalize_provider(name: str) -> str:
     raw = str(name or "").strip().lower()
     if raw in API_PROVIDER_ALIASES:
         return API_PROVIDER_ALIASES[raw]
-    if raw in {"ollama", "llama_cpp", "openai"}:
+    if raw in {"mle", "llama_cpp", "openai"}:
         return raw
-    return "llama_cpp"
+    # A removed local engine name, or a blank, is MLE.
+    return "mle"
 
 
 def resolve_api_key(config: dict[str, Any] | None = None) -> str:
@@ -1427,7 +1491,7 @@ def normalize_theme_llm_lora_map(raw: Any) -> dict[str, dict[str, Any]]:
       { "isekai_rpg": "D:/loras/isekai.gguf" }
       { "isekai_rpg": { "path": "...", "scale": 0.8, "note": "..." } }
     Multiple simultaneous LoRAs are not supported by llama-cpp-python server (one lora_path);
-    use one adapter per theme, or Ollama models that already bake ADAPTER weights.
+    use one adapter per theme, or a model that already bakes the adapter weights.
     """
     out = default_theme_llm_lora_map()
     if not isinstance(raw, dict):
@@ -1517,7 +1581,7 @@ def apply_theme_model_routing(
 ) -> dict[str, Any]:
     """
     Return a copy of model config with theme-based model + LLM LoRA applied (turn-time only).
-    Ollama → ollama_model; OpenAI-compatible → api_model; llama.cpp path-like → gguf_model_path.
+    MLE → mle_model; OpenAI-compatible → api_model; llama.cpp path-like → gguf_model_path.
     LLM LoRA (GGUF adapter) → lora_path for managed llama.cpp server.
     """
     out = dict(config or {})
@@ -1548,14 +1612,14 @@ def apply_theme_model_routing(
             out["lora_scale"] = max(0.0, min(2.0, float(out.get("lora_scale") if out.get("lora_scale") is not None else 1.0)))
         except (TypeError, ValueError):
             out["lora_scale"] = 1.0
-    # Ollama cannot load GGUF LoRA files mid-request — theme_adapter_map should point at
-    # Ollama models that already include the ADAPTER (or full fine-tunes).
+    # MLE does not load a GGUF adapter mid-request. theme_adapter_map names the
+    # model the engine should already be running.
     if provider != "llama_cpp":
         # Still record intent for UI/traces, but do not force a GGUF path onto non-llama providers.
         pass
     if model:
-        if provider == "ollama":
-            out["ollama_model"] = model
+        if provider == "mle":
+            out["mle_model"] = model
         elif provider == "openai":
             out["api_model"] = model
         else:
@@ -1612,8 +1676,7 @@ def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
             return dict(override)
     default = {
         "provider": os.getenv("AI_RPG_MODEL_PROVIDER", "llama_cpp"),
-        "ollama_base_url": os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
-        "ollama_model": os.getenv("OLLAMA_MODEL", "llama3.1"),
+        "mle_model": os.getenv("MLE_MODEL", "qwen3:8b"),
         "llama_cpp_base_url": os.getenv("LLAMA_CPP_BASE_URL", "http://localhost:8080"),
         "gguf_model_path": os.getenv("AI_RPG_GGUF_MODEL", DEFAULT_GGUF_MODEL),
         "api_base_url": os.getenv("AI_RPG_API_BASE_URL", os.getenv("OPENAI_BASE_URL", "https://api.x.ai/v1")),
@@ -1651,8 +1714,7 @@ def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
     merged = {**default, **stored}
     explicit_env = {
         "provider": "AI_RPG_MODEL_PROVIDER",
-        "ollama_base_url": "OLLAMA_BASE_URL",
-        "ollama_model": "OLLAMA_MODEL",
+        "mle_model": "MLE_MODEL",
         "llama_cpp_base_url": "LLAMA_CPP_BASE_URL",
         "gguf_model_path": "AI_RPG_GGUF_MODEL",
         "api_base_url": "AI_RPG_API_BASE_URL",
@@ -1676,6 +1738,12 @@ def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
     if os.getenv("AI_RPG_RESPONSE_HARD_CAP_TOKENS") or os.getenv("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS"):
         merged["response_token_hard_cap"] = _env_int("AI_RPG_RESPONSE_HARD_CAP_TOKENS", _env_int("AI_RPG_MAX_RESPONSE_HARD_CAP_TOKENS", DEFAULT_RESPONSE_HARD_CAP))
     merged["provider"] = _normalize_provider(merged.get("provider"))
+    if not str(merged.get("mle_model") or "").strip():
+        retired_model = str(merged.get("ollama_model") or "").strip()
+        if retired_model:
+            merged["mle_model"] = retired_model
+    merged.pop("ollama_model", None)
+    merged.pop("ollama_base_url", None)
     merged["theme_adapter_map"] = normalize_theme_adapter_map(merged.get("theme_adapter_map"))
     merged["theme_llm_lora_map"] = normalize_theme_llm_lora_map(merged.get("theme_llm_lora_map"))
     merged["lora_path"] = str(merged.get("lora_path") or "").strip()
@@ -1692,8 +1760,7 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
     current = get_model_config(ignore_override=True)
     allowed = {
         "provider",
-        "ollama_base_url",
-        "ollama_model",
+        "mle_model",
         "llama_cpp_base_url",
         "gguf_model_path",
         "api_base_url",
@@ -2171,7 +2238,7 @@ def _start_managed_llama_cpp(
     )
 
     host, port = _llama_cpp_host_port(base_url)
-    context_tokens = _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("OLLAMA_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
+    context_tokens = _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("AI_RPG_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
     gpu_layers = _llama_cpp_gpu_layers()
     flash_attention = os.getenv("AI_RPG_LLAMA_CPP_FLASH_ATTN", "True")
     log_mode = os.getenv("AI_RPG_LLM_LOG_MODE", "quiet").strip().lower()
@@ -2385,8 +2452,17 @@ def test_model_connection() -> dict[str, Any]:
                 }
             return _model_status_payload(provider, url, payload, config)
         else:
-            base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
-            url = f"{base_url}/api/tags"
+            from app.mle import status as mle_status
+
+            report = mle_status(str(config.get("mle_model") or ""))
+            return {
+                "ok": bool(report.get("ok")),
+                "provider": "mle",
+                "url": "",
+                "error": "" if report.get("ok") else str(report.get("detail") or "MLE has no model loaded."),
+                "config": public_model_config(config),
+                "managed_start": None,
+            }
 
         try:
             payload = _read_models_url(url, timeout=5)
@@ -2406,7 +2482,7 @@ def test_model_connection() -> dict[str, Any]:
                         "config": public_model_config(config),
                         "managed_start": start_result,
                     }
-            provider_name = "llama.cpp" if provider == "llama_cpp" else "Ollama"
+            provider_name = "llama.cpp" if provider == "llama_cpp" else "MLE"
             error = _connection_refused_message(provider_name, url) if _is_connection_refused_error(exc) else str(exc)
             if start_result and start_result.get("error"):
                 error = f"{error}. {start_result['error']}"
@@ -8599,7 +8675,7 @@ def enforce_token_budget(
     return system, user, diagnostics
 
 
-def _turn_token_default(context: dict[str, Any], phase: str) -> int:
+def _turn_token_default(context: dict[str, Any], phase: str, config: dict[str, Any] | None = None) -> int:
     options = (context.get("settings") or {}).get("playthrough_options") or {}
     detail = str(options.get("narration_detail") or "rich").strip().lower()
     draft_defaults = {
@@ -8608,13 +8684,11 @@ def _turn_token_default(context: dict[str, Any], phase: str) -> int:
         "rich": 1700,
         "expansive": 2400,
     }
-    verify_defaults = {
-        "concise": 700,
-        "balanced": 950,
-        "rich": 1300,
-        "expansive": 1800,
-    }
-    defaults = verify_defaults if phase == "verify" else draft_defaults
+    if phase == "verify":
+        profile = model_check_profile(config)
+        defaults = API_VERIFY_TOKENS if profile == "api" else LOCAL_VERIFY_TOKENS
+    else:
+        defaults = draft_defaults
     return defaults.get(detail, defaults["rich"])
 
 
@@ -8904,57 +8978,21 @@ def _chat_content_unlocked(
             managed_llama=(provider == "llama_cpp"),
         )
 
-    base_url = str(config.get("ollama_base_url") or "http://localhost:11434").rstrip("/")
-    model = str(config.get("ollama_model") or "llama3.1")
-    # Qwen3 and similar "thinking" models spend num_predict on message.thinking and leave
-    # message.content empty unless thinking is disabled. Default off for playable JSON turns.
-    ollama_think = os.getenv("OLLAMA_THINK", "0").strip().lower() in {"1", "true", "yes", "on"}
-    body: dict[str, Any] = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        "stream": False,
-        "think": ollama_think,
-        "options": {
-            "temperature": temperature,
-            "top_p": 0.9,
-            "num_ctx": context_window_tokens(config),
-            "num_predict": response_tokens,
-        },
-    }
-    if response_format == "json":
-        body["format"] = "json"
+    from app.mle import MleNotReady, chat as mle_chat
 
-    req = urllib.request.Request(
-        f"{base_url}/api/chat",
-        data=json.dumps(body).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-
+    model = str(config.get("mle_model") or "qwen3:8b")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise LlmError(f"HTTP {exc.code}: {detail}") from exc
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-        if _is_connection_refused_error(exc):
-            raise LlmError(_connection_refused_message("Ollama", f"{base_url}/api/chat")) from exc
-        raise LlmError(_transport_error_message(exc, timeout)) from exc
-
-    message = payload.get("message") or {}
-    content = str(message.get("content") or "").strip()
-    # Last-resort salvage if a model still emitted usable JSON only in thinking.
-    if not content:
-        thinking = str(message.get("thinking") or "").strip()
-        if thinking:
-            content = thinking
-    if not content:
-        raise LlmError("Ollama returned an empty response.")
-    return content
+        return mle_chat(
+            system_prompt,
+            user_prompt,
+            model=model,
+            timeout=timeout,
+            temperature=temperature,
+            max_tokens=response_tokens,
+            response_format=response_format,
+        )
+    except MleNotReady as exc:
+        raise LlmError(str(exc)) from exc
 
 
 def _join_openai_v1(base_url: str, path: str) -> str:
@@ -10836,7 +10874,7 @@ def _pipeline_config_snapshot() -> dict[str, Any]:
         "context_window": context_window_tokens(config),
         "response_token_cap": config.get("response_token_cap"),
         "response_token_hard_cap": config.get("response_token_hard_cap"),
-        "ollama_model": config.get("ollama_model"),
+        "mle_model": config.get("mle_model"),
         "gguf_model_path": config.get("gguf_model_path"),
     }
 
@@ -11519,8 +11557,11 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
             "narration_pipeline_enabled": pipeline_enabled(),
             "note": "Trace contains observable prompts, raw model outputs, parsed JSON, handoff cleanup decisions, verifier self_check, errors, and fallback decisions. It cannot include private hidden chain-of-thought that the model did not return.",
             "provider": config.get("provider"),
-            "ollama_model": config.get("ollama_model"),
+            "mle_model": config.get("mle_model"),
             "api_model": config.get("api_model"),
+            "check_profile": model_check_profile(config),
+            "draft_token_budget": _turn_max_tokens(context if isinstance(context, dict) else {}, "draft", config=config),
+            "verify_token_budget": _turn_max_tokens(context if isinstance(context, dict) else {}, "verify", config=config),
             "theme_model_source": config.get("theme_model_source") or "",
             "theme_model_active": config.get("theme_model_active") or "",
             "adapter_hint": (session_theme or {}).get("adapter_hint") if session_theme else "",

@@ -16,10 +16,8 @@ def default_prefs() -> dict[str, Any]:
     return {
         "launch_mode": "local",  # local | lan | vpn
         "app_port": 8000,
-        "model_provider": "ollama",  # ollama | llama_cpp | openai
-        "ollama_model": "qwen3:8b",
-        "ollama_base_url": "http://127.0.0.1:11434",
-        "ollama_think": False,
+        "model_provider": "mle",  # mle | llama_cpp | openai
+        "mle_model": "qwen3:8b",
         "gguf_model_path": "",
         "api_base_url": "https://api.x.ai/v1",
         "api_model": "grok-4.5",
@@ -37,6 +35,11 @@ def default_prefs() -> dict[str, Any]:
     }
 
 
+def _provider_name(value: Any) -> str:
+    prov = str(value or "mle").strip().lower()
+    return prov if prov in {"mle", "llama_cpp", "openai"} else "mle"
+
+
 def load_prefs() -> dict[str, Any]:
     base = default_prefs()
     if not prefs_path().is_file():
@@ -47,8 +50,14 @@ def load_prefs() -> dict[str, Any]:
             for key, value in raw.items():
                 if key in base:
                     base[key] = value
+            # A prefs file saved before MLE kept the model name under the old key.
+            if not str(base.get("mle_model") or "").strip():
+                retired = raw.get("ollama_model")
+                if str(retired or "").strip():
+                    base["mle_model"] = str(retired).strip()
     except Exception:
         pass
+    base["model_provider"] = _provider_name(base.get("model_provider"))
     return base
 
 
@@ -61,14 +70,12 @@ def save_prefs(updates: dict[str, Any] | None) -> dict[str, Any]:
     # normalize
     mode = str(current.get("launch_mode") or "local").lower()
     current["launch_mode"] = mode if mode in {"local", "lan", "vpn"} else "local"
-    prov = str(current.get("model_provider") or "ollama").lower()
-    current["model_provider"] = prov if prov in {"ollama", "llama_cpp", "openai"} else "ollama"
+    current["model_provider"] = _provider_name(current.get("model_provider"))
     try:
         current["app_port"] = max(1, min(65535, int(current.get("app_port") or 8000)))
     except (TypeError, ValueError):
         current["app_port"] = 8000
     for bkey in (
-        "ollama_think",
         "narration_pipeline",
         "narration_consolidate",
         "fast_verification",
@@ -85,9 +92,9 @@ def apply_prefs_to_env(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
     p = prefs or load_prefs()
     os.environ["AI_RPG_LAUNCH_MODE"] = str(p.get("launch_mode") or "local")
     os.environ["AI_RPG_APP_PORT"] = str(p.get("app_port") or 8000)
-    os.environ["AI_RPG_MODEL_PROVIDER"] = str(p.get("model_provider") or "ollama")
-    os.environ["OLLAMA_MODEL"] = str(p.get("ollama_model") or "qwen3:8b")
-    os.environ["OLLAMA_BASE_URL"] = str(p.get("ollama_base_url") or "http://127.0.0.1:11434")
+    os.environ["AI_RPG_MODEL_PROVIDER"] = _provider_name(p.get("model_provider"))
+    os.environ["MLE_MODEL"] = str(p.get("mle_model") or "qwen3:8b")
+    os.environ["AI_RPG_CONTEXT_TOKENS"] = str(int(p.get("llama_cpp_context") or 32768))
     os.environ["AI_RPG_NARRATION_PIPELINE"] = "1" if p.get("narration_pipeline") else "0"
     os.environ["AI_RPG_NARRATION_PIPELINE_CONSOLIDATE"] = "1" if p.get("narration_consolidate") else "0"
     os.environ["AI_RPG_FAST_VERIFICATION"] = "1" if p.get("fast_verification") else "0"

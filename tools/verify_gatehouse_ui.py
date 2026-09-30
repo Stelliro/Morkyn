@@ -69,14 +69,12 @@ $lines += (Row 'P' 'App port' ([string]$prefs.app_port))
 $lines += (Rule)
 $lines += (Box ':: MODEL')
 $lines += (Row 'B' 'Provider' ([string]$prefs.model_provider))
-$lines += (Row 'M' 'Ollama model' ([string]$prefs.ollama_model))
-$lines += (Row 'U' 'Ollama URL' ([string]$prefs.ollama_base_url))
+$lines += (Row 'M' 'MLE model' ([string]$prefs.mle_model))
 $lines += (Row 'F' 'GGUF path' $gguf)
 $lines += (Row 'C' 'Context tokens' ([string]$prefs.llama_cpp_context))
 $lines += (Row 'G' 'GPU layers' ([string]$prefs.llama_cpp_gpu_layers))
 $lines += (LampRow 'H' 'Flash attention' (Lamp $prefs.llama_cpp_flash_attn))
 $lines += (Row 'L' 'LLM logs' ([string]$prefs.llm_log_mode))
-$lines += (LampRow 'T' 'Ollama think' (Lamp $prefs.ollama_think) 'Qwen3: keep OFF')
 $lines += (Rule)
 $lines += (Box ':: STORY ENGINE')
 $lines += (Row 'D' 'Draft mode' ([string]$prefs.draft_mode))
@@ -229,8 +227,8 @@ $ErrorActionPreference='Stop'
 }
 # Inline the same mapping used by launcher
 $prefs = [ordered]@{
-  launch_mode='network'; app_port=8088; model_provider='ollama'; ollama_model='qwen3:8b'
-  ollama_base_url='http://127.0.0.1:11434'; ollama_think=$false; gguf_model_path=''
+  launch_mode='network'; app_port=8088; model_provider='mle'; mle_model='qwen3:8b'
+  gguf_model_path=''
   llama_cpp_context=16384; llama_cpp_gpu_layers=-1; llama_cpp_flash_attn=$true
   llm_log_mode='quiet'; soft_response_tokens=900; hard_response_tokens=1400
   draft_mode='dsl'; narration_pipeline=$true; narration_consolidate=$false
@@ -239,9 +237,8 @@ $prefs = [ordered]@{
 $env:AI_RPG_LAUNCH_MODE = $prefs.launch_mode
 $env:AI_RPG_APP_PORT = [string]$prefs.app_port
 $env:AI_RPG_MODEL_PROVIDER = $prefs.model_provider
-$env:OLLAMA_MODEL = $prefs.ollama_model
-$env:OLLAMA_BASE_URL = $prefs.ollama_base_url
-$env:OLLAMA_THINK = if ($prefs.ollama_think) {'1'} else {'0'}
+$env:MLE_MODEL = $prefs.mle_model
+$env:AI_RPG_CONTEXT_TOKENS = [string]$prefs.llama_cpp_context
 $env:AI_RPG_LLAMA_CPP_CONTEXT = [string]$prefs.llama_cpp_context
 $env:AI_RPG_MAX_RESPONSE_TOKENS = [string]$prefs.soft_response_tokens
 $env:AI_RPG_RESPONSE_HARD_CAP_TOKENS = [string]$prefs.hard_response_tokens
@@ -253,9 +250,9 @@ $env:AI_RPG_DSL_SKIP_VERIFY = if ($prefs.dsl_skip_verify) {'1'} else {'0'}
 $env:AI_RPG_NO_BROWSER = '1'
 @{
   launch=$env:AI_RPG_LAUNCH_MODE; port=$env:AI_RPG_APP_PORT; provider=$env:AI_RPG_MODEL_PROVIDER
-  model=$env:OLLAMA_MODEL; pipeline=$env:AI_RPG_NARRATION_PIPELINE; consolidate=$env:AI_RPG_NARRATION_PIPELINE_CONSOLIDATE
+  model=$env:MLE_MODEL; pipeline=$env:AI_RPG_NARRATION_PIPELINE; consolidate=$env:AI_RPG_NARRATION_PIPELINE_CONSOLIDATE
   draft=$env:AI_RPG_DRAFT_MODE; soft=$env:AI_RPG_MAX_RESPONSE_TOKENS; hard=$env:AI_RPG_RESPONSE_HARD_CAP_TOKENS
-  think=$env:OLLAMA_THINK; browser=$env:AI_RPG_NO_BROWSER; ctx=$env:AI_RPG_LLAMA_CPP_CONTEXT
+  browser=$env:AI_RPG_NO_BROWSER; ctx=$env:AI_RPG_CONTEXT_TOKENS
 } | ConvertTo-Json -Compress
 """
     proc = subprocess.run(
@@ -275,7 +272,8 @@ $env:AI_RPG_NO_BROWSER = '1'
         "pipeline_on": data.get("pipeline") == "1",
         "consolidate_off": data.get("consolidate") == "0",
         "draft_dsl": data.get("draft") == "dsl",
-        "think_off": data.get("think") == "0",
+        "provider_mle": data.get("provider") == "mle",
+        "model_name": data.get("model") == "qwen3:8b",
         "no_browser": data.get("browser") == "1",
         "ctx_16384": data.get("ctx") == "16384",
     }
@@ -288,10 +286,8 @@ def main() -> int:
     default = {
         "launch_mode": "local",
         "app_port": 8000,
-        "model_provider": "ollama",
-        "ollama_model": "qwen3:8b",
-        "ollama_base_url": "http://127.0.0.1:11434",
-        "ollama_think": False,
+        "model_provider": "mle",
+        "mle_model": "qwen3:8b",
         "gguf_model_path": "",
         "llama_cpp_context": 8192,
         "llama_cpp_gpu_layers": -1,
@@ -316,7 +312,6 @@ def main() -> int:
             "model_provider": "llama_cpp",
             "gguf_model_path": r"D:\models\example-qwen.gguf",
             "dsl_skip_verify": True,
-            "ollama_think": True,
             "soft_response_tokens": 800,
         }
     )

@@ -667,6 +667,29 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
         compact_context["world_ability_reference"] = ability_context_block()
     except Exception:
         pass
+    map_space = context.get("map_space") if isinstance(context.get("map_space"), dict) else None
+    if map_space:
+        compact_context["map_space"] = map_space
+    direction_hint = context.get("direction_hint") if isinstance(context.get("direction_hint"), dict) else None
+    if direction_hint:
+        compact_context["direction_hint"] = direction_hint
+    open_offers = context.get("open_offers")
+    if isinstance(open_offers, list) and open_offers:
+        compact_context["open_offers"] = open_offers[:8]
+    map_clause = ""
+    if map_space:
+        budget = int(map_space.get("step_budget") or 4)
+        map_clause = (
+            f" world_state.map_space is the whole land ({map_space.get('width')}×{map_space.get('height')}). "
+            f"Walk at most {budget} tiles this turn with WALK. Do not invent ground past that budget or the map edge. "
+            "A door into a room is MOVE, not a hike."
+        )
+        if map_space.get("scale") == "world":
+            map_clause += (
+                " Each step is one world cell. A city is at most 9 by 9 connected cells, "
+                "not a straight line or a solid block, and each cell contains an internal grid of at most 128 by 128. "
+                "One step does not cross the inside of a city."
+            )
     wait_extra = ""
     if turn_kind == "wait_scene":
         wait_extra = (
@@ -690,6 +713,12 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 f"{wait_extra} "
                 "Use narration_detail for fullness; at least 1000 visible characters, about 1500 normal target. "
                 "Obey world_state.narrative_voice.rule and world_state.movement_contract.rule exactly. "
+                f"{map_clause}"
+                "When world_state.direction_hint is present and direction_hint.told is true, "
+                "say direction_hint.wording and do not add another place or a coordinate. "
+                "When world_state.direction_hint is present and told is false, do not name a location for that question. "
+                "When world_state.open_offers is present, those jobs are posted and not yet taken. "
+                "The player can accept one. Do not invent extra jobs. "
                 "When world_state.naming_contract is present the player asked for a name: "
                 "write naming_contract.name in the narration as plain text. Never describe a name "
                 "without giving it. "

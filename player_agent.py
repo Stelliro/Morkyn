@@ -2,27 +2,27 @@
 player_agent.py — Autonomous two-role playtest loop for Mørkyn
 ==============================================================
 Runs from the project root:
-    python player_agent.py [--turns 120] [--ollama-url URL] [--port PORT] [--keep-db]
+    python player_agent.py [--turns 120] [--model NAME] [--port PORT] [--keep-db]
 
 Architecture
 ------------
-One Ollama model plays BOTH roles:
+MLE plays BOTH roles:
 
   Game role:   Morkyn's own narrative engine (uvicorn subprocess on a free port).
-               The model generates the in-world response to each player action.
 
-  Player role: A direct Ollama chat call with a "you are the player" system prompt.
+  Player role: An MLE chat call with a "you are the player" system prompt.
                Reads the game's narration + state and returns the next player action.
+               Until the welding rig is connected, that call fails in the open.
 
 Loop
 ----
 1. Start uvicorn subprocess (Morkyn server)
 2. Poll /api/version until ready (up to 60 s)
-3. POST /api/model-config   → tell Morkyn which Ollama model to use
+3. POST /api/model-config   → tell Morkyn which MLE model name to use
 4. POST /api/setup          → start a fresh playthrough with an opening scene
 5. For each turn (default 120):
    a. GET /api/state         → grab current player stats
-   b. Send last narration + stats to Ollama as the player brain → get next action
+   b. Send last narration + stats to MLE as the player brain → get next action
    c. POST /api/turn         → send that action to Morkyn
    d. Extract narration from response
    e. Check for bugs (empty response, JSON errors, character breaks, repetition)
@@ -54,11 +54,12 @@ from typing import Any
 # ──────────────────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-DEFAULT_OLLAMA_URL = "http://localhost:11434"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 DEFAULT_TURNS = 120
 SERVER_STARTUP_TIMEOUT = 90      # seconds to wait for uvicorn to become ready
 TURN_HTTP_TIMEOUT = 180          # seconds per /api/turn call (LLM can be slow)
-PLAYER_BRAIN_TIMEOUT = 60        # seconds for Ollama player-brain call
+PLAYER_BRAIN_TIMEOUT = 60        # seconds for the MLE player-brain call
 REPETITION_WINDOW = 5            # recent narrations to check overlap against
 REPETITION_THRESHOLD = 0.75      # word-overlap fraction that flags repetition
 
@@ -231,8 +232,8 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Mørkyn autonomous player-agent playtest")
     p.add_argument("--turns", type=int, default=DEFAULT_TURNS,
                    help=f"Number of turns to play (default {DEFAULT_TURNS})")
-    p.add_argument("--ollama-url", type=str, default=DEFAULT_OLLAMA_URL,
-                   help=f"Ollama base URL (default {DEFAULT_OLLAMA_URL})")
+    p.add_argument("--model", type=str, default="",
+                   help="MLE model name (default qwen3:8b, or MLE_MODEL)")
     p.add_argument("--port", type=int, default=0,
                    help="Port for the Morkyn server (default: auto-find a free port)")
     p.add_argument("--keep-db", action="store_true",
@@ -272,73 +273,21 @@ def http_post(url: str, payload: dict[str, Any], timeout: int = 30) -> dict[str,
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Ollama helpers
+# MLE player brain
 # ──────────────────────────────────────────────────────────────────────────────
 
-def ollama_list_models(base_url: str) -> list[str]:
-    try:
-        data = http_get(f"{base_url}/api/tags", timeout=10)
-        models = data.get("models") or []
-        return [m["name"] for m in models if isinstance(m, dict) and m.get("name")]
-    except Exception as e:
-        return []
+def mle_player_line(model: str, system: str, user: str) -> str:
+    """Ask MLE for the next player action. Raises until the welding rig is tied in."""
+    from app.mle import chat as mle_chat
 
-
-def pick_model(models: list[str]) -> str:
-    """Prefer 7B/8B-ish sizes; fall back to whatever is available."""
-    prefer_patterns = [
-        r"8b", r"7b", r"mistral", r"llama3\.1:8b", r"llama3:8b",
-        r"gemma.*7b", r"phi.*mini", r"phi3", r"orca.*mini",
-        r"neural.*chat", r"qwen.*7b", r"deepseek.*7b",
-    ]
-    avoid_patterns = [r"34b", r"70b", r"72b", r"180b"]
-
-    def score(name: str) -> int:
-        n = name.lower()
-        for pat in avoid_patterns:
-            if re.search(pat, n):
-                return -100
-        for i, pat in enumerate(prefer_patterns):
-            if re.search(pat, n):
-                return 1000 - i
-        return 500
-
-    if not models:
-        return "llama3.1"
-    return sorted(models, key=score, reverse=True)[0]
-
-
-def ollama_chat(
-    base_url: str,
-    model: str,
-    system: str,
-    user: str,
-    timeout: int = PLAYER_BRAIN_TIMEOUT,
-) -> str:
-    """Send a chat completion to Ollama and return the assistant's reply text."""
-    payload = {
-        "model": model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "stream": False,
-        "options": {
-            "num_predict": 120,
-            "temperature": 0.85,
-            "top_p": 0.95,
-        },
-    }
-    body = json.dumps(payload).encode()
-    req = urllib.request.Request(
-        f"{base_url}/api/chat",
-        data=body,
-        headers={"Content-Type": "application/json", "Accept": "application/json"},
-        method="POST",
+    return mle_chat(
+        system,
+        user,
+        model=model,
+        timeout=PLAYER_BRAIN_TIMEOUT,
+        temperature=0.85,
+        max_tokens=120,
     )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        data = json.loads(resp.read().decode())
-    return str((data.get("message") or {}).get("content") or "").strip()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -523,10 +472,14 @@ def check_action_quality(action: str, prev_action: str) -> list[str]:
 # Morkyn server lifecycle
 # ──────────────────────────────────────────────────────────────────────────────
 
-def start_morkyn_server(port: int, db_path: str) -> subprocess.Popen:
+def start_morkyn_server(port: int, db_path: str, model: str) -> subprocess.Popen:
     """Launch uvicorn as a subprocess with a fresh DB."""
     env = dict(os.environ)
     env["AI_RPG_DB"] = db_path
+    env["AI_RPG_MODEL_PROVIDER"] = "mle"
+    env["MLE_MODEL"] = model
+    for gone in ("OLLAMA_MODEL", "OLLAMA_BASE_URL", "OLLAMA_THINK", "OLLAMA_CONTEXT_TOKENS"):
+        env.pop(gone, None)
     env["AI_RPG_MAX_RESPONSE_TOKENS"] = env.get("AI_RPG_MAX_RESPONSE_TOKENS", "600")
     env["AI_RPG_RESPONSE_HARD_CAP_TOKENS"] = env.get("AI_RPG_RESPONSE_HARD_CAP_TOKENS", "800")
 
@@ -677,19 +630,14 @@ def main() -> int:
     args = parse_args()
     start_time = datetime.now()
 
-    # ── 0. Sanity: is Ollama reachable? ──────────────────────────────────────
-    available_models = ollama_list_models(args.ollama_url)
-    if not available_models:
-        print(
-            f"[FATAL] Cannot reach Ollama at {args.ollama_url} or no models are installed.\n"
-            "        Make sure Ollama is running:  ollama serve\n"
-            "        And at least one model is pulled, e.g.:  ollama pull phi3:mini"
-        )
-        return 1
+    model = (args.model or os.getenv("MLE_MODEL") or os.getenv("PLAYTEST_MLE_MODEL") or "qwen3:8b").strip() or "qwen3:8b"
+    from app.mle import status as mle_status
 
-    model = pick_model(available_models)
-    print(f"[MODEL] Available: {available_models}")
-    print(f"[MODEL] Selected:  {model}  (used for both game engine and player brain)")
+    report = mle_status(model)
+    if not report.get("ok"):
+        print(f"[FATAL] {report.get('detail')}")
+        return 1
+    print(f"[MODEL] MLE model name: {model}")
 
     # ── 1. Set up DB path ────────────────────────────────────────────────────
     data_dir = SCRIPT_DIR / "data"
@@ -706,7 +654,7 @@ def main() -> int:
     base_url = f"http://127.0.0.1:{port}"
     print(f"[SERVER] Binding on port {port}  (base_url={base_url})")
 
-    proc = start_morkyn_server(port, db_path)
+    proc = start_morkyn_server(port, db_path, model)
     print(f"[SERVER] PID {proc.pid}. Waiting for startup (up to {SERVER_STARTUP_TIMEOUT}s)…")
 
     if not wait_for_server(base_url, timeout=SERVER_STARTUP_TIMEOUT):
@@ -723,16 +671,15 @@ def main() -> int:
 
     print(f"[SERVER] Ready at {base_url}")
 
-    # ── 3. Configure the game's LLM to use our chosen Ollama model ───────────
+    # ── 3. Configure the game's LLM to use the MLE model name ────────────────
     try:
         http_post(f"{base_url}/api/model-config", {
-            "provider": "ollama",
-            "ollama_base_url": args.ollama_url,
-            "ollama_model": model,
+            "provider": "mle",
+            "mle_model": model,
             "response_token_cap": 600,
             "response_token_hard_cap": 800,
         }, timeout=15)
-        print(f"[GAME]   Model config set: ollama/{model}")
+        print(f"[GAME]   Model config set: mle/{model}")
     except Exception as e:
         print(f"[WARN]   Could not set model config (non-fatal): {e}")
 
@@ -840,12 +787,7 @@ def main() -> int:
         )
 
         try:
-            action = ollama_chat(
-                base_url=args.ollama_url,
-                model=model,
-                system=PLAYER_BRAIN_SYSTEM,
-                user=user_prompt,
-            )
+            action = mle_player_line(model, PLAYER_BRAIN_SYSTEM, user_prompt)
         except Exception as e:
             action = "I look around carefully to get my bearings."
             turn_issues.append(f"PLAYER_BRAIN_ERROR: {e} — using fallback action")

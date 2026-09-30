@@ -22,7 +22,6 @@ A **deterministic transcoder** (`app/turn_dsl.py`) maps opcodes into the turn di
 |----------|---------|---------|
 | `AI_RPG_DRAFT_MODE` | `dsl` | `dsl` / `ops` / `on` = NAR+OPS first; `json` = legacy JSON draft only |
 | `AI_RPG_DSL_SKIP_VERIFY` | `0` | If `1`, skip model verifier after a successful DSL draft |
-| `OLLAMA_THINK` | `0` | Keep off for Qwen3 so `message.content` is filled |
 
 On DSL parse failure, the pipeline falls back to the legacy JSON draft path.
 

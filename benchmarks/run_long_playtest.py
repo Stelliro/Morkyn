@@ -1,5 +1,5 @@
 """
-benchmarks — long backend playthrough against local Ollama.
+benchmarks — long backend playthrough against local MLE.
 
 Isolated temp world data. Writes live logs + final report under
 benchmarks/reports/ only.
@@ -9,10 +9,8 @@ Run from repo root:
 
 Env:
   GROK_BENCH_TURNS          default 100
-  GROK_BENCH_MODEL          default qwen3:8b (or PLAYTEST_OLLAMA_MODEL / OLLAMA_MODEL)
+  GROK_BENCH_MODEL          default qwen3:8b (or PLAYTEST_MLE_MODEL / MLE_MODEL)
   GROK_BENCH_ABORT_FAILS    consecutive hard failures before abort (default 5)
-  OLLAMA_BASE_URL           default http://127.0.0.1:11434
-  OLLAMA_THINK              default 0
 """
 from __future__ import annotations
 
@@ -189,8 +187,8 @@ def main() -> int:
     abort_fails = max(1, _env_int("GROK_BENCH_ABORT_FAILS", 5))
     model = (
         os.getenv("GROK_BENCH_MODEL")
-        or os.getenv("PLAYTEST_OLLAMA_MODEL")
-        or os.getenv("OLLAMA_MODEL")
+        or os.getenv("PLAYTEST_MLE_MODEL")
+        or os.getenv("MLE_MODEL")
         or "qwen3:8b"
     )
 
@@ -208,12 +206,10 @@ def main() -> int:
         "AI_RPG_CONSOLIDATED_FACTS": str(temp / "facts.jsonl"),
         "AI_RPG_CAMPAIGN_SLOTS": str(temp / "slots"),
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": model,
-        "OLLAMA_CONTEXT_TOKENS": os.getenv("OLLAMA_CONTEXT_TOKENS", "32768"),
-        "OLLAMA_THINK": os.getenv("OLLAMA_THINK", "0"),
-        "AI_RPG_OLLAMA_TIMEOUT": os.getenv("AI_RPG_OLLAMA_TIMEOUT", "600"),
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": model,
+        "AI_RPG_CONTEXT_TOKENS": os.getenv("AI_RPG_CONTEXT_TOKENS", "32768"),
+        "AI_RPG_MLE_TIMEOUT": os.getenv("AI_RPG_MLE_TIMEOUT", "600"),
         "AI_RPG_TURN_DRAFT_TIMEOUT": os.getenv("AI_RPG_TURN_DRAFT_TIMEOUT", "600"),
         "AI_RPG_TURN_VERIFY_TIMEOUT": os.getenv("AI_RPG_TURN_VERIFY_TIMEOUT", "480"),
         "AI_RPG_FAST_VERIFICATION": os.getenv("AI_RPG_FAST_VERIFICATION", "1"),
@@ -260,9 +256,8 @@ def main() -> int:
         init_db()
         update_model_config(
             {
-                "provider": "ollama",
-                "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-                "ollama_model": model,
+                "provider": "mle",
+                "mle_model": model,
                 "response_token_cap": 1000,
                 "response_token_hard_cap": 1500,
             }

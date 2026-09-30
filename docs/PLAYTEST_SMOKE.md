@@ -7,10 +7,10 @@ python tools/smoke_isekai_open.py
 ```
 
 - Always checks **weak skill seed** + **dice defaults** after Start.
-- If Ollama is up, runs **opening + 3 turns** with an isekai compounding setup.
+- If MLE has a model loaded, runs **opening + 3 turns** with an isekai compounding setup. Until the welding rig is connected, only the seed checks run.
 - Writes `report.json` under a temp dir (path printed).
 
-Env knobs: `OLLAMA_BASE_URL`, `PLAYTEST_OLLAMA_MODEL` / `OLLAMA_MODEL`.
+Env knobs: `PLAYTEST_MLE_MODEL` / `MLE_MODEL`.
 
 ## Manual checklist
 

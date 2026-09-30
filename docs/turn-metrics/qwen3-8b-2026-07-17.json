@@ -2,13 +2,11 @@
   "title": "Mørkyn local turn metrics — qwen3:8b",
   "date": "2026-07-17",
   "host": {
-    "provider": "ollama",
-    "base_url": "http://127.0.0.1:11434",
+    "provider": "local",
     "model": "qwen3:8b",
     "parameter_size": "8.2B",
     "quantization": "Q4_K_M",
-    "context_tokens": 32768,
-    "ollama_think": false
+    "context_tokens": 32768
   },
   "config": {
     "response_token_cap": 1200,

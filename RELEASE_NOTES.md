@@ -56,7 +56,7 @@ Three new blocks injected into every turn's LLM prompt:
 
 ### Autonomous player agent (`player_agent.py`)
 
-A standalone script that plays a full session using the same 8B Ollama model in both narrator and player roles. The player role sees only the narrative text and its character sheet — no world-state JSON, no entity codes, no GM context.
+A standalone script that plays a full session using the same 8B model through MLE in both narrator and player roles. The player role sees only the narrative text and its character sheet — no world-state JSON, no entity codes, no GM context.
 
 - **Lore Bible:** The agent maintains a running entity tracker built from the narrative it has seen. Named people, places, and objects are accumulated into a "What you know so far:" block injected at the start of each player context.
 - **Goal directive:** The agent receives a pursuit goal at session start and works toward it across turns.
@@ -91,7 +91,7 @@ Morkyn.bat local
 python -m uvicorn app.main:app --port 8000
 ```
 
-Requirements: Python 3.11+, Ollama running locally (or configured cloud API).
+Requirements: Python 3.11+. Local story uses MLE. A cloud API is optional. Forge and Comfy stay optional for images.
 
 See [README.md](README.md) for full setup.
 

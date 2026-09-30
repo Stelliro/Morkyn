@@ -1,10 +1,12 @@
 # Neural welding rig — offline adapters for Morkyn
 
+A repeated content word is hidden with a **sample-time blanket** in the welding rig, not with another theme weld and not with a paragraph in the prompt. For one generation the sampler cannot choose that token. The weight file stays as it is. Joining words, single letters, numbers, grid codes, and `@` / bracket tokens stay choosable. Names stay choosable. A job title stays choosable when it is listed with the names, and it is not a link to a record. Theme welds below are for a standing voice. They do not carry a five-to-ten-turn job cooldown.
+
 Morkyn does **not** train weights mid-session. Style / theme shifts come from:
 
 1. **Prompt bias** — `session_theme` (always on for Randomize/Start)
 2. **Model routing** — `theme_adapter_map` / `session_theme.theme_model` (turn-time swap)
-3. **Offline LoRA / merges** — train **outside** Morkyn, then point Ollama or llama.cpp at the result
+3. **Offline LoRA / merges** — train **outside** Morkyn, then point MLE or llama.cpp at the result
 
 The offline trainer lives in a **separate repo**:
 **[neural-welding-rig](https://github.com/Stelliro/neural-welding-rig)** (Unsloth LoRA, Gradio chamber).
@@ -45,7 +47,7 @@ Benchmarks (incomplete engineering tests):
 |-------|------------------|
 | Unsloth 4-bit LoRA train loop | Proven path to produce small adapters on consumer GPU |
 | Chat-template formatting + decode-only-new-tokens | Avoids garbled “prompt echo” welds when you build Morkyn theme adapters |
-| Explicit PEFT `adapter_model.safetensors` save | Reliable export into Ollama / llama.cpp workflow |
+| Explicit PEFT `adapter_model.safetensors` save | Reliable export into an MLE or llama.cpp workflow |
 | JSONL validation (`min samples`, parse repair) | Reuse idea for theme datasets |
 | Windows launcher pattern (`NeuralWeldingRig.bat/.ps1`) | Optional sibling launcher; do not fold into `Morkyn.ps1` game path |
 | Short max_steps welds for experiment | Cheap smoke tests before long theme packs |
@@ -59,7 +61,7 @@ Benchmarks (incomplete engineering tests):
 | Golden Record / termination stimuli | Security-research / identity-stress training — not RPG DM voice |
 | EPC / Machine Fear / paper concept shards as play data | Will push narration into `[STATE]/[METRICS]` lab dialect, not prose |
 | Protocol-key Gradio auth as Morkyn auth | Different threat model; Morkyn is local game |
-| Forcing DeepSeek-R1-Distill as Morkyn’s only base | Morkyn already routes Ollama / API / GGUF; adapters must match **your** base |
+| Forcing DeepSeek-R1-Distill as Morkyn’s only base | Morkyn already routes MLE / API / GGUF; adapters must match **your** base |
 | Live mid-session welding | Still too slow; keep offline |
 | Tunnel (`AI_OR_ENABLE_TUNNEL`) | Lab opt-in only; never enable from Morkyn launcher |
 
@@ -76,7 +78,7 @@ To get Morkyn adapters (`morkyn-isekai-dm`, etc.):
 
 1. Build **Morkyn-shaped** JSONL (see dataset outline below).  
 2. Train with the welding-rig **train mechanics** (or a thin theme-mode fork), **not** Golden/EPC injection.  
-3. Export adapter → Ollama/Modelfile/GGUF matching the **same family** as your Morkyn base.  
+3. Export the adapter as GGUF for llama.cpp, or keep it for MLE, matching the **same family** as your base.  
 4. Register in Morkyn Model → Theme adapter models / session theme model.
 
 ---
@@ -102,14 +104,7 @@ If local narration starts to feel **inverted, hard to scan, or thesaurus-flipped
 | `morkyn-setup-hygiene` | Setup Randomize only: structure fields clean, no slogan paste | Optional dedicated setup model |
 | `morkyn-cozy` | Soft pastoral / low stakes | custom map key or `theme_model` |
 
-Ollama example after export:
-
-```bash
-# After welding-rig / Unsloth export to GGUF / Modelfile
-ollama create morkyn-isekai-dm -f Modelfile
-```
-
-Then in Morkyn **Model → Theme adapter models**:
+Register the name in Morkyn **Model → Theme adapter models** (an MLE model name, or a GGUF path when the provider is llama.cpp):
 
 ```
 isekai_rpg → morkyn-isekai-dm
@@ -198,8 +193,8 @@ Quality beats volume: every positive should be something you would ship in Morky
 1. Keep **neural-welding-rig** checked out **beside** Morkyn (or any path outside the game server).  
 2. Export / write Morkyn theme JSONL (`tools/export_welding_jsonl.py` + hand rows + playtests).  
 3. In the welding-rig lab workspace, **replace** AI-OR synth data with your Morkyn JSONL (do not train Golden Record into a DM model you will ship).  
-4. Weld LoRA on a base you already run in Ollama (match family: Qwen / Llama / etc.).  
-5. Merge or serve adapter; create an Ollama model tag (`morkyn-isekai-dm`).  
+4. Weld LoRA on a base in the same family MLE will load (Qwen / Llama / etc.).  
+5. Keep the adapter under the name you will put in the MLE model field (`morkyn-isekai-dm`).  
 6. In Morkyn Model modal:
    - set **Theme adapter models** map, and/or  
    - set **This session theme model** for one run.  
@@ -214,7 +209,7 @@ Optional later (not required now): a `theme_mode` fork of the chamber that skips
 ```
 session_theme.theme_model   → highest priority (manual / this session)
 theme_adapter_map[hint]     → next
-main ollama_model / api_model / gguf → default
+main mle_model / api_model / gguf → default
 ```
 
 See also: `docs/SetupComposer.md` (session theme + adapter map), `docs/PLAYTEST_SMOKE.md` (isekai smoke).

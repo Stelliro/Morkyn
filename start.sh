@@ -11,7 +11,7 @@
 #
 # Options:
 #   --full         also install llama-cpp-python (only needed for the built-in
-#                  GGUF server; Ollama and cloud APIs do not need it)
+#                  GGUF server; MLE and cloud APIs do not need it)
 #   --update       apply an available update without asking
 #   --no-update    skip the update check entirely
 #   --port N       listen on port N (default 8000)
@@ -220,7 +220,7 @@ if [ "$NEED_DEPS" -eq 1 ]; then
     if [ "$WANT_FULL" -eq 0 ]; then
         # llama-cpp-python is only needed for the built-in GGUF server, and its
         # CUDA wheels are a large download that fails outright on machines with
-        # no matching toolchain. Ollama and cloud APIs need none of it, so the
+        # no matching toolchain. MLE and cloud APIs need none of it, so the
         # default install filters it out of the project's own pins rather than
         # keeping a second copy of the version numbers here. --full keeps it.
         TRIMMED="$(mktemp)"

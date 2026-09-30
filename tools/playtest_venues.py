@@ -17,8 +17,7 @@ beats run every time, and dumps the `locations` table after every turn.
     python tools/playtest_venues.py
 
 Env:
-    PLAYTEST_OLLAMA_MODEL   default qwen2.5:7b-instruct
-    OLLAMA_BASE_URL         default http://127.0.0.1:11434
+    PLAYTEST_MLE_MODEL   default qwen2.5:7b-instruct
     PLAYTEST_OUT            optional path for the JSON report
 """
 from __future__ import annotations
@@ -92,7 +91,7 @@ def _narration_of(payload: dict, state: dict) -> str:
 
 
 def main() -> int:
-    model = os.getenv("PLAYTEST_OLLAMA_MODEL", "qwen2.5:7b-instruct")
+    model = os.getenv("PLAYTEST_MLE_MODEL", "qwen2.5:7b-instruct")
     temp = Path(tempfile.mkdtemp(prefix="morkyn_venues_"))
     for key, val in {
         "AI_RPG_DB": str(temp / "world.db"),
@@ -103,12 +102,10 @@ def main() -> int:
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
         "AI_RPG_PACK_DIR": str(temp / "packs"),
         "AI_RPG_SKILL_LIBRARY": str(temp / "skill_library.json"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": model,
-        "OLLAMA_CONTEXT_TOKENS": os.getenv("OLLAMA_CONTEXT_TOKENS", "32768"),
-        "OLLAMA_THINK": "0",
-        "AI_RPG_OLLAMA_TIMEOUT": "600",
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": model,
+        "AI_RPG_CONTEXT_TOKENS": os.getenv("AI_RPG_CONTEXT_TOKENS", "32768"),
+        "AI_RPG_MLE_TIMEOUT": "600",
         "AI_RPG_TURN_DRAFT_TIMEOUT": "600",
         "AI_RPG_TURN_VERIFY_TIMEOUT": "480",
     }.items():
@@ -124,9 +121,8 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": model,
+            "provider": "mle",
+            "mle_model": model,
             "response_token_cap": 1500,
             "response_token_hard_cap": 2000,
         }

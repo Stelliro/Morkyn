@@ -523,8 +523,7 @@ class RewindRequest(BaseModel):
 
 class ModelConfigRequest(BaseModel):
     provider: str = Field(default="llama_cpp", max_length=40)
-    ollama_base_url: str = Field(default="http://localhost:11434", max_length=300)
-    ollama_model: str = Field(default="llama3.1", max_length=200)
+    mle_model: str = Field(default="qwen3:8b", max_length=200)
     llama_cpp_base_url: str = Field(default="http://localhost:8080", max_length=300)
     gguf_model_path: str = Field(default="", max_length=1000)
     api_base_url: str = Field(default="https://api.x.ai/v1", max_length=400)
@@ -533,7 +532,7 @@ class ModelConfigRequest(BaseModel):
     api_preset: str = Field(default="xai", max_length=40)
     response_token_cap: int = Field(default=1500, ge=64, le=100000)
     response_token_hard_cap: int = Field(default=2000, ge=64, le=100000)
-    # Optional: adapter_hint → Ollama model / API model / GGUF path for turn-time routing.
+    # Optional: adapter_hint → MLE model / API model / GGUF path for turn-time routing.
     theme_adapter_map: dict[str, str] = Field(default_factory=dict)
     # UI posts these on Save. Omitting them made the LoRA fields look saved, then vanish.
     theme_llm_lora_map: dict[str, Any] = Field(default_factory=dict)
@@ -630,6 +629,23 @@ class MapGenerateRequest(BaseModel):
     width: int | None = Field(default=None, ge=8, le=96)
     height: int | None = Field(default=None, ge=8, le=96)
     assign_images: bool = True
+    # world: the 16,383 grid. board: the older preset-sized chart, also used when width is sent.
+    scale: str = Field(default="world", max_length=16)
+    density_percent: int | None = Field(default=None, ge=0, le=100)
+    notice_percent: int | None = Field(default=None, ge=0, le=100)
+
+
+class MapRevealRequest(BaseModel):
+    x: int = Field(ge=0, le=16382)
+    y: int = Field(ge=0, le=16382)
+    radius: int = Field(default=1, ge=0, le=4)
+    label: str = Field(default="", max_length=80)
+
+
+class MapMarkerRequest(BaseModel):
+    x: int = Field(ge=0, le=16382)
+    y: int = Field(ge=0, le=16382)
+    label: str = Field(default="mark", max_length=80)
 
 
 class TileImageSearchRequest(BaseModel):
@@ -1932,7 +1948,15 @@ def api_tile_map(map_id: str = ""):
     if not data:
         # Soft empty payload so the UI can boot without a hard 404.
         return {"id": None, "tiles": [], "ascii": "", "empty": True}
-    data["ascii"] = ascii_preview(data)
+    if data.get("scale") == "world":
+        from app.world_scale import preview_window
+
+        preview = preview_window(data)
+        data["preview"] = preview
+        data["ascii"] = preview.get("ascii") or ""
+        data.pop("cell_index", None)
+    else:
+        data["ascii"] = ascii_preview(data)
     data["empty"] = False
     data["map_blank"] = False
     data["movement_locked"] = bool(runtime.get("movement_locked"))
@@ -1990,7 +2014,14 @@ def api_tile_map_local(radius: int = 6):
     if not data:
         return {"empty": True, "tiles": [], "radius": radius}
     view = local_map_view(data, radius=radius)
-    view["ascii"] = ascii_preview(data)
+    if data.get("scale") == "world":
+        view["ascii"] = (
+            f"{data.get('width')}×{data.get('height')} · density {data.get('density_percent')}% · "
+            f"{len(data.get('cities') or [])} settlements"
+        )
+        view["scale"] = "world"
+    else:
+        view["ascii"] = ascii_preview(data)
     view["id"] = data.get("id")
     view["preset_id"] = data.get("preset_id")
     view["map_avatar"] = _map_avatar_payload()
@@ -2349,19 +2380,53 @@ def api_travel_status():
 @app.post("/api/tiles/generate")
 def api_tiles_generate(request: MapGenerateRequest):
     try:
-        data = generate_map(
-            preset_id=request.preset_id or "forest_march",
-            seed=request.seed,
-            width=request.width,
-            height=request.height,
-            assign_images=request.assign_images,
-        )
+        # An explicit width stays on the small board. The default is the world grid.
+        if request.width is None and request.height is None and request.scale != "board":
+            from app.tile_world import generate_scaled_world
+
+            data = generate_scaled_world(
+                preset_id=request.preset_id or "forest_march",
+                seed=request.seed,
+                density_percent=request.density_percent,
+                notice_percent=request.notice_percent,
+            )
+        else:
+            data = generate_map(
+                preset_id=request.preset_id or "forest_march",
+                seed=request.seed,
+                width=request.width,
+                height=request.height,
+                assign_images=request.assign_images,
+            )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    data["ascii"] = ascii_preview(data)
+    if not data.get("ascii"):
+        data["ascii"] = ascii_preview(data)
     # Response size: omit nested grid if large; keep flat tiles
     data.pop("grid", None)
+    data.pop("cell_index", None)
     return data
+
+
+@app.post("/api/tiles/map/reveal")
+def api_tiles_map_reveal(request: MapRevealRequest):
+    from app.local_intel import run_map_command
+
+    label = request.label or ""
+    result = run_map_command("reveal", f"{request.x} {request.y} {request.radius} {label}".strip())
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "Could not reveal that cell."))
+    return result
+
+
+@app.post("/api/tiles/map/marker")
+def api_tiles_map_marker(request: MapMarkerRequest):
+    from app.local_intel import run_map_command
+
+    result = run_map_command("mark", f"{request.x} {request.y} {request.label}".strip())
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=str(result.get("error") or "Could not mark that cell."))
+    return result
 
 
 @app.post("/api/tiles/images/search")
@@ -2528,10 +2593,8 @@ def api_launcher_prefs_set(request: LauncherPrefsRequest):
             cfg = get_model_config()
             if saved.get("model_provider"):
                 cfg["provider"] = saved["model_provider"]
-            if saved.get("ollama_model"):
-                cfg["ollama_model"] = saved["ollama_model"]
-            if saved.get("ollama_base_url"):
-                cfg["ollama_base_url"] = saved["ollama_base_url"]
+            if saved.get("mle_model"):
+                cfg["mle_model"] = saved["mle_model"]
             if saved.get("gguf_model_path"):
                 cfg["gguf_model_path"] = saved["gguf_model_path"]
             if saved.get("api_base_url"):
@@ -3646,6 +3709,197 @@ def api_get_quests():
     with connect() as conn:
         quests = get_active_quests(conn)
     return {"ok": True, "quests": quests}
+
+
+@app.get("/api/quests/markers")
+def api_quest_markers():
+    """
+    Return one marker per active quest, for the current (active) step only.
+    Only steps with a location_coords set produce a marker.
+    """
+    import json as _json
+    from app.db import connect
+
+    markers: list[dict] = []
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT q.id AS quest_id, q.title AS quest_name, q.current_step,
+                   qs.step_number AS step_index, qs.description AS step_description,
+                   qs.location_name, qs.location_coords
+              FROM quests q
+              JOIN quest_steps qs
+                ON qs.quest_id = q.id AND qs.step_number = q.current_step
+             WHERE q.status = 'active'
+               AND qs.location_coords != ''
+             ORDER BY q.id
+            """
+        ).fetchall()
+        for row in rows:
+            try:
+                coords = _json.loads(row["location_coords"])
+            except Exception:
+                continue
+            if not isinstance(coords, dict) or coords.get("x") is None:
+                continue
+            markers.append(
+                {
+                    "quest_id": row["quest_id"],
+                    "quest_name": row["quest_name"],
+                    "step_index": row["step_index"],
+                    "step_description": row["step_description"],
+                    "location_name": row["location_name"] or "",
+                    "coords": {"x": float(coords["x"]), "y": float(coords["y"])},
+                    "is_current_step": True,
+                }
+            )
+    return markers
+
+
+@app.get("/api/map/npc-markers")
+def api_npc_markers():
+    """
+    Return NPC map markers for all placed NPCs.
+
+    Marker types (by priority, highest first):
+      "watched"   — player has pinned this NPC (purple 📌)
+      "quest_npc" — NPC is the giver of an active quest (orange 👤)
+      "vendor"    — NPC sells items / is a shop keeper (blue 🛒)
+
+    Lazily assigns/updates positions via update_npc_map_positions.
+    """
+    import json as _json
+    from app.db import connect
+    from app.world import update_npc_map_positions
+
+    # Role keywords that indicate a vendor/shopkeeper
+    VENDOR_ROLES = frozenset({
+        "merchant", "trader", "shopkeeper", "vendor", "peddler", "innkeeper",
+        "bartender", "barkeeper", "blacksmith", "alchemist", "armourer",
+        "armorer", "weaponsmith", "tailor", "herbalist", "apothecary",
+        "jeweller", "jeweler", "fence", "hawker", "stall vendor", "tinker",
+    })
+
+    with connect() as conn:
+        # Update NPC positions before reading them
+        try:
+            update_npc_map_positions(conn)
+        except Exception:
+            pass
+
+        # Collect watched NPC ids
+        try:
+            watched_ids = {
+                int(r["npc_id"])
+                for r in conn.execute("SELECT npc_id FROM watched_npcs").fetchall()
+            }
+        except Exception:
+            watched_ids = set()
+
+        # Collect active-quest giver NPC ids
+        try:
+            quest_npc_ids = {
+                int(r["giver_npc_id"])
+                for r in conn.execute(
+                    "SELECT giver_npc_id FROM quests WHERE status = 'active' AND giver_npc_id IS NOT NULL"
+                ).fetchall()
+                if r["giver_npc_id"] is not None
+            }
+        except Exception:
+            quest_npc_ids = set()
+
+        # Collect keeper_npc_ids (NPCs who are shopkeepers of venue locations)
+        try:
+            keeper_ids = {
+                int(r["keeper_npc_id"])
+                for r in conn.execute(
+                    "SELECT keeper_npc_id FROM locations WHERE keeper_npc_id > 0 AND kind != ''"
+                ).fetchall()
+            }
+        except Exception:
+            keeper_ids = set()
+
+        # Fetch all placed NPCs
+        try:
+            rows = conn.execute(
+                """
+                SELECT n.id, n.name, n.role, n.map_x, n.map_y, n.is_moving,
+                       l.kind AS loc_kind
+                  FROM npcs n
+                  LEFT JOIN locations l ON l.id = n.location_id
+                 WHERE n.map_x >= 0 AND n.map_y >= 0
+                """
+            ).fetchall()
+        except Exception:
+            rows = []
+
+        markers = []
+        for row in rows:
+            npc_id = int(row["id"])
+            role = str(row["role"] or "").lower()
+            loc_kind = str(row["loc_kind"] or "").lower()
+
+            # Determine marker type (highest priority first)
+            if npc_id in watched_ids:
+                marker_type = "watched"
+            elif npc_id in quest_npc_ids:
+                marker_type = "quest_npc"
+            elif (
+                npc_id in keeper_ids
+                or any(kw in role for kw in VENDOR_ROLES)
+                or loc_kind != ""  # venue child location → likely a shop
+            ):
+                marker_type = "vendor"
+            else:
+                continue  # no marker type → not shown on map
+
+            # Build note from role
+            note = str(row["role"] or "").replace("_", " ").title()
+
+            markers.append({
+                "npc_id": str(npc_id),
+                "name": str(row["name"] or ""),
+                "marker_type": marker_type,
+                "coords": {
+                    "x": float(row["map_x"]),
+                    "y": float(row["map_y"]),
+                },
+                "is_moving": bool(row["is_moving"]),
+                "note": note,
+            })
+
+    return markers
+
+
+@app.post("/api/npc/{npc_id}/watch")
+def api_npc_watch_toggle(npc_id: int):
+    """Toggle the player's watch pin on an NPC. Returns {"watching": bool}."""
+    from app.db import connect
+
+    with connect() as conn:
+        # Verify NPC exists
+        npc = conn.execute("SELECT id FROM npcs WHERE id = ?", (npc_id,)).fetchone()
+        if not npc:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="NPC not found")
+
+        turn_row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+        turn = int(turn_row["value"] or 0) if turn_row else 0
+
+        existing = conn.execute(
+            "SELECT npc_id FROM watched_npcs WHERE npc_id = ?", (npc_id,)
+        ).fetchone()
+        if existing:
+            conn.execute("DELETE FROM watched_npcs WHERE npc_id = ?", (npc_id,))
+            watching = False
+        else:
+            conn.execute(
+                "INSERT OR REPLACE INTO watched_npcs (npc_id, added_turn) VALUES (?, ?)",
+                (npc_id, turn),
+            )
+            watching = True
+
+    return {"watching": watching}
 
 
 @app.post("/api/quests/{quest_id}/advance")

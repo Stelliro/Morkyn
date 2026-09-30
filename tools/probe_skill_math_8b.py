@@ -428,11 +428,9 @@ def main() -> int:
         "AI_RPG_CONSOLIDATED_FACTS": str(temp / "facts.jsonl"),
         "AI_RPG_CAMPAIGN_SLOTS": str(temp / "slots"),
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": os.getenv("PLAYTEST_OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b")),
-        "OLLAMA_THINK": "0",
-        "AI_RPG_OLLAMA_TIMEOUT": "360",
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": os.getenv("PLAYTEST_MLE_MODEL", os.getenv("MLE_MODEL", "qwen3:8b")),
+        "AI_RPG_MLE_TIMEOUT": "360",
         "AI_RPG_SETUP_RANDOMIZER_TIMEOUT": "180",
     }.items():
         os.environ[key] = val
@@ -447,15 +445,14 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": os.environ["OLLAMA_MODEL"],
+            "provider": "mle",
+            "mle_model": os.environ["MLE_MODEL"],
             "response_token_cap": 900,
             "response_token_hard_cap": 1400,
         }
     )
 
-    print(f"model={os.environ['OLLAMA_MODEL']} temp={temp}", flush=True)
+    print(f"model={os.environ['MLE_MODEL']} temp={temp}", flush=True)
     report: list[dict[str, Any]] = []
 
     for entry in THEMES:
@@ -580,7 +577,7 @@ def main() -> int:
     # Aggregate
     overalls = [r["scoring"]["overall_10"] for r in report if r.get("scoring")]
     agg = {
-        "model": os.environ["OLLAMA_MODEL"],
+        "model": os.environ["MLE_MODEL"],
         "packages": len(report),
         "mean_overall_10": round(sum(overalls) / len(overalls), 1) if overalls else 0,
         "min_overall_10": min(overalls) if overalls else 0,

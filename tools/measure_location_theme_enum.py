@@ -83,7 +83,7 @@ CASES: list[tuple[str, str, bool]] = [
 
 def main() -> int:
     cfg = llm.get_model_config()
-    print(f"model: {cfg.get('provider')}:{cfg.get('ollama_model')}  (shipped config)")
+    print(f"model: {cfg.get('provider')}:{cfg.get('mle_model')}  (shipped config)")
     print(f"{len(CASES)} settings\n")
 
     rows: list[tuple[str, str, bool, str, str, str]] = []

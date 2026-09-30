@@ -2,12 +2,12 @@
 playtest.py — Automated playtest harness for Mørkyn
 ====================================================
 Run from the project root:
-    python playtest.py [--turns 120] [--model mistral] [--keep-db]
+    python playtest.py [--turns 120] [--model qwen3:8b] [--keep-db]
 
-The script spins up a fresh game world against your local Ollama server,
+The script spins up a fresh game world on MLE (Morkyn LLM Engine),
 drives 100+ turns of varied player behaviour, and writes playtest_report.txt
 when it's done.  Errors are caught turn-by-turn so a single crash never
-stops the whole run.
+stops the whole run. Until the welding rig is connected, MLE turns say so.
 """
 
 from __future__ import annotations
@@ -19,8 +19,6 @@ import re
 import sys
 import time
 import traceback
-import urllib.error
-import urllib.request
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -43,9 +41,8 @@ if str(SCRIPT_DIR) not in sys.path:
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Mørkyn automated playtest harness")
     p.add_argument("--turns", type=int, default=120, help="Number of turns to play (default 120)")
-    p.add_argument("--model", type=str, default="", help="Force a specific Ollama model name")
-    p.add_argument("--ollama-url", type=str, default="http://localhost:11434",
-                   help="Ollama base URL (default http://localhost:11434)")
+    p.add_argument("--model", type=str, default="",
+                   help="MLE model name (default qwen3:8b, or MLE_MODEL)")
     p.add_argument("--keep-db", action="store_true",
                    help="Keep the playtest DB after the run (default: use temp path)")
     p.add_argument("--db-path", type=str, default="",
@@ -56,84 +53,29 @@ def parse_args() -> argparse.Namespace:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 2.  Ollama model detection
+# 2.  MLE model name
 # ──────────────────────────────────────────────────────────────────────────────
 
-PREFER_7B_PATTERNS = [
-    r"7b",
-    r"8b",
-    r"mistral",
-    r"llama3\.1:8b",
-    r"llama3:8b",
-    r"gemma.*7b",
-    r"phi.*mini",
-    r"orca.*mini",
-    r"neural.*chat",
-    r"qwen.*7b",
-    r"deepseek.*7b",
-]
-
-def _ollama_get(url: str, timeout: int = 10) -> Any:
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode())
-
-
-def detect_ollama_models(base_url: str) -> list[str]:
-    """Return list of model names available on the Ollama server."""
-    try:
-        data = _ollama_get(f"{base_url}/api/tags")
-        models = data.get("models") or []
-        return [m["name"] for m in models if isinstance(m, dict) and m.get("name")]
-    except Exception as e:
-        print(f"[WARN] Could not reach Ollama at {base_url}: {e}")
-        return []
-
-
-def pick_model(models: list[str], forced: str = "") -> str:
-    """Pick the best available model, preferring ~7B sizes."""
-    if forced:
-        # Accept partial match: "mistral" matches "mistral:latest"
-        for m in models:
-            if forced.lower() in m.lower():
-                return m
-        print(f"[WARN] Forced model '{forced}' not found in {models}; falling back to auto-select.")
-
-    if not models:
-        return "llama3.1"  # fallback default, may fail gracefully later
-
-    low = [m.lower() for m in models]
-
-    # Score each model: higher = better
-    def score(name: str) -> int:
-        n = name.lower()
-        # Strongly prefer 7-8B
-        for i, pat in enumerate(PREFER_7B_PATTERNS):
-            if re.search(pat, n):
-                return 1000 - i
-        # Penalise very large models (34B+, 70B+)
-        if re.search(r"(34b|70b|72b|180b)", n):
-            return -100
-        # Anything else gets a middling score
-        return 500
-
-    scored = sorted(models, key=score, reverse=True)
-    return scored[0]
+def chosen_model(forced: str = "") -> str:
+    """Name stored for MLE. Nothing is downloaded or listed from a server."""
+    name = (forced or os.getenv("MLE_MODEL") or os.getenv("PLAYTEST_MLE_MODEL") or "qwen3:8b").strip()
+    return name or "qwen3:8b"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 3.  Environment configuration (must happen BEFORE importing app modules)
 # ──────────────────────────────────────────────────────────────────────────────
 
-def configure_environment(ollama_url: str, model: str, db_path: str) -> None:
-    os.environ["AI_RPG_MODEL_PROVIDER"] = "ollama"
-    os.environ["OLLAMA_BASE_URL"] = ollama_url
-    os.environ["OLLAMA_MODEL"] = model
+def configure_environment(model: str, db_path: str) -> None:
+    os.environ["AI_RPG_MODEL_PROVIDER"] = "mle"
+    os.environ["MLE_MODEL"] = model
     os.environ["AI_RPG_DB"] = db_path
+    for gone in ("OLLAMA_MODEL", "OLLAMA_BASE_URL", "OLLAMA_THINK", "OLLAMA_CONTEXT_TOKENS"):
+        os.environ.pop(gone, None)
     # Reduce token caps slightly so turns are faster in automated runs
     os.environ.setdefault("AI_RPG_MAX_RESPONSE_TOKENS", "600")
     os.environ.setdefault("AI_RPG_RESPONSE_HARD_CAP_TOKENS", "800")
-    print(f"[ENV] provider=ollama  url={ollama_url}  model={model}  db={db_path}")
+    print(f"[ENV] provider=mle  model={model}  db={db_path}")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -431,11 +373,7 @@ class PlaytestRun:
         self.args = args
         self.start_time = datetime.now()
 
-        # Model selection
-        self.ollama_url = args.ollama_url
-        available = detect_ollama_models(self.ollama_url)
-        self.available_models = available
-        self.model = pick_model(available, forced=args.model)
+        self.model = chosen_model(args.model)
 
         # DB path
         if args.db_path:
@@ -451,7 +389,7 @@ class PlaytestRun:
                 db.unlink()
                 print(f"[INFO] Removed stale playtest DB: {db}")
 
-        configure_environment(self.ollama_url, self.model, self.db_path)
+        configure_environment(self.model, self.db_path)
 
         # Tracking
         self.turn_log: list[dict[str, Any]] = []  # one entry per turn
@@ -485,11 +423,10 @@ class PlaytestRun:
         # Push model config into the DB so world.py picks it up reliably
         try:
             update_model_config({
-                "provider": "ollama",
-                "ollama_base_url": self.ollama_url,
-                "ollama_model": self.model,
+                "provider": "mle",
+                "mle_model": self.model,
             })
-            print(f"[INFO] Model config saved: ollama / {self.model}")
+            print(f"[INFO] Model config saved: mle / {self.model}")
         except Exception as e:
             print(f"[WARN] update_model_config failed (non-fatal): {e}")
 
@@ -694,7 +631,7 @@ class PlaytestRun:
         lines.append("MØRKYN AUTOMATED PLAYTEST REPORT")
         lines.append(f"Generated : {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
         lines.append(f"Duration  : {duration:.0f}s ({duration/60:.1f} min)")
-        lines.append(f"Model     : {self.model}  [{self.ollama_url}]")
+        lines.append(f"Model     : {self.model}  [MLE]")
         lines.append(f"DB path   : {self.db_path}")
 
         h("SUMMARY")
@@ -709,13 +646,9 @@ class PlaytestRun:
         lines.append("")
         lines.append(f"  OVERALL: {'✓ PASS' if passed else '✗ FAIL'}")
 
-        h("AVAILABLE OLLAMA MODELS")
-        if self.available_models:
-            for m in self.available_models:
-                marker = " ← selected" if m == self.model else ""
-                lines.append(f"  {m}{marker}")
-        else:
-            lines.append("  (none detected — Ollama may be offline)")
+        h("MLE")
+        lines.append(f"  model: {self.model}")
+        lines.append("  The welding rig is not connected yet, so a local turn says so.")
 
         h("TURN CATEGORY BREAKDOWN")
         for cat, count in sorted(category_counts.items()):
@@ -842,11 +775,8 @@ if __name__ == "__main__":
     print("=" * 72)
 
     run = PlaytestRun(args)
-    print(f"\n[MODEL] Selected: {run.model}")
-    if run.available_models:
-        print(f"[MODEL] All available: {', '.join(run.available_models[:8])}")
-    else:
-        print("[MODEL] No Ollama models detected — will attempt anyway with default.")
+    print(f"\n[MODEL] MLE model name: {run.model}")
+    print("[MODEL] The welding rig is not connected yet. Local turns will say so.")
     print()
 
     run.run()

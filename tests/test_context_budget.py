@@ -7,7 +7,7 @@ estimates ~9100 tokens. `enforce_token_budget` raised
 
 on turn one, the turn fell back to deterministic prose, and the player got flat
 canned narration on *every* turn with nothing on screen explaining why. The
-playtest tools in `tools/` all export `OLLAMA_CONTEXT_TOKENS=32768`, so no test
+playtest tools in `tools/` all export `AI_RPG_CONTEXT_TOKENS=32768`, so no test
 or probe ever exercised the shipped default.
 
 Two guarantees here:
@@ -64,7 +64,7 @@ class TestDefaultContextFitsContract(unittest.TestCase):
     def setUp(self):
         self._saved = {
             key: os.environ.pop(key, None)
-            for key in ("OLLAMA_CONTEXT_TOKENS", "AI_RPG_LLAMA_CPP_CONTEXT")
+            for key in ("AI_RPG_CONTEXT_TOKENS", "AI_RPG_LLAMA_CPP_CONTEXT")
         }
 
     def tearDown(self):
@@ -75,7 +75,7 @@ class TestDefaultContextFitsContract(unittest.TestCase):
                 os.environ[key] = value
 
     def test_default_window_holds_system_prompt_plus_working_room(self):
-        window = llm.context_window_tokens({"provider": "ollama"})
+        window = llm.context_window_tokens({"provider": "mle"})
         needed = llm.estimated_tokens(SYSTEM_PROMPT) + llm.MIN_TURN_HEADROOM_TOKENS
         self.assertGreaterEqual(
             window,
@@ -90,12 +90,12 @@ class TestDefaultContextFitsContract(unittest.TestCase):
         self.assertGreaterEqual(pref, needed, "launcher default context is too small to play")
 
     def test_default_config_selects_the_full_contract(self):
-        system, _verify, degraded = llm.fitting_system_prompts({"provider": "ollama"})
+        system, _verify, degraded = llm.fitting_system_prompts({"provider": "mle"})
         self.assertIs(system, SYSTEM_PROMPT)
         self.assertFalse(degraded)
 
     def test_budget_guard_does_not_raise_on_defaults(self):
-        system, _verify, _degraded = llm.fitting_system_prompts({"provider": "ollama"})
+        system, _verify, _degraded = llm.fitting_system_prompts({"provider": "mle"})
         # Should return a usable pair, not raise LlmError.
         got_system, got_user, diag = llm.enforce_token_budget(system, "world packet " * 200)
         self.assertTrue(got_system)
@@ -110,7 +110,7 @@ class TestSmallWindowDegradesInsteadOfFailing(unittest.TestCase):
         for window in (4096, 8192):
             with self.subTest(window=window):
                 system, verify, degraded = llm.fitting_system_prompts(
-                    {"provider": "ollama", "context_window": window}
+                    {"provider": "mle", "context_window": window}
                 )
                 self.assertIs(system, COMPACT_SYSTEM_PROMPT)
                 self.assertTrue(verify)
@@ -120,7 +120,7 @@ class TestSmallWindowDegradesInsteadOfFailing(unittest.TestCase):
         for window in (4096, 8192):
             with self.subTest(window=window):
                 system, _verify, _degraded = llm.fitting_system_prompts(
-                    {"provider": "ollama", "context_window": window}
+                    {"provider": "mle", "context_window": window}
                 )
                 self.assertLess(
                     llm.estimated_tokens(system),
@@ -130,7 +130,7 @@ class TestSmallWindowDegradesInsteadOfFailing(unittest.TestCase):
 
     def test_small_window_no_longer_hard_fails(self):
         system, _verify, _degraded = llm.fitting_system_prompts(
-            {"provider": "ollama", "context_window": 8192}
+            {"provider": "mle", "context_window": 8192}
         )
         try:
             llm.enforce_token_budget(system, "world packet " * 200)
@@ -139,7 +139,7 @@ class TestSmallWindowDegradesInsteadOfFailing(unittest.TestCase):
 
     def test_full_contract_still_wins_when_there_is_room(self):
         system, _verify, degraded = llm.fitting_system_prompts(
-            {"provider": "ollama", "context_window": 32768}
+            {"provider": "mle", "context_window": 32768}
         )
         self.assertIs(system, SYSTEM_PROMPT)
         self.assertFalse(degraded)
@@ -158,7 +158,7 @@ class TestTurnTimeoutsAreNotTighterThanTheModel(unittest.TestCase):
 
     Measured on an RTX 4070 Ti with qwen3:8b and a ~9k-token packet, the turn
     draft took 27-37s on an idle GPU and 75-100s with an ordinary desktop load
-    on the card. The old 90s Ollama default sat inside that range -- a probe
+    on the card. The old 90s local default sat inside that range -- a probe
     timed out at exactly 90s and a 100-turn run measured a draft at 99.7s -- so
     anyone on slower hardware, or merely watching a video, fell back every turn
     to canned deterministic prose.
@@ -168,7 +168,7 @@ class TestTurnTimeoutsAreNotTighterThanTheModel(unittest.TestCase):
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in (
-            "AI_RPG_TURN_DRAFT_TIMEOUT", "AI_RPG_TURN_VERIFY_TIMEOUT", "AI_RPG_OLLAMA_TIMEOUT",
+            "AI_RPG_TURN_DRAFT_TIMEOUT", "AI_RPG_TURN_VERIFY_TIMEOUT", "AI_RPG_MLE_TIMEOUT",
         )}
         for key in self._saved:
             os.environ.pop(key, None)
@@ -180,13 +180,13 @@ class TestTurnTimeoutsAreNotTighterThanTheModel(unittest.TestCase):
             else:
                 os.environ[key] = val
 
-    def _timeout(self, ollama_default: int, llama_default: int, env: str) -> int:
+    def _timeout(self, mle_default: int, llama_default: int, env: str) -> int:
         # Patch the config rather than writing one: this is about how the
         # defaults resolve, not about the settings table.
         original = llm.get_model_config
-        llm.get_model_config = lambda *a, **k: {"provider": "ollama"}
+        llm.get_model_config = lambda *a, **k: {"provider": "mle"}
         try:
-            return llm._model_timeout(ollama_default, llama_default, env)
+            return llm._model_timeout(mle_default, llama_default, env)
         finally:
             llm.get_model_config = original
 

@@ -14,7 +14,7 @@ Bug class (wiring-local-npcs-codes):
   After focused handoff, locations[] is optional so nested npcs are gone.
   The collectors then return [] and density / must_cover miss everyone on screen.
 
-CPU only — no live draft / no Ollama.
+CPU only — no live draft / no story model.
 
 Exit 0 = both invariants hold
 Exit 1 = bug proven

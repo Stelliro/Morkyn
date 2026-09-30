@@ -31,6 +31,7 @@ OPCODES = {
     "HP",
     "KARMA",
     "MOVE",
+    "WALK",
     "LOC_NEW",
     "EVENT",
     "GM",
@@ -77,6 +78,7 @@ XP <band>
 HP <band>
 KARMA <band> [VIS <private|local|faction|public>] [REASON "<why>"]
 MOVE <place name — an existing one from movement_contract.known_places, or a new one you name>
+WALK <direction> [STEPS <1-4>]
 LOC_NEW "<name>" "<summary>"
 EVENT "<title>" [LOC <code>] [NPC <code>] [SUMMARY "<text>"]
 GM "<trigger>" "<private future note>"
@@ -122,6 +124,11 @@ Leave CAST out when the scene cast does not change.
   movement_contract.current_location's parent. A scene that walks the player into a shop with no
   MOVE line leaves them standing in the street, and the shop stops existing the moment it scrolls
   out of context.
+- When world_state.map_space is present, that grid is the whole land. One turn walks at most
+  map_space.step_budget tiles. A hike across country is WALK <direction> STEPS <1-4>
+  (north, south, east, west, or a compound such as northeast) plus a MOVE naming the place
+  where the walk stops. Do not invent a road, town, or wilderness past the map edge or farther
+  than that budget. A door into a shop or room is MOVE only — do not WALK the grid for a room.
 - Interiors are entered only from the place they stand in. A player two locations away cannot
   MOVE straight into a shop — that move lands them outside it instead, and going in costs the next
   turn. Do not narrate walking across the map and through a shop door in one turn.
@@ -327,6 +334,8 @@ OPCODE_ALIASES = {
     "MOVETO": "MOVE",
     "GOTO": "MOVE",
     "TRAVEL": "MOVE",
+    "STEP": "WALK",
+    "STEPS": "WALK",
     "LOCNEW": "LOC_NEW",
     "NEWLOC": "LOC_NEW",
     "NEW_LOCATION": "LOC_NEW",
@@ -438,6 +447,43 @@ def _apply_amount(
         target[band_key] = band
     elif number is not None:
         target[number_key] = -abs(number) if negate else number
+
+
+def _walk_direction_and_steps(args: list[str], flags: dict[str, str]) -> tuple[str, int]:
+    """WALK east / WALK east STEPS 2 / WALK northeast. Steps clamp to the map budget."""
+    from app.tile_world import STEP_BUDGET, canonical_direction, clamp_steps
+
+    tokens = [str(token) for token in args]
+    step_token = flags.get("STEPS")
+    direction = ""
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token.upper() == "STEPS" and index + 1 < len(tokens):
+            step_token = tokens[index + 1]
+            index += 2
+            continue
+        if not direction:
+            one = canonical_direction(token)
+            pair = ""
+            if index + 1 < len(tokens):
+                pair = canonical_direction(f"{token} {tokens[index + 1]}")
+            if pair and not one:
+                direction = pair
+                index += 2
+                continue
+            if one:
+                direction = one
+                index += 1
+                continue
+            if token.isdigit() and step_token is None:
+                step_token = token
+                index += 1
+                continue
+        index += 1
+    if not direction:
+        return "", 0
+    return direction, clamp_steps(step_token if step_token is not None else STEP_BUDGET)
 
 
 def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
@@ -596,6 +642,11 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             turn["player"]["move_to_location_code"] = dest.upper()
         else:
             turn["player"]["move_to_location"] = dest[:120]
+    elif op == "WALK":
+        direction, steps = _walk_direction_and_steps(args, flags)
+        if not direction:
+            raise TurnDslError(f"WALK requires a direction on line {entry['line']}")
+        turn["map_walk"] = {"direction": direction, "steps": steps}
     elif op == "LOC_NEW":
         name = args[0] if args else ""
         summary = args[1] if len(args) > 1 else f"Discovered location: {name}"
@@ -844,6 +895,35 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
         here = (contract.get("current_location") or {}).get("code") or "the current location"
         instructions.append(
             f"Travel turn: if the prose ends anywhere but {here}, ===OPS=== MUST contain a MOVE line."
+        )
+    space = context.get("map_space") if isinstance(context, dict) else None
+    if isinstance(space, dict) and space.get("width") and space.get("height"):
+        budget = int(space.get("step_budget") or 4)
+        player = space.get("player") if isinstance(space.get("player"), dict) else {}
+        city_clause = ""
+        if space.get("scale") == "world":
+            city_clause = (
+                " Each step is one world cell. A city is at most 9 by 9 connected cells, "
+                "not a straight line or a solid block, each with an internal grid of at most 128 by 128. "
+                "One step does not cross inside a city."
+            )
+        instructions.append(
+            f"Map is {space['width']}×{space['height']}. You are at ({player.get('x')},{player.get('y')}). "
+            f"This turn walks at most {budget} tiles. If the prose crosses country, ===OPS=== MUST contain "
+            "WALK <direction> STEPS <n> and a MOVE naming where the scene stops. "
+            "Do not name a place beyond that walk or past the map edge. A door into a room is MOVE only."
+            + city_clause
+        )
+    hint = context.get("direction_hint") if isinstance(context, dict) else None
+    if isinstance(hint, dict):
+        if hint.get("told"):
+            instructions.append("Say direction_hint.wording. Do not add another place or a coordinate.")
+        else:
+            instructions.append("This question was not answered. Do not name a location for it.")
+    offers = context.get("open_offers") if isinstance(context, dict) else None
+    if isinstance(offers, list) and offers:
+        instructions.append(
+            "open_offers are posted and not yet taken. They can be accepted. Do not invent extra jobs."
         )
     packet["instructions"] = instructions
     return __import__("json").dumps(packet, ensure_ascii=True, separators=(",", ":"))

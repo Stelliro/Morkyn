@@ -4,7 +4,7 @@ benchmarks — dual-role playtest (no local LLM).
 Grok-style dual agent:
   - PLAYER: chooses the next action from world state + last narration
   - GM: writes narration + structured turn JSON
-  - BACKEND: Mørkyn apply_turn / SQLite only (Ollama is never called)
+  - BACKEND: Mørkyn apply_turn / SQLite only (no story model is called)
 
 Run from repo root:
   python benchmarks/run_dual_role_playtest.py
@@ -678,10 +678,9 @@ def main() -> int:
         "AI_RPG_CONSOLIDATED_FACTS": str(temp / "facts.jsonl"),
         "AI_RPG_CAMPAIGN_SLOTS": str(temp / "slots"),
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
-        # Force any accidental LLM path to fail fast rather than hang on Ollama.
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": "http://127.0.0.1:9",
-        "OLLAMA_MODEL": "unused-dual-role",
+        # Accidental model calls fail fast: MLE raises until the welding rig is connected.
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": "unused-dual-role",
     }.items():
         os.environ[key] = val
     (temp / "source_index").mkdir(exist_ok=True)

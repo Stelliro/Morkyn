@@ -170,11 +170,9 @@ def main() -> int:
         "AI_RPG_CONSOLIDATED_FACTS": str(temp / "facts.jsonl"),
         "AI_RPG_CAMPAIGN_SLOTS": str(temp / "slots"),
         "AI_RPG_MODEL_TRACE_DIR": str(temp / "traces"),
-        "AI_RPG_MODEL_PROVIDER": "ollama",
-        "OLLAMA_BASE_URL": os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
-        "OLLAMA_MODEL": os.getenv("PLAYTEST_OLLAMA_MODEL", os.getenv("OLLAMA_MODEL", "qwen3:8b")),
-        "OLLAMA_THINK": "0",
-        "AI_RPG_OLLAMA_TIMEOUT": "420",
+        "AI_RPG_MODEL_PROVIDER": "mle",
+        "MLE_MODEL": os.getenv("PLAYTEST_MLE_MODEL", os.getenv("MLE_MODEL", "qwen3:8b")),
+        "AI_RPG_MLE_TIMEOUT": "420",
         "AI_RPG_SETUP_RANDOMIZER_TIMEOUT": "200",
     }.items():
         os.environ[key] = val
@@ -190,19 +188,18 @@ def main() -> int:
     init_db()
     update_model_config(
         {
-            "provider": "ollama",
-            "ollama_base_url": os.environ["OLLAMA_BASE_URL"],
-            "ollama_model": os.environ["OLLAMA_MODEL"],
+            "provider": "mle",
+            "mle_model": os.environ["MLE_MODEL"],
             "response_token_cap": 900,
             "response_token_hard_cap": 1400,
         }
     )
     conn = test_model_connection()
-    print(f"model={os.environ['OLLAMA_MODEL']} ok={conn.get('ok')}", flush=True)
+    print(f"model={os.environ['MLE_MODEL']} ok={conn.get('ok')}", flush=True)
     if not conn.get("ok"):
         return 2
 
-    report: dict[str, Any] = {"model": os.environ["OLLAMA_MODEL"], "scenarios": [], "summary": {}}
+    report: dict[str, Any] = {"model": os.environ["MLE_MODEL"], "scenarios": [], "summary": {}}
     totals = {"bugs": 0, "wrong": 0, "holes": 0}
 
     for origin in ORIGINS:
