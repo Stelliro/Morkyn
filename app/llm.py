@@ -10980,6 +10980,19 @@ def _repair_bare_code_possessives(
     return out
 
 
+# Capitals that are words, not codes. NPC codes run A..Z, AA..AZ, so the 34th
+# person is AH and the 379th is NO; a shouted "AH!" or a king's "IV" must not
+# turn into that person's name.
+_BARE_CODE_WORDS = frozenset({
+    "AH", "AW", "AY", "EH", "HA", "HM", "OH", "OI", "OK", "OW", "UH", "UM", "YO", "SH", "ER",
+    "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO", "HE", "IF", "IN", "IS", "IT", "ME", "MY",
+    "NO", "OF", "ON", "OR", "SO", "TO", "UP", "US", "WE", "YE",
+    "II", "III", "IV", "VI", "VII", "IX", "XI", "XII", "XIV", "XV", "XVI", "XIX", "XX", "XXI",
+    "ALL", "AND", "ARE", "BUT", "CAN", "FOR", "GET", "HER", "HEY", "HIM", "HIS", "HOW", "NOT",
+    "NOW", "OFF", "OUT", "RUN", "SHE", "THE", "TOO", "WAY", "WHO", "WHY", "YES", "YOU",
+})
+
+
 def _repair_bare_entity_codes(
     text: str,
     *,
@@ -11004,7 +11017,7 @@ def _repair_bare_entity_codes(
         for k, v in (code_map or {}).items()
         if str(v or "").strip() and str(v).strip().upper() != str(k).upper()
     }
-    known = {c for c in cmap if re.fullmatch(r"[A-Z]{2,3}", c)}
+    known = {c for c in cmap if re.fullmatch(r"[A-Z]{2,3}", c) and c not in _BARE_CODE_WORDS}
     dangling = {
         str(c).upper() for c in (referenced_codes or set())
         if re.fullmatch(r"[A-Z]{2,3}", str(c).upper()) and str(c).upper() not in cmap
@@ -11031,9 +11044,14 @@ def _repair_bare_entity_codes(
     if known:
         alt = "|".join(re.escape(c) for c in sorted(known, key=len, reverse=True))
 
+        spoken = [s.span() for s in re.finditer(r'"[^"]*"|\u201c[^\u201d]*\u201d', out)]
+
         def named(m: re.Match[str]) -> str:
             code = m.group(1)
             name = cmap[code]
+            # Capitals inside a spoken line are shouting, not a code.
+            if any(start < m.start() < end for start, end in spoken):
+                return code
             before = out[max(0, m.start() - len(name) - 2): m.start()]
             if re.search(rf"{re.escape(name)}\s*$", before, flags=re.I):
                 return f"[[{code}]]"
