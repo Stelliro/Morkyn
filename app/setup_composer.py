@@ -963,9 +963,23 @@ def apply_keyword_intent(idea: str, plan: dict[str, Any] | None = None) -> dict[
     return out
 
 
+_SEED_CLIMB_WORDS = (
+    "compound", "snowball", "exponential", "weak", "useless", "nobody", "zero to hero", "underdog",
+    "seed", "op mc", "op-mc", "overpowered", "late-game op", "late game op", "rank f", "bottom tier",
+    "powerless", "start ordinary", "ordinary start", "cheat skill", "godhood",
+)
+
+
+def _idea_reads_as_seed_climb(text: str) -> bool:
+    """The idea's own words ask for a weak start that snowballs, not just levels or a mythic tone."""
+    low = str(text or "").lower()
+    return any(word in low for word in _SEED_CLIMB_WORDS)
+
+
 def merge_intent_plans(base: dict[str, Any], llm_plan: dict[str, Any] | None) -> dict[str, Any]:
     """Keyword plan is the floor; LLM may refine but not erase hard keyword flags."""
-    out = apply_keyword_intent(str(base.get("raw_idea") or ""), base)
+    raw_text = str(base.get("raw_idea") or "")
+    out = apply_keyword_intent(raw_text, base)
     if not llm_plan or not isinstance(llm_plan, dict):
         return out
     for key in ("genre", "portal_or_rebirth", "tone", "edge", "adapter_hint", "dm_stance", "style_notes"):
@@ -1011,6 +1025,10 @@ def merge_intent_plans(base: dict[str, Any], llm_plan: dict[str, Any] | None) ->
                 continue  # keyword compounding wins
             elif k == "start_power" and merged_pf.get("start_power") == "near_useless":
                 continue
+            elif k == "growth" and str(v).strip().lower() == "compounding" and not _idea_reads_as_seed_climb(raw_text):
+                continue  # the idea never asked for a weak seed that snowballs
+            elif k == "start_power" and str(v).strip().lower() == "near_useless" and not _idea_reads_as_seed_climb(raw_text):
+                continue
             else:
                 merged_pf[k] = v if not isinstance(v, str) else v.strip()[:240]
         out["power_fantasy"] = merged_pf
@@ -1046,6 +1064,12 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
             fields[name] = value
 
     set_if_free("difficulty", difficulty)
+
+    idea_low = str(intent.get("raw_idea") or "").lower()
+    if re.search(r"\b(?:no|without|zero)\s+(?:levels?|leveling|levelling|xp)\b", idea_low):
+        set_if_free("leveling_system", False)
+    elif re.search(r"\blevel(?:s|ing|ling)?\b|\bxp\b|\bexperience points\b", idea_low):
+        set_if_free("leveling_system", True)
 
     if system_ui or isekai:
         set_if_free("game_system", True)
@@ -1502,15 +1526,15 @@ def _seed(
 # F rank = nearly useless but *actionable*; high rank = wild payoff (never dead weight).
 SEED_SKILL_DOMAIN_POOL: list[dict[str, str]] = [
     # ── Simple mundane labor / body ──────────────────────────────────────
-    _seed("Hauling", "awkward loads ride better — fewer dropped crates", compounds_to="superhuman burden carry / siege logistics"),
+    _seed("Hauling", "carry awkward loads better — fewer dropped crates", compounds_to="superhuman burden carry / siege logistics"),
     _seed("Digging", "shovel work in soft earth; slow trenches", requires="shovel or spade", compounds_to="tunnel craft / earth-shaping"),
     _seed("Scaffold Sense", "feel when a board or ladder is about to give", compounds_to="structural prophecy / collapse denial"),
-    _seed("Breath Hold", "one extra lungful in smoke or water", compounds_to="void lung / deep-current survival"),
-    _seed("Cold Tolerance", "slight edge against chill", compounds_to="frost skin / winter dominion"),
+    _seed("Breath Hold", "hold one extra lungful in smoke or water", compounds_to="void lung / deep-current survival"),
+    _seed("Cold Tolerance", "shrug off a little more chill than most", compounds_to="frost skin / winter dominion"),
     _seed("Heat Tolerance", "last longer near forges or desert noon", compounds_to="cinder blood / forge walking"),
     _seed("Pain Metering", "rate how bad a wound is, not ignore it", lane="support", compounds_to="pain redirect / combat triage aura"),
     _seed("Load Balance", "stack carts so they tip less", compounds_to="perfect mass sense / anti-topple field"),
-    _seed("Grip Oil", "hands stay sticky-dry on wet wood or steel", compounds_to="impossible cling / wall-run grips"),
+    _seed("Grip Oil", "keep a sticky-dry grip on wet wood or steel", compounds_to="impossible cling / wall-run grips"),
     _seed("Sleep Debt", "nap 10 minutes that count as 30 — once a day", lane="support", compounds_to="battlefield micro-rest / party recovery pulse"),
     # ── Simple tools (need the tool) ─────────────────────────────────────
     _seed("Nail Sense", "know if a nail/peg will hold after one tap", lane="tool", requires="hammer + nail/peg", compounds_to="structure-binding strikes"),
@@ -1535,7 +1559,7 @@ SEED_SKILL_DOMAIN_POOL: list[dict[str, str]] = [
     _seed("Trail Mud", "read soft ground for recent traffic — incomplete", compounds_to="omni-track / path rewrite"),
     _seed("River Smell", "find water or damp air a little earlier", compounds_to="aquifer call / flood sense"),
     _seed("Camp Ash", "judge how old a cold fire is", compounds_to="ash divination / ember resurrection"),
-    _seed("Star Slice", "one constellation useful for rough direction", compounds_to="star-path stepping"),
+    _seed("Star Slice", "read one constellation for rough direction", compounds_to="star-path stepping"),
     _seed("Pack Order", "repack so the load rides quieter", compounds_to="dimensional pack logic"),
     _seed("Saddle Fit", "notice a bad mount strap before a fall", lane="tool", requires="saddle or harness", compounds_to="perfect mount bond"),
     _seed("Ferry Timing", "guess tide/current windows poorly at first", compounds_to="current throne / tide step"),
@@ -1546,7 +1570,7 @@ SEED_SKILL_DOMAIN_POOL: list[dict[str, str]] = [
     _seed("Herd Calm", "soothe one nervous animal briefly", compounds_to="beast legion command"),
     _seed("Bait Guess", "pick mediocre bait for fish/traps", compounds_to="lure that pulls spirits"),
     _seed("Spoilage Nose", "smell food going bad a day early", lane="support", compounds_to="decay clock / anti-rot field"),
-    _seed("Herb Thumb", "common field herbs; often wrong species at F", lane="support", compounds_to="panacea botany"),
+    _seed("Herb Thumb", "tell common field herbs apart; often the wrong species at F", lane="support", compounds_to="panacea botany"),
     _seed("Smoke Cure", "keep meat/smoke from total waste", lane="tool", requires="smoke rack or fire", compounds_to="preservation magic"),
     _seed("Beehive Distance", "hear/feel a hive before walking into it", compounds_to="swarm pact"),
     _seed("Bone Broth", "boil scraps into something that stops shakes", lane="support", requires="pot + fire", compounds_to="restorative feast alchemy"),
@@ -1557,8 +1581,8 @@ SEED_SKILL_DOMAIN_POOL: list[dict[str, str]] = [
     _seed("Door Knock", "read household mood from how a door is answered", compounds_to="threshold mastery"),
     _seed("Market Echo", "overhear price gossip; often outdated", compounds_to="market prophecy"),
     _seed("Name Catch", "retain one new name per scene reliably", compounds_to="true-name ledger"),
-    _seed("Accent Mirror", "slight local pronunciation mimic — comic at F", compounds_to="perfect persona mask"),
-    _seed("Favor Debt", "instinct for who still owes whom", compounds_to="debt chains as power"),
+    _seed("Accent Mirror", "mimic the local accent a little — comic at F", compounds_to="perfect persona mask"),
+    _seed("Favor Debt", "sense who still owes whom", compounds_to="debt chains as power"),
     _seed("Crowd Drift", "move with a throng without being shoved flat", compounds_to="mob current ride"),
     _seed("Toast Timing", "raise a cup at the socially correct second", lane="support", compounds_to="oath-binding toasts"),
     _seed("Seat Rank", "guess who outranks whom from seating alone", compounds_to="hierarchy rewrite presence"),
@@ -1579,7 +1603,7 @@ SEED_SKILL_DOMAIN_POOL: list[dict[str, str]] = [
     _seed("Stitch Calm", "sew a shallow cut without fainting the patient", lane="support", requires="needle + thread", compounds_to="flesh-suture magic"),
     _seed("Antidote Guess", "pick a common counter for mild poison — often wrong", lane="support", tier="simple", compounds_to="universal antidote craft"),
     _seed("Rest Circle", "draw a quiet camp circle that helps allies sleep", lane="support", tier="simple", compounds_to="sanctuary dome"),
-    _seed("Rally Word", "one short phrase that steadies a shaken ally", lane="support", tier="simple", compounds_to="battle-hymn dominion"),
+    _seed("Rally Word", "speak one short phrase that steadies a shaken ally", lane="support", tier="simple", compounds_to="battle-hymn dominion"),
     _seed("Shield Cover", "angle a shield so an ally takes less splash", lane="support", requires="shield", compounds_to="aegis projection"),
     _seed("Mana Sip", "share a thimble of stamina/mana with a touch — tiny at F", lane="support", tier="advanced", compounds_to="party resource lattice"),
     _seed("Life Thread", "feel if a downed body still has a life-thread", lane="support", tier="advanced", compounds_to="pull souls back from the brink"),
@@ -1613,11 +1637,11 @@ SEED_SKILL_DOMAIN_POOL: list[dict[str, str]] = [
     _seed("Joke Timing", "land one dry joke that breaks tension — sometimes", lane="support", compounds_to="morale dominion / fear-break laughter"),
     _seed("Map Crease", "fold a map so the right road shows first", lane="tool", requires="map", compounds_to="living cartography"),
     _seed("Salt Circle", "pour a salt line that *mostly* stays unbroken", lane="arcane", requires="salt", compounds_to="banishment fortress"),
-    _seed("Candle Whisper", "flame leans toward the larger lie in the room — unreliable", lane="arcane", requires="candle", compounds_to="truthfire oracle"),
+    _seed("Candle Whisper", "watch a flame lean toward the larger lie in the room — unreliable", lane="arcane", requires="candle", compounds_to="truthfire oracle"),
     _seed("Pocket Weight", "guess if a pocket holds coin, key, or blade by hang", compounds_to="inventory x-ray"),
     # ── Arcane / system (advanced-leaning, still F-weak) ────────────────
     _seed("Residue Glow", "faint sense of spent magic on objects — unreliable", lane="arcane", compounds_to="ley cartography / magic forensics"),
-    _seed("Omen Nudge", "one wrong/right gut twitch per day", lane="arcane", compounds_to="fate editing"),
+    _seed("Omen Nudge", "feel one wrong-or-right gut twitch per day", lane="arcane", compounds_to="fate editing"),
     _seed("Ward Itch", "skin prickle near crude wards only", lane="arcane", compounds_to="ward craft / ward break"),
     _seed("Dream Tag", "wake remembering one useful dream detail", lane="arcane", compounds_to="dreamwalk dominion"),
     _seed("Rune Scratch", "copy one simple mark that *almost* holds power", lane="arcane", tier="advanced", requires="stylus + surface", compounds_to="world-script runes"),
@@ -1649,7 +1673,7 @@ SEED_SKILL_DOMAIN_POOL: list[dict[str, str]] = [
     _seed("Lantern Guide", "a pale light leads 10 steps toward safety — or a trap", lane="summon", requires="lantern", compounds_to="psychopomp convoy"),
     _seed("Swarm Hum", "hum until insects gather in a fist-sized cloud", lane="summon", tier="advanced", compounds_to="plague swarm crown"),
     # ── Necromancy spectrum (usable, not pure edgelord) ─────────────────
-    _seed("Grave Chill", "hands go cold near recent death — unreliable range", lane="necro", tier="simple", compounds_to="death radar / reaper cartography"),
+    _seed("Grave Chill", "feel your hands go cold near recent death — unreliable range", lane="necro", tier="simple", compounds_to="death radar / reaper cartography"),
     _seed("Bone Sort", "tell animal bone from humanish at a glance — sometimes wrong", lane="necro", tier="simple", compounds_to="bone architecture"),
     _seed("Last Breath", "smell whether a corpse died scared, calm, or fighting", lane="necro", tier="simple", compounds_to="death-scene reconstruction"),
     _seed("Marrow Tap", "tap bone; hear a hollow vs solid note", lane="necro", requires="bone", compounds_to="osseomancy constructs"),
@@ -1887,6 +1911,14 @@ def pick_seed_skill_domain(
     return choice
 
 
+# Seed hints that open with a noun or adjective, not a verb: "flame leans toward
+# the larger lie" is already a sentence, and "You can flame leans" was the result.
+_HINT_NON_VERB_STARTS = frozenset({
+    "awkward", "common", "each", "faint", "flame", "hands", "instinct", "moss", "one",
+    "slight", "sticky", "tongue-tip", "two",
+})
+
+
 def player_facing_domain_description(domain: dict[str, Any] | None) -> str:
     """Write a setup-card description from a seed domain — no meta labels."""
     if not isinstance(domain, dict):
@@ -1907,7 +1939,14 @@ def player_facing_domain_description(domain: dict[str, Any] | None) -> str:
     if hint:
         body = hint[0].upper() + hint[1:] if hint else hint
         # If hint is a fragment ("hear when…"), frame it as a weak sense/act.
-        if not re.match(r"^(You|When|A |An |The |Briefly|Once|Can |May )", body, re.I):
+        # A hint that is already a clause ("flame leans toward the larger lie")
+        # stays a sentence: "You can flame leans ..." was the old result.
+        words = body.split()
+        already_clause = bool(words) and words[0].lower().strip(",;:") in _HINT_NON_VERB_STARTS
+        if already_clause:
+            if not body.endswith("."):
+                body += "."
+        elif not re.match(r"^(You|When|A |An |The |Briefly|Once|Can |May )", body, re.I):
             body = f"You can {body[0].lower() + body[1:] if body else 'sense a faint edge'}."
         else:
             if not body.endswith("."):
@@ -1915,7 +1954,7 @@ def player_facing_domain_description(domain: dict[str, Any] | None) -> str:
     else:
         body = f"{name} is a faint, unreliable aptitude — barely more than a habit at first."
     if req:
-        body += f" Requires: {req}."
+        body += f" Needs {req}."
     # The late payoff ("compounds_to") is growth fiction for the DM and the
     # growth math, not the player's base description, and "at F rank the effect
     # is brief" is a design note. Both used to be appended here.
@@ -4224,7 +4263,8 @@ LOCATION_SEEDS_BY_THEME: dict[str, tuple[str, ...]] = {
         "The Water Point",
     ),
     "fantasy": (
-        "Mosswake Gate",
+        # "Mosswake Gate" was first here. It is also the database's default start
+        # location, so a rolled arrival read as an unrolled one. Not a seed.
         "Outer Compound Yard",
         "Ash Road Cut",
         "Ferry Landing Stone",

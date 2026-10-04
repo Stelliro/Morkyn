@@ -2815,6 +2815,10 @@ def _model_status_payload(provider: str, url: str, payload: dict[str, Any], conf
     }
 
 
+# Field kinds that may see idea-bank sparks: the ones answered in sentences.
+SPARK_FIELD_KINDS = frozenset({"prose", "list_custom", "list_struct", "abilities"})
+
+
 def _setup_randomizer_return_fields(group: str, current_setup: dict[str, Any], text_mode: bool = False) -> list[str]:
     locked_fields = set(current_setup.get("_locked_fields") or [])
     if text_mode:
@@ -4394,6 +4398,22 @@ def roll_lock_count_for_batch(n: int, *, origin: str = "acquired") -> int:
     return max(0, min(n, k))
 
 
+def ensure_an_opening_power(abilities: list[Any] | None, *, progression: bool) -> list[dict[str, Any]]:
+    """
+    A progression start has a seed power the player can use on turn one.
+
+    The Overpowered preset came back with its only power locked behind "a
+    rival or ally forces the half-formed version into play once", so the climb
+    started with nothing to climb with. When every power is locked, the first
+    one opens and loses its prerequisite.
+    """
+    out = [dict(a) for a in (abilities or []) if isinstance(a, dict)]
+    if progression and out and all(bool(a.get("locked")) for a in out):
+        out[0]["locked"] = False
+        out[0]["prerequisites"] = ""
+    return out
+
+
 def assign_ability_locks_after_creation(
     abilities: list[Any] | None,
     *,
@@ -5731,19 +5751,24 @@ def ensure_distinct_abilities(
                 race_magic_enabled=race_magic_enabled,
             )
             entry["actions"].append("local_remake")
-            # If local remake still collides (rare), pick a fully distinct name + niche note — no bare numbers.
-            if any(ability_similarity_score(replacement, k) >= ABILITY_NEAR_DUP_THRESHOLD for k in keepers):
-                replacement["name"] = _unique_ability_display_name(
-                    str(replacement.get("name") or "Craft Edge"),
-                    forbidden | {str(replacement.get("name") or "")},
+            # Still colliding: draw other seeds. This used to rename the card
+            # after a different seed and append "Focuses on a different
+            # practical niche than the character's other powers." -- Academy got
+            # "Salt Taste" that writes a clean line and "Heat Tolerance" that
+            # angles a mirror. A name always stays with its own description.
+            tried = set(forbidden) | {str(replacement.get("name") or "")}
+            for _attempt in range(6):
+                if not any(ability_similarity_score(replacement, k) >= ABILITY_NEAR_DUP_THRESHOLD for k in keepers):
+                    break
+                replacement = _local_remake_ability(
+                    forbidden_names=tried,
+                    origin=origin,
                     world_style=world_style,
-                    salt=f"forced_distinct|{time.time_ns()}",
+                    magic_level=magic_level,
+                    race_magic_enabled=race_magic_enabled,
                 )
-                replacement["description"] = (
-                    str(replacement.get("description") or "").rstrip(".")
-                    + " Focuses on a different practical niche than the character's other powers."
-                )
-                entry["actions"].append("local_remake_forced_distinct")
+                tried.add(str(replacement.get("name") or ""))
+                entry["actions"].append("local_remake_redraw")
 
         # Always sanitize numeric junk on the way out of a remake
         if isinstance(replacement, dict):
@@ -6192,6 +6217,10 @@ def fallback_setup_randomization(group: str, current: dict[str, Any] | None = No
             if clean is not None:
                 value = clean
         fields[field] = value
+    if isinstance(fields.get("special_abilities"), list):
+        fields["special_abilities"] = ensure_an_opening_power(
+            fields["special_abilities"], progression=_intent_is_progression(intent_plan)
+        )
     # No world magic means no racial casting either; the random pair
     # ("forbidden", true) let a seed power charge mana.
     magic_now = str(fields.get("magic_level") or current_setup.get("magic_level") or "").strip().lower()
@@ -6655,8 +6684,15 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         if randomize_idea:
             base_rules.append(f"Raw player idea (background only): {randomize_idea}")
     # Cold-storage idea bank: keyword sparks only (not weights / not training data).
+    # Prose fields only. A spark is a sentence, and a short field answered with
+    # one verbatim on Qwen3 8B: tone came back "Witty, tired, and allergic to
+    # corporate hope slogans; still capable of small loyalties." and
+    # faction_pressure "Corporate security that smiles with non-lethal policies
+    # and lethal exceptions." -- both lines straight out of config/idea_bank.
     idea_sparks_pkg: dict[str, Any] | None = None
     try:
+        if not any(field_contract(field).get("kind") in SPARK_FIELD_KINDS for field in return_fields):
+            raise LookupError("no prose field in this roll")
         idea_sparks_pkg = idea_sparks_for_prompt(
             current_setup,
             fields=return_fields,
@@ -7184,8 +7220,9 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "collapsing ceiling + blue light, dust-covered alley + rusted wrench, Neo-Silicon, Iron Spire, night-shift forklift clones, "
                 "freight and labels, schedules and sore feet, bent pair of glasses, 'no free hero kit', "
                 "'not as a native already living a local plot', work-yard fence line, dirt-road-at-the-edge clones. "
-                "Vary former jobs: teacher, nurse, courier, cook, clerk, student, hotel desk, bike delivery, florist, radio host, janitor — not always warehouse/freight. "
-                "Vary transport: fall, medical emergency, summon, portal, train, ferry, fire — not always truck accident. "
+                "Only for transmigrated or reincarnated starts: give the former life a job and a way of crossing over that fit that former world, "
+                "a different one each roll. For every other backstory_mode the whole history happens in this world: a life that fits "
+                "world_style, tech_level and start_location, with no other-world office work, screens or neon unless this world has them. "
                 "IMPORTANT: backstory_mode 'transmigrated' means TRANSPORT from another life/world — not a native fantasy biography. "
                 "For transmigrated REQUIRED structure: (1) concrete life BEFORE transport (job, place, ordinary stakes in the former world); "
                 "(2) HOW they were transported (death, truck, summon ritual, portal, body-drop); "
@@ -8044,6 +8081,9 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 )
             except Exception:
                 pass
+            validated["special_abilities"] = ensure_an_opening_power(
+                validated.get("special_abilities"), progression=one_skillish
+            )
             if isinstance(validated.get("quality_gate"), dict):
                 validated["quality_gate"]["final_count"] = len(validated["special_abilities"] or [])
                 validated["quality_gate"]["target_count"] = target_count
@@ -8802,7 +8842,13 @@ def _sanitize_setup_randomization_values(result: dict[str, Any]) -> dict[str, An
             )
 
             story = _normalize_backstory_prose(out.get("character_backstory"))
-            if backstory_has_overused_motifs(story):
+            # The rebuild is a transmigration template. Applied to any origin, it
+            # turned a "fragmented memories" native into a hotel clerk who
+            # drowned and woke at "The Empty Lot" (start_location was elsewhere).
+            # A single-field roll carries no backstory_mode here; the backstory
+            # quality gate, which knows the mode, handles stock motifs there.
+            mode_here = str(out.get("backstory_mode") or "").lower()
+            if backstory_has_overused_motifs(story) and "transmigrat" in mode_here:
                 story = build_transmigration_backstory(
                     old_story="",
                     idea=str(out.get("_randomize_idea") or ""),

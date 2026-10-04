@@ -532,6 +532,9 @@ def normalize_gear_item(
         by_name = slot_for_name(name)
         if by_name and by_name != slot:
             slot = by_name
+        elif not by_name and slot in {"FINGER", "NECK", "WRIST"}:
+            # Jewellery slots need a name that fits them; "wooden comb" went on FINGER.
+            slot = CARRIED
     item = {
         "name": name,
         "slot": slot,

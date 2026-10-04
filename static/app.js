@@ -590,7 +590,7 @@ const START_LOCATION_BANKS = {
   desert: ["Dune Road Cairn", "Oasis Well Step", "Caravanserai Arch"],
   gothic: ["Chapel Porch Steps", "Crypt Stair Landing", "Manor Gatehouse"],
   noir: ["Rain-Slick Precinct Steps", "Dockside Warehouse Row", "All-Night Diner Counter"],
-  fantasy: ["Mosswake Gate", "Blackwater Relay", "Ferry Landing Stone", "Ash Road Cut", "Red Lantern Dock", "Iron Bell Crossroads"],
+  fantasy: ["Blackwater Relay", "Ferry Landing Stone", "Ash Road Cut", "Red Lantern Dock", "Iron Bell Crossroads"],
   // Nothing matched. Reads the same in a superhero city, a pirate port or a
   // school town -- which beats handing any of them a fantasy gate-town.
   generic: ["The Crossing", "The Old Junction", "The Terminus", "The Lower Landing", "The Quiet Yard", "The Far Platform", "The Last Stop", "The Border Post"],
@@ -4085,16 +4085,22 @@ function setWorldStyleSimple(text) {
   const styleEl = setupForm.querySelector('[name="custom_style"]');
   const customRadio = setupForm.querySelector('input[name="world_style"][value="custom"]');
   const prevCustom = custom ? String(custom.value || "").trim() : "";
-  if (custom) {
-    custom.value = t.slice(0, 120);
+  // The genre is its own setting. Only an empty genre takes a short lead from
+  // the vibe (its first clause), never the whole sentence cut mid-word.
+  const genreSet = Boolean(prevCustom) || Boolean(setupForm.querySelector('input[name="world_style"]:checked:not([value="custom"])'));
+  const writeGenre = Boolean(custom) && !genreSet;
+  if (writeGenre) {
+    custom.value = t.split(/[.;:]/)[0].trim().slice(0, 60);
   }
   const styleCur = styleEl ? String(styleEl.value || "").trim() : "";
   const styleIsSeed = !styleCur || styleCur === prevCustom || (prevCustom && styleCur.slice(0, 120) === prevCustom);
   if (t) {
-    setupForm.querySelectorAll('input[name="world_style"]').forEach((inp) => {
-      inp.checked = inp.value === "custom";
-    });
-    if (customRadio) customRadio.checked = true;
+    if (writeGenre) {
+      setupForm.querySelectorAll('input[name="world_style"]').forEach((inp) => {
+        inp.checked = inp.value === "custom";
+      });
+      if (customRadio) customRadio.checked = true;
+    }
     // Keep the Simple vibe in custom_style when it is still the prior seed (not a longer Advanced note).
     if (styleEl && styleIsSeed) {
       const cap = Number(styleEl.maxLength) > 0 ? Number(styleEl.maxLength) : 800;
@@ -4300,7 +4306,11 @@ function closeRandomizePopover() {
   document.querySelector("#randomizeSetup")?.setAttribute("aria-expanded", "false");
 }
 
+/** True once the player confirmed a preset or typed an idea; Start only then reads the preset idea. */
+let setupIdeaChosen = false;
+
 function runConfirmedRandomize(event, options = {}) {
+  setupIdeaChosen = true;
   if (event?.preventDefault) event.preventDefault();
   if (event?.stopPropagation) event.stopPropagation();
   const fromConfirm = Boolean(event?.target?.closest?.("[data-confirm-randomize], #presetConfirmBtn"));
@@ -5450,6 +5460,9 @@ async function randomizeAllSetup(options = {}) {
       const hardOverrideFields = new Set([
         "difficulty",
         "game_system",
+        "leveling_system",
+        "skill_levels_enabled",
+        "proficiency_system",
         "leveling_system",
         "skill_levels_enabled",
         "skill_growth_speed",
@@ -6901,6 +6914,7 @@ function writeGearCards(items) {
 /** Patch a required card in place from a rolled item (name, description, stats, abilities) without losing its identity. */
 function updateGearCardFromItem(card, item) {
   if (!card || !item) return;
+  delete card.dataset.gearDefault;
   const set = (sel, value) => {
     const el = card.querySelector(sel);
     if (el) el.value = value == null ? "" : String(value);
@@ -6969,8 +6983,8 @@ async function ensureRequiredGearCards(options = {}) {
       keep: false,
     };
     const existing = gearCardBySlot(slot);
-    if (existing) updateGearCardFromItem(existing, item);
-    else addGearItem(item, { expanded: false });
+    const card = existing ? (updateGearCardFromItem(existing, item), existing) : addGearItem(item, { expanded: false });
+    if (card) card.dataset.gearDefault = "1";
   });
   sortGearCards();
   syncStarterEquipmentFromGear();
@@ -19389,7 +19403,7 @@ async function requestSuggestions(instruction = "") {
 async function expandSimpleSetupDepth() {
   pushSimpleToForm();
   const idea =
-    setupRandomizeIdea() ||
+    (setupIdeaChosen ? setupRandomizeIdea() : "") ||
     [
       document.querySelector("#simpleWorld")?.value,
       document.querySelector("#simpleOrigin")?.value,
@@ -19400,6 +19414,7 @@ async function expandSimpleSetupDepth() {
       .join(" · ")
       .slice(0, 400);
   let intent = lastComposeIntent;
+  const decidedByIdea = new Set();
   // Prefer full overrides saved during Simple randomize (were filtered from the form then).
   // Advanced-depth fill only: strip Simple-surface keys so pushSimpleToForm user edits
   // (player_name, difficulty, …) are not clobbered on Start by randomize-time stash.
@@ -19411,6 +19426,7 @@ async function expandSimpleSetupDepth() {
   // depthOnlyFieldOverrides drops SIMPLE_INTENT_OVERRIDE_KEYS + SIMPLE_RANDOM_FIELD_ORDER.
   const stashed = depthOnlyFieldOverrides(rawStashed);
   if (stashed && Object.keys(stashed).length) {
+    Object.keys(stashed).forEach((key) => decidedByIdea.add(key));
     applyRandomizedSetup({ fields: stashed });
     normalizeRandomizerDependencies();
   }
@@ -19423,6 +19439,7 @@ async function expandSimpleSetupDepth() {
       const rawOverrides = composed.field_overrides || {};
       const overrides = depthOnlyFieldOverrides(rawOverrides);
       if (overrides && Object.keys(overrides).length) {
+        Object.keys(overrides).forEach((key) => decidedByIdea.add(key));
         applyRandomizedSetup({ fields: overrides });
         normalizeRandomizerDependencies();
       }
@@ -19456,10 +19473,24 @@ async function expandSimpleSetupDepth() {
   for (const name of fillTargets) {
     if (isSettingLocked(name)) continue;
     if (!randomizeFieldApplies(name, formData)) continue;
-    // After pushSimpleToForm, Simple-surface keys are user-owned — never re-roll on Start
-    // (enums like magic_level/death_rules/world_style are never empty selects).
+    // The idea already decided it on this pass; the model would only overwrite it.
+    // custom_skills from the idea is a skeleton (OP_MC_FRAME) the model expands; it still rolls.
+    if (decidedByIdea.has(name) && name !== "custom_skills") continue;
+    // Simple-surface keys the player can see are theirs once filled. An empty
+    // one, or gear the engine filled with its placeholders, is filled here.
     if (SIMPLE_RANDOM_FIELD_ORDER.includes(name) || SIMPLE_INTENT_OVERRIDE_KEYS.has(name)) {
-      continue;
+      if (name === "starter_gear") {
+        const placeholders = Array.from(document.querySelectorAll("#simpleGearList .gearSetupCard")).filter(
+          (card) => card.dataset.gearDefault === "1" && !card.querySelector("[data-gear-keep]")?.checked,
+        );
+        if (!placeholders.length) continue;
+      } else if (name === "special_abilities") {
+        continue;
+      } else {
+        const control = setupForm.elements[name];
+        const value = control && !(control instanceof RadioNodeList) ? String(control.value || "").trim() : "x";
+        if (value) continue;
+      }
     }
     // Skip if already substantial
     if (name === "special_abilities") {
@@ -19489,29 +19520,10 @@ async function expandSimpleSetupDepth() {
       fallbackRandomizeField(name, { ignoreLock: false });
     }
   }
-  // Soft length pads for key prose without forcing identical Advanced content
-  const bs = setupForm.elements.character_backstory;
-  if (bs && String(bs.value || "").trim().length < 120) {
-    const present = [
-      document.querySelector("#simpleHair")?.value,
-      document.querySelector("#simpleFace")?.value,
-      document.querySelector("#simpleLook")?.value,
-    ]
-      .map((s) => String(s || "").trim())
-      .filter(Boolean)
-      .join("; ");
-    const origin = document.querySelector("#simpleOrigin")?.value || "known";
-    const world = document.querySelector("#simpleWorld")?.value || "";
-    bs.value = [
-      String(bs.value || "").trim(),
-      present ? `They present as: ${present}.` : "",
-      world ? `The world around them leans ${world}.` : "",
-      `Their past is ${origin}; they are near the opening with ordinary means and local pressure.`,
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .slice(0, 1600);
-  }
+  // A template pad used to follow here ("They present as ...", "Their past is
+  // known; they are near the opening with ordinary means and local pressure.")
+  // and wrote design text into the player's backstory. An empty backstory is
+  // rolled above like any other empty field; a short one is the player's.
   pushSimpleToForm();
   // Length scoring: Simple final package should land in a similar band to a typical Advanced fill
   const score = scoreSetupDepth();
@@ -20658,7 +20670,10 @@ document.querySelector("#presetConfirmBtn")?.addEventListener("click", (event) =
   confirmSelectedPreset(event);
 });
 document.querySelector("#presetLabelInput")?.addEventListener("input", () => persistUserPresetText());
-document.querySelector("#presetSimpleIdea")?.addEventListener("input", () => persistUserPresetText());
+document.querySelector("#presetSimpleIdea")?.addEventListener("input", (event) => {
+  if (event.isTrusted) setupIdeaChosen = true;
+  persistUserPresetText();
+});
 document.querySelector("#presetSaveBtn")?.addEventListener("click", () => saveSelectedPresetFromEditor());
 document.querySelector("#presetDeleteBtn")?.addEventListener("click", () => deleteSelectedUserPreset());
 document.querySelector("#addGearItemBtn")?.addEventListener("click", () => {
@@ -20666,7 +20681,9 @@ document.querySelector("#addGearItemBtn")?.addEventListener("click", () => {
   card?.querySelector('[data-gear-field="name"]')?.focus();
   syncStarterEquipmentFromGear();
 });
-document.querySelector("#simpleGearList")?.addEventListener("input", () => {
+document.querySelector("#simpleGearList")?.addEventListener("input", (event) => {
+  const card = event.target?.closest?.(".gearSetupCard");
+  if (card && event.isTrusted) delete card.dataset.gearDefault;
   syncStarterEquipmentFromGear();
 });
 document.querySelector("#simpleGearList")?.addEventListener("change", (event) => {

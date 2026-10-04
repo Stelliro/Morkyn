@@ -4603,6 +4603,8 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         start_location = _START_LOCATION_LAST_RESORT
     skill_style = str(options.get("skill_style") or "standard")
     custom_skills = str(options.get("custom_skills") or "").strip()
+    # The intent's skeleton label is for the setup model, not the DM.
+    custom_skills = re.sub(r"^\s*OP_MC_FRAME:\s*", "", custom_skills)
     special_name = norm_name(str(options.get("special_ability_name") or "Unwritten Talent"))
     raw_abilities = options.get("special_abilities") or []
     requested_abilities = bool(options.get("special_ability")) or (isinstance(raw_abilities, list) and bool(raw_abilities))

@@ -48,7 +48,9 @@ def _capture_prompt(group: str, current: dict) -> dict:
     captured: dict = {}
 
     def fake_chat(system, user, **kwargs):
-        captured["user"] = user
+        # The first call is the prompt under test; the abilities path makes
+        # later calls (de-duplication) after the refusal.
+        captured.setdefault("user", user)
         raise RuntimeError("stop after prompt build")
 
     original = llm._chat_json
@@ -155,6 +157,11 @@ class TestModelGearIsSane(unittest.TestCase):
         self.assertEqual(items["reinforced satchel"]["slot"], "BACK")
         self.assertEqual(items["iron ring"]["slot"], "FINGER")
 
+    def test_a_comb_is_not_jewellery(self):
+        items = gear.normalize_gear_list([{"name": "wooden comb", "slot": "FINGER"}], context={}, trust=False)
+        comb = next(item for item in items if item["name"] == "wooden comb")
+        self.assertEqual(comb["slot"], "")
+
     def test_absurd_model_weights_are_re_estimated(self):
         items = self._by_name(trust=False)
         self.assertLess(items["scuffed steel-toed boots"]["item_stats"]["weight"], 2.5)
@@ -189,6 +196,130 @@ class TestModelTextCleanups(unittest.TestCase):
         )
         ledger = next(item for item in items if item["name"] == "ledger")
         self.assertEqual(ledger["stats"], {})
+
+
+class TestTheProgressionStartHasAPower(unittest.TestCase):
+    def test_an_all_locked_kit_opens_its_first_power(self):
+        kit = [{"name": "Seed", "locked": True, "prerequisites": "a rival forces it"}, {"name": "Later", "locked": True}]
+        out = llm.ensure_an_opening_power(kit, progression=True)
+        self.assertFalse(out[0]["locked"])
+        self.assertEqual(out[0]["prerequisites"], "")
+        self.assertTrue(out[1]["locked"])
+
+    def test_other_starts_keep_their_locks(self):
+        kit = [{"name": "Seed", "locked": True, "prerequisites": "x"}]
+        self.assertTrue(llm.ensure_an_opening_power(kit, progression=False)[0]["locked"])
+
+    def test_the_offline_fallback_opens_one_too(self):
+        for _ in range(15):
+            out = llm.fallback_setup_randomization("field:special_abilities", {"_randomize_idea": OVERPOWERED}, "down")
+            abilities = out["fields"].get("special_abilities") or []
+            self.assertTrue(abilities)
+            self.assertTrue(any(not a.get("locked") for a in abilities))
+
+    def test_no_arrival_seed_is_the_database_default(self):
+        from app.setup_composer import LOCATION_SEEDS_BY_THEME
+
+        for bank in LOCATION_SEEDS_BY_THEME.values():
+            self.assertNotIn("Mosswake Gate", bank)
+
+
+class TestSparksOnlyForProse(unittest.TestCase):
+    def test_short_fields_get_no_sparks(self):
+        for field in ("tone", "faction_pressure", "quest_style", "economy"):
+            prompt = _capture_prompt(f"field:{field}", {"world_style": "cyberpunk megacity", "_randomize_idea": "cyberpunk debt noir"})
+            self.assertFalse(prompt.get("idea_sparks"), field)
+
+    def test_prose_fields_may_still_get_them(self):
+        llm.idea_sparks_for_prompt  # the hook exists
+        prompt = _capture_prompt("field:character_backstory", {"world_style": "cyberpunk megacity", "_randomize_idea": "cyberpunk debt noir"})
+        self.assertIn("field_note", prompt)
+
+
+class TestTheModelIntentStaysWithTheIdea(unittest.TestCase):
+    ADVENTURERS = (
+        "Guild-hall adventuring fantasy: a job board, a party of roles, dungeons and wilderness, loot and levels "
+        "that matter. Normal difficulty; mythic progression tone; leveling and ranks on."
+    )
+
+    def _merge(self, idea, llm_pf):
+        from app.setup_composer import empty_intent, merge_intent_plans
+
+        base = empty_intent(idea)
+        base["raw_idea"] = idea
+        return merge_intent_plans(base, {"power_fantasy": llm_pf})
+
+    def test_a_mythic_tone_is_not_a_weak_seed_climb(self):
+        plan = self._merge(self.ADVENTURERS, {"growth": "compounding", "start_power": "near_useless"})
+        self.assertNotEqual(plan["power_fantasy"]["growth"], "compounding")
+        self.assertNotEqual(plan["power_fantasy"]["start_power"], "near_useless")
+        self.assertNotIn("custom_skills", intent_to_field_overrides(plan, set()))
+
+    def test_the_overpowered_idea_still_climbs(self):
+        plan = self._merge(OVERPOWERED, {"growth": "compounding"})
+        self.assertEqual(plan["power_fantasy"]["growth"], "compounding")
+
+    def test_levels_in_the_idea_switch_levelling(self):
+        plan = self._merge(self.ADVENTURERS, {})
+        self.assertIs(intent_to_field_overrides(plan, set()).get("leveling_system"), True)
+        plan = self._merge("Gritty survival with no levels and no XP.", {})
+        self.assertIs(intent_to_field_overrides(plan, set()).get("leveling_system"), False)
+
+    def test_gods_in_a_fantasy_idea_are_not_a_climb(self):
+        plan = self._merge("Old gods walk the roads; temples and kingdoms.", {"growth": "compounding"})
+        self.assertNotEqual(plan["power_fantasy"]["growth"], "compounding")
+
+
+class TestBackstoryAndSeedProse(unittest.TestCase):
+    def test_a_clause_hint_is_not_prefixed_with_you_can(self):
+        text = player_facing_domain_description({"name": "Candle Whisper", "hint": "flame leans toward the larger lie in the room"})
+        self.assertTrue(text.startswith("Flame leans"), text)
+
+    def test_every_seed_reads_as_a_sentence_with_a_hook(self):
+        from app.llm import _ABILITY_ACTION_HINT
+
+        for domain in SEED_SKILL_DOMAIN_POOL:
+            text = player_facing_domain_description(domain)
+            self.assertRegex(text, _ABILITY_ACTION_HINT, domain.get("name"))
+
+    def test_a_verb_hint_still_reads_you_can(self):
+        text = player_facing_domain_description({"name": "Weapon Name", "hint": "whisper a name to your weapon"})
+        self.assertTrue(text.startswith("You can whisper"), text)
+
+    def test_a_native_backstory_is_not_rebuilt_as_a_transmigration(self):
+        story = "They grew up hauling ore in the lower tunnels; the Seoul warehouse rumors never reached them."
+        out = llm._sanitize_setup_randomization_values({"character_backstory": story})
+        self.assertNotIn("Before the transfer", out["character_backstory"])
+
+
+class TestSeedPowersAreNotAllDuplicates(unittest.TestCase):
+    def test_seed_descriptions_do_not_read_as_near_duplicates(self):
+        import itertools
+
+        rng = random.Random(3)
+        pool = rng.sample(list(SEED_SKILL_DOMAIN_POOL), 30)
+        cards = [
+            {"name": d["name"], "description": player_facing_domain_description(d), "cost": "Numb fingers", "growth_math": "XP_to_next = 36 * rank^1.58", "power_type": "linear"}
+            for d in pool
+        ]
+        pairs = list(itertools.combinations(cards, 2))
+        close = sum(llm.ability_similarity_score(a, b) >= llm.ABILITY_NEAR_DUP_THRESHOLD for a, b in pairs)
+        # Shared boilerplate once made every pair a near-duplicate (435 of 435).
+        self.assertLess(close, len(pairs) // 20)
+
+    def test_a_remade_card_keeps_its_own_name(self):
+        from app.setup_composer import SEED_SKILL_DOMAIN_POOL as POOL
+
+        by_name = {d["name"]: player_facing_domain_description(d) for d in POOL}
+        kit = [
+            {"name": "Ward Cradle", "description": "You can hum a cradle ward over a sleeper.", "cost": "x", "growth_math": "m"},
+            {"name": "Door Knock", "description": "You can hum a cradle ward over a sleeper.", "cost": "x", "growth_math": "m"},
+        ]
+        out = llm.ensure_distinct_abilities(kit, existing=[], origin="both", one_skillish=False, world_style="", use_llm=False)
+        for card in out.get("abilities") or []:
+            if card["name"] in by_name and card["name"] not in ("Ward Cradle", "Door Knock"):
+                self.assertTrue(card["description"].startswith(by_name[card["name"]][:20]), card)
+            self.assertNotIn("different practical niche", card.get("description", ""))
 
 if __name__ == "__main__":
     unittest.main()
