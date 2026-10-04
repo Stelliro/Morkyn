@@ -6848,7 +6848,7 @@ function gearItemTemplate(item = {}) {
       <div class="gearStatBlock">
         <span class="gearRowLabel">Item stats</span>
         <div class="gearItemStatRow">
-          <label><span>Weight</span><input type="number" inputmode="decimal" min="0" max="200" step="0.1" data-gear-item-stat="weight" value="${escapeHtml(gearNumberOrBlank(itemStats.weight))}" placeholder="roll" /></label>
+          <label><span>Weight</span><input type="number" inputmode="decimal" min="0" max="200" step="0.01" data-gear-item-stat="weight" value="${escapeHtml(gearNumberOrBlank(itemStats.weight))}" placeholder="roll" /></label>
           <label><span>Durability</span><input type="number" inputmode="numeric" min="0" max="100" step="1" data-gear-item-stat="durability" value="${escapeHtml(gearNumberOrBlank(itemStats.durability))}" placeholder="roll" /></label>
           <label><span>Protection</span><input type="number" inputmode="numeric" min="0" max="10" step="1" data-gear-item-stat="protection" value="${escapeHtml(gearNumberOrBlank(itemStats.protection))}" placeholder="roll" /></label>
           <label><span>Value</span><input type="number" inputmode="numeric" min="0" max="100000" step="1" data-gear-item-stat="value" value="${escapeHtml(gearNumberOrBlank(itemStats.value))}" placeholder="roll" /></label>
