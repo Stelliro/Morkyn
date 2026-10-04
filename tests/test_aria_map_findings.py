@@ -81,8 +81,16 @@ class TestRepeatedSpeechFragments(unittest.TestCase):
             'Aria considers the coins. "Twelve gold... It\'s a start, but not nearly enough," she says.',
             'Aria shifts her gaze. "Twelve gold... Nearby, a cartographer is measuring a map.',
         ]
-        _kept, dropped = drop_repeated_sentences(paras)
-        self.assertEqual(dropped, ['"Twelve gold...', '"Twelve gold...'])
+        kept, dropped = drop_repeated_sentences(paras)
+        # Paragraph 2's line re-answers the same offer ("Twelve gold... It's a
+        # start"), so since playtest #5 the whole line goes, not just its
+        # opening fragment. Paragraph 3's unclosed restart still goes as before.
+        self.assertEqual(
+            dropped,
+            ['"Twelve gold... It\'s a start, but not nearly enough," she says.', '"Twelve gold...'],
+        )
+        self.assertEqual(kept[0], paras[0])
+        self.assertIn("Nearby, a cartographer", kept[2])
 
     def test_a_complete_short_line_may_still_echo(self):
         _kept, dropped = drop_repeated_sentences(['"I know," he said.', 'She waits. "I know," he said.'])

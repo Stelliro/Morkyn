@@ -77,6 +77,7 @@ from app.turn_dsl import (
 from app.narration_pipeline import (
     drop_repeated_sentences,
     ops_summary_from_turn,
+    player_quotes,
     parse_consolidated_paragraphs,
     pipeline_enabled,
     run_narration_pipeline,
@@ -10564,6 +10565,58 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
     return out
 
 
+_LABEL_GLUE_WORDS = frozenset({
+    "a", "an", "the", "and", "but", "or", "then", "so", "as", "at", "in", "on", "to",
+    "of", "for", "with", "from", "by", "into", "toward", "towards", "near", "past",
+    "you", "your", "he", "she", "they", "it", "his", "her", "their", "its", "him", "them",
+    "this", "that", "these", "those", "there", "here", "when", "while", "after", "before",
+    "i", "we", "my", "our",
+})
+_LABEL_DETERMINERS = frozenset({
+    "the", "a", "an", "this", "that", "your", "his", "her", "their", "its", "my", "our",
+})
+
+
+def _code_follows_other_label(before: str, name: str, *, is_person: bool = False) -> str:
+    """
+    What the words right before a [[code]] are: "" when they are not a label
+    (glue, a verb, nothing), "partial" when they share a word with the
+    entity's name ("the boots [[I1]]"), "other" when they name something else
+    ("Inkwell Inn [[I1]]", "the inn [[I1]]").
+
+    A role in front of a person's code ("the baker [[A]]") is not "other":
+    expanding it reads "the baker Aria", which is right.
+    """
+    tail = re.sub(r"[\s,]+$", "", before or "")
+    words = re.findall(r"[A-Za-z][A-Za-z'\u2019-]*", tail[-80:])
+    if not words or not re.search(r"[A-Za-z'\u2019-]$", tail):
+        return ""
+    name_words = {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z'\u2019-]*", name)}
+    # Title-case run directly before the code: a proper name.
+    run: list[str] = []
+    for word in reversed(words):
+        if word[0].isupper() and word.lower() not in _LABEL_GLUE_WORDS:
+            run.append(word)
+            if len(run) >= 5:
+                break
+        else:
+            break
+    if run:
+        if any(w.lower() in name_words for w in run):
+            return "partial"
+        return "other"
+    # Lowercase noun after a determiner: "the inn", "a small cart".
+    last = words[-1].lower()
+    if last in _LABEL_GLUE_WORDS:
+        return ""
+    recent = [w.lower() for w in words[-4:-1]]
+    if not any(w in _LABEL_DETERMINERS for w in recent):
+        return ""
+    if last in name_words or any(w in name_words for w in recent):
+        return "partial"
+    return "" if is_person else "other"
+
+
 def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     """
     Fix common LLM naming holes:
@@ -10591,6 +10644,14 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         start = match.start()
         window = repaired[max(0, start - (len(name) + 8)) : start]
         if re.search(rf"{re.escape(name)}\s*$", window, flags=re.IGNORECASE):
+            return full
+        label = _code_follows_other_label(repaired[:start], name, is_person=bool(re.fullmatch(r"[A-Z]{1,3}", code)))
+        if label == "other":
+            # The code sits on words naming something else -- an item code on a
+            # place the writer invented came out as "Inkwell Inn Well-Worn
+            # Boots" (playtest #3). Keep the words, drop the tag.
+            return ""
+        if label == "partial":
             return full
         return f"{name} [[{code}]]"
 
@@ -12395,11 +12456,23 @@ def _make_pipeline_paragraph_writer(
 
     from app.prompts import PROSE_VOICE
 
+    # The writer is one model call per beat. It used to get a 120-character op
+    # summary and bare codes, and filled the gaps itself: an invented inn tagged
+    # with an item code, a baker turned cartographer, the player's threat in an
+    # NPC's mouth, one remark answered three times (playtest #3, #5, #6). It
+    # now gets the draft and its facts, and writes texture for them.
     system = (
         "You write ONE playable RPG narration paragraph only. "
         "No headings, no bullet lists, no JSON, no OPS lines. "
-        "Use [[codes]] only when the brief lists them. "
-        "Do not repeat facts listed under forbidden_repeat. "
+        "The draft already decided what happens: who is present, their names and jobs, "
+        "where it happens, and who said what (scene_facts, scene_draft). "
+        "Your paragraph adds texture, pacing and detail to draft_slice, the part of the draft this beat covers. "
+        "Never add a named place, a named person, or a job or title that scene_facts and scene_draft do not have, "
+        "and never change anyone's job. "
+        "may_mention lists each [[code]] with its name and kind. Put a code only right after that entity's own name. "
+        "Words under player_speech are the player's own: only the player (you) says them; no other character speaks them. "
+        "When reply_status is present, the player's line was answered in an earlier paragraph: do not answer it again. "
+        "Do not repeat facts or spoken lines listed under forbidden_repeat or already_said. "
         "Continue from previous_paragraph_tail without restarting the scene. "
         "Always finish every sentence completely — never stop mid-word or mid-clause. "
         + PROSE_VOICE
@@ -12420,6 +12493,13 @@ def _make_pipeline_paragraph_writer(
             "End on a complete sentence with . ! or ?",
             "Direct, readable sentences; varied plain vocabulary — no inverted poetic templates.",
         ]
+        if "draft_slice" in brief:
+            if str(brief.get("draft_slice") or "").strip():
+                rules.append("Write what draft_slice says happens, in your own words; keep its speakers and facts.")
+            else:
+                rules.append("draft_slice is empty: deepen what is already established; no new event, place or person.")
+        if brief.get("reply_status"):
+            rules.append(str(brief["reply_status"]))
         for extra in brief.get("rules_extra") or []:
             if extra and str(extra) not in rules:
                 rules.append(str(extra))
@@ -12427,7 +12507,8 @@ def _make_pipeline_paragraph_writer(
             "task": "Write exactly one paragraph for this beat.",
             "brief": brief,
             "previous_paragraph_tail": (previous_paragraph or "")[-400:],
-            "already_said": list(ledger.forbidden_repeats())[:12],
+            # Newest last: first sentences and spoken lines of earlier paragraphs.
+            "already_said": list(ledger.forbidden_repeats())[-16:],
             "rejected_attempts": list(ledger.previously_attempted_texts(int(brief.get("beat_index") or 1) - 1))[:3],
             "rules": rules,
         }
@@ -12477,15 +12558,20 @@ def _make_pipeline_consolidator(
         labeled = "\n".join(f"===P{i + 1}===\n{p}" for i, p in enumerate(paragraphs))
         payload = {
             "task": "Return cleaned paragraphs with the same count when possible.",
-            "said_facts": [f.text for f in getattr(ledger, "said_facts", [])][:20],
+            "said_facts": [f.text for f in getattr(ledger, "said_facts", [])][-20:],
             "issues_to_watch": [
                 "same fact twice",
+                "the same reply or remark answered twice",
+                "the player's own words spoken by anyone but the player",
                 "entity present after removed",
                 "two incompatible actions without sequence",
             ],
             "input": labeled,
             "output_format": "===P1===\\nparagraph\\n===P2===\\nparagraph",
         }
+        quotes = player_quotes(str(getattr(ledger, "player_input", "") or ""))
+        if quotes:
+            payload["player_speech"] = [{"speaker": "player", "words": q} for q in quotes]
         try:
             raw = _chat_text(
                 system,
@@ -12552,6 +12638,7 @@ def _apply_narration_pipeline(
             turn_number=turn_number,
             writer=_make_pipeline_paragraph_writer(usage, trace, timeout, context),
             consolidator=consolidator_fn,
+            draft=result,
         )
     except Exception as exc:
         usage.append({"phase": "narration_pipeline_failed", "error": _trim_text(str(exc), 500)})

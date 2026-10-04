@@ -47,6 +47,22 @@ REPEAT_NEAR_MATCH = 0.85
 # innocent collision found while checking -- "leans against the counter and",
 # two different people at the same bar -- is five.
 REPEAT_SHARED_RUN_WORDS = 8
+# The same sentence with its words re-inflected or shuffled (playtest #3):
+#   "You follow Aria, and the scent of ink grows stronger with each step."
+#   "You follow Aria down the lane, the scent of ink growing stronger with each step."
+# Raw tokens put that pair at 0.67, under the near-match bar, and the longest
+# shared run is five words. Compared on content stems -- glue words out,
+# grows/growing folded together -- it is 8 of 9. Both sentences need enough
+# content for the score to mean anything; "Aria nods." is never policed.
+REPEAT_STEM_MATCH = 0.7
+REPEAT_STEM_MIN = 5
+# Spoken lines are compared as whole quotations, across paragraphs only
+# (playtest #5: three paragraphs each re-answered one remark, each ending on
+# "But then again, isn't everyone..."). A shared five-word run counts only when
+# three of the five are content words, so "I don't know what you" -- glue that
+# any two people say -- never costs a line.
+SPEECH_SHARED_RUN_WORDS = 5
+SPEECH_RUN_MIN_CONTENT = 3
 
 # --- env helpers -------------------------------------------------------------
 
@@ -822,6 +838,140 @@ def _is_speech_fragment(sentence: str) -> bool:
     return quotes % 2 == 1 or text.endswith(("...", "…"))
 
 
+def _stem(word: str) -> str:
+    """Fold the common inflections together: grows/growing/grown stay apart, grows/growing meet."""
+    w = word.lower().strip("'-")
+    if len(w) > 5 and w.endswith("ing"):
+        w = w[:-3]
+    elif len(w) > 4 and w.endswith("ed"):
+        w = w[:-2]
+    elif len(w) > 4 and w.endswith("es"):
+        w = w[:-2]
+    elif len(w) > 3 and w.endswith("s") and not w.endswith("ss"):
+        w = w[:-1]
+    if len(w) > 4 and w.endswith("e"):
+        w = w[:-1]
+    return w
+
+
+def content_stems(text: str) -> set[str]:
+    """Content words of a sentence, inflection folded, glue words out."""
+    out: set[str] = set()
+    for match in _CONTENT_WORD_RE.finditer(str(text or "")):
+        word = match.group(0).lower()
+        if len(word) < 3 or word in _STRUCTURE_WORDS:
+            continue
+        out.add(_stem(word))
+    return out
+
+
+def is_near_restatement(a: str, b: str) -> bool:
+    """Same sentence re-worded: content stems overlap REPEAT_STEM_MATCH or more."""
+    sa, sb = content_stems(a), content_stems(b)
+    if len(sa) < REPEAT_STEM_MIN or len(sb) < REPEAT_STEM_MIN:
+        return False
+    return jaccard(sa, sb) >= REPEAT_STEM_MATCH
+
+
+_QUOTE_SPAN_RE = re.compile(r'"([^"]+)"|\u201c([^\u201d]+)\u201d')
+
+
+def _quote_marks(text: str) -> int:
+    return sum(str(text or "").count(mark) for mark in ('"', "\u201c", "\u201d"))
+
+
+def quoted_spans(text: str) -> list[str]:
+    """Every quoted line in a passage, quotes removed."""
+    return [
+        (m.group(1) or m.group(2) or "").strip()
+        for m in _QUOTE_SPAN_RE.finditer(str(text or ""))
+        if (m.group(1) or m.group(2) or "").strip()
+    ]
+
+
+def _speech_key(text: str) -> str:
+    """Like _sentence_key, but "isn't" stays one word so contractions do not pad runs."""
+    folded = re.sub(r"['\u2019]", "", str(text or "").lower())
+    return " ".join(_SENTENCE_NORM_RE.sub(" ", folded).split())
+
+
+def _speech_runs(text: str) -> set[str]:
+    words = _speech_key(text).split()
+    runs: set[str] = set()
+    for i in range(len(words) - SPEECH_SHARED_RUN_WORDS + 1):
+        run = words[i : i + SPEECH_SHARED_RUN_WORDS]
+        if sum(1 for w in run if w not in _STRUCTURE_WORDS and len(w) > 2) >= SPEECH_RUN_MIN_CONTENT:
+            runs.add(" ".join(run))
+    return runs
+
+
+# Unlike split_sentences, also splits after a closing quote ('...soon." She
+# turns'), so a spoken line and the narration after it are separate units.
+# A lowercase word after the quote is its attribution ('?" she asks') and stays.
+_UNIT_SPLIT_RE = re.compile(r'(?<=[.!?])\s+|(?<=[.!?]["\u201d])\s+(?=[A-Z"\u201c])')
+
+
+def speech_units(block: str) -> list[str]:
+    """Sentences, but a quotation that spans several sentences stays one unit."""
+    units: list[str] = []
+    pending = ""
+    parts = (part.strip() for part in _UNIT_SPLIT_RE.split(str(block or "")))
+    for sentence in (part for part in parts if part):
+        pending = f"{pending} {sentence}".strip() if pending else sentence
+        if _quote_marks(pending) % 2 == 0:
+            units.append(pending)
+            pending = ""
+    if pending:
+        units.append(pending)
+    return units
+
+
+def speech_repeats(earlier_speech: list[str], speech: str) -> bool:
+    """True when a spoken line restates one already spoken (shared run or re-worded)."""
+    runs = _speech_runs(speech)
+    for prev in earlier_speech:
+        if runs & _speech_runs(prev):
+            return True
+        if is_near_restatement(prev, speech):
+            return True
+    return False
+
+
+def drop_repeated_speech(paragraphs: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Remove a spoken line that restates a line from an earlier paragraph.
+
+    Works on whole quotations, so a reply that runs over several sentences is
+    kept or dropped as one piece and never leaves an unclosed quote behind.
+    Lines inside one paragraph are not compared with each other.
+    """
+    seen: list[str] = []
+    kept_paragraphs: list[str] = []
+    dropped: list[str] = []
+    for para in paragraphs:
+        pending: list[str] = []
+        kept_blocks: list[str] = []
+        for block in _BLOCK_SPLIT_RE.split(str(para or "")):
+            kept_units: list[str] = []
+            for unit in speech_units(block):
+                spans = quoted_spans(unit)
+                if not spans or _quote_marks(unit) % 2:
+                    kept_units.append(unit)
+                    continue
+                speech = " ".join(spans)
+                if seen and speech_repeats(seen, speech):
+                    dropped.append(unit)
+                    continue
+                pending.append(speech)
+                kept_units.append(unit)
+            block_text = " ".join(kept_units).strip()
+            if block_text:
+                kept_blocks.append(block_text)
+        seen.extend(pending)
+        kept_paragraphs.append("\n\n".join(kept_blocks).strip())
+    return kept_paragraphs, dropped
+
+
 def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]]:
     """
     Remove any sentence already said earlier in the same turn, however far back.
@@ -836,11 +986,14 @@ def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]
     as the input, with "" where a paragraph was nothing but repeats, so callers
     holding parallel data (segment labels) stay aligned.
     """
+    original = list(paragraphs)
+    paragraphs, speech_dropped = drop_repeated_speech(list(paragraphs))
     seen_keys: set[str] = set()
     seen_tokens: list[set[str]] = []
+    seen_stems: list[set[str]] = []
     seen_runs: set[str] = set()
     kept_paragraphs: list[str] = []
-    dropped: list[str] = []
+    dropped: list[str] = list(speech_dropped)
 
     for para in paragraphs:
         kept_blocks: list[str] = []
@@ -875,8 +1028,22 @@ def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]
                 if runs & seen_runs:
                     dropped.append(sentence)
                     continue
+                # Re-worded restatement. Only a sentence with balanced quotes,
+                # so dropping it can never leave half a quotation behind.
+                stems = content_stems(sentence)
+                if (
+                    _quote_marks(sentence) % 2 == 0
+                    and len(stems) >= REPEAT_STEM_MIN
+                    and any(
+                        len(prev) >= REPEAT_STEM_MIN and jaccard(stems, prev) >= REPEAT_STEM_MATCH
+                        for prev in seen_stems
+                    )
+                ):
+                    dropped.append(sentence)
+                    continue
                 seen_keys.add(key)
                 seen_tokens.append(tokens)
+                seen_stems.append(stems)
                 seen_runs |= runs
                 kept_sentences.append(sentence)
             block_text = " ".join(kept_sentences).strip()
@@ -885,10 +1052,10 @@ def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]
         kept_paragraphs.append("\n\n".join(kept_blocks).strip())
 
     # A turn that repeated itself end to end still has to say something.
-    if paragraphs and not any(p.strip() for p in kept_paragraphs):
-        first = str(paragraphs[0] or "").strip()
+    if original and not any(p.strip() for p in kept_paragraphs):
+        first = str(original[0] or "").strip()
         if first:
-            return [first] + [""] * (len(paragraphs) - 1), []
+            return [first] + [""] * (len(original) - 1), []
 
     return kept_paragraphs, dropped
 
@@ -1082,63 +1249,336 @@ def consolidate_scene_heuristic(paragraphs: list[str], ledger: NarrationLedger) 
 # --- briefs + orchestrator ---------------------------------------------------
 
 
+# Reply status for every beat after the one that answers the player (playtest
+# #5): each beat used to get the player's line as fresh input and answered it
+# again.
+REPLY_GIVEN_NOTE = (
+    "The reply to the player's line is already given in an earlier paragraph. "
+    "Do not answer it again or restate it. Move forward: a consequence, a new "
+    "pressure, or something else that happens next."
+)
+_SPEECH_INTENT_RE = re.compile(
+    r"^\s*(?:i\s+)?(?:say|says|said|ask|asks|tell|tells|reply|replies|answer|answers|"
+    r"shout|shouts|yell|yells|whisper|whispers|call|calls|mutter|mutters)\b",
+    re.IGNORECASE,
+)
+_DSL_DIRECTIVE_LINE_RE = re.compile(r"^\s*(?:FOCUS|CAST|SCENE)\b.*$", re.MULTILINE)
+
+
+def player_quotes(player_input: str) -> list[str]:
+    """What the player said aloud, as typed. These words belong to the player."""
+    text = str(player_input or "")
+    if text.startswith("__"):
+        return []
+    # Engine notes ride on the input after a blank line; only the player's own part counts.
+    own = re.split(r"\n\s*\n", text, maxsplit=1)[0]
+    return [q for q in quoted_spans(own) if len(q.split()) >= 2]
+
+
+def player_spoke(player_input: str) -> bool:
+    text = str(player_input or "")
+    if text.startswith("__"):
+        return False
+    return bool(player_quotes(text)) or bool(_SPEECH_INTENT_RE.match(text))
+
+
+_PLAYER_SPEECH_VERB_RE = re.compile(
+    r"\byou(?:\s+\w+ly)?\s+(?:say|said|tell|told|ask|asked|reply|replied|answer|answered|"
+    r"snap|snapped|growl|growled|mutter|muttered|add|added|continue|continued|warn|warned|"
+    r"call|called|shout|shouted|whisper|whispered|speak|spoke|spit|spat|sneer|sneered|"
+    r"retort|retorted|declare|declared|state|stated|insist|insisted|repeat|repeated|"
+    r"press|pressed|begin|began|start|started|finish|finished|let|bark|barked|hiss|hissed|"
+    r"suggest|suggested|offer|offered|explain|explained|murmur|murmured|counter|countered)\b"
+    r"|\byour\s+(?:words|voice|question|retort|reply|threat|remark)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_player_line(span: str, quotes: list[str]) -> bool:
+    """A quoted line that carries the player's own words."""
+    if not quotes:
+        return False
+    key = _speech_key(span)
+    for quote in quotes:
+        runs = _speech_runs(quote)
+        if runs and runs & _speech_runs(span):
+            return True
+        qkey = _speech_key(quote)
+        if not runs and len(qkey.split()) >= 2 and qkey in key:
+            return True
+    return False
+
+
+def _slice_has_npc_speech(piece: str, quotes: list[str]) -> bool:
+    """Someone other than the player speaks in this part of the draft."""
+    for unit in speech_units(piece):
+        spans = quoted_spans(unit)
+        if not spans or all(_is_player_line(s, quotes) for s in spans):
+            continue
+        if _PLAYER_SPEECH_VERB_RE.search(unit):
+            continue
+        return True
+    return False
+
+
+def player_words_misattributed(text: str, quotes: list[str]) -> bool:
+    """
+    True when a paragraph puts the player's quoted words in a quotation that is
+    not given to the player (playtest #6: the player's threat came out of an
+    NPC's mouth). The player saying them -- "you say", "you snap" -- is fine.
+    """
+    if not quotes:
+        return False
+    units = speech_units(_collapse_ws(str(text or "").replace("\n", " ")))
+    for index, unit in enumerate(units):
+        for span in quoted_spans(unit):
+            if not _is_player_line(span, quotes):
+                continue
+            around = unit + " " + (units[index - 1] if index else "")
+            if not _PLAYER_SPEECH_VERB_RE.search(around):
+                return True
+    return False
+
+
+def entity_roster(context: dict[str, Any], draft: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    """
+    code -> name and kind for every entity the writer may tag.
+
+    A bare code list (playtest #3) let the writer put an item code on a place
+    it had just invented; a code it cannot read is a code it will misuse.
+    Entries without a name are left out.
+    """
+    rows: list[dict[str, Any]] = []
+    index: dict[str, dict[str, Any]] = {}
+
+    def add(code: Any, name: Any, kind: str, role: Any = "") -> None:
+        c = str(code or "").strip()
+        n = str(name or "").strip()
+        r = str(role or "").strip()
+        if not c or not n or n.upper() == c.upper():
+            return
+        key = c.upper()
+        row = index.get(key)
+        if row is not None:
+            if r and not row.get("role"):
+                row["role"] = r
+            return
+        row = {"code": c, "name": n, "kind": kind}
+        if r:
+            row["role"] = r
+        index[key] = row
+        rows.append(row)
+
+    for npc in collect_local_npcs(context):
+        add(npc.get("code"), npc.get("name"), "person", npc.get("role"))
+    draft = draft if isinstance(draft, dict) else {}
+    for npc in draft.get("npcs") or []:
+        if isinstance(npc, dict):
+            add(npc.get("code"), npc.get("name"), "person", npc.get("role"))
+    loc = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    add(loc.get("code"), loc.get("name"), "place (where the player is)")
+    for place in context.get("locations") or []:
+        if isinstance(place, dict):
+            add(place.get("code"), place.get("name"), "place")
+    for place in draft.get("locations") or []:
+        if isinstance(place, dict):
+            add(place.get("code"), place.get("name"), "place")
+    for item in collect_inventory(context):
+        add(item.get("code"), item.get("name"), "item the player carries")
+    for event in collect_relevant_events(context):
+        add(event.get("code"), event.get("title") or event.get("name"), "event")
+    return rows
+
+
+def draft_narration_text(draft: dict[str, Any] | None) -> str:
+    if not isinstance(draft, dict):
+        return ""
+    text = str(draft.get("narration") or "").strip()
+    if not text:
+        segments = draft.get("narration_segments") or []
+        text = "\n\n".join(
+            str(seg.get("text") or "") for seg in segments if isinstance(seg, dict)
+        ).strip()
+    text = _DSL_DIRECTIVE_LINE_RE.sub("", text)
+    return _collapse_ws(text)
+
+
+def draft_slices(text: str, count: int) -> list[str]:
+    """Cut the draft into `count` consecutive slices, one per beat, never inside a quotation."""
+    count = max(1, int(count or 1))
+    units: list[str] = []
+    for block in _BLOCK_SPLIT_RE.split(str(text or "")):
+        units.extend(speech_units(block))
+    units = [u for u in units if u.strip()]
+    if not units:
+        return [""] * count
+    total = sum(len(u) for u in units)
+    slices: list[list[str]] = [[] for _ in range(count)]
+    running = 0
+    for unit in units:
+        # Assign by where the unit starts in the draft, so slices follow its order.
+        slot = min(count - 1, int(running * count / max(1, total)))
+        slices[slot].append(unit)
+        running += len(unit)
+    return [" ".join(part).strip() for part in slices]
+
+
+def scene_facts(
+    context: dict[str, Any],
+    draft: dict[str, Any] | None,
+    player_input: str,
+    roster: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Who is who, where, and who said what: the draft's facts, for every beat."""
+    loc = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    facts: dict[str, Any] = {"where": str(loc.get("name") or "")}
+    cast: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    low_draft = draft_narration_text(draft).lower()
+    for row in roster:
+        # With a draft, the cast is who the draft put in the scene; a bystander
+        # on the location record is not handed to the writer to stage.
+        if row.get("kind") == "person" and (not low_draft or row["name"].lower() in low_draft):
+            entry = {"name": row["name"], "code": row["code"]}
+            if row.get("role"):
+                entry["role"] = row["role"]
+            cast.append(entry)
+            seen.add(row["name"].lower())
+    draft = draft if isinstance(draft, dict) else {}
+    for npc in draft.get("npcs") or []:
+        if not isinstance(npc, dict):
+            continue
+        name = str(npc.get("name") or "").strip()
+        if name and name.lower() not in seen:
+            entry = {"name": name}
+            if npc.get("role"):
+                entry["role"] = str(npc.get("role"))
+            cast.append(entry)
+            seen.add(name.lower())
+    if cast:
+        facts["cast"] = cast[:8]
+    draft_player = draft.get("player") if isinstance(draft.get("player"), dict) else {}
+    if draft_player.get("move_to_location"):
+        facts["player_moves_to"] = str(draft_player["move_to_location"])
+    spoken: list[dict[str, str]] = [
+        {"speaker": "player", "words": _trim(q, 300)} for q in player_quotes(player_input)
+    ]
+    names = {row["code"].upper(): row["name"] for row in roster}
+    names.update({row["name"].upper(): row["name"] for row in roster})
+    for convo in draft.get("conversations") or []:
+        if not isinstance(convo, dict):
+            continue
+        words = str(convo.get("topic") or convo.get("summary") or "").strip()
+        code = str(convo.get("npc_code") or "").strip().upper()
+        speaker = names.get(code) or str(convo.get("npc_name") or "").strip()
+        if words and speaker:
+            spoken.append({"speaker": speaker, "words": _trim(words, 300)})
+    if spoken:
+        facts["spoken"] = spoken[:8]
+    return facts
+
+
 def build_paragraph_briefs(
     budget: dict[str, Any],
     context: dict[str, Any],
     player_input: str,
     ledger: NarrationLedger,
     ops_summary: str = "",
+    draft: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     roles = list(budget.get("beat_roles") or _beat_roles(int(budget.get("paragraphs") or 1)))
     loc = ""
     current = context.get("current_location")
     if isinstance(current, dict):
         loc = str(current.get("name") or current.get("code") or "")
-    must_pool = _must_cover_candidates(context, player_input, ops_summary)
+    draft_text = draft_narration_text(draft)
+    state_ops = _state_ops_only(ops_summary)
+    must_pool = _must_cover_candidates(context, player_input, state_ops, draft_text)
+    roster = entity_roster(context, draft)
+    may_mention = roster[:14]
+    facts = scene_facts(context, draft, player_input, roster)
+    slices = draft_slices(draft_text, len(roles)) if draft_text else [""] * len(roles)
+    quotes = player_quotes(player_input)
+    real_input = bool(player_input) and not str(player_input).startswith("__")
+    # The beat that answers the player: the first slice where someone other
+    # than the player speaks, else the first beat.
+    answer_index = 0
+    if real_input:
+        npc_lines = [i for i, piece in enumerate(slices) if _slice_has_npc_speech(piece, quotes)]
+        player_line = [i for i, piece in enumerate(slices) if any(_is_player_line(s, quotes) for s in quoted_spans(piece))]
+        if npc_lines:
+            answer_index = npc_lines[0]
+        elif player_line:
+            # Nobody answers aloud: the beat after the player's line carries the reaction.
+            answer_index = min(len(roles) - 1, player_line[0] + 1)
+    spoke = player_spoke(player_input)
     briefs: list[dict[str, Any]] = []
     for index, role in enumerate(roles):
         cover = []
+        if real_input and index == answer_index:
+            cover.append(f"Respond to player intent: {_trim(player_input, 160)}")
         if must_pool:
             cover.append(must_pool[index % len(must_pool)])
-        if role in {"pressure", "hook"} and player_input and not str(player_input).startswith("__"):
+        if role in {"pressure", "hook"} and real_input:
             cover.append(
                 "End on a consequence, new pressure, or concrete detail. "
                 "Do not restate the player's options as a menu."
             )
-        briefs.append(
-            {
-                "beat_index": index + 1,
-                "beat_count": len(roles),
-                "beat_role": role,
-                "must_cover": cover,
-                "may_mention": _entity_codes(context)[:12],
-                "forbidden_repeat": ledger.forbidden_repeats()[:20],
-                "previous_attempt_texts": ledger.previously_attempted_texts(index)[:4],
-                "player_intent": _trim(player_input, 400),
-                "location_now": loc,
-                "ops_summary": _trim(ops_summary, 400),
-                "model_limits": {
-                    "max_tokens": int(budget.get("max_tokens_per_paragraph") or 200),
-                    "max_chars": int((budget.get("chars_per_paragraph") or {}).get("max") or 420),
-                    "min_chars": int((budget.get("chars_per_paragraph") or {}).get("min") or 200),
-                },
-            }
-        )
+        brief: dict[str, Any] = {
+            "beat_index": index + 1,
+            "beat_count": len(roles),
+            "beat_role": role,
+            "must_cover": cover,
+            "may_mention": may_mention,
+            "scene_facts": facts,
+            "forbidden_repeat": ledger.forbidden_repeats()[-20:],
+            "previous_attempt_texts": ledger.previously_attempted_texts(index)[:4],
+            "player_intent": _trim(player_input, 400),
+            "location_now": loc,
+            "ops_summary": _trim(state_ops, 400),
+            "model_limits": {
+                "max_tokens": int(budget.get("max_tokens_per_paragraph") or 200),
+                "max_chars": int((budget.get("chars_per_paragraph") or {}).get("max") or 420),
+                "min_chars": int((budget.get("chars_per_paragraph") or {}).get("min") or 200),
+            },
+        }
+        if draft_text:
+            brief["scene_draft"] = _trim(draft_text, 1400)
+            brief["draft_slice"] = slices[index]
+        if quotes:
+            brief["player_speech"] = [{"speaker": "player", "words": _trim(q, 300)} for q in quotes]
+        if spoke and index > answer_index:
+            brief["reply_status"] = REPLY_GIVEN_NOTE
+            brief["player_intent"] = "Already answered above: " + _trim(player_input, 200)
+        briefs.append(brief)
     return briefs
 
 
-def _must_cover_candidates(context: dict[str, Any], player_input: str, ops_summary: str) -> list[str]:
+def _state_ops_only(ops_summary: str) -> str:
+    """The ops summary minus its turn_summary echo, which is prose and not an op."""
+    parts = [p.strip() for p in str(ops_summary or "").split("; ")]
+    return "; ".join(p for p in parts if p and not p.startswith("summary:"))
+
+
+def _must_cover_candidates(
+    context: dict[str, Any],
+    player_input: str,
+    ops_summary: str,
+    draft_text: str = "",
+) -> list[str]:
     items: list[str] = []
-    if player_input and not player_input.startswith("__"):
-        items.append(f"Respond to player intent: {_trim(player_input, 160)}")
     if ops_summary:
         items.append(f"Honor state ops: {_trim(ops_summary, 160)}")
     loc = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
     if loc.get("name"):
         items.append(f"Ground the scene in {loc.get('name')}.")
+    low_draft = draft_text.lower()
     for npc in collect_local_npcs(context)[:4]:
-        if npc.get("name"):
-            items.append(f"NPC presence: {npc.get('name')}")
+        name = str(npc.get("name") or "").strip()
+        # With a draft, only people the draft put in this scene: a bystander on
+        # the location record is not a beat the writer has to stage.
+        if name and (not draft_text or name.lower() in low_draft):
+            items.append(f"NPC presence: {name}")
     for event in collect_relevant_events(context)[:4]:
         if event.get("title"):
             items.append(f"Event pressure: {event.get('title')}")
@@ -1220,6 +1660,7 @@ def run_narration_pipeline(
     writer: Callable[[dict[str, Any], str, NarrationLedger], str] | None = None,
     consolidator: Callable[[list[str], NarrationLedger], list[str]] | None = None,
     ledger_path: Path | None = None,
+    draft: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Build narration_segments via adaptive budget + cascade checks + ledger.
@@ -1231,7 +1672,8 @@ def run_narration_pipeline(
     # Prefer caller turn_number; if missing, infer from context history.
     resolved_turn = int(turn_number or 0) or infer_turn_number(context)
     ledger = NarrationLedger(turn=resolved_turn, player_input=player_input, budget=budget)
-    briefs = build_paragraph_briefs(budget, context, player_input, ledger, ops_summary)
+    briefs = build_paragraph_briefs(budget, context, player_input, ledger, ops_summary, draft=draft)
+    quotes = player_quotes(player_input)
     write = writer or default_paragraph_writer
     max_edits = _env_int("AI_RPG_NARRATION_PIPELINE_MAX_EDITS", DEFAULT_MAX_PAIR_EDITS)
     use_consolidator = consolidator is not None and not budget.get("skip_consolidator")
@@ -1261,7 +1703,7 @@ def run_narration_pipeline(
         role = str(brief.get("beat_role") or "act")
         previous = paragraphs[-1] if paragraphs else ""
         # refresh forbidden from ledger
-        brief["forbidden_repeat"] = ledger.forbidden_repeats()[:20]
+        brief["forbidden_repeat"] = ledger.forbidden_repeats()[-20:]
         if paragraphs:
             brief["previous_paragraph_tail"] = previous[-400:]
         progress_update(
@@ -1287,6 +1729,27 @@ def run_narration_pipeline(
             ledger.record_attempt("write_retry_truncated", index, rewrite_brief, retry, "proposed")
             if retry and not looks_garbage_fragment(retry):
                 text = retry
+
+        # Speaker and re-answer checks (playtest #5, #6). One rewrite with the
+        # problem named; a second failure loses the beat, never the turn.
+        problems = _beat_speech_problems(paragraphs, text, quotes)
+        if problems and text:
+            rewrite_brief = dict(brief)
+            rewrite_brief["rules_extra"] = list(brief.get("rules_extra") or []) + problems
+            retry = polish_paragraph(write(rewrite_brief, previous, ledger), max_chars=max_chars)
+            ledger.record_attempt(
+                "write_retry_speech", index, rewrite_brief, retry, "proposed", issues=problems
+            )
+            if retry and not looks_garbage_fragment(retry) and not _beat_speech_problems(paragraphs, retry, quotes):
+                text = retry
+            elif quotes and player_words_misattributed(text, quotes):
+                ledger.record_attempt(
+                    "drop_beat", index, {"role": role}, text, "rejected",
+                    issues=["player_words_given_to_another_speaker"],
+                )
+                continue
+            # A re-answer that survives the retry is trimmed by the speech pass
+            # below and again on the assembled turn.
 
         if paragraphs:
             edits = 0
@@ -1388,10 +1851,26 @@ def run_narration_pipeline(
                 )
                 continue
 
+        if paragraphs:
+            trimmed, speech_dropped = drop_repeated_speech(paragraphs + [text])
+            if speech_dropped:
+                ledger.record_attempt(
+                    "drop_repeated_speech", index, {"dropped": speech_dropped[:4]}, trimmed[-1], "accepted",
+                    issues=["spoken_line_already_said"],
+                )
+                text = polish_paragraph(trimmed[-1], max_chars=max_chars)
+                if not text or looks_garbage_fragment(text):
+                    continue
+
         paragraphs.append(text)
         first = re.split(r"(?<=[.!?])\s+", text.strip())[0] if text.strip() else ""
         if first and not looks_truncated(first):
             ledger.add_said_fact(first, index)
+        # Spoken lines too: with only first sentences on the list, the writer
+        # never saw that it had already given the reply (playtest #5).
+        for spoken in quoted_spans(text):
+            if len(spoken.split()) >= 3:
+                ledger.add_said_fact(f'"{spoken}"', index)
         set_preview(text, append_paragraph=True)
         progress_update(
             "narration_accept",
@@ -1476,6 +1955,24 @@ def run_narration_pipeline(
         "pipeline_version": PIPELINE_VERSION,
         "consolidator_skipped": bool(budget.get("skip_consolidator")),
     }
+
+
+def _beat_speech_problems(paragraphs: list[str], text: str, quotes: list[str]) -> list[str]:
+    """Rules to add on a rewrite when a beat misplaces or repeats speech."""
+    problems: list[str] = []
+    if quotes and player_words_misattributed(text, quotes):
+        problems.append(
+            "The words in player_speech are the player's own. Only the player (you) says them; "
+            "no other character speaks them."
+        )
+    if paragraphs:
+        earlier = [s for p in paragraphs for s in quoted_spans(p)]
+        if earlier and any(speech_repeats(earlier, " ".join(quoted_spans(u))) for u in speech_units(text) if quoted_spans(u)):
+            problems.append(
+                "A spoken line here restates one from an earlier paragraph. "
+                "Do not answer the same thing again; move the scene forward."
+            )
+    return problems
 
 
 def infer_turn_number(context: dict[str, Any]) -> int:
