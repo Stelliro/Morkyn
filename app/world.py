@@ -9498,6 +9498,11 @@ def _prose_says_it_arrived(text: str, name_l: str, tokens: list[str]) -> bool:
 _SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])[\"'\u201d\u2019)]*\s+|\n+")
 _PRONOUN_CARRY_RE = re.compile(r"\b(?:it|them|one|both)\b", re.I)
 _SUBJECT_RE = re.compile(r"\b(you|i|we|he|she|they)\b", re.I)
+# A capitalised name right before the verb, with or without its code: "Aria
+# took the loaf", "Aria [[A]] took the loaf". Past tense has no third-person
+# "-s", so without this the nearest pronoun (or none) made it the player's.
+_NAMED_SUBJECT_RE = re.compile(r"\b([A-Z][\w'\u2019-]*)(?:\s+\[\[[A-Za-z0-9]+\]\])?\s+$")
+_NOT_A_NAMED_SUBJECT = frozenset({"you", "i", "we", "then", "and", "but", "so", "now", "still", "finally", "slowly"})
 
 # The player ends up holding a thing they did not have. Only counted for items
 # not already owned: "the pouch you already carry" says nothing about more.
@@ -9546,6 +9551,9 @@ def _subject_is_player(sentence: str, pos: int, verb: str = "") -> bool:
     word = (verb.split() or [""])[0].lower()
     if word.endswith("s") and not word.endswith("ss"):
         return False
+    named = _NAMED_SUBJECT_RE.search(sentence[:pos])
+    if named and named.group(1).lower() not in _NOT_A_NAMED_SUBJECT:
+        return False
     subjects = _SUBJECT_RE.findall(sentence[:pos])
     if not subjects:
         return True
@@ -9583,7 +9591,7 @@ def _sentence_item_events(sentence: str, name_l: str, tokens: list[str], *, owne
         if re.search(r"\byour?\b|\bgiven\b", text_l):
             events.append((m.start(), "gain"))
             continue
-        player = _subject_is_player(lower, m.start(), text_l)
+        player = _subject_is_player(sentence, m.start(), text_l)
         if text_l.startswith("hand"):
             if "over" in text_l:
                 events.append((m.start(), "loss" if player else "gain"))
@@ -9594,7 +9602,7 @@ def _sentence_item_events(sentence: str, name_l: str, tokens: list[str], *, owne
             events.append((m.start(), "gain"))
     for m in _DISCOVER_GAIN_RE.finditer(lower):
         window = lower[m.end(): m.end() + _DISCOVER_NAME_WINDOW]
-        if ((name_l and name_l in window) or any(tok in window for tok in tokens)) and _subject_is_player(lower, m.start(), m.group(0)):
+        if ((name_l and name_l in window) or any(tok in window for tok in tokens)) and _subject_is_player(sentence, m.start(), m.group(0)):
             events.append((m.start(), "gain"))
     if not owned:
         for m in _POSSESSION_RE.finditer(sentence):
