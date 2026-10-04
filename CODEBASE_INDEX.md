@@ -124,6 +124,14 @@ Morkyn/
 - **Dependencies:** `app.db` (settings row `model_limits`), nvidia-smi when present, stdlib `struct` for the GGUF header.
 - **Design Notes:** Precedence per limit is explicit env > the player's saved numbers for this model > automatic. A model is keyed by its GGUF file name (`gguf:<name>`), its MLE name (`mle:<name>`), or its API model (`api:<name>`), so switching models brings each model's own numbers and switching back restores them. Automatic sizing never loads the model: the GGUF key/value header gives the architecture, `general.size_label`/`parameter_count`, `<arch>.context_length`, `block_count`, `attention.head_count_kv` and head size, from which the KV cache cost per token is `2 x layers x kv_heads x head_dim x 2 bytes` (f16). With a GPU answer from nvidia-smi the window is the largest multiple of 2048, up to the trained context, whose cache fits beside the weights after 8% of the card and 900 MB of runtime overhead are set aside; without one, a tokens-per-billion scale (262,144 / params, floor 8192) capped by the trained context; with nothing known, 32768. Response caps step with parameter count. The header read and the nvidia-smi call are cached; the settings row is cached for five seconds because `get_model_config()` resolves on every call. `update_model_config()` with `limits_mode` writes or clears the per-model entry and never persists the overlay fields. The launcher prefs' `llama_cpp_context: "auto"` (and `0` caps) export no env, so the server resolves; a number is an explicit choice for every model.
 
+#### Quest Parser
+
+- **Files:** `app/quest_parser.py`
+- **Purpose:** The narrator offers work in prose (optionally marking it with the `QUEST` / `QUEST_DONE` DSL ops); a gated parser call reads the final narration and proposes quests; the engine validates, creates and logs them.
+- **Key API:** `needs_quest_parse()` (regex gate), `build_parser_prompt()`, `parse_reply()`, `merge_marks()`, `validate_quest_changes()`, `evidence_offers_work()`, `apply_quest_changes()`.
+- **Consumers:** `app.llm._run_quest_parser` (after the final narration, phase `quest_parser`, `AI_RPG_QUEST_PARSER`), `app.world.apply_turn` (applies `turn['quest_changes']` / `quest_marks`, attaches `quest_report`).
+- **Design Notes:** A new quest needs evidence quoted from this turn's text that reads as an offer, request or acceptance (a refusal like "no one is hiring" does not count; a narrator mark is trusted), a giver that resolves to an NPC, a board, or a name the story uses, no duplicate of an open quest, and bounded rewards. Updates need a legal status change. Every turn carries a `quest_report` (skipped, empty, applied, rejected, error) with reasons for each rejection; accepted items are journalled.
+
 #### Starting Gear
 
 - **Files:** `app/gear.py`

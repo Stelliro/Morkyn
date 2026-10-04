@@ -88,5 +88,43 @@ class TestAQuestNeedsAnOffer(unittest.TestCase):
         self.assertEqual(len(accepted.get("new") or []), 1)
 
 
+
+FERRY = (
+    '"Not much," he grunts. "The riverfolk are still clearing the wreckage from the storm, and the '
+    'ferryman\u2019s looking for a hand with the nets. But you\u2019ll have to talk to him yourself."'
+)
+DOCKS = 'Elara nods and hands you a small pouch of coins. "Start at the docks. The captain needs help loading cargo."'
+
+
+class TestTheSecondLiveRun(unittest.TestCase):
+    """Second Qwen3 8B run: the gate had become too strict."""
+
+    def test_a_hand_wanted_and_help_needed_are_offers(self):
+        self.assertTrue(quest_parser.evidence_offers_work("looking for a hand with the nets", FERRY))
+        self.assertTrue(quest_parser.evidence_offers_work("The captain needs help loading cargo", DOCKS, "I'll take the job."))
+
+    def test_a_giver_named_in_the_story_without_a_row_is_kept(self):
+        changes = {
+            "new": [{"title": "Help the ferryman with the nets", "giver": "the ferryman", "evidence": "looking for a hand with the nets", "steps": [{"title": "Find the ferryman"}]}],
+            "updates": [],
+        }
+        accepted, rejected = quest_parser.validate_quest_changes(changes, narration=FERRY, npcs=[], locations=[], existing=[])
+        self.assertEqual(len(accepted.get("new") or []), 1, rejected)
+        self.assertEqual(accepted["new"][0]["giver_name"], "the ferryman")
+
+    def test_a_giver_nobody_mentioned_is_still_refused(self):
+        changes = {
+            "new": [{"title": "Help the ferryman with the nets", "giver": "Lord Ashby", "evidence": "looking for a hand with the nets", "steps": [{"title": "Find him"}]}],
+            "updates": [],
+        }
+        _accepted, rejected = quest_parser.validate_quest_changes(changes, narration=FERRY, npcs=[], locations=[], existing=[])
+        self.assertIn("unknown_giver", rejected[0]["reasons"])
+
+    def test_a_mark_matching_a_parser_title_keeps_its_trust(self):
+        parsed = {"new": [{"title": "Captain's Load", "evidence": "Start at the docks", "steps": [{"title": "Go to the docks"}]}], "updates": []}
+        merged = quest_parser.merge_marks(parsed, [{"op": "QUEST", "title": "Captain's Load", "giver": "", "step": "Go to the docks"}])
+        self.assertTrue(merged["new"][0].get("_from_mark"))
+
+
 if __name__ == "__main__":
     unittest.main()

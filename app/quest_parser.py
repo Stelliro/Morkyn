@@ -77,7 +77,12 @@ _JOB_RE = re.compile(
     r"bring (?:me|us|it|this|that|back)|fetch|retrieve|recover|find (?:my|our|the|him|her|them|out)|"
     r"track down|clear out|investigate|i need (?:someone|somebody|you|a hand|help)|we need (?:someone|you|help)|"
     r"in exchange|owe you|make it worth|wanted:|notice (?:is|was) (?:up|posted|pinned|nailed)|"
-    r"posted (?:on|at) the|board (?:reads|says|lists))\b",
+    r"posted (?:on|at) the|board (?:reads|says|lists)|"
+    # Live Qwen3 8B phrasing the list missed: "the ferryman's looking for a hand
+    # with the nets", "The captain needs help loading cargo".
+    r"(?:looking|asking) for (?:a hand|hands|help|someone|somebody|workers?|a crew)|"
+    r"needs? (?:a hand|hands|help|someone|somebody|workers?)|could use (?:a hand|help|someone)|"
+    r"wants? (?:someone|somebody|a hand)|lend (?:a|me a|us a) hand|hands? you (?:a|the) (?:pouch|purse|coins?|advance))\b",
     re.I,
 )
 _ADDRESS_RE = re.compile(
@@ -344,8 +349,13 @@ def merge_marks(parsed: dict[str, Any], marks: list[dict[str, Any]] | None) -> d
         op = str(mark.get("op") or "").upper()
         if op == "QUEST":
             title = str(mark.get("title") or "").strip()
-            if not title or _norm(title) in titles:
+            if title and _norm(title) in titles:
+                for item in out["new"]:
+                    if _norm(item.get("title")) == _norm(title):
+                        item["_from_mark"] = True
                 used_marks = True
+                continue
+            if not title:
                 continue
             step_text = str(mark.get("step") or "").strip()
             reward_text = str(mark.get("reward") or "").strip()
@@ -577,7 +587,8 @@ def validate_quest_changes(
             reasons.append("evidence_is_not_an_offer")
         giver_ref = str(raw.get("giver") or "").strip()
         giver = _resolve_npc(giver_ref, npcs)
-        if giver_ref and giver is None and not _BOARD_RE.search(giver_ref):
+        giver_named_in_story = bool(giver_ref) and _norm(giver_ref).replace("the ", "", 1) in _norm(f"{narration} {player_input}")
+        if giver_ref and giver is None and not _BOARD_RE.search(giver_ref) and not giver_named_in_story:
             reasons.append("unknown_giver")
         steps_in = _as_list(raw.get("steps"))
         steps: list[dict[str, Any]] = []
