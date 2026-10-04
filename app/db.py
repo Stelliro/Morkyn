@@ -725,6 +725,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("is_moving", "INTEGER NOT NULL DEFAULT 0"),
         # Turn on which position was last updated (for throttling movement)
         ("last_moved_turn", "INTEGER NOT NULL DEFAULT 0"),
+        # The venue this NPC works in (locations.id, 0 = none yet); set by
+        # world.ensure_npc_workplace the first time it is needed (playtest #16)
+        ("workplace_id", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")

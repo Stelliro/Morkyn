@@ -55,7 +55,7 @@ Morkyn/
 |   |-- narration_pipeline.py        # Adaptive paragraph quality pipeline
 |   |-- prompts.py                   # System/verifier prompts + agentic CoD steps
 |   |-- rng.py                       # Dice, magnitude bands, deterministic seeds, roll audit
-|   |-- venues.py                    # Shop/inn kinds, opening hours, settlement commonality
+|   |-- venues.py                    # Shop/inn kinds, opening hours, settlement commonality, trade->workplace kind, prose entry reader
 |   |-- world_facts.py               # Per-world race and lore rows, post-start passes, per-turn fetch
 |   |-- proficiencies.py             # Custom proficiencies settled into rows before turn 1
 |   |-- world_scale.py               # Seeded wilderness, theme ground, materials, people leanings

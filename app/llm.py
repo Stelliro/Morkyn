@@ -11164,6 +11164,88 @@ def _repair_gear_as_agent_prose(text: str, *, inventory_names: list[str] | None 
     return out
 
 
+def _entity_code_role_map(context: dict[str, Any] | None, turn: dict[str, Any] | None = None) -> dict[str, str]:
+    """NPC code -> stored role, from the world and this turn's new people."""
+    out: dict[str, str] = {}
+
+    def add(npc: Any) -> None:
+        if not isinstance(npc, dict):
+            return
+        code = str(npc.get("code") or "").strip().upper()
+        role = str(npc.get("role") or "").strip()
+        if re.fullmatch(r"[A-Z]{1,3}", code) and role and role.lower() not in {"local", "unknown"}:
+            out.setdefault(code, role)
+
+    ctx = context if isinstance(context, dict) else {}
+    for loc in ctx.get("locations") or []:
+        if isinstance(loc, dict):
+            for npc in loc.get("npcs") or []:
+                add(npc)
+    for npc in ctx.get("npcs") or []:
+        add(npc)
+    for npc in (turn or {}).get("npcs") or [] if isinstance(turn, dict) else []:
+        add(npc)
+    return out
+
+
+# "a cartter [[C]]" / "a cartter Hearthbin [[C]]": an article and a job word
+# standing in front of a person's tag. Lower-case words only, so a name or a
+# title is never read as the job.
+_ROLE_BEFORE_TAG_RE = re.compile(
+    r"\b(?P<art>[Aa]n?|[Tt]he)\s+(?P<desc>[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?)\s+"
+    r"(?:(?P<name>[A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)?)\s+)?\[\[(?P<code>[A-Z]{1,3})\]\]"
+)
+# "Hearthbin [[C]], the carter," -- read, not rewritten: an appositive can be
+# any description, so a different one is only reported.
+_ROLE_AFTER_TAG_RE = re.compile(
+    r"\[\[(?P<code>[A-Z]{1,3})\]\],\s+(?:the|a|an)\s+(?P<desc>[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,2})\s*[,.]"
+)
+
+
+def _same_job(desc: str, role: str) -> bool:
+    d, r = desc.lower().strip(), role.lower().strip()
+    return bool(d and r) and (r in d or d in r)
+
+
+def _prefer_stored_roles(text: str, code_to_name: dict[str, str], code_to_role: dict[str, str]) -> str:
+    """Put the stored job in front of a person's tag where the prose gave them another.
+
+    Playtest #16: the depth retry wrote "a cartter [[C]]"; the engine had
+    already filed C as Hearthbin the message runner, and the name repair made
+    it "a cartter Hearthbin [[C]]". The record is the truth the next turn
+    builds on, so the job in front of the tag becomes the stored one.
+    """
+    if not text or not code_to_role:
+        return text or ""
+
+    def fix(match: re.Match[str]) -> str:
+        code = match.group("code")
+        role = code_to_role.get(code, "")
+        name = code_to_name.get(code, "")
+        said = match.group("name") or ""
+        if not role or not name or (said and said.lower() != name.lower()):
+            return match.group(0)
+        if _same_job(match.group("desc"), role):
+            return match.group(0)
+        art = match.group("art")
+        if art.lower() != "the":
+            art = ("An" if art[0].isupper() else "an") if role[:1].lower() in "aeiou" else ("A" if art[0].isupper() else "a")
+        return f"{art} {role} {name} [[{code}]]"
+
+    return _ROLE_BEFORE_TAG_RE.sub(fix, text)
+
+
+def _role_mismatches(text: str, code_to_role: dict[str, str]) -> list[dict[str, str]]:
+    """Appositive jobs that differ from the stored role, for the turn trace."""
+    out: list[dict[str, str]] = []
+    for match in _ROLE_AFTER_TAG_RE.finditer(str(text or "")):
+        code = match.group("code")
+        role = code_to_role.get(code, "")
+        if role and not _same_job(match.group("desc"), role):
+            out.append({"code": code, "stored": role, "prose": match.group("desc")})
+    return out[:6]
+
+
 def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Deterministic name/code repair on narration after model output."""
     if not isinstance(result, dict):
@@ -11304,8 +11386,11 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
         targets = action.get("target_codes") if isinstance(action.get("target_codes"), dict) else {}
         referenced_codes.update(str(c) for c in targets.get("npcs") or [])
 
+    code_roles = _entity_code_role_map(context, result)
+
     def rewrite_names(text: str) -> str:
         out = text or ""
+        out = _prefer_stored_roles(out, code_map, code_roles)
         out = _repair_bare_code_possessives(
             out,
             code_map=code_map,
@@ -11381,6 +11466,10 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
     if result.get("turn_summary"):
         text = rewrite_names(str(result.get("turn_summary") or ""))
         result["turn_summary"] = _repair_prose_entity_labels(text, code_map)[:700]
+
+    mismatches = _role_mismatches(str(result.get("narration") or ""), code_roles)
+    if mismatches:
+        result["role_mismatches"] = mismatches
 
     # Scene plan event labels can keep system-job wording; clean NPC-looking entries only
     plan = result.get("scene_plan") if isinstance(result.get("scene_plan"), dict) else None
@@ -12789,6 +12878,10 @@ def _make_pipeline_paragraph_writer(
         "end it; keep its target and the people with_the_player part of the scene. "
         "When scene_facts.player_stays_in is present, the player is still in that place when the turn ends: "
         "do not take them into another place or building. "
+        "When scene_facts.player_goes_inside is present, the draft takes the player into that building: keep them going in. "
+        "scene_facts.keeper keeps the place the player is inside. In scene_facts.cast, works_here marks someone who "
+        "works in this place; works_at is that person's own workplace somewhere else, so here they are a visitor "
+        "and do not sell, keep or own what is here. "
         "The player makes their own choices: never write that they decide, choose or put something off; "
         "end on the situation, not on a decision made for them. "
         "Do not repeat facts or spoken lines listed under forbidden_repeat or already_said. "

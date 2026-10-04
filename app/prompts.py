@@ -765,6 +765,23 @@ def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
         place["name"] = name
     if code:
         place["code"] = code
+    # Inside a venue: what it is and who keeps it. Around it: the doors here, so
+    # a shop already on record is walked back into rather than reinvented.
+    if current.get("inside_venue"):
+        kind = str(current.get("venue_kind") or "").replace("_", " ")
+        if kind:
+            place["kind"] = kind
+        keeper = current.get("keeper") if isinstance(current.get("keeper"), dict) else {}
+        if keeper.get("name"):
+            place["keeper"] = str(keeper["name"])
+    doors = [
+        str(v.get("name") or "")
+        for v in current.get("venues_here") or []
+        if isinstance(v, dict) and str(v.get("name") or "").strip() and str(v.get("name")) != name
+    ]
+    if doors:
+        place["venues_here"] = doors[:8]
+    here_id = int(current.get("id") or source.get("id") or 0)
     people = []
     for npc in (source.get("npcs") or [])[:12]:
         if not isinstance(npc, dict):
@@ -772,7 +789,15 @@ def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
         person = str(npc.get("name") or "").strip()
         if not person:
             continue
-        people.append({"name": person, "code": npc.get("code") or "", "role": npc.get("role") or ""})
+        entry = {"name": person, "code": npc.get("code") or "", "role": npc.get("role") or ""}
+        # Whose place this is (playtest #16): someone whose workplace is
+        # elsewhere is a visitor here, not the one behind the counter.
+        workplace_id = int(npc.get("workplace_id") or 0)
+        if workplace_id and here_id and workplace_id == here_id:
+            entry["works_here"] = True
+        elif npc.get("workplace"):
+            entry["works_at"] = str(npc.get("workplace"))
+        people.append(entry)
     if people:
         place["people"] = people
     return place or None

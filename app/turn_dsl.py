@@ -123,6 +123,9 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
   crafted); something looked at, touched, tasted or handed back is not granted.
 - NPC_NEW NAME must be a name ("Aria", "Thornrow", "Captain Vesk"), never a description
   ("Woman", "Old Man", "Hooded Figure", "Guard"). The app overwrites description-only names.
+- world_state.current_location.people: works_here marks someone who works in this place;
+  works_at is that person's own workplace somewhere else, so here they are a visitor and do not
+  sell, keep or own what is here. current_location.keeper keeps the place the player is inside.
 - NPC_NEW ROLE is an occupation — carter, net mender, baker, off-duty guard, ferryman.
   It is not an appearance: "hooded stranger" and "cloaked local" are not jobs. Describe the
   hood in ===NAR=== if it matters. At most one genuinely mysterious watcher on screen.
@@ -217,6 +220,19 @@ def _decode_arg_escapes(text: str) -> str:
 # INDEX's own arity check, and cost the turn every op on every other line.
 _LEADING_POSITIONALS = {"FOCUS": 1, "INDEX": 2}
 _OPCODE_FLAG_KEYS: dict[str, set[str]] = {"QUEST": {"GIVER", "STEP", "AT", "REWARD"}}
+# Flags whose unquoted value may be several words ("ROLE net mender").
+_MULTIWORD_FLAGS = {"ROLE"}
+
+
+def _ends_multiword(token: str, flag_keys: set[str]) -> bool:
+    """A token that is not part of an unquoted multi-word value: a flag, a quoted
+    string, a location code or an attitude word."""
+    if token.upper() in flag_keys or re.fullmatch(r"__STR\d+__", token):
+        return True
+    key, sep, _ = token.partition("=")
+    if sep and key.upper() in flag_keys:
+        return True
+    return bool(_LOCATION_CODE_RE.match(token)) or token.lower() in _NPC_ATTITUDES
 
 
 def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
@@ -299,6 +315,18 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
             sm = re.fullmatch(r"__STR(\d+)__", nxt)
             flags[upper] = strings[int(sm.group(1))] if sm else _decode_arg_escapes(nxt)
             i += 2
+            if upper in _MULTIWORD_FLAGS and not sm:
+                # Playtest #16: "ROLE message runner LOC L1" stored Elara as a
+                # "message". An unquoted occupation runs to the next flag.
+                words = [flags[upper]]
+                while i < len(parts) and len(words) < 4 and not _ends_multiword(parts[i], flag_keys):
+                    # A capitalised word after a lower-case job is a name:
+                    # "ROLE baker Bo L1" keeps Bo as the NPC's name.
+                    if words[0][:1].islower() and parts[i][:1].isupper():
+                        break
+                    words.append(_decode_arg_escapes(parts[i]))
+                    i += 1
+                flags[upper] = " ".join(words)
             continue
         positionals.append(_decode_arg_escapes(token))
         i += 1
@@ -1034,6 +1062,14 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 f"The player goes after {followed}. If they lead into another place, MOVE names that place; "
                 f"otherwise the pursuit stays inside {here_name}."
             )
+    # Going indoors is a move on any turn, not only a travel turn (playtest #16:
+    # a talk turn ended inside a herb shop with no MOVE, and the shop never existed).
+    here_loc = context.get("current_location") if isinstance(context, dict) else None
+    if not (isinstance(here_loc, dict) and here_loc.get("inside_venue")):
+        instructions.append(
+            "If ===NAR=== takes the player through a door into a shop, inn, forge, temple or other building, "
+            "===OPS=== MUST contain MOVE with that building's name."
+        )
     space = context.get("map_space") if isinstance(context, dict) else None
     if isinstance(space, dict) and space.get("width") and space.get("height"):
         budget = int(space.get("step_budget") or 4)

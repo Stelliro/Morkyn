@@ -3958,6 +3958,13 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
                 """
             ).fetchall()
         )
+        # Whose place is whose (playtest #16): a baker in someone else's shop
+        # is a visitor there. ensure_npc_workplace stores the id on a turn.
+        place_names = {int(row["id"]): str(row["name"] or "") for row in locations}
+        for npc in npcs:
+            workplace_id = int(npc.get("workplace_id") or 0)
+            if workplace_id in place_names:
+                npc["workplace"] = place_names[workplace_id]
         relationships = rows_to_dicts(
             conn.execute(
                 """
@@ -6130,6 +6137,214 @@ def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
     return None
 
 
+def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str) -> dict[str, Any] | None:
+    """The building the prose walked the player into with no MOVE, made a real venue.
+
+    Playtest #16: game 2's draft had Elara wave the player and Aria into a herb
+    shop, wrote no MOVE, and the shop never existed. The player stayed "in"
+    Eldoria's Edge, nobody kept the shop, and the next turn Aria sold its herbs
+    as her own. Only an entry with the player as the one going in counts (see
+    venues.entry_in_prose), and only from an ordinary place: from inside a
+    venue, the doorway rules decide. Reuses a venue here of that kind (the one
+    the keeper already keeps first), else opens one; a kind this settlement is
+    too small for is read as a general store rather than dropped, because the
+    player has already been shown inside it.
+    """
+    here = conn.execute(
+        "SELECT l.* FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+    ).fetchone()
+    if here is None or int(venues._field(here, "parent_id", 0) or 0) or str(venues._field(here, "kind", "") or ""):
+        return None
+    here_id = int(here["id"])
+    people = [
+        str(row["name"] or "")
+        for row in conn.execute("SELECT name FROM npcs WHERE location_id = ?", (here_id,)).fetchall()
+    ]
+    people += [str(npc.get("name") or "") for npc in result.get("npcs") or [] if isinstance(npc, dict)]
+    shown = venues.entry_in_prose(narration, people)
+    if not shown:
+        return None
+    kind = str(shown.get("kind") or "")
+    keeper = str(shown.get("keeper") or "")
+    keeper_row = (
+        conn.execute("SELECT id FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (keeper,)).fetchone()
+        if keeper
+        else None
+    )
+    keeper_id = int(keeper_row["id"]) if keeper_row else 0
+    rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (here_id,)).fetchall()
+    target = None
+    if keeper_id:
+        target = next((row for row in rows if int(row["keeper_npc_id"] or 0) == keeper_id), None)
+    if target is None:
+        same = [row for row in rows if str(row["kind"] or "") == kind]
+        free = [row for row in same if not int(row["keeper_npc_id"] or 0)]
+        target = (free or same or [None])[0] if not keeper else (free[0] if free else None)
+    minted = False
+    if target is None:
+        chosen = ""
+        for candidate in (kind, "general_store"):
+            if candidate and venue_plausibility(conn, here_id, candidate)["ok"]:
+                chosen = candidate
+                break
+        if not chosen:
+            return None
+        noun = " ".join(word[:1].upper() + word[1:] for word in str(shown.get("noun") or "shop").split())
+        if keeper:
+            name = f"{keeper}'s {noun}"
+        else:
+            parent_name = str(here["name"] or "").strip()
+            base = re.sub(r"\s+(square|market|green|commons|gate|row|street|lane)$", "", parent_name, flags=re.I).strip()
+            name = f"{base or parent_name} {noun}".strip()
+        existing = _match_location_by_name(conn, name)
+        if existing is not None:
+            if int(venues._field(existing, "parent_id", 0) or 0) != here_id:
+                return None
+            target = existing
+        else:
+            new_id = _upsert_location(conn, name, "", parent_id=here_id, kind=chosen)
+            if not new_id or int(new_id) == here_id:
+                return None
+            target = _location_row(conn, new_id)
+            minted = True
+    if target is None:
+        return None
+    return {
+        "name": str(target["name"] or ""),
+        "kind": str(target["kind"] or kind),
+        "keeper": keeper,
+        "with": list(shown.get("with") or []),
+        "minted": minted,
+    }
+
+
+def _settle_entered_venue(
+    conn,
+    movement_report: dict[str, Any] | None,
+    narration: str,
+    prompt_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """After a move into a venue: who keeps it, and who came in with the player.
+
+    The one the prose shows letting the player in (or keeping the counter) is
+    bound as keeper and stands inside; people shown going in with the player,
+    and companions on the scene thread, move in from the street outside.
+    Without this the keeper stayed in the street record and the next turn's
+    cast had nobody behind the counter (playtest #16).
+    """
+    report: dict[str, Any] = {"keeper": "", "moved_in": []}
+    movement_report = movement_report if isinstance(movement_report, dict) else {}
+    here = conn.execute(
+        "SELECT l.* FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+    ).fetchone()
+    if here is None:
+        return report
+    parent_id = int(venues._field(here, "parent_id", 0) or 0)
+    if not parent_id or not str(venues._field(here, "kind", "") or ""):
+        return report
+    if str(here["code"] or "").upper() == str(movement_report.get("from") or "").upper():
+        return report
+    here_id = int(here["id"])
+    outside = [
+        str(row["name"] or "")
+        for row in conn.execute("SELECT name FROM npcs WHERE location_id IN (?, ?)", (parent_id, here_id)).fetchall()
+    ]
+    shown = venues.entry_in_prose(narration, outside) or {}
+    keeper = str(movement_report.get("keeper") or shown.get("keeper") or "")
+    along = {str(name) for name in (movement_report.get("with") or shown.get("with") or []) if name}
+    thread = (prompt_context or {}).get("scene_thread") if isinstance(prompt_context, dict) else None
+    if isinstance(thread, dict):
+        along |= {str(row.get("name") or "") for row in thread.get("with") or [] if isinstance(row, dict) and row.get("name")}
+    if keeper and not int(venues._field(here, "keeper_npc_id", 0) or 0):
+        npc = conn.execute("SELECT id FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (keeper,)).fetchone()
+        if npc is not None:
+            conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc["id"]), here_id))
+            conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(npc["id"])))
+            report["keeper"] = keeper
+    for name in sorted(along - {keeper, ""}):
+        npc = conn.execute(
+            "SELECT id FROM npcs WHERE name = ? COLLATE NOCASE AND location_id = ? LIMIT 1", (name, parent_id)
+        ).fetchone()
+        if npc is not None:
+            conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(npc["id"])))
+            report["moved_in"].append(name)
+    if not int(venues._field(_location_row(conn, here_id), "keeper_npc_id", 0) or 0):
+        bind_venue_keeper(conn, here_id)
+    return report
+
+
+def ensure_npc_workplace(conn, npc_id: int) -> int:
+    """This NPC's workplace venue id, created the first time it is needed; 0 for none.
+
+    Playtest #16: Aria the baker had no bakery, so in Elara's herb shop the
+    model let her sell the herbs. A trade gets premises in its settlement (a
+    child of the place, kept by this NPC) and the draft is told whose place is
+    whose. The keeper of a venue works there whatever their role says. The
+    settlement-size rule that stops a player conjuring an apothecary in a
+    hamlet does not apply: the baker already exists, so their bakery does. A
+    full settlement puts them in an existing one of that kind instead.
+    """
+    npc = conn.execute("SELECT * FROM npcs WHERE id = ?", (int(npc_id),)).fetchone()
+    if npc is None:
+        return 0
+    current = int(venues._field(npc, "workplace_id", 0) or 0)
+    if current and _location_row(conn, current) is not None:
+        return current
+    kept = conn.execute(
+        "SELECT id FROM locations WHERE keeper_npc_id = ? ORDER BY id LIMIT 1", (int(npc_id),)
+    ).fetchone()
+    venue_id = int(kept["id"]) if kept else 0
+    if not venue_id:
+        if int(venues._field(npc, "shell", 0) or 0):
+            return 0
+        kind = venues.workplace_kind_for_role(str(npc["role"] or ""))
+        if not kind:
+            return 0
+        home = _location_row(conn, int(npc["location_id"] or 0))
+        if home is None:
+            return 0
+        settlement_id = int(venues._field(home, "parent_id", 0) or 0) or int(home["id"])
+        settlement = _location_row(conn, settlement_id)
+        if settlement is None or settlement_size_for(conn, settlement) == "wilds":
+            return 0
+        rows = conn.execute(
+            "SELECT * FROM locations WHERE parent_id = ? AND kind = ? ORDER BY id", (settlement_id, kind)
+        ).fetchall()
+        free = [row for row in rows if not int(row["keeper_npc_id"] or 0)]
+        if free:
+            venue_id = int(free[0]["id"])
+            conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc_id), venue_id))
+        elif venue_capacity_left(conn, settlement_id, kind) > 0:
+            label = " ".join(word[:1].upper() + word[1:] for word in venues.kind_label(kind).split())
+            name = f"{str(npc['name'] or '').strip()}'s {label}"
+            if _match_location_by_name(conn, name) is not None:
+                return 0
+            cursor = conn.execute(
+                "INSERT INTO locations (code, name, summary, visit_count) VALUES (?, ?, ?, 0)",
+                (_next_code(conn, "locations", "L"), name, f"Where {npc['name']} works ({npc['role']})."[:400]),
+            )
+            venue_id = int(cursor.lastrowid)
+            stamp_venue_fields(conn, venue_id, parent_id=settlement_id, kind=kind)
+            conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc_id), venue_id))
+        elif rows:
+            venue_id = int(rows[0]["id"])
+    if venue_id:
+        conn.execute("UPDATE npcs SET workplace_id = ? WHERE id = ?", (venue_id, int(npc_id)))
+    return venue_id
+
+
+def _ensure_workplaces_here(conn) -> list[int]:
+    """Workplaces for everyone where the player stands, so the next prompt knows whose place is whose."""
+    here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    here_id = int((here["current_location_id"] if here else 0) or 0)
+    if not here_id:
+        return []
+    rows = conn.execute(
+        "SELECT id FROM npcs WHERE location_id = ? AND COALESCE(shell, 0) = 0 ORDER BY id", (here_id,)
+    ).fetchall()
+    return [ensure_npc_workplace(conn, int(row["id"])) for row in rows]
+
+
 def _movement_rule_example(known: list[dict[str, Any]], current_name: str = "") -> str:
     """
     The "do not extend a known name" rule, worked through this world's own map.
@@ -7256,6 +7471,10 @@ def _unasked_unshown_move(
         return ""
     if _PLAYER_DEPARTS_RE.search(text):
         return ""
+    # "Elara gestures for you to come in. Inside, the shop..." shows the move
+    # without naming the shop the MOVE named (playtest #16).
+    if venues.entry_in_prose(text):
+        return ""
     return dest or "map walk"
 
 
@@ -7398,6 +7617,22 @@ def resolve_movement(
                         "from": current_code,
                         "destination": minted,
                     }
+
+    # The prose walked the player into a building and the draft wrote no MOVE
+    # (playtest #16). Any turn kind: a talk turn that ends inside a shop has
+    # put the player in the shop.
+    shown = _venue_shown_in_prose(conn, result, narration)
+    if shown:
+        player_patch["move_to_location"] = shown["name"][:120]
+        return {
+            "status": "repaired",
+            "rule": "venue_shown",
+            "from": current_code,
+            "destination": shown["name"],
+            "keeper": shown["keeper"],
+            "with": shown["with"],
+            "minted": shown["minted"],
+        }
 
     if intent != "travel" and not travel_intent(player_input) and not doorway:
         status = {"status": "not_travel", "from": current_code, "intent": intent}
@@ -13022,6 +13257,18 @@ def apply_turn(
         _apply_inventory_capacity_modifiers(conn, result.get("inventory_capacity_modifiers") or [])
         _apply_skills(conn, result.get("skill_changes") or [])
         _apply_player(conn, result.get("player") or {})
+        # Who keeps the building the player just went into, who came in with
+        # them, and whose workplace is whose (playtest #16).
+        try:
+            entered = _settle_entered_venue(conn, movement_report, narration, prompt_context)
+            if entered.get("keeper") or entered.get("moved_in"):
+                movement_report["settled"] = entered
+        except Exception:
+            pass
+        try:
+            _ensure_workplaces_here(conn)
+        except Exception:
+            pass
         try:
             map_report = _apply_story_map_walk(
                 conn,

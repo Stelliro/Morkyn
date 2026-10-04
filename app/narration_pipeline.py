@@ -1454,6 +1454,17 @@ def scene_facts(
     """Who is who, where, and who said what: the draft's facts, for every beat."""
     loc = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
     facts: dict[str, Any] = {"where": str(loc.get("name") or "")}
+    keeper = loc.get("keeper") if isinstance(loc.get("keeper"), dict) else {}
+    if loc.get("inside_venue") and keeper.get("name"):
+        facts["keeper"] = str(keeper["name"])
+    # Whose place is whose (playtest #16): Aria the baker sold the herbs in
+    # Elara's shop. The engine's workplace record rides on each cast entry.
+    here_id = int(loc.get("id") or 0)
+    workplaces = {
+        str(npc.get("code") or "").upper(): npc
+        for npc in collect_local_npcs(context)
+        if isinstance(npc, dict) and npc.get("code")
+    }
     cast: list[dict[str, Any]] = []
     seen: set[str] = set()
     low_draft = draft_narration_text(draft).lower()
@@ -1464,6 +1475,12 @@ def scene_facts(
             entry = {"name": row["name"], "code": row["code"]}
             if row.get("role"):
                 entry["role"] = row["role"]
+            record = workplaces.get(str(row["code"]).upper()) or {}
+            workplace_id = int(record.get("workplace_id") or 0)
+            if workplace_id and workplace_id == here_id:
+                entry["works_here"] = True
+            elif record.get("workplace"):
+                entry["works_at"] = str(record["workplace"])
             cast.append(entry)
             seen.add(row["name"].lower())
     draft = draft if isinstance(draft, dict) else {}
@@ -1483,7 +1500,10 @@ def scene_facts(
     if draft_player.get("move_to_location"):
         facts["player_moves_to"] = str(draft_player["move_to_location"])
     else:
-        stays = _player_stays_in(context, draft, player_input)
+        inside = _draft_goes_inside(context, draft)
+        stays = "" if inside else _player_stays_in(context, draft, player_input)
+        if inside:
+            facts["player_goes_inside"] = inside
         if stays:
             facts["player_stays_in"] = stays
     spoken: list[dict[str, str]] = [
@@ -1502,6 +1522,27 @@ def scene_facts(
     if spoken:
         facts["spoken"] = spoken[:8]
     return facts
+
+
+def _draft_goes_inside(context: dict[str, Any], draft: dict[str, Any]) -> str:
+    """
+    "the shop" when the draft's prose takes the player into a building with no MOVE, else "".
+
+    Playtest #16: the draft walked the player into a herb shop without a MOVE.
+    The engine makes that building a place from the final prose
+    (app/world.py _venue_shown_in_prose), so the writer keeps the player going
+    inside instead of being told they stay in the street.
+    """
+    loc = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    if loc.get("inside_venue"):
+        return ""
+    try:
+        from app.venues import entry_in_prose
+
+        shown = entry_in_prose(draft_narration_text(draft))
+    except Exception:
+        return ""
+    return f"the {shown['noun']}" if shown else ""
 
 
 def _player_stays_in(context: dict[str, Any], draft: dict[str, Any], player_input: str) -> str:

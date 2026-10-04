@@ -85,7 +85,10 @@ _KIND_WORDS: dict[str, tuple[str, ...]] = {
     "shrine":        ("shrine", "wayshrine", "reliquary"),
     "guardhouse":    ("guardhouse", "watch house", "barracks", "gaol", "jail"),
     "market_hall":   ("market hall", "exchange", "trade hall"),
-    "general_store": ("general store", "provisioner", "sundries", "trading post", "chandler"),
+    # A bare "shop" or "store" is still a door with a counter behind it. Before
+    # playtest #16 a draft's MOVE into "<keeper>'s Shop" resolved as a second
+    # top-level town, so the plain words count as the generic kind.
+    "general_store": ("general store", "provisioner", "sundries", "trading post", "chandler", "shop", "store"),
     "mill":          ("mill", "millhouse"),
     "stable":        ("stable", "stables", "livery"),
     "bathhouse":     ("bathhouse", "baths"),
@@ -137,6 +140,194 @@ def venue_kind_from_name(name: str) -> str:
             if re.search(rf"(?:^|\s){re.escape(word)}(?:\s|$)", text):
                 best_kind, best_len = kind, len(word)
     return best_kind
+
+
+# What a trade's own premises are, for an NPC's workplace (playtest #16: Aria
+# the baker had no bakery, so the model staffed Elara's herb shop with her).
+# A role not listed falls back to the kind words above ("blacksmith", "tanner").
+_ROLE_KINDS: dict[str, tuple[str, ...]] = {
+    "bakery":        ("baker", "pastry cook"),
+    "smithy":        ("smith", "blacksmith", "farrier"),
+    "inn":           ("innkeeper", "innkeep", "hosteler", "hostler"),
+    "tavern":        ("tavern keeper", "tavernkeeper", "barkeep", "bartender", "brewer", "alewife"),
+    "apothecary":    ("apothecary", "herbalist", "physician"),
+    "butcher":       ("butcher",),
+    "tailor":        ("tailor", "seamstress", "weaver", "dressmaker"),
+    "tanner":        ("tanner", "leatherworker"),
+    "carpenter":     ("carpenter", "joiner", "cooper", "woodworker"),
+    "scribe":        ("scribe", "scrivener", "clerk", "notary"),
+    "temple":        ("priest", "priestess", "acolyte", "cleric"),
+    "mill":          ("miller",),
+    "stable":        ("stablehand", "stable hand", "groom", "ostler", "stablemaster"),
+    "general_store": ("shopkeeper", "storekeeper", "grocer", "provisioner", "chandler", "trader"),
+    "alchemist":     ("alchemist",),
+    "jeweller":      ("jeweller", "jeweler", "goldsmith", "silversmith"),
+    "armorer":       ("armorer", "armourer"),
+    "library":       ("librarian", "archivist"),
+}
+
+# Kinds that are a place to stand rather than premises someone works in.
+_NOT_WORKPLACES = {"well", "shrine", "guardhouse", "market_hall", "guild_hall", "bathhouse", "counting_house"}
+
+
+def workplace_kind_for_role(role: str) -> str:
+    """The venue kind an NPC with this occupation works in, or "" for none.
+
+    Whole words only and the longest phrase wins, so an "off-duty guard" or a
+    "message runner" has no shop and a "pastry cook" is not read as a cook.
+    """
+    text = re.sub(r"[^a-z' -]+", " ", str(role or "").lower()).replace("-", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return ""
+    best_kind, best_len = "", 0
+    for kind, words in _ROLE_KINDS.items():
+        for word in words:
+            if len(word) > best_len and re.search(rf"(?:^|\s){re.escape(word)}(?:\s|$)", text):
+                best_kind, best_len = kind, len(word)
+    if not best_kind:
+        best_kind = venue_kind_from_name(text)
+    return "" if best_kind in _NOT_WORKPLACES else best_kind
+
+
+# ---------------------------------------------------------------------------
+# Going indoors in prose (playtest #16)
+# ---------------------------------------------------------------------------
+# Game 2's draft walked the player and Aria into a herb shop ("gestures for you
+# to come in. Inside, the shop is cluttered...") with no MOVE. The shop was
+# never a place and nobody kept it, so the next turn Aria sold its herbs as
+# her own. These read whether the prose put the player inside a building, which
+# kind, who let them in, and who went in with them. Only the player as the one
+# going in counts: "the figure disappears into a shop" moves nobody.
+
+_SELF_ENTER_RE = re.compile(
+    r"\byou\b(?:\s+and\s+[A-Z][\w'-]*)?\s+(?:\w+ly\s+)?"
+    r"(?P<verb>step|walk|go|head|duck|slip|push|enter|move|follow|come|pass|hurry|venture|make\s+your\s+way)\w*\b"
+    r"(?P<tail>[^.!?\"\u201c\u201d]{0,60})",
+    re.I,
+)
+_LED_ENTER_RE = re.compile(
+    r"\b(?:for|lets?|leads?|ushers?|waves?|beckons?|invites?|pulls?|draws?|shows?|gestures?)\s+you\s+"
+    r"(?:to\s+)?(?:come\s+|step\s+|follow\s+\w+\s+)?(?P<tail>(?:in|inside|into|through)\b[^.!?\"\u201c\u201d]{0,60})",
+    re.I,
+)
+_SELF_EXIT_RE = re.compile(
+    r"\byou\b[^.!?\"\u201c\u201d]{0,30}?\b(?:step|walk|go|head|leave|exit|slip|duck|come)\w*\b"
+    r"[^.!?\"\u201c\u201d]{0,20}?\b(?:out|outside|back\s+out)\b",
+    re.I,
+)
+_INTO_RE = re.compile(r"\b(?:into|inside|in|through)\b(?P<obj>.*)$", re.I | re.S)
+# What "into" lands on when it is not a building.
+_OPEN_GROUND_RE = re.compile(
+    r"\b(?:street|road|lane|alley|square|market|plaza|courtyard|yard|crowd|clearing|forest|wood|field|path|"
+    r"night|dark|shadow|light|sun|rain|silence|view|line|place)\w*\b",
+    re.I,
+)
+# A generic shop's trade, from what fills it. Small on purpose: anything else
+# stays a general store.
+_GOODS_HINTS: dict[str, tuple[str, ...]] = {
+    "apothecary": ("herb", "remed", "tincture", "salve", "poultice"),
+    "bakery": ("bread", "loaves", "loaf", "pastr", "flour"),
+    "smithy": ("anvil", "bellows", "horseshoe"),
+    "tailor": ("bolts of cloth", "fabric", "garments"),
+}
+_KEEPER_CUE_RE = re.compile(
+    r"\b(?:gestures?|beckons?|waves?|ushers?|invites?|welcomes?|lets?)\b[^.!?]{0,30}\byou\b"
+    r"|\bbehind\s+(?:the|her|his|their)\s+counter\b"
+    r"|\b(?:owns?|runs?|keeps?|tends?)\s+(?:the|this|her|his|their)\s+(?:shop|store|counter|bar|forge|inn|tavern|place)\b"
+    r"|\b(?:shopkeeper|proprietor|owner|innkeeper)\b",
+    re.I,
+)
+
+
+def _sentences(text: str) -> list[str]:
+    flat = re.sub(r"\s*\[\[[A-Za-z0-9]+\]\]", "", str(text or ""))
+    return [s for s in re.split(r"(?<=[.!?\"\u201d])\s+", flat) if s.strip()]
+
+
+def _venue_noun(text: str) -> tuple[str, str]:
+    """(kind, the words that said so) for the first building noun in text, or ("", "")."""
+    low = re.sub(r"[^a-z' ]+", " ", str(text or "").lower())
+    best: tuple[int, int, str, str] | None = None
+    for kind, words in _KIND_WORDS.items():
+        # A well is not a door, and "bank" is a river's as often as a lender's.
+        if kind in {"well", "counting_house"}:
+            continue
+        for word in words:
+            for match in re.finditer(rf"(?:^|\s){re.escape(word)}(?=\s|$)", low):
+                at = match.start()
+                key = (at, -len(word))
+                if best is None or key < (best[0], best[1]):
+                    best = (at, -len(word), kind, word)
+    if best is None:
+        return "", ""
+    return best[2], best[3]
+
+
+def _goods_kind(text: str) -> str:
+    low = str(text or "").lower()
+    for kind, words in _GOODS_HINTS.items():
+        if any(word in low for word in words):
+            return kind
+    return ""
+
+
+def entry_in_prose(text: str, people: list[str] | tuple[str, ...] = ()) -> dict[str, Any] | None:
+    """Where the prose takes the player indoors, or None.
+
+    Returns {"kind", "noun", "keeper", "with"}: the venue kind (a generic shop
+    takes its trade from its goods, else general_store), the building word the
+    prose used, the person shown letting the player in or keeping the place,
+    and the other people shown inside with the player. The last entry wins, and
+    one the player walks back out of afterwards does not count.
+    """
+    sentences = _sentences(text)
+    found: tuple[int, str, str] | None = None
+    for index, sentence in enumerate(sentences):
+        for match in list(_SELF_ENTER_RE.finditer(sentence)) + list(_LED_ENTER_RE.finditer(sentence)):
+            tail = match.group("tail") or ""
+            verb = (match.groupdict().get("verb") or "").lower()
+            into = _INTO_RE.search(tail)
+            if into is None and not verb.startswith("enter"):
+                continue
+            obj = (into.group("obj") if into is not None else tail).strip()
+            head = " ".join(obj.split()[:6])
+            kind, noun = _venue_noun(head)
+            ground = _OPEN_GROUND_RE.search(head)
+            if kind and ground and ground.start() < head.lower().find(noun):
+                continue  # "into the street outside the inn" lands in the street
+            if not kind:
+                bare = not obj or obj[0] in ",;:" or re.match(r"(?:and|after|behind|with|as|while|to)\b", obj, re.I)
+                if not bare or _OPEN_GROUND_RE.search(" ".join(obj.split()[:4])):
+                    continue
+                window = " ".join(sentences[max(0, index - 1): index + 2])
+                kind, noun = _venue_noun(window)
+            if kind:
+                found = (index, kind, noun)
+        if found and found[0] < index and _SELF_EXIT_RE.search(sentence):
+            found = None
+    if found is None:
+        return None
+    index, kind, noun = found
+    if kind == "general_store" and noun in {"shop", "store"}:
+        kind = _goods_kind(" ".join(sentences[index: index + 3])) or kind
+    names = [str(p).strip() for p in people if str(p or "").strip()]
+    keeper = ""
+    for offset in (0, -1, 1, -2, 2):
+        at = index + offset
+        if not 0 <= at < len(sentences) or not _KEEPER_CUE_RE.search(sentences[at]):
+            continue
+        hit = next((n for n in names if re.search(rf"\b{re.escape(n)}\b", sentences[at], re.I)), "")
+        if hit:
+            keeper = hit
+            break
+    # The sentence before counts: "Aria knocks ... Elara gestures for you to come in."
+    inside = " ".join(sentences[max(0, index - 1): index + 3])
+    along = [
+        n for n in names
+        if n != keeper and re.search(rf"\b{re.escape(n)}\b", inside, re.I)
+    ]
+    return {"kind": kind, "noun": noun, "keeper": keeper, "with": along}
 
 
 def normalize_settlement_size(value: str) -> str:
