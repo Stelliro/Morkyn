@@ -11839,9 +11839,11 @@ def _retry_narration_prose(
             "",
             f"Target about {TARGET_TURN_NARRATION_CHARS} characters, never below "
             f"{MIN_TURN_NARRATION_CHARS}, never above {MAX_TURN_NARRATION_CHARS}.",
-            "Keep every fact, name, and [[CODE]] reference from the draft. Add sensory",
-            "detail, NPC reaction, consequence, and concrete choices the player could take.",
-            "Do not invent new rewards, items, or numbers. Do not decide the player's next action.",
+            "Keep every fact, name, and [[CODE]] reference from the draft. Add only texture:",
+            "the place, the light and sound, what the people already in the draft do, say, and show.",
+            "Nothing new happens: nobody hands over, gives, sells, or pays for anything that the",
+            "draft does not already hand over, no new offers or jobs, and no new people.",
+            "End where the draft ends. Do not decide the player's next action.",
             "",
             f"Scene goal: {str(plan.get('goal') or '')[:300]}",
             f"Player action: {str(player_input or '')[:300]}",
@@ -12161,6 +12163,50 @@ def _retry_short_narration(
     )
 
 
+_HANDOVER_RE = re.compile(
+    r"\b(?:hand(?:s|ed|ing)\s+(?:you|it|them|over)|give[sn]?\s+you|gave\s+you|giving\s+you|"
+    r"offer(?:s|ed|ing)?\s+you|take\s+this|here,?\s+take|press(?:es|ed)?\s+[\w\s]{0,30}?into\s+your|"
+    r"slip(?:s|ped)?\s+[\w\s]{0,30}?into\s+your|toss(?:es|ed)?\s+you|pays?\s+you|paid\s+you|"
+    r"you\s+(?:take|accept|receive|pocket)\s+the|(?:sells?|sold)\s+you|in\s+exchange\s+for)\b",
+    re.I,
+)
+
+
+def _expansion_adds_handover(original: str, expanded: str) -> list[str]:
+    """Hand-over phrases in the expanded prose that the original prose did not contain."""
+    before = {m.group(0).lower() for m in _HANDOVER_RE.finditer(str(original or ""))}
+    added: list[str] = []
+    for match in _HANDOVER_RE.finditer(str(expanded or "")):
+        phrase = match.group(0).lower()
+        if phrase not in before and phrase not in added:
+            added.append(phrase)
+    return added
+
+
+DSL_SKIP_MIN_CERTAINTY = 0.6
+
+
+def _dsl_turn_safe_to_skip(draft: dict[str, Any], policy: dict[str, Any] | None) -> bool:
+    """
+    The "skip verify on DSL turns" setting is a speed shortcut, not a licence
+    to skip the fact check on a turn that changes what the player owns.
+
+    It used to skip unconditionally: a turn scored 0.24 certainty, with an
+    item grant, an item take and a quest, went to the world unchecked and its
+    self-check read "passed".
+    """
+    try:
+        certainty = float((policy or {}).get("certainty") or 0.0)
+    except (TypeError, ValueError):
+        certainty = 0.0
+    if certainty < DSL_SKIP_MIN_CERTAINTY:
+        return False
+    player = draft.get("player") if isinstance(draft.get("player"), dict) else {}
+    risky = any(draft.get(key) for key in ("inventory_changes", "quest_marks", "skill_changes", "ability_updates"))
+    risky = risky or any(player.get(key) for key in ("gold_delta", "xp_delta", "gold_band", "xp_band", "level_delta"))
+    return not risky
+
+
 def _ensure_narration_depth(
     turn: dict[str, Any],
     context: dict[str, Any],
@@ -12195,6 +12241,27 @@ def _ensure_narration_depth(
                 context,
             )
             expanded_chars = _narration_char_count(expanded)
+            invented = _expansion_adds_handover(
+                str(normalized.get("narration") or ""), str(expanded.get("narration") or "")
+            )
+            if invented:
+                # The opening of one game grew from 470 to 2310 characters and
+                # gained "Let me offer you a small map ... Take this", with no op
+                # behind it: no item, no map reveal, and the next turn treated the
+                # gift as a sale. A short true scene beats a long false one.
+                _append_trace(
+                    trace,
+                    {
+                        "phase": phase,
+                        "event": "depth_retry_rejected",
+                        "mode": attempt,
+                        "reason": "expansion_adds_handover",
+                        "phrases": invented[:4],
+                        "before_chars": original_chars,
+                        "after_chars": expanded_chars,
+                    },
+                )
+                return normalized
             if expanded_chars >= MIN_TURN_NARRATION_CHARS or expanded_chars > original_chars:
                 _append_trace(
                     trace,
@@ -13244,9 +13311,10 @@ def _generate_turn_body(
         active_context = {**active_context, "verification_policy": verification_policy}
         _append_trace(trace, {"phase": "verification_policy", "event": "scored", **verification_policy})
         # Prefer skip-verify for low-risk DSL turns; still allow model verify when needed.
-        if verification_policy.get("mode") == "skip_model_verifier" or os.getenv(
-            "AI_RPG_DSL_SKIP_VERIFY", "0"
-        ).strip().lower() in {"1", "true", "yes", "on"}:
+        skip_setting = os.getenv("AI_RPG_DSL_SKIP_VERIFY", "0").strip().lower() in {"1", "true", "yes", "on"}
+        if verification_policy.get("mode") == "skip_model_verifier" or (
+            skip_setting and _dsl_turn_safe_to_skip(draft, verification_policy)
+        ):
             usage.append({"phase": "verify_skipped_dsl", "chars": 0, "estimated_tokens": 0})
             progress_update(
                 "verify_skip",

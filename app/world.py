@@ -9374,6 +9374,76 @@ def _prose_says_it_arrived(text: str, name_l: str, tokens: list[str]) -> bool:
     return False
 
 
+_CHART_NAME_RE = re.compile(r"\b(?:map|maps|chart|charts|atlas|atlases|sea\s*chart|route\s*map)\b", re.I)
+_NOT_A_CHART_RE = re.compile(r"\b(?:case|tube|pin|pins|holder|satchel|bag|table)\b", re.I)
+_LARGE_CHART_RE = re.compile(r"\b(?:large|regional|region|kingdom|realm|continent|world|detailed|full|survey|atlas)\b", re.I)
+_SMALL_CHART_RE = re.compile(r"\b(?:small|local|town|street|rough|crude|scrap|sketch|torn|partial)\b", re.I)
+
+
+def is_chart_item_name(name: str) -> bool:
+    """A map, chart or atlas, not a map case or a map table."""
+    text = str(name or "")
+    return bool(_CHART_NAME_RE.search(text)) and not _NOT_A_CHART_RE.search(text)
+
+
+def chart_reveal_radius(name: str, description: str = "") -> int:
+    """How far a given map reaches, in tiles, from its own words."""
+    text = f"{name} {description}"
+    if _LARGE_CHART_RE.search(text):
+        return 24
+    if _SMALL_CHART_RE.search(text):
+        return 10
+    return 16
+
+
+def _split_chart_items(changes: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Separate gained maps (revealed onto the player's map) from ordinary items."""
+    kept: list[dict[str, Any]] = []
+    charts: list[dict[str, Any]] = []
+    for change in changes or []:
+        try:
+            delta = int(change.get("quantity_delta") or 0)
+        except (TypeError, ValueError):
+            delta = 0
+        if delta > 0 and is_chart_item_name(str(change.get("name") or "")):
+            charts.append(change)
+        else:
+            kept.append(change)
+    return kept, charts
+
+
+def _reveal_from_charts(conn, charts: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reveal each received map onto the active world map and journal what it showed."""
+    if not _play_system_enabled(conn, "map_travel_enabled", True):
+        return {"status": "skipped", "reason": "map_off"}
+    try:
+        from app.tile_world import get_map, reveal_chart_area
+
+        chart = get_map(None, conn=conn)
+        if not chart:
+            return {"status": "no_map"}
+        reports = []
+        for item in charts[:3]:
+            name = str(item.get("name") or "map")
+            radius = chart_reveal_radius(name, str(item.get("description") or ""))
+            report = reveal_chart_area(chart, radius=radius, source=f"map:{name}", conn=conn)
+            reports.append({"item": name, **{k: report.get(k) for k in ("radius", "tiles_revealed", "settlements_known", "landmarks_known")}})
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (
+                    _turn_value(conn),
+                    "map",
+                    (
+                        f"The {name} is copied onto your map: {report.get('tiles_revealed', 0)} more tiles, "
+                        f"{report.get('settlements_known', 0)} settlements and {report.get('landmarks_known', 0)} landmarks marked."
+                    )[:900],
+                ),
+            )
+        return {"status": "revealed", "maps": reports}
+    except Exception as exc:  # a reveal must never break the turn
+        return {"status": "error", "error": str(exc)[:300]}
+
+
 def _filter_inventory_changes(
     conn,
     changes: list[dict[str, Any]],
@@ -9491,8 +9561,9 @@ def _filter_inventory_changes(
         )
         grounded = named and arrived
         # Never honor bare justified/true from the model
-        # Opening: only trust what was already set up (no free combat kit)
-        if input_kind == "opening" and not existing:
+        # Opening: only trust what was already set up (no free combat kit).
+        # A map is not kit: it reveals ground and takes no slot.
+        if input_kind == "opening" and not existing and not is_chart_item_name(name):
             grounded = False
         # Items cannot become dimensional storage without explicit prose
         if grounded:
@@ -12591,8 +12662,12 @@ def apply_turn(
             if isinstance(result.get("_dsl"), dict)
             else "",
         )
+        # A map that changes hands reveals ground instead of taking a slot.
+        inv_changes, chart_items = _split_chart_items(inv_changes)
         result["inventory_changes"] = inv_changes
         _apply_inventory(conn, inv_changes)
+        if chart_items:
+            result["map_reveal_report"] = _reveal_from_charts(conn, chart_items)
         gear_report: dict[str, Any] = {"status": "none", "items": []}
         if _play_system_enabled(conn, "items_enabled", True):
             try:

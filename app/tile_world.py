@@ -1580,6 +1580,73 @@ def grant_lived_area_knowledge(
     }
 
 
+def reveal_chart_area(
+    map_data: dict[str, Any],
+    *,
+    radius: int,
+    source: str = "map",
+    conn=None,
+) -> dict[str, Any]:
+    """
+    A map the player was given: the ground it shows is revealed on theirs.
+
+    Terrain within ``radius`` (Chebyshev, around the player) joins the revealed
+    tiles, and towns and landmarks in that square become known markers. The
+    item itself is not kept: maps take no pack space and what they showed is
+    never lost.
+    """
+    radius = max(1, min(24, int(radius)))
+    px = int((map_data.get("player") or {}).get("x") or 0)
+    py = int((map_data.get("player") or {}).get("y") or 0)
+    grid = _rebuild_grid(map_data)
+    width = len(grid[0]) if grid else int(map_data.get("width") or 0)
+    height = len(grid) if grid else int(map_data.get("height") or 0)
+    visited = set(str(v) for v in (map_data.get("visited") or []))
+    before = len(visited)
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            nx, ny = px + dx, py + dy
+            if 0 <= nx < width and 0 <= ny < height:
+                visited.add(f"{nx},{ny}")
+    map_data["visited"] = sorted(visited)
+
+    settlement_ids: list[str] = []
+    for sm in map_data.get("settlements_meta") or []:
+        if not isinstance(sm, dict):
+            continue
+        sx, sy = int(sm.get("x") or 0), int(sm.get("y") or 0)
+        if max(abs(sx - px), abs(sy - py)) <= radius:
+            settlement_ids.append(str(sm.get("id") or f"{sx},{sy}"))
+    notes: list[dict[str, Any]] = []
+    for lm in map_data.get("landmarks") or []:
+        if not isinstance(lm, dict):
+            continue
+        lx, ly = int(lm.get("x") or 0), int(lm.get("y") or 0)
+        if max(abs(lx - px), abs(ly - py)) > radius:
+            continue
+        notes.append(
+            {
+                "id": str(lm.get("id") or lm.get("poi_id") or f"lm{lx}_{ly}"),
+                "x": lx,
+                "y": ly,
+                "label": str(lm.get("name") or lm.get("label") or lm.get("state") or "Landmark"),
+                "kind": "landmark",
+                "source": source,
+                "summary": str(lm.get("summary") or lm.get("description") or "")[:240],
+            }
+        )
+    knowledge = grant_map_knowledge(map_data, settlement_ids=settlement_ids, notes=notes, source=source, save=False)
+    _save_map_payload(map_data, conn)
+    return {
+        "ok": True,
+        "radius": radius,
+        "tiles_revealed": len(visited) - before,
+        "settlements_known": len(settlement_ids),
+        "landmarks_known": len(notes),
+        "knowledge": knowledge,
+    }
+
+
 def knowledge_markers_for_view(map_data: dict[str, Any]) -> list[dict[str, Any]]:
     """Flatten intel markers for the UI (settlements + danger + notes)."""
     knowledge = _ensure_knowledge(map_data)

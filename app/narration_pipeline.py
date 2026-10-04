@@ -815,6 +815,13 @@ def words_past_cap(
     return blocked
 
 
+def _is_speech_fragment(sentence: str) -> bool:
+    """An unclosed quote opener or a line that trails off: '"Twelve gold...'."""
+    text = str(sentence or "").strip()
+    quotes = sum(text.count(mark) for mark in ('"', "“", "”"))
+    return quotes % 2 == 1 or text.endswith(("...", "…"))
+
+
 def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]]:
     """
     Remove any sentence already said earlier in the same turn, however far back.
@@ -843,6 +850,18 @@ def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]
             for sentence in split_sentences(block):
                 key = _sentence_key(sentence)
                 if len(key) < REPEAT_MIN_CHARS:
+                    # Short lines are exempt from the near-match tests, not from
+                    # an exact repeat: "Twelve gold..." opened the same reply
+                    # three times in one turn because it was 12 characters.
+                    # Complete short lines ("I know," he said.) may echo; a
+                    # repeated fragment -- an unclosed quote or a trailing
+                    # ellipsis -- is the model restarting the same reply.
+                    fragment = _is_speech_fragment(sentence)
+                    if fragment and len(key.split()) >= 2 and key in seen_keys:
+                        dropped.append(sentence)
+                        continue
+                    if fragment and len(key.split()) >= 2:
+                        seen_keys.add(key)
                     kept_sentences.append(sentence)
                     continue
                 if key in seen_keys:
