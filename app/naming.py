@@ -261,7 +261,15 @@ def mint_name(subject: str, *, seed_parts: tuple[Any, ...] = ()) -> str:
     try:
         from app.world import invent_person_name, name_seed
 
-        return invent_person_name(seed=name_seed("naming", subject, *seed_parts))
+        seed = name_seed("naming", subject, *seed_parts)
+        try:
+            from app.db import connect
+            from app.world import unique_person_name
+
+            with connect() as conn:
+                return unique_person_name(conn, seed)
+        except Exception:
+            return invent_person_name(seed=seed)
     except Exception:
         import hashlib
 

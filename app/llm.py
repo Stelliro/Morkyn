@@ -10867,7 +10867,16 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
             if code and code_map.get(code) and is_plausible_person_name(code_map[code]):
                 fallback = code_map[code]
             elif invent_person_name is not None:
-                fallback = invent_person_name(seed=name_seed(code, name, npc.get("role") or ""))
+                # Unique against live NPCs and places: this repair named a carter
+                # "Dockwick" in a world that also had a place called Dockwick.
+                try:
+                    from app.db import connect as _connect
+                    from app.world import unique_person_name as _unique_person_name
+
+                    with _connect() as _conn:
+                        fallback = _unique_person_name(_conn, name_seed(code, name, npc.get("role") or ""))
+                except Exception:
+                    fallback = invent_person_name(seed=name_seed(code, name, npc.get("role") or ""))
             else:
                 fallback = f"Stranger {code}" if code and re.fullmatch(r"[A-Z]{1,3}", code) else "Stranger"
             if name and name != fallback:

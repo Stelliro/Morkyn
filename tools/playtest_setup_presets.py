@@ -89,12 +89,30 @@ def free_port() -> int:
         return s.getsockname()[1]
 
 
+def isolated_data_env(data_dir: str) -> dict[str, str]:
+    """Every path setting the server reads, pointed inside ``data_dir``."""
+    root = Path(data_dir)
+    (root / "campaign_slots").mkdir(parents=True, exist_ok=True)
+    return {
+        "AI_RPG_DB": str(root / "world.db"),
+        "AI_RPG_CAMPAIGN_SLOTS": str(root / "campaign_slots"),
+        "AI_RPG_HISTORY_SUMMARY": str(root / "history_summaries.jsonl"),
+        "AI_RPG_SOURCE_INDEX": str(root / "source_index"),
+        "AI_RPG_CONSOLIDATED_FACTS": str(root / "consolidated_facts.jsonl"),
+        "AI_RPG_MODEL_TRACE_DIR": str(root / "model_traces"),
+    }
+
+
 def start_server(model: str) -> tuple[subprocess.Popen, str, str]:
     port = free_port()
     data_dir = tempfile.mkdtemp(prefix="morkyn_presets_")
+    # Mørkyn has no single data-dir setting: every store has its own variable,
+    # and each one left unset defaults to the player's real files under data/.
+    # An earlier version of this tool set a non-existent AI_RPG_DATA_DIR and
+    # wrote into the live world.db and save folder.
     env = {
         **os.environ,
-        "AI_RPG_DATA_DIR": data_dir,
+        **isolated_data_env(data_dir),
         "AI_RPG_MODEL_PROVIDER": "mle",
         "MLE_MODEL": model,
         "PYTHONIOENCODING": "utf-8",

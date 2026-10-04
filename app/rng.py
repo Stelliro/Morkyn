@@ -532,6 +532,7 @@ def resolve_magnitude(
         factor *= (DIFFICULTY_MULT.get(diff) or DIFFICULTY_MULT["normal"]).get(axis, 1.0)
 
     growth_key = str(table.get("growth_key") or "")
+    growth_applied = bool(growth_key)
     if growth_key:
         factor *= GROWTH_SPEED_MULT[_norm_speed(opts.get(growth_key))]
         explicit = opts.get(growth_key.replace("_speed", "_multiplier"))
@@ -574,6 +575,9 @@ def resolve_magnitude(
         "raw_total": raw_total,
         "scale": str(table.get("scale") or "none"),
         "factor": round(factor, 4),
+        # The growth speed is already in this value; apply-time code must not
+        # scale it again (a "very fast" moderate skill gain of 2 landed as 8).
+        "growth_applied": growth_applied,
         "level": max(1, int(level or 1)),
         "difficulty": str(difficulty or "normal"),
         "value": value,

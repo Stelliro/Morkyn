@@ -256,6 +256,34 @@ def context_notice(window: int, needed: int, provider: str = "mle") -> dict[str,
     }
 
 
+def stale_server_notice(changed: list[str]) -> dict[str, Any]:
+    """The Python on disk changed after this server started.
+
+    The page script is read fresh from disk on every load, but the server keeps
+    the Python it started with. The two drift apart after an update: one save
+    was set up by a new page against an old server, which ignored the new gear
+    list and kept the page's placeholder names ("boots, tunic, trousers").
+    """
+    shown = ", ".join(changed[:4]) + (" and more" if len(changed) > 4 else "")
+    return {
+        "code": "stale_server",
+        "stage": "runtime",
+        "provider": "",
+        "title": "Mørkyn was updated while it was running",
+        "summary": (
+            "The game's files changed after this server started, so the page and the server are now "
+            "different versions. New games and turns can come out wrong until you restart."
+        ),
+        "tips": [
+            "Close the Mørkyn server window and start it again from the launcher.",
+            "Your saves are safe; restarting does not touch them.",
+        ],
+        "detail": f"changed since start: {shown}",
+        "actions": [],
+        "fallback": None,
+    }
+
+
 def problem_detail(problem: dict[str, Any]) -> dict[str, Any]:
     """The HTTP error body: a message for old clients plus the problem for new ones."""
     return {"message": str(problem.get("summary") or problem.get("title") or "Model failure"), "problem": problem}

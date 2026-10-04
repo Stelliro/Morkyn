@@ -668,9 +668,37 @@ def unique_person_name(conn, seed: int, *, attempts: int = 24) -> str:
         }
     except Exception:
         taken = set()
+    # A place name is taken too, and so is a first part another NPC already
+    # wears: the Miriam Shaw save had an NPC and a location both called
+    # "Dockwick", and three NPCs called Ivycoil, Ivywick and Ivyfield.
+    try:
+        places = {
+            str(row["name"] or "").strip().lower()
+            for row in conn.execute("SELECT name FROM locations").fetchall()
+        }
+    except Exception:
+        places = set()
+    used_parts = {
+        part.lower()
+        for existing in taken
+        for part in _SHELL_NAME_PARTS_A
+        if existing.startswith(part.lower())
+    }
+
+    def _free(candidate: str) -> bool:
+        low = candidate.strip().lower()
+        if low in taken or low in places:
+            return False
+        return not any(low.startswith(part) for part in used_parts)
+
     name = invent_person_name(seed=seed)
     for attempt in range(attempts):
-        if name.strip().lower() not in taken:
+        if _free(name):
+            return name
+        name = invent_person_name(seed=name_seed(seed, "retry", attempt))
+    for attempt in range(attempts, attempts * 3):
+        # Shared first parts are a preference; an exact clash is not allowed.
+        if name.strip().lower() not in taken and name.strip().lower() not in places:
             return name
         name = invent_person_name(seed=name_seed(seed, "retry", attempt))
     for suffix in range(2, 40):
@@ -3800,7 +3828,7 @@ def _sanitize_stored_entity_names(conn) -> None:
             name = str(row["name"] or "")
             if is_plausible_person_name(name):
                 continue
-            fixed = invent_person_name(seed=name_seed(code, row["id"]))
+            fixed = unique_person_name(conn, name_seed(code, row["id"]))
             conn.execute("UPDATE npcs SET name = ? WHERE id = ?", (fixed, int(row["id"])))
         for row in conn.execute("SELECT id, name, code FROM locations").fetchall():
             name = str(row["name"] or "")
@@ -9312,11 +9340,11 @@ _ACQUIRE_PROSE_RE = re.compile(
     r"receiv\w+|accept\w*|claim\w*|"
     r"hand(?:s|ed|ing)\s+(?:you|over|him|her|them)|"
     r"give[sn]?\s+you|gave\s+you|giving\s+you|(?:is|are|was|were)\s+given|"
-    r"press(?:es|ed|ing)?\s+[\w\s]{0,20}?into\s+your|offer(?:s|ed|ing)?\s+you|"
+    r"press(?:es|ed|ing)?\s+[\w\s]{0,40}?into\s+your|offer(?:s|ed|ing)?\s+you|"
     r"buy|buys|bought|buying|purchas\w+|barter\w*|trade[sd]?\s+for|"
     r"craft\w*|forag\w*|harvest\w*|gather\w*|collect\w*|scoop\w*|"
-    r"pocket(?:s|ed|ing)|you\s+pocket\s|stow(?:s|ed|ing)?|tuck(?:s|ed|ing)?\s+[\w\s]{0,20}?into|"
-    r"slip(?:s|ped)?\s+[\w\s]{0,20}?into|"
+    r"pocket(?:s|ed|ing)|you\s+pocket\s|stow(?:s|ed|ing)?|tuck(?:s|ed|ing)?\s+[\w\s]{0,40}?into|"
+    r"slip(?:s|ped)?\s+[\w\s]{0,40}?into|"
     r"loot\w*|steal|steals|stole|"
     r"add(?:s|ed)?\s+(?:it|them|\w+)?\s*to\s+your\s+(?:pack|bag|inventory|satchel|pouch)|"
     r"now\s+(?:carry|carries|have|has|hold[s]?)"
@@ -9353,6 +9381,7 @@ def _filter_inventory_changes(
     narration: str = "",
     player_input: str = "",
     input_kind: str = "player",
+    draft_narration: str = "",
 ) -> list[dict[str, Any]]:
     """
     Drop positive inventory gains the prose does not actually describe happening.
@@ -9444,10 +9473,22 @@ def _filter_inventory_changes(
         )
         source_ok = acquire_intent and source_tag and (name_in_text or token_ok)
         named = name_in_text or token_ok or source_ok
+        # The grant was written against the draft prose. A gain whose item is
+        # absent from the draft and from the player's words was invented, even
+        # if a later rewrite of the narration describes it.
+        if draft_narration and named:
+            draft_text = f"{draft_narration}\n{player_input}".lower()
+            draft_hits = sum(1 for tok in tokens if tok in draft_text)
+            if not (name_l in draft_text or (tokens and draft_hits >= max(1, (len(tokens) + 1) // 2))):
+                named = False
         # The second half, and the one that was missing: the prose has to say
         # something arrived. An item being described at length is not an item
         # being acquired.
-        arrived = acquire_intent or _prose_says_it_arrived(text, name_l, tokens)
+        arrived = (
+            acquire_intent
+            or _prose_says_it_arrived(text, name_l, tokens)
+            or (bool(draft_narration) and _prose_says_it_arrived(str(draft_narration).lower(), name_l, tokens))
+        )
         grounded = named and arrived
         # Never honor bare justified/true from the model
         # Opening: only trust what was already set up (no free combat kit)
@@ -10239,7 +10280,11 @@ def _apply_skills(conn, changes: list[dict[str, Any]]) -> None:
         if not name:
             continue
         raw_delta = clamp(int(change.get("delta") or 0), -5, 8)
-        delta = _scaled_delta(raw_delta, str(speed), float(multiplier) if multiplier else None)
+        if change.get("_growth_applied"):
+            # Rolled by app/rng.py, which already applied the growth speed.
+            delta = raw_delta
+        else:
+            delta = _scaled_delta(raw_delta, str(speed), float(multiplier) if multiplier else None)
         delta = clamp(int(delta), -5, 12)
         notes = _short_skill_note(change.get("notes"))
         existing = conn.execute(
@@ -10292,11 +10337,16 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
         if settings.get("leveling_system", True)
         else 0
     )
+    raw_xp = clamp(int(player_patch.get("xp_delta") or 0), 0, 500)
     xp_delta = (
-        _scaled_delta(
-            clamp(int(player_patch.get("xp_delta") or 0), 0, 500),
-            str(settings.get("xp_growth_speed") or "normal"),
-            float(settings.get("xp_growth_multiplier")) if settings.get("xp_growth_multiplier") else None,
+        (
+            raw_xp
+            if player_patch.get("_xp_delta_growth_applied")  # rolled: growth speed already in it
+            else _scaled_delta(
+                raw_xp,
+                str(settings.get("xp_growth_speed") or "normal"),
+                float(settings.get("xp_growth_multiplier")) if settings.get("xp_growth_multiplier") else None,
+            )
         )
         if settings.get("leveling_system", True)
         else 0
@@ -12155,6 +12205,8 @@ def resolve_turn_bands(
             block.pop(number_key, None)
         else:
             block[number_key] = value
+            if roll and roll.get("growth_applied"):
+                block[f"_{number_key}_growth_applied"] = True
         block.pop(band_key, None)
 
     for change in result.get("inventory_changes") or []:
@@ -12249,6 +12301,8 @@ def resolve_turn_bands(
         change.pop("delta_band", None)
         if value is not None:
             change["delta"] = value
+            if roll and roll.get("growth_applied"):
+                change["_growth_applied"] = True
 
     rng_mod.record_rolls(conn, rolls, turn=turn, source="turn_bands")
     return {
@@ -12533,6 +12587,9 @@ def apply_turn(
             narration=narration,
             player_input=player_input,
             input_kind=input_kind,
+            draft_narration=str((result.get("_dsl") or {}).get("draft_narration") or "")
+            if isinstance(result.get("_dsl"), dict)
+            else "",
         )
         result["inventory_changes"] = inv_changes
         _apply_inventory(conn, inv_changes)

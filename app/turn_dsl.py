@@ -545,17 +545,18 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             }
         )
     elif op == "NPC_NEW":
-        name = flags.get("NAME") or (args[0] if args else "")
+        positional = _classify_npc_args(args)
+        name = flags.get("NAME") or positional["name"]
         if not name:
             raise TurnDslError(f"NPC_NEW requires NAME on line {entry['line']}")
         npc = {
             "code": None,
             "name": name[:120],
             "race": flags.get("RACE", "human")[:80],
-            "location": flags.get("LOC") or (args[1] if len(args) > 1 else ""),
-            "role": flags.get("ROLE") or (args[2] if len(args) > 2 else "local")[:80],
+            "location": flags.get("LOC") or positional["location"],
+            "role": (flags.get("ROLE") or positional["role"] or "local")[:80],
             "summary": flags.get("DESC") or f"Introduced this turn: {name}"[:400],
-            "attitude": flags.get("ATTITUDE", "neutral")[:40],
+            "attitude": (flags.get("ATTITUDE") or positional["attitude"] or "neutral")[:40],
             "personality": "",
             "likes": "",
             "principles": "",
@@ -819,6 +820,60 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
                 cast["keywords"].append(word)
 
 
+_NPC_ATTITUDES = frozenset({
+    "friendly", "neutral", "hostile", "wary", "suspicious", "curious", "helpful", "cold", "warm",
+    "afraid", "fearful", "nervous", "angry", "calm", "indifferent", "guarded", "kind", "rude",
+})
+_LOCATION_CODE_RE = re.compile(r"^\[?\[?L\d+\]?\]?$", re.I)
+_SHORT_CODE_RE = re.compile(r"^\[?\[?[A-Z]{1,2}\d{0,3}\]?\]?$")
+
+
+def _classify_npc_args(args: list[str]) -> dict[str, str]:
+    """
+    Read NPC_NEW's bare arguments by what they are, not where they sit.
+
+    The model wrote `NPC_NEW Dockwick "Dockwick" carter L1 friendly`. Read by
+    position, the second "Dockwick" became the location, and the engine minted
+    a place called Dockwick and moved the carter there. A location now comes
+    only from a location code (L1, [[L1]]) or the LOC flag, never a bare word.
+    """
+    out = {"name": "", "location": "", "role": "", "attitude": ""}
+    words: list[str] = []
+    for raw in args:
+        token = str(raw or "").strip()
+        if not token:
+            continue
+        if _LOCATION_CODE_RE.match(token):
+            out["location"] = out["location"] or token.strip("[]").upper()
+        elif token.lower() in _NPC_ATTITUDES:
+            out["attitude"] = out["attitude"] or token.lower()
+        elif _SHORT_CODE_RE.match(token) and not out["name"]:
+            continue  # an entity code like A1, not a name
+        elif not words or token.lower() != words[-1].lower():
+            words.append(token)
+    if words:
+        out["name"] = words[0]
+    if len(words) > 1:
+        # "Dockwick" "Dockwick": a repeated name is not a role.
+        rest = [w for w in words[1:] if w.lower() != out["name"].lower()]
+        out["role"] = rest[0] if rest else ""
+    return out
+
+
+def _first_sentences(text: str, limit: int) -> str:
+    """Whole sentences from the start of the prose, up to ``limit`` characters, code markers removed."""
+    flat = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))
+    flat = re.sub(r"\s+", " ", flat).strip()
+    out = ""
+    for sentence in re.split(r"(?<=[.!?])\s+", flat):
+        if not sentence:
+            continue
+        if out and len(out) + 1 + len(sentence) > limit:
+            break
+        out = f"{out} {sentence}".strip()
+    return out[:limit]
+
+
 def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "") -> dict[str, Any]:
     """Deterministic transcoder: NAR+OPS → apply_turn-compatible dict."""
     narration = str(narration or "").strip()
@@ -866,7 +921,12 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         "turn_summary": "",
         "journal": [],
         "scene_focus": "action",
-        "_dsl": {"ops_count": len(ops), "source": "nar_ops"},
+        # The prose the ops were written against. The narration pipeline and
+        # the depth retry rewrite the narration afterwards and can invent
+        # things (a turn granted "prayer beads" the draft never mentioned,
+        # then the rewrite put "beads clasped in your hands" in the final
+        # text); grounding a gain must not trust text written after the grant.
+        "_dsl": {"ops_count": len(ops), "source": "nar_ops", "draft_narration": narration[:5600]},
     }
 
     malformed_ops: list[str] = []
@@ -898,7 +958,14 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         # character 70. The field is capped at 700 downstream, so the 80 bought
         # nothing.
         intent = str(player_input or "").strip()[:400]
-        turn["turn_summary"] = f"player: {intent or 'acted'}. response: scene advanced with DSL ops."[:700]
+        # "response: scene advanced with DSL ops." told every later turn nothing
+        # about what happened; the history of the Miriam Shaw save read that way
+        # for two of its three turns. The scene's own first sentences do.
+        happened = _first_sentences(narration, 260)
+        if intent.startswith("__opening_scene_request__"):
+            turn["turn_summary"] = f"opening: {happened or 'the scene opened'}"[:700]
+        else:
+            turn["turn_summary"] = f"player: {intent or 'acted'}. response: {happened or 'the scene moved on'}"[:700]
     if not turn["scene_plan"]["goal"]:
         turn["scene_plan"]["goal"] = "Advance the immediate scene with justified local consequences."
     if not turn["scene_plan"]["focus_points"]:

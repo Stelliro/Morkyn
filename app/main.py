@@ -2819,8 +2819,41 @@ def api_llm_runtime():
     return snap
 
 
+def _python_stamp() -> dict[str, float]:
+    """mtime of every Python file the server runs."""
+    stamp: dict[str, float] = {}
+    for path in Path(__file__).resolve().parent.glob("*.py"):
+        try:
+            stamp[path.name] = path.stat().st_mtime
+        except OSError:
+            continue
+    return stamp
+
+
+_STARTUP_PYTHON_STAMP = _python_stamp()
+
+
+def _stale_server_notice() -> dict[str, Any] | None:
+    """A notice when app/*.py changed on disk after this process started."""
+    try:
+        now = _python_stamp()
+        changed = sorted(
+            name for name, mtime in now.items() if mtime > _STARTUP_PYTHON_STAMP.get(name, 0.0) + 1.0
+        )
+        if not changed:
+            return None
+        from app.failsafe import stale_server_notice
+
+        return stale_server_notice(changed)
+    except Exception:
+        return None
+
+
 def _context_notice_safely() -> dict[str, Any] | None:
-    """The too-small-context notice, or None; a status route must never fail over it."""
+    """The stale-server notice first, else the too-small-context notice, or None; never raises."""
+    stale = _stale_server_notice()
+    if stale:
+        return stale
     try:
         from app.llm import context_contract_notice
 

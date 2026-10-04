@@ -59,12 +59,12 @@ SCENE_ASK_RE = re.compile(
 
 ASK_SYSTEM = """You answer one look-up. You do not take a turn and you do not play the protagonist.
 
-The packet includes "voice".
-- voice "ooc": the player is asking you, the DM, not a character. Talk to them directly. This does not break the scene. Do not narrate their body. Do not say "you look", "you notice", or "you don't know" as if you are them. Say what the record contains, for example "The sheet only has a name and a short description. Nothing else is written down."
-- voice "scene": they are speaking to someone who is there. A short in-character reply from that person is appropriate. Still do not start a new scene.
+The input says who is being addressed in "addressed_to".
+- "dm": the player is asking you, the game master, not a character. Talk to them directly and plainly about what the game has recorded. This does not break the scene. Do not narrate their body or say "you look" or "you notice" as if you are them.
+- "character": they are speaking to someone who is there. A short in-character reply from that person is appropriate. Still do not start a new scene.
 
 Other rules:
-- Use only the record in the packet. If a trait is absent, say it is not written down.
+- Use only "record" and its "history" lines. If something is not there, say the game has no more on it. Talk about the world and the character in plain words.
 - Two to four short sentences. No new location, time, or relationship.
 - You may notice one small physical detail already implied by the name or description: colour, wear, size, a mark, or writing already mentioned.
 - Put that one sentence in "remember" so it can be stored on the record. Leave "remember" empty if you added nothing.
@@ -119,7 +119,26 @@ def accept_memory(question: str, known_text: str, remember: str, edit: str) -> t
     return remember, edit
 
 
+# Follow-ups lean on the last thing asked about: "where did the prayer beads
+# come from?" then "i can see they were added to my inventory though".
+_FOLLOW_UP_RE = re.compile(r"\b(?:they|them|those|these|it|its|that|this|he|she|him|her)\b", re.IGNORECASE)
+_LAST_SUBJECT: dict[str, Any] = {}
+
+
+def _remember_subject(subject: dict[str, str] | None) -> None:
+    if subject:
+        _LAST_SUBJECT.clear()
+        _LAST_SUBJECT.update(subject)
+
+
 def resolve_subject(context: dict[str, Any], question: str) -> dict[str, str] | None:
+    found = _resolve_subject_direct(context, question)
+    if found is None and _LAST_SUBJECT and _FOLLOW_UP_RE.search(str(question or "")):
+        return dict(_LAST_SUBJECT)
+    return found
+
+
+def _resolve_subject_direct(context: dict[str, Any], question: str) -> dict[str, str] | None:
     rows = _mention_catalog(context)
     scene_codes = set(_active_scene(context).get("present") or []) | set(_active_scene(context).get("interacting") or [])
     explicit = re.search(r"@([CILSAE])([a-z0-9_]+)", question or "", re.IGNORECASE)
@@ -171,6 +190,7 @@ def _record_for(context: dict[str, Any], subject: dict[str, str] | None) -> tupl
                     "weight": item.get("weight"),
                     "equipped_slot": item.get("equipped_slot") or "",
                     "quantity": item.get("quantity"),
+                    "history": _item_history(str(item.get("name") or "")),
                 }
     if kind == "C":
         pools = list(context.get("npcs") or [])
@@ -273,6 +293,22 @@ def _store_note(kind: str, code: str, name: str, note: str, replace: bool) -> bo
     return False
 
 
+def _item_history(name: str, limit: int = 4) -> list[str]:
+    """Journal lines that mention this item (how and when it arrived), oldest first. Ask rows excluded."""
+    name = str(name or "").strip()
+    if not name:
+        return []
+    try:
+        with connect() as conn:
+            rows = conn.execute(
+                "SELECT turn, kind, content FROM journal WHERE kind != 'ask' AND content LIKE ? ORDER BY id DESC LIMIT ?",
+                (f"%{name}%", limit),
+            ).fetchall()
+    except Exception:
+        return []
+    return [f"turn {row['turn']} ({row['kind']}): {str(row['content'])[:200]}" for row in reversed(rows)]
+
+
 def _journal_ask(question: str, answer: str) -> None:
     with connect() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
@@ -305,11 +341,27 @@ def ask_about(question: str) -> dict[str, Any]:
             "advanced_turn": False,
         }
     voice = ask_voice(question, subject)
+    if not record or not any(record.get(key) for key in ("name", "code")):
+        answer = (
+            "I can't tell which thing you mean. Name it, or type @ and pick it from the list."
+        )
+        _journal_ask(question, answer)
+        return {
+            "ok": True,
+            "question": question,
+            "answer": answer,
+            "subject": None,
+            "remembered": False,
+            "edited": False,
+            "advanced_turn": False,
+            "voice": voice,
+        }
+    _remember_subject(subject)
     packet = json.dumps(
         {
-            "voice": voice,
+            "addressed_to": "character" if voice == "scene" else "dm",
             "question": question,
-            "record": record or {"note": "No single record matched this question."},
+            "record": record,
         },
         ensure_ascii=True,
     )
