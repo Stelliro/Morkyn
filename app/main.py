@@ -3895,6 +3895,37 @@ def api_game_start_preset(campaign_id: str):
     return found
 
 
+class ConversationTargetRequest(BaseModel):
+    codes: list[str] = Field(default_factory=list)
+    group: bool = False
+
+
+@app.post("/api/conversation/target")
+def api_conversation_target(request: ConversationTargetRequest):
+    """
+    The player picks who they are talking to on the "Talking to" chip.
+
+    Empty codes (and no group) clears the target. The pick holds for the next
+    line; an @tag or a name in that line still wins (app/conversation.py).
+    """
+    from app.conversation import choose, view
+    from app.db import connect as _connect
+
+    state = get_state()
+    try:
+        with _connect() as conn:
+            choose(conn, state, request.codes, group=request.group)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    fresh = get_state()
+    # The cast panel marks who is talking from active_scene, which the pick rewrote.
+    return {
+        "ok": True,
+        "conversation": view(fresh),
+        "active_scene": (fresh.get("settings") or {}).get("active_scene") or {},
+    }
+
+
 @app.get("/api/campaign-slots")
 def api_list_campaign_slots():
     return {"slots": list_campaign_slots(), "autosave_slot": AUTOSAVE_SLOT}

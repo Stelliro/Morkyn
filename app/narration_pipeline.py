@@ -1512,11 +1512,17 @@ def build_paragraph_briefs(
             # Nobody answers aloud: the beat after the player's line carries the reaction.
             answer_index = min(len(roles) - 1, player_line[0] + 1)
     spoke = player_spoke(player_input)
+    # Who the player is talking to, decided by the engine (app/conversation.py).
+    from app.conversation import writer_view
+
+    talk = writer_view(context.get("conversation_turn"))
+    answerers = ", ".join((talk or {}).get("who_answers") or [])
     briefs: list[dict[str, Any]] = []
     for index, role in enumerate(roles):
         cover = []
         if real_input and index == answer_index:
-            cover.append(f"Respond to player intent: {_trim(player_input, 160)}")
+            to = f" (the player is talking to {answerers}; {answerers} answers)" if answerers else ""
+            cover.append(f"Respond to player intent{to}: {_trim(player_input, 160)}")
         if must_pool:
             cover.append(must_pool[index % len(must_pool)])
         if role in {"pressure", "hook"} and real_input:
@@ -1547,6 +1553,8 @@ def build_paragraph_briefs(
             brief["draft_slice"] = slices[index]
         if quotes:
             brief["player_speech"] = [{"speaker": "player", "words": _trim(q, 300)} for q in quotes]
+        if talk:
+            brief["conversation"] = talk
         if spoke and index > answer_index:
             brief["reply_status"] = REPLY_GIVEN_NOTE
             brief["player_intent"] = "Already answered above: " + _trim(player_input, 200)

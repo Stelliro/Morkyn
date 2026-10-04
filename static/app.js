@@ -25344,6 +25344,105 @@ function paintEncounter() {
   }
 }
 
+// "Talking to" chip (playtest #7). The engine decides who an untagged line
+// is said to (app/conversation.py); the chip shows that answer after every
+// turn and lets the player pick someone else, everyone, or nobody.
+let talkMenuOpen = false;
+
+function conversationView() {
+  return state?.conversation && typeof state.conversation === "object" ? state.conversation : {};
+}
+
+function paintTalkTarget() {
+  const wrap = document.querySelector("#talkTarget");
+  const nameEl = document.querySelector("#talkTargetName");
+  const button = document.querySelector("#talkTargetButton");
+  if (!wrap || !nameEl || !button) return;
+  const view = conversationView();
+  const options = Array.isArray(view.options) ? view.options : [];
+  const target = Array.isArray(view.target) ? view.target : [];
+  wrap.hidden = !options.length && !target.length;
+  if (wrap.hidden) talkMenuOpen = false;
+  const names = target.map((person) => String(person.name || person.code || ""));
+  nameEl.textContent = view.group && names.length > 1 ? "everyone here" : names.join(", ") || "nobody in particular";
+  button.title = names.length
+    ? `Your next line goes to ${names.join(", ")}${view.why_text ? ` (${view.why_text})` : ""}. Click to change. An @tag or a name in your line still wins.`
+    : "Nobody is addressed. Click to pick someone here.";
+  button.dataset.why = String(view.why || "none");
+  paintTalkMenu();
+}
+
+function paintTalkMenu() {
+  const menu = document.querySelector("#talkTargetMenu");
+  const button = document.querySelector("#talkTargetButton");
+  if (!menu) return;
+  menu.hidden = !talkMenuOpen;
+  button?.setAttribute("aria-expanded", talkMenuOpen ? "true" : "false");
+  if (!talkMenuOpen) return;
+  const view = conversationView();
+  const target = new Set((view.target || []).map((person) => String(person.code || "").toUpperCase()));
+  const rows = (view.options || []).map((person) => {
+    const code = String(person.code || "");
+    const chosen = !view.group && target.has(code.toUpperCase());
+    const aside = person.present ? "" : `<span class="talkTargetAside">nearby</span>`;
+    return `<button type="button" role="option" class="talkTargetOption" data-talk-code="${escapeHtml(code)}" aria-selected="${chosen}">${escapeHtml(person.name || code)}${aside}</button>`;
+  });
+  if ((view.present || []).length > 1) {
+    rows.push(`<button type="button" role="option" class="talkTargetOption" data-talk-group="1" aria-selected="${Boolean(view.group)}">Everyone here</button>`);
+  }
+  rows.push(`<button type="button" role="option" class="talkTargetOption" data-talk-clear="1" aria-selected="${!target.size}">Nobody in particular</button>`);
+  menu.innerHTML = rows.join("");
+}
+
+async function setTalkTarget(body) {
+  const button = document.querySelector("#talkTargetButton");
+  try {
+    const response = await fetch("/api/conversation/target", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(apiErrorMessage(data, response.status));
+    if (state) {
+      state.conversation = data.conversation || {};
+      if (state.settings && data.active_scene) state.settings.active_scene = data.active_scene;
+    }
+    talkMenuOpen = false;
+    paintTalkTarget();
+    paintPlayDock();
+  } catch (error) {
+    talkMenuOpen = false;
+    paintTalkTarget();
+    if (button) button.title = `Could not change who you are talking to: ${error.message || error}`;
+  }
+}
+
+document.querySelector("#talkTargetButton")?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  talkMenuOpen = !talkMenuOpen;
+  paintTalkMenu();
+});
+document.querySelector("#talkTargetMenu")?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const option = event.target.closest(".talkTargetOption");
+  if (!option) return;
+  if (option.dataset.talkClear) setTalkTarget({ codes: [] });
+  else if (option.dataset.talkGroup) setTalkTarget({ codes: [], group: true });
+  else if (option.dataset.talkCode) setTalkTarget({ codes: [option.dataset.talkCode] });
+});
+document.addEventListener("click", (event) => {
+  if (!talkMenuOpen || event.target.closest("#talkTarget")) return;
+  talkMenuOpen = false;
+  paintTalkMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !talkMenuOpen) return;
+  talkMenuOpen = false;
+  paintTalkMenu();
+  document.querySelector("#talkTargetButton")?.focus();
+});
+
 function paintPlayDock() {
   const nameEl = document.querySelector("#youName");
   const vitalsEl = document.querySelector("#youVitals");
@@ -25410,6 +25509,7 @@ function paintPlayDock() {
   syncPortraitFrameName(document.querySelector("#youFrame"), Boolean(face));
   syncPortraitSizeButton(document.querySelector("#youFrame"));
   paintEncounter();
+  paintTalkTarget();
 }
 
 function openHelpPanel() {

@@ -955,6 +955,63 @@ a.mainMenuGhost:hover {
   font-size: 1rem;
 }
 
+/* "Talking to" chip: a one-cut shard; the name is the lit thread. */
+.talkTargetChip {
+  --shard-cut-tl: 0px;
+  --shard-cut-br: 8px;
+  color: var(--text);
+}
+
+.talkTargetLabel {
+  color: var(--label-dim);
+  text-transform: uppercase;
+  letter-spacing: var(--track-label);
+}
+
+.talkTargetName {
+  color: var(--thread);
+  font-family: var(--font-narration);
+  font-style: italic;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.talkTargetChip[data-why="none"] .talkTargetName {
+  color: var(--muted);
+}
+
+.talkTargetMenu {
+  border: 1px solid var(--line-strong);
+  border-radius: 0;
+  background: var(--surface-3);
+  box-shadow: var(--shadow-soft);
+}
+
+.talkTargetOption {
+  border: 0;
+  border-left: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font);
+}
+
+.talkTargetOption:hover,
+.talkTargetOption:focus-visible {
+  border-left-color: var(--thread-dim);
+  color: var(--thread-bright);
+}
+
+.talkTargetOption[aria-selected="true"] {
+  border-left-color: var(--thread);
+  color: var(--thread);
+}
+
+.talkTargetAside {
+  color: var(--muted-2);
+  font-style: italic;
+}
+
 .composerOptional {
   background: transparent;
   border-color: var(--line);

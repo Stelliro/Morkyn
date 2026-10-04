@@ -72,6 +72,11 @@ class TestSceneCastSurvivesTheHandoff(unittest.TestCase):
     def test_apply_turn_writes_active_scene(self):
         db.init_db()
         world.start_playthrough({"player_name": "Ash", "start_location": "Low Gate", "special_ability_origin": "none"})
+        with db.connect() as conn:
+            # The cast names a real person standing here (app/conversation.py
+            # keeps only those in the scene).
+            loc = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0]
+            conn.execute("INSERT INTO npcs (code, location_id, name) VALUES ('B', ?, 'Gatekeeper')", (loc,))
         turn = parse_dsl_turn(_DSL_REPLY, player_input="I approach the gate")
         cleaned = llm._clean_turn_for_handoff(turn, "dsl_to_world")
         world.apply_turn(cleaned, player_input="I approach the gate")

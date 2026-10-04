@@ -5759,6 +5759,85 @@ button.chipBtn.activeChip {
   font-weight: 650;
 }
 
+/* Label and the "Talking to" chip share one row; the chip wraps under on a phone. */
+.turnInputHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 10px;
+  margin: 0 0 6px;
+}
+
+.turnInputHead .turnInputLabel {
+  margin: 0;
+}
+
+.talkTarget {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.talkTarget[hidden] {
+  display: none;
+}
+
+.talkTargetChip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 0;
+  padding: 3px 12px;
+  font-size: 0.82rem;
+}
+
+.talkTargetLabel {
+  flex: none;
+  font-size: 0.7rem;
+}
+
+.talkTargetName {
+  min-width: 0;
+  max-width: 24ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.talkTargetMenu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 31;
+  display: grid;
+  gap: 2px;
+  min-width: 200px;
+  max-width: min(320px, calc(100vw - 32px));
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 6px;
+}
+
+.talkTargetMenu[hidden] {
+  display: none;
+}
+
+.talkTargetOption {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 6px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.talkTargetAside {
+  font-size: 0.78em;
+}
+
 .mentionMenu {
   position: absolute;
   left: 0;

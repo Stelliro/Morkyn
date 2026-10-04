@@ -1179,10 +1179,22 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
     if named:
         world["named"] = named
 
+    # Who the player is talking to, decided by the engine (app/conversation.py).
+    from app.conversation import world_view as conversation_world_view
+
+    talk = conversation_world_view(context.get("conversation_turn"))
+    if talk:
+        world["conversation_turn"] = talk
+    talking_codes = {str(row.get("code") or "") for row in (talk or {}).get("talking_to") or []}
     if _TALK_RE.search(focus):
         conversations = context.get("conversations") if isinstance(context.get("conversations"), list) else []
-        if conversations and isinstance(conversations[0], dict):
-            latest = conversations[0]
+        latest = conversations[0] if conversations and isinstance(conversations[0], dict) else None
+        # The newest logged line belongs to whoever said it. Shown while the
+        # player talks to someone else, it pulled the draft back to them
+        # (playtest #6: Aria's old line, an untagged reply meant for Ashwalker).
+        if latest and talking_codes and str(latest.get("npc_code") or latest.get("code") or "") not in talking_codes:
+            latest = None
+        if latest:
             world["conversations"] = [{
                 "npc": latest.get("npc_name") or latest.get("name") or "",
                 "code": latest.get("npc_code") or latest.get("code") or "",
@@ -1283,6 +1295,9 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "unless the scene itself reveals it. "
         "When world_state.skill_check_context is present, name a check only by one of its "
         "active_skills codes. "
+        "When world_state.conversation_turn is present, the engine already decided who the player is talking to: "
+        "the people in conversation_turn.talking_to answer the player; people in conversation_turn.listening may "
+        "react but do not answer for them. The player's own quoted words are spoken by the player only. "
     )
     options = (world.get("settings") or {}).get("playthrough_options") or {}
     if isinstance(options, dict) and isinstance(options.get("choices"), dict) and options["choices"]:

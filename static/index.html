@@ -1709,7 +1709,16 @@
             </div>
             <form id="turnForm" class="composer chatComposer">
               <div class="composerField">
-                <label class="turnInputLabel" for="turnInput">What will you do?</label>
+                <div class="turnInputHead">
+                  <label class="turnInputLabel" for="turnInput">What will you do?</label>
+                  <div id="talkTarget" class="talkTarget" hidden>
+                    <button id="talkTargetButton" class="chipBtn secondaryButton talkTargetChip" type="button" aria-haspopup="listbox" aria-expanded="false" aria-controls="talkTargetMenu">
+                      <span class="talkTargetLabel">Talking to</span>
+                      <span id="talkTargetName" class="talkTargetName">nobody in particular</span>
+                    </button>
+                    <div id="talkTargetMenu" class="talkTargetMenu" role="listbox" aria-label="Who you are talking to" hidden></div>
+                  </div>
+                </div>
                 <textarea id="turnInput" placeholder="look around" rows="2" maxlength="2000"></textarea>
                 <div id="mentionMenu" class="mentionMenu hidden" hidden>
                   <input id="mentionSearch" type="search" placeholder="Search" autocomplete="off" aria-label="Search characters, items, places, skills" />

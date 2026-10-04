@@ -403,6 +403,9 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     # per-action skill search replaced a catalog that then shipped nowhere.
     "npc_psychology_context",
     "skill_check_context",
+    # Who the player is talking to (app/conversation.py). The draft, verify
+    # and paragraph passes all read it from the handed-off context.
+    "conversation_turn",
 }
 HANDOFF_OPTIONAL_CONTEXT_KEYS = {
     "gm_events",
@@ -12471,6 +12474,8 @@ def _make_pipeline_paragraph_writer(
         "and never change anyone's job. "
         "may_mention lists each [[code]] with its name and kind. Put a code only right after that entity's own name. "
         "Words under player_speech are the player's own: only the player (you) says them; no other character speaks them. "
+        "conversation says who the player is talking to: only someone in who_answers answers the player; "
+        "people in listening_only may react, but do not answer for them. "
         "When reply_status is present, the player's line was answered in an earlier paragraph: do not answer it again. "
         "Do not repeat facts or spoken lines listed under forbidden_repeat or already_said. "
         "Continue from previous_paragraph_tail without restarting the scene. "
@@ -12544,7 +12549,11 @@ def _make_pipeline_consolidator(
     usage: list[dict[str, Any]],
     trace: list[dict[str, Any]] | None,
     timeout: int,
+    context: dict[str, Any] | None = None,
 ):
+    from app.conversation import writer_view
+
+    talk = writer_view((context or {}).get("conversation_turn"))
     system = (
         "You are the scene consolidator. Read all paragraphs together. "
         "Fix doubling, contradictions, and simultaneous dual intents. "
@@ -12572,6 +12581,9 @@ def _make_pipeline_consolidator(
         quotes = player_quotes(str(getattr(ledger, "player_input", "") or ""))
         if quotes:
             payload["player_speech"] = [{"speaker": "player", "words": q} for q in quotes]
+        if talk:
+            payload["conversation"] = talk
+            payload["issues_to_watch"].append("someone answering the player who is not in conversation.who_answers")
         try:
             raw = _chat_text(
                 system,
@@ -12628,7 +12640,7 @@ def _apply_narration_pipeline(
     # turns via budget["skip_consolidator"] (see should_skip_consolidator).
     consolidator_fn = None
     if _env_bool("AI_RPG_NARRATION_PIPELINE_CONSOLIDATE", True):
-        consolidator_fn = _make_pipeline_consolidator(usage, trace, timeout)
+        consolidator_fn = _make_pipeline_consolidator(usage, trace, timeout, context)
     try:
         pipeline_out = run_narration_pipeline(
             context,

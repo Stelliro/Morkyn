@@ -41,6 +41,7 @@ Morkyn/
 |-- app/
 |   |-- __init__.py
 |   |-- content_packs.py             # JSON packs: skills/powers/items/tables + authoring spec
+|   |-- conversation.py              # Who the player is talking to (active speaker engine)
 |   |-- db.py                        # SQLite connection, schema, migrations
 |   |-- gear.py                      # Starting gear: item shape, body slots, engine stat rolls
 |   |-- encounters.py                # Danger model + encounter resolution
@@ -131,6 +132,14 @@ Morkyn/
 - **Key API:** `needs_quest_parse()` (regex gate), `build_parser_prompt()`, `parse_reply()`, `merge_marks()`, `validate_quest_changes()`, `evidence_offers_work()`, `apply_quest_changes()`.
 - **Consumers:** `app.llm._run_quest_parser` (after the final narration, phase `quest_parser`, `AI_RPG_QUEST_PARSER`), `app.world.apply_turn` (applies `turn['quest_changes']` / `quest_marks`, attaches `quest_report`).
 - **Design Notes:** A new quest needs evidence quoted from this turn's text that reads as an offer, request or acceptance (a refusal like "no one is hiring" does not count; a narrator mark is trusted), a giver that resolves to an NPC, a board, or a name the story uses, no duplicate of an open quest, and bounded rewards. Updates need a legal status change. Every turn carries a `quest_report` (skipped, empty, applied, rejected, error) with reasons for each rejection; accepted items are journalled.
+
+#### Conversation Target
+
+- **Files:** `app/conversation.py`
+- **Purpose:** Decides, in the engine and before any model call, who the player's line is said to, and who the turn leaves facing the player next.
+- **Key API:** `resolve()` (order: @tag, present NPC named as the addressee, group phrase, chip pick, then the stored target: revealed / answering partner / last speaker), `next_state()` (pure post-turn update), `update_after_turn()`, `choose()`, `view()`, `model_note()`, `world_view()`, `writer_view()`, `speakers_in()`.
+- **Consumers:** `app.world.play_turn` (`context['conversation_turn']`, draft footer via `_expand_input_references`), `app.world.apply_turn` (after the scene cast), `app.world.get_state` (`state['conversation']`), `app.prompts._visible_world` (`world_state.conversation_turn`), `app.narration_pipeline.build_paragraph_briefs` and the consolidator in `app.llm`, `/api/conversation/target`, the "Talking to" chip in `static/app.js`.
+- **Design Notes:** State is the `settings.conversation` row (in `SNAPSHOT_SETTING_KEYS`, exported with saves); `active_scene.interacting` is rewritten to the target. The roster is NPCs at the player's location plus party members; a name or tag of someone elsewhere is never the addressee.
 
 #### Starting Gear
 
@@ -464,6 +473,7 @@ There is no production build step. This is a local prototype served directly by 
 |---|---|---|
 | GET | `/` | Serve `static/index.html` |
 | GET | `/api/state` | Return current visible world state |
+| POST | `/api/conversation/target` | Pick who the player is talking to (`codes`, or `group: true`; empty clears); returns the chip view |
 | GET | `/api/player-art/{kind}` | Stored player face or fullbody image bytes (`?v=<token>` from `state.player_portrait.url`); immutable cache headers for the current token, 404 when none |
 | GET | `/api/version` | Return local app, planner, and mechanics version metadata |
 | GET | `/api/model-config` | Return local model configuration |

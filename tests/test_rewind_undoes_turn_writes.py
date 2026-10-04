@@ -231,6 +231,10 @@ class TestPreTurnWritesAreInsideTheRecord(unittest.TestCase):
         _fresh_world()
         _play(_SCENE)
         self.assertIsNone(_setting("active_scene"))
+        # The cast names a real person standing here (app/conversation.py keeps only those).
+        with db.connect() as conn:
+            loc = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0]
+            conn.execute("INSERT INTO npcs (code, location_id, name) VALUES ('B', ?, 'Gatekeeper')", (loc,))
         turn = _turn(_SCENE)
         turn["scene_cast"] = {"present": ["B"], "interacting": ["B"], "off": [], "keywords": ["gate"]}
         world.apply_turn(turn, player_input="I approach the gate")

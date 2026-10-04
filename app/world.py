@@ -180,6 +180,7 @@ AUTOINC_TABLES = [
 SNAPSHOT_SETTING_KEYS = (
     "last_social",
     "active_scene",
+    "conversation",
     "travel_ready",
     "player_conditions",
     "association_heat",
@@ -4304,6 +4305,13 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         state["party"] = get_party(conn=conn)
     except Exception:
         state["party"] = []
+    # Who the player is talking to, for the "Talking to" chip (app/conversation.py).
+    try:
+        from app.conversation import view as conversation_view
+
+        state["conversation"] = conversation_view(state)
+    except Exception:
+        state["conversation"] = {}
     try:
         from app.encounter_board import load_encounter
 
@@ -7147,6 +7155,61 @@ def gate_venue_move(conn, from_location_id: int, to_location_id: int) -> dict[st
     return {"location_id": to_id, "note": None}
 
 
+# "You head for the gate", "you follow her out": the player going somewhere.
+# Subject-bound on purpose: _TRAVEL_ARRIVAL_RE reads "arms crossed over her
+# chest" as travel, which is harmless on a travel turn and wrong here.
+_PLAYER_DEPARTS_RE = re.compile(
+    r"\byou\b[^.!?\"\u201c]{0,40}?\b(?:walk|head|leave|left|set\s+(?:off|out)|make\s+your\s+way|follow|"
+    r"step(?:s|ped)?\s+(?:out|into|through|onto)|move\s+on|travel|ride|rode|climb|descend|hurry|depart|"
+    r"wander|stride|march|slip\s+out|push\s+on|arriv|reach|enter|cross\s+(?:into|over\s+to)|emerge)\w*"
+    r"|\bfind\s+yourself\b",
+    re.I,
+)
+
+
+def _unasked_unshown_move(
+    result: dict[str, Any],
+    player_patch: dict[str, Any],
+    rows: list[Any],
+    player_input: str,
+    *,
+    intent: str,
+    narration: str,
+) -> str:
+    """
+    The destination of a move the player did not ask for and the final prose
+    does not show, or "" when the move stands.
+
+    Playtest #6c: "i say ..." to a stranger in The Back Lane came back from the
+    draft with WALK northeast and MOVE Plains2 ("Perhaps we should continue,"
+    you suggest). The paragraph writer kept everyone in the lane, and the
+    engine still put the player on a new tile in a new place, away from the
+    two people the scene was about. A talk turn's move has to be in the prose
+    the player reads, or it does not happen.
+    """
+    code = str(player_patch.get("move_to_location_code") or "").strip()
+    name = str(player_patch.get("move_to_location") or "").strip()
+    walk = result.get("map_walk")
+    if not (code or name or walk):
+        return ""
+    if intent == "travel" or travel_intent(player_input) or venue_move_intent(player_input):
+        return ""
+    text = str(narration or "")
+    if not text.strip():
+        return ""
+    dest = name
+    if code:
+        dest = next((str(r["name"] or "") for r in rows if str(r["code"] or "").upper() == code.upper()), "") or code
+    low = text.lower()
+    if dest and (dest.lower() in low or f"[[{dest.lower()}]]" in low):
+        return ""
+    if code and f"[[{code.lower()}]]" in low:
+        return ""
+    if _PLAYER_DEPARTS_RE.search(text):
+        return ""
+    return dest or "map walk"
+
+
 def resolve_movement(
     conn,
     result: dict[str, Any],
@@ -7188,6 +7251,13 @@ def resolve_movement(
 
     rows = conn.execute("SELECT id, code, name FROM locations ORDER BY id").fetchall()
     known_codes = {str(row["code"] or "").upper() for row in rows if row["code"]}
+
+    unasked = _unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration)
+    if unasked:
+        player_patch["move_to_location"] = None
+        player_patch["move_to_location_code"] = None
+        result["map_walk"] = None
+        return {"status": "dropped_unshown", "from": current_code, "destination": unasked, "intent": intent}
 
     note = ""
     explicit_code = str(player_patch.get("move_to_location_code") or "").strip().upper()
@@ -12211,10 +12281,18 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
     rows = _mention_catalog(context)
     scene = _active_scene(context)
     resolved_notes: list[str] = []
-    resolved_notes.extend(_bare_name_notes(text, rows, scene))
-    speaker = _scene_speaker_note(rows, scene)
+    # The conversation line goes first: the brief trims this footer, and who
+    # the player is talking to is the part a writer must not lose.
+    conversation_turn = context.get("conversation_turn")
+    if isinstance(conversation_turn, dict):
+        from app.conversation import model_note
+
+        speaker = model_note(conversation_turn)
+    else:
+        speaker = _scene_speaker_note(rows, scene)
     if speaker:
         resolved_notes.append(speaker)
+    resolved_notes.extend(_bare_name_notes(text, rows, scene))
     legacy_at = _legacy_at_tokens(context)
 
     def replace_mention(match: re.Match[str]) -> str:
@@ -12918,7 +12996,22 @@ def apply_turn(
         _write_model_usage(conn, turn, result)
         _write_verification_memory(conn, turn, result, prompt_context, used_fallback)
         _maybe_spawn_offscreen_gm_event(conn, turn)
+        scene_before = _settings(conn).get("active_scene")
         _apply_scene_cast(conn, result.get("scene_cast"))
+        try:
+            from app.conversation import update_after_turn as update_conversation
+
+            update_conversation(
+                conn,
+                resolution=(prompt_context or {}).get("conversation_turn"),
+                scene_before=scene_before if isinstance(scene_before, dict) else {},
+                scene_cast=result.get("scene_cast"),
+                narration=_narration_text(result),
+                player_input=player_input if input_kind == "player" else "",
+                turn=turn,
+            )
+        except Exception:
+            pass  # the conversation never blocks a turn; the old scene row still stands
         try:
             from app.quests import tick_quest_timers
             tick_quest_timers(conn, turn=turn)
@@ -13317,9 +13410,16 @@ def play_turn(
     action_spend_pack: dict[str, Any] | None = None
     # Rows this function changes before apply_turn takes the rewind snapshot.
     pre_snapshot_rows: dict[str, list[dict[str, Any]]] = {}
+    # Who this line is said to (playtest #6/#7). Decided here, once, by the
+    # engine; the draft, verify, paragraph and consolidation passes all read
+    # context["conversation_turn"], and apply_turn moves the target after.
+    from app.conversation import resolve as resolve_conversation
+
+    context["conversation_turn"] = resolve_conversation(context, player_input if input_kind == "player" else "")
     model_input = _expand_input_references(context, player_input)
     if _ensure_combat_profiles_for_input(context, model_input):
         context = get_state(include_hidden=True)
+        context["conversation_turn"] = resolve_conversation(context, player_input if input_kind == "player" else "")
         model_input = _expand_input_references(context, player_input)
 
     # Social walk-away / persist (player agency after cold reception)
