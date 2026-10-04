@@ -748,6 +748,12 @@ def narration_keep_words(
     """
     Names are never filtered. Job titles are counted elsewhere and also never
     filtered. A title is not a link to one record.
+
+    Names include the names of powers: the player's abilities and skills
+    (proficiencies are mirrored into skills), abilities an NPC or an item
+    carries, and ones a turn just gained or changed. They used to be left out,
+    so a power named in more than WORD_REPEAT_CAP recent scenes had its words
+    hidden from the sampler and came out half-written.
     """
     names: set[str] = set()
     titles: set[str] = set()
@@ -795,13 +801,29 @@ def narration_keep_words(
             if isinstance(npc, dict):
                 add_name(npc.get("name"))
                 add_title(npc.get("role"))
+                _add_power_names(npc.get("abilities"), add_name)
         for item in packet.get("inventory") or []:
             if isinstance(item, dict):
                 add_name(item.get("name"))
+                _add_power_names(item.get("granted_abilities"), add_name)
+                _add_power_names(item.get("enchantments"), add_name)
         for item in packet.get("inventory_changes") or []:
             if isinstance(item, dict):
                 add_name(item.get("name"))
+        for key in ("abilities", "skills", "ability_updates", "skill_changes"):
+            _add_power_names(packet.get(key), add_name)
     return names, titles
+
+
+def _add_power_names(entries: Any, add_name: Callable[[Any], None]) -> None:
+    """Ability, skill or enchantment names from a list of rows or plain names."""
+    if not isinstance(entries, list):
+        return
+    for entry in entries:
+        if isinstance(entry, dict):
+            add_name(entry.get("name") or entry.get("skill") or entry.get("ability_name"))
+        elif isinstance(entry, str):
+            add_name(entry)
 
 
 def words_past_cap(
