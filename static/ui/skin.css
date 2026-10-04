@@ -1127,6 +1127,43 @@ a.mainMenuGhost:hover {
   background: var(--surface-2);
 }
 
+/* Scene history: earlier turns above the current one (layout in styles.css). */
+.sceneTurn {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+}
+
+.sceneTurn[open] {
+  border-color: color-mix(in srgb, var(--thread) 40%, var(--line));
+}
+
+.sceneTurn > summary:hover {
+  background: var(--thread-soft);
+}
+
+.sceneTurnNo {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--neon-2);
+}
+
+.sceneTurnInput {
+  font-style: italic;
+  color: var(--muted);
+}
+
+.sceneTurnYou {
+  margin: 0;
+  font-style: italic;
+  color: var(--muted);
+}
+
+.sceneStatusLine {
+  font-size: 0.72rem;
+  color: var(--thread);
+}
+
 .code {
   border-radius: 0;
   background: var(--surface-inset);

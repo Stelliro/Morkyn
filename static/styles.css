@@ -5568,7 +5568,8 @@ body.play-menu-split .playMenuNav::after {
 
 .chatColumn {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  /* header, scroll area (history, last input, narration), composer */
+  grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 0;
   min-width: 0;
   border-right: 1px solid color-mix(in srgb, var(--neon-edge) 30%, var(--line));
@@ -5631,6 +5632,115 @@ button.chipBtn.activeChip {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
+}
+
+/* ---- Scene scroll: earlier turns sit above the current one ----------------
+   History, last input and narration scroll as one column, so earlier turns
+   are reached by scrolling up. A new turn scrolls the current input to the
+   top of the view. */
+.sceneScroll {
+  position: relative;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sceneScroll > * {
+  /* Never squash a block to make room: the column scrolls instead. */
+  flex-shrink: 0;
+}
+
+.sceneScroll > .turnBlock.chatOutputBlock {
+  flex: 1 0 auto;
+}
+
+.sceneScroll .chatOutputBlock .singleBox {
+  flex: 1 0 auto;
+  overflow: visible;
+}
+
+.sceneHistory {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sceneHistory[hidden] {
+  display: none;
+}
+
+.sceneHistoryMore {
+  align-self: center;
+}
+
+.sceneHistoryList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.sceneTurn > summary {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 6px 10px;
+  cursor: pointer;
+  list-style: none;
+  min-width: 0;
+}
+
+.sceneTurn > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sceneTurnNo {
+  flex: 0 0 auto;
+}
+
+.sceneTurnInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sceneTurnBody {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 10px 10px;
+}
+
+.sceneTurnBody .turnNarration {
+  padding-inline: clamp(12px, calc((100% - 80ch) / 2), 160px);
+}
+
+.sceneHeaderTools {
+  display: inline-flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.sceneStatusLine {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Side panel hidden: the scene takes the whole stage. */
+.sidePanelCollapsed [data-play-panel="map"],
+.sidePanelCollapsed .playSplitterCol {
+  display: none !important;
+}
+
+.sidePanelCollapsed [data-play-panel="chat"] {
+  flex: 1 1 0 !important;
 }
 
 .chatComposer textarea {

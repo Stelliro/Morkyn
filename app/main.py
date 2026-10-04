@@ -911,6 +911,37 @@ def api_state():
     return get_state()
 
 
+@app.get("/api/turn-history")
+def api_turn_history(before: int = 0, limit: int = 10):
+    """
+    Older turns for the scene history's "View more": journal rows grouped by
+    turn, newest first, for turns before ``before``. The page's state carries
+    only the latest 160 journal rows, so long games page back through here.
+    """
+    from app.db import connect
+
+    limit = max(1, min(30, int(limit or 10)))
+    before = int(before or 0)
+    if before <= 1:
+        return {"turns": [], "has_more": False}
+    with connect() as conn:
+        found = [
+            int(row["turn"])
+            for row in conn.execute(
+                "SELECT DISTINCT turn FROM journal WHERE turn > 0 AND turn < ? ORDER BY turn DESC LIMIT ?",
+                (before, limit + 1),
+            ).fetchall()
+        ]
+        has_more = len(found) > limit
+        turns = []
+        for turn in found[:limit]:
+            rows = conn.execute(
+                "SELECT turn, kind, content FROM journal WHERE turn = ? ORDER BY id", (turn,)
+            ).fetchall()
+            turns.append({"turn": turn, "entries": [dict(row) for row in rows]})
+    return {"turns": turns, "has_more": has_more}
+
+
 @app.get("/api/version")
 def api_version():
     git = update_status()

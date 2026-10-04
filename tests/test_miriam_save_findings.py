@@ -86,5 +86,28 @@ class TestStaleServerNotice(unittest.TestCase):
             main._STARTUP_PYTHON_STAMP.clear()
             main._STARTUP_PYTHON_STAMP.update(saved)
 
+
+class TestTurnHistoryRoute(unittest.TestCase):
+    """The scene history's "View more" pages back past the page's journal window."""
+
+    def test_older_turns_come_newest_first_with_a_more_flag(self):
+        from app import main
+
+        db.init_db()
+        world.start_playthrough({"player_name": "T", "start_location": "Low Gate", "special_ability_origin": "none"})
+        with connect() as conn:
+            for t in range(1, 26):
+                conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, 'player', ?)", (t, f"act {t}"))
+                conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, 'narration', ?)", (t, f"scene {t}"))
+            conn.commit()
+        page = main.api_turn_history(before=20, limit=10)
+        self.assertEqual([t["turn"] for t in page["turns"]], list(range(19, 9, -1)))
+        self.assertTrue(page["has_more"])
+        self.assertEqual({e["kind"] for e in page["turns"][0]["entries"]} >= {"player", "narration"}, True)
+        last = main.api_turn_history(before=4, limit=10)
+        self.assertEqual([t["turn"] for t in last["turns"]], [3, 2, 1])
+        self.assertFalse(last["has_more"])
+        self.assertEqual(main.api_turn_history(before=1)["turns"], [])
+
 if __name__ == "__main__":
     unittest.main()

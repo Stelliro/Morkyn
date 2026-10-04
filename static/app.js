@@ -22,6 +22,15 @@ function safeMediaUrl(url, fallback = "") {
 
 const setupView = document.querySelector("#setupView");
 const gameView = document.querySelector("#gameView");
+// Scene history + side panel state (functions near the Map button handlers).
+const SCENE_HISTORY_OPEN_KEY = "morkyn-scene-history-open";
+const SIDE_PANEL_COLLAPSED_KEY = "morkyn-side-panel-collapsed";
+const SCENE_HISTORY_PAGE = 10;
+let sceneHistoryShown = SCENE_HISTORY_PAGE;
+let sceneHistoryExtra = [];
+let sceneHistoryExhausted = false;
+const sceneTurnOpen = new Set();
+let sceneStatusTimer = 0;
 const mainMenuView = document.querySelector("#mainMenuView");
 const setupForm = document.querySelector("#setupForm");
 const setupSections = Array.from(document.querySelectorAll(".setupSection"));
@@ -9472,6 +9481,7 @@ function renderHistory() {
       `
     : `<p class="empty">No history yet.</p>`;
   historyEl.scrollTop = keepScroll;
+  renderSceneHistory();
 }
 
 let historyViewLock = false;
@@ -10287,9 +10297,9 @@ async function saveCampaignSlotByName(slotName) {
   });
   const data = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(data.detail || data.error || `HTTP ${response.status}`);
-  if (latestOutput) {
-    latestOutput.innerHTML = paragraphs(`Saved campaign slot: ${data.slot || trimmed}`);
-  }
+  // The narration stays; the save is reported beside it. Writing the notice
+  // into the scene replaced the turn the player was reading.
+  showSceneStatus(`Saved “${data.slot || trimmed}”.`);
   setSaveBrowserStatus(`Saved “${data.slot || trimmed}”.`, "ok");
   // After save, jump into that character’s list if we know the name
   const playerName = String(state?.player?.name || data.player_name || "").trim();
@@ -13796,6 +13806,11 @@ function setLayoutHintDismissed(dismissed) {
 }
 
 function updatePlayLayoutChrome() {
+  try {
+    syncSceneMapButton();
+  } catch (_) {
+    /* before the scene controls exist */
+  }
   const hint = document.querySelector("#playLayoutHint");
   const idle = document.querySelector("#chatIdleHint");
   const resetBtn = document.querySelector("#resetPlayLayoutBtn");
@@ -14054,7 +14069,7 @@ function setSceneFocus(on, options = {}) {
         behavior: options.smooth === false ? "auto" : "smooth",
         block: "nearest",
       });
-      latestOutput?.scrollTo?.({ top: 0, behavior: "smooth" });
+      revealCurrentTurn();
     }
     if (enabled && options.focusInput) turnInput?.focus();
     syncStageFocusControls();
@@ -14077,7 +14092,7 @@ function setSceneFocus(on, options = {}) {
   syncStageFocusControls();
   if (enabled && options.scroll !== false) {
     document.querySelector("#chatColumn")?.scrollIntoView({ behavior: options.smooth === false ? "auto" : "smooth", block: "nearest" });
-    latestOutput?.scrollTo?.({ top: 0, behavior: "smooth" });
+    revealCurrentTurn();
   }
   if (enabled && options.focusInput) {
     turnInput?.focus();
@@ -15580,7 +15595,7 @@ async function saveModelConfig(form) {
     modelModalContent.innerHTML = `${renderModelForm()}<p class="good">Model settings saved.${escapeHtml(sessionNote)}</p>`;
     decorateFunctionHelp(modelModalContent);
   }
-  latestOutput.innerHTML = paragraphs(`Model settings saved.${sessionNote}`);
+  showSceneStatus(`Model settings saved.${sessionNote}`);
 }
 
 function renderModelLimitsFields(config) {
@@ -19376,6 +19391,8 @@ function displayTurnPayload(payload, options = {}) {
     latestOutput.innerHTML = turnNarrationHtml(payload.turn);
     appendTurnMeta(payload);
   }
+  renderSceneHistory();
+  revealCurrentTurn();
   return true;
 }
 
@@ -20247,9 +20264,10 @@ async function importWorld(file) {
     body: JSON.stringify(data),
   });
   if (!response.ok) throw new Error(await response.text());
-  latestInput.innerHTML = "";
-  latestOutput.innerHTML = paragraphs("World imported.");
-  renderShell(await response.json());
+  const imported = await response.json();
+  renderShell(imported);
+  restoreLastTurnPanels();
+  showSceneStatus("World imported.");
 }
 
 async function runSearch(query) {
@@ -20314,7 +20332,7 @@ setupForm.addEventListener("change", (event) => {
         label,
         (error) => {
           fallbackRandomizeField(select.name);
-          latestOutput.innerHTML = paragraphs(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
+          setSetupRandomizeStatus(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
         },
         { updateConditionals: true },
       ),
@@ -20332,7 +20350,7 @@ setupForm.addEventListener("change", (event) => {
         label,
         (error) => {
           fallbackRandomizeField(randomList.name);
-          latestOutput.innerHTML = paragraphs(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
+          setSetupRandomizeStatus(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
         },
         { updateConditionals: true },
       ),
@@ -20487,7 +20505,7 @@ setupForm.addEventListener("click", (event) => {
         label,
         (error) => {
           fallbackRandomizeField(name, { ignoreLock: true });
-          latestOutput.innerHTML = paragraphs(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
+          setSetupRandomizeStatus(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
         },
       ),
       label,
@@ -20515,7 +20533,7 @@ setupForm.addEventListener("click", (event) => {
         label,
         (error) => {
           fallbackRandomizeSequence(RANDOM_GROUPS[group] || []);
-          latestOutput.innerHTML = paragraphs(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
+          setSetupRandomizeStatus(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
         },
       ),
       label,
@@ -20949,7 +20967,6 @@ randomAbilityButton?.addEventListener("click", () => {
         const reason = String(error?.message || error || "").trim();
         // The game-view output is hidden during setup, so the reason must land on the setup status line too.
         setSetupRandomizeStatus(`The model could not roll abilities (${reason || "no answer"}). Local seed abilities were used instead.`);
-        latestOutput.innerHTML = paragraphs(`Model randomizer unavailable; used local fallback. ${reason}`);
       },
     ),
     label,
@@ -21504,9 +21521,218 @@ document.querySelector("#mapFocusChatBtn")?.addEventListener("click", () => {
   setSceneFocus(true, { scroll: true, focusInput: true });
 });
 document.querySelector("#sceneFocusMapBtn")?.addEventListener("click", () => {
+  if (sidePanelCollapsed()) {
+    setSidePanelCollapsed(false);
+    return;
+  }
   setSceneFocus(false, { scroll: false });
   document.querySelector("#mapMain")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
 });
+
+// ---------------------------------------------------------------------------
+// Scene history, scene status, and the side panel toggle
+// ---------------------------------------------------------------------------
+// Earlier turns live above the current one in the scene's own scroll column:
+// the History button (Scene header) shows them, each turn is a collapsed card,
+// ten at a time, and "View more" at the top reaches further back (from the
+// server once the page's journal window runs out).
+// (state for these lives at the top of the file: renderHistory can run before this point)
+
+function readPref(key, fallback = false) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : raw === "1";
+  } catch (_) {
+    return fallback;
+  }
+}
+
+function writePref(key, on) {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch (_) {
+    /* private mode: the toggle still works for this page */
+  }
+}
+
+/** A short status in the Scene header. Saves and settings used to replace the narration with this. */
+function showSceneStatus(text, ms = 6000) {
+  const el = document.querySelector("#sceneStatusLine");
+  if (!el) return;
+  el.textContent = String(text || "");
+  el.hidden = !el.textContent;
+  window.clearTimeout(sceneStatusTimer);
+  if (el.textContent) {
+    sceneStatusTimer = window.setTimeout(() => {
+      el.hidden = true;
+      el.textContent = "";
+    }, ms);
+  }
+}
+
+function sceneHistoryIsOpen() {
+  return readPref(SCENE_HISTORY_OPEN_KEY, false);
+}
+
+function currentSceneTurn() {
+  const entry = lastHistoryEntry(["narration"]);
+  const turn = Number(entry?.turn);
+  return Number.isFinite(turn) ? turn : null;
+}
+
+function sceneHistoryGroups() {
+  const byTurn = new Map();
+  [...historyGroups(), ...sceneHistoryExtra].forEach((group) => {
+    const turn = Number(group?.turn);
+    if (!Number.isFinite(turn) || turn <= 0 || byTurn.has(turn)) return;
+    byTurn.set(turn, { turn, entries: group.entries || [] });
+  });
+  const current = currentSceneTurn();
+  return [...byTurn.values()]
+    .filter((group) => current === null || group.turn < current)
+    .sort((a, b) => b.turn - a.turn);
+}
+
+function sceneTurnHtml(group) {
+  const kindOf = (entry) => String(entry?.kind || "").toLowerCase();
+  const input = group.entries.find((entry) => ["player", "continue", "wait", "regenerate"].includes(kindOf(entry)));
+  const opening = group.entries.find((entry) => kindOf(entry) === "opening");
+  const narration = group.entries.filter((entry) => kindOf(entry) === "narration");
+  const asks = group.entries.filter((entry) => kindOf(entry) === "ask");
+  const inputText = String(input?.content || "").trim();
+  const label = inputText
+    ? inputText
+    : opening
+      ? "Opening scene"
+      : kindOf(input) === "continue"
+        ? "Continue"
+        : "No action recorded";
+  const open = sceneTurnOpen.has(group.turn) ? " open" : "";
+  const body = [
+    inputText ? `<p class="sceneTurnYou">${escapeHtml(inputText)}</p>` : "",
+    ...narration.map((entry) => `<article class="turnNarration">${paragraphs(entry.content || "")}</article>`),
+    ...asks.map((entry) => `<p class="sceneTurnYou">${escapeHtml(String(entry.content || ""))}</p>`),
+  ].join("");
+  return `
+    <details class="sceneTurn" data-scene-turn="${escapeHtml(group.turn)}"${open}>
+      <summary><span class="sceneTurnNo">Turn ${escapeHtml(group.turn)}</span><span class="sceneTurnInput">${escapeHtml(label)}</span></summary>
+      <div class="sceneTurnBody">${body || '<p class="empty">Nothing was written for this turn.</p>'}</div>
+    </details>`;
+}
+
+function renderSceneHistory() {
+  const section = document.querySelector("#sceneHistory");
+  const toggle = document.querySelector("#sceneHistoryToggle");
+  const open = sceneHistoryIsOpen();
+  if (toggle) {
+    toggle.setAttribute("aria-pressed", open ? "true" : "false");
+    toggle.classList.toggle("activeChip", open);
+  }
+  if (!section) return;
+  section.hidden = !open;
+  if (!open) return;
+  const list = document.querySelector("#sceneHistoryList");
+  const more = document.querySelector("#sceneHistoryMore");
+  const empty = document.querySelector("#sceneHistoryEmpty");
+  const earlier = sceneHistoryGroups();
+  const shown = earlier.slice(0, sceneHistoryShown).reverse();
+  if (list) list.innerHTML = shown.map(sceneTurnHtml).join("");
+  if (empty) empty.hidden = shown.length > 0;
+  const oldest = shown.length ? shown[0].turn : null;
+  const moreLocal = earlier.length > shown.length;
+  const moreRemote = !sceneHistoryExhausted && oldest !== null && oldest > 1;
+  if (more) more.hidden = !(moreLocal || moreRemote);
+}
+
+async function loadMoreSceneHistory() {
+  const scroll = document.querySelector("#sceneScroll");
+  const fromBottom = scroll ? scroll.scrollHeight - scroll.scrollTop : 0;
+  sceneHistoryShown += SCENE_HISTORY_PAGE;
+  const earlier = sceneHistoryGroups();
+  if (earlier.length < sceneHistoryShown && !sceneHistoryExhausted) {
+    const oldest = earlier.length ? earlier[earlier.length - 1].turn : currentSceneTurn() || 0;
+    try {
+      const response = await fetch(`/api/turn-history?before=${encodeURIComponent(oldest)}&limit=${SCENE_HISTORY_PAGE}`);
+      const data = response.ok ? await response.json() : { turns: [] };
+      const turns = Array.isArray(data.turns) ? data.turns : [];
+      sceneHistoryExtra = [...sceneHistoryExtra, ...turns];
+      if (!data.has_more || !turns.length) sceneHistoryExhausted = true;
+    } catch (_) {
+      sceneHistoryExhausted = true;
+    }
+  }
+  renderSceneHistory();
+  // Keep the turn the player was reading where it was; new cards appear above.
+  if (scroll) scroll.scrollTop = scroll.scrollHeight - fromBottom;
+}
+
+/** Scroll the scene so the current turn starts at the top; earlier turns are above, reached by scrolling up. */
+function revealCurrentTurn() {
+  const scroll = document.querySelector("#sceneScroll");
+  const block = scroll?.querySelector(".chatInputBlock");
+  const output = scroll?.querySelector(".chatOutputBlock");
+  if (!scroll || !block) return;
+  // With history above, the current turn fills at least the view, so the
+  // earlier turns are out of sight until the player scrolls up. A short scene
+  // otherwise left nothing to scroll and the history sat on screen.
+  if (output) {
+    const historyOpen = !document.querySelector("#sceneHistory")?.hidden;
+    output.style.minHeight = historyOpen ? `${Math.max(0, scroll.clientHeight - block.offsetHeight - 8)}px` : "";
+  }
+  // .sceneScroll is the offset parent (position: relative), so offsetTop is already relative to it.
+  scroll.scrollTop = Math.max(0, block.offsetTop - 4);
+}
+
+function sidePanelCollapsed() {
+  return Boolean(gameView?.classList.contains("sidePanelCollapsed"));
+}
+
+function setSidePanelCollapsed(collapsed) {
+  const on = Boolean(collapsed);
+  gameView?.classList.toggle("sidePanelCollapsed", on);
+  writePref(SIDE_PANEL_COLLAPSED_KEY, on);
+  const button = document.querySelector("#sidePanelToggle");
+  if (button) {
+    button.innerHTML = on ? "&#x27E8; Side" : "Side &#x27E9;";
+    button.title = on ? "Show the side panel" : "Hide the side panel";
+    button.setAttribute("aria-pressed", on ? "false" : "true");
+  }
+  syncSceneMapButton();
+}
+
+/** The Scene header's Map button only appears when the map is not where it normally sits. */
+function syncSceneMapButton() {
+  const button = document.querySelector("#sceneFocusMapBtn");
+  if (!button) return;
+  const mapPanel = document.querySelector("#mapMain");
+  const floated = Boolean(floatWindowState?.map?.open);
+  const offStage = !mapPanel || mapPanel.hidden || !mapPanel.offsetParent;
+  button.hidden = !(sidePanelCollapsed() || hasCustomPlayLayout() || floated || offStage);
+}
+
+window.addEventListener("resize", () => {
+  if (!document.querySelector("#sceneHistory")?.hidden) revealCurrentTurn();
+});
+document.querySelector("#sceneHistoryToggle")?.addEventListener("click", () => {
+  const next = !sceneHistoryIsOpen();
+  writePref(SCENE_HISTORY_OPEN_KEY, next);
+  renderSceneHistory();
+  revealCurrentTurn();
+});
+document.querySelector("#sceneHistoryMore")?.addEventListener("click", () => {
+  loadMoreSceneHistory();
+});
+document.querySelector("#sidePanelToggle")?.addEventListener("click", () => {
+  setSidePanelCollapsed(!sidePanelCollapsed());
+});
+document.addEventListener("toggle", (event) => {
+  const details = event.target;
+  if (!(details instanceof Element) || !details.matches("details[data-scene-turn]")) return;
+  const turn = Number(details.dataset.sceneTurn);
+  if (details.open) sceneTurnOpen.add(turn);
+  else sceneTurnOpen.delete(turn);
+}, true);
+setSidePanelCollapsed(readPref(SIDE_PANEL_COLLAPSED_KEY, false));
 
 document.addEventListener("toggle", (event) => {
   const details = event.target;

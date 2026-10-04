@@ -1674,8 +1674,19 @@
               <span class="playDragGrip" aria-hidden="true">⋮⋮</span>
               <strong>Scene</strong>
               <span class="chatIdleHint" id="chatIdleHint">Map is main while idle</span>
-              <button type="button" class="chipBtn secondaryButton" id="sceneFocusMapBtn" title="Make map the main view">Map</button>
+              <span class="sceneStatusLine" id="sceneStatusLine" role="status" aria-live="polite" hidden></span>
+              <span class="sceneHeaderTools">
+                <button type="button" class="chipBtn secondaryButton" id="sceneHistoryToggle" aria-pressed="false" aria-controls="sceneHistory" title="Show earlier turns above this one; scroll up to read them">History</button>
+                <button type="button" class="chipBtn secondaryButton" id="sceneFocusMapBtn" title="Bring the map back" hidden>Map</button>
+                <button type="button" class="chipBtn secondaryButton" id="sidePanelToggle" aria-pressed="true" aria-controls="mapMain" title="Hide the side panel">Side &#x27E9;</button>
+              </span>
             </div>
+            <div class="sceneScroll" id="sceneScroll">
+            <section class="sceneHistory" id="sceneHistory" aria-label="Earlier turns" hidden>
+              <button type="button" class="chipBtn secondaryButton sceneHistoryMore" id="sceneHistoryMore" hidden>View more</button>
+              <p class="empty sceneHistoryEmpty" id="sceneHistoryEmpty" hidden>No earlier turns yet.</p>
+              <div class="sceneHistoryList" id="sceneHistoryList"></div>
+            </section>
             <div class="turnBlock chatInputBlock">
               <h2 id="latestInputHeading">Last input</h2>
               <div id="latestInput" class="singleBox mutedBox" tabindex="0" aria-labelledby="latestInputHeading"></div>
@@ -1694,6 +1705,7 @@
                 </div>
               </div>
               <div id="latestOutput" class="singleBox sceneBox" tabindex="0" role="status" aria-live="polite" aria-labelledby="latestOutputHeading"></div>
+            </div>
             </div>
             <form id="turnForm" class="composer chatComposer">
               <div class="composerField">
