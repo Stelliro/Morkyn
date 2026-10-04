@@ -1276,6 +1276,36 @@ a.mainMenuGhost:hover {
   color: var(--label);
 }
 
+.suggestionTitle {
+  color: var(--label);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.suggestionClose {
+  border: 1px solid transparent;
+  border-radius: 0;
+  background: none;
+  color: var(--muted);
+}
+
+.suggestionClose:hover,
+.suggestionClose:focus-visible {
+  border-color: var(--thread-dim);
+  color: var(--thread);
+}
+
+/* The deeper idea is set apart by the thread, not a fill. */
+.deeperSuggestionItem {
+  border-color: var(--thread-dim);
+  border-left: 2px solid var(--thread);
+}
+
+.deeperSuggestionWhy {
+  color: var(--muted);
+  font-style: italic;
+}
+
 .floatPanelHeader {
   background: none;
 }

@@ -372,6 +372,7 @@
                   <div class="setupSimpleVibeActions">
                     <button type="button" class="chipBtn secondaryButton" id="presetNewBtn" title="Make a new text preset. It keeps the name and idea only, not this page.">New</button>
                     <button type="button" class="chipBtn secondaryButton" id="presetSaveBtn" title="Save the current setup page as a preset">Save preset</button>
+                    <button type="button" class="chipBtn secondaryButton" id="presetRenameBtn" title="Rename the selected saved preset">Rename</button>
                     <button type="button" class="chipBtn secondaryButton" id="presetDeleteBtn" title="Delete the selected saved preset">Delete</button>
                   </div>
                 </div>
@@ -1815,7 +1816,13 @@
                 </section>
               </aside>
               <div id="suggestionPanel" class="suggestionPanel hidden" aria-live="polite">
+                <div class="suggestionHead">
+                  <span class="suggestionTitle">Ideas</span>
+                  <button id="deeperSuggestionButton" class="secondaryButton chipBtn" type="button">Deeper idea</button>
+                  <button id="closeSuggestionsButton" class="suggestionClose" type="button" aria-label="Close ideas" title="Close (Esc)">×</button>
+                </div>
                 <div id="suggestionList" class="suggestionList"></div>
+                <div id="deeperSuggestion" class="deeperSuggestion" hidden></div>
                 <div class="suggestionRegenRow">
                   <input id="suggestionInstruction" maxlength="500" placeholder="Regen instructions…" />
                   <button id="regenSuggestionsButton" class="secondaryButton chipBtn" type="button">regen</button>

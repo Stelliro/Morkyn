@@ -510,7 +510,7 @@ There is no production build step. This is a local prototype served directly by 
 | POST | `/api/continue` | Continue the current scene without player input |
 | POST | `/api/regenerate` | Restore the latest pre-turn snapshot and regenerate that response; optional `RegenerateRequest {allow_fallback}`, `FailsafeBlocked` -> 503 `problem_detail` like `/api/turn` |
 | POST | `/api/wait` | Wait/Meditate/Sleep turn; `WaitRequest` carries `allow_fallback`, `FailsafeBlocked` -> 503 `problem_detail` like `/api/turn` |
-| POST | `/api/suggestions` | Generate three suggested player inputs |
+| POST | `/api/suggestions` | Generate three suggested player inputs from the last scene's hooks; `deeper: true` returns one longer idea with its reason |
 | POST | `/api/setup` | Start a new playthrough and opening scene |
 | POST | `/api/alias` | Add a player-created alias for an indexed entity |
 | POST | `/api/player-alias` | Create an identity alias for the player |

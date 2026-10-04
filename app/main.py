@@ -776,6 +776,8 @@ class ComposeIntentRequest(BaseModel):
 
 class SuggestionRequest(BaseModel):
     instruction: str = Field(default="", max_length=500)
+    # One longer idea with its reason instead of three short ones (playtest #4).
+    deeper: bool = False
 
 
 @app.on_event("startup")
@@ -3808,6 +3810,8 @@ def api_weather():
 @app.post("/api/suggestions")
 def api_suggestions(request: SuggestionRequest | None = None):
     try:
+        if request and request.deeper:
+            return get_input_suggestions(request.instruction, deeper=True)
         return get_input_suggestions(request.instruction if request else "")
     except LlmError as exc:
         raise HTTPException(status_code=503, detail=f"Model suggestion generation failed: {exc}") from exc

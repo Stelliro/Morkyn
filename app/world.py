@@ -15492,7 +15492,34 @@ def start_playthrough_with_opening(options: dict[str, Any]) -> dict[str, Any]:
     return opening
 
 
-def get_input_suggestions(instruction: str = "") -> dict[str, Any]:
+def get_input_suggestions(instruction: str = "", deeper: bool = False) -> dict[str, Any]:
     context = get_state(include_hidden=False)
-    prompt_context = build_prompt_context(context, f"suggest next player inputs {instruction}".strip())
-    return generate_input_suggestions(prompt_context, instruction)
+    # The lookups key on the last scene's words, not a fixed phrase, so the
+    # people, events and sources it names are the ones that come back (playtest #4).
+    last_narration = next(
+        (
+            str(row.get("content") or "")
+            for row in context.get("history") or []
+            if isinstance(row, dict) and row.get("kind") == "narration" and row.get("content")
+        ),
+        "",
+    )
+    scene_words = re.sub(r"\[\[[^\]]*\]\]", " ", last_narration)[-600:]
+    query = f"{instruction} {scene_words}".strip() or "suggest next player inputs"
+    prompt_context = build_prompt_context(context, query)
+    # Every carried item by name: the turn planner keeps only items the query
+    # names, and the inventory is what the player found most useful here.
+    prompt_context["carried_items"] = [
+        {
+            key: value
+            for key, value in {
+                "name": item.get("name"),
+                "qty": item.get("quantity") if int(item.get("quantity") or 1) > 1 else None,
+                "worn": item.get("equipped_slot") or None,
+            }.items()
+            if value
+        }
+        for item in context.get("inventory") or []
+        if isinstance(item, dict) and item.get("name")
+    ][:12]
+    return generate_input_suggestions(prompt_context, instruction, deeper=deeper)

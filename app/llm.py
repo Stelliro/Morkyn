@@ -155,6 +155,10 @@ DEFAULT_VERIFY_SKIP_CERTAINTY = 0.88
 DEFAULT_VERIFY_MEMORY_CERTAINTY = 0.86
 SUGGESTION_TARGET_CHARS = 100
 SUGGESTION_MAX_CHARS = 120
+# "Deeper idea": one action plus a one-line why, about 250 characters together.
+SUGGESTION_DEEPER_ACTION_CHARS = 170
+SUGGESTION_DEEPER_WHY_CHARS = 90
+SUGGESTION_SCENE_CHARS = 900
 OPTIONAL_IDENTITY_FIELDS = {"player_public_name", "player_title"}
 REFERENCE_CODE_PATTERN = re.compile(r"\[\[([A-Z]{1,3}|L\d+|I\d+|E\d+)\]\]", re.IGNORECASE)
 HIGH_RISK_TURN_CHANGE_KEYS = {
@@ -9337,46 +9341,205 @@ def fallback_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     }
 
 
-def generate_input_suggestions(context: dict[str, Any], instruction: str = "") -> dict[str, Any]:
-    settings = context.get("settings") or {}
-    suggestion_instruction = str(instruction or "").strip()[:500]
-    compact_context = {
-        "settings": {
-            "setup_complete": settings.get("setup_complete"),
-            "playthrough_options": settings.get("playthrough_options"),
-        },
-        "player": context.get("player"),
-        "active_player_alias": context.get("active_player_alias"),
-        "current_location": context.get("current_location"),
-        "skills": context.get("skills"),
-        "abilities": context.get("abilities"),
-        "inventory": context.get("inventory"),
-        "equipment_slots": context.get("equipment_slots"),
-        "inventory_capacity_modifiers": context.get("inventory_capacity_modifiers"),
-        "inventory_summary": context.get("inventory_summary"),
-        "locations": context.get("locations", [])[:4],
-        "events": context.get("events", [])[:8],
-        "conversations": context.get("conversations", [])[:6],
-        "relevant_sources": context.get("relevant_sources", [])[:6],
-        "turn_summaries": context.get("turn_summaries", [])[:6],
+def _suggestion_plain(text: Any, limit: int = 0) -> str:
+    """Prose without [[code]] marks, on one line, cut at a word when over limit."""
+    cleaned = REFERENCE_CODE_PATTERN.sub("", str(text or ""))
+    cleaned = re.sub(r"\[\[(.*?)\]\]", r"\1", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = re.sub(r"\s+([,.;:!?])", r"\1", cleaned)
+    cleaned = re.sub(r"\s+'s\b", "'s", cleaned)
+    if limit and len(cleaned) > limit:
+        cleaned = cleaned[:limit].rsplit(" ", 1)[0].rstrip(" ,;:-") + "..."
+    return cleaned
+
+
+def _suggestion_scene(context: dict[str, Any]) -> dict[str, Any]:
+    """The last scene and its open hooks, for the suggestion ask (playtest #4).
+
+    The old packet was world lists with no scene text, so the model could only
+    offer moves that fit anywhere. This carries the end of the last narration,
+    the questions it left hanging, the people in it with what they care about,
+    who the player is facing, and the quests and offers still open.
+    """
+    narration = _suggestion_plain(context.get("last_narration"))
+    tail = narration
+    if len(tail) > SUGGESTION_SCENE_CHARS:
+        tail = tail[-SUGGESTION_SCENE_CHARS:]
+        boundary = re.search(r"[.!?][\"\u201d']?\s+", tail)
+        if boundary and boundary.end() < len(tail) // 2:
+            tail = tail[boundary.end():]
+        tail = "..." + tail.lstrip()
+    questions: list[str] = []
+    for found in re.findall(r"[^.!?\"\u201c\u201d]{6,}\?", narration):
+        line = found.strip(" '")
+        if line and line not in questions:
+            questions.append(line[:160])
+    view = context.get("conversation") if isinstance(context.get("conversation"), dict) else {}
+    facing = {str(row.get("code") or "").upper() for row in view.get("target") or [] if isinstance(row, dict)}
+    here: set[str] = {str(row.get("code") or "").upper() for row in view.get("present") or [] if isinstance(row, dict)}
+    try:
+        from app.conversation import roster
+
+        here |= {row["code"] for row in roster(context)}
+    except Exception:
+        pass
+    lowered = narration.lower()
+    people: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for location in context.get("locations") or []:
+        for npc in (location.get("npcs") or []) if isinstance(location, dict) else []:
+            if not isinstance(npc, dict):
+                continue
+            code = str(npc.get("code") or "").upper()
+            name = str(npc.get("name") or "").strip()
+            if not name or code in seen:
+                continue
+            named = bool(re.search(rf"\b{re.escape(name.lower())}\b", lowered))
+            if code not in here and not named:
+                continue
+            seen.add(code)
+            facts = npc.get("known_facts")
+            if isinstance(facts, str):
+                try:
+                    facts = json.loads(facts)
+                except ValueError:
+                    facts = [facts]
+            known = [_suggestion_plain(fact, 140) for fact in (facts or []) if str(fact or "").strip()][:2]
+            cares = "; ".join(
+                part for part in (_suggestion_plain(npc.get(key), 100) for key in ("likes", "principles", "dislikes")) if part
+            )
+            row = {
+                "name": name,
+                "role": str(npc.get("role") or "").strip(),
+                "here": code in here,
+                "facing_player": code in facing,
+                "attitude": str(npc.get("attitude") or "").strip(),
+                "cares_about": cares,
+                "known": known or [_suggestion_plain(npc.get("summary"), 160)],
+            }
+            people.append({key: value for key, value in row.items() if value not in ("", [], [""])})
+    people.sort(key=lambda row: (not row.get("facing_player"), not row.get("here")))
+    quests = [
+        {"title": _suggestion_plain(q.get("title"), 80), "objective": _suggestion_plain(q.get("current_objective"), 140)}
+        for q in (context.get("active_quests") or [])[:3]
+        if isinstance(q, dict)
+    ]
+    offers = [
+        {
+            "title": _suggestion_plain(q.get("title"), 80),
+            "giver": str(q.get("giver") or ""),
+            "objective": _suggestion_plain(q.get("current_objective"), 140),
+        }
+        for q in (context.get("open_quest_offers") or [])[:3]
+        if isinstance(q, dict)
+    ]
+    scene = {
+        "place": (context.get("current_location") or {}).get("name"),
+        "last_scene": tail,
+        "questions_left_open": questions[-3:],
+        "people": people[:5],
+        "active_quests": quests,
+        "open_offers": offers,
     }
+    return {key: value for key, value in scene.items() if value not in (None, "", [])}
+
+
+def _suggestion_world(context: dict[str, Any]) -> dict[str, Any]:
+    """Who the player is and what they carry, trimmed to what a next move can use."""
+    settings = context.get("settings") or {}
+    options = settings.get("playthrough_options") if isinstance(settings.get("playthrough_options"), dict) else {}
+    player = context.get("player") if isinstance(context.get("player"), dict) else {}
+    keep_player = ("name", "public_name", "title", "race", "level", "health", "max_health", "gold")
+    carried = context.get("carried_items")
+    if not isinstance(carried, list):
+        carried = [
+            {"name": item.get("name"), "qty": item.get("quantity")}
+            for item in context.get("inventory") or []
+            if isinstance(item, dict) and item.get("name")
+        ][:12]
+    world = {
+        "tone": {
+            "world_style": options.get("world_style"),
+            "custom_style": _suggestion_plain(options.get("custom_style"), 300),
+            "magic_level": options.get("magic_level"),
+            "difficulty": options.get("difficulty"),
+        },
+        "player": {key: player.get(key) for key in keep_player if player.get(key) not in (None, "")},
+        "active_player_alias": context.get("active_player_alias"),
+        # Names, counts and worn slots; the capacity summary is item codes and weights.
+        "carried_items": carried,
+        "skills": context.get("skills"),
+        "abilities": [
+            {"name": ability.get("name"), "what": _suggestion_plain(ability.get("description") or ability.get("summary"), 100)}
+            for ability in context.get("abilities") or []
+            if isinstance(ability, dict) and ability.get("name")
+        ][:8],
+        "nearby_places": [location.get("name") for location in context.get("locations") or [] if isinstance(location, dict)][:5],
+        "events": context.get("events", [])[:4],
+        "conversations": context.get("conversations", [])[:3],
+        "relevant_sources": context.get("relevant_sources", [])[:3],
+        "turn_summaries": context.get("turn_summaries", [])[:3],
+    }
+    return {key: value for key, value in world.items() if value not in (None, "", [], {})}
+
+
+def generate_input_suggestions(context: dict[str, Any], instruction: str = "", deeper: bool = False) -> dict[str, Any]:
+    suggestion_instruction = str(instruction or "").strip()[:500]
+    shared_rules = [
+        "Return JSON only.",
+        "Read scene first. A suggestion answers the moment scene.last_scene ends on; one that would fit any scene is wrong.",
+        "Name a person, thing or place from scene or carried_items by its name, and do one concrete thing with or about it.",
+        "Write names as plain words, never [[codes]].",
+        "If user_instruction is present, use it to steer the suggestions while staying consistent with the scene.",
+        "Use the current scene and known indexed facts; do not reveal hidden information or future outcomes.",
+        "Do not continue the story, narrate results, or decide that the player already chose an option.",
+    ]
+    if deeper:
+        prompt = {
+            "task": "Suggest ONE well-considered next player input for this RPG turn, with the reason it is worth trying.",
+            "scene": _suggestion_scene(context),
+            "world_state": _suggestion_world(context),
+            "user_instruction": suggestion_instruction,
+            "return_shape": {"action": "what the player does or says", "why": "one line: why it could pay off here"},
+            "rules": [
+                *shared_rules,
+                "Build the action from two or more facts in scene and world_state: a person's want or attitude, an open question, a quest or offer, a carried item or ability.",
+                f"action: one direct action or spoken line the player could submit, at most {SUGGESTION_DEEPER_ACTION_CHARS} characters.",
+                f"why: one line, at most {SUGGESTION_DEEPER_WHY_CHARS} characters, naming the fact it builds on. No outcome is promised.",
+            ],
+        }
+        result = _chat_json(
+            "Return JSON only. Suggest one considered RPG player input with its reason. Do not explain beyond the why field.",
+            json.dumps(prompt, ensure_ascii=True),
+            timeout=_model_timeout(45, 240, "AI_RPG_SUGGESTION_TIMEOUT"),
+            phase="input_suggestion_deeper",
+            max_tokens=_env_int("AI_RPG_SUGGESTION_DEEPER_TOKENS", 160),
+        )
+        raw = result.get("deeper") if isinstance(result.get("deeper"), dict) else result
+        action = _clip_suggestion_text(
+            str(raw.get("action") or raw.get("suggestion") or raw.get("text") or "").strip(), SUGGESTION_DEEPER_ACTION_CHARS
+        )
+        why = _clip_suggestion_text(str(raw.get("why") or raw.get("reason") or "").strip(), SUGGESTION_DEEPER_WHY_CHARS)
+        if not action:
+            raise LlmError("Model did not return a usable deeper suggestion.")
+        return {"deeper": {"action": action, "why": why}}
     prompt = {
         "task": "Generate exactly 3 recommended player inputs for the next RPG turn.",
-        "world_state": compact_context,
+        "scene": _suggestion_scene(context),
+        "world_state": _suggestion_world(context),
         "user_instruction": suggestion_instruction,
         "return_shape": {"suggestions": ["player input option", "player input option", "player input option"]},
         "rules": [
-            "Return JSON only.",
-            "Each suggestion must be a direct action or spoken intent the player could submit next.",
-            "If user_instruction is present, use it to steer the suggestions while staying consistent with the scene.",
-            "Use the current scene and known indexed facts; do not reveal hidden information or future outcomes.",
-            "Do not continue the story, narrate results, or decide that the player already chose an option.",
+            *shared_rules,
+            "If scene.questions_left_open has a question, one suggestion answers or turns it aside in the player's own words.",
+            "If a person in scene cares about something, or a quest or offer is open, one suggestion works with or against it.",
+            "Use a carried item or ability when it fits the moment.",
             f"Keep each suggestion concise, specific, and playable. Aim for about {SUGGESTION_TARGET_CHARS} visible characters and never exceed {SUGGESTION_MAX_CHARS} characters.",
-            "Offer meaningfully different approaches such as cautious, social, investigative, practical, risky, or evasive when they fit.",
+            "The three take different approaches to the scene, when it allows them.",
         ],
     }
     result = _chat_json(
-        "Return JSON only. Create concise RPG player input suggestions. Do not explain.",
+        "Return JSON only. Create concise RPG player input suggestions for this exact scene. Do not explain.",
         json.dumps(prompt, ensure_ascii=True),
         timeout=_model_timeout(45, 240, "AI_RPG_SUGGESTION_TIMEOUT"),
         phase="input_suggestions",
@@ -9400,12 +9563,13 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "") -
     return {"suggestions": suggestions}
 
 
-def _clip_suggestion_text(text: str) -> str:
+def _clip_suggestion_text(text: str, limit: int = SUGGESTION_MAX_CHARS) -> str:
     cleaned = re.sub(r"\s+", " ", str(text or "").strip("-0123456789. )\t"))
-    if len(cleaned) <= SUGGESTION_MAX_CHARS:
+    cleaned = _suggestion_plain(cleaned)
+    if len(cleaned) <= limit:
         return cleaned
-    clipped = cleaned[:SUGGESTION_MAX_CHARS].rsplit(" ", 1)[0].rstrip(" ,.;:-")
-    return clipped or cleaned[:SUGGESTION_MAX_CHARS].rstrip()
+    clipped = cleaned[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:-")
+    return clipped or cleaned[:limit].rstrip()
 
 
 def ambient_llm_enabled(settings: dict[str, Any] | None = None) -> bool:

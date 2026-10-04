@@ -1273,6 +1273,7 @@ const ACTION_HELP_TARGETS = [
   ["#presetSelect", "Two sides: saved presets (text ideas and setups you keep) and game starts (how a previous game began)."],
   ["#presetNewBtn", "Make a new text preset. It keeps the name and idea only, not this page."],
   ["#presetSaveBtn", "Save the current setup page as a preset on this machine."],
+  ["#presetRenameBtn", "Rename the selected saved preset. Type in Preset name; it saves as you type. A name already in use gets the lowest free number."],
   ["#directorPresets", "Director seeds: pick a vibe. Confirm preset fills the start from that idea, including powers."],
   [".setupModeBtn", "Simple = short new-game form. Advanced = full multi-step board (everything you had before)."],
   [".imageModeBtn", "Simple image = generate face/body from identity. Advanced = engine prompts, LoRAs, checkpoint, tests."],
@@ -1291,6 +1292,8 @@ const ACTION_HELP_TARGETS = [
   ["#redoTurnButton", "Write a new narration for the last turn. This does not restore an undone turn."],
   ["#suggestButton", "Ask the LLM for three concise player-input suggestions based on the current scene and known world state."],
   ["#regenSuggestionsButton", "Regenerate the three suggestions, optionally using the instruction typed beside this button."],
+  ["#deeperSuggestionButton", "Ask for one longer idea built from this scene, with the reason it could pay off. Takes a little longer than the three short ones."],
+  ["#closeSuggestionsButton", "Close the ideas panel. Escape closes it too."],
   ["#newGameButton", "Leave for the main menu. This session is kept and can be resumed with Continue."],
   ["#regenerateButton", "Rewrite the last turn’s narration. Asks before replacing it. The old narration is not kept."],
   ["#rewindButton", "Undo the last turn, back to the previous snapshot."],
@@ -2401,7 +2404,8 @@ function setAiBusy(nextBusy, label = "AI is thinking...") {
   if (regenerateButton) regenerateButton.disabled = nextBusy;
   if (saveSetupSettingsButton) saveSetupSettingsButton.disabled = nextBusy;
   if (setupSettingsFile) setupSettingsFile.disabled = nextBusy;
-  suggestionPanel?.querySelectorAll("button").forEach((button) => {
+  // Close stays live: hiding the panel never needs the model.
+  suggestionPanel?.querySelectorAll("button:not(#closeSuggestionsButton)").forEach((button) => {
     button.disabled = nextBusy;
   });
   if (setupStartButton) setupStartButton.disabled = nextBusy;
@@ -4944,6 +4948,31 @@ function saveUserPresets(list) {
   }
 }
 
+/**
+ * A preset name no other preset holds (playtest #2). The bare name goes to the
+ * first; the next takes the lowest free number from 1, so a number a delete
+ * freed is the next one handed out (no 1, 2, 3, 15, 17 gaps). Built-in names
+ * count as taken. `excludeId` is the preset being renamed, which may keep its
+ * own name.
+ */
+function uniquePresetLabel(label, { excludeId = "", fallback = "Saved setup" } = {}) {
+  const typed = String(label || "").trim().slice(0, 40) || fallback;
+  const base = typed.replace(/\s+\d+$/, "").trim() || typed;
+  const taken = new Set(
+    allDirectorPresets()
+      .filter((p) => p && p.id !== excludeId)
+      .map((p) => String(p.label || "").trim().toLowerCase()),
+  );
+  if (!taken.has(typed.toLowerCase())) return typed;
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 1; n < 10000; n += 1) {
+    const suffix = ` ${n}`;
+    const candidate = `${base.slice(0, 40 - suffix.length).trimEnd()}${suffix}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return typed;
+}
+
 function allDirectorPresets() {
   const users = loadUserPresets();
   const builtinIds = new Set(DIRECTOR_PRESETS_BUILTIN.map((p) => p.id));
@@ -5062,6 +5091,8 @@ async function selectPresetValue(value) {
       if (ideaEl) ideaEl.disabled = false;
       const delBtn = document.querySelector("#presetDeleteBtn");
       if (delBtn) delBtn.disabled = true;
+      const renameBtn = document.querySelector("#presetRenameBtn");
+      if (renameBtn) renameBtn.disabled = true;
       const saveBtn = document.querySelector("#presetSaveBtn");
       if (saveBtn) {
         saveBtn.disabled = false;
@@ -5136,7 +5167,9 @@ function syncPresetEditorFromSelection() {
   const advEl = document.querySelector("#presetAdvancedIdea");
   const delBtn = document.querySelector("#presetDeleteBtn");
   const saveBtn = document.querySelector("#presetSaveBtn");
+  const renameBtn = document.querySelector("#presetRenameBtn");
   if (!labelEl || !simpleEl || !advEl) return;
+  if (renameBtn) renameBtn.disabled = !preset || Boolean(preset.builtin);
   if (!preset) {
     labelEl.value = "";
     simpleEl.value = "";
@@ -5219,7 +5252,7 @@ function bindSetupPresetCollapse() {
   card.addEventListener("click", (event) => {
     const t = event.target;
     if (!(t instanceof Element)) return;
-    if (t.closest("#presetNewBtn, #presetConfirmBtn, #presetSaveBtn, #presetDeleteBtn, #presetSelect, #presetEditor")) return;
+    if (t.closest("#presetNewBtn, #presetConfirmBtn, #presetSaveBtn, #presetRenameBtn, #presetDeleteBtn, #presetSelect, #presetEditor")) return;
     if (
       t.closest("#setupPresetToggle") ||
       (t.closest(".characterArtHead") && !t.closest("button.secondaryButton"))
@@ -5264,7 +5297,7 @@ function createUserPreset() {
   const storedIdea = current ? String(current.simple_idea || "").trim() : "";
   const labelChanged = !onGameStart && Boolean(typedLabel) && typedLabel !== storedLabel;
   const ideaChanged = !onGameStart && Boolean(typedIdea) && typedIdea !== storedIdea;
-  const label = labelChanged ? typedLabel : "Custom preset";
+  const label = uniquePresetLabel(labelChanged ? typedLabel : "Custom preset");
   const simple_idea = ideaChanged
     ? typedIdea
     : "Ordinary start, fair DM, local stakes. Fill a complete playable setup.";
@@ -5296,8 +5329,10 @@ function persistUserPresetText() {
   if (!selection.startsWith("preset:")) return;
   const preset = findPreset(selectedDirectorPresetId);
   if (!preset || preset.builtin || preset.id !== selection.slice("preset:".length)) return;
-  const label = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
-  if (!label) return;
+  const typed = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
+  if (!typed) return;
+  // Stored unique as you type; the box keeps your typing until it loses focus.
+  const label = uniquePresetLabel(typed, { excludeId: preset.id });
   const simple_idea = String(document.querySelector("#presetSimpleIdea")?.value || "").trim().slice(0, 400);
   const adv = document.querySelector("#presetAdvancedIdea");
   if (adv && document.activeElement !== adv) adv.value = simple_idea;
@@ -5318,6 +5353,43 @@ function persistUserPresetText() {
   const select = document.querySelector("#presetSelect");
   const option = select && Array.from(select.options).find((opt) => opt.value === selection);
   if (option) option.textContent = preset.settings ? `${label} · saved setup` : label;
+}
+
+/** After a rename: show the name it was stored under, which may carry a number. */
+function settleUserPresetLabel() {
+  const labelEl = document.querySelector("#presetLabelInput");
+  const selection = String(document.querySelector("#presetSelect")?.value || "");
+  if (!labelEl || !selection.startsWith("preset:")) return;
+  const preset = findPreset(selectedDirectorPresetId);
+  if (!preset || preset.builtin) return;
+  const typed = labelEl.value.trim();
+  if (!typed) {
+    labelEl.value = preset.label;
+    return;
+  }
+  if (typed !== preset.label) {
+    labelEl.value = preset.label;
+    setSetupRandomizeStatus(`“${typed}” is taken, so the preset is “${preset.label}”.`);
+  } else {
+    setSetupRandomizeStatus(`Renamed to “${preset.label}”.`);
+  }
+  renderDirectorPresets();
+}
+
+function startRenameSelectedPreset() {
+  const selection = String(document.querySelector("#presetSelect")?.value || "");
+  const preset = selection.startsWith("preset:") ? findPreset(selectedDirectorPresetId) : null;
+  if (!preset || preset.builtin) {
+    setSetupRandomizeStatus("Only a preset you saved can be renamed. Save this one first.");
+    return;
+  }
+  setSetupPresetsCollapsed(false);
+  const labelEl = document.querySelector("#presetLabelInput");
+  if (!labelEl) return;
+  labelEl.disabled = false;
+  labelEl.focus();
+  labelEl.select();
+  setSetupRandomizeStatus(`Type a new name for “${preset.label}”. Enter or leaving the box keeps it.`);
 }
 
 function confirmSelectedPreset(event) {
@@ -5355,12 +5427,13 @@ function saveSelectedPresetFromEditor() {
   const selection = String(document.querySelector("#presetSelect")?.value || "");
   const onGameStart = selection.startsWith("start:");
   const current = onGameStart ? null : findPreset(selectedDirectorPresetId);
-  let label = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
-  if (!label) label = "Saved setup";
+  const typedLabel = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
   const simple_idea = String(document.querySelector("#presetSimpleIdea")?.value || "").trim().slice(0, 400);
   const settings = snapshotSetupPreset();
   let list = loadUserPresets();
   const updatingUser = Boolean(current && !current.builtin);
+  // Same name as another preset (built-in or saved) takes the lowest free number.
+  const label = uniquePresetLabel(typedLabel, { excludeId: updatingUser ? current.id : "" });
   if (updatingUser) {
     list = list.map((p) =>
       p.id === current.id
@@ -5376,7 +5449,6 @@ function saveSelectedPresetFromEditor() {
     );
     saveUserPresets(list);
   } else {
-    if (current?.builtin && label === current.label) label = `${label} copy`.slice(0, 40);
     const id = `user_${Date.now().toString(36)}`;
     list.push(
       normalizePreset({
@@ -9174,6 +9246,11 @@ async function requestWait(minutes, kind = "wait") {
 
 function clearSuggestions(options = {}) {
   if (suggestionsEl) suggestionsEl.innerHTML = "";
+  const deeper = document.querySelector("#deeperSuggestion");
+  if (deeper) {
+    deeper.innerHTML = "";
+    deeper.hidden = true;
+  }
   suggestionPanel?.classList.add("hidden");
   if (!options.keepInstruction && suggestionInstruction) suggestionInstruction.value = "";
 }
@@ -9191,8 +9268,49 @@ function renderSuggestions(suggestions) {
       `,
     )
     .join("");
-  suggestionPanel.classList.toggle("hidden", items.length === 0);
+  const deeperShown = !document.querySelector("#deeperSuggestion")?.hidden;
+  suggestionPanel.classList.toggle("hidden", items.length === 0 && !deeperShown);
   decorateFunctionHelp(suggestionPanel);
+  revealSuggestionPanel();
+}
+
+/**
+ * The panel opens upward from the composer. On a short or narrow screen it
+ * grew past the top bar, which then covered its head and the close button, so
+ * its height is capped to the room above the composer and the cards scroll.
+ */
+function revealSuggestionPanel() {
+  if (!suggestionPanel || suggestionPanel.classList.contains("hidden")) return;
+  suggestionPanel.style.maxHeight = "";
+  const bar = Array.from(document.querySelectorAll("header.topbar")).find((el) => el.offsetParent !== null);
+  const ceiling = Math.max(0, bar ? bar.getBoundingClientRect().bottom : 0);
+  const room = Math.floor(suggestionPanel.getBoundingClientRect().bottom - ceiling - 8);
+  if (room > 0 && suggestionPanel.getBoundingClientRect().top < ceiling + 8) {
+    suggestionPanel.style.maxHeight = `${Math.max(160, room)}px`;
+  }
+}
+
+/** One longer idea with its reason, as its own card under the three (playtest #4). */
+function renderDeeperSuggestion(deeper) {
+  const host = document.querySelector("#deeperSuggestion");
+  if (!host || !suggestionPanel) return;
+  const action = String(deeper?.action || "").trim();
+  const why = String(deeper?.why || "").trim();
+  host.hidden = !action;
+  host.innerHTML = action
+    ? `
+        <article class="suggestionItem deeperSuggestionItem">
+          <div class="deeperSuggestionText">
+            <p>${escapeHtml(action)}</p>
+            ${why ? `<p class="deeperSuggestionWhy">${escapeHtml(why)}</p>` : ""}
+          </div>
+          <button class="useSuggestionButton" data-suggestion="${escapeHtml(action)}" type="button">use</button>
+        </article>
+      `
+    : "";
+  suggestionPanel.classList.remove("hidden");
+  decorateFunctionHelp(suggestionPanel);
+  revealSuggestionPanel();
 }
 
 function updateComposerState() {
@@ -19465,6 +19583,22 @@ async function requestSuggestions(instruction = "") {
   renderSuggestions(Array.isArray(payload) ? payload : payload.suggestions || []);
 }
 
+async function requestDeeperSuggestion(instruction = "") {
+  const host = document.querySelector("#deeperSuggestion");
+  if (!host || !suggestionPanel) return;
+  suggestionPanel.classList.remove("hidden");
+  host.hidden = false;
+  host.innerHTML = `<p class="suggestionStatus">Thinking it through...</p>`;
+  const response = await fetch("/api/suggestions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instruction: String(instruction || "").trim(), deeper: true }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const payload = await response.json();
+  renderDeeperSuggestion(payload.deeper || {});
+}
+
 /** Fill thin Simple setup so Advanced-depth fields reach similar richness (not identical values). */
 async function expandSimpleSetupDepth() {
   pushSimpleToForm();
@@ -20737,11 +20871,22 @@ document.querySelector("#presetConfirmBtn")?.addEventListener("click", (event) =
   confirmSelectedPreset(event);
 });
 document.querySelector("#presetLabelInput")?.addEventListener("input", () => persistUserPresetText());
+document.querySelector("#presetLabelInput")?.addEventListener("change", () => settleUserPresetLabel());
+document.querySelector("#presetLabelInput")?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  event.target.blur();
+});
 document.querySelector("#presetSimpleIdea")?.addEventListener("input", (event) => {
   if (event.isTrusted) setupIdeaChosen = true;
   persistUserPresetText();
 });
 document.querySelector("#presetSaveBtn")?.addEventListener("click", () => saveSelectedPresetFromEditor());
+document.querySelector("#presetRenameBtn")?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  startRenameSelectedPreset();
+});
 document.querySelector("#presetDeleteBtn")?.addEventListener("click", () => deleteSelectedUserPreset());
 document.querySelector("#addGearItemBtn")?.addEventListener("click", () => {
   const card = addGearItem({}, { expanded: true });
@@ -21099,6 +21244,28 @@ regenSuggestionsButton?.addEventListener("click", () => {
     suggestionPanel?.classList.remove("hidden");
     if (suggestionsEl) suggestionsEl.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
   });
+});
+document.querySelector("#deeperSuggestionButton")?.addEventListener("click", () => {
+  if (aiBusy) return;
+  enqueueAiTask(() => requestDeeperSuggestion(suggestionInstruction?.value || ""), "AI is thinking through one idea...").catch((error) => {
+    const host = document.querySelector("#deeperSuggestion");
+    suggestionPanel?.classList.remove("hidden");
+    if (host) {
+      host.hidden = false;
+      host.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+    }
+  });
+});
+document.querySelector("#closeSuggestionsButton")?.addEventListener("click", () => {
+  clearSuggestions({ keepInstruction: true });
+  suggestButton?.focus();
+});
+suggestionPanel?.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  event.preventDefault();
+  event.stopPropagation();
+  clearSuggestions({ keepInstruction: true });
+  suggestButton?.focus();
 });
 suggestionInstruction?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || aiBusy) return;
