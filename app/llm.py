@@ -20,6 +20,8 @@ from app.db import connect
 from app.idea_bank import idea_sparks_for_prompt, prompt_sparks
 from app.setup_composer import (
     COMPOSER_FIELD_ORDER,
+    dependency_sorted,
+    field_dependencies,
     OVERUSED_SEED_DOMAINS,
     SEED_SKILL_DOMAIN_POOL,
     apply_keyword_intent,
@@ -41,6 +43,17 @@ from app.setup_composer import (
     session_theme_from_intent,
     structural_fallback,
     theme_prompt_block,
+)
+from app.gear import (
+    REQUIRED_GEAR_SLOTS,
+    gear_context_from_setup,
+    gear_from_legacy_text,
+    gear_names,
+    gear_prompt_contract,
+    normalize_gear_item,
+    normalize_gear_list,
+    required_gear_defaults,
+    slot_for_name,
 )
 import functools
 
@@ -468,7 +481,7 @@ SETUP_RANDOMIZER_FIELD_GROUPS = {
         "hair",
         "facial_features",
         "appearance",
-        "starter_equipment",
+        "starter_gear",
         "previous_life_age",
         "previous_life_sex",
         "special_abilities",
@@ -917,8 +930,10 @@ def fitting_system_prompts(config: dict[str, Any] | None = None) -> tuple[str, s
     caller reports ``degraded`` so the reason is visible instead of silent.
     """
     model_config = config or get_model_config()
-    if model_config.get("provider") == "llama_cpp":
-        return COMPACT_SYSTEM_PROMPT, COMPACT_VERIFY_PROMPT, False
+    # The llama.cpp server used to be handed the compact contract at every
+    # window size, a leftover from when that provider meant a small GGUF at
+    # 8192. With the window resolved per model it is judged like MLE: the
+    # full contract when it fits, the compact one when it does not.
     window = int(
         model_config.get("context_window")
         or context_window_tokens(model_config)
@@ -2827,7 +2842,9 @@ def _setup_randomizer_return_fields(group: str, current_setup: dict[str, Any], t
     else:
         # Unknown group — do NOT default to the entire character block (that was a real bug).
         return_fields = SETUP_RANDOMIZER_FIELD_GROUPS.get(group, [])
-    return [field for field in return_fields if field not in locked_fields]
+    # Parents before children: the group lists were hand-ordered and rolled the
+    # name before the sex. The contract's depends_on decides now.
+    return dependency_sorted([field for field in return_fields if field not in locked_fields])
 
 
 def _world_supports_exotic_sex(current_setup: dict[str, Any]) -> bool:
@@ -3050,6 +3067,8 @@ def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
         return random.choice(SETUP_RANDOMIZER_BOOLEAN_FALLBACKS[field])
     if field == "special_abilities":
         return _fallback_special_abilities(current_setup)
+    if field == "starter_gear":
+        return _fallback_starter_gear(current_setup)
     if field == "player_name":
         forbid = str(current_setup.get("player_name") or "")
         values = list(SETUP_RANDOMIZER_FALLBACKS.get("player_name") or [])
@@ -3481,6 +3500,82 @@ def _enforce_ability_count(
                 if len(clean) >= target:
                     break
     return clean[:target]
+
+
+def _merge_starter_gear(generated: list[dict[str, Any]], current_setup: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """
+    A rolled kit with the player's locked cards put back verbatim.
+
+    A locked card wins by name, or by slot when it is one of the three required
+    basics (the model rewrote FEET; the player had pinned their boots). The
+    result goes through normalize_gear_list once more so slots stay unique and
+    the kit's stat total stays under the start-power cap; nothing is re-rolled.
+    """
+    setup = current_setup if isinstance(current_setup, dict) else {}
+    ctx = gear_context_from_setup(setup)
+    existing = setup.get("starter_gear") if isinstance(setup.get("starter_gear"), list) else []
+    kept: list[tuple[int, dict[str, Any]]] = []
+    for index, card in enumerate(existing):
+        if not isinstance(card, dict) or not card.get("keep"):
+            continue
+        # Verbatim where the player wrote something; a blank item_stats block is
+        # still filled from the world (a form card always carries a stats key,
+        # so no bonus is rolled onto a locked card).
+        item = normalize_gear_item(card, context=ctx, roll_missing=True)
+        if not item:
+            continue
+        item["keep"] = True
+        kept.append((index, item))
+    if not kept:
+        return generated
+    kept_names = {item["name"].lower() for _i, item in kept}
+    kept_slots = {item["slot"] for _i, item in kept if item["required"] and item["slot"] in REQUIRED_GEAR_SLOTS}
+    merged: list[dict[str, Any]] = [
+        item
+        for item in generated
+        if isinstance(item, dict)
+        and item.get("name", "").lower() not in kept_names
+        and not (item.get("slot") in kept_slots and item.get("slot") in REQUIRED_GEAR_SLOTS)
+    ]
+    for index, item in kept:
+        merged.insert(min(index, len(merged)), item)
+    return normalize_gear_list(merged, context=ctx, roll_missing=False)
+
+
+def _fallback_starter_gear(current_setup: dict[str, Any]) -> list[dict[str, Any]]:
+    """
+    The engine's kit when the model cannot answer: the three basics for this
+    world plus two or three carried extras from the seed pool. Locked cards
+    from the form are preserved.
+    """
+    setup = current_setup if isinstance(current_setup, dict) else {}
+    ctx = gear_context_from_setup(setup)
+    rng = random.Random()
+    basics = required_gear_defaults(ctx, rng)
+    modern_arrival = bool(ctx.get("isekai")) or "transmigrat" in str(ctx.get("backstory_mode") or "")
+    world_blob = f"{ctx.get('tech_level', '')} {ctx.get('world_style', '')}".lower()
+    modern_world = any(k in world_blob for k in ("modern", "near future", "near-future", "cyber", "urban", "contemporary", "sci-fi", "space", "industrial"))
+    modern_markers = ("phone", "badge", "earbud", "keycard", "transit", "hoodie", "sneaker", "scrub", "lanyard", "wallet", "flashlight", "duct tape", "bus pass", "umbrella")
+    extras: list[dict[str, Any]] = []
+    try:
+        from app.setup_composer import pick_starter_kit_seed
+
+        # The seed pool mixes modern pocket kits with local ones; a medieval
+        # native does not carry earbuds. Draw until the kit fits the world.
+        for _draw in range(8):
+            seed_kit = pick_starter_kit_seed(modern_arrival=modern_arrival)
+            if not (modern_arrival or modern_world) and any(m in seed_kit.lower() for m in modern_markers):
+                continue
+            extras = [
+                entry
+                for entry in gear_from_legacy_text(seed_kit)
+                if slot_for_name(str(entry.get("name") or "")) not in REQUIRED_GEAR_SLOTS
+            ][:3]
+            break
+    except Exception:
+        extras = []
+    items = normalize_gear_list(basics + extras, context=ctx, rng=rng)
+    return _merge_starter_gear(items, setup)
 
 
 def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str, Any]]:
@@ -5984,6 +6079,8 @@ def fallback_setup_randomization(group: str, current: dict[str, Any] | None = No
         idea=idea,
         context={**current_setup, **fields, "_compose_intent": intent_plan},
     )
+    if isinstance(fields.get("starter_gear"), list):
+        fields["starter_equipment"] = gear_names(fields["starter_gear"])
     return {
         "fields": fields,
         "fallback_used": True,
@@ -6134,6 +6231,9 @@ def coherence_review_setup(
         if value in (None, "", [], {}):
             continue
         if key == "special_abilities":
+            continue
+        if key == "starter_equipment" and isinstance(current_setup.get("starter_gear"), list):
+            # The string is gear_names() of the cards; a patch here would be dropped by the form.
             continue
         fields[key] = value
 
@@ -6292,7 +6392,50 @@ def _resolve_setup_intent(current_setup: dict[str, Any]) -> dict[str, Any]:
     return empty_intent()
 
 
-def _field_contracts_for_prompt(return_fields: list[str]) -> dict[str, Any]:
+def _field_dependency_context(
+    field: str,
+    current_setup: dict[str, Any] | None,
+    locked_fields: set[str] | None = None,
+) -> dict[str, Any]:
+    """The settings this field must agree with, as the model should see them.
+
+    agree_with holds every parent that already has a value (locked, filled by
+    the player, or rolled earlier in this walk); locked_parents names the ones
+    the player pinned, which are immutable. A parent still unset is listed so
+    the model decides it first when both are requested.
+    """
+    parents = field_dependencies(field)
+    if not parents:
+        return {}
+    setup = current_setup or {}
+    locked = set(locked_fields or [])
+    raw_locked_values = setup.get("_locked_values") if isinstance(setup.get("_locked_values"), dict) else {}
+    agree: dict[str, Any] = {}
+    unset: list[str] = []
+    locked_parents: list[str] = []
+    for parent in parents:
+        value = raw_locked_values.get(parent) if parent in locked and parent in raw_locked_values else setup.get(parent)
+        if value in (None, "", [], {}):
+            unset.append(parent)
+            continue
+        agree[parent] = value if isinstance(value, (bool, int, float)) else str(value)[:160]
+        if parent in locked:
+            locked_parents.append(parent)
+    out: dict[str, Any] = {"depends_on": parents}
+    if agree:
+        out["agree_with"] = agree
+    if locked_parents:
+        out["locked_parents"] = locked_parents
+    if unset:
+        out["decide_first"] = unset
+    return out
+
+
+def _field_contracts_for_prompt(
+    return_fields: list[str],
+    current_setup: dict[str, Any] | None = None,
+    locked_fields: set[str] | None = None,
+) -> dict[str, Any]:
     """
     The typed contract for each requested field, small enough to send.
 
@@ -6322,7 +6465,14 @@ def _field_contracts_for_prompt(return_fields: list[str]) -> dict[str, Any]:
             slim["allowed_values"] = list(allowed)
         forbidden = str(contract.get("forbidden") or "").strip()
         if forbidden:
-            slim["forbidden"] = forbidden[:240]
+            slim["forbidden"] = forbidden[:320]
+        slim.update(_field_dependency_context(field, current_setup, locked_fields))
+        if field == "starter_gear":
+            gear_contract = gear_prompt_contract()
+            slim["return_shape"] = gear_contract["return_shape"]["starter_gear"]
+            slim["slot_codes"] = gear_contract["slot_codes"]
+            slim["required_slots"] = gear_contract["required_slots"]
+            slim["rules"] = gear_contract["rules"]
         out[field] = slim
     return out
 
@@ -6444,6 +6594,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "facial_features",
             "appearance",
             "starter_equipment",
+            "starter_gear",
             "custom_skills",
             "special_abilities",
         ]
@@ -6516,15 +6667,20 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "player_sex": current_setup.get("player_sex"),
                 "backstory_mode": current_setup.get("backstory_mode"),
             },
+            # The parents this name must agree with, locked ones marked. The
+            # example names that used to sit in name_rules are gone: a locked
+            # male character was handed a feminine name, and one of the
+            # examples was feminine.
+            "depends_on": _field_dependency_context("player_name", current_setup, locked_fields),
             "return_shape": {"player_name": "Given name, or Given + family name"},
             "name_rules": [
-                "player_name is a real personal name: given name alone (Elena, Tomas) OR given + family (Mara Ellison, Corvin Hale).",
+                "player_name is a real personal name: a given name alone, or a given name plus a family name.",
+                "The name must read as the character's player_sex in context (or depends_on.agree_with). A locked player_sex is immutable; a blank one means choose a name whose sex reads clearly either way.",
                 "Prefer two-part names about half the time; single given names are fine when they sound like names, not handles.",
                 "NOT a nickname, street handle, callsign, epithet, title, or compound fantasy moniker.",
-                "Forbidden style examples: Ash, River, Patch, Northlight, Second Bell, the Red, Ashwalker, Wanderer, Shadow.",
-                "Those belong in player_public_name or player_title — never here.",
-                "No quotes, no ranks (Captain…), no 'the …', no pure nature-noun handles.",
-                "Match world_style lightly (modern vs fantasy surnames) without becoming a joke name.",
+                "Not a single nature noun, a colour word, a bell or landmark, 'the' plus an adjective, or a walker/seeker/wanderer compound. Those belong in player_public_name or player_title, never here.",
+                "No quotes, no ranks, no 'the ...'.",
+                "Match world_style lightly (modern vs fantasy surnames) without becoming a joke name; a transmigrated or reincarnated character may keep a former-world name.",
                 "Must differ from forbidden_name.",
             ],
             "rules": base_rules
@@ -6719,6 +6875,74 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "This is an OP MC / weak-start run: keep the opening kit modest in power "
                 f"even though you must still return exactly {max(1, int(target_count))} abilities."
             ]
+    elif return_fields == ["starter_gear"]:
+        # The structured kit. Like the abilities branch: the current cards go
+        # in with their flags, locked cards are immutable, and the engine's
+        # shape (slots, stat keys) is the return shape. No example item names:
+        # a 7B pastes them.
+        gear_contract = gear_prompt_contract()
+        existing_gear = current_setup.get("starter_gear") if isinstance(current_setup.get("starter_gear"), list) else []
+        current_cards = [
+            {
+                "name": str(card.get("name") or ""),
+                "slot": str(card.get("slot") or ""),
+                "required": bool(card.get("required")),
+                "locked": bool(card.get("keep")),
+                "description": str(card.get("description") or "")[:160],
+            }
+            for card in existing_gear
+            if isinstance(card, dict) and str(card.get("name") or "").strip()
+        ]
+        locked_gear = [card for card in current_cards if card["locked"]]
+        gear_context_keys = (
+            "world_style",
+            "custom_style",
+            "tech_level",
+            "magic_level",
+            "economy",
+            "loot_rarity",
+            "difficulty",
+            "player_sex",
+            "player_age",
+            "world_races",
+            "backstory_mode",
+            "memory_policy",
+            "character_backstory",
+            "appearance",
+            "start_location",
+            "inventory_rules",
+        )
+        prompt = {
+            "task": (
+                "Write the character's starting gear for an endless AI RPG: what they wear and carry the instant "
+                "Start is pressed, as items of this world. Return JSON only."
+            ),
+            "current_gear": current_cards,
+            "locked_gear": locked_gear,
+            "depends_on": _field_dependency_context("starter_gear", current_setup, locked_fields),
+            "setup_context": {
+                key: current_setup.get(key)
+                for key in gear_context_keys
+                if current_setup.get(key) not in (None, "", [], {})
+            },
+            "locked_setup": locked_setup,
+            "return_shape": gear_contract["return_shape"],
+            "slot_codes": gear_contract["slot_codes"],
+            "required_slots": gear_contract["required_slots"],
+            "stat_keys": gear_contract["stat_keys"],
+            "item_stat_keys": gear_contract["item_stat_keys"],
+            "field_intent": intent_slice_for_field(intent_plan, "starter_gear"),
+            "field_contract": {"kind": "list_struct", "forbidden": field_contract("starter_gear").get("forbidden", "")},
+            "idea_sparks": prompt_sparks(idea_sparks_pkg),
+            "rules": base_rules
+            + list(gear_contract["rules"])
+            + [
+                "Return the whole kit under starter_gear: the three required cards (FEET, TORSO, LEGS) rewritten for this world unless they appear in locked_gear, then zero to four more items.",
+                "Cards in locked_gear are immutable: return each with the same name and slot, unchanged.",
+                "Read depends_on.agree_with: the kit must fit player_sex, world_races, world_style, tech_level, backstory_mode, character_backstory, appearance and start_location. Clothes named in appearance are the same clothes here, not a second set.",
+                "Do not return current_gear unchanged unless it is locked; name things as this world names them.",
+            ],
+        }
     elif len(return_fields) == 1:
         field = return_fields[0]
         field_context = current_setup.get("_field_context") or {}
@@ -6774,11 +6998,17 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "facial_features",
             "appearance",
             "starter_equipment",
+            "starter_gear",
             "custom_skills",
             "special_abilities",
         ]
         nearby_setup = {key: current_setup.get(key) for key in context_keys if key in current_setup and key != field}
         field_notes = {
+            "player_name": (
+                "Generate the character's personal/legal name: a given name, or given name plus family name. "
+                "It must read as the character's player_sex (see depends_on.agree_with) and fit the culture of world_style; "
+                "a transmigrated or reincarnated character may keep a former-world name. Not a nickname, handle, or epithet."
+            ),
             "player_public_name": "Usually return a blank string. Generate an alias, public name, or nickname only when character_backstory and backstory_mode make it useful, such as a reincarnated former identity, a hidden local alias, a nameless drifter's handle, or a name NPCs would plausibly know.",
             "player_title": "Usually return a blank string. Generate a concise title or epithet only when character_backstory and backstory_mode justify reputation, former status, high power, formal office, infamous deeds, reincarnation from strength, or a title NPCs would plausibly use.",
             "player_age": "Generate the character's current age or apparent age in this life. Text is allowed for unusual species, constructs, or immortal starts. Do not use age to force personality or stereotypes.",
@@ -6847,6 +7077,11 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Do NOT reuse current_setup.appearance if present. "
                 "Portraits only use upper-body zones. Weak starts: ordinary clothes."
             ),
+            "starter_gear": (
+                "Return starter_gear as a list of item objects (see field_contract and depends_on): the three worn "
+                "basics in FEET, TORSO and LEGS rewritten for this world unless locked, plus a few extras that fit "
+                "the character's sex, race, origin, backstory, clothes in appearance and start_location. Mundane at Start."
+            ),
             "starter_equipment": (
                 "Comma-separated mundane starting items at Start (inventory). "
                 "3–6 items matching THIS character's job/arrival — invent a fresh kit every roll. "
@@ -6882,7 +7117,12 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "npc_density": "How crowded scenes feel (sparse, moderate, dense, faction patrols). No skill slogans.",
             "rank_scale": "A rank ladder string only such as F,E,D,C,B,A,S,SS,SSS.",
             "skill_style": "Short skill-learning policy only (standard, generous, training-heavy, strict). Put long compounding essays in custom_skills instead.",
-            "custom_style": "World constraints, genre lean, DM stance. Do not paste only skill timers; put growth timers in custom_skills.",
+            "custom_style": (
+                "Describe the world in one to three sentences, using depends_on.agree_with (world_style, tone, tech_level, "
+                "magic_level) and field_intent as the context: what the land and its climate are like, who lives there and "
+                "who holds power, how magic or technology sits in daily life, how power is earned by anyone who has it, and "
+                "the mood of play. Write about the place and its people. Power and growth rules belong in custom_skills."
+            ),
             "world_style": "Setting/genre phrase only (e.g. modern isekai coastal fantasy). Not an ability description.",
         }
         contract = field_contract(field)
@@ -6890,6 +7130,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         contract_rules = [
             f"Field kind: {contract.get('kind') or 'short_phrase'}.",
             str(contract.get("forbidden") or ""),
+            "depends_on.agree_with lists the settings this value must fit; locked_parents are immutable.",
         ]
         if contract.get("allowed_values"):
             contract_rules.append(
@@ -6913,7 +7154,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "nearby_setup": nearby_setup,
             "locked_setup": locked_setup,
             "field_context": field_context,
-            "field_contract": contract,
+            "field_contract": {key: value for key, value in contract.items() if key != "examples"},
+            "depends_on": _field_dependency_context(field, current_setup, locked_fields),
             "field_intent": field_intent,
             "intent_plan_summary": {
                 "genre": intent_plan.get("genre"),
@@ -7093,6 +7335,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "memory_policy": current_setup.get("memory_policy"),
                 "character_backstory": current_setup.get("character_backstory"),
                 "special_abilities": current_setup.get("special_abilities"),
+                "starter_gear": current_setup.get("starter_gear"),
             }
         prompt = {
             "task": "Generate playable setup values for an endless AI RPG. Return the generated JSON object only.",
@@ -7100,9 +7343,10 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "current_setup": prompt_current_setup,
             "locked_setup": locked_setup,
             "return_fields": return_fields,
-            "field_contracts": _field_contracts_for_prompt(return_fields),
+            "field_contracts": _field_contracts_for_prompt(return_fields, current_setup, locked_fields),
             "character_identity_rules": [
-                "player_name is the character's personal/legal name (Given, or Given + family). Not a nickname, handle, callsign, or epithet. Examples: Mara Ellison, Tomas Reed, Elena. Bad: Ash, River, Patch, the Red, Ashwalker, Wanderer.",
+                "player_name is the character's personal/legal name: a given name, or a given name plus a family name. Not a nickname, handle, callsign, epithet, role word, or a byname built from an adjective and a noun.",
+                "player_name must read as the character's player_sex (locked_setup or current_setup wins; otherwise decide player_sex first) and fit the culture of world_style. A transmigrated or reincarnated character may keep a former-world name.",
                 "player_public_name is rare. Leave it blank by default; fill it only when the backstory implies an alias, public handle, former-world name, or name strangers would plausibly know. Nicknames and street names go here, not in player_name.",
                 "player_title is rare. Leave it blank by default; fill it only when reputation, formal office, reincarnated former power, high strength, infamous deeds, or local rumors make a title more playable.",
                 "player_age and player_sex are current-life descriptive identity fields. Prefer male/female for ordinary humanoids; rare exotic sex categories only when the world supports them. Keep them concise, and do not make them behavior constraints or stereotypes.",
@@ -7122,6 +7366,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "rules": base_rules
             + [
                 "Generate fields one at a time in the order requested. Later fields must fit earlier current_setup values.",
+                "field_contracts[field].agree_with lists the settings that field must fit; locked_parents are immutable; decide_first names a parent not set yet, so decide it before the child and keep the child consistent with it.",
+                "world_style names the setting in a phrase. custom_style describes the world: the land and its climate, who lives there and who holds power, how magic or technology sits in daily life, how power is earned by anyone who has it, and the mood of play. It is about the place and its people.",
                 "field_contracts is binding. When a field lists allowed_values, return one of those strings EXACTLY as written -- lowercase, no synonyms, no free text. 'low', 'low-magic', and 'limited to guilds' are all wrong for a field whose allowed_values are rare/forbidden/common utility/cultivation/none; pick the closest listed value instead.",
                 "Boolean fields take true or false, not a label.",
             ],
@@ -7133,6 +7379,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     elif return_fields == ["player_name"]:
         token_cap = 80
     elif return_fields == ["special_abilities"]:
+        token_cap = 700
+    elif return_fields == ["starter_gear"]:
         token_cap = 700
     elif not text_mode and return_fields == ["character_backstory"]:
         token_cap = 360
@@ -7225,6 +7473,13 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         if return_fields == ["special_abilities"]:
             ability_fallback_reason = _trim_text(str(first_exc) or first_exc.__class__.__name__, 240)
             validated = {"special_abilities": _fallback_special_abilities(current_setup)}
+        elif return_fields == ["starter_gear"]:
+            validated = {
+                "starter_gear": _fallback_starter_gear(current_setup),
+                "fallback_used": True,
+                "fallback_reason": _trim_text(str(first_exc) or first_exc.__class__.__name__, 240),
+            }
+            validated["starter_equipment"] = gear_names(validated["starter_gear"])
         else:
             raise first_exc
     if not text_mode and return_fields == ["player_name"]:
@@ -7948,6 +8203,11 @@ def _lint_and_repair_setup_fields(
                     "Return JSON only with the repaired field.",
                     str(contract.get("forbidden") or ""),
                     "Do not mention compounding, near-useless skills, level delays, or cooldowns unless this field is custom_skills or skill growth.",
+                    (
+                        "Describe the world: the land and its climate, who lives there and who holds power, how power is earned by anyone who has it, and the mood of play."
+                        if contract.get("world_scope")
+                        else ""
+                    ),
                     "Match examples' shape: short structural phrase for structure fields.",
                 ],
             }
@@ -8254,6 +8514,8 @@ def _validate_setup_randomization(
         generated_keys.add(requested_field)
     if requested_field == "special_abilities" and "special_abilities" in result:
         generated_keys.add("special_abilities")
+    if requested_field == "starter_gear" and "starter_gear" in result:
+        generated_keys.add("starter_gear")
     if not generated_keys:
         raise LlmError("Randomizer returned no usable setup values.")
 
@@ -8324,6 +8586,19 @@ def _validate_setup_randomization(
         }
         result["special_abilities"] = cleaned_abilities
 
+    if "starter_gear" in result:
+        raw_gear = result["starter_gear"]
+        if isinstance(raw_gear, dict):
+            raw_gear = [raw_gear]
+        elif isinstance(raw_gear, str):
+            raw_gear = gear_from_legacy_text(raw_gear)
+        if not isinstance(raw_gear, list):
+            raise LlmError("Randomizer returned starter_gear, but it was not a list.")
+        gear_setup = current_setup if isinstance(current_setup, dict) else {}
+        items = normalize_gear_list(raw_gear, context=gear_context_from_setup(gear_setup))
+        result["starter_gear"] = _merge_starter_gear(items, gear_setup)
+        result["starter_equipment"] = gear_names(result["starter_gear"])
+
     # Drop legacy special_ability_origin if a model still returns it.
     result.pop("special_ability_origin", None)
 
@@ -8387,8 +8662,11 @@ def _sanitize_setup_randomization_values(result: dict[str, Any]) -> dict[str, An
         except Exception:
             pass
 
-    # starter_equipment: break the wrench+coins+satchel+hoodie stone kit
-    if "starter_equipment" in out:
+    # starter_equipment: the names of the cards when there are cards; otherwise
+    # break the wrench+coins+satchel+hoodie stone kit of the legacy string.
+    if isinstance(out.get("starter_gear"), list):
+        out["starter_equipment"] = gear_names(out["starter_gear"])
+    elif "starter_equipment" in out:
         out["starter_equipment"] = _diversify_starter_equipment(out.get("starter_equipment"))
 
     # start_location: never previous-life workplace for isekai/transmigrated

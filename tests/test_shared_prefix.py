@@ -108,13 +108,19 @@ class TestLocalProvidersShareTheDraftPrefix(unittest.TestCase):
         for out in outs:
             self.assertEqual(out[: len(DSL_DRAFT)], DSL_DRAFT)
 
-    def test_llama_cpp_gets_the_compact_contracts_after_the_prefix(self):
-        verify = llm.system_prompt_for_phase(LLAMA, DSL_DRAFT, "verify", COMPACT_VERIFY_PROMPT)
-        depth = llm.system_prompt_for_phase(LLAMA, DSL_DRAFT, "json_depth", COMPACT_SYSTEM_PROMPT)
+    def test_llama_cpp_gets_the_contracts_its_window_holds_after_the_prefix(self):
+        small = dict(LLAMA, context_window=8192)
+        verify = llm.system_prompt_for_phase(small, DSL_DRAFT, "verify", COMPACT_VERIFY_PROMPT)
+        depth = llm.system_prompt_for_phase(small, DSL_DRAFT, "json_depth", COMPACT_SYSTEM_PROMPT)
         self.assertTrue(verify.startswith(DSL_DRAFT))
         self.assertTrue(verify.endswith(COMPACT_VERIFY_PROMPT))
         self.assertTrue(depth.startswith(DSL_DRAFT))
         self.assertTrue(depth.endswith(COMPACT_SYSTEM_PROMPT))
+        wide = dict(LLAMA, context_window=32768)
+        verify = llm.system_prompt_for_phase(wide, DSL_DRAFT, "verify", VERIFY_PROMPT)
+        depth = llm.system_prompt_for_phase(wide, DSL_DRAFT, "json_depth", SYSTEM_PROMPT)
+        self.assertTrue(verify.endswith(VERIFY_PROMPT))
+        self.assertTrue(depth.endswith(SYSTEM_PROMPT))
 
     def test_a_blank_or_retired_provider_name_counts_as_local(self):
         for provider in ("", "ollama", "MLE"):

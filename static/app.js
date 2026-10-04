@@ -498,7 +498,7 @@ const SYSTEM_STYLE_DESCRIPTIONS = {
 
 // Section buttons stay. These lists are Optional fields only — Primary names are not here.
 const RANDOM_GROUPS = {
-  character: ["memory_policy", "character_backstory", "starter_equipment", "player_public_name", "player_title", "player_age", "player_sex", "previous_life_age", "previous_life_sex", "special_abilities"],
+  character: ["memory_policy", "character_backstory", "starter_gear", "player_public_name", "player_title", "player_age", "player_sex", "previous_life_age", "previous_life_sex", "special_abilities"],
   // Powers step: ability cards + custom skill rules (compounding / XP / tracking live here)
   powers: ["special_abilities", "custom_skills"],
   world: ["world_style", "magic_level", "world_races", "race_magic_enabled", "race_magic_rarity", "tech_level", "tone", "economy", "start_location", "race_magic_rules", "race_ability_rules"],
@@ -553,7 +553,7 @@ let RANDOM_FIELD_ORDER = [
   "hair",
   "facial_features",
   "appearance",
-  "starter_equipment",
+  "starter_gear",
   "player_name",
   "player_public_name",
   "player_title",
@@ -708,10 +708,10 @@ function detectStartLocationTheme() {
  */
 /** Header Randomize fills only these Primary controls. Optional stays as the person left it. */
 const PRIMARY_RANDOM_FIELD_ORDER = [
-  "player_name",
   "backstory_mode",
   "difficulty",
   "custom_style",
+  "player_name",
   "hair",
   "facial_features",
   "appearance",
@@ -732,14 +732,14 @@ const SIMPLE_RANDOM_FIELD_ORDER = [
   "skill_levels_enabled",
   "backstory_mode",
   "memory_policy",
+  "player_sex",
+  "player_age",
+  "player_name",
   "character_backstory",
   "hair",
   "facial_features",
   "appearance",
-  "starter_equipment",
-  "player_name",
-  "player_age",
-  "player_sex",
+  "starter_gear",
   "special_abilities",
 ];
 
@@ -769,7 +769,7 @@ const SIMPLE_INTENT_OVERRIDE_KEYS = new Set([
   "hair",
   "facial_features",
   "appearance",
-  "starter_equipment",
+  "starter_gear",
   "character_backstory",
   "special_abilities",
 ]);
@@ -779,6 +779,17 @@ function randomizeMode() {
 }
 
 /** Field walk for Confirm Randomize (Simple surface vs full Advanced). */
+/** Reorder a walk list by the composer's dependency order (parents first); unknown names keep their place at the end. */
+function orderByComposer(list) {
+  const fields = Array.isArray(list) ? list.slice() : [];
+  if (!RANDOM_FIELD_ORDER.length) return fields;
+  const rank = new Map(RANDOM_FIELD_ORDER.map((name, index) => [name, index]));
+  return fields
+    .map((name, index) => ({ name, key: rank.has(name) ? rank.get(name) : RANDOM_FIELD_ORDER.length + index }))
+    .sort((a, b) => a.key - b.key)
+    .map((entry) => entry.name);
+}
+
 function randomizeFieldOrderForMode(mode = randomizeMode()) {
   if (mode === "simple") return PRIMARY_RANDOM_FIELD_ORDER.slice();
   return RANDOM_FIELD_ORDER.slice();
@@ -836,12 +847,14 @@ const DIRECTOR_PRESETS_BUILTIN = [
     id: "op_mc",
     // legacy alias: older UI/localStorage used one_skill
     aliases: ["one_skill"],
-    label: "OP MC",
+    label: "Overpowered",
     builtin: true,
+    // Any setting: fantasy, modern, far future, native-born or arrived. The
+    // fantasy is the climb, not where it happens.
     simple_idea:
-      "OP MC: start ordinary with one weak compounding seed power that snowballs toward late-game OP (rank F up through S/SS/SSS). Growth Math makes the climb calculable; passives allowed; more powers can unlock later. Normal difficulty; mythic progression tone; local stakes early, fair DM, no free second combat kit at start.",
+      "Overpowered progression in any setting: start ordinary with one weak compounding seed power that snowballs toward late-game OP (rank F up through S/SS/SSS). Growth Math makes the climb calculable; passives allowed; more powers can unlock later. Normal difficulty; mythic progression tone; local stakes early; fair DM.",
     advanced_idea:
-      "OP MC power fantasy (isekai-friendly): an ordinary person starts with exactly one weak seed power that compounds into something genuinely strong later (domain varies; not weather or observation by default). Put calculable Growth Math on the seed: XP curves from F through S/SS/SSS, risk multipliers, soft caps, breakthroughs, rank-to-bonus, late multipliers. Custom skills hold the seed's fiction and limits, never a permanent one-skill ban; more powers and passives arrive through training and quests. Normal difficulty, mythic progression tone, fair DM, local stakes; no free second combat kit.",
+      "Overpowered progression power fantasy, open to any setting and any origin (native-born, transmigrated, reincarnated): an ordinary person starts with exactly one weak seed power that compounds into something genuinely strong later (domain varies; not weather or observation by default). Put calculable Growth Math on the seed: XP curves from F through S/SS/SSS, risk multipliers, soft caps, breakthroughs, rank-to-bonus, late multipliers. Custom skills hold the seed's fiction and limits, never a permanent one-skill ban; more powers and passives arrive through training and quests. The world vibe describes the setting, not the power rules. Normal difficulty, mythic progression tone, fair DM, local stakes.",
   },
   {
     id: "fantasy",
@@ -1043,9 +1056,9 @@ const SETTING_INFO = {
       "Clothing worn at Start (fact-checked with starter gear) and used for art. Prefer zone:item. Isekai arrival ≠ plate armor; put hair/face in their fields.",
     customPlaceholder: "Example: torso: travel clothes; feet: practical shoes",
   },
-  starter_equipment: {
+  starter_gear: {
     description:
-      "Items already owned when you press Start (fact-checked). Isekai/summon = clothes/pockets from arrival only — no free shield/sword. Reincarnated = this-life gear. Native = must fit the backstory job. God/system gifts happen after Start.",
+      "What you wear and carry when you press Start, one card per item (fact-checked). Feet, torso and legs are always worn; the model names them for the world, your sex and race. Isekai/summon = clothes/pockets from arrival only. Reincarnated = this-life gear. Native = must fit the backstory job. Stats and abilities on an item are optional; the engine rolls numbers from the world.",
     customPlaceholder: "Example: worn coat, pocket notebook, copper coins, water flask",
   },
   skill_style: {
@@ -3050,10 +3063,6 @@ function writeAbilityCards(abilities) {
   updateAbilityOriginControls();
   updatePowersDropdownMeta();
   placeAbilityBuilder();
-  if (currentAbilitySlotCount() > 0) {
-    const dropdown = document.querySelector("#powersDropdown");
-    if (dropdown) dropdown.open = true;
-  }
 }
 
 function fitAbilitiesToLockedCount(abilities) {
@@ -3093,7 +3102,7 @@ function updatePowersDropdownMeta() {
   if (!meta) return;
   const count = currentAbilitySlotCount();
   if (!count) {
-    meta.textContent = "None · open to add abilities";
+    meta.textContent = "None · add abilities or randomize";
     return;
   }
   const { min, max } = abilityCountRange();
@@ -3159,7 +3168,7 @@ function applyRandomizedSetup(payload) {
   const fields = payload?.fields || payload || {};
   // Never treat the abilities array as a string form field.
   Object.entries(fields).forEach(([name, value]) => {
-    if (name === "special_abilities" || name === "special_ability_origin") return;
+    if (name === "special_abilities" || name === "special_ability_origin" || name === "starter_gear") return;
     if (value === null || value === undefined) return;
     if (value === "" && !OPTIONAL_IDENTITY_FIELDS.has(name)) return;
     if (setupForm.querySelector(`[data-list-setting="${name}"]`)) {
@@ -3228,15 +3237,25 @@ function applyRandomizedSetup(payload) {
     // Existing cards keep their count. Locked cards stay. Empty lists still use the roll.
     writeAbilityCards(mergeRandomizedAbilities(abilities, rolledTarget));
   }
+  // Starting gear is a list of cards, never a string field. Locked cards stay,
+  // required cards are rewritten in place by slot, the rest follow the roll.
+  const gear = Array.isArray(payload?.starter_gear)
+    ? payload.starter_gear
+    : Array.isArray(fields?.starter_gear)
+      ? fields.starter_gear
+      : null;
+  if (gear) {
+    writeGearCards(mergeRandomizedGear(gear));
+  } else if (typeof fields?.starter_equipment === "string" && fields.starter_equipment.trim()) {
+    const list = document.querySelector("#simpleGearList");
+    if (list && !list.children.length) writeGearCards(parseStarterEquipmentToGear(fields.starter_equipment));
+  }
+  if (gear || fields?.starter_equipment != null) ensureRequiredGearCards().catch(() => {});
   normalizeRandomizerDependencies();
   updateAbilityOriginControls();
   updatePowersDropdownMeta();
   placeAbilityBuilder();
   // Make powers visible after a randomize that produced cards
-  if (currentAbilitySlotCount() > 0) {
-    const dropdown = document.querySelector("#powersDropdown");
-    if (dropdown) dropdown.open = true;
-  }
 }
 
 function commaSeparatedPhrases(value) {
@@ -3301,6 +3320,7 @@ function collectSetupSettings() {
     ability_count_min: abilityCountRange().min,
     ability_count_max: abilityCountRange().max,
     abilities: Array.from(abilityList.querySelectorAll(".abilitySetupCard")).map(abilityCardSnapshot).filter(Boolean),
+    gear: collectGearItems(),
     // Session theme / last Randomize intent so Start bias survives save/load.
     randomize_idea: setupRandomizeIdea(),
     compose_intent: lastComposeIntent && typeof lastComposeIntent === "object" ? lastComposeIntent : null,
@@ -3414,6 +3434,7 @@ function restoreSetupSettings(settings) {
     input.checked = locks.has(input.dataset.lockSetting);
   });
   restoreAbilitySettings(settings);
+  restoreGearSettings(settings);
   const customSkills = setupForm.elements.custom_skills;
   if (customSkills) customSkills.value = commaSeparatedPhrases(customSkills.value);
   // Restore Randomize idea + session theme / intent for playthrough bias.
@@ -3550,6 +3571,11 @@ function fallbackRandomizeRadioField(name) {
 
 function fallbackRandomizeField(name, options = {}) {
   if (!options.ignoreLock && isSettingLocked(name)) return;
+  if (name === "starter_gear") {
+    // No local item pool: the engine names the basics for this world (plain names offline).
+    ensureRequiredGearCards({ force: true, report: true }).catch(() => {});
+    return;
+  }
   if (OPTIONAL_IDENTITY_FIELDS.has(name) && !randomBool(optionalIdentityFillChance(name))) {
     setField(name, "");
     normalizeRandomizerDependencies();
@@ -3824,6 +3850,7 @@ function fieldContext(name) {
 function setupSnapshotValue(formData, name) {
   if (setupForm.querySelector(`[data-list-setting="${name}"]`)) return readListSetting(formData, name, "");
   if (name === "special_abilities") return collectAbilities();
+  if (name === "starter_gear") return collectGearItems();
   if (["race_magic_enabled", "proficiency_system", "skill_levels_enabled", "leveling_system", "game_system"].includes(name)) return boolField(formData, name);
   if (["player_name", "player_public_name", "player_title", "player_age", "previous_life_age", "character_backstory", "hair", "facial_features", "appearance", "starter_equipment", "start_location", "custom_style", "race_magic_rules", "race_ability_rules", "custom_skills", "inventory_rules"].includes(name)) {
     return formData.get(name) || "";
@@ -3849,6 +3876,14 @@ function currentSetupSnapshot(activeField = "") {
     snapshot[name] = setupSnapshotValue(formData, name);
     snapshot._included_fields.push(name);
   });
+  // The gear cards are the source; the legacy name string rides along as context,
+  // and the active gear roll always sees its own current cards (locked ones included).
+  const gearItems = collectGearItems();
+  snapshot.starter_equipment = gearItemsToStarterEquipment(gearItems);
+  if (activeField === "starter_gear" && !("starter_gear" in snapshot)) {
+    snapshot.starter_gear = gearItems;
+    snapshot._included_fields.push("starter_gear");
+  }
   lockedFields.forEach((name) => {
     snapshot._locked_values[name] = setupSnapshotValue(formData, name);
     snapshot._locked_field_context[name] = fieldContext(name);
@@ -3899,7 +3934,7 @@ function normalizeRandomizerDependencies() {
 }
 
 async function randomizeGroup(group) {
-  const fields = RANDOM_GROUPS[group] || [];
+  const fields = orderByComposer(RANDOM_GROUPS[group] || []);
   const idea = setupRandomizeIdea();
   const intent = lastComposeIntent;
   for (const name of fields) {
@@ -4159,9 +4194,8 @@ function pushSimpleToForm() {
   setWorldStyleSimple(world);
   if (document.querySelector("#simpleLeveling")) pushSimpleRulesToForm();
 
-  // Gear → starter_equipment (empty list clears randomized leftovers)
-  const gearText = gearItemsToStarterEquipment(collectGearItems());
-  setFormFieldValue("starter_equipment", gearText);
+  // Gear cards → starter_equipment names (empty list clears randomized leftovers)
+  syncStarterEquipmentFromGear();
   const simpleExtraEl = document.querySelector("#setupArtExtraSimple");
   const advExtra = document.querySelector("#setupArtExtra");
   if (advExtra && simpleExtraEl) advExtra.value = simpleExtraEl.value.trim();
@@ -4197,21 +4231,17 @@ function pullFormToSimple() {
   if (worldEl && worldEl.name !== "custom_style") set("#simpleWorld", worldCustom);
   pullFormRulesToSimple();
 
-  // Gear list from starter_equipment if empty
+  // Gear cards from a legacy starter_equipment string only when there are no cards at all
   const gearList = document.querySelector("#simpleGearList");
   if (gearList && !gearList.children.length) {
-    const parsed = parseStarterEquipmentToGear(getFormFieldValue("starter_equipment"));
-    parsed.forEach((g) => addGearItem(g));
+    parseStarterEquipmentToGear(getFormFieldValue("starter_equipment")).forEach((g) => addGearItem(g));
   }
+  ensureRequiredGearCards().catch(() => {});
 
   // Powers block is shared — re-mount under Simple and show cards after randomize
   placeAbilityBuilder();
   updateAbilityOriginControls();
   updatePowersDropdownMeta();
-  if (currentAbilitySlotCount() > 0) {
-    const dropdown = document.querySelector("#powersDropdown");
-    if (dropdown) dropdown.open = true;
-  }
 }
 
 function openRandomizePopover(fromEl) {
@@ -4357,6 +4387,10 @@ function randomizedPayloadFields(payload) {
 
 function randomizedFieldIsBlank(payload, name) {
   const fields = randomizedPayloadFields(payload);
+  if (name === "starter_gear") {
+    const list = Array.isArray(payload?.starter_gear) ? payload.starter_gear : fields.starter_gear;
+    return !(Array.isArray(list) && list.length);
+  }
   if (!Object.prototype.hasOwnProperty.call(fields, name)) return true;
   const raw = fields[name];
   if (raw === undefined || raw === null) return true;
@@ -4370,6 +4404,13 @@ async function randomizeField(name, options = {}) {
     const existing = readAbilityCards();
     if (existing.length && existing.every((ability) => ability.keep)) {
       setSetupRandomizeStatus("Every ability is locked, so the list stayed as it is.");
+      return;
+    }
+  }
+  if (name === "starter_gear") {
+    const existing = collectGearItems();
+    if (existing.length && existing.every((item) => item.keep)) {
+      setSetupRandomizeStatus("Every gear card is locked, so the kit stayed as it is.");
       return;
     }
   }
@@ -4398,6 +4439,7 @@ async function randomizeField(name, options = {}) {
   const blank = randomizedFieldIsBlank(payload, name);
   if (blank) fallbackRandomizeField(name, options);
   if (name === "special_abilities") reportAbilityRandomizeSource(payload, { blank });
+  if (name === "starter_gear") reportGearRandomizeSource(payload, { blank });
   return payload;
 }
 
@@ -4946,6 +4988,10 @@ function applyStartOptions(options) {
   if (abilities.length && typeof restoreAbilitySettings === "function") {
     restoreAbilitySettings({ abilities });
   }
+  const gear = Array.isArray(options.starter_gear) ? options.starter_gear : [];
+  if (gear.length) writeGearCards(gear);
+  else if (String(options.starter_equipment || "").trim()) writeGearCards(parseStarterEquipmentToGear(options.starter_equipment));
+  ensureRequiredGearCards().catch(() => {});
   updateConditionalSetup();
   decorateFunctionHelp(setupForm);
 }
@@ -5339,9 +5385,11 @@ async function randomizeAllSetup(options = {}) {
     : randomizeFieldOrderForMode(mode);
   await ensureComposerOrder();
   // Advanced uses full composer order (may refresh from API); Simple keeps fixed surface list.
+  // Simple keeps its surface list but walks it in the composer's order, so the
+  // sex is decided before the name and the mode before the backstory.
   const walkOrder =
     mode === "simple"
-      ? fieldOrder
+      ? orderByComposer(fieldOrder)
       : RANDOM_FIELD_ORDER.length
         ? RANDOM_FIELD_ORDER.slice()
         : fieldOrder;
@@ -5469,10 +5517,6 @@ async function randomizeAllSetup(options = {}) {
   placeAbilityBuilder();
   updateAbilityOriginControls();
   updatePowersDropdownMeta();
-  if (currentAbilitySlotCount() > 0) {
-    const dropdown = document.querySelector("#powersDropdown");
-    if (dropdown) dropdown.open = true;
-  }
   // Full randomize finished → rebuild face/body engine prompts once (overwrites prior).
   fillDefaultNegativesOnBoot();
   await rebuildEnginePrompts({ force: true, silent: false })
@@ -6251,12 +6295,26 @@ function abilityTemplate(ability = {}, options = {}) {
   ).join("");
   const tip = POWER_GROWTH_TYPES.find((t) => t.id === powerType)?.tip || "";
   const expanded = Boolean(options.expanded);
+  // nested: an ability that lives on a gear card. Same card, minus the
+  // per-card randomize / add-below buttons and the keep-lock (the gear
+  // card's own Lock covers it). Not tied into the LLM randomizer yet.
+  const nested = Boolean(options.nested);
   const collapseClass = expanded ? "is-expanded" : "is-collapsed";
   const summaryName = abilitySummaryLabel(ability);
   const summaryMeta = abilitySummaryMeta({ ...ability, locked, power_type: powerType });
   const kept = Boolean(ability.keep);
+  const keepLock = nested
+    ? ""
+    : `<label class="settingLock abilityKeepLock" title="Keep this ability when you randomize. Unlocked abilities are rewritten. The number of abilities stays.">
+          <input type="checkbox" data-ability-keep ${kept ? "checked" : ""} />
+          Lock
+        </label>`;
+  const extraActions = nested
+    ? ""
+    : `<button class="secondaryButton randomizeOneAbility" type="button">Randomize This</button>
+          <button class="secondaryButton addAbilityAfter" type="button">Add Ability Below</button>`;
   return `
-    <article class="abilitySetupCard ${collapseClass}${kept ? " is-kept" : ""}" data-ability-id="${escapeHtml(id)}">
+    <article class="abilitySetupCard ${collapseClass}${kept ? " is-kept" : ""}${nested ? " is-nested" : ""}" data-ability-id="${escapeHtml(id)}"${nested ? ' data-ability-nested="true"' : ""}>
       <header class="abilityCardSummary">
         <button type="button" class="abilityCollapseToggle" aria-expanded="${expanded ? "true" : "false"}" title="${expanded ? "Collapse power details" : "Expand power details"}">
           <span class="abilityCollapseChevron" aria-hidden="true"></span>
@@ -6266,10 +6324,7 @@ function abilityTemplate(ability = {}, options = {}) {
           <strong class="abilitySummaryName" data-ability-summary-name>${escapeHtml(summaryName)}</strong>
           <span class="abilitySummaryMeta" data-ability-summary-meta>${escapeHtml(summaryMeta)}</span>
         </div>
-        <label class="settingLock abilityKeepLock" title="Keep this ability when you randomize. Unlocked abilities are rewritten. The number of abilities stays.">
-          <input type="checkbox" data-ability-keep ${kept ? "checked" : ""} />
-          Lock
-        </label>
+        ${keepLock}
         <button class="secondaryButton chipBtn removeAbility abilitySummaryRemove" type="button" title="Remove this power">Remove</button>
       </header>
       <div class="abilityCardBody">
@@ -6316,8 +6371,7 @@ function abilityTemplate(ability = {}, options = {}) {
         </label>
         <div class="abilityCardActions">
           <button class="secondaryButton calcGrowthMathBtn" type="button" title="Fill growth math from type + current setup">Calculate level-up math</button>
-          <button class="secondaryButton randomizeOneAbility" type="button">Randomize This</button>
-          <button class="secondaryButton addAbilityAfter" type="button">Add Ability Below</button>
+          ${extraActions}
           <button class="secondaryButton removeAbility" type="button">Remove</button>
         </div>
       </div>
@@ -6581,106 +6635,517 @@ function updatePowerTypeTip(card) {
   if (el) el.textContent = tip;
 }
 
-// --- Gear / augments (simple + sync to starter_equipment) -------------------
+// --- Starting gear (structured cards; starter_equipment is the derived name list) ---
+// Item shape mirrors app/gear.py: {name, slot, required, keep, description, stats, item_stats, abilities}.
+const GEAR_SLOT_OPTIONS = [
+  ["", "Carried"],
+  ["HEAD", "Head"],
+  ["NECK", "Neck"],
+  ["TORSO", "Torso"],
+  ["UNDER", "Under layer"],
+  ["BACK", "Back"],
+  ["MAIN", "Main hand"],
+  ["OFF", "Off hand"],
+  ["WRIST", "Wrists"],
+  ["FINGER", "Fingers"],
+  ["WAIST", "Waist"],
+  ["LEGS", "Legs"],
+  ["FEET", "Feet"],
+];
+const GEAR_SLOT_CODES = new Set(GEAR_SLOT_OPTIONS.map(([code]) => code).filter(Boolean));
+const GEAR_REQUIRED_SLOTS = ["FEET", "TORSO", "LEGS"];
+const GEAR_REQUIRED_FALLBACK = { FEET: "boots", TORSO: "tunic", LEGS: "trousers" };
+const GEAR_STAT_KEYS = ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"];
+const GEAR_STAT_SHORT = { strength: "STR", dexterity: "DEX", constitution: "CON", intelligence: "INT", wisdom: "WIS", charisma: "CHA" };
+const GEAR_RARITIES = ["common", "uncommon", "rare"];
+
+function gearSlotLabel(code) {
+  const hit = GEAR_SLOT_OPTIONS.find(([value]) => value === code);
+  return hit ? hit[1] : "Carried";
+}
+
+function normalizeGearSlotClient(value) {
+  const code = String(value || "").trim().toUpperCase();
+  return GEAR_SLOT_CODES.has(code) ? code : "";
+}
+
+function gearNumberOrBlank(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const n = Number(value);
+  return Number.isFinite(n) ? String(n) : "";
+}
+
 function gearItemTemplate(item = {}) {
   const id = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : String(Date.now() + Math.random());
-  const effect = item.effect_type || "look_only";
+  const required = Boolean(item.required);
+  const keep = Boolean(item.keep);
+  const slot = normalizeGearSlotClient(item.slot);
+  const stats = item.stats && typeof item.stats === "object" ? item.stats : {};
+  const itemStats = item.item_stats && typeof item.item_stats === "object" ? item.item_stats : {};
+  const rarity = GEAR_RARITIES.includes(String(itemStats.rarity || "")) ? String(itemStats.rarity) : "";
+  const slotOptions = GEAR_SLOT_OPTIONS.map(
+    ([code, label]) => `<option value="${escapeHtml(code)}" ${code === slot ? "selected" : ""}>${escapeHtml(label)}</option>`,
+  ).join("");
+  const statInputs = GEAR_STAT_KEYS.map(
+    (key) => `
+          <label class="gearStatField" title="${escapeHtml(key)}">
+            <span>${GEAR_STAT_SHORT[key]}</span>
+            <input type="number" inputmode="numeric" min="-2" max="3" step="1" data-gear-stat="${key}" value="${escapeHtml(gearNumberOrBlank(stats[key]))}" placeholder="0" aria-label="${escapeHtml(key)} bonus while worn" />
+          </label>`,
+  ).join("");
+  const rarityOptions = [`<option value="" ${rarity ? "" : "selected"}>roll</option>`]
+    .concat(GEAR_RARITIES.map((r) => `<option value="${r}" ${r === rarity ? "selected" : ""}>${r}</option>`))
+    .join("");
+  const headRight = required
+    ? `<span class="gearRequiredBadge" title="Every character starts with something on their feet, torso and legs. Randomize renames this for your world unless it is locked.">Required</span>`
+    : `<button type="button" class="secondaryButton chipBtn removeGearItem" title="Remove this item">Remove</button>`;
   return `
-    <article class="gearSetupCard" data-gear-id="${escapeHtml(id)}">
-      <div class="gearCardRow">
-        <label>
+    <article class="gearSetupCard${required ? " is-required" : ""}${keep ? " is-kept" : ""}" data-gear-id="${escapeHtml(id)}" data-gear-required="${required ? "true" : "false"}" data-gear-slot-fixed="${required ? escapeHtml(slot) : ""}">
+      <div class="gearCardHead">
+        <label class="gearCardName">
           <span>Item</span>
           <input data-gear-field="name" value="${escapeHtml(item.name || "")}" maxlength="80" placeholder="Travel coat, iron ring…" />
         </label>
-        <label>
+        <label class="gearCardSlot">
           <span>Worn / slot</span>
-          <input data-gear-field="slot" value="${escapeHtml(item.slot || "")}" maxlength="40" placeholder="torso, feet, hand…" />
-        </label>
-        <label>
-          <span>Effect type</span>
-          <select data-gear-field="effect_type">
-            <option value="look_only" ${effect === "look_only" ? "selected" : ""}>Look only</option>
-            <option value="stat" ${effect === "stat" ? "selected" : ""}>Stat boost</option>
-            <option value="ability" ${effect === "ability" ? "selected" : ""}>Grants ability / action</option>
-            <option value="compounding" ${effect === "compounding" ? "selected" : ""}>Compounding with level</option>
-            <option value="mixed" ${effect === "mixed" ? "selected" : ""}>Mixed / special</option>
+          <select data-gear-field="slot" ${required ? "disabled" : ""} title="${required ? "This slot is fixed: it is one of the three basics." : "Where it is worn, or Carried."}">
+            ${slotOptions}
           </select>
         </label>
+        <label class="settingLock gearKeepLock" title="Keep this item exactly as written when you randomize.">
+          <input type="checkbox" data-gear-keep ${keep ? "checked" : ""} />
+          Lock
+        </label>
+        ${headRight}
       </div>
-      <label class="wide">
-        <span>What it does / rules</span>
-        <textarea data-gear-field="effect" rows="2" maxlength="400" placeholder="e.g. +1 endurance while worn; once/day muffles footsteps; compounds +2% quiet per player level while equipped">${escapeHtml(item.effect || "")}</textarea>
+      <label class="wide gearCardDescription">
+        <span>Description</span>
+        <textarea data-gear-field="description" rows="2" maxlength="300" placeholder="What it is in this world: material, condition, where it came from.">${escapeHtml(item.description || "")}</textarea>
       </label>
-      <div class="abilityCardActions">
-        <button type="button" class="secondaryButton removeGearItem" title="Remove">Remove</button>
+      <div class="gearStatBlock">
+        <span class="gearRowLabel">Stat bonuses while worn</span>
+        <div class="gearStatRow">${statInputs}
+        </div>
+      </div>
+      <div class="gearStatBlock">
+        <span class="gearRowLabel">Item stats</span>
+        <div class="gearItemStatRow">
+          <label><span>Weight</span><input type="number" inputmode="decimal" min="0" max="200" step="0.1" data-gear-item-stat="weight" value="${escapeHtml(gearNumberOrBlank(itemStats.weight))}" placeholder="roll" /></label>
+          <label><span>Durability</span><input type="number" inputmode="numeric" min="0" max="100" step="1" data-gear-item-stat="durability" value="${escapeHtml(gearNumberOrBlank(itemStats.durability))}" placeholder="roll" /></label>
+          <label><span>Protection</span><input type="number" inputmode="numeric" min="0" max="10" step="1" data-gear-item-stat="protection" value="${escapeHtml(gearNumberOrBlank(itemStats.protection))}" placeholder="roll" /></label>
+          <label><span>Value</span><input type="number" inputmode="numeric" min="0" max="100000" step="1" data-gear-item-stat="value" value="${escapeHtml(gearNumberOrBlank(itemStats.value))}" placeholder="roll" /></label>
+          <label><span>Rarity</span><select data-gear-item-stat="rarity">${rarityOptions}</select></label>
+        </div>
+      </div>
+      <div class="gearAbilityBlock">
+        <span class="gearRowLabel">Abilities on this item</span>
+        <div class="gearAbilityList"></div>
+      </div>
+      <div class="abilityCardActions gearCardActions">
+        <button type="button" class="secondaryButton rollGearStatsBtn" title="Let the engine pick weight, durability, protection, value, rarity and any bonus from the world.">Roll stats</button>
+        <button type="button" class="secondaryButton addGearAbilityBtn" title="Give this item a power. Same card as a special ability.">Add ability slot</button>
       </div>
     </article>
   `;
 }
 
-function addGearItem(item = {}) {
+/** Append one gear card. Returns the card. Abilities on the item are rendered as nested ability cards. */
+function addGearItem(item = {}, options = {}) {
   const list = document.querySelector("#simpleGearList");
-  if (!list) return;
+  if (!list) return null;
   list.insertAdjacentHTML("beforeend", gearItemTemplate(item));
+  const card = list.lastElementChild;
+  const abilities = Array.isArray(item.abilities) ? item.abilities : [];
+  abilities.forEach((ability) => addGearAbility(card, ability, { expanded: Boolean(options.expanded) }));
+  ensureTextAiControls(card);
+  decorateFunctionHelp(card);
+  return card;
 }
 
+/** One nested ability card inside a gear card: same UI as a special ability, no randomize / add-below. */
+function addGearAbility(card, ability = {}, options = {}) {
+  const host = card?.querySelector(".gearAbilityList");
+  if (!host) return null;
+  const prepared = { ...ability, power_type: ability.power_type || "item_bound", locked: Boolean(ability.locked) };
+  host.insertAdjacentHTML("beforeend", abilityTemplate(prepared, { expanded: options.expanded !== false, nested: true }));
+  const inserted = host.lastElementChild;
+  const costMode = inserted?.querySelector('[data-ability-field="cost_mode"]');
+  const cost = inserted?.querySelector('[data-ability-field="cost"]');
+  const customCost = ability.cost && !["no cost", "model decides"].includes(ability.cost);
+  if (costMode) costMode.value = customCost ? "custom" : ability.cost || "no cost";
+  if (cost && customCost) cost.value = ability.cost;
+  refreshAbilityCardSummary(inserted);
+  return inserted;
+}
+
+/** Read one ability card (top-level or nested) into the special-ability shape. */
+function abilityFromCard(card) {
+  if (!card) return null;
+  const field = (name) => card.querySelector(`[data-ability-field="${name}"]`);
+  const name = field("name")?.value.trim() || "";
+  const description = field("description")?.value.trim() || "";
+  if (!name && !description) return null;
+  const costMode = field("cost_mode")?.value || "no cost";
+  return {
+    name,
+    description,
+    locked: card.querySelector('[data-ability-field="locked"]:checked')?.value === "true",
+    prerequisites: field("prerequisites")?.value.trim() || "",
+    cost: costMode === "custom" ? field("cost")?.value.trim() || "model decides" : costMode,
+    growth_math: field("growth_math")?.value.trim() || "",
+    power_type: field("power_type")?.value || "item_bound",
+  };
+}
+
+function gearItemFromCard(card) {
+  if (!card) return null;
+  const f = (n) => card.querySelector(`[data-gear-field="${n}"]`)?.value?.trim() || "";
+  const required = card.dataset.gearRequired === "true";
+  const slot = required ? normalizeGearSlotClient(card.dataset.gearSlotFixed) : normalizeGearSlotClient(f("slot"));
+  const stats = {};
+  GEAR_STAT_KEYS.forEach((key) => {
+    const raw = card.querySelector(`[data-gear-stat="${key}"]`)?.value;
+    const n = raw === "" || raw == null ? 0 : Math.max(-2, Math.min(3, Math.round(Number(raw) || 0)));
+    if (n) stats[key] = n;
+  });
+  const itemStats = {};
+  card.querySelectorAll("[data-gear-item-stat]").forEach((input) => {
+    const key = input.dataset.gearItemStat;
+    const raw = String(input.value ?? "").trim();
+    if (!raw) return;
+    if (key === "rarity") {
+      if (GEAR_RARITIES.includes(raw)) itemStats.rarity = raw;
+      return;
+    }
+    const n = Number(raw);
+    if (Number.isFinite(n)) itemStats[key] = key === "weight" ? Math.round(n * 100) / 100 : Math.round(n);
+  });
+  const abilities = Array.from(card.querySelectorAll(".gearAbilityList .abilitySetupCard"))
+    .map(abilityFromCard)
+    .filter(Boolean);
+  return {
+    name: f("name"),
+    slot,
+    required,
+    keep: Boolean(card.querySelector("[data-gear-keep]")?.checked),
+    description: f("description"),
+    stats,
+    item_stats: itemStats,
+    abilities,
+  };
+}
+
+/** Every card with a name (required cards always count; a nameless required card is still sent so its slot survives). */
 function collectGearItems() {
   return Array.from(document.querySelectorAll("#simpleGearList .gearSetupCard"))
-    .map((card) => {
-      const f = (n) => card.querySelector(`[data-gear-field="${n}"]`)?.value?.trim() || "";
-      return {
-        name: f("name"),
-        slot: f("slot"),
-        effect_type: f("effect_type") || "look_only",
-        effect: f("effect"),
-      };
-    })
-    .filter((g) => g.name || g.effect);
+    .map(gearItemFromCard)
+    .filter((g) => g && (g.name || g.required || g.description || g.abilities.length));
 }
 
+function gearCardBySlot(slot) {
+  return (
+    Array.from(document.querySelectorAll("#simpleGearList .gearSetupCard")).find(
+      (card) => card.dataset.gearRequired === "true" && normalizeGearSlotClient(card.dataset.gearSlotFixed) === slot,
+    ) || null
+  );
+}
+
+/** The legacy comma-separated string: names only. */
 function gearItemsToStarterEquipment(items) {
+  const seen = new Set();
   return (items || [])
-    .map((g) => {
-      const bits = [g.name || "gear"];
-      if (g.slot) bits.push(`(${g.slot})`);
-      if (g.effect_type && g.effect_type !== "look_only") bits.push(`[${g.effect_type}]`);
-      if (g.effect) bits.push(`— ${g.effect}`);
-      return bits.join(" ");
+    .map((g) => String(g?.name || "").trim())
+    .filter((name) => {
+      if (!name || seen.has(name.toLowerCase())) return false;
+      seen.add(name.toLowerCase());
+      return true;
     })
-    .join("; ");
+    .join(", ")
+    .slice(0, 500);
 }
 
+function syncStarterEquipmentFromGear() {
+  setFormFieldValue("starter_equipment", gearItemsToStarterEquipment(collectGearItems()));
+}
+
+/** Required basics first (feet, torso, legs), then the rest in their current order. */
+function sortGearCards() {
+  const list = document.querySelector("#simpleGearList");
+  if (!list) return;
+  const cards = Array.from(list.querySelectorAll(".gearSetupCard"));
+  const rank = (card) => {
+    if (card.dataset.gearRequired !== "true") return GEAR_REQUIRED_SLOTS.length;
+    const index = GEAR_REQUIRED_SLOTS.indexOf(normalizeGearSlotClient(card.dataset.gearSlotFixed));
+    return index === -1 ? GEAR_REQUIRED_SLOTS.length : index;
+  };
+  cards
+    .map((card, index) => ({ card, index, key: rank(card) }))
+    .sort((a, b) => a.key - b.key || a.index - b.index)
+    .forEach(({ card }) => list.appendChild(card));
+}
+
+function requiredGearSlotsMissing() {
+  return GEAR_REQUIRED_SLOTS.filter((slot) => !gearCardBySlot(slot));
+}
+
+/** Replace all cards with the given items (required cards are created for missing basics afterwards). */
+function writeGearCards(items) {
+  const list = document.querySelector("#simpleGearList");
+  if (!list) return;
+  list.replaceChildren();
+  (Array.isArray(items) ? items : []).forEach((item) => addGearItem(item || {}, { expanded: false }));
+  sortGearCards();
+  syncStarterEquipmentFromGear();
+}
+
+/** Patch a required card in place from a rolled item (name, description, stats, abilities) without losing its identity. */
+function updateGearCardFromItem(card, item) {
+  if (!card || !item) return;
+  const set = (sel, value) => {
+    const el = card.querySelector(sel);
+    if (el) el.value = value == null ? "" : String(value);
+  };
+  set('[data-gear-field="name"]', item.name || "");
+  set('[data-gear-field="description"]', item.description || "");
+  if (card.dataset.gearRequired !== "true") {
+    set('[data-gear-field="slot"]', normalizeGearSlotClient(item.slot));
+  }
+  const stats = item.stats && typeof item.stats === "object" ? item.stats : {};
+  GEAR_STAT_KEYS.forEach((key) => set(`[data-gear-stat="${key}"]`, gearNumberOrBlank(stats[key])));
+  const itemStats = item.item_stats && typeof item.item_stats === "object" ? item.item_stats : {};
+  ["weight", "durability", "protection", "value"].forEach((key) => set(`[data-gear-item-stat="${key}"]`, gearNumberOrBlank(itemStats[key])));
+  set('[data-gear-item-stat="rarity"]', GEAR_RARITIES.includes(String(itemStats.rarity || "")) ? itemStats.rarity : "");
+  const host = card.querySelector(".gearAbilityList");
+  if (host && Array.isArray(item.abilities)) {
+    host.replaceChildren();
+    item.abilities.forEach((ability) => addGearAbility(card, ability, { expanded: false }));
+  }
+}
+
+/**
+ * Make sure the three basics exist. Missing ones come from the engine
+ * (/api/setup/gear-defaults) and fall back to plain names when the server
+ * cannot answer. With `force`, unlocked required cards are re-rolled too.
+ */
+async function ensureRequiredGearCards(options = {}) {
+  const list = document.querySelector("#simpleGearList");
+  if (!list) return [];
+  const force = Boolean(options.force);
+  let missing = requiredGearSlotsMissing();
+  const toFill = force
+    ? GEAR_REQUIRED_SLOTS.filter((slot) => {
+        const card = gearCardBySlot(slot);
+        return !card || !card.querySelector("[data-gear-keep]")?.checked;
+      })
+    : missing;
+  if (!toFill.length) {
+    sortGearCards();
+    return [];
+  }
+  let rolled = [];
+  let source = "local";
+  try {
+    const current = currentSetupSnapshot("starter_gear");
+    const response = await fetch("/api/setup/gear-defaults", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current }),
+    });
+    if (response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      const items = Array.isArray(payload?.starter_gear) ? payload.starter_gear : Array.isArray(payload?.fields?.starter_gear) ? payload.fields.starter_gear : [];
+      rolled = items.filter((item) => item && typeof item === "object");
+      if (rolled.length) source = "engine";
+    }
+  } catch (_) {
+    rolled = [];
+  }
+  toFill.forEach((slot) => {
+    const fromEngine = rolled.find((item) => normalizeGearSlotClient(item.slot) === slot);
+    const item = {
+      ...(fromEngine || { name: GEAR_REQUIRED_FALLBACK[slot] }),
+      slot,
+      required: true,
+      keep: false,
+    };
+    const existing = gearCardBySlot(slot);
+    if (existing) updateGearCardFromItem(existing, item);
+    else addGearItem(item, { expanded: false });
+  });
+  sortGearCards();
+  syncStarterEquipmentFromGear();
+  if (options.report) {
+    setSetupRandomizeStatus(
+      source === "engine"
+        ? `The engine named the ${toFill.length === 3 ? "three worn basics" : "missing basics"} for this world.`
+        : "The server did not answer, so the basics were given plain names.",
+    );
+  }
+  return toFill;
+}
+
+/**
+ * Merge rolled gear into the cards: locked cards stay as written, required cards
+ * are updated in place by slot, every other card is replaced by the roll.
+ */
+function mergeRandomizedGear(incoming) {
+  const pool = (Array.isArray(incoming) ? incoming : []).filter((item) => item && typeof item === "object");
+  const existing = collectGearItems();
+  const out = [];
+  const used = new Set();
+  const takeBySlot = (slot) => {
+    const index = pool.findIndex((item, i) => !used.has(i) && normalizeGearSlotClient(item.slot) === slot);
+    if (index === -1) return null;
+    used.add(index);
+    return pool[index];
+  };
+  existing.forEach((prev) => {
+    if (prev.keep) {
+      out.push({ ...prev, keep: true });
+      return;
+    }
+    if (prev.required) {
+      const next = takeBySlot(prev.slot);
+      out.push(next ? { ...next, slot: prev.slot, required: true, keep: false } : { ...prev, keep: false });
+    }
+  });
+  pool.forEach((item, index) => {
+    if (used.has(index)) return;
+    const slot = normalizeGearSlotClient(item.slot);
+    const name = String(item.name || "").trim().toLowerCase();
+    if (!name) return;
+    if (out.some((g) => String(g.name || "").trim().toLowerCase() === name)) return;
+    const requiredSlotTaken = GEAR_REQUIRED_SLOTS.includes(slot) && out.some((g) => g.required && g.slot === slot);
+    out.push({ ...item, slot: requiredSlotTaken ? "" : slot, required: false, keep: false });
+  });
+  return out;
+}
+
+function reportGearRandomizeSource(payload, options = {}) {
+  if (options.blank) {
+    setSetupRandomizeStatus("The model returned no gear, so the engine named the basics instead.");
+    return;
+  }
+  if (payload?.fallback_used) {
+    const reason = String(payload.fallback_reason || "the model did not answer").trim();
+    setSetupRandomizeStatus(`The model could not roll gear (${reason}). The engine built a plain kit instead.`);
+    return;
+  }
+  const count = collectGearItems().length;
+  setSetupRandomizeStatus(`${count} ${count === 1 ? "item" : "items"} of starting gear rolled by the model from your current setup.`);
+}
+
+/** Ask the engine for this one card's numbers. Leaves the card alone on failure. */
+async function rollGearStatsForCard(card) {
+  const item = gearItemFromCard(card);
+  if (!item) return;
+  try {
+    const response = await fetch("/api/setup/gear-stats", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ item, current: currentSetupSnapshot("starter_gear"), force: true }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const payload = await response.json();
+    const rolled = payload?.item && typeof payload.item === "object" ? payload.item : null;
+    if (!rolled) throw new Error("no item in the answer");
+    updateGearCardFromItem(card, { ...item, ...rolled, name: rolled.name || item.name, abilities: item.abilities });
+    syncStarterEquipmentFromGear();
+    setSetupRandomizeStatus(`Stats rolled for ${item.name || "that item"} from the world.`);
+  } catch (error) {
+    const reason = String(error?.message || error || "").trim();
+    setSetupRandomizeStatus(`The engine could not roll stats${reason ? ` (${reason.slice(0, 120)})` : ""}. The card was left as it is.`);
+  }
+}
+
+/** Restore cards from a saved settings file: structured gear first, legacy string second. */
+function restoreGearSettings(settings) {
+  const gear = Array.isArray(settings?.gear) ? settings.gear : null;
+  if (gear && gear.length) {
+    writeGearCards(gear);
+  } else {
+    const legacy = String(setupForm?.elements?.starter_equipment?.value || "").trim();
+    writeGearCards(legacy ? parseStarterEquipmentToGear(legacy) : []);
+  }
+  ensureRequiredGearCards().catch(() => {});
+}
+
+/**
+ * Cards from a legacy starter_equipment string (an imported preset without
+ * starter_gear). Mirrors app/gear.py gear_from_legacy_text + slot_for_name.
+ *
+ * It used to split on ";" and newlines only, so the plain comma list every
+ * model and preset writes ("cloak, pouch, vial, tool, bread") became ONE card
+ * holding all five names, with no slot. Commas split now (outside brackets),
+ * and a slot word or the item name picks the body slot.
+ */
 function parseStarterEquipmentToGear(text) {
   const raw = String(text || "").trim();
   if (!raw) return [];
+  const claimed = new Set();
   return raw
-    .split(/;|\n/)
+    .split(/[;\n]+|,(?![^()]*\))/)
     .map((s) => s.trim())
     .filter(Boolean)
     .slice(0, 12)
     .map((line) => {
       const slotM = line.match(/\(([^)]+)\)/);
-      const typeM = line.match(/\[(look_only|stat|ability|compounding|mixed)\]/i);
       // Em dash / spaced hyphen only. A bare "-" is part of the item name
-      // ("travel-stained coat", "3-day rations"); splitting on it stamped
-      // effect_type mixed and rewrote the line on the next Simple push.
+      // ("travel-stained coat", "3-day rations").
       const effectSplit = /\s*[—–]\s*|\s+-\s+/;
-      const effectM = line.split(effectSplit).slice(1).join(" - ").trim();
-      let name = line.replace(/\([^)]+\)/g, "").replace(/\[[^\]]+\]/g, "").split(effectSplit)[0].trim();
-      return {
-        name: name || line.slice(0, 40),
-        slot: slotM ? slotM[1] : "",
-        effect_type: typeM ? typeM[1].toLowerCase() : effectM ? "mixed" : "look_only",
-        effect: effectM || "",
-      };
-    });
+      const description = line.split(effectSplit).slice(1).join(" - ").trim();
+      const name = line.replace(/\([^)]*\)/g, " ").replace(/\[[^\]]*\]/g, " ").split(effectSplit)[0].replace(/\s+/g, " ").trim();
+      const slot = gearSlotFromWord(slotM ? slotM[1] : "") || gearSlotFromName(name);
+      const required = GEAR_REQUIRED_SLOTS.includes(slot) && !claimed.has(slot);
+      if (required) claimed.add(slot);
+      return { name: name || line.slice(0, 40), slot, required, description };
+    })
+    .filter((item) => item.name.length >= 2);
 }
 
+// Keyword tables mirror GEAR_SLOTS in app/gear.py.
+const GEAR_SLOT_NAME_WORDS = [
+  ["HEAD", ["helm", "helmet", "hat", "hood", "mask", "cap", "veil", "headband", "visor", "goggles"]],
+  ["NECK", ["amulet", "necklace", "collar", "scarf", "pendant", "locket", "torc"]],
+  ["TORSO", ["coat", "robe", "jacket", "armor", "armour", "tunic", "dress", "shirt", "vest", "hoodie", "jerkin", "mail", "cuirass", "blouse", "sweater", "parka", "gown", "apron"]],
+  ["UNDER", ["undershirt", "underlayer", "undersuit", "lining", "shift", "camisole"]],
+  ["BACK", ["cloak", "cape", "backpack", "pack", "rucksack", "satchel", "knapsack", "wings", "quiver"]],
+  ["MAIN", ["knife", "blade", "sword", "axe", "dagger", "staff", "spear", "club", "hammer", "pistol", "rifle", "bow", "wand", "cane", "crowbar", "tool", "wrench", "sickle", "machete", "baton"]],
+  ["OFF", ["shield", "lantern", "torch", "buckler"]],
+  ["WRIST", ["glove", "bracer", "bracelet", "gauntlet", "wristband", "cuff", "watch", "mitten"]],
+  ["FINGER", ["ring", "signet", "band"]],
+  ["WAIST", ["belt", "sash", "sheath", "holster", "girdle", "bandolier"]],
+  ["LEGS", ["trousers", "pants", "leggings", "breeches", "jeans", "skirt", "kilt", "greaves", "slacks", "shorts", "hose", "chaps"]],
+  ["FEET", ["boot", "boots", "shoe", "shoes", "sandal", "sandals", "sneaker", "sneakers", "slipper", "slippers", "moccasin", "clog"]],
+];
+const GEAR_SLOT_WORD_ALIASES = {
+  hand: "MAIN", hands: "WRIST", main_hand: "MAIN", off_hand: "OFF", body: "TORSO", chest: "TORSO", upper: "TORSO",
+  armor: "TORSO", armour: "TORSO", under: "UNDER", shoulders: "BACK", foot: "FEET", leg: "LEGS", lower: "LEGS",
+  wrists: "WRIST", fingers: "FINGER", belt: "WAIST",
+};
+
+function gearSlotFromWord(word) {
+  const key = String(word || "").trim().toLowerCase().replace(/[^a-z_]+/g, "_").replace(/^_+|_+$/g, "");
+  if (!key) return "";
+  if (GEAR_SLOT_CODES.has(key.toUpperCase())) return key.toUpperCase();
+  if (GEAR_SLOT_WORD_ALIASES[key]) return GEAR_SLOT_WORD_ALIASES[key];
+  const hit = GEAR_SLOT_NAME_WORDS.find(([, words]) => words.includes(key));
+  return hit ? hit[0] : "";
+}
+
+function gearSlotFromName(name) {
+  const low = ` ${String(name || "").toLowerCase()} `;
+  const hit = GEAR_SLOT_NAME_WORDS.find(([, words]) =>
+    words.some((word) => new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}s?\\b`).test(low)),
+  );
+  return hit ? hit[0] : "";
+}
+
+/** The Powers section header is the only fold; the builder lives directly in it. */
 function placeAbilityBuilder() {
   const block = document.querySelector("#abilityOptions");
-  if (!block) return;
-  const home = document.querySelector("#setupAdvancedPowersMount");
-  if (home && block.parentElement !== home) home.appendChild(block);
+  const home = document.querySelector("#setupBlockPowers");
+  if (block && home && !home.contains(block)) home.appendChild(block);
 }
 
 function updateSystemStyleDescription() {
@@ -8180,6 +8645,8 @@ function showSetupWizard(options = {}) {
   renderDirectorPresets();
   renderSimpleDirectorPresets();
   loadGameStartPresets();
+  // Feet, torso, legs are always on the table from the moment the window opens.
+  ensureRequiredGearCards().catch(() => {});
   newGameRollStarted = true;
   const mapStatus = document.querySelector("#mapAscii");
   if (mapStatus) mapStatus.textContent = "Rolling a new map…";
@@ -18975,7 +19442,7 @@ async function expandSimpleSetupDepth() {
     "start_location",
     "hair",
     "facial_features",
-    "starter_equipment",
+    "starter_gear",
     "character_backstory",
     "death_rules",
     "loot_rarity",
@@ -19003,9 +19470,12 @@ async function expandSimpleSetupDepth() {
     } else if (name === "custom_style") {
       const v = String(setupForm.elements.custom_style?.value || "").trim();
       if (v.length >= 80) continue;
-    } else if (name === "starter_equipment") {
-      const v = String(setupForm.elements.starter_equipment?.value || "").trim();
-      if (v.length >= 40) continue;
+    } else if (name === "starter_gear") {
+      const items = collectGearItems();
+      const basicsNamed = GEAR_REQUIRED_SLOTS.every((slot) =>
+        items.some((g) => g.required && g.slot === slot && g.name && !Object.values(GEAR_REQUIRED_FALLBACK).includes(g.name)),
+      );
+      if (basicsNamed) continue;
     } else if (name === "appearance" || name === "hair" || name === "facial_features") {
       const v = String(setupForm.elements[name]?.value || "").trim();
       if (v.length >= 12) continue;
@@ -19172,7 +19642,8 @@ async function startGame(event) {
       hair: textField(formData, "hair", "", 120),
       facial_features: textField(formData, "facial_features", "", 300),
       appearance: textField(formData, "appearance", "", 400),
-      starter_equipment: textField(formData, "starter_equipment", "", 500),
+      starter_equipment: gearItemsToStarterEquipment(collectGearItems()) || textField(formData, "starter_equipment", "", 500),
+      starter_gear: collectGearItems(),
       difficulty: setupValueText(formData, "difficulty", "normal", 60),
       narration_detail: setupValueText(formData, "narration_detail", "rich", 120),
       world_style: readListSetting(formData, "world_style", "frontier dark fantasy"),
@@ -20190,16 +20661,25 @@ document.querySelector("#presetLabelInput")?.addEventListener("input", () => per
 document.querySelector("#presetSimpleIdea")?.addEventListener("input", () => persistUserPresetText());
 document.querySelector("#presetSaveBtn")?.addEventListener("click", () => saveSelectedPresetFromEditor());
 document.querySelector("#presetDeleteBtn")?.addEventListener("click", () => deleteSelectedUserPreset());
-document.querySelector("#addGearItemBtn")?.addEventListener("click", () => addGearItem({}));
+document.querySelector("#addGearItemBtn")?.addEventListener("click", () => {
+  const card = addGearItem({}, { expanded: true });
+  card?.querySelector('[data-gear-field="name"]')?.focus();
+  syncStarterEquipmentFromGear();
+});
 document.querySelector("#simpleGearList")?.addEventListener("input", () => {
-  const gearText = gearItemsToStarterEquipment(collectGearItems());
-  setFormFieldValue("starter_equipment", gearText);
+  syncStarterEquipmentFromGear();
+});
+document.querySelector("#simpleGearList")?.addEventListener("change", (event) => {
+  const keep = event.target?.closest?.("[data-gear-keep]");
+  if (keep) keep.closest(".gearSetupCard")?.classList.toggle("is-kept", keep.checked);
 });
 setupForm?.elements?.starter_equipment?.addEventListener("input", () => {
+  // The hidden textarea is derived from the cards. A legacy string only seeds
+  // cards when there are none (an imported preset without starter_gear).
   const list = document.querySelector("#simpleGearList");
-  if (!list || list.matches(":focus-within")) return;
-  list.replaceChildren();
+  if (!list || list.matches(":focus-within") || list.children.length) return;
   parseStarterEquipmentToGear(getFormFieldValue("starter_equipment")).forEach((item) => addGearItem(item));
+  ensureRequiredGearCards().catch(() => {});
 });
 document.querySelector("#calcAllGrowthMathBtn")?.addEventListener("click", () => {
   const n = calculateAllAbilityGrowthMath({ force: true });
@@ -20226,8 +20706,28 @@ document.addEventListener("click", (event) => {
   }
   if (event.target.closest(".removeGearItem")) {
     event.preventDefault();
-    event.target.closest(".gearSetupCard")?.remove();
-    setFormFieldValue("starter_equipment", gearItemsToStarterEquipment(collectGearItems()));
+    const card = event.target.closest(".gearSetupCard");
+    if (card && card.dataset.gearRequired !== "true") card.remove();
+    syncStarterEquipmentFromGear();
+    return;
+  }
+  if (event.target.closest(".addGearAbilityBtn")) {
+    event.preventDefault();
+    const card = event.target.closest(".gearSetupCard");
+    const inserted = addGearAbility(card, {}, { expanded: true });
+    ensureTextAiControls(inserted || card);
+    decorateFunctionHelp(inserted || card);
+    inserted?.querySelector('[data-ability-field="name"]')?.focus();
+    return;
+  }
+  if (event.target.closest(".rollGearStatsBtn")) {
+    event.preventDefault();
+    const button = event.target.closest(".rollGearStatsBtn");
+    const card = button.closest(".gearSetupCard");
+    button.disabled = true;
+    rollGearStatsForCard(card).finally(() => {
+      button.disabled = false;
+    });
     return;
   }
 });

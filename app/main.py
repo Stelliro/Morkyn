@@ -203,6 +203,45 @@ class SpecialAbilitySetup(BaseModel):
         return normalized
 
 
+class GearAbilitySetup(SpecialAbilitySetup):
+    """An ability carried by a starting item: the special-ability shape plus its growth type."""
+
+    power_type: str = Field(default="item_bound", max_length=40)
+
+
+class StarterGearSetup(BaseModel):
+    """One starting item. app.gear normalizes it; this only bounds the payload."""
+
+    name: str = Field(default="", max_length=80)
+    slot: str = Field(default="", max_length=20)
+    required: bool = False
+    keep: bool = False
+    description: str = Field(default="", max_length=300)
+    stats: dict[str, Any] = Field(default_factory=dict)
+    item_stats: dict[str, Any] = Field(default_factory=dict)
+    abilities: list[GearAbilitySetup] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_empty_values(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {"name": data}
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        for key in ("name", "slot", "description"):
+            value = normalized.get(key)
+            normalized[key] = "" if value is None else str(value)[: {"name": 80, "slot": 20, "description": 300}[key]]
+        for key in ("stats", "item_stats"):
+            if not isinstance(normalized.get(key), dict):
+                normalized[key] = {}
+        if not isinstance(normalized.get("abilities"), list):
+            normalized["abilities"] = []
+        normalized["required"] = bool(normalized.get("required"))
+        normalized["keep"] = bool(normalized.get("keep"))
+        return normalized
+
+
 SETUP_STRING_DEFAULTS = {
     "player_name": "Wanderer",
     "player_public_name": "",
@@ -416,6 +455,7 @@ class SetupRequest(BaseModel):
     special_ability_name: str = Field(default="", max_length=100)
     special_ability_description: str = Field(default="", max_length=800)
     special_abilities: list[SpecialAbilitySetup] = Field(default_factory=list)
+    starter_gear: list[StarterGearSetup] = Field(default_factory=list)
     skill_style: str = Field(default="standard", max_length=60)
     skill_levels_enabled: bool = True
     new_skill_frequency: str = Field(default="normal", max_length=80)
@@ -496,6 +536,16 @@ class SetupRequest(BaseModel):
             normalized[key] = _clean_optional_float(normalized.get(key))
         if normalized.get("special_abilities") is None:
             normalized["special_abilities"] = []
+        if not isinstance(normalized.get("starter_gear"), list):
+            normalized["starter_gear"] = []
+        # The comma string is what the art prompt and the arrival fact-check
+        # read; derive it from the structured kit when the form left it blank.
+        if normalized["starter_gear"] and not str(normalized.get("starter_equipment") or "").strip():
+            from app.gear import gear_names
+
+            normalized["starter_equipment"] = gear_names(
+                [g if isinstance(g, dict) else {"name": g} for g in normalized["starter_gear"]]
+            )[: SETUP_TEXT_LIMITS["starter_equipment"]]
         return normalized
 
 
@@ -3244,6 +3294,47 @@ def api_compose_intent(request: ComposeIntentRequest):
         "field_overrides": overrides,
         "field_order": composer_tree_public()["field_order"],
     }
+
+
+class GearStatsRequest(BaseModel):
+    item: dict[str, Any] = Field(default_factory=dict)
+    current: dict[str, Any] = Field(default_factory=dict)
+    force: bool = True
+
+
+class GearDefaultsRequest(BaseModel):
+    current: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.post("/api/setup/gear-stats")
+def api_setup_gear_stats(request: GearStatsRequest):
+    """Engine-only: roll one starting item's numbers from the world. No model call."""
+    from app.gear import (
+        gear_context_from_setup,
+        normalize_gear_item,
+        roll_item_stats,
+        roll_stat_bonuses,
+    )
+
+    context = gear_context_from_setup(request.current)
+    raw = dict(request.item or {})
+    item = normalize_gear_item(raw, context=context, roll_missing=True)
+    if item is None:
+        raise HTTPException(status_code=422, detail="The item needs a name before its stats can be rolled.")
+    if request.force:
+        item["item_stats"] = roll_item_stats(item, context, force=True)
+        item["stats"] = roll_stat_bonuses(item, context)
+    item["required"] = bool(raw.get("required"))
+    item["keep"] = bool(raw.get("keep"))
+    return {"item": item}
+
+
+@app.post("/api/setup/gear-defaults")
+def api_setup_gear_defaults(request: GearDefaultsRequest):
+    """The three worn basics (feet, torso, legs) for this world. Engine-only."""
+    from app.gear import gear_context_from_setup, normalize_gear_list
+
+    return {"starter_gear": normalize_gear_list([], context=gear_context_from_setup(request.current), fill_required=True)}
 
 
 @app.post("/api/randomize-setup")

@@ -239,6 +239,7 @@ DEFAULT_EQUIPMENT_SLOTS = [
     ("WRIST", "Wrists", "wrist", 4, ["bracelet", "bracer", "wrist accessory"], 80),
     ("FINGER", "Fingers", "ring", 10, ["ring", "finger accessory"], 90),
     ("WAIST", "Waist", "waist", 1, ["belt", "sash", "pouch", "sheath"], 100),
+    ("LEGS", "Legs", "legs", 1, ["trousers", "pants", "leggings", "skirt", "greaves"], 105),
     ("FEET", "Feet", "feet", 1, ["boots", "shoes", "greaves"], 110),
     ("DECAL", "Decals", "decal", 8, ["decal", "insignia", "sigil", "badge", "cosmetic"], 120),
 ]
@@ -2457,7 +2458,11 @@ def _normalize_granted_abilities(value: Any, item: dict[str, Any]) -> list[dict[
                 "prerequisites": str(entry.get("prerequisites") or f"Equip {item_name}.")[:500],
                 "additions": str(entry.get("additions") or entry.get("notes") or "Removed automatically when the item is unequipped.")[:1200],
                 "locked": 1 if bool(entry.get("locked")) else 0,
+                "growth_math": str(entry.get("growth_math") or "")[:800],
+                "power_type": str(entry.get("power_type") or "item_bound")[:40],
             }
+            if isinstance(entry.get("resource_cost"), dict):
+                ability["resource_cost"] = entry["resource_cost"]
         else:
             continue
         ability["source"] = f"equipment:{item_code or item_name}"
@@ -4019,6 +4024,7 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         item["stat_links"] = _json(item.get("stat_links"), {})
         item["power_codes"] = _json(item.get("power_codes"), [])
         item["roll_profile"] = _json(item.get("roll_profile"), {})
+        item["item_stats"] = _json(item.get("item_stats"), {})
     for slot in equipment_slots:
         slot["accepts"] = _json(slot.get("accepts"), [])
     for entry in verification_memory:
@@ -4509,23 +4515,34 @@ def _sanitize_item_name(name: Any) -> str:
 
 
 def _default_equip_slot_for_item(name: str, item_type: str = "") -> str:
-    """Map worn starter gear to a body slot code (TORSO/FEET/…)."""
-    low = f"{name} {item_type}".lower()
-    if any(w in low for w in ("boot", "shoe", "sandal", "greave")):
-        return "FEET"
-    if any(w in low for w in ("helm", "helmet", "hat", "hood", "mask", "cap")):
-        return "HEAD"
-    if any(w in low for w in ("coat", "cloak", "robe", "jacket", "armor", "armour", "tunic", "dress", "shirt", "vest")):
-        return "TORSO"
-    if any(w in low for w in ("belt", "sash", "sheath")):
-        return "WAIST"
-    if "glove" in low or "bracer" in low:
-        return "WRIST"
-    if any(w in low for w in ("ring",)):
-        return "FINGER"
-    if any(w in low for w in ("amulet", "necklace", "collar", "scarf")):
-        return "NECK"
-    return ""
+    """Map worn starter gear to a body slot code (TORSO/LEGS/FEET/…). app.gear owns the table."""
+    from app.gear import slot_for_name
+
+    return slot_for_name(name) or slot_for_name(item_type) or ""
+
+
+_STARTER_WORN_SLOTS = frozenset({"HEAD", "NECK", "TORSO", "UNDER", "BACK", "WRIST", "FINGER", "WAIST", "LEGS", "FEET"})
+_STARTER_WEAPON_WORDS = ("knife", "blade", "sword", "axe", "dagger", "spear", "club", "hammer", "pistol", "rifle", "bow", "machete", "baton", "mace")
+_STARTER_CONTAINER_WORDS = ("bag", "satchel", "pack", "pouch", "purse", "sack", "tote", "case")
+_STARTER_FOOD_WORDS = ("ration", "bread", "loaf", "food", "fish", "snack", "bar", "fruit", "cheese", "jerky", "water", "flask", "skin", "bottle", "canteen")
+
+
+def _starter_item_type(name: str, slot: str) -> str:
+    """Inventory item_type for a setup gear item from its slot, then its name."""
+    low = str(name or "").lower()
+    if slot in _STARTER_WORN_SLOTS:
+        return "clothing"
+    if slot in {"MAIN", "OFF"}:
+        return "weapon" if any(w in low for w in _STARTER_WEAPON_WORDS) else "tool"
+    if any(w in low for w in _STARTER_CONTAINER_WORDS):
+        return "container"
+    if any(w in low for w in _STARTER_FOOD_WORDS):
+        return "consumable"
+    if any(w in low for w in _STARTER_WEAPON_WORDS):
+        return "weapon"
+    if any(w in low for w in ("tool", "rope", "coil", "kit", "wrench", "needle", "flint", "chalk", "pen")):
+        return "tool"
+    return "misc"
 
 
 # Written into the world only when the player named no start location AND the
@@ -4766,7 +4783,18 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             )
 
         # Seed starter gear only after arrival fact-check (isekai ≠ free shield).
-        starter_raw = str(options.get("starter_equipment") or "").strip()
+        # The structured list from setup wins; the comma string is the legacy road in.
+        from app import gear as _gear
+
+        gear_ctx = _gear.gear_context_from_setup(options)
+        raw_gear = options.get("starter_gear")
+        if isinstance(raw_gear, list) and raw_gear:
+            gear_items = _gear.normalize_gear_list(raw_gear, context=gear_ctx)
+        else:
+            gear_items = _gear.normalize_gear_list(
+                _gear.gear_from_legacy_text(options.get("starter_equipment")), context=gear_ctx
+            )
+        starter_raw = _gear.gear_names(gear_items)
         appearance_raw = str(options.get("appearance") or "").strip()
         starter_logic_report: dict[str, Any] = {}
         try:
@@ -4807,94 +4835,85 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         except Exception:
             starter_logic_report = {}
 
-        starter_items: list[str] = []
-        if starter_raw and _setup_flag_enabled(options, "items_enabled", True):
-            for part in re.split(r"[,;|]+", starter_raw):
-                name_item = _sanitize_item_name(part)
-                if name_item and name_item.lower() not in {s.lower() for s in starter_items}:
-                    starter_items.append(name_item[:100])
-        for index, item_name in enumerate(starter_items[:12]):
+        # The fact-check may have renamed or dropped items (apply_fixes). Keep
+        # what it kept; the three required basics always stay.
+        kept_rows = [row for row in (starter_logic_report.get("kept") or []) if isinstance(row, dict)]
+        if kept_rows and str(starter_logic_report.get("starter_equipment") or "").strip():
+            kept_lower = {
+                _sanitize_item_name(str(row.get("name") or "")).lower() for row in kept_rows
+            } | {str(row.get("name") or "").strip().lower() for row in kept_rows}
+            kept_lower.discard("")
+
+            def _kept(name: str) -> bool:
+                low_name = name.lower()
+                return any(low_name == k or low_name in k or k in low_name for k in kept_lower)
+
+            gear_items = [it for it in gear_items if it.get("required") or _kept(str(it.get("name") or ""))]
+        seed_items = gear_items if _setup_flag_enabled(options, "items_enabled", True) else []
+        for index, item in enumerate(seed_items[:12]):
+            item_name = _sanitize_item_name(item.get("name")) or str(item.get("name") or "")[:100]
             low = item_name.lower()
-            weight = 0.4
-            slot_size = 1
-            item_type = "misc"
-            if any(w in low for w in ("coat", "cloak", "robe", "jacket", "armor", "tunic", "dress", "clothes")):
-                item_type = "clothing"
-                weight = 1.2
-            elif any(w in low for w in ("boot", "shoe", "sandal")):
-                item_type = "clothing"
-                weight = 0.8
-            elif any(w in low for w in ("knife", "blade", "sword", "axe", "dagger")):
-                item_type = "weapon"
-                weight = 0.6
-            elif any(w in low for w in ("rope", "coil")):
-                item_type = "tool"
-                weight = 1.5
-            elif any(w in low for w in ("ration", "bread", "food")):
-                item_type = "consumable"
-                weight = 0.5
-            elif any(w in low for w in ("water", "flask", "skin")):
-                item_type = "consumable"
-                weight = 0.8
-            elif any(w in low for w in ("bag", "satchel", "pack", "pouch")):
-                item_type = "container"
-                weight = 0.5
-                slot_size = 1
+            equip_slot = str(item.get("slot") or "")
+            item_type = _starter_item_type(item_name, equip_slot)
+            item_stats = item.get("item_stats") if isinstance(item.get("item_stats"), dict) else {}
+            weight = max(0.0, _float(item_stats.get("weight"), 0.5))
+            rarity = str(item_stats.get("rarity") or "common")[:40]
             # Provenance note from fact-check when available
             provenance = "setup"
             latent = False
-            for row in starter_logic_report.get("kept") or []:
-                if not isinstance(row, dict):
-                    continue
+            for row in kept_rows:
                 kept_name = _sanitize_item_name(str(row.get("name") or "")).lower()
                 if kept_name == low or str(row.get("name") or "").lower() == low:
                     provenance = str(row.get("provenance") or "setup")
                     latent = bool(row.get("latent_possible"))
                     break
-            # Starter kit is always mundane at Start — no free enchantments / granted powers.
-            # Latent flags are DM-only metadata in starter_logic, not active item powers.
-            desc = f"Starting gear ({provenance}): ordinary {item_name}."
-            if latent:
-                desc += " Looks mundane; no known special power at Start."
-            else:
-                desc += " Mundane at Start."
-            code = f"I{index + 1}"
-            equip_slot = _default_equip_slot_for_item(item_name, item_type) or ""
-            # Only one item per exclusive body slot at start
-            if equip_slot:
-                taken = conn.execute(
-                    "SELECT COUNT(*) AS c FROM inventory WHERE equipped_slot = ?",
-                    (equip_slot,),
-                ).fetchone()
-                if taken and int(taken["c"] or 0) > 0:
-                    equip_slot = ""
+            desc = str(item.get("description") or "").strip()
+            if not desc:
+                desc = f"Starting gear ({provenance}): ordinary {item_name}."
+                desc += " Looks mundane; no known special power at Start." if latent else " Mundane at Start."
+            stats = item.get("stats") if isinstance(item.get("stats"), dict) else {}
+            abilities = [a for a in (item.get("abilities") or []) if isinstance(a, dict)]
+            stat_links, power_codes, roll_profile = _derive_item_links(
+                conn,
+                name=item_name,
+                item_type=item_type,
+                rarity=rarity,
+                stat_modifiers=stats,
+                granted_abilities=abilities,
+                change={},
+            )
             conn.execute(
                 """
                 INSERT INTO inventory (
                     code, name, description, quantity, weight, slot_size, item_type, rarity,
                     enchantments, stat_modifiers, granted_abilities, stack_limit, carry_modifier,
-                    container_bonus_weight, container_bonus_slots, dimensional_space, equipped_slot
+                    container_bonus_weight, container_bonus_slots, dimensional_space, equipped_slot,
+                    stat_links, power_codes, roll_profile, item_stats
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    code,
+                    f"I{index + 1}",
                     item_name,
                     desc[:400],
                     1,
                     weight,
-                    slot_size,
+                    1,
                     item_type,
-                    "common",
+                    rarity,
                     "[]",
-                    "{}",
-                    "[]",
+                    json.dumps(stats, ensure_ascii=True),
+                    json.dumps(abilities, ensure_ascii=True),
                     20,
                     1.0,
                     0.0,
                     0,
                     0,
                     equip_slot,
+                    json.dumps(stat_links, ensure_ascii=True),
+                    json.dumps(power_codes, ensure_ascii=True),
+                    json.dumps(roll_profile, ensure_ascii=True),
+                    json.dumps(item_stats, ensure_ascii=True),
                 ),
             )
 
@@ -4932,7 +4951,8 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "hair": str(options.get("hair") or "")[:120],
             "facial_features": str(options.get("facial_features") or "")[:300],
             "appearance": appearance_raw[:400] if appearance_raw else str(options.get("appearance") or "")[:400],
-            "starter_equipment": starter_raw[:500],
+            "starter_equipment": _gear.gear_names(gear_items)[:500],
+            "starter_gear": gear_items,
             "starter_logic": {
                 "arrival": (starter_logic_report.get("arrival") or {}),
                 "ordinary_start": bool(starter_logic_report.get("ordinary_start")),
@@ -9600,6 +9620,8 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
         has_bonus_weight = "container_bonus_weight" in change
         has_bonus_slots = "container_bonus_slots" in change
         has_dimensional = "dimensional_space" in change
+        has_item_stats = isinstance(change.get("item_stats"), dict)
+        item_stats = dict(change.get("item_stats") or {}) if has_item_stats else {}
         weight = max(0.0, _float(change.get("weight"), 1.0))
         slot_size = max(0, min(99, int(_float(change.get("slot_size"), 1))))
         item_type = str(change.get("item_type") or change.get("type") or "misc")[:80]
@@ -9658,7 +9680,8 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
                     dimensional_space = CASE WHEN ? THEN MAX(dimensional_space, ?) ELSE dimensional_space END,
                     stat_links = CASE WHEN ? THEN ? ELSE stat_links END,
                     power_codes = CASE WHEN ? THEN ? ELSE power_codes END,
-                    roll_profile = CASE WHEN ? THEN ? ELSE roll_profile END
+                    roll_profile = CASE WHEN ? THEN ? ELSE roll_profile END,
+                    item_stats = CASE WHEN ? THEN ? ELSE item_stats END
                 WHERE id = ?
                 """,
                 (
@@ -9693,6 +9716,8 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
                     json.dumps(power_codes, ensure_ascii=True),
                     int(has_links),
                     json.dumps(roll_profile, ensure_ascii=True),
+                    int(has_item_stats),
+                    json.dumps(item_stats, ensure_ascii=True),
                     existing["id"],
                 ),
             )
@@ -9701,8 +9726,8 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
         elif delta > 0:
             conn.execute(
                 """
-                INSERT INTO inventory (code, name, description, quantity, weight, slot_size, item_type, rarity, enchantments, stat_modifiers, granted_abilities, stack_limit, carry_modifier, container_bonus_weight, container_bonus_slots, dimensional_space, stat_links, power_codes, roll_profile)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO inventory (code, name, description, quantity, weight, slot_size, item_type, rarity, enchantments, stat_modifiers, granted_abilities, stack_limit, carry_modifier, container_bonus_weight, container_bonus_slots, dimensional_space, stat_links, power_codes, roll_profile, item_stats)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     _next_code(conn, "inventory", "I"),
@@ -9724,6 +9749,7 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
                     json.dumps(stat_links, ensure_ascii=True),
                     json.dumps(power_codes, ensure_ascii=True),
                     json.dumps(roll_profile, ensure_ascii=True),
+                    json.dumps(item_stats, ensure_ascii=True),
                 ),
             )
 

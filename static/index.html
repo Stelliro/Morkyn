@@ -752,10 +752,13 @@
 
                 <div class="setupSimpleGear wide" id="setupSimpleGearPanel">
                   <div class="setupSimpleVibeHead">
-                    <span class="setupSimpleVibeLabel">Worn gear</span>
-                    <button type="button" class="chipBtn secondaryButton" id="addGearItemBtn">Add gear</button>
+                    <span class="setupSimpleVibeLabel">Starting gear</span>
+                    <div class="setupSimpleVibeActions">
+                      <label class="settingLock"><input type="checkbox" data-lock-setting="starter_gear" /> Lock</label>
+                      <button type="button" class="chipBtn secondaryButton" id="addGearItemBtn">Add gear</button>
+                    </div>
                   </div>
-                  <p class="empty">One list. Clothes that do something: a stat boost, a granted trick, or compounding as you level. Pure fashion stays in Clothes under Primary.</p>
+                  <p class="empty">Three worn basics are always here: feet, torso, legs. The model names and describes them for your world when you randomize; lock a card to keep it. Add anything else you carry. Stats and abilities on an item are optional; Roll stats lets the engine pick numbers from the world.</p>
                   <div id="simpleGearList" class="simpleGearList"></div>
                 </div>
                 <label class="wide" hidden>
@@ -814,14 +817,9 @@
                 </div>
                 <button class="secondaryButton sectionHeaderAction" data-randomize-group="powers" type="button">Randomize Powers</button>
               </header>
-              <div id="setupAdvancedPowersMount" class="setupAdvancedPowersMount"></div>
               <section id="abilityOptions" class="abilityBuilder">
-                <details class="powersDropdown" id="powersDropdown">
-                  <summary class="powersDropdownSummary">
-                    <span class="powersDropdownTitle">Powers</span>
-                    <span class="powersDropdownMeta" id="powersDropdownMeta">None · open to set count range and abilities</span>
-                    <span class="powersDropdownChevron" aria-hidden="true">▾</span>
-                  </summary>
+                <div class="powersDropdown" id="powersDropdown">
+                  <p class="powersDropdownMeta" id="powersDropdownMeta">None · add abilities or randomize</p>
                   <div class="powersDropdownBody">
                     <header class="subsectionHeader">
                       <div>
@@ -863,7 +861,7 @@
                       </ul>
                     </details>
                   </div>
-                </details>
+                </div>
               </section>
             </section>
 

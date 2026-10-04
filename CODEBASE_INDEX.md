@@ -42,6 +42,7 @@ Morkyn/
 |   |-- __init__.py
 |   |-- content_packs.py             # JSON packs: skills/powers/items/tables + authoring spec
 |   |-- db.py                        # SQLite connection, schema, migrations
+|   |-- gear.py                      # Starting gear: item shape, body slots, engine stat rolls
 |   |-- encounters.py                # Danger model + encounter resolution
 |   |-- encounter_board.py           # Named people on a fight board
 |   |-- llm.py                       # Model config, JSON chat, token budget, traces, fallbacks
@@ -122,6 +123,15 @@ Morkyn/
 - **Consumers:** `app.llm.get_model_config()` (overlays `context_window`, both caps, and `model_limits.source`), `app.llm.context_window_tokens()`, `app.mle._context_tokens()`, the managed llama.cpp start, `/api/model-limits`, the settings form, `Morkyn.ps1` (managed server window when the pref is `auto`).
 - **Dependencies:** `app.db` (settings row `model_limits`), nvidia-smi when present, stdlib `struct` for the GGUF header.
 - **Design Notes:** Precedence per limit is explicit env > the player's saved numbers for this model > automatic. A model is keyed by its GGUF file name (`gguf:<name>`), its MLE name (`mle:<name>`), or its API model (`api:<name>`), so switching models brings each model's own numbers and switching back restores them. Automatic sizing never loads the model: the GGUF key/value header gives the architecture, `general.size_label`/`parameter_count`, `<arch>.context_length`, `block_count`, `attention.head_count_kv` and head size, from which the KV cache cost per token is `2 x layers x kv_heads x head_dim x 2 bytes` (f16). With a GPU answer from nvidia-smi the window is the largest multiple of 2048, up to the trained context, whose cache fits beside the weights after 8% of the card and 900 MB of runtime overhead are set aside; without one, a tokens-per-billion scale (262,144 / params, floor 8192) capped by the trained context; with nothing known, 32768. Response caps step with parameter count. The header read and the nvidia-smi call are cached; the settings row is cached for five seconds because `get_model_config()` resolves on every call. `update_model_config()` with `limits_mode` writes or clears the per-model entry and never persists the overlay fields. The launcher prefs' `llama_cpp_context: "auto"` (and `0` caps) export no env, so the server resolves; a number is an explicit choice for every model.
+
+#### Starting Gear
+
+- **Files:** `app/gear.py`
+- **Purpose:** One item shape for starting gear, shared by the setup form, the randomizer, SQLite and play: name, slot, description, six stat bonuses, the item's own stats (weight, durability, protection, value, rarity), and abilities in the special-ability shape.
+- **Key API:** `normalize_gear_list()` (the one entry point), `normalize_gear_item()`, `roll_item_stats()`, `roll_stat_bonuses()`, `required_gear_defaults()`, `gear_context_from_setup()`, `gear_names()`, `gear_from_legacy_text()`, `gear_prompt_contract()`, `slot_for_name()`, `normalize_slot()`.
+- **Consumers:** `app.world.start_playthrough` (one inventory row per item, `item_stats` column, `equipped_slot`), `app.llm` setup randomizer (`field:starter_gear` prompt, validation, fallback), `app.main` (`SetupRequest.starter_gear`, `/api/setup/gear-stats`, `/api/setup/gear-defaults`), the setup gear cards in `static/app.js`.
+- **Dependencies:** `app.content_packs.STAT_KEYS` / `normalize_stat_key`.
+- **Design Notes:** The three required slots (FEET, TORSO, LEGS) are always present; a missing one is filled with an engine basic named for the world's tech level and climate. One worn item per exclusive slot; a second one is carried. The model may fill any field; blanks are rolled from the world and excess is clamped (per-item bonus -2..+3, kit total by start power). The legacy `starter_equipment` string is derived (`gear_names`) so the art prompt and `starter_logic` keep working. No example item names ship in the prompt contract: a 7B pastes them.
 
 #### Setting Templates
 
@@ -455,6 +465,8 @@ There is no production build step. This is a local prototype served directly by 
 | POST | `/api/model-limits` | Keep the player's numbers for the current model (`mode: custom`) or return it to automatic |
 | POST | `/api/select-model-file` | Open a local file picker for GGUF model selection |
 | POST | `/api/randomize-setup` | Ask the model to randomize setup fields |
+| POST | `/api/setup/gear-stats` | Engine-only roll of one starting item's stats and bonuses from the current setup |
+| POST | `/api/setup/gear-defaults` | The three required starting basics (feet, torso, legs) named for the current setup's world |
 | POST | `/api/turn` | Apply a player turn; empty text continues the scene |
 | POST | `/api/continue` | Continue the current scene without player input |
 | POST | `/api/regenerate` | Restore the latest pre-turn snapshot and regenerate that response; optional `RegenerateRequest {allow_fallback}`, `FailsafeBlocked` -> 503 `problem_detail` like `/api/turn` |

@@ -1,12 +1,21 @@
 /**
- * Simple gear round-trip must not treat hyphens inside names as effect breaks.
+ * Starting-gear string round-trip.
  *
- * parseStarterEquipmentToGear split on /—|–|-/ so "travel-stained coat" and
- * "3-day rations" gained effect text and effect_type "mixed". pullFormToSimple
- * builds cards from that parse; the next pushSimpleToForm writes them back as
- * "travel-stained coat [mixed] — stained coat".
+ * The cards are the source of truth; the hidden starter_equipment string is
+ * derived from them (names only, comma-separated). The legacy parser only runs
+ * for an imported preset that has no starter_gear list.
  *
- * Exit 0 when hyphenated names stay look-only and emdash effects still round-trip.
+ * Guards:
+ *  - A hyphen inside a name ("travel-stained coat", "3-day rations") is part of
+ *    the name, not an effect break.
+ *  - A plain comma list ("cloak, pouch, vial, tool, bread") is FIVE cards, not
+ *    one card holding all five names (the original "everything in one Item box"
+ *    bug).
+ *  - Slots come from a bracketed slot word or from the item name, and the first
+ *    item in each of FEET / TORSO / LEGS is marked required.
+ *  - The derived string from cards parses back to the same names.
+ *
+ * Exit 0 on success.
  */
 const fs = require("fs");
 const path = require("path");
@@ -30,10 +39,25 @@ function extractFunction(name) {
   throw new Error(`unclosed ${name}`);
 }
 
-const code =
-  extractFunction("gearItemsToStarterEquipment") +
-  "\n" +
-  extractFunction("parseStarterEquipmentToGear");
+function extractConst(name) {
+  const needle = `const ${name} =`;
+  const start = src.indexOf(needle);
+  if (start < 0) throw new Error(`missing const ${name}`);
+  const end = src.indexOf(";\n", start);
+  return src.slice(start, end + 1);
+}
+
+const code = [
+  extractConst("GEAR_SLOT_OPTIONS"),
+  extractConst("GEAR_SLOT_CODES"),
+  extractConst("GEAR_REQUIRED_SLOTS"),
+  extractConst("GEAR_SLOT_NAME_WORDS"),
+  extractConst("GEAR_SLOT_WORD_ALIASES"),
+  extractFunction("gearSlotFromWord"),
+  extractFunction("gearSlotFromName"),
+  extractFunction("gearItemsToStarterEquipment"),
+  extractFunction("parseStarterEquipmentToGear"),
+].join("\n");
 const { gearItemsToStarterEquipment, parseStarterEquipmentToGear } = new Function(
   `${code}\nreturn { gearItemsToStarterEquipment, parseStarterEquipmentToGear };`,
 )();
@@ -45,43 +69,50 @@ function assert(cond, message) {
   }
 }
 
+// Hyphens stay inside names.
 const hyphenated = parseStarterEquipmentToGear("travel-stained coat; 3-day rations");
 assert(hyphenated.length === 2, `expected 2 cards, got ${hyphenated.length}`);
-for (const card of hyphenated) {
-  assert(card.effect_type === "look_only", `${card.name} typed ${card.effect_type} effect=${card.effect}`);
-  assert(!card.effect, `${card.name} stole effect ${card.effect}`);
-}
 assert(hyphenated[0].name === "travel-stained coat", `name ${hyphenated[0].name}`);
 assert(hyphenated[1].name === "3-day rations", `name ${hyphenated[1].name}`);
+assert(!hyphenated[0].description && !hyphenated[1].description, JSON.stringify(hyphenated));
 
-const rewritten = gearItemsToStarterEquipment(hyphenated);
-assert(!/\[mixed\]/i.test(rewritten), `round-trip stamped mixed: ${rewritten}`);
-assert(rewritten.includes("travel-stained coat"), rewritten);
-assert(rewritten.includes("3-day rations"), rewritten);
+// The original bug: a comma list is one card per item.
+const dump = parseStarterEquipmentToGear("travel-worn cloak, empty leather pouch, small glass vial, iron farming tool, rough loaf of bread");
+assert(dump.length === 5, `comma list gave ${dump.length} card(s): ${JSON.stringify(dump)}`);
+assert(dump[0].slot === "BACK", `cloak slot ${dump[0].slot}`);
+assert(dump[3].slot === "MAIN", `tool slot ${dump[3].slot}`);
+assert(dump[4].slot === "", `bread slot ${dump[4].slot}`);
 
+// Slot words and names pick body slots; first of each basic is required.
+const basics = parseStarterEquipmentToGear("dusty boots, patched tunic, rough breeches, spare boots");
+assert(basics.map((i) => i.slot).join() === "FEET,TORSO,LEGS,FEET", basics.map((i) => i.slot).join());
+assert(basics.slice(0, 3).every((i) => i.required), "first boots/tunic/breeches should be required");
+assert(!basics[3].required, "second boots must not be required");
+
+// Bracketed slot word and an em-dash description still work.
 const detailed = parseStarterEquipmentToGear("lantern (belt) — lights 10 feet");
 assert(detailed.length === 1, "lantern card missing");
 assert(detailed[0].name === "lantern", `lantern name ${detailed[0].name}`);
-assert(detailed[0].slot === "belt", `lantern slot ${detailed[0].slot}`);
-assert(detailed[0].effect === "lights 10 feet", `lantern effect ${detailed[0].effect}`);
-assert(detailed[0].effect_type === "mixed", "explicit emdash effect should still count as mixed when untagged");
+assert(detailed[0].slot === "WAIST", `lantern slot ${detailed[0].slot}`);
+assert(detailed[0].description === "lights 10 feet", `lantern description ${detailed[0].description}`);
 
-const spaced = parseStarterEquipmentToGear("hooded cloak - sheds rain");
-assert(spaced[0].name === "hooded cloak", `spaced name ${spaced[0].name}`);
-assert(spaced[0].effect === "sheds rain", `spaced effect ${spaced[0].effect}`);
+// A comma inside brackets does not split the item.
+const bracketed = parseStarterEquipmentToGear("coat (torso, outer), rope");
+assert(bracketed.length === 2 && bracketed[0].name === "coat", JSON.stringify(bracketed));
 
-const kept = gearItemsToStarterEquipment([
-  { name: "travel-stained coat", slot: "torso", effect_type: "look_only", effect: "" },
-  { name: "lantern", slot: "belt", effect_type: "mixed", effect: "lights 10 feet" },
-]);
-const again = parseStarterEquipmentToGear(kept);
-assert(again[0].name === "travel-stained coat" && again[0].effect_type === "look_only", JSON.stringify(again[0]));
-assert(again[0].slot === "torso", JSON.stringify(again[0]));
-assert(again[1].name === "lantern" && again[1].effect === "lights 10 feet", JSON.stringify(again[1]));
-assert(again[1].effect_type === "mixed" && again[1].slot === "belt", JSON.stringify(again[1]));
+// Cards -> derived string -> cards keeps every name.
+const cards = [
+  { name: "travel-stained coat", slot: "TORSO" },
+  { name: "3-day rations", slot: "" },
+  { name: "lantern", slot: "OFF", description: "lights 10 feet" },
+];
+const derived = gearItemsToStarterEquipment(cards);
+assert(derived === "travel-stained coat, 3-day rations, lantern", derived);
+const again = parseStarterEquipmentToGear(derived).map((i) => i.name);
+assert(again.join("|") === "travel-stained coat|3-day rations|lantern", again.join("|"));
 
 if (process.exitCode) {
-  console.error("simple gear hyphen round-trip failed");
+  console.error("starting gear string round-trip failed");
 } else {
   console.log("ok");
 }

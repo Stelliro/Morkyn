@@ -152,13 +152,16 @@ class TestSmallWindowDegradesInsteadOfFailing(unittest.TestCase):
         self.assertIs(system, SYSTEM_PROMPT)
         self.assertFalse(degraded)
 
-    def test_llama_cpp_keeps_its_compact_contract(self):
-        system, verify, degraded = llm.fitting_system_prompts(
-            {"provider": "llama_cpp", "context_window": 32768}
-        )
+    def test_llama_cpp_gets_the_contract_its_window_holds(self):
+        # It used to get the compact contract at every size, a leftover from
+        # when the provider meant a small GGUF at 8192.
+        system, _verify, degraded = llm.fitting_system_prompts({"provider": "llama_cpp", "context_window": 32768})
+        self.assertIs(system, SYSTEM_PROMPT)
+        self.assertFalse(degraded)
+        system, verify, degraded = llm.fitting_system_prompts({"provider": "llama_cpp", "context_window": 8192})
         self.assertIs(system, COMPACT_SYSTEM_PROMPT)
         self.assertTrue(verify)
-        self.assertFalse(degraded, "llama_cpp uses the compact contract by design, not by degradation")
+        self.assertTrue(degraded)
 
 
 class TestTurnTimeoutsAreNotTighterThanTheModel(unittest.TestCase):

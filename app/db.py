@@ -158,7 +158,8 @@ def init_db() -> None:
                 container_bonus_weight REAL NOT NULL DEFAULT 0,
                 container_bonus_slots INTEGER NOT NULL DEFAULT 0,
                 dimensional_space INTEGER NOT NULL DEFAULT 0,
-                equipped_slot TEXT NOT NULL DEFAULT ''
+                equipped_slot TEXT NOT NULL DEFAULT '',
+                item_stats TEXT NOT NULL DEFAULT '{}'
             );
 
             CREATE TABLE IF NOT EXISTS equipment_slots (
@@ -843,6 +844,10 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("power_codes", "TEXT NOT NULL DEFAULT '[]'"),
         ("roll_profile", "TEXT NOT NULL DEFAULT '{}'"),
         ("pack_id", "TEXT NOT NULL DEFAULT ''"),
+        # item_stats: the item's own numbers from setup gear (weight is also
+        #   the weight column; durability, protection, value and rarity ride
+        #   here as JSON so the card and the DM read the same figures).
+        ("item_stats", "TEXT NOT NULL DEFAULT '{}'"),
     ):
         if column not in inventory_columns:
             conn.execute(f"ALTER TABLE inventory ADD COLUMN {column} {definition}")

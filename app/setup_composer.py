@@ -21,7 +21,8 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "world_style": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "isekai", "tone", "keywords", "adapter_hint"],
-        "forbidden": "Do not paste the full player idea slogan. Return a setting/genre phrase only.",
+        "forbidden": "Do not paste the full player idea slogan. Return a setting/genre phrase only, about the world, never about one character.",
+        "world_scope": True,
     },
     "tone": {
         "kind": "short_phrase",
@@ -44,16 +45,17 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "custom_style": {
         "kind": "prose",
-        "intent_keys": ["genre", "isekai", "edge", "power_fantasy", "tone", "keywords", "dm_stance", "style_notes"],
+        # power_fantasy is deliberately absent: with it in reach, a preset's
+        # "one weak seed power ... no free combat kit" frame was written into
+        # the World vibe box verbatim. Power rules live in custom_skills.
+        "intent_keys": ["genre", "isekai", "edge", "tone", "keywords", "dm_stance", "style_notes"],
+        "depends_on": ["world_style", "tone", "tech_level", "magic_level"],
         "forbidden": (
-            "World constraints, genre lean, and DM stance only. "
-            "Do not paste skill timers (1-hour delay, cooldowns), ability lists, or the full idea slogan. "
-            "Put growth timers in custom_skills / skill growth fields instead."
+            "Describe the world. One to three sentences a DM reads before the first turn: what the land and its climate are like, who lives there and who holds power, how magic or technology sits in daily life, how power is earned by anyone who has it, and the mood of play. Use world_style, tone, tech_level, magic_level and the idea's genre and keywords as the context. Write about the place and its people, not about one character. Power rules and skill timers belong in custom_skills."
         ),
-        "examples": [
-            "Isekai coastal fantasy with a readable system UI when game_system is on. Fair pressure, no auto-win.",
-        ],
         "ban_growth_timers": True,
+        "ban_growth_slogans": True,
+        "world_scope": True,
     },
     "economy": {
         "kind": "short_phrase",
@@ -301,11 +303,13 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "memory_policy": {
         "kind": "short_phrase",
         "intent_keys": ["isekai", "portal_or_rebirth", "genre"],
+        "depends_on": ["backstory_mode"],
         "forbidden": "Memory policy only.",
     },
     "character_backstory": {
         "kind": "prose",
         "intent_keys": ["isekai", "portal_or_rebirth", "genre", "power_fantasy", "keywords", "tone"],
+        "depends_on": ["backstory_mode", "memory_policy", "player_name", "player_sex", "player_age", "world_style", "start_location"],
         "forbidden": (
             "Concrete third-person character history only; not a setup slogan, skill dump, or power-fantasy essay. "
             "If backstory_mode is transmigrated: MUST cover (1) life before transport, (2) how they were transported, "
@@ -317,6 +321,7 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "hair": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords", "tone"],
+        "depends_on": ["player_sex", "world_races", "world_style"],
         "forbidden": "Hair only: length, color, style. Not face, clothes, or backstory.",
         "examples": [
             "short brown hair",
@@ -331,7 +336,8 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "facial_features": {
         "kind": "short_phrase",
-        "intent_keys": ["genre", "keywords", "tone", "power_fantasy"],
+        "intent_keys": ["genre", "keywords", "tone"],
+        "depends_on": ["player_sex", "world_races", "hair"],
         "forbidden": (
             "Face only for portraits: eyes, freckles, scars, jaw, brows, marks. "
             "Not hair (use hair field), not clothes, not personality essays."
@@ -346,7 +352,8 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     },
     "appearance": {
         "kind": "short_phrase",
-        "intent_keys": ["genre", "power_fantasy", "keywords", "tone", "isekai"],
+        "intent_keys": ["genre", "keywords", "tone", "isekai"],
+        "depends_on": ["player_sex", "world_style", "tech_level", "hair"],
         "forbidden": (
             "Clothing / worn gear only. Prefer zone:item (torso/feet…). "
             "Put hair in hair field and face details in facial_features. "
@@ -383,37 +390,86 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "travel cloak, empty satchel, wooden charm, water skin",
             "plain tunic, scuffed boots, coin purse, heel of bread",
         ],
+        # Legacy comma string. The form, the model and the world now carry
+        # starter_gear (structured cards); this is gear_names() of that list.
+        "derived_from": "starter_gear",
+    },
+    "starter_gear": {
+        # The structured kit: see app/gear.py for the item shape. The text
+        # below is the ask, not a gate: it tells the model what to describe
+        # and the parents it must read. No example item names on purpose.
+        "kind": "list_struct",
+        "intent_keys": [
+            "genre",
+            "power_fantasy",
+            "keywords",
+            "tone",
+            "difficulty",
+            "isekai",
+            "portal_or_rebirth",
+        ],
+        "depends_on": [
+            "world_style",
+            "tech_level",
+            "player_sex",
+            "world_races",
+            "backstory_mode",
+            "character_backstory",
+            "appearance",
+            "start_location",
+        ],
+        "forbidden": (
+            "Describe what the character is wearing and carrying the instant Start is pressed, as items of "
+            "this world. Three worn basics are always present, one each in FEET, TORSO and LEGS: name and "
+            "describe them from the world's tech level and climate, the character's sex and race, their "
+            "origin and backstory, and the clothes already named in appearance (the same clothes, not a "
+            "second set). Add a few carried or worn extras that fit who they are. Mundane at Start: an "
+            "isekai arrival keeps only clothes and pockets, no free weapon, armor or gift; a reincarnated "
+            "or transmigrated local keeps a modest this-life kit; a native carries the kit of their job. "
+            "Local materials and local names for things. Stat bonuses and item abilities are optional and "
+            "tiny; the engine rolls what is left blank."
+        ),
     },
     "player_name": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords"],
+        # The sex is decided first and the name has to read as it: a locked
+        # male character was handed a feminine name because nothing here said
+        # the two were related and the name used to be rolled before the sex.
+        "depends_on": ["player_sex", "world_style", "backstory_mode"],
         # No worked names here. A 7B reads a name in an instruction as a name to
         # use, not as a placeholder -- the same trap that put "Riverbend" in 26%
         # of every place this game has ever named. Describe the shape instead.
         "forbidden": (
             "Personal/legal name only: a given name, or a given name plus a family "
             "name. Not a nickname, handle, callsign, epithet, or a byname built "
-            "from an adjective and a noun."
+            "from an adjective and a noun. The name must read as the character's "
+            "player_sex and fit the culture of world_style; a transmigrated or "
+            "reincarnated character may keep a name from the former world."
         ),
     },
     "player_public_name": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "keywords"],
+        "depends_on": ["player_name", "backstory_mode", "character_backstory"],
         "forbidden": "Alias/nickname/handle only; blank is normal. Do not put the legal name here.",
     },
     "player_title": {
         "kind": "short_phrase",
         "intent_keys": ["genre", "power_fantasy"],
+        "depends_on": ["player_name", "backstory_mode", "character_backstory"],
         "forbidden": "Title only; blank is normal.",
     },
     "player_age": {
         "kind": "short_phrase",
         "intent_keys": ["isekai", "portal_or_rebirth"],
+        "depends_on": ["backstory_mode", "world_style"],
         "forbidden": "Age only.",
     },
     "player_sex": {
         "kind": "short_phrase",
         "intent_keys": [],
+        "depends_on": ["world_style", "world_races"],
         "forbidden": (
             "Sex/body category only. Prefer male or female for ordinary humanoids. "
             "Blank is valid. Sexless/constructed or varies-by-form only when the world/body clearly supports it."
@@ -423,6 +479,7 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "previous_life_age": {
         "kind": "short_phrase",
         "intent_keys": ["isekai", "portal_or_rebirth"],
+        "depends_on": ["backstory_mode", "memory_policy", "player_age"],
         "forbidden": "Former-life age only when relevant.",
     },
     "previous_life_sex": {
@@ -542,7 +599,7 @@ SETUP_COMPOSER_PHASES: list[dict[str, Any]] = [
             "hair",
             "facial_features",
             "appearance",
-            "starter_equipment",
+            "starter_gear",
             "player_name",
             "player_public_name",
             "player_title",
@@ -584,18 +641,60 @@ def _topo_phases() -> list[dict[str, Any]]:
     return ordered
 
 
+def field_dependencies(field: str) -> list[str]:
+    """The settings this field must agree with (its contract's depends_on)."""
+    # Read the table directly: this runs while the module is still loading,
+    # before field_contract() below exists.
+    deps = (FIELD_CONTRACTS.get(field) or {}).get("depends_on") or []
+    return [str(d) for d in deps if str(d) in FIELD_CONTRACTS and str(d) != field]
+
+
+def dependency_sorted(fields: list[str]) -> list[str]:
+    """The same fields, parents before children, otherwise in the given order.
+
+    Phases order the walk coarsely (world before identity). Inside a phase the
+    declaration order used to be the walk order, and it rolled player_name
+    before player_sex, so the name could not know the sex. A field's
+    depends_on now pulls its parents ahead of it wherever both are in the list.
+    """
+    wanted = [str(f) for f in fields]
+    present = set(wanted)
+    out: list[str] = []
+    done: set[str] = set()
+    visiting: set[str] = set()
+
+    def visit(name: str) -> None:
+        if name in done:
+            return
+        if name in visiting:
+            return  # cycle guard: keep declaration order for the rest
+        visiting.add(name)
+        for parent in field_dependencies(name):
+            if parent in present:
+                visit(parent)
+        visiting.discard(name)
+        done.add(name)
+        out.append(name)
+
+    for name in wanted:
+        visit(name)
+    return out
+
+
 def composer_field_order() -> list[str]:
     """Flatten phases into the single load order for Randomize walks."""
     seen: set[str] = set()
     order: list[str] = []
     for phase in _topo_phases():
-        for field in phase.get("fields") or []:
+        for field in dependency_sorted(list(phase.get("fields") or [])):
             if field in FIELD_CONTRACTS and field not in seen:
                 order.append(field)
                 seen.add(field)
-    # Any contract fields missing from phases still append (safety)
-    for field in FIELD_CONTRACTS:
-        if field not in seen:
+    # Any contract fields missing from phases still append (safety).
+    # A derived field (starter_equipment is gear_names of starter_gear) is
+    # not walked: the model never writes it directly.
+    for field, contract in FIELD_CONTRACTS.items():
+        if field not in seen and not contract.get("derived_from"):
             order.append(field)
             seen.add(field)
     return order
@@ -628,6 +727,7 @@ def composer_tree_public() -> dict[str, Any]:
             for p in _topo_phases()
         ],
         "field_order": list(COMPOSER_FIELD_ORDER),
+        "dependencies": {name: field_dependencies(name) for name in COMPOSER_FIELD_ORDER if field_dependencies(name)},
         "contracts": {name: field_contract(name) for name in COMPOSER_FIELD_ORDER},
     }
 
@@ -2033,6 +2133,7 @@ def has_growth_slogan(text: str) -> bool:
     return bool(GROWTH_SLOGAN_RE.search(text or ""))
 
 
+
 def has_growth_timer(text: str) -> bool:
     return bool(GROWTH_TIMER_RE.search(text or ""))
 
@@ -2401,6 +2502,10 @@ def coerce_typed_setup_value(field: str, value: Any) -> tuple[Any, list[str]]:
     kind = contract.get("kind")
     reasons: list[str] = []
 
+    if kind == "list_struct":
+        # Structured cards (starter_gear) are validated by their own module.
+        return value, []
+
     if kind == "boolean":
         if isinstance(value, bool):
             return value, []
@@ -2488,6 +2593,8 @@ def field_contamination_reasons(field: str, value: Any, idea: str = "") -> list[
     reasons: list[str] = []
     contract = field_contract(field)
     kind = contract.get("kind")
+    if kind == "list_struct":
+        return []
     idea_l = str(idea or "").strip().lower()
     text_l = text.lower()
 
@@ -5931,8 +6038,12 @@ def _clean_custom_style_fallback(intent: dict[str, Any], ctx: dict[str, Any]) ->
         bits.append("Isekai RPG lean: new-world pressure with fair stakes.")
     if isinstance(intent.get("power_fantasy"), dict) and intent["power_fantasy"].get("system_ui"):
         bits.append("System UI may appear diegetically when game_system is on; keep windows short.")
-    if isinstance(intent.get("power_fantasy"), dict) and intent["power_fantasy"].get("growth") == "compounding":
-        bits.append("Start weak; growth compounds through play — never auto-win. Put timers in skill rules, not race rules.")
+    pf = intent.get("power_fantasy") if isinstance(intent.get("power_fantasy"), dict) else {}
+    if pf.get("growth") == "compounding" or str(pf.get("start_power") or "") in {"near_useless", "weak"}:
+        # The world fact behind a progression fantasy, at world scope. The old
+        # line here was a player rule ("Start weak; growth compounds...") and
+        # the field refuses that shape now.
+        bits.append("Power here is earned: talent starts small and grows with risk and training; nobody is born strong.")
     dm = str(intent.get("dm_stance") or "").strip()
     if dm:
         bits.append(f"DM stance: {dm}")
@@ -5993,7 +6104,7 @@ def sanitize_setup_fields(
         dirty.setdefault(field, []).extend(reasons)
     ctx = {**(context or {}), **{k: v for k, v in out.items() if not str(k).startswith("_")}}
     for field, value in list(out.items()):
-        if str(field).startswith("_") or field in ("notes",):
+        if str(field).startswith("_") or field in ("notes", "starter_gear"):
             continue
         clean, reasons = sanitize_field_value(field, value, idea=idea, context=ctx)
         if reasons:
@@ -6010,7 +6121,7 @@ def sanitize_setup_fields(
     for field, reasons in cross.items():
         dirty.setdefault(field, []).extend(reasons)
     # Third pass: starter gear / clothes vs arrival logic (isekai vs reincarnation vs native).
-    gear_keys = ("starter_equipment", "appearance", "backstory_mode", "character_backstory", "memory_policy")
+    gear_keys = ("starter_gear", "starter_equipment", "appearance", "backstory_mode", "character_backstory", "memory_policy")
     if any(k in out or k in ctx for k in gear_keys):
         try:
             from app.starter_logic import apply_starter_logic_to_setup
@@ -6021,6 +6132,11 @@ def sanitize_setup_fields(
             elif isinstance(out.get("_compose_intent"), dict):
                 intent = out["_compose_intent"]
             merged_for_gear = {**ctx, **out}
+            if isinstance(merged_for_gear.get("starter_gear"), list):
+                # The fact-check reads the comma string; derive it from the cards.
+                from app.gear import gear_names
+
+                merged_for_gear["starter_equipment"] = gear_names(merged_for_gear["starter_gear"])
             gear_in = {
                 k: merged_for_gear.get(k)
                 for k in (
@@ -6037,6 +6153,10 @@ def sanitize_setup_fields(
             }
             gear_out, gear_dirty = apply_starter_logic_to_setup(gear_in, intent=intent)
             for field, reason in gear_dirty.items():
+                if field == "starter_equipment" and isinstance(out.get("starter_gear"), list):
+                    # The string is gear_names() of the cards; the cards are
+                    # fact-checked again at Start. Keep the two in step here.
+                    continue
                 dirty.setdefault(field, []).append(reason)
                 out[field] = gear_out.get(field)
             if gear_out.get("_starter_logic"):
