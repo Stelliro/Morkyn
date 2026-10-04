@@ -113,7 +113,8 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
 - Database/world_state is source of truth. Only propose justified changes.
 - playthrough_options.choices are this playthrough's labels. For RANK, use only the rungs named in choices.rank_scale. playthrough_options.setting_templates, when present, is the one written rule this action named. Follow that included rule. Do not replace its labels.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
-  Write "XP small", "GOLD -moderate", "HP -small", "GRANT \"rope\" QTY small".
+  Write "XP small", "GOLD -moderate", "HP -small"; GRANT takes the item's name in quotes,
+  then QTY and a band.
   A leading "-" means a loss. The app rolls the actual amount; a bare number on
   XP, GOLD, HP, KARMA or SKILL is read as a band hint and re-rolled, so bands are
   shorter and more reliable.
@@ -121,14 +122,15 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
   large three, huge five. A real stack may be a plain number. GRANT only what
   ===NAR=== puts in the player's hands (given, bought, picked up, looted,
   crafted); something looked at, touched, tasted or handed back is not granted.
-- NPC_NEW NAME must be a name ("Aria", "Thornrow", "Captain Vesk"), never a description
-  ("Woman", "Old Man", "Hooded Figure", "Guard"). The app overwrites description-only names.
+- NPC_NEW NAME is the person's own given name, the one people call them by, made for this
+  world and this person. How they look or what they do is not a name; the app overwrites
+  description-only names. Never give a name already used by someone else in world_state.
 - world_state.current_location.people: works_here marks someone who works in this place;
   works_at is that person's own workplace somewhere else, so here they are a visitor and do not
   sell, keep or own what is here. current_location.keeper keeps the place the player is inside.
-- NPC_NEW ROLE is an occupation — carter, net mender, baker, off-duty guard, ferryman.
-  It is not an appearance: "hooded stranger" and "cloaked local" are not jobs. Describe the
-  hood in ===NAR=== if it matters. At most one genuinely mysterious watcher on screen.
+- NPC_NEW ROLE is the person's occupation, a job word or two that fits this place and this
+  world. It is not an appearance: what they wear or how they look belongs in ===NAR===.
+  At most one genuinely mysterious watcher on screen.
 - Movement is an op, not a description. If the prose ends with the player anywhere other than
   world_state.movement_contract.current_location, ===OPS=== MUST contain a MOVE line.
   Writing "you leave for the coast road" with no MOVE line leaves the player standing where they were,

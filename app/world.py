@@ -9996,6 +9996,35 @@ def _reveal_from_charts(conn, charts: list[dict[str, Any]]) -> dict[str, Any]:
         return {"status": "error", "error": str(exc)[:300]}
 
 
+# What an opening may not hand out for free: anything that fights, protects,
+# or is better than ordinary. Word-bounded so "bowl" is not a bow.
+_OPENING_KIT_TYPES = frozenset({
+    "weapon", "armor", "armour", "shield", "helm", "helmet", "ammo", "ammunition",
+    "firearm", "gun", "bow", "crossbow", "sword", "blade", "axe", "spear", "club",
+})
+_OPENING_KIT_NAME_RE = re.compile(
+    r"\b(?:" + "|".join(_STARTER_WEAPON_WORDS) + r"|armou?r|mail|helm|helmet|shield|gauntlets?|"
+    r"breastplate|cuirass|greaves|bracers|arrows?|bolts?|crossbow|halberd|rapier|sabre|saber|"
+    r"scimitar|flail|warhammer|whip|sling|wand|staff|potion|scroll|amulet|talisman)s?\b",
+    re.I,
+)
+_OPENING_PLAIN_RARITIES = frozenset({"", "common", "uncommon", "mundane", "ordinary", "plain", "poor", "junk"})
+
+
+def _is_opening_kit(change: dict[str, Any]) -> bool:
+    """Is this opening grant combat kit or better-than-ordinary loot?"""
+    item_type = str(change.get("item_type") or "").strip().lower()
+    if item_type in _OPENING_KIT_TYPES:
+        return True
+    if str(change.get("rarity") or "").strip().lower() not in _OPENING_PLAIN_RARITIES:
+        return True
+    if change.get("enchantments") or change.get("stat_modifiers") or change.get("granted_abilities"):
+        return True
+    if bool(change.get("dimensional_space")):
+        return True
+    return bool(_OPENING_KIT_NAME_RE.search(str(change.get("name") or "")))
+
+
 def _filter_inventory_changes(
     conn,
     changes: list[dict[str, Any]],
@@ -10118,10 +10147,14 @@ def _filter_inventory_changes(
         arrived = outcome == "gain" or (outcome is None and acquire_intent)
         grounded = named and arrived
         # Never honor bare justified/true from the model
-        # Opening: only trust what was already set up (no free combat kit).
-        # A map is not kit: it reveals ground and takes no slot.
+        # Opening: no free combat kit. This used to refuse every new item, so a
+        # baker handing the player a loaf in the first scene was dropped
+        # (playtest #13). Ordinary goods the final prose hands over count like
+        # any other turn's gain; weapons, armour, rare+ or magical items stay
+        # out. A map is not kit: it reveals ground and takes no slot.
         if input_kind == "opening" and not existing and not is_chart_item_name(name):
-            grounded = False
+            if outcome != "gain" or _is_opening_kit(change):
+                grounded = False
         # Items cannot become dimensional storage without explicit prose
         if grounded:
             kept.append(_strip_unearned_dimensional(change))

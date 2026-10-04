@@ -1438,9 +1438,10 @@ def opening_feel_prompt_block(
         "Opening scene feel (turn_kind=opening_scene only):",
         "- Establish an immediate, playable situation with 2–4 concrete hooks; do not choose for the player.",
         "- Keep the first scene local and personal before world-ending stakes.",
-        "- Entity refs: always use the real place name from world_state.current_location "
-        "(e.g. Low Gate Timber Arch [[L1]]), and if inventory or local NPCs exist, name them the same way "
-        "(Sarah [[A]], cracked phone [[I1]]). Do not write vague 'the street' only — pin the starting place. "
+        "- Entity refs: always use the real place name from world_state.current_location, written as "
+        "its name then its code in double brackets, and if inventory or local NPCs exist, name them the "
+        "same way with their own names and codes from state. Do not write vague 'the street' only — pin "
+        "the starting place. "
         "You do not need all three (place/NPC/item) in one beat, but every named entity that is in state must "
         "appear as readable Name [[code]] so the UI can make it clickable.",
     ]

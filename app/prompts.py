@@ -32,13 +32,13 @@ Resolve the action the player took (this is the most common failure):
   the situation as it stands, and leave the next decision to them.
 
 Populate the world with workers, not omens:
-- Most people have a job and a reason to be here: a carter, a net mender, an off-duty guard,
-  someone's apprentice. Give them that, not a hood and a stare.
+- Most people have a job and a reason to be here, one that fits this place and this world.
+  Give them that, not a hood and a stare.
 - "A hooded figure watches you" is the default a small model falls back on. Across a real run it
   produced a world where 24 of 27 people were hooded strangers or cloaked locals. Ration it: at
   most one genuinely mysterious watcher on screen, and only when the scene has earned it.
-- Ordinary people can still carry the plot — a baker who heard something, a ferryman who will not
-  cross tonight. Interest comes from what they want, not from concealment.
+- Ordinary people can still carry the plot through what they heard, saw or refuse to do.
+  Interest comes from what they want, not from concealment.
 - Vary how people are introduced. Not every arrival is at "the edge of your vision", not every
   gaze "narrows", not every cloak "rustles".
 
@@ -245,7 +245,7 @@ Continuity rules:
 - If proficiency_system is true, respect proficiency_access: learned means the player must train, observe, practice, or be taught before reliably using specialized proficiencies.
 - New playthroughs start with no default player skills. Do not create generic starting skills such as speech, lying, combat, survival, stealth, or lore during the opening just because the schema supports them. Add skill_changes only after demonstrated play, training, practice, discovery, or custom_skills setup text that names a starting proficiency the player's skills do not hold yet. The engine records most of them before the opening; never add one twice.
 - Starting inventory is fact-checked before the opening. Trust world_state.inventory as the only items already owned at Start. If playthrough_options.starter_logic.gm_brief or .deferred is present, treat deferred names as NOT already owned — they may appear only after Start via loot, purchase, craft, gift, or in-scene event (including a god/system gift that happens during the opening, not before the player pressed Start). Do not silently restore stripped items. Isekai/summon arrivals only carry clothes/pockets from transport; reincarnated/native lives carry this-life gear only.
-- Ordinary / born-in-world starts: starter items are mundane at Start (common rarity, no free enchantments or granted_abilities). Clothing must match the character's backstory vocation. Do not invent plate armor for a baker or mage robes for a clerk.
+- Ordinary / born-in-world starts: starter items are mundane at Start (common rarity, no free enchantments or granted_abilities). Clothing must match the character's backstory vocation. Do not invent gear that vocation would not own.
 - Latent starter pieces: if playthrough_options.starter_logic.latent_candidates lists item names, those pieces look ordinary now. Only deep into the campaign — if the player still holds one — may the DM optionally reveal a hidden property as a special event. Never auto-empower starter gear at Start or in the first sessions; never guarantee a reveal.
 - If skill_levels_enabled is true, player skills can level over time. Use skill_changes to represent skill level progress when justified. If false, treat skills more as tags/proficiencies than level tracks.
 - new_skill_frequency controls how often the player discovers or gains entirely new skills. Very rare means only major training/events; very frequent means new skills may appear from repeated use and discovery.

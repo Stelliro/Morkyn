@@ -7717,8 +7717,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "forbidden_name": current_setup.get("player_name"),
                 "return_shape": {"player_name": "new personal name that is not a nickname"},
                 "name_rules": [
-                    "Not a nickname/handle/epithet (Ash, River, Patch, the Red, Ashwalker are forbidden).",
-                    "Prefer names like Elena Croft, Tomas Reed, or Mira.",
+                    "Not a nickname, handle or epithet: a given name, optionally with a family name.",
+                    "Make it fit the character's world, people and sex.",
                 ],
             }
             validated = _validate_setup_randomization(
@@ -10758,6 +10758,17 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
     if not name_to_code:
         return text
     out = text
+    # "Aria's [[A]] story": the writer tagged the possessive. The name is
+    # already there, so the code moves in front of the "'s" once. Left alone,
+    # the pass below tagged "Aria" again and it read "Aria [[A]]'s [[A]] story"
+    # (playtest #15).
+    for name_l, code in name_to_code.items():
+        out = re.sub(
+            rf"(?<!\[\[)\b({re.escape(name_l)})(['\u2019]s)\s*\[\[{re.escape(code)}\]\]",
+            rf"\1 [[{code}]]\2",
+            out,
+            flags=re.IGNORECASE,
+        )
     for name_l, code in sorted(name_to_code.items(), key=lambda kv: -len(kv[0])):
         # Capture original casing from first match via re.I; don't double-append [[code]]
         # Look for name not already followed by [[same code]]
@@ -11235,6 +11246,58 @@ def _prefer_stored_roles(text: str, code_to_name: dict[str, str], code_to_role: 
     return _ROLE_BEFORE_TAG_RE.sub(fix, text)
 
 
+# "A net mender named Aria": a job, then a name given as an introduction.
+_NAMED_INTRO_RE = re.compile(
+    r"\b(?P<art>[Aa]n?|[Aa]nother)\s+(?P<desc>[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*){0,2})\s+"
+    r"(?P<verb>named|called)\s+(?P<name>[A-Z][\w'-]*(?:\s+[A-Z][\w'-]*)?)"
+    r"(?:\s+\[\[(?P<code>[A-Z]{1,3})\]\])?"
+)
+
+_NOT_A_JOB_WORDS = frozenset({
+    "man", "woman", "men", "women", "girl", "boy", "child", "kid", "lad", "lass", "person",
+    "figure", "stranger", "local", "one", "someone", "fellow", "elder", "youth", "traveler",
+    "traveller", "newcomer", "friend", "sister", "brother", "mother", "father", "daughter", "son",
+})
+
+
+def _drop_reused_names(
+    text: str, code_to_name: dict[str, str], code_to_role: dict[str, str]
+) -> tuple[str, list[dict[str, str]]]:
+    """Take a known person's name off an introduction of somebody else.
+
+    Playtest #14: the opening filed Aria as the baker, and the same prose went
+    on "A net mender named Aria weaves a new net". The record already says who
+    Aria is, so a different job introduced under her name is a second person
+    wearing it; the name comes off that introduction ("A net mender weaves")
+    and the reuse is returned for the turn trace.
+    """
+    found: list[dict[str, str]] = []
+    if not text or not code_to_role:
+        return text or "", found
+    by_name = {
+        str(name).strip().lower(): code
+        for code, name in code_to_name.items()
+        if re.fullmatch(r"[A-Z]{1,3}", str(code)) and str(name or "").strip()
+    }
+
+    def fix(match: re.Match[str]) -> str:
+        name = match.group("name")
+        code = by_name.get(name.lower())
+        tagged = match.group("code")
+        if not code or (tagged and tagged != code):
+            return match.group(0)
+        # "a woman named Aria" says nothing about a job; it may be her.
+        if match.group("desc").split()[-1] in _NOT_A_JOB_WORDS:
+            return match.group(0)
+        role = code_to_role.get(code, "")
+        if not role or _same_job(match.group("desc"), role):
+            return match.group(0)
+        found.append({"code": code, "name": name, "stored": role, "prose": match.group("desc")})
+        return f"{match.group('art')} {match.group('desc')}"
+
+    return _NAMED_INTRO_RE.sub(fix, text), found
+
+
 def _role_mismatches(text: str, code_to_role: dict[str, str]) -> list[dict[str, str]]:
     """Appositive jobs that differ from the stored role, for the turn trace."""
     out: list[dict[str, str]] = []
@@ -11387,9 +11450,12 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
         referenced_codes.update(str(c) for c in targets.get("npcs") or [])
 
     code_roles = _entity_code_role_map(context, result)
+    name_reuses: list[dict[str, str]] = []
 
     def rewrite_names(text: str) -> str:
         out = text or ""
+        out, reused = _drop_reused_names(out, code_map, code_roles)
+        name_reuses.extend(r for r in reused if r not in name_reuses)
         out = _prefer_stored_roles(out, code_map, code_roles)
         out = _repair_bare_code_possessives(
             out,
@@ -11470,6 +11536,8 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
     mismatches = _role_mismatches(str(result.get("narration") or ""), code_roles)
     if mismatches:
         result["role_mismatches"] = mismatches
+    if name_reuses:
+        result["name_reuses"] = name_reuses[:6]
 
     # Scene plan event labels can keep system-job wording; clean NPC-looking entries only
     plan = result.get("scene_plan") if isinstance(result.get("scene_plan"), dict) else None
