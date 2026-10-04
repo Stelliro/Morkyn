@@ -53,7 +53,8 @@ SIMPLE_SURFACE = {
     "system_style",
     "magic_level",
     "death_rules",
-    "starter_equipment",
+    "start_location",
+    "starter_gear",
     "special_abilities",
 }
 

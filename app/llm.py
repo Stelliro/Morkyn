@@ -7267,6 +7267,11 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Fantasy natives: no modern phones; use local tools. Near-useless starts: no combat kit/legendaries. Match appearance."
             ),
             "world_races": "Generate a concise list of peoples/species only (e.g. human; human, elf, beastfolk). Include human unless excluded. Never power labels like Low-Power Human, and never skill/growth slogans.",
+            "tech_level": (
+                "The level of technology people live with, as an era of technology: stone, bronze, iron, medieval, renaissance, "
+                "early industrial, industrial, modern, near future, far future or spacefaring, optionally with one qualifier. "
+                "It must fit world_style. Not a mood, a genre, or a magic word."
+            ),
             "race_magic_rules": "Generate clear per-race magic access rules only. State who can cast, training vs innate, taboos. Do NOT paste global skill compounding delays, cooldowns, or player power fantasy.",
             "race_ability_rules": (
                 "Describe, for each people in world_races, their non-spell gifts and learned racial arts as they are for that people as a whole: "
@@ -8274,7 +8279,31 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             result=normalized,
             randomize_idea=randomize_idea,
         )
+    if "custom_skills" in normalized:
+        normalized["custom_skills"] = align_seed_skill_with_abilities(
+            normalized.get("custom_skills"), current_setup.get("special_abilities")
+        )
     return normalized
+
+
+def align_seed_skill_with_abilities(text: Any, abilities: Any) -> str:
+    """
+    The seed named in custom_skills is one of the powers on the cards.
+
+    The engine decides the name; the model only phrases the rule. Shown the
+    cards, Qwen3 8B still wrote "weak seed skill: Ember Resolve" beside a kit
+    whose powers were Sigil Smudge, Rattle Command, Mana Sip and Spear Line.
+    """
+    value = str(text or "")
+    cards = [a for a in (abilities or []) if isinstance(a, dict) and str(a.get("name") or "").strip()]
+    match = re.search(r"(weak seed skill:\s*)([^,;]+)", value, flags=re.I)
+    if not cards or not match:
+        return value
+    named = match.group(2).strip().lower()
+    if any(named == str(card["name"]).strip().lower() for card in cards):
+        return value
+    seed = next((card for card in cards if not card.get("locked")), cards[0])
+    return value[: match.start(2)] + str(seed["name"]).strip() + value[match.end(2):]
 
 
 def _normalize_sex_fields(

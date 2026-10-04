@@ -321,5 +321,27 @@ class TestSeedPowersAreNotAllDuplicates(unittest.TestCase):
                 self.assertTrue(card["description"].startswith(by_name[card["name"]][:20]), card)
             self.assertNotIn("different practical niche", card.get("description", ""))
 
+
+class TestTheEngineNamesTheSeed(unittest.TestCase):
+    CARDS = [{"name": "Sigil Smudge", "locked": True}, {"name": "Rattle Command", "locked": False}]
+
+    def test_a_foreign_seed_name_is_replaced_by_a_usable_card(self):
+        text = "weak seed skill: Ember Resolve, rank F / level 1, grows with risk"
+        out = llm.align_seed_skill_with_abilities(text, self.CARDS)
+        self.assertTrue(out.startswith("weak seed skill: Rattle Command,"), out)
+
+    def test_a_matching_name_and_no_cards_are_left_alone(self):
+        text = "weak seed skill: Sigil Smudge, rank F"
+        self.assertEqual(llm.align_seed_skill_with_abilities(text, self.CARDS), text)
+        self.assertEqual(llm.align_seed_skill_with_abilities("weak seed skill: X, rank F", []), "weak seed skill: X, rank F")
+
+    def test_the_simple_walk_rolls_gear_parents(self):
+        js = (ROOT / "static" / "app.js").read_text(encoding="utf-8")
+        import re as _re
+
+        walk = _re.search(r"const SIMPLE_RANDOM_FIELD_ORDER = \[(.*?)\];", js, _re.S).group(1)
+        for name in ("tech_level", "world_races", "start_location"):
+            self.assertIn(f'"{name}"', walk)
+
 if __name__ == "__main__":
     unittest.main()

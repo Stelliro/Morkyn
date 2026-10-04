@@ -720,6 +720,10 @@ const PRIMARY_RANDOM_FIELD_ORDER = [
 const SIMPLE_RANDOM_FIELD_ORDER = [
   "world_style",
   "custom_style",
+  // Gear and the vibe read these; left to Start they were the defaults
+  // ("iron age", "human") when gear rolled, so a cyberpunk kit got wool trousers.
+  "tech_level",
+  "world_races",
   "magic_level",
   "race_magic_enabled",
   "difficulty",
@@ -735,6 +739,8 @@ const SIMPLE_RANDOM_FIELD_ORDER = [
   "player_sex",
   "player_age",
   "player_name",
+  // The backstory ends where play starts; the place has to exist first.
+  "start_location",
   "character_backstory",
   "hair",
   "facial_features",
@@ -3883,6 +3889,16 @@ function currentSetupSnapshot(activeField = "") {
   if (activeField === "starter_gear" && !("starter_gear" in snapshot)) {
     snapshot.starter_gear = gearItems;
     snapshot._included_fields.push("starter_gear");
+  }
+  // Powers come late in the walk order, so a field rolled before them (custom_skills
+  // on Start) never saw them and named a different seed ("Label Decode" next to
+  // the card "Debt Echo"). Cards that exist are real content: send them.
+  if (!("special_abilities" in snapshot)) {
+    const cards = collectAbilities();
+    if (cards.length) {
+      snapshot.special_abilities = cards;
+      snapshot._included_fields.push("special_abilities");
+    }
   }
   lockedFields.forEach((name) => {
     snapshot._locked_values[name] = setupSnapshotValue(formData, name);
