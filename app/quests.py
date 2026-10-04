@@ -164,8 +164,50 @@ def create_quest(
 
 def get_active_quests(conn) -> list[dict[str, Any]]:
     """Return all active quests with their steps."""
+    return _quests_with_status(conn, "active")
+
+
+def get_offered_quests(conn) -> list[dict[str, Any]]:
+    """Offered (posted, not yet taken) quests with their steps and giver name."""
+    quests = _quests_with_status(conn, "offered")
+    for quest in quests:
+        quest["giver_name"] = ""
+        if quest.get("giver_npc_id"):
+            row = conn.execute("SELECT name FROM npcs WHERE id = ?", (quest["giver_npc_id"],)).fetchone()
+            quest["giver_name"] = str(row["name"] or "") if row else ""
+    return quests
+
+
+def pay_quest_completion(conn, quest_id: int, result: dict[str, Any]) -> None:
+    """Pay gold/xp and credit the giver when ``result`` (from advance_quest_step) completed the quest."""
+    if not result.get("completed"):
+        return
+    try:
+        conn.execute(
+            "UPDATE player SET gold = gold + ?, xp = xp + ? WHERE id = 1",
+            (int(result.get("reward_gold") or 0), int(result.get("reward_xp") or 0)),
+        )
+    except Exception:
+        pass
+    try:
+        quest_row = conn.execute("SELECT giver_npc_id FROM quests WHERE id = ?", (quest_id,)).fetchone()
+        giver_npc_id = int(quest_row["giver_npc_id"]) if quest_row and quest_row["giver_npc_id"] else None
+        if giver_npc_id:
+            from app.relationships import RELATIONSHIP_EVENTS, update_relationship
+
+            update_relationship(
+                conn,
+                giver_npc_id,
+                reason=f"Player completed quest {quest_id}",
+                **RELATIONSHIP_EVENTS["quest_complete_for_npc"],
+            )
+    except Exception:
+        pass
+
+
+def _quests_with_status(conn, status: str) -> list[dict[str, Any]]:
     rows = conn.execute(
-        "SELECT * FROM quests WHERE status = 'active' ORDER BY created_turn DESC"
+        "SELECT * FROM quests WHERE status = ? ORDER BY created_turn DESC, id DESC", (status,)
     ).fetchall()
     result = []
     for row in rows:

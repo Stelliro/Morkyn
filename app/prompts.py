@@ -450,6 +450,10 @@ Required JSON shape:
   "journal": [
     {"kind": "fact/quest/rumor/event/system", "content": "durable fact learned or event that happened"}
   ],
+  "quest_marks": [
+    {"op": "QUEST", "title": "work the story just offered", "giver": "NPC code or name", "step": "first thing to do", "location": "place code or name", "reward": "as promised"},
+    {"op": "QUEST_DONE", "quest": "Q-code or title", "action": "accept/step_done/complete/fail/abandon"}
+  ],
   "scene_focus": "action/conversation/travel/survival/filler/lore/system"
 }
 """
@@ -1184,13 +1188,22 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                 "code": latest.get("npc_code") or latest.get("code") or "",
                 "line": _one_line(latest.get("summary") or latest.get("topic") or latest.get("text")),
             }]
-    if _QUEST_RE.search(focus):
-        titles = []
-        for quest in context.get("active_quests") or []:
-            if isinstance(quest, dict) and quest.get("title"):
-                titles.append({"title": quest.get("title"), "code": quest.get("code") or ""})
-        if titles:
-            world["active_quests"] = titles[:6]
+    # The player's quests ride every turn, small: title, code and the step
+    # they are on. This used to need the word "quest" or "job" in the focus
+    # text, and the handoff dropped the key besides, so it never showed.
+    quests_view = []
+    for quest in context.get("active_quests") or []:
+        if not (isinstance(quest, dict) and quest.get("title")):
+            continue
+        entry = {"title": _one_line(quest.get("title"))[:80], "code": quest.get("code") or ""}
+        objective = _one_line(quest.get("current_objective") or "")
+        if objective:
+            entry["now"] = objective[:160]
+        if quest.get("turns_remaining"):
+            entry["turns_left"] = quest.get("turns_remaining")
+        quests_view.append(entry)
+    if quests_view:
+        world["active_quests"] = quests_view[: 6 if _QUEST_RE.search(focus) else 4]
     asks = context.get("relevant_asks")
     if isinstance(asks, list) and asks:
         lines = [str(item)[:240] for item in asks[:3] if str(item).strip()]
@@ -1253,7 +1266,10 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "say direction_hint.wording and do not add another place or a coordinate. "
         "When world_state.direction_hint is present and told is false, do not name a location for that question. "
         "When world_state.open_offers is present, those jobs are posted and not yet taken. "
-        "The player can accept one. Do not invent extra jobs. "
+        "The player can accept one. The story may offer other work that fits the scene and quest_style, "
+        "but not a pile of offers at once. "
+        "When world_state.active_quests is present, those are the player's jobs and the step each is on; "
+        "keep them consistent, and let the story move a step only when the player's action earns it. "
         "When world_state.naming_contract is present the player asked for a name: "
         "write naming_contract.name in the narration as plain text. Never describe a name without giving it. "
         "When world_state.recall_contract is present the player is answering something this "

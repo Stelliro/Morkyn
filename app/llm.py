@@ -325,6 +325,10 @@ TURN_SHAPE_KEYS = {
     "journal",
     "map_walk",
     "scene_cast",
+    # Narrator marks (DSL QUEST / QUEST_DONE) and the parser's proposals that
+    # world.apply_turn validates and instates. See app/quest_parser.py.
+    "quest_marks",
+    "quest_changes",
 }
 TURN_SHAPE_ORDER = (
     "scene_plan",
@@ -351,6 +355,8 @@ TURN_SHAPE_ORDER = (
     "journal",
     "map_walk",
     "scene_cast",
+    "quest_marks",
+    "quest_changes",
 )
 HANDOFF_BASE_CONTEXT_KEYS = {
     "settings",
@@ -378,6 +384,9 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "map_space",
     "direction_hint",
     "open_offers",
+    # The player's quests and their current step. prompts.py shows them every
+    # turn; this key was missing, so that view never fired.
+    "active_quests",
     "narrative_voice",
     "naming_contract",
     "recall_contract",
@@ -438,6 +447,7 @@ HANDOFF_TURN_LIST_LIMITS = {
     "inventory_capacity_modifiers": 8,
     "locations": 6,
     "npcs": 10,
+    "quest_marks": 6,
     "relationships": 12,
     "events": 12,
     "conversations": 8,
@@ -10067,6 +10077,39 @@ def _chat_content(
         )
 
 
+# Reasoning models (Qwen3) wrap hidden thinking in <think>...</think>. On
+# Qwen3 8B the prose-repair reply came back as "<think>\nOkay, the user wants me
+# to rewrite the given scene..." and that text became the player's narration.
+_THINK_BLOCK_RE = re.compile(r"<(think|thinking|reasoning)>.*?</\1>", re.I | re.S)
+_THINK_OPEN_RE = re.compile(r"<(?:think|thinking|reasoning)>.*\Z", re.I | re.S)
+
+
+def strip_reasoning(text: Any) -> str:
+    """Remove reasoning blocks; an unclosed one (cut off by the token cap) runs to the end and goes too."""
+    value = str(text or "")
+    if "<" not in value:
+        return value
+    value = _THINK_BLOCK_RE.sub("", value)
+    value = _THINK_OPEN_RE.sub("", value)
+    value = re.sub(r"</(?:think|thinking|reasoning)>", "", value, flags=re.I)
+    return value.strip()
+
+
+def _model_is_qwen3(config: dict[str, Any]) -> bool:
+    """True when the configured or resolved model is Qwen3, which honours /no_think."""
+    names = [str(config.get(key) or "") for key in ("mle_model", "gguf_model_path", "api_model")]
+    try:
+        from app.mle import resolve_model_path
+
+        if _normalize_provider(config.get("provider")) == "mle":
+            path = resolve_model_path(str(config.get("mle_model") or ""))
+            if path is not None:
+                names.append(path.name)
+    except Exception:
+        pass
+    return any("qwen3" in name.lower().replace("-", "").replace("_", "") or "qwen3" in name.lower() for name in names)
+
+
 def _chat_content_unlocked(
     system_prompt: str,
     user_prompt: str,
@@ -10078,6 +10121,37 @@ def _chat_content_unlocked(
     keep_words: list[str] | None = None,
 ) -> str:
     config = get_model_config()
+    if _model_is_qwen3(config) and "/no_think" not in user_prompt:
+        # Qwen3's switch for this turn: answer directly, no hidden reasoning.
+        # Thinking spent the token budget and the time of every call.
+        user_prompt = f"{user_prompt}\n/no_think"
+    return strip_reasoning(
+        _chat_content_dispatch(
+            config,
+            system_prompt,
+            user_prompt,
+            timeout=timeout,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            response_format=response_format,
+            hide_words=hide_words,
+            keep_words=keep_words,
+        )
+    )
+
+
+def _chat_content_dispatch(
+    config: dict[str, Any],
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    timeout: int = 90,
+    temperature: float = 0.75,
+    max_tokens: int | None = None,
+    response_format: str | None = "json",
+    hide_words: list[str] | None = None,
+    keep_words: list[str] | None = None,
+) -> str:
     response_tokens = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
     provider = _normalize_provider(config.get("provider"))
     if provider in {"llama_cpp", "openai"}:
@@ -11355,11 +11429,16 @@ def _resolve_verified_turn(
     if kind == "verdict":
         return _merge_verifier_verdict(_unwrap_verifier_verdict(verified) or {}, draft, context, trace, phase)
     try:
-        return _normalize_turn(verified, context)
+        resolved = _normalize_turn(verified, context)
     except LlmError as exc:
         if not _is_missing_narration_error(exc):
             raise
-        return _merge_verified_with_draft_narration(verified, draft)
+        resolved = _merge_verified_with_draft_narration(verified, draft)
+    # The verifier never writes quest marks; a full-turn reply replaces the
+    # draft, so carry the narrator's marks across.
+    if isinstance(resolved, dict) and isinstance(draft, dict) and draft.get("quest_marks") and not resolved.get("quest_marks"):
+        resolved["quest_marks"] = draft["quest_marks"]
+    return resolved
 
 
 def _turn_for_depth_retry(turn: dict[str, Any]) -> dict[str, Any]:
@@ -12760,6 +12839,10 @@ def _try_dsl_draft(
                 "narration_chars": _narration_char_count(turn),
                 "ops_count": dsl_meta.get("ops_count"),
                 "malformed_ops": int(dsl_meta.get("malformed_ops") or 0),
+                # Lines whose opcode is not on the list. They used to vanish
+                # untraced, so a model writing QUEST before it existed lost the
+                # line with no record.
+                "unknown_ops": list(dsl_meta.get("unknown_ops") or [])[:8],
             },
         )
         return turn
@@ -12903,6 +12986,10 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     )
     try:
         # Scope so nested _chat_content / pipeline calls use the themed model.
+        if isinstance(context, dict) and "active_quests" not in context:
+            # The planner packet does not carry the player's quests; the
+            # handoff keeps this key and prompts.py shows it.
+            context["active_quests"] = _load_active_quests_snapshot()
         with model_config_scope(config):
             result = _generate_turn_body(
                 context,
@@ -12921,6 +13008,16 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 progress_preview=progress_preview,
                 progress_end=progress_end,
                 progress_fail=progress_fail,
+            )
+            # The narration is final here (pipeline, prose repairs and the
+            # verifier are done), so the parser reads what the player reads.
+            result = _run_quest_parser(
+                result,
+                context,
+                player_input,
+                usage=usage,
+                trace=trace,
+                timeout=_model_timeout(60, 180, "AI_RPG_QUEST_PARSER_TIMEOUT"),
             )
         narr = ""
         if isinstance(result, dict):
@@ -12943,6 +13040,144 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     except Exception as exc:
         progress_fail(str(exc)[:240])
         raise
+
+
+def _quest_parser_enabled() -> bool:
+    """AI_RPG_QUEST_PARSER=0 turns the parser call off; narrator marks still flow."""
+    return _env_bool("AI_RPG_QUEST_PARSER", True)
+
+
+def _load_active_quests_snapshot() -> list[dict[str, Any]]:
+    """Read-only: the player's active quests in the compact prompt shape."""
+    try:
+        from app.quests import quest_context_for_llm
+
+        with connect() as conn:
+            return list(quest_context_for_llm(conn) or [])[:8]
+    except Exception:
+        return []
+
+
+def _quest_parser_inputs(context: dict[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    """NPCs, places, active quests and offers the parser may reference, from the turn context."""
+    ctx = context if isinstance(context, dict) else {}
+    npcs: list[dict[str, Any]] = []
+    places: list[dict[str, Any]] = []
+    seen_npcs: set[str] = set()
+    seen_places: set[str] = set()
+    current = ctx.get("current_location") if isinstance(ctx.get("current_location"), dict) else {}
+    for loc in [current, *(ctx.get("locations") or [])]:
+        if not isinstance(loc, dict):
+            continue
+        key = str(loc.get("code") or loc.get("name") or "").strip()
+        if key and key not in seen_places:
+            seen_places.add(key)
+            places.append({"code": str(loc.get("code") or ""), "name": str(loc.get("name") or "")})
+        for npc in loc.get("npcs") or []:
+            if not isinstance(npc, dict):
+                continue
+            nkey = str(npc.get("code") or npc.get("name") or "").strip()
+            if nkey and nkey not in seen_npcs:
+                seen_npcs.add(nkey)
+                npcs.append(
+                    {
+                        "code": str(npc.get("code") or ""),
+                        "name": str(npc.get("name") or ""),
+                        "role": str(npc.get("role") or ""),
+                    }
+                )
+    return {
+        "npcs": npcs[:16],
+        "locations": places[:12],
+        "active_quests": [q for q in (ctx.get("active_quests") or []) if isinstance(q, dict)][:8],
+        "open_offers": [o for o in (ctx.get("open_offers") or []) if isinstance(o, dict)][:8],
+    }
+
+
+def _run_quest_parser(
+    turn: Any,
+    context: dict[str, Any] | None,
+    player_input: str,
+    *,
+    usage: list[dict[str, Any]] | None = None,
+    trace: list[dict[str, Any]] | None = None,
+    timeout: int = 90,
+    use_model: bool = True,
+) -> Any:
+    """
+    Read the final narration for quest material and attach turn["quest_changes"].
+
+    The narrator offers work in prose (and may mark it with QUEST / QUEST_DONE).
+    When ``quest_parser.needs_quest_parse`` says the turn may hold quest material,
+    one small parser call proposes quests and updates; ``merge_marks`` folds in
+    the narrator's marks. world.apply_turn validates and instates the result.
+    Nothing here may break a turn: any failure is traced and the turn goes on,
+    with the narrator's marks alone when they can still be merged.
+    """
+    if not isinstance(turn, dict):
+        return turn
+    started = time.time()
+    marks = [m for m in (turn.get("quest_marks") or []) if isinstance(m, dict)]
+    narration = str(turn.get("narration") or "")
+    if not narration:
+        narration = "\n\n".join(
+            str(s.get("text") or "") for s in (turn.get("narration_segments") or []) if isinstance(s, dict)
+        )
+    record: dict[str, Any] = {
+        "phase": "quest_parser",
+        "event": "skipped",
+        "marks": len(marks),
+        "enabled": _quest_parser_enabled(),
+    }
+    empty = {"new": [], "updates": []}
+    try:
+        from app import quest_parser as qp
+
+        record["phase"] = qp.PARSER_PHASE
+        inputs = _quest_parser_inputs(context)
+        gate = bool(
+            qp.needs_quest_parse(
+                narration,
+                player_input,
+                marks=marks,
+                active_quests=inputs["active_quests"],
+                open_offers=inputs["open_offers"],
+            )
+        )
+        record["gate"] = gate
+        parsed: dict[str, Any] = dict(empty)
+        if gate and use_model and record["enabled"]:
+            system, user = qp.build_parser_prompt(narration, player_input, marks=marks, **inputs)
+            record["prompt_chars"] = len(system) + len(user)
+            raw: Any = None
+            try:
+                raw = _chat_json(
+                    system,
+                    user,
+                    timeout=timeout,
+                    usage=usage,
+                    phase=qp.PARSER_PHASE,
+                    max_tokens=qp.PARSER_MAX_TOKENS,
+                    trace=trace,
+                )
+                parsed = qp.parse_reply(raw)
+                record["event"] = "parsed"
+            except Exception as exc:  # model down, bad JSON, timeout: marks alone
+                record["event"] = "model_failed"
+                record["error"] = _trim_text(str(exc) or exc.__class__.__name__, 400)
+            record["raw_reply"] = raw
+        changes = qp.merge_marks(parsed, marks)
+        if isinstance(changes, dict) and (changes.get("new") or changes.get("updates")):
+            turn["quest_changes"] = changes
+        record["proposal"] = changes
+        if record["event"] == "skipped" and marks:
+            record["event"] = "marks_only"
+    except Exception as exc:  # the contract module is not ready, or it raised
+        record["event"] = "error"
+        record["error"] = _trim_text(f"{exc.__class__.__name__}: {exc}", 400)
+    record["seconds"] = round(time.time() - started, 3)
+    _append_trace(trace, record)
+    return turn
 
 
 def _generate_turn_body(

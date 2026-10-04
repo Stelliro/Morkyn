@@ -12247,6 +12247,7 @@ let questStageData = null;
 
 /** Player-facing quest log — active quests from /api/quests. */
 let playerQuestData = null;
+let playerQuestOffers = [];
 
 async function loadPlayerQuests() {
   try {
@@ -12254,15 +12255,39 @@ async function loadPlayerQuests() {
     if (!response.ok) return;
     const payload = await response.json();
     playerQuestData = payload.quests || [];
+    playerQuestOffers = Array.isArray(payload.offered) ? payload.offered : [];
     if (activeTab === "quests") renderIndex();
   } catch (_) {
     // Silently ignore — the quest system may not be seeded yet.
   }
 }
 
+/** Jobs the story offered (or a board posted) that the player has not taken yet. */
+function renderOfferedQuestSection() {
+  if (!playerQuestOffers.length) return "";
+  const cards = playerQuestOffers
+    .map((q) => {
+      const giver = q.giver_name ? `from ${escapeHtml(q.giver_name)}` : "posted";
+      const reward = `${Number(q.reward_gold) || 0}g / ${Number(q.reward_xp) || 0}xp`;
+      const promised = String(q.description || "").match(/Promised: (.+)$/);
+      const first = (q.steps || [])[0];
+      return `
+        <article class="card questCard questOfferCard">
+          <header>
+            <strong>${escapeHtml(q.code)} — ${escapeHtml(q.title)}</strong>
+            <span class="meta">${giver} · ${escapeHtml(promised ? promised[1] : reward)}</span>
+          </header>
+          ${first ? `<p>${escapeHtml(first.title || "")}${first.location_name ? ` · ${escapeHtml(first.location_name)}` : ""}</p>` : ""}
+        </article>`;
+    })
+    .join("");
+  return `<h3 class="questSectionTitle">Offered</h3>${cards}<h3 class="questSectionTitle">Active</h3>`;
+}
+
 function renderPlayerQuestSection() {
+  const offered = renderOfferedQuestSection();
   if (!playerQuestData || playerQuestData.length === 0) {
-    return `<p class="empty">No active quests. Use <strong>Seed starter quests</strong> below to add a few, or quests will appear as you play.</p>
+    return `${offered}<p class="empty">No active quests. Use <strong>Seed starter quests</strong> below to add a few, or quests will appear as you play.</p>
       <div class="composerActions" style="margin-bottom:0.5rem">
         <button type="button" class="chipBtn secondaryButton" id="seedQuestsBtn">Seed starter quests</button>
       </div>`;
@@ -12288,7 +12313,7 @@ function renderPlayerQuestSection() {
         </div>
       </article>`;
   }).join("");
-  return cards + `<div class="composerActions" style="margin-top:0.5rem"><button type="button" class="chipBtn secondaryButton" id="seedQuestsBtn" title="Add a handful of starter quests">Seed starter quests</button></div>`;
+  return offered + cards + `<div class="composerActions" style="margin-top:0.5rem"><button type="button" class="chipBtn secondaryButton" id="seedQuestsBtn" title="Add a handful of starter quests">Seed starter quests</button></div>`;
 }
 
 function renderQuests() {

@@ -4229,6 +4229,23 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         state["active_quests"] = quest_context_for_llm(conn)
     except Exception:
         state["active_quests"] = []
+    # Posted, not yet taken: the quest parser files story offers here too.
+    try:
+        from app.quests import get_offered_quests
+
+        state["open_quest_offers"] = [
+            {
+                "code": q.get("code"),
+                "title": q.get("title"),
+                "status": "offered",
+                "giver": q.get("giver_name") or "",
+                "reward": f"{q.get('reward_gold') or 0}g / {q.get('reward_xp') or 0}xp",
+                "current_objective": (q.get("steps") or [{}])[0].get("description", ""),
+            }
+            for q in get_offered_quests(conn)[:8]
+        ]
+    except Exception:
+        state["open_quest_offers"] = []
     try:
         from app.relationships import all_relationships_for_llm
         state["npc_player_relationships"] = all_relationships_for_llm(conn)
@@ -12340,7 +12357,7 @@ def _apply_story_map_walk(
 # re-reads state from the database on some paths (injuries) and must carry
 # every one of these across that refresh; keeping the list in one place is
 # what stops a new measurement from silently vanishing on half the turns.
-TURN_STATE_TELEMETRY_KEYS: tuple[str, ...] = ("dice_rolls", "movement", "map_walk", "voice_check", "gear_check")
+TURN_STATE_TELEMETRY_KEYS: tuple[str, ...] = ("dice_rolls", "movement", "map_walk", "voice_check", "gear_check", "quest_report")
 
 
 def apply_turn(
@@ -12355,6 +12372,7 @@ def apply_turn(
     # after that have to land on the object the caller returns as the turn.
     caller_result = result
     map_report: dict[str, Any] = {"status": "skipped", "steps_taken": 0}
+    quest_report: dict[str, Any] = {"status": "skipped", "created": [], "updated": [], "rejected": []}
     with connect() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         next_turn = int(row["value"]) + 1 if row else 1
@@ -12691,6 +12709,26 @@ def apply_turn(
                 )
         except Exception:
             pass
+        # Quests the story offered, the player took, or a step the story
+        # finished: proposed by the quest parser (and narrator QUEST marks),
+        # grounded and instated here. Runs after NPC minting (a giver met this
+        # turn resolves) and after the offer-accept regex above.
+        quest_changes = result.get("quest_changes") if isinstance(result.get("quest_changes"), dict) else None
+        quest_marks = result.get("quest_marks") if isinstance(result.get("quest_marks"), list) else None
+        if (quest_changes or quest_marks) and _play_system_enabled(conn, "quests_enabled", True):
+            try:
+                from app.quest_parser import apply_quest_changes, merge_marks
+
+                changes = dict(quest_changes or {"new": [], "updates": []})
+                if quest_marks:
+                    source_before = changes.get("source")
+                    changes = merge_marks({**changes, "_parser_ran": bool(quest_changes), "source": source_before or "parser"}, quest_marks)
+                quest_report = apply_quest_changes(
+                    conn, changes, narration=narration, player_input=player_input, turn=turn
+                )
+            except Exception as exc:
+                quest_report = {"status": "error", "error": str(exc)[:300], "created": [], "updated": [], "rejected": []}
+        result["quest_report"] = quest_report
         if gear_report.get("status") == "unequipped" and gear_report.get("items"):
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
@@ -12758,6 +12796,8 @@ def apply_turn(
         # Measurable the same way: how often the prose dresses the player in
         # something the record never gave them. Reported, never rewritten.
         state["gear_check"] = check_unowned_gear(narration, worn_gear_index(state))
+        # What the quest pass created, advanced, or refused this turn.
+        state["quest_report"] = {**quest_report, "turn": turn}
     if result is not caller_result:
         caller_result.clear()
         caller_result.update(result)

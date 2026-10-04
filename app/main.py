@@ -3986,11 +3986,13 @@ class RelationshipUpdateRequest(BaseModel):
 
 @app.get("/api/quests")
 def api_get_quests():
-    from app.quests import get_active_quests
+    from app.quests import get_active_quests, get_offered_quests
     from app.db import connect
     with connect() as conn:
         quests = get_active_quests(conn)
-    return {"ok": True, "quests": quests}
+        offered = get_offered_quests(conn)
+    # "quests" stays active-only for older callers; offers ride alongside.
+    return {"ok": True, "quests": quests, "offered": offered}
 
 
 @app.get("/api/quests/markers")
@@ -4192,29 +4194,10 @@ def api_advance_quest(quest_id: int):
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         turn = int(row["value"]) if row else 0
         result = advance_quest_step(conn, quest_id, turn=turn)
-        if result.get("completed"):
-            try:
-                conn.execute(
-                    "UPDATE player SET gold = gold + ?, xp = xp + ? WHERE id = 1",
-                    (result["reward_gold"], result["reward_xp"]),
-                )
-            except Exception:
-                pass
-            # Apply quest completion relationship delta to the giver NPC
-            try:
-                quest_row = conn.execute(
-                    "SELECT giver_npc_id FROM quests WHERE id = ?", (quest_id,)
-                ).fetchone()
-                giver_npc_id = int(quest_row["giver_npc_id"]) if quest_row and quest_row["giver_npc_id"] else None
-                if giver_npc_id:
-                    from app.relationships import update_relationship, RELATIONSHIP_EVENTS
-                    update_relationship(
-                        conn, giver_npc_id,
-                        reason=f"Player completed quest {quest_id}",
-                        **RELATIONSHIP_EVENTS["quest_complete_for_npc"],
-                    )
-            except Exception:
-                pass
+        # Same payout the quest parser uses when the story completes a quest.
+        from app.quests import pay_quest_completion
+
+        pay_quest_completion(conn, quest_id, result)
     return result
 
 

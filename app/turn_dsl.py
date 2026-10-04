@@ -42,7 +42,12 @@ OPCODES = {
     "INDEX",
     "NOTE",
     "CAST",
+    # Quest marks. Optional: the engine's quest parser also reads the prose.
+    "QUEST",
+    "QUEST_DONE",
 }
+
+QUEST_DONE_ACTIONS = ("accept", "step_done", "complete", "fail", "abandon")
 
 NAR_MARKERS = ("===NAR===", "===NARRATION===", "@NAR")
 OPS_MARKERS = ("===OPS===", "@OPS")
@@ -92,6 +97,8 @@ CAST present <npc_code>
 CAST interacting <npc_code>
 CAST off <npc_code>
 CAST keyword <one scene word>
+QUEST "<title>" GIVER <npc code or "name"> STEP "<first thing to do>" [AT <place code or "name">] [REWARD "<as promised>"]
+QUEST_DONE <Q-code or "title"> <accept|step_done|complete|fail|abandon>
 
 Rules:
 CAST is the only way to change who is in the active scene.
@@ -99,6 +106,10 @@ interacting = the character who replies to the player. present = nearby and rele
 If nobody is interacting, do not invent a speaker. If you want someone to address the player, CAST interacting that code.
 A later "how was your day?" is for the interacting character, not everyone marked present.
 Leave CAST out when the scene cast does not change.
+QUEST marks work the story just offered or the player just took on. Marking is optional: the
+engine also reads the prose for offered work, so write the offer in ===NAR=== either way. At most
+one QUEST per turn, and only for real work with a giver and a first step, not idle talk.
+QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dropped.
 - Database/world_state is source of truth. Only propose justified changes.
 - playthrough_options.choices are this playthrough's labels. For RANK, use only the rungs named in choices.rank_scale. playthrough_options.setting_templates, when present, is the one written rule this action named. Follow that included rule. Do not replace its labels.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
@@ -200,6 +211,7 @@ def _decode_arg_escapes(text: str) -> str:
 # "INDEX npc F \"...\"" parsed as flags={NPC: F} with one positional left, failed
 # INDEX's own arity check, and cost the turn every op on every other line.
 _LEADING_POSITIONALS = {"FOCUS": 1, "INDEX": 2}
+_OPCODE_FLAG_KEYS: dict[str, set[str]] = {"QUEST": {"GIVER", "STEP", "AT", "REWARD"}}
 
 
 def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
@@ -247,6 +259,9 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
         "VERDICT",
         "SKILL",
     }
+    # Flag words that only mean something on one op. "AT" and "STEP" are
+    # ordinary words elsewhere, so they are flags on QUEST lines alone.
+    flag_keys = flag_keys | _OPCODE_FLAG_KEYS.get(normalize_opcode(opcode), set())
     force_positional_remaining = _LEADING_POSITIONALS.get(opcode, 0)
     i = 1
     while i < len(parts):
@@ -357,6 +372,14 @@ OPCODE_ALIASES = {
     "EXP": "XP",
     "RELATION": "REL",
     "RELATIONSHIP": "REL",
+    "OFFER": "QUEST",
+    "JOB": "QUEST",
+    "TASK": "QUEST",
+    "QUEST_NEW": "QUEST",
+    "NEWQUEST": "QUEST",
+    "QUEST_UPDATE": "QUEST_DONE",
+    "QUESTDONE": "QUEST_DONE",
+    "QUEST_STEP": "QUEST_DONE",
 }
 
 
@@ -369,6 +392,11 @@ def normalize_opcode(opcode: str) -> str:
 
 
 def parse_ops(ops_block: str) -> list[dict[str, Any]]:
+    return parse_ops_detailed(ops_block)[0]
+
+
+def parse_ops_detailed(ops_block: str) -> tuple[list[dict[str, Any]], list[str]]:
+    """Ops plus the lines whose opcode is not on the list (they used to vanish untraced)."""
     ops: list[dict[str, Any]] = []
     seen_lines = 0
     skipped: list[str] = []
@@ -390,7 +418,7 @@ def parse_ops(ops_block: str) -> list[dict[str, Any]]:
     if seen_lines and not ops:
         # Nothing at all parsed: this is not a typo, it is the wrong format.
         raise TurnDslError(f"No recognizable opcodes in ops block: {'; '.join(skipped[:3])}")
-    return ops
+    return ops, skipped
 
 
 def _paragraphs(narration: str) -> list[dict[str, str]]:
@@ -753,6 +781,30 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         content = " ".join(args) if args else ""
         if content:
             turn["journal"].append({"kind": "fact", "content": content[:1400]})
+    elif op == "QUEST":
+        title = str(args[0] if args else flags.get("NAME", "")).strip()
+        if not title:
+            raise TurnDslError(f"QUEST requires a title on line {entry['line']}")
+        step = flags.get("STEP") or (args[1] if len(args) > 1 else "")
+        turn.setdefault("quest_marks", []).append(
+            {
+                "op": "QUEST",
+                "title": title[:80],
+                "giver": str(flags.get("GIVER") or "").strip()[:80],
+                "step": str(step).strip()[:240],
+                "location": str(flags.get("AT") or flags.get("LOC") or "").strip()[:80],
+                "reward": str(flags.get("REWARD") or "").strip()[:160],
+                "evidence": "",
+            }
+        )
+    elif op == "QUEST_DONE":
+        quest = str(args[0] if args else "").strip()
+        action = str(args[1] if len(args) > 1 else "step_done").strip().lower().replace("-", "_")
+        if action == "done":
+            action = "step_done"
+        if not quest or action not in QUEST_DONE_ACTIONS:
+            raise TurnDslError(f"QUEST_DONE requires a quest and one of {', '.join(QUEST_DONE_ACTIONS)} on line {entry['line']}")
+        turn.setdefault("quest_marks", []).append({"op": "QUEST_DONE", "quest": quest[:80], "action": action})
     elif op == "CAST":
         slot = str(args[0] if args else "").strip().lower()
         value = " ".join(args[1:]).strip() if len(args) > 1 else ""
@@ -863,8 +915,10 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
 
 def parse_dsl_turn(text: str, player_input: str = "") -> dict[str, Any]:
     narration, ops_block = split_nar_ops(text)
-    ops = parse_ops(ops_block)
+    ops, skipped = parse_ops_detailed(ops_block)
     turn = ops_to_turn(narration, ops, player_input=player_input)
+    if skipped:
+        turn["_dsl"]["unknown_ops"] = skipped[:8]
     return turn
 
 
@@ -916,7 +970,8 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     offers = context.get("open_offers") if isinstance(context, dict) else None
     if isinstance(offers, list) and offers:
         instructions.append(
-            "open_offers are posted and not yet taken. They can be accepted. Do not invent extra jobs."
+            "open_offers are posted and not yet taken. They can be accepted. The story may offer other work "
+            "that fits this scene and quest_style, but not a pile of offers at once."
         )
     options = {}
     if isinstance(context, dict):

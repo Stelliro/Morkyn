@@ -82,6 +82,17 @@ class TestCitedKeysSurvive(unittest.TestCase):
         self.assertIn("world_time", ALLOWED)
         self.assertIn("world_time", _cited_world_state_keys())
 
+    def test_active_quests_survive(self):
+        # prompts.py built an active-quest view from world_state.active_quests
+        # while the handoff dropped the key, so the narrator never saw the
+        # player's quests.
+        self.assertIn("active_quests", ALLOWED)
+        self.assertIn("active_quests", _cited_world_state_keys())
+        cleaned = _clean_context_for_handoff(
+            {"active_quests": [{"code": "Q1", "title": "Find the well"}]}, "planner_to_draft"
+        )
+        self.assertEqual(cleaned.get("active_quests"), [{"code": "Q1", "title": "Find the well"}])
+
 
 class TestTheFilterActuallyKeepsThem(unittest.TestCase):
     """The allowlist is necessary but the filter is what decides."""
