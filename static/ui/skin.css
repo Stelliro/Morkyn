@@ -1095,6 +1095,30 @@ a.mainMenuGhost:hover {
   color: var(--muted);
 }
 
+/* The settlement grid is a square shard of the same void: one hairline. */
+.settlementCanvas {
+  border: 1px solid var(--thread-dim);
+  background: var(--ink);
+}
+
+.settlementInfo {
+  color: var(--muted);
+}
+
+.settlementSummary {
+  color: var(--text);
+}
+
+.settlementPlace.isHere,
+.settlementVenue.isHere {
+  color: var(--thread);
+}
+
+.settlementWards {
+  font-style: italic;
+  color: var(--muted-2);
+}
+
 .mapSection .mapTravelBanner {
   font-style: italic;
   color: var(--muted-2);
@@ -1219,6 +1243,12 @@ a.mainMenuGhost:hover {
 .sceneStatusLine {
   font-size: 0.72rem;
   color: var(--thread);
+}
+
+.sceneClock {
+  font-family: var(--font);
+  letter-spacing: var(--track-title);
+  color: var(--label);
 }
 
 .code {

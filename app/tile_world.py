@@ -1809,6 +1809,203 @@ def list_settlements(map_data: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _settlement_res(side: int, span: int) -> int:
+    """Samples per cell edge: enough to read the wards, few enough to send a metropolis."""
+    return max(1, min(int(side), max(12, 64 // max(1, int(span)))))
+
+
+def settlement_view(
+    map_data: dict[str, Any],
+    *,
+    city_id: str = "",
+    places: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """One settlement's own grid, read-only, drawn only as far as the player knows it.
+
+    The world map's rules decide what is known: a settlement is listed once a
+    tile of it was seen or someone told you of it. Inside it, a world cell shows
+    its wards and streets only when that cell was seen; the rest is outline.
+    Without ``city_id`` the settlement you stand in is chosen, else none.
+    """
+    if str(map_data.get("scale") or "") != "world" or not map_data.get("cities"):
+        return {"available": False, "reason": "This map has no settlement grids.", "settlements": []}
+    from app.world_scale import cell_raster, index_cities
+
+    cities = {str(c.get("id") or ""): c for c in map_data.get("cities") or [] if isinstance(c, dict)}
+    px = int((map_data.get("player") or {}).get("x") or 0)
+    py = int((map_data.get("player") or {}).get("y") or 0)
+    index = map_data.get("cell_index")
+    if not isinstance(index, dict):
+        index = index_cities(list(cities.values()))
+    here_entry = index.get(f"{px},{py}") or {}
+    here_id = str((here_entry.get("city") or {}).get("id") or "")
+    seen = {str(v) for v in (map_data.get("visited") or [])} | {str(v) for v in (map_data.get("revealed") or [])}
+    seen.add(f"{px},{py}")
+    known: list[dict[str, Any]] = []
+    for item in filter_settlements_for_player(map_data):
+        sid = str(item.get("id") or "")
+        if sid in cities:
+            known.append(
+                {
+                    "id": sid,
+                    "name": str(cities[sid].get("name") or item.get("name") or "Settlement"),
+                    "band": str(cities[sid].get("band") or ""),
+                    "known_how": str(item.get("known_how") or ""),
+                    "here": sid == here_id,
+                }
+            )
+    if here_id and not any(k["id"] == here_id for k in known):
+        city = cities[here_id]
+        known.insert(0, {"id": here_id, "name": str(city.get("name") or "Settlement"),
+                         "band": str(city.get("band") or ""), "known_how": "visited", "here": True})
+    known_ids = {k["id"] for k in known}
+    wanted = str(city_id or "").strip()
+    if wanted and wanted not in known_ids:
+        wanted = ""
+    selected = wanted or here_id
+    out: dict[str, Any] = {
+        "available": True,
+        "settlements": known,
+        "selected": selected,
+        "here": here_id,
+        "settlement": None,
+    }
+    if not selected:
+        out["reason"] = "You are not in a settlement you know." if known else "You know of no settlement yet."
+        return out
+    city = cities[selected]
+    cells = [c for c in city.get("cells") or [] if isinstance(c, dict)]
+    span = city.get("span") or [1, 1]
+    span_w, span_h = max(1, int(span[0])), max(1, int(span[1]))
+    drawn: list[dict[str, Any]] = []
+    for cell in cells:
+        cx, cy = int(cell.get("x") or 0), int(cell.get("y") or 0)
+        local = cell.get("local") or [0, 0]
+        side = max(1, int(cell.get("side") or 1))
+        is_known = f"{cx},{cy}" in seen
+        entry: dict[str, Any] = {
+            "x": cx,
+            "y": cy,
+            "local": [int(local[0]), int(local[1])],
+            "side": side,
+            "known": is_known,
+            "here": cx == px and cy == py,
+        }
+        if is_known:
+            res = _settlement_res(side, max(span_w, span_h))
+            entry["res"] = res
+            entry["raster"] = cell_raster(cell, res)
+            entry["districts"] = [
+                {
+                    "id": str(d.get("id") or ""),
+                    "type": str(d.get("type") or ""),
+                    "label": str(d.get("label") or d.get("type") or ""),
+                    "name": str(d.get("name") or ""),
+                    "anchor": [int((d.get("anchor") or [0, 0])[0]), int((d.get("anchor") or [0, 0])[1])],
+                    "requires_entry": bool(d.get("requires_entry")),
+                }
+                for d in cell.get("districts") or []
+                if isinstance(d, dict)
+            ]
+        drawn.append(entry)
+    player = None
+    if selected == here_id:
+        cell = here_entry.get("cell") or {}
+        side = max(1, int(cell.get("side") or 1))
+        local = cell.get("local") or [0, 0]
+        # The engine keeps no finer position than the world cell; its centre stands in.
+        player = {"x": px, "y": py, "local": [int(local[0]), int(local[1])],
+                  "fine_x": side // 2, "fine_y": side // 2, "side": side}
+    out["settlement"] = {
+        "id": selected,
+        "name": str(city.get("name") or "Settlement"),
+        "band": str(city.get("band") or ""),
+        "span": [span_w, span_h],
+        "cells": drawn,
+        "known_cells": sum(1 for c in drawn if c["known"]),
+        "player": player,
+        "places": [
+            p for p in (places or [])
+            if isinstance(p, dict) and any(int(p.get("x", -1)) == c["x"] and int(p.get("y", -1)) == c["y"] for c in drawn)
+        ],
+    }
+    return out
+
+
+def settlement_places(map_data: dict[str, Any], conn) -> list[dict[str, Any]]:
+    """Places the player has been, pinned to world cells, with the venues inside them.
+
+    A row in ``locations`` exists only once the story reached it, so every one is
+    known. Outdoor places carry their tile in ``place_anchors``; the place you
+    stand in (or the outdoor place around the room you are in) sits on your tile.
+    """
+    from app.venues import hours_note, kind_label
+
+    rows = [dict(r) for r in conn.execute(
+        "SELECT id, code, name, parent_id, kind, open_minute, close_minute FROM locations"
+    ).fetchall()]
+    by_id = {int(r["id"]): r for r in rows}
+    children: dict[int, list[dict[str, Any]]] = {}
+    for r in rows:
+        if int(r.get("parent_id") or 0):
+            children.setdefault(int(r["parent_id"]), []).append(r)
+    minute_row = conn.execute("SELECT value FROM pacing WHERE key = 'world_minute'").fetchone()
+    try:
+        minute = int(float(minute_row["value"])) if minute_row else 0
+    except (TypeError, ValueError):
+        minute = 0
+    player_row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    current = int(player_row["current_location_id"] or 0) if player_row else 0
+    current_root = current
+    guard = 0
+    while current_root and int((by_id.get(current_root) or {}).get("parent_id") or 0) and guard < 16:
+        current_root = int(by_id[current_root]["parent_id"])
+        guard += 1
+    px = int((map_data.get("player") or {}).get("x") or 0)
+    py = int((map_data.get("player") or {}).get("y") or 0)
+    pinned: dict[int, tuple[int, int]] = {}
+    for r in rows:
+        if int(r.get("parent_id") or 0):
+            continue
+        anchor = _anchor_at(map_data, str(r.get("code") or ""), str(r.get("name") or ""))
+        if anchor and anchor.get("x") is not None:
+            pinned[int(r["id"])] = (int(anchor["x"]), int(anchor["y"]))
+    if current_root and current_root in by_id and current_root not in pinned:
+        pinned[current_root] = (px, py)
+
+    def _venues(parent: int, depth: int = 0) -> list[dict[str, Any]]:
+        found = []
+        for r in children.get(parent, []):
+            kind = str(r.get("kind") or "")
+            found.append(
+                {
+                    "code": str(r.get("code") or ""),
+                    "name": str(r.get("name") or ""),
+                    "kind": kind,
+                    "label": kind_label(kind) if kind else "",
+                    "hours": hours_note(r, minute) if kind else "",
+                    "here": int(r["id"]) == current,
+                    "venues": _venues(int(r["id"]), depth + 1) if depth < 4 else [],
+                }
+            )
+        return found
+
+    places = []
+    for loc_id, (x, y) in pinned.items():
+        r = by_id[loc_id]
+        places.append(
+            {
+                "code": str(r.get("code") or ""),
+                "name": str(r.get("name") or ""),
+                "x": x,
+                "y": y,
+                "here": loc_id == current,
+                "venues": _venues(loc_id),
+            }
+        )
+    return places
+
+
 def local_map_view(map_data: dict[str, Any], *, radius: int = 6) -> dict[str, Any]:
     """Remembered land around the journey, not a sliding window that forgets.
 

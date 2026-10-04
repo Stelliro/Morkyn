@@ -60,6 +60,11 @@ const continueButton = document.querySelector("#continueButton");
 const waitButton = document.querySelector("#waitButton");
 const waitPopover = document.querySelector("#waitPopover");
 const worldTimeLine = document.querySelector("#worldTimeLine");
+const sceneClock = document.querySelector("#sceneClock");
+// Map view: "world" (the lens) or "settlement" (one settlement's own grid, playtest #19).
+let mapViewMode = "world";
+let settlementPick = "";
+let settlementData = null;
 const weatherLine = document.querySelector("#weatherLine");
 const areaRepLine = document.querySelector("#areaRepLine");
 const venueLine = document.querySelector("#venueLine");
@@ -8949,9 +8954,22 @@ function renderShell(nextState, options = {}) {
   queueAutoNpcPortraits();
 }
 
+// "Day 1 · 08:27 · morning" from the engine's clock. The word comes from the server.
+function formatSceneClock(wt) {
+  if (!wt || typeof wt !== "object" || wt.day == null) return "Day — · --:--";
+  const hh = String(wt.hour ?? 0).padStart(2, "0");
+  const mm = String(wt.minute_of_hour ?? 0).padStart(2, "0");
+  const part = String(wt.part_of_day || "").trim();
+  return `Day ${wt.day} · ${hh}:${mm}${part ? ` · ${part}` : ""}`;
+}
+
 function updateWorldTimeLine(worldTime) {
-  if (!worldTimeLine) return;
   const wt = worldTime && typeof worldTime === "object" ? worldTime : state?.world_time;
+  if (sceneClock) {
+    sceneClock.textContent = formatSceneClock(wt);
+    sceneClock.title = wt?.label ? `In-world time · ${wt.label}` : "In-world time";
+  }
+  if (!worldTimeLine) return;
   if (!wt || !wt.label) {
     worldTimeLine.textContent = "Day — · --:--";
     return;
@@ -24727,8 +24745,274 @@ let _lastNpcMarkers = [];
 /** NPC ids the player has pinned to watch (string ids matching API response). */
 const _watchedNpcIds = new Set();
 
+// ---------------------------------------------------------------------------
+// Settlement view. The server sends only what the player knows: wards of the
+// tiles they have seen, outline for the rest. Light is a line; nothing filled.
+function setMapViewMode(mode) {
+  mapViewMode = mode === "settlement" ? "settlement" : "world";
+  const on = mapViewMode === "settlement";
+  document.querySelectorAll("#mapViewBar [data-map-view]").forEach((btn) => {
+    const active = btn.getAttribute("data-map-view") === mapViewMode;
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+    btn.classList.toggle("activeChip", active);
+  });
+  const view = document.querySelector("#settlementView");
+  const info = document.querySelector("#settlementInfo");
+  const pick = document.querySelector("#mapSettlementSelect");
+  if (view) view.hidden = !on;
+  if (info) info.hidden = !on;
+  if (pick) pick.hidden = !on || !(settlementData?.settlements || []).length;
+  if (on) refreshSettlementView();
+}
+
+async function refreshSettlementView() {
+  if (mapViewMode !== "settlement") return;
+  const query = settlementPick ? `?city_id=${encodeURIComponent(settlementPick)}` : "";
+  let data = null;
+  try {
+    const res = await fetch(`/api/tiles/map/settlement${query}`, { cache: "no-store" });
+    data = res.ok ? await res.json() : null;
+  } catch (_) {
+    data = null;
+  }
+  settlementData = data || { available: false, reason: "The settlement map could not be loaded.", settlements: [] };
+  paintSettlementPicker(settlementData);
+  paintSettlementCanvas(settlementData);
+  paintSettlementInfo(settlementData);
+}
+
+function paintSettlementPicker(data) {
+  const pick = document.querySelector("#mapSettlementSelect");
+  if (!pick) return;
+  const list = Array.isArray(data?.settlements) ? data.settlements : [];
+  pick.hidden = mapViewMode !== "settlement" || !list.length;
+  const options = [];
+  if (!data?.selected) options.push(`<option value="">Choose a settlement</option>`);
+  for (const item of list) {
+    const label = `${item.name || "Settlement"}${item.here ? " (here)" : ""}`;
+    options.push(`<option value="${escapeHtml(item.id)}">${escapeHtml(label)}</option>`);
+  }
+  pick.innerHTML = options.join("");
+  pick.value = data?.selected || "";
+}
+
+function paintSettlementCanvas(data) {
+  const canvas = document.querySelector("#settlementCanvas");
+  if (!canvas || mapViewMode !== "settlement") return;
+  const rect = canvas.getBoundingClientRect();
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const size = Math.max(160, Math.round(Math.min(rect.width || 320, rect.height || rect.width || 320) * dpr));
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const ink = cssToken("--ink", "#07050b");
+  const thread = cssToken("--thread", "#c9b3f0");
+  const bright = cssToken("--thread-bright", "#ece4fb");
+  const dim = cssToken("--thread-dim", "rgba(190,160,240,0.38)");
+  const soft = cssToken("--thread-soft", "rgba(190,160,240,0.12)");
+  const lineStrong = cssToken("--line-strong", "rgba(200,190,230,0.22)");
+  const muted = cssToken("--muted", "#9a94a6");
+  const label = cssToken("--label", "#c4b8da");
+  const font = cssToken("--font", "sans-serif");
+  ctx.fillStyle = ink;
+  ctx.fillRect(0, 0, size, size);
+  const city = data?.settlement;
+  if (!data?.available || !city) {
+    ctx.fillStyle = muted;
+    ctx.font = `${Math.round(13 * dpr)}px ${font}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(data?.reason || "No settlement to show.", size / 2, size / 2, size - 24 * dpr);
+    return;
+  }
+  const spanW = Math.max(1, Number(city.span?.[0]) || 1);
+  const spanH = Math.max(1, Number(city.span?.[1]) || 1);
+  const unit = Math.floor((size * 0.92) / Math.max(spanW, spanH));
+  const ox = Math.round((size - unit * spanW) / 2);
+  const oy = Math.round((size - unit * spanH) / 2);
+  const labels = [];
+  for (const cell of city.cells || []) {
+    const x0 = ox + Number(cell.local?.[0] || 0) * unit;
+    const y0 = oy + Number(cell.local?.[1] || 0) * unit;
+    if (!cell.known || !Array.isArray(cell.raster)) {
+      ctx.save();
+      ctx.setLineDash([3 * dpr, 4 * dpr]);
+      ctx.strokeStyle = dim;
+      ctx.lineWidth = dpr;
+      ctx.strokeRect(x0 + 0.5, y0 + 0.5, unit - 1, unit - 1);
+      ctx.restore();
+      continue;
+    }
+    const res = Math.max(1, Number(cell.res) || cell.raster.length || 1);
+    const step = unit / res;
+    const districts = Array.isArray(cell.districts) ? cell.districts : [];
+    const isStreet = (index) => districts[index]?.type === "street";
+    // Streets are faint light; ward edges are hairlines where the owner changes.
+    ctx.fillStyle = soft;
+    for (let ry = 0; ry < res; ry += 1) {
+      for (let rx = 0; rx < res; rx += 1) {
+        if (isStreet(cell.raster[ry]?.[rx])) ctx.fillRect(x0 + rx * step, y0 + ry * step, Math.ceil(step), Math.ceil(step));
+      }
+    }
+    ctx.strokeStyle = dim;
+    ctx.lineWidth = Math.max(1, dpr * 0.75);
+    ctx.beginPath();
+    for (let ry = 0; ry < res; ry += 1) {
+      for (let rx = 0; rx < res; rx += 1) {
+        const here = cell.raster[ry]?.[rx];
+        if (isStreet(here)) continue;
+        const right = cell.raster[ry]?.[rx + 1];
+        const below = cell.raster[ry + 1]?.[rx];
+        if (rx + 1 < res && right !== here && !isStreet(right)) {
+          ctx.moveTo(x0 + (rx + 1) * step, y0 + ry * step);
+          ctx.lineTo(x0 + (rx + 1) * step, y0 + (ry + 1) * step);
+        }
+        if (ry + 1 < res && below !== here && !isStreet(below)) {
+          ctx.moveTo(x0 + rx * step, y0 + (ry + 1) * step);
+          ctx.lineTo(x0 + (rx + 1) * step, y0 + (ry + 1) * step);
+        }
+      }
+    }
+    ctx.stroke();
+    ctx.strokeStyle = lineStrong;
+    ctx.lineWidth = dpr;
+    ctx.strokeRect(x0 + 0.5, y0 + 0.5, unit - 1, unit - 1);
+    const side = Math.max(1, Number(cell.side) || 1);
+    for (const d of districts) {
+      if (d.type === "street") continue;
+      labels.push({
+        x: x0 + ((Number(d.anchor?.[0]) || 0) + 0.5) * (unit / side),
+        y: y0 + ((Number(d.anchor?.[1]) || 0) + 0.5) * (unit / side),
+        cellX: x0,
+        cellY: y0,
+        // Tiles reuse ward names, so a city of many tiles names only the one you are on.
+        text: cell.here || (city.cells || []).length === 1 ? d.name || d.label || "" : "",
+        gated: !!d.requires_entry,
+      });
+    }
+  }
+  // A ward's name when it fits inside its tile without touching another name;
+  // otherwise a point marks the ward. Gated wards are the moon colour.
+  const fontPx = Math.round(10 * dpr);
+  ctx.font = `${fontPx}px ${font}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const placed = [];
+  const pad = 3 * dpr;
+  for (const item of labels) {
+    ctx.fillStyle = item.gated ? cssToken("--moon", "#d4566a") : label;
+    const width = item.text ? ctx.measureText(item.text).width : 0;
+    let drawn = false;
+    if (width && width + pad * 2 <= unit) {
+      const cx = Math.min(Math.max(item.x, item.cellX + pad + width / 2), item.cellX + unit - pad - width / 2);
+      const cy = Math.min(Math.max(item.y, item.cellY + pad + fontPx / 2), item.cellY + unit - pad - fontPx / 2);
+      const box = { x0: cx - width / 2 - pad, x1: cx + width / 2 + pad, y0: cy - fontPx / 2 - pad, y1: cy + fontPx / 2 + pad };
+      const clash = placed.some((b) => box.x0 < b.x1 && box.x1 > b.x0 && box.y0 < b.y1 && box.y1 > b.y0);
+      if (!clash) {
+        ctx.fillText(item.text, cx, cy);
+        placed.push(box);
+        drawn = true;
+      }
+    }
+    if (!drawn) ctx.fillRect(item.x - dpr, item.y - dpr, 2 * dpr, 2 * dpr);
+  }
+  // Known places sit on their tile, not a street: a small diamond in the tile's corner.
+  for (const place of city.places || []) {
+    const cell = (city.cells || []).find((c) => c.x === place.x && c.y === place.y);
+    if (!cell) continue;
+    const cx = ox + Number(cell.local?.[0] || 0) * unit + 8 * dpr;
+    const cy = oy + Number(cell.local?.[1] || 0) * unit + 8 * dpr;
+    ctx.strokeStyle = thread;
+    ctx.lineWidth = dpr;
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 4 * dpr);
+    ctx.lineTo(cx + 4 * dpr, cy);
+    ctx.lineTo(cx, cy + 4 * dpr);
+    ctx.lineTo(cx - 4 * dpr, cy);
+    ctx.closePath();
+    ctx.stroke();
+  }
+  const you = city.player;
+  if (you) {
+    const side = Math.max(1, Number(you.side) || 1);
+    const px = ox + Number(you.local?.[0] || 0) * unit + ((Number(you.fine_x) || 0) + 0.5) * (unit / side);
+    const py = oy + Number(you.local?.[1] || 0) * unit + ((Number(you.fine_y) || 0) + 0.5) * (unit / side);
+    ctx.strokeStyle = bright;
+    ctx.lineWidth = 1.5 * dpr;
+    ctx.beginPath();
+    ctx.arc(px, py, 6 * dpr, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px, py - 11 * dpr);
+    ctx.lineTo(px, py + 11 * dpr);
+    ctx.stroke();
+  }
+}
+
+function paintSettlementInfo(data) {
+  const summary = document.querySelector("#settlementSummary");
+  const placesEl = document.querySelector("#settlementPlaces");
+  const wardsEl = document.querySelector("#settlementWards");
+  const city = data?.settlement;
+  if (summary) {
+    if (!city) {
+      summary.textContent = data?.reason || "";
+    } else {
+      const total = (city.cells || []).length;
+      const band = String(city.band || "").replace(/_/g, " ");
+      const where = city.player ? " You are here." : "";
+      summary.textContent = `${city.name}${band ? `, ${band}` : ""}. You have seen ${city.known_cells || 0} of its ${total} map tile${total === 1 ? "" : "s"}.${where}`;
+    }
+  }
+  if (placesEl) {
+    const rows = [];
+    const venueRows = (list, depth) => {
+      for (const v of list || []) {
+        const bits = [v.name, v.label, v.hours].filter(Boolean).map((s) => escapeHtml(s));
+        rows.push(`<li class="settlementVenue${v.here ? " isHere" : ""}" style="--depth:${depth}">${bits.join(" · ")}${v.here ? " · you are here" : ""}</li>`);
+        venueRows(v.venues, depth + 1);
+      }
+    };
+    for (const place of city?.places || []) {
+      rows.push(`<li class="settlementPlace${place.here ? " isHere" : ""}">${escapeHtml(place.name)}${place.here ? " · you are here" : ""}</li>`);
+      venueRows(place.venues, 1);
+    }
+    placesEl.innerHTML = rows.join("");
+    placesEl.hidden = !rows.length;
+  }
+  if (wardsEl) {
+    // Name the wards of the tile you stand on; a metropolis has hundreds in all.
+    const cells = (city?.cells || []).filter((c) => c.known);
+    const tile = cells.find((c) => c.here);
+    const names = (tile?.districts || [])
+      .filter((d) => d.type !== "street" && d.name)
+      .map((d) => (d.requires_entry ? `${d.name} (gated)` : d.name));
+    const total = cells.reduce((sum, c) => sum + (c.districts || []).filter((d) => d.type !== "street").length, 0);
+    const parts = [];
+    if (names.length) parts.push(`Wards on your tile: ${names.join(", ")}.`);
+    if (total > names.length) parts.push(`${total} wards seen in all.`);
+    wardsEl.textContent = parts.join(" ");
+    wardsEl.hidden = !parts.length;
+  }
+}
+
+document.querySelector("#mapViewBar")?.addEventListener("click", (event) => {
+  const btn = event.target?.closest?.("[data-map-view]");
+  if (btn) setMapViewMode(btn.getAttribute("data-map-view"));
+});
+document.querySelector("#mapSettlementSelect")?.addEventListener("change", (event) => {
+  settlementPick = String(event.target?.value || "");
+  refreshSettlementView();
+});
+window.addEventListener("resize", () => {
+  if (mapViewMode === "settlement" && settlementData) paintSettlementCanvas(settlementData);
+});
+
 async function refreshLocalMap() {
   const canvas = document.querySelector("#playMapCanvas");
+  // The settlement view follows the player too.
+  if (mapViewMode === "settlement") refreshSettlementView();
   const meta = document.querySelector("#playMapMeta");
   const memoryLine = document.querySelector("#mapMemoryLine");
   const showMapLine = (text) => {

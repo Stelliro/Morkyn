@@ -192,7 +192,7 @@ Morkyn/
 
 - **Files:** `app/world_scale.py`
 - **Purpose:** Grows the seeded land, theme ground, materials, and the usual people of a stretch.
-- **Key API:** `bands_for_preset()`, `bands_for_world()`, `generate_scaled_world()`
+- **Key API:** `bands_for_preset()`, `bands_for_world()`, `generate_scaled_world()`, `cell_raster()` (a tile's ward grid sampled down, for `app.tile_world.settlement_view()` and the map's Settlement view)
 - **Consumers:** `app.tile_world`, map save and load, prompt map clauses.
 - **Dependencies:** stdlib only for the band tables. Map persistence goes through `app.tile_world` and `app.world`.
 - **Design Notes:** A city stays a connected clump inside a 9 by 9 neighborhood. The center cell is 128 by 128. Outer cells are smaller. The widest fine span is 1,152. Theme bands are separate from that city math. Deep Caverns uses cavern, mushroom, crystal, lava, water, and cliff. Its usual people are dark-dwelling creatures and dwarves. A kind is a leaning for a province of ground, not a census, and a stretch may be empty. Stored `terrain_bands` win over the theme. A world with none falls back to the theme's bands. The model does not place cities, notices, or coordinates.
@@ -503,6 +503,7 @@ There is no production build step. This is a local prototype served directly by 
 | GET | `/` | Serve `static/index.html` |
 | GET | `/api/state` | Return current visible world state |
 | GET | `/api/world-facts` | Read-only race and lore rows for this world plus the last post-start pass report |
+| GET | `/api/tiles/map/settlement` | Read-only grid of one known settlement (`?city_id=`; default the one you stand in): known settlements, each world tile's ward raster when seen, your position, known places and venues |
 | POST | `/api/conversation/target` | Pick who the player is talking to (`codes`, or `group: true`; empty clears); returns the chip view |
 | GET | `/api/player-art/{kind}` | Stored player face or fullbody image bytes (`?v=<token>` from `state.player_portrait.url`); immutable cache headers for the current token, 404 when none |
 | GET | `/api/version` | Return local app, planner, and mechanics version metadata |

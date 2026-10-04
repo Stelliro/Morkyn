@@ -2552,6 +2552,23 @@ def api_tile_settlements():
     return {"settlements": list_settlements(data)}
 
 
+@app.get("/api/tiles/map/settlement")
+def api_tile_settlement(city_id: str = ""):
+    """One known settlement's own grid for the map's Settlement view. Read-only."""
+    from app.db import connect as _connect
+    from app.tile_world import settlement_places, settlement_view
+
+    data = get_map(None)
+    if not data:
+        return {"available": False, "reason": "No map yet.", "settlements": []}
+    conn = _connect()
+    try:
+        places = settlement_places(data, conn)
+    finally:
+        conn.close()
+    return settlement_view(data, city_id=city_id, places=places)
+
+
 @app.get("/api/travel-status")
 def api_travel_status():
     from app.db import connect as _connect

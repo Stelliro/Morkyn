@@ -864,6 +864,41 @@ def tiles_in_cell(cell: dict[str, Any]) -> list[dict[str, Any]]:
     return tiles
 
 
+def cell_raster(cell: dict[str, Any], res: int) -> list[list[int]]:
+    """The internal grid sampled down to res by res, as indexes into cell["districts"].
+
+    Same flood as tiles_in_cell, without one dict per fine tile, so a whole
+    city can be drawn. -1 is ground no district owns.
+    """
+    side = clamp_int(int(cell.get("side") or 1), 1, CITY_CELL_MAX)
+    res = clamp_int(int(res), 1, side)
+    seed = int(cell.get("seed") or 1)
+    streets = street_mask(seed, side)
+    stored = [item for item in (cell.get("districts") or []) if isinstance(item, dict)]
+    body_index = [index for index, item in enumerate(stored) if item.get("type") != "street"]
+    street_index = next((index for index, item in enumerate(stored) if item.get("type") == "street"), -1)
+    anchors = []
+    for index in body_index:
+        anchor = stored[index].get("anchor") or [0, 0]
+        anchors.append((int(anchor[0]), int(anchor[1])))
+    owner = _flood(side, streets, anchors)
+    fallback = body_index[0] if body_index else -1
+    rows: list[list[int]] = []
+    for ry in range(res):
+        fy = min(side - 1, int((ry + 0.5) * side / res))
+        row: list[int] = []
+        for rx in range(res):
+            fx = min(side - 1, int((rx + 0.5) * side / res))
+            if (fx, fy) in streets and street_index >= 0:
+                row.append(street_index)
+            elif (fx, fy) in owner and owner[(fx, fy)] < len(body_index):
+                row.append(body_index[owner[(fx, fy)]])
+            else:
+                row.append(fallback)
+        rows.append(row)
+    return rows
+
+
 def _place_name(rng: random.Random, band: str, used: set[str]) -> str:
     base = f"{rng.choice(_NAME_LEFT)}{rng.choice(_NAME_RIGHT)}"
     if band == "metropolis":

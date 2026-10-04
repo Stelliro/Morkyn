@@ -1674,6 +1674,7 @@
             <div class="chatColumnHeader playPanelHeader" data-play-drag="chat" title="Drag to reorder panels">
               <span class="playDragGrip" aria-hidden="true">⋮⋮</span>
               <strong>Scene</strong>
+              <span class="sceneClock" id="sceneClock" title="In-world time">Day — · --:--</span>
               <span class="chatIdleHint" id="chatIdleHint">Map is main while idle</span>
               <span class="sceneStatusLine" id="sceneStatusLine" role="status" aria-live="polite" hidden></span>
               <span class="sceneHeaderTools">
@@ -1850,11 +1851,24 @@
               </div>
             </header>
             <p id="mapMemoryLine" class="mapMemoryLine">No map yet</p>
+            <div class="mapViewBar" id="mapViewBar" role="group" aria-label="Map view">
+              <button type="button" class="chipBtn secondaryButton activeChip" data-map-view="world" aria-pressed="true">World</button>
+              <button type="button" class="chipBtn secondaryButton" data-map-view="settlement" aria-pressed="false" title="The settlement you are in, or one you know, drawn on its own grid">Settlement</button>
+              <select id="mapSettlementSelect" class="mapSettlementSelect" aria-label="Settlement to show" hidden></select>
+            </div>
             <div class="mapSquareSlot">
               <div class="mapMainStage">
                 <canvas id="playMapCanvas" class="mapCanvas playMapCanvas mapMainCanvas" width="480" height="480" aria-label="Main map"></canvas>
                 <div id="mapHoverTip" class="mapHoverTip hidden"></div>
+                <div id="settlementView" class="settlementView" hidden>
+                  <canvas id="settlementCanvas" class="settlementCanvas" width="480" height="480" role="img" aria-label="Settlement map"></canvas>
+                </div>
               </div>
+            </div>
+            <div id="settlementInfo" class="settlementInfo" aria-live="polite" hidden>
+              <p id="settlementSummary" class="settlementSummary"></p>
+              <ul id="settlementPlaces" class="settlementPlaces"></ul>
+              <p id="settlementWards" class="settlementWards"></p>
             </div>
             <div class="mapColumnList" id="mapColumnList">
             <section class="mapSection" aria-labelledby="mapMoveHeading">

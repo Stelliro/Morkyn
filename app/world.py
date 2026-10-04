@@ -832,6 +832,18 @@ def _pacing_set(conn, key: str, value: str | int) -> None:
     )
 
 
+def part_of_day(hour: int) -> str:
+    """Plain word for the hour, for the play UI's clock: morning, afternoon, evening, night."""
+    hour = int(hour) % 24
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 21:
+        return "evening"
+    return "night"
+
+
 def format_world_time(
     day: int,
     minute: int,
@@ -851,6 +863,7 @@ def format_world_time(
         "minute": minute,
         "hour": hour,
         "minute_of_hour": moh,
+        "part_of_day": part_of_day(hour),
         "day_length_minutes": day_length,
         "epoch_label": epoch,
         "label": f"{epoch} · {core}" if epoch else core,
