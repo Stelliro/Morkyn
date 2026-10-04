@@ -1,142 +1,15 @@
-/* --------------------------------------------------------------------------
-   Mørkyn design system — calm dark UI
-   Themes set on <html data-theme="...">. Default = dusk (quiet forest slate).
-   -------------------------------------------------------------------------- */
-:root {
-  color-scheme: dark;
+/* ==========================================================================
+   Mørkyn UI · styles.css  (layer 2 of 3)  — the layout engine
 
-  /* Surfaces — low contrast so panels recede */
-  --bg: #0c0f12;
-  --bg-glow: rgba(110, 150, 170, 0.07);
-  --bg-glow-2: rgba(90, 140, 110, 0.05);
-  --surface: rgba(20, 24, 28, 0.88);
-  --surface-solid: #14181c;
-  --surface-2: rgba(28, 33, 38, 0.72);
-  --surface-3: rgba(14, 17, 20, 0.65);
-  --surface-inset: rgba(8, 10, 12, 0.55);
+   Grids, sizes, positions, states, and responsive rules. This file owns
+   WHERE things go and WHEN they show. It does not own how they look:
+     - every colour, font, radius, and shadow value lives in ui/tokens.css
+     - the visual treatment of each component lives in ui/skin.css
+   A rule here may reference a token; it may not invent a value.
 
-  /* Lines / text */
-  --line: rgba(255, 255, 255, 0.07);
-  --line-strong: rgba(255, 255, 255, 0.12);
-  --text: #e4e8e6;
-  --muted: #8b9490;
-  --muted-2: #6a7370;
-  /* Setting / field titles — brighter than muted help text, soft accent tint */
-  --label: color-mix(in srgb, var(--text) 88%, var(--accent) 12%);
-  --label-dim: color-mix(in srgb, var(--text) 62%, var(--muted) 38%);
-
-  /* Accents — desaturated so chrome doesn't scream */
-  --accent: #7aaf8a;
-  --accent-soft: rgba(122, 175, 138, 0.14);
-  --accent-2: #7a9fb8;
-  --accent-2-soft: rgba(122, 159, 184, 0.12);
-  --warn: #c4a46a;
-  --bad: #c48478;
-  --on-accent: #0c1210;
-
-  /* Shape / depth */
-  --radius-xs: 6px;
-  --radius-sm: 10px;
-  --radius-md: 14px;
-  --radius-lg: 18px;
-  --radius-pill: 999px;
-  --shadow-soft: 0 18px 50px rgba(0, 0, 0, 0.35);
-  --shadow-sm: 0 6px 18px rgba(0, 0, 0, 0.22);
-  --font: "Segoe UI", Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
-  /* Single column. A short window widens this only while the list is split. */
-  --play-menu-width: min(320px, 92vw);
-  --btn-bg: rgba(255, 255, 255, 0.035);
-  --btn-bg-hover: rgba(255, 255, 255, 0.06);
-  --btn-border: rgba(255, 255, 255, 0.08);
-  --btn-text: rgba(228, 232, 230, 0.82);
-  --field-bg: rgba(0, 0, 0, 0.22);
-  --decal-opacity: 0.45;
-
-  /* Soft neon — definition without club lighting */
-  --neon: #5dffb0;
-  --neon-dim: rgba(93, 255, 176, 0.22);
-  --neon-2: #5ec8ff;
-  --neon-2-dim: rgba(94, 200, 255, 0.18);
-  --neon-glow: 0 0 18px rgba(93, 255, 176, 0.18), 0 0 40px rgba(94, 200, 255, 0.08);
-  --neon-edge: rgba(93, 255, 176, 0.35);
-  --scene-glow: inset 0 0 0 1px rgba(94, 200, 255, 0.12), 0 0 28px rgba(93, 255, 176, 0.06);
-}
-
-/* Playstyle themes — same structure, different mood */
-html[data-theme="ember"] {
-  --bg: #120e0c;
-  --bg-glow: rgba(180, 90, 50, 0.08);
-  --bg-glow-2: rgba(120, 50, 30, 0.06);
-  --surface: rgba(28, 20, 18, 0.9);
-  --surface-solid: #1c1412;
-  --surface-2: rgba(40, 28, 24, 0.75);
-  --surface-3: rgba(18, 12, 11, 0.7);
-  --accent: #d0895c;
-  --accent-soft: rgba(208, 137, 92, 0.16);
-  --accent-2: #c9a06a;
-  --accent-2-soft: rgba(201, 160, 106, 0.12);
-  --on-accent: #1a100c;
-  --neon: #ff9a5c;
-  --neon-dim: rgba(255, 154, 92, 0.2);
-  --neon-2: #ffc46e;
-  --neon-2-dim: rgba(255, 196, 110, 0.16);
-  --neon-edge: rgba(255, 154, 92, 0.35);
-  --neon-glow: 0 0 18px rgba(255, 154, 92, 0.16), 0 0 36px rgba(255, 196, 110, 0.08);
-}
-
-html[data-theme="tide"] {
-  --bg: #0a1014;
-  --bg-glow: rgba(60, 120, 170, 0.1);
-  --bg-glow-2: rgba(40, 90, 130, 0.06);
-  --surface: rgba(16, 24, 32, 0.9);
-  --surface-solid: #101820;
-  --surface-2: rgba(24, 36, 48, 0.75);
-  --surface-3: rgba(10, 16, 22, 0.7);
-  --accent: #6eb0c8;
-  --accent-soft: rgba(110, 176, 200, 0.14);
-  --accent-2: #7a9ec4;
-  --accent-2-soft: rgba(122, 158, 196, 0.12);
-  --on-accent: #071016;
-  --neon: #5ee0ff;
-  --neon-dim: rgba(94, 224, 255, 0.2);
-  --neon-2: #7aa8ff;
-  --neon-2-dim: rgba(122, 168, 255, 0.16);
-  --neon-edge: rgba(94, 224, 255, 0.38);
-  --neon-glow: 0 0 18px rgba(94, 224, 255, 0.18), 0 0 36px rgba(122, 168, 255, 0.08);
-}
-
-html[data-theme="bloom"] {
-  --bg: #100e14;
-  --bg-glow: rgba(140, 90, 170, 0.09);
-  --bg-glow-2: rgba(80, 50, 120, 0.06);
-  --surface: rgba(24, 20, 32, 0.9);
-  --surface-solid: #181420;
-  --surface-2: rgba(36, 30, 48, 0.75);
-  --surface-3: rgba(14, 12, 20, 0.7);
-  --accent: #b08ec8;
-  --accent-soft: rgba(176, 142, 200, 0.15);
-  --accent-2: #8ea0c8;
-  --accent-2-soft: rgba(142, 160, 200, 0.12);
-  --on-accent: #120e18;
-}
-
-html[data-theme="ash"] {
-  --bg: #0e0e0e;
-  --bg-glow: rgba(140, 140, 140, 0.06);
-  --bg-glow-2: rgba(90, 90, 90, 0.05);
-  --surface: rgba(22, 22, 22, 0.92);
-  --surface-solid: #161616;
-  --surface-2: rgba(32, 32, 32, 0.78);
-  --surface-3: rgba(14, 14, 14, 0.72);
-  --accent: #b0b0b0;
-  --accent-soft: rgba(176, 176, 176, 0.12);
-  --accent-2: #9a9a9a;
-  --accent-2-soft: rgba(154, 154, 154, 0.1);
-  --on-accent: #101010;
-  --muted: #8a8a8a;
-  /* Ash is monochrome — keep labels bright against gray help text */
-  --label: #d4d4d4;
-}
+   Load order: ui/tokens.css → styles.css → ui/skin.css
+   Rulebook:   docs/UI_RULEBOOK.md
+   ========================================================================== */
 
 * {
   box-sizing: border-box;
@@ -218,7 +91,7 @@ body.aiBusy:not(.llmChatThinking)::after {
   display: grid;
   place-items: center;
   padding: 20px;
-  background: color-mix(in srgb, #05070c 72%, transparent);
+  background: color-mix(in srgb, var(--ink) 72%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
@@ -428,7 +301,7 @@ body.aiBusy:not(.llmChatThinking)::after {
   display: grid;
   grid-template-rows: auto auto auto 1fr;
   gap: 16px;
-  border: 1px solid rgba(145, 184, 216, 0.36);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 36%, transparent);
   border-radius: 8px;
   background: rgba(17, 21, 24, 0.92);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.44);
@@ -452,7 +325,7 @@ body.aiBusy:not(.llmChatThinking)::after {
 .startSplashLog {
   display: grid;
   gap: 7px;
-  border-block: 1px solid rgba(145, 184, 216, 0.18);
+  border-block: 1px solid color-mix(in srgb, var(--accent-2) 18%, transparent);
   padding-block: 13px;
 }
 
@@ -471,7 +344,7 @@ body.aiBusy:not(.llmChatThinking)::after {
   height: 7px;
   border-radius: 50%;
   background: var(--accent-2);
-  box-shadow: 0 0 16px rgba(145, 184, 216, 0.8);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--accent-2) 80%, transparent);
   flex: 0 0 auto;
   transform: translateY(-1px);
 }
@@ -481,7 +354,7 @@ body.aiBusy:not(.llmChatThinking)::after {
   align-items: center;
   gap: 13px;
   min-height: 62px;
-  border: 1px solid rgba(145, 184, 216, 0.2);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 20%, transparent);
   border-radius: 6px;
   background: rgba(11, 17, 23, 0.72);
   padding: 12px 14px;
@@ -511,7 +384,7 @@ body.aiBusy:not(.llmChatThinking)::after {
   height: 8px;
   border-radius: 50%;
   background: var(--accent-2);
-  box-shadow: 0 0 14px rgba(145, 184, 216, 0.75);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent-2) 75%, transparent);
   animation: splashPulse 1.2s ease-in-out infinite;
 }
 
@@ -590,7 +463,7 @@ body.aiBusy:not(.llmChatThinking)::after {
 
 .scenePlan {
   margin-top: 10px;
-  border: 1px solid rgba(145, 184, 216, 0.3);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 30%, transparent);
   border-radius: 6px;
   background: rgba(32, 38, 43, 0.72);
   padding: 10px 12px;
@@ -871,7 +744,7 @@ label span,
   display: grid;
   place-items: center;
   padding: 20px;
-  background: color-mix(in srgb, #05070c 72%, transparent);
+  background: color-mix(in srgb, var(--ink) 72%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
 }
@@ -1333,7 +1206,10 @@ body.setup-mode-advanced .setupHeaderUtility {
   }
 }
 
-@media (max-width: 1499px) {
+/* One column only on a narrow window. This used to kick in below 1500px,
+   which put every optional field in a single column on a 1440 desktop and
+   made the page 14,000px tall. */
+@media (max-width: 899px) {
   .setupOptionalSections .setupGrid,
   .setupOptionalSections .conditional {
     grid-template-columns: 1fr;
@@ -2218,6 +2094,18 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
   resize: vertical;
 }
 
+.presetConfirmRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.presetConfirmHint {
+  margin: 0;
+  font-size: 0.8rem;
+}
+
 .directorPreset.isUserPreset {
   border-style: dashed;
 }
@@ -2513,7 +2401,7 @@ body.image-mode-simple .imageSimpleOnly,
 }
 
 .setupPanel.setupRandomizing {
-  outline: 1px solid rgba(145, 184, 216, 0.42);
+  outline: 1px solid color-mix(in srgb, var(--accent-2) 42%, transparent);
   /* Modal handles the busy message — keep form dimmed only */
   filter: saturate(0.85);
 }
@@ -2755,7 +2643,8 @@ body.image-mode-simple .imageSimpleOnly,
 }
 
 .setupHeader button.confirmRandomizeBtn,
-.randomizePopover button.confirmRandomizeBtn {
+.randomizePopover button.confirmRandomizeBtn,
+#presetConfirmBtn {
   width: auto;
   max-width: 100%;
   flex: 0 0 auto;
@@ -2770,7 +2659,8 @@ body.image-mode-simple .imageSimpleOnly,
 }
 
 .setupHeader button.confirmRandomizeBtn:hover,
-.randomizePopover button.confirmRandomizeBtn:hover {
+.randomizePopover button.confirmRandomizeBtn:hover,
+#presetConfirmBtn:hover {
   filter: brightness(1.06);
   color: var(--on-accent);
 }
@@ -2804,6 +2694,15 @@ body.image-mode-simple .imageSimpleOnly,
   margin-top: 8px;
 }
 
+.presetSelectLabel {
+  display: grid;
+  gap: 4px;
+  margin: 0 0 10px;
+}
+.presetSelectLabel select {
+  width: 100%;
+  max-width: 36rem;
+}
 .setupPresetCard .characterArtHead .setupSimpleVibeActions {
   flex: 0 0 auto;
 }
@@ -3146,7 +3045,7 @@ body.image-mode-simple .imageSimpleOnly,
 .helpText {
   text-decoration-line: underline;
   text-decoration-style: dotted;
-  text-decoration-color: rgba(145, 184, 216, 0.85);
+  text-decoration-color: color-mix(in srgb, var(--accent-2) 85%, transparent);
   text-underline-offset: 3px;
   cursor: help;
 }
@@ -3163,7 +3062,7 @@ body.image-mode-simple .imageSimpleOnly,
   width: min(320px, calc(100vw - 28px));
   border: 1px solid color-mix(in srgb, var(--neon) 40%, var(--line));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-solid, #111518) 96%, #000);
+  background: color-mix(in srgb, var(--surface-solid, var(--ink)) 96%, #000);
   color: var(--text);
   padding: 10px 12px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
@@ -3496,8 +3395,8 @@ body.image-mode-simple .imageSimpleOnly,
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-start;
-  gap: 10px 14px;
-  padding: 12px 14px;
+  gap: 8px 14px;
+  padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius-md);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent), var(--surface-3);
@@ -3656,7 +3555,7 @@ fieldset.settingField > .settingControls {
   display: grid;
   grid-column: 1 / -1;
   gap: 8px;
-  border: 1px solid rgba(145, 184, 216, 0.45);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 45%, transparent);
   border-radius: 6px;
   background: rgba(17, 21, 24, 0.96);
   padding: 9px;
@@ -3887,6 +3786,24 @@ fieldset.settingField > .settingControls {
   flex: 0 0 auto;
 }
 
+.abilityKeepLock {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.abilitySetupCard.is-kept {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+}
+
+.abilitySetupCard.is-kept .abilityKeepLock {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
 .abilityCardBody {
   display: grid;
   gap: 12px;
@@ -4048,6 +3965,16 @@ select {
 textarea {
   resize: vertical;
   min-height: 42px;
+}
+
+/* Boxes and dots are not text fields: the 42px / 100% field size above
+   turned a lone checkbox into a slab. */
+input[type="checkbox"],
+input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  padding: 0;
 }
 
 input:hover,
@@ -4716,7 +4643,7 @@ body.play-menu-split .playMenuNav::after {
   flex-shrink: 0;
   border-bottom: 1px solid color-mix(in srgb, var(--neon-2) 22%, var(--line));
   background:
-    linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, #000), color-mix(in srgb, var(--surface) 70%, #0a0d12));
+    linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, #000), color-mix(in srgb, var(--surface) 70%, var(--ink)));
   overflow: visible;
 }
 .presentStripInner,
@@ -4756,7 +4683,7 @@ body.play-menu-split .playMenuNav::after {
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid color-mix(in srgb, var(--neon) 30%, var(--line));
-  background: #0a0d12;
+  background: var(--ink);
 }
 .npcPortraitFrameCompact img {
   width: 100%;
@@ -4847,7 +4774,7 @@ body.play-menu-split .playMenuNav::after {
   padding: 6px 14px;
   border-bottom: 1px solid color-mix(in srgb, var(--neon) 28%, var(--line));
   background:
-    linear-gradient(135deg, color-mix(in srgb, var(--neon-dim) 35%, #0c1018), #0a0d12 70%);
+    linear-gradient(135deg, color-mix(in srgb, var(--neon-dim) 35%, var(--ink)), var(--ink) 70%);
   box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--neon) 12%, transparent);
 }
 .mapStatusPrimary {
@@ -5474,7 +5401,7 @@ body.play-menu-split .playMenuNav::after {
   border: 1px solid color-mix(in srgb, var(--line) 80%, var(--neon));
   border-left: 3px solid var(--neon-2);
   border-radius: 10px;
-  background: color-mix(in srgb, #0c1016 90%, var(--surface));
+  background: color-mix(in srgb, var(--ink) 90%, var(--surface));
 }
 
 .encounterPerson header {
@@ -5572,12 +5499,20 @@ button.chipBtn.activeChip {
   font-size: 0.92rem;
 }
 
-.chatOutputBlock {
+/* A flex column, not a grid: the heading and the (usually hidden) thinking
+   banner keep their own height and the scene box takes whatever is left.
+   As a grid with implicit auto rows, extra height was shared out to the
+   heading's row too, which left a blank band between NARRATION and the
+   scene text. Two classes so this beats the later .turnBlock grid rule. */
+.turnBlock.chatOutputBlock {
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .chatOutputBlock .singleBox {
-  height: 100%;
+  height: auto;
+  flex: 1 1 0;
   max-height: none;
   min-height: 0;
   overflow-y: auto;
@@ -5685,7 +5620,7 @@ button.chipBtn.activeChip {
   min-width: 0;
   background:
     radial-gradient(600px 400px at 50% 30%, var(--neon-dim), transparent 60%),
-    #0a0d12;
+    var(--ink);
   border-right: 1px solid color-mix(in srgb, var(--neon-edge) 25%, var(--line));
   overflow: hidden;
   padding-bottom: 0;
@@ -5789,7 +5724,7 @@ button.chipBtn.activeChip {
     0 0 0 1px rgba(0, 0, 0, 0.55),
     0 0 18px var(--neon-dim);
   image-rendering: pixelated;
-  background: #080b10;
+  background: var(--ink);
   aspect-ratio: auto;
   object-fit: fill;
   display: block;
@@ -6570,7 +6505,7 @@ button.chipBtn {
   position: relative;
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--neon-2) 30%, var(--line));
-  background: #0a0e12;
+  background: var(--ink);
   overflow: hidden;
   display: grid;
   place-items: center;
@@ -6818,7 +6753,7 @@ button.chipBtn {
   box-shadow: var(--neon-glow);
   cursor: crosshair;
   image-rendering: pixelated;
-  background: #080b10;
+  background: var(--ink);
 }
 
 .mapHoverTip {
@@ -7743,7 +7678,7 @@ button.npcRosterCard {
 .npcRosterCard .thumb {
   aspect-ratio: 1;
   border-radius: 8px;
-  background: #0a0e12;
+  background: var(--ink);
   border: 1px solid var(--line);
   display: grid;
   place-items: center;
@@ -7798,7 +7733,7 @@ button.npcRosterCard {
   height: 32px;
   border-radius: 50%;
   border: 2px solid color-mix(in srgb, var(--neon) 55%, #fff);
-  background: #0a0e12;
+  background: var(--ink);
   overflow: hidden;
   display: grid;
   place-items: center;
@@ -8989,7 +8924,7 @@ button.npcRosterCard {
   height: min(62vh, 640px);
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: #0a0e12;
+  background: var(--ink);
 }
 
 .iibEmbedNote {
@@ -9032,7 +8967,7 @@ button.npcRosterCard {
   aspect-ratio: 1;
   padding: 0;
   border: 0;
-  background: #0a0e12;
+  background: var(--ink);
   cursor: pointer;
 }
 
@@ -9101,7 +9036,7 @@ button.npcRosterCard {
   height: 120px;
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--neon-2) 30%, var(--line));
-  background: #0a0e12;
+  background: var(--ink);
   overflow: hidden;
   display: grid;
   place-items: center;
@@ -9258,7 +9193,7 @@ body.popoutBody .iibEmbedFrame {
   align-items: center;
   gap: 14px;
   min-height: 96px;
-  border: 1px solid rgba(145, 184, 216, 0.34);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 34%, transparent);
   border-radius: 6px;
   background: rgba(11, 17, 23, 0.58);
   padding: 14px;
@@ -9276,7 +9211,7 @@ body.popoutBody .iibEmbedFrame {
   height: 8px;
   border-radius: 50%;
   background: var(--accent-2);
-  box-shadow: 0 0 14px rgba(145, 184, 216, 0.75);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--accent-2) 75%, transparent);
   animation: splashPulse 1.2s ease-in-out infinite;
 }
 
@@ -9595,9 +9530,9 @@ button.compactButton {
 .debugTraceNotice {
   display: grid;
   gap: 4px;
-  border: 1px solid rgba(145, 184, 216, 0.42);
+  border: 1px solid color-mix(in srgb, var(--accent-2) 42%, transparent);
   border-radius: 6px;
-  background: rgba(145, 184, 216, 0.07);
+  background: color-mix(in srgb, var(--accent-2) 7%, transparent);
   padding: 9px;
   color: var(--muted);
   font-size: 13px;
@@ -9747,8 +9682,11 @@ button.compactButton {
 .helpCommands dt { font-weight: 700; }
 .helpCommands dd { margin: 0; color: var(--muted); }
 
+/* One quiet line: the player's own words do not need a 72px box. */
 .chatInputBlock .singleBox {
+  min-height: 0;
   max-height: 4.6rem;
+  padding: 8px 12px;
   overflow: auto;
 }
 
@@ -9789,7 +9727,7 @@ button.compactButton {
   border: 1px solid color-mix(in srgb, var(--neon) 32%, var(--line));
   border-left: 3px solid var(--neon);
   border-radius: 12px;
-  background: color-mix(in srgb, #0c1016 92%, var(--surface));
+  background: color-mix(in srgb, var(--ink) 92%, var(--surface));
 }
 
 .mapSectionTitle,
@@ -9877,7 +9815,7 @@ button.compactButton {
 .mapSection.mapPlaceCard {
   display: grid;
   gap: 8px;
-  background: color-mix(in srgb, #0c1016 92%, var(--surface));
+  background: color-mix(in srgb, var(--ink) 92%, var(--surface));
   box-shadow: none;
 }
 
@@ -9909,7 +9847,7 @@ button.compactButton {
 .mapSection.presentStrip,
 .mapSection.mapSettlementStrip {
   border-bottom: 0;
-  background: color-mix(in srgb, #0c1016 92%, var(--surface));
+  background: color-mix(in srgb, var(--ink) 92%, var(--surface));
 }
 
 .mapSection .presentStripLabel {
@@ -10070,7 +10008,7 @@ button.compactButton {
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid var(--line);
-  background: #0c1016;
+  background: var(--ink);
   color: var(--muted);
   cursor: zoom-in;
 }
@@ -10318,7 +10256,7 @@ button.miniItemMore {
 }
 
 /* Undo old rule that painted every setup header button as primary */
-.setupHeader button:not(#setupStart):not(#setupStartMobile):not(.primaryButton):not(#setupPresetToggle) {
+.setupHeader button:not(#setupStart):not(#setupStartMobile):not(.primaryButton):not(#setupPresetToggle):not(#presetConfirmBtn) {
   background: var(--btn-bg);
   color: var(--btn-text);
   border-color: var(--btn-border);
@@ -10466,7 +10404,7 @@ button.miniItemMore {
 }
 
 .historyEntry {
-  border-left: 2px solid rgba(145, 184, 216, 0.38);
+  border-left: 2px solid color-mix(in srgb, var(--accent-2) 38%, transparent);
   padding-left: 9px;
 }
 
@@ -10554,7 +10492,7 @@ button.miniItemMore {
 
 .tabs button.active {
   background: var(--accent-2);
-  color: #0e1418;
+  color: var(--on-accent);
   border-color: transparent;
   font-weight: 800;
 }
@@ -10962,7 +10900,7 @@ button.miniItemMore {
   width: min(340px, calc(100vw - 28px));
   border: 1px solid color-mix(in srgb, #d5b870 40%, var(--line));
   border-radius: 8px;
-  background: color-mix(in srgb, var(--surface-solid, #111518) 97%, #000);
+  background: color-mix(in srgb, var(--surface-solid, var(--ink)) 97%, #000);
   padding: 10px 12px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
   font-size: 12.5px;
@@ -11350,6 +11288,41 @@ button.miniItemMore {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
+}
+
+.modelTokenGridThree {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.modelLimits {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 12px 12px;
+  min-width: 0;
+}
+
+.modelLimitsAuto {
+  margin: 0;
+  font-size: 0.86em;
+  opacity: 0.85;
+}
+
+.modelLimitsMode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.modelLimitsRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.modelLimitsRow small {
+  opacity: 0.75;
 }
 
 .modelButtonRow {
@@ -12731,7 +12704,7 @@ body.compact-mode .indexContent {
   min-height: 180px;
   max-height: 240px;
   overflow: hidden;
-  background: #0e1218;
+  background: var(--ink);
   border: 1px solid var(--line);
   border-radius: var(--radius-sm);
 }
@@ -12791,13 +12764,13 @@ body.compact-mode .indexContent {
   max-height: 280px;
   object-fit: contain;
   image-rendering: pixelated;
-  background: #0e1218;
+  background: var(--ink);
   border-bottom: 1px solid var(--line);
 }
 
 .mapAscii {
   color: #c8d0dc !important;
-  background: #0e1218 !important;
+  background: var(--ink) !important;
   font-size: 12px !important;
   line-height: 1.1 !important;
   min-height: 4em;
@@ -13216,4 +13189,200 @@ body.compact-mode .indexContent {
   .tileLibraryFilters {
     grid-template-columns: 1fr;
   }
+}
+
+/* ==========================================================================
+   ui/interact.js — folds, peeks, context menu, provider-aware forms.
+   Layout only; the look is in ui/skin.css section 12.
+   ========================================================================== */
+
+.uiFolded {
+  display: none !important;
+}
+
+.isFoldable {
+  cursor: pointer;
+  user-select: none;
+}
+
+/* The chevron: a small open corner that turns when the block is folded. */
+.isFoldable::after {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 10px;
+  vertical-align: 2px;
+  border-right: 1px solid currentColor;
+  border-bottom: 1px solid currentColor;
+  transform: rotate(45deg);
+  transition: transform 0.15s ease;
+}
+
+.isFoldable.isFolded::after {
+  transform: rotate(-45deg);
+}
+
+.uiPeek {
+  position: fixed;
+  z-index: 130;
+  width: min(340px, calc(100vw - 28px));
+  padding: 10px 12px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  /* Never under the cursor: it would catch pointerover and flicker. */
+  pointer-events: none;
+}
+
+.uiPeek.hidden {
+  display: none;
+}
+
+.uiPeekHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.uiPeekKind {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.uiPeekMeta,
+.uiPeekDesc {
+  margin: 0 0 4px;
+}
+
+.uiPeekHint {
+  margin: 6px 0 0;
+}
+
+.uiContextMenu {
+  position: fixed;
+  z-index: 140;
+  min-width: 200px;
+  max-width: 280px;
+  padding: 6px;
+  display: grid;
+  gap: 2px;
+}
+
+.uiContextMenu.hidden {
+  display: none;
+}
+
+.uiContextMenu header {
+  display: grid;
+  gap: 2px;
+  padding: 6px 10px 8px;
+}
+
+.uiContextMenu button {
+  width: 100%;
+  min-height: 30px;
+  padding: 0 10px;
+  text-align: left;
+}
+
+.uiOffProvider {
+  display: none !important;
+}
+
+/* ==========================================================================
+   ui/failsafe.js — the "model problem" dialog. Layout only; look in skin.css.
+   ========================================================================== */
+
+#failsafeModal:not(.hidden) {
+  display: grid;
+  z-index: 150;
+}
+
+.failsafePanel {
+  width: min(600px, 100%);
+}
+
+.failsafeEyebrow {
+  margin: 0 0 4px;
+}
+
+.failsafeTips {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  line-height: 1.45;
+}
+
+.failsafeDetail {
+  margin-top: 12px;
+}
+
+.failsafeDetail pre {
+  margin: 6px 0 0;
+  max-height: 160px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.failsafeNote {
+  margin: 12px 0 0;
+  line-height: 1.45;
+}
+
+.failsafeActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.failsafeActions .failsafeQuiet {
+  margin-left: auto;
+}
+
+.failsafeInline {
+  margin-top: 8px;
+}
+
+/* ==========================================================================
+   Layout pass: the Move card holds the pad; map art folds under its own
+   heading; the travel banner is a line of help, not a box.
+   ========================================================================== */
+
+.mapMoveRow {
+  justify-content: center;
+}
+
+.mapSection .mapTravelBanner {
+  margin: 6px 0 0;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.74rem;
+  line-height: 1.35;
+}
+
+.mapSubTitle {
+  margin: 10px 0 6px;
+}
+
+.mapSection > .mapAvatarTools {
+  padding: 0 0 4px;
+}
+
+.presetExplainer {
+  margin: 0 0 8px;
+}
+
+/* Prose measure: the scene box is as wide as the column, but a line of
+   narration should not be 130 characters long. The text sits in a centred
+   column of about 80ch; the padding grows with the box and stops at 160px. */
+.chatOutputBlock .sceneBox {
+  padding-inline: clamp(22px, calc((100% - 80ch) / 2), 160px);
 }

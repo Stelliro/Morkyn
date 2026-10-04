@@ -42,7 +42,10 @@ from app.setup_composer import (
     structural_fallback,
     theme_prompt_block,
 )
+import functools
+
 from app.prompts import (
+    PROSE_REPAIR_SYSTEM_PROMPT,
     COMPACT_SYSTEM_PROMPT,
     COMPACT_VERIFY_PROMPT,
     SYSTEM_PROMPT,
@@ -109,17 +112,22 @@ DEFAULT_RESPONSE_HARD_CAP = 2000
 # API hosts need a higher ceiling: a rich verify of 1300 tokens cut grok-4.7 off
 # mid-JSON, and the repair then dropped the state operations.
 API_RESPONSE_HARD_CAP_TOKENS = 4800
+# The verifier answers with a verdict (pass or revise), the issues it found and
+# a patch of only the turn keys it replaces; it does not re-emit the turn. A
+# full-turn verify reply overran its cap at 5,224 characters and took 71% of a
+# 107 s cloud turn, mostly narration the draft already had. These caps leave
+# room for a few replaced ops and, in the rare case, one replacement narration.
 LOCAL_VERIFY_TOKENS = {
-    "concise": 700,
-    "balanced": 950,
-    "rich": 1300,
-    "expansive": 1800,
+    "concise": 500,
+    "balanced": 650,
+    "rich": 800,
+    "expansive": 1000,
 }
 API_VERIFY_TOKENS = {
-    "concise": 1800,
-    "balanced": 2800,
-    "rich": 3600,
-    "expansive": 4800,
+    "concise": 900,
+    "balanced": 1200,
+    "rich": 1500,
+    "expansive": 1900,
 }
 # Size token that is not the tail of a larger count ("7b" yes, "70b"/"14b" no).
 _SMALL_LOCAL_MODEL_RE = re.compile(r"(?<![\d.])(?:0\.5|1\.5|[1-8])b\b", re.IGNORECASE)
@@ -190,21 +198,58 @@ def _note_verify_outcome(ok: bool, reason: str = "") -> None:
         )
 
 
+VERIFY_VERDICT_PASS = {"pass", "passed", "ok", "accept", "accepted", "approve", "approved", "consistent"}
+VERIFY_VERDICT_REVISE = {
+    "revise", "revised", "revision", "patch", "patched", "fix", "fixed",
+    "correct", "corrected", "fail", "failed", "reject", "rejected",
+}
+
+
+def _unwrap_verifier_verdict(verified: Any) -> dict[str, Any] | None:
+    """The verdict object itself, also when a model wrapped it in a result key."""
+    if not isinstance(verified, dict):
+        return None
+    if isinstance(verified.get("verdict"), str):
+        return verified
+    for key in TURN_WRAPPER_KEYS:
+        inner = verified.get(key)
+        if isinstance(inner, dict) and isinstance(inner.get("verdict"), str):
+            return inner
+    return None
+
+
+def _verify_reply_kind(verified: Any) -> str:
+    """
+    What the verifier sent back: ``verdict`` (the current contract), ``legacy``
+    (a whole turn, which the older prompt asked for and some models still send),
+    ``echo`` (the input world_state or draft_turn handed back) or ``invalid``.
+    """
+    if not isinstance(verified, dict):
+        return "invalid"
+    # Echoing the prompt back: the reply carries the input wrapper keys.
+    if "world_state" in verified or "draft_turn" in verified:
+        return "echo"
+    if _unwrap_verifier_verdict(verified) is not None:
+        return "verdict"
+    if TURN_SHAPE_KEYS.intersection(_turn_payload(verified)):
+        return "legacy"
+    return "invalid"
+
+
 def _verified_output_is_useful(verified: Any, draft: dict[str, Any]) -> bool:
     """
-    Did the verifier actually return a corrected turn?
+    Did the verifier actually return a verdict or a corrected turn?
 
     The characteristic small-model failure is regurgitation: it echoes the
     ``world_state`` it was given back as its answer. That parses as JSON and
-    looks like success, so check for turn-shaped content instead of validity.
+    looks like success, so check the reply's shape instead of its validity.
+    A verdict object is useful however short it is; a legacy full turn is
+    useful when it carries prose.
     """
-    if not isinstance(verified, dict):
-        return False
-    # Echoing the prompt back: the reply carries the input wrapper keys.
-    if "world_state" in verified or "draft_turn" in verified:
-        return False
-    turn_keys = {"narration", "narration_segments", "scene_plan", "turn_summary", "self_check"}
-    if not (turn_keys & set(verified)):
+    kind = _verify_reply_kind(verified)
+    if kind == "verdict":
+        return True
+    if kind != "legacy":
         return False
     # A verifier that returns nothing but an empty shell is not useful either.
     return bool(_narration_char_count(_coerce_turn_shape(verified)) or verified.get("narration_segments"))
@@ -266,6 +311,7 @@ TURN_SHAPE_KEYS = {
     "gm_events",
     "journal",
     "map_walk",
+    "scene_cast",
 }
 TURN_SHAPE_ORDER = (
     "scene_plan",
@@ -291,6 +337,7 @@ TURN_SHAPE_ORDER = (
     "gm_events",
     "journal",
     "map_walk",
+    "scene_cast",
 )
 HANDOFF_BASE_CONTEXT_KEYS = {
     "settings",
@@ -327,6 +374,12 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "relevant_sources",
     "retrieval",
     "relevant_asks",
+    # Built in play_turn / build_prompt_context and consumed by the prompt
+    # view. Both were produced on every turn and dropped here: the hidden NPC
+    # psychology block (grudges, agendas) never reached the narrator, and the
+    # per-action skill search replaced a catalog that then shipped nowhere.
+    "npc_psychology_context",
+    "skill_check_context",
 }
 HANDOFF_OPTIONAL_CONTEXT_KEYS = {
     "gm_events",
@@ -814,9 +867,36 @@ def _int_value(value: Any, default: int) -> int:
 
 def context_window_tokens(config: dict[str, Any] | None = None) -> int:
     model_config = config or get_model_config()
-    if model_config.get("provider") == "llama_cpp":
-        return _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("AI_RPG_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
-    return _env_int("AI_RPG_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS)
+    # The window follows the model: explicit env, else the player's saved
+    # number for this model, else what the GGUF header and the GPU allow
+    # (app/model_limits.py). get_model_config() already resolved it into
+    # context_window; a bare config dict resolves here.
+    window = _int_value(model_config.get("context_window"), 0)
+    if window <= 0:
+        try:
+            from app.model_limits import resolve_limits
+
+            window = int(resolve_limits(model_config, with_facts=False)["context_tokens"])
+        except Exception:
+            window = 0
+    if window <= 0:
+        if model_config.get("provider") == "llama_cpp":
+            return _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("AI_RPG_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
+        window = _env_int("AI_RPG_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS)
+    if model_config.get("provider") == "mle":
+        # After the loader fell back to its smaller context, the env value
+        # still named the one that did not fit. Every budget (contract
+        # choice, packet pruning, response cap) must use the window the
+        # model really has, or each turn overflows llama_cpp.
+        try:
+            from app.mle import loaded_context
+
+            loaded = int(loaded_context() or 0)
+        except Exception:
+            loaded = 0
+        if loaded > 0:
+            return min(window, loaded)
+    return window
 
 
 # Room a turn needs beyond the fixed system contract: the world packet plus the
@@ -849,7 +929,92 @@ def fitting_system_prompts(config: dict[str, Any] | None = None) -> tuple[str, s
     return SYSTEM_PROMPT, VERIFY_PROMPT, False
 
 
+# Providers that run the model locally and reuse the KV cache for an identical
+# token prefix: MLE (llama-cpp-python in-process) and the llama.cpp server. The
+# openai provider bills every token and caches nothing.
+PREFIX_CACHED_PROVIDERS = frozenset({"mle", "llama_cpp"})
+
+# Post-draft phases that carry their own task contract.
+SHARED_PREFIX_PHASES = ("verify", "prose_repair", "json_depth")
+
+SHARED_PREFIX_BRIDGE = (
+    "The contract above governed the draft call for this turn and is repeated here "
+    "unchanged so the model can reuse its cached prefix. For this call, follow only "
+    "the contract below."
+)
+
+
+def shares_prompt_prefix(config: dict[str, Any] | None = None) -> bool:
+    """True when the configured provider reuses its KV cache for an identical prompt prefix."""
+    model_config = config or get_model_config()
+    return _normalize_provider(str(model_config.get("provider") or "")) in PREFIX_CACHED_PROVIDERS
+
+
+def _phase_contract(config: dict[str, Any] | None, phase: str) -> str:
+    """The bare contract a post-draft phase sends on its own, sized to the window like the draft's."""
+    json_contract, verify_contract, _degraded = fitting_system_prompts(config)
+    if phase == "verify":
+        return verify_contract
+    if phase == "prose_repair":
+        return PROSE_REPAIR_SYSTEM_PROMPT
+    if phase == "json_depth":
+        return json_contract
+    raise ValueError(f"unknown turn phase for a system prompt: {phase!r}")
+
+
+def system_prompt_for_phase(
+    config: dict[str, Any] | None,
+    draft_system_prompt: str,
+    phase: str,
+    task_prompt: str,
+) -> str:
+    """System prompt for one post-draft phase of a turn whose draft sent ``draft_system_prompt``.
+
+    A turn used to send three or four unrelated system prompts: the DSL or JSON
+    draft contract, ``VERIFY_PROMPT``, ``PROSE_REPAIR_SYSTEM_PROMPT`` for the
+    prose repairs, and the JSON contract again for the depth fallback. A local
+    provider reuses its KV cache only for an identical token prefix, so every
+    call after the draft re-read a fresh prefix. For a local provider every
+    later call now starts with the draft's exact system prompt, per-turn blocks
+    included, and carries the phase's bare contract after it, so the prefix is
+    identical across the turn's calls. The draft call itself is unchanged, and
+    the JSON draft that runs when a DSL draft cannot be read keeps its own
+    contract.
+
+    ``task_prompt`` is what the phase sends on its own. The openai provider
+    keeps it: its tokens are billed and no prefix is cached.
+    """
+    if not shares_prompt_prefix(config):
+        return task_prompt
+    contract = _phase_contract(config, phase)
+    if draft_system_prompt.startswith(contract.rstrip()):
+        # The draft already sent this contract (a JSON draft and its depth fallback).
+        return draft_system_prompt
+    separator = "\n" if draft_system_prompt.endswith("\n") else "\n\n"
+    return f"{draft_system_prompt}{separator}{SHARED_PREFIX_BRIDGE}\n\n{contract}"
+
+
 _WARNED_COMPACT_CONTRACT = False
+
+
+def context_contract_notice(config: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """A runtime notice when the window cannot hold the full contract, else None.
+
+    Same test as fitting_system_prompts, surfaced to the browser through
+    /api/llm-runtime and /api/model-status. Only the in-process engine: the
+    llama.cpp server path always uses the compact contract by design, and a
+    cloud API has no small-window mode.
+    """
+    model_config = config or get_model_config()
+    if _normalize_provider(str(model_config.get("provider") or "")) != "mle":
+        return None
+    window = int(context_window_tokens(model_config) or 0)
+    needed = estimated_tokens(SYSTEM_PROMPT) + MIN_TURN_HEADROOM_TOKENS
+    if window <= 0 or window >= needed:
+        return None
+    from app.failsafe import context_notice
+
+    return context_notice(window, needed, provider="mle")
 
 
 def _warn_compact_contract_once(window: int) -> None:
@@ -953,6 +1118,11 @@ def _is_context_length_error(exc: Exception) -> bool:
         "requested too many tokens",
         "num_ctx",
         "n_ctx",
+        # llama_cpp in-process (MLE): "Requested tokens (N) exceed context window of M"
+        "exceed context window",
+        "context window of",
+        # native llama-server wording
+        "exceeds the available context",
     )
     return any(marker in text for marker in markers)
 
@@ -981,6 +1151,51 @@ def _is_connection_refused_error(exc: Any) -> bool:
         "failed to establish a new connection",
     )
     return any(marker in text for marker in markers)
+
+
+_MODEL_UNAVAILABLE_MARKERS = (
+    "no gguf model path",
+    "gguf model file was not found",
+    "lora adapter file was not found",
+    "has no model loaded",
+    "could not load",
+    "could not import llama_cpp",
+    "needs an api key",
+    "could not start managed",
+)
+
+
+def _is_model_unavailable_error(exc: Any) -> bool:
+    """Nothing about the prompt caused this: the model is unreachable, missing, or unconfigured.
+
+    A second call with the same configuration cannot succeed, so callers must
+    not fall through to another draft form or a retry. Measured on a turn with
+    no GGUF path saved: the DSL draft failed, the JSON draft ran anyway, then
+    the JSON retry ran too -- three calls and 24 seconds for an error that was
+    known before the first one.
+    """
+    if _is_connection_refused_error(exc) or _is_timeout_error(exc):
+        return True
+    text = str(exc).lower()
+    return any(marker in text for marker in _MODEL_UNAVAILABLE_MARKERS)
+
+
+def _failed_pass_usage(phase: str, exc: Exception) -> dict[str, Any]:
+    """The usage row for a failed prose pass.
+
+    A timeout or a refused connection is flagged ``model_unavailable`` so the
+    passes that follow in the same turn skip their own call: each of them
+    would otherwise wait the full draft timeout against the same dead model.
+    """
+    entry: dict[str, Any] = {"phase": phase, "error": _trim_text(str(exc), 500)}
+    if _is_model_unavailable_error(exc):
+        entry["model_unavailable"] = True
+    return entry
+
+
+def _model_unavailable_noted(usage: list[dict[str, Any]] | None) -> bool:
+    """True once a pass in this turn found the model unreachable."""
+    return any(isinstance(entry, dict) and entry.get("model_unavailable") for entry in (usage or ()))
 
 
 def _transport_error_message(exc: Exception, timeout: int) -> str:
@@ -1375,7 +1590,7 @@ def _turn_max_tokens(context: dict[str, Any], phase: str, compact: bool = False,
     requested_tokens = _env_int(env_name, _turn_token_default(context, phase, config))
     if not compact:
         return requested_tokens
-    compact_default = 700 if phase == "verify" else 900
+    compact_default = 500 if phase == "verify" else 900
     compact_env = "AI_RPG_TURN_COMPACT_VERIFY_TOKENS" if phase == "verify" else "AI_RPG_TURN_COMPACT_DRAFT_TOKENS"
     return min(requested_tokens, _env_int(compact_env, compact_default))
 
@@ -1666,10 +1881,41 @@ def public_model_config(config: dict[str, Any] | None = None) -> dict[str, Any]:
     # Ephemeral routing fields are turn-only; strip from public settings blob.
     cfg.pop("theme_model_source", None)
     cfg.pop("theme_model_active", None)
+    try:
+        from app.model_limits import resolve_limits
+
+        cfg["limits"] = resolve_limits(cfg)
+    except Exception:
+        cfg["limits"] = None
     return cfg
 
 
-def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
+def _overlay_model_limits(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Fold the per-model token limits into a config: caps, context_window, and their sources.
+
+    Precedence inside resolve_limits is explicit env > the player's saved
+    numbers for this model > automatic from the model's own header and the
+    GPU. A failure here must never take the config down with it.
+    """
+    try:
+        from app.model_limits import resolve_limits
+
+        limits = resolve_limits(cfg, with_facts=False)
+    except Exception:
+        return cfg
+    cfg["response_token_cap"] = int(limits["response_token_cap"])
+    cfg["response_token_hard_cap"] = int(limits["response_token_hard_cap"])
+    cfg["context_window"] = int(limits["context_tokens"])
+    cfg["model_limits"] = {
+        "model_key": limits.get("model_key") or "",
+        "label": limits.get("label") or "",
+        "mode": limits.get("mode") or "auto",
+        "source": limits.get("source") or {},
+    }
+    return cfg
+
+
+def get_model_config(*, ignore_override: bool = False, resolve_limits: bool = True) -> dict[str, Any]:
     if not ignore_override:
         override = _model_config_override.get()
         if override is not None:
@@ -1698,19 +1944,19 @@ def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
         default["provider"] = _normalize_provider(default["provider"])
         default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
         default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
-        return default
+        return _overlay_model_limits(default) if resolve_limits else default
     if not row:
         default["provider"] = _normalize_provider(default["provider"])
         default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
         default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
-        return default
+        return _overlay_model_limits(default) if resolve_limits else default
     try:
         stored = json.loads(row["value"])
     except json.JSONDecodeError:
         default["provider"] = _normalize_provider(default["provider"])
         default["theme_adapter_map"] = normalize_theme_adapter_map(default.get("theme_adapter_map"))
         default["theme_llm_lora_map"] = normalize_theme_llm_lora_map(default.get("theme_llm_lora_map"))
-        return default
+        return _overlay_model_limits(default) if resolve_limits else default
     merged = {**default, **stored}
     explicit_env = {
         "provider": "AI_RPG_MODEL_PROVIDER",
@@ -1753,11 +1999,11 @@ def get_model_config(*, ignore_override: bool = False) -> dict[str, Any]:
         merged["lora_scale"] = 1.0
     if os.getenv("AI_RPG_LLM_LORA_PATH"):
         merged["lora_path"] = str(os.getenv("AI_RPG_LLM_LORA_PATH") or "").strip()
-    return merged
+    return _overlay_model_limits(merged) if resolve_limits else merged
 
 
 def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
-    current = get_model_config(ignore_override=True)
+    current = get_model_config(ignore_override=True, resolve_limits=False)
     allowed = {
         "provider",
         "mle_model",
@@ -1805,15 +2051,39 @@ def update_model_config(config: dict[str, Any]) -> dict[str, Any]:
             next_config["api_base_url"] = preset["api_base_url"]
         if not next_config.get("api_model"):
             next_config["api_model"] = preset["api_model"]
-    # Never persist ephemeral routing diagnostics.
+    # Never persist ephemeral routing diagnostics or the per-model overlay.
     next_config.pop("theme_model_source", None)
     next_config.pop("theme_model_active", None)
+    next_config.pop("context_window", None)
+    next_config.pop("model_limits", None)
     with connect() as conn:
         conn.execute(
             "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             ("model_config", json.dumps(next_config, ensure_ascii=True)),
         )
-    return public_model_config(next_config)
+    # The settings form says whether its numbers are the player's own for
+    # this model or the automatic ones. Stored per model, so switching to
+    # another model brings that model's numbers, and switching back restores these.
+    limits_mode = str(config.get("limits_mode") or "").strip().lower()
+    if limits_mode in {"auto", "custom"}:
+        try:
+            from app.model_limits import model_facts, set_limits
+
+            key = str(model_facts(next_config).get("key") or "")
+            if limits_mode == "custom":
+                set_limits(
+                    key,
+                    {
+                        "context_tokens": config.get("context_tokens"),
+                        "response_token_cap": config.get("response_token_cap"),
+                        "response_token_hard_cap": config.get("response_token_hard_cap"),
+                    },
+                )
+            else:
+                set_limits(key, None)
+        except Exception:
+            pass
+    return public_model_config(get_model_config(ignore_override=True))
 
 
 def _read_models_url(url: str, timeout: int = 5) -> dict[str, Any]:
@@ -2238,7 +2508,7 @@ def _start_managed_llama_cpp(
     )
 
     host, port = _llama_cpp_host_port(base_url)
-    context_tokens = _env_int("AI_RPG_LLAMA_CPP_CONTEXT", _env_int("AI_RPG_CONTEXT_TOKENS", DEFAULT_CONTEXT_TOKENS))
+    context_tokens = context_window_tokens(config)
     gpu_layers = _llama_cpp_gpu_layers()
     flash_attention = os.getenv("AI_RPG_LLAMA_CPP_FLASH_ATTN", "True")
     log_mode = os.getenv("AI_RPG_LLM_LOG_MODE", "quiet").strip().lower()
@@ -8188,7 +8458,91 @@ def _extract_json(text: str) -> dict[str, Any]:
         first_object = _first_json_object(stripped)
         if first_object:
             return json.loads(first_object)
+        closed = _close_truncated_json(stripped)
+        if closed is not None:
+            return closed
         raise
+
+
+_DANGLING_KEY_RE = re.compile(r'([{,])\s*"(?:[^"\\]|\\.)*"\s*$')
+
+
+def _json_closers(head: str) -> str:
+    """The quote and brackets that would finish `head`, innermost first."""
+    stack: list[str] = []
+    quoted = False
+    escaped = False
+    for char in head:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                quoted = False
+            continue
+        if char == '"':
+            quoted = True
+        elif char in "{[":
+            stack.append("}" if char == "{" else "]")
+        elif char in "}]" and stack:
+            stack.pop()
+    return ('"' if quoted else "") + "".join(reversed(stack))
+
+
+def _close_truncated_json(text: str) -> dict[str, Any] | None:
+    """Finish an object the response cap cut off, without a model call.
+
+    A verify pass that overran its token cap came back as 5,224 characters
+    ending mid-string; the repair call that followed took 26 seconds to send
+    those same characters back with the quotes closed. The cut is mechanical,
+    so the fix is too: close the cut string, drop a dangling separator or a
+    key that never got its value, then close every open array and object in
+    order. Only the tail is touched. The longest readable prefix is tried
+    first, so a value cut mid-string is kept as far as it got; if nothing
+    parses, the caller falls through to the model repair as before.
+    """
+    start = text.find("{")
+    if start < 0:
+        return None
+    body = text[start:]
+    boundaries: list[int] = []
+    in_string = False
+    escaped = False
+    for index, char in enumerate(body):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in ",{[}]":
+            boundaries.append(index + 1)
+    if in_string:
+        # Cut mid-string: the text so far is real prose, keep it.
+        boundaries.append(len(body))
+    for cut in sorted(set(boundaries), reverse=True)[:6]:
+        head = body[:cut]
+        head += _json_closers(head)[:1] if _json_closers(head).startswith('"') else ""
+        for _ in range(3):
+            head = re.sub(r"[\s,:]+$", "", head)
+            dangling = _DANGLING_KEY_RE.search(head)
+            if dangling:
+                head = head[: dangling.start() + 1]
+        head = re.sub(r"[\s,:]+$", "", head)
+        if not head:
+            continue
+        try:
+            parsed = json.loads(head + _json_closers(head))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict) and parsed:
+            return parsed
+    return None
 
 
 def _first_json_object(text: str) -> str:
@@ -8594,6 +8948,123 @@ def estimated_tokens(text: str) -> int:
     return max(1, (len(text) + 3) // 4)
 
 
+# JSON-aware pruning for an over-budget user packet (`build_user_prompt`,
+# `build_verify_prompt`, `build_dsl_user_prompt` all send one JSON object).
+# A middle cut turns that object into invalid JSON; dropping keys keeps it
+# parseable. `world_state` keys are dropped in this order, first to last.
+# A `world_state` key not listed here is dropped before any listed key.
+# The last eight are the keys a turn cannot run without; they go only when
+# everything else has gone. The packet's own fields (instruction,
+# player_input, turn_kind, output_contract, instructions, draft_turn) are
+# never dropped: when they alone overflow, the middle cut runs as before.
+WORLD_STATE_DROP_ORDER: tuple[str, ...] = (
+    "npc_psychology_context",
+    "conversations",
+    "named",
+    "relevant_asks",
+    "open_offers",
+    "active_quests",
+    "narrative_voice",
+    "skill_check_context",
+    "map_space",
+    "settings",
+    "direction_hint",
+    # Kept until last, in this order.
+    "mechanics_context",
+    "recall_contract",
+    "naming_contract",
+    "movement_contract",
+    "turn",
+    "world_time",
+    "current_location",
+    "player",
+)
+# Longest string value kept under `world_state` once the packet is over budget.
+WORLD_STATE_STRING_CAP = 400
+_PRUNE_JSON_SEPARATORS = (",", ":")
+
+
+def _parse_json_packet(text: str) -> dict[str, Any] | None:
+    stripped = text.lstrip()
+    if not stripped.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _shorten_strings(value: Any, cap: int) -> tuple[Any, int]:
+    """Cut every string longer than `cap` under `value`; returns (new_value, count)."""
+    if isinstance(value, str):
+        if len(value) > cap:
+            return value[:cap].rstrip() + "\u2026", 1
+        return value, 0
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        count = 0
+        for key, item in value.items():
+            new_item, n = _shorten_strings(item, cap)
+            out[key] = new_item
+            count += n
+        return out, count
+    if isinstance(value, list):
+        rows = []
+        count = 0
+        for item in value:
+            new_item, n = _shorten_strings(item, cap)
+            rows.append(new_item)
+            count += n
+        return rows, count
+    return value, 0
+
+
+def _prune_json_packet(
+    packet: dict[str, Any],
+    *,
+    fits: Any,
+    diagnostics: dict[str, Any],
+) -> str:
+    """
+    Shrink a JSON packet by shortening long `world_state` strings, then dropping
+    `world_state` keys in WORLD_STATE_DROP_ORDER until `fits(serialized)` is true
+    or nothing is left to drop. Always returns valid JSON.
+    """
+
+    def dump(obj: Any) -> str:
+        return json.dumps(obj, ensure_ascii=True, separators=_PRUNE_JSON_SEPARATORS)
+
+    world = packet.get("world_state")
+    if not isinstance(world, dict):
+        return dump(packet)
+    world = dict(world)
+    packet = dict(packet)
+    packet["world_state"] = world
+
+    shortened, count = _shorten_strings(world, WORLD_STATE_STRING_CAP)
+    if count:
+        world.clear()
+        world.update(shortened)
+        diagnostics["strings_shortened"] = int(diagnostics.get("strings_shortened") or 0) + count
+        diagnostics["pruned"] = True
+    text = dump(packet)
+    if fits(text):
+        return text
+
+    rank = {key: index for index, key in enumerate(WORLD_STATE_DROP_ORDER)}
+    unknown = [key for key in world if key not in rank]
+    order = unknown + [key for key in WORLD_STATE_DROP_ORDER if key in world]
+    for key in order:
+        world.pop(key, None)
+        diagnostics.setdefault("keys_dropped", []).append(key)
+        diagnostics["pruned"] = True
+        text = dump(packet)
+        if fits(text):
+            return text
+    return text
+
+
 def enforce_token_budget(
     system_prompt: str,
     user_prompt: str,
@@ -8632,16 +9103,28 @@ def enforce_token_budget(
         "pruned": False,
         "truncated_chars": 0,
         "soft_pass": False,
+        "keys_dropped": [],
+        "strings_shortened": 0,
     }
     if total <= budget:
         diagnostics["after_estimated_tokens"] = total
         diagnostics["within_budget"] = True
         return system, user, diagnostics
 
+    original_user_len = len(user)
+    # A JSON packet is pruned by key so it stays valid JSON; a middle cut
+    # would leave the model an unparseable object.
+    packet = _parse_json_packet(user)
+    if packet is not None:
+        user = _prune_json_packet(
+            packet,
+            fits=lambda text: system_tokens + estimated_tokens(text) <= budget,
+            diagnostics=diagnostics,
+        )
+
     # Keep system intact; shrink user prompt from the middle until under budget.
     allowed_user = max(256, budget - system_tokens - 16)
     max_user_chars = max(600, allowed_user * 4 - 96)
-    original_user_len = len(user)
     attempts = 0
     while estimated_tokens(system) + estimated_tokens(user) > budget and attempts < 8:
         attempts += 1
@@ -9949,7 +10432,10 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
                 note += " Replaced non-person labels: " + ", ".join(
                     f"{a!r}→{b!r}" for a, b in rename_pairs[:4]
                 )
-            corrections.append(note)
+            # _normalize_turn runs on every handoff, so without this guard the
+            # same sentence landed five times in one turn's self_check.
+            if rename_pairs or not any(str(item).startswith(note) for item in corrections):
+                corrections.append(note)
     return result
 
 
@@ -10152,6 +10638,7 @@ def _keep_cleaned_turn_value(key: str, value: Any) -> bool:
 def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     # Preserve pipeline debug meta across normalize/cleanup (not part of world schema).
     pipeline_meta = turn.get("_narration_pipeline") if isinstance(turn, dict) else None
+    dsl_meta = turn.get("_dsl") if isinstance(turn, dict) else None
     normalized = _normalize_turn(turn)
     before_chars, before_tokens = _json_size(normalized)
     cleaned: dict[str, Any] = {}
@@ -10173,6 +10660,8 @@ def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[s
     cleaned = {key: value for key, value in cleaned.items() if _keep_cleaned_turn_value(key, value)}
     if pipeline_meta:
         cleaned["_narration_pipeline"] = pipeline_meta
+    if isinstance(dsl_meta, dict) and dsl_meta:
+        cleaned["_dsl"] = dsl_meta
     after_chars, after_tokens = _json_size(cleaned)
     _append_trace(
         trace,
@@ -10184,7 +10673,7 @@ def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[s
             "after_chars": after_chars,
             "before_estimated_tokens": before_tokens,
             "after_estimated_tokens": after_tokens,
-            "removed_keys": sorted(key for key in normalized.keys() if key not in cleaned),
+            "removed_keys": sorted(key for key in normalized.keys() if key not in cleaned and not key.startswith("_")),
             "narration_chars": _narration_char_count(cleaned),
             "list_counts": {key: len(value) for key, value in cleaned.items() if isinstance(value, list)},
             "narration_pipeline_preserved": bool(pipeline_meta),
@@ -10193,13 +10682,159 @@ def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[s
     return cleaned
 
 
+def _prompt_draft(draft: dict[str, Any]) -> dict[str, Any]:
+    """The draft as the verifier sees it: engine meta (underscore keys) stays home."""
+    if not isinstance(draft, dict):
+        return draft
+    return {key: value for key, value in draft.items() if not str(key).startswith("_")}
+
+
 def _merge_verified_with_draft_narration(verified: dict[str, Any], draft: dict[str, Any]) -> dict[str, Any]:
+    """A legacy full-turn reply that carried no prose: its keys over the draft, draft narration kept."""
     merged = {**draft, **_turn_payload(verified)}
     merged["narration_segments"] = draft.get("narration_segments") or []
     merged["narration"] = draft.get("narration") or ""
     if not merged.get("turn_summary"):
         merged["turn_summary"] = draft.get("turn_summary") or ""
     return _normalize_turn(merged)
+
+
+def _verdict_string_list(value: Any, limit: int = 8) -> list[str]:
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if isinstance(item, dict):
+            item = item.get("issue") or item.get("text") or item.get("summary") or json.dumps(item, ensure_ascii=True)
+        text = _trim_text(str(item or ""), 260)
+        if text:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _merge_verifier_verdict(
+    verdict_object: dict[str, Any],
+    draft: dict[str, Any],
+    context: dict[str, Any] | None,
+    trace: list[dict[str, Any]] | None = None,
+    phase: str = "verify",
+) -> dict[str, Any]:
+    """
+    Apply a verifier verdict to the draft.
+
+    The verifier returns ``verdict`` (pass or revise), ``issues`` and a
+    ``patch`` holding only the turn keys it replaces. Everything the patch
+    does not name is kept from the draft, the draft narration included: prose
+    is replaced only when the patch carries a non-empty ``narration`` or
+    ``narration_segments``. ``self_check`` is written here from the verdict,
+    so the verification memory and the UI see the same passed / issues_found /
+    corrections_made shape a full-turn verifier produced.
+    """
+    verdict = str(verdict_object.get("verdict") or "").strip().lower()
+    issues = _verdict_string_list(verdict_object.get("issues", verdict_object.get("issues_found")))
+    corrections = _verdict_string_list(verdict_object.get("corrections", verdict_object.get("corrections_made")))
+    patch = verdict_object.get("patch") if isinstance(verdict_object.get("patch"), dict) else {}
+    # Turn keys set beside the verdict instead of inside patch are the patch too.
+    stray = {key: value for key, value in verdict_object.items() if key in TURN_SHAPE_KEYS}
+    patch = {**stray, **patch}
+    merged = dict(draft)
+    applied: list[str] = []
+    ignored: list[str] = []
+    narration_replaced = False
+    for key, value in patch.items():
+        if key not in TURN_SHAPE_KEYS or key == "self_check":
+            ignored.append(key)
+            continue
+        if key == "narration":
+            text = _narration_value_text(value)
+            if not text:
+                ignored.append(key)
+                continue
+            merged["narration"] = text
+            merged["narration_segments"] = [{"label": "scene", "text": text}]
+            narration_replaced = True
+        elif key == "narration_segments":
+            segments = _coerce_segments(value)
+            if not segments or not _narration_value_text(segments):
+                ignored.append(key)
+                continue
+            merged["narration_segments"] = segments
+            merged.pop("narration", None)
+            narration_replaced = True
+        else:
+            merged[key] = value
+        applied.append(key)
+    if verdict in VERIFY_VERDICT_PASS:
+        passed = True
+        reference = "Model verifier verdict: pass."
+    elif verdict in VERIFY_VERDICT_REVISE:
+        passed = bool(applied)
+        reference = f"Model verifier verdict: revise; patched {', '.join(applied) if applied else 'nothing'}."
+    else:
+        passed = False
+        reference = f"Model verifier returned an unrecognized verdict ({verdict or 'empty'})."
+        issues = [*issues, "Verifier verdict was not pass or revise."]
+    if passed and not applied:
+        consistency = "Draft accepted as written."
+    elif passed:
+        consistency = "Draft consistent after the verifier patch."
+    else:
+        consistency = "Verifier found issues the patch did not resolve."
+    merged["self_check"] = {
+        "passed": passed,
+        "issues_found": issues[:8],
+        "corrections_made": [*corrections, *(f"Verifier replaced {key}." for key in applied)][:8],
+        "reference_check": reference,
+        "consistency_check": consistency,
+    }
+    if not merged.get("turn_summary"):
+        merged["turn_summary"] = draft.get("turn_summary") or ""
+    _append_trace(
+        trace,
+        {
+            "phase": phase,
+            "event": "verifier_verdict",
+            "verdict": verdict,
+            "passed": passed,
+            "issues": issues[:8],
+            "patched_keys": applied,
+            "ignored_keys": ignored,
+            "narration_replaced": narration_replaced,
+        },
+    )
+    return _normalize_turn(merged, context)
+
+
+def _resolve_verified_turn(
+    verified: Any,
+    draft: dict[str, Any],
+    context: dict[str, Any] | None,
+    trace: list[dict[str, Any]] | None = None,
+    phase: str = "verify",
+) -> dict[str, Any]:
+    """
+    Turn the verifier's reply into the turn the world applies.
+
+    A verdict object is merged over the draft. A legacy full-turn reply (one
+    carrying TURN_SHAPE_KEYS and no verdict) is normalized as it always was,
+    and one that carries no prose takes the draft narration. An echo of the
+    input falls through the legacy path and keeps the draft; the caller reports
+    it to the breaker through ``_verified_output_is_useful``.
+    """
+    kind = _verify_reply_kind(verified)
+    _append_trace(trace, {"phase": phase, "event": "verifier_reply", "kind": kind})
+    if kind == "verdict":
+        return _merge_verifier_verdict(_unwrap_verifier_verdict(verified) or {}, draft, context, trace, phase)
+    try:
+        return _normalize_turn(verified, context)
+    except LlmError as exc:
+        if not _is_missing_narration_error(exc):
+            raise
+        return _merge_verified_with_draft_narration(verified, draft)
 
 
 def _turn_for_depth_retry(turn: dict[str, Any]) -> dict[str, Any]:
@@ -10922,6 +11557,7 @@ def _ensure_narration_depth(
     usage: list[dict[str, Any]],
     phase: str,
     trace: list[dict[str, Any]] | None = None,
+    prose_system_prompt: str | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_turn(turn, context)
     original_chars = _narration_char_count(normalized)
@@ -10931,13 +11567,18 @@ def _ensure_narration_depth(
     # Prose-only first: it is the smallest thing to ask for, cannot truncate
     # into invalid JSON, and preserves the draft's structured ops. The
     # full-turn JSON retry stays as a fallback for models that handle it.
-    for attempt, retry in (
-        ("prose", _retry_narration_prose),
-        ("json", _retry_short_narration),
+    for attempt, retry, contract in (
+        ("prose", _retry_narration_prose, prose_system_prompt or system_prompt),
+        ("json", _retry_short_narration, system_prompt),
     ):
+        if _model_unavailable_noted(usage):
+            # The prose retry (or an earlier pass) already waited out a dead
+            # model; the JSON retry would wait the same timeout again.
+            _append_trace(trace, {"phase": phase, "event": "depth_retry_skipped", "mode": attempt, "reason": "model_unavailable"})
+            break
         try:
             expanded = _normalize_turn(
-                retry(context, player_input, normalized, system_prompt, timeout, usage, phase, trace),
+                retry(context, player_input, normalized, contract, timeout, usage, phase, trace),
                 context,
             )
             expanded_chars = _narration_char_count(expanded)
@@ -10954,7 +11595,7 @@ def _ensure_narration_depth(
                 )
                 return expanded
         except LlmError as exc:
-            usage.append({"phase": f"{phase}_{attempt}_failed", "error": _trim_text(str(exc), 500)})
+            usage.append(_failed_pass_usage(f"{phase}_{attempt}_failed", exc))
             _append_trace(
                 trace,
                 {"phase": phase, "event": "depth_retry_failed", "mode": attempt, "error": str(exc)},
@@ -11212,11 +11853,17 @@ def _ensure_narration_quality(
     usage: list[dict[str, Any]],
     phase: str,
     trace: list[dict[str, Any]] | None = None,
+    prose_system_prompt: str | None = None,
 ) -> dict[str, Any]:
     """
     When AI_RPG_NARRATION_PIPELINE is on: paragraph pipeline (packed, tier-aware).
     Otherwise: legacy whole-turn depth retry when under MIN_TURN_NARRATION_CHARS.
+
+    `prose_system_prompt` is the contract for the prose-only passes (depth
+    prose, voice, answer act, recall). `system_prompt` still backs the
+    whole-turn JSON depth fallback, which needs the JSON shape.
     """
+    prose_prompt = prose_system_prompt or system_prompt
     if pipeline_enabled():
         refined = _apply_narration_pipeline(turn, context, player_input, usage, trace, timeout)
         budget = (refined.get("_narration_pipeline") or {}).get("budget") or {}
@@ -11226,12 +11873,16 @@ def _ensure_narration_quality(
         if _narration_char_count(refined) >= floor:
             deep = refined
         else:
-            deep = _ensure_narration_depth(refined, context, player_input, system_prompt, timeout, usage, phase, trace)
+            deep = _ensure_narration_depth(
+                refined, context, player_input, system_prompt, timeout, usage, phase, trace, prose_system_prompt=prose_prompt
+            )
     else:
-        deep = _ensure_narration_depth(turn, context, player_input, system_prompt, timeout, usage, phase, trace)
-    voiced = _ensure_narration_voice(deep, context, player_input, system_prompt, timeout, usage, phase, trace)
-    answered = _ensure_answer_act(voiced, context, player_input, system_prompt, timeout, usage, phase, trace)
-    recalled = _ensure_recall_specifics(answered, context, player_input, system_prompt, timeout, usage, phase, trace)
+        deep = _ensure_narration_depth(
+            turn, context, player_input, system_prompt, timeout, usage, phase, trace, prose_system_prompt=prose_prompt
+        )
+    voiced = _ensure_narration_voice(deep, context, player_input, prose_prompt, timeout, usage, phase, trace)
+    answered = _ensure_answer_act(voiced, context, player_input, prose_prompt, timeout, usage, phase, trace)
+    recalled = _ensure_recall_specifics(answered, context, player_input, prose_prompt, timeout, usage, phase, trace)
     return _apply_menu_trim(recalled)
 
 
@@ -11261,6 +11912,9 @@ def _ensure_narration_voice(
     turn["_voice_check"] = report
     if not report.get("drift") or not _voice_repair_enabled():
         return turn
+    if _model_unavailable_noted(usage):
+        _append_trace(trace, {"phase": phase, "event": "voice_retry_skipped", "reason": "model_unavailable"})
+        return turn
     try:
         fixed = _normalize_turn(
             _retry_narration_voice(context, player_input, turn, system_prompt, timeout, usage, f"{phase}_voice", trace),
@@ -11270,7 +11924,7 @@ def _ensure_narration_voice(
         _append_trace(trace, {"phase": phase, "event": "voice_retry_ok", "before": report})
         return fixed
     except LlmError as exc:
-        usage.append({"phase": f"{phase}_voice_failed", "error": _trim_text(str(exc), 500)})
+        usage.append(_failed_pass_usage(f"{phase}_voice_failed", exc))
         _append_trace(trace, {"phase": phase, "event": "voice_retry_failed", "error": str(exc)})
     return turn
 
@@ -11428,6 +12082,9 @@ def _ensure_recall_specifics(
     turn["_recall_check"] = report
     if not report.get("missing") or not _answer_repair_enabled():
         return turn
+    if _model_unavailable_noted(usage):
+        _append_trace(trace, {"phase": phase, "event": "recall_retry_skipped", "reason": "model_unavailable"})
+        return turn
     try:
         fixed = _normalize_turn(
             _retry_recall_specifics(
@@ -11439,7 +12096,7 @@ def _ensure_recall_specifics(
         _append_trace(trace, {"phase": phase, "event": "recall_retry_ok", "before": report})
         return fixed
     except LlmError as exc:
-        usage.append({"phase": f"{phase}_recall_failed", "error": _trim_text(str(exc), 500)})
+        usage.append(_failed_pass_usage(f"{phase}_recall_failed", exc))
         _append_trace(trace, {"phase": phase, "event": "recall_retry_failed", "error": str(exc)})
     return turn
 
@@ -11459,6 +12116,9 @@ def _ensure_answer_act(
     turn["_answer_check"] = report
     if not report.get("unanswered") or not _answer_repair_enabled():
         return turn
+    if _model_unavailable_noted(usage):
+        _append_trace(trace, {"phase": phase, "event": "answer_retry_skipped", "reason": "model_unavailable"})
+        return turn
     try:
         fixed = _normalize_turn(
             _retry_answer_act(
@@ -11473,7 +12133,7 @@ def _ensure_answer_act(
         _append_trace(trace, {"phase": phase, "event": "answer_retry_ok", "before": report})
         return fixed
     except LlmError as exc:
-        usage.append({"phase": f"{phase}_answer_failed", "error": _trim_text(str(exc), 500)})
+        usage.append(_failed_pass_usage(f"{phase}_answer_failed", exc))
         _append_trace(trace, {"phase": phase, "event": "answer_retry_failed", "error": str(exc)})
     return turn
 
@@ -11523,11 +12183,19 @@ def _try_dsl_draft(
     usage: list[dict[str, Any]],
     trace: list[dict[str, Any]],
     system_prompt: str | None = None,
+    active_context: dict[str, Any] | None = None,
 ) -> dict[str, Any] | None:
-    """Attempt NAR+OPS draft. Returns turn dict or None to fall back to JSON draft."""
+    """Attempt NAR+OPS draft. Returns turn dict or None to fall back to JSON draft.
+
+    Returns None only when the model answered and the answer could not be
+    read. A transport failure, a timeout, or a missing model is raised instead:
+    the JSON draft would hit the same wall, and on a timeout it would wait the
+    full draft timeout a second time before the turn fell back.
+    """
     if not draft_mode_enabled():
         return None
-    active_context = _clean_context_for_handoff(context, "planner_to_dsl_draft", trace)
+    if active_context is None:
+        active_context = _clean_context_for_handoff(context, "planner_to_dsl_draft", trace)
     dsl_prompt = build_dsl_user_prompt(active_context, player_input)
     light = _is_light_question(player_input)
     max_tokens = 420 if light else min(_turn_max_tokens(active_context, "draft"), 1400)
@@ -11552,9 +12220,12 @@ def _try_dsl_draft(
         )
     except LlmError as exc:
         _append_trace(trace, {"phase": "draft_dsl", "event": "failed", "error": str(exc)})
+        if _is_model_unavailable_error(exc):
+            raise _attach_model_usage(exc, usage, trace)
         return None
     try:
         turn = parse_dsl_turn(raw, player_input=player_input)
+        dsl_meta = turn.get("_dsl") if isinstance(turn.get("_dsl"), dict) else {}
         turn = _clean_turn_for_handoff(_normalize_turn(turn), "dsl_to_verify", trace)
         _append_trace(
             trace,
@@ -11562,7 +12233,8 @@ def _try_dsl_draft(
                 "phase": "draft_dsl",
                 "event": "transcoded",
                 "narration_chars": _narration_char_count(turn),
-                "ops_count": (turn.get("_dsl") or {}).get("ops_count"),
+                "ops_count": dsl_meta.get("ops_count"),
+                "malformed_ops": int(dsl_meta.get("malformed_ops") or 0),
             },
         )
         return turn
@@ -11629,19 +12301,34 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         _warn_compact_contract_once(context_window_tokens(config))
     theme_block = theme_prompt_block(session_theme, playthrough_options)
     dsl_system_prompt = DSL_SYSTEM_PROMPT
+    # Depth, voice, answer, and recall repairs ask for prose only. They used
+    # to carry the full JSON contract (~9.5k tokens) as their system prompt,
+    # a prefix no other call in the turn shares, so every repair re-read the
+    # whole contract for rules about a JSON shape it was told not to return.
+    prose_system_prompt = PROSE_REPAIR_SYSTEM_PROMPT
     is_opening = str(player_input or "").startswith("__opening_scene_request__")
     if theme_block:
         system_prompt = f"{system_prompt.rstrip()}\n\n{theme_block}"
         dsl_system_prompt = f"{DSL_SYSTEM_PROMPT.rstrip()}\n\n{theme_block}"
+        prose_system_prompt = f"{prose_system_prompt.rstrip()}\n\n{theme_block}"
     avoid_block = anti_repetition_block(context)
     if avoid_block:
         system_prompt = f"{system_prompt.rstrip()}\n\n{avoid_block}"
         dsl_system_prompt = f"{dsl_system_prompt.rstrip()}\n\n{avoid_block}"
+        prose_system_prompt = f"{prose_system_prompt.rstrip()}\n\n{avoid_block}"
     if is_opening:
         open_block = opening_feel_prompt_block(session_theme, playthrough_options)
         if open_block:
             system_prompt = f"{system_prompt.rstrip()}\n\n{open_block}"
             dsl_system_prompt = f"{dsl_system_prompt.rstrip()}\n\n{open_block}"
+    # A local model reuses its KV cache only for an identical token prefix, so
+    # every call after the draft starts with the draft's exact system prompt and
+    # carries its own contract after it. The openai provider keeps the small
+    # per-task prompts. The draft call sends the same prompt either way.
+    draft_system_prompt = dsl_system_prompt if draft_mode_enabled() else system_prompt
+    verify_prompt = system_prompt_for_phase(config, draft_system_prompt, "verify", verify_prompt)
+    prose_system_prompt = system_prompt_for_phase(config, draft_system_prompt, "prose_repair", prose_system_prompt)
+    depth_system_prompt = system_prompt_for_phase(config, draft_system_prompt, "json_depth", system_prompt)
     progress_begin(
         "opening" if is_opening else "turn",
         total_steps=6,
@@ -11667,15 +12354,16 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 "deterministic draft payload cleanup before verifier",
                 "certainty-based verification policy scoring",
                 "malformed JSON repair or retry when needed",
-                "verifier JSON model call when remaining checks require it",
+                "verifier verdict call (pass or revise plus a patch of only the changed keys) when remaining checks require it",
                 "deterministic verified payload cleanup before world application",
                 "optional adaptive paragraph narration pipeline when AI_RPG_NARRATION_PIPELINE is on",
                 "narration depth retry when needed (or after pipeline floor miss)",
                 "world.apply_turn SQLite state application or deterministic fallback",
             ],
             "narration_pipeline_enabled": pipeline_enabled(),
-            "note": "Trace contains observable prompts, raw model outputs, parsed JSON, handoff cleanup decisions, verifier self_check, errors, and fallback decisions. It cannot include private hidden chain-of-thought that the model did not return.",
+            "note": "Trace contains observable prompts, raw model outputs, parsed JSON, handoff cleanup decisions, verifier verdict and self_check, errors, and fallback decisions. It cannot include private hidden chain-of-thought that the model did not return.",
             "provider": config.get("provider"),
+            "shared_prompt_prefix": shares_prompt_prefix(config),
             "mle_model": config.get("mle_model"),
             "api_model": config.get("api_model"),
             "check_profile": model_check_profile(config),
@@ -11702,6 +12390,8 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
                 system_prompt=system_prompt,
                 verify_prompt=verify_prompt,
                 dsl_system_prompt=dsl_system_prompt,
+                prose_system_prompt=prose_system_prompt,
+                depth_system_prompt=depth_system_prompt,
                 progress_update=progress_update,
                 progress_preview=progress_preview,
                 progress_end=progress_end,
@@ -11742,12 +12432,19 @@ def _generate_turn_body(
     system_prompt: str,
     verify_prompt: str,
     dsl_system_prompt: str | None = None,
+    prose_system_prompt: str | None = None,
+    depth_system_prompt: str | None = None,
     progress_update: Any,
     progress_preview: Any,
     progress_end: Any,
     progress_fail: Any,
 ) -> dict[str, Any]:
     active_context = _clean_context_for_handoff(context, "planner_to_draft", trace)
+    # Every narration-quality pass below hands its prose-only retries this
+    # contract, and its whole-turn JSON depth fallback the depth contract (the
+    # JSON contract alone, or the draft prefix plus it for a local model).
+    ensure_quality = functools.partial(_ensure_narration_quality, prose_system_prompt=prose_system_prompt)
+    depth_system_prompt = depth_system_prompt or system_prompt
     progress_update(
         "draft",
         "Asking the model for the scene draft…",
@@ -11761,6 +12458,7 @@ def _generate_turn_body(
         usage,
         trace,
         system_prompt=dsl_system_prompt or DSL_SYSTEM_PROMPT,
+        active_context=active_context,
     )
     if dsl_draft is not None:
         draft = dsl_draft
@@ -11791,8 +12489,8 @@ def _generate_turn_body(
             # A plain question should not pay for a second call that pads the
             # answer out to a full scene.
             if not _is_light_question(player_input):
-                result = _ensure_narration_quality(
-                    result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_dsl_retry", trace
+                result = ensure_quality(
+                    result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_dsl_retry", trace
                 )
             result = _clean_turn_for_handoff(result, "dsl_to_world", trace)
             result["_verification_policy"] = verification_policy
@@ -11820,8 +12518,8 @@ def _generate_turn_body(
                 {"phase": "verify", "event": "verifier_disabled", **verifier_breaker_status()},
             )
             usage.append({"phase": "verify_skipped_breaker", "reason": _VERIFY_DISABLED_REASON})
-            result = _ensure_narration_quality(
-                draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace
+            result = ensure_quality(
+                draft, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_retry", trace
             )
             result = _clean_turn_for_handoff(result, "dsl_draft_to_world", trace)
             result["_verification_policy"] = {
@@ -11841,19 +12539,14 @@ def _generate_turn_body(
             )
             verified = _chat_json(
                 verify_prompt,
-                build_verify_prompt(active_context, player_input, draft),
+                build_verify_prompt(active_context, player_input, _prompt_draft(draft)),
                 timeout=verify_timeout,
                 usage=usage,
                 phase="verify",
                 max_tokens=_turn_max_tokens(active_context, "verify"),
                 trace=trace,
             )
-            try:
-                result = _normalize_turn(verified, active_context)
-            except LlmError as exc:
-                if not _is_missing_narration_error(exc):
-                    raise
-                result = _merge_verified_with_draft_narration(verified, draft)
+            result = _resolve_verified_turn(verified, draft, active_context, trace, phase="verify")
             _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
             progress_update(
                 "narration",
@@ -11861,8 +12554,8 @@ def _generate_turn_body(
                 step=4,
                 line="Narration quality / pipeline pass.",
             )
-            result = _ensure_narration_quality(
-                result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace
+            result = ensure_quality(
+                result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_retry", trace
             )
             result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
             result["_verification_policy"] = verification_policy
@@ -11891,8 +12584,8 @@ def _generate_turn_body(
                 "reference_check": "not verified",
                 "consistency_check": "not verified",
             }
-            draft = _ensure_narration_quality(
-                draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace
+            draft = ensure_quality(
+                draft, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_draft_retry", trace
             )
             draft = _clean_turn_for_handoff(draft, "dsl_to_world_unverified", trace)
             draft["_verification_policy"] = verification_policy
@@ -11956,9 +12649,7 @@ def _generate_turn_body(
             except LlmError as retry_exc:
                 raise _attach_model_usage(retry_exc, usage, trace)
     except LlmError as exc:
-        if _is_connection_refused_error(exc):
-            raise _attach_model_usage(exc, usage, trace)
-        if _is_timeout_error(exc):
+        if _is_model_unavailable_error(exc):
             raise _attach_model_usage(exc, usage, trace)
         if _is_context_length_error(exc):
             active_context = _clean_context_for_handoff(_compact_turn_context(context), "planner_to_draft_compact_retry", trace)
@@ -12039,7 +12730,7 @@ def _generate_turn_body(
             line="Certainty policy skipped model verifier.",
         )
         result = _mark_draft_verified_by_policy(draft, verification_policy)
-        result = _ensure_narration_quality(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_certainty_retry", trace)
+        result = ensure_quality(result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_certainty_retry", trace)
         result = _clean_turn_for_handoff(result, "draft_certainty_to_world", trace)
         result["_verification_policy"] = verification_policy
         _append_trace(
@@ -12070,8 +12761,8 @@ def _generate_turn_body(
             },
         )
         usage.append({"phase": "verify_skipped_breaker", "reason": _VERIFY_DISABLED_REASON})
-        result = _ensure_narration_quality(
-            draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace
+        result = ensure_quality(
+            draft, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_retry", trace
         )
         result = _clean_turn_for_handoff(result, "draft_to_world", trace)
         result["_verification_policy"] = {
@@ -12091,19 +12782,14 @@ def _generate_turn_body(
         )
         verified = _chat_json(
             verify_prompt,
-            build_verify_prompt(active_context, player_input, draft),
+            build_verify_prompt(active_context, player_input, _prompt_draft(draft)),
             timeout=verify_timeout,
             usage=usage,
             phase="verify",
             max_tokens=_turn_max_tokens(active_context, "verify"),
             trace=trace,
         )
-        try:
-            result = _normalize_turn(verified, active_context)
-        except LlmError as exc:
-            if not _is_missing_narration_error(exc):
-                raise
-            result = _merge_verified_with_draft_narration(verified, draft)
+        result = _resolve_verified_turn(verified, draft, active_context, trace, phase="verify")
         _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
         progress_update(
             "narration",
@@ -12111,7 +12797,7 @@ def _generate_turn_body(
             step=4,
             line="Narration quality / pipeline pass.",
         )
-        result = _ensure_narration_quality(result, active_context, player_input, system_prompt, timeout, usage, "narration_depth_retry", trace)
+        result = ensure_quality(result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_retry", trace)
         result = _clean_turn_for_handoff(result, "verifier_to_world", trace)
         result["_verification_policy"] = verification_policy
         _append_trace(
@@ -12129,27 +12815,25 @@ def _generate_turn_body(
         return result
     except LlmError as exc:
         # Any hard verify failure counts toward the breaker too, not just
-        # syntactically-valid garbage.
-        _note_verify_outcome(False, _trim_text(str(exc), 120))
+        # syntactically-valid garbage -- but only once the turn actually goes
+        # out unverified. A context-length overflow that the compact retry
+        # recovers is a verified turn, and charging the breaker for it would
+        # disable the verifier after three overflows the retry absorbed.
         if _is_context_length_error(exc):
             try:
                 compact_context = _clean_context_for_handoff(_compact_turn_context(active_context), "planner_to_verify_compact_retry", trace)
                 verified = _chat_json(
                     verify_prompt,
-                    build_verify_prompt(compact_context, player_input, draft),
+                    build_verify_prompt(compact_context, player_input, _prompt_draft(draft)),
                     timeout=verify_timeout,
                     usage=usage,
                     phase="verify_compact_retry",
                     max_tokens=_turn_max_tokens(compact_context, "verify", compact=True),
                     trace=trace,
                 )
-                try:
-                    result = _normalize_turn(verified, active_context)
-                except LlmError as verify_exc:
-                    if not _is_missing_narration_error(verify_exc):
-                        raise
-                    result = _merge_verified_with_draft_narration(verified, draft)
-                result = _ensure_narration_quality(result, compact_context, player_input, system_prompt, timeout, usage, "narration_depth_compact_retry", trace)
+                result = _resolve_verified_turn(verified, draft, active_context, trace, phase="verify_compact_retry")
+                _note_verify_outcome(_verified_output_is_useful(verified, draft), "echoed input")
+                result = ensure_quality(result, compact_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_compact_retry", trace)
                 result = _clean_turn_for_handoff(result, "verifier_compact_retry_to_world", trace)
                 result["_verification_policy"] = verification_policy
                 _append_trace(
@@ -12167,6 +12851,7 @@ def _generate_turn_body(
                 return result
             except LlmError:
                 pass
+        _note_verify_outcome(False, _trim_text(str(exc), 120))
         draft = _normalize_turn(draft, active_context)
         draft["self_check"] = {
             "passed": False,
@@ -12175,7 +12860,7 @@ def _generate_turn_body(
             "reference_check": "not verified",
             "consistency_check": "not verified",
         }
-        draft = _ensure_narration_quality(draft, active_context, player_input, system_prompt, timeout, usage, "narration_depth_draft_retry", trace)
+        draft = ensure_quality(draft, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_draft_retry", trace)
         draft = _clean_turn_for_handoff(draft, "draft_to_world_unverified", trace)
         draft["_verification_policy"] = verification_policy
         _append_trace(

@@ -136,5 +136,123 @@ class TestPromptBuildsWithTheClock(unittest.TestCase):
         self.assertIn("Day 3", packet)
 
 
+class TestStandingView(unittest.TestCase):
+    """A scene call sees the tile underfoot, not the land catalog."""
+
+    def _context(self):
+        return {
+            "world_time": {"day": 3, "hour": 14, "label": "Day 3 - 14:00"},
+            "player": {"name": "Ash", "backstory": "SECRET_BACKSTORY", "health": 20},
+            "map_space": {
+                "width": 16383,
+                "height": 16383,
+                "scale": "world",
+                "step_budget": 4,
+                "density_percent": 8,
+                "materials": ["limestone", "glow-fungus"],
+                "player": {"x": 10, "y": 12, "terrain": "cavern"},
+                "people_leaning": {
+                    "majority": ["dwarven", "darkling"],
+                    "kind": "dwarven",
+                    "province": [0, 0],
+                    "option": "If this stretch needs inhabitants, they may be dwarves.",
+                },
+                "rule": "The land is this fixed 16383 by 16383 map.",
+                "places_in_reach": [{"name": "Far City", "x": 1, "y": 2}],
+            },
+            "mechanics_context": {
+                "purpose": "a long mechanics essay",
+                "resources": {"energy": 10, "max_energy": 10},
+                "weather": {"kind": "rain", "label": "Steady rain", "strength": 0.5},
+                "combat": {"status": "not_combat"},
+            },
+            "abilities": [{
+                "name": "Hearth Spark",
+                "code": "AB1",
+                "description": "A small flame.",
+                "cost": "4 mana",
+                "growth_math": "x*2",
+            }],
+            "inventory": [{
+                "name": "iron sword",
+                "code": "I9",
+                "equipped_slot": "MAIN",
+                "description": "A nicked blade.",
+                "stat_modifiers": {"damage": 5},
+            }],
+            "current_location": {"name": "Saltcut", "code": "L2", "id": 2},
+            "locations": [{
+                "id": 2,
+                "name": "Saltcut",
+                "code": "L2",
+                "summary": "A long history of the ward that should stay out.",
+                "npcs": [{"name": "Elara", "code": "A", "role": "miller", "summary": "She keeps the mill."}],
+            }],
+        }
+
+    def test_a_look_sees_the_tile_and_not_the_catalog(self):
+        from app.prompts import build_user_prompt
+
+        packet = build_user_prompt(self._context(), "look around")
+        self.assertIn("cavern", packet)
+        self.assertIn("dwarven", packet)
+        self.assertIn("Steady rain", packet)
+        self.assertIn("Day 3", packet)
+        self.assertIn("Saltcut", packet)
+        self.assertIn("Elara", packet)
+        self.assertIn("iron sword", packet)
+        self.assertNotIn("16383", packet)
+        self.assertNotIn("glow-fungus", packet)
+        self.assertNotIn("Far City", packet)
+        self.assertNotIn('"province"', packet)
+        self.assertNotIn("SECRET_BACKSTORY", packet)
+        self.assertNotIn("Hearth Spark", packet)
+        self.assertNotIn("growth_math", packet)
+        self.assertNotIn("A nicked blade", packet)
+        self.assertNotIn("long history of the ward", packet)
+        self.assertNotIn('"step_budget"', packet)
+
+    def test_a_walk_adds_the_step_limit_without_the_land_size(self):
+        from app.prompts import build_user_prompt
+
+        packet = build_user_prompt(self._context(), "I walk east")
+        self.assertIn('"step_budget":4', packet)
+        self.assertNotIn("16383", packet)
+
+    def test_a_named_spell_is_one_line(self):
+        from app.prompts import build_user_prompt
+
+        packet = build_user_prompt(self._context(), "I cast Hearth Spark")
+        self.assertIn("Hearth Spark", packet)
+        self.assertIn("A small flame", packet)
+        self.assertNotIn("growth_math", packet)
+        self.assertNotIn("4 mana", packet)
+
+    def test_the_check_looks_up_what_the_scene_named(self):
+        from app.prompts import build_user_prompt, build_verify_prompt
+
+        context = self._context()
+        scene = build_user_prompt(context, "look around")
+        self.assertNotIn("Hearth Spark", scene)
+        checked = build_verify_prompt(
+            context,
+            "look around",
+            {"narration_segments": [{"text": "You cup a Hearth Spark in one hand."}]},
+        )
+        self.assertIn("Hearth Spark", checked)
+        self.assertIn("A small flame", checked)
+        self.assertNotIn("growth_math", checked)
+        self.assertNotIn("4 mana", checked)
+
+    def test_the_story_draft_keeps_the_step_rule_without_the_land_size(self):
+        from app.turn_dsl import build_dsl_user_prompt
+
+        packet = build_dsl_user_prompt(self._context(), "where can I buy food")
+        self.assertIn("One step does not cross inside a city.", packet)
+        self.assertNotIn("16383", packet)
+        self.assertNotIn("(10,12)", packet)
+        self.assertNotIn("9 by 9", packet)
+
+
 if __name__ == "__main__":
     unittest.main()

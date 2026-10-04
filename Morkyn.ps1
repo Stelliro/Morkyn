@@ -29,6 +29,30 @@ if ($env:AI_RPG_LAUNCH_MODE) {
 
 # --- helpers -----------------------------------------------------------------
 
+function Get-ExplicitPrefInt {
+    # A positive number from a pref, or 0 for "auto", blank, or anything else.
+    param($Value)
+    $text = ([string]$Value).Trim().ToLowerInvariant()
+    if (-not $text -or $text -eq "auto") { return 0 }
+    $number = 0
+    if ([int]::TryParse($text, [ref]$number) -and $number -gt 0) { return $number }
+    return 0
+}
+
+function Get-AutoContextTokens {
+    # Ask the app which window this model gets (app/model_limits.py reads the
+    # GGUF header and the GPU). 32768 when the app cannot answer.
+    param([hashtable]$PythonCommand, [string]$ModelPath)
+    try {
+        $args = @($PythonCommand.BaseArgs) + @("-m", "app.model_limits", "--context")
+        if ($ModelPath) { $args += $ModelPath }
+        $out = & $PythonCommand.FilePath @args 2>$null
+        $number = 0
+        if ($out -and [int]::TryParse(([string]$out).Trim(), [ref]$number) -and $number -gt 0) { return $number }
+    } catch { }
+    return 32768
+}
+
 function Resolve-PythonCommand {
     $python = Get-Command python -ErrorAction SilentlyContinue
     if ($python) { return @{ FilePath = $python.Source; BaseArgs = @() } }
@@ -212,12 +236,12 @@ function New-DefaultPrefs {
         api_base_url             = "https://api.x.ai/v1"
         api_model                = "grok-4.5"
         api_preset               = "xai"
-        llama_cpp_context        = 8192
+        llama_cpp_context        = "auto"
         llama_cpp_gpu_layers     = -1
         llama_cpp_flash_attn     = $true
         llm_log_mode             = "quiet"
-        soft_response_tokens     = 1000
-        hard_response_tokens     = 1500
+        soft_response_tokens     = 0
+        hard_response_tokens     = 0
         draft_mode               = "dsl"
         narration_pipeline       = $true
         narration_consolidate    = $true
@@ -281,19 +305,26 @@ function Apply-PrefsToEnvironment {
     if ($Prefs.api_preset) { $env:AI_RPG_API_PRESET = [string]$Prefs.api_preset }
     if ($Prefs.gguf_model_path) { $env:AI_RPG_GGUF_MODEL = [string]$Prefs.gguf_model_path }
     else { Remove-Item Env:AI_RPG_GGUF_MODEL -ErrorAction SilentlyContinue }
-    $env:AI_RPG_LLAMA_CPP_CONTEXT = [string][int]$Prefs.llama_cpp_context
+    $ctxPref = Get-ExplicitPrefInt $Prefs.llama_cpp_context
+    if ($ctxPref -gt 0) { $env:AI_RPG_LLAMA_CPP_CONTEXT = [string]$ctxPref }
+    else { Remove-Item Env:AI_RPG_LLAMA_CPP_CONTEXT -ErrorAction SilentlyContinue }
     $env:AI_RPG_LLAMA_CPP_GPU_LAYERS = [string][int]$Prefs.llama_cpp_gpu_layers
     $env:AI_RPG_LLAMA_CPP_FLASH_ATTN = if ($Prefs.llama_cpp_flash_attn) { "True" } else { "False" }
     $env:AI_RPG_LLM_LOG_MODE = [string]$Prefs.llm_log_mode
-    $env:AI_RPG_MAX_RESPONSE_TOKENS = [string][int]$Prefs.soft_response_tokens
-    $env:AI_RPG_RESPONSE_HARD_CAP_TOKENS = [string][int]$Prefs.hard_response_tokens
+    $softPref = Get-ExplicitPrefInt $Prefs.soft_response_tokens
+    if ($softPref -gt 0) { $env:AI_RPG_MAX_RESPONSE_TOKENS = [string]$softPref }
+    else { Remove-Item Env:AI_RPG_MAX_RESPONSE_TOKENS -ErrorAction SilentlyContinue }
+    $hardPref = Get-ExplicitPrefInt $Prefs.hard_response_tokens
+    if ($hardPref -gt 0) { $env:AI_RPG_RESPONSE_HARD_CAP_TOKENS = [string]$hardPref }
+    else { Remove-Item Env:AI_RPG_RESPONSE_HARD_CAP_TOKENS -ErrorAction SilentlyContinue }
     $env:AI_RPG_DRAFT_MODE = [string]$Prefs.draft_mode
     $env:AI_RPG_NARRATION_PIPELINE = if ($Prefs.narration_pipeline) { "1" } else { "0" }
     $env:AI_RPG_NARRATION_PIPELINE_CONSOLIDATE = if ($Prefs.narration_consolidate) { "1" } else { "0" }
     $env:AI_RPG_FAST_VERIFICATION = if ($Prefs.fast_verification) { "1" } else { "0" }
     $env:AI_RPG_DSL_SKIP_VERIFY = if ($Prefs.dsl_skip_verify) { "1" } else { "0" }
     $env:AI_RPG_LLM_STARTUP_TIMEOUT = [string][int]$Prefs.llm_startup_timeout
-    $env:AI_RPG_CONTEXT_TOKENS = [string][int]$Prefs.llama_cpp_context
+    if ($ctxPref -gt 0) { $env:AI_RPG_CONTEXT_TOKENS = [string]$ctxPref }
+    else { Remove-Item Env:AI_RPG_CONTEXT_TOKENS -ErrorAction SilentlyContinue }
     if (-not $Prefs.open_browser) { $env:AI_RPG_NO_BROWSER = "1" }
     else { Remove-Item Env:AI_RPG_NO_BROWSER -ErrorAction SilentlyContinue }
 }
@@ -964,7 +995,8 @@ function Show-Gatehouse {
     Write-Row "B" "Provider" $provider
     Write-Row "M" "MLE model" ([string]$Prefs.mle_model)
     Write-Row "F" "GGUF path" $ggufShort "DarkGray"
-    Write-Row "C" "Context tokens" ([string]$Prefs.llama_cpp_context)
+    $ctxLabel = if ((Get-ExplicitPrefInt $Prefs.llama_cpp_context) -gt 0) { [string]$Prefs.llama_cpp_context } else { "auto (from the model)" }
+    Write-Row "C" "Context tokens" $ctxLabel
     Write-Row "G" "GPU layers" ([string]$Prefs.llama_cpp_gpu_layers)
     Write-LampRow "H" "Flash attention" $flash
     Write-Row "L" "LLM logs" ([string]$Prefs.llm_log_mode)
@@ -1204,8 +1236,10 @@ function Invoke-GatehouseMenu {
             }
             "C" {
                 Write-Host ""
-                $v = Read-HostSafe "  Context tokens [$($Prefs.llama_cpp_context)]"
+                Write-Host "  auto = sized from the model's header and your GPU. Below 12288 the full story contract does not fit." -ForegroundColor DarkGray
+                $v = Read-HostSafe "  Context tokens (auto or a number) [$($Prefs.llama_cpp_context)]"
                 if ($v -match '^\d+$') { $Prefs.llama_cpp_context = [int]$v; $msg = "context -> $v" }
+                elseif ($v -match '^(?i)auto$') { $Prefs.llama_cpp_context = "auto"; $msg = "context -> auto" }
             }
             "G" {
                 Write-Host ""
@@ -1346,7 +1380,8 @@ Apply-PrefsToEnvironment -Prefs $prefs
 $modelPath = if ($env:AI_RPG_GGUF_MODEL) { $env:AI_RPG_GGUF_MODEL } elseif ($prefs.gguf_model_path) { [string]$prefs.gguf_model_path } else { "" }
 $llmHost = if ($env:AI_RPG_LLM_HOST) { $env:AI_RPG_LLM_HOST } else { "127.0.0.1" }
 $llmPort = if ($env:AI_RPG_LLM_PORT) { [int]$env:AI_RPG_LLM_PORT } else { 8080 }
-$ctxTokens = [int]$prefs.llama_cpp_context
+$ctxExplicit = Get-ExplicitPrefInt $prefs.llama_cpp_context
+$ctxTokens = $ctxExplicit
 $gpuLayers = [int]$prefs.llama_cpp_gpu_layers
 $flashAttention = if ($prefs.llama_cpp_flash_attn) { "True" } else { "False" }
 $llmStartupTimeout = [int]$prefs.llm_startup_timeout
@@ -1400,7 +1435,13 @@ Write-Host "  Close this terminal to stop the app and managed LLM server." -Fore
 Write-Host ""
 
 $env:LLAMA_CPP_BASE_URL = $baseUrl
-$env:AI_RPG_CONTEXT_TOKENS = "$ctxTokens"
+if ($ctxExplicit -gt 0) { $env:AI_RPG_CONTEXT_TOKENS = "$ctxTokens" }
+else {
+    # auto: the server resolves the window per model; only a managed
+    # llama.cpp server needs the number up front, and asks the app for it.
+    Remove-Item Env:AI_RPG_CONTEXT_TOKENS -ErrorAction SilentlyContinue
+    if ($modelPath) { $ctxTokens = Get-AutoContextTokens -PythonCommand $pythonCommand -ModelPath $modelPath } else { $ctxTokens = 32768 }
+}
 $env:MLE_MODEL = [string]$prefs.mle_model
 
 $managedProcesses = @()

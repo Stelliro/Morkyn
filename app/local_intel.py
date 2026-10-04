@@ -1314,10 +1314,36 @@ def direction_hint_for_prompt(state: dict[str, Any], player_input: str) -> dict[
         conn.close()
 
 
+def _play_flag_on(conn, key: str) -> bool:
+    """Missing setup flags stay on, matching current play."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM settings WHERE key = 'playthrough_options'"
+        ).fetchone()
+        opts = json.loads(row["value"]) if row and row["value"] else {}
+    except Exception:
+        return True
+    if not isinstance(opts, dict) or key not in opts:
+        return True
+    value = opts.get(key)
+    if value is None or value == "":
+        return True
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"1", "true", "yes", "on"}:
+            return True
+        if lowered in {"0", "false", "no", "off"}:
+            return False
+        return True
+    return bool(value)
+
+
 def apply_turn_intel(conn, player_input: str, turn: int) -> str:
     """Save a heard-about patch, charge a bribe, or accept a posted offer."""
     notes: list[str] = []
-    if parse_direction_question(player_input) is not None:
+    asked = parse_direction_question(player_input)
+    faction_held = bool(asked and asked.get("good") == "guild" and not _play_flag_on(conn, "factions_enabled"))
+    if asked is not None and not faction_held:
         from app.tile_world import _save_map_payload, get_map
 
         chart = get_map(None, conn=conn)
@@ -1360,7 +1386,7 @@ def apply_turn_intel(conn, player_input: str, turn: int) -> str:
                     f"Heard about {hint.get('label') or 'a place'}, {where}. "
                     f"The map marks ({hint.get('x')}, {hint.get('y')})."
                 )
-                if hint.get("reason") == "bribe":
+                if hint.get("reason") == "bribe" and _play_flag_on(conn, "economy_enabled"):
                     gold = _player_gold(conn)
                     if gold >= BRIBE_GOLD:
                         conn.execute(
@@ -1368,7 +1394,7 @@ def apply_turn_intel(conn, player_input: str, turn: int) -> str:
                             (gold - BRIBE_GOLD,),
                         )
                         notes.append(f"You paid {BRIBE_GOLD} coin for the direction.")
-    accepted = accept_offered_quest(conn, player_input)
+    accepted = accept_offered_quest(conn, player_input) if _play_flag_on(conn, "quests_enabled") else None
     if accepted:
         notes.append(f"You took the offer: {accepted['title']}.")
     return " ".join(notes)[:1400]

@@ -1,0 +1,187 @@
+/* ==========================================================================
+   Mørkyn UI · tokens.css  (layer 1 of 3)
+
+   The ONLY file allowed to introduce a colour, font stack, radius, shadow,
+   or spacing value. Every other stylesheet refers to these names.
+
+   Load order (index.html, popout.html):
+     1. /static/ui/tokens.css   ← this file: values
+     2. /static/styles.css      ← layout engine: grids, sizes, states
+     3. /static/ui/skin.css     ← look: shards, threads, type, controls
+
+   The language comes from the logo and key art in Media/: a black void, a
+   vertical spire, and thin filaments of violet-white light. So there is one
+   light ("the thread"), expressed as a hue, and everything else is black
+   with a cast of that hue. A theme changes the hue and nothing else.
+
+   Themes are an attribute on <html>: data-theme="ember|tide|bloom|ash".
+   No attribute means the default, "dusk". A theme block may override values
+   only; it must never add a new token name.
+
+   Rulebook: docs/UI_RULEBOOK.md
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* ----- The thread -------------------------------------------------------
+     Hue and saturation of the one light. Everything luminous derives from
+     these two numbers, so a theme is two lines. */
+  --thread-h: 264;
+  --thread-s: 70%;
+
+  --thread: hsl(var(--thread-h) var(--thread-s) 78%);
+  --thread-bright: hsl(var(--thread-h) calc(var(--thread-s) + 10%) 92%);
+  --thread-deep: hsl(var(--thread-h) calc(var(--thread-s) - 10%) 58%);
+  --thread-dim: hsl(var(--thread-h) var(--thread-s) 70% / 0.38);
+  --thread-soft: hsl(var(--thread-h) var(--thread-s) 70% / 0.12);
+  --thread-ghost: hsl(var(--thread-h) var(--thread-s) 70% / 0.05);
+  --thread-halo: 0 0 18px -4px hsl(var(--thread-h) var(--thread-s) 70% / 0.55);
+
+  /* ----- Type -------------------------------------------------------------
+     Display: a high-contrast serif that matches the logo's spiked letters.
+     Only the wordmark and the drop cap use it. Everything else is the sans;
+     narration is a reading serif. System stacks only: the app runs offline. */
+  --font: "Segoe UI", Inter, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Bodoni MT", "Bodoni 72", Didot, "Didot LT STD", "Libre Bodoni", "Playfair Display", "Times New Roman", serif;
+  --font-narration: Georgia, "Palatino Linotype", Palatino, "Book Antiqua", "Liberation Serif", serif;
+  --font-mono: Consolas, "SFMono-Regular", Menlo, "Liberation Mono", monospace;
+
+  --track-label: 0.18em;
+  --track-title: 0.08em;
+
+  /* ----- The void (surfaces) ----------------------------------------------
+     Black with a cast of the thread hue. Each step is one shard laid on the
+     one below it. */
+  --bg: hsl(var(--thread-h) 28% 3.5%);
+  --ink: hsl(var(--thread-h) 30% 2.5%);
+  --surface: hsl(var(--thread-h) 20% 6.5%);
+  --surface-solid: hsl(var(--thread-h) 20% 6.5%);
+  --surface-2: hsl(var(--thread-h) 18% 9%);
+  --surface-3: hsl(var(--thread-h) 22% 5%);
+  --surface-inset: hsl(var(--thread-h) 30% 2.5%);
+  --bg-glow: hsl(var(--thread-h) var(--thread-s) 60% / 0.07);
+  --bg-glow-2: hsl(var(--thread-h) var(--thread-s) 60% / 0.03);
+
+  /* Aliases that older rules in styles.css reach for. Keep them pointed at
+     the real tokens; never give them their own values. */
+  --panel: var(--surface);
+  --surface-1: var(--surface);
+  --card-bg-2: var(--surface-2);
+  --border: var(--line);
+  --text-muted: var(--muted);
+  --neon-1: var(--neon);
+
+  /* ----- Lines / text ----------------------------------------------------- */
+  --line: hsl(var(--thread-h) 40% 75% / 0.1);
+  --line-strong: hsl(var(--thread-h) 45% 78% / 0.22);
+  --line-etched: rgba(0, 0, 0, 0.6);
+  --text: hsl(var(--thread-h) 18% 90%);
+  --muted: hsl(var(--thread-h) 12% 62%);
+  --muted-2: hsl(var(--thread-h) 10% 44%);
+  --label: hsl(var(--thread-h) 30% 74%);
+  --label-dim: hsl(var(--thread-h) 18% 58%);
+
+  /* ----- Accents ------------------------------------------------------------
+     The thread is the only accent. The red moon is the only signal. */
+  --accent: var(--thread);
+  --accent-soft: var(--thread-soft);
+  --accent-strong: var(--thread-bright);
+  --accent-deep: var(--thread-deep);
+  --accent-2: hsl(var(--thread-h) 16% 66%);
+  --accent-2-soft: hsl(var(--thread-h) 16% 66% / 0.1);
+  --moon: hsl(350 62% 58%);
+  --moon-soft: hsl(350 62% 58% / 0.14);
+  --warn: hsl(32 70% 62%);
+  --bad: var(--moon);
+  --good: hsl(150 35% 58%);
+  --on-accent: hsl(var(--thread-h) 30% 6%);
+
+  /* Legacy "neon" names. styles.css uses these ~300 times for emphasis;
+     they resolve to the thread. A box-shadow list cannot contain `none`, so
+     the empty glow is a zero-size transparent shadow. */
+  --neon: var(--thread);
+  --neon-dim: var(--thread-soft);
+  --neon-2: var(--accent-2);
+  --neon-2-dim: var(--accent-2-soft);
+  --neon-edge: var(--thread-dim);
+  --neon-glow: 0 0 0 0 transparent;
+  --scene-glow: 0 0 0 0 transparent;
+
+  /* ----- Shards -------------------------------------------------------------
+     A shard is a container with two opposite corners cut at 45°, drawn by
+     skin.css from these three values. Set them on an element to vary it. */
+  --shard-cut: 10px;
+  --shard-cut-tl: var(--shard-cut); /* top-left corner; 0 for a one-cut chip */
+  --shard-cut-br: var(--shard-cut); /* bottom-right corner */
+  --shard-fill: var(--surface-solid);
+  --shard-line: var(--thread-dim);
+
+  /* ----- Controls --------------------------------------------------------- */
+  --btn-bg: var(--surface-2);
+  --btn-bg-hover: hsl(var(--thread-h) 20% 12%);
+  --btn-border: var(--line-strong);
+  --btn-text: var(--text);
+  --field-bg: var(--surface-inset);
+
+  /* ----- Shape / depth -------------------------------------------------------
+     No radius anywhere: the art is broken slabs. The tokens stay so old
+     rules keep resolving. */
+  --radius-xs: 0;
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-pill: 0;
+  --shadow-soft: 0 30px 60px -24px rgba(0, 0, 0, 0.9);
+  --shadow-sm: 0 16px 32px -16px rgba(0, 0, 0, 0.85);
+  --bevel: inset 0 1px 0 hsl(var(--thread-h) 40% 80% / 0.05);
+  --inset: inset 0 1px 2px rgba(0, 0, 0, 0.6);
+  --decal-opacity: 1;
+
+  /* ----- Spacing ---------------------------------------------------------- */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  /* ----- Layout ----------------------------------------------------------- */
+  --play-menu-width: min(320px, 92vw);
+}
+
+/* --------------------------------------------------------------------------
+   Themes: the thread changes hue. The void follows it through the tokens
+   above, so a theme is two numbers.
+   -------------------------------------------------------------------------- */
+
+/* Ember: the red moon from the key art. */
+html[data-theme="ember"] {
+  --thread-h: 352;
+  --thread-s: 64%;
+}
+
+/* Tide: cold cyan filament. */
+html[data-theme="tide"] {
+  --thread-h: 192;
+  --thread-s: 62%;
+}
+
+/* Bloom: magenta. */
+html[data-theme="bloom"] {
+  --thread-h: 312;
+  --thread-s: 66%;
+}
+
+/* Ash: a white thread; the void loses its cast. */
+html[data-theme="ash"] {
+  --thread-h: 260;
+  --thread-s: 0%;
+  --bg: hsl(0 0% 3.5%);
+  --ink: hsl(0 0% 2.5%);
+  --surface: hsl(0 0% 6.5%);
+  --surface-solid: hsl(0 0% 6.5%);
+  --surface-2: hsl(0 0% 9%);
+  --surface-3: hsl(0 0% 5%);
+  --surface-inset: hsl(0 0% 2.5%);
+}

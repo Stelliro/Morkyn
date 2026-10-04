@@ -9,8 +9,8 @@ gloves" for a character whose whole recorded wardrobe is
 Nothing on the hands, and the record has always known it: appearance is written
 by body zone at setup, so an absent zone means bare rather than unrecorded.
 
-The wardrobe was not missing from the packet. `build_user_prompt` sends
-`playthrough_options` whole, appearance included, and the model was reading it.
+The wardrobe reaches the model as the appearance string, the worn zones.
+`build_user_prompt` sends that string, not the rest of the setup sheet.
 What was missing was a rule that covered it. The no-invention rule beside it
 reads:
 
@@ -120,8 +120,8 @@ class CheckUnownedGearTests(unittest.TestCase):
 
 class PacketContractTests(unittest.TestCase):
     """
-    The wardrobe was never missing from the packet -- `build_user_prompt` sends
-    `playthrough_options` whole, appearance included. What was missing was a rule
+    The wardrobe reaches the model as the appearance string. `build_user_prompt`
+    sends that worn list, not the rest of the setup sheet. What was missing was a rule
     covering it: the no-invention rule next to this one is scoped to
     `player_inventory_codes`, which is held inventory, and clothing is not
     inventory here. Both halves are pinned, because either one going away

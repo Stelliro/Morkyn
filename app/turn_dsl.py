@@ -100,7 +100,7 @@ If nobody is interacting, do not invent a speaker. If you want someone to addres
 A later "how was your day?" is for the interacting character, not everyone marked present.
 Leave CAST out when the scene cast does not change.
 - Database/world_state is source of truth. Only propose justified changes.
-- playthrough_options.setting_templates are the written rules for this playthrough's setup choices. Follow each rule. The short choice is only the selection. For RANK, use only the rungs named in the rank_scale rule.
+- playthrough_options.choices are this playthrough's labels. For RANK, use only the rungs named in choices.rank_scale. playthrough_options.setting_templates, when present, is the one written rule this action named. Follow that included rule. Do not replace its labels.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
   Write "XP small", "GOLD -moderate", "HP -small", "GRANT \"rope\" QTY small".
   A leading "-" means a loss. The app rolls the actual amount; a bare number is
@@ -125,11 +125,11 @@ Leave CAST out when the scene cast does not change.
   movement_contract.current_location's parent. A scene that walks the player into a shop with no
   MOVE line leaves them standing in the street, and the shop stops existing the moment it scrolls
   out of context.
-- When world_state.map_space is present, that grid is the whole land. One turn walks at most
-  map_space.step_budget tiles. A hike across country is WALK <direction> STEPS <1-4>
+- A hike is at most 4 tiles. One step does not cross inside a city. When map_space.step_budget
+  is present, that is this turn's limit. A hike across country is WALK <direction> STEPS <1-4>
   (north, south, east, west, or a compound such as northeast) plus a MOVE naming the place
-  where the walk stops. Do not invent a road, town, or wilderness past the map edge or farther
-  than that budget. A door into a shop or room is MOVE only — do not WALK the grid for a room.
+  where the walk stops. Do not invent a road, town, or wilderness farther than that walk.
+  A door into a shop or room is MOVE only — do not WALK the grid for a room.
 - Interiors are entered only from the place they stand in. A player two locations away cannot
   MOVE straight into a shop — that move lands them outside it instead, and going in costs the next
   turn. Do not narrate walking across the map and through a shop door in one turn.
@@ -900,19 +900,11 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     space = context.get("map_space") if isinstance(context, dict) else None
     if isinstance(space, dict) and space.get("width") and space.get("height"):
         budget = int(space.get("step_budget") or 4)
-        player = space.get("player") if isinstance(space.get("player"), dict) else {}
-        city_clause = ""
-        if space.get("scale") == "world":
-            city_clause = (
-                " Each step is one world cell. A city is at most 9 by 9 connected cells, "
-                "not a straight line or a solid block, each with an internal grid of at most 128 by 128. "
-                "One step does not cross inside a city."
-            )
+        city_clause = " One step does not cross inside a city." if space.get("scale") == "world" else ""
         instructions.append(
-            f"Map is {space['width']}×{space['height']}. You are at ({player.get('x')},{player.get('y')}). "
             f"This turn walks at most {budget} tiles. If the prose crosses country, ===OPS=== MUST contain "
             "WALK <direction> STEPS <n> and a MOVE naming where the scene stops. "
-            "Do not name a place beyond that walk or past the map edge. A door into a room is MOVE only."
+            "Do not name a place beyond that walk. A door into a room is MOVE only."
             + city_clause
         )
     hint = context.get("direction_hint") if isinstance(context, dict) else None
@@ -932,9 +924,14 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     templates = options.get("setting_templates") if isinstance(options, dict) else None
     if isinstance(templates, dict) and templates:
         instructions.append(
-            "setting_templates are the written rules for this playthrough's setup choices. "
-            "Follow each rule. The short choice is only the selection. "
-            "For rank_scale, use only the rungs named in that rule."
+            "playthrough_options.choices are this playthrough's labels. "
+            "For rank_scale, use only the rungs named there."
+        )
+    included = ((packet.get("world_state") or {}).get("settings") or {}).get("playthrough_options") or {}
+    included_rules = included.get("setting_templates") if isinstance(included, dict) else None
+    if isinstance(included_rules, dict) and included_rules:
+        instructions.append(
+            "Follow the setting_templates rule included for this action. Do not replace its labels."
         )
     packet["instructions"] = instructions
     return __import__("json").dumps(packet, ensure_ascii=True, separators=(",", ":"))

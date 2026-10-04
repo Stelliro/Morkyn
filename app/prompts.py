@@ -457,7 +457,7 @@ Required JSON shape:
 
 VERIFY_PROMPT = """You are the consistency verifier for the RPG engine.
 
-Return JSON only. Check the draft against the provided world state and player input.
+Return JSON only. Check draft_turn against the provided world state and player input, then return a verdict object, not a turn.
 
 Your task:
 - Use world_state.turn_plan.verification_checks as the prioritized checklist for this specific turn.
@@ -482,7 +482,12 @@ Your task:
 - Prefer small targeted index_updates over broad rewrites.
 - Preserve valid creative content; only correct contradictions, unsupported claims, broken references, and overlarge output.
 
-Return the full corrected turn JSON using the same schema. self_check.passed must be true only if the corrected draft is internally consistent.
+Return one JSON object with these keys:
+- verdict: "pass" when the draft can be applied as written; "revise" when the patch must be applied first.
+- issues: a list of short strings, one per problem found. Empty when the verdict is pass.
+- patch: an object holding only the draft_turn keys whose value must be replaced, each with its complete corrected value in the draft_turn schema. Leave out every key that is already right; an empty object means nothing changes. A key set to an empty list removes those changes. Put narration or narration_segments in the patch only when the prose itself states something wrong; prose that already answers the action stays out of the patch. Never put self_check in the patch; the engine writes it from the verdict.
+
+After a revise verdict with its patch applied, the turn must be internally consistent. Do not return the full turn. Do not repeat world_state or draft_turn.
 """
 
 
@@ -542,7 +547,7 @@ self_check fields: passed,issues_found,corrections_made,reference_check,consiste
 """
 
 
-COMPACT_VERIFY_PROMPT = """You are the JSON consistency verifier. Return minified corrected full turn JSON only.
+COMPACT_VERIFY_PROMPT = """You are the JSON consistency verifier. Return one minified JSON verdict object only, not a turn.
 
 Check draft_turn against world_state and player_input:
 - If verification_policy is present, focus on remaining_checks and blockers. Do not spend tokens rechecking deterministically_verified checks unless draft_turn contradicts them.
@@ -560,189 +565,735 @@ Check draft_turn against world_state and player_input:
 - scene_plan has 1-6 high-level focus_points; event persistence metadata is plausible
 - gm_events are private future-facing notes, not exposed player-visible text
 - narration fits playthrough_options.narration_detail, reads as continuous prose, stays between 1000 and 2400 visible characters when possible, remains under 700 words, and does not contradict state
-- self_check explains the result
+- the verdict is pass only when nothing above is wrong
 
-Do not return only self_check, notes, or corrections. Use world_state.turn_plan.verification_checks as the checklist. Preserve or correct draft_turn.scene_plan and draft_turn.narration_segments and return them in the final object. narration_segments must contain non-empty text and read as continuous prose when joined.
+Use world_state.turn_plan.verification_checks as the checklist. Reply keys: verdict ("pass" when the draft stands as written, "revise" when the patch must be applied first), issues (short strings, one per problem, empty on pass), patch (only the draft_turn keys whose value must change, each complete and in the draft_turn schema; empty when nothing changes). Put narration or narration_segments in the patch only when the prose itself is wrong; keep self_check out of it. Do not return the full turn and do not repeat world_state or draft_turn.
 """
 
 
-def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
-    settings = context.get("settings") or {}
-    if str(player_input).startswith("__opening_scene_request__"):
-        turn_kind = "opening_scene"
-    elif str(player_input).startswith("__continue_scene_request__"):
-        turn_kind = "continue_scene"
-    elif str(player_input).startswith("__wait_request__"):
-        turn_kind = "wait_scene"
-    elif str(player_input).startswith("__event_request__"):
-        turn_kind = "event_scene"
-    else:
-        turn_kind = "player_action"
-    # Slim NPC view for prompts: codes + presence/power, not full essays
-    slim_locations = []
+# A scene call reads titles and what is in front of the player. A stored rule,
+# or one line of a record, is added only when this action names that thing.
+_TRAVEL_RE = re.compile(
+    r"\b(?:walk|walking|travel|traveling|travelling|hike|hiking)\b"
+    r"|\bgo(?:ing)?\s+(?:north|south|east|west)\b",
+    re.I,
+)
+# System contract for the prose-only repair passes (depth, voice, answer act,
+# recall). They return a rewritten scene and nothing else, so they do not need
+# the JSON turn contract above; carrying it cost ~9.5k tokens of system prompt
+# per repair on a prefix no other call in the turn shared.
+PROSE_REPAIR_SYSTEM_PROMPT = (
+    "You rewrite one scene of narration for an endless RPG.\n\n"
+    "Return ONLY the scene prose. No JSON, no headers, no markdown fences, no OPS lines, no commentary.\n"
+    "Keep every fact, name, and [[CODE]] reference the draft already has. Do not add rewards, items, "
+    "numbers, places, or people the draft does not have. Do not decide the player's next action, and do "
+    "not end on a menu of options or a question about what to do next.\n"
+    + PROSE_VOICE
+)
+
+
+_TALK_RE = re.compile(
+    r"\b(say|says|said|ask|asks|asked|tell|greet|greeting|talk|speak|whisper|shout)\b",
+    re.I,
+)
+_QUEST_RE = re.compile(r"\b(quest|quests|job|jobs|task|tasks|contract)\b", re.I)
+# A one-cue entry stays a tuple. A bare parenthesized string is walked one
+# character at a time, and a lone backslash raises PatternError before narration.
+_TEMPLATE_CUES: dict[str, tuple[str, ...]] = {
+    "rank_scale": (r"\branks?\b", r"\brungs?\b", r"\bladder\b"),
+    "economy": (r"\bprices?\b", r"\bgold\b", r"\bcoins?\b", r"\bwages?\b", r"\bbuy\b", r"\bsell\b"),
+    "quest_style": (r"\bquests?\b", r"\bjobs?\b"),
+    "faction_pressure": (r"\bfactions?\b", r"\bguilds?\b"),
+    "magic_level": (r"\bmagic\b", r"\bspells?\b"),
+    "death_rules": (r"\bdie\b", r"\bdying\b", r"\bdeath\b", r"\bkilled\b", r"\bdowned\b"),
+    "loot_rarity": (r"\bloot\b", r"\brarity\b"),
+    "world_races": (r"\braces?\b", r"\bpeoples?\b"),
+    "skill_style": (r"\bnew skill\b", r"\blearn(?:ing)? a skill\b"),
+    "tech_level": (r"\bmachines?\b", r"\btechnology\b"),
+    "proficiency_system": (r"\bproficienc(?:y|ies)\b",),
+    "proficiency_access": (r"\bproficienc(?:y|ies)\b",),
+    "dice_checks_enabled": (r"\bdice\b",),
+    "leveling_system": (r"\blevels?\b", r"\bxp\b"),
+    "encounter_check_frequency": (r"\bencounters?\b",),
+}
+
+
+def _one_line(value: Any, limit: int = 160) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if not text:
+        return ""
+    sentence = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0]
+    return sentence[:limit]
+
+
+def _turn_kind_for(player_input: str) -> str:
+    text = str(player_input or "")
+    if text.startswith("__opening_scene_request__"):
+        return "opening_scene"
+    if text.startswith("__continue_scene_request__"):
+        return "continue_scene"
+    if text.startswith("__wait_request__"):
+        return "wait_scene"
+    if text.startswith("__event_request__"):
+        return "event_scene"
+    return "player_action"
+
+
+def _focus_text(context: dict[str, Any], player_input: str, extra: str = "") -> str:
+    parts = [str(player_input or "")]
+    if extra:
+        parts.append(extra)
+    mechanics = context.get("mechanics_context") if isinstance(context.get("mechanics_context"), dict) else {}
+    for event in mechanics.get("forced_events") or []:
+        if isinstance(event, dict):
+            parts.append(str(event.get("kind") or ""))
+            parts.append(str(event.get("summary") or ""))
+    for event in context.get("gm_events") or []:
+        if isinstance(event, dict) and (event.get("force") or event.get("due")):
+            parts.append(str(event.get("summary") or ""))
+    return "\n".join(parts)
+
+
+def _named_in(text: str, name: str, code: str = "") -> bool:
+    label = str(name or "").strip()
+    if len(label) >= 3 and re.search(rf"(?<![A-Za-z0-9]){re.escape(label)}(?![A-Za-z0-9])", text, re.I):
+        return True
+    token = str(code or "").strip()
+    if token and re.search(rf"\[\[{re.escape(token)}\]\]", text, re.I):
+        return True
+    if len(token) >= 2 and re.search(rf"(?<![A-Za-z0-9]){re.escape(token)}(?![A-Za-z0-9])", text):
+        return True
+    return False
+
+
+def _is_travel(context: dict[str, Any], player_input: str) -> bool:
+    contract = context.get("movement_contract")
+    if isinstance(contract, dict) and contract.get("travel_intent"):
+        return True
+    return bool(_TRAVEL_RE.search(str(player_input or "")))
+
+
+def _weather_view(context: dict[str, Any]) -> dict[str, Any] | None:
+    mechanics = context.get("mechanics_context") if isinstance(context.get("mechanics_context"), dict) else {}
+    raw = mechanics.get("weather") if isinstance(mechanics.get("weather"), dict) else None
+    if raw is None and isinstance(context.get("weather"), dict):
+        raw = context.get("weather")
+    if not isinstance(raw, dict):
+        return None
+    kind = str(raw.get("kind") or "").strip()
+    label = str(raw.get("label") or kind).strip()
+    if not kind and not label:
+        return None
+    view: dict[str, Any] = {}
+    if kind:
+        view["kind"] = kind
+    if label:
+        view["label"] = label
+    announce = mechanics.get("weather_announce") or raw.get("announce")
+    if announce:
+        view["announce"] = _one_line(announce, 200)
+    return view
+
+
+def _map_view(context: dict[str, Any], player_input: str) -> dict[str, Any] | None:
+    """Standing tile, the stretch's people-leaning, and exits only while walking."""
+    space = context.get("map_space") if isinstance(context.get("map_space"), dict) else None
+    if not space:
+        return None
+    view: dict[str, Any] = {}
+    player = space.get("player") if isinstance(space.get("player"), dict) else {}
+    terrain = str(player.get("terrain") or "").strip()
+    if terrain:
+        view["tile"] = {"terrain": terrain}
+    leaning = space.get("people_leaning") if isinstance(space.get("people_leaning"), dict) else None
+    if leaning:
+        local: dict[str, Any] = {}
+        if leaning.get("majority"):
+            local["majority"] = leaning.get("majority")
+        kind = str(leaning.get("kind") or "").strip()
+        if kind:
+            local["kind"] = kind
+        option = str(leaning.get("option") or "").strip()
+        if option:
+            local["option"] = option
+        if local:
+            view["people_leaning"] = local
+    if _is_travel(context, player_input):
+        view["step_budget"] = int(space.get("step_budget") or 4)
+        exits = space.get("exits") if isinstance(space.get("exits"), dict) else {}
+        slim_exits: dict[str, Any] = {}
+        for name, info in exits.items():
+            if isinstance(info, dict):
+                slim_exits[str(name)] = {"status": info.get("status") or "", "terrain": info.get("terrain") or ""}
+            else:
+                slim_exits[str(name)] = {"status": str(info)}
+        if slim_exits:
+            view["exits"] = slim_exits
+    return view or None
+
+
+def _location_with_people(context: dict[str, Any]) -> dict[str, Any]:
+    current = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    if current.get("npcs"):
+        return current
+    cid = current.get("id")
+    code = str(current.get("code") or "")
     for loc in context.get("locations") or []:
         if not isinstance(loc, dict):
             continue
-        npcs = []
-        for n in loc.get("npcs") or []:
-            if not isinstance(n, dict):
-                continue
-            npcs.append(
-                {
-                    "code": n.get("code"),
-                    "name": n.get("name"),
-                    "role": n.get("role"),
-                    "presence": n.get("presence") or "full",
-                    "power_rank": n.get("power_rank", 10),
-                    "shell": n.get("shell", 0),
-                    "attitude": n.get("attitude"),
-                    "summary": (str(n.get("summary") or ""))[:160],
-                }
-            )
-        slim_locations.append(
-            {
-                "code": loc.get("code"),
-                "name": loc.get("name"),
-                "summary": (str(loc.get("summary") or ""))[:220],
-                "npcs": npcs[:24],
-                "events": (loc.get("events") or [])[:6],
-            }
-        )
-    compact_context = {
-        "settings": {
-            "setup_complete": settings.get("setup_complete"),
-            "playthrough_options": settings.get("playthrough_options"),
-        },
-        "world_time": context.get("world_time"),
-        "turn": context.get("turn"),
-        "gm_notes": context.get("gm_notes"),
-        "player": context.get("player"),
-        "resources": context.get("resources"),
-        "current_location": context.get("current_location"),
-        "mechanics_context": context.get("mechanics_context"),
-        "verification_policy": context.get("verification_policy"),
-        "turn_plan": context.get("turn_plan"),
-        "action_context": context.get("action_context"),
-        "working_set": context.get("working_set"),
-        "event_lifecycle": context.get("event_lifecycle"),
-        "movement_contract": context.get("movement_contract"),
-        "narrative_voice": context.get("narrative_voice"),
-        "naming_contract": context.get("naming_contract"),
-        "recall_contract": context.get("recall_contract"),
-        "gm_events": context.get("gm_events", [])[:8],
-        "skills": context.get("skills"),
-        "abilities": context.get("abilities"),
-        "player_aliases": context.get("player_aliases"),
-        "active_player_alias": context.get("active_player_alias"),
-        "inventory": context.get("inventory"),
-        "equipment_slots": context.get("equipment_slots"),
-        "equipment_effects": context.get("equipment_effects"),
-        "inventory_capacity_modifiers": context.get("inventory_capacity_modifiers"),
-        "inventory_summary": context.get("inventory_summary"),
-        "locations": slim_locations or context.get("locations"),
-        "recognition": context.get("recognition"),
-        "relationships": context.get("relationships"),
-        "events": context.get("events", [])[:12],
-        "conversations": context.get("conversations", [])[:12],
-        "response_drafts": context.get("response_drafts", [])[:8],
-        "karma_history": context.get("karma_history", [])[:8],
-        "relevant_sources": context.get("relevant_sources", [])[:10],
-        "retrieval": context.get("retrieval"),
-        "turn_summaries": context.get("turn_summaries", [])[:10],
-        "active_quests": context.get("active_quests", []),
-        "npc_player_relationships": context.get("npc_player_relationships", []),
-    }
-    # The band vocabulary, not the dice behind it: showing the tables would
-    # invite the model to do the arithmetic itself.
-    try:
-        from app.rng import band_contract_block
+        if cid and loc.get("id") == cid:
+            return loc
+        if code and str(loc.get("code") or "") == code:
+            return loc
+    return current
 
-        compact_context["amount_contract"] = band_contract_block()
-    except Exception:
-        pass
-    # Inject world context for LLM consistency
+
+def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
+    current = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    source = _location_with_people(context)
+    place: dict[str, Any] = {}
+    name = str(current.get("name") or source.get("name") or "").strip()
+    code = str(current.get("code") or source.get("code") or "").strip()
+    if name:
+        place["name"] = name
+    if code:
+        place["code"] = code
+    people = []
+    for npc in (source.get("npcs") or [])[:12]:
+        if not isinstance(npc, dict):
+            continue
+        person = str(npc.get("name") or "").strip()
+        if not person:
+            continue
+        people.append({"name": person, "code": npc.get("code") or "", "role": npc.get("role") or ""})
+    if people:
+        place["people"] = people
+    return place or None
+
+
+def _appearance(context: dict[str, Any]) -> str:
+    options = ((context.get("settings") or {}).get("playthrough_options") or {})
+    if isinstance(options, dict):
+        text = str(options.get("appearance") or "").strip()
+        if text:
+            return text
+    player = context.get("player") if isinstance(context.get("player"), dict) else {}
+    return str(player.get("appearance") or "").strip()
+
+
+def _player_view(context: dict[str, Any]) -> dict[str, Any] | None:
+    player = context.get("player") if isinstance(context.get("player"), dict) else {}
+    view: dict[str, Any] = {}
+    for key in ("name", "public_name", "title"):
+        if player.get(key):
+            view[key] = player.get(key)
+    worn = []
+    for item in context.get("inventory") or []:
+        if not isinstance(item, dict):
+            continue
+        slot = str(item.get("equipped_slot") or "").strip()
+        item_name = str(item.get("name") or "").strip()
+        if not slot or not item_name:
+            continue
+        worn.append({"name": item_name, "code": item.get("code") or "", "slot": slot})
+    if worn:
+        view["worn"] = worn
+    alias = context.get("active_player_alias")
+    if isinstance(alias, dict) and str(alias.get("active") or "").strip() in {"1", "true", "True"} and alias.get("alias"):
+        view["known_as"] = alias.get("alias")
+    return view or None
+
+
+def _person_line(context: dict[str, Any], person: dict[str, Any]) -> str:
+    code = str(person.get("code") or "")
+    name = str(person.get("name") or "")
+    for loc in context.get("locations") or []:
+        if not isinstance(loc, dict):
+            continue
+        for npc in loc.get("npcs") or []:
+            if not isinstance(npc, dict):
+                continue
+            same_code = code and str(npc.get("code") or "") == code
+            same_name = name and str(npc.get("name") or "") == name
+            if same_code or same_name:
+                return _one_line(npc.get("summary"))
+    return ""
+
+
+def _matched_templates(context: dict[str, Any], focus: str) -> dict[str, Any]:
+    options = ((context.get("settings") or {}).get("playthrough_options") or {})
+    if not isinstance(options, dict):
+        return {}
+    templates = options.get("setting_templates") if isinstance(options.get("setting_templates"), dict) else {}
+    matched: dict[str, Any] = {}
+    for key, row in templates.items():
+        raw = _TEMPLATE_CUES.get(str(key)) or ()
+        cues = (raw,) if isinstance(raw, str) else raw
+        if not any(re.search(cue, focus, re.I) for cue in cues):
+            continue
+        rule = row.get("rule") if isinstance(row, dict) else row
+        text = str(rule or "").strip()[:900]
+        if text:
+            matched[str(key)] = {"rule": text}
+    return matched
+
+
+def _named_records(context: dict[str, Any], focus: str, here_codes: set[str]) -> dict[str, Any]:
+    named: dict[str, Any] = {}
+    people = []
+    for loc in context.get("locations") or []:
+        if not isinstance(loc, dict):
+            continue
+        for npc in loc.get("npcs") or []:
+            if not isinstance(npc, dict):
+                continue
+            code = str(npc.get("code") or "")
+            if code and code in here_codes:
+                continue
+            if not _named_in(focus, str(npc.get("name") or ""), code):
+                continue
+            people.append({
+                "name": npc.get("name") or "",
+                "code": code,
+                "role": npc.get("role") or "",
+                "line": _one_line(npc.get("summary")),
+            })
+    if people:
+        named["people"] = people[:4]
+    items = []
+    for item in context.get("inventory") or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("equipped_slot") or "").strip():
+            continue
+        code = str(item.get("code") or "")
+        if not _named_in(focus, str(item.get("name") or ""), code):
+            continue
+        items.append({
+            "name": item.get("name") or "",
+            "code": code,
+            "line": _one_line(item.get("description") or item.get("item_type")),
+        })
+    if items:
+        named["items"] = items[:4]
+    abilities = []
+    for ability in context.get("abilities") or []:
+        if not isinstance(ability, dict):
+            continue
+        code = str(ability.get("code") or "")
+        if not _named_in(focus, str(ability.get("name") or ""), code):
+            continue
+        abilities.append({
+            "name": ability.get("name") or "",
+            "code": code,
+            "line": _one_line(ability.get("description")),
+        })
+    if abilities:
+        named["abilities"] = abilities[:3]
+    skills = []
+    for skill in context.get("skills") or []:
+        if not isinstance(skill, dict):
+            continue
+        code = str(skill.get("code") or "")
+        if not _named_in(focus, str(skill.get("name") or ""), code):
+            continue
+        skills.append({
+            "name": skill.get("name") or "",
+            "code": code,
+            "line": _one_line(skill.get("notes") or skill.get("description")),
+        })
+    if skills:
+        named["skills"] = skills[:3]
+    return named
+
+
+def _combat_view(mechanics: dict[str, Any]) -> dict[str, Any] | None:
+    combat = mechanics.get("combat") if isinstance(mechanics.get("combat"), dict) else None
+    if not combat:
+        return None
+    status = str(combat.get("status") or "")
+    if status in {"", "not_combat"}:
+        return {"status": "not_combat"}
+    attack = combat.get("player_attack") if isinstance(combat.get("player_attack"), dict) else {}
+    target = combat.get("target") if isinstance(combat.get("target"), dict) else {}
+    resolution = combat.get("resolution") if isinstance(combat.get("resolution"), dict) else {}
+    view: dict[str, Any] = {"status": status}
+    if attack.get("weapon"):
+        view["player_attack"] = {"weapon": attack.get("weapon")}
+    if target.get("name") or target.get("code"):
+        view["target"] = {"name": target.get("name") or "", "code": target.get("code") or ""}
+    if resolution:
+        view["resolution"] = {
+            "outcome": resolution.get("outcome"),
+            "damage": resolution.get("damage"),
+            "target_health_after": resolution.get("target_health_after"),
+        }
+    return view
+
+
+def _mechanics_view(context: dict[str, Any]) -> dict[str, Any] | None:
+    mechanics = context.get("mechanics_context") if isinstance(context.get("mechanics_context"), dict) else {}
+    view: dict[str, Any] = {}
+    weather = _weather_view(context)
+    if weather:
+        announce = weather.pop("announce", None)
+        view["weather"] = weather
+        if announce:
+            view["weather_announce"] = announce
+    combat = _combat_view(mechanics)
+    if combat:
+        view["combat"] = combat
+    ability = mechanics.get("ability_use") if isinstance(mechanics.get("ability_use"), dict) else None
+    if ability:
+        record = ability.get("ability") if isinstance(ability.get("ability"), dict) else {}
+        view["ability_use"] = {
+            "ok": ability.get("ok"),
+            "blocked": ability.get("blocked"),
+            "name": record.get("name") or ability.get("name") or "",
+            "code": record.get("code") or "",
+            "reasons": list(ability.get("reasons") or [])[:3],
+        }
+    forced = []
+    for event in mechanics.get("forced_events") or []:
+        if not isinstance(event, dict):
+            continue
+        forced.append({"kind": event.get("kind") or "", "summary": _one_line(event.get("summary"), 180)})
+    if forced:
+        view["forced_events"] = forced[:4]
+    # play_turn rolls the action's checks before the model is called and the
+    # system prompt tells the model to narrate them. The view did not carry
+    # them, so a failed persuasion roll stored a cold attitude on the NPC and
+    # the narrator, never told, wrote free cooperation anyway.
+    checks = []
+    for check in mechanics.get("resolved_checks") or []:
+        if not isinstance(check, dict):
+            continue
+        skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+        row: dict[str, Any] = {
+            "skill": skill.get("code") or check.get("skill_code") or "",
+            "outcome": check.get("outcome") or "",
+        }
+        if check.get("degree"):
+            row["degree"] = check.get("degree")
+        if check.get("social_attitude"):
+            row["attitude"] = check.get("social_attitude")
+        if check.get("social_direction"):
+            row["direction"] = _one_line(check.get("social_direction"), 240)
+        if check.get("mishap"):
+            row["mishap"] = _one_line(check.get("mishap"), 160)
+        injury = check.get("injury") if isinstance(check.get("injury"), dict) else None
+        if injury and injury.get("summary"):
+            row["injury"] = _one_line(injury.get("summary"), 160)
+        checks.append(row)
+    if checks:
+        view["resolved_checks"] = checks[:4]
+    spend = mechanics.get("action_spend") if isinstance(mechanics.get("action_spend"), dict) else None
+    if spend and (spend.get("blocked") or spend.get("collapse")):
+        view["action_spend"] = {
+            "blocked": bool(spend.get("blocked")),
+            "kind": spend.get("kind") or "",
+            "reasons": list(spend.get("reasons") or [])[:3],
+        }
+    collapse = mechanics.get("collapse")
+    if isinstance(collapse, dict) and collapse:
+        view["collapse"] = collapse
+    elif isinstance(collapse, str) and collapse.strip():
+        view["collapse"] = collapse.strip()[:200]
+    reputation = mechanics.get("area_reputation")
+    if isinstance(reputation, (int, float)) and not isinstance(reputation, bool) and int(reputation) != 0:
+        view["area_reputation"] = int(reputation)
+    social = mechanics.get("social_reputation") if isinstance(mechanics.get("social_reputation"), dict) else None
+    if social:
+        view["social_reputation"] = {
+            key: social.get(key) for key in ("flavor", "npc_code", "walked_away") if social.get(key) is not None
+        }
+    codes = mechanics.get("player_inventory_codes")
+    if isinstance(codes, list) and codes:
+        view["player_inventory_codes"] = [str(code) for code in codes[:40]]
+        if mechanics.get("player_inventory_truncated"):
+            view["player_inventory_truncated"] = True
+    return view or None
+
+
+def _voice_view(context: dict[str, Any]) -> dict[str, Any] | None:
+    voice = context.get("narrative_voice")
+    if not isinstance(voice, dict):
+        return None
+    view: dict[str, Any] = {}
+    rule = str(voice.get("rule") or "").strip()
+    if rule:
+        view["rule"] = rule
+    pronouns = voice.get("player_pronouns")
+    if isinstance(pronouns, dict) and pronouns:
+        view["player_pronouns"] = pronouns
+    return view or None
+
+
+def _setup_choices(context: dict[str, Any]) -> dict[str, str]:
+    """The player's own labels. The written essay stays out until the action names it."""
+    options = ((context.get("settings") or {}).get("playthrough_options") or {})
+    if not isinstance(options, dict):
+        return {}
+    templates = options.get("setting_templates") if isinstance(options.get("setting_templates"), dict) else {}
     try:
-        from app.world_context import naming_context_block, loot_context_block, ability_context_block
-        compact_context["world_naming_guide"] = naming_context_block()
-        compact_context["world_loot_reference"] = loot_context_block()
-        compact_context["world_ability_reference"] = ability_context_block()
+        from app.setting_templates import TEMPLATE_SPECS
+
+        keys = [str(spec.get("key") or "") for spec in TEMPLATE_SPECS]
     except Exception:
-        pass
-    map_space = context.get("map_space") if isinstance(context.get("map_space"), dict) else None
-    if map_space:
-        compact_context["map_space"] = map_space
-    direction_hint = context.get("direction_hint") if isinstance(context.get("direction_hint"), dict) else None
-    if direction_hint:
-        compact_context["direction_hint"] = direction_hint
-    open_offers = context.get("open_offers")
-    if isinstance(open_offers, list) and open_offers:
-        compact_context["open_offers"] = open_offers[:8]
-    map_clause = ""
-    if map_space:
-        budget = int(map_space.get("step_budget") or 4)
-        map_clause = (
-            f" world_state.map_space is the whole land ({map_space.get('width')}×{map_space.get('height')}). "
-            f"Walk at most {budget} tiles this turn with WALK. Do not invent ground past that budget or the map edge. "
-            "A door into a room is MOVE, not a hike."
+        keys = list(templates.keys())
+    choices: dict[str, str] = {}
+    for key in keys:
+        if not key:
+            continue
+        row = templates.get(key) if isinstance(templates, dict) else None
+        choice = str(row.get("choice") or "").strip() if isinstance(row, dict) else ""
+        if not choice:
+            raw = options.get(key)
+            choice = raw.strip() if isinstance(raw, str) else ""
+        if choice and choice.lower() != "custom":
+            choices[key] = choice[:160]
+    return choices
+
+
+def _draft_text(draft: Any) -> str:
+    """Names and sentences the scene already wrote, so the check can look those up."""
+    if not isinstance(draft, dict):
+        return ""
+    parts = [str(draft.get("narration") or "")]
+    for segment in draft.get("narration_segments") or []:
+        if isinstance(segment, dict):
+            parts.append(str(segment.get("text") or ""))
+        elif segment:
+            parts.append(str(segment))
+    for key in ("npcs", "inventory", "items", "abilities", "skills", "locations"):
+        rows = draft.get(key)
+        if isinstance(rows, dict):
+            rows = list(rows.values())
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            parts.append(str(row.get("name") or ""))
+            parts.append(str(row.get("code") or ""))
+    return "\n".join(part for part in parts if part)
+
+
+def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str = "") -> dict[str, Any]:
+    """Titles plus what the player can see. Sheets stay out until named."""
+    focus = _focus_text(context, player_input, extra_focus)
+    world: dict[str, Any] = {}
+    if context.get("world_time") is not None:
+        world["world_time"] = context.get("world_time")
+    if context.get("turn") is not None:
+        world["turn"] = context.get("turn")
+
+    settings_out: dict[str, Any] = {}
+    setup = context.get("settings") if isinstance(context.get("settings"), dict) else {}
+    if "setup_complete" in setup:
+        settings_out["setup_complete"] = setup.get("setup_complete")
+    options_out: dict[str, Any] = {}
+    appearance = _appearance(context)
+    if appearance:
+        options_out["appearance"] = appearance
+    choices = _setup_choices(context)
+    if choices:
+        options_out["choices"] = choices
+    rules = _matched_templates(context, focus)
+    if rules:
+        options_out["setting_templates"] = rules
+    if options_out:
+        settings_out["playthrough_options"] = options_out
+    if settings_out:
+        world["settings"] = settings_out
+
+    player = _player_view(context)
+    if player:
+        for worn in player.get("worn") or []:
+            if not _named_in(focus, str(worn.get("name") or ""), str(worn.get("code") or "")):
+                continue
+            for item in context.get("inventory") or []:
+                if not isinstance(item, dict):
+                    continue
+                same = str(item.get("code") or "") == str(worn.get("code") or "") or str(item.get("name") or "") == str(worn.get("name") or "")
+                if same:
+                    line = _one_line(item.get("description") or item.get("item_type"))
+                    if line:
+                        worn["line"] = line
+                    break
+        world["player"] = player
+
+    place = _place_view(context)
+    if place:
+        for person in place.get("people") or []:
+            if _named_in(focus, str(person.get("name") or ""), str(person.get("code") or "")):
+                line = _person_line(context, person)
+                if line:
+                    person["line"] = line
+        world["current_location"] = place
+
+    space = _map_view(context, player_input)
+    if space:
+        world["map_space"] = space
+    mechanics = _mechanics_view(context)
+    if mechanics:
+        world["mechanics_context"] = mechanics
+    voice = _voice_view(context)
+    if voice:
+        world["narrative_voice"] = voice
+
+    hint = context.get("direction_hint") if isinstance(context.get("direction_hint"), dict) else None
+    if hint:
+        kept = {key: hint.get(key) for key in ("told", "wording", "reason") if key in hint}
+        world["direction_hint"] = kept or hint
+    offers = context.get("open_offers")
+    if isinstance(offers, list) and offers:
+        slim_offers = []
+        for row in offers[:8]:
+            if isinstance(row, dict):
+                slim_offers.append({"title": row.get("title") or "", "source": row.get("source") or ""})
+            else:
+                slim_offers.append(row)
+        world["open_offers"] = slim_offers
+    if context.get("naming_contract"):
+        world["naming_contract"] = context.get("naming_contract")
+    if context.get("recall_contract"):
+        world["recall_contract"] = context.get("recall_contract")
+    psychology = context.get("npc_psychology_context")
+    if isinstance(psychology, str) and psychology.strip():
+        world["npc_psychology_context"] = psychology.strip()[:1800]
+    checks_ctx = context.get("skill_check_context")
+    if isinstance(checks_ctx, dict) and checks_ctx.get("dice_checks_enabled"):
+        active = [row for row in checks_ctx.get("active_skills") or [] if isinstance(row, dict) and row.get("code")]
+        if active:
+            world["skill_check_context"] = {
+                "active_skills": [{"code": row["code"], "name": row.get("name") or ""} for row in active[:8]]
+            }
+
+    here_codes = {str(person.get("code") or "") for person in (place or {}).get("people") or [] if person.get("code")}
+    named = _named_records(context, focus, here_codes)
+    if named:
+        world["named"] = named
+
+    if _TALK_RE.search(focus):
+        conversations = context.get("conversations") if isinstance(context.get("conversations"), list) else []
+        if conversations and isinstance(conversations[0], dict):
+            latest = conversations[0]
+            world["conversations"] = [{
+                "npc": latest.get("npc_name") or latest.get("name") or "",
+                "code": latest.get("npc_code") or latest.get("code") or "",
+                "line": _one_line(latest.get("summary") or latest.get("topic") or latest.get("text")),
+            }]
+    if _QUEST_RE.search(focus):
+        titles = []
+        for quest in context.get("active_quests") or []:
+            if isinstance(quest, dict) and quest.get("title"):
+                titles.append({"title": quest.get("title"), "code": quest.get("code") or ""})
+        if titles:
+            world["active_quests"] = titles[:6]
+    asks = context.get("relevant_asks")
+    if isinstance(asks, list) and asks:
+        lines = [str(item)[:240] for item in asks[:3] if str(item).strip()]
+        if lines:
+            world["relevant_asks"] = lines
+    if _is_travel(context, player_input):
+        contract = context.get("movement_contract") if isinstance(context.get("movement_contract"), dict) else {}
+        current = contract.get("current_location") if isinstance(contract.get("current_location"), dict) else {}
+        travel_view: dict[str, Any] = {
+            "travel_intent": True,
+            "current_location": {
+                "name": current.get("name") or (place or {}).get("name") or "",
+                "code": current.get("code") or (place or {}).get("code") or "",
+            },
+        }
+        known = [str(name) for name in (contract.get("known_places") or []) if str(name or "").strip()]
+        if known:
+            travel_view["known_places"] = known[:10]
+        venues = []
+        for venue in contract.get("venues_here") or []:
+            if isinstance(venue, dict) and str(venue.get("name") or "").strip():
+                venues.append({"name": venue.get("name"), "kind": venue.get("kind") or ""})
+        if venues:
+            travel_view["venues_here"] = venues[:8]
+        world["movement_contract"] = travel_view
+    return world
+
+
+def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool) -> str:
+    if checking:
+        text = (
+            "This pass reads the same titles, plus one line for anything the draft named. "
+            "Return a verdict object: verdict, issues, and a patch of only the draft_turn keys that must change. "
+            "Narration that already answers the action stays out of the patch. "
+            "Do not add a fact that was not included. "
         )
-        if map_space.get("scale") == "world":
-            map_clause += (
-                " Each step is one world cell. A city is at most 9 by 9 connected cells, "
-                "not a straight line or a solid block, and each cell contains an internal grid of at most 128 by 128. "
-                "One step does not cross the inside of a city."
-            )
-        leaning = map_space.get("people_leaning") if isinstance(map_space.get("people_leaning"), dict) else None
-        if leaning:
-            map_clause += (
-                " map_space.people_leaning.majority is who most inhabitants are when anyone lives in this world. "
-                "A kind is a leaning, not a census: dwarven may be dwarves or a people near that idea, "
-                "darkling may be creatures that keep to the dark or a people near that idea. "
-                "The local kind may be empty, and even a named kind may be absent from the scene. "
-                "Do not treat the label as a race that must be spoken."
-            )
-        if map_space.get("materials"):
-            map_clause += " map_space.materials are what this land's ground and goods are made of."
-    wait_extra = ""
+    else:
+        text = (
+            "This pass reads titles and what is in front of the player, then writes the scene. "
+            "Continue one turn. opening_scene = first scene before the player acts. "
+            "continue_scene = advance without inventing a player action. "
+            "wait_scene = narrate spent time only using resolved rng. "
+            "event_scene = narrate a decided world-event pack. "
+        )
     if turn_kind == "wait_scene":
-        wait_extra = (
-            " For wait_scene: world_time already advanced; rng lines in player_input are binding; "
-            "no extra major events; shells only for listed codes."
-        )
+        text += "world_time already advanced; rng lines in player_input are binding; no extra major events. "
     elif turn_kind == "event_scene":
-        wait_extra = (
-            " For event_scene: the event pack is binding (ambush, portal, stage). "
-            "Honor force/immutable; narrate combat/social pressure from shells listed; no inventing player gear."
+        text += "The event pack is binding. Do not invent player gear. "
+    elif turn_kind in {"opening_scene", "continue_scene"} and checking:
+        text += "Do not invent a player action. "
+    text += (
+        "When world_state.map_space.tile is present, that is the ground underfoot. "
+        "When world_state.map_space.people_leaning is present, that is who might live on this stretch: "
+        "a chance, not a crowd that must appear, and not a census. "
+        "When world_state.mechanics_context.weather is present, that is the sky. Do not invent a different sky. "
+        "When world_state.movement_contract.travel_intent is true, the walk stops at map_space.step_budget "
+        "and map_space.exits. Do not invent ground past that. "
+        "playthrough_options.appearance and player.worn are the clothes and armour in view. "
+        "When world_state.direction_hint is present and direction_hint.told is true, "
+        "say direction_hint.wording and do not add another place or a coordinate. "
+        "When world_state.direction_hint is present and told is false, do not name a location for that question. "
+        "When world_state.open_offers is present, those jobs are posted and not yet taken. "
+        "The player can accept one. Do not invent extra jobs. "
+        "When world_state.naming_contract is present the player asked for a name: "
+        "write naming_contract.name in the narration as plain text. Never describe a name without giving it. "
+        "When world_state.recall_contract is present the player is answering something this "
+        "world already knows: write recall_contract.specifics into the narration as plain "
+        "text. Restating the question ('you answer honestly who you owe, how much') is not an answer. "
+        "When world_state.mechanics_context.resolved_checks is present, those dice already fell: "
+        "narrate each listed outcome and attitude as it stands. Do not re-roll, soften a failure, "
+        "or grant the cooperation a failed social check denied. "
+        "When world_state.npc_psychology_context is present, it is private narrator knowledge about "
+        "people in the scene: let it steer what they do and withhold. Never read it out as fact "
+        "unless the scene itself reveals it. "
+        "When world_state.skill_check_context is present, name a check only by one of its "
+        "active_skills codes. "
+    )
+    options = (world.get("settings") or {}).get("playthrough_options") or {}
+    if isinstance(options, dict) and isinstance(options.get("choices"), dict) and options["choices"]:
+        text += (
+            "playthrough_options.choices are this playthrough's labels. "
+            "For rank_scale, use only the rungs named there. "
         )
+    templates = options.get("setting_templates") if isinstance(options, dict) else None
+    if isinstance(templates, dict) and templates:
+        text += (
+            "When world_state.settings.playthrough_options.setting_templates is present, "
+            "follow that stored rule. Do not replace its labels. "
+        )
+    if not checking:
+        text += "Prefer existing codes. The database wins over invention."
+    return text
+
+
+def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
+    turn_kind = _turn_kind_for(player_input)
+    world = _visible_world(context, player_input)
     return json.dumps(
         {
-            "world_state": compact_context,
+            "world_state": world,
             "turn_kind": turn_kind,
             "player_input": player_input,
-            "instruction": (
-                "Continue one turn. Read world_state.action_context.priority_segments, then scene_plan with 1-6 focus_points, "
-                "then continuous prose. opening_scene = first scene before player acts. continue_scene = advance without inventing a player action. "
-                "wait_scene = narrate spent time only using resolved rng. event_scene = narrate a decided world-event pack."
-                f"{wait_extra} "
-                "Use narration_detail for fullness; at least 1000 visible characters, about 1500 normal target. "
-                "Obey world_state.narrative_voice.rule and world_state.movement_contract.rule exactly. "
-                f"{map_clause}"
-                "When world_state.direction_hint is present and direction_hint.told is true, "
-                "say direction_hint.wording and do not add another place or a coordinate. "
-                "When world_state.direction_hint is present and told is false, do not name a location for that question. "
-                "When world_state.open_offers is present, those jobs are posted and not yet taken. "
-                "The player can accept one. Do not invent extra jobs. "
-                "When world_state.naming_contract is present the player asked for a name: "
-                "write naming_contract.name in the narration as plain text. Never describe a name "
-                "without giving it. "
-                "When world_state.recall_contract is present the player is answering something this "
-                "world already knows: write recall_contract.specifics into the narration as plain "
-                "text. Restating the question ('you answer honestly who you owe, how much') is not "
-                "an answer. "
-                "When world_state.settings.playthrough_options.setting_templates is present, "
-                "those written rules define the chosen rank scale, economy, quests, and the other listed settings. "
-                "Follow the stored rule. "
-                "Prefer existing codes. Database wins over invention."
-            ),
+            "instruction": _scene_instruction(turn_kind, world, checking=False),
         },
         ensure_ascii=True,
         separators=(",", ":"),
@@ -750,55 +1301,15 @@ def build_user_prompt(context: dict[str, Any], player_input: str) -> str:
 
 
 def build_verify_prompt(context: dict[str, Any], player_input: str, draft: dict[str, Any]) -> str:
-    settings = context.get("settings") or {}
-    if str(player_input).startswith("__opening_scene_request__"):
-        turn_kind = "opening_scene"
-    elif str(player_input).startswith("__continue_scene_request__"):
-        turn_kind = "continue_scene"
-    elif str(player_input).startswith("__wait_request__"):
-        turn_kind = "wait_scene"
-    elif str(player_input).startswith("__event_request__"):
-        turn_kind = "event_scene"
-    else:
-        turn_kind = "player_action"
+    turn_kind = _turn_kind_for(player_input)
+    world = _visible_world(context, player_input, extra_focus=_draft_text(draft))
     return json.dumps(
         {
-            "world_state": {
-                "settings": {
-                    "setup_complete": settings.get("setup_complete"),
-                    "playthrough_options": settings.get("playthrough_options"),
-                },
-                "world_time": context.get("world_time"),
-                "player": context.get("player"),
-                "current_location": context.get("current_location"),
-                "mechanics_context": context.get("mechanics_context"),
-                "verification_policy": context.get("verification_policy"),
-                "turn_plan": context.get("turn_plan"),
-                "action_context": context.get("action_context"),
-                "working_set": context.get("working_set"),
-                "event_lifecycle": context.get("event_lifecycle"),
-                "gm_events": context.get("gm_events", [])[:8],
-                "skills": context.get("skills"),
-                "abilities": context.get("abilities"),
-                "inventory": context.get("inventory"),
-                "equipment_slots": context.get("equipment_slots"),
-                "equipment_effects": context.get("equipment_effects"),
-                "inventory_capacity_modifiers": context.get("inventory_capacity_modifiers"),
-                "inventory_summary": context.get("inventory_summary"),
-                "player_aliases": context.get("player_aliases"),
-                "active_player_alias": context.get("active_player_alias"),
-                "locations": context.get("locations"),
-                "recognition": context.get("recognition"),
-                "relevant_sources": context.get("relevant_sources", [])[:8],
-                "retrieval": context.get("retrieval"),
-                "events": context.get("events", [])[:16],
-                "conversations": context.get("conversations", [])[:16],
-                "turn_summaries": context.get("turn_summaries", [])[:12],
-            },
+            "world_state": world,
             "turn_kind": turn_kind,
             "player_input": player_input,
             "draft_turn": draft,
-            "instruction": "Return a corrected, checked full turn JSON. If world_state.verification_policy exists, focus on remaining_checks and blockers; treat deterministically_verified checks as already cleared unless the draft contradicts them. Otherwise prioritize world_state.turn_plan.verification_checks and world_state.action_context.priority_segments when checking the draft. If turn_kind is opening_scene or continue_scene, do not invent a player action. Preserve or expand useful continuous narration detail unless it contradicts state or exceeds the configured narration_detail; final narration should be at least 1000 visible characters and normally about 1500. Keep scene_plan high-level with 1-6 focus_points, event persistence metadata plausible, and gm_events hidden. Do not add unsupported facts. If playthrough_options.setting_templates is present, those written rules define the setup choices. Do not replace the stored rank ladder or the other template rules.",
+            "instruction": _scene_instruction(turn_kind, world, checking=True),
         },
         ensure_ascii=True,
         separators=(",", ":"),

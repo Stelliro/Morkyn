@@ -583,6 +583,81 @@ def resolve_magnitude(
     }
 
 
+def notation_minimum(notation: str) -> int:
+    """The lowest total a notation can roll: every die at 1, plus the modifier."""
+    text = str(notation or "0").strip()
+    flat = _FLAT_RE.match(text)
+    if flat:
+        value = int(flat.group("value"))
+        return -value if flat.group("sign") == "-" else value
+    match = _DICE_RE.match(text)
+    if not match:
+        raise DiceError(f"Unparseable dice notation: {notation!r}")
+    count = int(match.group("count") or 1)
+    if match.group("keep"):
+        count = max(1, min(count, int(match.group("keep_n") or 1)))
+    modifier = int(match.group("mod") or 0)
+    if match.group("sign") == "-":
+        modifier = -modifier
+    return count + modifier
+
+
+def fixed_magnitude(
+    kind: str,
+    band: Any,
+    *,
+    level: int = 1,
+    negative: bool = False,
+    turn: int = 0,
+    tag: str = "",
+) -> dict[str, Any]:
+    """
+    The no-dice translation of a band: the band's lowest possible roll.
+
+    Band authority "off" keeps the model's numbers as written, but the prompt
+    and the DSL only ever emit bands now, so with nothing translating them
+    every GOLD / GRANT / SKILL amount was dropped on the floor. This maps a
+    band to one conservative fixed number, unscaled, and returns the same
+    record shape as :func:`resolve_magnitude` so the audit trail still shows
+    where the amount came from.
+    """
+    kind = str(kind or "item_count")
+    table = magnitude_table(kind)
+    canon_band = normalize_band(band)
+    notation = str((table.get("bands") or {}).get(canon_band) or "0")
+    raw_total = int(notation_minimum(notation))
+    value = raw_total
+    if canon_band != "none" and value <= 0:
+        value = 1
+    low = int(table.get("min", -1_000_000))
+    high = int(table.get("max", 1_000_000))
+    if negative:
+        magnitude = min(abs(value), high if high > 0 else abs(low))
+        value = -magnitude
+        if low < 0:
+            value = max(low, value)
+    else:
+        value = max(low, min(high, value))
+    return {
+        "kind": kind,
+        "band": canon_band,
+        "notation": notation,
+        "rolls": [],
+        "kept": [],
+        "modifier": 0,
+        "raw_total": raw_total,
+        "scale": "none",
+        "factor": 1.0,
+        "level": max(1, int(level or 1)),
+        "difficulty": "normal",
+        "value": value,
+        "clamped_to": [low, high],
+        "tag": tag or kind,
+        "turn": int(turn or 0),
+        "fixed": True,
+    }
+
+
 # --- reverse direction: numbers back into bands ------------------------------
 
 def band_from_number(kind: str, value: Any, *, level: int = 1) -> str:
@@ -715,6 +790,8 @@ def explain(result: dict[str, Any]) -> str:
     factor = float(result.get("factor") or 1.0)
     if abs(factor - 1.0) > 0.01:
         bits += f" x{factor:.2f}"
+    if result.get("fixed"):
+        bits += " fixed (band authority off)"
     return f"{result.get('kind')} ({result.get('band')}): {bits} = {result.get('value')}"
 
 

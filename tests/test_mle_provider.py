@@ -6,6 +6,9 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
+import time
+import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,6 +23,7 @@ os.environ.pop("MLE_MODEL", None)
 os.environ.pop("MLE_GGUF", None)
 
 from app import llm
+from app import mle
 from app.llm import _normalize_provider, apply_theme_model_routing
 from app.mle import MleNotReady, chat, piece_should_hide, resolve_model_path, status
 
@@ -385,6 +389,175 @@ class TestMleProvider(unittest.TestCase):
         for node in ast.walk(compatible):
             if isinstance(node, ast.Name):
                 self.assertNotIn(node.id, {"hide_words", "keep_words"})
+
+
+class TestStatusDoesNotWaitOnGeneration(unittest.TestCase):
+    """status() used to take _LOCK unconditionally, so Test Connection and the
+    context-fallback endpoint parked behind an in-flight turn for up to the
+    MLE timeout. When the model is already loaded for the resolved path the
+    lock buys nothing; when it is not, status waits briefly and reports busy."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.models = Path(self._tmp.name) / "models"
+        self.models.mkdir()
+        self.gguf = self.models / "only.gguf"
+        self.gguf.write_bytes(b"GGUF")
+        self._env = patch.dict(os.environ, {"MLE_MODEL": "", "MLE_GGUF": ""})
+        self._dir = patch("app.mle.models_dir", return_value=self.models)
+        self._env.start()
+        self._dir.start()
+        self.assertTrue(mle._LOCK.acquire(timeout=1), "test needs the lock")
+
+    def tearDown(self):
+        mle._LOCK.release()
+        self._dir.stop()
+        self._env.stop()
+        self._tmp.cleanup()
+
+    def _status_in_thread(self, wait: float = 3.0):
+        box = {}
+
+        def run():
+            box["report"] = status("only")
+
+        worker = threading.Thread(target=run, daemon=True)
+        started = time.monotonic()
+        worker.start()
+        worker.join(wait)
+        return box.get("report"), time.monotonic() - started, worker.is_alive()
+
+    def test_loaded_model_reports_without_the_lock(self):
+        with patch.object(mle, "_MODEL", object()), patch.object(
+            mle, "_MODEL_PATH", str(self.gguf.resolve())
+        ), patch.object(mle, "_MODEL_CTX", 8192), patch.object(mle, "_DETAIL", "Loaded only.gguf in-process (context 8192)."):
+            report, elapsed, alive = self._status_in_thread()
+        self.assertFalse(alive, "status must not park behind the generation lock")
+        self.assertLess(elapsed, 2.5)
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["context"], 8192)
+        self.assertIn("only.gguf", report["detail"])
+
+    def test_unloaded_model_reports_busy_instead_of_waiting(self):
+        with patch.object(mle, "_MODEL", None), patch.object(mle, "_MODEL_PATH", ""), patch.object(
+            mle, "_STATUS_LOCK_WAIT", 0.1
+        ), patch.object(mle, "_ensure_loaded", side_effect=AssertionError("must not load while busy")):
+            report, elapsed, alive = self._status_in_thread()
+        self.assertFalse(alive)
+        self.assertLess(elapsed, 2.0)
+        self.assertFalse(report["ok"])
+        self.assertTrue(report["busy"])
+        self.assertIn("generating", report["detail"])
+
+    def test_lock_is_released_after_a_failed_load(self):
+        mle._LOCK.release()
+        try:
+            with patch.object(mle, "_MODEL", None), patch.object(mle, "_MODEL_PATH", ""), patch.object(
+                mle, "_ensure_loaded", side_effect=MleNotReady("MLE could not load only.gguf.")
+            ):
+                report = status("only")
+            self.assertFalse(report["ok"])
+            self.assertIn("could not load", report["detail"])
+            self.assertTrue(mle._LOCK.acquire(blocking=False), "status left the lock held")
+            mle._LOCK.release()
+        finally:
+            self.assertTrue(mle._LOCK.acquire(timeout=1))
+
+
+def _fake_llama_module():
+    """The real llama_cpp when installed; else a stand-in exposing LogitsProcessorList."""
+    try:
+        import llama_cpp.llama  # noqa: F401
+
+        return None
+    except Exception:
+        pkg = types.ModuleType("llama_cpp")
+        sub = types.ModuleType("llama_cpp.llama")
+        sub.LogitsProcessorList = list
+        pkg.llama = sub
+        return {"llama_cpp": pkg, "llama_cpp.llama": sub}
+
+
+class _FakeModel:
+    """create_chat_completion runs the logits processor once, optionally past the deadline."""
+
+    def __init__(self, text: str, expire: bool):
+        self.text = text
+        self.expire = expire
+        self.calls = 0
+
+    def token_eos(self):
+        return 2
+
+    def create_chat_completion(self, **kwargs):
+        import numpy as np
+
+        self.calls += 1
+        processor = kwargs.get("logits_processor")
+        if processor:
+            mask = processor[0]
+            if self.expire:
+                mask.deadline = time.monotonic() - 1
+            mask(None, np.zeros(4, dtype=np.float32))
+        return {"choices": [{"message": {"content": self.text}}]}
+
+
+class TestGenerationTimeoutIsAnError(unittest.TestCase):
+    """The per-call timeout forced EOS silently, so a 300s stall came back as a
+    normal truncated completion: no timeout guard in llm.py or the failsafe
+    could see it, and a half JSON draft went on to repair or parse."""
+
+    def setUp(self):
+        self._modules = _fake_llama_module()
+        self._patch = patch.dict(sys.modules, self._modules) if self._modules else None
+        if self._patch:
+            self._patch.start()
+
+    def tearDown(self):
+        if self._patch:
+            self._patch.stop()
+
+    def test_sample_mask_records_the_deadline_hit(self):
+        import numpy as np
+
+        mask = mle._SampleMask(np.asarray([], dtype=np.int32), time.monotonic() - 1, 2)
+        self.assertFalse(mask.hit)
+        out = mask(None, np.zeros(4, dtype=np.float32))
+        self.assertTrue(mask.hit)
+        self.assertEqual(float(out[2]), 0.0)
+        self.assertTrue(all(np.isneginf(out[i]) for i in (0, 1, 3)))
+
+        fresh = mle._SampleMask(np.asarray([], dtype=np.int32), time.monotonic() + 60, 2)
+        fresh(None, np.zeros(4, dtype=np.float32))
+        self.assertFalse(fresh.hit)
+
+    def test_generate_raises_a_timeout_the_guards_recognise(self):
+        model = _FakeModel('{"narration": "half a', expire=True)
+        with patch.object(mle, "_banned_ids", return_value=()):
+            with self.assertRaises(MleNotReady) as caught:
+                mle._generate(
+                    model, "x.gguf", "sys", "user", timeout=7, temperature=0.7,
+                    max_tokens=None, response_format="json", hide_words=None, keep_words=None,
+                )
+        message = str(caught.exception)
+        self.assertIn("timed out after 7s", message)
+        self.assertEqual(model.calls, 1)
+        wrapped = llm.LlmError(message)
+        self.assertTrue(llm._is_timeout_error(wrapped))
+        self.assertTrue(llm._is_model_unavailable_error(wrapped))
+        self.assertEqual(llm._transport_error_message(wrapped, 7), "timed out after 7s")
+        from app.failsafe import classify_failure
+
+        self.assertEqual(classify_failure(message, stage="turn", provider="mle")["code"], "timeout")
+
+    def test_generate_returns_text_when_the_deadline_did_not_fire(self):
+        model = _FakeModel('{"narration": "whole"}', expire=False)
+        with patch.object(mle, "_banned_ids", return_value=()):
+            out = mle._generate(
+                model, "x.gguf", "sys", "user", timeout=7, temperature=0.7,
+                max_tokens=None, response_format="json", hide_words=None, keep_words=None,
+            )
+        self.assertEqual(out, '{"narration": "whole"}')
 
 
 if __name__ == "__main__":

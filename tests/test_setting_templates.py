@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 from app.db import connect, init_db
-from app.prompts import SYSTEM_PROMPT, build_user_prompt
+from app.prompts import SYSTEM_PROMPT, _TEMPLATE_CUES, build_user_prompt
 from app.setting_templates import (
     TEMPLATE_SPECS,
     choice_parts,
@@ -331,5 +331,77 @@ class SettingTemplateTests(unittest.TestCase):
         }
         prose = build_user_prompt(context, "look around")
         dsl = build_dsl_user_prompt(context, "look around")
-        self.assertIn("setting_templates", prose)
+        self.assertNotIn("setting_templates", prose)
+        self.assertNotIn("Ranks run from low to high", prose)
+        self.assertIn("F,E,D,C,B,A,S,SS,SSS", prose)
+        self.assertNotIn("setting_templates", dsl)
+        self.assertNotIn("Ranks run from low to high", dsl)
+        asked = build_user_prompt(context, "what rank is this sword")
+        self.assertIn("Ranks run from low to high", asked)
+        self.assertIn("setting_templates", asked)
         self.assertIn("use only the rungs", dsl.lower())
+
+    def test_one_cue_entries_are_patterns_and_an_opening_still_builds(self):
+        import re
+
+        one_cue = (
+            "proficiency_system",
+            "proficiency_access",
+            "dice_checks_enabled",
+            "encounter_check_frequency",
+        )
+        for key in one_cue:
+            cues = _TEMPLATE_CUES[key]
+            self.assertIsInstance(cues, tuple, key)
+            self.assertGreaterEqual(len(cues), 1, key)
+            for cue in cues:
+                self.assertIsInstance(cue, str, key)
+                self.assertGreater(len(cue), 1, key)
+                re.compile(cue)
+
+        choice = "common, uncommon, rare, epic, legendary, unique and unknown"
+        rank_rule = fallback_rule("rank_scale", choice)
+        for label in ("common", "uncommon", "rare", "epic", "legendary", "unique", "unknown"):
+            self.assertIn(label, rank_rule.lower())
+        templates = {
+            "rank_scale": {"choice": choice, "rule": rank_rule, "source": "fallback"},
+        }
+        for key, sample in (
+            ("proficiency_system", "on"),
+            ("proficiency_access", "learned"),
+            ("dice_checks_enabled", "on"),
+            ("encounter_check_frequency", "normal"),
+        ):
+            templates[key] = {
+                "choice": sample,
+                "rule": fallback_rule(key, sample),
+                "source": "fallback",
+            }
+        context = {
+            "settings": {
+                "playthrough_options": {
+                    "rank_scale": choice,
+                    "setting_templates": templates,
+                }
+            }
+        }
+        opening = build_user_prompt(
+            context,
+            "__opening_scene_request__: Begin the playthrough before the player acts.",
+        )
+        self.assertNotIn("setting_templates", opening)
+        self.assertNotIn("bottom of this ladder", opening)
+        asked = build_user_prompt(context, "what rank is the guard")
+        self.assertIn("bottom of this ladder", asked.lower())
+        for label in ("common", "uncommon", "rare", "epic", "legendary", "unique", "unknown"):
+            self.assertIn(label, asked.lower())
+        from app.prompts import _matched_templates
+
+        self.assertEqual(_matched_templates(context, "look around"), {})
+        named = _matched_templates(
+            context,
+            "I train a proficiency, roll the dice, and face an encounter",
+        )
+        for key in one_cue:
+            self.assertIn(key, named)
+            self.assertTrue(named[key]["rule"])

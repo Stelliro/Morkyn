@@ -30,7 +30,7 @@ from app.main import BUNDLE_ASSETS, BUNDLE_PLACEHOLDER, bundle_token, index_html
 
 STATIC = Path(__file__).resolve().parent.parent / "static"
 INDEX = STATIC / "index.html"
-ASSET_REF_RE = re.compile(r'/static/([\w.\-]+)\?v=([^"\']+)')
+ASSET_REF_RE = re.compile(r'/static/([\w./\-]+)\?v=([^"\']+)')
 
 
 class SourceTemplateTests(unittest.TestCase):

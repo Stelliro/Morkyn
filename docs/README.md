@@ -17,6 +17,7 @@
 | [Encounters.md](Encounters.md) | Stat/weather/environment-aware danger model |
 | [Venues.md](Venues.md) | Shops as real interiors: containment, opening hours, commonality, keeper identity |
 | [SetupComposer.md](SetupComposer.md) | Randomize tree, session theme, adapter routing |
+| [UI_RULEBOOK.md](UI_RULEBOOK.md) | The three CSS layers, the iron-and-brass look, and how to change the UI safely |
 | [WeldingRig.md](WeldingRig.md) | Offline LoRA pack: datasets, adapter names, wiring |
 | [PLAYTEST_SMOKE.md](PLAYTEST_SMOKE.md) | Isekai opening + 3-turn smoke checklist |
 | [TODO_NEXT.md](TODO_NEXT.md) | Priority queue (dispatch ids) |

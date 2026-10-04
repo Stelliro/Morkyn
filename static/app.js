@@ -778,10 +778,10 @@ function randomizeFieldOrderForMode(mode = randomizeMode()) {
   return RANDOM_FIELD_ORDER.slice();
 }
 
-function filterIntentOverridesForMode(overrides, mode = randomizeMode()) {
+function filterIntentOverridesForMode(overrides, mode = randomizeMode(), allowList = null) {
   if (!overrides || typeof overrides !== "object") return {};
   if (mode !== "simple") return { ...overrides };
-  const allow = new Set(PRIMARY_RANDOM_FIELD_ORDER);
+  const allow = new Set(allowList && allowList.length ? allowList : PRIMARY_RANDOM_FIELD_ORDER);
   const out = {};
   for (const [k, v] of Object.entries(overrides)) {
     if (allow.has(k)) out[k] = v;
@@ -812,9 +812,18 @@ let lastSessionTheme = null;
 /**
  * Director / vibe presets.
  * Each preset has two LLM steers so Simple and Advanced Randomize stay stable:
- * - simple_idea: short, same pipeline, fewer visible fields
- * - advanced_idea: full composer steer (was formerly `idea`)
+ * - simple_idea: short (<= 400 chars), same pipeline, fewer visible fields
+ * - advanced_idea: full composer steer (<= 600 chars; was formerly `idea`)
  * Built-ins are not deletable; user presets live in localStorage.
+ *
+ * Writing rule: an idea is written in the vocabulary the setup composer and
+ * the field lists already recognise, so the name on the chip and the world it
+ * rolls agree even on a small local model. Lead with the genre word the
+ * location themes key on (cyberpunk, noir, gothic, wasteland, space, sect,
+ * fantasy...), name the difficulty as easy/normal/hard/brutal, pick the tone
+ * from the tone list, state magic_level, economy and loot_rarity by their
+ * option phrases, and spell out edges ("lasting injuries", "scarce loot").
+ * Never a proper noun: the model pastes those into the world verbatim.
  */
 const DIRECTOR_PRESETS_BUILTIN = [
   {
@@ -824,72 +833,153 @@ const DIRECTOR_PRESETS_BUILTIN = [
     label: "OP MC",
     builtin: true,
     simple_idea:
-      "OP MC seed: start ordinary with one weak compounding power that can snowball into late-game OP (S/SS/SSS). Growth Math must make that path calculable. Passives allowed. More powers can unlock later — not stuck at one forever. Local stakes early, fair DM, no free second combat kit at start.",
+      "OP MC: start ordinary with one weak compounding seed power that snowballs toward late-game OP (rank F up through S/SS/SSS). Growth Math makes the climb calculable; passives allowed; more powers can unlock later. Normal difficulty; mythic progression tone; local stakes early, fair DM, no free second combat kit at start.",
     advanced_idea:
-      "OP MC fantasy (isekai-friendly): ordinary person starts with exactly one weak seed power that compounds and evolves into something genuinely strong later (domain varies—not weather/observation by default). Put calculable Growth Math on the seed (XP curves through F→…→S/SS/SSS, risk mult, soft caps, breakthroughs, rank→bonus, late multipliers). Custom skills hold seed fiction, tracking, and limits — not a permanent one-skill ban. May gain more powers and passives through play (training, quests, breakthroughs); only the opening kit is thin. Passiveives are first-class (always-on ranks). Soft caps early, fair DM, local stakes; no free second combat toolkit at Start.",
+      "OP MC power fantasy (isekai-friendly): an ordinary person starts with exactly one weak seed power that compounds into something genuinely strong later (domain varies; not weather or observation by default). Put calculable Growth Math on the seed: XP curves from F through S/SS/SSS, risk multipliers, soft caps, breakthroughs, rank-to-bonus, late multipliers. Custom skills hold the seed's fiction and limits, never a permanent one-skill ban; more powers and passives arrive through training and quests. Normal difficulty, mythic progression tone, fair DM, local stakes; no free second combat kit.",
   },
   {
     id: "fantasy",
     label: "Fantasy",
     builtin: true,
     simple_idea:
-      "Classic fantasy RPG: kingdoms, roads, ruins, workable magic. Balanced difficulty, local quests that can scale.",
+      "Classic high fantasy: kingdoms, old roads, ruins, and workable magic that is common utility. Normal difficulty; grounded adventure tone; coin-driven economy; loot earned and uncommon. Local quests that can scale to the realm; neither grimdark nor cozy.",
     advanced_idea:
-      "Classic fantasy RPG: kingdoms, roads, ruins, and workable magic. Balanced difficulty; adventure and discovery; clear rules without loud game-UI; neither grimdark nor pure cozy. Local quests that can scale.",
-  },
-  {
-    id: "cyberpunk",
-    label: "Cyberpunk",
-    builtin: true,
-    simple_idea:
-      "Near-future cyberpunk: corps, street work, chrome, debt. Hard-normal; tech and social leverage; noir jobs.",
-    advanced_idea:
-      "Near-future cyberpunk RPG: megacorps, street work, chrome, and debt. Hard-normal difficulty; tech and social leverage over magic; noir tone; jobs stay local until they touch bigger systems.",
+      "Classic high fantasy RPG: kingdoms and border lords, old roads and older ruins, temples, guilds, and magic that is common utility rather than miracle. Normal difficulty; grounded adventure tone; coin-driven economy; loot earned and uncommon; elves, dwarves and beastfolk alongside humans. Clear rules without loud game UI; local quests that can scale to the realm; neither grimdark nor pure cozy.",
   },
   {
     id: "adventurers",
     label: "Adventurers",
     builtin: true,
     simple_idea:
-      "Classic tabletop fantasy: dungeons, wilderness, factions. Fair challenge; loot and levels matter.",
+      "Guild-hall adventuring fantasy: a job board, a party of roles, dungeons and wilderness, loot and levels that matter. Normal difficulty; mythic progression tone; guild-controlled economy; generous adventuring loot; magic common utility; leveling and ranks on.",
     advanced_idea:
-      "Tabletop-campaign fantasy in the spirit of classic D&D: dungeons, wilderness, factions, and party roles in the world. Fair challenge, loot and levels matter, quest hooks without video-game menus.",
+      "Tabletop-campaign fantasy: an adventurers' guild with a job board and ranks, a party of complementary roles, dungeons, wilderness treks, rival companies and faction favors. Normal difficulty; mythic progression tone; guild-controlled economy; generous adventuring loot; magic common utility; leveling system on with earned ranks. Quest hooks and loot tables in the fiction, not video-game menus; fair challenge that rewards planning.",
+  },
+  {
+    id: "cyberpunk",
+    label: "Cyberpunk",
+    builtin: true,
+    simple_idea:
+      "Near-future cyberpunk megacity: megacorps, neon streets, chrome, debt, fixers. Hard difficulty; no magic, high tech; grounded adventure with noir jobs; coin-driven economy; loot earned and uncommon. Tech and social leverage over brawn; jobs stay local until they touch someone too big to touch.",
+    advanced_idea:
+      "Near-future cyberpunk RPG: a megacity under corporate rule, neon streets, chrome and cybernetic augments bought on debt, fixers, netrunners and street crews. Hard difficulty; no magic, high tech; grounded adventure with a noir edge; coin-driven economy; loot earned and uncommon; lasting injuries. Tech and social leverage beat brawn; every job is local until it touches a megacorp, and then it is dangerous.",
   },
   {
     id: "iron_front",
     label: "Iron Front",
     builtin: true,
     simple_idea:
-      "War-scarred grim setting: faith, heresy, scarce trust. Hard difficulty; survival over glory.",
+      "Grimdark war front: trenches, faith and heresy, brutal infantry, scarce trust. Brutal difficulty; grim road story tone; lasting injuries; scarce mundane loot; barter-heavy economy; magic forbidden and feared. Loyalty and survival over glory; no power fantasy.",
     advanced_idea:
-      "War-scarred grim setting in a Warhammer vein: faith, heresy, brutal infantry, scarce trust. Hard difficulty; horror and attrition; loyalty and survival over glory; no power fantasy.",
+      "Grimdark war front RPG: trench lines and shelled towns, a faith that polices itself, heresy as a crime, brutal infantry life, officers who spend soldiers. Brutal difficulty; grim road story tone; lasting injuries and real attrition; scarce mundane loot; barter-heavy economy; magic forbidden and feared where it exists at all. Loyalty, cowardice and survival over glory; horror in the quiet hours; no power fantasy and no chosen one.",
   },
   {
     id: "court",
     label: "Court",
     builtin: true,
     simple_idea:
-      "Political intrigue: salons, succession, blackmail. Low open combat; reputation drives play.",
+      "Court intrigue: salons, succession, blackmail, soft power. Normal difficulty; political intrigue tone; low open combat, reputation and leverage drive play; coin-driven economy; magic rare and whispered about. Every public move has a consequence.",
     advanced_idea:
-      "Political intrigue RPG: salons, succession, blackmail, soft power. Low open combat; reputation and leverage drive play; normal difficulty; every public move has consequences.",
+      "Court intrigue RPG: a capital in a succession crisis, salons and balls, blackmail, marriages, debts, spies and soft power. Normal difficulty; political intrigue tone; low open combat, with reputation, favors and leverage as the real weapons; coin-driven economy; loot earned and uncommon; magic rare and whispered about. Every public move has a consequence, every private one has a witness.",
   },
   {
     id: "frontier",
     label: "Frontier",
     builtin: true,
     simple_idea:
-      "Remote frontier: thin law, weather, supply, small settlements. Survival first; modest magic.",
+      "Frontier dark fantasy: thin law, hard weather, long supply lines, small settlements. Hard difficulty; survival pressure tone; scarce economy; scarce mundane loot; magic rare. Survival and craft first; community stakes over empire plots.",
     advanced_idea:
-      "Remote frontier RPG: thin law, weather, supply, and small settlements. Survival and craft first; modest magic if any; hard-normal difficulty; community stakes over empire plots.",
+      "Frontier dark fantasy RPG: thin law, hard weather, long supply lines, small settlements that know every face, and a wilderness that does not care. Hard difficulty; survival pressure tone; scarce economy; scarce mundane loot; magic rare and distrusted; lasting injuries. Survival and craft first; the stakes are a town's winter, a bridge, a feud, not an empire.",
   },
   {
     id: "depth",
     label: "Depths",
     builtin: true,
     simple_idea:
-      "Underworld delves: rival crews, light and resources. Hard-normal; discoveries cost blood.",
+      "Underworld delve: tunnels, rival crews, light and air as resources, ancient pressure below. Hard difficulty; survival pressure tone; barter-heavy economy; loot earned and uncommon; magic rare and old. Every discovery costs blood; the surface stays distant until it doesn't.",
     advanced_idea:
-      "Underworld and dungeon-depth RPG: delves, rival crews, ancient pressure. Resource and light management; hard-normal difficulty; discoveries cost blood; surface politics stay distant until they don't.",
+      "Underworld delve RPG: a settlement at the mouth of the deep, rival crews, caverns and dungeon levels, light, air and rations as resources, and an ancient pressure that notices visitors. Hard difficulty; survival pressure tone; barter-heavy economy; loot earned and uncommon; magic rare and old; lasting injuries. Discoveries cost blood; surface politics stay distant until the deep sends something up.",
+  },
+  {
+    id: "isekai",
+    label: "Isekai",
+    builtin: true,
+    simple_idea:
+      "Isekai: an ordinary person from a modern life is transported to another world and wakes with a status window and a level up system. Normal difficulty; mythic progression tone; weak start, steady growth; guild-controlled economy; magic common utility. Arrival is the first scene; no chosen-one autopilot.",
+    advanced_idea:
+      "Isekai RPG: an ordinary person from a modern life is transported to another world of guilds, ranks and monsters, and wakes with a readable status window and a level up system. Normal difficulty; mythic progression tone; weak start with steady, earned growth; guild-controlled economy; loot earned and uncommon; magic common utility. Play begins at arrival, not at the old job; former-life knowledge is a tool, not a cheat; no chosen-one autopilot.",
+  },
+  {
+    id: "wuxia",
+    label: "Wuxia",
+    builtin: true,
+    simple_idea:
+      "Wuxia sect politics: cultivation realms, sect rivalries, qi techniques, face and debts of honor. Hard difficulty; mythic progression tone; magic as cultivation; guild-controlled economy; loot earned and uncommon. Breakthroughs are earned through training and risk.",
+    advanced_idea:
+      "Wuxia sect politics RPG: cultivation realms with named stages, inner and outer disciples, elders, rival sects, qi techniques, face, oaths and debts of honor. Hard difficulty; mythic progression tone; magic as cultivation; guild-controlled economy; loot earned and uncommon; training-heavy skills. Breakthroughs are earned through training, insight and risk; elders and rival disciples are the real weather; no sudden heavenly favor.",
+  },
+  {
+    id: "academy",
+    label: "Academy",
+    builtin: true,
+    simple_idea:
+      "Mage academy intrigue: students, entrance trials, house rivalries, forbidden stacks in the library. Normal difficulty; political intrigue tone; magic common utility inside the walls and rare outside; coin-driven economy. Exams, duels and secrets instead of dungeons.",
+    advanced_idea:
+      "Mage academy intrigue RPG: a walled school of magic with entrance trials, houses and rivalries, exams, sanctioned duels, faculty politics and a library with forbidden stacks. Normal difficulty; political intrigue tone; magic common utility inside the walls and rare outside; coin-driven economy; loot earned and uncommon; training-heavy skills. Secrets, patrons and grades carry the stakes; the city beyond the gate is where they land.",
+  },
+  {
+    id: "wasteland",
+    label: "Wasteland",
+    builtin: true,
+    simple_idea:
+      "Post-collapse wasteland: scorched roads, scrap settlements, rad storms, water as currency. Hard difficulty; survival pressure tone; barter-heavy economy; scarce mundane loot; no magic, salvaged tech. Lasting injuries; every trade and every mile is a risk.",
+    advanced_idea:
+      "Post-collapse wasteland RPG: scorched roads, scrap settlements behind tire walls, rad storms, raiders, water and ammunition as currency. Hard difficulty; survival pressure tone; barter-heavy economy; scarce mundane loot; no magic, salvaged tech that breaks; lasting injuries. Every trade, every mile and every stranger is a risk; a working pump is a kingdom.",
+  },
+  {
+    id: "salvage",
+    label: "Salvage",
+    builtin: true,
+    simple_idea:
+      "Space frontier salvage: a small crew, derelict hulls, air and fuel on a ledger, station politics at the edge of charted space. Hard difficulty; grounded adventure tone; no magic, high tech; scarce economy; loot earned and uncommon. Problems are physical first, political second.",
+    advanced_idea:
+      "Space frontier salvage RPG: a small crew and an old ship, derelict hulls and dead stations, air, fuel and repairs on a ledger, a frontier station where every faction wants a cut. Hard difficulty; grounded adventure tone; no magic, high tech; scarce economy; loot earned and uncommon; lasting injuries. Problems are physical first and political second; nobody is coming to help.",
+  },
+  {
+    id: "gothic",
+    label: "Gothic",
+    builtin: true,
+    simple_idea:
+      "Gothic horror: a haunted manor, a vampire blood court, crypts, dark romance, debts paid in years. Hard difficulty; grim road story tone; magic forbidden and costly; coin-driven economy; loot earned and uncommon. Dread over gore; invitations matter; daylight is a resource.",
+    advanced_idea:
+      "Gothic horror RPG: a haunted manor and the village that serves it, a vampire blood court with etiquette and appetites, crypts, bargains, dark romance, debts paid in years of life. Hard difficulty; grim road story tone; magic forbidden and costly; coin-driven economy; loot earned and uncommon; lasting injuries. Dread over gore; invitations and thresholds matter; daylight, salt and names are resources.",
+  },
+  {
+    id: "noir",
+    label: "Noir",
+    builtin: true,
+    simple_idea:
+      "Noir city: hardboiled detective work, rain, favors, debts, and a case nobody wants solved. Normal difficulty; political intrigue tone; magic none or rare; coin-driven economy; scarce mundane loot. Investigation and leverage over combat; every clue costs someone.",
+    advanced_idea:
+      "Noir RPG: a rainy city of precincts, docks and all-night diners, hardboiled detective work, crooked money, favors, debts, and a case nobody upstairs wants solved. Normal difficulty; political intrigue tone; magic none or rare and hidden; coin-driven economy; scarce mundane loot. Investigation, leverage and nerve over combat; every clue costs someone, and the client is lying about something.",
+  },
+  {
+    id: "apocalypse",
+    label: "Apocalypse",
+    builtin: true,
+    simple_idea:
+      "System apocalypse: gates open over a modern city, monsters pour out, and survivors get a level up system window. Brutal difficulty; survival pressure tone; weak start, steady growth; barter-heavy economy; loot earned and uncommon. The first days decide who lives.",
+    advanced_idea:
+      "System apocalypse RPG: gates open over a modern city, monsters pour out, the grid fails, and survivors wake to a level up system window with ranks and skills. Brutal difficulty; survival pressure tone; weak start with steady, earned growth; barter-heavy economy; loot earned and uncommon; lasting injuries; magic only through the system. Death is close and ranks are earned; the first days decide who lives and who leads.",
+  },
+  {
+    id: "hearth",
+    label: "Hearth",
+    builtin: true,
+    simple_idea:
+      "Cozy low-stakes fantasy: a small village, a shop or farm to run, festivals, neighbors with problems, gentle mysteries. Easy difficulty; grounded adventure tone; magic common utility; barter-heavy economy; loot earned and uncommon. No war, no doom; stakes are personal and reversible.",
+    advanced_idea:
+      "Cozy fantasy RPG: a small village in a kind valley, a shop or farm or inn to run, seasons and festivals, neighbors with problems, a market town a day away, and gentle mysteries in the woods. Easy difficulty; grounded adventure tone; magic common utility; barter-heavy economy; loot earned and uncommon; no permadeath. No war and no doom: the stakes are a harvest, a friendship, a secret, and all of them can be mended.",
   },
 ];
 
@@ -1142,10 +1232,13 @@ const ACTION_HELP_TARGETS = [
   ["#setupModelButton", "Open the local LLM connection settings used for setup randomization, AI text fill, suggestions, and gameplay turns."],
   ["#saveSetupSettings", "Download the current setup form, ability cards, locks, and custom rules as a reusable JSON settings file."],
   ["#loadSetupSettingsButton", "Load a previously saved setup settings JSON file back into the setup form."],
-  ["#simpleOpenRandomize", "Opens the Randomize idea box. Confirm fills Primary only. Optional stays as you left it. Locked Primary fields are skipped."],
-  ["#randomizeSetupPrompt", "Optional idea (tone, genre, hook). Used only when you Confirm randomize."],
-  ["#randomizePopoverConfirm", "Confirm randomize. Fills Primary only. Optional stays as you left it."],
-  ["#directorPresets", "Director seeds: pick a vibe to fill the Randomize idea. Press Confirm randomize to fill Primary only."],
+  ["#simpleOpenRandomize", "Use Presets, then Confirm preset. A text idea fills the start, including powers. A saved setup or a previous game start loads that opening."],
+  ["#randomizeSetupPrompt", "Optional idea (tone, genre, hook). Confirm preset uses the idea in the preset card."],
+  ["#randomizePopoverConfirm", "Confirm preset fills the start from a text idea, including powers. Locked fields stay as they are."],
+  ["#presetSelect", "Two sides: saved presets (text ideas and setups you keep) and game starts (how a previous game began)."],
+  ["#presetNewBtn", "Make a new text preset. It keeps the name and idea only, not this page."],
+  ["#presetSaveBtn", "Save the current setup page as a preset on this machine."],
+  ["#directorPresets", "Director seeds: pick a vibe. Confirm preset fills the start from that idea, including powers."],
   [".setupModeBtn", "Simple = short new-game form. Advanced = full multi-step board (everything you had before)."],
   [".imageModeBtn", "Simple image = generate face/body from identity. Advanced = engine prompts, LoRAs, checkpoint, tests."],
   // Intent summary help is attached to the title in renderIntentSummary (not the whole bar).
@@ -1153,7 +1246,9 @@ const ACTION_HELP_TARGETS = [
   ["#setupStart", "Start the playthrough with the current setup and ask the LLM to write the opening scene before the player acts."],
   ["#setupPrev", "Move to the previous setup step without changing any filled values."],
   ["#setupNext", "Move to the next setup step. On the final step, this starts the playthrough."],
-  ["#randomAbilityButton", "Randomize the Special Abilities list. If Lock Count is on, only ability contents change; the number of cards stays fixed."],
+  ["#randomAbilityButton", "Randomize unlocked abilities. Locked abilities stay. If abilities are already on the page, the number of cards stays."],
+  [".abilityKeepLock", "Lock this ability so randomize keeps it. Unlocked abilities are rewritten. The number of abilities stays."],
+  [".randomizeOneAbility", "Rewrite this ability. A locked ability stays until you unlock it."],
   ["#addAbilityButton", "Add a blank ability card and expand it for editing. Randomized powers stay collapsed until you open them."],
   ["#sendButton", "Submit the typed player input. If the text box is empty, this acts as Continue and lets the LLM advance the scene."],
   ["#continueButton", "Continue the scene without typing an action — the DM advances from the current moment."],
@@ -1187,7 +1282,7 @@ const ACTION_HELP_TARGETS = [
   [".rewindPointButton", "Goes back to this turn. This cannot be undone."],
   [".invLinkBtn", "Puts this item in What will you do?. Close the sheet to edit or delete it."],
   [".insertRefButton", "Insert this entity reference token into the player input box."],
-  [".randomizeOneAbility", "Replace this single ability card with a local preset."],
+
   [".addAbilityAfter", "Insert a blank ability card directly below this one."],
   [".removeAbility", "Remove this ability card from the starting setup."],
   ["[data-text-ai-open]", "Open a prompt box for this text field. The AI knows the field name, current setup context, and ability name when present."],
@@ -1284,7 +1379,7 @@ const TEXT_AI_OPTION_HELP = {
 
 const ABILITY_FIELD_HELP = {
   name: "The ability name shown in setup and later player records.",
-  locked: "Unlocked abilities are usable at the start. Locked abilities exist in setup but require the listed condition before use.",
+  locked: "Starts usable means the power works at the opening. Needs unlock means it waits on the prerequisite. The Lock checkbox on the card is separate: it keeps the ability when you randomize.",
   description: "The immutable base description of what this ability does. The model may discover details later, but should not rewrite this foundation.",
   prerequisites:
     "Optional unlock condition. Leave blank for powers usable at Start. Use a real sentence for strong locked powers — never [] or empty JSON. Mild utilities should stay unlocked.",
@@ -2323,6 +2418,8 @@ async function pollLlmRuntimeOnce() {
     const res = await fetch("/api/llm-runtime", { cache: "no-store" });
     const data = await res.json().catch(() => ({}));
     setLlmRuntimeBanner(data);
+    if (data?.phase === "error" && data?.problem) window.MorkynFailsafe?.notice(data.problem);
+    else if (data?.notice) window.MorkynFailsafe?.notice(data.notice);
     return data;
   } catch (_) {
     return null;
@@ -2874,6 +2971,85 @@ function currentAbilitySlotCount() {
   return abilityList?.querySelectorAll(".abilitySetupCard").length || 0;
 }
 
+function readAbilityCards() {
+  if (!abilityList) return [];
+  return Array.from(abilityList.querySelectorAll(".abilitySetupCard"))
+    .map((card) => abilityCardSnapshot(card))
+    .filter(Boolean);
+}
+
+/**
+ * Cards already on the page set the count. Locked cards stay in place.
+ * Min does not add. Max does not remove. An empty list still uses the min–max roll.
+ */
+function mergeRandomizedAbilities(incoming, rolledTarget = null) {
+  const existing = readAbilityCards();
+  const pool = (Array.isArray(incoming) ? incoming : []).filter((ability) => ability && typeof ability === "object");
+  if (!existing.length) {
+    const fitted = fitAbilitiesToCountPolicy(pool, rolledTarget).map((ability) => applyOriginToAbility(ability));
+    return assignAbilityLocksAfterCreation(fitted, "both").map((ability) => ({ ...ability, keep: false }));
+  }
+  const used = [];
+  let poolIndex = 0;
+  const next = existing.map((prev) => {
+    if (prev.keep) {
+      used.push(prev);
+      return { ...prev, keep: true };
+    }
+    let replacement = null;
+    while (poolIndex < pool.length) {
+      const cand = pool[poolIndex++];
+      const name = String(cand?.name || "").trim().toLowerCase();
+      const dup = name && used.some((item) => String(item.name || "").trim().toLowerCase() === name);
+      if (dup) continue;
+      replacement = cand;
+      break;
+    }
+    if (!replacement) replacement = randomAbilityPreset(used);
+    const prepared = applyOriginToAbility({ ...replacement, keep: false });
+    prepared.keep = false;
+    used.push(prepared);
+    return prepared;
+  });
+  const freshAt = [];
+  next.forEach((ability, index) => {
+    if (!existing[index].keep) freshAt.push(index);
+  });
+  if (freshAt.length) {
+    const assigned = assignAbilityLocksAfterCreation(
+      freshAt.map((index) => next[index]),
+      "both",
+    );
+    freshAt.forEach((index, offset) => {
+      next[index] = { ...(assigned[offset] || next[index]), keep: false };
+    });
+  }
+  return next;
+}
+
+function writeAbilityCards(abilities) {
+  if (!abilityList) return;
+  abilityList.innerHTML = "";
+  (Array.isArray(abilities) ? abilities : []).forEach((ability) => {
+    const card = addAbility(ability || {}, { expanded: false });
+    if (!card) return;
+    const costMode = card.querySelector('[data-ability-field="cost_mode"]');
+    if (costMode && ability?.cost_mode) costMode.value = ability.cost_mode;
+    const cost = card.querySelector('[data-ability-field="cost"]');
+    if (cost && ability?.cost_mode === "custom") cost.value = ability.cost || "";
+    const keep = card.querySelector("[data-ability-keep]");
+    if (keep) keep.checked = Boolean(ability?.keep);
+    refreshAbilityCardSummary(card);
+  });
+  updateAbilityOriginControls();
+  updatePowersDropdownMeta();
+  placeAbilityBuilder();
+  if (currentAbilitySlotCount() > 0) {
+    const dropdown = document.querySelector("#powersDropdown");
+    if (dropdown) dropdown.open = true;
+  }
+}
+
 function fitAbilitiesToLockedCount(abilities) {
   if (!abilityQuantityLocked()) return abilities;
   const targetCount = Math.max(1, currentAbilitySlotCount() || abilityCountRange().min);
@@ -3039,17 +3215,12 @@ function applyRandomizedSetup(payload) {
       payload?.quality_gate?.target_count ??
       fields?.ability_count_roll?.target ??
       lastAbilityCountRoll;
-    if (rolledTarget != null && Number.isFinite(Number(rolledTarget))) {
+    const hadCards = readAbilityCards().length > 0;
+    if (!hadCards && rolledTarget != null && Number.isFinite(Number(rolledTarget))) {
       lastAbilityCountRoll = Number(rolledTarget);
     }
-    // 1) fit to rolled quantity  2) card defaults  3) score power → roll locks → prereqs on strongest
-    const fitted = fitAbilitiesToCountPolicy(abilities, rolledTarget).map((ability) => applyOriginToAbility(ability));
-    const nextAbilities = assignAbilityLocksAfterCreation(fitted, "both");
-    if (abilityList) {
-      abilityList.innerHTML = "";
-      // Generated / randomized powers start collapsed so the list stays scannable.
-      nextAbilities.forEach((ability) => addAbility(ability, { expanded: false }));
-    }
+    // Existing cards keep their count. Locked cards stay. Empty lists still use the roll.
+    writeAbilityCards(mergeRandomizedAbilities(abilities, rolledTarget));
   }
   normalizeRandomizerDependencies();
   updateAbilityOriginControls();
@@ -3205,6 +3376,7 @@ function restoreAbilitySettings(settings) {
         name: ability.name || "",
         description: ability.description || "",
         locked: Boolean(ability.locked),
+        keep: Boolean(ability.keep),
         prerequisites: ability.prerequisites || "",
         cost: ability.cost_mode === "custom" ? ability.cost || "" : ability.cost || ability.cost_mode || "no cost",
         growth_math: ability.growth_math || "",
@@ -3242,6 +3414,10 @@ function restoreSetupSettings(settings) {
   const ideaInput = document.querySelector("#randomizeSetupPrompt");
   if (ideaInput && settings.randomize_idea != null) {
     ideaInput.value = String(settings.randomize_idea || "").slice(0, 400);
+  }
+  const presetIdea = document.querySelector("#presetSimpleIdea");
+  if (presetIdea && settings.randomize_idea != null) {
+    presetIdea.value = String(settings.randomize_idea || "").slice(0, 400);
   }
   lastComposeIntent =
     settings.compose_intent && typeof settings.compose_intent === "object" ? settings.compose_intent : null;
@@ -3374,27 +3550,20 @@ function fallbackRandomizeField(name, options = {}) {
     return;
   }
   if (name === "special_abilities") {
-    const previous = collectAbilities();
-    // Same count policy for Simple + Advanced (shared builder + field_context).
-    const count = rollAbilityCountForRandomize();
-    abilityList.innerHTML = "";
-    const used = [...previous];
-    for (let i = 0; i < count; i += 1) {
-      const next = randomAbilityPreset(used);
-      used.push(next);
-      addAbility(next, { expanded: false });
+    const existing = readAbilityCards();
+    const free = existing.filter((ability) => !ability.keep).length;
+    if (existing.length && free === 0) {
+      setSetupRandomizeStatus("Every ability is locked, so the list stayed as it is.");
+    } else {
+      const count = existing.length ? free : rollAbilityCountForRandomize();
+      const seeds = existing.filter((ability) => ability.keep);
+      const pool = [];
+      for (let i = 0; i < count; i += 1) {
+        const next = randomAbilityPreset(seeds.concat(pool));
+        pool.push(next);
+      }
+      writeAbilityCards(mergeRandomizedAbilities(pool, existing.length ? null : count));
     }
-    // Stronger cards get locks/prereqs after the full batch is filled.
-    const batch = collectAbilities();
-    if (batch.length) {
-      abilityList.innerHTML = "";
-      assignAbilityLocksAfterCreation(batch, "both").forEach((ab) => addAbility(ab, { expanded: false }));
-    }
-    updateAbilityOriginControls();
-    updatePowersDropdownMeta();
-    placeAbilityBuilder();
-    const dropdown = document.querySelector("#powersDropdown");
-    if (dropdown && count > 0) dropdown.open = true;
   } else if (setupForm.querySelector(`[data-list-setting="${name}"]`)) {
     fallbackRandomizeListField(name);
   } else if (!fallbackRandomizeRadioField(name) && !fallbackRandomizeSelectField(name) && hasRandomSetupPool(name)) {
@@ -3619,22 +3788,28 @@ function fieldContext(name) {
   if (name === "special_abilities") {
     const { min, max } = abilityCountRange();
     const quantityLocked = abilityQuantityLocked();
-    const existingCount = currentAbilitySlotCount();
-    // Always roll (or lock) the slot count *before* the model runs.
-    const rolledCount = rollAbilityCountForRandomize();
+    const existing = readAbilityCards();
+    const free = existing.filter((ability) => !ability.keep).length;
+    // Cards already on the page set the count. Ask only for replacements of unlocked cards.
+    const rolledCount = existing.length ? free : rollAbilityCountForRandomize();
+    const keptNames = existing.filter((ability) => ability.keep).map((ability) => ability.name).filter(Boolean);
     const originRule =
       "Invent distinct powers (name, description, cost, growth_math). Mix inherent and trained-feeling fiction as fits the world. The app rolls quantity first, then after creation locks the stronger powers and sets prerequisites only on those. Focus on fiction quality, not forcing locked=true on every card.";
+    const countRule = existing.length
+      ? `The page already has ${existing.length} abilities and that number must stay. Return exactly ${free} new abilities to replace the unlocked ones. Do not add or remove slots. Leave these locked abilities out of the result: ${keptNames.join(", ") || "(none)"}.`
+      : `Return exactly requested_count (${rolledCount}) ability slots (rolled from ${min}–${max}${quantityLocked ? ", quantity locked" : ", pure RNG"}). Do not pick a different count.`;
     return {
       type: "special_abilities",
-      existing_count: existingCount,
-      quantity_locked: quantityLocked,
-      // Pre-rolled target — server must return exactly this many abilities.
+      existing_count: existing.length,
+      kept_count: existing.length - free,
+      quantity_locked: quantityLocked || existing.length > 0,
       requested_count: rolledCount,
       target_count: rolledCount,
       count_rolled: true,
       count_min: min,
       count_max: max,
-      roll_rule: `Return exactly requested_count (${rolledCount}) ability slots (rolled from ${min}–${max}${quantityLocked ? ", quantity locked" : ", pure RNG"}). Do not pick a different count. Each ability needs name, description, locked, prerequisites, cost, growth_math, and power_type (compounding|passive|linear|soft_cap|breakthrough|flat|item_bound). ${originRule}`,
+      kept_names: keptNames,
+      roll_rule: `${countRule} Each ability needs name, description, locked, prerequisites, cost, growth_math, and power_type (compounding|passive|linear|soft_cap|breakthrough|flat|item_bound). ${originRule}`,
     };
   }
   return { type: "field", value: setupForm.elements[name]?.value || "" };
@@ -4089,29 +4264,30 @@ function closeRandomizePopover() {
   document.querySelector("#randomizeSetup")?.setAttribute("aria-expanded", "false");
 }
 
-function runConfirmedRandomize(event) {
+function runConfirmedRandomize(event, options = {}) {
   if (event?.preventDefault) event.preventDefault();
   if (event?.stopPropagation) event.stopPropagation();
-  const fromConfirm = Boolean(event?.target?.closest?.("[data-confirm-randomize]"));
+  const fromConfirm = Boolean(event?.target?.closest?.("[data-confirm-randomize], #presetConfirmBtn"));
   const fromHotkey = event?.key === "Enter";
   const explicitConfirm = fromConfirm || fromHotkey || !event;
   if (!explicitConfirm && isSetupActionSuppressed()) {
-    setSetupRandomizeStatus("Click Confirm randomize again.");
+    setSetupRandomizeStatus("Press Confirm preset again.");
     return;
   }
   if (setupRandomizationLocked()) {
-    setSetupRandomizeStatus("Already filling Primary…");
+    setSetupRandomizeStatus("Already filling the start…");
     return;
   }
   if (setupUiMode === "simple") pushSimpleToForm();
   closeRandomizePopover();
   const idea = setupRandomizeIdea();
-  // The one Confirm fills Primary only. It does not roll Optional.
   const mode = "simple";
-  const fieldOrder = PRIMARY_RANDOM_FIELD_ORDER.slice();
+  const fieldOrder = Array.isArray(options.fieldOrder) && options.fieldOrder.length
+    ? options.fieldOrder
+    : SIMPLE_RANDOM_FIELD_ORDER.slice();
   const label = idea
-    ? "Randomizing Primary fields from your idea..."
-    : "Randomizing Primary fields...";
+    ? "Generating a start from your idea, including powers..."
+    : "Generating a start, including powers...";
   setSetupRandomizeStatus(label);
   const promptInput = document.querySelector("#randomizeSetupPrompt");
   if (randomizeSetup) randomizeSetup.disabled = true;
@@ -4124,7 +4300,8 @@ function runConfirmedRandomize(event) {
       (error) => {
         usedFallback = true;
         fallbackRandomizeSequence(fieldOrder);
-        setSetupRandomizeStatus("Model unavailable. Filled Primary from the local list.");
+        if (fieldOrder.includes("special_abilities")) calculateAllAbilityGrowthMath({ force: false });
+        setSetupRandomizeStatus("Model unavailable. Filled the start from the local list, including powers.");
         latestOutput.innerHTML = paragraphs(
           `Model randomizer unavailable; used local fallback. ${error.message || error}`,
         );
@@ -4134,10 +4311,13 @@ function runConfirmedRandomize(event) {
   )
     .then(() => {
       if (setupUiMode === "simple") pullFormToSimple();
-      if (!usedFallback) setSetupRandomizeStatus("Primary filled. Optional was left as you set it.");
+      if (!usedFallback) {
+        if (fieldOrder.includes("special_abilities")) calculateAllAbilityGrowthMath({ force: false });
+        setSetupRandomizeStatus("Start filled, including powers. Locked fields were left alone.");
+      }
     })
     .catch(() => {
-      if (!usedFallback) setSetupRandomizeStatus("Could not fill Primary. Try Confirm randomize again.");
+      if (!usedFallback) setSetupRandomizeStatus("Could not generate a start. Press Confirm preset again.");
     })
     .finally(() => {
       if (randomizeSetup) randomizeSetup.disabled = false;
@@ -4180,6 +4360,13 @@ function randomizedFieldIsBlank(payload, name) {
 
 async function randomizeField(name, options = {}) {
   if (!options.ignoreLock && isSettingLocked(name)) return;
+  if (name === "special_abilities") {
+    const existing = readAbilityCards();
+    if (existing.length && existing.every((ability) => ability.keep)) {
+      setSetupRandomizeStatus("Every ability is locked, so the list stayed as it is.");
+      return;
+    }
+  }
   const current = currentSetupSnapshot(name);
   const idea = String(options.idea || "").trim().slice(0, 400);
   if (idea) current._randomize_idea = idea;
@@ -4281,6 +4468,7 @@ function abilityCardSnapshot(card) {
     name: field("name")?.value.trim() || "",
     description: field("description")?.value.trim() || "",
     locked: card.querySelector('[data-ability-field="locked"]:checked')?.value === "true",
+    keep: Boolean(card.querySelector("[data-ability-keep]")?.checked),
     prerequisites: field("prerequisites")?.value.trim() || "",
     cost_mode: costMode,
     cost: costMode === "custom" ? field("cost")?.value.trim() || "" : costMode,
@@ -4605,6 +4793,7 @@ function normalizePreset(raw) {
   const aliases = Array.isArray(raw.aliases)
     ? raw.aliases.map((a) => String(a || "").trim()).filter(Boolean)
     : [];
+  const settings = raw.settings && typeof raw.settings === "object" ? raw.settings : null;
   return {
     id,
     label,
@@ -4612,6 +4801,7 @@ function normalizePreset(raw) {
     builtin: Boolean(raw.builtin),
     simple_idea: simple,
     advanced_idea: advanced,
+    settings,
   };
 }
 
@@ -4655,11 +4845,133 @@ function ideaForActivePreset(preset) {
   return String(preset.advanced_idea || preset.simple_idea || "").slice(0, 600);
 }
 
+let gameStartPresets = [];
+let gameStartsLoadNote = "No previous game starts yet";
+let presetSelectHold = 0;
+
+function renderPresetSelect() {
+  const saved = document.querySelector("#presetSavedGroup");
+  const starts = document.querySelector("#presetStartGroup");
+  const select = document.querySelector("#presetSelect");
+  if (!saved || !starts || !select) return;
+  const current = select.value;
+  presetSelectHold += 1;
+  try {
+  saved.innerHTML = allDirectorPresets()
+    .map((preset) => {
+      const mark = preset.settings ? " · saved setup" : "";
+      return `<option value="preset:${escapeHtml(preset.id)}">${escapeHtml(preset.label + mark)}</option>`;
+    })
+    .join("");
+  starts.innerHTML = gameStartPresets.length
+    ? gameStartPresets
+        .map((row) => `<option value="start:${escapeHtml(row.id)}">${escapeHtml(row.label || "Game start")}</option>`)
+        .join("")
+    : `<option value="start:" disabled>${escapeHtml(gameStartsLoadNote)}</option>`;
+  const still = Array.from(select.options).some((option) => option.value === current);
+  if (still) select.value = current;
+  else if (selectedDirectorPresetId) select.value = `preset:${selectedDirectorPresetId}`;
+  } finally {
+    presetSelectHold -= 1;
+  }
+}
+
+async function loadGameStartPresets() {
+  try {
+    const response = await fetch("/api/setup/game-starts");
+    if (response.status === 404) {
+      gameStartPresets = [];
+      gameStartsLoadNote = "Start the game again to list previous starts";
+    } else if (!response.ok) {
+      gameStartPresets = [];
+      gameStartsLoadNote = "Previous game starts could not be loaded";
+    } else {
+      const data = await response.json();
+      gameStartPresets = Array.isArray(data.starts) ? data.starts : [];
+      gameStartsLoadNote = "No previous game starts yet";
+    }
+  } catch (_) {
+    gameStartPresets = [];
+    gameStartsLoadNote = "Previous game starts could not be loaded";
+  }
+  renderPresetSelect();
+}
+
+function applyStartOptions(options) {
+  if (!options || typeof options !== "object") return;
+  for (const [name, value] of Object.entries(options)) {
+    if (value == null || typeof value === "object") continue;
+    const controls = setupControlsByName(name);
+    if (!controls.length) continue;
+    const target = controls[0];
+    if (target.type === "checkbox") target.checked = value === true || value === "true" || value === 1;
+    else target.value = String(value);
+  }
+  const abilities = Array.isArray(options.special_abilities) ? options.special_abilities : [];
+  if (abilities.length && typeof restoreAbilitySettings === "function") {
+    restoreAbilitySettings({ abilities });
+  }
+  updateConditionalSetup();
+  decorateFunctionHelp(setupForm);
+}
+
+async function selectPresetValue(value) {
+  if (presetSelectHold) return;
+  const key = String(value || "");
+  if (key.startsWith("start:")) {
+    const id = key.slice("start:".length);
+    if (!id) return;
+    setSetupRandomizeStatus("Loading that game's starting setup…");
+    try {
+      const response = await fetch(`/api/setup/game-starts/${encodeURIComponent(id)}`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "That start could not be loaded.");
+      if (data.form && typeof data.form === "object") restoreSetupSettings(data.form);
+      else applyStartOptions(data.options || {});
+      if (setupUiMode === "simple") pullFormToSimple();
+      const label = document.querySelector("#presetLabelInput");
+      if (label) {
+        label.disabled = false;
+        if (data.label) label.value = String(data.label).slice(0, 40);
+      }
+      const ideaEl = document.querySelector("#presetSimpleIdea");
+      if (ideaEl) ideaEl.disabled = false;
+      const delBtn = document.querySelector("#presetDeleteBtn");
+      if (delBtn) delBtn.disabled = true;
+      const saveBtn = document.querySelector("#presetSaveBtn");
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = "Save preset";
+        saveBtn.title = "Save this opening as a preset you can reuse. The game start itself stays.";
+      }
+      setSetupRandomizeStatus("Loaded the opening setup. This is how that game started, not where it is now.");
+    } catch (error) {
+      setSetupRandomizeStatus(error.message || "Could not load that game start.");
+    }
+    return;
+  }
+  if (!key.startsWith("preset:")) return;
+  const preset = findPreset(key.slice("preset:".length));
+  if (!preset) return;
+  applyDirectorPreset(preset.id);
+  if (preset.settings) {
+    try {
+      restoreSetupSettings(preset.settings);
+      if (setupUiMode === "simple") pullFormToSimple();
+      setSetupRandomizeStatus(`Loaded saved preset “${preset.label}”.`);
+    } catch (error) {
+      setSetupRandomizeStatus(error.message || "Could not load that preset.");
+    }
+  }
+}
+
 function renderDirectorPresets() {
-  const hosts = [
-    document.querySelector("#directorPresets"),
-    document.querySelector("#simpleDirectorPresets"),
-  ].filter(Boolean);
+  if (!selectedDirectorPresetId) {
+    const first = allDirectorPresets()[0];
+    if (first) selectedDirectorPresetId = first.id;
+  }
+  renderPresetSelect();
+  const hosts = [document.querySelector("#directorPresets")].filter(Boolean);
   const presets = allDirectorPresets();
   const html = presets
     .map(
@@ -4705,28 +5017,31 @@ function syncPresetEditorFromSelection() {
     labelEl.value = "";
     simpleEl.value = "";
     advEl.value = "";
-    labelEl.disabled = true;
-    simpleEl.disabled = true;
-    advEl.disabled = true;
+    labelEl.disabled = false;
+    simpleEl.disabled = false;
+    advEl.disabled = false;
     if (delBtn) delBtn.disabled = true;
-    if (saveBtn) saveBtn.disabled = true;
+    if (saveBtn) {
+      saveBtn.disabled = false;
+      saveBtn.textContent = "Save preset";
+      saveBtn.title = "Save the current setup page as a new preset.";
+    }
     return;
   }
   labelEl.value = preset.label;
   simpleEl.value = preset.simple_idea || preset.advanced_idea || "";
   advEl.value = simpleEl.value;
-  // Built-ins: ideas editable as session overrides when saved → duplicates to user copy
   const isBuiltin = Boolean(preset.builtin);
-  labelEl.disabled = isBuiltin;
+  labelEl.disabled = false;
   simpleEl.disabled = false;
   advEl.disabled = false;
   if (delBtn) delBtn.disabled = isBuiltin;
-  if (saveBtn) saveBtn.disabled = false;
   if (saveBtn) {
-    saveBtn.textContent = isBuiltin ? "Save as copy" : "Save";
+    saveBtn.disabled = false;
+    saveBtn.textContent = "Save preset";
     saveBtn.title = isBuiltin
-      ? "Save edited ideas as a new custom preset"
-      : "Save edits to this custom preset";
+      ? "Save this page as a new preset. Built-in ideas stay."
+      : "Save the current setup page under this name.";
   }
 }
 
@@ -4753,7 +5068,7 @@ function setSetupPresetsCollapsed(collapsed, persist = true) {
   if (meta) {
     meta.textContent = on
       ? "Collapsed · click to expand presets"
-      : "Expanded · pick an idea, then Confirm randomize";
+      : "Expanded · saved setups and previous game starts";
   }
   if (!persist) return;
   try {
@@ -4766,9 +5081,12 @@ function setSetupPresetsCollapsed(collapsed, persist = true) {
 function bindSetupPresetCollapse() {
   let collapsed = false;
   try {
-    collapsed = localStorage.getItem(SETUP_PRESETS_COLLAPSED_KEY) === "1";
+    // Closed until opened once: expanded, the card left a 375px window for a
+    // 14,000px form. The choice is remembered either way.
+    const stored = localStorage.getItem(SETUP_PRESETS_COLLAPSED_KEY);
+    collapsed = stored == null ? true : stored === "1";
   } catch (_) {
-    collapsed = false;
+    collapsed = true;
   }
   setSetupPresetsCollapsed(collapsed, false);
   const card = document.querySelector("#setupPresetCard");
@@ -4777,7 +5095,7 @@ function bindSetupPresetCollapse() {
   card.addEventListener("click", (event) => {
     const t = event.target;
     if (!(t instanceof Element)) return;
-    if (t.closest("#presetNewBtn, #presetSaveBtn, #presetDeleteBtn")) return;
+    if (t.closest("#presetNewBtn, #presetConfirmBtn, #presetSaveBtn, #presetDeleteBtn, #presetSelect, #presetEditor")) return;
     if (
       t.closest("#setupPresetToggle") ||
       (t.closest(".characterArtHead") && !t.closest("button.secondaryButton"))
@@ -4800,77 +5118,165 @@ function applyDirectorPreset(presetId, { runRandomize = false } = {}) {
   document.querySelectorAll("[data-director-preset]").forEach((btn) => {
     btn.classList.toggle("isSelected", btn.getAttribute("data-director-preset") === preset.id);
   });
+  const select = document.querySelector("#presetSelect");
+  if (select) {
+    const wanted = `preset:${preset.id}`;
+    presetSelectHold += 1;
+    if (Array.from(select.options).some((option) => option.value === wanted)) select.value = wanted;
+    presetSelectHold -= 1;
+  }
   syncPresetEditorFromSelection();
-  // Chips only set vibe/idea — Confirm randomize performs the roll (avoids surprise wipes).
+  // Chips set the idea. Confirm preset on the card performs the roll.
   if (runRandomize) runConfirmedRandomize();
 }
 
 function createUserPreset() {
+  const selection = String(document.querySelector("#presetSelect")?.value || "");
+  const onGameStart = selection.startsWith("start:");
+  const current = onGameStart ? null : findPreset(selectedDirectorPresetId);
+  const typedLabel = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
+  const typedIdea = String(document.querySelector("#presetSimpleIdea")?.value || "").trim().slice(0, 400);
+  const storedLabel = current ? String(current.label || "") : "";
+  const storedIdea = current ? String(current.simple_idea || "").trim() : "";
+  const labelChanged = !onGameStart && Boolean(typedLabel) && typedLabel !== storedLabel;
+  const ideaChanged = !onGameStart && Boolean(typedIdea) && typedIdea !== storedIdea;
+  const label = labelChanged ? typedLabel : "Custom preset";
+  const simple_idea = ideaChanged
+    ? typedIdea
+    : "Ordinary start, fair DM, local stakes. Fill a complete playable setup.";
   const id = `user_${Date.now().toString(36)}`;
-  const label = "Custom preset";
   const list = loadUserPresets();
   list.push(
     normalizePreset({
       id,
       label,
       builtin: false,
-      simple_idea: "Ordinary start, fair DM, local stakes. Fill a complete playable setup.",
-      advanced_idea:
-        "Ordinary start, fair DM, local stakes. Complete playable setup with clear genre, tone, and progression.",
+      simple_idea,
+      advanced_idea: simple_idea,
     }),
   );
   saveUserPresets(list);
   selectedDirectorPresetId = id;
   renderDirectorPresets();
   applyDirectorPreset(id);
+  const ideaEl = document.querySelector("#presetSimpleIdea");
+  if (ideaEl) {
+    ideaEl.focus();
+    ideaEl.select();
+  }
+  setSetupRandomizeStatus(`New text preset “${label}”. Edit the idea, then press Confirm preset.`);
+}
+
+function persistUserPresetText() {
+  const selection = String(document.querySelector("#presetSelect")?.value || "");
+  if (!selection.startsWith("preset:")) return;
+  const preset = findPreset(selectedDirectorPresetId);
+  if (!preset || preset.builtin || preset.id !== selection.slice("preset:".length)) return;
+  const label = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
+  if (!label) return;
+  const simple_idea = String(document.querySelector("#presetSimpleIdea")?.value || "").trim().slice(0, 400);
+  const adv = document.querySelector("#presetAdvancedIdea");
+  if (adv && document.activeElement !== adv) adv.value = simple_idea;
+  const list = loadUserPresets().map((p) =>
+    p.id === preset.id
+      ? normalizePreset({
+          id: p.id,
+          label,
+          builtin: false,
+          aliases: p.aliases,
+          simple_idea,
+          advanced_idea: simple_idea,
+          settings: p.settings,
+        })
+      : p,
+  );
+  saveUserPresets(list);
+  const select = document.querySelector("#presetSelect");
+  const option = select && Array.from(select.options).find((opt) => opt.value === selection);
+  if (option) option.textContent = preset.settings ? `${label} · saved setup` : label;
+}
+
+function confirmSelectedPreset(event) {
+  if (event?.preventDefault) event.preventDefault();
+  if (event?.stopPropagation) event.stopPropagation();
+  const selection = String(document.querySelector("#presetSelect")?.value || "");
+  if (selection.startsWith("start:")) {
+    if (!selection.slice("start:".length)) {
+      setSetupRandomizeStatus(`${gameStartsLoadNote}.`);
+      return;
+    }
+    selectPresetValue(selection);
+    return;
+  }
+  const preset = findPreset(selectedDirectorPresetId);
+  if (preset?.settings) {
+    selectPresetValue(`preset:${preset.id}`);
+    return;
+  }
+  const ideaInput = document.querySelector("#randomizeSetupPrompt");
+  const live = setupRandomizeIdea();
+  if (ideaInput && live) ideaInput.value = live;
+  runConfirmedRandomize(event);
+}
+
+function snapshotSetupPreset() {
+  if (setupUiMode === "simple") pushSimpleToForm();
+  const snap = collectSetupSettings();
+  delete snap.compose_intent;
+  delete snap.session_theme;
+  return snap;
 }
 
 function saveSelectedPresetFromEditor() {
-  const current = findPreset(selectedDirectorPresetId);
-  if (!current) {
-    window.alert("Select a preset first.");
-    return;
-  }
-  const label = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
+  const selection = String(document.querySelector("#presetSelect")?.value || "");
+  const onGameStart = selection.startsWith("start:");
+  const current = onGameStart ? null : findPreset(selectedDirectorPresetId);
+  let label = String(document.querySelector("#presetLabelInput")?.value || "").trim().slice(0, 40);
+  if (!label) label = "Saved setup";
   const simple_idea = String(document.querySelector("#presetSimpleIdea")?.value || "").trim().slice(0, 400);
-  const advanced_idea = simple_idea;
-  if (!simple_idea) {
-    window.alert("Add a randomize idea.");
-    return;
-  }
+  const settings = snapshotSetupPreset();
   let list = loadUserPresets();
-  if (current.builtin) {
-    // Save as a new custom copy
-    const id = `user_${Date.now().toString(36)}`;
-    const copy = normalizePreset({
-      id,
-      label: label || `${current.label} (copy)`,
-      builtin: false,
-      simple_idea: simple_idea || advanced_idea,
-      advanced_idea: advanced_idea || simple_idea,
-    });
-    list.push(copy);
-    saveUserPresets(list);
-    selectedDirectorPresetId = id;
-  } else {
+  const updatingUser = Boolean(current && !current.builtin);
+  if (updatingUser) {
     list = list.map((p) =>
       p.id === current.id
         ? normalizePreset({
             id: current.id,
-            label: label || current.label,
+            label,
             builtin: false,
-            simple_idea: simple_idea || advanced_idea,
-            advanced_idea: advanced_idea || simple_idea,
+            simple_idea,
+            advanced_idea: simple_idea,
+            settings,
           })
         : p,
     );
     saveUserPresets(list);
+  } else {
+    if (current?.builtin && label === current.label) label = `${label} copy`.slice(0, 40);
+    const id = `user_${Date.now().toString(36)}`;
+    list.push(
+      normalizePreset({
+        id,
+        label,
+        builtin: false,
+        simple_idea,
+        advanced_idea: simple_idea,
+        settings,
+      }),
+    );
+    saveUserPresets(list);
+    selectedDirectorPresetId = id;
   }
   renderDirectorPresets();
   applyDirectorPreset(selectedDirectorPresetId);
+  setSetupRandomizeStatus(`Saved preset “${findPreset(selectedDirectorPresetId)?.label || label}”.`);
 }
 
 function deleteSelectedUserPreset() {
+  if (String(document.querySelector("#presetSelect")?.value || "").startsWith("start:")) {
+    window.alert("Game starts stay with that save. Delete removes a preset you saved.");
+    return;
+  }
   const current = findPreset(selectedDirectorPresetId);
   if (!current || current.builtin) {
     window.alert("Built-in presets cannot be deleted. Save as a copy first if you want a custom version.");
@@ -4914,7 +5320,7 @@ async function randomizeAllSetup(options = {}) {
     // Keep full overrides on session_theme / lastCompose for Start + Advanced;
     // only stamp Simple-allowed keys into the form during Simple randomize.
     const rawOverrides = composed.field_overrides || {};
-    const overrides = filterIntentOverridesForMode(rawOverrides, mode);
+    const overrides = filterIntentOverridesForMode(rawOverrides, mode, mode === "simple" ? walkOrder : null);
     if (overrides && typeof overrides === "object" && Object.keys(overrides).length) {
       applyRandomizedSetup({ fields: overrides });
       normalizeRandomizerDependencies();
@@ -4947,8 +5353,8 @@ async function randomizeAllSetup(options = {}) {
   for (const name of walkOrder) {
     normalizeRandomizerDependencies();
     if (!randomizeFieldApplies(name)) continue;
-    // One page: header Randomize fills Primary only, even if walkOrder drifts.
-    if (mode === "simple" && !PRIMARY_RANDOM_FIELD_ORDER.includes(name)) continue;
+    // Generate walks the list it was given, including powers. A simple roll with no list stays on Primary.
+    if (mode === "simple" && !walkOrder.includes(name)) continue;
     // World difficulty and origin have HTML defaults. Skip the model only when this
     // idea's compose actually set them, then roll the select locally so Confirm changes them.
     if (mode === "simple" && (name === "difficulty" || name === "backstory_mode")) {
@@ -5006,6 +5412,9 @@ async function randomizeAllSetup(options = {}) {
       fallbackRandomizeField(name);
     }
   }
+  if (walkOrder.includes("special_abilities") && !isSettingLocked("special_abilities") && !collectAbilities().length) {
+    fallbackRandomizeField("special_abilities");
+  }
   // Full-package coherence pass: Advanced only (Simple package is intentionally thin until Start).
   if (mode === "advanced" && options.coherencePass !== false) {
     try {
@@ -5018,7 +5427,7 @@ async function randomizeAllSetup(options = {}) {
   // Refresh summary after walk (intent may still be the pre-walk plan).
   if (idea && (lastComposeIntent || lastSessionTheme)) {
     renderIntentSummary(lastComposeIntent, lastSessionTheme, {
-      source: mode === "simple" ? "after Simple Randomize" : "after Randomize",
+      source: mode === "simple" ? "after Generate" : "after Randomize",
     });
   }
   // Keep powers builder mounted/visible (Simple reparent + origin UI)
@@ -5756,7 +6165,7 @@ function abilitySummaryMeta(ability = {}) {
     ability.power_type ||
     (ability.compounding || ability.one_skill || ability.op_mc ? "compounding" : "linear");
   const typeLabel = POWER_GROWTH_TYPES.find((t) => t.id === powerType)?.label || powerType;
-  return `${locked ? "Locked" : "Unlocked"} · ${typeLabel}`;
+  return `${locked ? "Needs unlock" : "Starts usable"} · ${typeLabel}`;
 }
 
 function setAbilityCardExpanded(card, expanded) {
@@ -5775,12 +6184,14 @@ function refreshAbilityCardSummary(card) {
   if (!card) return;
   const name = card.querySelector('[data-ability-field="name"]')?.value.trim() || "Unnamed power";
   const locked = card.querySelector('[data-ability-field="locked"]:checked')?.value === "true";
+  const keep = Boolean(card.querySelector("[data-ability-keep]")?.checked);
   const powerType = card.querySelector('[data-ability-field="power_type"]')?.value || "linear";
   const typeLabel = POWER_GROWTH_TYPES.find((t) => t.id === powerType)?.label || powerType;
   const nameEl = card.querySelector("[data-ability-summary-name]");
   const metaEl = card.querySelector("[data-ability-summary-meta]");
+  card.classList.toggle("is-kept", keep);
   if (nameEl) nameEl.textContent = name;
-  if (metaEl) metaEl.textContent = `${locked ? "Locked" : "Unlocked"} · ${typeLabel}`;
+  if (metaEl) metaEl.textContent = `${locked ? "Needs unlock" : "Starts usable"} · ${typeLabel}`;
 }
 
 /**
@@ -5806,8 +6217,9 @@ function abilityTemplate(ability = {}, options = {}) {
   const collapseClass = expanded ? "is-expanded" : "is-collapsed";
   const summaryName = abilitySummaryLabel(ability);
   const summaryMeta = abilitySummaryMeta({ ...ability, locked, power_type: powerType });
+  const kept = Boolean(ability.keep);
   return `
-    <article class="abilitySetupCard ${collapseClass}" data-ability-id="${escapeHtml(id)}">
+    <article class="abilitySetupCard ${collapseClass}${kept ? " is-kept" : ""}" data-ability-id="${escapeHtml(id)}">
       <header class="abilityCardSummary">
         <button type="button" class="abilityCollapseToggle" aria-expanded="${expanded ? "true" : "false"}" title="${expanded ? "Collapse power details" : "Expand power details"}">
           <span class="abilityCollapseChevron" aria-hidden="true"></span>
@@ -5817,6 +6229,10 @@ function abilityTemplate(ability = {}, options = {}) {
           <strong class="abilitySummaryName" data-ability-summary-name>${escapeHtml(summaryName)}</strong>
           <span class="abilitySummaryMeta" data-ability-summary-meta>${escapeHtml(summaryMeta)}</span>
         </div>
+        <label class="settingLock abilityKeepLock" title="Keep this ability when you randomize. Unlocked abilities are rewritten. The number of abilities stays.">
+          <input type="checkbox" data-ability-keep ${kept ? "checked" : ""} />
+          Lock
+        </label>
         <button class="secondaryButton chipBtn removeAbility abilitySummaryRemove" type="button" title="Remove this power">Remove</button>
       </header>
       <div class="abilityCardBody">
@@ -5833,8 +6249,8 @@ function abilityTemplate(ability = {}, options = {}) {
           </label>
           <fieldset class="toggleSet compactToggle">
             <legend>State</legend>
-            <label><input type="radio" data-ability-field="locked" name="ability_locked_${escapeHtml(id)}" value="false" ${locked ? "" : "checked"} /> Unlocked</label>
-            <label><input type="radio" data-ability-field="locked" name="ability_locked_${escapeHtml(id)}" value="true" ${locked ? "checked" : ""} /> Locked</label>
+            <label><input type="radio" data-ability-field="locked" name="ability_locked_${escapeHtml(id)}" value="false" ${locked ? "" : "checked"} /> Starts usable</label>
+            <label><input type="radio" data-ability-field="locked" name="ability_locked_${escapeHtml(id)}" value="true" ${locked ? "checked" : ""} /> Needs unlock</label>
           </fieldset>
         </div>
         <p class="empty powerTypeTip" data-power-type-tip>${escapeHtml(tip)}</p>
@@ -5878,7 +6294,9 @@ function abilityTemplate(ability = {}, options = {}) {
  */
 function addAbility(ability = {}, options = {}) {
   let prepared = ability.name || ability.description ? { ...ability } : applyOriginToAbility(ability);
-  prepared = normalizeAbilityLockAndPrerequisites(prepared, "both");
+  // A kept card is restored as the user left it, including its learned/starting state.
+  if (!prepared.keep) prepared = normalizeAbilityLockAndPrerequisites(prepared, "both");
+  else prepared = { ...prepared, keep: true };
   const expanded = Boolean(options.expanded);
   abilityList.insertAdjacentHTML("beforeend", abilityTemplate(prepared, { expanded }));
   const card = abilityList.lastElementChild;
@@ -5920,13 +6338,14 @@ function collectAbilities() {
       const name = field("name")?.value.trim() || "";
       const description = field("description")?.value.trim() || "";
       const locked = card.querySelector('[data-ability-field="locked"]:checked')?.value === "true";
+      const keep = Boolean(card.querySelector("[data-ability-keep]")?.checked);
       const prerequisites = normalizeAbilityPrerequisites(field("prerequisites")?.value || "");
       const costMode = field("cost_mode")?.value || "no cost";
       const cost = costMode === "custom" ? field("cost")?.value.trim() || "model decides" : costMode;
       const growth_math = field("growth_math")?.value.trim() || "";
       const power_type = field("power_type")?.value || "linear";
       return normalizeAbilityLockAndPrerequisites(
-        { name, description, locked, prerequisites, cost, growth_math, power_type },
+        { name, description, locked, keep, prerequisites, cost, growth_math, power_type },
         "both",
       );
     })
@@ -6946,7 +7365,7 @@ async function continuePlaythrough() {
   }
 }
 
-const SETUP_TUTORIAL_KEY = "morkyn-setup-tutorial-v10";
+const SETUP_TUTORIAL_KEY = "morkyn-setup-tutorial-v11";
 let setupTourIndex = -1;
 let setupTourActive = false;
 let setupTourKeepFlyoutOpen = false;
@@ -7016,7 +7435,7 @@ function getSetupTourSteps() {
       title: "LLM Settings",
       text:
         "This is where you connect the brain of the game — a local GGUF, xAI/Grok, or another OpenAI-compatible API. " +
-        "Randomize, AI field fill, suggestions, and in-game turns all use this connection. " +
+        "Generate, AI field fill, suggestions, and in-game turns all use this connection. " +
         "If something AI-related fails, check here first.",
       shape: "pill",
       select: () => document.querySelector("#setupModelButton"),
@@ -7032,14 +7451,16 @@ function getSetupTourSteps() {
       select: () => document.querySelector("#saveSetupSettings"),
     },
     {
-      id: "randomize-all",
-      title: "Randomize",
+      id: "presets",
+      title: "Presets",
       text:
-        "Fills Primary only: name, origin, world difficulty, world vibe, hair, face, and clothes. " +
-        "Optional stays as you left it. Locked Primary fields are skipped. " +
-        "Confirm fills Primary only.",
+        "This menu has two sides. Saved presets are built-in ideas and setups you save from this page. " +
+        "Game starts are how a previous game began — the opening setup, not the middle of that save. " +
+        "New makes a text preset. Confirm preset fills the page from that idea, including powers, " +
+        "or loads a saved setup or a previous game’s opening. Save preset stores the page as it is now.",
       shape: "rect",
-      select: () => document.querySelector("#simpleOpenRandomize"),
+      before: () => setSetupPresetsCollapsed(false, false),
+      select: () => document.querySelector("#presetSelect") || document.querySelector("#setupPresetCard"),
     },
     {
       id: "menu-open",
@@ -7047,7 +7468,7 @@ function getSetupTourSteps() {
       text:
         "This heading is the second group. " +
         "Identity details, Powers, World, People, Rules, and Checks & Dice are all on this page under Optional. " +
-        "Skip the group, or open only the block you care about. Randomize does not fill it.",
+        "Skip the group, or open only the block you care about. Confirm preset fills powers and the main start from a text idea; the rest stays as you left it.",
       shape: "rect",
       select: () => document.querySelector("#setupOptionalHeading"),
     },
@@ -7126,7 +7547,7 @@ function getSetupTourSteps() {
       title: "Field Randomize",
       text:
         "Rolls only this one setting, using the rest of your setup as context (so a title can match a grim world, etc.). " +
-        "Different from the top-bar Randomize, which fills Primary only. " +
+        "Different from Generate on Presets, which fills the whole start including powers. " +
         "Use this when one line feels blank but you like everything else.",
       shape: "pill",
       select: () =>
@@ -7193,7 +7614,7 @@ function getSetupTourSteps() {
       text:
         "Press Start to begin play with these choices. " +
         "They aren’t decoration — genre, death rules, NPCs, and checks shape how the model runs your world. " +
-        "You can still Randomize earlier pages or Load a saved setup later if you want a different tone.",
+        "You can still Generate from a preset, or load a game start, if you want a different opening.",
       shape: "pill",
       select: () => document.querySelector("#setupStart"),
     },
@@ -7292,7 +7713,7 @@ function scrollTourTarget(target) {
     if (scrollable) {
       const host = node.getBoundingClientRect();
       const rect = target.getBoundingClientRect();
-      // Leave room under the control so the tip can sit below it and the arrow can touch it.
+      // Leave room under the control so the tip and the arrow can sit below it.
       const desired = host.top + Math.min(140, Math.max(72, host.height * 0.16));
       const delta = rect.top - desired;
       if (Math.abs(delta) > 6) node.scrollTop += delta;
@@ -7348,26 +7769,34 @@ function positionSetupTour(target, options = {}) {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const margin = 12;
-  const gap = 6;
+  const gap = 10;
   const arrowW = 48;
   const arrowH = 72;
   const tipW = Math.min(tipRect.width || 420, vw - margin * 2);
   const tipH = tipRect.height || 180;
   const cx = rect.left + Math.min(rect.width, 180) / 2;
-  // SVG point is y=70 in a 72px box. After rotate(180) that point is 2px from the top edge.
-  const bite = 26;
+  // Unrotated tip is 2px in from the bottom. Turned sideways, that tip
+  // swings about 10px past the 48px box.
   const tipInset = 2;
-  const headingTarget = Boolean(target.matches?.("h1, h2, h3"));
-  const headingOverlap = headingTarget ? Math.min(8, Math.max(0, rect.height / 2)) : 0;
-  const headingArrowTop = (which) => {
-    if (which === "below") return rect.bottom - headingOverlap - tipInset;
-    if (which === "above") return rect.top + headingOverlap - (arrowH - tipInset);
-    return rect.top + rect.height / 2 - arrowH / 2;
+  const sideOverhang = arrowH / 2 - tipInset - arrowW / 2;
+  const holeLeft = rect.left - padX;
+  const holeTop = rect.top - padY;
+  const holeRight = rect.right + padX;
+  const holeBottom = rect.bottom + padY;
+  const clear = 8;
+  const outsideArrow = (which) => {
+    if (which === "below") return { left: cx - arrowW / 2, top: holeBottom + clear - tipInset };
+    if (which === "above") return { left: cx - arrowW / 2, top: holeTop - clear - (arrowH - tipInset) };
+    if (which === "right") {
+      return { left: holeRight + clear + sideOverhang, top: rect.top + rect.height / 2 - arrowH / 2 };
+    }
+    return { left: holeLeft - clear - arrowW - sideOverhang, top: rect.top + rect.height / 2 - arrowH / 2 };
   };
 
   const spaceBelow = vh - rect.bottom - margin;
   const spaceAbove = rect.top - margin;
-  const need = tipH + 16;
+  const need = tipH + arrowH + clear;
+  const headingTarget = Boolean(target.matches?.("h1, h2, h3"));
   let place = "below";
   if (options.beside && !headingTarget) {
     const spaceRight = vw - rect.right - margin;
@@ -7382,67 +7811,70 @@ function positionSetupTour(target, options = {}) {
     place = spaceBelow >= spaceAbove ? "below" : "above";
   }
 
+  const parked = outsideArrow(place);
+  let arrowLeft = parked.left;
+  let arrowTop = parked.top;
   let tipLeft = cx - tipW / 2;
   let tipTop = margin;
-  let arrowLeft = cx - arrowW / 2;
-  let arrowTop = headingTarget ? headingArrowTop("below") : rect.bottom - bite;
 
   arrow.classList.remove("isAbove", "isBelow", "isPointLeft", "isPointRight");
   if (place === "below") {
     arrow.classList.add("isBelow");
-    arrowTop = headingTarget ? headingArrowTop("below") : rect.bottom - bite;
     tipTop = arrowTop + arrowH + gap;
   } else if (place === "above") {
     arrow.classList.add("isAbove");
-    arrowTop = headingTarget ? headingArrowTop("above") : rect.top - arrowH + bite;
     tipTop = arrowTop - gap - tipH;
   } else if (place === "right") {
     arrow.classList.add("isPointLeft");
-    arrowLeft = rect.right - bite;
-    arrowTop = rect.top + rect.height / 2 - arrowH / 2;
-    tipLeft = rect.right + arrowW + gap;
+    tipLeft = arrowLeft + arrowW + sideOverhang + gap;
     tipTop = rect.top + rect.height / 2 - tipH / 2;
   } else {
     arrow.classList.add("isPointRight");
-    arrowLeft = rect.left - arrowW + bite;
-    arrowTop = rect.top + rect.height / 2 - arrowH / 2;
-    tipLeft = arrowLeft - gap - tipW;
+    tipLeft = arrowLeft - sideOverhang - gap - tipW;
     tipTop = rect.top + rect.height / 2 - tipH / 2;
   }
 
   if (options.beside && (place === "right" || place === "left")) {
     tipTop = Math.max(rect.top, margin);
-    const aim = Math.min(rect.bottom - 8, Math.max(rect.top + 36, margin + 36));
+    const aim = Math.min(holeBottom - 8, Math.max(holeTop + 36, margin + 36));
     arrowTop = aim - arrowH / 2;
   }
 
   tipLeft = Math.max(margin, Math.min(tipLeft, vw - margin - tipW));
   tipTop = Math.max(margin, Math.min(tipTop, vh - margin - tipH));
-  arrowLeft = Math.max(margin, Math.min(arrowLeft, vw - margin - arrowW));
-  arrowTop = Math.max(margin, Math.min(arrowTop, vh - margin - arrowH));
-  if (headingTarget && (place === "below" || place === "above")) {
-    const touchTop = headingArrowTop(place);
-    if (touchTop >= margin - 8 && touchTop <= vh - arrowH - margin + 8) arrowTop = touchTop;
-  } else if (place === "below" || place === "above") {
-    const headY = place === "below" ? arrowTop : arrowTop + arrowH;
-    const edgeY = place === "below" ? rect.bottom : rect.top;
-    if (Math.abs(headY - edgeY) > 28) {
-      arrowTop = place === "below" ? rect.bottom - bite : rect.top - arrowH + bite;
+  arrowLeft = Math.max(4, Math.min(arrowLeft, vw - arrowW - 4));
+  arrowTop = Math.max(4, Math.min(arrowTop, vh - arrowH - 4));
+  // Clamping must not put the arrow back on the spotlight.
+  const visual = () => {
+    if (place === "left" || place === "right") {
+      const top = arrowTop + (arrowH - arrowW) / 2;
+      return {
+        left: arrowLeft - sideOverhang,
+        top,
+        right: arrowLeft + arrowW + sideOverhang,
+        bottom: top + arrowW,
+      };
     }
+    return { left: arrowLeft, top: arrowTop, right: arrowLeft + arrowW, bottom: arrowTop + arrowH };
+  };
+  const hitsHole = (box) =>
+    box.left < holeRight - 1 && box.right > holeLeft + 1 && box.top < holeBottom - 1 && box.bottom > holeTop + 1;
+  if (hitsHole(visual())) {
+    const again = outsideArrow(place);
+    arrowLeft = again.left;
+    arrowTop = again.top;
   }
 
-  if (options.beside) {
-    const overlaps =
-      tipLeft < rect.right - 2 &&
-      tipLeft + tipW > rect.left + 2 &&
-      tipTop < rect.bottom - 2 &&
-      tipTop + tipH > rect.top + 2;
-    if (overlaps) {
-      if (place === "right") tipLeft = rect.right + gap;
-      else if (place === "left") tipLeft = rect.left - gap - tipW;
-      else if (place === "below") tipTop = rect.bottom + gap;
-      else tipTop = rect.top - gap - tipH;
-    }
+  const tipHits =
+    tipLeft < holeRight - 2 &&
+    tipLeft + tipW > holeLeft + 2 &&
+    tipTop < holeBottom - 2 &&
+    tipTop + tipH > holeTop + 2;
+  if (tipHits) {
+    if (place === "right") tipLeft = Math.min(holeRight + gap, vw - margin - tipW);
+    else if (place === "left") tipLeft = Math.max(margin, holeLeft - gap - tipW);
+    else if (place === "below") tipTop = Math.min(arrowTop + arrowH + gap, vh - margin - tipH);
+    else tipTop = Math.max(margin, arrowTop - gap - tipH);
   }
 
   tip.style.left = `${tipLeft}px`;
@@ -7604,6 +8036,7 @@ function showSetupWizard(options = {}) {
   setImageUiMode(imageUiMode);
   renderDirectorPresets();
   renderSimpleDirectorPresets();
+  loadGameStartPresets();
   newGameRollStarted = true;
   const mapStatus = document.querySelector("#mapAscii");
   if (mapStatus) mapStatus.textContent = "Rolling a new map…";
@@ -7627,30 +8060,105 @@ function showSetupWizard(options = {}) {
   }
 }
 
+const PLAYER_ART_TOKEN_SUFFIX = "-token";
+const playerArtFetches = {};
+
+function rememberPlayerArt(lsKey, dataUrl, token) {
+  try {
+    localStorage.setItem(lsKey, dataUrl);
+    if (token) localStorage.setItem(lsKey + PLAYER_ART_TOKEN_SUFFIX, token);
+    else localStorage.removeItem(lsKey + PLAYER_ART_TOKEN_SUFFIX);
+  } catch (_) {
+    /* ignore quota */
+  }
+}
+
+function forgetPlayerArt(lsKey) {
+  try {
+    localStorage.removeItem(lsKey);
+    localStorage.removeItem(lsKey + PLAYER_ART_TOKEN_SUFFIX);
+  } catch (_) {
+    /* ignore */
+  }
+}
+
+function repaintPlayerArt() {
+  if (!gameView || gameView.classList.contains("hidden")) return;
+  paintPlayDock();
+  renderIndex();
+  if (characterSheetOpen) paintCharacterSheet();
+  pushAllPopouts();
+}
+
+function fetchPlayerArt(key, lsKey, url, token) {
+  /** One fetch per token; the copy lands in localStorage and on the state entry. */
+  if (playerArtFetches[key] === token) return;
+  playerArtFetches[key] = token;
+  fetch(url)
+    .then((res) => (res.ok ? res.blob() : Promise.reject(new Error(`player art ${res.status}`))))
+    .then(
+      (blob) =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(reader.error || new Error("player art unreadable"));
+          reader.readAsDataURL(blob);
+        }),
+    )
+    .then((dataUrl) => {
+      if (!dataUrl.startsWith("data:image")) throw new Error("player art is not an image");
+      rememberPlayerArt(lsKey, dataUrl, token);
+      const entry = state?.[key];
+      if (entry && entry.token === token) {
+        entry.data_url = dataUrl;
+        repaintPlayerArt();
+      }
+    })
+    .catch((err) => console.warn("player art fetch failed", err))
+    .finally(() => {
+      if (playerArtFetches[key] === token) delete playerArtFetches[key];
+    });
+}
+
+function adoptPlayerArt(key, lsKey, kind) {
+  /**
+   * The state names stored art by token and URL and does not carry the image.
+   * A matching token means the localStorage copy is current; otherwise the
+   * picture is fetched once. An entry that still carries data_url (older
+   * server) is used as-is, and with no server entry the setup-time copy in
+   * localStorage stays in play.
+   */
+  const entry = state?.[key];
+  let cached = "";
+  let cachedToken = "";
+  try {
+    cached = safeMediaUrl(localStorage.getItem(lsKey) || "");
+    cachedToken = localStorage.getItem(lsKey + PLAYER_ART_TOKEN_SUFFIX) || "";
+  } catch (_) {
+    /* ignore */
+  }
+  if (entry?.data_url) {
+    rememberPlayerArt(lsKey, entry.data_url, entry.token || "");
+    return;
+  }
+  if (entry?.url && entry?.token) {
+    if (cached && cachedToken === entry.token) {
+      entry.data_url = cached;
+      return;
+    }
+    if (cached) entry.data_url = cached;
+    fetchPlayerArt(key, lsKey, entry.url, entry.token);
+    return;
+  }
+  if (cached) state[key] = { data_url: cached, kind };
+}
+
 function renderShell(nextState, options = {}) {
   state = nextState;
   const ready = Boolean(state.setup_complete) || (options.forceGame && Boolean(state?.player));
-  // Prefer server-cached art when present; otherwise keep setup-localStorage art
-  if (state.player_portrait?.data_url) {
-    try {
-      localStorage.setItem("morkyn-player-portrait", state.player_portrait.data_url);
-    } catch (_) {
-      /* ignore quota */
-    }
-  } else {
-    const faceLs = safeMediaUrl(localStorage.getItem("morkyn-player-portrait") || "");
-    if (faceLs) state.player_portrait = { data_url: faceLs, kind: "face" };
-  }
-  if (state.player_fullbody?.data_url) {
-    try {
-      localStorage.setItem("morkyn-player-fullbody", state.player_fullbody.data_url);
-    } catch (_) {
-      /* ignore quota */
-    }
-  } else {
-    const bodyLs = safeMediaUrl(localStorage.getItem("morkyn-player-fullbody") || "");
-    if (bodyLs) state.player_fullbody = { data_url: bodyLs, kind: "fullbody" };
-  }
+  // Prefer server-stored art when present; otherwise keep setup-localStorage art
+  adoptPlayerArt("player_portrait", "morkyn-player-portrait", "face");
+  adoptPlayerArt("player_fullbody", "morkyn-player-fullbody", "fullbody");
   if (!ready) {
     // Prefer main menu over dumping into setup immediately.
     if (!options.forceGame) showMainMenu();
@@ -7961,13 +8469,7 @@ async function requestWait(minutes, kind = "wait") {
         ? `${verb} ${mins / 60} hour(s)…`
         : `${verb} ${mins} minute(s)…`;
   latestOutput.innerHTML = paragraphs(label);
-  const response = await fetch("/api/wait", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ minutes: mins, kind: kindL }),
-  });
-  if (!response.ok) throw new Error(await response.text());
-  const payload = await response.json();
+  const payload = await postTurnWithFailsafe("/api/wait", { minutes: mins, kind: kindL });
   if (payload?.wait?.after) updateWorldTimeLine(payload.wait.after);
   if (payload?.world_time) updateWorldTimeLine(payload.world_time);
   if (payload?.state?.weather) updateWeatherLine(payload.state.weather);
@@ -8156,6 +8658,7 @@ function saveHistoryOpenState(value) {
 }
 
 const HISTORY_LINK_LINE = "Add to What will you do? It is optional. Close lets you edit or delete it.";
+const HISTORY_LINK_LABEL = "Link";
 const HISTORY_UNDO_LINE = "To undo the last turn, choose Menu, then Undo last turn. This cannot be put back.";
 
 function historyRowSkipped(entry) {
@@ -8274,7 +8777,7 @@ function historyEntryHtml(entry) {
       <strong>${escapeHtml(label)}</strong>
       <p>${linkifyText(entry.content || "")}</p>
       <div class="miniActions">
-        <button class="insertRefButton" type="button" data-link-token="${escapeHtml(token)}" title="${escapeHtml(HISTORY_LINK_LINE)}" aria-label="${escapeHtml(HISTORY_LINK_LINE)}">${escapeHtml(HISTORY_LINK_LINE)}</button>
+        <button class="insertRefButton" type="button" data-link-token="${escapeHtml(token)}" title="${escapeHtml(HISTORY_LINK_LINE)}" aria-label="${escapeHtml(HISTORY_LINK_LINE)}">${escapeHtml(HISTORY_LINK_LABEL)}</button>
       </div>
     </section>
   `;
@@ -11941,7 +12444,7 @@ function renderThemeAdapterMapFields(config) {
     ? `Current adapter_hint: <code>${escapeHtml(hint)}</code>${mapped ? ` · map suggests <code>${escapeHtml(mapped)}</code>` : ""}`
     : "No session theme yet — Randomize an idea or Start a run first.";
   return `
-    <details class="themeAdapterMap" open>
+    <details class="themeAdapterMap">
       <summary>Theme models + LLM LoRAs (optional)</summary>
       <p class="empty">When a playthrough has <code>session_theme.adapter_hint</code>, turns can use a different MLE model name, API model, or GGUF path for llama.cpp. Leave blank to keep the main model.</p>
       ${rows}
@@ -12020,16 +12523,7 @@ function renderModelForm() {
         <span>MLE model</span>
         <input name="mle_model" value="${escapeHtml(config.mle_model || "qwen3:8b")}" maxlength="200" />
       </label>
-      <div class="modelTokenGrid">
-        <label>
-          <span>Soft Token Target</span>
-          <input name="response_token_cap" type="number" min="64" max="100000" step="1" value="${escapeHtml(config.response_token_cap ?? 1500)}" />
-        </label>
-        <label>
-          <span>Hard Token Cap</span>
-          <input name="response_token_hard_cap" type="number" min="64" max="100000" step="1" value="${escapeHtml(config.response_token_hard_cap ?? 2000)}" />
-        </label>
-      </div>
+      ${renderModelLimitsFields(config)}
       ${renderThemeAdapterMapFields(config)}
       <div class="modelButtonRow">
         <button type="submit">Save Model</button>
@@ -14417,6 +14911,77 @@ async function saveModelConfig(form) {
   latestOutput.innerHTML = paragraphs(`Model settings saved.${sessionNote}`);
 }
 
+function renderModelLimitsFields(config) {
+  // Limits follow the model (app/model_limits.py): the header of the GGUF
+  // and the GPU decide, unless the player keeps their own numbers for it.
+  const limits = config.limits || {};
+  const auto = limits.auto || {};
+  const basis = auto.basis || {};
+  const custom = limits.mode === "custom";
+  const label = limits.label || config.mle_model || "this model";
+  const source = limits.source || {};
+  const tag = (key) => (source[key] === "env" ? " (set by env, read-only)" : "");
+  const autoLine = auto.context_tokens
+    ? `Auto for ${escapeHtml(label)}: ${Number(auto.context_tokens).toLocaleString()} context, ${Number(auto.response_token_cap).toLocaleString()} / ${Number(auto.response_token_hard_cap).toLocaleString()} response. ${escapeHtml(basis.context || "")}`
+    : "Automatic limits appear once a model is selected.";
+  return `
+      <fieldset class="modelLimits" data-model-key="${escapeHtml(limits.model_key || "")}">
+        <legend>Token limits</legend>
+        <p class="modelLimitsAuto">${autoLine}</p>
+        <label class="modelLimitsMode">
+          <input type="checkbox" name="limits_custom" ${custom ? "checked" : ""} />
+          <span>Use my own numbers for ${escapeHtml(label)} and remember them</span>
+        </label>
+        <div class="modelTokenGrid modelTokenGridThree">
+          <label>
+            <span>Context tokens${tag("context_tokens")}</span>
+            <input name="context_tokens" type="number" min="4096" max="131072" step="1024" value="${escapeHtml(limits.context_tokens ?? config.context_window ?? 32768)}" ${source.context_tokens === "env" ? "readonly" : ""} />
+          </label>
+          <label>
+            <span>Soft Token Target${tag("response_token_cap")}</span>
+            <input name="response_token_cap" type="number" min="64" max="100000" step="1" value="${escapeHtml(config.response_token_cap ?? 1500)}" ${source.response_token_cap === "env" ? "readonly" : ""} />
+          </label>
+          <label>
+            <span>Hard Token Cap${tag("response_token_hard_cap")}</span>
+            <input name="response_token_hard_cap" type="number" min="64" max="100000" step="1" value="${escapeHtml(config.response_token_hard_cap ?? 2000)}" ${source.response_token_hard_cap === "env" ? "readonly" : ""} />
+          </label>
+        </div>
+        <div class="modelLimitsRow">
+          <button class="secondaryButton resetModelLimits" type="button" ${auto.context_tokens ? "" : "disabled"}>Back to auto</button>
+          <small>Editing a number switches this model to your own limits; Save Model keeps them.</small>
+        </div>
+      </fieldset>
+  `;
+}
+
+// The form is re-rendered from several places, so the limit inputs are wired
+// once by delegation: editing a number marks the model as custom, and
+// "Back to auto" refills the automatic numbers and clears the mark.
+document.addEventListener("input", (event) => {
+  const el = event.target;
+  if (!(el instanceof HTMLInputElement)) return;
+  if (!["context_tokens", "response_token_cap", "response_token_hard_cap"].includes(el.name)) return;
+  const form = el.closest("#modelForm");
+  const box = form?.querySelector('input[name="limits_custom"]');
+  if (box && !box.checked) box.checked = true;
+});
+document.addEventListener("click", (event) => {
+  const button = event.target instanceof Element ? event.target.closest(".resetModelLimits") : null;
+  if (!button) return;
+  const form = button.closest("#modelForm");
+  if (!form) return;
+  const auto = modelConfig?.limits?.auto || {};
+  const put = (name, value) => {
+    const input = form.querySelector(`input[name="${name}"]`);
+    if (input && value != null && !input.readOnly) input.value = String(value);
+  };
+  put("context_tokens", auto.context_tokens);
+  put("response_token_cap", auto.response_token_cap);
+  put("response_token_hard_cap", auto.response_token_hard_cap);
+  const box = form.querySelector('input[name="limits_custom"]');
+  if (box) box.checked = false;
+});
+
 function modelPayloadFromForm(form) {
   const formData = new FormData(form);
   const preset = String(formData.get("api_preset") || "xai");
@@ -14458,6 +15023,8 @@ function modelPayloadFromForm(form) {
     api_key: String(formData.get("api_key") || "").trim(),
     response_token_cap: Math.round(finiteNumber(formData.get("response_token_cap"), 1500)),
     response_token_hard_cap: Math.round(finiteNumber(formData.get("response_token_hard_cap"), 2000)),
+    context_tokens: Math.round(finiteNumber(formData.get("context_tokens"), 0)),
+    limits_mode: formData.get("limits_custom") ? "custom" : "auto",
     theme_adapter_map,
     theme_llm_lora_map,
     lora_path: String(formData.get("lora_path") || "").trim(),
@@ -16508,8 +17075,8 @@ function clearArtSlot(slot) {
   const key = String(slot || "").toLowerCase();
   if (key === "face" || key === "setup-face") {
     lastSetupFaceDataUrl = "";
+    forgetPlayerArt("morkyn-player-portrait");
     try {
-      localStorage.removeItem("morkyn-player-portrait");
       localStorage.removeItem("morkyn-player-portrait-sig");
     } catch (_) {
       /* ignore */
@@ -16532,11 +17099,7 @@ function clearArtSlot(slot) {
   }
   if (key === "fullbody" || key === "setup-fullbody" || key === "body") {
     lastSetupBodyDataUrl = "";
-    try {
-      localStorage.removeItem("morkyn-player-fullbody");
-    } catch (_) {
-      /* ignore */
-    }
+    forgetPlayerArt("morkyn-player-fullbody");
     if (state) state.player_fullbody = null;
     setArtFrameContent(document.querySelector("[data-setup-fullbody]"), {
       badge: "body · 3:4",
@@ -17701,11 +18264,14 @@ async function testModelConnection(container) {
   if (payload.ok) {
     const models = (payload.models || []).length ? ` Models: ${(payload.models || []).map(escapeHtml).join(", ")}` : "";
     const start = payload.managed_start?.started ? " Started managed llama.cpp server." : "";
-    status.innerHTML = `<p class="good">Connection OK. ${escapeHtml(payload.url || "")}${escapeHtml(start)}${models}</p>`;
+    const notice = payload.notice
+      ? `<p class="warn">${escapeHtml(payload.notice.summary || "")}</p>${window.MorkynFailsafe?.tipsHtml?.(payload.notice) || ""}`
+      : "";
+    status.innerHTML = `<p class="good">Connection OK. ${escapeHtml(payload.url || "")}${escapeHtml(start)}${models}</p>${notice}`;
   } else {
     const logs = payload.managed_start?.logs;
     const logText = logs?.stderr_tail || logs?.stdout_tail || "";
-    status.innerHTML = `<p class="bad">Connection failed at ${escapeHtml(payload.url || "")}: ${escapeHtml(payload.error || "unknown error")}</p>${logText ? `<pre class="modelLogTail">${escapeHtml(logText)}</pre>` : ""}`;
+    status.innerHTML = `<p class="bad">Connection failed at ${escapeHtml(payload.url || "")}: ${escapeHtml(payload.error || "unknown error")}</p>${logText ? `<pre class="modelLogTail">${escapeHtml(logText)}</pre>` : ""}${window.MorkynFailsafe?.tipsHtml?.(payload.problem) || ""}`;
   }
 }
 
@@ -18155,17 +18721,43 @@ async function requestTurn(text, options = {}) {
 
   let payload = null;
   try {
-    const response = await fetch(isContinue ? "/api/continue" : "/api/turn", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: isContinue ? undefined : JSON.stringify({ text: cleanText }),
-    });
-    if (!response.ok) throw new Error(await response.text());
-    payload = await response.json();
+    payload = await postTurnWithFailsafe(isContinue ? "/api/continue" : "/api/turn", isContinue ? {} : { text: cleanText });
   } finally {
     clearTurnWaitTimer();
   }
   if (!displayTurnPayload(payload, { animateNarration: true })) throw new Error("Turn response did not include narration.");
+}
+
+/**
+ * POST a turn-writing request through the failsafe loop. With the failsafe
+ * layer present, a model failure comes back as a problem (503) instead of a
+ * silent offline-narrator turn; the dialog decides. "fallback" resends with
+ * allow_fallback set, "retry" resends as is, anything else throws. A 400 is a
+ * domain error (nothing to rewrite, bad minutes) and is thrown untouched.
+ * Shared by requestTurn, regenerateTurn and requestWait so Rewrite and
+ * Wait/Meditate/Sleep cannot slip past the dialog.
+ */
+async function postTurnWithFailsafe(url, body = {}, stage = "turn") {
+  const failsafe = window.MorkynFailsafe;
+  let allowFallback = !failsafe;
+  for (;;) {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...body, allow_fallback: allowFallback }),
+    });
+    if (response.ok) return response.json();
+    const raw = await response.text();
+    const parsed = response.status === 400 ? null : failsafe?.parseError(raw, stage);
+    if (!parsed?.problem) throw new Error(raw);
+    const choice = await failsafe.ask(parsed.problem);
+    if (choice === "fallback") {
+      allowFallback = true;
+      continue;
+    }
+    if (choice === "retry") continue;
+    throw new Error(parsed.message || raw);
+  }
 }
 
 async function requestSuggestions(instruction = "") {
@@ -18509,6 +19101,10 @@ async function startGame(event) {
       lastSessionTheme = themeForSession;
     }
     setupPayload.session_theme = themeForSession && typeof themeForSession === "object" ? themeForSession : {};
+    const formSnap = collectSetupSettings();
+    delete formSnap.compose_intent;
+    delete formSnap.session_theme;
+    setupPayload.setup_form = formSnap;
     const response = await fetch("/api/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -18929,13 +19525,32 @@ async function regenerateTurn() {
   clearSuggestions();
   let payload = null;
   try {
-    const response = await fetch("/api/regenerate", { method: "POST" });
-    if (!response.ok) throw new Error(await response.text());
-    payload = await response.json();
+    payload = await postTurnWithFailsafe("/api/regenerate", {});
+  } catch (error) {
+    // The rewind already went through: the world sits one turn back and the
+    // server keeps the input, so the next Rewrite replays it rather than
+    // undoing a second turn. Show that world, not the narration just undone.
+    await showRefusedRewrite();
+    throw error;
   } finally {
     clearTurnWaitTimer();
   }
   if (!displayTurnPayload(payload, { animateNarration: true })) throw new Error("Regenerated response did not include narration.");
+}
+
+async function showRefusedRewrite() {
+  try {
+    const response = await fetch("/api/state");
+    if (response.ok) renderShell(await response.json(), { forceGame: true });
+  } catch (_) {
+    /* keep what is on screen */
+  }
+  if (latestInput) latestInput.innerHTML = "";
+  if (latestOutput) {
+    latestOutput.innerHTML = paragraphs(
+      "The rewrite was not written. The turn is undone and your last input is kept: press Rewrite again once the model is back, or type something new.",
+    );
+  }
 }
 
 async function exportWorld() {
@@ -19255,7 +19870,8 @@ setupForm.addEventListener("click", (event) => {
     summaryBar &&
     !event.target.closest("button") &&
     !event.target.closest("a") &&
-    !event.target.closest("input")
+    !event.target.closest("input") &&
+    !event.target.closest(".abilityKeepLock")
   ) {
     const card = summaryBar.closest(".abilitySetupCard");
     if (card) {
@@ -19267,7 +19883,11 @@ setupForm.addEventListener("click", (event) => {
   const randomizeOne = event.target.closest(".randomizeOneAbility");
   if (randomizeOne) {
     const card = randomizeOne.closest(".abilitySetupCard");
-    const preset = randomAbilityPreset();
+    if (card?.querySelector("[data-ability-keep]")?.checked) {
+      setSetupRandomizeStatus("That ability is locked. Unlock it to randomize it.");
+      return;
+    }
+    const preset = randomAbilityPreset(readAbilityCards());
     if (card) {
       // Keep collapsed after randomize-this
       card.outerHTML = abilityTemplate(preset, { expanded: false });
@@ -19302,7 +19922,8 @@ setupForm?.addEventListener("input", (event) => {
   if (card) refreshAbilityCardSummary(card);
 });
 setupForm?.addEventListener("change", (event) => {
-  const field = event.target?.closest?.("[data-ability-field]");
+  const keep = event.target?.closest?.("[data-ability-keep]");
+  const field = keep || event.target?.closest?.("[data-ability-field]");
   if (!field) return;
   const card = field.closest(".abilitySetupCard");
   if (card) refreshAbilityCardSummary(card);
@@ -19401,7 +20022,19 @@ document.querySelector("#simpleDirectorPresets")?.addEventListener("click", (eve
   applyDirectorPreset(btn.dataset.directorPreset, { runRandomize: false });
 });
 bindSetupPresetCollapse();
-document.querySelector("#presetNewBtn")?.addEventListener("click", () => createUserPreset());
+document.querySelector("#presetSelect")?.addEventListener("change", (event) => {
+  selectPresetValue(event.target.value);
+});
+document.querySelector("#presetNewBtn")?.addEventListener("click", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  createUserPreset();
+});
+document.querySelector("#presetConfirmBtn")?.addEventListener("click", (event) => {
+  confirmSelectedPreset(event);
+});
+document.querySelector("#presetLabelInput")?.addEventListener("input", () => persistUserPresetText());
+document.querySelector("#presetSimpleIdea")?.addEventListener("input", () => persistUserPresetText());
 document.querySelector("#presetSaveBtn")?.addEventListener("click", () => saveSelectedPresetFromEditor());
 document.querySelector("#presetDeleteBtn")?.addEventListener("click", () => deleteSelectedUserPreset());
 document.querySelector("#addGearItemBtn")?.addEventListener("click", () => addGearItem({}));
@@ -21178,6 +21811,19 @@ function hideScriptGate() {
   }
 }
 
+/**
+ * Read a design token from ui/tokens.css so canvas paint follows the theme.
+ * Canvas has no CSS cascade, so anything drawn with fillStyle must ask.
+ */
+function cssToken(name, fallback) {
+  try {
+    const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    return value || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
 /** UI theme: dusk | ember | tide | bloom | ash */
 const THEME_KEY = "morkyn-ui-theme";
 const THEME_DEFAULT = "dusk";
@@ -22010,9 +22656,9 @@ function updateTravelStatus(ready, opts) {
       ? `${label}: map blank · movement locked`
       : `${label}: movement locked · no free walk`;
   } else if (travelReady) {
-    text = `${WALK_FOCUS_NOTE} The pad walks any time. Click a neighbor tile. Long trips are open.`;
+    text = "Arrow keys or the pad walk one tile; click a neighbor tile. Long trips are open.";
   } else {
-    text = `${WALK_FOCUS_NOTE} The pad walks any time. Long trips wait until the scene clears.`;
+    text = "Arrow keys or the pad walk one tile. Long trips wait until the scene clears.";
   }
   if (line) {
     line.textContent = text;
@@ -22118,7 +22764,7 @@ async function walkStep(dx, dy, options = {}) {
       body: JSON.stringify({ dx: stepX, dy: stepY, mode: "free" }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+    if (!res.ok) throw new Error(apiErrorMessage(data, res.status));
     // Free steps should not re-render the whole shell (avoids interrupting typing).
     if (data.state?.current_location) {
       state = { ...(state || {}), ...data.state, travel_ready: data.travel_ready };
@@ -22224,10 +22870,14 @@ function bindLocalMapClick() {
     const scaleX = canvas.width / rect.width;
     const scaleY = canvas.height / rect.height;
     const cell = canvas._mapMeta.cell || mapTilePx || 32;
-    const cx = Math.floor(((event.clientX - rect.left) * scaleX) / cell) + canvas._mapMeta.minX;
-    const cy = Math.floor(((event.clientY - rect.top) * scaleY) / cell) + canvas._mapMeta.minY;
     const px = Number(localMapView.player?.x ?? 0);
     const py = Number(localMapView.player?.y ?? 0);
+    // The lens draws a player-relative window (minX is -extent), while tiles
+    // and the player carry world coordinates. Without adding the player back,
+    // every click read as thousands of tiles away and nothing moved.
+    const relative = canvas._mapMeta.mode === "local";
+    const cx = Math.floor(((event.clientX - rect.left) * scaleX) / cell) + canvas._mapMeta.minX + (relative ? px : 0);
+    const cy = Math.floor(((event.clientY - rect.top) * scaleY) / cell) + canvas._mapMeta.minY + (relative ? py : 0);
     const dx = cx - px;
     const dy = cy - py;
     // One-step adjacent (incl. diagonal) = free walk, no confirm
@@ -22980,7 +23630,7 @@ async function refreshLocalMap() {
         if (ctx) {
           canvas.width = 320;
           canvas.height = 320;
-          ctx.fillStyle = "#0a0a0f";
+          ctx.fillStyle = cssToken("--ink", "#0a0a0f");
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.fillStyle = "#6a6a80";
           ctx.font = "13px sans-serif";
@@ -23070,7 +23720,7 @@ async function refreshFullMap() {
         if (ctx) {
           canvas.width = 480;
           canvas.height = 360;
-          ctx.fillStyle = "#0a0a0f";
+          ctx.fillStyle = cssToken("--ink", "#0a0a0f");
           ctx.fillRect(0, 0, canvas.width, canvas.height);
           ctx.fillStyle = "#6a6a80";
           ctx.font = "14px sans-serif";
@@ -23346,6 +23996,20 @@ function showSettlementDetail(s) {
   }
 }
 
+// A FastAPI error body: `detail` is a string, or an object whose `message`
+// is the line written for the player (the map-move 409s). Never let an
+// object reach Error(), which prints it as "[object Object]".
+function apiErrorMessage(data, status) {
+  const d = data && data.detail;
+  if (typeof d === "string" && d.trim()) return d;
+  if (d && typeof d === "object") {
+    const m = d.message || d.error || d.summary;
+    if (typeof m === "string" && m.trim()) return m;
+  }
+  if (data && typeof data.error === "string" && data.error.trim()) return data.error;
+  return `HTTP ${status}`;
+}
+
 async function walkToTile(x, y) {
   if (movementLocked || mapBlank || state?.movement_locked || state?.map_blank) {
     window.alert(
@@ -23367,7 +24031,7 @@ async function walkToTile(x, y) {
       body: JSON.stringify({ x, y, mode: free ? "free" : "scene" }),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || data.error || `HTTP ${res.status}`);
+    if (!res.ok) throw new Error(apiErrorMessage(data, res.status));
     if (data.state) {
       if (free) {
         state = { ...(state || {}), ...data.state, travel_ready: data.travel_ready };
@@ -24664,6 +25328,9 @@ attachItemOverlayHandlers();
 // Never leave LLM modal open from a prior checkbox state / CSS race.
 closeModelModalFromUi();
 showMainMenu();
+// One runtime poll at boot: a context too small for the full contract was
+// only ever reported on the server console, so nothing told the player.
+pollLlmRuntimeOnce();
 loadState()
   .then(() => {
     // Stay on menu unless user continues; only reveal Continue if a game exists.

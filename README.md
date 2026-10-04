@@ -115,7 +115,7 @@ Morkyn/
 ├── requirements.txt
 ├── .env.example
 ├── app/                      # FastAPI backend
-├── static/                   # browser UI (no build step)
+├── static/                   # browser UI (no build step; see docs/UI_RULEBOOK.md)
 ├── Media/                    # logo, key art, screenshots
 ├── content/                  # built-in content packs
 ├── docs/                     # design notes (APIs, pipeline, DSL, metrics)
@@ -240,7 +240,7 @@ Optional lock: `AI_RPG_AGENT_TOKEN`.
 Useful overrides:
 
 ```powershell
-$env:AI_RPG_LLAMA_CPP_CONTEXT="32768"   # keep >= 12288: the full system contract is ~9.1k tokens
+$env:AI_RPG_LLAMA_CPP_CONTEXT="32768"   # explicit override; leave the launcher pref on "auto" to size it from the model's header and your GPU
 $env:AI_RPG_LLAMA_CPP_GPU_LAYERS="-1"
 $env:AI_RPG_MAX_RESPONSE_TOKENS="1500"
 $env:AI_RPG_RESPONSE_HARD_CAP_TOKENS="2000"

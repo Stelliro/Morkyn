@@ -2171,6 +2171,7 @@ def roll_travel_encounter(
     *,
     minutes: int,
     seed: int,
+    turn: int = 0,
     hidden_bases: list[dict[str, Any]] | None = None,
     weather: dict[str, Any] | None = None,
     world_time: dict[str, Any] | None = None,
@@ -2231,6 +2232,7 @@ def roll_travel_encounter(
             assessment,
             minutes=minutes,
             seed=seed,
+            turn=turn,
             player=aware,
             skills=snapshot.get("skills"),
             options=snapshot.get("options"),
@@ -2259,7 +2261,7 @@ def roll_travel_encounter(
     except Exception:
         pass
     p = max(0.02, min(0.55, p))
-    rng = random.Random(int(seed) & 0x7FFFFFFF)
+    rng = random.Random((int(seed) ^ (int(turn or 0) * 2654435761)) & 0x7FFFFFFF)
     hit = rng.random() < p
     x = int((to_cell or {}).get("x") or 0)
     y = int((to_cell or {}).get("y") or 0)
@@ -2566,6 +2568,18 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
         ^ (py * 12347)
         ^ (len(data.get("visited") or []) * 17)
     )
+    # The pacing turn goes into the roll as well. Once the surrounding tiles
+    # are revealed, len(visited) stops moving, and this seed alone replayed
+    # the identical natural, kind, count and awareness d20 on every retrace
+    # of the same step: one extreme roll made a step a permanent ambush or
+    # permanently quiet while danger still moved with night, weather and
+    # fatigue. The same turn still seeds the same roll, which rewind needs.
+    try:
+        with connect() as _turn_conn:
+            _turn_row = _turn_conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+        travel_turn = int(_turn_row["value"]) if _turn_row else 0
+    except Exception:
+        travel_turn = 0
     settlement_id = cell.get("settlement_id")
     settlement_meta = None
     if settlement_id:
@@ -2578,6 +2592,7 @@ def move_player(map_id: str | None, x: int, y: int) -> dict[str, Any]:
         {**cell, "x": x, "y": y},
         minutes=minutes,
         seed=seed,
+        turn=travel_turn,
         hidden_bases=list(data.get("hidden_bases") or []),
         weather=weather_snapshot,
         map_data=data,

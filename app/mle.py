@@ -14,6 +14,7 @@ import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 from app.narration_pipeline import _STRUCTURE_WORDS
 
@@ -27,16 +28,27 @@ _CODE_RE = re.compile(r"^[a-z]+\d+[a-z0-9]*$")
 _DIGIT_RE = re.compile(r"^\d+$")
 
 _LOCK = threading.Lock()
+# How long status() waits for _LOCK when the model still has to load. A turn
+# in flight holds the lock for up to the MLE timeout; status must not.
+_STATUS_LOCK_WAIT = 2.0
 _MODEL = None
 _MODEL_PATH = ""
 _MODEL_CTX = 0
 _DETAIL = ""
 _KEY_CACHE: dict[str, tuple[str, ...]] = {}
 _BAN_CACHE: dict[tuple[str, tuple[str, ...]], tuple[int, ...]] = {}
+# The smaller context is used only once someone said yes to it (or the
+# policy is auto). Per process: a restart asks again, on purpose.
+_FALLBACK_ALLOWED = False
+_LAST_PROBLEM: dict[str, Any] | None = None
 
 
 class MleNotReady(RuntimeError):
     """MLE is the engine in use, and no model is loaded in it yet."""
+
+    def __init__(self, message: str = "", problem: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.problem = problem
 
 
 def models_dir() -> Path:
@@ -117,7 +129,16 @@ def chat(
         )
 
 
-def status(model: str = "") -> dict[str, str | bool]:
+def loaded_context() -> int:
+    """The context the in-process model actually loaded with, or 0 when none is loaded.
+
+    Read without the lock: a stale answer during a reload is harmless, and the
+    budget code asks on every call.
+    """
+    return int(_MODEL_CTX or 0) if _MODEL is not None else 0
+
+
+def status(model: str = "") -> dict[str, Any]:
     """ok is true only after the GGUF file has loaded."""
     label = _label(model)
     path = resolve_model_path(model)
@@ -128,23 +149,63 @@ def status(model: str = "") -> dict[str, str | bool]:
             "model": label,
             "detail": missing_model_detail(model),
         }
-    try:
-        with _LOCK:
-            _ensure_loaded(path)
-            detail = _DETAIL
-            loaded = _MODEL is not None
-    except MleNotReady as exc:
+    # Already loaded for this path: _ensure_loaded would be a no-op, and
+    # waiting on _LOCK here parks Test Connection (and the context-fallback
+    # endpoint) behind a turn in flight for the rest of that turn.
+    report = _loaded_report(label, str(path.resolve()))
+    if report is not None:
+        return report
+    if not _LOCK.acquire(timeout=_STATUS_LOCK_WAIT):
         return {
+            "ok": False,
+            "busy": True,
+            "engine": ENGINE_NAME,
+            "model": label,
+            "detail": f"{ENGINE_NAME} is generating a turn; try again when it finishes.",
+        }
+    try:
+        _ensure_loaded(path)
+        detail = _DETAIL
+        loaded = _MODEL is not None
+        context = _MODEL_CTX
+    except MleNotReady as exc:
+        report = {
             "ok": False,
             "engine": ENGINE_NAME,
             "model": label,
             "detail": str(exc),
         }
+        if getattr(exc, "problem", None):
+            report["problem"] = exc.problem
+        return report
+    finally:
+        _LOCK.release()
     return {
         "ok": loaded,
         "engine": ENGINE_NAME,
         "model": label,
         "detail": detail if loaded else missing_model_detail(model),
+        "context": context if loaded else 0,
+        "context_requested": _context_tokens(),
+    }
+
+
+def _loaded_report(label: str, resolved: str) -> dict[str, Any] | None:
+    """The status report when the model for ``resolved`` is already in memory, else None.
+
+    Read without the lock, like loaded_context(): the fields are snapshotted
+    once, and a reload racing this read only costs a stale answer.
+    """
+    model, loaded_path, context, detail = _MODEL, _MODEL_PATH, _MODEL_CTX, _DETAIL
+    if model is None or loaded_path != resolved:
+        return None
+    return {
+        "ok": True,
+        "engine": ENGINE_NAME,
+        "model": label,
+        "detail": detail,
+        "context": context,
+        "context_requested": _context_tokens(),
     }
 
 
@@ -172,12 +233,21 @@ def _label(model: str) -> str:
 
 
 def _context_tokens() -> int:
-    raw = os.getenv("AI_RPG_CONTEXT_TOKENS", "32768").strip()
+    """The window to open the model with: explicit env, else the model's resolved limit."""
+    raw = os.getenv("AI_RPG_CONTEXT_TOKENS", "").strip()
     try:
         value = int(raw)
     except ValueError:
-        value = 32768
-    return value if value > 0 else 32768
+        value = 0
+    if value > 0:
+        return value
+    try:
+        from app.model_limits import resolve_limits
+
+        resolved = int(resolve_limits(with_facts=False)["context_tokens"])
+    except Exception:
+        resolved = 0
+    return resolved if resolved > 0 else 32768
 
 
 def _gpu_layers() -> int:
@@ -191,6 +261,26 @@ def _gpu_layers() -> int:
 def _flash_attn() -> bool:
     raw = os.getenv("AI_RPG_LLAMA_CPP_FLASH_ATTN", "").strip().lower()
     return raw in {"1", "true", "yes", "on"}
+
+
+def _fallback_policy() -> str:
+    """ask: stop at the requested size and offer the smaller one. auto: shrink silently."""
+    return str(os.getenv("AI_RPG_CONTEXT_FALLBACK", "ask") or "ask").strip().lower()
+
+
+def allow_context_fallback(flag: bool = True) -> None:
+    """The player (or a script) accepted the smaller context for this process."""
+    global _FALLBACK_ALLOWED
+    _FALLBACK_ALLOWED = bool(flag)
+
+
+def fallback_allowed() -> bool:
+    return _FALLBACK_ALLOWED or _fallback_policy() == "auto"
+
+
+def last_problem() -> dict[str, Any] | None:
+    """The problem from the last failed load, for /api/model-status; None once a load succeeds."""
+    return dict(_LAST_PROBLEM) if _LAST_PROBLEM else None
 
 
 def _maskable_key(piece: str) -> str:
@@ -306,13 +396,23 @@ def _open_model(path: str, n_ctx: int):
 
 
 def _ensure_loaded(path: Path) -> None:
-    global _MODEL, _MODEL_PATH, _MODEL_CTX, _DETAIL
+    global _MODEL, _MODEL_PATH, _MODEL_CTX, _DETAIL, _LAST_PROBLEM
     resolved = str(path.resolve())
-    if _MODEL is not None and _MODEL_PATH == resolved:
-        return
-    _drop_model()
     requested = _context_tokens()
-    attempts = [requested] if requested == _FALLBACK_CONTEXT else [requested, _FALLBACK_CONTEXT]
+    if _MODEL is not None and _MODEL_PATH == resolved:
+        # Same file, same window: nothing to do. Same file at the accepted
+        # fallback size with a bigger request: that fallback stands. Any
+        # other change in the requested window (the player edited the
+        # model's limits) reopens the file at the new size.
+        if _MODEL_CTX == requested or (_MODEL_CTX == _FALLBACK_CONTEXT and requested > _FALLBACK_CONTEXT):
+            return
+    _drop_model()
+    # A smaller context is a fallback only when the request is bigger than it,
+    # and it is tried only once someone has accepted it: the browser shows the
+    # tips and a "continue anyway" button, and AI_RPG_CONTEXT_FALLBACK=auto
+    # says yes in advance for scripts and headless runs.
+    can_shrink = requested > _FALLBACK_CONTEXT
+    attempts = [requested] + ([_FALLBACK_CONTEXT] if can_shrink and fallback_allowed() else [])
     errors: list[str] = []
     for n_ctx in attempts:
         loaded = None
@@ -326,6 +426,7 @@ def _ensure_loaded(path: Path) -> None:
         _MODEL = loaded
         _MODEL_PATH = resolved
         _MODEL_CTX = n_ctx
+        _LAST_PROBLEM = None
         if n_ctx == requested:
             _DETAIL = f"Loaded {resolved} in-process (context {n_ctx})."
         else:
@@ -334,6 +435,15 @@ def _ensure_loaded(path: Path) -> None:
                 f"{requested} did not load)."
             )
         return
+    if can_shrink and not fallback_allowed():
+        from app.failsafe import context_problem
+
+        _LAST_PROBLEM = context_problem(requested, _FALLBACK_CONTEXT, errors[-1] if errors else "")
+        raise MleNotReady(
+            f"MLE could not load {resolved} at context {requested}. " + " ".join(errors)
+            + f" Accept the {_FALLBACK_CONTEXT}-token fallback to continue.",
+            problem=_LAST_PROBLEM,
+        )
     raise MleNotReady(f"MLE could not load {resolved}. " + " ".join(errors))
 
 
@@ -392,12 +502,16 @@ class _SampleMask:
         self.banned = banned
         self.deadline = deadline
         self.eos_id = eos_id
+        # Set once the deadline forces EOS. Without it the truncated text came
+        # back as a normal completion and no timeout guard could see it.
+        self.hit = False
 
     def __call__(self, input_ids, scores):
         del input_ids
         import numpy as np
 
         if self.deadline and time.monotonic() >= self.deadline:
+            self.hit = True
             stopped = np.array(scores, dtype=np.float32, copy=True)
             stopped[:] = -np.inf
             if 0 <= self.eos_id < stopped.shape[0]:
@@ -439,12 +553,14 @@ def _generate(
     banned = np.asarray(banned_tokens, dtype=np.int32)
     deadline = time.monotonic() + max(0, int(timeout)) if int(timeout or 0) > 0 else 0.0
     processor = None
+    mask = None
     if banned.size or deadline:
         try:
             eos_id = int(model.token_eos())
         except Exception:
             eos_id = -1
-        processor = LogitsProcessorList([_SampleMask(banned, deadline, eos_id)])
+        mask = _SampleMask(banned, deadline, eos_id)
+        processor = LogitsProcessorList([mask])
     token_limit = None if max_tokens is None else int(max_tokens)
     if token_limit is not None and token_limit <= 0:
         token_limit = None
@@ -465,7 +581,16 @@ def _generate(
         raise
     except Exception as exc:
         raise MleNotReady(f"MLE generation failed ({path}). {exc}") from exc
-    return _completion_text(payload)
+    text = _completion_text(payload)
+    if mask is not None and mask.hit:
+        # The deadline forced EOS mid-generation. Raise the same way a server
+        # timeout does so the timeout guards (and the failsafe) see it instead
+        # of parsing a truncated draft as a finished turn.
+        raise MleNotReady(
+            f"MLE generation timed out after {int(timeout)}s ({path}); "
+            f"{len(text)} characters were produced before the deadline."
+        )
+    return text
 
 
 def _completion_text(payload) -> str:

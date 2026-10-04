@@ -282,6 +282,13 @@ def tick_quest_timers(conn, *, turn: int = 0) -> list[int]:
 
 def seed_starter_quests(conn, *, turn: int = 0) -> None:
     """Add a few starter quests to seed the world. Idempotent."""
+    try:
+        from app.local_intel import _play_flag_on
+
+        if not _play_flag_on(conn, "quests_enabled"):
+            return
+    except Exception:
+        pass
     existing = conn.execute("SELECT COUNT(*) FROM quests").fetchone()[0]
     if existing > 0:
         return

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import math
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, model_validator
 
@@ -69,6 +70,7 @@ from app.tile_world import (
     set_tile_images_disabled_forever,
     suggest_tile_prompt,
 )
+from app.failsafe import FailsafeBlocked, classify_failure, problem_detail
 from app.llm import (
     LlmError,
     coherence_review_setup,
@@ -127,6 +129,8 @@ from app.world import (
     get_world_bible,
     has_continuable_save,
     import_world,
+    load_player_art,
+    player_art_token,
     list_campaign_slots,
     load_campaign_slot,
     play_continue_turn,
@@ -169,6 +173,12 @@ if MEDIA_DIR.is_dir():
 
 class TurnRequest(BaseModel):
     text: str = Field(default="", max_length=2000)
+    # False: a model failure comes back as a 503 problem instead of an offline-narrator turn.
+    allow_fallback: bool = True
+
+
+class ContinueRequest(BaseModel):
+    allow_fallback: bool = True
 
 
 class SpecialAbilitySetup(BaseModel):
@@ -441,6 +451,8 @@ class SetupRequest(BaseModel):
     npc_density: str = Field(default="moderate", max_length=80)
     quest_style: str = Field(default="emergent", max_length=80)
     faction_pressure: str = Field(default="local disputes", max_length=100)
+    # Form snapshot for the preset menu. Stored aside from the play rules.
+    setup_form: dict = Field(default_factory=dict)
     # Dice / skill checks (setup tab 5)
     # Compiled Randomize intent → durable DM+genre lean for this playthrough.
     session_theme: dict = Field(default_factory=dict)
@@ -537,6 +549,10 @@ class ModelConfigRequest(BaseModel):
     # UI posts these on Save. Omitting them made the LoRA fields look saved, then vanish.
     theme_llm_lora_map: dict[str, Any] = Field(default_factory=dict)
     lora_path: str = Field(default="", max_length=1000)
+    # Token limits: "auto" lets the model's own header and the GPU decide;
+    # "custom" keeps the numbers below for this model and remembers them.
+    limits_mode: str | None = Field(default=None, max_length=12)
+    context_tokens: int | None = Field(default=None, ge=0, le=131072)
 
 
 class ImageConfigRequest(BaseModel):
@@ -744,7 +760,7 @@ def startup() -> None:
         print(f"[saves] archive pass skipped: {exc}")
 
 
-BUNDLE_ASSETS: tuple[str, ...] = ("app.js", "styles.css")
+BUNDLE_ASSETS: tuple[str, ...] = ("app.js", "styles.css", "ui/tokens.css", "ui/skin.css", "ui/interact.js", "ui/failsafe.js")
 BUNDLE_PLACEHOLDER = "__BUNDLE__"
 _bundle_cache: dict[str, Any] = {"stamp": None, "token": "", "html": ""}
 
@@ -868,6 +884,44 @@ def api_update_model_config(request: ModelConfigRequest):
     # Only keys the client sent. A full dump would reset lora_path / theme maps
     # to empty defaults on partial posts (Ensure adapter, older clients).
     return update_model_config(request.model_dump(exclude_unset=True))
+
+
+class ModelLimitsRequest(BaseModel):
+    mode: str = Field(default="auto", max_length=12)
+    context_tokens: int | None = Field(default=None, ge=0, le=131072)
+    response_token_cap: int | None = Field(default=None, ge=0, le=100000)
+    response_token_hard_cap: int | None = Field(default=None, ge=0, le=100000)
+
+
+@app.get("/api/model-limits")
+def api_model_limits():
+    """The token limits for the configured model, with where each number came from."""
+    from app.model_limits import resolve_limits
+
+    return resolve_limits()
+
+
+@app.post("/api/model-limits")
+def api_set_model_limits(request: ModelLimitsRequest):
+    """Keep the player's numbers for the current model, or go back to automatic."""
+    from app.llm import get_model_config
+    from app.model_limits import model_facts, resolve_limits, set_limits
+
+    key = str(model_facts(get_model_config(ignore_override=True, resolve_limits=False)).get("key") or "")
+    if not key:
+        raise HTTPException(status_code=400, detail="No model is configured to remember limits for.")
+    if request.mode.strip().lower() == "custom":
+        set_limits(
+            key,
+            {
+                "context_tokens": request.context_tokens,
+                "response_token_cap": request.response_token_cap,
+                "response_token_hard_cap": request.response_token_hard_cap,
+            },
+        )
+    else:
+        set_limits(key, None)
+    return resolve_limits()
 
 
 class SessionThemeRequest(BaseModel):
@@ -1117,11 +1171,55 @@ def api_player_art_store(request: PlayerArtStoreRequest):
         meta={"source": "setup_handoff"},
     )
     state = get_state()
+    # get_state names a slot only when an image is stored, so presence is the entry itself.
     return {
         "ok": True,
-        "has_face": bool((state.get("player_portrait") or {}).get("data_url") if isinstance(state.get("player_portrait"), dict) else state.get("player_portrait")),
-        "has_fullbody": bool((state.get("player_fullbody") or {}).get("data_url") if isinstance(state.get("player_fullbody"), dict) else state.get("player_fullbody")),
+        "has_face": bool(state.get("player_portrait")),
+        "has_fullbody": bool(state.get("player_fullbody")),
     }
+
+
+PLAYER_ART_IMMUTABLE = "public, max-age=31536000, immutable"
+
+
+def player_art_response(kind: str, requested_token: str = "") -> Response:
+    """
+    The stored face or full-body picture as image bytes.
+
+    The state payload names the picture by token (`player_portrait.url`), so a
+    browser fetches it once per change and polls and turns stop carrying the
+    base64. A URL carrying the current token is immutable to the cache; one
+    carrying an old or no token still gets the current picture, revalidated.
+    """
+    entry = load_player_art(kind)
+    if not entry:
+        raise HTTPException(status_code=404, detail="No stored player art for that slot")
+    data_url = str(entry.get("data_url") or "")
+    token = player_art_token(data_url)
+    try:
+        header, payload = data_url.split(",", 1)
+        media = header[len("data:"):].split(";")[0].strip().lower()
+        if ";base64" not in header or not media.startswith("image/"):
+            raise ValueError("not a base64 image data URL")
+        body = base64.b64decode(payload, validate=False)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="Stored player art unreadable") from exc
+    return Response(
+        content=body,
+        media_type=media,
+        headers={
+            "Cache-Control": PLAYER_ART_IMMUTABLE if requested_token == token else "no-cache",
+            "ETag": f'"{token}"',
+            "X-Content-Type-Options": "nosniff",
+            "X-Player-Art-Token": token,
+        },
+    )
+
+
+@app.get("/api/player-art/{kind}")
+def api_player_art(kind: str, v: str = ""):
+    """Serve the stored player art for `kind` (face or fullbody); 404 when none is stored."""
+    return player_art_response(kind, v)
 
 
 @app.get("/api/portraits")
@@ -2626,6 +2724,17 @@ def api_model_status():
         status = test_model_connection()
         if isinstance(status, dict):
             status["llm_runtime"] = get_llm_runtime()
+            notice = _context_notice_safely()
+            if notice:
+                status["notice"] = notice
+            if not status.get("ok"):
+                from app.mle import last_problem
+
+                provider = str(status.get("provider") or "")
+                problem = last_problem() if provider == "mle" else None
+                status["problem"] = problem or classify_failure(
+                    status.get("error") or "", stage="load", provider=provider
+                )
         return status
     except Exception as exc:
         return JSONResponse(
@@ -2638,6 +2747,7 @@ def api_model_status():
                 "config": {},
                 "managed_start": None,
                 "llm_runtime": get_llm_runtime(),
+                "problem": classify_failure(str(exc), stage="load"),
             },
         )
 
@@ -2649,7 +2759,41 @@ def api_llm_runtime():
     phase: offline | starting | switching | ready | error
     method: none | hot_swap | soft_recycle | already_ready
     """
-    return get_llm_runtime()
+    snap = get_llm_runtime()
+    if snap.get("phase") == "error":
+        snap["problem"] = classify_failure(snap.get("error") or snap.get("user_message") or "", stage="runtime")
+    else:
+        notice = _context_notice_safely()
+        if notice:
+            snap["notice"] = notice
+    return snap
+
+
+def _context_notice_safely() -> dict[str, Any] | None:
+    """The too-small-context notice, or None; a status route must never fail over it."""
+    try:
+        from app.llm import context_contract_notice
+
+        return context_contract_notice()
+    except Exception:
+        return None
+
+
+@app.post("/api/failsafe/mle-fallback")
+def api_mle_fallback():
+    """The player accepted the smaller context. Load with it now and report."""
+    from app.llm import get_model_config
+    from app.mle import allow_context_fallback, status as mle_status
+
+    allow_context_fallback(True)
+    config = get_model_config()
+    report = mle_status(str(config.get("mle_model") or ""))
+    body: dict[str, Any] = {"ok": bool(report.get("ok")), "status": report}
+    if not report.get("ok"):
+        body["problem"] = report.get("problem") or classify_failure(
+            str(report.get("detail") or ""), stage="load", provider="mle"
+        )
+    return body
 
 
 class LlmEnsureRequest(BaseModel):
@@ -3303,14 +3447,21 @@ def api_turn(request: TurnRequest):
         if not result.get("ok"):
             raise HTTPException(status_code=400, detail=str(result.get("error") or "Command failed."))
         return result
-    if not request.text.strip():
-        return play_continue_turn()
-    return play_turn(request.text)
+    try:
+        if not request.text.strip():
+            return play_continue_turn(allow_fallback=request.allow_fallback)
+        return play_turn(request.text, allow_fallback=request.allow_fallback)
+    except FailsafeBlocked as exc:
+        raise HTTPException(status_code=503, detail=problem_detail(exc.problem)) from exc
 
 
 @app.post("/api/continue")
-def api_continue():
-    return play_continue_turn()
+def api_continue(request: ContinueRequest | None = None):
+    allow = request.allow_fallback if request else True
+    try:
+        return play_continue_turn(allow_fallback=allow)
+    except FailsafeBlocked as exc:
+        raise HTTPException(status_code=503, detail=problem_detail(exc.problem)) from exc
 
 
 class InitiateFightRequest(BaseModel):
@@ -3340,6 +3491,8 @@ class WaitRequest(BaseModel):
     minutes: int = Field(default=60, ge=-1, le=1440)
     # wait | meditate | sleep — recovery rates differ
     kind: str = Field(default="wait", max_length=40)
+    # False: a model failure comes back as a 503 problem instead of an offline-narrator turn.
+    allow_fallback: bool = True
 
 
 @app.post("/api/wait")
@@ -3349,7 +3502,11 @@ def api_wait(request: WaitRequest | None = None):
     kind=wait|meditate|sleep recovers energy/mana/fatigue at different rates."""
     minutes = int(request.minutes) if request else 60
     kind = str(request.kind or "wait") if request else "wait"
-    return play_wait_turn(minutes, kind=kind)
+    allow = request.allow_fallback if request else True
+    try:
+        return play_wait_turn(minutes, kind=kind, allow_fallback=allow)
+    except FailsafeBlocked as exc:
+        raise HTTPException(status_code=503, detail=problem_detail(exc.problem)) from exc
 
 
 class QuestStageRequest(BaseModel):
@@ -3533,10 +3690,18 @@ def api_rewind(request: RewindRequest | None = None):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+class RegenerateRequest(BaseModel):
+    # False: a model failure comes back as a 503 problem instead of an offline-narrator turn.
+    allow_fallback: bool = True
+
+
 @app.post("/api/regenerate")
-def api_regenerate():
+def api_regenerate(request: RegenerateRequest | None = None):
+    allow = request.allow_fallback if request else True
     try:
-        return regenerate_last_turn()
+        return regenerate_last_turn(allow_fallback=allow)
+    except FailsafeBlocked as exc:
+        raise HTTPException(status_code=503, detail=problem_detail(exc.problem)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -3556,6 +3721,23 @@ def api_import(data: dict):
 
 class CampaignSlotRequest(BaseModel):
     slot: str = Field(default="", max_length=64)
+
+
+@app.get("/api/setup/game-starts")
+def api_game_start_presets():
+    from app.world import list_game_start_presets
+
+    return {"starts": list_game_start_presets()}
+
+
+@app.get("/api/setup/game-starts/{campaign_id}")
+def api_game_start_preset(campaign_id: str):
+    from app.world import get_game_start_preset
+
+    found = get_game_start_preset(campaign_id)
+    if not found:
+        raise HTTPException(status_code=404, detail="No starting setup for that game.")
+    return found
 
 
 @app.get("/api/campaign-slots")

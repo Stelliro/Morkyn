@@ -1,0 +1,1443 @@
+/* ==========================================================================
+   Mørkyn UI · skin.css  (layer 3 of 3)
+
+   The look. Loaded last, so a rule here beats the same selector in
+   styles.css. The language is the logo's: a black void, shards with cut
+   corners, and one thread of light. Nothing is filled with colour; light
+   is always a line.
+
+   What this file may do:
+     - set colour, border, background, radius, shadow, font, letter-spacing,
+       text-transform, clip and mask
+     - use ONLY names from ui/tokens.css for any value of those kinds
+   What it may not do:
+     - change display, grid, flex, position, size, overflow, or spacing that
+       moves things (that is styles.css, the layout engine)
+     - rename, add, or remove an id or class that static/app.js looks up
+
+   Sections (search for the number):
+     01 Foundation      body, scrollbars, selection, focus
+     02 Shards          the cut-corner container, and who gets it
+     03 Threads         fading hairlines and the needle marker
+     04 Type            wordmark, eyebrows, labels, narration
+     05 Controls        buttons, chips, inputs
+     06 Main menu
+     07 Setup
+     08 Play · chrome   topbar, panel headers, drawer, menu button
+     09 Play · scene    chat column, scene box, composer
+     10 Play · map      map column, ring, d-pad, dock cards
+     11 Play · tabs     tab rail, index cards, history, quests
+     12 Overlays        modals, popovers, floats, banners, splash
+     13 Motion          reduced-motion guard
+
+   Rulebook: docs/UI_RULEBOOK.md
+   ========================================================================== */
+
+
+/* ==========================================================================
+   01 Foundation
+   ========================================================================== */
+
+html {
+  background: var(--bg);
+}
+
+body {
+  background:
+    radial-gradient(1100px 600px at 50% -10%, var(--bg-glow), transparent 60%),
+    radial-gradient(800px 500px at 100% 100%, var(--bg-glow-2), transparent 55%),
+    var(--bg);
+  font-family: var(--font);
+  color: var(--text);
+}
+
+/* Three filaments crossing the void, and a vignette. No images. */
+body::before {
+  opacity: var(--decal-opacity);
+  background-image:
+    linear-gradient(112deg, transparent calc(50% - 0.5px), var(--thread-ghost) calc(50% - 0.5px), var(--thread-ghost) calc(50% + 0.5px), transparent calc(50% + 0.5px)),
+    linear-gradient(68deg, transparent calc(38% - 0.5px), var(--thread-ghost) calc(38% - 0.5px), var(--thread-ghost) calc(38% + 0.5px), transparent calc(38% + 0.5px)),
+    linear-gradient(125deg, transparent calc(74% - 0.5px), var(--thread-ghost) calc(74% - 0.5px), var(--thread-ghost) calc(74% + 0.5px), transparent calc(74% + 0.5px)),
+    radial-gradient(130% 100% at 50% 50%, transparent 50%, rgba(0, 0, 0, 0.6) 100%);
+  background-size: 100% 100%;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--thread-dim) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--thread-dim);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::selection {
+  background: var(--thread-dim);
+  color: var(--text);
+}
+
+:focus-visible {
+  outline: 1px solid var(--thread-bright);
+  outline-offset: 2px;
+}
+
+a {
+  color: var(--thread);
+  text-decoration-color: var(--thread-dim);
+  text-underline-offset: 2px;
+}
+
+a:hover {
+  color: var(--thread-bright);
+}
+
+hr {
+  border: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--thread-dim), transparent);
+}
+
+
+/* ==========================================================================
+   02 Shards
+   A shard is a container with its top-left and bottom-right corners cut at
+   45°, outlined by a one-pixel thread. It is drawn entirely with background
+   layers, so it needs no pseudo-elements and no clip-path: the two corner
+   squares hold a diagonal gradient, four strips draw the straight edges, and
+   three rectangles fill the inside. Tune it per element with the tokens
+   --shard-cut, --shard-fill and --shard-line.
+
+   Who gets it: a container that holds a whole task. Never a card in a list.
+   ========================================================================== */
+
+/* Two-cut shards: whole-task containers and primary buttons. */
+.mainMenuPanel,
+.modalPanel,
+.setupPanel,
+.sceneBox,
+.outputBlock .sceneBox,
+.encounterDialog[open],
+.setupLlmBusyCard,
+.startSplashPanel,
+.randomizePopover,
+.floatPanel,
+.playMenuDrawer,
+.characterSheetDrawer,
+.uiPeek,
+.uiContextMenu,
+.itemHoverOverlay,
+#sendButton,
+#setupStart,
+#setupStartMobile,
+#setupNext,
+#presetConfirmBtn,
+.mainMenuPrimary,
+button.primary,
+.primaryButton,
+/* One-cut shards (top-left square, bottom-right cut): chips and tabs. */
+.chipBtn,
+.topActions .chipBtn,
+button.chipBtn,
+.tabs button,
+.mapDpadBtn,
+.playMenuToggle,
+.composerOptional .askButton,
+.composerOptional .helpButton,
+.directorPreset,
+.castDetailsBtn,
+.castLinkBtn,
+.miniDetailsBtn,
+.miniLinkBtn {
+  border: 0;
+  border-radius: 0;
+  outline: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  background:
+    linear-gradient(135deg, transparent calc(50% - 0.5px), var(--shard-line) calc(50% - 0.5px), var(--shard-line) calc(50% + 0.5px), var(--shard-fill) calc(50% + 0.5px)) left top / var(--shard-cut-tl) var(--shard-cut-tl) no-repeat,
+    linear-gradient(315deg, transparent calc(50% - 0.5px), var(--shard-line) calc(50% - 0.5px), var(--shard-line) calc(50% + 0.5px), var(--shard-fill) calc(50% + 0.5px)) right bottom / var(--shard-cut-br) var(--shard-cut-br) no-repeat,
+    linear-gradient(var(--shard-line), var(--shard-line)) right top / calc(100% - var(--shard-cut-tl)) 1px no-repeat,
+    linear-gradient(var(--shard-line), var(--shard-line)) left bottom / calc(100% - var(--shard-cut-br)) 1px no-repeat,
+    linear-gradient(var(--shard-line), var(--shard-line)) left bottom / 1px calc(100% - var(--shard-cut-tl)) no-repeat,
+    linear-gradient(var(--shard-line), var(--shard-line)) right top / 1px calc(100% - var(--shard-cut-br)) no-repeat,
+    linear-gradient(var(--shard-fill), var(--shard-fill)) right top / calc(100% - var(--shard-cut-tl)) var(--shard-cut-tl) no-repeat,
+    linear-gradient(var(--shard-fill), var(--shard-fill)) left bottom / calc(100% - var(--shard-cut-br)) var(--shard-cut-br) no-repeat,
+    linear-gradient(var(--shard-fill), var(--shard-fill)) 0 var(--shard-cut-tl) / 100% calc(100% - var(--shard-cut-tl) - var(--shard-cut-br)) no-repeat;
+}
+
+/* Floating shards cast a shadow; the blur is wide enough that the cut
+   corners do not show a square silhouette. */
+.mainMenuPanel,
+.modalPanel,
+.encounterDialog[open],
+.setupLlmBusyCard,
+.randomizePopover,
+.floatPanel {
+  box-shadow: var(--shadow-soft);
+}
+
+.floatPanel.isFront {
+  --shard-line: var(--thread);
+  box-shadow: var(--shadow-soft);
+}
+
+/* The setup panel used to draw two corner ticks. The cut corners replace them. */
+.setupPanel::before,
+.setupPanel::after {
+  content: none;
+}
+
+/* Cards: a plain slab with one hairline. No cut, no shadow. */
+.card,
+.historyItem,
+.questCard,
+.subsectionHeader,
+.sectionHeader,
+.setupFactGroup,
+.characterArtCard,
+.npcStage,
+.scenePlan,
+.rewardBanner,
+.legalPre,
+.composerOptional,
+.singleBox,
+.mapSection,
+.chatThinkingBanner,
+.llmRuntimeBanner,
+.startSplashHeartbeat {
+  border-radius: 0;
+  border: 1px solid var(--line);
+  box-shadow: none;
+}
+
+
+/* ==========================================================================
+   03 Threads
+   A thread is a one-pixel line of light that fades at one or both ends.
+   A needle is a short vertical thread used as a marker.
+   ========================================================================== */
+
+/* Panel headers end in a thread that fades to the right. */
+.chatColumnHeader,
+.mapMainHeader,
+.tabsPanelHeader,
+.historyPanelHeader,
+.floatPanelHeader,
+.playMenuHeader,
+.modalHeader,
+.setupHeader,
+.popoutHeader {
+  background: none;
+  border-bottom: 1px solid;
+  border-image: linear-gradient(90deg, var(--thread-dim), var(--thread-ghost) 60%, transparent) 1;
+  box-shadow: none;
+}
+
+.topbar,
+.topbar.topbarPlay {
+  background: var(--ink);
+  border-bottom: 1px solid;
+  border-image: linear-gradient(90deg, var(--thread), var(--thread-dim) 30%, var(--thread-ghost) 70%, transparent) 1;
+  box-shadow: none;
+}
+
+/* Section headings carry a needle instead of a solid bar. */
+.settingsSubhead {
+  border-left: 0;
+  background: linear-gradient(180deg, transparent, var(--thread) 30%, var(--thread) 70%, transparent) left center / 1px 100% no-repeat;
+}
+
+/* The drag grip is a needle, not a glyph. */
+.playDragGrip {
+  color: transparent;
+  font-size: 0;
+  width: 1px;
+  min-width: 1px;
+  background: linear-gradient(180deg, transparent, var(--thread-dim) 25%, var(--thread-dim) 75%, transparent);
+}
+
+.playPanelHeader:hover .playDragGrip {
+  background: linear-gradient(180deg, transparent, var(--thread) 25%, var(--thread) 75%, transparent);
+  opacity: 1;
+}
+
+/* Column seams */
+.chatColumn,
+.mapMain,
+.tabCategoryRail {
+  border-right: 1px solid;
+  border-image: linear-gradient(180deg, var(--thread-dim), var(--thread-ghost) 40%, transparent) 1;
+}
+
+.mainMenuQuiet,
+.mapMainFooter,
+.composer,
+.setupFooter {
+  border-top: 1px solid;
+  border-image: linear-gradient(90deg, var(--thread-dim), transparent 60%) 1;
+}
+
+
+/* ==========================================================================
+   04 Type
+   ========================================================================== */
+
+/* The wordmark: the logo's letterforms, mixed case, tracked, in the thread. */
+.neonTitle,
+.popoutHeader h1 {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 1.45rem;
+  letter-spacing: var(--track-title);
+  text-transform: none;
+  color: var(--thread-bright);
+  text-shadow: none;
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+
+/* Titles: the sans, light, tracked. Never gradient-filled, never glowing. */
+h1,
+.setupHeader h1,
+.playMenuHeader h2,
+.modalHeader h2,
+.startSplashPanel h1,
+.setupLlmBusyCard h2,
+.characterSheetTitle,
+.encounterHeader h2 {
+  font-family: var(--font);
+  font-weight: 300;
+  letter-spacing: 0.04em;
+  color: var(--text);
+  text-shadow: none;
+  background: none;
+  -webkit-text-fill-color: currentColor;
+}
+
+/* Eyebrows: the small tracked label above or beside a block. One style. */
+.chatColumnHeader strong,
+.mapMainHeader h2,
+.mapMainHeaderTitle h2,
+.tabsPanelHeader strong,
+.historyPanelHeader strong,
+.floatPanelHeader strong,
+.mainMenuEyebrow,
+.mainMenuGroupLabel,
+.playMenuGroupLabel,
+.composerGroupLabel,
+.startSplashEyebrow,
+.setupLlmBusyEyebrow,
+.npcStageHeader strong,
+.presentStripLabel,
+.helpPanel h3,
+.setupFactGroupHead h2,
+.characterSheetSectionTitle,
+.saveEditorHeading,
+.directorPresetsLabel,
+.mapSectionTitle,
+.mapSection > .dockLabel,
+.mapSection .presentStripLabel,
+.mapPlaceLabel,
+.settingsSubhead {
+  font-family: var(--font);
+  font-weight: 600;
+  font-size: 0.66rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--label);
+  text-shadow: none;
+}
+
+.playMenuHeader h2 {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--thread);
+}
+
+/* Field titles and section labels (the 12px uppercase family in styles.css) */
+h2,
+legend,
+.settingFieldHeader > span,
+.characterArtTitle,
+.sectionHeaderTitle,
+.tileLibraryHeader h3,
+.imageBrowserHeader h3,
+.visionCard h3,
+.worldMapCard h3,
+.equipmentGrid h3,
+.itemLedger h3,
+.modelForm label > span,
+.imageForm label > span,
+.appSettingsForm label > span {
+  font-family: var(--font);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--label);
+}
+
+/* Narration reads as a page. */
+.sceneBox,
+.turnNarration,
+.startSplashDraft,
+.historyTurn .turnNarration {
+  font-family: var(--font-narration);
+  font-size: 1.02rem;
+  line-height: 1.72;
+  text-shadow: none;
+}
+
+.sceneBox .turnNarration {
+  border: 0;
+  background: transparent;
+  padding: 2px 4px;
+}
+
+/* The drop cap is the one place the logo's serif meets the prose. */
+/* No drop cap when the paragraph opens with a linked name: the float would
+   tear the first letter off the link. */
+.turnNarration > p:first-child:not(:has(> .entityLink:first-child))::first-letter {
+  float: left;
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: 3.4em;
+  line-height: 0.78;
+  margin: 0.04em 0.14em 0 0;
+  color: var(--thread);
+}
+
+#latestInput.mutedBox {
+  font-family: var(--font-narration);
+  font-style: italic;
+  color: var(--muted);
+}
+
+.entityLink {
+  color: var(--thread);
+  border-bottom-color: var(--thread-dim);
+  font-weight: 600;
+}
+
+.entityLink:hover {
+  color: var(--thread-bright);
+  border-bottom-color: var(--thread);
+}
+
+.entityLink.subtle {
+  color: var(--accent-2);
+}
+
+code,
+kbd,
+pre,
+.code {
+  font-family: var(--font-mono);
+}
+
+
+/* ==========================================================================
+   05 Controls
+   Three tiers. Primary: a shard with a bright thread and a faint halo.
+   Button: a slab with a hairline. Chip: smaller, tracked caps.
+   ========================================================================== */
+
+button,
+.buttonLike {
+  border-radius: 0;
+  border: 1px solid var(--btn-border);
+  background: var(--btn-bg);
+  color: var(--btn-text);
+  box-shadow: none;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+
+button:hover,
+.buttonLike:hover {
+  background: var(--btn-bg-hover);
+  border-color: var(--thread-dim);
+  color: var(--thread-bright);
+}
+
+button:active,
+.buttonLike:active {
+  box-shadow: var(--inset);
+  transform: none;
+}
+
+button:disabled,
+button:disabled:hover {
+  box-shadow: none;
+  color: var(--muted-2);
+  border-color: var(--line);
+  --shard-line: var(--line);
+}
+
+.secondaryButton:not(.chipBtn),
+.setupHeader .secondaryButton:not(.chipBtn),
+.setupHeader .buttonLike.secondaryButton:not(.chipBtn),
+.setupHeader button:not(#setupStart):not(#setupStartMobile):not(.primaryButton):not(#setupPresetToggle):not(#presetConfirmBtn):not(.chipBtn) {
+  background: var(--btn-bg);
+  border-color: var(--btn-border);
+  color: var(--btn-text);
+  box-shadow: none;
+}
+
+.secondaryButton:hover,
+.setupHeader .secondaryButton:hover {
+  border-color: var(--thread-dim);
+  color: var(--thread-bright);
+}
+
+/* Primary: the shard background comes from 02; this sets its light. */
+#sendButton,
+#setupStart,
+#setupStartMobile,
+#setupNext,
+#presetConfirmBtn,
+.mainMenuPrimary,
+button.primary,
+.primaryButton {
+  --shard-cut: 7px;
+  --shard-fill: var(--thread-soft);
+  --shard-line: var(--thread);
+  color: var(--thread-bright);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  box-shadow: var(--thread-halo);
+}
+
+#sendButton:hover,
+#setupStart:hover,
+#setupStartMobile:hover,
+#setupNext:hover,
+#presetConfirmBtn:hover,
+.mainMenuPrimary:hover,
+button.primary:hover,
+.primaryButton:hover {
+  --shard-line: var(--thread-bright);
+  --shard-fill: var(--thread-dim);
+  color: var(--thread-bright);
+  filter: none;
+  box-shadow: var(--thread-halo);
+}
+
+#sendButton:active,
+#setupStart:active,
+.mainMenuPrimary:active {
+  --shard-fill: var(--thread-soft);
+  box-shadow: none;
+}
+
+/* Chips: one-cut shards (the background comes from 02; this sets the light). */
+.chipBtn,
+.topActions .chipBtn,
+button.chipBtn,
+.tabs button,
+.composerOptional .askButton,
+.composerOptional .helpButton,
+.mapDpadBtn,
+.playMenuToggle,
+.directorPreset,
+.castDetailsBtn,
+.castLinkBtn,
+.miniDetailsBtn,
+.miniLinkBtn {
+  --shard-cut-tl: 0px;
+  --shard-cut-br: 5px;
+  --shard-fill: var(--btn-bg);
+  --shard-line: var(--btn-border);
+  border-radius: 0 !important; /* matches the !important on .chipBtn in styles.css */
+  font-family: var(--font);
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--label);
+}
+
+.chipBtn:hover,
+.tabs button:hover,
+.composerOptional .askButton:hover,
+.composerOptional .helpButton:hover,
+.mapDpadBtn:hover:not(:disabled),
+.playMenuToggle:hover,
+.directorPreset:hover,
+.castDetailsBtn:hover,
+.castLinkBtn:hover,
+.miniDetailsBtn:hover,
+.miniLinkBtn:hover {
+  --shard-line: var(--thread-dim);
+  --shard-fill: var(--btn-bg-hover);
+  color: var(--thread-bright);
+}
+
+.chipBtn.activeChip,
+button.chipBtn.activeChip,
+.tabs button.active,
+.directorPreset.isSelected {
+  --shard-line: var(--thread);
+  --shard-fill: var(--thread-soft);
+  color: var(--thread-bright);
+  box-shadow: none;
+  font-weight: 600;
+}
+
+.directorPreset {
+  text-transform: none;
+  letter-spacing: 0.02em;
+}
+
+/* Fields: a well in the void. */
+input,
+select,
+textarea {
+  border-radius: 0;
+  border: 1px solid var(--line);
+  background: var(--field-bg);
+  color: var(--text);
+  box-shadow: var(--inset);
+  accent-color: var(--thread);
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--line-strong);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--thread);
+  box-shadow: var(--inset), var(--thread-halo);
+  background: var(--field-bg);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted-2);
+  font-style: italic;
+}
+
+input[type="checkbox"],
+input[type="radio"],
+input[type="range"] {
+  box-shadow: none;
+  accent-color: var(--thread);
+}
+
+select option {
+  background: var(--surface-solid);
+  color: var(--text);
+}
+
+
+/* ==========================================================================
+   06 Main menu
+   The key art is the backdrop; the logo is the title.
+   ========================================================================== */
+
+.mainMenuView {
+  background:
+    linear-gradient(180deg, hsl(var(--thread-h) 30% 3% / 0.55), hsl(var(--thread-h) 30% 3% / 0.92)),
+    url("/media/morkyn-key-art.png") center 30% / cover no-repeat,
+    var(--bg);
+}
+
+.mainMenuPanel {
+  --shard-cut: 14px;
+  --shard-fill: hsl(var(--thread-h) 24% 5% / 0.92);
+  width: min(460px, 100%);
+  padding: 30px 34px 22px;
+}
+
+.mainMenuBrand {
+  text-align: center;
+}
+
+.mainMenuEyebrow {
+  color: var(--label-dim);
+}
+
+/* The title is the logo image, cropped to the word and faded at the edges.
+   The text stays in the DOM for assistive tech. */
+.mainMenuTitle {
+  height: 140px;
+  margin: 2px 0 0;
+  color: transparent;
+  font-size: 0;
+  background: url("/media/morkyn-logo.png") center 47.5% / 400px auto no-repeat;
+  -webkit-mask:
+    linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent),
+    linear-gradient(180deg, transparent, #000 28%, #000 72%, transparent);
+  -webkit-mask-composite: source-in;
+  mask:
+    linear-gradient(90deg, transparent, #000 10%, #000 90%, transparent),
+    linear-gradient(180deg, transparent, #000 28%, #000 72%, transparent);
+  mask-composite: intersect;
+}
+
+.mainMenuTagline {
+  font-family: var(--font-narration);
+  font-style: italic;
+  color: var(--muted);
+}
+
+/* A thread under the brand. */
+.mainMenuBrand::after {
+  content: "";
+  display: block;
+  width: 70%;
+  height: 1px;
+  margin: 18px auto 0;
+  background: linear-gradient(90deg, transparent, var(--thread) 50%, transparent);
+}
+
+.mainMenuPrimary,
+.mainMenuSecondary,
+.mainMenuGhost,
+a.mainMenuGhost {
+  border-radius: 0;
+  font-family: var(--font);
+  font-weight: 600;
+  font-size: 0.78rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  padding: 13px 14px;
+}
+
+.mainMenuSecondary {
+  background: hsl(var(--thread-h) 20% 8% / 0.7);
+  border: 1px solid var(--line-strong);
+  color: var(--text);
+  box-shadow: none;
+}
+
+.mainMenuSecondary:hover {
+  border-color: var(--thread-dim);
+  color: var(--thread-bright);
+  background: var(--btn-bg-hover);
+}
+
+.mainMenuGhost,
+a.mainMenuGhost {
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.mainMenuGhost:hover,
+a.mainMenuGhost:hover {
+  border-color: var(--line-strong);
+  color: var(--text);
+}
+
+.mainMenuFoot {
+  font-family: var(--font-narration);
+  font-style: italic;
+  color: var(--muted-2);
+}
+
+
+/* ==========================================================================
+   07 Setup
+   ========================================================================== */
+
+.setupPanel {
+  --shard-cut: 16px;
+}
+
+.setupHeader h1 {
+  font-size: clamp(1.3rem, 2.4vw, 1.7rem);
+}
+
+.setupHeader p,
+.sectionHeader p,
+.setupFactGroupHead p,
+.settingDescription,
+.empty,
+.catalogNote {
+  color: var(--muted);
+}
+
+.setupPanel.setupRandomizing {
+  outline: 0;
+  --shard-line: var(--thread);
+  filter: none;
+}
+
+.setupFactGroup {
+  background: var(--surface-3);
+}
+
+.setupFactGroupOptional {
+  background: transparent;
+  border-color: transparent;
+}
+
+.sectionHeader,
+.subsectionHeader {
+  background: var(--surface-3);
+}
+
+.setupTourTip {
+  border-radius: 0;
+  border: 1px solid var(--thread-dim);
+  background: var(--surface-solid);
+}
+
+
+/* ==========================================================================
+   08 Play · chrome
+   ========================================================================== */
+
+.topbarWorldVibe,
+#locationLine {
+  font-family: var(--font-narration);
+  font-style: italic;
+  color: var(--muted);
+}
+
+.travelStatusLine {
+  color: var(--accent-2);
+  text-shadow: none;
+}
+
+.playPanel.isDragOver {
+  outline: 1px solid var(--thread);
+}
+
+.playMenuToggle {
+  --shard-line: var(--thread-dim);
+  --shard-fill: var(--ink);
+  color: var(--thread);
+  font-size: 0.72rem;
+}
+
+.playMenuToggle:hover {
+  --shard-line: var(--thread);
+  --shard-fill: var(--ink);
+  box-shadow: var(--thread-halo);
+}
+
+.playMenuBars span {
+  box-shadow: none;
+  border-radius: 0;
+  height: 1px;
+}
+
+.playMenuBackdrop {
+  background: hsl(var(--thread-h) 30% 2% / 0.6);
+}
+
+.playMenuDrawer {
+  --shard-cut: 14px;
+  --shard-fill: var(--ink);
+  box-shadow: -30px 0 60px -20px rgba(0, 0, 0, 0.9);
+}
+
+.playMenuGroupLabel {
+  color: var(--label-dim);
+}
+
+.playMenuItem {
+  border-radius: 0;
+  border-color: transparent;
+  color: var(--text);
+  background: transparent;
+}
+
+.playMenuItem:hover {
+  border-color: transparent;
+  background: var(--thread-ghost);
+  color: var(--thread-bright);
+}
+
+/* The pressed row carries a needle on its left edge. */
+.playMenuItem[aria-pressed="true"] {
+  border-color: transparent;
+  background:
+    linear-gradient(180deg, transparent, var(--thread-bright) 25%, var(--thread-bright) 75%, transparent) left center / 2px 80% no-repeat,
+    var(--thread-soft);
+  color: var(--thread-bright);
+  box-shadow: none;
+}
+
+.playMenuLane {
+  border-radius: 0;
+  background: var(--surface-inset);
+  box-shadow: none;
+}
+
+.playMenuThumb {
+  border-radius: 0;
+  background: var(--thread-dim);
+}
+
+.playMenuDrawer button:focus-visible {
+  outline-color: var(--thread-bright);
+}
+
+.characterSheetDrawer {
+  --shard-cut: 14px;
+  --shard-fill: var(--ink);
+  box-shadow: -30px 0 60px -20px rgba(0, 0, 0, 0.9);
+}
+
+
+/* ==========================================================================
+   09 Play · scene
+   ========================================================================== */
+
+.chatColumn {
+  background: var(--surface);
+}
+
+.gameView.sceneFocus:not(.customLayout) .chatColumn,
+.gameView.isGenerating:not(.customLayout) .chatColumn {
+  box-shadow: none;
+  border-color: var(--line);
+}
+
+.singleBox {
+  background: var(--surface-3);
+}
+
+.mutedBox {
+  background: var(--surface-inset);
+  box-shadow: var(--inset);
+}
+
+#latestInput:focus-visible,
+#latestOutput:focus-visible {
+  outline: 1px solid var(--thread);
+}
+
+.sceneBox,
+.outputBlock .sceneBox {
+  --shard-cut: 12px;
+  --shard-fill: var(--surface-3);
+  /* Inline padding is the reading measure and lives in styles.css. */
+  padding-block: 18px;
+}
+
+.composer {
+  background: var(--surface-3);
+  box-shadow: none;
+}
+
+.turnInputLabel {
+  font-family: var(--font-narration);
+  font-style: italic;
+  font-weight: 400;
+  letter-spacing: 0.01em;
+  color: var(--label);
+}
+
+#turnInput {
+  font-family: var(--font-narration);
+  font-size: 1rem;
+}
+
+.composerOptional {
+  background: transparent;
+  border-color: var(--line);
+}
+
+.composerAskHint {
+  color: var(--muted);
+}
+
+.chatIdleHint {
+  color: var(--muted-2);
+  font-style: italic;
+}
+
+.chatThinkingBanner {
+  border-color: var(--thread-dim);
+  background: var(--surface-2);
+}
+
+.chatThinkingLogo {
+  filter: none;
+  border-radius: 0;
+}
+
+.chatThinkingElapsed {
+  color: var(--thread) !important; /* matches the !important in styles.css */
+}
+
+.chatThinkingCopy strong {
+  font-weight: 500;
+}
+
+.setupLlmBusyPulse span,
+.chatThinkingPulse span,
+.startSplashPulse span {
+  background: var(--thread);
+  box-shadow: none;
+  border-radius: 0;
+  width: 1px;
+  height: 10px;
+}
+
+
+/* ==========================================================================
+   10 Play · map
+   ========================================================================== */
+
+.mapMain {
+  background: var(--ink);
+}
+
+/* The world sits in a ring of thread: one bright hairline with a faint halo
+   and a dark gap, like a lens. */
+.mapMainCanvas {
+  border: 1px solid var(--thread);
+  box-shadow:
+    0 0 0 4px var(--ink),
+    0 0 0 5px var(--thread-ghost),
+    0 0 24px -2px var(--thread-dim);
+  background: var(--ink);
+}
+
+.mapDpadBtn {
+  font-size: 0.68rem;
+}
+
+.mapDpadBtn:active:not(:disabled) {
+  box-shadow: var(--inset);
+  transform: none;
+}
+
+.mapStatusStrip {
+  background: var(--surface-3);
+  border-bottom: 1px solid;
+  border-image: linear-gradient(90deg, var(--thread-dim), transparent 70%) 1;
+  box-shadow: none;
+}
+
+.mapMemoryLine {
+  font-style: italic;
+  color: var(--muted);
+}
+
+.mapSection .mapTravelBanner {
+  font-style: italic;
+  color: var(--muted-2);
+}
+
+.mapSection .mapTravelBanner.locked {
+  font-style: normal;
+  color: var(--moon);
+}
+
+.mapSubTitle {
+  color: var(--label-dim);
+}
+
+/* A folded section header keeps its description as the summary line. */
+.sectionHeaderTitle.isFolded ~ p {
+  color: var(--muted-2);
+}
+
+/* Dock hints are one quiet line, not a paragraph. */
+.dockHint {
+  font-size: 0.74rem;
+  font-style: italic;
+  font-weight: 400;
+  color: var(--muted-2);
+}
+
+.castDetailsBtn,
+.castLinkBtn,
+.miniDetailsBtn,
+.miniLinkBtn {
+  font-size: 0.62rem;
+  min-height: 0;
+  padding: 3px 7px;
+}
+
+/* Cards under the map carry a needle on the left instead of a thick bar. */
+.mapSection {
+  border-left: 1px solid var(--line);
+  background:
+    linear-gradient(180deg, transparent, var(--thread-dim) 30%, var(--thread-dim) 70%, transparent) left center / 1px 70% no-repeat,
+    var(--surface-3);
+}
+
+.presentStrip .npcPortraitFrame,
+.youFrame {
+  border-color: var(--line-strong);
+  box-shadow: none;
+  border-radius: 0;
+}
+
+.llmRuntimeDot,
+.llmRuntimeBanner.isBusy .llmRuntimeDot {
+  box-shadow: none;
+}
+
+
+/* ==========================================================================
+   11 Play · tabs
+   ========================================================================== */
+
+.tabsPanel,
+.historyPanel {
+  background: var(--surface);
+}
+
+.tabCategoryRail {
+  background: var(--surface-3);
+}
+
+.tabCategoryBtn {
+  border-radius: 0 !important; /* matches the !important on .tabCategoryBtn in styles.css */
+  letter-spacing: 0.04em;
+}
+
+.tabCategoryBtn.active {
+  color: var(--thread-bright) !important;
+  border-color: transparent !important;
+  background:
+    linear-gradient(180deg, transparent, var(--thread-bright) 25%, var(--thread-bright) 75%, transparent) left center / 2px 80% no-repeat,
+    var(--thread-soft) !important;
+  box-shadow: none;
+}
+
+.card,
+.historyItem {
+  background: var(--surface-2);
+}
+
+.code {
+  border-radius: 0;
+  background: var(--surface-inset);
+  color: var(--thread);
+  box-shadow: var(--inset);
+}
+
+
+/* ==========================================================================
+   12 Overlays
+   ========================================================================== */
+
+.modalBackdrop {
+  background: hsl(var(--thread-h) 30% 2% / 0.8);
+}
+
+.modalPanel {
+  --shard-cut: 14px;
+}
+
+.modalHeader {
+  padding-bottom: 12px;
+}
+
+.modalHeader h2 {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--thread);
+}
+
+.modalHeader p {
+  color: var(--muted);
+}
+
+.encounterDialog::backdrop {
+  background: hsl(264 30% 2% / 0.75);
+}
+
+.waitPopover,
+.mentionMenu,
+.entityMenu,
+.suggestionPanel,
+.helpPanel {
+  border-radius: 0;
+  border: 1px solid var(--thread-dim);
+  background: var(--surface-solid);
+  box-shadow: var(--shadow-sm);
+}
+
+.helpPanel h3 {
+  color: var(--label);
+}
+
+.floatPanelHeader {
+  background: none;
+}
+
+.setupLlmBusyModal {
+  background: hsl(var(--thread-h) 30% 2% / 0.82);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+.setupLlmBusyLogo,
+.setupLlmBusyRing {
+  filter: none;
+  border-radius: 0;
+}
+
+.setupLlmBusyRing {
+  border-radius: 50%;
+  border-color: var(--thread-ghost);
+  border-top-color: var(--thread);
+}
+
+.setupLlmBusyElapsed {
+  color: var(--thread);
+}
+
+.startSplash {
+  background: var(--bg);
+}
+
+.startSplashLog {
+  border-color: var(--line);
+}
+
+.startSplashLine::before {
+  background: var(--thread);
+  box-shadow: none;
+  border-radius: 0;
+  width: 1px;
+  height: 10px;
+}
+
+.startSplashPhase {
+  color: var(--accent-2);
+}
+
+.startSplashHeartbeat {
+  background: var(--surface-3);
+}
+
+body.aiBusy:not(.llmChatThinking)::after {
+  border: 1px solid var(--thread-dim);
+  border-radius: 0;
+  background: var(--ink);
+  box-shadow: var(--shadow-sm);
+}
+
+.startSplashCursor::after,
+.turnNarration.streaming::after {
+  background: var(--thread);
+  width: 1px;
+}
+
+/* Rewards keep the warm signal; errors are the red moon. */
+.rewardBanner {
+  border-left: 1px solid var(--warn);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--warn) 10%, transparent), var(--surface-2));
+}
+
+.rewardPill {
+  border-radius: 0;
+  background: var(--surface-inset);
+}
+
+.llmRuntimeBanner.isError {
+  background: var(--moon-soft);
+  border-color: var(--moon);
+  color: var(--text);
+}
+
+
+/* --- ui/interact.js: folds, peeks, context menu ----------------------------- */
+
+.isFoldable::after {
+  border-color: var(--thread-dim);
+}
+
+.isFoldable:hover::after,
+.isFoldable:focus-visible::after {
+  border-color: var(--thread);
+}
+
+/* The peek is the one translucent surface: a shard you can half see through,
+   with a light blur so prose underneath does not fight the card. */
+.uiPeek,
+.itemHoverOverlay {
+  --shard-cut: 8px;
+  --shard-fill: hsl(var(--thread-h) 22% 5% / 0.86);
+  --shard-line: var(--thread-dim);
+  backdrop-filter: blur(5px);
+  -webkit-backdrop-filter: blur(5px);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
+}
+
+.uiPeekHead strong,
+.uiPeek .itemOverlayHead strong {
+  color: var(--thread-bright);
+}
+
+.uiPeekKind,
+.uiPeek .itemOverlayCode {
+  font-size: 0.64rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--label-dim);
+}
+
+.uiPeekMeta {
+  color: var(--muted);
+}
+
+.uiPeekHint {
+  font-size: 0.68rem;
+  font-style: italic;
+  color: var(--muted-2);
+}
+
+.uiContextMenu {
+  --shard-cut: 8px;
+  --shard-fill: var(--ink);
+  --shard-line: var(--thread);
+  box-shadow: var(--shadow-sm);
+}
+
+.uiContextMenu header {
+  border-bottom: 1px solid;
+  border-image: linear-gradient(90deg, var(--thread-dim), transparent 80%) 1;
+}
+
+.uiContextMenu header strong {
+  font-size: 0.9rem;
+  color: var(--text);
+}
+
+.uiContextMenu header span {
+  font-size: 0.62rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--label-dim);
+}
+
+.uiContextMenu button {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.uiContextMenu button:hover,
+.uiContextMenu button:focus-visible {
+  outline: 0;
+  background:
+    linear-gradient(180deg, transparent, var(--thread-bright) 25%, var(--thread-bright) 75%, transparent) left center / 2px 70% no-repeat,
+    var(--thread-soft);
+  color: var(--thread-bright);
+}
+
+.uiContextMenu button.isDanger {
+  color: var(--moon);
+}
+
+.uiContextMenu button.isDanger:hover,
+.uiContextMenu button.isDanger:focus-visible {
+  background:
+    linear-gradient(180deg, transparent, var(--moon) 25%, var(--moon) 75%, transparent) left center / 2px 70% no-repeat,
+    var(--moon-soft);
+  color: var(--text);
+}
+
+
+/* --- ui/failsafe.js: the model-problem dialog ------------------------------ */
+
+.failsafePanel {
+  --shard-line: var(--moon);
+}
+
+.failsafeEyebrow {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--moon);
+}
+
+.failsafePanel .modalHeader h2 {
+  font-size: 1.1rem;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--text);
+}
+
+.failsafeTips li::marker {
+  color: var(--thread);
+}
+
+.failsafeDetail summary {
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.failsafeDetail pre {
+  font-family: var(--font-mono);
+  font-size: 0.74rem;
+  color: var(--muted);
+  background: var(--surface-inset);
+  border: 1px solid var(--line);
+  padding: 8px 10px;
+}
+
+.failsafeNote {
+  font-family: var(--font-narration);
+  font-style: italic;
+  font-size: 0.9rem;
+  color: var(--label);
+}
+
+.failsafeQuiet {
+  color: var(--muted);
+}
+
+.failsafeInline {
+  font-size: 0.86rem;
+  color: var(--muted);
+}
+
+.failsafeInline strong {
+  color: var(--text);
+}
+
+
+/* ==========================================================================
+   13 Motion
+   ========================================================================== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

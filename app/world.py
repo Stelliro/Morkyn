@@ -86,7 +86,26 @@ WORLD_TABLES = [
     "gm_events",
     # Tile overworld (not FK-linked to locations); must round-trip with Continue/load.
     "world_maps",
+    "quests",
+    "quest_steps",
+    "npc_player_relationships",
+    # Campaign-scoped engine state: the NPC/notice offer clocks and the
+    # names the world committed to. Both are per campaign, so a slot must
+    # carry them and a new playthrough must drop them.
+    "quest_clocks",
+    "name_ledger",
 ]
+# Slots written before a table joined the export do not name it. Loading one
+# must not wipe rows that slot never stored. An empty list still replaces:
+# that save had none.
+_REPLACE_ONLY_WHEN_EXPORTED = frozenset({
+    "world_maps",
+    "quests",
+    "quest_steps",
+    "npc_player_relationships",
+    "quest_clocks",
+    "name_ledger",
+})
 OPENING_SCENE_INPUT = (
     "__opening_scene_request__: Begin the playthrough before the player acts. "
     "Establish the immediate situation, include concrete hooks, and wait for the player's first choice."
@@ -149,7 +168,23 @@ AUTOINC_TABLES = [
     "verification_memory",
     "journal",
     "gm_events",
+    # Quest rows are inside the rewind record: tick_quest_timers runs on
+    # every apply_turn, so a replayed turn ticked twice and could fail a
+    # quest one turn early, and offers posted inside the turn stayed.
+    "quests",
+    "quest_steps",
 ]
+# Settings rows a turn writes after the snapshot (apply_turn) or just
+# before it (play_turn's social check). Snapshotted by key, absence
+# included, so a rewind removes what the turn created.
+SNAPSHOT_SETTING_KEYS = (
+    "last_social",
+    "active_scene",
+    "travel_ready",
+    "player_conditions",
+    "association_heat",
+    "area_reputation",
+)
 RESTORE_ORDER = [
     "turn_snapshots",
     "response_drafts",
@@ -163,6 +198,9 @@ RESTORE_ORDER = [
     "turn_summaries",
     "conversations",
     "relationships",
+    "npc_player_relationships",
+    "quest_steps",
+    "quests",
     "events",
     "abilities",
     "player_skills",
@@ -177,6 +215,8 @@ RESTORE_ORDER = [
     "gm_notes",
     "gm_events",
     "world_maps",
+    "quest_clocks",
+    "name_ledger",
 ]
 
 
@@ -848,7 +888,7 @@ def advance_world_time(conn, minutes: int) -> dict[str, Any]:
     _pacing_set(conn, "world_minute", new_minute)
     after = get_world_time(conn)
     weather_tick = tick_weather(conn, minutes_advanced=add, time_after=after)
-    if days_add > 0:
+    if days_add > 0 and _play_system_enabled(conn, "quests_enabled", True):
         try:
             from app.local_intel import tick_quest_clocks
 
@@ -2999,6 +3039,180 @@ def gc_campaign_blobs() -> dict[str, Any]:
     return {"removed": removed, "freed_bytes": freed, "kept": kept}
 
 
+def _slim_game_start_form(form: dict[str, Any]) -> dict[str, Any]:
+    """Keep the controls that rebuild the setup page. Drop compiled model plans."""
+    return {
+        "format": str(form.get("format") or "morkyn-setup")[:80],
+        "saved_at": str(form.get("saved_at") or "")[:40],
+        "controls": form.get("controls") if isinstance(form.get("controls"), list) else [],
+        "custom_inputs": form.get("custom_inputs") if isinstance(form.get("custom_inputs"), list) else [],
+        "list_custom": form.get("list_custom") if isinstance(form.get("list_custom"), list) else [],
+        "gain_controls": form.get("gain_controls") if isinstance(form.get("gain_controls"), list) else [],
+        "locks": form.get("locks") if isinstance(form.get("locks"), list) else [],
+        "abilities": form.get("abilities") if isinstance(form.get("abilities"), list) else [],
+        "ability_count_locked": bool(form.get("ability_count_locked")),
+        "ability_count_min": form.get("ability_count_min"),
+        "ability_count_max": form.get("ability_count_max"),
+        "randomize_idea": str(form.get("randomize_idea") or "")[:400],
+    }
+
+
+def _read_game_start_form() -> dict[str, Any] | None:
+    try:
+        with connect() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'game_start_form'").fetchone()
+    except Exception:
+        return None
+    if not row or not row["value"]:
+        return None
+    try:
+        raw = json.loads(str(row["value"]))
+    except (TypeError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) and isinstance(raw.get("controls"), list) else None
+
+
+def _game_start_from_export(data: dict[str, Any]) -> dict[str, Any] | None:
+    tables = data.get("tables") if isinstance(data.get("tables"), dict) else {}
+    for row in tables.get("settings") or []:
+        if not isinstance(row, dict) or str(row.get("key") or "") != "game_start_form":
+            continue
+        raw = row.get("value")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raw = None
+        if isinstance(raw, dict) and isinstance(raw.get("controls"), list):
+            return {"form": raw}
+    for row in tables.get("journal") or []:
+        if not isinstance(row, dict) or str(row.get("kind") or "") != "setup":
+            continue
+        content = str(row.get("content") or "")
+        prefix = "Playthrough started:"
+        if not content.startswith(prefix):
+            continue
+        try:
+            options = json.loads(content[len(prefix):].strip())
+        except json.JSONDecodeError:
+            return None
+        if isinstance(options, dict):
+            return {"options": options}
+    return None
+
+
+def _write_start_file(slot_name: str, payload: dict[str, Any]) -> None:
+    path = campaign_slots_dir() / slot_name / "start.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_start_file(slot_name: str) -> dict[str, Any] | None:
+    path = campaign_slots_dir() / slot_name / "start.json"
+    if not path.exists():
+        return None
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _ensure_start_file(slot: dict[str, Any]) -> dict[str, Any] | None:
+    name = str(slot.get("slot") or "")
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return None
+    existing = _load_start_file(name)
+    if existing:
+        return existing
+    world_path = campaign_slots_dir() / name / "world.json"
+    if not world_path.exists():
+        return None
+    try:
+        data = json.loads(world_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    found = _game_start_from_export(data)
+    if not found:
+        return None
+    payload = {
+        "campaign_id": str(slot.get("campaign_id") or name),
+        "slot": name,
+        "player_name": slot.get("player_name") or "",
+        "saved_at": slot.get("saved_at") or slot.get("modified") or "",
+        **found,
+    }
+    _write_start_file(name, payload)
+    return payload
+
+
+def _game_start_label(payload: dict[str, Any], slot: dict[str, Any]) -> str:
+    name = str(payload.get("player_name") or slot.get("player_name") or "").strip()
+    if not name:
+        form = payload.get("form") if isinstance(payload.get("form"), dict) else {}
+        for control in form.get("controls") or []:
+            if isinstance(control, dict) and control.get("name") == "player_name":
+                name = str(control.get("value") or "").strip()
+                break
+    if not name:
+        options = payload.get("options") if isinstance(payload.get("options"), dict) else {}
+        name = str(options.get("player_name") or "").strip()
+    name = name or "Unnamed start"
+    stamp = str(payload.get("saved_at") or slot.get("saved_at") or slot.get("modified") or "")[:10]
+    return f"{name} · {stamp}" if stamp else name
+
+
+def list_game_start_presets() -> list[dict[str, Any]]:
+    """One row per character: the setup from when that game began."""
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for slot in list_campaign_slots():
+        cid = str(slot.get("campaign_id") or slot.get("slot") or "")
+        if not cid:
+            continue
+        grouped.setdefault(cid, []).append(slot)
+    rows: list[dict[str, Any]] = []
+    for cid, group in grouped.items():
+        chosen = next((slot for slot in group if (campaign_slots_dir() / str(slot.get("slot") or "") / "start.json").exists()), None)
+        if chosen is None:
+            chosen = sorted(group, key=lambda item: int(item.get("turn") or 0))[0]
+        payload = _ensure_start_file(chosen)
+        if not payload:
+            continue
+        rows.append({
+            "id": cid,
+            "slot": str(chosen.get("slot") or ""),
+            "label": _game_start_label(payload, chosen),
+            "player_name": payload.get("player_name") or chosen.get("player_name") or "",
+            "saved_at": payload.get("saved_at") or chosen.get("saved_at") or chosen.get("modified") or "",
+        })
+    rows.sort(key=lambda item: str(item.get("saved_at") or ""), reverse=True)
+    return rows
+
+
+def get_game_start_preset(campaign_id: str) -> dict[str, Any] | None:
+    wanted = str(campaign_id or "").strip()
+    if not wanted or "/" in wanted or "\\" in wanted:
+        return None
+    for row in list_game_start_presets():
+        if str(row.get("id") or "") != wanted:
+            continue
+        payload = _load_start_file(str(row.get("slot") or ""))
+        if not payload:
+            return None
+        detail = dict(row)
+        if isinstance(payload.get("form"), dict):
+            detail["form"] = payload["form"]
+        if isinstance(payload.get("options"), dict):
+            detail["options"] = payload["options"]
+        return detail
+    return None
+
+
 def list_campaign_slots() -> list[dict[str, Any]]:
     campaign_slots_dir().mkdir(parents=True, exist_ok=True)
     slots: list[dict[str, Any]] = []
@@ -3180,6 +3394,15 @@ def save_campaign_slot(slot_name: str) -> dict[str, Any]:
         "campaign_id": campaign_id(),
     }
     (slot_dir / "metadata.json").write_text(json.dumps(metadata, ensure_ascii=True, indent=2), encoding="utf-8")
+    form = _read_game_start_form()
+    if form:
+        _write_start_file(safe, {
+            "campaign_id": metadata.get("campaign_id") or "",
+            "slot": safe,
+            "player_name": player.get("name") or "",
+            "saved_at": metadata.get("saved_at") or "",
+            "form": form,
+        })
     return metadata
 
 
@@ -3588,9 +3811,68 @@ def _sanitize_stored_entity_names(conn) -> None:
         pass
 
 
+PLAYER_ART_KEYS: dict[str, str] = {"face": "player_portrait", "fullbody": "player_fullbody"}
+
+
+def _parse_player_art(raw: Any) -> dict[str, Any] | None:
+    """One stored art row (settings value, JSON text or dict) as a dict, or None."""
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip().startswith("{"):
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def player_art_token(data_url: str) -> str:
+    """Short digest of the image itself. It moves when the picture does and not otherwise."""
+    return hashlib.sha256(str(data_url or "").encode("utf-8")).hexdigest()[:16]
+
+
+def _player_art_ref(raw: Any, kind: str) -> dict[str, Any] | None:
+    """
+    The state-side view of one art slot: everything stored except the image.
+
+    The base64 used to ride on every /api/state poll and every turn payload,
+    about 1.2 MB a time for a picture the browser already had. The state now
+    names the picture by token and URL; the browser fetches /api/player-art/
+    once per token and keeps the copy. `data_url` is deliberately absent.
+    """
+    entry = _parse_player_art(raw)
+    if not entry:
+        return None
+    data_url = str(entry.get("data_url") or "")
+    if not data_url:
+        return None
+    token = player_art_token(data_url)
+    ref = {key: value for key, value in entry.items() if key != "data_url"}
+    ref["kind"] = str(entry.get("kind") or kind)
+    ref["updated_at"] = str(entry.get("updated_at") or "")
+    ref["token"] = token
+    ref["url"] = f"/api/player-art/{kind}?v={token}"
+    return ref
+
+
+def load_player_art(kind: str) -> dict[str, Any] | None:
+    """The stored row for `kind` ("face" or "fullbody") with its data_url, or None when there is no image."""
+    key = PLAYER_ART_KEYS.get(str(kind or "").lower())
+    if not key:
+        return None
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    entry = _parse_player_art(row["value"] if row else None)
+    if not entry or not str(entry.get("data_url") or "").startswith("data:image"):
+        return None
+    return entry
+
+
 def get_state(include_hidden: bool = False) -> dict[str, Any]:
     with connect() as conn:
         settings = _settings(conn)
+        settings.pop("game_start_form", None)
         try:
             from app.setting_templates import overlay_setting_templates
 
@@ -4024,26 +4306,15 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
     state["location_special_flags"] = loc_flags
     state["movement_locked"] = bool(movement_locked)
     state["map_blank"] = bool(map_blank)
-    portrait = settings.get("player_portrait")
-    if isinstance(portrait, dict):
-        state["player_portrait"] = portrait
-    elif isinstance(portrait, str) and portrait.strip().startswith("{"):
-        try:
-            state["player_portrait"] = json.loads(portrait)
-        except Exception:
-            state["player_portrait"] = None
-    else:
-        state["player_portrait"] = None
-    fullbody = settings.get("player_fullbody")
-    if isinstance(fullbody, dict):
-        state["player_fullbody"] = fullbody
-    elif isinstance(fullbody, str) and fullbody.strip().startswith("{"):
-        try:
-            state["player_fullbody"] = json.loads(fullbody)
-        except Exception:
-            state["player_fullbody"] = None
-    else:
-        state["player_fullbody"] = None
+    # The art is named on the state top level (kind, token, url, updated_at)
+    # and never carried: the browser fetches /api/player-art/{kind} once per
+    # token. The copies left inside settings were 1.2 MB of base64 on every
+    # /api/state and turn payload and in every trace file, read by nothing:
+    # export and the save editor read the settings table, not this dict.
+    state["player_portrait"] = _player_art_ref(settings.get("player_portrait"), "face")
+    state["player_fullbody"] = _player_art_ref(settings.get("player_fullbody"), "fullbody")
+    settings.pop("player_portrait", None)
+    settings.pop("player_fullbody", None)
     if include_hidden:
         state["gm_notes"] = gm_notes or {"id": 1, "content": ""}
         state["gm_events"] = gm_events
@@ -4166,6 +4437,11 @@ def _clear_playthrough(conn) -> None:
         pass
 
     for table in (
+        "quest_steps",
+        "npc_player_relationships",
+        "quests",
+        "quest_clocks",
+        "name_ledger",
         "response_drafts",
         "aliases",
         "player_aliases",
@@ -4192,7 +4468,7 @@ def _clear_playthrough(conn) -> None:
     conn.execute(
         """
         DELETE FROM sqlite_sequence
-        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal')
+        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships')
         """
     )
     conn.execute("DELETE FROM pacing")
@@ -4260,6 +4536,8 @@ _START_LOCATION_LAST_RESORT = "The Crossing"
 
 
 def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
+    # The form snapshot is for the preset menu. It is not a play rule.
+    setup_form = options.pop("setup_form", None) if isinstance(options, dict) else None
     player_name = norm_name(str(options.get("player_name") or "Wanderer"))
     public_name = norm_name(str(options.get("player_public_name") or ""))
     player_title = norm_name(str(options.get("player_title") or ""))
@@ -4630,6 +4908,11 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "relationships_enabled": _setup_flag_enabled(options, "relationships_enabled", True),
             "fighting_enabled": _setup_flag_enabled(options, "fighting_enabled", True),
             "items_enabled": _setup_flag_enabled(options, "items_enabled", True),
+            "map_travel_enabled": _setup_flag_enabled(options, "map_travel_enabled", True),
+            "skills_enabled": _setup_flag_enabled(options, "skills_enabled", True),
+            "quests_enabled": _setup_flag_enabled(options, "quests_enabled", True),
+            "factions_enabled": _setup_flag_enabled(options, "factions_enabled", True),
+            "economy_enabled": _setup_flag_enabled(options, "economy_enabled", True),
             "system_style": options.get("system_style") or "subtle blue-window system",
             "death_rules": options.get("death_rules") or "downed, not deleted",
             "economy": options.get("economy") or "scarce",
@@ -4842,6 +5125,8 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 conn.execute("ROLLBACK TO SAVEPOINT setting_templates")
             except Exception:
                 pass
+        if isinstance(setup_form, dict) and isinstance(setup_form.get("controls"), list):
+            _set_setting(conn, "game_start_form", _slim_game_start_form(setup_form))
 
     # Lived-area map intel: natives / long-lived travelers know towns & danger without
     # having walked every tile. Amnesia starts colder.
@@ -4979,14 +5264,18 @@ def _restore_world(data: dict[str, Any]) -> None:
         pass
 
     tables = data.get("tables") or {}
-    # Older campaign slots predate world_maps in WORLD_TABLES. Only replace maps
-    # when the export explicitly includes that key (even if the list is empty).
-    restore_maps = isinstance(tables, dict) and "world_maps" in tables
+    # Older slots omit tables that joined the export later. Only replace those
+    # when the save names the key, even if the list is empty.
+    def _replace_table(table: str) -> bool:
+        if table in _REPLACE_ONLY_WHEN_EXPORTED:
+            return isinstance(tables, dict) and table in tables
+        return True
+
     with connect() as conn:
         conn.execute("PRAGMA foreign_keys = OFF")
         try:
             for table in RESTORE_ORDER:
-                if table == "world_maps" and not restore_maps:
+                if not _replace_table(table):
                     continue
                 if table in WORLD_TABLES or table == "turn_snapshots":
                     try:
@@ -4994,7 +5283,7 @@ def _restore_world(data: dict[str, Any]) -> None:
                     except Exception:
                         pass
             for table in WORLD_TABLES:
-                if table == "world_maps" and not restore_maps:
+                if not _replace_table(table):
                     continue
                 rows = tables.get(table) or []
                 if not rows:
@@ -5115,9 +5404,68 @@ def _snapshot_row(conn, table: str, where: str, params: tuple[Any, ...], rows: d
                 seen.add(marker)
 
 
-def _save_snapshot(conn, turn: int, result: dict[str, Any]) -> None:
+def _capture_pre_turn_rows(
+    conn,
+    pre_rows: dict[str, list[dict[str, Any]]],
+    *,
+    npc_code: str = "",
+    npc_id: int | None = None,
+    location_id: int | None = None,
+    setting_keys: tuple[str, ...] = (),
+) -> None:
+    """Record rows play_turn is about to change before apply_turn takes the snapshot.
+
+    The social check (attitude, trust, last_social) and the pronoun pin run
+    before apply_turn, so the snapshot taken there already held the new
+    values and a rewind could not undo them. The caller hands the dict to
+    apply_turn as ``result["_snapshot_rows"]``; those rows are merged first
+    and win over whatever _save_snapshot reads later.
+    """
+    if npc_code:
+        _snapshot_row(conn, "npcs", "code = ?", (str(npc_code),), pre_rows)
+    if npc_id:
+        _snapshot_row(conn, "npcs", "id = ?", (int(npc_id),), pre_rows)
+    if location_id:
+        _snapshot_row(conn, "npcs", "location_id = ?", (int(location_id),), pre_rows)
+    for key in setting_keys:
+        _snapshot_setting(conn, key, pre_rows)
+
+
+def _snapshot_setting(conn, key: str, rows: dict[str, list[dict[str, Any]]]) -> None:
+    """Snapshot one settings row; an absent key is recorded so a rewind deletes it."""
+    captured = {str(row.get("key")) for row in rows.get("settings", [])}
+    absent = {str(row.get("key")) for row in rows.get("__settings_absent__", [])}
+    if key in captured or key in absent:
+        return
+    found = rows_to_dicts(conn.execute("SELECT * FROM settings WHERE key = ?", (key,)).fetchall())
+    if found:
+        rows.setdefault("settings", []).extend(found)
+    else:
+        rows.setdefault("__settings_absent__", []).append({"key": key})
+
+
+def _save_snapshot(
+    conn,
+    turn: int,
+    result: dict[str, Any],
+    pre_rows: dict[str, list[dict[str, Any]]] | None = None,
+) -> None:
     rows: dict[str, list[dict[str, Any]]] = {}
+    # Rows play_turn changed before this point go in first; _snapshot_row
+    # keeps the first copy of a row, so these win over the current values.
+    for table, found in (pre_rows or {}).items():
+        if isinstance(found, list):
+            rows[table] = [dict(row) for row in found if isinstance(row, dict)]
     _snapshot_row(conn, "player", "id = 1", (), rows)
+    for key in SNAPSHOT_SETTING_KEYS:
+        _snapshot_setting(conn, key, rows)
+    _snapshot_row(conn, "quests", "id >= 0", (), rows)
+    _snapshot_row(conn, "quest_steps", "id >= 0", (), rows)
+    # Whole table, empty list included: the restore replaces it outright.
+    try:
+        rows["quest_clocks"] = rows_to_dicts(conn.execute("SELECT * FROM quest_clocks").fetchall())
+    except Exception:
+        pass
     _snapshot_row(conn, "player_aliases", "id >= 0", (), rows)
     _snapshot_row(conn, "equipment_slots", "id >= 0", (), rows)
     _snapshot_row(conn, "inventory_capacity_modifiers", "id >= 0", (), rows)
@@ -5991,7 +6339,12 @@ def infer_npc_pronouns(name: str, narration: str, others: Sequence[str] = ()) ->
     return ""
 
 
-def bind_npc_pronouns(conn, narration: str, npcs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+def bind_npc_pronouns(
+    conn,
+    narration: str,
+    npcs: list[dict[str, Any]] | None = None,
+    pre_rows: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
     """Pin each NPC's pronouns the first time the prose commits to them.
 
     Write-once, like ``keeper_npc_id``. Re-inferring every turn is what let one
@@ -6021,6 +6374,9 @@ def bind_npc_pronouns(conn, narration: str, npcs: list[dict[str, Any]] | None = 
         if not guess:
             continue
         try:
+            if pre_rows is not None:
+                # The pin is write-once; a rewind must be able to unpin it.
+                _capture_pre_turn_rows(conn, pre_rows, npc_id=int(row.get("id") or 0))
             conn.execute("UPDATE npcs SET pronouns = ? WHERE id = ?", (guess, int(row.get("id") or 0)))
         except Exception:
             continue
@@ -7843,6 +8199,11 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     }
     if not map_space:
         prompt_context.pop("map_space", None)
+    # Character art is never prompt material. Left in, the two base64 strings
+    # were 1.2 MB of the planner packet the handoff filter then dropped, and
+    # the whole of a 2.6 MB trace file per turn.
+    prompt_context.pop("player_portrait", None)
+    prompt_context.pop("player_fullbody", None)
     try:
         from app.skill_checks import gm_context_block, merge_check_settings
 
@@ -7923,6 +8284,10 @@ def _restore_snapshot_rows(conn, rows: dict[str, list[dict[str, Any]]]) -> None:
     for table in ("player", "pacing", "settings", "gm_notes"):
         for row in rows.get(table, []):
             _update_or_insert_row(conn, table, row)
+    for row in rows.get("__settings_absent__", []):
+        key = str((row or {}).get("key") or "")
+        if key:
+            conn.execute("DELETE FROM settings WHERE key = ?", (key,))
 
     delete_order = [
         "response_drafts",
@@ -7949,6 +8314,24 @@ def _restore_snapshot_rows(conn, rows: dict[str, list[dict[str, Any]]]) -> None:
     for table in delete_order:
         max_id = int(max_ids.get(table, 0))
         conn.execute(f"DELETE FROM {table} WHERE id > ?", (max_id,))
+    # Quest tables joined the record later; a snapshot without their
+    # max id must not wipe them.
+    for table in ("quest_steps", "quests"):
+        if table in max_ids:
+            conn.execute(f"DELETE FROM {table} WHERE id > ?", (int(max_ids.get(table) or 0),))
+    if "quest_clocks" in rows:
+        try:
+            conn.execute("DELETE FROM quest_clocks")
+            for row in rows.get("quest_clocks") or []:
+                if not isinstance(row, dict) or not row:
+                    continue
+                columns = list(row.keys())
+                conn.execute(
+                    f"INSERT OR REPLACE INTO quest_clocks ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                    [row[column] for column in columns],
+                )
+        except Exception:
+            pass
 
     restore_order = [
         "locations",
@@ -7971,6 +8354,8 @@ def _restore_snapshot_rows(conn, rows: dict[str, list[dict[str, Any]]]) -> None:
         "journal",
         "conversations",
         "response_drafts",
+        "quests",
+        "quest_steps",
     ]
     for table in restore_order:
         for row in rows.get(table, []):
@@ -8024,6 +8409,10 @@ def rewind_last_turn(snapshot_id: int | None = None) -> dict[str, Any]:
             conn.execute("DELETE FROM journal WHERE turn >= ?", (rewound_turn,))
             conn.execute("DELETE FROM turn_summaries WHERE turn >= ?", (rewound_turn,))
             conn.execute("DELETE FROM model_logs WHERE turn >= ?", (rewound_turn,))
+            # The dice audit mirrors applied history (a new playthrough clears
+            # it); a regenerate re-rolls the same seeds, so the rows of every
+            # rewound attempt stacked up as duplicates in the per-turn feed.
+            conn.execute("DELETE FROM dice_rolls WHERE turn >= ?", (rewound_turn,))
             # pacing.turn should already be restored from snapshot; clamp if missing
             pace = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
             if pace is not None:
@@ -8069,30 +8458,67 @@ def _latest_regeneration_target() -> dict[str, Any]:
         }
 
 
-def regenerate_last_turn() -> dict[str, Any]:
-    target = _latest_regeneration_target()
-    rewind_last_turn(target["snapshot_id"])
+REGENERATE_PENDING_KEY = "regenerate_pending"
 
-    input_kind = target["input_kind"]
-    if input_kind == "opening":
-        payload = play_opening_turn()
-    elif input_kind == "continue":
-        payload = play_continue_turn()
-    elif input_kind == "wait":
-        # Re-run wait from journal summary if possible; fall back to continue
-        content = str(target.get("content") or "")
-        minutes = 60
-        import re as _re
 
-        m = _re.search(r"Waited\s+(\d+)", content, _re.I)
-        if m:
-            minutes = int(m.group(1))
-        payload = play_wait_turn(minutes)
+def _read_pending_regeneration(conn) -> dict[str, Any] | None:
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (REGENERATE_PENDING_KEY,)).fetchone()
+    if not row:
+        return None
+    try:
+        pending = json.loads(row["value"] or "null")
+    except (TypeError, ValueError):
+        return None
+    return pending if isinstance(pending, dict) else None
+
+
+def regenerate_last_turn(allow_fallback: bool = True) -> dict[str, Any]:
+    from app.failsafe import FailsafeBlocked
+
+    # A rewrite the failsafe refused has already consumed its snapshot: the
+    # world sits one turn back and the input it was about to replay is kept
+    # under REGENERATE_PENDING_KEY. Honour that instead of rewinding a second
+    # turn, which is what a plain Retry of /api/regenerate would otherwise do.
+    with connect() as conn:
+        pending = _read_pending_regeneration(conn)
+        conn.execute("DELETE FROM settings WHERE key = ?", (REGENERATE_PENDING_KEY,))
+    if pending and int(pending.get("turn") or 0) == _current_turn_number() + 1:
+        target = pending
     else:
-        player_input = target["content"].strip()
-        if not player_input:
-            raise ValueError("The latest player input is empty and cannot be regenerated.")
-        payload = play_turn(player_input)
+        target = _latest_regeneration_target()
+        rewind_last_turn(target["snapshot_id"])
+
+    input_kind = str(target.get("input_kind") or "player")
+    try:
+        if input_kind == "opening":
+            payload = play_opening_turn(allow_fallback=allow_fallback)
+        elif input_kind == "continue":
+            payload = play_continue_turn(allow_fallback=allow_fallback)
+        elif input_kind == "wait":
+            # Re-run wait from journal summary if possible; fall back to continue
+            content = str(target.get("content") or "")
+            minutes = 60
+            import re as _re
+
+            m = _re.search(r"Waited\s+(\d+)", content, _re.I)
+            if m:
+                minutes = int(m.group(1))
+            payload = play_wait_turn(minutes, allow_fallback=allow_fallback)
+        else:
+            player_input = str(target.get("content") or "").strip()
+            if not player_input:
+                raise ValueError("The latest player input is empty and cannot be regenerated.")
+            payload = play_turn(player_input, allow_fallback=allow_fallback)
+    except FailsafeBlocked as exc:
+        replay = {
+            "turn": int(target.get("turn") or 0),
+            "input_kind": input_kind,
+            "content": str(target.get("content") or ""),
+        }
+        with connect() as conn:
+            _set_setting(conn, REGENERATE_PENDING_KEY, replay)
+        exc.problem["pending_replay"] = {"turn": replay["turn"], "input_kind": input_kind}
+        raise
 
     payload["regenerated"] = True
     payload["regenerated_turn"] = target["turn"]
@@ -9744,6 +10170,8 @@ def _short_skill_note(raw: Any) -> str:
 
 
 def _apply_skills(conn, changes: list[dict[str, Any]]) -> None:
+    if not _play_system_enabled(conn, "skills_enabled", True):
+        return
     settings = _settings(conn).get("playthrough_options", {})
     speed = settings.get("skill_growth_speed") or "normal"
     multiplier = settings.get("skill_growth_multiplier")
@@ -9831,6 +10259,8 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     level = clamp(int(player["level"]) + level_delta, 1, 100)
     xp = clamp(int(player["xp"]) + xp_delta, 0, 1_000_000)
     gold_delta = clamp(int(player_patch.get("gold_delta") or 0), -50_000, 5_000)
+    if not _play_system_enabled(conn, "economy_enabled", True):
+        gold_delta = 0
     gold = clamp(int(player["gold"]) + gold_delta, 0, 1_000_000)
     raw_karma_delta = clamp(int(player_patch.get("karma_delta") or 0), -25, 25)
     karma_reason = str(player_patch.get("karma_reason") or "Karma changed because of the player's action.")[:900]
@@ -11529,7 +11959,9 @@ def band_authority_mode(options: dict[str, Any] | None = None) -> str:
                 hints and re-rolled. The server owns every amount.
     ``bands``   — bands are rolled; explicit numbers are passed through (still
                 clamped as before).
-    ``off``     — legacy behaviour, bands ignored.
+    ``off``     — no dice: explicit numbers pass through and a band becomes its
+                fixed minimum (``rng.fixed_magnitude``). The prompt and the DSL
+                emit bands only, so "bands ignored" dropped every amount.
     """
     env = str(os.getenv("AI_RPG_BAND_AUTHORITY") or "").strip().lower()
     if env in {"rolled", "bands", "off"}:
@@ -11570,7 +12002,16 @@ def _resolve_amount(
         number = 0
 
     if mode == "off":
-        return (number if number else None), None
+        if not has_band:
+            return (number if number else None), None
+        # A band still has to mean something with the dice off, or the prose
+        # pays the player and the record shows nothing.
+        canon = rng_mod.normalize_band(str(band).lstrip("-"), default="small")
+        negative = allow_negative and (
+            number < 0 or str(band).strip().lower().startswith(("-", "lose", "spend"))
+        )
+        roll = rng_mod.fixed_magnitude(kind, canon, level=level, negative=negative, turn=turn, tag=tag)
+        return roll["value"], roll
 
     if not has_band:
         if not number:
@@ -11624,8 +12065,8 @@ def resolve_turn_bands(
 
     options = options if isinstance(options, dict) else {}
     mode = band_authority_mode(options)
-    if mode == "off":
-        return {"mode": mode, "rolls": []}
+    # "off" walks the same containers: _resolve_amount maps each band to a
+    # fixed number there, so the band keys are still consumed and recorded.
 
     try:
         prow = conn.execute("SELECT level FROM player WHERE id = 1").fetchone()
@@ -11840,6 +12281,8 @@ def _apply_story_map_walk(
     """
     if _map_is_locked(conn):
         return {"status": "locked", "steps_taken": 0, "reason": "locked"}
+    if not _play_system_enabled(conn, "map_travel_enabled", True):
+        return {"status": "skipped", "steps_taken": 0, "reason": "off"}
     from app.tile_world import _save_map_payload, apply_story_map_walk, get_map
 
     chart = get_map(None, conn=conn)
@@ -11863,6 +12306,13 @@ def _apply_story_map_walk(
     if report.get("status") in {"walked", "blocked"}:
         _save_map_payload(chart, conn=conn)
     return report
+
+
+# Per-turn measurements apply_turn puts on the state it returns. play_turn
+# re-reads state from the database on some paths (injuries) and must carry
+# every one of these across that refresh; keeping the list in one place is
+# what stops a new measurement from silently vanishing on half the turns.
+TURN_STATE_TELEMETRY_KEYS: tuple[str, ...] = ("dice_rolls", "movement", "map_walk", "voice_check", "gear_check")
 
 
 def apply_turn(
@@ -11894,7 +12344,8 @@ def apply_turn(
         except Exception as exc:
             movement_report = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200]}
 
-        _save_snapshot(conn, next_turn, result)
+        pre_rows = result.pop("_snapshot_rows", None)
+        _save_snapshot(conn, next_turn, result, pre_rows=pre_rows if isinstance(pre_rows, dict) else None)
         turn = _next_turn(conn)
 
         # Every "how much" the model proposed becomes a server-rolled amount
@@ -11918,6 +12369,10 @@ def apply_turn(
                 )
             except Exception:
                 pass
+        try:
+            _record_skill_check_rolls(conn, result, turn)
+        except Exception:
+            pass
 
         narration = _narration_text(result)
         # Last-line defense: expand [[codes]] / fill blank subjects using live cast names
@@ -12260,6 +12715,7 @@ def apply_turn(
             "rolls": band_report.get("rolls") or [],
         }
     if isinstance(state, dict):
+        # Every key set here is listed in TURN_STATE_TELEMETRY_KEYS.
         # Measurable: a playtest can count model / repaired / unresolved travel turns.
         state["movement"] = {**movement_report, "turn": turn}
         state["map_walk"] = {
@@ -12438,12 +12894,77 @@ def update_npc_map_positions(conn) -> None:  # type: ignore[no-untyped-def]
                 )
 
 
-def play_turn(player_input: str, input_kind: str = "player", journal_input: str | None = None) -> dict[str, Any]:
+def _skill_check_seed() -> tuple[int, int]:
+    """(turn the check belongs to, campaign seed) for seeding a skill check.
+
+    The turn is the one `apply_turn` is about to write, so a rewind (which
+    restores `pacing.turn`) followed by a regenerate seeds the same roll.
+    """
+    from app import rng as rng_mod
+
+    return _current_turn_number() + 1, rng_mod.campaign_seed()
+
+
+def _skill_check_rng(turn: int, seed: int, index: int, skill_code: str):
+    from app import rng as rng_mod
+
+    return rng_mod.rng_for("skill_check", turn=int(turn), seed=int(seed), salt=f"{int(index)}:{skill_code}")
+
+
+def _record_skill_check_rolls(conn, result: dict[str, Any], turn: int) -> None:
+    """Write each resolved check's d20 to `dice_rolls` beside the band rolls.
+
+    Without this `/api/dice/recent?turn=N` showed the gold and XP a turn
+    rolled and not the check that decided the scene.
+    """
+    from app import rng as rng_mod
+
+    for check in result.get("skill_checks") or []:
+        if not isinstance(check, dict) or check.get("natural") is None:
+            continue
+        skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+        code = str(check.get("skill_code") or skill.get("code") or "general")
+        sides = str(check.get("dice") or "d20").strip().lstrip("dD") or "20"
+        try:
+            natural = int(check.get("natural") or 0)
+        except (TypeError, ValueError):
+            continue
+        rng_mod.record_roll(
+            conn,
+            {
+                "turn": int(turn),
+                "tag": f"check:{code}",
+                "kind": "check",
+                "notation": f"1d{sides}",
+                "rolls": [natural],
+                "modifier": check.get("modifier") or 0,
+                "raw_total": natural,
+                "value": check.get("total") or natural,
+                "band": str(check.get("outcome") or ""),
+            },
+            turn=int(turn),
+            source="skill_check",
+            inputs={
+                "dc": check.get("dc"),
+                "degree": check.get("degree"),
+                "injury": bool(check.get("injury")),
+            },
+        )
+
+
+def play_turn(
+    player_input: str,
+    input_kind: str = "player",
+    journal_input: str | None = None,
+    allow_fallback: bool = True,
+) -> dict[str, Any]:
     context = get_state(include_hidden=True)
     used_fallback = False
     fallback_reason = ""
     ability_use_pack: dict[str, Any] | None = None
     action_spend_pack: dict[str, Any] | None = None
+    # Rows this function changes before apply_turn takes the rewind snapshot.
+    pre_snapshot_rows: dict[str, list[dict[str, Any]]] = {}
     model_input = _expand_input_references(context, player_input)
     if _ensure_combat_profiles_for_input(context, model_input):
         context = get_state(include_hidden=True)
@@ -12505,7 +13026,7 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                     or pl0.get("replace_turn")
                     or pl0.get("immutable")
                 ):
-                    return play_world_event_turn(top, input_kind="event")
+                    return play_world_event_turn(top, input_kind="event", allow_fallback=allow_fallback)
                 pl = pl0
                 model_input = (
                     model_input
@@ -12697,10 +13218,11 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         )
 
         opts = ((context.get("settings") or {}).get("playthrough_options") or {})
+        skills_on = _setup_flag_enabled(opts if isinstance(opts, dict) else {}, "skills_enabled", True)
         check_cfg = merge_check_settings(
             opts.get("skill_check_settings") if isinstance(opts.get("skill_check_settings"), dict) else opts
         )
-        if check_cfg.get("dice_checks_enabled") and input_kind == "player":
+        if skills_on and check_cfg.get("dice_checks_enabled") and input_kind == "player":
             player = context.get("player") or {}
             raw_bonus = player.get("effective_stats")
             if isinstance(raw_bonus, dict):
@@ -12714,11 +13236,17 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                 inferred = infer_check_from_action(model_input, context)
                 if inferred and (inferred.get("social") or check_cfg.get("auto_check_on_risky_actions")):
                     pending = [inferred]
-            for item in pending[:4]:
+            # The d20 is seeded like every other server roll: an unseeded
+            # Random() made a rewind + regenerate of the same input roll a
+            # different check (and apply a different injury) while every band
+            # roll on the same turn reproduced exactly.
+            check_turn, check_seed = _skill_check_seed()
+            for index, item in enumerate(pending[:4]):
                 if not isinstance(item, dict):
                     continue
+                pending_code = str(item.get("skill_code") or item.get("code") or item.get("skill") or "general")
                 resolved = resolve_check(
-                    skill_code=str(item.get("skill_code") or item.get("code") or item.get("skill") or "general"),
+                    skill_code=pending_code,
                     difficulty=item.get("difficulty"),
                     dc=item.get("dc"),
                     player_stats=stats if isinstance(stats, dict) else {},
@@ -12729,6 +13257,7 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                     settings=check_cfg,
                     context_note=str(item.get("context_note") or item.get("note") or model_input)[:400],
                     weapon_or_tool=str(item.get("weapon_or_tool") or item.get("weapon") or ""),
+                    rng=_skill_check_rng(check_turn, check_seed, index, pending_code),
                 )
                 # LEGACY, deliberate: `resolve_check` returns `skill` as a dict
                 # and has never returned a `skill_code` key, so the right-hand
@@ -12761,15 +13290,23 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                             from app.db import connect as _c
 
                             with _c() as c2:
+                                loc_id = None
+                                prow = c2.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+                                if prow:
+                                    loc_id = prow["current_location_id"]
+                                # Before any write: the rewind record needs these rows as they are now.
+                                _capture_pre_turn_rows(
+                                    c2,
+                                    pre_snapshot_rows,
+                                    npc_code=code,
+                                    location_id=int(loc_id) if loc_id else None,
+                                    setting_keys=("last_social",),
+                                )
                                 c2.execute(
                                     "UPDATE npcs SET attitude = ? WHERE code = ?",
                                     (attitude.lower(), code),
                                 )
                                 # Track last social target for walk-away / persist API
-                                loc_id = None
-                                prow = c2.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
-                                if prow:
-                                    loc_id = prow["current_location_id"]
                                 cold = attitude.lower() in {
                                     "dismissive",
                                     "apprehensive",
@@ -12872,6 +13409,17 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     try:
         result = generate_turn(prompt_context, model_input)
     except LlmError as exc:
+        if not allow_fallback:
+            # The browser asked to be told first. It shows the tips and may
+            # resend this turn with allow_fallback set, which takes the branch below.
+            from app.failsafe import FailsafeBlocked, classify_failure
+            from app.llm import get_model_config
+
+            try:
+                provider = str((get_model_config() or {}).get("provider") or "")
+            except Exception:
+                provider = ""
+            raise FailsafeBlocked(classify_failure(str(exc) or exc.__class__.__name__, stage="turn", provider=provider)) from exc
         fallback_reason = str(exc) or exc.__class__.__name__
         result = fallback_turn(context, player_input)
         result["llm_error"] = fallback_reason
@@ -12897,12 +13445,14 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         from app.skill_checks import apply_check_to_turn, merge_check_settings, resolve_check
 
         opts = ((context.get("settings") or {}).get("playthrough_options") or {})
+        skills_on = _setup_flag_enabled(opts if isinstance(opts, dict) else {}, "skills_enabled", True)
         check_cfg = merge_check_settings(
             opts.get("skill_check_settings") if isinstance(opts.get("skill_check_settings"), dict) else opts
         )
-        for resolved in skill_check_results:
-            result = apply_check_to_turn(result, resolved)
-        if check_cfg.get("dice_checks_enabled") and input_kind == "player":
+        if skills_on:
+            for resolved in skill_check_results:
+                result = apply_check_to_turn(result, resolved)
+        if skills_on and check_cfg.get("dice_checks_enabled") and input_kind == "player":
             player = context.get("player") or {}
             raw_bonus = player.get("effective_stats")
             if isinstance(raw_bonus, dict):
@@ -12911,6 +13461,7 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                 raw_stats = player.get("stats")
                 stats = raw_stats if isinstance(raw_stats, dict) else {}
             skills = context.get("skills") or []
+            check_turn, check_seed = _skill_check_seed()
             for item in list(result.get("skill_checks") or [])[:4]:
                 if not isinstance(item, dict):
                     continue
@@ -12931,6 +13482,9 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
                     settings=check_cfg,
                     context_note=str(item.get("context_note") or model_input)[:400],
                     weapon_or_tool=str(item.get("weapon_or_tool") or ""),
+                    # Index continues the pre-resolved list so two checks on one
+                    # turn never share a stream.
+                    rng=_skill_check_rng(check_turn, check_seed, len(skill_check_results), code or "general"),
                 )
                 skill_check_results.append(resolved)
                 result = apply_check_to_turn(result, resolved)
@@ -13002,10 +13556,12 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     # next turn's contract can state it instead of letting the model re-decide.
     try:
         with connect() as _conn_pron:
-            bind_npc_pronouns(_conn_pron, _narration_text_of(result))
+            bind_npc_pronouns(_conn_pron, _narration_text_of(result), pre_rows=pre_snapshot_rows)
     except Exception:
         pass
 
+    if pre_snapshot_rows and isinstance(result, dict):
+        result["_snapshot_rows"] = pre_snapshot_rows
     actual_player_input = journal_input if journal_input is not None else player_input
     state = apply_turn(
         result,
@@ -13020,7 +13576,7 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     # about half the turns. Keep them locally and re-attach after any refresh.
     turn_telemetry = {
         key: (state or {}).get(key)
-        for key in ("dice_rolls", "movement", "voice_check")
+        for key in TURN_STATE_TELEMETRY_KEYS
         if isinstance(state, dict) and state.get(key)
     }
     if ability_use_pack:
@@ -13108,10 +13664,12 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     model_usage = list(result.get("_model_usage") or [])
     model_trace_steps = result.get("_model_trace") or []
     pipeline_meta = result.get("_narration_pipeline") if isinstance(result.get("_narration_pipeline"), dict) else None
+    dsl_meta = result.get("_dsl") if isinstance(result.get("_dsl"), dict) else None
     result.pop("_model_trace", None)
     # Keep turn payload lean for the client; full dump lives in the trace file.
     result.pop("_model_usage", None)
     result.pop("_narration_pipeline", None)
+    result.pop("_dsl", None)
     rewards = _turn_reward_summary(context, state, result)
     narration_chars = len(_narration_text(result) or str(result.get("narration") or ""))
     trace_name = Path(debug_trace_path).name if debug_trace_path else ""
@@ -13132,6 +13690,7 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
             if isinstance(step, dict)
         ][-40:],
         "narration_pipeline": pipeline_meta,
+        "dsl": dsl_meta,
         "narration_chars": narration_chars,
         "trace_path": debug_trace_path or "",
         "trace_name": trace_name,
@@ -13192,6 +13751,10 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
         # server had to, or a travel turn resolved nowhere; plus point-of-view drift.
         "movement": (state or {}).get("movement") or {},
         "voice_check": (state or {}).get("voice_check") or {},
+        # The tile walk a travel turn took, and prose that dressed the player
+        # in gear the record never gave them: surfaced beside movement.
+        "map_walk": (state or {}).get("map_walk") or {},
+        "gear_check": (state or {}).get("gear_check") or {},
         # Which name answered a naming demand, where it came from, and whether
         # the prose had to be repaired to say it.
         "naming": (state or {}).get("naming") or {},
@@ -13213,8 +13776,13 @@ def play_turn(player_input: str, input_kind: str = "player", journal_input: str 
     return payload
 
 
-def play_opening_turn() -> dict[str, Any]:
-    return play_turn(OPENING_SCENE_INPUT, input_kind="opening", journal_input=OPENING_SCENE_JOURNAL)
+def play_opening_turn(allow_fallback: bool = True) -> dict[str, Any]:
+    return play_turn(
+        OPENING_SCENE_INPUT,
+        input_kind="opening",
+        journal_input=OPENING_SCENE_JOURNAL,
+        allow_fallback=allow_fallback,
+    )
 
 
 def _current_turn_number() -> int:
@@ -13223,14 +13791,22 @@ def _current_turn_number() -> int:
     return int(row["value"]) if row else 0
 
 
-def play_continue_turn() -> dict[str, Any]:
+def play_continue_turn(allow_fallback: bool = True) -> dict[str, Any]:
+    # Every branch carries the flag: the browser asked to be told about a
+    # dead model before any turn is written, the opening and a forced beat
+    # included.
     if _current_turn_number() <= 0:
-        return play_opening_turn()
+        return play_opening_turn(allow_fallback=allow_fallback)
     # Forced world events can steal Continue (portal opens no matter what).
     forced = consume_due_world_events(force_only=True, limit=1)
     if forced:
-        return play_world_event_turn(forced[0], input_kind="event")
-    return play_turn(CONTINUE_SCENE_INPUT, input_kind="continue", journal_input=CONTINUE_SCENE_JOURNAL)
+        return play_world_event_turn(forced[0], input_kind="event", allow_fallback=allow_fallback)
+    return play_turn(
+        CONTINUE_SCENE_INPUT,
+        input_kind="continue",
+        journal_input=CONTINUE_SCENE_JOURNAL,
+        allow_fallback=allow_fallback,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -13493,7 +14069,9 @@ def resolve_world_event(event_id: int, *, status: str = "resolved") -> None:
         )
 
 
-def play_world_event_turn(event_pack: dict[str, Any], *, input_kind: str = "event") -> dict[str, Any]:
+def play_world_event_turn(
+    event_pack: dict[str, Any], *, input_kind: str = "event", allow_fallback: bool = True
+) -> dict[str, Any]:
     """
     Full scene turn driven by a resolved RNG/force pack (ambush, portal, etc.).
     Database already decided the event; LLM only narrates.
@@ -13545,7 +14123,7 @@ def play_world_event_turn(event_pack: dict[str, Any], *, input_kind: str = "even
         )
     journal = f"World event [{kind}]: {str(pack.get('summary') or kind)[:200]}"
     try:
-        result = play_turn(model_input, input_kind=input_kind, journal_input=journal)
+        result = play_turn(model_input, input_kind=input_kind, journal_input=journal, allow_fallback=allow_fallback)
     except Exception:
         # Leave event active for retry / recovery consume; do not resolve
         raise
@@ -14148,11 +14726,13 @@ def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any]
     return out
 
 
-def play_wait_turn(minutes: int, kind: str = "wait") -> dict[str, Any]:
+def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True) -> dict[str, Any]:
     """
     Spend in-world time at current location. RNG decides events before the LLM narrates.
     kind: wait | meditate | sleep — all recover energy/mana/fatigue at different rates.
     """
+    from app.failsafe import FailsafeBlocked
+
     kind_l = str(kind or "wait").strip().lower()
     if kind_l in {"meditate", "meditation", "cultivate", "breathe"}:
         kind_l = "meditate"
@@ -14163,7 +14743,7 @@ def play_wait_turn(minutes: int, kind: str = "wait") -> dict[str, Any]:
 
     if _current_turn_number() <= 0:
         # Opening must exist first
-        opening = play_opening_turn()
+        opening = play_opening_turn(allow_fallback=allow_fallback)
         # Still allow wait after opening in same call? Prefer require opening first.
         if _current_turn_number() <= 0:
             return opening
@@ -14184,7 +14764,7 @@ def play_wait_turn(minutes: int, kind: str = "wait") -> dict[str, Any]:
                 apply_regen(c_force, minutes=minutes, kind=kind_l, options=opts if isinstance(opts, dict) else {})
             except Exception:
                 pass
-        result = play_world_event_turn(forced[0], input_kind="event")
+        result = play_world_event_turn(forced[0], input_kind="event", allow_fallback=allow_fallback)
         result["wait_interrupted"] = True
         result["wait_minutes_applied"] = minutes
         result["wait_kind"] = kind_l
@@ -14347,7 +14927,15 @@ def play_wait_turn(minutes: int, kind: str = "wait") -> dict[str, Any]:
         f"{wait_verb} {minutes} minute(s). {before.get('label')} → {after.get('label')}. "
         f"Events: {rng_pack.get('event_count')}."
     )
-    payload = play_turn(model_input, input_kind="wait", journal_input=journal)
+    try:
+        payload = play_turn(model_input, input_kind="wait", journal_input=journal, allow_fallback=allow_fallback)
+    except FailsafeBlocked:
+        # Nothing was narrated, so nothing was waited: put the clock back where
+        # the request found it, or a Retry charges the minutes twice.
+        with connect() as c_undo:
+            _pacing_set(c_undo, "world_day", int(before["day"]))
+            _pacing_set(c_undo, "world_minute", int(before["minute"]))
+        raise
     payload["world_time"] = after
     payload["wait"] = {
         "minutes": minutes,

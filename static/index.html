@@ -5,7 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mørkyn</title>
     <link rel="manifest" href="/static/morkyn.webmanifest" />
+    <!-- UI layers: tokens (values) → styles (layout) → skin (look). See docs/UI_RULEBOOK.md -->
+    <link rel="stylesheet" href="/static/ui/tokens.css?v=__BUNDLE__" />
     <link rel="stylesheet" href="/static/styles.css?v=__BUNDLE__" />
+    <link rel="stylesheet" href="/static/ui/skin.css?v=__BUNDLE__" />
     <style id="scriptGateStyles">
       /* Inline so this screen works even when app.js / external CSS is blocked */
       .scriptGate {
@@ -279,7 +282,10 @@
               <p>
                 The settings can look a little confronting at first — lots of knobs, locks, and options.
                 We designed them for <strong>simple controls</strong>: change what you care about, leave the rest alone,
-                or hit Randomize and then only edit what bothers you.
+                or open <strong>Presets</strong>. That menu has two sides.
+                <strong>Saved presets</strong> are built-in ideas and setups you keep with Save preset.
+                <strong>Game starts</strong> are how a previous game began, not the middle of that save.
+                <strong>New</strong> makes a text preset. <strong>Confirm preset</strong> fills the page from that idea, including powers, or loads a saved setup or a previous game’s opening. Then only edit what bothers you.
               </p>
               <p>
                 That said: <strong>these settings matter</strong>. Genre, tone, death rules, how NPCs behave, magic, and checks
@@ -351,10 +357,6 @@
                   <input id="setupSettingsFile" class="hidden" type="file" accept="application/json,.json" />
                 </div>
                 <button type="button" id="setupModelButton" class="secondaryButton setupPrimarySettings chipBtn">LLM Settings</button>
-                <div class="randomizeMenuWrap">
-                  <button id="simpleOpenRandomize" class="secondaryButton chipBtn" type="button" aria-expanded="false" aria-controls="randomizePopover" title="Open idea box. Confirm fills Primary only.">Randomize ▾</button>
-                  <button type="button" class="secondaryButton chipBtn confirmRandomizeBtn" id="randomizePopoverConfirm" data-confirm-randomize title="Fill Primary only. Optional stays as you left it.">Confirm randomize</button>
-                </div>
                 <button id="setupStart" class="setupStartDesktop" type="submit">Start</button>
               </div>
             </div>
@@ -364,27 +366,38 @@
                 <div class="characterArtHead">
                   <button type="button" class="characterArtToggle" id="setupPresetToggle" aria-expanded="true" aria-controls="setupPresetBody" title="Show or hide preset ideas">
                     <span class="characterArtTitle">Presets</span>
-                    <span class="characterArtToggleMeta" id="setupPresetCollapseMeta">Expanded · pick an idea, then Confirm randomize</span>
+                    <span class="characterArtToggleMeta" id="setupPresetCollapseMeta">Expanded · saved setups and previous game starts</span>
                     <span class="characterArtChevron" aria-hidden="true">▸</span>
                   </button>
                   <div class="setupSimpleVibeActions">
-                    <button type="button" class="chipBtn secondaryButton" id="presetNewBtn" title="Create a custom preset">New</button>
-                    <button type="button" class="chipBtn secondaryButton" id="presetSaveBtn" title="Save edits to selected custom preset">Save</button>
-                    <button type="button" class="chipBtn secondaryButton" id="presetDeleteBtn" title="Delete selected custom preset">Delete</button>
+                    <button type="button" class="chipBtn secondaryButton" id="presetNewBtn" title="Make a new text preset. It keeps the name and idea only, not this page.">New</button>
+                    <button type="button" class="chipBtn secondaryButton" id="presetSaveBtn" title="Save the current setup page as a preset">Save preset</button>
+                    <button type="button" class="chipBtn secondaryButton" id="presetDeleteBtn" title="Delete the selected saved preset">Delete</button>
                   </div>
                 </div>
                 <div class="characterArtBody" id="setupPresetBody">
-                  <p class="empty">Pick a preset and edit the one idea. <strong>Confirm randomize</strong> sits next to Randomize and fills Primary only.</p>
-                  <div id="simpleDirectorPresets" class="directorPresets simpleDirectorPresets"></div>
+                  <p class="empty presetExplainer">Saved presets are ideas you keep; game starts are earlier openings. Confirm fills the page from the idea, powers included.</p>
+                  <label class="presetSelectLabel">
+                    <span>Preset</span>
+                    <select id="presetSelect" aria-label="Preset">
+                      <optgroup label="Saved presets" id="presetSavedGroup"></optgroup>
+                      <optgroup label="Game starts" id="presetStartGroup"></optgroup>
+                    </select>
+                  </label>
+                  <div id="simpleDirectorPresets" class="directorPresets simpleDirectorPresets" hidden></div>
                   <div class="presetEditor" id="presetEditor">
                     <label>
                       <span>Preset name</span>
                       <input id="presetLabelInput" type="text" maxlength="40" placeholder="My preset" />
                     </label>
                     <label class="wide">
-                      <span>Randomize idea</span>
-                      <textarea id="presetSimpleIdea" rows="2" maxlength="400" placeholder="Short steer for Primary: tone, genre, hook…"></textarea>
+                      <span>Idea</span>
+                      <textarea id="presetSimpleIdea" rows="2" maxlength="400" placeholder="Tone, genre, hook… Confirm preset fills the page from this text"></textarea>
                     </label>
+                    <div class="presetConfirmRow">
+                      <button type="button" class="chipBtn confirmRandomizeBtn" id="presetConfirmBtn" title="A text idea fills this page, including powers. A saved setup or a previous game start loads that opening.">Confirm preset</button>
+                    </div>
+                    <p class="empty presetConfirmHint">A text idea fills this page, including powers. A saved setup or a previous game start loads that opening.</p>
                     <label class="wide" hidden>
                       <span>Extra preset notes</span>
                       <textarea id="presetAdvancedIdea" rows="3" maxlength="600" placeholder="Kept in sync with Randomize idea. Not a second form."></textarea>
@@ -407,23 +420,23 @@
                   aria-label="Optional idea for Randomize"
                 ></textarea>
               </label>
-              <p class="empty randomizePopoverHint">Nothing is rolled until you confirm. Confirm fills Primary only. Optional stays as you left it.</p>
+              <p class="empty randomizePopoverHint">Use Confirm preset. A text idea fills the start, including powers. A saved setup or a previous game start loads that opening. Locked fields stay as you left them.</p>
               <div class="randomizePopoverActions">
                 <button type="button" class="secondaryButton chipBtn" id="randomizePopoverCancel">Cancel</button>
-                <button type="button" class="secondaryButton chipBtn confirmRandomizeBtn" id="randomizePopoverConfirmInline" data-confirm-randomize title="Fill Primary only. Optional stays as you left it.">Confirm randomize</button>
+                <button type="button" class="secondaryButton chipBtn confirmRandomizeBtn" id="randomizePopoverConfirmInline" data-confirm-randomize title="Fill the start, including powers. Locked fields stay as you left them.">Generate</button>
               </div>
             </div>
           </header>
 
           <!-- Simple mode: form left, character art right (reparented card) -->
           <section id="setupSimplePanel" class="setupSimplePanel" aria-label="New game">
-            <p class="setupSimpleLead"><strong>Primary</strong> is the start. Nothing in it is required, including the name. <strong>Optional</strong> is every other setting, once. Randomize fills Primary only.</p>
+            <p class="setupSimpleLead"><strong>Primary</strong> is the start. Nothing in it is required, including the name. <strong>Optional</strong> is every other setting, once. Confirm preset fills the start from a text idea, including powers.</p>
             <div class="setupSimpleLayout">
               <div class="setupSimpleMain">
                 <section class="setupFactGroup" id="setupPrimaryGroup" aria-labelledby="setupPrimaryHeading">
                   <header class="setupFactGroupHead">
                     <h2 id="setupPrimaryHeading">Primary</h2>
-                    <p>Name, origin, world difficulty, world, and look. Randomize fills these. Nothing here is required — a blank name is fine, and Start still works.</p>
+                    <p>Name, origin, world difficulty, world, and look. Nothing here is required — a blank name is fine, and Start still works.</p>
                   </header>
                   <div class="setupSimpleGrid setupPrimaryGrid">
                   <label class="simpleSetupField">
@@ -473,7 +486,7 @@
                 <section class="setupFactGroup setupFactGroupOptional" id="setupOptionalGroup" aria-labelledby="setupOptionalHeading">
                   <header class="setupFactGroupHead">
                     <h2 id="setupOptionalHeading">Optional</h2>
-                    <p>Everything else: identity details, powers, world, people, rules, and checks. Skip it, or change only what you care about. Randomize does not fill this group.</p>
+                    <p>Everything else: identity details, powers, world, people, rules, and checks. Skip it, or change only what you care about. Confirm preset fills powers and the main start from a text idea. People, factions, and the finer rules stay as you left them.</p>
                   </header>
                   <div id="setupOptionalSections" class="setupOptionalSections"></div>
                 </section>
@@ -512,7 +525,7 @@
               <header class="sectionHeader">
                 <div class="sectionHeaderNav" data-setup-step-nav-host></div>
                 <div class="sectionHeaderText">
-                  <h2 class="sectionHeaderTitle">Identity</h2>
+                  <h2 class="sectionHeaderTitle" data-fold-default="closed">Identity</h2>
                   <p>The rest of who you are — public name, age, memory, backstory, and worn gear. Name, origin, and look are in Primary. None of this is required.</p>
                 </div>
                 <button class="secondaryButton sectionHeaderAction" data-randomize-group="character" type="button">Randomize Identity</button>
@@ -796,7 +809,7 @@
               <header class="sectionHeader">
                 <div class="sectionHeaderNav" data-setup-step-nav-host></div>
                 <div class="sectionHeaderText">
-                  <h2 class="sectionHeaderTitle">Powers</h2>
+                  <h2 class="sectionHeaderTitle" data-fold-default="closed">Powers</h2>
                   <p>Optional starting abilities. Base text is locked once play begins.</p>
                 </div>
                 <button class="secondaryButton sectionHeaderAction" data-randomize-group="powers" type="button">Randomize Powers</button>
@@ -812,7 +825,7 @@
                   <div class="powersDropdownBody">
                     <header class="subsectionHeader">
                       <div>
-                        <p class="empty">Add none, one, or several abilities. Per-card Locked + prerequisites cover learned vs starting powers. Growth type per card; Calculate level-up math fills numbers from world/difficulty. Final math also refreshes at Start.</p>
+                        <p class="empty">Add none, one, or several abilities. Lock an ability to keep it when you randomize; the others are rewritten, and the number of abilities stays. State on each card is whether it starts usable or needs a prerequisite. Growth type per card; Calculate level-up math fills numbers from world/difficulty. Final math also refreshes at Start.</p>
                       </div>
                       <div class="subsectionActions">
                         <button id="calcAllGrowthMathBtn" class="secondaryButton" type="button" title="Fill empty growth math from power type + setup context">Calculate all level-up math</button>
@@ -833,7 +846,7 @@
                         <span>Max</span>
                         <input id="abilityCountMax" type="number" min="1" max="4" value="4" step="1" inputmode="numeric" aria-label="Maximum abilities when randomizing" />
                       </label>
-                      <p class="empty abilityCountRangeHint">1–4 skills. When count is unlocked, Randomize Abilities (and full setup randomize) pick how many within this range. Lock Count keeps the current card count instead.</p>
+                      <p class="empty abilityCountRangeHint">Min and max apply when the list is empty. Once abilities are here, randomize keeps that number: locked cards stay, the others are rewritten. Min does not add abilities. Max does not remove abilities you already have.</p>
                     </div>
                     <div id="abilityList" class="abilityList"></div>
                     <details class="powerTypeTips">
@@ -857,7 +870,7 @@
               <header class="sectionHeader">
                 <div class="sectionHeaderNav" data-setup-step-nav-host></div>
                 <div class="sectionHeaderText">
-                  <h2 class="sectionHeaderTitle">World</h2>
+                  <h2 class="sectionHeaderTitle" data-fold-default="closed">World</h2>
                   <p>Genre tags, map, opening place, tone, and physical rules. World vibe is in Primary.</p>
                 </div>
                 <button class="secondaryButton sectionHeaderAction" data-randomize-group="world" type="button">Randomize World</button>
@@ -1032,7 +1045,7 @@
               <header class="sectionHeader">
                 <div class="sectionHeaderNav" data-setup-step-nav-host></div>
                 <div class="sectionHeaderText">
-                  <h2 class="sectionHeaderTitle">People</h2>
+                  <h2 class="sectionHeaderTitle" data-fold-default="closed">People</h2>
                   <p>How dense the social world is, and what kind of conflicts drive it.</p>
                 </div>
                 <button class="secondaryButton sectionHeaderAction" data-randomize-group="people" type="button">Randomize People</button>
@@ -1107,7 +1120,7 @@
               <header class="sectionHeader">
                 <div class="sectionHeaderNav" data-setup-step-nav-host></div>
                 <div class="sectionHeaderText">
-                  <h2 class="sectionHeaderTitle">Rules</h2>
+                  <h2 class="sectionHeaderTitle" data-fold-default="closed">Rules</h2>
                   <p>Risk level, progression, and in-world interfaces. World difficulty is in Primary, not here.</p>
                 </div>
                 <button class="secondaryButton sectionHeaderAction" data-randomize-group="rules" type="button">Randomize Rules</button>
@@ -1292,7 +1305,7 @@
               <header class="sectionHeader">
                 <div class="sectionHeaderNav" data-setup-step-nav-host></div>
                 <div class="sectionHeaderText">
-                  <h2 class="sectionHeaderTitle">Checks &amp; Dice</h2>
+                  <h2 class="sectionHeaderTitle" data-fold-default="closed">Checks &amp; Dice</h2>
                   <p>Optional dice rolls for speech, strength, lore, events, and encounters. Specialized skills can still yield partial info when attributes are low.</p>
                 </div>
                 <button class="secondaryButton sectionHeaderAction" data-randomize-group="checks" type="button">Randomize Checks</button>
@@ -1543,16 +1556,28 @@
                 <span>MLE model</span>
                 <input name="mle_model" value="qwen3:8b" maxlength="200" />
               </label>
-              <div class="modelTokenGrid">
-                <label>
-                  <span>Soft Token Target</span>
-                  <input name="response_token_cap" type="number" min="64" max="100000" step="1" value="1500" />
+              <fieldset class="modelLimits">
+                <legend>Token limits</legend>
+                <p class="modelLimitsAuto">Automatic limits appear once a model is selected.</p>
+                <label class="modelLimitsMode">
+                  <input type="checkbox" name="limits_custom" />
+                  <span>Use my own numbers for this model and remember them</span>
                 </label>
-                <label>
-                  <span>Hard Token Cap</span>
-                  <input name="response_token_hard_cap" type="number" min="64" max="100000" step="1" value="2000" />
-                </label>
-              </div>
+                <div class="modelTokenGrid modelTokenGridThree">
+                  <label>
+                    <span>Context tokens</span>
+                    <input name="context_tokens" type="number" min="4096" max="131072" step="1024" value="32768" />
+                  </label>
+                  <label>
+                    <span>Soft Token Target</span>
+                    <input name="response_token_cap" type="number" min="64" max="100000" step="1" value="1500" />
+                  </label>
+                  <label>
+                    <span>Hard Token Cap</span>
+                    <input name="response_token_hard_cap" type="number" min="64" max="100000" step="1" value="2000" />
+                  </label>
+                </div>
+              </fieldset>
               <div class="modelButtonRow">
                 <button type="submit">Save Model</button>
                 <button class="secondaryButton testModelConnection" type="button">Test Connection</button>
@@ -1816,6 +1841,9 @@
                   <button type="button" class="mapDpadBtn mapDpadE" data-dx="1" data-dy="0" aria-label="East">East</button>
                   <button type="button" class="mapDpadBtn mapDpadS" data-dx="0" data-dy="1" aria-label="South">South</button>
                 </div>
+              </div>
+              <p id="mapTravelBanner" class="mapTravelBanner">Arrow keys or the pad walk one tile. Long trips wait until the scene clears.</p>
+              <h3 class="mapSectionTitle mapSubTitle" data-fold-default="closed">Map art</h3>
                 <div class="mapAvatarTools">
                   <label class="mapTilePx">
                     <span>Tile size</span>
@@ -1833,8 +1861,7 @@
                   <input id="mapAvatarUpload" type="file" accept="image/*" class="srOnly" tabindex="-1" />
                   <button type="button" class="secondaryButton chipBtn" id="mapAvatarClear">Clear</button>
                 </div>
-              </div>
-              <p id="mapTravelBanner" class="mapTravelBanner">Arrow keys walk only when What will you do? is not focused. The pad walks any time. Long trips may wait on the scene.</p>
+              <p class="mapTravelBanner mapTravelBannerOld" hidden>Arrow keys walk only when What will you do? is not focused. The pad walks any time. Long trips may wait on the scene.</p>
             </div>
             </section>
             <aside class="playSideDock" id="playSideDock" aria-label="You, inventory, and who is here">
@@ -1854,12 +1881,12 @@
               </section>
               <section class="mapSection" aria-labelledby="whoIsHereHeading">
                 <h3 class="dockLabel" id="whoIsHereHeading">Who is here</h3>
-                <p class="dockHint">Details opens this, and Link puts it in What will you do?. Delete it there to undo.</p>
+                <p class="dockHint">Hover to peek. Right-click for actions.</p>
                 <div id="sceneCastList" class="sceneCastList"></div>
               </section>
               <section class="mapSection" aria-labelledby="mapPackHeading">
                 <h3 class="dockLabel" id="mapPackHeading">Pack</h3>
-                <p class="dockHint">Details opens this, and Link puts it in What will you do?. Delete it there to undo.</p>
+                <p class="dockHint">Hover to peek. Right-click for actions.</p>
                 <div id="miniInventory" class="miniInventory"></div>
               </section>
             </aside>
@@ -2118,7 +2145,7 @@
           <div>
             <h2 id="entityTitle">Entity</h2>
             <p id="entityMeta"></p>
-            <p class="dockHint">Close or Escape leaves this. Link puts this in What will you do?. Delete it there to undo. Alias is optional.</p>
+            <p class="dockHint">Escape closes. Link puts this in What will you do?.</p>
           </div>
           <button id="closeEntityMenu" type="button">Close</button>
         </header>
@@ -2177,6 +2204,8 @@
     </div>
 
     <script src="/static/app.js?v=__BUNDLE__"></script>
+    <script src="/static/ui/interact.js?v=__BUNDLE__"></script>
+    <script src="/static/ui/failsafe.js?v=__BUNDLE__"></script>
     <script>
       // Fallback if app.js 404s without setting boot flag — already handled by timeout above.
     </script>

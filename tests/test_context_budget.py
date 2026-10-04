@@ -85,9 +85,17 @@ class TestDefaultContextFitsContract(unittest.TestCase):
         )
 
     def test_default_launcher_pref_matches(self):
-        pref = int(default_prefs()["llama_cpp_context"])
+        # "auto" hands the window to app/model_limits.py, whose default for an
+        # unknown model is the same full window; a number here must still fit.
+        pref = default_prefs()["llama_cpp_context"]
         needed = llm.estimated_tokens(SYSTEM_PROMPT) + llm.MIN_TURN_HEADROOM_TOKENS
-        self.assertGreaterEqual(pref, needed, "launcher default context is too small to play")
+        if str(pref).strip().lower() == "auto":
+            from app.model_limits import DEFAULT_CONTEXT_TOKENS, auto_context_tokens
+
+            self.assertGreaterEqual(DEFAULT_CONTEXT_TOKENS, needed)
+            self.assertGreaterEqual(auto_context_tokens({}, None)[0], needed)
+        else:
+            self.assertGreaterEqual(int(pref), needed, "launcher default context is too small to play")
 
     def test_default_config_selects_the_full_contract(self):
         system, _verify, degraded = llm.fitting_system_prompts({"provider": "mle"})

@@ -22,10 +22,13 @@ def default_prefs() -> dict[str, Any]:
         "api_base_url": "https://api.x.ai/v1",
         "api_model": "grok-4.5",
         "api_preset": "xai",
-        "llama_cpp_context": 32768,  # below ~12k the full system contract does not fit
+        # "auto": the model's own header and the GPU size the window and the
+        # response caps (app/model_limits.py). A number here is an explicit
+        # choice for every model and is exported as the env override.
+        "llama_cpp_context": "auto",
         "llama_cpp_gpu_layers": -1,
-        "soft_response_tokens": 1000,
-        "hard_response_tokens": 1500,
+        "soft_response_tokens": 0,
+        "hard_response_tokens": 0,
         "draft_mode": "dsl",
         "narration_pipeline": True,
         "narration_consolidate": True,
@@ -33,6 +36,18 @@ def default_prefs() -> dict[str, Any]:
         "open_browser": True,
         "ui_theme": "dusk",
     }
+
+
+def explicit_pref_int(value: Any) -> int:
+    """A positive number from a pref, or 0 for auto / blank / anything else."""
+    text = str(value if value is not None else "").strip().lower()
+    if not text or text == "auto":
+        return 0
+    try:
+        number = int(float(text))
+    except ValueError:
+        return 0
+    return number if number > 0 else 0
 
 
 def _provider_name(value: Any) -> str:
@@ -94,7 +109,12 @@ def apply_prefs_to_env(prefs: dict[str, Any] | None = None) -> dict[str, Any]:
     os.environ["AI_RPG_APP_PORT"] = str(p.get("app_port") or 8000)
     os.environ["AI_RPG_MODEL_PROVIDER"] = _provider_name(p.get("model_provider"))
     os.environ["MLE_MODEL"] = str(p.get("mle_model") or "qwen3:8b")
-    os.environ["AI_RPG_CONTEXT_TOKENS"] = str(int(p.get("llama_cpp_context") or 32768))
+    context = explicit_pref_int(p.get("llama_cpp_context"))
+    if context:
+        os.environ["AI_RPG_CONTEXT_TOKENS"] = str(context)
+    else:
+        # auto: leave the env unset so the server resolves the window per model.
+        os.environ.pop("AI_RPG_CONTEXT_TOKENS", None)
     os.environ["AI_RPG_NARRATION_PIPELINE"] = "1" if p.get("narration_pipeline") else "0"
     os.environ["AI_RPG_NARRATION_PIPELINE_CONSOLIDATE"] = "1" if p.get("narration_consolidate") else "0"
     os.environ["AI_RPG_FAST_VERIFICATION"] = "1" if p.get("fast_verification") else "0"
