@@ -549,7 +549,6 @@ let RANDOM_FIELD_ORDER = [
   "new_skill_frequency",
   "skill_growth_speed",
   "proficiency_growth_speed",
-  "custom_skills",
   "npc_density",
   "quest_style",
   "faction_pressure",
@@ -572,6 +571,8 @@ let RANDOM_FIELD_ORDER = [
   "previous_life_sex",
   "start_location",
   "special_abilities",
+  // After the character and powers: proficiencies come from both (playtest #1).
+  "custom_skills",
 ];
 
 /**

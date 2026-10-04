@@ -17,6 +17,22 @@ from typing import Any
 # Field contracts — kind + what intent may touch + paste bans
 # ---------------------------------------------------------------------------
 
+# The shape the Custom Proficiencies help text promises (playtest #1). Every
+# ask that writes custom_skills sends this; the old asks only said "skill
+# rules or named proficiencies" and a random fill came back as slogans.
+# After start, app/proficiencies.py settles the text into rows in the same
+# shape. No sample names here: the model pastes them.
+CUSTOM_SKILLS_SHAPE = (
+    "Comma-separated short phrases in plain words. Each is a named proficiency or a training rule. "
+    "A named proficiency is the plain name of a craft, trade, art or discipline this character could "
+    "be taught (a noun phrase, not a motto), followed in parentheses by its starting rank on rank_scale, "
+    "how its progress is tracked, and its hard limit; starting ranks sit in the lower half of "
+    "rank_scale, the lowest two for a weak start. A training rule says how proficiencies are found or "
+    "trained, how progress is tracked, or what caps growth, so a game master can check it in play. "
+    "Build every phrase from this character (character_backstory, special_abilities) and this world "
+    "(world_style, tech_level, magic_level). XP or rank formulas belong on the ability's growth_math."
+)
+
 FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "world_style": {
         "kind": "short_phrase",
@@ -224,8 +240,13 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "custom_skills": {
         "kind": "list_custom",
         "intent_keys": ["power_fantasy", "keywords", "genre"],
+        # Rolls last, in phase "powers", so nearby_setup already holds the
+        # backstory and the ability cards. No depends_on: its agree_with
+        # block repeated nearby_setup and, with the shape, doubled the roll
+        # time on Qwen3 8B (17s to 35s against a 45s timeout).
+        "shape": CUSTOM_SKILLS_SHAPE,
         "forbidden": (
-            "Comma-separated skill rules only; not a full idea dump. "
+            "Named proficiencies and training rules only; not a full idea dump, not mottos. "
             "Put long XP/rank formulas on ability growth_math instead of here."
         ),
     },
@@ -572,7 +593,6 @@ SETUP_COMPOSER_PHASES: list[dict[str, Any]] = [
             "new_skill_frequency",
             "skill_growth_speed",
             "proficiency_growth_speed",
-            "custom_skills",
         ],
         "depends_on": ["difficulty_edge", "world_frame"],
     },
@@ -614,7 +634,9 @@ SETUP_COMPOSER_PHASES: list[dict[str, Any]] = [
     {
         "id": "powers",
         "label": "Powers",
-        "fields": ["special_abilities"],
+        # custom_skills rolls last: its proficiencies come from the
+        # backstory and the ability cards (playtest #1).
+        "fields": ["special_abilities", "custom_skills"],
         "depends_on": ["identity", "progression", "world_peoples"],
     },
 ]

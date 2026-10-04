@@ -100,6 +100,9 @@ WORLD_TABLES = [
     # world's rows.
     "world_races",
     "world_facts",
+    # Settled custom proficiencies (app/proficiencies.py). A slot from
+    # before this table loads it empty; its custom_skills text stands.
+    "player_proficiencies",
 ]
 # Slots written before a table joined the export do not name it. Loading one
 # must not wipe rows that slot never stored. An empty list still replaces:
@@ -226,6 +229,7 @@ RESTORE_ORDER = [
     "name_ledger",
     "world_races",
     "world_facts",
+    "player_proficiencies",
 ]
 
 
@@ -5219,6 +5223,11 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             from app.world_facts import seed_from_options
 
             seed_from_options(conn, stored_options)
+            # Last world's settled proficiencies; the post-start pass
+            # writes this world's.
+            from app.proficiencies import clear_proficiencies
+
+            clear_proficiencies(conn)
             conn.execute("RELEASE SAVEPOINT world_facts")
         except Exception:
             try:
@@ -15454,8 +15463,8 @@ def start_playthrough_with_opening(options: dict[str, Any]) -> dict[str, Any]:
     except Exception:
         pass
     # Post-start, pre-turn-1: small model passes that turn setup text into
-    # validated engine rows (world facts now; custom proficiencies register
-    # here too). Skippable; the opening never waits on a failure.
+    # validated engine rows (world facts, then custom proficiencies).
+    # Skippable; the opening never waits on a failure.
     try:
         from app.world_facts import run_post_start_passes
 

@@ -20,6 +20,7 @@ from app.db import connect
 from app.idea_bank import idea_sparks_for_prompt, prompt_sparks
 from app.setup_composer import (
     COMPOSER_FIELD_ORDER,
+    CUSTOM_SKILLS_SHAPE,
     dependency_sorted,
     field_dependencies,
     OVERUSED_SEED_DOMAINS,
@@ -6363,7 +6364,8 @@ def coherence_review_setup(
             "Fiction may allow more powers later through play.",
             "When rewriting special_abilities, preserve or fill growth_math with concrete calculable formulas.",
             "Prefer concrete nouns and limits over adjectives like 'mysterious', 'ancient destiny', 'chosen'.",
-            "Keep custom_skills as one comma-separated string (no bullets).",
+            "Keep custom_skills as one comma-separated string (no bullets). When you rewrite it, use this "
+            "shape: " + CUSTOM_SKILLS_SHAPE,
             "STARTER GEAR + ORIGIN LOGIC: starter_equipment is what the player owns the instant Start is pressed. "
             "Origin, character_backstory, clothes, and kit must match world vibe as one package. "
             "If the destination is low-tech/fantasy isekai and the origin is modern/near-future tech life, "
@@ -6645,6 +6647,9 @@ def _field_contracts_for_prompt(
         forbidden = str(contract.get("forbidden") or "").strip()
         if forbidden:
             slim["forbidden"] = forbidden[:320]
+        shape = str(contract.get("shape") or "").strip()
+        if shape:
+            slim["shape"] = shape
         slim.update(_field_dependency_context(field, current_setup, locked_fields))
         if field == "starter_gear":
             gear_contract = gear_prompt_contract()
@@ -6794,7 +6799,12 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "custom_style": "Keep this as setting constraints, themes, bans, and must-have world details.",
             "race_magic_rules": "Keep this as clear per-race magic access rules. Preserve which races can cast, need training, or use alternate traditions.",
             "race_ability_rules": "Keep this as clear per-race innate or learned ability rules. Preserve limits and starting strength.",
-            "custom_skills": "Keep this as comma-separated skill discovery, training limits, progression rules, or named proficiencies. Use commas between every proficiency or rule phrase. Include starting proficiencies only when the user explicitly asks for named starting skills.",
+            "custom_skills": (
+                "Rewrite into this shape: " + CUSTOM_SKILLS_SHAPE + " "
+                "Keep every proficiency name, rank and limit the text already gives; add a start rank, "
+                "tracking or limit only where a named proficiency lacks one, and turn a phrase that names "
+                "no skill into the training rule it implies. Add no new starting proficiencies."
+            ),
             "ability_description": "Rewrite only the ability's immutable base description. Preserve scope and avoid adding broad new powers unless the user asked for them.",
             "ability_prerequisites": "Rewrite only the unlock condition, training need, item, oath, event, or other prerequisite.",
             "ability_cost": "Rewrite only the cost, cooldown, limit, injury, resource, debt, or drawback.",
@@ -7304,15 +7314,11 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "It is a world rule, not tied to the player's skills or rank, and it fits magic_level and tech_level."
             ),
             "custom_skills": (
-                "Comma-separated skill rules and named seed skills. For weak-seed / compounding fantasy "
-                "include: (1) seed skill name/domain, (2) starting rank, (3) how it compounds in fiction, "
-                "(4) how ranks are tracked (system UI vs DM notes), (5) XP sources in prose "
-                "(practice/mentors/risk/milestones), (6) hard limits. "
-                "Do NOT dump long XP formulas here — those belong on the ability growth_math field. "
-                "If current_setup has special_abilities, align the seed skill with that ability. "
-                "Never default to weather/observation/sandstorm/knot-work/ropework/fabric/barter/lie-detection/footsteps. "
-                "Pick a fresh practical domain each roll. Use commas between phrases. "
-                "User-locked custom_skills must not be rewritten."
+                "Write custom_skills in field_contract.shape from nearby_setup. Two to five phrases: one to "
+                "three proficiencies this character learned in the life character_backstory describes, one "
+                "sharing the first special ability's domain when there is one, then one or two training rules "
+                "for this world. For a weak-seed or compounding start, lead with the seed proficiency at the "
+                "lowest rank. User-locked custom_skills must not be rewritten."
             ),
             "quest_style": "Quest STRUCTURE only: how hooks arrive (emergent, job board, faction chains, personal mysteries). Never describe player skills, compounding, near-useless abilities, or power fantasy.",
             "faction_pressure": "Who squeezes the setting socially/politically (guilds, cults, military, local disputes). Never player skill growth or delayed compounding slogans.",
@@ -7565,7 +7571,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Prefer the word transmigrated for the mode; do not confuse the AI with using 'isekai' as the backstory_mode label.",
                 "Do not write first-person diary voice (I/my). Do not invent chosen-one destiny or paste skill/compounding text into backstory.",
                 "custom_skills and special_abilities should fit the concrete backstory, race rules, world rules, and any optional identity fields already generated.",
-                "custom_skills must be one comma-separated string when present; never use bullets or newlines for proficiencies.",
+                "custom_skills follows field_contracts.custom_skills.shape: named proficiencies with start rank, tracking and hard limit, and training rules, one comma-separated string.",
                 "special_abilities: use each card's locked + prerequisites for learned vs starting powers. Empty list means no special powers.",
             ],
             "rules": base_rules
@@ -7664,11 +7670,20 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     # Why the abilities came from the seed pool instead of the model, if they did.
     # The UI shows this; a silent swap looked like "randomize always falls back".
     ability_fallback_reason = ""
+    # custom_skills now answers with named proficiencies, each with rank,
+    # tracking and limit (playtest #1). On Qwen3 8B that roll measured 39-43s
+    # against the 45s default, so it gets the longer budget the other long
+    # fields' retries already have.
+    roll_timeout = (
+        _model_timeout(90, 240, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT")
+        if not text_mode and return_fields == ["custom_skills"]
+        else _model_timeout(45, 240, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT")
+    )
     try:
         result = _chat_json(
             "Return JSON only. Generate direct values. Do not explain. Do not echo the request.",
             json.dumps(prompt, ensure_ascii=True),
-            timeout=_model_timeout(45, 240, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
+            timeout=roll_timeout,
             phase="setup_randomize",
             max_tokens=token_cap,
         )
@@ -8198,7 +8213,15 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                     else ""
                 ),
                 "ban_overused_domains": sorted(OVERUSED_SEED_DOMAINS),
-                "return_shape": {"custom_skills": "comma-separated skill fiction string"},
+                "return_shape": {"custom_skills": "comma-separated proficiency and training-rule phrases"},
+                "context": {
+                    key: current_setup.get(key)
+                    for key in (
+                        "character_backstory", "world_style", "tech_level", "magic_level",
+                        "rank_scale", "skill_style", "proficiency_access",
+                    )
+                    if current_setup.get(key) not in (None, "", [], {})
+                },
                 "rules": (
                     [
                         "Lead with 'weak seed skill: <OriginalName>'.",
@@ -8208,9 +8231,9 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                     ]
                     if one_skillish
                     else [
-                        "Write 1-3 concrete skill rules or training paths in a single comma-separated string.",
-                        "Each clause should be a full phrase (not bare keywords like 'system UI, risk').",
-                        "Mention how skills grow (practice, mentors, reputation) without dumping rank tables here.",
+                        "Shape: " + CUSTOM_SKILLS_SHAPE,
+                        "Each named proficiency states its start rank, how its progress is tracked and its hard limit; "
+                        "build them from context.",
                         "Output custom_skills only as one string.",
                     ]
                 ),

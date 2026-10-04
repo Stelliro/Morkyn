@@ -957,6 +957,14 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
+    # Settled custom proficiencies (playtest #1).
+    try:
+        from app.proficiencies import ensure_proficiency_table
+
+        ensure_proficiency_table(conn)
+    except Exception:
+        pass
+
     # Titles system (added in 0.10.0-wip)
     try:
         from app.titles import init_titles

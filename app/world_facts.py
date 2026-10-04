@@ -1040,3 +1040,7 @@ def apply_refinement(conn, content: str) -> dict[str, Any]:
 
 
 register_post_start_pass("world_facts", refine_from_model)
+
+# Custom proficiencies (playtest #1) register the second pass on import, so
+# it runs after the world facts it may add rule rows beside.
+import app.proficiencies  # noqa: E402,F401
