@@ -90,10 +90,34 @@ def resolve_model_path(model: str = "") -> Path | None:
     found = _file_if_exists(os.getenv("MLE_GGUF") or "")
     if found is not None:
         return found
+    # "The only GGUF in the folder" stands in for the default name alone. A
+    # model the player named (a path, or a file name other than the default)
+    # that is not on disk is missing: loading some other file in its place
+    # meant a launcher set to qwen3:8b quietly ran Qwen2.5 7B, and a path to a
+    # model that does not exist reported ready.
+    if any(_is_named_choice(candidate) for candidate in (requested, env_model)):
+        return None
     files = _gguf_files(models_dir())
     if len(files) == 1:
         return files[0]
     return None
+
+
+def _is_named_choice(value: str) -> bool:
+    text = str(value or "").strip()
+    return bool(text) and text.lower() != DEFAULT_MODEL.lower()
+
+
+def substitution_note(model: str = "") -> str:
+    """Say so when the default name resolved to a differently named file."""
+    path = resolve_model_path(model)
+    label = _label(model)
+    if path is None or _looks_like_path(label):
+        return ""
+    want = _bare_filename(label).lower().removesuffix(".gguf")
+    if want and want == path.stem.lower():
+        return ""
+    return f"{label} is not in {models_dir()}; loaded {path.name}, the only GGUF there."
 
 
 def chat(
@@ -139,7 +163,19 @@ def loaded_context() -> int:
 
 
 def status(model: str = "") -> dict[str, Any]:
-    """ok is true only after the GGUF file has loaded."""
+    """ok is true only after the GGUF file has loaded; names the file that did."""
+    report = _status(model)
+    path = resolve_model_path(model)
+    if path is not None:
+        report["file"] = path.name
+        note = substitution_note(model)
+        if note:
+            report["substituted"] = True
+            report["detail"] = f"{note} {report.get('detail') or ''}".strip()
+    return report
+
+
+def _status(model: str = "") -> dict[str, Any]:
     label = _label(model)
     path = resolve_model_path(model)
     if path is None:

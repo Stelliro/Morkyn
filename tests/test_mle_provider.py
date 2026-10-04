@@ -162,6 +162,23 @@ class TestMleProvider(unittest.TestCase):
         with patch.dict(os.environ, {"MLE_GGUF": str(only), "MLE_MODEL": ""}):
             self.assertEqual(resolve_model_path("qwen3:8b"), only)
 
+    def test_a_named_model_that_is_missing_is_missing(self):
+        from app.mle import substitution_note
+
+        only = self.models / "qwen2.5-7b-instruct-q4_k_m.gguf"
+        only.write_bytes(b"GGUF")
+        # The default name may stand in for the only file, and says so.
+        self.assertEqual(resolve_model_path("qwen3:8b"), only)
+        self.assertIn("qwen2.5-7b-instruct-q4_k_m.gguf", substitution_note("qwen3:8b"))
+        # Anything the player actually named is not swapped for another file.
+        self.assertIsNone(resolve_model_path("qwen3-14b"))
+        self.assertIsNone(resolve_model_path(str(Path(self._tmp.name) / "gone.gguf")))
+        with patch.dict(os.environ, {"MLE_MODEL": str(Path(self._tmp.name) / "gone.gguf")}):
+            self.assertIsNone(resolve_model_path("qwen3:8b"))
+            self.assertFalse(status("qwen3:8b")["ok"])
+        # A file whose name matches needs no note.
+        self.assertEqual(substitution_note("qwen2.5-7b-instruct-q4_k_m"), "")
+
     def test_sample_cover_uses_journal_not_the_packet(self):
         db_path = Path(self._tmp.name) / "journal.db"
         conn = sqlite3.connect(db_path)
