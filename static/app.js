@@ -2975,10 +2975,17 @@ function assignAbilityLocksAfterCreation(abilities = [], origin = abilityOrigin(
     }
   });
 
-  return diversifyAbilityPrerequisites(list).map((ab) => {
+  const result = diversifyAbilityPrerequisites(list).map((ab) => {
     if (!ab.locked) ab.prerequisites = "";
     return ab;
   });
+  // A progression start keeps one power usable on turn one (server rule
+  // ensure_an_opening_power). This browser re-roll used to lock it again.
+  if (result.length && result.every((ab) => ab.locked) && intentWantsPowers()) {
+    result[0].locked = false;
+    result[0].prerequisites = "";
+  }
+  return result;
 }
 
 function applyOriginToAbility(ability = {}) {

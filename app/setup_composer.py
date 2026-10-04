@@ -5137,14 +5137,15 @@ def _pockets_for_job(job: str) -> tuple[str, ...]:
 
 
 _TX_CLOSERS: tuple[str, ...] = (
-    "Play begins at that arrival — they are a newcomer with ordinary habits, not a local plot already in motion.",
-    "The campaign opens on that threshold: former-world memory intact, no free power, everything still to learn.",
-    "From that first unfamiliar hour forward, they must invent a life here without a hero starter pack.",
-    "Nothing here knows their name yet; the story starts cold at the landing, not mid-local intrigue.",
-    "They keep modern reflexes and empty pockets — useful habits, not destiny gear.",
-    "Whatever comes next starts from that first disoriented breath in a place that is not Earth.",
-    "They are not a native of this plotline; they are a late arrival who still dresses wrong.",
-    "Local laws, monsters, and manners are all unread manuals — the opening is pure arrival shock.",
+    # In-world closing lines. The old ones were the template's rules written
+    # as prose ("no free power", "without a hero starter pack", "not destiny
+    # gear", "the story starts cold at the landing, not mid-local intrigue").
+    "Nobody there knew their name, and the road out was the only thing that looked familiar.",
+    "They stood up, counted what was left in their pockets, and started walking.",
+    "The first hour went to learning which way the wind carried voices.",
+    "Their old habits came with them; the language, the coins and the customs did not.",
+    "Someone nearby was already watching the stranger who had appeared out of nowhere.",
+    "The air smelled wrong, the light fell at the wrong angle, and they were very much awake.",
 )
 
 
