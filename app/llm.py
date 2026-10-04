@@ -3054,6 +3054,74 @@ def _sanitize_player_name(value: Any, *, forbidden: str = "") -> str:
     return "Mara Ellison"
 
 
+_TECH_BY_GENRE: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
+    (("space", "star", "orbital", "galactic", "void", "salvage"), ("spacefaring salvage",)),
+    (("cyber", "neon", "near future", "near-future", "corporate", "megacity", "modern", "urban", "contemporary"), ("near future",)),
+    (("steam", "industrial", "noir", "gaslight", "clockwork", "iron front", "trench", "rail"), ("early industrial",)),
+    (("wasteland", "apocalypse", "post-apocalyptic", "ruin"), ("early industrial", "near future")),
+    (("bronze", "ancient", "tribal", "stone"), ("iron age",)),
+    (("fantasy", "sword", "sect", "wuxia", "xianxia", "cultivation", "kingdom", "court", "gothic", "frontier", "medieval"), ("medieval", "iron age")),
+)
+
+
+def _fallback_tech_level(setup: dict[str, Any], intent: dict[str, Any] | None) -> str:
+    """A tech level that fits the world's genre; the pool used to hand a frontier fantasy 'spacefaring salvage'."""
+    blob = " ".join(
+        str(x or "")
+        for x in (
+            setup.get("world_style"),
+            (intent or {}).get("genre") if isinstance(intent, dict) else "",
+            setup.get("custom_style"),
+        )
+    ).lower()
+    for words, choices in _TECH_BY_GENRE:
+        if any(word in blob for word in words):
+            return random.choice(choices)
+    current = str(setup.get("tech_level") or "").strip()
+    return current or "medieval"
+
+
+def _intent_is_progression(intent: dict[str, Any] | None) -> bool:
+    pf = (intent or {}).get("power_fantasy") if isinstance(intent, dict) else None
+    pf = pf if isinstance(pf, dict) else {}
+    return str(pf.get("growth") or "").lower() == "compounding" or str(pf.get("start_power") or "").lower() in {"near_useless", "weak"}
+
+
+def _fallback_progression_skills(setup: dict[str, Any]) -> str:
+    """custom_skills for a progression idea when the model is down: name the seed, never 'do not seed skills'."""
+    abilities = setup.get("special_abilities") if isinstance(setup.get("special_abilities"), list) else []
+    seed = next((str(a.get("name") or "").strip() for a in abilities if isinstance(a, dict) and str(a.get("name") or "").strip()), "")
+    lead = f"weak seed skill: {seed}" if seed else "one weak seed skill, named when it first shows"
+    return _comma_separated_phrases(
+        f"{lead}, rank F at the start, grows with practice, risk and training toward high ranks, "
+        "breakthroughs at rank thresholds, more skills unlock through play"
+    )
+
+
+# Which fallback names read as which sex. The offline fallback picked from the
+# whole pool, so a character with player_sex "male" came back "Nadia Voss".
+FALLBACK_NAME_SEX = {
+    "female": {
+        "Mara Ellison", "Iris Vale", "Tamsin Reed", "Elena Croft", "Liora Dane",
+        "Nadia Voss", "Helena Kade", "Miriam Shaw", "Celia Thorn", "Ava Mercer",
+    },
+    "male": {
+        "Corvin Hale", "Kael Morin", "Jonas Pike", "Marcus Bell", "Tobias Wren",
+        "Darius Cole", "Owen Graves", "Felix Rourke",
+    },
+}
+
+
+def _fallback_names_for_sex(sex: str) -> list[str]:
+    """The pool narrowed to names that read as ``sex``; the whole pool when sex is open."""
+    pool = list(SETUP_RANDOMIZER_FALLBACKS.get("player_name") or [])
+    key = str(sex or "").strip().lower()
+    if key not in FALLBACK_NAME_SEX:
+        return pool
+    other = set().union(*(names for k, names in FALLBACK_NAME_SEX.items() if k != key))
+    return [name for name in pool if name not in other] or pool
+
+
 def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
     if field in PREVIOUS_LIFE_IDENTITY_FIELDS and not _setup_has_former_life_identity(current_setup):
         return ""
@@ -3071,7 +3139,7 @@ def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
         return _fallback_starter_gear(current_setup)
     if field == "player_name":
         forbid = str(current_setup.get("player_name") or "")
-        values = list(SETUP_RANDOMIZER_FALLBACKS.get("player_name") or [])
+        values = _fallback_names_for_sex(str(current_setup.get("player_sex") or ""))
         random.shuffle(values)
         for value in values:
             cleaned = _sanitize_player_name(value, forbidden=forbid)
@@ -3105,6 +3173,28 @@ def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
             return _comma_separated_phrases(value)
         return value
     return current_setup.get(field)
+
+
+# Starting letters common across naming cultures; rare ones (Q, X, Z, U, Y, I)
+# would push the model toward invented-sounding names.
+_NAME_INITIALS = "ABCDEFGHJKLMNOPRSTW"
+
+
+def _name_initials_hint(rng: random.Random | None = None) -> dict[str, str]:
+    """
+    A random starting letter for the given and the family name.
+
+    Shown instead of example names: a 7B/8B pastes examples, and unsteered it
+    returns its house names (four Qwen3 8B rolls in a row ended in "Voss").
+    """
+    rng = rng or random
+    given = rng.choice(_NAME_INITIALS)
+    family = rng.choice(_NAME_INITIALS.replace(given, "") or _NAME_INITIALS)
+    return {
+        "given_name_starts_with": given,
+        "family_name_starts_with": family,
+        "rule": "Start the given name with given_name_starts_with and any family name with family_name_starts_with, unless a locked or former-world name says otherwise.",
+    }
 
 
 def _ability_fingerprint(ability: dict[str, Any] | None) -> str:
@@ -5298,6 +5388,13 @@ def sanitize_ability_name(name: Any) -> str:
     # Order matters: strip "Variant 7" / "(2)" before bare trailing digits.
     text = re.sub(r"\s+Variant\s+\d{1,3}$", "", text, flags=re.I)
     text = re.sub(r"\s*\(\d{1,3}\)\s*$", "", text)
+    # Retry wording the model copies into the name: "Eclipse Sigil (Reinvented)".
+    text = re.sub(
+        r"\s*[\(\[](?:re-?invented|revised|reworked|new|alt(?:ernate)?|v\d+|version \d+|remix|updated|variant)[\)\]]\s*$",
+        "",
+        text,
+        flags=re.I,
+    )
     # "Salt Circle 52", "Name Whisper 40", "Lamp Glare 87"
     text = re.sub(r"\s+\d{1,3}$", "", text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -6063,8 +6160,31 @@ def fallback_setup_randomization(group: str, current: dict[str, Any] | None = No
     fields: dict[str, Any] = {}
     intent_plan = _resolve_setup_intent(current_setup)
     idea = str(current_setup.get("_randomize_idea") or intent_plan.get("raw_idea") or "")
+    # What the idea already decided. The fallback used to roll every field from
+    # a flat pool, so the Overpowered preset came back with levelling off and
+    # magic "forbidden" while its seed power cost mana.
+    try:
+        from app.setup_composer import intent_to_field_overrides
+
+        intent_fields = intent_to_field_overrides(
+            intent_plan, set(current_setup.get("_locked_fields") or [])
+        )
+    except Exception:
+        intent_fields = {}
+    # The custom_skills override is a skeleton the model is meant to expand.
+    intent_fields.pop("custom_skills", None)
     for field in return_fields:
-        value = _fallback_setup_value(field, {**current_setup, **fields})
+        so_far = {**current_setup, **fields}
+        if field in intent_fields:
+            value = intent_fields[field]
+        elif field == "custom_style":
+            value = structural_fallback(field, {**so_far, "_compose_intent": intent_plan})
+        elif field == "tech_level":
+            value = _fallback_tech_level(so_far, intent_plan)
+        elif field == "custom_skills" and _intent_is_progression(intent_plan):
+            value = _fallback_progression_skills(so_far)
+        else:
+            value = _fallback_setup_value(field, so_far)
         if value is None:
             continue
         if field_is_contaminated(field, value, idea):
@@ -6072,6 +6192,11 @@ def fallback_setup_randomization(group: str, current: dict[str, Any] | None = No
             if clean is not None:
                 value = clean
         fields[field] = value
+    # No world magic means no racial casting either; the random pair
+    # ("forbidden", true) let a seed power charge mana.
+    magic_now = str(fields.get("magic_level") or current_setup.get("magic_level") or "").strip().lower()
+    if magic_now in {"none", "forbidden"} and "race_magic_enabled" in return_fields:
+        fields["race_magic_enabled"] = False
     if "custom_skills" in fields:
         fields["custom_skills"] = _comma_separated_phrases(fields.get("custom_skills"))
     fields, _dirty = sanitize_setup_fields(
@@ -6081,6 +6206,15 @@ def fallback_setup_randomization(group: str, current: dict[str, Any] | None = No
     )
     if isinstance(fields.get("starter_gear"), list):
         fields["starter_equipment"] = gear_names(fields["starter_gear"])
+    # Answer only what was asked. sanitize_setup_fields returns the fields it
+    # cross-checked from context too (backstory_mode, world_style, tone, ...),
+    # many of them defaulted because the browser snapshot holds only the fields
+    # before the active one, and the page applied every one: a transmigrated
+    # start flipped to "known" on Start. The model path already answers narrowly.
+    allowed = set(return_fields)
+    if "starter_gear" in allowed:
+        allowed.add("starter_equipment")
+    fields = {key: value for key, value in fields.items() if key in allowed}
     return {
         "fields": fields,
         "fallback_used": True,
@@ -6672,6 +6806,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             # male character was handed a feminine name, and one of the
             # examples was feminine.
             "depends_on": _field_dependency_context("player_name", current_setup, locked_fields),
+            "name_shape": _name_initials_hint(),
             "return_shape": {"player_name": "Given name, or Given + family name"},
             "name_rules": [
                 "player_name is a real personal name: a given name alone, or a given name plus a family name.",
@@ -6729,7 +6864,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         sample_n = min(6, len(SEED_SKILL_DOMAIN_POOL))
         inspiration_only = [
             {
-                "name": d.get("name"),
+                # No "name": a 7B/8B pastes names it is shown (Weapon Name,
+                # Guest Right, Bone Broth came back verbatim on Qwen3 8B).
                 # Clean player-facing effect only — never paste tier/lane tags into ability text.
                 "effect_hint": d.get("hint"),
                 "requires": d.get("requires") or "",
@@ -6849,6 +6985,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "If two powers would feel the same in play, replace the weaker one with a distinct domain.",
                 "Do not use banned overused domains (Observation, knots/ropework, fabric/thread sense, barter, lie detection, footstep tracking, weather/sandstorm defaults).",
                 "Obscure is good; unusable is not. Every ability needs a concrete turn-1 action or always-on effect with a limit.",
+                "Write effects as what happens in the story. This game has no armor class, saving throws, advantage, or damage types: never write AC, saves, advantage/disadvantage, d20, or 'resistance to bludgeoning'. Numbers are for duration, size, count, or the rank math only.",
+                "One cost per ability, stated once. Do not repeat a cooldown, and do not let the description name a different frequency than the cost.",
                 "Spectrum is allowed: simple practical powers AND advanced lanes (summoning, necromancy, healing/support, weapon-bound arts, tool rites).",
                 "If a power needs a tool/weapon/focus, state that in description or cost; F-rank clumsy, high ranks make the item legendary-adjacent.",
                 "Focus on inventing distinct powers (name, description, cost, growth_math). Mix inherent and trained-feeling fiction as fits the world. The app assigns locked/prerequisites AFTER generation: stronger powers are more likely locked with unlock paths; weaker ones stay usable at Start. You may still set locked as a hint, but power level of the fiction matters more.",
@@ -7040,6 +7178,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             ),
             "character_backstory": (
                 "Generate 2-4 concise third-person sentences of actual character history (use they/their, never I/my). "
+                "If start_location is set, the last sentence leaves the character at start_location. "
                 "INVENT a FRESH job, city, death/transport method, and arrival detail every roll — do NOT reuse stock clones. "
                 "BANNED stock motifs (never use): Seoul warehouse, expired coffee, half-eaten bento, coin that always lands heads, "
                 "collapsing ceiling + blue light, dust-covered alley + rusted wrench, Neo-Silicon, Iron Spire, night-shift forklift clones, "
@@ -7092,12 +7231,20 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             ),
             "world_races": "Generate a concise list of peoples/species only (e.g. human; human, elf, beastfolk). Include human unless excluded. Never power labels like Low-Power Human, and never skill/growth slogans.",
             "race_magic_rules": "Generate clear per-race magic access rules only. State who can cast, training vs innate, taboos. Do NOT paste global skill compounding delays, cooldowns, or player power fantasy.",
-            "race_ability_rules": "Generate clear per-race non-spell ability rules only. Cover modest innate gifts and learned racial arts. Do NOT dump 'near-useless skill compounds' or level-delay timers for all races.",
+            "race_ability_rules": (
+                "Describe, for each people in world_races, their non-spell gifts and learned racial arts as they are for that people as a whole: "
+                "modest innate senses or knacks, and what training can add. Plain prose, one or two sentences per people. "
+                "It is about the peoples, not the player character, and it uses words, not tabletop shorthand (no d20, 1d6, long rest, feet ranges)."
+            ),
             "narration_detail": "Generate one prose-detail preference such as concise, balanced, rich, expansive, or a short custom rule for how much scene text each turn should include.",
             "loot_rarity": "Generate one loot rarity policy. It should control how often mundane, rare, enchanted, unique, or legendary items appear.",
             "inventory_weight_limit": "Generate a practical base carry weight limit as a number. Low-powered starts should be modest; superhuman starts can be higher if supported.",
             "inventory_slot_limit": "Generate a practical packed inventory slot limit as a number. Backpacks and containers can change slots later, but base slots should stay understandable.",
-            "inventory_rules": "Generate concise carrying and equipment rules, including whether magic storage, backpacks, many accessories, or superhuman item quantities are common.",
+            "inventory_rules": (
+                "Describe how carrying and equipment work in this world for everyone: how much a person can haul, whether packs, carts, "
+                "pack animals, magic or tech storage exist and how common they are, and what wearing many accessories costs. "
+                "It is a world rule, not tied to the player's skills or rank, and it fits magic_level and tech_level."
+            ),
             "custom_skills": (
                 "Comma-separated skill rules and named seed skills. For weak-seed / compounding fantasy "
                 "include: (1) seed skill name/domain, (2) starting rank, (3) how it compounds in fiction, "
@@ -8567,6 +8714,9 @@ def _validate_setup_randomization(
             if power_type not in allowed_power_types:
                 power_type = "linear"
             ability["power_type"] = power_type
+            clean_name = sanitize_ability_name(ability.get("name"))
+            if clean_name:
+                ability["name"] = clean_name
             cleaned_abilities.append(ability)
         # Clamp to the same 1–4 range / lock policy the UI uses (Simple + Advanced).
         setup = current_setup if isinstance(current_setup, dict) else {}
@@ -8595,7 +8745,8 @@ def _validate_setup_randomization(
         if not isinstance(raw_gear, list):
             raise LlmError("Randomizer returned starter_gear, but it was not a list.")
         gear_setup = current_setup if isinstance(current_setup, dict) else {}
-        items = normalize_gear_list(raw_gear, context=gear_context_from_setup(gear_setup))
+        # Model output: the item name outranks a wrong slot; absurd weights are re-estimated.
+        items = normalize_gear_list(raw_gear, context=gear_context_from_setup(gear_setup), trust=False)
         result["starter_gear"] = _merge_starter_gear(items, gear_setup)
         result["starter_equipment"] = gear_names(result["starter_gear"])
 

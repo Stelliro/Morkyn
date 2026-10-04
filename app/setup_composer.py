@@ -1055,6 +1055,9 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
             set_if_free("skill_levels_enabled", True)
 
     if growth == "compounding":
+        # A progression fantasy needs levels to climb; the 8B and the offline
+        # fallback both turned this off for the Overpowered preset.
+        set_if_free("leveling_system", True)
         set_if_free("skill_growth_speed", "very fast")
         set_if_free("proficiency_growth_speed", "fast")
         set_if_free("xp_growth_speed", "fast")
@@ -1188,7 +1191,8 @@ def intent_to_field_overrides(intent: dict[str, Any], locked: set[str] | None = 
     if system_ui:
         style_bits.append("A readable game-system window can appear in-world without breaking immersion.")
     if growth == "compounding":
-        style_bits.append("Power fantasy: start weak, growth compounds through play, never auto-win.")
+        # World scope: how power is earned here, not what one character holds.
+        style_bits.append("Power here is earned: talent starts small and grows with risk and training; nobody is born strong.")
     dm = str(intent.get("dm_stance") or "").strip()
     if dm:
         style_bits.append(f"DM stance: {dm}")
@@ -1911,10 +1915,10 @@ def player_facing_domain_description(domain: dict[str, Any] | None) -> str:
     else:
         body = f"{name} is a faint, unreliable aptitude — barely more than a habit at first."
     if req:
-        body += f" It only answers cleanly when you have {req}."
-    body += " At F rank the effect is brief, incomplete, or easy to miss."
-    if late:
-        body += f" With practice it may grow toward {late} — never as a free start."
+        body += f" Requires: {req}."
+    # The late payoff ("compounds_to") is growth fiction for the DM and the
+    # growth math, not the player's base description, and "at F rank the effect
+    # is brief" is a design note. Both used to be appended here.
     return body[:800]
 
 

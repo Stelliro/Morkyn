@@ -500,7 +500,14 @@ def normalize_gear_ability(raw: Any, item_name: str = "") -> dict[str, Any] | No
     }
 
 
-def normalize_gear_item(raw: Any, *, context: dict[str, Any] | None = None, rng: random.Random | None = None, roll_missing: bool = True) -> dict[str, Any] | None:
+def normalize_gear_item(
+    raw: Any,
+    *,
+    context: dict[str, Any] | None = None,
+    rng: random.Random | None = None,
+    roll_missing: bool = True,
+    trust: bool = True,
+) -> dict[str, Any] | None:
     """
     One item, validated. Blank numbers are rolled from the world when ``roll_missing``.
 
@@ -518,6 +525,13 @@ def normalize_gear_item(raw: Any, *, context: dict[str, Any] | None = None, rng:
     # A worn word in the slot box the model made up ("legs/feet") still lands on the name's slot.
     if slot == CARRIED and str(slot_in or "").strip():
         slot = slot_for_name(name)
+    # Model output (trust=False): the item's own name outranks the slot the
+    # model picked. Qwen3 8B put a pocket knife on WRIST and a satchel on
+    # WAIST. A player's card keeps whatever slot the player chose.
+    if not trust:
+        by_name = slot_for_name(name)
+        if by_name and by_name != slot:
+            slot = by_name
     item = {
         "name": name,
         "slot": slot,
@@ -534,9 +548,19 @@ def normalize_gear_item(raw: Any, *, context: dict[str, Any] | None = None, rng:
         if key not in raw_stats and key in raw:
             raw_stats = {**raw_stats, key: raw.get(key)}
     item["item_stats"] = roll_item_stats({**item, "item_stats": raw_stats}, context, rng) if roll_missing else {k: raw_stats[k] for k in ITEM_STAT_KEYS if k in raw_stats}
+    if not trust and "weight" in item["item_stats"]:
+        # Boots at 6 kg and an empty satchel at 4 kg came back from the model.
+        # Far from the engine's estimate for this name and slot, the estimate wins.
+        estimate = _weight_for(name, slot, random.Random(0))
+        given = _float(item["item_stats"].get("weight"), estimate)
+        if estimate > 0 and not (estimate / 3.0 <= given <= estimate * 3.0):
+            item["item_stats"]["weight"] = round(estimate, 2)
     if roll_missing and "stats" not in raw and not item["stats"] and not any(k in raw for k in ("stat_bonuses", "stat_modifiers", "bonuses")):
         item["stats"] = roll_stat_bonuses(item, context, rng)
         item["_stats_rolled"] = True
+    if item["slot"] == CARRIED:
+        # Stat bonuses apply to the wearer while worn; a carried item gives none.
+        item["stats"] = {}
     abilities_raw = raw.get("abilities") if raw.get("abilities") is not None else raw.get("granted_abilities")
     if isinstance(abilities_raw, (str, dict)):
         abilities_raw = [abilities_raw]
@@ -556,6 +580,7 @@ def normalize_gear_list(
     rng: random.Random | None = None,
     fill_required: bool = True,
     roll_missing: bool = True,
+    trust: bool = True,
 ) -> list[dict[str, Any]]:
     """
     The whole starting kit, validated.
@@ -575,7 +600,7 @@ def normalize_gear_list(
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
     for entry in raw_list if isinstance(raw_list, list) else []:
-        item = normalize_gear_item(entry, context=ctx, rng=rng, roll_missing=roll_missing)
+        item = normalize_gear_item(entry, context=ctx, rng=rng, roll_missing=roll_missing, trust=trust)
         if not item or item["name"].lower() in seen:
             continue
         seen.add(item["name"].lower())

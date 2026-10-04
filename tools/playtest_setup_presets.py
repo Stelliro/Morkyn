@@ -173,6 +173,10 @@ def run_one(pw, base: str, name: str, mode: str, preset: str, typed_idea: str, t
     open_setup(page, base)
     result: dict = {"run": name, "mode": mode, "preset": preset}
     if mode != "untouched":
+        # The presets card opens collapsed; a player clicks it open first.
+        if not page.locator("#presetSelect").is_visible():
+            page.locator("#setupPresetToggle").click()
+            page.wait_for_timeout(400)
         page.select_option("#presetSelect", f"preset:{preset}")
         page.wait_for_timeout(600)
         if mode == "typed":
@@ -185,6 +189,20 @@ def run_one(pw, base: str, name: str, mode: str, preset: str, typed_idea: str, t
         result["walk_seconds"] = wait_for_walk(page, timeout_s)
     snap = page.evaluate(SNAPSHOT)
     result.update(snap)
+    # Start runs expandSimpleSetupDepth() before it posts the setup; Simple
+    # Randomize leaves tone, tech, start location, custom skills and the like
+    # to that pass. Run it here (without starting the game) and record what
+    # Start would actually send.
+    t1 = time.time()
+    try:
+        page.evaluate("async () => { if (typeof setupUiMode !== 'undefined' && setupUiMode === 'simple') await expandSimpleSetupDepth(); }")
+        page.wait_for_timeout(1500)
+        after = page.evaluate(SNAPSHOT)
+        result["at_start"] = {k: after[k] for k in ("fields", "gear", "abilities", "status")}
+        result["at_start"]["log"] = after["log"][len(snap["log"]):]
+    except Exception as exc:  # noqa: BLE001
+        result["at_start"] = {"error": str(exc)[:400]}
+    result["expand_seconds"] = round(time.time() - t1, 1)
     result["page_errors"] = errors
     result["console"] = console[-60:]
     try:
