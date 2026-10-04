@@ -42,6 +42,7 @@ Morkyn/
 |   |-- __init__.py
 |   |-- content_packs.py             # JSON packs: skills/powers/items/tables + authoring spec
 |   |-- conversation.py              # Who the player is talking to (active speaker engine)
+|   |-- scene_thread.py              # What the player is in the middle of (pursuit, quest, companions)
 |   |-- db.py                        # SQLite connection, schema, migrations
 |   |-- gear.py                      # Starting gear: item shape, body slots, engine stat rolls
 |   |-- encounters.py                # Danger model + encounter resolution
@@ -142,6 +143,14 @@ Morkyn/
 - **Key API:** `resolve()` (order: @tag, present NPC named as the addressee, group phrase, chip pick, then the stored target: revealed / answering partner / last speaker), `next_state()` (pure post-turn update), `update_after_turn()`, `choose()`, `view()`, `model_note()`, `world_view()`, `writer_view()`, `speakers_in()`.
 - **Consumers:** `app.world.play_turn` (`context['conversation_turn']`, draft footer via `_expand_input_references`), `app.world.apply_turn` (after the scene cast), `app.world.get_state` (`state['conversation']`), `app.prompts._visible_world` (`world_state.conversation_turn`), `app.narration_pipeline.build_paragraph_briefs` and the consolidator in `app.llm`, `/api/conversation/target`, the "Talking to" chip in `static/app.js`.
 - **Design Notes:** State is the `settings.conversation` row (in `SNAPSHOT_SETTING_KEYS`, exported with saves); `active_scene.interacting` is rewritten to the target. The roster is NPCs at the player's location plus party members; a name or tag of someone elsewhere is never the addressee.
+
+#### Scene Thread
+
+- **Files:** `app/scene_thread.py`
+- **Purpose:** Keeps what the player is in the middle of (a pursuit in their own words or an accepted quest step, its target, who came along) so a side action happens inside it instead of resetting the scene (playtest #20).
+- **Key API:** `begin_turn()` (pure, before the draft: pursuit, invitation, drop), `next_thread()` (pure post-turn update from the quest report, prose and location), `update_after_turn()`, `world_view()`, `writer_view()`, `suggestion_view()`, `pursuit_in()`, `follow_target()`.
+- **Consumers:** `app.world.play_turn` (`context['scene_thread']`), `app.world.apply_turn` (after the quest report), `app.world.get_state` (`state['scene_thread']`), `app.world.travel_intent` and `resolve_movement` (follow rule), `app.prompts._visible_world` (`world_state.scene_thread`, `movement_contract.following`), `app.turn_dsl.build_dsl_user_prompt`, `app.narration_pipeline.build_paragraph_briefs`, the consolidator and `generate_input_suggestions` in `app.llm`.
+- **Design Notes:** State is the `settings.scene_thread` row (in `SNAPSHOT_SETTING_KEYS`, exported with saves); deleted when the thread ends. Companions are recorded, not moved: NPC rows keep their location.
 
 #### Starting Gear
 

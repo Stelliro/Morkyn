@@ -411,6 +411,8 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     # Who the player is talking to (app/conversation.py). The draft, verify
     # and paragraph passes all read it from the handed-off context.
     "conversation_turn",
+    # What the player is in the middle of (app/scene_thread.py, playtest #20).
+    "scene_thread",
     # Budgeted race and lore rows for this turn (app/world_facts.py).
     "world_facts",
 }
@@ -9433,8 +9435,16 @@ def _suggestion_scene(context: dict[str, Any]) -> dict[str, Any]:
         for q in (context.get("open_quest_offers") or [])[:3]
         if isinstance(q, dict)
     ]
+    try:
+        from app.scene_thread import suggestion_view
+
+        thread = suggestion_view(context.get("scene_thread"))
+    except Exception:
+        thread = None
     scene = {
         "place": (context.get("current_location") or {}).get("name"),
+        # What the player is in the middle of (playtest #20).
+        "thread": thread,
         "last_scene": tail,
         "questions_left_open": questions[-3:],
         "people": people[:5],
@@ -9494,6 +9504,10 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "", d
         "Use the current scene and known indexed facts; do not reveal hidden information or future outcomes.",
         "Do not continue the story, narrate results, or decide that the player already chose an option.",
     ]
+    if context.get("scene_thread"):
+        shared_rules.append(
+            "scene.thread is what the player is in the middle of. A side errand does not replace it."
+        )
     if deeper:
         prompt = {
             "task": "Suggest ONE well-considered next player input for this RPG turn, with the reason it is worth trying.",
@@ -9504,6 +9518,7 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "", d
             "rules": [
                 *shared_rules,
                 "Build the action from two or more facts in scene and world_state: a person's want or attitude, an open question, a quest or offer, a carried item or ability.",
+                "If scene.thread is present, the action carries it on.",
                 f"action: one direct action or spoken line the player could submit, at most {SUGGESTION_DEEPER_ACTION_CHARS} characters.",
                 f"why: one line, at most {SUGGESTION_DEEPER_WHY_CHARS} characters, naming the fact it builds on. No outcome is promised.",
             ],
@@ -9531,6 +9546,8 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "", d
         "return_shape": {"suggestions": ["player input option", "player input option", "player input option"]},
         "rules": [
             *shared_rules,
+            "If scene.thread is present, at least one suggestion carries it on: goes after what it is after, "
+            "takes its next step, or works with the people in it.",
             "If scene.questions_left_open has a question, one suggestion answers or turns it aside in the player's own words.",
             "If a person in scene cares about something, or a quest or offer is open, one suggestion works with or against it.",
             "Use a carried item or ability when it fits the moment.",
@@ -12397,6 +12414,89 @@ def _apply_menu_trim(turn: dict[str, Any]) -> dict[str, Any]:
     return turn
 
 
+# "For now, you decide to leave the well repairs for later and focus on the
+# herbs." (playtest #20, turn 4): the closing line made the player's choice.
+# A decision the player did not state is narration error, like a menu closer,
+# so the closing sentence goes; anything earlier in the scene is left alone.
+_DECIDED_FOR_PLAYER_RE = re.compile(
+    r"\byou\s+(?:\w+\s+){0,2}?"
+    r"(?:decide[sd]?|choose|chose|opt(?:s|ed)?|resolve[sd]?|elect(?:s|ed)?|determine[sd]?)"
+    r"\s+(?:to|that|against|not\s+to|instead)\b"
+    r"|\byou\s+make\s+up\s+your\s+mind\b",
+    re.I,
+)
+# "Whatever you decide to do" is the situation, not a decision.
+_DECISION_OPEN_RE = re.compile(r"\b(?:whatever|if|when|once|unless|until|before|whether|however|what)\s+$", re.I)
+_DECISION_STOPWORDS = {
+    "the", "and", "for", "now", "then", "with", "your", "you", "that", "this", "their", "them", "her", "his",
+    "into", "onto", "from", "about", "later", "instead", "first", "more", "some", "back", "focus", "leave",
+    "keep", "make", "take", "time", "moment", "matter", "rather", "while",
+}
+
+
+def _decision_words(text: str) -> set[str]:
+    return {
+        w[:5]
+        for w in re.findall(r"[a-z][a-z']+", str(text or "").lower())
+        if len(w) > 2 and w not in _DECISION_STOPWORDS
+    }
+
+
+def _decided_for_player(sentence: str, player_input: str) -> bool:
+    """True when the sentence commits the player to a choice their own line did not make."""
+    if re.search(r'["\u201c\u201d]', sentence):
+        return False
+    match = _DECIDED_FOR_PLAYER_RE.search(sentence)
+    if not match:
+        return False
+    if _DECISION_OPEN_RE.search(sentence[: match.start()]):
+        return False
+    own = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0]
+    if str(player_input or "").startswith("__"):
+        own = ""
+    chosen = _decision_words(sentence[match.end():])
+    if not chosen:
+        return True
+    said = _decision_words(own)
+    return len(chosen & said) * 2 < len(chosen)
+
+
+def _drop_decided_choice(turn: dict[str, Any], player_input: str, *, floor: int = 200) -> dict[str, Any]:
+    """Drop a closing sentence that decides for the player; segments follow the narration."""
+    original = str(turn.get("narration") or "").rstrip()
+    if not original:
+        return turn
+    text = original
+    removed = 0
+    for _ in range(2):
+        starts = [m.end() for m in re.finditer(r"[.!?][\"\u201d')\]]*\s+", text)]
+        if not starts:
+            break
+        cut = starts[-1]
+        last = text[cut:].strip()
+        if not last or not _decided_for_player(last, player_input):
+            break
+        candidate = text[:cut].rstrip()
+        if len(candidate) < floor:
+            break
+        text = candidate
+        removed += 1
+    if not removed:
+        return turn
+    turn["narration"] = text
+    segments = turn.get("narration_segments")
+    if isinstance(segments, list) and segments:
+        rebuilt = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+        if rebuilt:
+            turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in rebuilt]
+    check = turn.get("self_check")
+    if isinstance(check, dict):
+        made = check.get("corrections_made") if isinstance(check.get("corrections_made"), list) else []
+        check["corrections_made"] = [*made, "Dropped a closing sentence that made a choice for the player."]
+    turn["_decision_trimmed"] = removed
+    return turn
+
+
 def _narration_voice_drift(turn: dict[str, Any], context: dict[str, Any]) -> dict[str, Any]:
     """Point-of-view check on a drafted turn. Returns the report, drift flag included."""
     try:
@@ -12685,6 +12785,12 @@ def _make_pipeline_paragraph_writer(
         "conversation says who the player is talking to: only someone in who_answers answers the player; "
         "people in listening_only may react, but do not answer for them. "
         "When reply_status is present, the player's line was answered in an earlier paragraph: do not answer it again. "
+        "scene_thread is what the player is in the middle of: this beat happens inside it. A side action does not "
+        "end it; keep its target and the people with_the_player part of the scene. "
+        "When scene_facts.player_stays_in is present, the player is still in that place when the turn ends: "
+        "do not take them into another place or building. "
+        "The player makes their own choices: never write that they decide, choose or put something off; "
+        "end on the situation, not on a decision made for them. "
         "Do not repeat facts or spoken lines listed under forbidden_repeat or already_said. "
         "Continue from previous_paragraph_tail without restarting the scene. "
         "Always finish every sentence completely — never stop mid-word or mid-clause. "
@@ -12760,8 +12866,10 @@ def _make_pipeline_consolidator(
     context: dict[str, Any] | None = None,
 ):
     from app.conversation import writer_view
+    from app.scene_thread import writer_view as thread_writer_view
 
     talk = writer_view((context or {}).get("conversation_turn"))
+    thread = thread_writer_view((context or {}).get("scene_thread"))
     system = (
         "You are the scene consolidator. Read all paragraphs together. "
         "Fix doubling, contradictions, and simultaneous dual intents. "
@@ -12792,6 +12900,9 @@ def _make_pipeline_consolidator(
         if talk:
             payload["conversation"] = talk
             payload["issues_to_watch"].append("someone answering the player who is not in conversation.who_answers")
+        if thread:
+            payload["scene_thread"] = thread
+            payload["issues_to_watch"].append("the scene forgetting scene_thread, or settling it for the player")
         try:
             raw = _chat_text(
                 system,
@@ -12947,7 +13058,7 @@ def _ensure_narration_quality(
     voiced = _ensure_narration_voice(deep, context, player_input, prose_prompt, timeout, usage, phase, trace)
     answered = _ensure_answer_act(voiced, context, player_input, prose_prompt, timeout, usage, phase, trace)
     recalled = _ensure_recall_specifics(answered, context, player_input, prose_prompt, timeout, usage, phase, trace)
-    return _apply_menu_trim(recalled)
+    return _drop_decided_choice(_apply_menu_trim(recalled), player_input)
 
 
 def _voice_repair_enabled() -> bool:

@@ -1482,6 +1482,10 @@ def scene_facts(
     draft_player = draft.get("player") if isinstance(draft.get("player"), dict) else {}
     if draft_player.get("move_to_location"):
         facts["player_moves_to"] = str(draft_player["move_to_location"])
+    else:
+        stays = _player_stays_in(context, draft, player_input)
+        if stays:
+            facts["player_stays_in"] = stays
     spoken: list[dict[str, str]] = [
         {"speaker": "player", "words": _trim(q, 300)} for q in player_quotes(player_input)
     ]
@@ -1498,6 +1502,44 @@ def scene_facts(
     if spoken:
         facts["spoken"] = spoken[:8]
     return facts
+
+
+def _player_stays_in(context: dict[str, Any], draft: dict[str, Any], player_input: str) -> str:
+    """
+    The place the player is still in when this turn ends, or "" when the turn may move them.
+
+    Playtest #20: a travel-shaped line with no MOVE and no place the engine
+    could resolve left the player standing in Eldoria's Edge while the prose
+    walked them down an alley and into a shop. The engine keeps them here
+    unless the draft moves them, the line names a known place, or the line
+    walks through a doorway (app/world.py resolve_movement), so the writer
+    is told the same.
+    """
+    loc = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    name = str(loc.get("name") or "").strip()
+    if not name:
+        return ""
+    player = draft.get("player") if isinstance(draft.get("player"), dict) else {}
+    if player.get("move_to_location") or player.get("move_to_location_code") or draft.get("map_walk"):
+        return ""
+    if any(isinstance(row, dict) and row.get("name") for row in draft.get("locations") or []):
+        return ""
+    text = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0].lower()
+    if str(player_input or "").startswith("__"):
+        return ""
+    try:
+        from app.world import venue_move_intent
+
+        if venue_move_intent(text):
+            return ""
+    except Exception:
+        return ""
+    contract = context.get("movement_contract") if isinstance(context.get("movement_contract"), dict) else {}
+    places = [str(p) for p in contract.get("known_places") or [] if str(p or "").strip()]
+    places += [str(v.get("name") or "") for v in contract.get("venues_here") or [] if isinstance(v, dict)]
+    if any(len(p) >= 3 and p.lower() in text for p in places):
+        return ""
+    return name
 
 
 def build_paragraph_briefs(
@@ -1539,6 +1581,10 @@ def build_paragraph_briefs(
 
     talk = writer_view(context.get("conversation_turn"))
     answerers = ", ".join((talk or {}).get("who_answers") or [])
+    # What the player is in the middle of (app/scene_thread.py, playtest #20).
+    from app.scene_thread import writer_view as thread_writer_view
+
+    thread = thread_writer_view(context.get("scene_thread"))
     briefs: list[dict[str, Any]] = []
     for index, role in enumerate(roles):
         cover = []
@@ -1550,7 +1596,8 @@ def build_paragraph_briefs(
         if role in {"pressure", "hook"} and real_input:
             cover.append(
                 "End on a consequence, new pressure, or concrete detail. "
-                "Do not restate the player's options as a menu."
+                "Do not restate the player's options as a menu, and do not decide anything for the player: "
+                "end on the situation as it stands."
             )
         brief: dict[str, Any] = {
             "beat_index": index + 1,
@@ -1577,6 +1624,8 @@ def build_paragraph_briefs(
             brief["player_speech"] = [{"speaker": "player", "words": _trim(q, 300)} for q in quotes]
         if talk:
             brief["conversation"] = talk
+        if thread:
+            brief["scene_thread"] = thread
         if spoke and index > answer_index:
             brief["reply_status"] = REPLY_GIVEN_NOTE
             brief["player_intent"] = "Already answered above: " + _trim(player_input, 200)

@@ -1020,9 +1020,20 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     contract = context.get("movement_contract") if isinstance(context, dict) else None
     if isinstance(contract, dict) and contract.get("travel_intent"):
         here = (contract.get("current_location") or {}).get("code") or "the current location"
+        here_name = (contract.get("current_location") or {}).get("name") or here
         instructions.append(
-            f"Travel turn: if the prose ends anywhere but {here}, ===OPS=== MUST contain a MOVE line."
+            f"Travel turn: if the prose ends anywhere but {here}, ===OPS=== MUST contain a MOVE line. "
+            f"Without a MOVE the player is still in {here_name} when the turn ends, and the prose says so."
         )
+        # Going after someone with no destination named (playtest #20).
+        from app.scene_thread import follow_target
+
+        followed = follow_target(player_input)
+        if followed:
+            instructions.append(
+                f"The player goes after {followed}. If they lead into another place, MOVE names that place; "
+                f"otherwise the pursuit stays inside {here_name}."
+            )
     space = context.get("map_space") if isinstance(context, dict) else None
     if isinstance(space, dict) and space.get("width") and space.get("height"):
         budget = int(space.get("step_budget") or 4)

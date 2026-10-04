@@ -190,6 +190,8 @@ SNAPSHOT_SETTING_KEYS = (
     "last_social",
     "active_scene",
     "conversation",
+    # What the player is in the middle of (app/scene_thread.py, playtest #20).
+    "scene_thread",
     "travel_ready",
     "player_conditions",
     "association_heat",
@@ -4324,6 +4326,14 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         state["conversation"] = conversation_view(state)
     except Exception:
         state["conversation"] = {}
+    # What the player is in the middle of (app/scene_thread.py): the turn
+    # builds on it, and the suggestion ask offers a move that continues it.
+    try:
+        from app.scene_thread import load as load_scene_thread
+
+        state["scene_thread"] = load_scene_thread(settings)
+    except Exception:
+        state["scene_thread"] = None
     try:
         from app.encounter_board import load_encounter
 
@@ -5753,9 +5763,17 @@ def travel_intent(player_input: str) -> bool:
     behind conversation, combat, and investigation — so "look for the north road
     and walk there" classifies as investigation. For deciding whether a MOVE was
     expected, a secondary travel signal is enough.
+
+    Going after someone ("chase the thief", "go after her") is movement too, so
+    the move rules and the #6c unshown-move drop treat it the same way
+    (playtest #20).
     """
     primary, secondary = _turn_intent(player_input)
-    return primary == "travel" or "travel" in secondary
+    if primary == "travel" or "travel" in secondary:
+        return True
+    from app.scene_thread import follow_target
+
+    return bool(follow_target(player_input))
 
 
 def _turn_intent(player_input: str) -> tuple[str, list[str]]:
@@ -7462,10 +7480,48 @@ def resolve_movement(
                 "destination": minted,
             }
 
+    # Following someone (playtest #20): "follow the hooded figure" names no
+    # destination. The player goes where the one followed went only when the
+    # prose names that place; otherwise they stay here, and the draft and the
+    # paragraph writer were told so (the prose keeps them in this place).
+    from app.scene_thread import follow_target
+
+    followed = follow_target(player_input)
+    if followed:
+        if arrived or _PLAYER_DEPARTS_RE.search(tail):
+            place = _known_place_named_in(rows, tail, current_name)
+            if place is not None:
+                player_patch["move_to_location_code"] = str(place["code"])
+                return {
+                    "status": "repaired",
+                    "rule": "follow_named",
+                    "from": current_code,
+                    "destination": str(place["name"] or ""),
+                    "follow": followed,
+                }
+
     report = {"status": "unresolved", "from": current_code}
+    if followed:
+        report["follow"] = followed
+        report["stayed_in"] = current_name
     if note:
         report["rejected"] = note
     return report
+
+
+def _known_place_named_in(rows: list[Any], text: str, current_name: str):
+    """The known place the text names last by its stored name (not the current one), or None."""
+    best = None
+    best_at = -1
+    low = str(text or "").lower()
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        if len(name) < 3 or name.lower() == str(current_name or "").lower() or not row["code"]:
+            continue
+        for match in re.finditer(rf"(?<![a-z0-9]){re.escape(name.lower())}(?![a-z0-9])", low):
+            if match.start() > best_at:
+                best, best_at = row, match.start()
+    return best
 
 
 def _context_limit_profile(intent: str, state: dict[str, Any]) -> dict[str, int]:
@@ -13112,6 +13168,11 @@ def apply_turn(
         elif movement_report.get("status") == "unresolved":
             if int(map_report.get("steps_taken") or 0):
                 unresolved_note = "Travel action had no resolvable place name; the map token still walked."
+            elif movement_report.get("follow"):
+                unresolved_note = (
+                    f"Followed {movement_report.get('follow')} with no place named; the player stayed in "
+                    f"{movement_report.get('stayed_in') or 'the same place'}."
+                )[:1400]
             else:
                 unresolved_note = "Travel action with no MOVE op and no resolvable destination; player stayed put."
             conn.execute(
@@ -13154,6 +13215,22 @@ def apply_turn(
             except Exception as exc:
                 quest_report = {"status": "error", "error": str(exc)[:300], "created": [], "updated": [], "rejected": []}
         result["quest_report"] = quest_report
+        # The scene thread after this turn (playtest #20): a quest taken or
+        # finished, who came along, where it now is. After the quest and the
+        # move, before the snapshot is read back on a rewind.
+        try:
+            from app.scene_thread import update_after_turn as update_scene_thread
+
+            update_scene_thread(
+                conn,
+                turn_thread=(prompt_context or {}).get("scene_thread"),
+                quest_report=quest_report,
+                narration=narration,
+                player_input=player_input if input_kind == "player" else "",
+                turn=turn,
+            )
+        except Exception:
+            pass  # the thread never blocks a turn; the old row still stands
         if gear_report.get("status") == "unequipped" and gear_report.get("items"):
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
@@ -13464,10 +13541,21 @@ def play_turn(
     from app.conversation import resolve as resolve_conversation
 
     context["conversation_turn"] = resolve_conversation(context, player_input if input_kind == "player" else "")
+    # What the player is in the middle of, after this line (playtest #20). The
+    # draft, verify and paragraph passes read context["scene_thread"]; apply_turn
+    # stores the thread after the quest report and the move.
+    from app.scene_thread import begin_turn as begin_scene_thread
+
+    context["scene_thread"] = begin_scene_thread(
+        context, player_input if input_kind == "player" else "", context["conversation_turn"]
+    )
     model_input = _expand_input_references(context, player_input)
     if _ensure_combat_profiles_for_input(context, model_input):
         context = get_state(include_hidden=True)
         context["conversation_turn"] = resolve_conversation(context, player_input if input_kind == "player" else "")
+        context["scene_thread"] = begin_scene_thread(
+            context, player_input if input_kind == "player" else "", context["conversation_turn"]
+        )
         model_input = _expand_input_references(context, player_input)
 
     # Social walk-away / persist (player agency after cold reception)

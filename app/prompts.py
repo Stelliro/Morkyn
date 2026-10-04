@@ -27,6 +27,9 @@ Resolve the action the player took (this is the most common failure):
   the player can act on — then stop. Let them decide what to do with it in their own words.
 - If the action genuinely cannot complete (blocked, interrupted, they lack something), show the
   obstacle happening. That is still a resolution. Standing still and deliberating is not.
+- The player makes every choice. Narrate what they did, not what they will do next: never write
+  that they decide, choose, resolve or put something off unless their own input says so. Close on
+  the situation as it stands, and leave the next decision to them.
 
 Populate the world with workers, not omens:
 - Most people have a job and a reason to be here: a carter, a net mender, an off-duty guard,
@@ -1191,6 +1194,12 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
     talk = conversation_world_view(context.get("conversation_turn"))
     if talk:
         world["conversation_turn"] = talk
+    # What the player is in the middle of, kept by the engine (app/scene_thread.py).
+    from app.scene_thread import world_view as scene_thread_view
+
+    thread = scene_thread_view(context.get("scene_thread"))
+    if thread:
+        world["scene_thread"] = thread
     talking_codes = {str(row.get("code") or "") for row in (talk or {}).get("talking_to") or []}
     if _TALK_RE.search(focus):
         conversations = context.get("conversations") if isinstance(context.get("conversations"), list) else []
@@ -1246,6 +1255,15 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                 venues.append({"name": venue.get("name"), "kind": venue.get("kind") or ""})
         if venues:
             travel_view["venues_here"] = venues[:8]
+        # Prose and position must agree (playtest #20): without a move the
+        # engine keeps the player here, so the scene has to keep them here too.
+        here_name = travel_view["current_location"]["name"] or "the current place"
+        travel_view["no_move_means"] = f"the player is still in {here_name} at the end of the turn"
+        from app.scene_thread import follow_target
+
+        followed = follow_target(player_input)
+        if followed:
+            travel_view["following"] = followed
         world["movement_contract"] = travel_view
     return world
 
@@ -1305,6 +1323,27 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "the people in conversation_turn.talking_to answer the player; people in conversation_turn.listening may "
         "react but do not answer for them. The player's own quoted words are spoken by the player only. "
     )
+    if world.get("movement_contract"):
+        text += (
+            "A move is the only thing that changes where the player is. When the turn has no move, "
+            "movement_contract.no_move_means holds: the prose keeps the player in that place and does not take "
+            "them into another place or building. When movement_contract.following is present, the player goes "
+            "after that one: if they lead somewhere else, name that place with a move; otherwise the pursuit "
+            "stays inside the current place. "
+        )
+    if world.get("scene_thread"):
+        text += (
+            "world_state.scene_thread is what the player is in the middle of right now, kept by the engine. "
+            "This turn's action happens inside it: a side action such as examining something or asking a "
+            "question does not end it, replace it, or send its target or the people with_the_player away. "
+            "Keep them where the thread left them. The thread ends only when the player drops it, finishes it, "
+            "or the scene itself resolves it. "
+        )
+        if checking:
+            text += (
+                "A draft that forgets scene_thread on a side action, or swaps it for an unrelated errand, "
+                "is an issue. "
+            )
     if world.get("world_facts"):
         text += (
             "When world_state.world_facts is present, those rows are this world's stored facts. "
