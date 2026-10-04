@@ -250,7 +250,10 @@ VERIFICATION_MEMORY_VERSION = "V0.1.0"
 VERIFICATION_MEMORY_CONFIDENCE_MIN = 0.86
 VERIFICATION_MEMORY_LIMIT = 24
 EVENT_PERSISTENCE_VALUES = {"persistent", "temporary", "recurring", "traveling", "background"}
-TURN_REFERENCE_PATTERN = re.compile(r"(?:@([A-Z]{1,3})|#(L\d+)|!(I\d+)|&(E\d+)|\[\[([A-Z]{1,3}|L\d+|I\d+|E\d+)\]\])", re.IGNORECASE)
+# "@A" is a code; "@Caria" is a mention (kind C, slug aria) and must not read as
+# the code CAR, which then leaked into the paragraph writer's cast and the prose
+# as "the baker at CAR" (playtest issue #9). Hence the lookahead.
+TURN_REFERENCE_PATTERN = re.compile(r"(?:@([A-Z]{1,3})(?![A-Za-z0-9_])|#(L\d+)|!(I\d+)|&(E\d+)|\[\[([A-Z]{1,3}|L\d+|I\d+|E\d+)\]\])", re.IGNORECASE)
 COMBAT_ATTACK_KEYWORDS = {
     "attack", "fight", "punch", "kick", "stab", "slash", "shoot", "strike", "hit", "swing", "thrust", "jab", "smash", "bash", "club", "slice", "cut", "fire", "throw",
 }
@@ -9314,7 +9317,8 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
 # "I take stock of my injuries" used to mark every named item as arrived.
 _TAKE_PERCEPTION_TAIL = (
     r"(?:in|note|stock|care|aim|cover|"
-    r"a\s+(?:look|gander|peek|moment|breath|step)|"
+    # "take a bite / a sip" eats or drinks on the spot; nothing goes in the pack.
+    r"a\s+(?:look|gander|peek|moment|breath|step|bite|sip|swig|taste|mouthful|seat)|"
     r"your\s+time)"
 )
 _TAKE_PERCEPTION_RE = re.compile(
@@ -9372,6 +9376,145 @@ def _prose_says_it_arrived(text: str, name_l: str, tokens: list[str]) -> bool:
         if (name_l and name_l in window) or any(tok in window for tok in tokens):
             return True
     return False
+
+
+# Per-item reading of the final prose. _prose_says_it_arrived only asks whether
+# anything arrived anywhere in the text, so one hand-over grounded every item the
+# turn named, and nothing looked at what happened next. Reported from play
+# (issue #9): the player asked a baker a question; the prose had her offer a
+# tart, the player take a bite and hand it back, and the engine still granted
+# two loaves and two tarts. The question per item is now "after the last
+# sentence about this item, does the player have it?"
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])[\"'\u201d\u2019)]*\s+|\n+")
+_PRONOUN_CARRY_RE = re.compile(r"\b(?:it|them|one|both)\b", re.I)
+_SUBJECT_RE = re.compile(r"\b(you|i|we|he|she|they)\b", re.I)
+
+# The player ends up holding a thing they did not have. Only counted for items
+# not already owned: "the pouch you already carry" says nothing about more.
+_POSSESSION_RE = re.compile(
+    r"\b(?:in|into)\s+your\s+(?:hands?|palms?|grip|arms|pack|bag|satchel|pouch|pockets?|purse|inventory)\b",
+    re.I,
+)
+# The item leaves again: handed back, given away, refused, put back, or eaten on
+# the spot. Each entry: (pattern, needs the player as subject).
+_ITEM_LOSS_RES: tuple[tuple[re.Pattern[str], bool], ...] = (
+    (re.compile(r"\b(?:hand|give|gave|pass|slide|toss|offer|return)(?:s|es|ed|ing)?\b[^.;!?]{0,40}?\bback\b", re.I), True),
+    (re.compile(r"\breturn(?:s|ed|ing)?\s+(?:it|them|the|a|an|her|his)\b", re.I), True),
+    (re.compile(
+        r"\b(?:hand|give|gave|pass|slide|toss)(?:s|es|ed|ing)?\s+"
+        r"(?:(?:him|her|them)\b|(?:it|them|the\s+\w+(?:\s+\w+)?)\s+(?:over\s+)?to\s+(?:him|her|them|the\s+\w+|(?-i:[A-Z][a-z]+))\b)",
+        re.I,
+    ), True),
+    (re.compile(
+        r"\b(?:eat|eats|ate|eaten|eating|devour\w*|swallow\w*|gobble\w*|finish(?:es|ed|ing)?|"
+        r"wolf(?:s|ed)?\s+down|polish(?:es|ed)?\s+off|drink|drinks|drank|drain(?:s|ed)?|quaff\w*)\b",
+        re.I,
+    ), True),
+    (re.compile(
+        r"\b(?:declin|refus)\w*|\bturn(?:s|ed|ing)?\s+(?:it\s+|them\s+|\w+\s+)?down\b|"
+        r"\bput(?:s|ting)?\s+(?:it|them|the\s+\w+)\s+back\b|\bset(?:s|ting)?\s+(?:it|them)\s+back\b|"
+        r"\bwon'?t\s+sell\b|\bnot\s+for\s+sale\b",
+        re.I,
+    ), False),
+)
+
+
+def _sentence_mentions_item(sentence_l: str, name_l: str, tokens: list[str]) -> bool:
+    if name_l and name_l in sentence_l:
+        return True
+    hits = sum(1 for tok in tokens if re.search(rf"\b{re.escape(tok)}", sentence_l))
+    return bool(tokens) and hits >= max(1, (len(tokens) + 1) // 2)
+
+
+def _subject_is_player(sentence: str, pos: int, verb: str = "") -> bool:
+    """
+    Is the player doing the verb at ``pos``? A third-person form ("she takes",
+    "the merchant hands over") never is, in second-person narration. Otherwise
+    the nearest subject pronoun decides, and none reads as the player, because
+    the narration elides "you" ("You consider, then take it").
+    """
+    word = (verb.split() or [""])[0].lower()
+    if word.endswith("s") and not word.endswith("ss"):
+        return False
+    subjects = _SUBJECT_RE.findall(sentence[:pos])
+    if not subjects:
+        return True
+    return subjects[-1].lower() in {"you", "i", "we"}
+
+
+def _sentence_item_events(sentence: str, name_l: str, tokens: list[str], *, owned: bool) -> list[tuple[int, str]]:
+    """(position, "gain" | "loss") for one sentence already known to be about the item."""
+    events: list[tuple[int, str]] = []
+    taken: list[tuple[int, int]] = []
+    lower = sentence.lower()
+    for pattern, player_only in _ITEM_LOSS_RES:
+        for m in pattern.finditer(sentence):
+            text_l = m.group(0).lower()
+            tail = lower[m.end(): m.end() + 12]
+            player = _subject_is_player(sentence, m.start(), text_l)
+            if "back" in text_l and (tail.lstrip().startswith("to you") or not player):
+                # "she hands it back to you": the item comes to the player.
+                if tail.lstrip().startswith("to you"):
+                    events.append((m.start(), "gain"))
+                    taken.append(m.span())
+                continue
+            if player_only and not player:
+                continue
+            events.append((m.start(), "loss"))
+            taken.append(m.span())
+
+    def overlaps(span: tuple[int, int]) -> bool:
+        return any(span[0] < end and start < span[1] for start, end in taken)
+
+    for m in _ACQUIRE_PROSE_RE.finditer(lower):
+        if overlaps(m.span()):
+            continue
+        text_l = m.group(0)
+        if re.search(r"\byour?\b|\bgiven\b", text_l):
+            events.append((m.start(), "gain"))
+            continue
+        player = _subject_is_player(lower, m.start(), text_l)
+        if text_l.startswith("hand"):
+            if "over" in text_l:
+                events.append((m.start(), "loss" if player else "gain"))
+            elif player:
+                events.append((m.start(), "loss"))
+            continue
+        if player:
+            events.append((m.start(), "gain"))
+    for m in _DISCOVER_GAIN_RE.finditer(lower):
+        window = lower[m.end(): m.end() + _DISCOVER_NAME_WINDOW]
+        if ((name_l and name_l in window) or any(tok in window for tok in tokens)) and _subject_is_player(lower, m.start(), m.group(0)):
+            events.append((m.start(), "gain"))
+    if not owned:
+        for m in _POSSESSION_RE.finditer(sentence):
+            if not overlaps(m.span()):
+                events.append((m.start(), "gain"))
+    return sorted(events)
+
+
+def _prose_item_outcome(text: str, name_l: str, tokens: list[str], *, owned: bool = False) -> str | None:
+    """
+    Where the prose leaves this one item: "gain" when the last thing it says
+    about the item puts it in the player's hands, "loss" when the last thing is
+    the item going back, being refused or being eaten, None when the prose
+    never moves it at all. A sentence that names the item counts, and so does
+    the sentence right after it when it says "it" or "them".
+    """
+    state: str | None = None
+    carry = False
+    for sentence in _SENTENCE_SPLIT_RE.split(str(text or "")):
+        if not sentence.strip():
+            continue
+        lower = sentence.lower()
+        about = _sentence_mentions_item(lower, name_l, tokens)
+        if not about and not (carry and _PRONOUN_CARRY_RE.search(lower)):
+            carry = False
+            continue
+        carry = about
+        for _pos, kind in _sentence_item_events(sentence, name_l, tokens, owned=owned):
+            state = kind
+    return state
 
 
 _CHART_NAME_RE = re.compile(r"\b(?:map|maps|chart|charts|atlas|atlases|sea\s*chart|route\s*map)\b", re.I)
@@ -9549,16 +9692,21 @@ def _filter_inventory_changes(
         if draft_narration and named:
             draft_text = f"{draft_narration}\n{player_input}".lower()
             draft_hits = sum(1 for tok in tokens if tok in draft_text)
-            if not (name_l in draft_text or (tokens and draft_hits >= max(1, (len(tokens) + 1) // 2))):
+            # The head noun has to be there too: a draft about "prayer" does not
+            # name "prayer beads" (the Miriam save), and half the tokens of a
+            # two-word name is only the adjective.
+            head_ok = not tokens or tokens[-1] in draft_text
+            if not (name_l in draft_text or (tokens and head_ok and draft_hits >= max(1, (len(tokens) + 1) // 2))):
                 named = False
-        # The second half, and the one that was missing: the prose has to say
-        # something arrived. An item being described at length is not an item
-        # being acquired.
-        arrived = (
-            acquire_intent
-            or _prose_says_it_arrived(text, name_l, tokens)
-            or (bool(draft_narration) and _prose_says_it_arrived(str(draft_narration).lower(), name_l, tokens))
-        )
+        # The second half: the prose has to say this item arrived. An item being
+        # described at length, touched or looked at is not an item acquired.
+        # This is judged per item against the FINAL narration, the text the
+        # player reads: if the last word on the item is a hand-back, a refusal
+        # or a bite eaten on the spot, there is no gain whatever the draft said
+        # (issue #9). The draft only falls in when there is no final text.
+        final_text = str(narration or "") if str(narration or "").strip() else str(draft_narration or "")
+        outcome = _prose_item_outcome(final_text, name_l, tokens, owned=bool(existing))
+        arrived = outcome == "gain" or (outcome is None and acquire_intent)
         grounded = named and arrived
         # Never honor bare justified/true from the model
         # Opening: only trust what was already set up (no free combat kit).
@@ -9577,7 +9725,7 @@ def _filter_inventory_changes(
                         "inventory_reject",
                         (
                             f"Rejected unearned gain: {name} x{delta} "
-                            f"(named={named}, prose_says_arrived={arrived}, owned={bool(existing)})"
+                            f"(named={named}, prose_says_arrived={arrived}, prose_outcome={outcome}, owned={bool(existing)})"
                         )[:900],
                     ),
                 )
@@ -12184,6 +12332,10 @@ def _resolve_amount(
             return None, None
         if mode == "bands":
             return number, None
+        # An item count is a count. "GRANT arrows QTY 20" means twenty arrows;
+        # re-rolling it as a band gave back whatever the table said.
+        if kind == "item_count":
+            return max(-99, min(99, number)), None
         band = rng_mod.band_from_number(kind, number, level=level)
     else:
         # A model that invents a band word ("fresh", "modest") still clearly

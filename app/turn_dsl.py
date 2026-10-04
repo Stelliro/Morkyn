@@ -116,6 +116,10 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
   Write "XP small", "GOLD -moderate", "HP -small", "GRANT \"rope\" QTY small".
   A leading "-" means a loss. The app rolls the actual amount; a bare number is
   read as a band hint and re-rolled, so bands are shorter and more reliable.
+- GRANT and TAKE QTY counts objects: trivial or small is one, moderate two,
+  large three, huge five. A real stack may be a plain number. GRANT only what
+  ===NAR=== puts in the player's hands (given, bought, picked up, looted,
+  crafted); something looked at, touched, tasted or handed back is not granted.
 - NPC_NEW NAME must be a name ("Aria", "Thornrow", "Captain Vesk"), never a description
   ("Woman", "Old Man", "Hooded Figure", "Guard"). The app overwrites description-only names.
 - NPC_NEW ROLE is an occupation — carter, net mender, baker, off-duty guard, ferryman.

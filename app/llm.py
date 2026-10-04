@@ -10726,6 +10726,71 @@ def _repair_bare_code_possessives(
     return out
 
 
+def _repair_bare_entity_codes(
+    text: str,
+    *,
+    code_map: dict[str, str] | None = None,
+    referenced_codes: set[str] | None = None,
+) -> str:
+    """
+    Bare multi-letter NPC codes outside [[ ]] are not prose.
+
+    Reported from play (issue #9): "The baker at CAR certainly knows his craft."
+    CAR was a misread of the mention "@Caria", handed to the paragraph writer as
+    a cast code, and the writer used it as a word. A code the engine knows is
+    rendered as "Name [[CODE]]"; a code this turn referenced that names nothing
+    is removed, together with the preposition that introduced it. Single-letter
+    codes are left alone: "A" and "I" are English words.
+    """
+    out = text or ""
+    if not out:
+        return out
+    cmap = {
+        str(k).upper(): str(v).strip()
+        for k, v in (code_map or {}).items()
+        if str(v or "").strip() and str(v).strip().upper() != str(k).upper()
+    }
+    known = {c for c in cmap if re.fullmatch(r"[A-Z]{2,3}", c)}
+    dangling = {
+        str(c).upper() for c in (referenced_codes or set())
+        if re.fullmatch(r"[A-Z]{2,3}", str(c).upper()) and str(c).upper() not in cmap
+    }
+    if not known and not dangling:
+        return out
+    bare = r"(?<!\[\[)(?<![\w@#!&])\b({codes})\b(?!\]\])(?!\s*\[\[)"
+    if dangling:
+        alt = "|".join(re.escape(c) for c in sorted(dangling, key=len, reverse=True))
+        out = re.sub(
+            r"\s*\b(?:at|in|from|of|to|near|by|with|for)\s+" + bare.format(codes=alt),
+            "",
+            out,
+        )
+        source = out
+
+        def drop(m: re.Match[str]) -> str:
+            # As a sentence subject the code stands for a person; keep one.
+            if re.search(r"(?:^|[.!?\"\u201c]\s*)$", source[: m.start()]):
+                return "Someone"
+            return ""
+
+        out = re.sub(bare.format(codes=alt), drop, source)
+    if known:
+        alt = "|".join(re.escape(c) for c in sorted(known, key=len, reverse=True))
+
+        def named(m: re.Match[str]) -> str:
+            code = m.group(1)
+            name = cmap[code]
+            before = out[max(0, m.start() - len(name) - 2): m.start()]
+            if re.search(rf"{re.escape(name)}\s*$", before, flags=re.I):
+                return f"[[{code}]]"
+            return f"{name} [[{code}]]"
+
+        out = re.sub(bare.format(codes=alt), named, out)
+    out = re.sub(r"[ \t]{2,}", " ", out)
+    out = re.sub(r" +([,.;:!?])", r"\1", out)
+    return out
+
+
 def _repair_gear_as_agent_prose(text: str, *, inventory_names: list[str] | None = None) -> str:
     """
     Fix classic 8B failures where wardrobe / gear is treated as a person or faction:
@@ -10938,6 +11003,17 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
             item_codes.add(str(ch.get("code")).upper())
     # Always treat I# pattern as items even without map
     item_codes |= {c for c in code_map if re.fullmatch(r"I\d+", c)}
+    # Codes this turn pointed at (player refs, planner targets). One that names
+    # nothing must not survive into the prose as a word.
+    referenced_codes: set[str] = set()
+    if isinstance(context, dict):
+        plan = context.get("turn_plan") if isinstance(context.get("turn_plan"), dict) else {}
+        refs = plan.get("explicit_references") if isinstance(plan.get("explicit_references"), dict) else {}
+        referenced_codes.update(str(c) for c in refs.get("all") or [])
+        action = context.get("action_context") if isinstance(context.get("action_context"), dict) else {}
+        referenced_codes.update(str(c) for c in action.get("hard_reference_codes") or [])
+        targets = action.get("target_codes") if isinstance(action.get("target_codes"), dict) else {}
+        referenced_codes.update(str(c) for c in targets.get("npcs") or [])
 
     def rewrite_names(text: str) -> str:
         out = text or ""
@@ -10990,6 +11066,7 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
             item_codes=item_codes,
             place_codes=place_codes,
         )
+        out = _repair_bare_entity_codes(out, code_map=code_map, referenced_codes=referenced_codes)
         return out
 
     segments = result.get("narration_segments")

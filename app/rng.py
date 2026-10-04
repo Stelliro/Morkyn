@@ -337,6 +337,12 @@ DEFAULT_MAGNITUDE_TABLES: dict[str, dict[str, Any]] = {
             "huge": "6d10+25",
         },
     },
+    # Items are counted, not measured. A GRANT names one thing changing hands,
+    # and the model writes "QTY small" for that one thing, so the bands here
+    # mean "one", "a couple", "a few", "a handful" and nothing more. They used
+    # to be dice ("small" = 1d2), which turned a single loaf into two loaves
+    # half the time (playtest issue #9). A real stack (twenty arrows) comes
+    # from an explicit count, which the engine honours as written.
     "item_count": {
         "scale": "none",
         "min": 0,
@@ -344,10 +350,10 @@ DEFAULT_MAGNITUDE_TABLES: dict[str, dict[str, Any]] = {
         "bands": {
             "none": "0",
             "trivial": "1",
-            "small": "1d2",
-            "moderate": "1d4+1",
-            "large": "2d6+3",
-            "huge": "4d10+10",
+            "small": "1",
+            "moderate": "2",
+            "large": "3",
+            "huge": "5",
         },
     },
     "trust": {
