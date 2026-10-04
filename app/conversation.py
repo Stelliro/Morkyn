@@ -12,7 +12,9 @@ and every stage that writes gets the same answer:
 
 1. an explicit @tag (code, @C<name>, or an alias),
 2. a present NPC named in the player's own words (not merely talked about),
-3. a group phrase ("everyone", "you all", "both of you") -> all present,
+3. a call to someone unseen ("come out", "whoever is hiding", "show
+   yourself") -> nobody present; the people here only listen,
+   then a group phrase ("everyone", "you all", "both of you") -> all present,
 4. the player's pick on the "Talking to" chip,
 5. who the last turn left facing the player: someone just revealed or brought
    in, else whoever spoke last, else the one the player was already talking to,
@@ -39,6 +41,7 @@ RULE_TEXT = {
     "tag": "tagged by the player",
     "name": "named in the player's line",
     "group": "the player addresses everyone present",
+    "unseen": "the player calls out to someone unseen or not yet in the scene",
     "chosen": "picked by the player",
     "revealed": "just revealed or stepped in",
     "last_speaker": "spoke to the player last",
@@ -52,6 +55,17 @@ _GROUP_RE = re.compile(
     r"you\s+two|you\s+three|you\s+lot|you\s+guys|you\s+people|you\s+folks|both\s+of\s+you|"
     r"the\s+two\s+of\s+you|each\s+of\s+you|all\s+of\s+them|both\s+of\s+them|them\s+all|"
     r"the\s+(?:whole\s+)?(?:group|crowd|room))\b",
+    re.IGNORECASE,
+)
+# A call to someone not in the scene yet. Playtest turn 5: "come out now",
+# commanding whatever is hiding to reveal itself, went to Aria as "the one the
+# player was talking to", which tells the draft only Aria may answer -- the one
+# person the line was not for.
+_UNSEEN_RE = re.compile(
+    r"\b(?:who|what)(?:ever|soever)?\s*(?:is|['’]s|are|goes)\s+"
+    r"(?:there|out\s+there|hiding|lurking|watching|following|in\s+the\s+(?:shadows?|dark(?:ness)?))\b|"
+    r"\b(?:show|reveal)\s+(?:yourself|yourselves|itself|themselves|your\s+face)\b|"
+    r"\bcome\s+out\b|\bstep\s+(?:out|forward|into\s+the\s+light)\b",
     re.IGNORECASE,
 )
 _QUOTE_RE = re.compile(r'"([^"]*)"|“([^”]*)”')
@@ -396,6 +410,10 @@ def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | 
     named = _pick([m for m in mentions if not m["tag"]])
     if named:
         return done(named, "name")
+    if text and _UNSEEN_RE.search(text):
+        done([], "none")
+        out["rule"] = "unseen"
+        return out
     if text and _GROUP_RE.search(text):
         group = present or [row["code"] for row in rows]
         if group:
@@ -434,7 +452,12 @@ def model_note(resolution: dict[str, Any] | None) -> str:
     listening = list(resolution.get("listening") or [])
     if not addressed and not listening:
         return ""
-    if addressed:
+    if not addressed and resolution.get("rule") == "unseen":
+        line = (
+            "Conversation (engine decided) - the player calls out to someone unseen or not yet in the scene; "
+            "whoever was called may answer, and nobody present answers for them."
+        )
+    elif addressed:
         who = ", ".join(_label(c, names) for c in addressed)
         why = RULE_TEXT.get(str(resolution.get("rule") or ""), "")
         line = f"Conversation (engine decided) - the player is talking to {who}" + (f" ({why})" if why else "") + "."
@@ -462,9 +485,14 @@ def world_view(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
     listening = list(resolution.get("listening") or [])
     if not addressed and not listening:
         return None
+    unseen = not addressed and resolution.get("rule") == "unseen"
     view: dict[str, Any] = {
         "talking_to": [{"name": names.get(c, c), "code": c} for c in addressed],
-        "answers": "any of talking_to" if resolution.get("group") else "talking_to only",
+        "answers": (
+            "whoever the player called out to, not the listeners"
+            if unseen
+            else "any of talking_to" if resolution.get("group") else "talking_to only"
+        ),
         "why": RULE_TEXT.get(str(resolution.get("rule") or ""), ""),
     }
     if listening:
@@ -481,8 +509,10 @@ def writer_view(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
     listening = list(resolution.get("listening") or [])
     if not addressed and not listening:
         return None
+    unseen = not addressed and resolution.get("rule") == "unseen"
     view: dict[str, Any] = {
-        "player_talks_to": [_label(c, names) for c in addressed] or ["nobody in particular"],
+        "player_talks_to": [_label(c, names) for c in addressed]
+        or (["someone unseen or not yet in the scene"] if unseen else ["nobody in particular"]),
         "who_answers": [_label(c, names) for c in addressed] if addressed else [],
     }
     if listening:
