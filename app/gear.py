@@ -52,6 +52,13 @@ CARRIED = ""
 REQUIRED_GEAR_SLOTS: tuple[str, ...] = ("FEET", "TORSO", "LEGS")
 """Every character starts clothed: boots, torso, legs. These cards cannot be removed."""
 
+LEGACY_PLACEHOLDER_NAMES: frozenset[str] = frozenset({"boots", "tunic", "trousers"})
+"""The bare names the setup page once gave the basics when the engine did not answer.
+
+Saves kept them in the start form's ``starter_equipment`` string, so a later
+start restored them and they became the kit (playtest #17). On an unlocked
+required card with nothing else written, they mean "not named yet"."""
+
 EXCLUSIVE_SLOTS: frozenset[str] = frozenset({"HEAD", "TORSO", "UNDER", "BACK", "MAIN", "OFF", "WAIST", "LEGS", "FEET"})
 """One worn item each at Start; a second item for the same slot is carried."""
 
@@ -576,6 +583,29 @@ def normalize_gear_item(
     return item
 
 
+def is_placeholder_basic(raw: Any) -> bool:
+    """
+    True for a basic the page named with a placeholder: a bare
+    ``LEGACY_PLACEHOLDER_NAMES`` word on a worn basic slot, unlocked, with no
+    description and no abilities. A player's own card has more than that, or
+    a lock.
+    """
+    if isinstance(raw, str):
+        raw = {"name": raw}
+    if not isinstance(raw, dict):
+        return False
+    name = _clean_text(raw.get("name") or raw.get("item"), 80).strip(" .,;:").lower()
+    if name not in LEGACY_PLACEHOLDER_NAMES:
+        return False
+    if raw.get("keep") or raw.get("locked_card"):
+        return False
+    if _clean_text(raw.get("description") or raw.get("effect"), 300) or raw.get("abilities"):
+        return False
+    slot_in = str(raw.get("slot") or "").strip()
+    slot = normalize_slot(slot_in) if slot_in else slot_for_name(name)
+    return slot in REQUIRED_GEAR_SLOTS
+
+
 def normalize_gear_list(
     raw_list: Any,
     *,
@@ -590,6 +620,7 @@ def normalize_gear_list(
 
     * Entries with no name are dropped; names are unique (case-insensitive).
     * The three required slots are always present (engine basics fill a gap).
+      A placeholder basic (``is_placeholder_basic``) counts as a gap.
     * One worn item per exclusive slot; a second one is carried.
     * Positive stat bonuses across the kit are capped by start power.
     * At most ``MAX_GEAR_ITEMS`` items; required ones are never the ones cut.
@@ -603,6 +634,8 @@ def normalize_gear_list(
     items: list[dict[str, Any]] = []
     seen: set[str] = set()
     for entry in raw_list if isinstance(raw_list, list) else []:
+        if fill_required and is_placeholder_basic(entry):
+            continue
         item = normalize_gear_item(entry, context=ctx, rng=rng, roll_missing=roll_missing, trust=trust)
         if not item or item["name"].lower() in seen:
             continue

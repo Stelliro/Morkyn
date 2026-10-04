@@ -3101,6 +3101,10 @@ def _slim_game_start_form(form: dict[str, Any]) -> dict[str, Any]:
         "gain_controls": form.get("gain_controls") if isinstance(form.get("gain_controls"), list) else [],
         "locks": form.get("locks") if isinstance(form.get("locks"), list) else [],
         "abilities": form.get("abilities") if isinstance(form.get("abilities"), list) else [],
+        # The gear cards. Without them a restore rebuilt the kit from the
+        # names-only starter_equipment string: descriptions, stats and locks
+        # were lost, and a placeholder kit carried into the next game (#17).
+        "gear": [g for g in form.get("gear") if isinstance(g, dict)][:24] if isinstance(form.get("gear"), list) else [],
         "ability_count_locked": bool(form.get("ability_count_locked")),
         "ability_count_min": form.get("ability_count_min"),
         "ability_count_max": form.get("ability_count_max"),

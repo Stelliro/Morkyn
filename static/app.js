@@ -3599,7 +3599,7 @@ function fallbackRandomizeRadioField(name) {
 function fallbackRandomizeField(name, options = {}) {
   if (!options.ignoreLock && isSettingLocked(name)) return;
   if (name === "starter_gear") {
-    // No local item pool: the engine names the basics for this world (plain names offline).
+    // No local item pool: the engine names the basics for this world (blank offline; Start names them).
     ensureRequiredGearCards({ force: true, report: true }).catch(() => {});
     return;
   }
@@ -6772,7 +6772,13 @@ const GEAR_SLOT_OPTIONS = [
 ];
 const GEAR_SLOT_CODES = new Set(GEAR_SLOT_OPTIONS.map(([code]) => code).filter(Boolean));
 const GEAR_REQUIRED_SLOTS = ["FEET", "TORSO", "LEGS"];
-const GEAR_REQUIRED_FALLBACK = { FEET: "boots", TORSO: "tunic", LEGS: "trousers" };
+// The bare names this page once gave the basics when the engine did not
+// answer. Saves kept them, and a restored setup started the next game in
+// "boots, tunic, trousers" (playtest #17). Mirrors LEGACY_PLACEHOLDER_NAMES
+// in app/gear.py: on an unlocked basic with nothing else written, they mean
+// "not named yet". The page no longer invents names of its own.
+const GEAR_LEGACY_PLACEHOLDER_NAMES = new Set(["boots", "tunic", "trousers"]);
+const GEAR_UNNAMED_BASIC_HINT = "Named for your world at Start";
 const GEAR_STAT_KEYS = ["strength", "dexterity", "constitution", "intelligence", "wisdom", "charisma"];
 const GEAR_STAT_SHORT = { strength: "STR", dexterity: "DEX", constitution: "CON", intelligence: "INT", wisdom: "WIS", charisma: "CHA" };
 const GEAR_RARITIES = ["common", "uncommon", "rare"];
@@ -7002,8 +7008,17 @@ function sortGearCards() {
     .forEach(({ card }) => list.appendChild(card));
 }
 
+/** A basic with no name of its own yet: blank, or an old placeholder nobody locked or wrote about. */
+function gearBasicUnnamed(card) {
+  if (!card) return true;
+  const item = gearItemFromCard(card);
+  if (!item || !item.name) return true;
+  if (item.keep || item.description || item.abilities.length) return false;
+  return GEAR_LEGACY_PLACEHOLDER_NAMES.has(item.name.toLowerCase());
+}
+
 function requiredGearSlotsMissing() {
-  return GEAR_REQUIRED_SLOTS.filter((slot) => !gearCardBySlot(slot));
+  return GEAR_REQUIRED_SLOTS.filter((slot) => gearBasicUnnamed(gearCardBySlot(slot)));
 }
 
 /** Replace all cards with the given items (required cards are created for missing basics afterwards). */
@@ -7042,9 +7057,10 @@ function updateGearCardFromItem(card, item) {
 }
 
 /**
- * Make sure the three basics exist. Missing ones come from the engine
- * (/api/setup/gear-defaults) and fall back to plain names when the server
- * cannot answer. With `force`, unlocked required cards are re-rolled too.
+ * Make sure the three basics exist and have names. Missing or unnamed ones
+ * come from the engine (/api/setup/gear-defaults). When the server cannot
+ * answer, the card stays blank and Start has the engine name it for the world.
+ * With `force`, unlocked required cards are re-rolled too.
  */
 async function ensureRequiredGearCards(options = {}) {
   const list = document.querySelector("#simpleGearList");
@@ -7082,14 +7098,18 @@ async function ensureRequiredGearCards(options = {}) {
   toFill.forEach((slot) => {
     const fromEngine = rolled.find((item) => normalizeGearSlotClient(item.slot) === slot);
     const item = {
-      ...(fromEngine || { name: GEAR_REQUIRED_FALLBACK[slot] }),
+      ...(fromEngine || { name: "" }),
       slot,
       required: true,
       keep: false,
     };
     const existing = gearCardBySlot(slot);
     const card = existing ? (updateGearCardFromItem(existing, item), existing) : addGearItem(item, { expanded: false });
-    if (card) card.dataset.gearDefault = "1";
+    if (card) {
+      card.dataset.gearDefault = "1";
+      const nameInput = card.querySelector('[data-gear-field="name"]');
+      if (nameInput && !fromEngine) nameInput.placeholder = GEAR_UNNAMED_BASIC_HINT;
+    }
   });
   sortGearCards();
   syncStarterEquipmentFromGear();
@@ -7097,7 +7117,7 @@ async function ensureRequiredGearCards(options = {}) {
     setSetupRandomizeStatus(
       source === "engine"
         ? `The engine named the ${toFill.length === 3 ? "three worn basics" : "missing basics"} for this world.`
-        : "The server did not answer, so the basics were given plain names.",
+        : "The server did not answer, so the basics will be named for your world when you press Start.",
     );
   }
   return toFill;
@@ -19704,7 +19724,7 @@ async function expandSimpleSetupDepth() {
     } else if (name === "starter_gear") {
       const items = collectGearItems();
       const basicsNamed = GEAR_REQUIRED_SLOTS.every((slot) =>
-        items.some((g) => g.required && g.slot === slot && g.name && !Object.values(GEAR_REQUIRED_FALLBACK).includes(g.name)),
+        items.some((g) => g.required && g.slot === slot && g.name && !GEAR_LEGACY_PLACEHOLDER_NAMES.has(g.name.toLowerCase())),
       );
       if (basicsNamed) continue;
     } else if (name === "appearance" || name === "hair" || name === "facial_features") {
