@@ -342,6 +342,8 @@ def auto_context_tokens(facts: dict[str, Any], gpu: dict[str, int] | None) -> tu
         chosen = max(NO_FACTS_CONTEXT_FLOOR, min(ceiling, scaled))
         why = f"{params:g}B parameters on the tokens-per-billion scale" + (f", trained to {trained:,}" if trained else "")
         return chosen, why
+    if facts.get("kind") == "api":
+        return min(ceiling, DEFAULT_CONTEXT_TOKENS), "the default window; a hosted model sizes its own context"
     return min(ceiling, DEFAULT_CONTEXT_TOKENS), ("trained context" if trained else "the default window; nothing is known about this model")
 
 

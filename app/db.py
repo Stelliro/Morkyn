@@ -854,7 +854,7 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         _fill_blank_prefixed_codes(conn, table, prefix)
     _fill_blank_alpha_codes(conn, "npcs")
 
-    # Quest tables (added in 0.9.13)
+    # Quest tables (added in 0.10.0-wip)
     _existing_tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     if "quests" not in _existing_tables:
         conn.executescript("""
@@ -923,7 +923,7 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             );
         """)
 
-    # quest_steps location columns (added in 0.9.13+)
+    # quest_steps location columns (added in 0.10.0-wip)
     qs_cols = {row["name"] for row in conn.execute("PRAGMA table_info(quest_steps)").fetchall()}
     if "location_name" not in qs_cols:
         try:
@@ -944,14 +944,14 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
-    # Titles system (added in 0.9.13)
+    # Titles system (added in 0.10.0-wip)
     try:
         from app.titles import init_titles
         init_titles(conn)
     except Exception:
         pass
 
-    # Party system (added in 0.9.13)
+    # Party system (added in 0.10.0-wip)
     try:
         from app.party import init_party
         init_party(conn)

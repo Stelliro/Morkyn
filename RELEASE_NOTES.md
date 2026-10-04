@@ -1,12 +1,20 @@
-# Mørkyn 0.10.1-wip — Release Notes
+# Mørkyn 0.10.0-wip — Release Notes
 
-Notes extended 2026-10-01. Still untagged.
+Notes extended 2026-10-04. Still untagged.
 
-**Status:** WIP release — systems under active development, not stable. Not yet tagged. Builds on `0.10.0-wip`, which builds on the [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12) stable release.
+**Status:** WIP release — systems under active development, not stable. Not yet tagged; it ships as `0.10.0`. Builds on the [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12) stable release.
 
 ---
 
-## What's new in 0.10.1-wip
+## What's new (October 2026)
+
+### Since 2026-10-04
+
+- **Token limits follow the model.** Context window and response caps come from the GGUF header and the GPU, or a tokens-per-billion scale; your own numbers are kept per model; launcher prefs default to `auto` — `app/model_limits.py`.
+- **Failsafes.** A model failure opens a dialog that names the problem and what to try, with "Continue anyway"; a context too small for the full contract is announced at boot — `app/failsafe.py`, `static/ui/failsafe.js`.
+- **Cheaper turns.** The verifier returns a verdict and a patch, local models share one system prefix per turn, prose repairs carry a prose contract, truncated JSON is closed locally, a dead model costs one call — `app/llm.py`, `app/prompts.py`.
+- **The UI is three CSS layers** drawn from the key art, with folds, hover peeks, and right-click menus — `static/ui/`, `docs/UI_RULEBOOK.md`.
+- **Rewind covers everything a turn wrote**: quests, offer clocks, the name ledger, social writes, pronoun pins, dice rows. Skill-check dice are seeded and audited. Hidden NPC psychology, server-rolled checks, and the skill search reach the narrator. See `CHANGELOG.md` for the full list.
 
 ### MLE (Morkyn LLM Engine)
 
@@ -46,7 +54,7 @@ The world-preset card folds. The two map views are labeled. Starting a new game 
 
 ---
 
-## What's new in 0.10.0-wip
+## What's new (September 2026)
 
 ### Fight / combat state
 
@@ -104,7 +112,7 @@ A standalone script that plays a full session using the same 8B model through ML
 - **Goal directive:** The agent receives a pursuit goal at session start and works toward it across turns.
 - **Debug command blocker:** A filter strips meta-commands and debug strings from player output so the narrator never receives OOC text.
 
-### Save editor (carried from 0.9.13-dev sprint)
+### Save editor (carried from the 0.10.0-wip sprint)
 
 World save files can be viewed and edited cell-by-cell in the browser. Any table except `world_maps` and `settings` is editable. Changes are all-or-nothing; a backup is written before any file is touched. `dry_run` mode reports what would change before committing — `app/save_editor.py`.
 
@@ -160,7 +168,7 @@ See [README.md](README.md) for full setup.
 | `CHANGELOG.md` | [Unreleased] promoted to [0.10.0-wip], new entries added |
 | `RELEASE_NOTES.md` | This file |
 
-### Files touched for 0.10.1-wip
+### Files touched in October 2026
 
 | File | Change |
 | --- | --- |
@@ -171,4 +179,8 @@ See [README.md](README.md) for full setup.
 | `app/tile_world.py` | World-scale map preview and city shape |
 | `app/llm.py`, `app/launcher_prefs.py`, `Morkyn.ps1` | Local provider is `mle` |
 | `static/app.js`, `static/index.html` | MLE in model settings; map marks on the play screen |
-| `README.md`, `CHANGELOG.md`, `RELEASE_NOTES.md` | Version set to 0.10.1-wip |
+| `README.md`, `CHANGELOG.md`, `RELEASE_NOTES.md` | Version stays `0.10.0-wip` until the `0.10.0` release |
+| `app/model_limits.py` | New — per-model token limits from the GGUF header, the GPU, or a tokens-per-billion scale |
+| `app/failsafe.py`, `static/ui/failsafe.js` | New — model-problem dialog, context notice |
+| `static/ui/tokens.css`, `static/ui/skin.css`, `static/ui/interact.js` | New — the three-layer UI |
+| `app/llm.py`, `app/prompts.py`, `app/world.py`, `app/mle.py` | Verdict verifier, shared prefix, rewind coverage, dead-model handling, MLE timeout and status |

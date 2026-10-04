@@ -182,6 +182,12 @@ const ABILITY_ORIGINS = new Set(["none", "acquired", "innate", "both"]);
 const ABILITY_COUNT_MIN_DEFAULT = 1;
 const ABILITY_COUNT_MAX_DEFAULT = 4;
 const ABILITY_COUNT_HARD_MAX = 4;
+// Free-text setup the model can ground abilities in. With none of these filled
+// (and no idea or compiled intent) the ability randomize buttons stay locked.
+const ABILITY_CONTEXT_SOURCES = ["custom_style", "character_backstory", "custom_skills", "race_magic_rules", "race_ability_rules"];
+const ABILITY_CONTEXT_FIELD_NAMES = new Set([...ABILITY_CONTEXT_SOURCES, "world_style"]);
+const ABILITY_CONTEXT_HINT =
+  "Randomize is locked until the model has something to build on: add a world description, an idea, a backstory, or skill/race notes first.";
 
 const RANDOM_SETUP = {
   // Personal/legal names (Given or Given + family) — not handles/nicknames.
@@ -1246,9 +1252,9 @@ const ACTION_HELP_TARGETS = [
   ["#setupStart", "Start the playthrough with the current setup and ask the LLM to write the opening scene before the player acts."],
   ["#setupPrev", "Move to the previous setup step without changing any filled values."],
   ["#setupNext", "Move to the next setup step. On the final step, this starts the playthrough."],
-  ["#randomAbilityButton", "Randomize unlocked abilities. Locked abilities stay. If abilities are already on the page, the number of cards stays."],
+  ["#randomAbilityButton", "Ask the model to roll unlocked abilities from your current setup. Locked abilities stay. If abilities are already on the page, the number of cards stays. Stays locked until the setup has some text to build on."],
   [".abilityKeepLock", "Lock this ability so randomize keeps it. Unlocked abilities are rewritten. The number of abilities stays."],
-  [".randomizeOneAbility", "Rewrite this ability. A locked ability stays until you unlock it."],
+  [".randomizeOneAbility", "Ask the model to rewrite this one ability from your current setup. A locked ability stays until you unlock it."],
   ["#addAbilityButton", "Add a blank ability card and expand it for editing. Randomized powers stay collapsed until you open them."],
   ["#sendButton", "Submit the typed player input. If the text box is empty, this acts as Continue and lets the LLM advance the scene."],
   ["#continueButton", "Continue the scene without typing an action — the DM advances from the current moment."],
@@ -4368,6 +4374,14 @@ async function randomizeField(name, options = {}) {
     }
   }
   const current = currentSetupSnapshot(name);
+  if (options.ignoreLock) {
+    // A direct button overrides this field's own lock. The server strips locked
+    // fields from a request, so leaving the lock in sent back an empty answer and
+    // the UI quietly filled the field from its local pool.
+    current._locked_fields = (current._locked_fields || []).filter((field) => field !== name);
+    if (current._locked_values) delete current._locked_values[name];
+    if (current._locked_field_context) delete current._locked_field_context[name];
+  }
   const idea = String(options.idea || "").trim().slice(0, 400);
   if (idea) current._randomize_idea = idea;
   const intent = options.intent || lastComposeIntent;
@@ -4381,7 +4395,28 @@ async function randomizeField(name, options = {}) {
   const payload = await response.json();
   applyRandomizedSetup(payload);
   // A 200 with an empty field used to leave the control untouched. Fill it locally.
-  if (randomizedFieldIsBlank(payload, name)) fallbackRandomizeField(name, options);
+  const blank = randomizedFieldIsBlank(payload, name);
+  if (blank) fallbackRandomizeField(name, options);
+  if (name === "special_abilities") reportAbilityRandomizeSource(payload, { blank });
+  return payload;
+}
+
+/** Tell the player where the ability cards came from: the model, or the local seed pool and why. */
+function reportAbilityRandomizeSource(payload, options = {}) {
+  if (options.blank) {
+    setSetupRandomizeStatus("The model returned no abilities, so local seed abilities were used instead.");
+    return;
+  }
+  if (payload?.fallback_used) {
+    const reason = String(payload.fallback_reason || payload?.quality_gate?.reason || "the model did not answer").trim();
+    setSetupRandomizeStatus(`The model could not roll abilities (${reason}). Local seed abilities were used instead.`);
+    return;
+  }
+  const count = readAbilityCards().length;
+  const attempt = Number(payload?.quality_gate?.attempt || 1);
+  setSetupRandomizeStatus(
+    `${count} ${count === 1 ? "ability" : "abilities"} rolled by the model from your current setup${attempt > 1 ? ` after ${attempt} tries` : ""}.`,
+  );
 }
 
 async function ensureComposerOrder() {
@@ -6100,6 +6135,8 @@ function updateAbilityOriginControls() {
     control.disabled = locked;
   });
   syncAbilityCountRangeInputs();
+  // Must run after the blanket enable above: it re-locks the randomize buttons when the setup is too thin.
+  refreshAbilityRandomizeGate();
   updatePowersDropdownMeta();
   updateTextOptimizeControls();
 }
@@ -6329,6 +6366,112 @@ function randomAbilityPreset(avoidList = []) {
 function randomizeAbility() {
   // Randomize always inserts collapsed — user expands only via Add Ability or toggle.
   addAbility(randomAbilityPreset(), { expanded: false });
+}
+
+function abilityContextReadiness() {
+  const found = [];
+  if (!setupForm) return { ready: false, found };
+  ABILITY_CONTEXT_SOURCES.forEach((name) => {
+    const filled = Array.from(setupForm.querySelectorAll(`[name="${name}"]`)).some((el) => String(el.value || "").trim());
+    if (filled) found.push(name);
+  });
+  if (String(setupForm.querySelector('[data-list-custom="world_style"]')?.value || "").trim()) found.push("world_style_custom");
+  // Only idea text the player can see counts; a preset's hidden default idea does not.
+  const ideaBoxes = ["#presetSimpleIdea", "#presetAdvancedIdea", "#randomizeSetupPrompt"];
+  if (ideaBoxes.some((selector) => String(document.querySelector(selector)?.value || "").trim())) found.push("idea");
+  if (lastComposeIntent && typeof lastComposeIntent === "object") found.push("intent");
+  return { ready: found.length > 0, found };
+}
+
+/** Lock or unlock the ability randomize buttons by how much setup the model has to go on. */
+function refreshAbilityRandomizeGate() {
+  if (!setupForm) return false;
+  const { ready } = abilityContextReadiness();
+  const busy = setupRandomizationLocked();
+  if (randomAbilityButton) {
+    randomAbilityButton.disabled = busy || !ready;
+    randomAbilityButton.classList.toggle("needsContext", !ready);
+    if (ready) randomAbilityButton.removeAttribute("title");
+    else randomAbilityButton.title = ABILITY_CONTEXT_HINT;
+  }
+  abilityList?.querySelectorAll(".randomizeOneAbility").forEach((button) => {
+    button.disabled = busy || !ready;
+    if (ready) button.removeAttribute("title");
+    else button.title = ABILITY_CONTEXT_HINT;
+  });
+  const hint = document.querySelector("#abilityContextHint");
+  if (hint) hint.hidden = ready;
+  return ready;
+}
+
+function replaceAbilityCard(card, ability) {
+  if (!abilityList) return null;
+  const prepared = applyOriginToAbility({ ...ability, keep: false });
+  if (card?.isConnected) {
+    card.outerHTML = abilityTemplate(prepared, { expanded: false });
+  } else {
+    abilityList.insertAdjacentHTML("beforeend", abilityTemplate(prepared, { expanded: false }));
+  }
+  ensureTextAiControls(abilityList);
+  decorateFunctionHelp(abilityList);
+  updateAbilityOriginControls();
+  abilityList.querySelectorAll(".abilitySetupCard").forEach((c) => refreshAbilityCardSummary(c));
+  return prepared;
+}
+
+/** Rewrite one card with the model: same route as the section button, count fixed at one. */
+async function randomizeOneAbilityWithModel(card) {
+  const cards = Array.from(abilityList?.querySelectorAll(".abilitySetupCard") || []);
+  const index = cards.indexOf(card);
+  const all = readAbilityCards();
+  const replaced = index >= 0 ? all[index] : null;
+  const others = all.filter((_, i) => i !== index);
+  const keptNames = others.map((ability) => ability.name).filter(Boolean);
+  const current = currentSetupSnapshot("special_abilities");
+  current._locked_fields = (current._locked_fields || []).filter((field) => field !== "special_abilities");
+  if (current._locked_values) delete current._locked_values.special_abilities;
+  if (current._locked_field_context) delete current._locked_field_context.special_abilities;
+  if (lastComposeIntent && typeof lastComposeIntent === "object") current._compose_intent = lastComposeIntent;
+  const idea = String(setupRandomizeIdea() || "").trim().slice(0, 400);
+  if (idea) current._randomize_idea = idea;
+  current._field_context = {
+    type: "special_abilities",
+    existing_count: all.length,
+    kept_count: others.length,
+    quantity_locked: true,
+    requested_count: 1,
+    target_count: 1,
+    count_rolled: true,
+    count_min: 1,
+    count_max: 1,
+    kept_names: keptNames,
+    roll_rule:
+      `Rewrite one ability card. Return exactly 1 new ability that replaces "${replaced?.name || "this card"}" ` +
+      `and differs in name, action, and effect from every other card: ${keptNames.join(", ") || "(none)"}. ` +
+      "Each ability needs name, description, locked, prerequisites, cost, growth_math, and power_type.",
+  };
+  const response = await fetch("/api/randomize-setup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ group: "field:special_abilities", current }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  const payload = await response.json();
+  const list = Array.isArray(payload?.special_abilities)
+    ? payload.special_abilities
+    : Array.isArray(payload?.fields?.special_abilities)
+      ? payload.fields.special_abilities
+      : [];
+  const fresh = list.find((ability) => ability && typeof ability === "object" && String(ability.name || "").trim());
+  if (!fresh) throw new Error("The model returned no ability.");
+  const prepared = replaceAbilityCard(card, fresh);
+  if (payload?.fallback_used) {
+    const reason = String(payload.fallback_reason || "the model did not answer").trim();
+    setSetupRandomizeStatus(`The model could not rewrite that ability (${reason}). A local seed ability was used instead.`);
+  } else {
+    setSetupRandomizeStatus(`"${prepared?.name || fresh.name}" was rolled by the model from your current setup.`);
+  }
+  return payload;
 }
 
 function collectAbilities() {
@@ -14922,7 +15065,7 @@ function renderModelLimitsFields(config) {
   const source = limits.source || {};
   const tag = (key) => (source[key] === "env" ? " (set by env, read-only)" : "");
   const autoLine = auto.context_tokens
-    ? `Auto for ${escapeHtml(label)}: ${Number(auto.context_tokens).toLocaleString()} context, ${Number(auto.response_token_cap).toLocaleString()} / ${Number(auto.response_token_hard_cap).toLocaleString()} response. ${escapeHtml(basis.context || "")}`
+    ? `Auto for ${escapeHtml(label)}: ${Number(auto.context_tokens).toLocaleString()} context, ${Number(auto.response_token_cap).toLocaleString()} / ${Number(auto.response_token_hard_cap).toLocaleString()} response (${escapeHtml(basis.context || "")}).`
     : "Automatic limits appear once a model is selected.";
   return `
       <fieldset class="modelLimits" data-model-key="${escapeHtml(limits.model_key || "")}">
@@ -19887,15 +20030,25 @@ setupForm.addEventListener("click", (event) => {
       setSetupRandomizeStatus("That ability is locked. Unlock it to randomize it.");
       return;
     }
-    const preset = randomAbilityPreset(readAbilityCards());
-    if (card) {
-      // Keep collapsed after randomize-this
-      card.outerHTML = abilityTemplate(preset, { expanded: false });
-      ensureTextAiControls(abilityList);
-      decorateFunctionHelp(abilityList);
-      updateAbilityOriginControls();
-      abilityList.querySelectorAll(".abilitySetupCard").forEach((c) => refreshAbilityCardSummary(c));
+    if (!refreshAbilityRandomizeGate()) {
+      setSetupRandomizeStatus(ABILITY_CONTEXT_HINT);
+      return;
     }
+    // This used to swap in a local preset without asking the model at all.
+    const label = "Rewriting one ability...";
+    enqueueAiTask(
+      withSetupRandomizationLock(
+        () => randomizeOneAbilityWithModel(card),
+        label,
+        (error) => {
+          const reason = String(error?.message || error || "").trim();
+          replaceAbilityCard(card, randomAbilityPreset(readAbilityCards()));
+          setSetupRandomizeStatus(`The model could not rewrite that ability (${reason || "no answer"}). A local seed ability was used instead.`);
+        },
+      ),
+      label,
+    ).finally(() => updateAbilityOriginControls());
+    return;
   }
   const addAfter = event.target.closest(".addAbilityAfter");
   if (addAfter) {
@@ -20216,6 +20369,10 @@ addAbilityButton?.addEventListener("click", () => {
   card?.querySelector('[data-ability-field="name"]')?.focus?.();
 });
 randomAbilityButton?.addEventListener("click", () => {
+  if (!refreshAbilityRandomizeGate()) {
+    setSetupRandomizeStatus(ABILITY_CONTEXT_HINT);
+    return;
+  }
   randomAbilityButton.disabled = true;
   const label = "Randomizing abilities...";
   enqueueAiTask(
@@ -20224,16 +20381,30 @@ randomAbilityButton?.addEventListener("click", () => {
       label,
       (error) => {
         fallbackRandomizeField("special_abilities", { ignoreLock: true });
-        latestOutput.innerHTML = paragraphs(`Model randomizer unavailable; used local fallback. ${error.message || error}`);
+        const reason = String(error?.message || error || "").trim();
+        // The game-view output is hidden during setup, so the reason must land on the setup status line too.
+        setSetupRandomizeStatus(`The model could not roll abilities (${reason || "no answer"}). Local seed abilities were used instead.`);
+        latestOutput.innerHTML = paragraphs(`Model randomizer unavailable; used local fallback. ${reason}`);
       },
     ),
     label,
   )
     .finally(() => {
       randomAbilityButton.disabled = false;
-        updateAbilityOriginControls();
+      updateAbilityOriginControls();
     });
 });
+// Typing a world description, backstory, idea, or skill/race notes unlocks the ability randomize buttons.
+document.addEventListener("input", (event) => {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) return;
+  const name = target.getAttribute("name") || target.dataset?.listCustom || "";
+  if (ABILITY_CONTEXT_FIELD_NAMES.has(name) || target.id === "presetSimpleIdea" || target.id === "presetAdvancedIdea") {
+    refreshAbilityRandomizeGate();
+  }
+});
+// Apply the gate on first paint, before any card exists to trigger a refresh.
+refreshAbilityRandomizeGate();
 setupPrevButton?.addEventListener("click", () => setSetupStep(setupStep - 1));
 setupNextButton?.addEventListener("click", () => {
   if (setupStep === setupSections.length - 1) {

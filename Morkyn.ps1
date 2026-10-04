@@ -1007,8 +1007,10 @@ function Show-Gatehouse {
     Write-LampRow "K" "Pipeline consolidate" $cons
     Write-LampRow "V" "Fast verification" $fast
     Write-LampRow "S" "Skip DSL verifier" $skip
-    Write-Row "R" "Soft response tok" ([string]$Prefs.soft_response_tokens)
-    Write-Row "E" "Hard response tok" ([string]$Prefs.hard_response_tokens)
+    $softLabel = if ((Get-ExplicitPrefInt $Prefs.soft_response_tokens) -gt 0) { [string]$Prefs.soft_response_tokens } else { "auto (from the model)" }
+    $hardLabel = if ((Get-ExplicitPrefInt $Prefs.hard_response_tokens) -gt 0) { [string]$Prefs.hard_response_tokens } else { "auto (from the model)" }
+    Write-Row "R" "Soft response tok" $softLabel
+    Write-Row "E" "Hard response tok" $hardLabel
     Write-Rule
     Write-TuiLine -Width $w -Text "CLIENT" -Color DarkYellow
     Write-LampRow "O" "Open browser" $browser
@@ -1261,13 +1263,17 @@ function Invoke-GatehouseMenu {
             "S" { $Prefs.dsl_skip_verify = -not [bool]$Prefs.dsl_skip_verify; $msg = "skip DSL verifier toggled" }
             "R" {
                 Write-Host ""
-                $v = Read-HostSafe "  Soft response tokens [$($Prefs.soft_response_tokens)]"
+                Write-Host "  auto = sized from the model's parameter count. A number is used for every model." -ForegroundColor DarkGray
+                $v = Read-HostSafe "  Soft response tokens (auto or a number) [$($Prefs.soft_response_tokens)]"
                 if ($v -match '^\d+$') { $Prefs.soft_response_tokens = [int]$v; $msg = "soft tokens -> $v" }
+                elseif ($v -match '^(?i)auto$') { $Prefs.soft_response_tokens = 0; $msg = "soft tokens -> auto" }
             }
             "E" {
                 Write-Host ""
-                $v = Read-HostSafe "  Hard response tokens [$($Prefs.hard_response_tokens)]"
+                Write-Host "  auto = sized from the model's parameter count. A number is used for every model." -ForegroundColor DarkGray
+                $v = Read-HostSafe "  Hard response tokens (auto or a number) [$($Prefs.hard_response_tokens)]"
                 if ($v -match '^\d+$') { $Prefs.hard_response_tokens = [int]$v; $msg = "hard tokens -> $v" }
+                elseif ($v -match '^(?i)auto$') { $Prefs.hard_response_tokens = 0; $msg = "hard tokens -> auto" }
             }
             "O" { $Prefs.open_browser = -not [bool]$Prefs.open_browser; $msg = "open browser toggled" }
             "W" {

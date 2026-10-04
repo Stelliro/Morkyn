@@ -163,7 +163,7 @@ from app.world import (
 ROOT = Path(__file__).resolve().parent.parent
 STATIC_DIR = ROOT / "static"
 MEDIA_DIR = ROOT / "Media"
-APP_VERSION = "V0.10.1-wip"
+APP_VERSION = "V0.10.0-wip"
 
 app = FastAPI(title="Mørkyn")
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -3883,7 +3883,7 @@ def api_get_gm_notes():
 
 
 # ---------------------------------------------------------------------------
-# Quest endpoints (0.9.13)
+# Quest endpoints (0.10.0-wip)
 # ---------------------------------------------------------------------------
 
 class RelationshipUpdateRequest(BaseModel):
@@ -4187,7 +4187,7 @@ def api_seed_quests():
 
 
 # ---------------------------------------------------------------------------
-# NPC relationship endpoints (0.9.13)
+# NPC relationship endpoints (0.10.0-wip)
 # ---------------------------------------------------------------------------
 
 

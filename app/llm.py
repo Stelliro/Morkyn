@@ -2805,7 +2805,11 @@ def _setup_randomizer_return_fields(group: str, current_setup: dict[str, Any], t
     if text_mode:
         return [group.split(":", 1)[1]]
     if group.startswith("field:"):
-        return_fields = [group.split(":", 1)[1]]
+        # A direct per-field button is an explicit request: the client already
+        # decided to override the section lock, so the lock must not empty the
+        # request here (an empty return used to send the UI straight to its
+        # local fallback pool without a word).
+        return [group.split(":", 1)[1]]
     elif group == "all":
         return_fields = SETUP_RANDOMIZER_ALL_FIELD_ORDER
     elif group == "special_abilities":
@@ -7204,6 +7208,9 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     if idea_sparks_pkg and isinstance(prompt, dict) and idea_sparks_pkg.get("sparks"):
         # Inject once for all field groups (abilities already set earlier; others get it here).
         prompt.setdefault("idea_sparks", prompt_sparks(idea_sparks_pkg))
+    # Why the abilities came from the seed pool instead of the model, if they did.
+    # The UI shows this; a silent swap looked like "randomize always falls back".
+    ability_fallback_reason = ""
     try:
         result = _chat_json(
             "Return JSON only. Generate direct values. Do not explain. Do not echo the request.",
@@ -7216,6 +7223,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     except Exception as first_exc:
         # Small local models often break ability JSON shape — fall back instead of hard-failing setup.
         if return_fields == ["special_abilities"]:
+            ability_fallback_reason = _trim_text(str(first_exc) or first_exc.__class__.__name__, 240)
             validated = {"special_abilities": _fallback_special_abilities(current_setup)}
         else:
             raise first_exc
@@ -7533,6 +7541,19 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             except Exception:
                 # Model failed mid-retry — count as denial and continue toward fallback.
                 validated = {"special_abilities": []}
+        if ability_fallback_reason or quality_source == "fallback_seed_pool":
+            # The gate above re-scores whatever list it was handed, so a seed-pool
+            # list passes as source "llm". Say where the cards really came from.
+            reason = ability_fallback_reason or (
+                f"the model's abilities failed the quality gate {ABILITY_QUALITY_MAX_ATTEMPTS} times"
+            )
+            validated["fallback_used"] = True
+            validated["fallback_reason"] = reason
+            if isinstance(validated.get("quality_gate"), dict):
+                validated["quality_gate"]["source"] = (
+                    "fallback_model_error" if ability_fallback_reason else "fallback_seed_pool"
+                )
+                validated["quality_gate"]["reason"] = reason
         # Soft polish only after quality pass / fallback (never mask a failed gate).
         abilities_out = validated.get("special_abilities")
         if isinstance(abilities_out, list):

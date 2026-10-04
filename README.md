@@ -4,11 +4,21 @@
   <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
 </p>
 
-**Version `0.10.1-wip`** · WIP — not stable, not yet tagged. Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.10.0-wip`** · WIP — not stable, not yet tagged; ships as `0.10.0`. Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
-**Mørkyn** is a local-first browser RPG. A local LLM narrates turns and proposes structured world changes, while SQLite remains the source of truth for the player, inventory, NPCs, events, summaries, and long-running continuity.
+## This is not the usual AI RPG
 
-It is still pre-1.0 software, but it has enough systems to be a playable prototype and a solid base for long playthroughs.
+Most "AI RPGs" are a chat window with a system prompt. The model is the whole game: it remembers what fits in its context, rolls whatever number sounds right, and quietly rewrites your inventory, your location, and the people you met once the early turns scroll away. Play long enough and the world you were in is gone.
+
+Mørkyn turns that around. **The model only narrates. The engine decides.**
+
+- **The world is a database, not a transcript.** Player, places, people, items, quests, relationships, and the private motives of NPCs live in SQLite. The model proposes changes in a closed op language; the engine applies what is justified and refuses the rest. A gain the ops claim but the prose never shows arriving is refused; a pickup the prose shows and the ops forgot is granted, so the story and the inventory cannot drift apart.
+- **Every number is rolled by the server.** The model writes a band such as `small` or `huge`; the app rolls the amount, scales it by level and difficulty, and writes every roll to an audit table you can read.
+- **Continuity is a contract, not a hope.** Where you are, what you are called, who an NPC is, what the world already told you, the dice that already fell: each is stated to the model every turn and verified after. When the prose dodges a name it owes you, the engine says the name.
+- **Rewind really rewinds.** Regenerate a turn and the same dice fall, the same encounter rolls, the same clocks tick, and nothing the discarded turn wrote survives.
+- **It runs at home on a 7B.** Local-first, nothing leaves your machine. A small model is enough because it never has to be the memory, the referee, or the map.
+
+It is pre-1.0 software, but it is a playable prototype with enough systems under it for long playthroughs. The claims above are tested behaviours, not lines in a prompt.
 
 ## Download
 
@@ -137,17 +147,19 @@ Morkyn/
 - Optional adaptive narration pipeline and agent bridge endpoints.
 - Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
 
-### New in 0.10.1-wip
+### New in 0.10.0-wip
 
+- **Token limits follow the model.** Context window and response caps come from the GGUF header and your GPU, or a tokens-per-billion scale when only the name is known. Edit them and they are remembered for that model; the launcher defaults to `auto` — `app/model_limits.py`.
+- **Failsafes.** A model failure stops the turn and opens a dialog that names the problem, what to try, and a "Continue anyway". A context too small for the full story contract is announced at boot instead of on the server console — `app/failsafe.py`.
+- **Cheaper turns.** The verifier returns a verdict and a patch, not a rewritten turn; local models reuse one system prefix across the turn's calls; prose repairs carry a prose contract; a reply cut by its token cap is closed locally; a dead model costs one call instead of three — `app/llm.py`.
+- **The interface is drawn from the key art.** Three CSS layers (values, layout, look), folding sections, hover peeks on names, right-click menus on people, items, and tiles — `static/ui/`, `docs/UI_RULEBOOK.md`.
+- **Rewind covers everything a turn wrote**: quests and their clocks, the name ledger, social writes, pronoun pins, and the dice audit. Skill checks are seeded like every other roll. Hidden NPC psychology, server-rolled checks, and the per-action skill search now reach the narrator.
 - **MLE (Morkyn LLM Engine).** The local story model loads a GGUF in-process. A missing file says so instead of answering. Narration drafts can hide an overused word while the next token is chosen. Names, job titles, and the draft's JSON keys stay choosable. The weights file and the finished sentence stay as they are — `app/mle.py`.
 - **Wilderness map.** The land is a seeded 16,383-cell grid. Cities are clumps inside a 9 by 9 neighborhood, not a one-cell line. The model does not place them — `app/world_scale.py`.
 - **Local intel.** Directions, heard-about cells, notice boards, and quest clocks belong to the engine — `app/local_intel.py`.
 - **Encounter board.** A fight tracks the named people in it, and a move is stored as what the player saw — `app/encounter_board.py`.
 - **Setup rules.** The short choice stays short. The save stores a written rule for it before the first scene. A typed list such as common, uncommon, rare, epic, legendary, unique, and unknown becomes one rung per label — `app/setting_templates.py`.
 - **World themes.** Deep Caverns grows cavern, mushroom, crystal, lava, water, and cliff, and leans toward dark-dwelling creatures and dwarves. Other themes have their own ground and usual people. A new game rolls its own map seed. The older small board stays as the legacy map — `app/world_scale.py`.
-
-### New in 0.10.0-wip
-
 - **Fight / combat state.** NPCs can be initiated into combat from the UI or via `initiate_fight`. Ambient `fight_nearby` events fire as full combat turns during Wait and Rest — `app/world.py`.
 - **Quest / Objectives system.** Active quests appear in the Quests tab with step-by-step objectives, a progress bar, difficulty-scaled rewards, optional timers, and hidden sub-tasks. Up to 6 steps per quest. The backend manages creation, step advancement, timer auto-fail, and reward payment — `app/quests.py`, `/api/quests`.
 - **In-browser quest creation form.** Author new quests entirely in the UI — no API calls needed.
@@ -158,7 +170,7 @@ Morkyn/
 - **Save editor.** World save files can be viewed and edited cell-by-cell in the browser. Any table except `world_maps` and `settings` is editable; changes are all-or-nothing with a backup written first — `app/save_editor.py`.
 - **Titles system** *(in progress)* — earnable titles with stat bonuses; award logic and UI pending.
 - **Party system** *(in progress)* — invite/remove NPCs, morale, combat bonuses; morale propagation pending.
-- **Hidden NPC psychology** *(in progress)* — narrator-only private feelings, agendas, family ties; context injection pending.
+- **Hidden NPC psychology** — narrator-only private feelings, agendas, family ties. Context injection landed in October.
 
 ### New in 0.9.12
 
@@ -284,9 +296,9 @@ Trace files are written under `data/model_traces/` (gitignored). The play view s
 ## Development
 
 ```powershell
-python tests/behavior_test.py
-python tests/test_narration_pipeline.py
-python benchmarks/run_dual_role_playtest.py
+python -m unittest discover -s tests -p "test_*.py"   # the full suite
+python tests/behavior_test.py                          # memory / token / slot checks
+python benchmarks/run_dual_role_playtest.py            # 100 turns over the real engine, no model
 ```
 
 ## Docs and license
@@ -302,7 +314,7 @@ python benchmarks/run_dual_role_playtest.py
 | Field | Value |
 | --- | --- |
 | Product | **Mørkyn** |
-| Version | **0.10.1-wip** |
+| Version | **0.10.0-wip** |
 | GitHub | https://github.com/Stelliro/Morkyn |
 
 Formerly published as AI RPG Consistency Prototype (`ai-rpg-consistency-prototype`).

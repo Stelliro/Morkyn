@@ -1147,16 +1147,11 @@ body.setup-mode-advanced .setupHeaderUtility {
 }
 
 .setupPrimaryGrid {
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-/* Beside the art column the form is too narrow for three header rows.
-   Wide screens (the maximized window) keep Name, Origin, and World difficulty together. */
+/* Each field keeps its Randomize / Lock row on one line beside the title. */
 @media (max-width: 1499px) {
-  .setupPrimaryGrid {
-    grid-template-columns: 1fr;
-  }
-
   .setupPrimaryGrid .settingFieldHeader {
     flex-wrap: nowrap;
     align-items: center;
@@ -1336,19 +1331,25 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
   max-width: none;
 }
 
-/* Must follow .setupSimpleGrid — same element has both classes, and the later rule wins. */
+/* Must follow .setupSimpleGrid — same element has both classes, and the later rule wins.
+   Two equal columns: Name | Origin, World difficulty | Hair; the long text fields take
+   the full row. The old three-column template put a 243px sliver on the right at every
+   width below 1500px, because the Face field's "span 2" opened an implicit column
+   beside the single-column override. */
 .setupSimpleGrid.setupPrimaryGrid {
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.9fr) minmax(0, 0.9fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
 .setupPrimaryGrid .setupPrimaryFace {
-  grid-column: span 2;
+  grid-column: 1 / -1;
 }
 
-@media (max-width: 1499px) {
-  .setupSimpleGrid.setupPrimaryGrid {
-    grid-template-columns: 1fr;
-  }
+/* The short fields pair up first (Name | Origin, World difficulty | Hair), then the
+   full-row text fields follow. In source order the wide World vibe sat between
+   them and left an empty cell beside Difficulty and another beside Hair. */
+.setupPrimaryGrid > .wide,
+.setupPrimaryGrid > .setupPrimaryFace {
+  order: 1;
 }
 
 /* The two-class grid above beats a one-class container rule. Narrow forms stack. */
@@ -11384,6 +11385,11 @@ button.miniItemMore {
     padding: 0;
   }
 
+  /* Simple mode keeps the centred panel (see body.setup-mode-simple .setupPanel below). */
+  body.setup-mode-simple .setupView {
+    place-items: center;
+  }
+
   .setupPanel {
     width: 100%;
     max-width: none;
@@ -11405,6 +11411,26 @@ button.miniItemMore {
   .setupPanel::before,
   .setupPanel::after {
     display: none;
+  }
+
+  /* The full-bleed grid above exists for the Advanced step rail. Simple mode
+     has no rail, so it was inheriting a form the width of the whole monitor:
+     a 1,846px text box at 1920px. It keeps the centred panel instead. */
+  body.setup-mode-simple .setupPanel {
+    width: min(1200px, calc(100vw - 48px));
+    max-width: none;
+    height: auto;
+    max-height: calc(100svh - 40px);
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: none;
+    grid-template-rows: none;
+    gap: 0;
+    padding: clamp(14px, 2vw, 22px);
+    padding-bottom: 0;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-soft);
   }
 
   .setupHeader {

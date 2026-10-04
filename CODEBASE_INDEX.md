@@ -1,7 +1,7 @@
 # CODEBASE INDEX - Mørkyn
 
 > Single source of truth for project structure, conventions, and architecture.
-> Last updated: 2026-10-01 (setting rules, theme wilderness, setup map views)
+> Last updated: 2026-10-04 (per-model token limits, verdict verifier, failsafes, rewind coverage)
 
 > Use this file before making architecture, schema, API, prompt-contract, launcher, or major UI changes. Update it whenever those facts change.
 
@@ -15,7 +15,7 @@
 - **Primary Languages:** Python, JavaScript, HTML, CSS
 - **Key Frameworks / Libraries:** FastAPI, Pydantic, SQLite, Uvicorn, llama-cpp-python server, MLE (Morkyn LLM Engine)
 - **Target Platforms:** Windows local development, browser UI at localhost or trusted local-network phone/tablet browsers
-- **Current Version:** 0.10.1-wip. `APP_VERSION` in `app/main.py` is `V0.10.1-wip`. The tagged stable release is still 0.9.12.
+- **Current Version:** 0.10.0-wip. `APP_VERSION` in `app/main.py` is `V0.10.0-wip`; it ships as 0.10.0. The tagged stable release is still 0.9.12.
 - **Status:** Active development / prototype
 - **Brand assets:** `Media/` (logo + key art)
 
