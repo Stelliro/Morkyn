@@ -114,8 +114,9 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
 - playthrough_options.choices are this playthrough's labels. For RANK, use only the rungs named in choices.rank_scale. playthrough_options.setting_templates, when present, is the one written rule this action named. Follow that included rule. Do not replace its labels.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
   Write "XP small", "GOLD -moderate", "HP -small", "GRANT \"rope\" QTY small".
-  A leading "-" means a loss. The app rolls the actual amount; a bare number is
-  read as a band hint and re-rolled, so bands are shorter and more reliable.
+  A leading "-" means a loss. The app rolls the actual amount; a bare number on
+  XP, GOLD, HP, KARMA or SKILL is read as a band hint and re-rolled, so bands are
+  shorter and more reliable.
 - GRANT and TAKE QTY counts objects: trivial or small is one, moderate two,
   large three, huge five. A real stack may be a plain number. GRANT only what
   ===NAR=== puts in the player's hands (given, bought, picked up, looted,
