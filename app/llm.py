@@ -406,6 +406,8 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     # Who the player is talking to (app/conversation.py). The draft, verify
     # and paragraph passes all read it from the handed-off context.
     "conversation_turn",
+    # Budgeted race and lore rows for this turn (app/world_facts.py).
+    "world_facts",
 }
 HANDOFF_OPTIONAL_CONTEXT_KEYS = {
     "gm_events",
@@ -9499,6 +9501,7 @@ def estimated_tokens(text: str) -> int:
 WORLD_STATE_DROP_ORDER: tuple[str, ...] = (
     "npc_psychology_context",
     "conversations",
+    "world_facts",
     "named",
     "relevant_asks",
     "open_offers",

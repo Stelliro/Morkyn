@@ -911,6 +911,16 @@ def api_state():
     return get_state()
 
 
+@app.get("/api/world-facts")
+def api_world_facts():
+    """Read-only view of this world's race and lore rows (app/world_facts.py)."""
+    from app.db import connect
+    from app.world_facts import all_facts
+
+    with connect() as conn:
+        return all_facts(conn)
+
+
 @app.get("/api/turn-history")
 def api_turn_history(before: int = 0, limit: int = 10):
     """

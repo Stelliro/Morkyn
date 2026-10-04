@@ -94,6 +94,12 @@ WORLD_TABLES = [
     # carry them and a new playthrough must drop them.
     "quest_clocks",
     "name_ledger",
+    # Per-world race and lore rows (app/world_facts.py). Not replace-only: a
+    # slot from before these tables loads with them empty, and the first read
+    # re-splits that slot's own setup strings instead of keeping the last
+    # world's rows.
+    "world_races",
+    "world_facts",
 ]
 # Slots written before a table joined the export do not name it. Loading one
 # must not wipe rows that slot never stored. An empty list still replaces:
@@ -218,6 +224,8 @@ RESTORE_ORDER = [
     "world_maps",
     "quest_clocks",
     "name_ledger",
+    "world_races",
+    "world_facts",
 ]
 
 
@@ -5203,6 +5211,20 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 conn.execute("ROLLBACK TO SAVEPOINT setting_templates")
             except Exception:
                 pass
+        # Race, magic and lore setup strings as small engine rows (playtest #8).
+        # The deterministic split alone is enough to play; the post-start
+        # model pass only refines it.
+        try:
+            conn.execute("SAVEPOINT world_facts")
+            from app.world_facts import seed_from_options
+
+            seed_from_options(conn, stored_options)
+            conn.execute("RELEASE SAVEPOINT world_facts")
+        except Exception:
+            try:
+                conn.execute("ROLLBACK TO SAVEPOINT world_facts")
+            except Exception:
+                pass
         if isinstance(setup_form, dict) and isinstance(setup_form.get("controls"), list):
             _set_setting(conn, "game_start_form", _slim_game_start_form(setup_form))
 
@@ -8292,6 +8314,14 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
             break
 
     map_space = _map_space_for_prompt()
+    # Race and lore rows for the people here and the words of this turn,
+    # under a character budget, instead of whole setup paragraphs (playtest #8).
+    try:
+        from app.world_facts import relevant_facts_for_state
+
+        world_facts = relevant_facts_for_state(state, player_input)
+    except Exception:
+        world_facts = {}
     prompt_context = {
         **state,
         "player": context_player,
@@ -8315,6 +8345,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "history": [],
         "last_narration": last_narration,
         "relevant_asks": relevant_asks,
+        "world_facts": world_facts,
         "turn_plan": turn_plan,
         "action_context": action_context,
         "working_set": _working_set(current_code, locations, relevant_sources),
@@ -15420,6 +15451,15 @@ def start_playthrough_with_opening(options: dict[str, Any]) -> dict[str, Any]:
         from app.setting_templates import refresh_setting_templates_from_model
 
         refresh_setting_templates_from_model()
+    except Exception:
+        pass
+    # Post-start, pre-turn-1: small model passes that turn setup text into
+    # validated engine rows (world facts now; custom proficiencies register
+    # here too). Skippable; the opening never waits on a failure.
+    try:
+        from app.world_facts import run_post_start_passes
+
+        run_post_start_passes()
     except Exception:
         pass
     opening = play_opening_turn()

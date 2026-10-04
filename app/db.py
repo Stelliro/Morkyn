@@ -949,6 +949,14 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     except Exception:
         pass
 
+    # Per-world race and lore rows (playtest #8).
+    try:
+        from app.world_facts import ensure_world_fact_tables
+
+        ensure_world_fact_tables(conn)
+    except Exception:
+        pass
+
     # Titles system (added in 0.10.0-wip)
     try:
         from app.titles import init_titles

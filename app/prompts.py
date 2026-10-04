@@ -1174,6 +1174,12 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                 "active_skills": [{"code": row["code"], "name": row.get("name") or ""} for row in active[:8]]
             }
 
+    # Engine rows for the races present and the lore this turn touches,
+    # already budgeted in app/world_facts.py (playtest #8).
+    facts = context.get("world_facts")
+    if isinstance(facts, dict) and (facts.get("races") or facts.get("facts")):
+        world["world_facts"] = {key: facts[key] for key in ("races", "facts") if facts.get(key)}
+
     here_codes = {str(person.get("code") or "") for person in (place or {}).get("people") or [] if person.get("code")}
     named = _named_records(context, focus, here_codes)
     if named:
@@ -1299,6 +1305,13 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "the people in conversation_turn.talking_to answer the player; people in conversation_turn.listening may "
         "react but do not answer for them. The player's own quoted words are spoken by the player only. "
     )
+    if world.get("world_facts"):
+        text += (
+            "When world_state.world_facts is present, those rows are this world's stored facts. "
+            "world_facts.races gives each people's magic access and rules; here lists who in the scene is of that people. "
+            "A person whose people has magic none does not cast or use magic. "
+            "Keep people, magic, customs and lore consistent with world_facts.facts. "
+        )
     options = (world.get("settings") or {}).get("playthrough_options") or {}
     if isinstance(options, dict) and isinstance(options.get("choices"), dict) and options["choices"]:
         text += (

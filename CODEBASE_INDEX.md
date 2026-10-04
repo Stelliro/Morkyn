@@ -55,6 +55,7 @@ Morkyn/
 |   |-- prompts.py                   # System/verifier prompts + agentic CoD steps
 |   |-- rng.py                       # Dice, magnitude bands, deterministic seeds, roll audit
 |   |-- venues.py                    # Shop/inn kinds, opening hours, settlement commonality
+|   |-- world_facts.py               # Per-world race and lore rows, post-start passes, per-turn fetch
 |   |-- world_scale.py               # Seeded wilderness, theme ground, materials, people leanings
 |   |-- turn_dsl.py                  # NAR+OPS draft language
 |   |-- updates.py                   # Optional GitHub update/rollback
@@ -158,6 +159,15 @@ Morkyn/
 - **Consumers:** `app.world` at playthrough start and in `get_state()`, `app.prompts`, `app.turn_dsl`.
 - **Dependencies:** `app.db`. A cloud rewrite uses `app.llm` only when the story provider is OpenAI-compatible and a key is present.
 - **Design Notes:** Table `setting_templates` holds `key`, `choice`, `rule`, `source` (`llm` or `fallback`), and `created_at`. A fallback is always stored. `AI_RPG_SETTING_TEMPLATES=0` skips the model call. The cloud call does not start MLE, llama.cpp, Forge, or ComfyUI. A custom list splits on commas and on the word `and`. `common, uncommon, rare, epic, legendary, unique and unknown` is seven rank rungs. A built-in phrase such as `earned and uncommon` stays one label. A model rule is kept only when it names every label. For ranks, neighboring rungs glued with `and` are discarded. Combat labels in `app.world._rank_labels` use the same split. Boolean setup values are stored as `on` or `off`.
+
+#### World Facts
+
+- **Files:** `app/world_facts.py`
+- **Purpose:** Keeps a world's setup prose (`world_races`, `race_magic_rules`, `race_ability_rules`, `custom_style`, `faction_pressure`) as short engine rows, and hands each turn only the rows it needs.
+- **Key API:** `ensure_world_fact_tables()`, `seed_from_options()` (deterministic split), `ensure_seeded()` (lazy split for older worlds), `validate_race_row()`, `validate_fact_row()`, `store_race()`, `store_fact()`, `relevant_facts()` / `relevant_facts_for_state()` (budgeted per-turn rows), `all_facts()`, `register_post_start_pass()`, `run_post_start_passes()`, `parse_lines()` (closed `PREFIX|field|...` format), `refine_from_model()`, `apply_refinement()`.
+- **Consumers:** `app.db._migrate_columns` (tables), `app.world.start_playthrough` (split), `app.world.start_playthrough_with_opening` (post-start passes before the opening), `app.world.build_prompt_context` (`context['world_facts']`, kept by `HANDOFF_BASE_CONTEXT_KEYS`), `app.prompts._visible_world` (`world_state.world_facts` plus one instruction line), `GET /api/world-facts`.
+- **Dependencies:** `app.db`, `app.rng` (seeded numbers for unfamiliar peoples), `app.llm._chat_content` for the optional model pass.
+- **Design Notes:** Tables `world_races` (code R1.., `magic_access` in none/rare/learned/innate/common/unknown, `size_band` in tiny..huge/varies/unknown, `lifespan_years` integer) and `world_facts` (code F1.., kind in custom/history/rule/faction/place_lore/magic/tone, text <= 200 chars, JSON `links` and `tags`); both are in `WORLD_TABLES` and not replace-only, so an older slot loads empty and is re-split from its own settings. Every row, split or model, passes the same validators. The post-start phase is a registry: a pass takes the stored `playthrough_options`, opens its own short connections (no lock held while the model runs), and returns a report stored in `settings.world_facts_pass`. `AI_RPG_POST_START_MODEL=off`, or MLE with no model file, skips every model pass. Custom proficiencies (playtest #1) are meant to register a pass here.
 
 #### Wilderness Scale
 
@@ -473,6 +483,7 @@ There is no production build step. This is a local prototype served directly by 
 |---|---|---|
 | GET | `/` | Serve `static/index.html` |
 | GET | `/api/state` | Return current visible world state |
+| GET | `/api/world-facts` | Read-only race and lore rows for this world plus the last post-start pass report |
 | POST | `/api/conversation/target` | Pick who the player is talking to (`codes`, or `group: true`; empty clears); returns the chip view |
 | GET | `/api/player-art/{kind}` | Stored player face or fullbody image bytes (`?v=<token>` from `state.player_portrait.url`); immutable cache headers for the current token, 404 when none |
 | GET | `/api/version` | Return local app, planner, and mechanics version metadata |
