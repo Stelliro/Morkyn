@@ -11218,6 +11218,42 @@ def _same_job(desc: str, role: str) -> bool:
     return bool(d and r) and (r in d or d in r)
 
 
+# Review of playtest #16: the article-and-words pattern also matches "a nod to
+# Aria [[A]]", "the loaf to Aria [[A]]" and "a smiling Aria [[A]]", and the
+# rewrite turned them into "a baker Aria [[A]]". Only words shaped like a job
+# are a job: a trade suffix or a known trade, with no preposition among them.
+_NOT_JOB_DESC_WORDS = frozenset({
+    "to", "for", "from", "with", "beside", "behind", "near", "by", "at", "on", "in", "into", "onto", "of",
+    "toward", "towards", "past", "before", "after", "around", "about", "under", "over", "between", "among",
+    "like", "than", "as", "and", "or", "but", "nor", "against", "beyond", "across", "upon", "without",
+    "other", "another", "elder", "older", "younger", "former", "latter", "stranger", "eager", "sober",
+    "clever", "bitter", "tender", "proper", "slender", "river", "corner", "danger", "anger", "silver",
+})
+_JOB_SUFFIX_RE = re.compile(r"(?:er|or|ist|man|woman|smith|keeper|keep|wright|monger|hand|maid|herd|ess)$")
+_PLAIN_JOB_WORDS = frozenset({
+    "merchant", "guard", "cook", "scout", "priest", "monk", "nun", "clerk", "page", "squire", "knight",
+    "soldier", "mage", "scribe", "thief", "vendor", "smith", "tanner", "cooper", "mason", "groom",
+    "steward", "bard", "physician", "apprentice", "servant", "courier", "envoy", "sentry", "beggar",
+})
+
+
+def _job_shaped(desc: str) -> bool:
+    words = [w for w in re.findall(r"[a-z][a-z'-]*", str(desc or "").lower())]
+    if not words or any(w in _NOT_JOB_DESC_WORDS for w in words):
+        return False
+    last = words[-1]
+    if last.endswith(("ing", "ed", "ly")) and last not in _PLAIN_JOB_WORDS:
+        return False
+    if last in _PLAIN_JOB_WORDS or _JOB_SUFFIX_RE.search(last):
+        return True
+    try:
+        from app.venues import workplace_kind_for_role
+
+        return bool(workplace_kind_for_role(" ".join(words)))
+    except Exception:
+        return False
+
+
 def _prefer_stored_roles(text: str, code_to_name: dict[str, str], code_to_role: dict[str, str]) -> str:
     """Put the stored job in front of a person's tag where the prose gave them another.
 
@@ -11236,7 +11272,7 @@ def _prefer_stored_roles(text: str, code_to_name: dict[str, str], code_to_role: 
         said = match.group("name") or ""
         if not role or not name or (said and said.lower() != name.lower()):
             return match.group(0)
-        if _same_job(match.group("desc"), role):
+        if _same_job(match.group("desc"), role) or not _job_shaped(match.group("desc")):
             return match.group(0)
         art = match.group("art")
         if art.lower() != "the":
@@ -11261,7 +11297,10 @@ _NOT_A_JOB_WORDS = frozenset({
 
 
 def _drop_reused_names(
-    text: str, code_to_name: dict[str, str], code_to_role: dict[str, str]
+    text: str,
+    code_to_name: dict[str, str],
+    code_to_role: dict[str, str],
+    new_roles: dict[str, str] | None = None,
 ) -> tuple[str, list[dict[str, str]]]:
     """Take a known person's name off an introduction of somebody else.
 
@@ -11270,9 +11309,13 @@ def _drop_reused_names(
     Aria is, so a different job introduced under her name is a second person
     wearing it; the name comes off that introduction ("A net mender weaves")
     and the reuse is returned for the turn trace.
+
+    ``new_roles`` holds this turn's new people by name: in game 2 that was the
+    opening itself, where Aria had no code yet when the prose was repaired.
     """
     found: list[dict[str, str]] = []
-    if not text or not code_to_role:
+    new_roles = {str(k).strip().lower(): str(v) for k, v in (new_roles or {}).items() if str(k).strip() and v}
+    if not text or not (code_to_role or new_roles):
         return text or "", found
     by_name = {
         str(name).strip().lower(): code
@@ -11282,14 +11325,14 @@ def _drop_reused_names(
 
     def fix(match: re.Match[str]) -> str:
         name = match.group("name")
-        code = by_name.get(name.lower())
+        code = by_name.get(name.lower(), "")
         tagged = match.group("code")
-        if not code or (tagged and tagged != code):
+        if (not code and name.lower() not in new_roles) or (tagged and tagged != code):
             return match.group(0)
         # "a woman named Aria" says nothing about a job; it may be her.
-        if match.group("desc").split()[-1] in _NOT_A_JOB_WORDS:
+        if match.group("desc").split()[-1] in _NOT_A_JOB_WORDS or not _job_shaped(match.group("desc")):
             return match.group(0)
-        role = code_to_role.get(code, "")
+        role = code_to_role.get(code, "") if code else new_roles.get(name.lower(), "")
         if not role or _same_job(match.group("desc"), role):
             return match.group(0)
         found.append({"code": code, "name": name, "stored": role, "prose": match.group("desc")})
@@ -11450,11 +11493,20 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
         referenced_codes.update(str(c) for c in targets.get("npcs") or [])
 
     code_roles = _entity_code_role_map(context, result)
+    # This turn's new people have no code until apply_turn files them.
+    new_roles = {
+        str(npc.get("name") or "").strip(): str(npc.get("role") or "").strip()
+        for npc in result.get("npcs") or []
+        if isinstance(npc, dict)
+        and not str(npc.get("code") or "").strip()
+        and str(npc.get("name") or "").strip()
+        and str(npc.get("role") or "").strip().lower() not in {"", "local", "unknown"}
+    }
     name_reuses: list[dict[str, str]] = []
 
     def rewrite_names(text: str) -> str:
         out = text or ""
-        out, reused = _drop_reused_names(out, code_map, code_roles)
+        out, reused = _drop_reused_names(out, code_map, code_roles, new_roles)
         name_reuses.extend(r for r in reused if r not in name_reuses)
         out = _prefer_stored_roles(out, code_map, code_roles)
         out = _repair_bare_code_possessives(
@@ -11793,6 +11845,13 @@ def _clean_turn_for_handoff(turn: dict[str, Any], phase: str, trace: list[dict[s
         cleaned["_narration_pipeline"] = pipeline_meta
     if isinstance(dsl_meta, dict) and dsl_meta:
         cleaned["_dsl"] = dsl_meta
+    # The name repair's reports (playtest #14, #16): not world schema, but the
+    # turn trace is where they are read. Without this the cleanup listed them
+    # under removed_keys and the trace never showed a reuse.
+    for key in ("name_reuses", "role_mismatches"):
+        rows = turn.get(key) if isinstance(turn, dict) else None
+        if isinstance(rows, list) and rows:
+            cleaned[key] = [row for row in rows if isinstance(row, dict)][:6]
     after_chars, after_tokens = _json_size(cleaned)
     _append_trace(
         trace,
