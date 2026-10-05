@@ -6475,8 +6475,8 @@ def movement_contract(
         contract["venue_rule"] = (
             "Interiors are places, not scenery. Whenever the player goes inside a shop, inn, forge or "
             "temple, write that building's NAME in player.move_to_location — stepping through a door is "
-            "a move. Use a name from venues_here when one fits; otherwise name the new building "
-            f"(\"{current_name} Apothecary\", \"The Salt Crow\") and it is created here. "
+            "a move. Use a name from venues_here when one fits; otherwise give the new building its own "
+            "name, the kind people here would put over its door, and it is created here. "
             f"Interiors are entered only from {current_name or 'outside'}: a player standing anywhere "
             "else must travel here first. When the player steps back out, move them to "
             f"\"{current_name}\"."
@@ -7637,8 +7637,12 @@ def resolve_movement(
 
     # The prose walked the player into a building and the draft wrote no MOVE
     # (playtest #16). Any turn kind: a talk turn that ends inside a shop has
-    # put the player in the shop.
-    shown = _venue_shown_in_prose(conn, result, narration)
+    # put the player in the shop. Not when the turn goes somewhere else first:
+    # "you reach Riverford and step into the inn" is Riverford's inn, and
+    # opening it inside the place the player left put them in the wrong town.
+    shown = None
+    if not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name):
+        shown = _venue_shown_in_prose(conn, result, narration)
     if shown:
         player_patch["move_to_location"] = shown["name"][:120]
         return {
@@ -7759,6 +7763,27 @@ def resolve_movement(
     if note:
         report["rejected"] = note
     return report
+
+
+def _entry_belongs_elsewhere(
+    rows: list[Any], result: dict[str, Any], player_input: str, narration: str, current_name: str
+) -> bool:
+    """True when this turn travels to another place, so a building the prose enters is not one here."""
+    if _movement_destination_from_input(rows, player_input, current_name) is not None:
+        return True
+    new_places = []
+    for location in result.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        name = norm_name(str(location.get("name") or ""))
+        if not name or name == current_name or _is_place_or_item_code(name) or not is_plausible_place_name(name):
+            continue
+        new_places.append(name.lower())
+    if not new_places:
+        return False
+    # A new row that is the building itself ("Elara's Herb Shop") is the entry, not a journey.
+    noun = str((venues.entry_in_prose(narration) or {}).get("noun") or "").lower()
+    return any(not noun or noun not in place for place in new_places)
 
 
 def _known_place_named_in(rows: list[Any], text: str, current_name: str):

@@ -217,6 +217,16 @@ _SELF_EXIT_RE = re.compile(
     re.I,
 )
 _INTO_RE = re.compile(r"\b(?:into|inside|in|through)\b(?P<obj>.*)$", re.I | re.S)
+# "in" that is not going inside: "step in front of the bakery", "head in the
+# direction of the inn", "lets you in on a secret about the tavern".
+_NOT_INSIDE_RE = re.compile(
+    r"^(?:front\s+of|the\s+direction\s+of|direction\s+of|(?:full\s+|plain\s+)?(?:view|sight)\s+of|"
+    r"search\s+of|pursuit\s+of|the\s+shadow\s+of|the\s+lee\s+of|on\b|time\b|turn\b|line\b|case\b)",
+    re.I,
+)
+# Spoken lines are not the narration moving the player: "Why don't you step
+# into my shop?" is an invitation, not an entry.
+_SPEECH_RE = re.compile(r"\"[^\"\n]*\"|\u201c[^\u201d\n]*\u201d")
 # What "into" lands on when it is not a building.
 _OPEN_GROUND_RE = re.compile(
     r"\b(?:street|road|lane|alley|square|market|plaza|courtyard|yard|crowd|clearing|forest|wood|field|path|"
@@ -281,7 +291,7 @@ def entry_in_prose(text: str, people: list[str] | tuple[str, ...] = ()) -> dict[
     and the other people shown inside with the player. The last entry wins, and
     one the player walks back out of afterwards does not count.
     """
-    sentences = _sentences(text)
+    sentences = _sentences(_SPEECH_RE.sub(" ", str(text or "")))
     found: tuple[int, str, str] | None = None
     for index, sentence in enumerate(sentences):
         for match in list(_SELF_ENTER_RE.finditer(sentence)) + list(_LED_ENTER_RE.finditer(sentence)):
@@ -291,6 +301,8 @@ def entry_in_prose(text: str, people: list[str] | tuple[str, ...] = ()) -> dict[
             if into is None and not verb.startswith("enter"):
                 continue
             obj = (into.group("obj") if into is not None else tail).strip()
+            if into is not None and _NOT_INSIDE_RE.match(obj):
+                continue
             head = " ".join(obj.split()[:6])
             kind, noun = _venue_noun(head)
             ground = _OPEN_GROUND_RE.search(head)
