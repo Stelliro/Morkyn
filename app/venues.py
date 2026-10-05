@@ -332,6 +332,12 @@ def workplace_kind_for_role(role: str, era: str = "") -> str:
     return kind_for_era(best_kind, era) if era else best_kind
 
 
+def keeper_role_for_kind(kind: str) -> str:
+    """The trade of whoever keeps a venue of this kind ("shopkeeper" for a general store), or ""."""
+    words = _ROLE_KINDS.get(normalize_kind(kind) or str(kind or ""), ())
+    return words[0] if words else ""
+
+
 def workplace_kinds_for_role(role: str, era: str = "") -> list[str]:
     """Every kind this trade may already work in: the era's own first, then the role's literal one.
 

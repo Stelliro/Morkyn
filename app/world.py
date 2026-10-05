@@ -6221,12 +6221,18 @@ def stamp_venue_fields(conn, location_id: int, *, parent_id: int, kind: str) -> 
         pass
 
 
-def bind_venue_keeper(conn, venue_id: int) -> int:
+def bind_venue_keeper(conn, venue_id: int, exclude: Any = ()) -> int:
     """Pin one NPC behind this venue's counter, so the keeper stops changing identity.
 
     A live probe visited "the same" apothecary three times and met Jethook, then
     "a woman with a kind face", then "a man in worn clothes" -- nobody was bound
     to the shop, so the model reinvented the keeper each visit.
+
+    Live gate batch 4: the first person standing inside was whoever walked in
+    with the player, so the carter companion kept "The First Trading Post" and
+    the water carrier on the scene thread kept "Furlong's Cookshop". People in
+    `exclude` (the player's companions) never keep it, and someone of the
+    venue's own trade comes before anyone else standing there.
     """
     row = _location_row(conn, venue_id)
     if row is None or not str(row["kind"] or ""):
@@ -6234,14 +6240,46 @@ def bind_venue_keeper(conn, venue_id: int) -> int:
     existing = int(venues._field(row, "keeper_npc_id", 0) or 0)
     if existing and conn.execute("SELECT 1 FROM npcs WHERE id = ?", (existing,)).fetchone():
         return existing
-    npc = conn.execute(
-        "SELECT id FROM npcs WHERE location_id = ? AND COALESCE(shell, 0) = 0 ORDER BY id LIMIT 1",
-        (int(venue_id),),
-    ).fetchone()
-    if npc is None:
+    skip = {int(x) for x in exclude or () if x}
+    kind = str(row["kind"] or "")
+    era = _world_era(conn)
+    candidates = [
+        npc
+        for npc in conn.execute(
+            "SELECT id, role FROM npcs WHERE location_id = ? AND COALESCE(shell, 0) = 0 ORDER BY id",
+            (int(venue_id),),
+        ).fetchall()
+        if int(npc["id"]) not in skip
+    ]
+    if not candidates:
         return 0
+    fits = [npc for npc in candidates if kind in venues.workplace_kinds_for_role(str(npc["role"] or ""), era)]
+    npc = (fits or candidates)[0]
     conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc["id"]), int(venue_id)))
     return int(npc["id"])
+
+
+def _companion_npc_ids(conn, prompt_context: dict[str, Any] | None) -> set[int]:
+    """Ids of the people travelling with the player: the scene thread's companions and the party."""
+    ids: set[int] = set()
+    thread = (prompt_context or {}).get("scene_thread") if isinstance(prompt_context, dict) else None
+    for entry in (thread or {}).get("with") or [] if isinstance(thread, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        found = None
+        if entry.get("code"):
+            found = conn.execute("SELECT id FROM npcs WHERE code = ?", (str(entry["code"]),)).fetchone()
+        if found is None and entry.get("name"):
+            found = conn.execute(
+                "SELECT id FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (str(entry["name"]),)
+            ).fetchone()
+        if found is not None:
+            ids.add(int(found["id"]))
+    try:
+        ids |= {int(r[0]) for r in conn.execute("SELECT npc_id FROM party_members").fetchall() if r[0]}
+    except Exception:
+        pass
+    return ids
 
 
 def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute: int | None = None) -> dict[str, Any]:
@@ -6599,6 +6637,16 @@ def _settle_entered_venue(
     thread = (prompt_context or {}).get("scene_thread") if isinstance(prompt_context, dict) else None
     if isinstance(thread, dict):
         along |= {str(row.get("name") or "") for row in thread.get("with") or [] if isinstance(row, dict) and row.get("name")}
+    companions = _companion_npc_ids(conn, prompt_context)
+    for name in along:
+        found = conn.execute("SELECT id FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (name,)).fetchone()
+        if found is not None:
+            companions.add(int(found["id"]))
+    if keeper and companions and conn.execute(
+        f"SELECT 1 FROM npcs WHERE name = ? COLLATE NOCASE AND id IN ({','.join('?' for _ in companions)})",
+        (keeper, *sorted(companions)),
+    ).fetchone():
+        keeper = ""  # the prose's "keeper" is someone who came in with the player
     if keeper and not int(venues._field(here, "keeper_npc_id", 0) or 0):
         npc = conn.execute("SELECT id FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (keeper,)).fetchone()
         if npc is not None:
@@ -6613,7 +6661,7 @@ def _settle_entered_venue(
             conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(npc["id"])))
             report["moved_in"].append(name)
     if not int(venues._field(_location_row(conn, here_id), "keeper_npc_id", 0) or 0):
-        trade = _trade_keeper_for(conn, here_id)
+        trade = _trade_keeper_for(conn, here_id, exclude=companions)
         if trade is not None:
             conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(trade["id"]), here_id))
             conn.execute(
@@ -6622,11 +6670,11 @@ def _settle_entered_venue(
             )
             report["keeper"] = str(trade["name"] or "")
         else:
-            bind_venue_keeper(conn, here_id)
+            bind_venue_keeper(conn, here_id, companions)
     return report
 
 
-def _trade_keeper_for(conn, venue_id: int):
+def _trade_keeper_for(conn, venue_id: int, exclude: Any = ()):
     """The person already in the story whose trade this venue is, or None.
 
     Playtest #33 (live): the opening set "Victor Silva, mechanic" beside the
@@ -6649,7 +6697,8 @@ def _trade_keeper_for(conn, venue_id: int):
         ).fetchone()
     except Exception:
         own = None
-    if own is not None:
+    skip = {int(x) for x in exclude or () if x}
+    if own is not None and int(own["id"]) not in skip:
         return own
     parent_id = int(venues._field(venue, "parent_id", 0) or 0)
     era = _world_era(conn)
@@ -6660,6 +6709,8 @@ def _trade_keeper_for(conn, venue_id: int):
         places,
     ).fetchall()
     for row in rows:
+        if int(row["id"]) in skip:
+            continue
         if kind not in venues.workplace_kinds_for_role(str(row["role"] or ""), era):
             continue
         keeps = conn.execute(
@@ -10501,6 +10552,20 @@ def _sanitize_npc_role(role: Any) -> str:
     return text[:100]
 
 
+def _different_people(stored: str, given: str) -> bool:
+    """Two person names that share no word: not the same person under one code."""
+    stored, given = str(stored or "").strip(), str(given or "").strip()
+    if not stored or not given or stored.lower() == given.lower():
+        return False
+    if not (is_plausible_person_name(stored) and is_plausible_person_name(given)):
+        return False
+
+    def words(text: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z][a-z'-]+", text.lower()) if len(w) > 1}
+
+    return not (words(stored) & words(given))
+
+
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     if not isinstance(npc, dict):
         return None
@@ -10556,6 +10621,14 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     existing = None
     if code:
         existing = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone()
+        if existing is not None and _different_people(str(existing["name"] or ""), name):
+            # Live gate batch 4: the draft issued C = "Nichola Furlong, smith"
+            # while C was Linnet Tapley the cooper; the row kept Linnet's name,
+            # took the smith's job and walked into the smithy. A code with
+            # someone else's name is a new person, not a rename.
+            existing = None
+            code = ""
+            npc["_recoded"] = True
     if existing is None:
         existing = conn.execute(
             "SELECT * FROM npcs WHERE location_id = ? AND name = ?",
@@ -10665,6 +10738,8 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         return int(existing["id"])
 
     new_code = _next_alpha_code(conn, "npcs")
+    if npc.pop("_recoded", False):
+        npc["code"] = new_code  # the turn's entry must not keep pointing at someone else
     facts = [known_fact[:350]] if known_fact else []
     # New faces: honor shell/presence; demote crowd extras and apex ranks until earned.
     presence = str(npc.get("presence") or "").strip().lower()
@@ -12922,10 +12997,19 @@ def _ensure_npcs_from_narration(
     result: dict[str, Any],
     narration: str,
     location_id: int | None,
+    *,
+    companions: Any = (),
+    keeper_role: str = "",
 ) -> list[dict[str, Any]]:
     """
     If prose introduces speaking/visible figures but the model returned no/few npcs,
     seed shell NPC rows so the cast table matches the scene.
+
+    Live gate batch 4: the carter who walked into the trading post with the
+    player counted as the face there, so the bearded trader the prose put
+    behind the counter was never seeded. `companions` (ids) are not counted;
+    in a venue nobody keeps yet, the first face seeded has the venue's trade
+    (`keeper_role`).
     """
     if not location_id:
         return []
@@ -12942,12 +13026,13 @@ def _ensure_npcs_from_narration(
     has_dialogue = bool(re.search(r'[“"][^”"]{8,}[”"]', text))
     existing = [n for n in (result.get("npcs") or []) if isinstance(n, dict)]
     # Also count DB faces at this location (already upserted this turn)
-    db_count = int(
-        conn.execute(
-            "SELECT COUNT(*) AS c FROM npcs WHERE location_id = ?",
-            (int(location_id),),
-        ).fetchone()["c"]
-        or 0
+    skip = {int(x) for x in companions or () if x}
+    db_count = len(
+        [
+            r
+            for r in conn.execute("SELECT id FROM npcs WHERE location_id = ?", (int(location_id),)).fetchall()
+            if int(r["id"]) not in skip
+        ]
     )
     target = min(3, max(len(hints), 1 if has_dialogue and not existing and db_count == 0 else 0))
     if target <= 0:
@@ -12967,7 +13052,7 @@ def _ensure_npcs_from_narration(
         if recalled:
             existing.append({"code": recalled["code"], "name": recalled["name"], "role": recalled["role"]})
             continue
-        role = _seed_role_for(conn, int(location_id), hint, i, salt=text[:40])
+        role = keeper_role if keeper_role and not created else _seed_role_for(conn, int(location_id), hint, i, salt=text[:40])
         sentence = _hint_sentence(text, hint)
         speaker = _NAMED_SPEAKER_RE.fullmatch(hint) if hint else None
         try:
@@ -14411,7 +14496,7 @@ def apply_turn(
             here_row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
             here_id = int((here_row["current_location_id"] if here_row else 0) or 0)
             if here_id and str(venues._field(_location_row(conn, here_id), "kind", "") or ""):
-                bind_venue_keeper(conn, here_id)
+                bind_venue_keeper(conn, here_id, _companion_npc_ids(conn, prompt_context))
         except Exception:
             pass
 
@@ -14477,7 +14562,28 @@ def apply_turn(
             prow2 = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
             if prow2 and prow2["current_location_id"]:
                 loc_id_seed = int(prow2["current_location_id"])
-            seeded = _ensure_npcs_from_narration(conn, result, narration, loc_id_seed)
+            seed_companions = _companion_npc_ids(conn, prompt_context)
+            if isinstance(movement_report, dict) and isinstance(movement_report.get("settled"), dict):
+                for name in movement_report["settled"].get("moved_in") or []:
+                    found = conn.execute("SELECT id FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (str(name),)).fetchone()
+                    if found is not None:
+                        seed_companions.add(int(found["id"]))
+            seed_venue = _location_row(conn, loc_id_seed) if loc_id_seed else None
+            keeperless = bool(
+                seed_venue is not None
+                and str(venues._field(seed_venue, "kind", "") or "")
+                and not int(venues._field(seed_venue, "keeper_npc_id", 0) or 0)
+            )
+            seeded = _ensure_npcs_from_narration(
+                conn,
+                result,
+                narration,
+                loc_id_seed,
+                companions=seed_companions,
+                keeper_role=venues.keeper_role_for_kind(str(venues._field(seed_venue, "kind", "") or "")) if keeperless else "",
+            )
+            if seeded and keeperless:
+                bind_venue_keeper(conn, int(loc_id_seed), seed_companions)
             if seeded:
                 # Re-run name repair so prose can pick up new codes/names if needed
                 try:
