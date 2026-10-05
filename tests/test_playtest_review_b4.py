@@ -134,5 +134,49 @@ class MentionIsNotACall(unittest.TestCase):
         self.assertEqual(conn.execute("SELECT location_id FROM npcs").fetchone()[0], 4)
 
 
+class KeeperOpeningLineIsKept(unittest.TestCase):
+    """#30 review: an untagged line after "You ..." is the player's only as a reply."""
+
+    def test_shopkeeper_greeting_stays(self):
+        para = "You push open the door and step up to the counter. “What can I get you?”"
+        kept, dropped = drop_invented_player_speech([para], "I go into the shop.")
+        self.assertEqual(dropped, [])
+        self.assertIn("What can I get you?", kept[0])
+        kept, dropped = drop_invented_player_speech(["You lean on the bar. “Rough night?”"], "I walk to the bar.")
+        self.assertEqual(dropped, [])
+
+    def test_an_invented_reply_after_someone_spoke_still_goes(self):
+        paras = [
+            "“Looking for anything specific?” he asks.",
+            "You shake your head. “Just checking what you have to offer.”",
+        ]
+        kept, dropped = drop_invented_player_speech(paras, "I go inside to see what they sell.")
+        self.assertEqual(len(dropped), 1)
+        self.assertNotIn("Just checking", kept[1])
+
+    def test_a_drop_under_the_floor_gets_the_depth_retry(self):
+        long_npc = "The keeper studies you for a long while. " * 8
+        narration = long_npc + "\n\n" + "You shake your head. “" + ("I only want to look around here today. " * 20) + "”"
+        turn = {"narration": narration, "self_check": {"corrections_made": []}}
+        # Speech after an NPC line so the dialogue convention applies.
+        turn["narration"] = "“Well?” he asks.\n\n" + narration
+        calls = []
+
+        def depth(t, *a, **k):
+            calls.append(len(str(t.get("narration") or "")))
+            return t
+
+        passthrough = lambda t, *a, **k: t  # noqa: E731
+        with mock.patch.object(llm, "pipeline_enabled", return_value=False), \
+                mock.patch.object(llm, "_ensure_narration_depth", side_effect=depth), \
+                mock.patch.object(llm, "_ensure_narration_voice", side_effect=passthrough), \
+                mock.patch.object(llm, "_ensure_answer_act", side_effect=passthrough), \
+                mock.patch.object(llm, "_ensure_recall_specifics", side_effect=passthrough):
+            out = llm._ensure_narration_quality(turn, {}, "I walk over to the counter.", "sys", 30, [], "test")
+        self.assertNotIn("I only want to look around", out["narration"])
+        self.assertEqual(len(calls), 2, "the depth check runs again once the drop took the turn under the floor")
+        self.assertLess(calls[1], llm.MIN_TURN_NARRATION_CHARS)
+
+
 if __name__ == "__main__":
     unittest.main()

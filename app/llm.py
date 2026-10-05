@@ -13549,6 +13549,7 @@ def _ensure_narration_quality(
     whole-turn JSON depth fallback, which needs the JSON shape.
     """
     prose_prompt = prose_system_prompt or system_prompt
+    floor = MIN_TURN_NARRATION_CHARS
     if pipeline_enabled():
         refined = _apply_narration_pipeline(turn, context, player_input, usage, trace, timeout)
         budget = (refined.get("_narration_pipeline") or {}).get("budget") or {}
@@ -13568,7 +13569,19 @@ def _ensure_narration_quality(
     voiced = _ensure_narration_voice(deep, context, player_input, prose_prompt, timeout, usage, phase, trace)
     answered = _ensure_answer_act(voiced, context, player_input, prose_prompt, timeout, usage, phase, trace)
     recalled = _ensure_recall_specifics(answered, context, player_input, prose_prompt, timeout, usage, phase, trace)
-    return _drop_invented_player_speech(_drop_decided_choice(_apply_menu_trim(recalled), player_input), player_input)
+    trimmed = _drop_decided_choice(_apply_menu_trim(recalled), player_input)
+    chars_before = _narration_char_count(trimmed)
+    final = _drop_invented_player_speech(trimmed, player_input)
+    chars_after = _narration_char_count(final)
+    if chars_after < chars_before and chars_after < floor:
+        # The depth check ran before the drop; a turn the drop took under the
+        # floor gets the same depth retry a short draft would have had.
+        _append_trace(trace, {"phase": phase, "event": "depth_after_speech_drop", "chars": chars_after, "floor": floor})
+        deeper = _ensure_narration_depth(
+            final, context, player_input, system_prompt, timeout, usage, phase, trace, prose_system_prompt=prose_prompt
+        )
+        final = _drop_invented_player_speech(deeper, player_input)
+    return final
 
 
 def _drop_invented_player_speech(turn: dict[str, Any], player_input: str) -> dict[str, Any]:

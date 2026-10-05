@@ -1498,7 +1498,10 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     A quotation is the player's when it is tagged "you say/ask/..." in its
     own unit, continues straight on from such a line, or stands in a dialogue
     paragraph that opens on the player's action and holds nothing but that
-    action and untagged quotation. It is invented when its words are not in
+    action and untagged quotation, as a reply to someone who spoke before it
+    in the narration. Without an earlier line from someone else, that shape
+    is the other person opening ("You step up to the counter. 'What can I get
+    you?'"), so it stays. It is invented when its words are not in
     what the player typed. When the player asked to speak without giving the
     words, nothing is checked. Whole units go, so no half quote is left.
     Returns (paragraphs, dropped) with the input's length.
@@ -1512,6 +1515,7 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
         return list(paragraphs), []
     out: list[str] = []
     dropped: list[str] = []
+    other_spoke = False  # someone else has a line earlier in this narration
     for para in paragraphs:
         kept_blocks: list[str] = []
         for block in _BLOCK_SPLIT_RE.split(str(para or "")):
@@ -1523,7 +1527,7 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             lead = 0
             while lead < len(units) and not quoted_spans(units[lead]) and re.match(r"^you\b", units[lead], re.I):
                 lead += 1
-            players_block = 0 < lead < len(units) and all(bare[lead:])
+            players_block = other_spoke and 0 < lead < len(units) and all(bare[lead:])
             kept_units: list[str] = []
             player_turn = False
             for index, unit in enumerate(units):
@@ -1544,6 +1548,7 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                         dropped.append(unit)
                     continue
                 player_turn = False
+                other_spoke = True
                 kept_units.append(unit)
             block_text = " ".join(kept_units).strip()
             if block_text:
