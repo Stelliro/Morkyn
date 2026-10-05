@@ -7891,6 +7891,15 @@ def _held_head(name: str) -> str:
     return item_head(name)
 
 
+# The player putting away something they carry: "I pocket the crystal",
+# "I tuck the map into my coat", "I put the key away".
+_STOW_RE = re.compile(
+    r"\b(?:pocket|stow|stash|tuck|store|hide)\w*\b"
+    r"|\b(?:put|puts|slip|slips|place|places|drop|drops)\b[^.!?]{0,40}?\b(?:away|back|into\s+(?:my|your)|in\s+(?:my|your))\b",
+    re.IGNORECASE,
+)
+
+
 def ground_acquisitions(
     turn: dict[str, Any], narration: str, state: dict[str, Any], *, player_input: str = ""
 ) -> list[str]:
@@ -7927,7 +7936,10 @@ def ground_acquisitions(
         own_words.add(word)
         if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
             own_words.add(word[:-1])
-    names_held = bool(held_heads & own_words)
+    # Only a stow of a held item, with one thing claimed, reads the claim as
+    # that item renamed. Handing over, showing or using a held item ("I hand
+    # Umar the crystal") says nothing about what the prose then gives back.
+    names_held = bool(held_heads & own_words) and bool(_STOW_RE.search(own)) and len(claimed) == 1
 
     granted: list[str] = []
     for name in claimed:

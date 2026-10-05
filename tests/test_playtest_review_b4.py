@@ -246,5 +246,30 @@ class GenericWordsAreNotVenues(unittest.TestCase):
         self.assertEqual((int(row[0] or 0), str(row[1] or "")), (0, ""))
 
 
+class HandingOverDoesNotHideAGrant(unittest.TestCase):
+    """#35 review: only a stow of a held item reads the claim as that item."""
+
+    STATE = {"inventory": [{"name": "data crystal"}]}
+
+    def test_a_trade_turn_still_grants(self):
+        for prose in ("Umar nods. You receive a brass key, cold and heavy.", "You are handed a brass key from his belt."):
+            turn: dict = {}
+            got = world.ground_acquisitions(turn, prose, self.STATE, player_input="I hand Umar the crystal and ask what it opens")
+            self.assertEqual(got, ["brass key"], prose)
+
+    def test_pocketing_a_held_item_still_grants_nothing(self):
+        turn: dict = {}
+        self.assertEqual(
+            world.ground_acquisitions(turn, "You pocket the glowing shard.", self.STATE, player_input="I pocket the crystal"), []
+        )
+        turn = {}
+        self.assertEqual(
+            world.ground_acquisitions(
+                turn, "You tuck the shard into your coat.", self.STATE, player_input="I put the crystal away in my coat"
+            ),
+            [],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
