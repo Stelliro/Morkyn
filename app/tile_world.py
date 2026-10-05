@@ -733,6 +733,7 @@ def generate_map(
                 ),
             ),
         )
+        pin_live_campaign_map(conn)
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_world_map_id', ?)",
             (map_id,),
@@ -818,6 +819,7 @@ def generate_scaled_world(
                 json.dumps(meta, ensure_ascii=True),
             ),
         )
+        pin_live_campaign_map(conn)
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_world_map_id', ?)",
             (run_id,),
@@ -1011,6 +1013,28 @@ def pin_campaign_map(conn) -> str:
     conn.execute(
         "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (CAMPAIGN_MAP_KEY, chosen)
     )
+    return chosen
+
+
+def pin_live_campaign_map(conn) -> str:
+    """Before a new roll takes over the active map, a live campaign keeps its own.
+
+    A game started before maps were pinned (game 2 among them) has no pin; the
+    first roll on the setup screen would otherwise leave it with no record of
+    its map. Only while a campaign is set up and nothing is pinned yet.
+    """
+    if pinned_map_id(conn):
+        return ""
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'setup_complete'").fetchone()
+    except Exception:
+        return ""
+    if not row or str(row[0] or "").strip().strip('"').lower() != "true":
+        return ""
+    chosen = active_map_id(conn)
+    if not chosen or conn.execute("SELECT id FROM world_maps WHERE id = ?", (chosen,)).fetchone() is None:
+        return ""
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (CAMPAIGN_MAP_KEY, chosen))
     return chosen
 
 

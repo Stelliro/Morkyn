@@ -85,6 +85,17 @@ class TheCampaignMapIsPinned(unittest.TestCase):
         world.load_campaign_slot("game-a")
         self.assertIn("world-game-a", _ids())
 
+    def test_a_game_from_before_pins_keeps_its_map_through_a_real_setup_roll(self):
+        # Game 2 was started before maps were pinned.
+        with connect() as conn:
+            conn.execute("DELETE FROM settings WHERE key = ?", (tile_world.CAMPAIGN_MAP_KEY,))
+        rolled = tile_world.generate_scaled_world(preset_id="frontier_any", seed=4321)
+        with connect() as conn:
+            self.assertEqual(tile_world.active_map_id(conn), rolled["id"])
+            self.assertEqual(tile_world.pinned_map_id(conn), "world-game-a")
+        saved = [r["id"] for r in world.export_world()["tables"]["world_maps"]]
+        self.assertIn("world-game-a", saved)
+
     def test_a_start_without_a_map_drops_the_last_games_pin(self):
         with connect() as conn:
             conn.execute("DELETE FROM world_maps")
