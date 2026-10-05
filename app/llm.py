@@ -13274,6 +13274,8 @@ def _make_pipeline_paragraph_writer(
         "Never add a named place, a named person, or a job or title that scene_facts and scene_draft do not have, "
         "and never change anyone's job. "
         "may_mention lists each [[code]] with its name and kind. Put a code only right after that entity's own name. "
+        "Items whose kind says worn by or carried by the player belong to the player (you) and no one else: "
+        "no other character wears, holds or borrows them. "
         "Words under player_speech are the player's own: only the player (you) says them; no other character speaks them. "
         "player_line is the player's own input, and it is all that you (the player) say and do this turn. "
         "Narrate its action and what the world does back. When draft_slice gives you other words, a reply, "

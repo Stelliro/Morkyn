@@ -182,9 +182,40 @@ _ARRIVAL_VERBS = (
     r"finds\s+(?:herself|himself|themselves|themself)",
 )
 _PLACE = r"(?P<place>(?:[Tt]he\s+)?[A-Z][\w'’\-]*(?:\s+(?:(?:of|the|de|del|la|le|upon|on)\s+)?[A-Z][\w'’\-]*)*)"
-_ARRIVAL_RE = re.compile(
-    r"\b(?:" + "|".join(_ARRIVAL_VERBS) + r")\s+(?:(?:at|in|on|into|onto|near|outside|beside|by)\s+)" + _PLACE
+_ARRIVAL_HEAD = r"\b(?:" + "|".join(_ARRIVAL_VERBS) + r")\s+(?:(?:at|in|on|into|onto|near|outside|beside|by)\s+)"
+_ARRIVAL_RE = re.compile(_ARRIVAL_HEAD + _PLACE)
+# A described place after the preposition: "awoke in the ruins of the
+# sky-temple of Vael'Kara" (playtest #35). It runs to the next comma or clause
+# end, and counts only when its head is a place noun, so "woke in a cold
+# sweat" is not a place.
+_DESCRIBED_PLACE_RE = re.compile(
+    _ARRIVAL_HEAD + r"(?P<place>(?:the|a|an)\s+[a-z][^,.;:!?]{2,80}?)(?=\s*(?:[,.;:!?]|$|\s+(?:and|with|where|while|as|when|to|before|after)\b))"
 )
+_PLACE_NOUNS = frozenset(
+    {
+        "ruin", "ruins", "temple", "city", "town", "village", "hamlet", "forest", "woods", "wood", "desert",
+        "dunes", "wastes", "wasteland", "cave", "cavern", "caves", "crossroads", "road", "platform", "station",
+        "port", "harbor", "harbour", "docks", "dock", "shore", "beach", "coast", "valley", "mountain",
+        "mountains", "hills", "hill", "field", "fields", "plains", "swamp", "marsh", "bog", "tower", "castle",
+        "keep", "fortress", "fort", "camp", "outpost", "settlement", "market", "square", "alley", "street",
+        "district", "snowdrifts", "tundra", "glacier", "wreckage", "wreck", "ship", "bunker", "vault", "shrine",
+        "sanctuary", "chapel", "church", "monastery", "abbey", "mine", "quarry", "sewer", "sewers", "catacombs",
+        "crypt", "tomb", "graveyard", "cemetery", "battlefield", "bridge", "river", "lake", "island", "jungle",
+        "canyon", "gorge", "ravine", "crater", "hall", "palace", "manor", "inn", "tavern", "farm", "wilds",
+        "wilderness", "edge", "outskirts", "border", "frontier", "gate", "gates", "quarter", "slums", "lab",
+        "laboratory", "facility", "ward", "clearing", "grove", "meadow", "steppe", "badlands", "oasis",
+        "colony", "habitat", "hangar", "deck", "spire", "citadel", "arena", "pit", "well", "cellar", "basement",
+        "warehouse", "factory", "yard", "junkyard", "scrapyard", "depot", "terminal", "ruinfield",
+    }
+)
+
+
+def _described_place(story: str) -> re.Match[str] | None:
+    for match in _DESCRIBED_PLACE_RE.finditer(story):
+        words = re.findall(r"[a-z][a-z'’\-]*", match.group("place").lower())
+        if any(w in _PLACE_NOUNS or w.split("-")[-1] in _PLACE_NOUNS for w in words):
+            return match
+    return None
 
 
 def _place_key(text: Any) -> str:
@@ -198,9 +229,17 @@ def _place_tokens(text: Any) -> set[str]:
     return {t for t in tokens if len(t) >= 4}
 
 
+def _first_arrival(story: str) -> re.Match[str] | None:
+    named = _ARRIVAL_RE.search(story)
+    described = _described_place(story)
+    if named and described:
+        return named if named.start() <= described.start() else described
+    return named or described
+
+
 def arrival_place(backstory: Any) -> str:
-    """The named place the backstory arrives at ('' when it names none)."""
-    match = _ARRIVAL_RE.search(str(backstory or ""))
+    """The place the backstory arrives at, named or described ('' when it gives none)."""
+    match = _first_arrival(str(backstory or ""))
     return match.group("place").strip() if match else ""
 
 
@@ -222,7 +261,7 @@ def align_backstory_arrival(backstory: Any, start_location: Any, *, previous: An
         return story.replace(old, target), True
     if _place_key(target) and _place_key(target) in _place_key(story):
         return story, False
-    match = _ARRIVAL_RE.search(story)
+    match = _first_arrival(story)
     if not match:
         return story, False
     place = match.group("place").strip()

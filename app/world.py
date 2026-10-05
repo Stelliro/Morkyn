@@ -5107,6 +5107,13 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 magic_level=str(options.get("magic_level") or ""),
                 special_ability_origin=str(options.get("special_ability_origin") or ""),
                 apply_fixes=True,
+                # A card in a body slot is clothing whatever its name (playtest #35).
+                worn_names=[
+                    str(it.get("name") or "")
+                    for it in gear_items
+                    if str(it.get("slot") or "").upper()
+                    in {"HEAD", "NECK", "TORSO", "UNDER", "BACK", "WRIST", "FINGER", "WAIST", "LEGS", "FEET"}
+                ],
             )
             starter_raw = str(starter_logic_report.get("starter_equipment") or starter_raw)[:500]
             if starter_logic_report.get("appearance"):
@@ -5147,6 +5154,17 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 return any(low_name == k or low_name in k or k in low_name for k in kept_lower)
 
             gear_items = [it for it in gear_items if it.get("required") or _kept(str(it.get("name") or ""))]
+        if starter_logic_report:
+            # The required cards survive a strip; the popup, stripped list and
+            # gm_brief now say what the inventory holds (playtest #35).
+            try:
+                from app.starter_logic import reconcile_with_seeded
+
+                starter_logic_report = reconcile_with_seeded(
+                    starter_logic_report, [str(it.get("name") or "") for it in gear_items]
+                )
+            except Exception:
+                pass
         # Appearance follows the worn cards (playtest #21).
         try:
             from app.setup_coherence import appearance_from_gear
@@ -7862,8 +7880,21 @@ def _names_in_inventory_changes(turn: dict[str, Any]) -> set[str]:
     return out
 
 
-def ground_acquisitions(turn: dict[str, Any], narration: str, state: dict[str, Any]) -> list[str]:
+def _held_head(name: str) -> str:
+    from app.starter_logic import item_head
+
+    return item_head(name)
+
+
+def ground_acquisitions(
+    turn: dict[str, Any], narration: str, state: dict[str, Any], *, player_input: str = ""
+) -> list[str]:
     """Grant what the prose says the player picked up and the ops forgot.
+
+    A claim whose head noun is an item already held is that item, not a new
+    one. When the player's own words name a held item ("I pocket the
+    crystal"), a renamed claim in the prose ("you pocket the glowing shard")
+    is that item too (playtest #35 minted a shard beside the data crystal).
 
     Same shape as the movement repair: the narration asserts a state change, the
     model emitted no op for it, and the server makes the world match the story
@@ -7877,13 +7908,31 @@ def ground_acquisitions(turn: dict[str, Any], narration: str, state: dict[str, A
     if not claimed:
         return []
     have = _names_in_inventory_changes(turn)
+    held_heads: set[str] = set()
     for row in (state or {}).get("inventory") or []:
         if isinstance(row, dict) and str(row.get("name") or "").strip():
             have.add(str(row["name"]).strip().lower())
+            held_heads.add(_held_head(str(row["name"])))
+    held_heads.discard("")
+    own = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0]
+    if own.startswith("__"):
+        own = ""
+    own_words = set()
+    for word in re.findall(r"[a-z][a-z'-]*", own.lower()):
+        own_words.add(word)
+        if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+            own_words.add(word[:-1])
+    names_held = bool(held_heads & own_words)
 
     granted: list[str] = []
     for name in claimed:
         if any(name in existing or existing in name for existing in have):
+            continue
+        head = _held_head(name)
+        if head and head in held_heads:
+            continue
+        if names_held and not (head and head in own_words):
+            # The player handled something they hold; the prose renamed it.
             continue
         turn.setdefault("inventory_changes", []).append(
             {
@@ -15563,7 +15612,9 @@ def play_turn(
     # Injected before apply_turn so the ordinary inventory pipeline handles it.
     acquisitions: list[str] = []
     try:
-        acquisitions = ground_acquisitions(result, _narration_text_of(result), context)
+        acquisitions = ground_acquisitions(
+            result, _narration_text_of(result), context, player_input=str(player_input or "")
+        )
     except Exception:
         acquisitions = []
 

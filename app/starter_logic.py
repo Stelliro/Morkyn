@@ -137,8 +137,12 @@ def classify_arrival(
     )
     amnesia_markers = ("amnesia", "nameless", "no memory", "cannot remember", "blank slate")
 
-    # Mode field first
-    if any(m in mode for m in ("amnesia", "hidden", "nameless")):
+    # Mode field first. "hidden" hides the past from the player; it is an
+    # amnesia start only when the memory policy or the story says the memory
+    # is gone (playtest #35: a hidden cartographer whose story remembers her
+    # lost team was stripped as a blank slate).
+    hidden_lost = "hidden" in mode and memory_is_lost(memory_policy, character_backstory)
+    if any(m in mode for m in ("amnesia", "nameless")) or hidden_lost:
         kind = ARRIVAL_AMNESIA
     elif "reincarnat" in mode or "reborn" in mode:
         kind = ARRIVAL_REINCARNATED
@@ -235,6 +239,58 @@ def classify_arrival(
         "minimal_only": kind == ARRIVAL_AMNESIA,
         "notes": _arrival_note(kind),
     }
+
+
+_MEMORY_LOST_RE = re.compile(
+    r"\b(?:amnesi\w*|no\s+memor\w*|memor(?:y|ies)\s+(?:\w+\s+)?(?:wiped|gone|lost|erased|blank|stolen|taken)|"
+    r"(?:lost|without|stripped of|robbed of)\s+(?:all\s+|her\s+|his\s+|their\s+)*(?:\w+\s+)?memor\w*|"
+    r"cannot remember|can't remember|remembers? nothing|forgot(?:ten)?\s+(?:everything|who)|blank slate|nameless)\b",
+    re.I,
+)
+
+
+def memory_is_lost(memory_policy: str = "", character_backstory: str = "") -> bool:
+    """The memory policy or the story says the character's memory is gone."""
+    return bool(_MEMORY_LOST_RE.search(f"{memory_policy or ''} {character_backstory or ''}"))
+
+
+_HEAD_SKIP = frozenset({"of", "the", "a", "an", "and", "with", "pair", "set", "bundle", "some"})
+
+
+def item_head(name: str) -> str:
+    """The noun an item is called by: "cracked compass" -> "compass", "satchel of tools" -> "satchel"."""
+    low = re.sub(r"[^a-z\s'-]", " ", _norm(name))
+    low = re.split(r"\s+(?:of|with|from|for)\s+", low, maxsplit=1)[0]
+    words = [w.strip("'-") for w in low.split() if w.strip("'-") and w.strip("'-") not in _HEAD_SKIP]
+    if not words:
+        return ""
+    head = words[-1]
+    return head[:-1] if head.endswith("s") and not head.endswith("ss") and len(head) > 3 else head
+
+
+def _story_words(story: str) -> set[str]:
+    out: set[str] = set()
+    for word in re.findall(r"[a-z][a-z'-]*", _norm(story)):
+        word = word.strip("'-")
+        out.add(word)
+        if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+            out.add(word[:-1])
+    return out
+
+
+def backstory_names_item(item_name: str, story: str, bucket: str = "") -> str:
+    """The word by which the backstory gives the character this item ('' when it does not).
+
+    "her only possession a cracked compass" names the compass; "the remnants
+    of her old tools" names any trade tool.
+    """
+    words = _story_words(story)
+    head = item_head(item_name)
+    if head and len(head) > 2 and head in words:
+        return head
+    if bucket == BUCKET_TOOL and "tool" in words:
+        return "tool"
+    return ""
 
 
 def _arrival_note(kind: str) -> str:
@@ -1122,6 +1178,9 @@ def classify_item(name: str) -> dict[str, Any]:
         # pocket knife is tool-ish; full dagger leans combat
         if "pocket knife" in low or "penknife" in low or "utility knife" in low:
             bucket = BUCKET_POCKET
+        elif re.search(r"\bpick[\s-]?axe|\bice[\s-]axe|\bhand[\s-]?axe for|\bwood[\s-]?axe", low):
+            # A laborer's pickaxe is a trade tool, not a weapon ("axe" inside it, playtest #35).
+            bucket = BUCKET_TOOL
         else:
             bucket = BUCKET_COMBAT
     elif any(
@@ -1227,6 +1286,12 @@ def classify_item(name: str) -> dict[str, Any]:
             "underwear",
             "uniform",
         )
+    ) or re.search(
+        # Playtest #35: "reflective grey padded work top", "chinos" and
+        # "woven beanie" were pocket trinkets and an amnesia start stripped them.
+        r"\b(?:tops?|chinos|beanie|cap|tee|t-shirt|jersey|camisole|mittens?|bandana|beret|bonnet|turban|"
+        r"sarong|tabard|surcoat|leotard|bodysuit|shawl|sash|tights|stockings|loincloth|kimono|sari|wraps)\b",
+        low,
     ):
         bucket = BUCKET_WORN
     elif any(
@@ -1740,13 +1805,19 @@ def evaluate_item(
     character_backstory: str = "",
     magic_level: str = "",
     special_ability_origin: str = "",
+    worn: bool = False,
 ) -> dict[str, Any]:
     """
     Returns decision: keep | strip | defer
     defer = not in starting inventory; may appear after Start via narration/loot.
     strip = illogical / lore-breaking; do not reintroduce without new story.
+
+    ``worn`` marks a card in a body slot (TORSO, LEGS, FEET...): it is clothing
+    whatever its name, so it is never stripped as unexplained kit.
     """
     meta = classify_item(item_name)
+    if worn and meta["bucket"] in {BUCKET_POCKET, BUCKET_TOOL, BUCKET_VALUABLE, BUCKET_CONSUMABLE}:
+        meta = {**meta, "bucket": BUCKET_WORN}
     bucket = meta["bucket"]
     story = _norm(character_backstory)
     kind = arrival["arrival"]
@@ -1788,6 +1859,8 @@ def evaluate_item(
         power_demoted = True
         item_name = demoted
         meta = classify_item(item_name)
+        if worn and meta["bucket"] in {BUCKET_POCKET, BUCKET_TOOL, BUCKET_VALUABLE, BUCKET_CONSUMABLE}:
+            meta = {**meta, "bucket": BUCKET_WORN}
         bucket = meta["bucket"]
 
     # Lore mismatch: magic item in non-magic / cyberpunk / powers-off worlds
@@ -1925,6 +1998,12 @@ def evaluate_item(
             return _row("keep", ["Minimal worn clothes OK for blank/amnesia start."], "on_body_unknown")
         if bucket == BUCKET_CONSUMABLE and any(w in meta["key"] for w in ("water", "bread", "ration")):
             return _row("keep", ["One survival scrap OK if already in hand."], "found_on_person")
+        named_by = backstory_names_item(item_name, character_backstory, bucket)
+        if named_by and bucket not in {BUCKET_LEGENDARY, BUCKET_MAGIC}:
+            # "her only possession a cracked compass": the story earns it.
+            row = _row("keep", [f"The backstory gives the character this ({named_by})."], "named_in_backstory")
+            row["story_word"] = named_by
+            return row
         return _row(
             "strip",
             ["Amnesia/blank start: no unexplained kit."],
@@ -2344,9 +2423,12 @@ def fact_check_starter_loadout(
     magic_level: str = "",
     special_ability_origin: str = "",
     apply_fixes: bool = True,
+    worn_names: list[str] | None = None,
 ) -> dict[str, Any]:
     """
     Fact-check starter_equipment (+ optional clothing phrases from appearance).
+
+    ``worn_names`` are the cards in a body slot; they count as clothing.
 
     1) Harmonize origin/backstory/gear language to world vibe when they clash.
     2) Classify arrival from the *harmonized* identity.
@@ -2415,6 +2497,9 @@ def fact_check_starter_loadout(
     deferred: list[dict[str, Any]] = []
     stripped: list[dict[str, Any]] = []
 
+    worn_set = {_norm(n) for n in worn_names or [] if _norm(n)}
+    story_words = _story_words(story)
+    by_story_word: dict[str, dict[str, Any]] = {}
     for name in items:
         row = evaluate_item(
             name,
@@ -2422,7 +2507,35 @@ def fact_check_starter_loadout(
             character_backstory=story,
             magic_level=magic_level,
             special_ability_origin=special_ability_origin,
+            worn=_norm(name) in worn_set,
         )
+        word = str(row.pop("story_word", "") or "")
+        if word and row["decision"] == "keep":
+            # The story gives one of each: "a tattered satchel of medical
+            # tools" keeps that satchel, not every satchel on the list.
+            overlap = len(_story_words(str(row.get("name") or "")) & story_words)
+            row["_story_overlap"] = overlap
+            held = by_story_word.get(word)
+            if held is not None:
+                loser = row
+                if overlap > int(held.get("_story_overlap") or 0):
+                    kept.remove(held)
+                    by_story_word[word] = row
+                    loser = held
+                    kept.append(row)
+                loser.update(
+                    decision="strip",
+                    reasons=["Amnesia/blank start: the backstory gives only one of these."],
+                    player_reason=(
+                        f"Removed “{loser['name']}”: amnesia/blank starts keep worn clothes and what the "
+                        "backstory gives, and it gives only one."
+                    ),
+                    provenance="invalid",
+                )
+                loser.pop("_story_overlap", None)
+                stripped.append(loser)
+                continue
+            by_story_word[word] = row
         if row["decision"] == "keep":
             kept.append(row)
         elif row["decision"] == "defer":
@@ -2501,6 +2614,9 @@ def fact_check_starter_loadout(
                 "key": "clothes worn at arrival",
             }
         )
+
+    for row in kept:
+        row.pop("_story_overlap", None)
 
     # Ensure every kept row has latent_possible set; never claim powers at Start.
     ordinary_life = is_ordinary_this_life_start(arrival, story) or bool(harm.get("localized"))
@@ -2695,6 +2811,81 @@ def _gm_brief(
             "Reincarnation: they have already lived/grown in this world — gear is this-life property, not truck-kun loot."
         )
     return " ".join(x for x in lines if x)[:1600]
+
+
+def reconcile_with_seeded(report: dict[str, Any], seeded_names: list[str]) -> dict[str, Any]:
+    """The report after seeding: what the inventory holds is kept, whatever the fact-check said.
+
+    Start keeps every required worn card even when the fact-check stripped it
+    (playtest #35: the popup said the "reflective grey padded work top" was
+    removed, the inventory kept it, and gm_brief's "only these" list left it
+    out). The popup, the stripped list and the brief are rebuilt from the
+    names actually seeded, so the three agree with the inventory.
+    """
+    if not isinstance(report, dict) or not report:
+        return report
+    seeded = [str(n or "").strip() for n in seeded_names if str(n or "").strip()]
+    seeded_low = [_norm(n) for n in seeded]
+
+    def _held(name: str) -> bool:
+        low = _norm(name)
+        return bool(low) and any(low == s or low in s or s in low for s in seeded_low)
+
+    out = dict(report)
+    moved: list[dict[str, Any]] = []
+    stripped: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    for key, keep_list in (("stripped", stripped), ("deferred", deferred)):
+        for row in report.get(key) or []:
+            if isinstance(row, dict) and _held(str(row.get("name") or "")):
+                moved.append(row)
+            else:
+                keep_list.append(row)
+    kept = [dict(r) for r in report.get("kept") or [] if isinstance(r, dict)]
+    for row in moved:
+        kept.append(
+            {
+                **row,
+                "decision": "keep",
+                "reasons": ["Worn at Start: the required clothing card stays."],
+                "player_reason": "",
+                "provenance": "seeded_required",
+            }
+        )
+    out["kept"] = kept
+    out["stripped"] = stripped
+    out["deferred"] = deferred
+    moved_names = [str(r.get("name") or "") for r in moved]
+    messages = [
+        m for m in report.get("player_messages") or []
+        if not any(name and name.lower() in str(m).lower() for name in moved_names)
+    ]
+    out["player_messages"] = messages
+    stripped_names = [str(s.get("name") or "") for s in stripped]
+    deferred_names = [str(d.get("name") or "") for d in deferred]
+    notes = [n for n in report.get("notes") or [] if not str(n).startswith("Removed as illogical at Start:")]
+    if stripped_names:
+        notes.append("Removed as illogical at Start: " + ", ".join(stripped_names[:8]))
+    out["notes"] = notes
+    arrival = report.get("arrival") if isinstance(report.get("arrival"), dict) else {}
+    out["summary"] = (
+        f"Arrival={arrival.get('arrival')}. Vibe={(report.get('vibe') or {}).get('path')}. Kept {len(seeded)}, "
+        f"deferred {len(deferred_names)}, stripped {len(stripped_names)}."
+    )
+    if arrival.get("arrival"):
+        out["gm_brief"] = _gm_brief(
+            arrival,
+            seeded,
+            deferred_names,
+            stripped_names,
+            vibe=report.get("vibe") if isinstance(report.get("vibe"), dict) else {},
+            ordinary_start=bool(report.get("ordinary_start")),
+            latent_candidates=[n for n in report.get("latent_candidates") or [] if _held(str(n))],
+        )
+    if moved:
+        out["show_popup"] = bool(report.get("show_popup")) and bool(stripped or deferred or messages)
+    out["seeded"] = seeded
+    return out
 
 
 def apply_starter_logic_to_setup(

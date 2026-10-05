@@ -124,7 +124,8 @@ class SplitQualityTest(unittest.TestCase):
         titles = {fact["text"][:30]: fact["title"] for fact in _facts()}
         self.assertIn("Kingdom of Eldoria", titles.values())
         self.assertIn("Magic and technology", titles.values())
-        self.assertIn("Power through combat prowess", titles.values())
+        # Playtest #35 keeps the participle: "Power is earned through combat prowess".
+        self.assertIn("Power earned through combat prowess", titles.values())
         self.assertNotIn("In a land of mist-shrouded forests", titles.values())
         for title in titles.values():
             self.assertLessEqual(len(title.split()), 8, title)

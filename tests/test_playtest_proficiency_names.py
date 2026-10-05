@@ -287,7 +287,8 @@ class TheSetupRollIsSettled(unittest.TestCase):
         value = str(out.get("custom_skills") or out.get("values", {}).get("custom_skills") or "")
         self.assertNotIn("master the", value)
         self.assertNotIn("forge unbreakable", value)
-        self.assertEqual(value, "Dance of Shadows (E), Ancient Lore (C), Rope Splicing (D)")
+        # Playtest #35: the ordinary cap is D on this scale.
+        self.assertEqual(value, "Dance of Shadows (E), Ancient Lore (D), Rope Splicing (D)")
 
 
 class TheRollKeepsItsParentheses(unittest.TestCase):
@@ -319,7 +320,7 @@ class TheRollKeepsItsParentheses(unittest.TestCase):
         self.assertEqual(llm._comma_separated_phrases(rolled), rolled)
 
     def test_only_the_opening_label_is_the_start_rank(self):
-        # Live roll, ordinary start on E..S (cap C): "capped at S" is the limit.
+        # Live roll, ordinary start on E..S (cap D since #35): "capped at S" is the limit.
         opts = dict(GAME2, rank_scale="E,D,C,B,A,S")
         rolled = (
             "Net Mending (D, tracked by repaired nets, capped at A), "
@@ -331,7 +332,7 @@ class TheRollKeepsItsParentheses(unittest.TestCase):
             text,
             "Net Mending (D, tracked by repaired nets, capped at A), "
             "Current Sense (weak, seed, tracked by water awareness, capped at S), "
-            "Barge Poling (C, tracked by crossings, capped at S)",
+            "Barge Poling (D, tracked by crossings, capped at S)",
         )
         self.assertEqual(report["ranks_lowered"], ["Barge Poling"])
 
@@ -357,8 +358,9 @@ class ThePostStartPass(unittest.TestCase):
         self.assertIn("RULE Crafting Mastery: titled Unbreakable Bonds Limit from its text", report["adjusted"])
 
     def test_the_stale_theme_alone_was_the_hole(self):
-        # Without the idea, game 2's stored theme ("ordinary") allows B: why adjusted was [].
-        self.assertEqual(prof.start_rank_cap(GAME2, LABELS), 4)
+        # Without the idea, game 2's stored theme ("ordinary") allowed B: why adjusted was [].
+        # Playtest #35 lowered the ordinary cap to the lowest quarter (D).
+        self.assertEqual(prof.start_rank_cap(GAME2, LABELS), 2)
         self.assertEqual(prof.start_rank_cap(GAME2, LABELS, IDEA), 0)
         self.assertEqual(prof.seed_rank_cap(GAME2, LABELS, IDEA), 0)
         self.assertEqual(prof.seed_rank_cap(GAME2, LABELS, "weak start, seed at rank D"), 1)

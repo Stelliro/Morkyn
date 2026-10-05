@@ -1562,13 +1562,59 @@ def player_own_line(player_input: str) -> str:
     return re.split(r"\n\s*\n", text, maxsplit=1)[0].strip()
 
 
-def entity_roster(context: dict[str, Any], draft: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+_ITEM_HEAD_SKIP = frozenset({"of", "the", "a", "an", "and", "with", "pair", "set", "bundle", "some"})
+
+
+def _item_head(name: str) -> str:
+    """The noun an item is called by: "work gloves" -> "glove", "satchel of tools" -> "satchel"."""
+    low = re.sub(r"[^a-z\s'-]", " ", str(name or "").lower())
+    low = re.split(r"\s+(?:of|with|from|for)\s+", low, maxsplit=1)[0]
+    words = [w.strip("'-") for w in low.split() if w.strip("'-") and w.strip("'-") not in _ITEM_HEAD_SKIP]
+    if not words:
+        return ""
+    head = words[-1]
+    return head[:-1] if head.endswith("s") and not head.endswith("ss") and len(head) > 3 else head
+
+
+def _text_words(text: str) -> set[str]:
+    out: set[str] = set()
+    for word in re.findall(r"[a-z][a-z'-]*", str(text or "").lower()):
+        word = word.strip("'-")
+        out.add(word)
+        if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+            out.add(word[:-1])
+    return out
+
+
+def _item_in_play(item: dict[str, Any], words: set[str], codes: set[str]) -> bool:
+    """The draft, the player's words or the ops name this item."""
+    code = str(item.get("code") or "").strip().upper()
+    if code and code in codes:
+        return True
+    name = str(item.get("name") or "")
+    # "tin of salve" is called the tin or the salve.
+    tail = _item_head(re.sub(r"^.*\s(?:of|with)\s+", "", name.lower())) if re.search(r"\s(?:of|with)\s", name.lower()) else ""
+    return any(h and h in words for h in (_item_head(name), tail))
+
+
+def entity_roster(
+    context: dict[str, Any],
+    draft: dict[str, Any] | None = None,
+    *,
+    player_input: str = "",
+    ops_summary: str = "",
+) -> list[dict[str, Any]]:
     """
     code -> name and kind for every entity the writer may tag.
 
     A bare code list (playtest #3) let the writer put an item code on a place
     it had just invented; a code it cannot read is a code it will misuse.
     Entries without a name are left out.
+
+    The player's items are offered only when the draft, the player's input or
+    the ops name them, and their kind says they are on the player (playtest
+    #35: every inventory row rode on every beat as "item the player carries",
+    and the 8B put the player's work gloves on the nurse in the paragraph).
     """
     rows: list[dict[str, Any]] = []
     index: dict[str, dict[str, Any]] = {}
@@ -1605,8 +1651,17 @@ def entity_roster(context: dict[str, Any], draft: dict[str, Any] | None = None) 
     for place in draft.get("locations") or []:
         if isinstance(place, dict):
             add(place.get("code"), place.get("name"), "place")
+    draft_text = draft_narration_text(draft) if draft else ""
+    own = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0]
+    if own.startswith("__"):
+        own = ""
+    words = _text_words(" ".join((draft_text, own, str(ops_summary or ""))))
+    codes = {c.upper() for c in re.findall(r"\b[A-Za-z]{1,3}\d{1,4}\b", f"{ops_summary} {own} {draft_text}")}
     for item in collect_inventory(context):
-        add(item.get("code"), item.get("name"), "item the player carries")
+        if not _item_in_play(item, words, codes):
+            continue
+        worn = str(item.get("equipped_slot") or "").strip()
+        add(item.get("code"), item.get("name"), "worn by the player (you)" if worn else "carried by the player (you)")
     for event in collect_relevant_events(context):
         add(event.get("code"), event.get("title") or event.get("name"), "event")
     return rows
@@ -1806,7 +1861,7 @@ def build_paragraph_briefs(
     state_ops = _state_ops_only(ops_summary)
     must_pool = _must_cover_candidates(context, player_input, state_ops, draft_text)
     own_line = player_own_line(player_input)
-    roster = entity_roster(context, draft)
+    roster = entity_roster(context, draft, player_input=player_input, ops_summary=state_ops)
     may_mention = roster[:14]
     facts = scene_facts(context, draft, player_input, roster)
     slices = draft_slices(draft_text, len(roles)) if draft_text else [""] * len(roles)

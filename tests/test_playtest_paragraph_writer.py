@@ -137,8 +137,13 @@ class MayMentionTests(unittest.TestCase):
             self.assertIsInstance(row, dict)
             self.assertTrue(row["code"] and row["name"] and row["kind"])
         by_code = {row["code"]: row for row in rows}
-        self.assertEqual(by_code["I1"]["name"], "Well-Worn Boots")
-        self.assertIn("item", by_code["I1"]["kind"])
+        # Playtest #35: the player's items ride only on beats that name them,
+        # marked as the player's ("Well-Worn Boots" is not in this draft).
+        self.assertNotIn("I1", by_code)
+        named = entity_roster(CONTEXT, OPENING_DRAFT, player_input="I check my boots")
+        boots = next(row for row in named if row["code"] == "I1")
+        self.assertEqual(boots["name"], "Well-Worn Boots")
+        self.assertEqual(boots["kind"], "carried by the player (you)")
         self.assertIn("place", by_code["L1"]["kind"])
         self.assertEqual(by_code["A"]["role"], "baker")
 

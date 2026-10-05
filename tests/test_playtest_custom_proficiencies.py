@@ -152,7 +152,8 @@ class TheEngineValidatesStructure(unittest.TestCase):
 
     def test_rank_cap_follows_the_start(self):
         labels = prof.rank_labels({"rank_scale": "F,E,D,C,B,A,S,SS,SSS"})
-        self.assertEqual(prof.start_rank_cap({}, labels), 4)
+        # Playtest #35: an ordinary start is the lowest quarter (D), not the midpoint (B).
+        self.assertEqual(prof.start_rank_cap({}, labels), 2)
         weak = {"session_theme": {"power_fantasy": {"start_power": "near_useless"}}}
         # Playtest #22: a weak, seed or compounding start keeps to the bottom rank.
         self.assertEqual(prof.start_rank_cap(weak, labels), 0)
@@ -184,7 +185,7 @@ class TheEngineValidatesStructure(unittest.TestCase):
             report["adjusted"],
             [
                 "SKILL Marsh Reckoning: rank 'Q' not on the scale, set to F",
-                "SKILL Rope Splicing: start rank lowered to B",
+                "SKILL Rope Splicing: start rank lowered to D",
                 # The model's title named words the rule does not say.
                 "RULE Mentors gate mastery: titled Mentor Limit from its text",
             ],
@@ -196,7 +197,7 @@ class TheEngineValidatesStructure(unittest.TestCase):
             skills = {row["name"]: dict(row) for row in conn.execute("SELECT * FROM player_skills").fetchall()}
             rules = prof.proficiency_rules(conn)
             stored = json.loads(conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()["value"])
-        self.assertEqual([(r["name"], r["start_rank"]) for r in rows], [("Barge Poling", "E"), ("Marsh Reckoning", "F"), ("Rope Splicing", "B")])
+        self.assertEqual([(r["name"], r["start_rank"]) for r in rows], [("Barge Poling", "E"), ("Marsh Reckoning", "F"), ("Rope Splicing", "D")])
         self.assertIn("Barge Poling", skills)
         self.assertEqual(skills["Barge Poling"]["value"], prof.skill_value_for_rank(1))
         self.assertIn("Start rank E", skills["Barge Poling"]["notes"])
@@ -280,7 +281,7 @@ class ThePostStartPass(unittest.TestCase):
     def test_settle_prompt_carries_character_world_and_scale(self):
         user = json.loads(prof.settle_prompt(dict(SETUP, custom_skills=SLOGANS), ["Barge Poling"]))
         self.assertEqual(user["custom_proficiency_text"], SLOGANS)
-        self.assertEqual(user["highest_start_rank"], "B")
+        self.assertEqual(user["highest_start_rank"], "D")
         self.assertEqual(user["character"]["abilities"][0]["name"], "Current Sense")
         self.assertEqual(user["character"]["skills_already_recorded"], ["Barge Poling"])
         self.assertEqual(user["world"]["tech_level"], "medieval")

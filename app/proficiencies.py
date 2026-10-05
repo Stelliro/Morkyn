@@ -178,8 +178,9 @@ def start_rank_cap(
 
     A weak, seed or compounding start keeps every proficiency at the bottom
     rank (playtest #22: an "OP progression, start ordinary with one weak
-    seed" idea got C/C/D), an ordinary one the lower half, a strong start the
-    whole scale.
+    seed" idea got C/C/D), an ordinary one the lowest quarter, a strong start
+    the whole scale. The midpoint was B on the nine-step scale: an expert
+    rank for an ordinary road laborer (playtest #35).
     """
     profile = start_profile(options, idea, power_fantasy)
     last = max(0, len(labels) - 1)
@@ -187,7 +188,35 @@ def start_rank_cap(
         return 0
     if profile["start_power"] == "strong":
         return last
-    return max(0, (len(labels) - 1) // 2)
+    return max(0, min(last, max(1, last // 4)))
+
+
+_STATED_RANK = re.compile(r"^\s*(?:start(?:ing)?\s+)?(?:rank\s+)?([A-Za-z]{1,4})\s*(?:[;,)]|$)", re.I)
+
+
+def stated_start_ranks(options: dict[str, Any], labels: list[str]) -> dict[str, int]:
+    """Rank index the setup text already gave each named proficiency ("Frostbite Whisper (F)").
+
+    Read from the text the player started with, so a later pass cannot raise
+    a rank settled at Start (playtest #35: F at Start, B after the pass).
+    The lowest rank stated for a name wins.
+    """
+    folded = [label.upper() for label in labels]
+    out: dict[str, int] = {}
+    for key in ("custom_skills_setup", "custom_skills"):
+        for phrase in split_phrases(str((options or {}).get(key) or "")):
+            head, paren, tail = phrase.partition("(")
+            if not paren:
+                continue
+            match = _STATED_RANK.match(tail)
+            if not match or match.group(1).upper() not in folded:
+                continue
+            name = race_key(_clean(head))
+            if not name:
+                continue
+            index = folded.index(match.group(1).upper())
+            out[name] = min(index, out.get(name, index))
+    return out
 
 
 _SEED_RANK = re.compile(
@@ -906,6 +935,7 @@ def apply_settlement(conn, content: str, options: dict[str, Any], *, rename=None
     idea = idea_text(options, conn)
     cap = start_rank_cap(options, labels, idea)
     seed_cap = seed_rank_cap(options, labels, idea)
+    stated = stated_start_ranks(options, labels)
     seeds = seed_names(options)
     seed_used = False
     mirror = True
@@ -929,10 +959,15 @@ def apply_settlement(conn, content: str, options: dict[str, Any], *, rename=None
     def settle_skill(fields: list[str], original: str) -> None:
         nonlocal seed_used
         is_seed = not seed_used and is_seed_name(fields[0], seeds)
+        row_cap = seed_cap if is_seed else cap
+        # A rank the setup already gave this proficiency is its ceiling.
+        given = stated.get(race_key(_clean(fields[0]).strip(" .:;,\"'")))
+        if given is not None:
+            row_cap = min(row_cap, given)
         clean, errors = validate_skill_row(
             {"name": fields[0], "start_rank": fields[1], "tracking": fields[2], "hard_limit": fields[3]},
             labels,
-            seed_cap if is_seed else cap,
+            row_cap,
         )
         if clean is None:
             rejected.append(f"SKILL {original[:30]}: {'; '.join(errors)}")

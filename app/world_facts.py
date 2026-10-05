@@ -329,7 +329,25 @@ def _is_verbish(word: str) -> bool:
     return low in _VERB_WORDS or (low.endswith("ed") and len(low) > 4) or (low.endswith("en") and low in {"taken", "given", "broken", "chosen", "forbidden", "hidden", "written"})
 
 
+# A title never ends on a joiner, preposition or determiner (playtest #35:
+# "Survivors harness forbidden magic and", "Modern urban elements blend with").
+_TITLE_TAIL = _DETERMINERS | _PREPOSITIONS | {
+    "and", "or", "but", "nor", "at", "on", "into", "when", "where", "while", "which", "that", "who", "here",
+    "there", "now", "as", "always", "never", "often", "it", "is", "are",
+}
+_PRONOUN_SUBJECTS = {"nobody", "everyone", "everybody", "none", "anyone", "someone", "somebody", "nothing", "everything", "no-one"}
+_PARENTHETICAL = re.compile(r",\s*(?:when|where|if|though|although|once|unless|while|as)\b[^,]{0,60},\s*", re.I)
+
+
+def _trim_tail(words: list[str]) -> list[str]:
+    out = list(words)
+    while len(out) > 1 and out[-1].lower() in _TITLE_TAIL:
+        out.pop()
+    return out
+
+
 def _cap(words: list[str]) -> str:
+    words = _trim_tail(words)
     title = " ".join(words).replace("/", " and ")
     title = re.sub(r"\s+", " ", title).strip(" ,;:-")
     while len(title) > TITLE_MAX and " " in title:
@@ -338,13 +356,25 @@ def _cap(words: list[str]) -> str:
 
 
 def _object_words(words: list[str], limit: int = 2) -> list[str]:
-    """The head of the phrase after a verb: up to ``limit`` content words, skipping determiners."""
+    """The head of the phrase after a verb: up to ``limit`` content words, skipping determiners.
+
+    A leading participle used as an adjective counts ("calculated risks",
+    "forbidden magic").
+    """
     out: list[str] = []
-    for word in words:
+    for index, word in enumerate(words):
         low = word.lower()
         if low in _DETERMINERS and not out:
             continue
-        if low in {"and", "or", "but", "that", "which", "who"} or low in _PREPOSITIONS or _is_verbish(word):
+        participle = (
+            not out
+            and _is_verbish(word)
+            and low not in _VERB_WORDS
+            and index + 1 < len(words)
+            and not _is_verbish(words[index + 1])
+            and words[index + 1].lower() not in _PREPOSITIONS | _DETERMINERS | {"and", "or", "but"}
+        )
+        if low in {"and", "or", "but", "that", "which", "who"} or low in _PREPOSITIONS or (_is_verbish(word) and not participle):
             break
         out.append(word)
         if len(out) >= limit:
@@ -356,21 +386,51 @@ def _clause_words(text: str) -> tuple[list[str], int | None]:
     """The words of a fact after any lead-in clause, and the index of its main verb if one is found."""
     body = _clean(text).rstrip(".!?")
     trimmed = _LEAD_IN.sub("", body, count=1)
+    # "Magic, when it exists, is a secret": the aside is not the subject.
+    trimmed = _PARENTHETICAL.sub(" ", trimmed or body)
     words = re.findall(r"[A-Za-z][A-Za-z'/-]*", trimmed or body)
     verb = next((index for index, word in enumerate(words) if index and word.lower() in _VERB_WORDS), None)
     if verb is None or verb > 7:
         # "Snow closes the passes", "The river floods each spring": a
         # third-person verb right after a one-noun subject.
         start = 1 if words and words[0].lower() in _DETERMINERS else 0
+        guessed = None
         if len(words) > start + 2:
             noun, guess = words[start].lower(), words[start + 1].lower()
             if guess.endswith("s") and not guess.endswith("ss") and not noun.endswith("s") and guess not in _DETERMINERS:
-                verb = start + 1
+                guessed = start + 1
+        if guessed is None:
+            # "Survivors harness forbidden magic", "Modern urban elements
+            # blend with...": a plural noun and a plain verb (playtest #35).
+            for j in range(start, min(start + 4, len(words) - 2)):
+                noun, guess = words[j].lower(), words[j + 1]
+                low = guess.lower()
+                if not (noun.endswith("s") and not noun.endswith(("ss", "'s")) and len(noun) > 3):
+                    continue
+                if noun in _VERB_WORDS or noun in _PRONOUN_SUBJECTS:
+                    continue
+                if (
+                    guess.islower()
+                    and (not low.endswith("s") or low.endswith("ss"))
+                    and low not in _DETERMINERS | _PREPOSITIONS | _TITLE_TAIL | _COMMON_ADJECTIVES
+                    and not low.endswith(_ADJECTIVE_ENDINGS)
+                    and not low.endswith(("ed", "ing"))
+                    and not _is_verbish(guess)
+                ):
+                    guessed = j + 1
+                    break
+        if guessed is not None:
+            verb = guessed
     return words, verb
 
 
 def _title_for(text: str) -> str:
     """A short noun phrase naming what the fact is about."""
+    # "DM stance: always keep fair..." is titled by its label.
+    label, colon, _ = _clean(text).partition(":")
+    label_words = re.findall(r"[A-Za-z][A-Za-z'/-]*", label)
+    if colon and 2 <= len(label_words) <= 4 and not any(w.lower() in _VERB_WORDS for w in label_words):
+        return _cap(label_words)
     words, verb = _clause_words(text)
     if not words:
         return _clean(text)[:TITLE_MAX]
@@ -378,13 +438,20 @@ def _title_for(text: str) -> str:
         subject = words[: min(5, len(words))]
         while subject and subject[0].lower() in _DETERMINERS:
             subject = subject[1:]
+        # The noun phrase stops at the first verb-like word.
+        cut = next((i for i, w in enumerate(subject) if i and _is_verbish(w)), None)
+        if cut is not None:
+            subject = subject[:cut]
         return _cap(subject or words[:4])
+    if words[0].lower() in _PRONOUN_SUBJECTS:
+        # "Nobody is born strong" says itself; "Born nobody" did not.
+        return _cap(words[:5])
     subject = words[:verb]
     while len(subject) > 1 and subject[0].lower() in _DETERMINERS:
         subject = subject[1:]
     subject = subject[:5]
     rest = words[verb + 1:]
-    content = [word for word in subject if word.lower() not in _DETERMINERS | {"and", "or", "of"}]
+    content = [word for word in subject if word.lower() not in _DETERMINERS | _TITLE_TAIL | {"and", "or", "of"}]
     verb_word = words[verb].lower()
     if verb_word in _HAVE_WORDS:
         obj = _object_words(rest)
@@ -397,7 +464,14 @@ def _title_for(text: str) -> str:
         if index < len(rest) and rest[index].lower() in _PREPOSITIONS:
             obj = _object_words(rest[index + 1:])
             if obj:
-                return _cap([*subject, rest[index].lower(), *obj])
+                # "Power is earned through calculated risks" -> "Power earned through calculated risks".
+                participles = [w for w in rest[:index] if _is_verbish(w) and w.lower() not in _VERB_WORDS]
+                return _cap([*subject, *participles, rest[index].lower(), *obj])
+        elif verb_word in {"is", "are", "was", "were"} and rest and rest[0].lower() in {"a", "an", "the"}:
+            # "The land is a brutal frontier" -> "Land is a brutal frontier".
+            obj = _object_words(rest)
+            if obj:
+                return _cap([*subject, verb_word, rest[0].lower(), *obj])
         elif verb_word in {"is", "are", "was", "were"} and index <= 1:
             # "Magic is rare" -> "Rare magic"; "The mood is grounded" -> "Grounded mood".
             adjective = rest[0]
@@ -408,6 +482,12 @@ def _title_for(text: str) -> str:
             obj = _object_words(rest)
             if obj:
                 return _cap([*subject, "and", *obj])
+    if len(_trim_tail(content)) <= 1 and rest:
+        # A one-word subject is not a title ("Power", "Land", "Survivors"):
+        # name what it does as well.
+        obj = _object_words(rest)
+        if obj:
+            return _cap([*_trim_tail(subject), words[verb], *obj])
     return _cap(subject)
 
 
@@ -1337,6 +1417,20 @@ def _restates(conn, text: str) -> bool:
     return False
 
 
+def retitle_split_rows(conn) -> list[str]:
+    """Engine-titled rows get the current title rule; a save started before it keeps no first-words title."""
+    changed: list[str] = []
+    for row in conn.execute("SELECT code, title, text FROM world_facts WHERE source = 'split'").fetchall():
+        title = str(row["title"] or "")
+        if title == "Faction pressure":
+            continue
+        fresh = _title_for(str(row["text"] or ""))
+        if fresh and fresh != title:
+            conn.execute("UPDATE world_facts SET title = ? WHERE code = ?", (fresh, row["code"]))
+            changed.append(f"{row['code']}: {title[:30]} -> {fresh}")
+    return changed
+
+
 def apply_refinement(conn, content: str, fixed_magic: dict[str, str] | None = None) -> dict[str, Any]:
     """Validate and store the model's lines. Unknown race codes, bad enums and long text are refused.
 
@@ -1451,7 +1545,10 @@ def apply_refinement(conn, content: str, fixed_magic: dict[str, str] | None = No
             conn.execute(
                 f"DELETE FROM world_facts WHERE code IN ({', '.join('?' for _ in dropped)})", dropped
             )
+    retitled = retitle_split_rows(conn)
     report: dict[str, Any] = {"called": True, "accepted": accepted, "rejected": rejected[:12]}
+    if retitled:
+        report["retitled"] = retitled[:12]
     if adjusted:
         report["adjusted"] = adjusted[:12]
     if dropped:
