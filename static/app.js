@@ -204,29 +204,9 @@ const ABILITY_CONTEXT_HINT =
   "Randomize is locked until the model has something to build on: add a world description, an idea, a backstory, or skill/race notes first.";
 
 const RANDOM_SETUP = {
-  // Personal/legal names (Given or Given + family) — not handles/nicknames.
-  player_name: [
-    "Mara Ellison",
-    "Corvin Hale",
-    "Iris Vale",
-    "Tamsin Reed",
-    "Kael Morin",
-    "Elena Croft",
-    "Jonas Pike",
-    "Sable Quinn",
-    "Ren Ashford",
-    "Liora Dane",
-    "Marcus Bell",
-    "Nadia Voss",
-    "Tobias Wren",
-    "Helena Kade",
-    "Darius Cole",
-    "Miriam Shaw",
-    "Owen Graves",
-    "Celia Thorn",
-    "Felix Rourke",
-    "Ava Mercer",
-  ],
+  // No player_name list: a fixed list here named two saves running "Miriam
+  // Shaw" (playtest #21, review). The offline fallback asks the server for a
+  // name drawn for this world and sex (drawPlayerNameFromServer).
   // Nicknames / public handles only (usually blank).
   player_public_name: ["", "Ash", "River", "Patch", "Northlight", "Second Bell", "Vellum"],
   player_title: ["", "the Weatherwise", "of Kiln Street", "the Long Listener", "Under New Moons", "the Spare Key"],
@@ -3214,7 +3194,9 @@ function applyRandomizedSetup(payload) {
     // Clamp model nicknames out of the legal Name field
     if (name === "player_name") {
       const current = String(setupForm?.elements?.player_name?.value || "").trim();
-      setField(name, sanitizePlayerNameClient(value, current));
+      const clean = sanitizePlayerNameClient(value, current);
+      if (clean) setField(name, clean);
+      else drawPlayerNameFromServer().catch(() => {});
       return;
     }
     const field = setupForm.elements[name];
@@ -3630,13 +3612,10 @@ function fallbackRandomizeField(name, options = {}) {
     }
   } else if (setupForm.querySelector(`[data-list-setting="${name}"]`)) {
     fallbackRandomizeListField(name);
+  } else if (name === "player_name") {
+    drawPlayerNameFromServer().catch(() => {});
   } else if (!fallbackRandomizeRadioField(name) && !fallbackRandomizeSelectField(name) && hasRandomSetupPool(name)) {
-    if (name === "player_name") {
-      const current = String(setupForm?.elements?.player_name?.value || "").trim();
-      setField(name, sanitizePlayerNameClient(pickRandomSetupValue(name), current));
-    } else {
-      setField(name, pickRandomSetupValue(name));
-    }
+    setField(name, pickRandomSetupValue(name));
   }
   // Keep hair / face / clothes de-duplicated after local rolls
   if (["hair", "facial_features", "appearance"].includes(name)) {
@@ -3682,10 +3661,35 @@ function sanitizePlayerNameClient(value, forbidden = "") {
       .join(" ")
       .slice(0, 80);
   }
-  const pool = (RANDOM_SETUP.player_name || []).filter(
-    (n) => String(n).toLowerCase() !== forbid && !isNicknameStylePlayerName(n),
-  );
-  return pool.length ? choice(pool) : "Mara Ellison";
+  // Not a usable name: the caller asks the server for a drawn one.
+  return "";
+}
+
+/**
+ * A player name drawn by the server for this world and sex, never a recent
+ * game's (POST /api/setup/name-draw, no model). Fills the Name field when one
+ * comes back; leaves it as it is when the server cannot be reached.
+ */
+async function drawPlayerNameFromServer() {
+  const els = setupForm?.elements || {};
+  const body = {};
+  for (const key of ["player_name", "player_sex", "world_style", "custom_style", "tech_level", "magic_level", "start_location", "world_races"]) {
+    body[key] = String(els[key]?.value || "");
+  }
+  try {
+    const response = await fetch("/api/setup/name-draw", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) return "";
+    const data = await response.json();
+    const name = String(data?.name || "").trim();
+    if (name) setField("player_name", name);
+    return name;
+  } catch {
+    return "";
+  }
 }
 
 /** Pick from RANDOM_SETUP avoiding the current form value when possible. */

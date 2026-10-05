@@ -3097,10 +3097,15 @@ def _diversify_starter_equipment(value: Any) -> str:
     return ", ".join(cleaned)[:500] if cleaned else raw[:500]
 
 
-def _sanitize_player_name(value: Any, *, forbidden: str = "") -> str:
+def _sanitize_player_name(value: Any, *, forbidden: str = "", setup: dict[str, Any] | None = None) -> str:
     """
     player_name = personal/legal name NPCs would put on a record.
     Nicknames, street handles, and epithets belong in player_public_name / player_title.
+
+    A name that has to be replaced (a nickname, or a re-roll that came back
+    unchanged) gets a name drawn for this world, sex and the recent games,
+    not one off a fixed list: that list's "Miriam Shaw" was the character in
+    two saves running (playtest #21, review).
     """
     name = re.sub(r"\s+", " ", str(value or "").strip())[:80]
     forbid = re.sub(r"\s+", " ", str(forbidden or "").strip()).lower()
@@ -3113,6 +3118,11 @@ def _sanitize_player_name(value: Any, *, forbidden: str = "") -> str:
             else:
                 parts.append(w[:1].upper() + w[1:] if w else w)
         return " ".join(parts)[:80]
+    drawn = _drawn_player_names({**(setup or {}), "player_name": str(forbidden or (setup or {}).get("player_name") or "")})
+    for candidate in drawn:
+        if candidate.strip().lower() != forbid and not _is_nickname_style_player_name(candidate):
+            return candidate[:80]
+    # Last resort only (the pools failed to load).
     pool = list(SETUP_RANDOMIZER_FALLBACKS.get("player_name") or ["Mara Ellison"])
     random.shuffle(pool)
     for candidate in pool:
@@ -3180,6 +3190,27 @@ FALLBACK_NAME_SEX = {
 }
 
 
+def _drawn_player_names(setup: dict[str, Any] | None) -> list[str]:
+    try:
+        return [str(n) for n in (_player_name_options(setup).get("name_options") or []) if str(n).strip()]
+    except Exception:
+        return []
+
+
+def draw_player_name(setup: dict[str, Any] | None) -> dict[str, Any]:
+    """A fresh player name for this world and sex, never a recent game's (no model).
+
+    The setup page's offline fallback asks for this instead of picking from
+    its own fixed list.
+    """
+    setup = setup if isinstance(setup, dict) else {}
+    options = _player_name_options(setup)
+    names = [str(n) for n in options.get("name_options") or [] if str(n).strip()]
+    current = str(setup.get("player_name") or "").strip().lower()
+    name = next((n for n in names if n.lower() != current and not _is_nickname_style_player_name(n)), "")
+    return {"name": name, "options": names}
+
+
 def _fallback_names_for_sex(sex: str) -> list[str]:
     """The pool narrowed to names that read as ``sex``; the whole pool when sex is open."""
     pool = list(SETUP_RANDOMIZER_FALLBACKS.get("player_name") or [])
@@ -3215,7 +3246,7 @@ def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
             cleaned = _sanitize_player_name(value, forbidden=forbid)
             if cleaned.lower() != forbid.strip().lower():
                 return cleaned
-        return _sanitize_player_name("", forbidden=forbid)
+        return _sanitize_player_name("", forbidden=forbid, setup=current_setup)
     if field == "start_location":
         # SETUP_RANDOMIZER_FALLBACKS["start_location"] is one flat fantasy-leaning
         # list, so the LLM-unavailable path handed a space opera "Mosswake Gate"
@@ -6733,6 +6764,18 @@ def _field_contracts_for_prompt(
         if rolls and rolls.get(field):
             slim["engine_rolled"] = dict(rolls[field])
             slim["engine_rolled_rule"] = EXAMPLE_ROLLED_RULE
+        if field == "player_name":
+            # Same draw as the single-field roll: the group (identity) roll
+            # used to name the character with nothing to steer it off the
+            # model's house names or the last games' characters.
+            try:
+                slim.update(_player_name_options(current_setup))
+            except Exception:
+                pass
+            slim["name_options_rule"] = (
+                "name_options were drawn for this roll: take one, or write a name in the same style. "
+                "Never use a name in avoid_names, given or family part."
+            )
         if field == "custom_skills":
             # The group roll (the powers phase) shows the name form too,
             # drawn for this call (playtest #22).
@@ -7851,6 +7894,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         validated["player_name"] = _sanitize_player_name(
             validated.get("player_name"),
             forbidden=str(current_setup.get("player_name") or ""),
+            setup=current_setup,
         )
     elif not text_mode and return_fields == ["character_backstory"]:
         # Quality gate: invent → verify → retry on deny → diversified bank fallback
@@ -8486,6 +8530,19 @@ def _cohere_identity_fields(
         if named and named != sex:
             options = _player_name_options({**current_setup, **out, "player_sex": sex}).get("name_options") or []
             fits = [n for n in options if name_sex(n) in ("", sex)]
+            if fits:
+                out["player_name"] = fits[0]
+    name = out.get("player_name")
+    if isinstance(name, str) and name.strip() and "player_name" not in locked:
+        # A recent game's character name is never handed back (playtest #21:
+        # "Miriam Shaw" twice running). The player can still type it.
+        try:
+            recent = {n.strip().lower() for n in recent_player_names()}
+        except Exception:
+            recent = set()
+        if name.strip().lower() in recent:
+            options = _drawn_player_names({**current_setup, **out})
+            fits = [n for n in options if not sex or name_sex(n) in ("", sex)]
             if fits:
                 out["player_name"] = fits[0]
     return out

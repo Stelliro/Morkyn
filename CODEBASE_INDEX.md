@@ -542,6 +542,7 @@ There is no production build step. This is a local prototype served directly by 
 | POST | `/api/wait` | Wait/Meditate/Sleep turn; `WaitRequest` carries `allow_fallback`, `FailsafeBlocked` -> 503 `problem_detail` like `/api/turn` |
 | POST | `/api/suggestions` | Generate three suggested player inputs from the last scene's hooks; `deeper: true` returns one longer idea with its reason |
 | POST | `/api/setup/identity-check` | Before Start: does the chosen sex agree with the backstory's pronouns and the name; an unset sex comes back inferred |
+| POST | `/api/setup/name-draw` | A player name drawn from `app/example_pools.py` for this world and sex, never a recent game's (no model); the setup page's offline name fallback |
 | POST | `/api/setup` | Start a new playthrough and opening scene |
 | POST | `/api/alias` | Add a player-created alias for an indexed entity |
 | POST | `/api/player-alias` | Create an identity alias for the player |

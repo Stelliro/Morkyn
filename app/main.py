@@ -3577,6 +3577,28 @@ def api_setup_identity_check(request: IdentityCheckRequest):
     }
 
 
+class NameDrawRequest(BaseModel):
+    player_name: str = Field(default="", max_length=120)
+    player_sex: str = Field(default="", max_length=80)
+    world_style: str = Field(default="", max_length=400)
+    custom_style: str = Field(default="", max_length=2000)
+    tech_level: str = Field(default="", max_length=120)
+    magic_level: str = Field(default="", max_length=120)
+    start_location: str = Field(default="", max_length=200)
+    world_races: str = Field(default="", max_length=400)
+
+
+@app.post("/api/setup/name-draw")
+def api_setup_name_draw(request: NameDrawRequest):
+    """
+    A player name drawn for this world and sex, never a recent game's (no
+    model). The setup page's offline fallback uses it instead of a fixed list.
+    """
+    from app.llm import draw_player_name
+
+    return draw_player_name(request.model_dump())
+
+
 class StarterLogicRequest(BaseModel):
     starter_equipment: str = Field(default="", max_length=500)
     appearance: str = Field(default="", max_length=400)
