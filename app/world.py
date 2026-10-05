@@ -4842,8 +4842,10 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         # stored map is a reroll or an earlier game (playtest #25). Saved slots
         # carry their own maps in world.json, so none of theirs is lost.
         try:
-            from app.tile_world import prune_world_maps
+            from app.tile_world import pin_campaign_map, prune_world_maps
 
+            # The pin is this game's now; the last game's pin goes with it.
+            pin_campaign_map(conn)
             prune_world_maps(conn)
         except Exception:
             pass

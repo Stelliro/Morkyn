@@ -979,13 +979,59 @@ def active_map_id(conn) -> str:
     return value
 
 
-def campaign_map_ids(conn) -> set[str]:
-    """Maps this campaign uses. Only the active map is referenced anywhere."""
+# The map a campaign started on, recorded at Start. Opening New game rolls a
+# fresh map and makes it active straight away, before Start; a player who
+# then goes back and keeps playing the old game has an active map that is
+# not that game's. Saves and pruning keep the pinned map too, so that stray
+# roll can never cost a campaign its own map.
+CAMPAIGN_MAP_KEY = "campaign_world_map_id"
+
+
+def pinned_map_id(conn) -> str:
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = ?", (CAMPAIGN_MAP_KEY,)).fetchone()
+    except Exception:
+        return ""
+    value = str((row["value"] if row else "") or "").strip()
+    if value.startswith('"'):
+        try:
+            value = str(json.loads(value) or "").strip()
+        except (TypeError, ValueError):
+            pass
+    return value
+
+
+def pin_campaign_map(conn) -> str:
+    """Record the active map as this campaign's own (called at Start)."""
     chosen = active_map_id(conn)
-    if not chosen:
-        return set()
-    row = conn.execute("SELECT id FROM world_maps WHERE id = ?", (chosen,)).fetchone()
-    return {chosen} if row else set()
+    if not chosen or conn.execute("SELECT id FROM world_maps WHERE id = ?", (chosen,)).fetchone() is None:
+        # No map to pin: the last game's pin must not ride into this one.
+        conn.execute("DELETE FROM settings WHERE key = ?", (CAMPAIGN_MAP_KEY,))
+        return ""
+    conn.execute(
+        "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (CAMPAIGN_MAP_KEY, chosen)
+    )
+    return chosen
+
+
+def campaign_map_ids(conn) -> set[str]:
+    """Maps this campaign uses: the active map and the map it started on.
+
+    Empty when the active map is missing: then nothing says which map is in
+    use, and callers keep every map.
+    """
+    out: set[str] = set()
+    for chosen in (active_map_id(conn), pinned_map_id(conn)):
+        if not chosen:
+            if not out:
+                return set()
+            continue
+        row = conn.execute("SELECT id FROM world_maps WHERE id = ?", (chosen,)).fetchone()
+        if row:
+            out.add(chosen)
+        elif not out:
+            return set()
+    return out
 
 
 def legacy_board_ids(conn) -> set[str]:
@@ -1013,9 +1059,10 @@ def campaign_map_rows(conn, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def prune_world_maps(conn) -> dict[str, Any]:
     """Delete stored maps this campaign does not use; returns what went.
 
-    Called when a new game starts, after its map is rolled and active.
-    Keeps the active map and the Legacy button's board. Does nothing
-    without an active map, since then there is no telling which is in use.
+    Called when a new game starts, after its map is rolled and active
+    and pinned (``pin_campaign_map``). Keeps the campaign's maps and the
+    Legacy button's board. Does nothing without an active map, since then
+    there is no telling which is in use.
     """
     keep = campaign_map_ids(conn)
     if not keep:
