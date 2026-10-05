@@ -6034,15 +6034,43 @@ def travel_intent(player_input: str) -> bool:
     return bool(follow_target(player_input))
 
 
+_QUESTION_LEAD_RE = re.compile(r"^(?:who|what|where|when|why|how|which|whose|whom)\b", re.I)
+_VOCATIVE_RE = re.compile(r"^(?:[A-Z][\w'\u2019-]*\s+){0,3}?[A-Z][\w'\u2019-]*\s*,\s*")
+# Apostrophes required: "were" and "well" are not "we're" and "we'll".
+_FIRST_PERSON_RE = re.compile(r"\b(?:i|we|us|let\s+us|(?:i|we|let)['\u2019](?:ll|m|re|s))\b", re.I)
+
+
+def _travel_scoring_text(player_input: str) -> str:
+    """The player's line without questions about someone else's comings and goings.
+
+    Playtest #33 (live): "Eli Dasgupta, are those your boot prints by the
+    sign? Where were you headed?" scored as travel on "headed", which exempted
+    the draft's MOVE to The Old Well from the unasked-move gate, and "Who runs
+    the inn?" was travel on "runs". A question keeps its movement words only
+    when the player is the one going ("Can I go in?", "Shall we head out?").
+    """
+    kept: list[str] = []
+    for part in re.split(r"(?<=[.!?])\s+|\n+", str(player_input or "")):
+        body = _VOCATIVE_RE.sub("", part.strip(), count=1)
+        if not body:
+            continue
+        asking = body.rstrip().endswith("?") or _QUESTION_LEAD_RE.match(body) is not None
+        if asking and not _FIRST_PERSON_RE.search(body):
+            continue
+        kept.append(part)
+    return " ".join(kept)
+
+
 def _turn_intent(player_input: str) -> tuple[str, list[str]]:
     kind = _turn_kind(player_input)
     if kind != "player_action":
         return kind, []
     tokens = _intent_tokens(player_input)
+    travel_tokens = _intent_tokens(_travel_scoring_text(player_input))
     scores: list[tuple[str, int]] = []
     lowered = str(player_input or "").lower()
     for intent, keywords in TURN_INTENT_KEYWORDS.items():
-        score = len(tokens & keywords)
+        score = len((travel_tokens if intent == "travel" else tokens) & keywords)
         if intent == "claim_check" and any(phrase in lowered for phrase in ("said i could", "told me i could", "gave me permission", "said we could")):
             score += 3
         if score:
@@ -6278,13 +6306,38 @@ _VENUE_EXIT_RE = re.compile(
 
 
 def venue_move_intent(text: str) -> str:
-    """"enter", "exit" or "" for a line that walks the player through a doorway."""
-    line = str(text or "")
-    if _VENUE_EXIT_RE.search(line):
-        return "exit"
-    if _VENUE_ENTER_RE.search(line):
-        return "enter"
-    return ""
+    """"enter", "exit" or "" for a line that walks the player through a doorway.
+
+    The last doorway motion in the line wins (playtest #33, live): "I slip back
+    out and go into the nearest salvage shop" goes in. Read as "exit", it never
+    reached the rules that open the shop, and the player stayed at the gate
+    while the prose stood them in Ito Salvage. A question about someone else's
+    comings and goings moves nobody.
+    """
+    line = _travel_scoring_text(text)
+    exit_at = max((m.end() for m in _VENUE_EXIT_RE.finditer(line)), default=-1)
+    # "step back out into the street" is still the way out.
+    enter_at = max(
+        (
+            m.end() for m in _VENUE_ENTER_RE.finditer(line)
+            if not re.search(r"\b(?:out|outside)\s+(?:in|into|inside|through)$", line[: m.end()], re.I)
+        ),
+        default=-1,
+    )
+    if exit_at < 0 and enter_at < 0:
+        return ""
+    return "exit" if exit_at > enter_at else "enter"
+
+
+def _world_era(conn) -> str:
+    """This world's era (example_pools.ERAS), from the playthrough options."""
+    try:
+        options = _settings(conn).get("playthrough_options") or {}
+        return resolve_world_era(
+            str(options.get("tech_level") or ""), str(options.get("world_style") or ""), str(options.get("custom_style") or "")
+        )
+    except Exception:
+        return ""
 
 
 def _venue_named_anywhere(conn, player_input: str, *, exclude_parent: int = 0):
@@ -6319,12 +6372,14 @@ def _venue_named_anywhere(conn, player_input: str, *, exclude_parent: int = 0):
     return None
 
 
-def _mint_venue_from_request(conn, parent_id: int, player_input: str) -> str:
+def _mint_venue_from_request(conn, parent_id: int, player_input: str, narration: str = "") -> str:
     """Open the kind of venue the player just asked to walk into, if it fits here.
 
-    Only the player's own words are consulted -- letting the narration mint venues
-    would put a shop wherever the prose drifted. Returns the new venue's name, or
-    "" when the settlement cannot support that trade.
+    Only the player's own words decide that a shop opens and what trade it is --
+    letting the narration mint venues would put a shop wherever the prose
+    drifted. The prose may still give the shop its name when it shows the
+    player going into it ("into Ito Salvage", playtest #33). Returns the new
+    venue's name, or "" when the settlement cannot support that trade.
     """
     if not parent_id:
         return ""
@@ -6347,6 +6402,15 @@ def _mint_venue_from_request(conn, parent_id: int, player_input: str) -> str:
     parent_name = str(parent["name"] or "").strip()
     base = re.sub(r"\s+(square|market|green|commons|gate|row|street|lane)$", "", parent_name, flags=re.I).strip()
     name = f"{base or parent_name} {venues.kind_label(kind).title()}".strip()
+    told = str((venues.entry_in_prose(narration) or {}).get("name") or "").strip() if narration else ""
+    if (
+        told
+        and venues.venue_kind_from_name(told) in {"", kind}
+        and is_plausible_place_name(told)
+        and not is_fragment_place_name(told)
+        and _match_location_by_name(conn, told) is None
+    ):
+        name = told
     if _match_location_by_name(conn, name) is not None:
         return ""
     new_id = _upsert_location(conn, name, "", parent_id=parent_id, kind=kind)
@@ -6388,7 +6452,7 @@ def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
     return None
 
 
-def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str) -> dict[str, Any] | None:
+def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=None) -> dict[str, Any] | None:
     """The building the prose walked the player into with no MOVE, made a real venue.
 
     Playtest #16: game 2's draft had Elara wave the player and Aria into a herb
@@ -6401,9 +6465,10 @@ def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str) -> dict[
     too small for is read as a general store rather than dropped, because the
     player has already been shown inside it.
     """
-    here = conn.execute(
-        "SELECT l.* FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
-    ).fetchone()
+    if here is None:
+        here = conn.execute(
+            "SELECT l.* FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+        ).fetchone()
     if here is None or int(venues._field(here, "parent_id", 0) or 0) or str(venues._field(here, "kind", "") or ""):
         return None
     here_id = int(here["id"])
@@ -6500,7 +6565,8 @@ def _settle_entered_venue(
     if here is None:
         return report
     parent_id = int(venues._field(here, "parent_id", 0) or 0)
-    if not parent_id or not str(venues._field(here, "kind", "") or ""):
+    # A kind is enough: a roadside garage stands on its own (playtest #33).
+    if not str(venues._field(here, "kind", "") or ""):
         return report
     if str(here["code"] or "").upper() == str(movement_report.get("from") or "").upper():
         return report
@@ -6529,8 +6595,61 @@ def _settle_entered_venue(
             conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(npc["id"])))
             report["moved_in"].append(name)
     if not int(venues._field(_location_row(conn, here_id), "keeper_npc_id", 0) or 0):
-        bind_venue_keeper(conn, here_id)
+        trade = _trade_keeper_for(conn, here_id)
+        if trade is not None:
+            conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(trade["id"]), here_id))
+            conn.execute(
+                "UPDATE npcs SET location_id = ?, workplace_id = ?, workplace_plan = '' WHERE id = ?",
+                (here_id, here_id, int(trade["id"])),
+            )
+            report["keeper"] = str(trade["name"] or "")
+        else:
+            bind_venue_keeper(conn, here_id)
     return report
+
+
+def _trade_keeper_for(conn, venue_id: int):
+    """The person already in the story whose trade this venue is, or None.
+
+    Playtest #33 (live): the opening set "Victor Silva, mechanic" beside the
+    Chrome Wrench Garage; nothing linked him to it, so the draft invented a
+    second mechanic, Randy, the moment the player went in. Someone whose
+    workplace this already is comes first, then the longest-standing person of
+    the trade in the venue's settlement or inside it. The engine picks the
+    keeper; the model only writes them.
+    """
+    venue = _location_row(conn, venue_id)
+    if venue is None:
+        return None
+    kind = str(venues._field(venue, "kind", "") or "")
+    if not kind:
+        return None
+    try:
+        own = conn.execute(
+            "SELECT id, name FROM npcs WHERE workplace_id = ? AND COALESCE(shell, 0) = 0 ORDER BY id LIMIT 1",
+            (int(venue_id),),
+        ).fetchone()
+    except Exception:
+        own = None
+    if own is not None:
+        return own
+    parent_id = int(venues._field(venue, "parent_id", 0) or 0)
+    era = _world_era(conn)
+    places = [int(venue_id)] + ([parent_id] if parent_id else [])
+    marks = ",".join("?" for _ in places)
+    rows = conn.execute(
+        f"SELECT id, name, role FROM npcs WHERE location_id IN ({marks}) AND COALESCE(shell, 0) = 0 ORDER BY id",
+        places,
+    ).fetchall()
+    for row in rows:
+        if kind not in venues.workplace_kinds_for_role(str(row["role"] or ""), era):
+            continue
+        keeps = conn.execute(
+            "SELECT 1 FROM locations WHERE keeper_npc_id = ? AND id != ? LIMIT 1", (int(row["id"]), int(venue_id))
+        ).fetchone()
+        if keeps is None:
+            return row
+    return None
 
 
 def _move_companions_with_player(
@@ -6651,19 +6770,36 @@ def plan_npc_workplace(conn, npc_id: int) -> int:
     if not venue_id:
         if int(venues._field(npc, "shell", 0) or 0):
             return 0
-        kind = venues.workplace_kind_for_role(str(npc["role"] or ""))
-        if not kind:
+        kinds = venues.workplace_kinds_for_role(str(npc["role"] or ""), _world_era(conn))
+        if not kinds:
             return 0
+        kind = kinds[0]
         home = _location_row(conn, int(npc["location_id"] or 0))
         if home is None:
             return 0
+        if int(venues._field(home, "parent_id", 0) or 0) and str(venues._field(home, "kind", "") or "") in kinds:
+            # Already standing in a venue of their trade: they work there, even
+            # when someone else keeps it (Randy in Victor's garage, playtest #33).
+            conn.execute("UPDATE npcs SET workplace_id = ?, workplace_plan = '' WHERE id = ?", (int(home["id"]), int(npc_id)))
+            return int(home["id"])
         settlement_id = int(venues._field(home, "parent_id", 0) or 0) or int(home["id"])
         settlement = _location_row(conn, settlement_id)
         if settlement is None or settlement_size_for(conn, settlement) == "wilds":
             return 0
-        rows = conn.execute(
-            "SELECT * FROM locations WHERE parent_id = ? AND kind = ? ORDER BY id", (settlement_id, kind)
-        ).fetchall()
+        rows: list[Any] = []
+        # A venue of the trade that already stands here (or the opening's
+        # kindless building of it, playtest #33) comes before planning one.
+        for candidate in kinds:
+            rows = conn.execute(
+                "SELECT * FROM locations WHERE parent_id = ? AND kind = ? ORDER BY id", (settlement_id, candidate)
+            ).fetchall()
+            if not rows and _adopt_kindless_building(conn, settlement_id, candidate):
+                rows = conn.execute(
+                    "SELECT * FROM locations WHERE parent_id = ? AND kind = ? ORDER BY id", (settlement_id, candidate)
+                ).fetchall()
+            if rows:
+                kind = candidate
+                break
         free = [row for row in rows if not int(row["keeper_npc_id"] or 0)]
         if free:
             venue_id = int(free[0]["id"])
@@ -6683,6 +6819,162 @@ def plan_npc_workplace(conn, npc_id: int) -> int:
             "UPDATE npcs SET workplace_plan = ? WHERE id = ?", (json.dumps(plan, ensure_ascii=True), int(npc_id))
         )
     return venue_id
+
+
+def _kindless_buildings(conn, kind: str, *, exclude: tuple[int, ...] = ()) -> list[Any]:
+    """Top-level places with no kind whose own name says they are a `kind` building.
+
+    Rows made before the kind vocabulary knew the trade, or by a path that
+    never classified (an opening, an NPC's LOC), sit in the open world as if
+    they were towns (playtest #33: "Chrome Wrench Garage" had no parent and no
+    kind for a whole game). A row that already holds other places is a
+    settlement whatever its name says, and stays one.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT * FROM locations WHERE COALESCE(parent_id, 0) = 0 AND COALESCE(kind, '') = '' ORDER BY id"
+        ).fetchall()
+    except Exception:
+        return []
+    out = []
+    for row in rows:
+        if int(row["id"]) in exclude:
+            continue
+        name = str(row["name"] or "")
+        if is_fragment_place_name(name) or venues.venue_kind_from_name(name) != kind:
+            continue
+        if conn.execute("SELECT 1 FROM locations WHERE parent_id = ? LIMIT 1", (int(row["id"]),)).fetchone():
+            continue
+        out.append(row)
+    return out
+
+
+def _adopt_kindless_building(conn, settlement_id: int, kind: str) -> int:
+    """Make the one kindless `kind` building in the world a venue of this settlement; its id, or 0."""
+    found = _kindless_buildings(conn, kind, exclude=(int(settlement_id),))
+    if len(found) != 1:
+        return 0
+    venue_id = int(found[0]["id"])
+    stamp_venue_fields(conn, venue_id, parent_id=int(settlement_id), kind=kind)
+    return venue_id
+
+
+def _settlement_for_building(conn, building_id: int, kind: str, current_id: int) -> int:
+    """Which place a kindless building stands in, for stamping it as a venue; 0 when unknown.
+
+    The settlement where someone of the building's trade stands comes first
+    (the opening's mechanic beside the garage); otherwise the place the player
+    enters it from, when that is an ordinary top-level place.
+    """
+    era = _world_era(conn)
+    for row in conn.execute(
+        "SELECT n.role AS role, l.id AS lid, l.name AS lname, l.parent_id AS lparent, l.kind AS lkind "
+        "FROM npcs n JOIN locations l ON l.id = n.location_id WHERE COALESCE(n.shell, 0) = 0 ORDER BY n.id"
+    ).fetchall():
+        if kind not in venues.workplace_kinds_for_role(str(row["role"] or ""), era):
+            continue
+        settlement = int(row["lparent"] or 0) or int(row["lid"])
+        if settlement == int(building_id):
+            continue
+        place = _location_row(conn, settlement)
+        if place is None or str(place["kind"] or "") or is_fragment_place_name(str(place["name"] or "")):
+            continue
+        return settlement
+    here = _location_row(conn, current_id)
+    if (
+        here is not None
+        and int(here["id"]) != int(building_id)
+        and not int(here["parent_id"] or 0)
+        and not str(here["kind"] or "")
+        and not is_fragment_place_name(str(here["name"] or ""))
+    ):
+        return int(here["id"])
+    return 0
+
+
+def _venue_for_named_move(
+    conn,
+    result: dict[str, Any],
+    player_patch: dict[str, Any],
+    name: str,
+    resolved,
+    current,
+    player_input: str,
+    narration: str,
+) -> dict[str, Any]:
+    """Run the venue rules for a MOVE that names a place, on a turn that goes indoors.
+
+    Playtest #33 (live): an explicit MOVE was trusted and returned before any
+    venue rule ran. "walk back to the Chrome Wrench Garage and go inside" moved
+    the player into a garage that had no parent, kind or keeper since the
+    opening made it, and "head for the Spindle at Edge and go inside the first
+    shop" stopped at the settlement. Two shapes are settled here:
+
+      * The MOVE names a kindless top-level building ("...Garage"): it becomes
+        a venue of the settlement it stands in, once (write-once, like keeper).
+      * The MOVE names an ordinary place and the player asked to go into a
+        shop there, which the prose shows: the shop opens inside that place
+        and the player goes in through it.
+
+    Returns report fields ({} when neither applies).
+    """
+    doorway = venue_move_intent(player_input)
+    shown = venues.entry_in_prose(narration) or {}
+    if doorway != "enter" and not shown:
+        return {}
+    current_id = int(venues._field(current, "id", 0) or 0) if current is not None else 0
+    if resolved is not None:
+        if int(venues._field(resolved, "parent_id", 0) or 0) or str(venues._field(resolved, "kind", "") or ""):
+            return {}
+        resolved_id = int(resolved["id"])
+        row_name = str(resolved["name"] or "")
+        kind = venues.venue_kind_from_name(row_name)
+        told = str(shown.get("name") or "").lower()
+        if not kind and shown and told and (told in row_name.lower() or row_name.lower() in told):
+            # The prose names this very row as the building it walks into.
+            kind = str(shown.get("kind") or "") or "general_store"
+        if kind:
+            parent_id = _settlement_for_building(conn, resolved_id, kind, current_id)
+            if parent_id:
+                stamp_venue_fields(conn, resolved_id, parent_id=parent_id, kind=kind)
+            else:
+                stamp_venue_fields(conn, resolved_id, parent_id=0, kind=kind)
+            fields: dict[str, Any] = {"venue_stamped": {"name": row_name, "kind": kind}}
+            if parent_id:
+                parent = _location_row(conn, parent_id)
+                fields["venue_stamped"]["in"] = str(parent["name"] or "") if parent is not None else ""
+                if parent_id != current_id and shown:
+                    # The prose walks there and goes in: one turn, through the parent.
+                    player_patch["_enter_via"] = parent_id
+            return fields
+        place = resolved
+    else:
+        if venues.venue_kind_from_name(name):
+            return {}  # a new building: _upsert_location makes it a venue where the player stands
+        place = None
+    if doorway != "enter" or not shown:
+        return {}
+    if place is None:
+        if not is_plausible_place_name(name) or is_fragment_place_name(name):
+            return {}
+        place_id = _upsert_location(conn, name)
+        place = _location_row(conn, place_id)
+    if place is None or int(place["id"]) == current_id:
+        return {}
+    venue = _venue_shown_in_prose(conn, result, narration, here=place)
+    if not venue:
+        return {}
+    player_patch["move_to_location"] = venue["name"][:120]
+    player_patch["_enter_via"] = int(place["id"])
+    return {
+        "status": "repaired",
+        "rule": "venue_via",
+        "destination": venue["name"],
+        "via": str(place["name"] or ""),
+        "keeper": venue["keeper"],
+        "with": venue["with"],
+        "minted": venue["minted"],
+    }
 
 
 def ensure_npc_workplace(conn, npc_id: int) -> int:
@@ -6829,6 +7121,34 @@ def _movement_rule_example(known: list[dict[str, Any]], current_name: str = "") 
     )
 
 
+def _walk_plan(player_input: str, marks: dict[str, tuple[str, str]], default: Any) -> dict[str, str]:
+    """The way a walk this turn goes, decided by the engine before the draft (playtest #33).
+
+    The player's own direction first, then the bearing of a known place they
+    name, then the engine's fallback heading (the same one the map walk uses
+    when the draft writes no WALK), so the prose and the token agree.
+    """
+    try:
+        from app.tile_world import direction_in_text
+
+        said = direction_in_text(player_input)
+    except Exception:
+        said = ""
+    if said:
+        return {"direction": said, "toward": "", "from": "player"}
+    low = str(player_input or "").lower()
+    best = ""
+    for name in marks:
+        if len(name) >= 4 and re.search(rf"(?<![a-z0-9]){re.escape(name.lower())}(?![a-z0-9])", low):
+            if len(name) > len(best):
+                best = name
+    if best:
+        return {"direction": marks[best][0], "toward": marks[best][1], "from": "known_place"}
+    if isinstance(default, dict) and default.get("direction"):
+        return {"direction": str(default["direction"]), "toward": str(default.get("toward") or ""), "from": "map"}
+    return {}
+
+
 def _map_space_for_prompt() -> dict[str, Any] | None:
     """Finite grid for this turn, or None when no chart has been generated."""
     try:
@@ -6929,7 +7249,15 @@ def movement_contract(
             f"\"{current_name}\"."
         )
         if settlement:
-            allowed = venues.plausible_kinds(settlement)
+            try:
+                from app.example_pools import world_context as _wc
+
+                era = str(_wc(((state.get("settings") or {}).get("playthrough_options") or {})).get("era") or "")
+            except Exception:
+                era = ""
+            # The world's own trades (playtest #33): a modern village was offered
+            # a smithy, a mill and a stable, and never a garage or a clinic.
+            allowed = venues.plausible_kinds(settlement, era)
             contract["venue_kinds_possible"] = [venues.kind_label(k) for k in allowed][:18]
             contract["venue_rule"] += (
                 f" This is a {settlement}; only the trades in venue_kinds_possible plausibly exist here. "
@@ -6960,6 +7288,37 @@ def movement_contract(
             f"\"{current.get('exit_to') or 'the street outside'}\" in player.move_to_location."
         )
 
+    # The engine decides the bearing before the model writes (playtest #33,
+    # live): with names only, the draft invented "east" while the map walked
+    # west to the same place. Each known place carries its direction and
+    # distance from the player's tile, and a walk with no direction of its own
+    # goes the way the engine's fallback will take it.
+    if isinstance(map_space, dict):
+        source = map_space.get("place_bearings") if isinstance(map_space.get("place_bearings"), dict) else {}
+        bearings: dict[str, str] = {}
+        marks: dict[str, tuple[str, str]] = {}
+        for entry in known:
+            mark = source.get(str(entry.get("name") or "").strip().lower())
+            if isinstance(mark, dict) and mark.get("direction"):
+                bearings[str(entry["name"])] = f"{mark['direction']}, {int(mark.get('distance') or 0)} tiles"
+                marks[str(entry["name"])] = (str(mark["direction"]), str(entry["name"]))
+        # A venue lies where its parent does: "back to the garage" heads for the crossroads.
+        rows_by_id = {
+            int(loc.get("id") or 0): loc for loc in state.get("locations") or [] if isinstance(loc, dict) and loc.get("id")
+        }
+        for loc in rows_by_id.values():
+            parent = rows_by_id.get(int(loc.get("parent_id") or 0))
+            if not parent or str(loc.get("code") or "") == current_code:
+                continue
+            mark = source.get(str(parent.get("name") or "").strip().lower())
+            if isinstance(mark, dict) and mark.get("direction"):
+                marks.setdefault(str(loc.get("name") or ""), (str(mark["direction"]), str(parent.get("name") or "")))
+        if bearings:
+            contract["bearings"] = bearings
+        plan = _walk_plan(player_input, marks, map_space.get("default_heading"))
+        if plan:
+            contract["walk_plan"] = plan
+
     # Only worth the tokens on turns that might actually move: most turns are not travel.
     if isinstance(map_space, dict) and map_space.get("width") and map_space.get("height"):
         budget = int(map_space.get("step_budget") or 4)
@@ -6979,6 +7338,13 @@ def movement_contract(
                 "WALK <direction> STEPS <n> for the tiles crossed. "
                 "A shop or room off this place is a door, not a hike across the map."
             )
+            plan = contract.get("walk_plan")
+            if isinstance(plan, dict) and plan.get("direction"):
+                toward = f" toward {plan['toward']}" if plan.get("toward") else ""
+                contract["expectation"] += (
+                    f" The way from here runs {plan['direction']}{toward}: the prose heads {plan['direction']}, "
+                    f"and WALK says {plan['direction']}."
+                )
         else:
             contract["expectation"] = (
                 "This input is travel. The player already decided to go; complete the journey in prose "
@@ -7827,7 +8193,7 @@ def _movement_destination_from_input(rows: list[Any], player_input: str, current
     return best
 
 
-def gate_venue_move(conn, from_location_id: int, to_location_id: int) -> dict[str, Any]:
+def gate_venue_move(conn, from_location_id: int, to_location_id: int, *, via: int = 0) -> dict[str, Any]:
     """Decide whether a move into a venue is allowed, and where it lands instead.
 
     Interiors are not reachable from across the map and are not open at every
@@ -7845,7 +8211,10 @@ def gate_venue_move(conn, from_location_id: int, to_location_id: int) -> dict[st
     row = _location_row(conn, to_id)
     if row is None:
         return {"location_id": to_id, "note": None}
-    check = venue_entry_check(conn, from_id, row)
+    # The movement rules settled that this turn reaches the venue's own
+    # parent and goes in, and the prose shows both (playtest #33).
+    standing = int(via) if via and int(via) == int(venues._field(row, "parent_id", 0) or 0) else from_id
+    check = venue_entry_check(conn, standing, row)
     if check.get("ok"):
         return {"location_id": to_id, "note": None}
     venue_name = str(venues._field(row, "name", "") or "")
@@ -7895,6 +8264,29 @@ _PLAYER_DEPARTS_RE = re.compile(
 )
 
 
+def _unspoken(text: str) -> str:
+    """Narration with quoted speech blanked out: what someone says is not the player moving."""
+    return venues.strip_speech(text)
+
+
+def _player_departs(text: str) -> bool:
+    """Does the narration (not a speaker) take the player somewhere?
+
+    Playtest #33 (live): Umar's line "They think you're heading there, but
+    you're not." counted as the prose moving the player, so a talk turn's MOVE
+    to a place the prose never named was kept. So did "everything you've left
+    behind": a perfect tense is what already happened, not a move this turn.
+    """
+    for match in _PLAYER_DEPARTS_RE.finditer(_unspoken(text)):
+        if _PERFECT_TENSE_RE.search(match.group(0)):
+            continue
+        return True
+    return False
+
+
+_PERFECT_TENSE_RE = re.compile(r"\byou(?:['\u2019](?:ve|d)|\s+ha(?:ve|d))\s+(?:\w+\s+)?\w+$", re.I)
+
+
 def _unasked_unshown_move(
     result: dict[str, Any],
     player_patch: dict[str, Any],
@@ -7926,20 +8318,39 @@ def _unasked_unshown_move(
     if not text.strip():
         return ""
     dest = name
+    dest_row = None
     if code:
-        dest = next((str(r["name"] or "") for r in rows if str(r["code"] or "").upper() == code.upper()), "") or code
-    low = text.lower()
+        dest_row = next((r for r in rows if str(r["code"] or "").upper() == code.upper()), None)
+        dest = (str(dest_row["name"] or "") if dest_row is not None else "") or code
+    elif name:
+        dest_row = next((r for r in rows if str(r["name"] or "").lower() == name.lower()), None)
+    # A place named only inside someone's speech is not where the prose went
+    # (playtest #33: "I was heading to the old well," he says).
+    low = _unspoken(text).lower()
     if dest and (dest.lower() in low or f"[[{dest.lower()}]]" in low):
         return ""
     if code and f"[[{code.lower()}]]" in low:
         return ""
-    if _PLAYER_DEPARTS_RE.search(text):
+    if _player_departs(text):
         return ""
     # "Elara gestures for you to come in. Inside, the shop..." shows the move
-    # without naming the shop the MOVE named (playtest #16).
-    if venues.entry_in_prose(text):
+    # without naming the shop the MOVE named (playtest #16). Only when the
+    # MOVE is a building: an entry into the med-bay does not show a move to
+    # "The Twelfth Circuit" (playtest #33).
+    if venues.entry_in_prose(text) and _is_building(dest, dest_row):
         return ""
     return dest or "map walk"
+
+
+def _is_building(name: str, row: Any = None) -> bool:
+    """Is this destination a venue (or named like one)?"""
+    if row is not None:
+        keys = row.keys() if hasattr(row, "keys") else []
+        if "parent_id" in keys and int(row["parent_id"] or 0):
+            return True
+        if "kind" in keys and str(row["kind"] or ""):
+            return True
+    return bool(venues.venue_kind_from_name(name))
 
 
 def resolve_movement(
@@ -7981,7 +8392,7 @@ def resolve_movement(
     current_code = str((row["code"] if row else "") or "")
     current_name = str((row["name"] if row else "") or "")
 
-    rows = conn.execute("SELECT id, code, name FROM locations ORDER BY id").fetchall()
+    rows = conn.execute("SELECT id, code, name, parent_id, kind FROM locations ORDER BY id").fetchall()
     known_codes = {str(row["code"] or "").upper() for row in rows if row["code"]}
 
     unasked = _unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration)
@@ -7989,6 +8400,23 @@ def resolve_movement(
         player_patch["move_to_location"] = None
         player_patch["move_to_location_code"] = None
         result["map_walk"] = None
+        # The prose may still have walked the player into a building here
+        # (playtest #33: "You step off the platform and into the med-bay").
+        shown = None
+        if not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name):
+            shown = _venue_shown_in_prose(conn, result, narration)
+        if shown:
+            player_patch["move_to_location"] = shown["name"][:120]
+            return {
+                "status": "repaired",
+                "rule": "venue_shown",
+                "from": current_code,
+                "destination": shown["name"],
+                "keeper": shown["keeper"],
+                "with": shown["with"],
+                "minted": shown["minted"],
+                "dropped": unasked,
+            }
         return {"status": "dropped_unshown", "from": current_code, "destination": unasked, "intent": intent}
 
     note = ""
@@ -8034,7 +8462,25 @@ def resolve_movement(
             player_patch["move_to_location"] = None
             note = note or "same_place_name"
         else:
-            return {"status": "model", "from": current_code, "destination": explicit_name[:120]}
+            report = {"status": "model", "from": current_code, "destination": explicit_name[:120]}
+            # Going indoors runs the venue rules even when the MOVE is explicit
+            # (playtest #33, live).
+            try:
+                report.update(
+                    _venue_for_named_move(
+                        conn, result, player_patch, explicit_name,
+                        _location_row(conn, int(resolved["id"])) if resolved is not None else None,
+                        _location_row(conn, current_id), player_input, narration,
+                    )
+                )
+            except Exception:
+                pass
+            # Flag, as the code path does, a named move the prose never names.
+            prose = _unspoken(narration).lower()
+            dest_name = str(report.get("destination") or explicit_name)
+            if prose.strip() and dest_name.lower() not in prose and not venues.entry_in_prose(narration):
+                report["prose_mismatch"] = dest_name
+            return report
 
     # A doorway is a move the model reliably narrates and reliably fails to record.
     # Resolve it from state rather than hoping: the venues here are known, and so
@@ -8047,6 +8493,10 @@ def resolve_movement(
         if here_row is not None:
             here_id = int(here_row["id"])
             inside_of = int(venues._field(here_row, "parent_id", 0) or 0)
+            if doorway == "exit" and not inside_of and _VENUE_ENTER_RE.search(_travel_scoring_text(player_input)):
+                # Not inside anything, so "step back out" leaves nothing; the
+                # going-in that follows it still counts (playtest #33).
+                doorway = "enter"
             if doorway == "exit" and inside_of:
                 parent = _location_row(conn, inside_of)
                 if parent is not None:
@@ -8072,7 +8522,7 @@ def resolve_movement(
                 # settlement supports and none exists yet. Rules that pick an
                 # existing place cannot help, and the model reliably narrates the
                 # visit without recording it, so mint the venue here.
-                minted = _mint_venue_from_request(conn, parent_for_venues, player_input)
+                minted = _mint_venue_from_request(conn, parent_for_venues, player_input, narration)
                 if minted:
                     player_patch["move_to_location"] = minted[:120]
                     return {
@@ -8191,7 +8641,7 @@ def resolve_movement(
 
     followed = follow_target(player_input)
     if followed:
-        if arrived or _PLAYER_DEPARTS_RE.search(tail):
+        if arrived or _player_departs(tail):
             place = _known_place_named_in(rows, tail, current_name)
             if place is not None:
                 player_patch["move_to_location_code"] = str(place["code"])
@@ -11548,9 +11998,10 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
 
     move_to = player_patch.get("move_to_location") or player_patch.get("move_to_location_code")
     venue_note: dict[str, Any] | None = None
+    via = int(player_patch.pop("_enter_via", 0) or 0)
     if move_to:
         location_id = _find_location_id(conn, str(move_to))
-        gate = gate_venue_move(conn, previous_location_id, location_id)
+        gate = gate_venue_move(conn, previous_location_id, location_id, via=via)
         location_id = int(gate["location_id"] or previous_location_id)
         venue_note = gate.get("note")
         if location_id != previous_location_id:
@@ -13741,6 +14192,12 @@ def _apply_story_map_walk(
     here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     dest_id = int(here["current_location_id"] or 0) if here and here["current_location_id"] else 0
     dest = _location_brief(conn, dest_id)
+    if dest and int(dest.get("parent_id") or 0):
+        # A venue has no tile of its own: the walk heads for its parent (playtest #33).
+        parent = _location_brief(conn, int(dest["parent_id"]))
+        if parent:
+            dest["parent_code"] = parent["code"]
+            dest["parent_name"] = parent["name"]
     report = apply_story_map_walk(
         chart,
         player_input=player_input,

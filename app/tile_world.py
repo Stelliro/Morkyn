@@ -3368,6 +3368,9 @@ def _place_names(dest: dict[str, Any] | None, movement_report: dict[str, Any] | 
         (dest or {}).get("name"),
         (dest or {}).get("code"),
         (movement_report or {}).get("destination"),
+        # A venue stands on its parent's tile (playtest #33).
+        (dest or {}).get("parent_name"),
+        (dest or {}).get("parent_code"),
     ):
         text = str(value or "").strip()
         if text and text not in names:
@@ -3408,7 +3411,12 @@ def _settlement_match(map_data: dict[str, Any], names: list[str], px: int, py: i
 
 
 def _nearest_other_settlement(map_data: dict[str, Any], px: int, py: int) -> tuple[int, int] | None:
-    best: tuple[int, int, int] | None = None
+    found = _nearest_settlement_info(map_data, px, py)
+    return (found[0], found[1]) if found else None
+
+
+def _nearest_settlement_info(map_data: dict[str, Any], px: int, py: int) -> tuple[int, int, str] | None:
+    best: tuple[int, int, int, str] | None = None
     for settlement in list_settlements(map_data):
         try:
             sx, sy = int(settlement.get("x")), int(settlement.get("y"))
@@ -3418,10 +3426,106 @@ def _nearest_other_settlement(map_data: dict[str, Any], px: int, py: int) -> tup
         if cheb == 0 or cheb > SETTLEMENT_HORIZON:
             continue
         if best is None or cheb < best[0]:
-            best = (cheb, sx, sy)
+            best = (cheb, sx, sy, str(settlement.get("name") or ""))
     if best is None:
         return None
-    return best[1], best[2]
+    return best[1], best[2], best[3]
+
+
+def _open_heading(map_data: dict[str, Any]) -> str:
+    """The first road (else open) neighbour of the player's tile, or ""."""
+    px, py = _player_xy(map_data)
+    grid = _rebuild_grid(map_data)
+    height = len(grid)
+    width = len(grid[0]) if height else 0
+    roads: list[str] = []
+    opens: list[str] = []
+    for name, dx, dy in NEIGHBOR_ORDER:
+        nx, ny = px + dx, py + dy
+        if not (0 <= nx < width and 0 <= ny < height):
+            continue
+        cell = grid[ny][nx] if isinstance(grid[ny][nx], dict) else None
+        if not tile_walkable(cell):
+            continue
+        if str((cell or {}).get("state") or "") in {"road", "bridge"}:
+            roads.append(name)
+        else:
+            opens.append(name)
+    return roads[0] if roads else (opens[0] if opens else "")
+
+
+def place_bearings(map_data: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Direction and distance from the player's tile to every pinned place, keyed by lower-case name.
+
+    Playtest #33 (live): the draft was given known places as bare names, chose
+    "east" for a walk back to the garage, and the map then walked west. The
+    engine knows where each pinned place lies, so it says so before the model
+    writes.
+    """
+    if not isinstance(map_data, dict):
+        return {}
+    anchors = map_data.get("place_anchors")
+    if not isinstance(anchors, dict):
+        return {}
+    px, py = _player_xy(map_data)
+    out: dict[str, dict[str, Any]] = {}
+    for record in anchors.values():
+        if not isinstance(record, dict) or record.get("x") is None:
+            continue
+        name = str(record.get("name") or "").strip()
+        if not name or name.lower() in out:
+            continue
+        try:
+            ax, ay = int(record["x"]), int(record["y"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        distance = max(abs(ax - px), abs(ay - py))
+        if distance == 0:
+            continue
+        out[name.lower()] = {"name": name, "direction": heading_name(ax - px, ay - py), "distance": distance}
+    return out
+
+
+def default_heading(map_data: dict[str, Any] | None) -> dict[str, str]:
+    """The way a walk with no direction and no pinned destination goes: the same
+    choice the map walk's fallback makes, decided before the draft writes."""
+    if not isinstance(map_data, dict):
+        return {}
+    px, py = _player_xy(map_data)
+    try:
+        found = _nearest_settlement_info(map_data, px, py)
+    except Exception:
+        found = None
+    if found is not None:
+        direction = heading_name(found[0] - px, found[1] - py)
+        if direction:
+            return {"direction": direction, "toward": found[2]}
+    if str(map_data.get("scale") or "") == "world":
+        return {}
+    try:
+        heading = _open_heading(map_data)
+    except Exception:
+        heading = ""
+    return {"direction": heading, "toward": ""} if heading else {}
+
+
+def _anchor_named_in(map_data: dict[str, Any], text: str) -> dict[str, Any] | None:
+    """The pinned place the player's own words name (longest name wins), or None."""
+    anchors = map_data.get("place_anchors")
+    low = str(text or "").lower()
+    if not isinstance(anchors, dict) or not low:
+        return None
+    best: dict[str, Any] | None = None
+    for record in anchors.values():
+        if not isinstance(record, dict) or record.get("x") is None:
+            continue
+        name = str(record.get("name") or "").strip().lower()
+        if len(name) < 4 or name in _GENERIC_PLACE_LABELS:
+            continue
+        if re.search(rf"(?<![a-z0-9]){re.escape(name)}(?![a-z0-9])", low):
+            if best is None or len(name) > len(str(best.get("name") or "")):
+                best = record
+    return best
 
 
 def _same_place(origin: dict[str, Any] | None, dest: dict[str, Any] | None) -> bool:
@@ -3545,6 +3649,10 @@ def plan_story_walk(
         direction = _direction_from_inputs(player_input, report, dest)
         if direction:
             return {"action": "steps", "direction": direction, "steps": STEP_BUDGET, "reason": "outdoor_direction"}
+        # A known place the player named: the bearing the draft was given (playtest #33).
+        named = _anchor_named_in(map_data, player_input)
+        if named is not None and (int(named["x"]), int(named["y"])) != (px, py):
+            return {"action": "toward", "x": int(named["x"]), "y": int(named["y"]), "reason": "input_anchor"}
         return {"action": "fallback", "reason": "outdoor_fallback"}
     direction = _direction_from_inputs(player_input, report, dest)
     if direction and (travel or status == "unresolved"):
@@ -3557,23 +3665,7 @@ def _fallback_step(map_data: dict[str, Any]) -> dict[str, Any]:
     target = _nearest_other_settlement(map_data, px, py)
     if target is not None:
         return walk_toward(map_data, target[0], target[1], budget=STEP_BUDGET, save=False)
-    grid = _rebuild_grid(map_data)
-    height = len(grid)
-    width = len(grid[0]) if height else 0
-    roads: list[str] = []
-    opens: list[str] = []
-    for name, dx, dy in NEIGHBOR_ORDER:
-        nx, ny = px + dx, py + dy
-        if not (0 <= nx < width and 0 <= ny < height):
-            continue
-        cell = grid[ny][nx] if isinstance(grid[ny][nx], dict) else None
-        if not tile_walkable(cell):
-            continue
-        if str((cell or {}).get("state") or "") in {"road", "bridge"}:
-            roads.append(name)
-        else:
-            opens.append(name)
-    heading = roads[0] if roads else (opens[0] if opens else "")
+    heading = _open_heading(map_data)
     if not heading:
         start = (px, py)
         return _walk_report(
@@ -3770,6 +3862,13 @@ def spatial_contract(map_data: dict[str, Any] | None) -> dict[str, Any] | None:
         "explored_tiles": explored,
         "rule": rule,
     }
+    # The engine's own bearings, for the movement contract (playtest #33).
+    bearings = place_bearings(map_data)
+    if bearings:
+        payload["place_bearings"] = bearings
+    heading = default_heading(map_data)
+    if heading:
+        payload["default_heading"] = heading
     if world_scale:
         payload["scale"] = "world"
         payload["density_percent"] = map_data.get("density_percent")

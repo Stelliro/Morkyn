@@ -1278,6 +1278,17 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
         known = [str(name) for name in (contract.get("known_places") or []) if str(name or "").strip()]
         if known:
             travel_view["known_places"] = known[:10]
+        # Where each known place lies and which way this walk goes, decided by
+        # the engine before the draft writes (playtest #33).
+        bearings = contract.get("bearings") if isinstance(contract.get("bearings"), dict) else {}
+        if bearings:
+            travel_view["bearings"] = {str(k): str(v) for k, v in list(bearings.items())[:10]}
+        plan = contract.get("walk_plan") if isinstance(contract.get("walk_plan"), dict) else {}
+        if plan.get("direction"):
+            toward = f" toward {plan['toward']}" if plan.get("toward") else ""
+            travel_view["walk_plan"] = (
+                f"A walk this turn goes {plan['direction']}{toward}. Narrate that heading; WALK says {plan['direction']}."
+            )
         venues = []
         for venue in contract.get("venues_here") or []:
             if isinstance(venue, dict) and str(venue.get("name") or "").strip():

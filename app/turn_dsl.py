@@ -1151,6 +1151,14 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
             f"Travel turn: if the prose ends anywhere but {here}, ===OPS=== MUST contain a MOVE line. "
             f"Without a MOVE the player is still in {here_name} when the turn ends, and the prose says so."
         )
+        # The engine's heading for this walk (playtest #33): the prose follows the map.
+        plan = contract.get("walk_plan") if isinstance(contract.get("walk_plan"), dict) else {}
+        if plan.get("direction"):
+            toward = f" toward {plan['toward']}" if plan.get("toward") else ""
+            instructions.append(
+                f"If the player walks, the way runs {plan['direction']}{toward}: the prose heads "
+                f"{plan['direction']} and WALK says {plan['direction']}."
+            )
         # Going after someone with no destination named (playtest #20).
         from app.scene_thread import follow_target
 
