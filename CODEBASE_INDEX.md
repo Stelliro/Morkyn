@@ -57,6 +57,7 @@ Morkyn/
 |   |-- rng.py                       # Dice, magnitude bands, deterministic seeds, roll audit
 |   |-- venues.py                    # Shop/inn kinds, opening hours, settlement commonality, trade->workplace kind, prose entry reader
 |   |-- world_facts.py               # Per-world race and lore rows, post-start passes, per-turn fetch
+|   |-- example_pools.py             # Fresh per-call prompt examples from world-filtered pools, engine-rolled appearance values
 |   |-- proficiencies.py             # Custom proficiencies settled into rows before turn 1
 |   |-- world_scale.py               # Seeded wilderness, theme ground, materials, people leanings
 |   |-- turn_dsl.py                  # NAR+OPS draft language
@@ -178,6 +179,15 @@ Morkyn/
 - **Consumers:** `app.db._migrate_columns` (tables), `app.world.start_playthrough` (split), `app.world.start_playthrough_with_opening` (post-start passes before the opening), `app.world.build_prompt_context` (`context['world_facts']`, kept by `HANDOFF_BASE_CONTEXT_KEYS`), `app.prompts._visible_world` (`world_state.world_facts` plus one instruction line), `GET /api/world-facts`.
 - **Dependencies:** `app.db`, `app.rng` (seeded numbers for unfamiliar peoples), `app.llm._chat_content` for the optional model pass.
 - **Design Notes:** Tables `world_races` (code R1.., `magic_access` in none/rare/learned/innate/common/unknown, `size_band` in tiny..huge/varies/unknown, `lifespan_years` integer) and `world_facts` (code F1.., kind in custom/history/rule/faction/place_lore/magic/tone, text <= 200 chars, JSON `links` and `tags`); both are in `WORLD_TABLES` and not replace-only, so an older slot loads empty and is re-split from its own settings. Every row, split or model, passes the same validators. The post-start phase is a registry: a pass takes the stored `playthrough_options`, opens its own short connections (no lock held while the model runs), and returns a report stored in `settings.world_facts_pass`. `AI_RPG_POST_START_MODEL=off`, or MLE with no model file, skips every model pass. Custom proficiencies (playtest #1, `app/proficiencies.py`) register the second pass.
+
+#### Example Pools
+
+- **Files:** `app/example_pools.py`
+- **Purpose:** Gives every prompt that needs examples three to five fresh ones drawn from large pools filtered by the world (era, magic, naming culture, climate, water, settlement size) and the person (sex, age band), instead of a fixed list the model pastes (playtest #14, #26).
+- **Key API:** `world_context()`, `setup_context()`, `draw()`, `draw_names()`, `setup_examples()`, `roll_values()`, `roll_setup_values()`, `apply_rolled_values()`, `cast_options()`, `turn_cast_options()`, `record_npc_name()`, `used_names()`, `remember_player_name()`, `recent_player_names()`
+- **Consumers:** `app.llm.generate_setup_randomization` (single-field examples, `engine_rolled`, player `name_options`/`avoid_names`, offline name fallback), `app.llm._lint_and_repair_setup_fields`, `app.setup_composer.structural_fallback`, `app.world.build_prompt_context` (`cast_options`), `app.world.movement_contract` (`venue_name_options`), `app.world._upsert_npc` / `create_shell_npc` (ledger), `app.world.start_playthrough` (player name history), `app.turn_dsl.build_dsl_user_prompt`.
+- **Dependencies:** `app.world` (`resolve_world_era`, `resolve_world_magic`, `_SEED_ROLE_POOLS`, `_SEED_POOL_HINTS`), `app.venues`, `app.naming.ledger_record`, `app.rng.rng_for`, `app.db.connect`.
+- **Design Notes:** Entries carry tags; an entry fits when every tag agrees with what the context knows (unknown passes; `water` is strict, so a net mender needs water here). Draws are deterministic for a seeded rng; turn draws are seeded per campaign, turn and place. A name already held by an NPC, in `name_ledger`, or by the player is never drawn, nor is any part of it. `player_name_history` is deliberately not a campaign table: not cleared by `_clear_playthrough`, not exported. Hard appearance facts are the engine's; the model writes around them.
 
 #### Custom Proficiencies
 
@@ -580,6 +590,8 @@ The current world export table set is defined in `app/world.py` as `WORLD_TABLES
 - `npc_player_relationships`
 - `quest_clocks`
 - `name_ledger`
+
+`player_name_history` (app/example_pools.py) holds the last 24 player names across games so a new character is not handed an old one; it is created lazily, is not campaign state, and is neither exported nor cleared on a new game.
 
 `turn_snapshots` is used for rewind state but is intentionally not part of the normal `WORLD_TABLES` export list.
 

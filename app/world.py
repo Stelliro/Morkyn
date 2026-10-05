@@ -1894,6 +1894,9 @@ def create_shell_npc(
         ensure_npc_clock(conn, int(cur.lastrowid), role=str(role or ""), shell=bool(shell))
     except Exception:
         pass
+    from app.example_pools import record_npc_name
+
+    record_npc_name(conn, code, name)
     row = conn.execute("SELECT * FROM npcs WHERE id = ?", (cur.lastrowid,)).fetchone()
     return row_to_dict(row) if row else {"code": code, "name": name, "presence": presence, "power_rank": power_rank, "shell": shell}
 
@@ -4807,6 +4810,10 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             """,
             (player_name, public_name, player_title, player_age, player_sex, previous_life_age, previous_life_sex, backstory_mode, character_backstory, memory_policy, 20, 20, 1, 0, 12, 0, start_id),
         )
+        # Kept across games so the next character is not handed this name again.
+        from app.example_pools import remember_player_name
+
+        remember_player_name(conn, player_name)
         try:
             from app.player_resources import seed_player_resources
 
@@ -6472,11 +6479,20 @@ def movement_contract(
                 {"name": v.get("name"), "kind": v.get("kind"), "hours": v.get("hours")} for v in here_venues[:8]
             ]
         contract["settlement_size"] = settlement
+        try:
+            from app.example_pools import draw, world_context
+
+            options = ((state.get("settings") or {}).get("playthrough_options") or {})
+            used = [str(loc.get("name") or "") for loc in (state.get("locations") or []) if isinstance(loc, dict)]
+            contract["venue_name_options"] = draw("venue_name", world_context(options, location=current), 3, None, used)
+        except Exception:
+            pass
         contract["venue_rule"] = (
             "Interiors are places, not scenery. Whenever the player goes inside a shop, inn, forge or "
             "temple, write that building's NAME in player.move_to_location — stepping through a door is "
             "a move. Use a name from venues_here when one fits; otherwise give the new building its own "
-            "name, the kind people here would put over its door, and it is created here. "
+            "name, the kind people here would put over its door (venue_name_options were drawn for this "
+            "place; take one or make one like them), and it is created here. "
             f"Interiors are entered only from {current_name or 'outside'}: a player standing anywhere "
             "else must travel here first. When the player steps back out, move them to "
             f"\"{current_name}\"."
@@ -8712,6 +8728,16 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     }
     if not map_space:
         prompt_context.pop("map_space", None)
+    # Names, jobs and venue names drawn fresh for this turn (playtest #14):
+    # unused in this world, fitting this place. The draft prompt used to
+    # carry the same sample names on every turn and two games opened with
+    # the same baker.
+    try:
+        from app.example_pools import turn_cast_options
+
+        prompt_context["cast_options"] = turn_cast_options(state, turn=current_turn)
+    except Exception:
+        pass
     # Character art is never prompt material. Left in, the two base64 strings
     # were 1.2 MB of the planner packet the handoff filter then dropped, and
     # the whole of a 2.6 MB trace file per turn.
@@ -9752,6 +9778,10 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         ensure_npc_clock(conn, new_id, role=str(role or ""), shell=bool(shell))
     except Exception:
         pass
+    # The world has used this name now; the pools never offer it again here.
+    from app.example_pools import record_npc_name
+
+    record_npc_name(conn, new_code, name)
     return new_id
 
 

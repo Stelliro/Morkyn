@@ -33,6 +33,11 @@ CUSTOM_SKILLS_SHAPE = (
     "(world_style, tech_level, magic_level). XP or rank formulas belong on the ability's growth_math."
 )
 
+# No contract carries a fixed "examples" list any more (playtest #26): the
+# same few strings went out on every roll and came back pasted ("amber eyes
+# ... faint scar on right cheek"). Each call now draws three to five fresh
+# examples for the field from app/example_pools.py, filtered by this world,
+# and the engine rolls hair colour, eye colour and the like itself.
 FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
     "world_style": {
         "kind": "short_phrase",
@@ -80,7 +85,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Economy structure only: how goods/money move (scarce, coin-driven, barter-heavy, guild markets). "
             "Never mention skills, compounding, level delays, abilities, or power fantasy."
         ),
-        "examples": ["scarce dock markets", "coin-driven harbor trade", "barter-heavy coastal exchange"],
         "ban_growth_slogans": True,
     },
     "world_races": {
@@ -97,7 +101,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "and never an object. Never power labels like 'Low-Power Human' or "
             "skill/growth slogans."
         ),
-        "examples": ["human", "human, elf, dwarf", "human, riverfolk, beastfolk"],
         "ban_growth_slogans": True,
     },
     "race_magic_enabled": {
@@ -117,9 +120,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Per-race magic access only: who can cast, training vs innate, taboos. "
             "Never paste global skill compounding delays, cooldowns, or player power fantasy."
         ),
-        "examples": [
-            "Humans need formal training; elves inherit low glamour; beastfolk rarely cast but sense spirits.",
-        ],
         "ban_growth_slogans": True,
         "ban_growth_timers": True,
     },
@@ -130,9 +130,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Per-race innate/learned non-spell abilities only. "
             "Never paste 'near-useless skill compounds' or global level-delay timers for all races."
         ),
-        "examples": [
-            "Humans learn broadly; elves sense old growth; beastfolk inherit heightened senses. Innate gifts start modest.",
-        ],
         "ban_growth_slogans": True,
         "ban_growth_timers": True,
     },
@@ -211,7 +208,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Short skill-learning policy only (standard, generous, training-heavy, strict, or one short custom rule). "
             "Do not paste full ability descriptions or quest/faction text."
         ),
-        "examples": ["standard", "training-heavy", "generous discovery with practice"],
         "max_len": 80,
     },
     "proficiency_access": {
@@ -254,7 +250,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
         "kind": "short_phrase",
         "intent_keys": ["genre", "tone"],
         "forbidden": "How crowded scenes feel only (sparse, moderate, dense, faction-heavy). No skill growth slogans.",
-        "examples": ["sparse", "moderate", "dense with faction patrols"],
         "ban_growth_slogans": True,
     },
     "quest_style": {
@@ -264,11 +259,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Quest STRUCTURE only: how work/hooks arrive (emergent, job board, faction chains, personal mysteries). "
             "Never describe player skills, compounding, near-useless abilities, or power fantasy."
         ),
-        "examples": [
-            "emergent local work",
-            "job board and personal mysteries",
-            "faction errands with side mysteries",
-        ],
         "ban_growth_slogans": True,
         "max_len": 90,
     },
@@ -279,11 +269,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Who squeezes the world socially/politically only (guilds, cults, military, local disputes). "
             "Never describe player skill growth or delayed compounding."
         ),
-        "examples": [
-            "local disputes",
-            "guild control and harbor politics",
-            "hidden cults under coastal guilds",
-        ],
         "ban_growth_slogans": True,
         "max_len": 90,
     },
@@ -294,7 +279,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "NPC rank pressure only relative to the player (mostly weaker, near player, elite-heavy, relative ranks). "
             "Never paste level-delay timers or player skill compounding rules."
         ),
-        "examples": ["relative ranks", "mostly weaker", "near player", "elite-heavy later"],
         "ban_growth_slogans": True,
         "ban_growth_timers": True,
     },
@@ -305,14 +289,12 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "How often NPCs have special skills only (rare specialists, many trained NPCs). "
             "Not player skill growth or ability slogans."
         ),
-        "examples": ["some trained NPCs", "rare specialists", "occasional trainers"],
         "ban_growth_slogans": True,
     },
     "rank_scale": {
         "kind": "short_phrase",
         "intent_keys": ["isekai", "genre"],
         "forbidden": "Rank ladder string only (e.g. F,E,D,C,B,A,S,SS,SSS). Never paste ability prose or growth slogans.",
-        "examples": ["F,E,D,C,B,A,S,SS,SSS", "D,C,B,A,S"],
         "ban_growth_slogans": True,
         "max_len": 60,
     },
@@ -344,16 +326,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
         "intent_keys": ["genre", "keywords", "tone"],
         "depends_on": ["player_sex", "world_races", "world_style"],
         "forbidden": "Hair only: length, color, style. Not face, clothes, or backstory.",
-        "examples": [
-            "short brown hair",
-            "long black braid",
-            "messy copper curls",
-            "cropped black hair",
-            "shoulder-length ash blonde",
-            "tight cornrows",
-            "bald with stubble shadow",
-            "white undercut",
-        ],
     },
     "facial_features": {
         "kind": "short_phrase",
@@ -363,13 +335,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Face only for portraits: eyes, freckles, scars, jaw, brows, marks. "
             "Not hair (use hair field), not clothes, not personality essays."
         ),
-        "examples": [
-            "green eyes, light freckles, soft jaw",
-            "dark brown eyes, thin scar on left cheek",
-            "amber eyes, high cheekbones, crooked smile",
-            "blue-grey eyes, deep-set, narrow nose",
-            "black eyes, round face, small burn near temple",
-        ],
     },
     "appearance": {
         "kind": "short_phrase",
@@ -380,12 +345,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Put hair in hair field and face details in facial_features. "
             "Not a backstory essay or skill slogans."
         ),
-        "examples": [
-            "torso: travel-stained coat; feet: dusty boots; waist: rope coil",
-            "torso: plain work tunic; hands: work gloves; feet: practical boots",
-            "torso: frayed cloak; legs: patched trousers; bag: worn satchel",
-            "torso: secondhand hoodie; feet: scuffed sneakers; bag: messenger bag",
-        ],
     },
     "starter_equipment": {
         "kind": "list_custom",
@@ -406,11 +365,6 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "No free shields/swords/armor/god gifts at isekai arrival — those come AFTER Start. "
             "No legendaries. Prefer thin ordinary kits over packing every useful item."
         ),
-        "examples": [
-            "patched work vest, work gloves, worn boots, copper coins",
-            "travel cloak, empty satchel, wooden charm, water skin",
-            "plain tunic, scuffed boots, coin purse, heel of bread",
-        ],
         # Legacy comma string. The form, the model and the world now carry
         # starter_gear (structured cards); this is gear_names() of that list.
         "derived_from": "starter_gear",
@@ -495,7 +449,7 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Sex/body category only. Prefer male or female for ordinary humanoids. "
             "Blank is valid. Sexless/constructed or varies-by-form only when the world/body clearly supports it."
         ),
-        "examples": ["female", "male", ""],
+        "fallback": "female",
     },
     "previous_life_age": {
         "kind": "short_phrase",
@@ -510,7 +464,7 @@ FIELD_CONTRACTS: dict[str, dict[str, Any]] = {
             "Former-life sex only when relevant. Prefer male/female for ordinary former lives; "
             "exotic categories only when the former body is clearly nonstandard."
         ),
-        "examples": ["female", "male", ""],
+        "fallback": "female",
     },
     "start_location": {
         "kind": "short_phrase",
@@ -6094,9 +6048,21 @@ def structural_fallback(field: str, context: dict[str, Any] | None = None) -> An
     allowed = field_contract(field).get("allowed_values") or []
     if allowed:
         return allowed[0]
-    examples = field_contract(field).get("examples") or []
-    if examples:
-        return examples[0]
+    if "fallback" in field_contract(field):
+        return field_contract(field)["fallback"]
+    # Appearance and kit fall back to one draw for this world (seeded, so the
+    # fallback stays deterministic), not to the fixed first example every
+    # offline roll used to land on.
+    if field in ("hair", "facial_features", "appearance", "starter_equipment"):
+        try:
+            from app.example_pools import setup_examples
+
+            seed = f"{field}|{ctx.get('world_style') or ''}|{ctx.get('player_name') or ''}"
+            drawn = setup_examples(field, ctx, n=1, rng=random.Random(seed))
+            if drawn:
+                return drawn[0]
+        except Exception:
+            pass
     return None
 
 

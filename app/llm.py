@@ -17,6 +17,16 @@ import urllib.request
 from typing import Any, Iterator
 
 from app.db import connect
+from app.example_pools import (
+    EXAMPLES_RULE,
+    ROLLED_RULE as EXAMPLE_ROLLED_RULE,
+    apply_rolled_values,
+    draw_names,
+    recent_player_names,
+    roll_setup_values,
+    setup_context,
+    setup_examples,
+)
 from app.idea_bank import idea_sparks_for_prompt, prompt_sparks
 from app.setup_composer import (
     COMPOSER_FIELD_ORDER,
@@ -415,6 +425,8 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "scene_thread",
     # Budgeted race and lore rows for this turn (app/world_facts.py).
     "world_facts",
+    # Names, jobs and venue names drawn for this turn (app/example_pools.py).
+    "cast_options",
 }
 HANDOFF_OPTIONAL_CONTEXT_KEYS = {
     "gm_events",
@@ -3166,8 +3178,10 @@ def _fallback_setup_value(field: str, current_setup: dict[str, Any]) -> Any:
         return _fallback_starter_gear(current_setup)
     if field == "player_name":
         forbid = str(current_setup.get("player_name") or "")
-        values = _fallback_names_for_sex(str(current_setup.get("player_sex") or ""))
-        random.shuffle(values)
+        values = list(_player_name_options(current_setup).get("name_options") or [])
+        if not values:
+            values = _fallback_names_for_sex(str(current_setup.get("player_sex") or ""))
+            random.shuffle(values)
         for value in values:
             cleaned = _sanitize_player_name(value, forbidden=forbid)
             if cleaned.lower() != forbid.strip().lower():
@@ -6622,6 +6636,7 @@ def _field_contracts_for_prompt(
     return_fields: list[str],
     current_setup: dict[str, Any] | None = None,
     locked_fields: set[str] | None = None,
+    rolls: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """
     The typed contract for each requested field, small enough to send.
@@ -6656,6 +6671,9 @@ def _field_contracts_for_prompt(
         shape = str(contract.get("shape") or "").strip()
         if shape:
             slim["shape"] = shape
+        if rolls and rolls.get(field):
+            slim["engine_rolled"] = dict(rolls[field])
+            slim["engine_rolled_rule"] = EXAMPLE_ROLLED_RULE
         slim.update(_field_dependency_context(field, current_setup, locked_fields))
         if field == "starter_gear":
             gear_contract = gear_prompt_contract()
@@ -6680,6 +6698,16 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     return_fields = _setup_randomizer_return_fields(group, current_setup, text_mode)
     if not return_fields:
         return {}
+    # Hard appearance facts (hair colour and length, eye colour, a notable
+    # mark, the clothes' colour) are rolled by the engine; the model writes
+    # the field around them (playtest #26). Text-assist rewrites the player's
+    # own words and rolls nothing.
+    setup_rolls: dict[str, dict[str, str]] = {}
+    if not text_mode:
+        try:
+            setup_rolls = roll_setup_values(return_fields, current_setup, locked_fields)
+        except Exception:
+            setup_rolls = {}
     # Ability origin UI removed — special_abilities always generate when requested.
 
     base_rules = [
@@ -6874,7 +6902,11 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             # male character was handed a feminine name, and one of the
             # examples was feminine.
             "depends_on": _field_dependency_context("player_name", current_setup, locked_fields),
-            "name_shape": _name_initials_hint(),
+            # Drawn for this call from the pool for this world's naming
+            # culture and the character's sex, minus the names of recent games
+            # (two games in a row were "Miriam Shaw"). Options, never a list
+            # every roll sees.
+            **_player_name_options(current_setup),
             "return_shape": {"player_name": "Given name, or Given + family name"},
             "name_rules": [
                 "player_name is a real personal name: a given name alone, or a given name plus a family name.",
@@ -6885,6 +6917,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "No quotes, no ranks, no 'the ...'.",
                 "Match world_style lightly (modern vs fantasy surnames) without becoming a joke name; a transmigrated or reincarnated character may keep a former-world name.",
                 "Must differ from forbidden_name.",
+                "name_options were drawn for this roll: take one, or write a name in the same style. Never use a name in avoid_names, given or family part.",
             ],
             "rules": base_rules
             + [
@@ -7354,11 +7387,14 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Allowed values (pick one exactly unless custom is clearly required by field_context): "
                 + ", ".join(str(v) for v in contract["allowed_values"])
             )
-        if contract.get("examples"):
-            contract_rules.append(
-                "Good examples for this field (adapt, do not copy blindly): "
-                + " | ".join(str(e) for e in contract["examples"][:4])
-            )
+        # Fresh examples for this call only (playtest #26). The contract's
+        # fixed list went out on every roll and was pasted back.
+        try:
+            drawn_examples = setup_examples(field, current_setup, rolled=setup_rolls.get(field))
+        except Exception:
+            drawn_examples = []
+        if drawn_examples:
+            contract_rules.append(EXAMPLES_RULE + " " + " | ".join(drawn_examples))
         if contract.get("ban_growth_slogans") or contract.get("ban_growth_timers"):
             contract_rules.append(
                 "Reject any answer about compounding skills, near-useless skills, level delays, or cooldowns for this field. "
@@ -7371,7 +7407,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "nearby_setup": nearby_setup,
             "locked_setup": locked_setup,
             "field_context": field_context,
-            "field_contract": {key: value for key, value in contract.items() if key != "examples"},
+            "field_contract": {key: value for key, value in contract.items() if key not in {"examples", "fallback"}},
             "depends_on": _field_dependency_context(field, current_setup, locked_fields),
             "field_intent": field_intent,
             "intent_plan_summary": {
@@ -7397,6 +7433,9 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "For previous_life_age and previous_life_sex, blank is the normal result unless the setup clearly includes reincarnation, transmigration, rebirth, or remembered former life.",
             ],
         }
+        if setup_rolls.get(field):
+            prompt["engine_rolled"] = dict(setup_rolls[field])
+            prompt["rules"] = list(prompt.get("rules") or []) + [EXAMPLE_ROLLED_RULE]
         # Diversity seeds stop 8B from welding one stock clone across re-rolls
         if field == "character_backstory":
             prompt["diversity_seed"] = random.randint(1000, 999999)
@@ -7560,7 +7599,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "current_setup": prompt_current_setup,
             "locked_setup": locked_setup,
             "return_fields": return_fields,
-            "field_contracts": _field_contracts_for_prompt(return_fields, current_setup, locked_fields),
+            "field_contracts": _field_contracts_for_prompt(return_fields, current_setup, locked_fields, setup_rolls),
             "character_identity_rules": [
                 "player_name is the character's personal/legal name: a given name, or a given name plus a family name. Not a nickname, handle, callsign, epithet, role word, or a byname built from an adjective and a noun.",
                 "player_name must read as the character's player_sex (locked_setup or current_setup wins; otherwise decide player_sex first) and fit the culture of world_style. A transmigrated or reincarnated character may keep a former-world name.",
@@ -8328,7 +8367,39 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         normalized["custom_skills"] = align_seed_skill_with_abilities(
             normalized.get("custom_skills"), current_setup.get("special_abilities")
         )
+    for rolled_field, rolled in setup_rolls.items():
+        if rolled_field in normalized:
+            normalized[rolled_field] = apply_rolled_values(rolled_field, normalized[rolled_field], rolled)
     return normalized
+
+
+def _safe_setup_examples(field: str, setup: dict[str, Any] | None) -> list[str]:
+    try:
+        return setup_examples(field, setup)
+    except Exception:
+        return []
+
+
+def _player_name_options(setup: dict[str, Any] | None) -> dict[str, Any]:
+    """3-5 fresh names for this roll, and the recent games' names to avoid."""
+    setup = setup if isinstance(setup, dict) else {}
+    try:
+        avoid = recent_player_names()
+    except Exception:
+        avoid = []
+    current = str(setup.get("player_name") or "").strip()
+    if current and current not in avoid:
+        avoid = [current, *avoid]
+    try:
+        options = draw_names(setup_context(setup), random.randint(3, 5), random.Random(), avoid)
+    except Exception:
+        options = []
+    out: dict[str, Any] = {}
+    if options:
+        out["name_options"] = options
+    if avoid:
+        out["avoid_names"] = avoid[:12]
+    return out
 
 
 def align_seed_skill_with_abilities(text: Any, abilities: Any) -> str:
@@ -8440,8 +8511,8 @@ def _lint_and_repair_setup_fields(
                 "field": field,
                 "rejected_value": result.get(field),
                 "reject_reasons": reasons,
-                "field_contract": contract,
-                "examples": contract.get("examples") or [],
+                "field_contract": {key: value for key, value in contract.items() if key not in {"examples", "fallback"}},
+                "examples": _safe_setup_examples(field, current_setup),
                 "nearby_setup": {
                     k: current_setup.get(k)
                     for k in (

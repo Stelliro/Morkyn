@@ -180,11 +180,14 @@ class TestModelTextCleanups(unittest.TestCase):
         self.assertEqual(llm.sanitize_ability_name("Glass Tongue (v2)"), "Glass Tongue")
         self.assertEqual(llm.sanitize_ability_name("Mirror (Debt)"), "Mirror (Debt)")
 
-    def test_the_name_prompt_steers_by_initials_not_examples(self):
-        prompt = _capture_prompt("field:player_name", {"player_sex": "male", "world_style": "frontier dark fantasy"})
-        shape = prompt.get("name_shape") or {}
-        self.assertEqual(len(shape.get("given_name_starts_with", "")), 1)
-        self.assertEqual(len(shape.get("family_name_starts_with", "")), 1)
+    def test_the_name_prompt_offers_fresh_draws_not_a_fixed_list(self):
+        # Superseded the initials hint (user direction, playtest #26): a few
+        # names drawn per call from a large pool, different every roll.
+        current = {"player_sex": "male", "world_style": "frontier dark fantasy"}
+        first = _capture_prompt("field:player_name", current).get("name_options") or []
+        second = _capture_prompt("field:player_name", current).get("name_options") or []
+        self.assertTrue(3 <= len(first) <= 5, first)
+        self.assertNotEqual(first, second)
 
     def test_ability_rules_forbid_tabletop_shorthand(self):
         prompt = _capture_prompt("field:special_abilities", {"world_style": "frontier dark fantasy"})
