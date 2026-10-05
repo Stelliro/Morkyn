@@ -6946,9 +6946,14 @@ def _venue_for_named_move(
             return {}
         resolved_id = int(resolved["id"])
         row_name = str(resolved["name"] or "")
-        kind = venues.venue_kind_from_name(row_name)
+        # A place that already holds places is a settlement, not a building:
+        # it is never re-parented as a venue (same rule as _kindless_buildings).
+        holds_places = conn.execute(
+            "SELECT 1 FROM locations WHERE parent_id = ? LIMIT 1", (resolved_id,)
+        ).fetchone() is not None
+        kind = "" if holds_places else venues.venue_kind_from_name(row_name)
         told = str(shown.get("name") or "").lower()
-        if not kind and shown and told and (told in row_name.lower() or row_name.lower() in told):
+        if not kind and not holds_places and shown and told and (told in row_name.lower() or row_name.lower() in told):
             # The prose names this very row as the building it walks into.
             kind = str(shown.get("kind") or "") or "general_store"
         if kind:

@@ -178,5 +178,73 @@ class KeeperOpeningLineIsKept(unittest.TestCase):
         self.assertLess(calls[1], llm.MIN_TURN_NARRATION_CHARS)
 
 
+class GenericWordsAreNotVenues(unittest.TestCase):
+    """#33 review: weak kind words name a venue only as a head noun."""
+
+    def test_everyday_prose_enters_nothing(self):
+        for prose in (
+            "You slip through the gap between the scrap parts piled high.",
+            "You duck into the supply tent, out of the wind.",
+            "You push through the rusted door. Inside, the smell of grease hangs over the parts bins.",
+            "You step into the shade of the bar of rusted girders.",
+            "You walk into the ruined lounge of the derelict station.",
+        ):
+            self.assertIsNone(venues.entry_in_prose(prose), prose)
+
+    def test_streets_and_modifiers_are_not_venues(self):
+        for name in ("Iron Bar Crossing", "Supply Depot", "Parts Unknown", "Clinic Road", "Smithy Lane", "The Forge Quarter"):
+            self.assertEqual(venues.venue_kind_from_name(name), "", name)
+
+    def test_real_venues_still_are(self):
+        for name, kind in (
+            ("Rust Bar", "bar"), ("Rustwater Supply", "general_store"), ("Kel's Parts", "garage"),
+            ("Chrome Wrench Garage", "garage"), ("Ito Salvage", "salvage_yard"), ("Noodle Bar", "diner"),
+            ("Okafor Repairs", "garage"), ("The Iron Smithy", "smithy"),
+        ):
+            self.assertEqual(venues.venue_kind_from_name(name), kind, name)
+        self.assertEqual((venues.entry_in_prose("You step into the bar.") or {}).get("kind"), "bar")
+        hit = venues.entry_in_prose("You push through the door. Inside, the garage is dimly lit.") or {}
+        self.assertEqual(hit.get("kind"), "garage")
+
+    def _seed(self, places, here):
+        os.environ["AI_RPG_DB"] = str(_TMP / f"venues_{len(places)}_{here}_{id(self)}.db")
+        db.init_db()
+        with connect() as conn:
+            conn.execute("DELETE FROM npcs")
+            for loc_id, name, parent in places:
+                if conn.execute("SELECT 1 FROM locations WHERE id = ?", (loc_id,)).fetchone():
+                    conn.execute(
+                        "UPDATE locations SET name = ?, code = ?, parent_id = ?, kind = '', keeper_npc_id = 0 WHERE id = ?",
+                        (name, f"L{loc_id}", parent, loc_id),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO locations (id, code, name, summary, parent_id) VALUES (?, ?, ?, '', ?)",
+                        (loc_id, f"L{loc_id}", name, parent),
+                    )
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (here,))
+
+    def test_supply_tent_mints_no_shop(self):
+        self._seed([(1, "Rustwater Town", 0)], 1)
+        with connect() as conn:
+            self.assertIsNone(world._venue_shown_in_prose(conn, {}, "You duck into the supply tent, out of the wind."))
+            self.assertIsNone(world._venue_shown_in_prose(conn, {}, "You slip through the gap between the scrap parts piled high."))
+            count = conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0]
+        self.assertEqual(count, 1)
+
+    def test_a_place_holding_places_is_not_stamped_a_venue(self):
+        self._seed([(1, "Rustwater Town", 0), (2, "Ironside Garage", 0), (3, "Back Lot", 2)], 1)
+        with connect() as conn:
+            resolved = conn.execute("SELECT * FROM locations WHERE id = 2").fetchone()
+            current = conn.execute("SELECT * FROM locations WHERE id = 1").fetchone()
+            fields = world._venue_for_named_move(
+                conn, {}, {}, "Ironside Garage", resolved, current,
+                "I walk to Ironside Garage and go inside.", "You push through the door into Ironside Garage.",
+            )
+            row = conn.execute("SELECT parent_id, kind FROM locations WHERE id = 2").fetchone()
+        self.assertNotIn("venue_stamped", fields)
+        self.assertEqual((int(row[0] or 0), str(row[1] or "")), (0, ""))
+
+
 if __name__ == "__main__":
     unittest.main()

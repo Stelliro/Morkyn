@@ -189,6 +189,30 @@ _KIND_WORDS: dict[str, tuple[str, ...]] = {
 }
 
 
+# Kind words that are also everyday nouns and modifiers: "scrap parts", "a
+# supply tent", "a bar of rusted girders", "the ruined lounge of the station".
+# They name a venue only as the head of a name ("Rustwater Supply", "Kel's
+# Parts") or of the thing the prose walks into ("into the bar."), never when
+# another word leans on them ("supply tent", "parts bins", "Iron Bar Crossing").
+_WEAK_KIND_WORDS = frozenset({
+    "mart", "supply", "supplies", "hardware", "repairs", "parts", "deli", "canteen", "bar", "lounge",
+})
+# Words that may follow a weak kind word in prose while it is still the head:
+# punctuation is checked separately.
+_WEAK_HEAD_FOLLOW = frozenset({
+    "and", "or", "where", "with", "behind", "at", "on", "in", "inside", "as", "while", "is", "was", "are",
+    "were", "smells", "hums", "that", "which", "beyond", "before", "after", "near", "by", "from", "itself",
+    "stands", "sits", "lies", "has", "had", "seems", "feels", "looks", "you",
+})
+# A last word that makes a name a street, district or crossing, not a building:
+# "Clinic Road", "Smithy Lane", "The Forge Quarter", "Iron Bar Crossing".
+_PLACE_TAIL_WORDS = frozenset({
+    "road", "lane", "street", "st", "way", "row", "quarter", "district", "crossing", "square", "alley",
+    "avenue", "ave", "ward", "gate", "bridge", "hill", "heights", "end", "corner", "junction", "depot",
+    "boulevard", "drive", "court", "place", "park", "flats", "fields", "field", "town", "village", "city",
+})
+
+
 def _fold(text: str) -> str:
     """Lower case with accents dropped, so "Café" reads as "cafe"."""
     decomposed = unicodedata.normalize("NFKD", str(text or ""))
@@ -227,13 +251,21 @@ def venue_kind_from_name(name: str) -> str:
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return ""
-    best_kind, best_len = "", 0
+    best_kind, best_len, best_end = "", 0, 0
     for kind, words in _KIND_WORDS.items():
         for word in words:
             if len(word) <= best_len:
                 continue
-            if re.search(rf"(?:^|\s){re.escape(word)}(?:\s|$)", text):
-                best_kind, best_len = kind, len(word)
+            # A weak word counts only as the name's last word ("Rustwater
+            # Supply"), not as a modifier ("Supply Depot", "Iron Bar Crossing").
+            tail = r"$" if word in _WEAK_KIND_WORDS else r"(?:\s|$)"
+            match = re.search(rf"(?:^|\s){re.escape(word)}{tail}", text)
+            if match:
+                best_kind, best_len, best_end = kind, len(word), match.end()
+    if best_kind:
+        rest = text[best_end:].split()
+        if rest and rest[-1] in _PLACE_TAIL_WORDS:
+            return ""  # "Clinic Road", "The Forge Quarter": a street or district
     return best_kind
 
 
@@ -412,9 +444,21 @@ def _sentences(text: str) -> list[str]:
     return [s for s in re.split(r"(?<=[.!?\"\u201d])\s+", flat) if s.strip()]
 
 
+def _weak_is_head(folded: str, end: int) -> bool:
+    """A weak kind word ending at `end` is the head noun: nothing leans on it."""
+    rest = folded[end:]
+    if not rest.strip() or re.match(r"\s*[^\w\s']", rest):
+        return True  # end of text or punctuation: "into the bar." / "the bar, where"
+    nxt = re.match(r"\s*([a-z']+)", rest)
+    return bool(nxt) and nxt.group(1) in _WEAK_HEAD_FOLLOW
+
+
 def _venue_noun(text: str) -> tuple[str, str]:
     """(kind, the words that said so) for the first building noun in text, or ("", "")."""
-    low = re.sub(r"[^a-z' ]+", " ", _fold(text))
+    folded = _fold(text)
+    # Punctuation kept for the weak-word head check, same length as `low`.
+    marked = re.sub(r"[^a-z' ]", lambda m: m.group(0) if m.group(0) in ",.;:!?" else " ", folded)
+    low = re.sub(r"[^a-z' ]", " ", folded)
     best: tuple[int, int, str, str] | None = None
     for kind, words in _KIND_WORDS.items():
         # A well is not a door, and "bank" is a river's as often as a lender's.
@@ -422,6 +466,8 @@ def _venue_noun(text: str) -> tuple[str, str]:
             continue
         for word in words:
             for match in re.finditer(rf"(?:^|\s){re.escape(word)}(?=\s|$)", low):
+                if word in _WEAK_KIND_WORDS and not _weak_is_head(marked, match.end()):
+                    continue  # "scrap parts piled", "the supply tent", "a bar of girders"
                 at = match.start()
                 key = (at, -len(word))
                 if best is None or key < (best[0], best[1]):
@@ -457,7 +503,9 @@ def _entry_from(word: str, obj: str, sentences: list[str], index: int) -> tuple[
     if word != "through" and _NOT_INSIDE_RE.match(obj):
         return None
     door = word == "through" and _PASS_THROUGH_RE.match(obj) is not None
-    head = " ".join(obj.split()[:6])
+    # "through the gap between the scrap parts": what "through" crosses is the
+    # first thing named, not a noun further along the clause.
+    head = " ".join(obj.split()[: 3 if word == "through" else 6])
     kind, noun = ("", "") if door else _venue_noun(head)
     ground = _OPEN_GROUND_RE.search(head)
     if kind and ground and ground.start() < _fold(head).find(noun):
