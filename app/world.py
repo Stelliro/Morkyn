@@ -4767,6 +4767,41 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
     custom_skills = str(options.get("custom_skills") or "").strip()
     # The intent's skeleton label is for the setup model, not the DM.
     custom_skills = re.sub(r"^\s*OP_MC_FRAME:\s*", "", custom_skills)
+    # A roll settles custom_skills (noun names, ranks inside this start's cap),
+    # but text from an older saved form or typed by hand reached the game as
+    # written: game 2's form, started offline, kept "master the dance of
+    # shadows (E), learn from the ancients (C)" for a one-weak-seed start
+    # (review of playtest #22). Start settles it the same way unless the
+    # player locked the field, with no model call: a phrase the engine cannot
+    # name stays, rank capped, for the post-start pass, and the player's own
+    # text is kept as custom_skills_setup.
+    custom_skills_setup = custom_skills
+    form_locks = setup_form.get("locks") if isinstance(setup_form, dict) else None
+    if custom_skills and "custom_skills" not in (form_locks or []):
+        try:
+            from app.proficiencies import settle_setup_text
+
+            theme = options.get("session_theme") if isinstance(options.get("session_theme"), dict) else {}
+            form = setup_form if isinstance(setup_form, dict) else {}
+            idea = str(form.get("randomize_idea") or options.get("randomize_idea") or options.get("_randomize_idea") or "")
+            settled, settle_report = settle_setup_text(
+                custom_skills,
+                options,
+                power_fantasy=_floored_power_fantasy(theme.get("power_fantasy"), options, setup_form),
+                idea=idea,
+                ask=lambda system, user: "",
+                keep_unnamed=True,
+            )
+            if settled.strip() and settled != custom_skills:
+                custom_skills = settled
+                changes = [
+                    f"{kind}: {', '.join(values)}"
+                    for kind, values in settle_report.items()
+                    if isinstance(values, list) and values
+                ]
+                setup_coherence_notes.append("custom_skills settled at Start (" + "; ".join(changes)[:300] + ")")
+        except Exception:
+            pass
     special_name = norm_name(str(options.get("special_ability_name") or "Unwritten Talent"))
     raw_abilities = options.get("special_abilities") or []
     requested_abilities = bool(options.get("special_ability")) or (isinstance(raw_abilities, list) and bool(raw_abilities))
@@ -5237,6 +5272,8 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "npc_skill_frequency": options.get("npc_skill_frequency") or "some trained NPCs",
             "rank_scale": options.get("rank_scale") or "F,E,D,C,B,A,S,SS,SSS",
             "custom_skills": custom_skills,
+            # The player's own text when Start settled it (the pass keeps it too).
+            **({"custom_skills_setup": custom_skills_setup} if custom_skills_setup != custom_skills else {}),
             "player_public_name": public_name,
             "player_title": player_title,
             "player_age": player_age,

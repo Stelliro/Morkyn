@@ -539,6 +539,7 @@ def settle_setup_text(
     power_fantasy: dict[str, Any] | None = None,
     idea: str = "",
     ask=None,
+    keep_unnamed: bool = False,
 ) -> tuple[str, dict[str, Any]]:
     """The rolled custom_skills text with noun names and ranks inside this start's cap.
 
@@ -546,7 +547,8 @@ def settle_setup_text(
     phrase of four words or fewer. Verb-led names become their noun form when
     the object names the skill; the rest are re-asked once together, and a
     phrase still without a skill noun is dropped. Training rules (longer
-    clauses) pass untouched.
+    clauses) pass untouched. ``keep_unnamed`` keeps such a phrase, its rank
+    capped, for a later pass to name (Start runs with no model call).
     """
     labels = rank_labels(options)
     cap = start_rank_cap(options, labels, idea, power_fantasy)
@@ -606,6 +608,12 @@ def settle_setup_text(
                 if lowered:
                     report["ranks_lowered"].append(names[index])
                 out[slot] = f"{names[index]} {tail}".strip()
+            elif keep_unnamed:
+                tail, lowered = _clamp_rank_text(tail, labels, cap)
+                if lowered:
+                    report["ranks_lowered"].append(head)
+                report.setdefault("kept_for_the_pass", []).append(head)
+                out[slot] = f"{head} {tail}".strip()
             else:
                 report["dropped"].append(head)
     return ", ".join(part for part in out if part), report
