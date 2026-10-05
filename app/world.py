@@ -4562,6 +4562,12 @@ def _clear_playthrough(conn) -> None:
         conn.execute("DELETE FROM setting_templates")
     except Exception:
         pass
+    # What the last game was in the middle of (its pursuit, who it was
+    # talking to, conditions, local heat) is that game's, not this one's.
+    # Smoke test: game 1's "follow the trail of whoever set" thread rode into
+    # game 2's opening draft as its GOAL and moved the new player to game 1's
+    # "The Spindle at Edge".
+    conn.executemany("DELETE FROM settings WHERE key = ?", [(key,) for key in SNAPSHOT_SETTING_KEYS])
 
     for table in (
         "quest_steps",
