@@ -35,6 +35,11 @@ _MODEL = None
 _MODEL_PATH = ""
 _MODEL_CTX = 0
 _DETAIL = ""
+# The loaded window came from the automatic size (no env, no custom value).
+# An automatic window is pinned for the life of the load: auto tracks live
+# free VRAM, and re-reading it on every call reopened the model whenever free
+# VRAM drifted by one 2048-token step.
+_MODEL_CTX_AUTO = False
 _KEY_CACHE: dict[str, tuple[str, ...]] = {}
 _BAN_CACHE: dict[tuple[str, tuple[str, ...]], tuple[int, ...]] = {}
 # The smaller context is used only once someone said yes to it (or the
@@ -270,20 +275,29 @@ def _label(model: str) -> str:
 
 def _context_tokens() -> int:
     """The window to open the model with: explicit env, else the model's resolved limit."""
+    return _context_request()[0]
+
+
+def _context_request() -> tuple[int, bool]:
+    """(window, automatic): the window to open with, and whether it is the
+    automatic size rather than an explicit env or the player's custom value."""
     raw = os.getenv("AI_RPG_CONTEXT_TOKENS", "").strip()
     try:
         value = int(raw)
     except ValueError:
         value = 0
     if value > 0:
-        return value
+        return value, False
+    auto = False
     try:
         from app.model_limits import resolve_limits
 
-        resolved = int(resolve_limits(with_facts=False)["context_tokens"])
+        limits = resolve_limits(with_facts=False)
+        resolved = int(limits["context_tokens"])
+        auto = str((limits.get("source") or {}).get("context_tokens") or "") == "auto"
     except Exception:
         resolved = 0
-    return resolved if resolved > 0 else 32768
+    return (resolved, auto) if resolved > 0 else (32768, False)
 
 
 def _gpu_layers() -> int:
@@ -404,12 +418,13 @@ def _close_quiet(model) -> None:
 
 
 def _drop_model() -> None:
-    global _MODEL, _MODEL_PATH, _MODEL_CTX
+    global _MODEL, _MODEL_PATH, _MODEL_CTX, _MODEL_CTX_AUTO
     if _MODEL is not None:
         _close_quiet(_MODEL)
     _MODEL = None
     _MODEL_PATH = ""
     _MODEL_CTX = 0
+    _MODEL_CTX_AUTO = False
     _KEY_CACHE.clear()
     _BAN_CACHE.clear()
 
@@ -432,15 +447,19 @@ def _open_model(path: str, n_ctx: int):
 
 
 def _ensure_loaded(path: Path) -> None:
-    global _MODEL, _MODEL_PATH, _MODEL_CTX, _DETAIL, _LAST_PROBLEM
+    global _MODEL, _MODEL_PATH, _MODEL_CTX, _MODEL_CTX_AUTO, _DETAIL, _LAST_PROBLEM
     resolved = str(path.resolve())
-    requested = _context_tokens()
+    requested, automatic = _context_request()
     if _MODEL is not None and _MODEL_PATH == resolved:
         # Same file, same window: nothing to do. Same file at the accepted
-        # fallback size with a bigger request: that fallback stands. Any
-        # other change in the requested window (the player edited the
-        # model's limits) reopens the file at the new size.
+        # fallback size with a bigger request: that fallback stands. Same file
+        # opened at the automatic size and still asked for the automatic size:
+        # that window stands too, whatever free VRAM reads now (the loaded
+        # model's own buffers move it). Any other change in the requested
+        # window (the player edited the model's limits) reopens the file.
         if _MODEL_CTX == requested or (_MODEL_CTX == _FALLBACK_CONTEXT and requested > _FALLBACK_CONTEXT):
+            return
+        if automatic and _MODEL_CTX_AUTO:
             return
     _drop_model()
     # A smaller context is a fallback only when the request is bigger than it,
@@ -462,6 +481,7 @@ def _ensure_loaded(path: Path) -> None:
         _MODEL = loaded
         _MODEL_PATH = resolved
         _MODEL_CTX = n_ctx
+        _MODEL_CTX_AUTO = automatic
         _LAST_PROBLEM = None
         if n_ctx == requested:
             _DETAIL = f"Loaded {resolved} in-process (context {n_ctx})."

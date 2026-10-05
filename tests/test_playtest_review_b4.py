@@ -271,5 +271,45 @@ class HandingOverDoesNotHideAGrant(unittest.TestCase):
         )
 
 
+class AutoWindowIsPinnedPerLoad(unittest.TestCase):
+    """#36 review: the automatic window is read once per load, not per call."""
+
+    def setUp(self):
+        self.path = _TMP / "model.gguf"
+        self.path.write_bytes(b"x")
+
+    def test_free_vram_drift_does_not_reopen(self):
+        opened = []
+
+        def fake_open(path, n_ctx):
+            opened.append(n_ctx)
+            return mock.Mock()
+
+        with mock.patch.object(mle, "_open_model", side_effect=fake_open), mock.patch.object(mle, "_close_quiet"):
+            mle._drop_model()
+            try:
+                for size in (14336, 12288, 12288, 10240):
+                    with mock.patch.object(mle, "_context_request", return_value=(size, True)):
+                        mle._ensure_loaded(self.path)
+                self.assertEqual(opened, [14336])
+                self.assertEqual(mle.loaded_context(), 14336)
+                # The player setting a size still reopens.
+                with mock.patch.object(mle, "_context_request", return_value=(16384, False)):
+                    mle._ensure_loaded(self.path)
+                self.assertEqual(opened, [14336, 16384])
+            finally:
+                mle._drop_model()
+
+    def test_request_reports_its_source(self):
+        env = {k: v for k, v in os.environ.items() if k != "AI_RPG_CONTEXT_TOKENS"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            with mock.patch("app.model_limits.resolve_limits", return_value={"context_tokens": 14336, "source": {"context_tokens": "auto"}}):
+                self.assertEqual(mle._context_request(), (14336, True))
+            with mock.patch("app.model_limits.resolve_limits", return_value={"context_tokens": 20480, "source": {"context_tokens": "custom"}}):
+                self.assertEqual(mle._context_request(), (20480, False))
+        with mock.patch.dict(os.environ, {"AI_RPG_CONTEXT_TOKENS": "8192"}):
+            self.assertEqual(mle._context_request(), (8192, False))
+
+
 if __name__ == "__main__":
     unittest.main()

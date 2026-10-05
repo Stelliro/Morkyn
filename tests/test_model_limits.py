@@ -300,13 +300,13 @@ class TestTheConfigCarriesTheLimits(unittest.TestCase):
 
         with mock.patch.object(mle, "_open_model", side_effect=fake_open), mock.patch.object(mle, "_close_quiet"):
             mle._drop_model()
-            with mock.patch.object(mle, "_context_tokens", return_value=32768):
+            with mock.patch.object(mle, "_context_request", return_value=(32768, False)):
                 mle._ensure_loaded(self.seven)
                 mle._ensure_loaded(self.seven)
-            with mock.patch.object(mle, "_context_tokens", return_value=16384):
+            with mock.patch.object(mle, "_context_request", return_value=(16384, False)):
                 mle._ensure_loaded(self.seven)
             # The accepted fallback size stands against a bigger request.
-            with mock.patch.object(mle, "_MODEL_CTX", mle._FALLBACK_CONTEXT), mock.patch.object(mle, "_context_tokens", return_value=32768):
+            with mock.patch.object(mle, "_MODEL_CTX", mle._FALLBACK_CONTEXT), mock.patch.object(mle, "_context_request", return_value=(32768, False)):
                 mle._ensure_loaded(self.seven)
             mle._drop_model()
         self.assertEqual(opened, [32768, 16384])
