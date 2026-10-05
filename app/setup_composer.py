@@ -25,9 +25,10 @@ from typing import Any
 CUSTOM_SKILLS_SHAPE = (
     "Comma-separated short phrases in plain words. Each is a named proficiency or a training rule. "
     "A named proficiency is the plain name of a craft, trade, art or discipline this character could "
-    "be taught (a noun phrase, not a motto), followed in parentheses by its starting rank on rank_scale, "
+    "be taught: a noun phrase in the form of the drawn proficiency names, never a verb phrase or a motto. "
+    "It is followed in parentheses by its starting rank on rank_scale, "
     "how its progress is tracked, and its hard limit; starting ranks sit in the lower half of "
-    "rank_scale, the lowest two for a weak start. A training rule says how proficiencies are found or "
+    "rank_scale, and at the lowest rank for a weak, seed or compounding start. A training rule says how proficiencies are found or "
     "trained, how progress is tracked, or what caps growth, so a game master can check it in play. "
     "Build every phrase from this character (character_backstory, special_abilities) and this world "
     "(world_style, tech_level, magic_level). XP or rank formulas belong on the ability's growth_math."
@@ -950,6 +951,27 @@ def _idea_reads_as_seed_climb(text: str) -> bool:
     """The idea's own words ask for a weak start that snowballs, not just levels or a mythic tone."""
     low = str(text or "").lower()
     return any(word in low for word in _SEED_CLIMB_WORDS)
+
+
+def floor_power_fantasy(power_fantasy: dict[str, Any] | None, idea: str) -> dict[str, Any]:
+    """The idea's own words are the floor under a stored power fantasy (playtest #22).
+
+    Game 2's idea asked to "start ordinary with one weak compounding seed
+    power", but the session theme that reached Start said start_power
+    "ordinary", growth "steady", so nothing capped its proficiencies. The
+    keyword pass only ever makes a start weaker or its growth compounding
+    here, the same way merge_intent_plans lets those keyword flags win.
+    """
+    out = dict(power_fantasy or {})
+    text = str(idea or "").strip()
+    if not text:
+        return out
+    keyword = apply_keyword_intent(text).get("power_fantasy") or {}
+    if keyword.get("growth") == "compounding":
+        out["growth"] = "compounding"
+    if keyword.get("start_power") == "near_useless" and str(out.get("start_power") or "").lower() not in ("near_useless", "weak"):
+        out["start_power"] = "near_useless"
+    return out
 
 
 def merge_intent_plans(base: dict[str, Any], llm_plan: dict[str, Any] | None) -> dict[str, Any]:

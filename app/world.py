@@ -4657,6 +4657,25 @@ def _starter_item_type(name: str, slot: str) -> str:
 _START_LOCATION_LAST_RESORT = "The Crossing"
 
 
+def _floored_power_fantasy(raw: Any, options: dict[str, Any], setup_form: Any) -> dict[str, Any]:
+    """The stored power fantasy, floored by the Randomize idea's own words (playtest #22).
+
+    The client sends whatever session theme it last compiled; game 2's said
+    "ordinary"/"steady" for an idea that asked for one weak compounding seed.
+    """
+    pf = dict(raw) if isinstance(raw, dict) else {}
+    form = setup_form if isinstance(setup_form, dict) else {}
+    idea = str(form.get("randomize_idea") or options.get("randomize_idea") or options.get("_randomize_idea") or "")
+    if not idea.strip():
+        return pf
+    try:
+        from app.setup_composer import floor_power_fantasy
+
+        return floor_power_fantasy(pf, idea)
+    except Exception:
+        return pf
+
+
 def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
     # The form snapshot is for the preset menu. It is not a play rule.
     setup_form = options.pop("setup_form", None) if isinstance(options, dict) else None
@@ -5214,9 +5233,7 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 "genre": str(raw_theme.get("genre") or "")[:120],
                 "isekai": bool(raw_theme.get("isekai")),
                 "dm_stance": str(raw_theme.get("dm_stance") or "fair pressure, player agency, no chosen-one autopilot")[:240],
-                "power_fantasy": raw_theme.get("power_fantasy")
-                if isinstance(raw_theme.get("power_fantasy"), dict)
-                else {},
+                "power_fantasy": _floored_power_fantasy(raw_theme.get("power_fantasy"), options, setup_form),
                 "tone": str(raw_theme.get("tone") or "")[:120],
                 "edge": str(raw_theme.get("edge") or "")[:200],
                 "keywords": [str(k)[:40] for k in (raw_theme.get("keywords") or []) if k][:12]

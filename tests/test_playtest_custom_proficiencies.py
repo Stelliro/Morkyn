@@ -152,14 +152,17 @@ class TheEngineValidatesStructure(unittest.TestCase):
         labels = prof.rank_labels({"rank_scale": "F,E,D,C,B,A,S,SS,SSS"})
         self.assertEqual(prof.start_rank_cap({}, labels), 4)
         weak = {"session_theme": {"power_fantasy": {"start_power": "near_useless"}}}
-        self.assertEqual(prof.start_rank_cap(weak, labels), 1)
+        # Playtest #22: a weak, seed or compounding start keeps to the bottom rank.
+        self.assertEqual(prof.start_rank_cap(weak, labels), 0)
         strong = {"session_theme": {"power_fantasy": {"start_power": "strong"}}}
         self.assertEqual(prof.start_rank_cap(strong, labels), 8)
 
     def test_settlement_keeps_rows_and_rewrites_the_text(self):
         opts = _fresh()
         content = "\n".join([
-            "SKILL|master the dance of shadows|F|practice at night|cannot hide in daylight",
+            # A verb phrase whose object is not a skill (playtest #22 turns
+            # "master the dance of shadows" into Dance of Shadows instead).
+            "SKILL|earn trust through deeds|F|practice at night|cannot hide in daylight",
             "SKILL|Barge Poling|E|each hard crossing logged by the ferry master|no use in open sea",
             "SKILL|Marsh Reckoning|Q|walking new channels|none past the delta",
             "SKILL|Rope Splicing|SS|repairs done on the job|no load over one ton",
@@ -172,7 +175,7 @@ class TheEngineValidatesStructure(unittest.TestCase):
             report = prof.apply_settlement(conn, content, opts)
         self.assertEqual(report["accepted"], {"skills": 3, "rules": 1})
         reasons = " ".join(report["rejected"])
-        self.assertIn("reads as a sentence", reasons)
+        self.assertIn("a verb phrase that names no skill", reasons)
         # Off the scale: the engine starts it at the lowest rank. Over the
         # start's cap: kept at the cap. Neither is lost.
         self.assertEqual(
@@ -180,6 +183,8 @@ class TheEngineValidatesStructure(unittest.TestCase):
             [
                 "SKILL Marsh Reckoning: rank 'Q' not on the scale, set to F",
                 "SKILL Rope Splicing: start rank lowered to B",
+                # The model's title named words the rule does not say.
+                "RULE Mentors gate mastery: titled Mentor Limit from its text",
             ],
         )
         self.assertIn("duplicate", reasons)

@@ -22,6 +22,7 @@ from app.example_pools import (
     ROLLED_RULE as EXAMPLE_ROLLED_RULE,
     apply_rolled_values,
     draw_names,
+    examples_rule,
     recent_player_names,
     roll_setup_values,
     setup_context,
@@ -1455,7 +1456,25 @@ def _comma_separated_phrases(value: Any, limit: int = 1200) -> str:
         raw = raw.replace(separator, ",")
     parts: list[str] = []
     seen: set[str] = set()
-    for part in raw.split(","):
+    # Split at top-level commas only (playtest #22, live roll): splitting inside
+    # "(D, tracked by miles poled, hard limit S)" deduped the repeated
+    # "hard limit S)" out of every phrase after the first and left the
+    # parentheses open.
+    pieces: list[str] = []
+    depth = 0
+    current = ""
+    for char in raw:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth = max(0, depth - 1)
+        if char == "," and depth == 0:
+            pieces.append(current)
+            current = ""
+            continue
+        current += char
+    pieces.append(current)
+    for part in pieces:
         clean = part.strip()
         if clean.startswith(("- ", "* ")):
             clean = clean[2:].strip()
@@ -1463,7 +1482,11 @@ def _comma_separated_phrases(value: Any, limit: int = 1200) -> str:
         if marker.rstrip(".)").isdigit() and marker.endswith((".", ")")):
             clean = rest.strip()
         key = clean.lower()
-        if not clean or key in seen:
+        if not clean:
+            continue
+        # A lone short token ("F") is a rank or code that belongs to the phrase
+        # before it; dropping its repeat moved "Scar Library, F" to no rank.
+        if key in seen and len(clean) > 3:
             continue
         seen.add(key)
         parts.append(clean)
@@ -6710,6 +6733,16 @@ def _field_contracts_for_prompt(
         if rolls and rolls.get(field):
             slim["engine_rolled"] = dict(rolls[field])
             slim["engine_rolled_rule"] = EXAMPLE_ROLLED_RULE
+        if field == "custom_skills":
+            # The group roll (the powers phase) shows the name form too,
+            # drawn for this call (playtest #22).
+            try:
+                shapes = setup_examples(field, current_setup)
+            except Exception:
+                shapes = []
+            if shapes:
+                slim["examples"] = shapes
+                slim["examples_rule"] = examples_rule(field)
         slim.update(_field_dependency_context(field, current_setup, locked_fields))
         if field == "starter_gear":
             gear_contract = gear_prompt_contract()
@@ -7437,7 +7470,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         except Exception:
             drawn_examples = []
         if drawn_examples:
-            contract_rules.append(EXAMPLES_RULE + " " + " | ".join(drawn_examples))
+            contract_rules.append(examples_rule(field) + " " + " | ".join(drawn_examples))
         if contract.get("ban_growth_slogans") or contract.get("ban_growth_timers"):
             contract_rules.append(
                 "Reject any answer about compounding skills, near-useless skills, level delays, or cooldowns for this field. "
@@ -8412,6 +8445,10 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         normalized["custom_skills"] = align_seed_skill_with_abilities(
             normalized.get("custom_skills"), current_setup.get("special_abilities")
         )
+        if "custom_skills" in return_fields and "custom_skills" not in locked_fields:
+            normalized["custom_skills"] = _settle_custom_skills_names(
+                normalized.get("custom_skills"), current_setup, intent_plan
+            )
     for rolled_field, rolled in setup_rolls.items():
         if rolled_field in normalized:
             normalized[rolled_field] = apply_rolled_values(rolled_field, normalized[rolled_field], rolled)
@@ -8483,6 +8520,29 @@ def _player_name_options(setup: dict[str, Any] | None) -> dict[str, Any]:
     return out
 
 
+def _settle_custom_skills_names(text: Any, current_setup: dict[str, Any], intent_plan: dict[str, Any]) -> str:
+    """Noun names and in-cap ranks for a rolled custom_skills string (playtest #22).
+
+    Game 2 rolled "master the dance of shadows (E), learn from the ancients
+    (C), forge unbreakable bonds (D)" for a one-weak-seed start. A verb-led
+    name becomes its noun form when the object is the skill, the rest get one
+    re-ask together and are dropped if still nameless; ranks above this
+    start's cap are lowered.
+    """
+    from app.proficiencies import settle_setup_text
+
+    value = str(text or "")
+    if not value.strip():
+        return value
+    pf = intent_plan.get("power_fantasy") if isinstance(intent_plan, dict) and isinstance(intent_plan.get("power_fantasy"), dict) else None
+    idea = str(current_setup.get("_randomize_idea") or (intent_plan or {}).get("raw_idea") or "")
+    try:
+        settled, _report = settle_setup_text(value, current_setup, power_fantasy=pf, idea=idea)
+    except Exception:
+        return value
+    return settled
+
+
 def align_seed_skill_with_abilities(text: Any, abilities: Any) -> str:
     """
     The seed named in custom_skills is one of the powers on the cards.
@@ -8493,7 +8553,9 @@ def align_seed_skill_with_abilities(text: Any, abilities: Any) -> str:
     """
     value = str(text or "")
     cards = [a for a in (abilities or []) if isinstance(a, dict) and str(a.get("name") or "").strip()]
-    match = re.search(r"(weak seed skill:\s*)([^,;]+)", value, flags=re.I)
+    # The name stops at a parenthesis too: "Luminous Weaving (F, ...)" lost
+    # its "(F," when the name ran to the first comma (playtest #22, live roll).
+    match = re.search(r"(weak seed skill:\s*)([^,;(]*[^,;(\s])", value, flags=re.I)
     if not cards or not match:
         return value
     named = match.group(2).strip().lower()

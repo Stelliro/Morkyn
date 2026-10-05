@@ -831,6 +831,113 @@ _CARRIED: list[Entry] = [
 
 
 # ---------------------------------------------------------------------------
+# Proficiency names (playtest #22)
+# ---------------------------------------------------------------------------
+# The shape of a proficiency name: a noun naming a craft, a body of lore, a
+# field skill, a way with people or a magical practice. custom_skills asks
+# with no samples came back as verb slogans ("master the dance of shadows,
+# learn from the ancients, forge unbreakable bonds"). Each roll now shows a
+# few of these, drawn per call, one per category, filtered by the world.
+
+_PROFICIENCY_NAMES: list[Entry] = [
+    # craft and trade
+    *_plain((
+        "Carpentry", "Rope Splicing", "Leatherworking", "Basket Weaving", "Tailoring", "Cooking",
+        "Bookkeeping", "Trap Making", "Knot Tying", "Sewing", "Woodcarving", "Butchery",
+    ), cat="craft"),
+    *_plain((
+        "Joinery", "Cooperage", "Candle Making", "Tanning", "Smithing", "Fletching", "Pottery",
+        "Glassblowing", "Dyeing", "Brewing", "Masonry", "Thatching", "Wheelwrighting", "Bookbinding",
+        "Cobbling", "Charcoal Burning", "Bonesetting", "Cheesemaking", "Ink Making", "Mapmaking",
+    ), cat="craft", era=OLD),
+    *_plain(("Bowyery", "Calligraphy", "Embroidery", "Herbalism"), cat="craft", era=PRE),
+    *_plain(("Clock Repair", "Typesetting", "Telegraphy", "Gunsmithing", "Machining", "Boiler Tending", "Photography"),
+            cat="craft", era=IND),
+    *_plain(("Electrical Repair", "Auto Mechanics", "Welding", "Plumbing", "Programming", "First Aid", "Sound Engineering"),
+            cat="craft", era=MOD),
+    *_plain(("Drone Repair", "Hull Patching", "Circuit Salvage", "Fabricator Tuning", "Hydroponics", "Reactor Tending",
+             "Suit Maintenance"), cat="craft", era=FUT),
+    *_plain(("Net Mending", "Sail Mending", "Boatbuilding", "Rigging"), cat="craft", water=True, era=OLD),
+    _e("Rigging", cat="craft", era=NEW),
+    # lore and learning
+    *_plain(("Local History", "Weather Lore", "Beast Lore", "Mineral Lore", "Genealogy", "Arithmetic", "Cartography",
+             "Folk Remedies"), cat="lore"),
+    *_plain(("Herb Lore", "Heraldry", "Old Scripts", "Guild Law", "Temple Rites", "Star Reading", "Alchemy"),
+            cat="lore", era=OLD),
+    *_plain(("Forensics", "Chemistry", "Urban Geography", "Criminal Law"), cat="lore", era=MOD),
+    *_plain(("Xenobiology", "Station Protocols", "Astrogation", "Data Forensics"), cat="lore", era=FUT),
+    *_plain(("Tide Lore", "Ship Signals"), cat="lore", water=True),
+    # field and body
+    *_plain(("Tracking", "Foraging", "Climbing", "Stealth", "Knife Fighting", "Wrestling", "Animal Handling",
+             "Lockpicking", "Mountaineering"), cat="field"),
+    *_plain(("Snaring", "Archery", "Swordplay", "Horsemanship", "Spear Fighting"), cat="field", era=OLD),
+    *_plain(("Quarterstaff", "Falconry"), cat="field", era=PRE),
+    *_plain(("Marksmanship",), cat="field", era=("industrial", "modern", "future")),
+    *_plain(("Driving", "Free Running"), cat="field", era=MOD),
+    *_plain(("Zero-G Movement", "Piloting", "Vacuum Survival"), cat="field", era=FUT),
+    *_plain(("Swimming", "Sailing", "Rowing", "Fishing"), cat="field", water=True),
+    _e("Cold Survival", cat="field", climate="cold"),
+    _e("Desert Survival", cat="field", climate="hot"),
+    # people
+    *_plain(("Haggling", "Storytelling", "Etiquette", "Interrogation", "Disguise", "Forgery", "Gambling", "Oratory",
+             "Street Cant", "Bargaining"), cat="people"),
+    *_plain(("Balladry", "Fortune Telling"), cat="people", era=OLD),
+    # magic: only where the world has it
+    *_plain(("Ward Drawing", "Rune Carving", "Hedge Magic", "Potion Brewing", "Scrying", "Glyph Reading"),
+            cat="magic", magic=SOME_MAGIC),
+    *_plain(("Enchanting", "Charm Weaving", "Ley Sensing"), cat="magic", magic=("common utility",)),
+    *_plain(("Qi Circulation", "Pill Refining", "Talisman Drawing", "Formation Arrays", "Sword Intent"),
+            cat="magic", magic=("cultivation",)),
+]
+_PROFICIENCY_CATEGORIES = ("craft", "lore", "field", "people", "magic")
+
+
+def _stems(text: str) -> set[str]:
+    return {word[:5] for word in re.findall(r"[a-z]{4,}", _norm(text))}
+
+
+def draw_proficiency_names(
+    context: dict[str, Any] | None = None,
+    n: int = 4,
+    rng: random.Random | None = None,
+    exclude: Iterable[Any] = (),
+) -> list[str]:
+    """Proficiency name shapes for one call: one per category, fitting the world.
+
+    When ``context["backstory"]`` names a trade (a carpenter, a sailor), one
+    draw is taken from the names that share a word with it, so the shapes
+    fit the character as well as the world.
+    """
+    rng = rng or random.Random()
+    ctx = dict(context or {})
+    full, _tokens = _excluded(exclude)
+    if not _norm(ctx.get("magic")):
+        # Unknown magic draws no magical practice: magic only where the world has it.
+        ctx["magic"] = "none"
+    pool = [
+        (text, tags) for text, tags in _PROFICIENCY_NAMES
+        if _fits({k: v for k, v in tags.items() if k != "cat"}, ctx) and _norm(text) not in full
+    ]
+    out: list[str] = []
+    backstory = _stems(ctx.get("backstory") or "")
+    if backstory:
+        near = [text for text, _tags in pool if _stems(text) & backstory]
+        if near:
+            out.append(rng.choice(near))
+    categories = list(_PROFICIENCY_CATEGORIES)
+    rng.shuffle(categories)
+    for category in categories:
+        if len(out) >= n:
+            break
+        choices = [text for text, tags in pool if tags.get("cat") == category and text not in out]
+        if choices:
+            out.append(rng.choice(choices))
+    rest = [text for text, _tags in pool if text not in out]
+    out += _sample(rng, rest, n - len(out))
+    return out[:n]
+
+
+# ---------------------------------------------------------------------------
 # Context
 # ---------------------------------------------------------------------------
 
@@ -1120,7 +1227,7 @@ def _render_face(ctx: dict[str, Any], rng: random.Random, rolled: dict[str, Any]
     return ", ".join(bits)
 
 
-RENDERED_KINDS = ("person_name", "venue_name", "hair", "facial_features", "appearance", "starter_equipment", "race_magic_rules", "race_ability_rules")
+RENDERED_KINDS = ("person_name", "venue_name", "hair", "facial_features", "appearance", "starter_equipment", "race_magic_rules", "race_ability_rules", "proficiency_name")
 DRAWN_KINDS = ("npc_role", *sorted(_PHRASES))
 KINDS = (*DRAWN_KINDS, *RENDERED_KINDS)
 
@@ -1142,6 +1249,8 @@ def draw(
     n = max(0, int(n))
     if kind == "person_name":
         return draw_names(ctx, n, rng, exclude)
+    if kind == "proficiency_name":
+        return draw_proficiency_names(ctx, n, rng, exclude)
     full, tokens = _excluded(exclude)
     if kind in DRAWN_KINDS:
         pool = [item for item in _pool(kind, ctx) if _norm(item) not in full]
@@ -1288,6 +1397,7 @@ SETUP_FIELD_KINDS = {
     "player_sex": "player_sex",
     "previous_life_sex": "previous_life_sex",
     "player_name": "person_name",
+    "custom_skills": "proficiency_name",
 }
 
 EXAMPLES_RULE = (
@@ -1295,11 +1405,26 @@ EXAMPLES_RULE = (
     "Use one if it fits this world, adapt it, or write your own."
 )
 
+# Per-field wording where "use one" would be wrong (playtest #22): the drawn
+# proficiency names show the form a name takes, not this character's skills.
+FIELD_EXAMPLES_RULES = {
+    "custom_skills": (
+        "Proficiency names drawn fresh for this roll from a large pool, to show the form a name takes: a noun "
+        "naming a craft, a lore, a field skill, a way with people or a practice, never a verb phrase. Name this "
+        "character's own proficiencies in that form; take one only if it fits the backstory."
+    ),
+}
+
+
+def examples_rule(field: str) -> str:
+    return FIELD_EXAMPLES_RULES.get(field, EXAMPLES_RULE)
+
 
 def setup_context(setup: dict[str, Any] | None) -> dict[str, Any]:
     setup = setup if isinstance(setup, dict) else {}
     ctx = world_context(setup, sex=str(setup.get("player_sex") or ""), age=setup.get("player_age"))
     ctx["races"] = str(setup.get("world_races") or "")
+    ctx["backstory"] = str(setup.get("character_backstory") or "")[:1200]
     return ctx
 
 
