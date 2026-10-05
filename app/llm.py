@@ -7417,8 +7417,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Return a single prose string (not a JSON list of sentences)."
             ),
             "hair": (
-                "Hair ONLY: length + color + style in one short phrase "
-                "(e.g. messy copper curls, cropped black hair, white undercut). "
+                "Hair ONLY: length + color + style in one short phrase, keeping engine_rolled's colour and length. "
                 "No eyes, jaw, freckles, scars, or clothes. "
                 "Do NOT reuse current_setup.hair if present — invent a different look. "
                 "Avoid always defaulting to silver/cropped/grey tired face tropes."
@@ -7431,8 +7430,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Do NOT reuse current_setup.facial_features — pick a fresh face."
             ),
             "appearance": (
-                "Clothing / worn gear ONLY. Prefer zone tags: "
-                "'torso: travel coat; feet: dusty boots'. "
+                "Clothing / worn gear ONLY. Prefer zone tags in the form '<zone>: <item>; <zone>: <item>', "
+                "in engine_rolled's colour and condition. "
                 "Do NOT put hair or facial features here. "
                 "Do NOT reuse current_setup.appearance if present. "
                 "Portraits only use upper-body zones. Weak starts: ordinary clothes."
@@ -7444,13 +7443,12 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             ),
             "starter_equipment": (
                 "Comma-separated mundane starting items at Start (inventory). "
-                "3–6 items matching THIS character's job/arrival — invent a fresh kit every roll. "
-                "BANNED as default every time: rusted wrench + copper coins + worn satchel + rain-slicked hoodie + scuffed sneakers stack. "
-                "Do NOT always include copper coins or a wrench. Vary tools, bags, and clothes with the job. "
-                "Isekai/modern arrival may keep a cracked/dead phone, keys, ID badge, wallet, or transit card — phones are fine as dead pocket tech. "
-                "Fantasy natives: no modern phones; use local tools. Near-useless starts: no combat kit/legendaries. Match appearance."
+                "3–6 items matching THIS character's job/arrival — invent a fresh kit every roll, with tools, bags and "
+                "clothes that follow the job. "
+                "An isekai or modern arrival may keep dead pocket things from the former world; fantasy natives carry "
+                "this world's own tools and no modern devices. Near-useless starts: no combat kit/legendaries. Match appearance."
             ),
-            "world_races": "Generate a concise list of peoples/species only (e.g. human; human, elf, beastfolk). Include human unless excluded. Never power labels like Low-Power Human, and never skill/growth slogans.",
+            "world_races": "Generate a concise comma-separated list of peoples/species only. Include human unless excluded. Never power labels like Low-Power Human, and never skill/growth slogans.",
             "tech_level": (
                 "The level of technology people live with, as an era of technology: stone, bronze, iron, medieval, renaissance, "
                 "early industrial, industrial, modern, near future, far future or spacefaring, optionally with one qualifier. "
@@ -7492,7 +7490,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "who holds power, how magic or technology sits in daily life, how power is earned by anyone who has it, and "
                 "the mood of play. Write about the place and its people. Power and growth rules belong in custom_skills."
             ),
-            "world_style": "Setting/genre phrase only (e.g. modern isekai coastal fantasy). Not an ability description.",
+            "world_style": "Setting/genre phrase only: a few words naming the era, the genre and the kind of place. Not an ability description.",
         }
         contract = field_contract(field)
         field_intent = intent_slice_for_field(intent_plan, field)

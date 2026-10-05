@@ -102,8 +102,10 @@ class TheAskSpellsOutTheShape(unittest.TestCase):
         for key in ("tech_level", "world_style", "rank_scale", "magic_level"):
             self.assertIn(key, prompt["nearby_setup"])
         # The whole roll prompt stays near its old size; a doubled prompt
-        # doubled the roll time on Qwen3 8B against a 45s timeout.
-        self.assertLess(len(json.dumps(prompt)), 7200)
+        # doubled the roll time on Qwen3 8B against a 45s timeout. The
+        # per-call draws (proficiency names, idea sparks) make the size vary:
+        # 7055-7237 over 60 rolls, so 7200 failed about one run in nine.
+        self.assertLess(len(json.dumps(prompt)), 7400)
 
     def test_group_roll_contract_carries_shape(self):
         contracts = llm._field_contracts_for_prompt(["custom_skills"], dict(SETUP), set())

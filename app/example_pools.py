@@ -1442,31 +1442,54 @@ def _key_word(value: str) -> str:
     return max(words, key=len) if words else ""
 
 
+def _has_term(text: str, term: str, after: str = "") -> bool:
+    return re.search(rf"(?<![\w-]){re.escape(_norm(term))}(?![\w-]){after}", _norm(text)) is not None
+
+
+def _swap_term(text: str, rolled: str, known: Iterable[str], after: str = "") -> str:
+    """``text`` with the first other known value replaced by ``rolled``; '' when none is there.
+
+    The model kept its own value and the rolled one was put beside it:
+    "auburn hair, long black curls", "waist-length shoulder-length".
+    """
+    for other in sorted({str(k) for k in known}, key=len, reverse=True):
+        if _norm(other) == _norm(rolled):
+            continue
+        found = re.search(rf"(?<![\w-]){re.escape(other)}(?![\w-]){after}", text, flags=re.I)
+        if found:
+            return text[: found.start()] + rolled + text[found.start() + len(other):]
+    return ""
+
+
 def apply_rolled_values(field: str, value: Any, rolled: dict[str, Any] | None) -> Any:
-    """Put back a rolled value the model's text dropped. Never removes anything."""
+    """Make the text carry the rolled values: a different value of the same kind is
+    swapped for the rolled one, a missing one is added. Nothing else is removed."""
     if not rolled or not isinstance(value, str):
         return value
     text = value.strip()
-    low = _norm(text)
     if field == "hair":
         colour = str(rolled.get("hair_colour") or "")
         length = str(rolled.get("hair_length") or "")
-        if colour and _key_word(colour) not in low:
-            text = f"{colour} hair, {text}" if text else f"{length} {colour} hair".strip()
-            low = _norm(text)
-        if length and _key_word(length) not in low:
-            text = f"{length} {text}" if not text.lower().startswith(length) else text
+        if colour and not _has_term(text, colour):
+            swapped = _swap_term(text, colour, (t for t, _ in _HAIR_COLOURS))
+            text = swapped or (f"{colour} hair, {text}" if text else f"{length} {colour} hair".strip())
+        if length and not _has_term(text, length):
+            swapped = _swap_term(text, length, _HAIR_LENGTHS)
+            text = swapped or f"{length} {text}"
         return text
     if field == "facial_features":
         eyes = str(rolled.get("eye_colour") or "")
         mark = str(rolled.get("notable_mark") or "")
-        if eyes and _key_word(eyes) not in low:
-            text = f"{eyes} eyes, {text}" if text else f"{eyes} eyes"
+        low = _norm(text)
+        if eyes and not _has_term(text, eyes):
+            swapped = _swap_term(text, eyes, (t for t, _ in _EYE_COLOURS), after=r"(?=\s+eyes?\b)")
+            text = swapped or (f"{eyes} eyes, {text}" if text else f"{eyes} eyes")
         if mark and mark != "none" and _key_word(mark) not in low:
             text = f"{text}, {mark}" if text else mark
         return text
     if field == "appearance":
         colour = str(rolled.get("main_colour") or "")
+        low = _norm(text)
         if colour and _key_word(colour) not in low:
             text = f"{text}; colour: {colour}" if text else f"colour: {colour}"
         return text
