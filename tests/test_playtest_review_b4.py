@@ -1,0 +1,138 @@
+"""
+Review of the live smoke fixes (#31, #30, #33, #35, #36): five defects the
+fixes themselves brought in, each reproduced with the live run's shapes.
+
+  #31  resolve() read any mention of a person who is elsewhere as a call:
+       "I give up on Carlos for now ..." (R2 g2 t5), "I follow Carlos Barnes
+       toward the forest" (R2 g2 t4) and "the Spindle at Edge that Marisol
+       mentioned" told the draft the player was calling them, and
+       bring_called_here pulled Carlos in on "Carlos turns down a side lane
+       and is lost to sight".
+  #30  drop_invented_player_speech read a keeper's opening line after a
+       "You ..." action as the player's ("You step up to the counter. 'What
+       can I get you?'"), and the drop ran after the depth check.
+  #33  generic kind words ("parts", "supply", "bar", "lounge") made ordinary
+       prose and street names into venues, and a named move could stamp a
+       settlement that holds places as a venue.
+  #35  ground_acquisitions dropped every new item on any turn where the
+       player named something they hold ("I hand Umar the crystal").
+  #36  the auto window tracked live free VRAM and mle reopened the model
+       whenever it drifted one step.
+
+The turn-pipeline tests run with the player's launcher env.
+"""
+from __future__ import annotations
+
+import os
+import sqlite3
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tools"))
+from playtest_setup_presets import isolated_data_env  # noqa: E402
+
+_TMP = Path(tempfile.mkdtemp(prefix="morkyn-review-b4-"))
+ISOLATED_ENV = {
+    **isolated_data_env(str(_TMP)),
+    "AI_RPG_PACK_DIR": str(_TMP / "packs"),
+    "AI_RPG_SKILL_LIBRARY": str(_TMP / "skill_library.json"),
+    "AI_RPG_IDEA_BANK": str(_TMP / "idea_bank"),
+    "AI_RPG_LAUNCHER_PREFS": str(_TMP / "launcher_prefs.json"),
+}
+os.environ.update(ISOLATED_ENV)
+LAUNCHER_ENV = {
+    **ISOLATED_ENV,
+    "AI_RPG_NARRATION_PIPELINE": "1",
+    "AI_RPG_NARRATION_PIPELINE_CONSOLIDATE": "1",
+    "AI_RPG_FAST_VERIFICATION": "1",
+    "AI_RPG_DSL_SKIP_VERIFY": "1",
+    "AI_RPG_DRAFT_MODE": "dsl",
+}
+_launcher_patch = mock.patch.dict(os.environ, LAUNCHER_ENV)
+
+
+def setUpModule():
+    _launcher_patch.start()
+
+
+def tearDownModule():
+    _launcher_patch.stop()
+
+
+from app import conversation as cv  # noqa: E402
+from app import db, llm, mle, venues, world  # noqa: E402
+from app.db import connect  # noqa: E402
+from app.narration_pipeline import drop_invented_player_speech  # noqa: E402
+
+# Live inputs (R2 g2), copied from the turn payloads.
+G2_T4_INPUT = "I follow Carlos Barnes toward the forest, keeping low."
+G2_T5_INPUT = "I give up on Carlos for now, walk back to the Chrome Wrench Garage and go inside to see what they sell."
+R1_G1_T5_INPUT = "I head for the Spindle at Edge that Marisol mentioned and go inside the first shop I find."
+
+
+def _g2_ctx():
+    # The g2_t4 roster: Marisol, Victor and Carlos at L4, the player at L7.
+    return {
+        "current_location": {"id": 7, "code": "L7"},
+        "locations": [
+            {"id": 4, "code": "L4", "npcs": [
+                {"id": 1, "code": "A", "name": "Marisol Okafor"},
+                {"id": 2, "code": "B", "name": "Victor Silva"},
+                {"id": 3, "code": "C", "name": "Carlos Barnes"},
+            ]},
+            {"id": 7, "code": "L7", "npcs": []},
+        ],
+        "settings": {},
+    }
+
+
+class MentionIsNotACall(unittest.TestCase):
+    """#31 review: only an address form calls an absent person."""
+
+    def test_live_mentions_call_nobody(self):
+        for line in (
+            G2_T5_INPUT,
+            G2_T4_INPUT,
+            R1_G1_T5_INPUT,
+            "I go back to the garage to see what Victor has.",
+        ):
+            r = cv.resolve(_g2_ctx(), line, {})
+            self.assertNotEqual(r["rule"], "called", line)
+            self.assertFalse(r.get("called"), line)
+            self.assertNotIn("calls to", cv.model_note(r), line)
+
+    def test_address_forms_still_call(self):
+        for line, code in (
+            ("Marisol, I woke up in the snow and don't know this place.", "A"),
+            ("I call out to Carlos to wait for me.", "C"),
+            ("Wait up, Carlos!", "C"),
+            ("I shout for Victor over the wind.", "B"),
+            ('"Victor, are you there?"', "B"),
+            ("I ask Marisol where the pharmacy keeps its stock.", "A"),
+        ):
+            r = cv.resolve(_g2_ctx(), line, {})
+            self.assertEqual(r["rule"], "called", line)
+            self.assertEqual(r["called"], [code], line)
+
+    def test_a_given_up_target_is_not_pulled_into_the_scene(self):
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE player (id INTEGER, current_location_id INTEGER)")
+        conn.execute("INSERT INTO player VALUES (1, 7)")
+        conn.execute("CREATE TABLE npcs (id INTEGER, code TEXT, name TEXT, location_id INTEGER)")
+        conn.execute("INSERT INTO npcs VALUES (3, 'C', 'Carlos Barnes', 4)")
+        r = cv.resolve(_g2_ctx(), G2_T5_INPUT, {})
+        prose = "Somewhere behind you, Carlos turns down a side lane and is lost to sight."
+        self.assertEqual(cv.bring_called_here(conn, r, prose), [])
+        # Even when called, a sentence that loses him from sight does not bring him.
+        called = {"called": ["C"]}
+        self.assertEqual(cv.bring_called_here(conn, called, prose), [])
+        self.assertEqual(conn.execute("SELECT location_id FROM npcs").fetchone()[0], 4)
+
+
+if __name__ == "__main__":
+    unittest.main()

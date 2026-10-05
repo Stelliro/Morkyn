@@ -88,6 +88,19 @@ _TOPIC_CUE_RE = re.compile(
     re.IGNORECASE,
 )
 _CONJUNCTION_RE = re.compile(r"^\s*(?:,|and|&|,\s*and)\s*$", re.IGNORECASE)
+# Words right before an absent person's name that call to them: raising the
+# voice or speaking straight at them. Spatial words ("to", "at", "towards",
+# "with") are not here: walking to someone, or following them, is not a call.
+_CALL_CUE_RE = re.compile(
+    r"(?:\bcall(?:s|ed|ing)?(?:\s+out)?(?:\s+(?:to|for))?|\bshout(?:s|ed|ing)?(?:\s+(?:to|for|at))?|"
+    r"\byell(?:s|ed|ing)?(?:\s+(?:to|for|at))?|\bholler(?:s|ed|ing)?(?:\s+(?:to|for|at))?|"
+    r"\bcr(?:y|ies|ied)\s+out\s+(?:to|for)|\bwhistle(?:s|d)?\s+(?:to|for)|\bwave(?:s|d)?\s+(?:to|at)|"
+    r"\bhail(?:s|ed|ing)?|\bbeckon(?:s|ed|ing)?|\bsummon(?:s|ed|ing)?|"
+    r"\b(?:say|says|said|speak|speaks|talk|talks|whisper|whispers|mutter|mutters|reply|replies|turn|turns)\s+to|"
+    r"\bask(?:s|ed)?|\btell(?:s)?|\bgreet(?:s|ed)?|\bthank(?:s|ed)?|\bwarn(?:s|ed)?|\banswer(?:s|ed)?)"
+    r"\s+(?:the\s+)?$",
+    re.IGNORECASE,
+)
 # First names that are ordinary words; matched only when the player capitalised them.
 _COMMON_WORD_NAMES = {
     "will", "mark", "rose", "grace", "hope", "faith", "may", "june", "bill", "jack", "sue", "frank",
@@ -371,6 +384,39 @@ def _pick(mentions: list[dict[str, Any]]) -> list[str]:
     return _codes(plain)
 
 
+def _called_codes(text: str, mentions: list[dict[str, Any]]) -> list[str]:
+    """Codes of absent people the line is said or called to.
+
+    Playtest #31 review: any mention used to count ("I give up on Carlos",
+    "I follow Carlos Barnes", "the Spindle that Marisol mentioned"), so the
+    draft was told they were being called and the prose could pull them in.
+    Only an address form counts: a vocative ("Marisol, ..." / "... , Marisol!",
+    quoted or not) or a calling or speaking verb right before the name."""
+    codes: list[str] = []
+    quotes = _quote_ranges(text)
+    for m in mentions:
+        start, end = m["start"], m["end"]
+        if m.get("tag"):
+            codes.append(m["code"])
+            continue
+        if _inside(start, quotes) is not None:
+            if m.get("use") == "address":
+                codes.append(m["code"])
+            continue
+        before = text[:start]
+        after = text[end:]
+        lead = before.rstrip()
+        if (not lead or lead[-1] in ".!?:;") and re.match(r"\s*[,!?]", after):
+            codes.append(m["code"])  # "Marisol, I woke up ..." / "Carlos! Wait."
+            continue
+        if lead.endswith(",") and re.match(r"\s*(?:[.!?]|$)", after):
+            codes.append(m["code"])  # "Wait up, Carlos!"
+            continue
+        if _CALL_CUE_RE.search(before) and not re.match(r"['’]s\b", after):
+            codes.append(m["code"])
+    return _codes(codes)
+
+
 def is_speech(player_input: str) -> bool:
     text = own_text(player_input)
     if not text:
@@ -435,7 +481,7 @@ def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | 
     # A named person who is not here is called: the writer is told who, and
     # apply_turn brings her here when the prose shows her (bring_called_here).
     elsewhere = known_elsewhere(context, here) if text else []
-    called = _pick(_mentions(text, elsewhere)) if elsewhere else []
+    called = _called_codes(text, _mentions(text, elsewhere)) if elsewhere else []
     if called:
         done([], "none")
         out["rule"] = "called"
@@ -787,7 +833,8 @@ _SHOWN_HERE_RE = re.compile(
 )
 _NOT_HERE_RE = re.compile(
     r"\b(?:not\s+here|isn['’]?t\s+here|is\s+not|nowhere|no\s+sign\s+of|absent|gone|away\s+at|elsewhere|"
-    r"no\s+answer|does\s+not\s+answer|doesn['’]?t\s+answer)\b",
+    r"no\s+answer|does\s+not\s+answer|doesn['’]?t\s+answer|lost\s+to\s+sight|out\s+of\s+sight|"
+    r"disappear(?:s|ed)?|vanish(?:es|ed)?|somewhere)\b",
     re.IGNORECASE,
 )
 
