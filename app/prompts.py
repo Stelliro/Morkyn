@@ -816,7 +816,7 @@ def _appearance(context: dict[str, Any]) -> str:
 def _player_view(context: dict[str, Any]) -> dict[str, Any] | None:
     player = context.get("player") if isinstance(context.get("player"), dict) else {}
     view: dict[str, Any] = {}
-    for key in ("name", "public_name", "title"):
+    for key in ("name", "public_name", "title", "race"):
         if player.get(key):
             view[key] = player.get(key)
     worn = []

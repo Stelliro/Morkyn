@@ -273,21 +273,176 @@ def split_sentences(text: Any) -> list[str]:
     return out
 
 
-def _title_for(text: str) -> str:
-    words = re.findall(r"[A-Za-z][A-Za-z'-]*", text)
-    title = " ".join(words[:6])
-    return title[:TITLE_MAX] or text[:TITLE_MAX]
+# Titles and tags (playtest #23). A title is the subject noun phrase of the
+# fact, not its first six words: "In a land of mist-shrouded forests, the
+# kingdom of Eldoria is ruled by..." is titled "Kingdom of Eldoria". Tags are
+# the nouns it is about, never "both" or an -ed adjective.
+_LEAD_IN = re.compile(
+    r"^(?:in|on|at|across|under|beyond|throughout|within|among|before|after|since|when|where|while|"
+    r"though|although|as|for|from|during|along|over|once|long ago)\b[^,]{0,100},\s*",
+    re.I,
+)
+_VERB_WORDS = {
+    "is", "are", "was", "were", "be", "been", "has", "have", "had", "can", "cannot", "can't", "could",
+    "may", "might", "must", "will", "would", "should", "shall", "do", "does", "did", "don't", "doesn't",
+    "coexist", "coexists", "rule", "rules", "ruled", "hold", "holds", "held", "live", "lives", "dictate",
+    "dictates", "earn", "earns", "need", "needs", "lack", "lacks", "keep", "keeps", "kept", "control",
+    "controls", "own", "owns", "see", "sees", "run", "runs", "guard", "guards", "worship", "worships",
+    "fear", "fears", "trade", "trades", "serve", "serves", "sense", "senses", "learn", "learns", "cast",
+    "casts", "resist", "resists", "work", "works", "draw", "draws", "pay", "pays", "lose", "loses", "gain",
+    "gains", "inherit", "inherits", "heal", "heals", "hear", "hears", "climb", "climbs", "endure", "endures",
+    "remember", "remembers", "track", "tracks", "feel", "feels", "start", "starts", "tire", "tires",
+    "harbor", "harbors", "harbour", "harbours", "shape", "shapes", "govern", "governs", "lead", "leads",
+    "led", "want", "wants", "seek", "seeks", "hunt", "hunts", "fight", "fights", "follow", "follows",
+    "stand", "stands", "lie", "lies", "rise", "rises", "fell", "falls", "dwell", "dwells", "come", "comes",
+    "came", "remain", "remains", "bring", "brings", "mark", "marks", "carry", "carries", "spread", "spreads",
+    "grow", "grows", "know", "knows", "believe", "believes", "use", "uses", "make", "makes", "take", "takes",
+    "meet", "meets", "gather", "gathers", "forbid", "forbids", "allow", "allows", "require", "requires",
+}
+_HAVE_WORDS = {"has", "have", "had", "hold", "holds", "own", "owns", "keep", "keeps"}
+_DETERMINERS = {
+    "the", "a", "an", "only", "all", "most", "some", "every", "each", "both", "many", "few", "no", "its",
+    "their", "this", "these", "those", "that", "his", "her", "our", "any",
+}
+_PREPOSITIONS = {"through", "by", "of", "in", "from", "with", "under", "over", "against", "among", "across", "beyond", "to", "for"}
+_TAG_SKIP = {
+    "both", "alike", "each", "every", "other", "others", "some", "many", "much", "very", "also", "thick",
+    "high", "such", "more", "most", "less", "into", "onto", "upon", "over", "under", "about", "among",
+    "across", "still", "even", "just", "like", "same", "whose", "what", "these", "those", "here", "your",
+    "between", "against", "within", "without", "beyond", "around", "after", "before", "because", "though",
+    "although", "people", "peoples", "thing", "things", "kind", "kinds", "part", "parts", "way", "ways",
+    "fates", "fate", "air", "tension", "stakes", "pressure", "pressures", "groups",
+}
+_ADJECTIVE_ENDINGS = ("ical", "ious", "eous", "ous", "ful", "less", "ish", "ly")
+_COMMON_ADJECTIVES = {
+    "harsh", "sparse", "rare", "local", "fair", "common", "small", "large", "great", "little", "young",
+    "dark", "deep", "cold", "warm", "hard", "true", "real", "full", "free", "secret", "ancient", "dead",
+    "long", "short", "whole", "first", "second", "third", "last", "next", "three", "four", "five",
+    "seven", "eight", "nine", "twelve", "hundred", "thousand", "present", "strong", "weak", "open",
+    "close", "near", "distant", "wild", "grim", "bleak", "safe", "rich", "poor", "proud", "known",
+    "ordinary", "usual", "strict", "severe", "often",
+}
 
 
-def _tags_for(text: str, extra: list[str] | None = None) -> list[str]:
-    tags: list[str] = []
-    for word in [*(extra or []), *re.findall(r"[a-z][a-z-]{3,}", text.lower())]:
-        word = word.strip("-")
-        if not word or word in _STOPWORDS or word in tags:
+def _is_verbish(word: str) -> bool:
+    low = word.lower()
+    return low in _VERB_WORDS or (low.endswith("ed") and len(low) > 4) or (low.endswith("en") and low in {"taken", "given", "broken", "chosen", "forbidden", "hidden", "written"})
+
+
+def _cap(words: list[str]) -> str:
+    title = " ".join(words).replace("/", " and ")
+    title = re.sub(r"\s+", " ", title).strip(" ,;:-")
+    while len(title) > TITLE_MAX and " " in title:
+        title = title.rsplit(" ", 1)[0]
+    return title[:1].upper() + title[1:TITLE_MAX]
+
+
+def _object_words(words: list[str], limit: int = 2) -> list[str]:
+    """The head of the phrase after a verb: up to ``limit`` content words, skipping determiners."""
+    out: list[str] = []
+    for word in words:
+        low = word.lower()
+        if low in _DETERMINERS and not out:
             continue
-        tags.append(word[:24])
-        if len(tags) >= TAG_MAX:
+        if low in {"and", "or", "but", "that", "which", "who"} or low in _PREPOSITIONS or _is_verbish(word):
             break
+        out.append(word)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _clause_words(text: str) -> tuple[list[str], int | None]:
+    """The words of a fact after any lead-in clause, and the index of its main verb if one is found."""
+    body = _clean(text).rstrip(".!?")
+    trimmed = _LEAD_IN.sub("", body, count=1)
+    words = re.findall(r"[A-Za-z][A-Za-z'/-]*", trimmed or body)
+    verb = next((index for index, word in enumerate(words) if index and word.lower() in _VERB_WORDS), None)
+    if verb is None or verb > 7:
+        # "Snow closes the passes", "The river floods each spring": a
+        # third-person verb right after a one-noun subject.
+        start = 1 if words and words[0].lower() in _DETERMINERS else 0
+        if len(words) > start + 2:
+            noun, guess = words[start].lower(), words[start + 1].lower()
+            if guess.endswith("s") and not guess.endswith("ss") and not noun.endswith("s") and guess not in _DETERMINERS:
+                verb = start + 1
+    return words, verb
+
+
+def _title_for(text: str) -> str:
+    """A short noun phrase naming what the fact is about."""
+    words, verb = _clause_words(text)
+    if not words:
+        return _clean(text)[:TITLE_MAX]
+    if verb is None or verb > 7:
+        subject = words[: min(5, len(words))]
+        while subject and subject[0].lower() in _DETERMINERS:
+            subject = subject[1:]
+        return _cap(subject or words[:4])
+    subject = words[:verb]
+    while len(subject) > 1 and subject[0].lower() in _DETERMINERS:
+        subject = subject[1:]
+    subject = subject[:5]
+    rest = words[verb + 1:]
+    content = [word for word in subject if word.lower() not in _DETERMINERS | {"and", "or", "of"}]
+    verb_word = words[verb].lower()
+    if verb_word in _HAVE_WORDS:
+        obj = _object_words(rest)
+        if obj:
+            return _cap([*obj, "of", *[w.lower() if w[:1].isupper() and w.lower() in _DETERMINERS else w for w in subject]])
+    if len(content) <= 1 and rest:
+        index = 0
+        while index < len(rest) and (_is_verbish(rest[index]) or rest[index].lower() in {"not", "never", "often", "always"}):
+            index += 1
+        if index < len(rest) and rest[index].lower() in _PREPOSITIONS:
+            obj = _object_words(rest[index + 1:])
+            if obj:
+                return _cap([*subject, rest[index].lower(), *obj])
+        elif verb_word in {"is", "are", "was", "were"} and index <= 1:
+            # "Magic is rare" -> "Rare magic"; "The mood is grounded" -> "Grounded mood".
+            adjective = rest[0]
+            if adjective.lower() not in _DETERMINERS and adjective.lower() not in _PREPOSITIONS:
+                return _cap([adjective, *(word.lower() if word != word.upper() else word for word in subject)])
+        elif index == 0 and verb_word not in {"is", "are", "was", "were"}:
+            # "Snow closes the high passes" -> "Snow and high passes".
+            obj = _object_words(rest)
+            if obj:
+                return _cap([*subject, "and", *obj])
+    return _cap(subject)
+
+
+def _tag_word(word: str) -> str:
+    low = word.lower().strip("-'/")
+    if len(low) < 4 or low in _STOPWORDS or low in _TAG_SKIP or low in _DETERMINERS:
+        return ""
+    if low in _VERB_WORDS or low.endswith(("ed", "ing")) and len(low) > 4:
+        return ""
+    if low.endswith(_ADJECTIVE_ENDINGS) or low in _COMMON_ADJECTIVES:
+        return ""
+    return low[:24]
+
+
+def _tags_for(text: str, extra: list[str] | None = None, title: str = "") -> list[str]:
+    """The nouns a fact is about: given tags, then title words, then names, then the rest."""
+    words, verb = _clause_words(text)
+    verb_word = words[verb].lower() if verb is not None and verb < len(words) else ""
+    candidates: list[str] = [str(word) for word in extra or []]
+    candidates += re.findall(r"[A-Za-z][A-Za-z'-]*", title)
+    sentence_words = re.findall(r"[A-Za-z][A-Za-z'-]*", text)
+    candidates += [word for word in sentence_words[1:] if word[:1].isupper()]
+    candidates += [word for word in sentence_words if word.lower() != verb_word]
+    tags: list[str] = []
+    seen: set[str] = set()
+    for word in candidates:
+        for part in re.split(r"/", word):
+            tag = _tag_word(part)
+            key = _singular(tag)
+            if not tag or key in seen:
+                continue
+            seen.add(key)
+            tags.append(tag)
+            if len(tags) >= TAG_MAX:
+                return tags
     return tags
 
 
@@ -554,13 +709,128 @@ def _ability_by_race(races: list[str], rules: str) -> tuple[dict[str, str], list
     return joined, named_sentences
 
 
+# Form markers that are not peoples: the "custom" and "random" checkboxes of
+# the world_races list (playtest #23).
+_RACE_LIST_MARKERS = {"custom", "random", "none", "other", "any", "default"}
+
+
+def resolve_race_list(conn, options: dict[str, Any]) -> list[str]:
+    """The peoples this world uses, never empty and never a form marker.
+
+    playthrough_options.world_races first; a list that holds only "custom" or
+    "random" (an unfilled custom box) falls back to the setting template's
+    stored choice, then the checked boxes of the saved setup form, then human.
+    """
+    def _clean_list(value: Any) -> list[str]:
+        return [label for label in split_list(value) if race_key(label) not in _RACE_LIST_MARKERS]
+
+    races = _clean_list(options.get("world_races") if isinstance(options, dict) else "")
+    if races:
+        return races
+    try:
+        row = conn.execute("SELECT choice FROM setting_templates WHERE key = 'world_races'").fetchone()
+        races = _clean_list(row["choice"] if row else "")
+    except Exception:
+        races = []
+    if races:
+        return races
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'game_start_form'").fetchone()
+        form = json.loads(str(row["value"] or "{}")) if row else {}
+        checked = [
+            str(control.get("value") or "")
+            for control in form.get("controls") or []
+            if isinstance(control, dict) and control.get("name") == "world_races" and control.get("checked")
+        ]
+        custom = [
+            str(item.get("value") or "")
+            for item in form.get("list_custom") or []
+            if isinstance(item, dict) and item.get("name") == "world_races"
+        ]
+        races = _clean_list(", ".join(checked + custom))
+    except Exception:
+        races = []
+    return races or ["human"]
+
+
+_PLAYER_RACE_VERBS = r"(?:born|reborn|reincarnated|raised|awakens?|wakes?|is|was|as|being)"
+
+
+def resolve_player_race(options: dict[str, Any], races: list[str]) -> str:
+    """The player's people: a setup value if one is given, a backstory that says
+    "born/reborn/... as a <people>", else human when the world has humans,
+    else the world's first people."""
+    options = options if isinstance(options, dict) else {}
+    explicit = _clean(options.get("player_race"))
+    if explicit and race_key(explicit) not in _RACE_LIST_MARKERS:
+        match = next((race for race in races if race_key(race) == race_key(explicit) or _mentions(explicit, race)), None)
+        return match or explicit[:NAME_MAX]
+    story = " ".join(_clean(options.get(key)) for key in ("character_backstory", "appearance"))
+    if story:
+        low = story.lower()
+        for race in races:
+            for form in sorted(_race_forms(race), key=len, reverse=True):
+                tokens = [re.escape(token) for token in re.split(r"[\s-]+", form) if token]
+                if not tokens:
+                    continue
+                pattern = _PLAYER_RACE_VERBS + r"\s+(?:a|an)\s+(?:young\s+|half-?\s*)?" + r"[\s-]?".join(tokens) + r"(?![a-z0-9])"
+                if re.search(pattern, low):
+                    return race
+    if any(race_key(race) == "human" for race in races):
+        return next(race for race in races if race_key(race) == "human")
+    return races[0] if races else "human"
+
+
+def _store_player_race(conn, race: str) -> None:
+    """Set the player's people once; a stored race is never overwritten here."""
+    try:
+        conn.execute("UPDATE player SET race = ? WHERE id = 1 AND COALESCE(race, '') = ''", (race[:NAME_MAX],))
+    except Exception:
+        pass
+
+
+def player_race(conn) -> str:
+    try:
+        row = conn.execute("SELECT race FROM player WHERE id = 1").fetchone()
+    except Exception:
+        return ""
+    return _clean(row["race"]) if row else ""
+
+
+def _race_trait_rng(name: str, seed: int | None):
+    try:
+        from app.rng import rng_for
+
+        return rng_for("world_race_traits", seed=seed, salt=race_key(name))
+    except Exception:
+        import random
+
+        return random.Random(f"traits:{race_key(name)}")
+
+
 def seed_from_options(conn, options: dict[str, Any]) -> dict[str, Any]:
     """Replace this world's fact rows with the deterministic split of its setup strings."""
     ensure_world_fact_tables(conn)
     clear_world_facts(conn)
     if not isinstance(options, dict):
         return {"races": 0, "facts": 0, "rejected": []}
-    races = split_list(options.get("world_races") or "human")
+    races = resolve_race_list(conn, options)
+    raw_labels = split_list(options.get("world_races"))
+    if not raw_labels or any(race_key(label) in _RACE_LIST_MARKERS for label in raw_labels):
+        # A marker-only list ("custom" with an empty box) is replaced by the
+        # list actually used, so the stored options agree with the table.
+        options["world_races"] = ", ".join(races)
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()
+            stored = json.loads(str(row["value"] or "{}")) if row else None
+            if isinstance(stored, dict):
+                stored["world_races"] = options["world_races"]
+                conn.execute(
+                    "UPDATE settings SET value = ? WHERE key = 'playthrough_options'",
+                    (json.dumps(stored),),
+                )
+        except Exception:
+            pass
     magic_rules = str(options.get("race_magic_rules") or "")
     ability_rules = str(options.get("race_ability_rules") or "")
     magic_level = str(options.get("magic_level") or "")
@@ -576,10 +846,19 @@ def seed_from_options(conn, options: dict[str, Any]) -> dict[str, Any]:
     codes: dict[str, str] = {}
     for race in races:
         lifespan, size = _rolled_numbers(race, seed)
+        # Engine-rolled traits so no people is empty-traited when no model
+        # pass runs; the post-start pass writes this world's own (#23).
+        try:
+            from app.example_pools import roll_race_traits
+
+            traits = roll_race_traits(race, _race_trait_rng(race, seed), limit=TRAITS_MAX)
+        except Exception:
+            traits = ""
         code, errors = store_race(
             conn,
             {
                 "name": race,
+                "traits": traits,
                 "magic_access": access.get(race_key(race), "unknown"),
                 "ability_rules": abilities.get(race_key(race), ""),
                 "lifespan_years": lifespan,
@@ -604,19 +883,31 @@ def seed_from_options(conn, options: dict[str, Any]) -> dict[str, Any]:
     for sentence in split_sentences(options.get("custom_style")):
         named = [race for race in races if _mentions(sentence, race)]
         rows.append({"kind": _sentence_kind(sentence), "text": sentence, "links": _links(named)})
-    for label in split_list(options.get("faction_pressure"), limit=8):
-        rows.append({"kind": "faction", "title": label, "text": f"Faction pressure in this world: {label}."})
+    # The faction_pressure labels are one setting row, not one near-empty row
+    # each; the post-start pass replaces it with named factions (#23).
+    pressures = [label for label in split_list(options.get("faction_pressure"), limit=8) if race_key(label) not in _RACE_LIST_MARKERS]
+    if pressures:
+        rows.append(
+            {
+                "kind": "faction",
+                "title": "Faction pressure",
+                "text": f"Pressures between groups here: {'; '.join(pressures)}."[:TEXT_MAX],
+                "tag_extra": ["faction"],
+            }
+        )
     for row in rows:
         text = str(row["text"])
         row.setdefault("title", _title_for(text))
-        row["tags"] = _tags_for(text)
+        row["tags"] = _tags_for(text, extra=row.pop("tag_extra", None), title=str(row["title"]))
         row["source"] = "split"
         code, errors = store_fact(conn, row)
         if code and "duplicate" not in errors:
             facts += 1
         elif not code:
             rejected.extend(f"fact '{text[:40]}': {error}" for error in errors)
-    return {"races": len(codes), "facts": facts, "rejected": rejected[:12]}
+    player = resolve_player_race(options, races)
+    _store_player_race(conn, player)
+    return {"races": len(codes), "facts": facts, "rejected": rejected[:12], "player_race": player}
 
 
 def ensure_seeded(conn) -> bool:
@@ -663,11 +954,14 @@ def all_facts(conn) -> dict[str, Any]:
             last_pass = json.loads(str(row["value"] or "null"))
         except json.JSONDecodeError:
             last_pass = None
-    return {"races": races, "facts": facts, "post_start_pass": last_pass}
+    return {"races": races, "facts": facts, "player_race": player_race(conn), "post_start_pass": last_pass}
 
 
-def _race_view(row: dict[str, Any], here: list[str]) -> dict[str, Any]:
+def _race_view(row: dict[str, Any], here: list[str], player: bool = False) -> dict[str, Any]:
     view: dict[str, Any] = {"code": row["code"], "name": row["name"], "magic": row["magic_access"]}
+    if player:
+        # The player is of this people (#23); "here" stays the NPCs present.
+        view["player"] = True
     if row.get("traits"):
         view["traits"] = row["traits"]
     if row.get("ability_rules"):
@@ -700,9 +994,10 @@ def relevant_facts(
 ) -> dict[str, list[dict[str, Any]]]:
     """A budgeted handful of rows for one turn.
 
-    ``present`` is the people in the scene, each ``{"name", "race"}``. Their
-    races come first, then races the turn text names, then facts linked to
-    those races, then facts whose words the turn shares, then one tone fact.
+    ``present`` is the people in the scene, each ``{"name", "race"}``; the
+    player's entry carries ``"player": True``. Their races come first, then
+    races the turn text names, then facts linked to those races, then facts
+    whose words the turn shares, then one tone fact.
     """
     races = _race_by_key(conn)
     if not races:
@@ -710,6 +1005,7 @@ def relevant_facts(
     focus = " ".join([text, location_name, quest_text])
     chosen: list[tuple[dict[str, Any], list[str]]] = []
     here_by_key: dict[str, list[str]] = {}
+    player_key = ""
     for person in present:
         key = race_key(person.get("race") or "")
         if not key:
@@ -717,8 +1013,13 @@ def relevant_facts(
         match = races.get(key) or next(
             (row for row in races.values() if _mentions(str(person.get("race") or ""), row["name"])), None
         )
-        if match:
-            here_by_key.setdefault(match["name_key"], []).append(str(person.get("name") or ""))
+        if not match:
+            continue
+        names = here_by_key.setdefault(match["name_key"], [])
+        if person.get("player"):
+            player_key = match["name_key"]
+        else:
+            names.append(str(person.get("name") or ""))
     for key, names in here_by_key.items():
         chosen.append((races[key], [name for name in names if name]))
     for row in races.values():
@@ -750,7 +1051,7 @@ def relevant_facts(
     out: dict[str, list[dict[str, Any]]] = {"races": [], "facts": []}
     used = 0
     for row, here in chosen:
-        view = _race_view(row, here)
+        view = _race_view(row, here, player=row["name_key"] == player_key)
         size = len(json.dumps(view, separators=(",", ":")))
         if used + size > budget_chars:
             break
@@ -781,7 +1082,7 @@ def relevant_facts_for_state(state: dict[str, Any], player_input: str) -> dict[s
                 present.append({"name": npc.get("name") or "", "race": npc.get("race") or ""})
     player = state.get("player") if isinstance(state.get("player"), dict) else {}
     if player.get("race"):
-        present.append({"name": player.get("name") or "", "race": player.get("race")})
+        present.append({"name": player.get("name") or "", "race": player.get("race"), "player": True})
     quests = " ".join(
         f"{quest.get('title') or ''} {quest.get('current_objective') or ''}"
         for quest in state.get("active_quests") or []
@@ -789,6 +1090,22 @@ def relevant_facts_for_state(state: dict[str, Any], player_input: str) -> dict[s
     )
     with connect() as conn:
         ensure_seeded(conn)
+        if not player.get("race"):
+            # A world started before the player had a race column: store
+            # the resolved people once, so the player is of somebody (#23).
+            race = player_race(conn)
+            if not race:
+                try:
+                    row = conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()
+                    options = json.loads(str(row["value"] or "{}")) if row else {}
+                except (TypeError, json.JSONDecodeError):
+                    options = {}
+                names = [str(row["name"]) for row in conn.execute("SELECT name FROM world_races ORDER BY id").fetchall()]
+                if names:
+                    race = resolve_player_race(options if isinstance(options, dict) else {}, names)
+                    _store_player_race(conn, race)
+            if race:
+                present.append({"name": player.get("name") or "", "race": race, "player": True})
         return relevant_facts(
             conn,
             present=present,
@@ -887,34 +1204,81 @@ def run_post_start_passes() -> dict[str, Any]:
     return report
 
 
+# The pass enriches (playtest #23). Asked to "write facts the table does not
+# hold yet" beside the full setup text, the 8B restated the setup sentences
+# and every one was refused. Now the stored rows are shown as already known,
+# each call asks for a few kinds of new lore drawn from app/example_pools.py,
+# and each race is asked for traits and ability rules of its own.
 _REFINE_SYSTEM = (
-    "You turn one RPG world's setup text into short table rows. Answer with lines only, "
+    "You enrich one RPG world's tables with what its setup implies but does not say. Answer with lines only, "
     "no prose, no JSON, no numbering. Two line shapes are allowed:\n"
-    "RACE|<race name exactly as the table writes it>|<magic access>|<lifespan in years, a whole number>|<size>|<traits, at most 120 characters>|<ability rules, at most 160 characters>\n"
-    "FACT|<kind>|<title, at most 6 words>|<one fact, at most 200 characters>|<linked codes separated by spaces, or empty>|<up to 4 one-word tags separated by spaces>\n"
+    "RACE|<race name exactly as given>|<magic access>|<lifespan in years, a whole number>|<size>|<traits>|<gifts and limits beyond magic>\n"
+    "FACT|<kind>|<title>|<the fact>|<race codes it is about, separated by spaces, or empty>|<up to 4 nouns it is about, separated by spaces>\n"
     "magic access is one of: " + ", ".join(MAGIC_ACCESS) + ". "
     "size is one of: " + ", ".join(SIZE_BANDS) + ". "
-    "kind is one of: " + ", ".join(FACT_KINDS) + ". "
-    "Write one RACE line for each race in the table. Do not add peoples the table does not list. "
-    "Each RACE line must agree with the setup text: when the text says a people has no magic, its access is none. "
-    "Write FACT lines for customs, factions, history, places and rules the setup text states or plainly implies, "
-    "each one fact, not a summary of the whole text. The fact table already holds every setup sentence: "
-    "write only facts it does not hold yet, and write none when the setup text has nothing more to give. "
-    "Links may only use codes shown in the input. Do not invent names the setup text does not give."
+    "kind is one of: " + ", ".join(FACT_KINDS) + ".\n"
+    "Write one RACE line for every race in races, and no other peoples. traits: two to four short phrases on how "
+    "this people looks, lives and behaves in this world, at most 120 characters. gifts and limits beyond magic (stored as the race's ability rules): one or two gifts or "
+    "limits this people has in play beyond its magic access (senses, body, endurance, craft, lore), at most 160 "
+    "characters; magic access is its own field, so do not repeat it here. When a race has magic_fixed, copy its magic access as shown: "
+    "the setup decided it. Ability rules never give spells to a race whose magic access is none. When setup_rule is "
+    "shown for a race, its ability rules keep that rule and may add to it.\n"
+    "Then write one FACT line for each item in write_facts_about, using the kind before the colon. already_known is "
+    "what the world's tables hold: do not repeat or reword any of it; each fact adds something new that fits it. "
+    "A fact is one or two plain sentences, at most 200 characters. The title is a short noun phrase naming the "
+    "subject, two to five words. Factions grow out of setup.faction_pressure and get a proper name of their own. "
+    "Links may only use race codes from races."
 )
 
 
-def refine_from_model(options: dict[str, Any]) -> dict[str, Any]:
-    """One model call that adjusts the race rows and adds fact rows; the engine validates each line."""
-    from app.db import connect
-    from app.llm import _chat_content
+def _fixed_magic(races: list[dict[str, Any]], options: dict[str, Any]) -> dict[str, str]:
+    """Magic access the setup rules decide, by race key. The model may not change these."""
+    names = [str(row["name"]) for row in races]
+    access, _ = race_magic_from_rules(
+        names, str(options.get("race_magic_rules") or ""), str(options.get("magic_level") or "")
+    )
+    return access
 
-    with connect() as conn:
-        ensure_seeded(conn)
-        races = [dict(row) for row in conn.execute("SELECT * FROM world_races ORDER BY id").fetchall()]
-        facts = [_fact_dict(row) for row in conn.execute("SELECT * FROM world_facts ORDER BY id").fetchall()]
-    if not races:
-        return {"called": False, "reason": "no races"}
+
+def _fact_asks(options: dict[str, Any], rng=None) -> list[str]:
+    """Three to five kinds of new lore for this call, drawn fresh from the pool."""
+    import random
+
+    from app.example_pools import draw, world_context
+
+    rng = rng or random.Random()
+    context = world_context(options)
+    asks = draw("world_fact_ask", context, rng.randint(3, 5), rng)
+    pressures = [label for label in split_list(options.get("faction_pressure"), limit=8) if race_key(label) not in _RACE_LIST_MARKERS]
+    if pressures and not any(ask.startswith("faction:") for ask in asks):
+        factions = [ask for ask in draw("world_fact_ask", context, 40, rng) if ask.startswith("faction:")]
+        if factions:
+            asks = [*asks[:-1], factions[0]] if len(asks) >= 3 else [*asks, factions[0]]
+    return asks
+
+
+def build_refine_request(conn, options: dict[str, Any], rng=None) -> tuple[str, dict[str, Any]]:
+    """The user message for the pass, and what the engine fixed for the answer."""
+    races = [dict(row) for row in conn.execute("SELECT * FROM world_races ORDER BY id").fetchall()]
+    facts = [_fact_dict(row) for row in conn.execute("SELECT * FROM world_facts ORDER BY id").fetchall()]
+    fixed = _fixed_magic(races, options)
+    abilities, _ = _ability_by_race([str(row["name"]) for row in races], str(options.get("race_ability_rules") or ""))
+    asks = _fact_asks(options, rng)
+    race_rows = []
+    for row in races:
+        key = str(row["name_key"])
+        item: dict[str, Any] = {
+            "code": row["code"],
+            "name": row["name"],
+            "magic_access": row["magic_access"],
+            "lifespan_years": row["lifespan_years"],
+            "size": row["size_band"],
+        }
+        if key in fixed:
+            item["magic_fixed"] = True
+        if abilities.get(key):
+            item["setup_rule"] = abilities[key]
+        race_rows.append(item)
     user = json.dumps(
         {
             "setup": {
@@ -923,32 +1287,42 @@ def refine_from_model(options: dict[str, Any]) -> dict[str, Any]:
                 "magic_level": _clean(options.get("magic_level"))[:80],
                 "tech_level": _clean(options.get("tech_level"))[:80],
                 "race_magic_rarity": _clean(options.get("race_magic_rarity"))[:80],
-                "custom_style": _clean(options.get("custom_style"))[:800],
                 "race_magic_rules": _clean(options.get("race_magic_rules"))[:1200],
                 "race_ability_rules": _clean(options.get("race_ability_rules"))[:1200],
                 "faction_pressure": _clean(options.get("faction_pressure"))[:200],
             },
-            "race_table": [
-                {
-                    "code": row["code"],
-                    "name": row["name"],
-                    "magic_access": row["magic_access"],
-                    "lifespan_years": row["lifespan_years"],
-                    "size": row["size_band"],
-                    "traits": row["traits"],
-                    "ability_rules": row["ability_rules"],
-                }
-                for row in races
-            ],
-            "fact_table": [{"code": fact["code"], "kind": fact["kind"], "text": fact["text"]} for fact in facts],
+            "races": race_rows,
+            "already_known": [f"{fact['code']} ({fact['kind']}): {fact['text']}" for fact in facts],
+            "write_facts_about": asks,
         },
         ensure_ascii=True,
     )
+    return user, {"fixed_magic": fixed, "asked": asks}
+
+
+def refine_from_model(options: dict[str, Any]) -> dict[str, Any]:
+    """One model call that enriches the race rows and adds new fact rows; the engine validates each line."""
+    from app.db import connect
+    from app.llm import _chat_content
+
+    with connect() as conn:
+        ensure_seeded(conn)
+        if not conn.execute("SELECT 1 FROM world_races LIMIT 1").fetchone():
+            return {"called": False, "reason": "no races"}
+        user, plan = build_refine_request(conn, options)
     # The first call after start may load the local model cold; 60s timed out
     # on Qwen3 8B with the reply two-thirds written.
-    content = _chat_content(_REFINE_SYSTEM, user, timeout=180, temperature=0.3, max_tokens=900, response_format="text")
+    content = _chat_content(_REFINE_SYSTEM, user, timeout=180, temperature=0.4, max_tokens=1300, response_format="text")
     with connect() as conn:
-        return apply_refinement(conn, content)
+        report = apply_refinement(conn, content, fixed_magic=plan["fixed_magic"])
+    report["asked"] = plan["asked"]
+    return report
+
+
+def _filled(value: str) -> str:
+    """A field the model left as a placeholder ("none", "n/a", "-") counts as not written."""
+    text = _clean(value)
+    return "" if race_key(text).strip(".") in {"", "none", "n/a", "na", "nil", "nothing", "empty", "-", "unknown"} else text
 
 
 def _restates(conn, text: str) -> bool:
@@ -963,12 +1337,26 @@ def _restates(conn, text: str) -> bool:
     return False
 
 
-def apply_refinement(conn, content: str) -> dict[str, Any]:
-    """Validate and store the model's lines. Unknown race codes, bad enums and long text are refused."""
+def apply_refinement(conn, content: str, fixed_magic: dict[str, str] | None = None) -> dict[str, Any]:
+    """Validate and store the model's lines. Unknown race codes, bad enums and long text are refused.
+
+    ``fixed_magic`` is the magic access the setup rules decided, by race key;
+    the model's value for those peoples is replaced by the engine's. Without it
+    the stored playthrough_options decide.
+    """
     by_code = {str(row["code"]).upper(): dict(row) for row in conn.execute("SELECT * FROM world_races").fetchall()}
     by_key = {str(row["name_key"]): row for row in by_code.values()}
+    if fixed_magic is None:
+        try:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()
+            options = json.loads(str(row["value"] or "{}")) if row else {}
+        except (TypeError, json.JSONDecodeError):
+            options = {}
+        fixed_magic = _fixed_magic(list(by_code.values()), options) if isinstance(options, dict) else {}
     accepted = {"races": 0, "facts": 0}
     rejected: list[str] = []
+    adjusted: list[str] = []
+    new_factions = 0
     for head, fields in parse_lines(content, ("RACE", "FACT")):
         if head == "RACE":
             fields = (fields + [""] * 6)[:6]
@@ -985,15 +1373,22 @@ def apply_refinement(conn, content: str) -> dict[str, Any]:
                 lifespan = int(re.sub(r"[^\d]", "", fields[2]) or current["lifespan_years"])
             except ValueError:
                 lifespan = int(current["lifespan_years"])
+            magic = fields[1] or current["magic_access"]
+            decided = fixed_magic.get(str(current["name_key"]))
+            # A valid but different value is corrected; an invalid one is still refused below.
+            said = _enum(magic, MAGIC_ACCESS)
+            if decided and said is not None and said != decided:
+                adjusted.append(f"RACE {code}: magic {magic[:12]} -> {decided} (setup rule)")
+                magic = decided
             _, errors = store_race(
                 conn,
                 {
                     "name": current["name"],
-                    "magic_access": fields[1] or current["magic_access"],
+                    "magic_access": magic,
                     "lifespan_years": lifespan,
                     "size_band": fields[3] or current["size_band"],
-                    "traits": fields[4] or current["traits"],
-                    "ability_rules": fields[5] or current["ability_rules"],
+                    "traits": _filled(fields[4]) or current["traits"],
+                    "ability_rules": _filled(fields[5]) or current["ability_rules"],
                     "source": "model",
                 },
             )
@@ -1003,9 +1398,15 @@ def apply_refinement(conn, content: str) -> dict[str, Any]:
                 accepted["races"] += 1
         else:
             fields = (fields + [""] * 5)[:5]
+            # Qwen3 8B wrote the link codes at the end of the fact text
+            # ("...salted fish. R1 R2 R3 R4 R5 R6"): they are links, not text.
+            trailing = re.search(r"(?:\s+\b[RF]\d{1,3}\b[,;]?)+\s*$", fields[2])
+            if trailing:
+                fields[3] = f"{fields[3]} {trailing.group(0)}"
+                fields[2] = fields[2][: trailing.start()].rstrip()
             names = {str(row["name_key"]): str(row["code"]) for row in by_code.values()}
             links = []
-            for token in fields[3].replace(",", " ").split():
+            for token in fields[3].replace(",", " ").replace(";", " ").split():
                 links.append(names.get(race_key(token), token))
             # A race link stands only when the fact names that people; the
             # 8B linked a rule about two peoples to all six.
@@ -1021,22 +1422,41 @@ def apply_refinement(conn, content: str) -> dict[str, Any]:
             if _restates(conn, said):
                 rejected.append(f"FACT {fields[1][:30]}: restates a stored fact")
                 continue
+            title = _clean(fields[1]).strip(" .")
+            if not title or len(title) > TITLE_MAX:
+                title = _title_for(fields[2])
             stored, errors = store_fact(
                 conn,
                 {
                     "kind": fields[0],
-                    "title": fields[1],
+                    "title": title,
                     "text": fields[2],
                     "links": links,
-                    "tags": fields[4].replace(",", " ").split(),
+                    "tags": _tags_for(fields[2], extra=fields[4].replace(",", " ").split(), title=title),
                     "source": "model",
                 },
             )
             if stored and not errors:
                 accepted["facts"] += 1
+                if _enum(fields[0], FACT_KINDS) == "faction":
+                    new_factions += 1
             elif errors and errors != ["duplicate"]:
                 rejected.append(f"FACT {fields[1][:30]}: {'; '.join(errors)}")
-    return {"called": True, "accepted": accepted, "rejected": rejected[:12]}
+    dropped: list[str] = []
+    if new_factions:
+        # Named factions replace the split's one-line pressure summary.
+        for row in conn.execute("SELECT code FROM world_facts WHERE kind = 'faction' AND source = 'split'").fetchall():
+            dropped.append(str(row["code"]))
+        if dropped:
+            conn.execute(
+                f"DELETE FROM world_facts WHERE code IN ({', '.join('?' for _ in dropped)})", dropped
+            )
+    report: dict[str, Any] = {"called": True, "accepted": accepted, "rejected": rejected[:12]}
+    if adjusted:
+        report["adjusted"] = adjusted[:12]
+    if dropped:
+        report["replaced_split_factions"] = dropped
+    return report
 
 
 register_post_start_pass("world_facts", refine_from_model)

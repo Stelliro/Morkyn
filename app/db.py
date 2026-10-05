@@ -755,6 +755,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("backstory_mode", "'known'"),
         ("backstory", "''"),
         ("memory_policy", "'known'"),
+        # The player's people, one of world_races (playtest #23); set at start
+        # by app/world_facts.py from setup, a backstory, or human.
+        ("race", "''"),
     ):
         if column not in player_columns:
             conn.execute(f"ALTER TABLE player ADD COLUMN {column} TEXT NOT NULL DEFAULT {default}")

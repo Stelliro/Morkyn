@@ -706,6 +706,121 @@ _RACE_ABILITY_RULES = (
 )
 
 # ---------------------------------------------------------------------------
+# World facts (playtest #23): race traits and the kinds of lore to ask for
+# ---------------------------------------------------------------------------
+
+# Short traits for a people, so a race row is never empty-traited when no model
+# pass runs. A people is matched by a word in its name; anything else draws
+# from the general pool. Rolled per world from the campaign seed.
+_RACE_TRAITS_BY_WORD: dict[str, tuple[str, ...]] = {
+    "human": (
+        "short-lived and quick to adapt", "found in every trade", "customs change from valley to valley",
+        "stubborn about home ground", "many small kingdoms and quarrels", "marry young, work young",
+    ),
+    "elf": (
+        "long-lived and slow to trust", "lean and light-footed", "keep long memories of old slights",
+        "few children, born late in life", "keen-eyed at dusk", "speak an older tongue among themselves",
+    ),
+    "dwarf": (
+        "stocky and hardy", "live in close-knit clans", "prize craft and kept oaths", "slow to forget a debt",
+        "at home under stone", "beards and braids marked by clan",
+    ),
+    "orc": (
+        "broad and strong", "blunt in speech", "standing won in open contests", "bands bound by kin",
+        "often met with distrust", "heal hard wounds with scars worn proudly",
+    ),
+    "goblin": ("small and quick", "live in crowded warrens", "scavengers and tinkerers", "loud in numbers, wary alone"),
+    "halfling": ("small and sure-footed", "love comfort and full larders", "close family ties", "hard to rattle"),
+    "gnome": ("small and curious", "tinkerers and tale-keepers", "long-lived and talkative", "fond of riddles"),
+    "giant": ("towering and slow to anger", "few in number", "live far from towns", "long memories of old borders"),
+    "troll": ("huge and tough-hided", "slow to heal fire wounds", "keep to wild places", "feared by travellers"),
+    "kobold": ("tiny and scaled", "live in tunnels", "skilled with traps", "loyal to their warren"),
+    "beast": (
+        "keen noses and sharp hearing", "fur, horns or scales by bloodline", "clan marks worn openly",
+        "wary of crowded cities", "restless under a roof", "settle quarrels in the open",
+    ),
+    "spirit": (
+        "a faint shimmer in bright light", "dream vividly and often", "uneasy around cold iron",
+        "feel the dead nearby", "born rarely, to ordinary parents", "eyes that catch the light oddly",
+    ),
+    "sea": ("at home in cold water", "salt-cured skin", "keep the tides as a calendar", "distrust the deep inland"),
+}
+_RACE_TRAIT_WORDS = {
+    "beast": ("beast", "cat", "wolf", "fox", "lizard", "serpent", "minotaur", "harpy"),
+    "spirit": ("spirit", "fae", "fey", "ash", "touched", "blooded", "void"),
+    "sea": ("mer", "tide", "seal", "sea", "river"),
+}
+_RACE_TRAITS_GENERAL = (
+    "tight-knit families", "slow to trust outsiders", "keep old customs strictly", "tall and lean",
+    "short and sturdy", "hardy in bad weather", "quick to laugh, quick to anger", "proud of their crafts",
+    "live in scattered villages", "awake more by night than by day", "long memories for grudges",
+    "few in number here", "travel in small bands", "settle disputes by elders' word",
+)
+
+
+def _trait_pool(race: str) -> list[str]:
+    low = _norm(race)
+    for word, traits in _RACE_TRAITS_BY_WORD.items():
+        hints = _RACE_TRAIT_WORDS.get(word, (word,))
+        if any(hint in low for hint in hints):
+            return list(traits)
+    return list(_RACE_TRAITS_GENERAL)
+
+
+def roll_race_traits(race: str, rng: random.Random | None = None, n: int = 2, limit: int = 120) -> str:
+    """Two or three short traits for one people, drawn by the engine."""
+    rng = rng or random.Random()
+    pool = _trait_pool(race)
+    picked = rng.sample(pool, min(len(pool), max(1, n)))
+    general = [trait for trait in _RACE_TRAITS_GENERAL if trait not in picked]
+    if pool is not _RACE_TRAITS_GENERAL and general and rng.random() < 0.5:
+        picked.append(rng.choice(general))
+    text = ""
+    for trait in picked:
+        candidate = f"{text}, {trait}" if text else trait
+        if len(candidate) > limit:
+            break
+        text = candidate
+    return text
+
+
+# Kinds of lore the post-start world-facts pass asks for. Each entry is
+# "<fact kind>: <what to write>"; a few are drawn per call, so two worlds are
+# not asked the same questions. These are asks, never sample answers.
+_PHRASES["world_fact_ask"] = [
+    *_plain((
+        "faction: a group with a proper name, who leads it and what it wants",
+        "faction: a rival of whoever rules here, named, and what it is after",
+        "faction: a group people fear or whisper about, named, and what it does",
+        "custom: a greeting, oath or courtesy people here use",
+        "custom: how strangers are treated when they arrive",
+        "custom: a festival or holy day and what is done on it",
+        "custom: something taboo here and what happens to someone who breaks it",
+        "custom: how the dead are buried or remembered",
+        "custom: what ordinary people eat, drink or trade day to day",
+        "custom: how people here prove their worth or honour",
+        "history: an old war, fall or founding that people still talk about",
+        "history: how the current rulers came to power",
+        "history: a disaster within living memory and what it changed",
+        "place_lore: a named place beyond the settlements and the story told about it",
+        "place_lore: a road, river or ruin that travellers avoid, and why",
+        "place_lore: where people gather to trade or settle disputes, and its name",
+        "rule: a law about weapons, debts or trade, and who enforces it",
+        "rule: who may own land or hold office, and who may not",
+    )),
+    *_plain((
+        "magic: what using magic costs or risks here",
+        "magic: how people without magic regard those who have it",
+        "magic: who may teach magic, and what the law says about it",
+    ), magic=SOME_MAGIC),
+    *_plain((
+        "place_lore: what sailors or fishers believe about the coast",
+        "custom: what is owed to the sea or river before a voyage",
+    ), water=True),
+    *_plain(("history: what came before the current machines or industry",), era=NEW),
+]
+
+# ---------------------------------------------------------------------------
 # Appearance: rolled values and pieces
 # ---------------------------------------------------------------------------
 
