@@ -709,6 +709,18 @@ def unique_person_name(conn, seed: int, *, attempts: int = 24) -> str:
             return False
         return not any(low.startswith(part) for part in used_parts)
 
+    # A name from this world's own naming pool first (playtest #14/#26
+    # review): the compound parts below are the same for every world, and
+    # they ignored name_ledger. The compound name stays the last resort.
+    try:
+        from app.example_pools import engine_person_name
+
+        pooled = engine_person_name(conn, seed)
+    except Exception:
+        pooled = ""
+    if pooled and pooled.strip().lower() not in taken and pooled.strip().lower() not in places:
+        return pooled
+
     name = invent_person_name(seed=seed)
     for attempt in range(attempts):
         if _free(name):
@@ -15588,7 +15600,13 @@ def ensure_settlement_ruler(
         # npcs is UNIQUE(location_id, name), so the insert retry below cannot
         # catch a duplicate in a different place. Check the whole world.
         base = f"{rng.choice(_SHELL_NAME_PARTS_A)} {rng.choice(surnames)}"
-        name = base if attempt == 0 else f"{base} {sid[-4:]}{attempt}"
+        try:
+            from app.example_pools import engine_person_name
+
+            pooled = engine_person_name(conn, name_seed("ruler", sid, attempt), family=True)
+        except Exception:
+            pooled = ""
+        name = pooled or (base if attempt == 0 else f"{base} {sid[-4:]}{attempt}")
         if _person_name_taken(conn, name):
             name = unique_person_name(conn, name_seed("ruler", sid, attempt))
         try:
@@ -15639,7 +15657,13 @@ def ensure_settlement_ruler(
         for attempt in range(12):
             ncode = _next_alpha_code(conn, "npcs")
             base = f"{rng.choice(_SHELL_NAME_PARTS_A)}{rng.choice(_SHELL_NAME_PARTS_B)}"
-            nname = base if attempt == 0 else f"{base} {nrole.split()[0][:6]}{attempt}"
+            try:
+                from app.example_pools import engine_person_name
+
+                pooled = engine_person_name(conn, name_seed("local_cast", sid, nrole, attempt))
+            except Exception:
+                pooled = ""
+            nname = pooled or (base if attempt == 0 else f"{base} {nrole.split()[0][:6]}{attempt}")
             if _person_name_taken(conn, nname):
                 nname = unique_person_name(conn, name_seed("local_cast", nrole, attempt))
             try:

@@ -1221,7 +1221,10 @@ def draw_names(
     if want in ("female", "male"):
         sexes = [want] * n
     else:
-        sexes = [("female", "male")[i % 2] for i in range(n)]
+        # The first sex is rolled: alternating from "female" made every
+        # single draw (n=1, the engine's own NPCs) a woman's name.
+        first = rng.randrange(2)
+        sexes = [("female", "male")[(i + first) % 2] for i in range(n)]
         rng.shuffle(sexes)
     out: list[str] = []
     used_given: set[str] = set()
@@ -1675,6 +1678,47 @@ def used_names(conn) -> list[str]:
         except Exception:
             continue
     return names
+
+
+def world_options(conn) -> dict[str, Any]:
+    """This world's playthrough_options, or {} before Start."""
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()
+    except Exception:
+        return {}
+    if not row or not row[0]:
+        return {}
+    try:
+        import json
+
+        value = json.loads(row[0])
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def engine_person_name(
+    conn,
+    seed: Any,
+    *,
+    family: bool = False,
+    sex: str = "",
+    exclude: Iterable[Any] = (),
+) -> str:
+    """One name the engine gives a person it makes itself (shell NPCs, local cast, rulers).
+
+    Drawn from this world's naming culture, never a name or name part already
+    used here (NPCs, name_ledger, the player, recent player names, places).
+    Deterministic for a seed and the same table contents. '' when the pool
+    for this culture is used up.
+    """
+    try:
+        ctx = world_context(world_options(conn), sex=sex)
+        used = used_names(conn) + recent_player_names(conn) + used_place_names(conn) + list(exclude or ())
+        names = draw_names(ctx, 1, random.Random(str(seed)), used, sex=sex, family=family)
+    except Exception:
+        return ""
+    return names[0] if names else ""
 
 
 def used_roles(conn) -> list[str]:
