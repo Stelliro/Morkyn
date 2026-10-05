@@ -962,6 +962,77 @@ def get_map(map_id: str | None = None, conn=None) -> dict[str, Any] | None:
     return loaded
 
 
+# The letter board the setup screen's Legacy button opens (static/app.js
+# LEGACY_MAP_SEED). Not a campaign map, but pruning keeps it so that button
+# still has something to show.
+LEGACY_BOARD_SEED = 1935480396
+
+
+def active_map_id(conn) -> str:
+    row = conn.execute("SELECT value FROM settings WHERE key = 'active_world_map_id'").fetchone()
+    value = str((row["value"] if row else "") or "").strip()
+    if value.startswith('"'):
+        try:
+            value = str(json.loads(value) or "").strip()
+        except (TypeError, ValueError):
+            pass
+    return value
+
+
+def campaign_map_ids(conn) -> set[str]:
+    """Maps this campaign uses. Only the active map is referenced anywhere."""
+    chosen = active_map_id(conn)
+    if not chosen:
+        return set()
+    row = conn.execute("SELECT id FROM world_maps WHERE id = ?", (chosen,)).fetchone()
+    return {chosen} if row else set()
+
+
+def legacy_board_ids(conn) -> set[str]:
+    row = conn.execute(
+        "SELECT id FROM world_maps WHERE seed = ? AND width = 36 AND height = 36 "
+        "ORDER BY created_at DESC LIMIT 1",
+        (LEGACY_BOARD_SEED,),
+    ).fetchone()
+    return {str(row["id"])} if row else set()
+
+
+def campaign_map_rows(conn, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The world_maps rows a campaign save carries: only the ones it uses.
+
+    Playtest #25: every save copied the whole table (75 maps since July in
+    game 2). With no usable active map the rows pass through unchanged,
+    so a save never loses the map it would have needed.
+    """
+    keep = campaign_map_ids(conn)
+    if not keep:
+        return rows
+    return [row for row in rows if str((row or {}).get("id") or "") in keep]
+
+
+def prune_world_maps(conn) -> dict[str, Any]:
+    """Delete stored maps this campaign does not use; returns what went.
+
+    Called when a new game starts, after its map is rolled and active.
+    Keeps the active map and the Legacy button's board. Does nothing
+    without an active map, since then there is no telling which is in use.
+    """
+    keep = campaign_map_ids(conn)
+    if not keep:
+        return {"removed": 0, "kept": [], "skipped": "no active map"}
+    keep |= legacy_board_ids(conn)
+    drop = [str(row["id"]) for row in conn.execute("SELECT id FROM world_maps").fetchall() if str(row["id"]) not in keep]
+    for start in range(0, len(drop), 200):
+        chunk = drop[start:start + 200]
+        marks = ", ".join("?" for _ in chunk)
+        conn.execute(f"DELETE FROM world_maps WHERE id IN ({marks})", chunk)
+        try:
+            conn.execute(f"DELETE FROM tile_image_run_disable WHERE run_id IN ({marks})", chunk)
+        except Exception:
+            pass
+    return {"removed": len(drop), "kept": sorted(keep)}
+
+
 def get_legacy_map() -> dict[str, Any] | None:
     """Newest small stored board, not the active world.
 

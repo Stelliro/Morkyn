@@ -592,7 +592,10 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             "race": flags.get("RACE", "human")[:80],
             "location": flags.get("LOC") or positional["location"],
             "role": (flags.get("ROLE") or positional["role"] or "local")[:80],
-            "summary": flags.get("DESC") or f"Introduced this turn: {name}"[:400],
+            # Nothing known yet stays empty (playtest #24). A placeholder here
+            # was stored as the summary and the first NPC_NOTE glued onto it:
+            # "Introduced this turn: Aria Aria is a baker ...".
+            "summary": (flags.get("DESC") or "")[:400],
             "attitude": (flags.get("ATTITUDE") or positional["attitude"] or "neutral")[:40],
             "personality": "",
             "likes": "",

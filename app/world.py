@@ -3983,8 +3983,12 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         place_names = {int(row["id"]): str(row["name"] or "") for row in locations}
         for npc in npcs:
             workplace_id = int(npc.get("workplace_id") or 0)
+            plan = _json(str(npc.pop("workplace_plan", "") or "") or "{}", {})
             if workplace_id in place_names:
                 npc["workplace"] = place_names[workplace_id]
+            elif isinstance(plan, dict) and plan.get("name"):
+                # Planned, not yet a place (playtest #27); still not here.
+                npc["workplace"] = str(plan["name"])
         relationships = rows_to_dicts(
             conn.execute(
                 """
@@ -4822,6 +4826,15 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
 
     with connect() as conn:
         _clear_playthrough(conn)
+        # The map was rolled before Start and is the active one; every other
+        # stored map is a reroll or an earlier game (playtest #25). Saved slots
+        # carry their own maps in world.json, so none of theirs is lost.
+        try:
+            from app.tile_world import prune_world_maps
+
+            prune_world_maps(conn)
+        except Exception:
+            pass
         # Drop harness leftovers so they never ride into a live export
         _purge_test_settings(conn)
         conn.execute("INSERT INTO pacing (key, value) VALUES ('turn', '0')")
@@ -5483,6 +5496,11 @@ def _purge_test_settings(conn) -> None:
 def export_world() -> dict[str, Any]:
     with connect() as conn:
         tables = {table: _table_rows(conn, table) for table in WORLD_TABLES}
+        # Only the map this campaign uses (playtest #25: game 2 carried 75).
+        if "world_maps" in tables:
+            from app.tile_world import campaign_map_rows
+
+            tables["world_maps"] = campaign_map_rows(conn, list(tables.get("world_maps") or []))
         if "settings" in tables:
             tables["settings"] = _scrub_settings_rows(list(tables.get("settings") or []))
         return {
@@ -5517,6 +5535,18 @@ def _restore_world(data: dict[str, Any]) -> None:
             for table in RESTORE_ORDER:
                 if not _replace_table(table):
                     continue
+                if table == "world_maps":
+                    # The Legacy button's board is not a campaign map and new
+                    # saves do not carry it (playtest #25); loading one keeps it.
+                    try:
+                        from app.tile_world import legacy_board_ids
+
+                        kept = sorted(legacy_board_ids(conn))
+                        marks = ", ".join("?" for _ in kept) or "''"
+                        conn.execute(f"DELETE FROM world_maps WHERE id NOT IN ({marks})", kept)
+                    except Exception:
+                        pass
+                    continue
                 if table in WORLD_TABLES or table == "turn_snapshots":
                     try:
                         conn.execute(f"DELETE FROM {table}")
@@ -5540,12 +5570,17 @@ def _restore_world(data: dict[str, Any]) -> None:
                         continue
                     placeholders = ", ".join("?" for _ in columns)
                     names = ", ".join(columns)
+                    verb = "INSERT OR REPLACE" if table == "world_maps" else "INSERT"
                     conn.execute(
-                        f"INSERT INTO {table} ({names}) VALUES ({placeholders})",
+                        f"{verb} INTO {table} ({names}) VALUES ({placeholders})",
                         [row[column] for column in columns],
                     )
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA foreign_key_check")
+            # Saves from before playtest #24 stored a placeholder as the summary.
+            from app.db import repair_npc_default_summaries
+
+            repair_npc_default_summaries(conn)
         except Exception:
             conn.rollback()
             raise
@@ -6295,6 +6330,15 @@ def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str) -> dict[
         free = [row for row in same if not int(row["keeper_npc_id"] or 0)]
         target = (free or same or [None])[0] if not keeper else (free[0] if free else None)
     minted = False
+    if target is None and keeper_id:
+        # The keeper's own planned workplace, made a place now that the player
+        # is shown going in (playtest #27).
+        plan = npc_workplace_plan(conn, keeper_id)
+        if plan and int(plan.get("parent_id") or 0) == here_id and (not kind or plan.get("kind") == kind):
+            venue_id = ensure_npc_workplace(conn, keeper_id)
+            if venue_id:
+                target = _location_row(conn, venue_id)
+                minted = True
     if target is None:
         chosen = ""
         for candidate in (kind, "general_store"):
@@ -6387,16 +6431,37 @@ def _settle_entered_venue(
     return report
 
 
-def ensure_npc_workplace(conn, npc_id: int) -> int:
-    """This NPC's workplace venue id, created the first time it is needed; 0 for none.
+def _workplace_label(kind: str) -> str:
+    return " ".join(word[:1].upper() + word[1:] for word in venues.kind_label(kind).split())
+
+
+def npc_workplace_plan(conn, npc_id: int) -> dict[str, Any]:
+    """The stored planned workplace ({kind, name, parent_id}) of an NPC, or {}."""
+    try:
+        row = conn.execute("SELECT workplace_plan FROM npcs WHERE id = ?", (int(npc_id),)).fetchone()
+    except Exception:
+        return {}
+    plan = _json(str((row["workplace_plan"] if row else "") or "") or "{}", {})
+    if not isinstance(plan, dict) or not plan.get("kind") or not plan.get("name"):
+        return {}
+    return plan
+
+
+def plan_npc_workplace(conn, npc_id: int) -> int:
+    """Settle where this NPC works without making a place; the venue id if one exists, else 0.
 
     Playtest #16: Aria the baker had no bakery, so in Elara's herb shop the
-    model let her sell the herbs. A trade gets premises in its settlement (a
-    child of the place, kept by this NPC) and the draft is told whose place is
-    whose. The keeper of a venue works there whatever their role says. The
-    settlement-size rule that stops a player conjuring an apothecary in a
-    hamlet does not apply: the baker already exists, so their bakery does. A
-    full settlement puts them in an existing one of that kind instead.
+    model let her sell the herbs. A trade has premises in its settlement and
+    the draft is told whose place is whose. The keeper of a venue works there
+    whatever their role says, and a free venue of the trade's kind is claimed.
+
+    Playtest #27: making those premises a location row the moment a
+    tradesperson stood near the player filled the place lists ("Aria's
+    Bakery" on turn 1, "Jethand's Tailor" on turn 4). When no venue exists
+    yet, the workplace is kept as a planned record on the NPC (kind, name,
+    settlement) that still reaches the prompts as works_at, and
+    ensure_npc_workplace turns it into a place only when the player goes
+    there, asks for it, or the story names it.
     """
     npc = conn.execute("SELECT * FROM npcs WHERE id = ?", (int(npc_id),)).fetchone()
     if npc is None:
@@ -6408,6 +6473,7 @@ def ensure_npc_workplace(conn, npc_id: int) -> int:
         "SELECT id FROM locations WHERE keeper_npc_id = ? ORDER BY id LIMIT 1", (int(npc_id),)
     ).fetchone()
     venue_id = int(kept["id"]) if kept else 0
+    plan: dict[str, Any] = {}
     if not venue_id:
         if int(venues._field(npc, "shell", 0) or 0):
             return 0
@@ -6429,26 +6495,73 @@ def ensure_npc_workplace(conn, npc_id: int) -> int:
             venue_id = int(free[0]["id"])
             conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc_id), venue_id))
         elif venue_capacity_left(conn, settlement_id, kind) > 0:
-            label = " ".join(word[:1].upper() + word[1:] for word in venues.kind_label(kind).split())
-            name = f"{str(npc['name'] or '').strip()}'s {label}"
-            if _match_location_by_name(conn, name) is not None:
-                return 0
-            cursor = conn.execute(
-                "INSERT INTO locations (code, name, summary, visit_count) VALUES (?, ?, ?, 0)",
-                (_next_code(conn, "locations", "L"), name, f"Where {npc['name']} works ({npc['role']})."[:400]),
-            )
-            venue_id = int(cursor.lastrowid)
-            stamp_venue_fields(conn, venue_id, parent_id=settlement_id, kind=kind)
-            conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc_id), venue_id))
+            plan = {
+                "kind": kind,
+                "name": f"{str(npc['name'] or '').strip()}'s {_workplace_label(kind)}",
+                "parent_id": settlement_id,
+            }
         elif rows:
             venue_id = int(rows[0]["id"])
     if venue_id:
-        conn.execute("UPDATE npcs SET workplace_id = ? WHERE id = ?", (venue_id, int(npc_id)))
+        conn.execute("UPDATE npcs SET workplace_id = ?, workplace_plan = '' WHERE id = ?", (venue_id, int(npc_id)))
+    elif plan:
+        conn.execute(
+            "UPDATE npcs SET workplace_plan = ? WHERE id = ?", (json.dumps(plan, ensure_ascii=True), int(npc_id))
+        )
+    return venue_id
+
+
+def ensure_npc_workplace(conn, npc_id: int) -> int:
+    """This NPC's workplace venue id, made a place now if it was only planned; 0 for none.
+
+    The settlement-size rule that stops a player conjuring an apothecary in a
+    hamlet does not apply: the baker already exists, so their bakery does. A
+    full settlement puts them in an existing one of that kind instead.
+    """
+    venue_id = plan_npc_workplace(conn, npc_id)
+    if venue_id:
+        return venue_id
+    plan = npc_workplace_plan(conn, npc_id)
+    npc = conn.execute("SELECT * FROM npcs WHERE id = ?", (int(npc_id),)).fetchone()
+    if not plan or npc is None:
+        return 0
+    kind = str(plan["kind"])
+    name = str(plan["name"])
+    settlement_id = int(plan.get("parent_id") or 0)
+    if _location_row(conn, settlement_id) is None:
+        return 0
+    same_name = _match_location_by_name(conn, name)
+    if same_name is not None:
+        # The story or a MOVE made it already: adopt it unless someone else keeps it.
+        keeper = int(venues._field(same_name, "keeper_npc_id", 0) or 0)
+        if keeper and keeper != int(npc_id):
+            return 0
+        venue_id = int(same_name["id"])
+    elif venue_capacity_left(conn, settlement_id, kind) > 0:
+        cursor = conn.execute(
+            "INSERT INTO locations (code, name, summary, visit_count) VALUES (?, ?, ?, 0)",
+            (_next_code(conn, "locations", "L"), name, f"Where {npc['name']} works ({npc['role']})."[:400]),
+        )
+        venue_id = int(cursor.lastrowid)
+        stamp_venue_fields(conn, venue_id, parent_id=settlement_id, kind=kind)
+    else:
+        row = conn.execute(
+            "SELECT id FROM locations WHERE parent_id = ? AND kind = ? ORDER BY id LIMIT 1", (settlement_id, kind)
+        ).fetchone()
+        if row is None:
+            return 0
+        conn.execute("UPDATE npcs SET workplace_id = ?, workplace_plan = '' WHERE id = ?", (int(row["id"]), int(npc_id)))
+        return int(row["id"])
+    conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc_id), venue_id))
+    conn.execute("UPDATE npcs SET workplace_id = ?, workplace_plan = '' WHERE id = ?", (venue_id, int(npc_id)))
     return venue_id
 
 
 def _ensure_workplaces_here(conn) -> list[int]:
-    """Workplaces for everyone where the player stands, so the next prompt knows whose place is whose."""
+    """Workplaces for everyone where the player stands, so the next prompt knows whose place is whose.
+
+    Plans only (playtest #27): no location row is made here.
+    """
     here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     here_id = int((here["current_location_id"] if here else 0) or 0)
     if not here_id:
@@ -6456,7 +6569,61 @@ def _ensure_workplaces_here(conn) -> list[int]:
     rows = conn.execute(
         "SELECT id FROM npcs WHERE location_id = ? AND COALESCE(shell, 0) = 0 ORDER BY id", (here_id,)
     ).fetchall()
-    return [ensure_npc_workplace(conn, int(row["id"])) for row in rows]
+    return [plan_npc_workplace(conn, int(row["id"])) for row in rows]
+
+
+def _realize_named_workplaces(conn, player_input: str, *texts: str) -> list[str]:
+    """Make planned workplaces places once the player or the story names them (playtest #27).
+
+    A plan's own name ("Aria's Bakery") or its keeper's first name with the
+    trade ("Aria's bakery") in the input, the narration or a MOVE counts. So
+    does the player asking for the trade's place in their settlement ("I go to
+    the bakery") when exactly one planned workplace of that kind is there and
+    none exists yet.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT id, name, workplace_plan FROM npcs WHERE COALESCE(workplace_plan, '') != '' "
+            "AND COALESCE(workplace_id, 0) = 0"
+        ).fetchall()
+    except Exception:
+        return []
+    if not rows:
+        return []
+    said = str(player_input or "").lower()
+    told = " ".join(str(text or "") for text in texts).lower()
+    here = conn.execute(
+        "SELECT l.* FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+    ).fetchone()
+    settlement_id = 0
+    if here is not None:
+        settlement_id = int(venues._field(here, "parent_id", 0) or 0) or int(here["id"])
+    plans: list[tuple[int, dict[str, Any], str]] = []
+    for row in rows:
+        plan = npc_workplace_plan(conn, int(row["id"]))
+        if plan:
+            plans.append((int(row["id"]), plan, str(row["name"] or "")))
+    realized: list[str] = []
+    for npc_id, plan, npc_name in plans:
+        label = venues.kind_label(str(plan["kind"])).lower()
+        first = npc_name.strip().split(" ")[0].lower() if npc_name.strip() else ""
+        names = {str(plan["name"]).lower()}
+        if first and label:
+            names.add(f"{first}'s {label}")
+        named = any(name and (name in said or name in told) for name in names)
+        if not named and label and int(plan.get("parent_id") or 0) == settlement_id:
+            same_kind = [p for _, p, _ in plans if p["kind"] == plan["kind"] and int(p.get("parent_id") or 0) == settlement_id]
+            exists = conn.execute(
+                "SELECT 1 FROM locations WHERE parent_id = ? AND kind = ? LIMIT 1", (settlement_id, plan["kind"])
+            ).fetchone()
+            named = (
+                len(same_kind) == 1
+                and exists is None
+                and re.search(rf"\b(?:the|a|your|her|his|their)\s+{re.escape(label)}\b", said) is not None
+            )
+        if named and ensure_npc_workplace(conn, npc_id):
+            realized.append(str(plan["name"]))
+    return realized
 
 
 def _movement_rule_example(known: list[dict[str, Any]], current_name: str = "") -> str:
@@ -9732,21 +9899,21 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
             short_sum = summary[:200] if summary else ""
             facts = _json(existing["known_facts"] or "[]", [])
             trust = int(existing["trust"] or 0) + trust_delta
+            shell_summary = str(existing["summary"] or "")
+            if short_sum and short_sum[:40] not in shell_summary:
+                shell_summary = _merge_text(shell_summary, short_sum, 400)
             conn.execute(
                 """
                 UPDATE npcs
                 SET attitude = COALESCE(NULLIF(?, ''), attitude),
-                    summary = CASE WHEN ? != '' AND instr(summary, ?) = 0
-                        THEN substr(trim(summary || ' ' || ?), 1, 400) ELSE summary END,
+                    summary = ?,
                     trust = ?,
                     known_facts = ?
                 WHERE id = ?
                 """,
                 (
                     attitude if attitude != "neutral" else "",
-                    short_sum,
-                    short_sum[:40] if short_sum else "",
-                    short_sum,
+                    shell_summary,
                     max(-100, min(100, trust)),
                     json.dumps(facts),
                     int(existing["id"]),
@@ -9756,9 +9923,7 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         facts = _json(existing["known_facts"] or "[]", [])
         if known_fact and known_fact not in facts:
             facts.append(known_fact[:350])
-        merged_summary = existing["summary"]
-        if summary and summary not in merged_summary:
-            merged_summary = f"{merged_summary} {summary}".strip()[:1400]
+        merged_summary = _merge_text(existing["summary"] or "", summary, 1400)
         conn.execute(
             """
             UPDATE npcs
@@ -12008,12 +12173,23 @@ def _apply_response_drafts(conn, drafts: list[dict[str, Any]], turn: int) -> Non
 
 
 def _merge_text(existing: str, addition: str, limit: int) -> str:
-    addition = addition.strip()
+    """Append a note as its own sentence.
+
+    A bare space joined a fact onto text with no full stop (playtest #24:
+    "Introduced this turn: Aria Aria is a baker ..."), so a note after
+    unterminated text gets one.
+    """
+    addition = str(addition or "").strip()
+    existing = str(existing or "")
     if not addition:
         return existing
     if addition in existing:
         return existing
-    return f"{existing} {addition}".strip()[:limit]
+    head = existing.strip()
+    if not head:
+        return addition[:limit]
+    sep = " " if head[-1] in ".!?\u2026\"'\u201d)]" else ". "
+    return f"{head}{sep}{addition}"[:limit]
 
 
 def _apply_index_updates(conn, updates: list[dict[str, Any]]) -> None:
@@ -13266,6 +13442,17 @@ def apply_turn(
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         next_turn = int(row["value"]) + 1 if row else 1
 
+        # A planned workplace the player or the story names becomes a place
+        # before movement resolves, so a MOVE there finds it (playtest #27).
+        try:
+            _realize_named_workplaces(
+                conn,
+                player_input,
+                _narration_text(result),
+                str(((result.get("player") or {}) if isinstance(result.get("player"), dict) else {}).get("move_to_location") or ""),
+            )
+        except Exception:
+            pass
         # Movement runs before the snapshot so a repaired destination is part of
         # the rewind record, not applied on top of it.
         try:

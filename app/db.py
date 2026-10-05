@@ -728,6 +728,10 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         # The venue this NPC works in (locations.id, 0 = none yet); set by
         # world.ensure_npc_workplace the first time it is needed (playtest #16)
         ("workplace_id", "INTEGER NOT NULL DEFAULT 0"),
+        # The workplace before it is a place (playtest #27): JSON {kind, name,
+        # parent_id}. world.plan_npc_workplace writes it; the location row is
+        # only made when the player goes there, asks for it, or the story names it.
+        ("workplace_plan", "TEXT NOT NULL DEFAULT ''"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
@@ -947,6 +951,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         except Exception:
             pass
 
+    repair_npc_default_summaries(conn)
+
     # Written rules for short setup choices (rank ladder and the other selections).
     try:
         from app.setting_templates import ensure_setting_template_table
@@ -984,6 +990,40 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         init_party(conn)
     except Exception:
         pass
+
+
+# The placeholder NPC_NEW used to store as a summary (playtest #24). Saves from
+# before the fix carry it, often with a note glued on: "Introduced this turn:
+# Aria Aria is a baker with a steady hand and a sharp mind."
+_INTRODUCED_PREFIX = "Introduced this turn:"
+
+
+def strip_introduced_prefix(summary: str, name: str = "") -> str:
+    """The summary without the old 'Introduced this turn: <Name>' placeholder."""
+    text = str(summary or "").strip()
+    if not text.lower().startswith(_INTRODUCED_PREFIX.lower()):
+        return text
+    rest = text[len(_INTRODUCED_PREFIX):].lstrip()
+    name = str(name or "").strip()
+    if name and rest.lower().startswith(name.lower()):
+        rest = rest[len(name):]
+    return rest.lstrip(" .,;:-").strip()
+
+
+def repair_npc_default_summaries(conn: sqlite3.Connection) -> int:
+    """Strip the placeholder from stored NPC summaries; returns rows changed."""
+    try:
+        rows = conn.execute(
+            "SELECT id, name, summary FROM npcs WHERE summary LIKE ?", (f"{_INTRODUCED_PREFIX}%",)
+        ).fetchall()
+    except sqlite3.Error:
+        return 0
+    for row in rows:
+        conn.execute(
+            "UPDATE npcs SET summary = ? WHERE id = ?",
+            (strip_introduced_prefix(row["summary"], row["name"]), int(row["id"])),
+        )
+    return len(rows)
 
 
 def _alpha_code(number: int) -> str:
