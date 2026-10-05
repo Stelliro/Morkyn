@@ -1177,6 +1177,12 @@ def classify_item(name: str) -> dict[str, Any]:
             "robe",
             "jacket",
             "tunic",
+            # Game 2's "worn leather jerkin" counted as a pocket trinket and
+            # pushed a backstory item past the trinket cap (playtest #21).
+            "jerkin",
+            "blouse",
+            "doublet",
+            "gown",
             "shirt",
             "dress",
             "clothes",

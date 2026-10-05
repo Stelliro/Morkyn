@@ -28,6 +28,12 @@ from app.example_pools import (
     setup_examples,
 )
 from app.idea_bank import idea_sparks_for_prompt, prompt_sparks
+from app.setup_coherence import (
+    align_backstory_arrival,
+    binary_sex,
+    name_sex,
+    pronouns_for_setup,
+)
 from app.setup_composer import (
     COMPOSER_FIELD_ORDER,
     CUSTOM_SKILLS_SHAPE,
@@ -6398,6 +6404,7 @@ def coherence_review_setup(
             "If illogical, rewrite character_backstory and/or starter_equipment/appearance together.",
             "If everything is already solid, return empty field_patches and omit special_abilities.",
             "User-facing names/titles already filled should only change if clearly cheesy.",
+            "start_location is where character_backstory arrives: if you change one, change the other to the same place.",
         ],
     }
     try:
@@ -6452,6 +6459,7 @@ def coherence_review_setup(
         idea=idea,
         context={**current_setup, **fields, "_compose_intent": intent_plan},
     )
+    fields = _cohere_reviewed_arrival(current_setup, fields, locked)
     changed = list(fields.keys())
     if abilities is not None:
         abilities = _ensure_ability_growth_math(abilities if isinstance(abilities, list) else [])
@@ -6463,6 +6471,34 @@ def coherence_review_setup(
         "changed": changed,
         "fallback_used": False,
     }
+
+
+def _cohere_reviewed_arrival(
+    current_setup: dict[str, Any],
+    fields: dict[str, Any],
+    locked: set[str],
+) -> dict[str, Any]:
+    """The coherence pass may rename start_location; the backstory's arrival follows it.
+
+    Playtest #21: game 2's backstory arrived at "The Empty Lot" and play began
+    at Eldoria's Edge. This pass is the one step that changes start_location
+    after the backstory is written, and it patched the place alone. A locked
+    backstory keeps its place: the start_location patch is dropped instead.
+    """
+    out = dict(fields)
+    old_loc = str(current_setup.get("start_location") or "").strip()
+    new_loc = str(out.get("start_location") or old_loc).strip()
+    story = str(out.get("character_backstory") or current_setup.get("character_backstory") or "")
+    if not new_loc or not story.strip():
+        return out
+    aligned, changed = align_backstory_arrival(story, new_loc, previous=old_loc)
+    if not changed:
+        return out
+    if "character_backstory" in locked:
+        out.pop("start_location", None)
+        return out
+    out["character_backstory"] = aligned
+    return out
 
 
 def _setup_intent_prompt_shape() -> dict[str, Any]:
@@ -6885,6 +6921,12 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Return only the generated field value in JSON.",
             ],
         }
+        if field == "character_backstory":
+            prompt["pronouns"] = pronouns_for_setup(current_setup)
+            prompt["rules"].append(
+                "Refer to the character with the pronouns in `pronouns` (they follow player_sex); "
+                "change any other pronouns for the character to these."
+            )
     elif return_fields == ["player_name"]:
         prompt = {
             "task": (
@@ -7278,7 +7320,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "For reincarnated childhood, prefer former life fragments."
             ),
             "character_backstory": (
-                "Generate 2-4 concise third-person sentences of actual character history (use they/their, never I/my). "
+                "Generate 2-4 concise third-person sentences of actual character history, never I/my. "
+                "Refer to the character with the pronouns in `pronouns` (they follow player_sex). "
                 "If start_location is set, the last sentence leaves the character at start_location. "
                 "INVENT a FRESH job, city, death/transport method, and arrival detail every roll — do NOT reuse stock clones. "
                 "BANNED stock motifs (never use): Seoul warehouse, expired coffee, half-eaten bento, coin that always lands heads, "
@@ -7438,6 +7481,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             prompt["rules"] = list(prompt.get("rules") or []) + [EXAMPLE_ROLLED_RULE]
         # Diversity seeds stop 8B from welding one stock clone across re-rolls
         if field == "character_backstory":
+            prompt["pronouns"] = pronouns_for_setup(current_setup)
             prompt["diversity_seed"] = random.randint(1000, 999999)
             prompt["ban_stock_motifs"] = [
                 "Seoul warehouse",
@@ -7610,7 +7654,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Backstory mode affects both optional identity fields: reincarnated/transmigrated characters may carry former-world names or former-rank titles, while hidden/amnesia/nameless starts often stay blank unless the backstory gives NPC-facing clues.",
                 "backstory_mode must be a short label (known/transmigrated/reincarnated/...), never a prose sentence.",
                 "memory_policy must be a short phrase (ordinary memory / remembers former life / former life fragments/...), never a menu dump.",
-                "character_backstory: third person only; 2-4 sentences.",
+                "character_backstory: third person only; 2-4 sentences. Refer to the character with the pronouns of player_sex: she/her for female, he/him for male, they/them otherwise.",
                 "transmigrated = former-world life + transport method + start at arrival (or just before). Never a native-only fantasy plot with a bolted-on 'woke in another world' sentence.",
                 "reincarnated = grew up in this world + former-life fragments. body transmigration = old mind in a local body.",
                 "Prefer the word transmigrated for the mode; do not confuse the AI with using 'isekai' as the backstory_mode label.",
@@ -7874,6 +7918,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 attempt=attempt,
                 transmig=transmig,
                 nearby_setup=prompt.get("nearby_setup") if isinstance(prompt, dict) else current_setup,
+                pronouns=pronouns_for_setup(current_setup),
             )
             try:
                 retried = _validate_setup_randomization(
@@ -8370,7 +8415,43 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
     for rolled_field, rolled in setup_rolls.items():
         if rolled_field in normalized:
             normalized[rolled_field] = apply_rolled_values(rolled_field, normalized[rolled_field], rolled)
+    if not text_mode:
+        normalized = _cohere_identity_fields(current_setup, normalized, locked_fields)
     return normalized
+
+
+def _cohere_identity_fields(
+    current_setup: dict[str, Any],
+    result: dict[str, Any],
+    locked_fields: set[str] | None = None,
+) -> dict[str, Any]:
+    """Engine coherence on a roll (playtest #21).
+
+    * A rolled backstory arrives at start_location. Game 2's backstory arrived
+      at "The Empty Lot" while play began at Eldoria's Edge.
+    * A rolled player_name reads as player_sex. When the engine's name pools
+      know the name as the other sex, the first freshly drawn name for this sex
+      replaces it.
+    """
+    out = dict(result)
+    locked = set(locked_fields or ())
+    merged = {**current_setup, **out}
+    story = out.get("character_backstory")
+    location = str(merged.get("start_location") or "").strip()
+    if isinstance(story, str) and story.strip() and location:
+        aligned, changed = align_backstory_arrival(story, location)
+        if changed:
+            out["character_backstory"] = aligned
+    sex = binary_sex(merged.get("player_sex"))
+    name = out.get("player_name")
+    if sex and isinstance(name, str) and name.strip() and "player_name" not in locked:
+        named = name_sex(name)
+        if named and named != sex:
+            options = _player_name_options({**current_setup, **out, "player_sex": sex}).get("name_options") or []
+            fits = [n for n in options if name_sex(n) in ("", sex)]
+            if fits:
+                out["player_name"] = fits[0]
+    return out
 
 
 def _safe_setup_examples(field: str, setup: dict[str, Any] | None) -> list[str]:
@@ -8661,6 +8742,7 @@ def _backstory_quality_retry_prompt(
     attempt: int,
     transmig: bool,
     nearby_setup: Any = None,
+    pronouns: str = "they/them",
 ) -> dict[str, Any]:
     """Prompt the model to invent again after a backstory quality denial (not stamp the freight template)."""
     rep = denied.get("report") if isinstance(denied.get("report"), dict) else {}
@@ -8706,8 +8788,8 @@ def _backstory_quality_retry_prompt(
         "return_shape": {"character_backstory": "2-4 concise third-person sentences as ONE string"},
         "required_details": (
             [
-                "concrete former-world job NEVER used in rejected_backstory (teacher, nurse, cook, courier, clerk, florist, radio host, janitor, stagehand…)",
-                "HOW they were transported (vary: fall, medical, summon, portal, train, ferry — not always truck/freight)",
+                "a concrete former-world job NEVER used in rejected_backstory, chosen for this character",
+                "HOW they were transported, a way that fits the former world and is not truck/freight",
                 "start at NEW-WORLD arrival with different pocket props",
                 "no skill names, compounding, weak seed, or ability rules",
                 "no 'no free hero kit' / 'freight and labels' / 'bent pair of glasses' boilerplate",
@@ -8720,13 +8802,13 @@ def _backstory_quality_retry_prompt(
             ]
         ),
         "quality_bar": {
-            "person": "third person they/their only",
+            "person": f"third person, {pronouns} for the character",
             "length": "2-4 sentences, ≥140 characters",
             "transmigrated": "former life + transport + arrival place required",
             "forbidden": "stock clones, skill meta, first person, native fantasy plot for isekai",
         },
         "rules": [
-            "Third person only (they/their).",
+            f"Third person only; refer to the character as {pronouns}.",
             "Do NOT paraphrase rejected_backstory with synonym swaps.",
             "Return prose string only, not a JSON list of sentences.",
             "Fix every hard_fail from the denial.",

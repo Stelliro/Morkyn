@@ -99,6 +99,7 @@ from app.idea_bank import (
     search_idea_bank,
 )
 from app.starter_logic import fact_check_starter_loadout
+from app.setup_coherence import identity_warnings, infer_player_sex
 from app.skill_checks import (
     catalog_public,
     player_with_gear_scores,
@@ -3555,6 +3556,25 @@ def api_setup_coherence_pass(request: CoherencePassRequest):
             "changed": [],
             "fallback_used": True,
         }
+
+
+class IdentityCheckRequest(BaseModel):
+    player_name: str = Field(default="", max_length=120)
+    player_sex: str = Field(default="", max_length=80)
+    character_backstory: str = Field(default="", max_length=4000)
+
+
+@app.post("/api/setup/identity-check")
+def api_setup_identity_check(request: IdentityCheckRequest):
+    """
+    Before Start: does the chosen sex agree with the backstory's pronouns and the
+    name (playtest #21)? Changes nothing. An unset sex comes back inferred.
+    """
+    setup = request.model_dump()
+    return {
+        "warnings": identity_warnings(setup),
+        "inferred_sex": infer_player_sex(setup),
+    }
 
 
 class StarterLogicRequest(BaseModel):

@@ -58,6 +58,7 @@ Morkyn/
 |   |-- venues.py                    # Shop/inn kinds, opening hours, settlement commonality, trade->workplace kind, prose entry reader
 |   |-- world_facts.py               # Per-world race and lore rows, post-start passes, per-turn fetch
 |   |-- example_pools.py             # Fresh per-call prompt examples from world-filtered pools, engine-rolled appearance values
+|   |-- setup_coherence.py           # Setup cross-checks: sex/pronouns/name, backstory arrival, appearance vs worn gear, backstory items
 |   |-- proficiencies.py             # Custom proficiencies settled into rows before turn 1
 |   |-- world_scale.py               # Seeded wilderness, theme ground, materials, people leanings
 |   |-- turn_dsl.py                  # NAR+OPS draft language
@@ -188,6 +189,15 @@ Morkyn/
 - **Consumers:** `app.llm.generate_setup_randomization` (single-field examples, `engine_rolled`, player `name_options`/`avoid_names`, offline name fallback), `app.llm._lint_and_repair_setup_fields`, `app.setup_composer.structural_fallback`, `app.world.build_prompt_context` (`cast_options`), `app.world.movement_contract` (`venue_name_options`), `app.world._upsert_npc` / `create_shell_npc` (ledger), `app.world.start_playthrough` (player name history), `app.turn_dsl.build_dsl_user_prompt`.
 - **Dependencies:** `app.world` (`resolve_world_era`, `resolve_world_magic`, `_SEED_ROLE_POOLS`, `_SEED_POOL_HINTS`), `app.venues`, `app.naming.ledger_record`, `app.rng.rng_for`, `app.db.connect`.
 - **Design Notes:** Entries carry tags; an entry fits when every tag agrees with what the context knows (unknown passes; `water` is strict, so a net mender needs water here). Draws are deterministic for a seeded rng; turn draws are seeded per campaign, turn and place. A name already held by an NPC, in `name_ledger`, or by the player is never drawn, nor is any part of it. `player_name_history` is deliberately not a campaign table: not cleared by `_clear_playthrough`, not exported. Hard appearance facts are the engine's; the model writes around them.
+
+#### Setup Coherence
+
+- **Files:** `app/setup_coherence.py`
+- **Purpose:** The character the player starts with agrees with itself (playtest #21): the chosen sex, the backstory's pronouns and the name; the backstory's arrival place and `start_location`; the appearance clothing tags and the worn gear cards; the items the backstory carries and the starting inventory.
+- **Key API:** `pronoun_sex()`, `name_sex()`, `pronouns_for_setup()`, `infer_player_sex()`, `identity_warnings()`, `arrival_place()`, `align_backstory_arrival()`, `appearance_parts()`, `name_basics_from_appearance()`, `appearance_from_gear()`, `backstory_carried_items()`, `backstory_gear_items()`
+- **Consumers:** `app.llm.generate_setup_randomization` (backstory `pronouns`, `_cohere_identity_fields`), `app.llm.coherence_review_setup` (`_cohere_reviewed_arrival`), `app.world.start_playthrough`, `app.main` (`/api/setup/identity-check`), `static/app.js` `confirmSetupIdentity()`.
+- **Dependencies:** `app.example_pools._NAMES` (name sex), `app.gear` (slots, placeholder basics).
+- **Design Notes:** Engine-only; asks the model nothing. The player's chosen sex is never changed: a disagreement is a warning on the setup page, and only an unset sex is inferred. Worn cards are the truth for clothes; appearance follows them, except that an unnamed basic is named from appearance first. Backstory items are carried cards with no stats and still pass `fact_check_starter_loadout`, so arrival rules and the trinket cap apply. Start records what it changed in `settings.setup_coherence` (its own key: `playthrough_options` rides in every turn prompt).
 
 #### Custom Proficiencies
 
@@ -531,6 +541,7 @@ There is no production build step. This is a local prototype served directly by 
 | POST | `/api/regenerate` | Restore the latest pre-turn snapshot and regenerate that response; optional `RegenerateRequest {allow_fallback}`, `FailsafeBlocked` -> 503 `problem_detail` like `/api/turn` |
 | POST | `/api/wait` | Wait/Meditate/Sleep turn; `WaitRequest` carries `allow_fallback`, `FailsafeBlocked` -> 503 `problem_detail` like `/api/turn` |
 | POST | `/api/suggestions` | Generate three suggested player inputs from the last scene's hooks; `deeper: true` returns one longer idea with its reason |
+| POST | `/api/setup/identity-check` | Before Start: does the chosen sex agree with the backstory's pronouns and the name; an unset sex comes back inferred |
 | POST | `/api/setup` | Start a new playthrough and opening scene |
 | POST | `/api/alias` | Add a player-created alias for an indexed entity |
 | POST | `/api/player-alias` | Create an identity alias for the player |

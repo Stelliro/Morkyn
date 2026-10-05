@@ -4706,6 +4706,28 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         # setup_composer unavailable and the player named nothing. Anything we
         # write here goes in the world's mouth, so it must not carry a genre.
         start_location = _START_LOCATION_LAST_RESORT
+    # The character agrees with itself (playtest #21). A sex left unset is read
+    # from the backstory's pronouns, then the name; a chosen one is never changed
+    # here (the setup page flags a disagreement before Start). The backstory
+    # arrives where play starts: game 2 arrived at "The Empty Lot" and started
+    # at Eldoria's Edge.
+    setup_coherence_notes: list[str] = []
+    try:
+        from app.setup_coherence import align_backstory_arrival, infer_player_sex
+
+        if not player_sex:
+            inferred_sex = infer_player_sex(
+                {"player_sex": "", "player_name": player_name, "character_backstory": character_backstory}
+            )
+            if inferred_sex:
+                player_sex = inferred_sex
+                setup_coherence_notes.append(f"player_sex inferred as {inferred_sex}")
+        aligned_story, arrival_changed = align_backstory_arrival(character_backstory, start_location)
+        if arrival_changed:
+            character_backstory = aligned_story[:1600]
+            setup_coherence_notes.append(f"backstory arrival set to {start_location}")
+    except Exception:
+        pass
     skill_style = str(options.get("skill_style") or "standard")
     custom_skills = str(options.get("custom_skills") or "").strip()
     # The intent's skeleton label is for the setup model, not the DM.
@@ -4899,14 +4921,37 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
 
         gear_ctx = _gear.gear_context_from_setup(options)
         raw_gear = options.get("starter_gear")
-        if isinstance(raw_gear, list) and raw_gear:
-            gear_items = _gear.normalize_gear_list(raw_gear, context=gear_ctx)
-        else:
-            gear_items = _gear.normalize_gear_list(
-                _gear.gear_from_legacy_text(options.get("starter_equipment")), context=gear_ctx
-            )
-        starter_raw = _gear.gear_names(gear_items)
+        if not (isinstance(raw_gear, list) and raw_gear):
+            raw_gear = _gear.gear_from_legacy_text(options.get("starter_equipment"))
         appearance_raw = str(options.get("appearance") or "").strip()
+        # Worn cards are the truth for clothes (playtest #21). An unnamed basic
+        # takes the clothes appearance already names for its zone; the backstory's
+        # carried things become carried cards ahead of the extras, then all of it
+        # goes through the arrival fact-check like any other card.
+        backstory_item_names: set[str] = set()
+        try:
+            from app.setup_coherence import backstory_gear_items, name_basics_from_appearance
+
+            raw_gear, named_from_look = name_basics_from_appearance(raw_gear, appearance_raw)
+            if named_from_look:
+                setup_coherence_notes.append("worn basics named from appearance: " + ", ".join(named_from_look))
+            story_cards = backstory_gear_items(character_backstory, raw_gear)
+            if story_cards:
+                backstory_item_names = {card["name"].lower() for card in story_cards}
+                worn_first = [g for g in raw_gear if isinstance(g, dict) and g.get("required")]
+                rest = [g for g in raw_gear if not (isinstance(g, dict) and g.get("required"))]
+                raw_gear = worn_first + story_cards + rest
+                setup_coherence_notes.append("carried from backstory: " + ", ".join(c["name"] for c in story_cards))
+        except Exception:
+            pass
+        gear_items = _gear.normalize_gear_list(raw_gear, context=gear_ctx)
+        for item in gear_items:
+            if str(item.get("name") or "").lower() in backstory_item_names:
+                # Carried, not worn, and no bonus the story never gave it.
+                item["slot"] = _gear.CARRIED
+                item["required"] = False
+                item["stats"] = {}
+        starter_raw = _gear.gear_names(gear_items)
         starter_logic_report: dict[str, Any] = {}
         try:
             from app.starter_logic import fact_check_starter_loadout
@@ -4949,6 +4994,16 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         # The fact-check may have renamed or dropped items (apply_fixes). Keep
         # what it kept; the three required basics always stay.
         kept_rows = [row for row in (starter_logic_report.get("kept") or []) if isinstance(row, dict)]
+        # A kept item the fact-check demoted ("small enchanted lantern" -> "small
+        # lantern") keeps its card under the new name; matched by the old name it
+        # was silently dropped below.
+        for row in kept_rows:
+            original = str(row.get("original_name") or "").strip().lower()
+            if not original:
+                continue
+            for item in gear_items:
+                if str(item.get("name") or "").strip().lower() == original:
+                    item["name"] = str(row.get("name") or item["name"])[:80]
         if kept_rows and str(starter_logic_report.get("starter_equipment") or "").strip():
             kept_lower = {
                 _sanitize_item_name(str(row.get("name") or "")).lower() for row in kept_rows
@@ -4960,6 +5015,21 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 return any(low_name == k or low_name in k or k in low_name for k in kept_lower)
 
             gear_items = [it for it in gear_items if it.get("required") or _kept(str(it.get("name") or ""))]
+        # Appearance follows the worn cards (playtest #21).
+        try:
+            from app.setup_coherence import appearance_from_gear
+
+            appearance_raw, look_changed = appearance_from_gear(appearance_raw, gear_items)
+            if look_changed:
+                setup_coherence_notes.append("appearance clothing set from worn gear: " + ", ".join(look_changed))
+        except Exception:
+            pass
+        # The fact-check may rewrite the backstory, mode or memory; the player row
+        # was written before it ran and used to keep the old text.
+        conn.execute(
+            "UPDATE player SET backstory = ?, backstory_mode = ?, memory_policy = ? WHERE id = 1",
+            (character_backstory, backstory_mode, memory_policy),
+        )
         seed_items = gear_items if _setup_flag_enabled(options, "items_enabled", True) else []
         for index, item in enumerate(seed_items[:12]):
             item_name = _sanitize_item_name(item.get("name")) or str(item.get("name") or "")[:100]
@@ -5190,6 +5260,9 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             pass
         _set_setting(conn, "setup_complete", "true")
         _set_setting(conn, "playthrough_options", stored_options)
+        # What the coherence pass changed at Start (playtest #21). Its own key:
+        # playthrough_options rides in every turn prompt.
+        _set_setting(conn, "setup_coherence", setup_coherence_notes[:12])
         # Location specials (heavens = blank map + movement lock; themed arrivals keep theme id)
         try:
             from app.setup_composer import apply_location_special_flags

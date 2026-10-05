@@ -6956,6 +6956,9 @@ function gearItemFromCard(card) {
     name: f("name"),
     slot,
     required,
+    // A basic the page filled with engine defaults: at Start it takes the
+    // clothes appearance names for its zone (playtest #21).
+    engine_default: card.dataset.gearDefault === "1",
     keep: Boolean(card.querySelector("[data-gear-keep]")?.checked),
     description: f("description"),
     stats,
@@ -19830,11 +19833,57 @@ function scoreSetupDepth() {
   return { total: Math.round(total * 10) / 10, target, weak, ratio: target ? total / target : 1 };
 }
 
+// The identity the player already saw flagged and chose to keep (playtest #21).
+let setupIdentityAcknowledged = "";
+
+/**
+ * Before Start: the chosen sex, the backstory's pronouns and the name agree
+ * (playtest #21: name Miriam, backstory "she", sex male). The engine checks;
+ * a disagreement is shown in the setup status line and Start stops once. The
+ * player's chosen sex is never changed; an unset one is filled from the
+ * backstory or the name. Pressing Start again with nothing changed starts.
+ */
+async function confirmSetupIdentity() {
+  const formData = new FormData(setupForm);
+  const body = {
+    player_name: String(formData.get("player_name") || "").trim().slice(0, 120),
+    player_sex: setupValueText(formData, "player_sex", "", 80),
+    character_backstory: String(formData.get("character_backstory") || "").trim().slice(0, 4000),
+  };
+  let payload = null;
+  try {
+    const response = await fetch("/api/setup/identity-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) return true;
+    payload = await response.json();
+  } catch (_) {
+    return true;
+  }
+  if (!body.player_sex && payload?.inferred_sex && !isSettingLocked("player_sex")) {
+    setField("player_sex", String(payload.inferred_sex));
+  }
+  const warnings = Array.isArray(payload?.warnings) ? payload.warnings : [];
+  if (!warnings.length) {
+    setupIdentityAcknowledged = "";
+    return true;
+  }
+  const signature = JSON.stringify(body);
+  if (signature === setupIdentityAcknowledged) return true;
+  setupIdentityAcknowledged = signature;
+  setSetupRandomizeStatus(warnings.map((w) => String(w?.message || "")).filter(Boolean).join(" "));
+  document.querySelector("#setupRandomizeStatus")?.scrollIntoView?.({ block: "nearest" });
+  return false;
+}
+
 async function startGame(event) {
   event.preventDefault();
   if (aiBusy) return;
   // Simple view writes into the real form before Start
   if (setupUiMode === "simple") pushSimpleToForm();
+  if (!(await confirmSetupIdentity())) return;
   // Fill empty growth math from power type + world/player context before abilities are read
   calculateAllAbilityGrowthMath({ force: false });
   const startLabel = "Starting playthrough...";
