@@ -42,6 +42,7 @@ RULE_TEXT = {
     "name": "named in the player's line",
     "group": "the player addresses everyone present",
     "unseen": "the player calls out to someone unseen or not yet in the scene",
+    "called": "named by the player but not here yet",
     "chosen": "picked by the player",
     "revealed": "just revealed or stepped in",
     "last_speaker": "spoke to the player last",
@@ -149,6 +150,24 @@ def roster(context: dict[str, Any]) -> list[dict[str, Any]]:
         word = str(alias.get("alias") or "").strip()
         if row is not None and word:
             row["aliases"].append(word)
+    return rows
+
+
+def known_elsewhere(context: dict[str, Any], here: set[str]) -> list[dict[str, Any]]:
+    """Known NPCs who are not at the player's location (roster shape)."""
+    rows: list[dict[str, Any]] = []
+    seen = set(here)
+    for location in context.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        for npc in location.get("npcs") or []:
+            if not isinstance(npc, dict):
+                continue
+            code = str(npc.get("code") or "").strip().upper()
+            name = str(npc.get("name") or "").strip()
+            if code and name and code not in seen:
+                seen.add(code)
+                rows.append({"code": code, "name": name, "aliases": []})
     return rows
 
 
@@ -410,6 +429,19 @@ def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | 
     named = _pick([m for m in mentions if not m["tag"]])
     if named:
         return done(named, "name")
+    # Playtest #31 (live): "Marisol, I woke up in the snow ..." named a known
+    # person who was stored somewhere else. The line went to nobody, the writer
+    # was told nothing, the prose walked her in anyway and last_speaker won.
+    # A named person who is not here is called: the writer is told who, and
+    # apply_turn brings her here when the prose shows her (bring_called_here).
+    elsewhere = known_elsewhere(context, here) if text else []
+    called = _pick(_mentions(text, elsewhere)) if elsewhere else []
+    if called:
+        done([], "none")
+        out["rule"] = "called"
+        out["called"] = called
+        out["names"] = {**out["names"], **{row["code"]: row["name"] for row in elsewhere if row["code"] in called}}
+        return out
     if text and _UNSEEN_RE.search(text):
         done([], "none")
         out["rule"] = "unseen"
@@ -450,9 +482,16 @@ def model_note(resolution: dict[str, Any] | None) -> str:
     names = resolution.get("names") or {}
     addressed = list(resolution.get("addressed") or [])
     listening = list(resolution.get("listening") or [])
-    if not addressed and not listening:
+    called = list(resolution.get("called") or []) if not addressed else []
+    if not addressed and not listening and not called:
         return ""
-    if not addressed and resolution.get("rule") == "unseen":
+    if called:
+        who = ", ".join(_label(c, names) for c in called)
+        line = (
+            f"Conversation (engine decided) - the player calls to {who}, who is not at this location; "
+            f"{who} may come over and answer if the scene allows it, and nobody present answers for them."
+        )
+    elif not addressed and resolution.get("rule") == "unseen":
         line = (
             "Conversation (engine decided) - the player calls out to someone unseen or not yet in the scene; "
             "whoever was called may answer, and nobody present answers for them."
@@ -483,9 +522,10 @@ def world_view(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
     names = resolution.get("names") or {}
     addressed = list(resolution.get("addressed") or [])
     listening = list(resolution.get("listening") or [])
-    if not addressed and not listening:
+    called = list(resolution.get("called") or []) if not addressed else []
+    if not addressed and not listening and not called:
         return None
-    unseen = not addressed and resolution.get("rule") == "unseen"
+    unseen = not addressed and resolution.get("rule") in {"unseen", "called"}
     view: dict[str, Any] = {
         "talking_to": [{"name": names.get(c, c), "code": c} for c in addressed],
         "answers": (
@@ -495,6 +535,8 @@ def world_view(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
         ),
         "why": RULE_TEXT.get(str(resolution.get("rule") or ""), ""),
     }
+    if called:
+        view["called"] = [{"name": names.get(c, c), "code": c, "here": False} for c in called]
     if listening:
         view["listening"] = [{"name": names.get(c, c), "code": c} for c in listening]
     return view
@@ -507,11 +549,13 @@ def writer_view(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
     names = resolution.get("names") or {}
     addressed = list(resolution.get("addressed") or [])
     listening = list(resolution.get("listening") or [])
-    if not addressed and not listening:
+    called = list(resolution.get("called") or []) if not addressed else []
+    if not addressed and not listening and not called:
         return None
     unseen = not addressed and resolution.get("rule") == "unseen"
     view: dict[str, Any] = {
         "player_talks_to": [_label(c, names) for c in addressed]
+        or [f"{_label(c, names)} (called; not here yet)" for c in called]
         or (["someone unseen or not yet in the scene"] if unseen else ["nobody in particular"]),
         "who_answers": [_label(c, names) for c in addressed] if addressed else [],
     }
@@ -618,6 +662,12 @@ def next_state(
         for code in speakers:
             if code not in known_here and code not in before and code not in revealed:
                 revealed.append(code)
+    # Someone the player called by name who the prose brought here (playtest #31).
+    for code in _codes((resolution or {}).get("called")):
+        if code in here and (code in named_in_prose or code in speakers):
+            if code in revealed:
+                revealed.remove(code)
+            revealed.append(code)
 
     addressed = [c for c in _codes((resolution or {}).get("addressed")) if c in here]
     group = bool((resolution or {}).get("group"))
@@ -725,6 +775,61 @@ def context_from_conn(conn) -> dict[str, Any]:
             "active_scene": read_scene(conn),
         },
     }
+
+
+# A sentence that shows a named person here: stepping in, standing, speaking.
+_SHOWN_HERE_RE = re.compile(
+    r"\b(?:steps?|stepped|stands?|stood|comes?|came|walks?|walked|appears?|appeared|arrives?|arrived|"
+    r"emerges?|emerged|turns?|turned|looks?\s+up|watches|watched|nods?|nodded|leans?|leaned|waits?|waited|"
+    r"approaches|approached|hurries|hurried|says?|said|asks?|asked|answers?|answered|replies|replied|"
+    r"beside\s+you|in\s+front\s+of\s+you|before\s+you)\b",
+    re.IGNORECASE,
+)
+_NOT_HERE_RE = re.compile(
+    r"\b(?:not\s+here|isn['’]?t\s+here|is\s+not|nowhere|no\s+sign\s+of|absent|gone|away\s+at|elsewhere|"
+    r"no\s+answer|does\s+not\s+answer|doesn['’]?t\s+answer)\b",
+    re.IGNORECASE,
+)
+
+
+def bring_called_here(conn, resolution: dict[str, Any] | None, narration: str) -> list[str]:
+    """Move a called NPC (resolution["called"]) to the player's location when the
+    prose shows them here. The engine owns where people are; the prose only has
+    to agree. Codes moved."""
+    called = _codes((resolution or {}).get("called")) if isinstance(resolution, dict) else []
+    text = re.sub(r"\s+", " ", str(narration or ""))
+    if not called or not text.strip():
+        return []
+    row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    here_id = row[0] if row else None
+    if here_id is None:
+        return []
+    sentences = re.split(r"(?<=[.!?\"”])\s+", text)
+    moved: list[str] = []
+    for code in called:
+        npc = conn.execute("SELECT id, name, location_id FROM npcs WHERE code = ?", (code,)).fetchone()
+        if npc is None or npc[2] == here_id:
+            continue
+        rows = [{"code": code, "name": str(npc[1] or ""), "aliases": []}]
+        shown = False
+        if code in speakers_in(text, rows):
+            shown = True
+        for sentence in sentences:
+            if not _names_in(sentence, rows):
+                continue
+            if _NOT_HERE_RE.search(sentence):
+                shown = False
+                break
+            if _SHOWN_HERE_RE.search(sentence):
+                shown = True
+        if not shown:
+            continue
+        try:
+            conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(npc[0])))
+        except Exception:
+            continue  # a same-named NPC already stands here
+        moved.append(code)
+    return moved
 
 
 def read_scene(conn) -> dict[str, Any]:

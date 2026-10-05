@@ -182,7 +182,10 @@ class ResolutionOrder(unittest.TestCase):
 
     def test_npc_somewhere_else_is_never_the_addressee(self):
         r = cv.resolve(self.ctx, 'I tell Brannoc Vell "you owe me"')
-        self.assertEqual(r["addressed"], ["C"])
+        # Never the addressee while he is elsewhere; since playtest #31 he is
+        # "called" (the writer is told who), and nobody present answers for him.
+        self.assertEqual(r["addressed"], [])
+        self.assertEqual((r["rule"], r["called"]), ("called", ["D"]))
 
     def test_group_phrase_addresses_everyone_present(self):
         r = cv.resolve(self.ctx, 'i say to everyone "calm down"')

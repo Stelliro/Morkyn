@@ -82,7 +82,7 @@ def _verb_in_clause_position(text: str, start: int) -> bool:
 _TARGET_STOP_RE = re.compile(
     r"\s+(?:and|but|or|to|into|in|inside|through|before|while|until|so|if|because|then|from|"
     r"toward|towards|down|up|across|around|out|along|past|over|at|as|when|without|again|now|quietly|"
-    r"carefully|closely|slowly|quickly)\b",
+    r"carefully|closely|slowly|quickly|near|beside|behind|outside|among|under|by)\b",
     re.IGNORECASE,
 )
 # Not a target: "follow me" is an invitation, "look for a way" a plan.
@@ -92,13 +92,45 @@ _NOT_TARGET_RE = re.compile(
     re.IGNORECASE,
 )
 _PRONOUN_RE = re.compile(r"^(?:him|her|them|it|that\s+one|this\s+one)$", re.IGNORECASE)
-# Asking someone along.
+# Asking someone along. Playtest #32 (live): "Rolf, stay close." and "...with
+# Umar beside me." were never read as asking anyone, so nobody was recorded.
 _INVITE_RE = re.compile(
     r"\b(?:come\s+(?:with|along\s+with)\s+(?:me|us)|come\s+along|join\s+(?:me|us)|follow\s+me|tag\s+along|"
     r"walk\s+with\s+(?:me|us)|you\s+coming|coming\s+with\s+(?:me|us)|with\s+me\s+on\s+this|"
-    r"lead\s+the\s+way|show\s+me\s+(?:the\s+way|where))\b",
+    r"lead\s+the\s+way|show\s+me\s+(?:the\s+way|where)|"
+    r"stay\s+(?:close|near|with\s+(?:me|us)|beside\s+(?:me|us)|behind\s+(?:me|us))|"
+    r"stick\s+(?:close|with\s+(?:me|us))|keep\s+close|keep\s+up|"
+    r"(?:you['’]?re|you\s+are)\s+with\s+(?:me|us)|"
+    r"(?:beside|alongside|behind)\s+(?:me|us)|at\s+my\s+side|by\s+my\s+side)\b",
     re.IGNORECASE,
 )
+# "with Umar beside me": the one taken along is named inside the phrase.
+_WITH_NAMED_RE = re.compile(
+    r"\bwith\s+(?P<name>[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?)\s+(?:beside|alongside|behind|next\s+to)\s+(?:me|us)\b"
+)
+# Search verbs: looking for a thing is a side action, not a pursuit (playtest
+# #32: "looking for footprints or anything dropped" replaced the live thread).
+_SEARCH_VERB_RE = re.compile(r"^(?:look|search|hunt|investigat)", re.IGNORECASE)
+# Words that make a target a person or a creature: something that can be
+# followed or found, rather than marks, clues or a way out.
+_BEING_WORDS = frozenset({
+    "man", "men", "woman", "women", "figure", "figures", "stranger", "strangers", "person", "people",
+    "boy", "girl", "child", "children", "kid", "kids", "youth", "elder", "crone", "widow", "fellow",
+    "thief", "thieves", "killer", "murderer", "assassin", "spy", "spies", "scout", "scouts", "rider",
+    "riders", "courier", "messenger", "runner", "watcher", "watchers", "guard", "guards", "soldier",
+    "soldiers", "hunter", "hunters", "agent", "agents", "smuggler", "smugglers", "bandit", "bandits",
+    "raider", "raiders", "brigand", "cultist", "cultists", "priest", "priestess", "witch", "wizard",
+    "mage", "merchant", "trader", "peddler", "beggar", "traveler", "traveller", "pilgrim", "survivor",
+    "survivors", "deserter", "fugitive", "prisoner", "captive", "culprit", "suspect", "informant",
+    "contact", "friend", "friends", "brother", "sister", "mother", "father", "son", "daughter", "wife",
+    "husband", "owner", "keeper", "leader", "boss", "captain", "sergeant", "officer", "marshal",
+    "sheriff", "doctor", "healer", "medic", "stalker", "shadow", "intruder", "attacker", "arsonist",
+    "creature", "creatures", "beast", "beasts", "animal", "animals", "wolf", "wolves", "hound",
+    "hounds", "dog", "dogs", "bear", "deer", "stag", "boar", "horse", "rat", "rats", "bird", "crow",
+    "raven", "thing", "monster", "ghost", "spirit", "drone", "robot", "android", "watchman",
+    "fisherman", "ferryman", "horseman", "huntsman", "swordsman", "lawman", "gunman", "madman",
+})
+_SOMEONE_RE = re.compile(r"^(?:who(?:m)?ever|someone|somebody|anyone|anybody)\b", re.IGNORECASE)
 # The player letting it go.
 _DROP_RE = re.compile(
     r"\b(?:forget\s+(?:about\s+)?(?:it|him|her|them|that|the\s+\w+)|give\s+up(?:\s+on)?|"
@@ -157,16 +189,45 @@ def _clean_target(raw: str) -> str:
     return " ".join(words).strip(" '’-")
 
 
-def pursuit_in(player_input: str) -> dict[str, str] | None:
+def names_a_being(target: str, people: list[dict[str, str]] | None = None) -> bool:
+    """A target that is a person or a creature: a name, a pronoun, "whoever ...",
+    or a noun phrase whose head is a person or animal word. Footprints, marks
+    and clues are not. A structural check on the player's own line."""
+    text = str(target or "").strip()
+    if not text:
+        return False
+    if _PRONOUN_RE.match(text) or _SOMEONE_RE.match(text):
+        return True
+    if people and _person_named(text, people):
+        return True
+    words = re.findall(r"[A-Za-z][\w'’-]*", text)
+    if not words:
+        return False
+    if words[0][:1].isupper() and words[0].lower() not in _STOPWORDS:
+        return True  # a name the player typed: "Carlos Barnes", "Rolf"
+    low = [w.lower().replace("’", "'") for w in words]
+    if any(re.sub(r"'s$", "", w) in _BEING_WORDS for w in low):
+        return True
+    roles = {str(p.get("role") or "").lower() for p in people or [] if p.get("role")}
+    return any(role and role in text.lower() for role in roles)
+
+
+def pursuit_in(player_input: str, people: list[dict[str, str]] | None = None) -> dict[str, str] | None:
     """{"doing", "target"} when the player's own line goes after someone or something."""
     text = own_text(player_input)
     if not text:
         return None
     for match in _PURSUE_RE.finditer(text):
-        if _NOUN_LIKE_VERB_RE.match(match.group("verb")) and not _verb_in_clause_position(text, match.start()):
+        verb_word = match.group("verb")
+        noun_like = bool(_NOUN_LIKE_VERB_RE.match(verb_word))
+        if noun_like and not _verb_in_clause_position(text, match.start()):
             continue
         target = _clean_target(match.group("target"))
         if not target or _NOT_TARGET_RE.match(target):
+            continue
+        # Playtest #32: "looking for footprints" and "investigate the marks"
+        # search for things; only a person or creature is gone after.
+        if (noun_like or _SEARCH_VERB_RE.match(verb_word)) and not names_a_being(target, people):
             continue
         verb = re.sub(r"\s+", " ", match.group("verb").strip().lower())
         return {"doing": f"{verb} {target}", "target": target}
@@ -186,6 +247,29 @@ def follow_target(player_input: str) -> str:
 
 def invites_along(player_input: str) -> bool:
     return bool(_INVITE_RE.search(own_text(player_input)))
+
+
+def asked_along_in(
+    player_input: str,
+    resolution: dict[str, Any] | None,
+    people: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Who the player's own line asks to come along: the addressee of an
+    invitation, or the person named in "with <name> beside me"."""
+    text = own_text(player_input)
+    if not text or not _INVITE_RE.search(text):
+        return []
+    names = (resolution or {}).get("names") if isinstance(resolution, dict) else {}
+    asked: list[dict[str, str]] = []
+    for code in (resolution or {}).get("addressed") or []:
+        name = str((names or {}).get(code) or "")
+        if name:
+            asked.append({"code": str(code), "name": name})
+    for match in _WITH_NAMED_RE.finditer(text):
+        person = _person_named(match.group("name"), people)
+        if person and all(row["code"] != person["code"] for row in asked):
+            asked.append({"code": person["code"], "name": person["name"]})
+    return asked
 
 
 def drops_thread(player_input: str) -> bool:
@@ -245,6 +329,17 @@ def _people_here(context: dict[str, Any]) -> list[dict[str, str]]:
         return []
 
 
+def _companion_doing(player_input: str, shown: list[dict[str, str]]) -> str:
+    """What the player is doing with the people who came along: the player's own
+    words without the invitation, else plainly who they are with."""
+    text = own_text(player_input)
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    rest = [s for s in sentences if not _INVITE_RE.search(s)]
+    if rest:
+        return " ".join(rest)[:160]
+    return "go on with " + " and ".join(str(p.get("name") or "") for p in shown[:3])
+
+
 def _person_named(target: str, people: list[dict[str, str]]) -> dict[str, str] | None:
     low = str(target or "").lower()
     for person in people:
@@ -276,18 +371,19 @@ def begin_turn(
     text = own_text(player_input)
     people = _people_here(context)
     names = (resolution or {}).get("names") if isinstance(resolution, dict) else {}
-    asked: list[dict[str, str]] = []
-    if text and _INVITE_RE.search(text):
-        for code in (resolution or {}).get("addressed") or []:
-            name = str((names or {}).get(code) or "")
-            if name:
-                asked.append({"code": str(code), "name": name})
+    asked = asked_along_in(text, resolution, people)
     if text and _DROP_RE.search(text):
         # "stop following him" is the player letting go, never a new pursuit.
         if previous:
             return {**previous, "status": "dropped", "asked_along": asked}
         return {"status": "none", "asked_along": asked} if asked else None
-    found = pursuit_in(text)
+    found = pursuit_in(text, people)
+    if found and previous and _SEARCH_VERB_RE.match(found["doing"]) and not _same_target(
+        found["target"], str(previous.get("target") or "")
+    ):
+        # A search while a pursuit is live is a side action inside it; only an
+        # explicit new pursuit of someone else replaces it (playtest #32).
+        found = None
     if found:
         target = found["target"]
         if _PRONOUN_RE.match(target):
@@ -344,6 +440,32 @@ def _companions_shown(asked: list[dict[str, str]], narration: str) -> list[dict[
         if any(_ALONG_RE.search(s) for s in mine):
             out.append({"code": str(person.get("code") or ""), "name": name})
     return out
+
+
+def companions_shown(asked: list[dict[str, str]], narration: str) -> list[dict[str, str]]:
+    return _companions_shown(list(asked or []), narration)
+
+
+def left_behind(narration: str):
+    """A test for a name: does the prose show them refusing or staying behind?"""
+    sentences = re.split(r"(?<=[.!?])\s+", re.sub(r"\[\[[^\]]*\]\]", "", str(narration or "")))
+
+    def check(name: str) -> bool:
+        if not name:
+            return False
+        first = name.split()[0]
+        pattern = re.compile(rf"\b(?:{re.escape(name)}|{re.escape(first)})\b", re.IGNORECASE)
+        return any(_REFUSE_RE.search(s) for s in sentences if pattern.search(s))
+
+    return check
+
+
+def same_target(a: str, b: str) -> bool:
+    return _same_target(a, b)
+
+
+def person_named(target: str, people: list[dict[str, str]]) -> dict[str, str] | None:
+    return _person_named(target, people)
 
 
 def _quest_row(conn, code: str) -> dict[str, Any] | None:
@@ -437,9 +559,26 @@ def next_thread(
         live = quests.get(code)
         if live and str(live.get("status") or "") in {"completed", "complete", "failed", "abandoned"}:
             return None
+    shown = _companions_shown(asked, narration)
+    if thread is None and shown:
+        # Playtest #32 (live): "Rolf, come with me. I want to find whoever is
+        # burning those herbs" has no pursuit verb and no earlier thread, so the
+        # companion the prose showed following was computed and thrown away.
+        # People who came along are kept on a thread of their own.
+        thread = {
+            "version": 1,
+            "doing": _companion_doing(player_input, shown),
+            "target": "",
+            "target_code": "",
+            "with": [],
+            "quest": {},
+            "source": "companions",
+            "started_turn": turn,
+            "touched_turn": turn,
+            "where": "",
+        }
     if thread is None:
         return None
-    shown = _companions_shown(asked, narration)
     if shown:
         have = {str(row.get("code") or row.get("name")) for row in thread.get("with") or []}
         for person in shown:

@@ -698,7 +698,7 @@ def _person_name_taken(conn, name: str) -> bool:
     return bool(row)
 
 
-def unique_person_name(conn, seed: int, *, attempts: int = 24) -> str:
+def unique_person_name(conn, seed: int, *, attempts: int = 24, sex: str = "") -> str:
     """
     A replacement name no live NPC already holds.
 
@@ -743,7 +743,7 @@ def unique_person_name(conn, seed: int, *, attempts: int = 24) -> str:
     try:
         from app.example_pools import engine_person_name
 
-        pooled = engine_person_name(conn, seed)
+        pooled = engine_person_name(conn, seed, sex=sex)
     except Exception:
         pooled = ""
     if pooled and pooled.strip().lower() not in taken and pooled.strip().lower() not in places:
@@ -1887,20 +1887,34 @@ def create_shell_npc(
     role: str = "passerby",
     seed: int | None = None,
     appearance: str = "",
+    summary: str = "",
+    sex: str = "",
+    name: str = "",
 ) -> dict[str, Any]:
     """
     Minimal NPC for crowd / one-shot drama. No portrait, no deep stats.
 
     `role` is an occupation; `appearance` is how they look. Folding the two
     together is what produced a world where every face was a "hooded stranger".
+    `summary` is what the prose said about them (playtest #34: a fixed
+    placeholder gave every seeded face the same nothing); `sex` steers the
+    drawn name; `name` is one the prose already gave them.
     """
     presence = presence if presence in {"nameless", "background", "event_worthy"} else "nameless"
+    sex = sex if sex in {"female", "male"} else ""
+    wanted = str(name or "").strip()
+    if wanted and (
+        not is_plausible_person_name(wanted)
+        or conn.execute("SELECT 1 FROM npcs WHERE name = ? COLLATE NOCASE", (wanted,)).fetchone()
+    ):
+        wanted = ""
     # Uniqueness is world-wide, not per-location: the pool is 20x20, and a run
     # with sixteen seeded faces produced three separate people all called
     # "Grainwick". Two of anyone reads as one character in two places.
-    name = unique_person_name(
+    name = wanted or unique_person_name(
         conn,
         seed if seed is not None else random.randint(1, 10**9),
+        sex=sex,
     )
     code = _next_alpha_code(conn, "npcs")
     shell = 1 if presence in {"nameless", "background"} else 0
@@ -1912,20 +1926,23 @@ def create_shell_npc(
             code, location_id, name, race, role, summary, attitude,
             personality, likes, principles, dislikes, trust, known_facts,
             rank, stat_profile, skill_profile, health, max_health,
-            presence, power_rank, portrait_eligible, shell
-        ) VALUES (?, ?, ?, 'human', ?, ?, 'neutral', '', '', '', '', 0, '[]', 'F', '{}', '{}', 0, 0, ?, ?, ?, ?)
+            presence, power_rank, portrait_eligible, shell, pronouns
+        ) VALUES (?, ?, ?, 'human', ?, ?, 'neutral', '', '', '', '', 0, '[]', 'F', '{}', '{}', 0, 0, ?, ?, ?, ?, ?)
         """,
         (
             code,
             int(location_id),
             name,
             str(role or "passerby")[:80],
-            (("A brief face in the crowd." if presence == "nameless" else "Someone at the edge of the scene.")
-             + str(appearance or ""))[:300],
+            str(summary).strip()[:300]
+            if str(summary or "").strip()
+            else (("A brief face in the crowd." if presence == "nameless" else "Someone at the edge of the scene.")
+                  + str(appearance or ""))[:300],
             presence,
             power_rank,
             portrait,
             shell,
+            {"female": "she", "male": "he"}.get(sex, ""),
         ),
     )
     try:
@@ -6516,6 +6533,78 @@ def _settle_entered_venue(
     return report
 
 
+def _move_companions_with_player(
+    conn,
+    movement_report: dict[str, Any] | None,
+    prompt_context: dict[str, Any] | None,
+    narration: str,
+    player_input: str,
+) -> list[str]:
+    """After the player leaves a place: the scene thread's companions, anyone
+    asked along and shown going, and the person the player follows move too.
+
+    Playtest #32 (live): only the player row ever moved. Carlos, followed into
+    the forest, stayed at L4; Rolf, shown following, stayed at L1; so the next
+    turn's roster, conversation and thread target lost them. The engine decides
+    who comes; someone the prose shows refusing or staying behind stays.
+    """
+    from app import scene_thread as st
+
+    report = movement_report if isinstance(movement_report, dict) else {}
+    if str(report.get("status") or "") not in {"model", "repaired"}:
+        return []
+    origin = str(report.get("from") or "").strip().upper()
+    here = conn.execute(
+        "SELECT l.id, l.code FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+    ).fetchone()
+    if here is None or not origin or str(here["code"] or "").upper() == origin:
+        return []
+    origin_row = conn.execute("SELECT id FROM locations WHERE UPPER(code) = ?", (origin,)).fetchone()
+    if origin_row is None:
+        return []
+    origin_id = int(origin_row["id"])
+    here_id = int(here["id"])
+    thread = (prompt_context or {}).get("scene_thread") if isinstance(prompt_context, dict) else None
+    thread = thread if isinstance(thread, dict) else {}
+    left_behind = st.left_behind(narration)
+    wanted: list[dict[str, str]] = []
+    for row in list(thread.get("with") or []) + st.companions_shown(thread.get("asked_along") or [], narration):
+        if isinstance(row, dict) and row.get("name") and not left_behind(str(row.get("name"))):
+            wanted.append({"code": str(row.get("code") or ""), "name": str(row["name"])})
+    followed = st.follow_target(player_input)
+    if followed:
+        people = [
+            {"code": str(r["code"]), "name": str(r["name"])}
+            for r in conn.execute("SELECT code, name FROM npcs WHERE location_id = ?", (origin_id,)).fetchall()
+        ]
+        person = None
+        if thread.get("target_code") and st.same_target(followed, str(thread.get("target") or "")):
+            person = {"code": str(thread["target_code"]), "name": str(thread.get("target") or "")}
+        else:
+            person = st.person_named(followed, people)
+        if person:
+            wanted.append(person)
+    moved: list[str] = []
+    for person in wanted:
+        npc = None
+        if person.get("code"):
+            npc = conn.execute(
+                "SELECT id, name FROM npcs WHERE code = ? AND location_id = ?", (person["code"], origin_id)
+            ).fetchone()
+        if npc is None:
+            npc = conn.execute(
+                "SELECT id, name FROM npcs WHERE name = ? COLLATE NOCASE AND location_id = ?", (person["name"], origin_id)
+            ).fetchone()
+        if npc is None or str(npc["name"]) in moved:
+            continue
+        try:
+            conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(npc["id"])))
+        except Exception:
+            continue  # someone of the same name already stands there
+        moved.append(str(npc["name"]))
+    return moved
+
+
 def _workplace_label(kind: str) -> str:
     return " ".join(word[:1].upper() + word[1:] for word in venues.kind_label(kind).split())
 
@@ -9964,6 +10053,16 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         existing = conn.execute(
             "SELECT * FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (name,)
         ).fetchone()
+        if existing is None and name.strip() and " " not in name.strip():
+            # Playtest #34 (live): NPC_NEW "Umar" beside the known "Umar Mendes"
+            # minted a second Umar. A bare first name that exactly one known
+            # person wears is that person; their stored job stays.
+            first = conn.execute(
+                "SELECT * FROM npcs WHERE name LIKE ? COLLATE NOCASE LIMIT 2", (name.strip() + " %",)
+            ).fetchall()
+            if len(first) == 1:
+                existing = first[0]
+                role = str(existing["role"] or role)
         if existing is not None and int(existing["location_id"] or 0) != int(location_id or 0):
             try:
                 conn.execute(
@@ -11890,6 +11989,46 @@ _ERA_TEXT_HINTS = (
 )
 
 
+# Phrases that name an era outright. Playtest #34 (live): tech_level "wasteland
+# iron age" and "arctic iron age" both resolved 'modern' ("wasteland" was
+# scanned first, and a model-written "Modern urban elements ..." style beat the
+# player's tech level), so a frontier dark fantasy was staffed with pharmacists,
+# bike couriers and a building super. An era the tech level names wins.
+_ERA_NAMES = (
+    ("future", ("spacefaring", "far future", "far-future", "interstellar", "space age")),
+    ("modern", (
+        "near future", "near-future", "modern", "contemporary", "present day", "present-day",
+        "information age", "atomic age", "digital age",
+    )),
+    ("industrial", (
+        "early industrial", "late industrial", "industrial", "steam age", "victorian", "mechanical age",
+        "clockwork age",
+    )),
+    ("preindustrial", (
+        "iron age", "bronze age", "stone age", "medieval", "dark age", "feudal", "classical antiquity",
+    )),
+)
+# Setting words, not eras: a wasteland or ruins can belong to any age. They
+# only decide when nothing names an era.
+_ERA_SETTING_WORDS = frozenset({
+    "wasteland", "urban", "post-apocalyptic", "apocalyp", "post-collapse", "ancient", "mythic",
+})
+
+
+def _era_hint_in(text: str, *, setting_words: bool) -> str:
+    for era, hints in _ERA_TEXT_HINTS:
+        if any(hint in text for hint in hints if (hint in _ERA_SETTING_WORDS) == setting_words):
+            return era
+    return ""
+
+
+def _era_named_in(text: str) -> str:
+    for era, names in _ERA_NAMES:
+        if any(name in text for name in names):
+            return era
+    return ""
+
+
 def resolve_world_era(tech_level: str = "", *style_text: str) -> str:
     """Which technological era this world runs in.
 
@@ -11900,14 +12039,15 @@ def resolve_world_era(tech_level: str = "", *style_text: str) -> str:
     """
     tech = str(tech_level or "").strip().lower()
     blob = " ".join(str(part or "") for part in style_text).lower()
-    prose_era = ""
-    for era, hints in _ERA_TEXT_HINTS:
-        if any(hint in blob for hint in hints):
-            prose_era = era
-            break
     # An explicit, non-default tech_level is server truth and wins.
     if tech in _TECH_LEVEL_ERA and tech not in _DEFAULTED_TECH_LEVELS:
         return _TECH_LEVEL_ERA[tech]
+    # A typed tech level that names an era ("wasteland iron age") wins too.
+    if tech and tech not in _DEFAULTED_TECH_LEVELS:
+        named = _era_named_in(tech)
+        if named:
+            return named
+    prose_era = _era_hint_in(blob, setting_words=False) or _era_hint_in(blob, setting_words=True)
     # Otherwise the style prose speaks first. "iron age" is the field's Pydantic
     # default, applied whenever nobody chose one, and it is indistinguishable
     # from a deliberate pick at this layer -- so a player who typed "far-future
@@ -11918,10 +12058,7 @@ def resolve_world_era(tech_level: str = "", *style_text: str) -> str:
         return prose_era
     if tech in _TECH_LEVEL_ERA:
         return _TECH_LEVEL_ERA[tech]
-    for era, hints in _ERA_TEXT_HINTS:
-        if any(hint in tech for hint in hints):
-            return era
-    return "preindustrial"
+    return _era_hint_in(tech, setting_words=False) or _era_hint_in(tech, setting_words=True) or "preindustrial"
 
 
 # The tech level to state as world truth, per era. Only used to replace a
@@ -12146,21 +12283,121 @@ def _appearance_note(hint: str) -> str:
     return f" Looks {found[0]}."
 
 
+_FIGURE_NOUNS = (
+    r"(?:figure|man|woman|stranger|person|traveler|traveller|merchant|guard|patron|guest|girl|boy|"
+    r"youth|elder|crone|widow|soldier|scout|rider|wanderer|beggar|peddler|broker|innkeeper|bartender|"
+    r"barkeep|keeper|server|barmaid|barman|lady|fellow)"
+)
+# A person the prose shows: "a wiry woman", "a hooded figure", "the scarred
+# woman". "the" needs a describing word, so a bare "the man" (usually someone
+# already known) is not a new face.
 _FIGURE_HINT_RE = re.compile(
     r"\b("
-    r"(?:a|an|the)\s+(?:hooded|cloaked|masked|armou?red|ash[- ]?gr[ae]y|gray[- ]?cloaked|"
-    r"tall|short|older|young|weathered|scarred|lean|burly|thin|stocky)\s+"
-    r"(?:figure|man|woman|stranger|person|traveler|traveller|merchant|guard|patron|guest)|"
-    r"(?:a|an|the)\s+(?:second|third|another|nearby|watching)\s+figure|"
-    r"(?:a|an)\s+(?:stranger|merchant|guard|innkeeper|bartender|barkeep|traveler|traveller|"
-    r"wanderer|broker|scout|soldier|patron|guest|keeper|server|barmaid|barman)|"
-    # Spoken dialogue with a named/titled speaker: Mara says / the innkeeper asks
+    r"(?:a|an)\s+(?:[a-z][a-z'-]*\s+){0,2}" + _FIGURE_NOUNS + r"|"
+    r"the\s+(?:[a-z][a-z'-]*\s+){1,2}" + _FIGURE_NOUNS + r"|"
+    # A titled speaker: the innkeeper asks
     r"(?:the\s+)?(?:innkeeper|bartender|barkeep|guard|merchant|stranger|keeper|"
-    r"server|barmaid|barman|captain|clerk)\s+(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)|"
-    r"[A-Z][a-z]{2,12}\s+(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?|replies?|answers?)"
-    r")\b",
+    r"server|barmaid|barman|captain|clerk)\s+(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)"
+    r")\b(?!['’]s)",
     re.I,
 )
+# A named speaker: "Mara says". Case-sensitive: compiled with re.I this read
+# "she says", "the whisper", "perhaps answers" and "wind calls" as people and
+# seeded invisible NPCs (playtest #34, live).
+_NAMED_SPEAKER_RE = re.compile(
+    r"\b([A-Z][a-z]{2,12})\s+(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?|replies|answers?)\b"
+)
+_NOT_A_NAME = frozenset({
+    "she", "he", "they", "you", "we", "it", "someone", "somebody", "nobody", "everyone", "everybody",
+    "anyone", "one", "another", "each", "then", "and", "but", "perhaps", "who", "this", "that", "the",
+    "there", "here", "now", "still", "voice", "wind", "nothing", "something", "none", "both", "all",
+})
+_HINT_FEMALE_RE = re.compile(r"\b(?:woman|girl|widow|crone|lady|barmaid|she|her|hers|herself)\b", re.I)
+_HINT_MALE_RE = re.compile(r"\b(?:man|boy|barman|fellow|he|him|his|himself)\b", re.I)
+
+
+def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
+    """People the prose shows who might be new: described strangers and named
+    speakers. A later "the <...> <noun>" with the noun of an earlier hint is the
+    same person, and a named speaker the world already knows is not new."""
+    known = {str(n or "").strip().lower() for n in known_names or () if str(n or "").strip()}
+    known |= {n.split()[0] for n in list(known) if n.split()}
+    found: list[tuple[int, str, str]] = []
+    for match in _FIGURE_HINT_RE.finditer(str(text or "")):
+        if re.search(r"\b(?:like|as|than|as\s+if|as\s+though)\s*$", str(text)[: match.start()], re.I):
+            continue  # a simile: "like a man waiting for a trap to spring"
+        hint = match.group(0).strip()
+        words = hint.lower().split()
+        noun = words[-2] if len(words) > 1 and re.match(r"(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)$", words[-1]) else words[-1]
+        found.append((match.start(), hint, noun))
+    for match in _NAMED_SPEAKER_RE.finditer(str(text or "")):
+        word = match.group(1)
+        if word.lower() in _NOT_A_NAME or word.lower() in known:
+            continue
+        if any(start <= match.start() < start + len(h) for start, h, _n in found):
+            continue  # "Guard says" is already a titled speaker
+        found.append((match.start(), match.group(0).strip(), ""))
+    found.sort()
+    hints: list[str] = []
+    nouns: set[str] = set()
+    for _pos, hint, noun in found:
+        words = hint.lower().split()
+        if words[0] not in {"a", "an"} and noun and noun in nouns:
+            continue  # "the scarred woman" after "a wiry woman": the same person
+        if noun:
+            nouns.add(noun)
+        if hint not in hints:
+            hints.append(hint)
+    return hints
+
+
+def _hint_sentence(text: str, hint: str) -> str:
+    """The prose's own sentence about a seeded face, codes stripped."""
+    flat = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))
+    flat = re.sub(r"\s+", " ", flat).strip()
+    for sentence in re.split(r"(?<=[.!?])\s+", flat):
+        if hint and hint.lower() in sentence.lower():
+            return sentence.strip()[:300]
+    if not hint:
+        for sentence in re.split(r"(?<=[.!?])\s+", flat):
+            if re.search(r'[“"]', sentence):
+                return sentence.strip()[:300]
+    return ""
+
+
+def _hint_sex(hint: str, sentence: str) -> str:
+    for source in (hint, sentence):
+        female = bool(_HINT_FEMALE_RE.search(source or ""))
+        male = bool(_HINT_MALE_RE.search(source or ""))
+        if female != male:
+            return "female" if female else "male"
+    return ""
+
+
+def _recall_described(conn, hint: str, location_id: int) -> dict[str, Any] | None:
+    """ "the scarred woman" is someone already seeded: the one person elsewhere
+    whose stored description has the hint's describing word. Moved here."""
+    words = hint.lower().split()
+    if not words or words[0] != "the" or len(words) < 3:
+        return None
+    stems = [w[:4] for w in words[1:-1] if len(w) >= 4]
+    if not stems:
+        return None
+    rows = [
+        row
+        for row in conn.execute(
+            "SELECT id, code, name, role, summary FROM npcs WHERE location_id != ? AND presence = 'event_worthy'",
+            (int(location_id),),
+        ).fetchall()
+        if any(stem in str(row["summary"] or "").lower() for stem in stems)
+    ]
+    if len(rows) != 1:
+        return None
+    try:
+        conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(location_id), int(rows[0]["id"])))
+    except Exception:
+        return None
+    return dict(rows[0])
 
 
 def _ensure_npcs_from_narration(
@@ -12178,7 +12415,12 @@ def _ensure_npcs_from_narration(
     text = str(narration or "")
     if not text.strip():
         return []
-    hints = [m.group(0).strip() for m in _FIGURE_HINT_RE.finditer(text)]
+    try:
+        known_names = [str(r[0] or "") for r in conn.execute("SELECT name FROM npcs").fetchall()]
+    except Exception:
+        known_names = []
+    known_names += [str(n.get("name") or "") for n in (result.get("npcs") or []) if isinstance(n, dict)]
+    hints = _figure_hints(text, known_names)
     # Dialogue without a listed speaker still implies at least one face
     has_dialogue = bool(re.search(r'[“"][^”"]{8,}[”"]', text))
     existing = [n for n in (result.get("npcs") or []) if isinstance(n, dict)]
@@ -12204,7 +12446,13 @@ def _ensure_npcs_from_narration(
     created: list[dict[str, Any]] = []
     for i in range(need):
         hint = hints[i] if i < len(hints) else ""
+        recalled = _recall_described(conn, hint, int(location_id)) if hint else None
+        if recalled:
+            existing.append({"code": recalled["code"], "name": recalled["name"], "role": recalled["role"]})
+            continue
         role = _seed_role_for(conn, int(location_id), hint, i, salt=text[:40])
+        sentence = _hint_sentence(text, hint)
+        speaker = _NAMED_SPEAKER_RE.fullmatch(hint) if hint else None
         try:
             shell = create_shell_npc(
                 conn,
@@ -12214,6 +12462,9 @@ def _ensure_npcs_from_narration(
                 role=role,
                 seed=name_seed("shell_npc", location_id, hint, i, text[:40]),
                 appearance=_appearance_note(hint),
+                summary=sentence,
+                sex=_hint_sex(hint, sentence),
+                name=speaker.group(1) if speaker else "",
             )
         except Exception:
             continue
@@ -13641,54 +13892,6 @@ def apply_turn(
         except Exception:
             pass
 
-        # Opening/scene figures without structured npcs → seed cast so export isn't empty
-        try:
-            loc_id_seed = None
-            prow2 = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
-            if prow2 and prow2["current_location_id"]:
-                loc_id_seed = int(prow2["current_location_id"])
-            seeded = _ensure_npcs_from_narration(conn, result, narration, loc_id_seed)
-            if seeded:
-                # Re-run name repair so prose can pick up new codes/names if needed
-                try:
-                    from app.llm import _repair_entity_names_in_turn
-
-                    cast2 = rows_to_dicts(
-                        conn.execute(
-                            "SELECT code, name, role FROM npcs WHERE location_id = ? ORDER BY id",
-                            (loc_id_seed,),
-                        ).fetchall()
-                    ) if loc_id_seed else []
-                    mini_ctx2 = {
-                        "locations": [{"code": "L1", "name": "", "npcs": cast2}],
-                        "npcs": cast2,
-                        "inventory": rows_to_dicts(
-                            conn.execute("SELECT code, name FROM inventory ORDER BY id").fetchall()
-                        ),
-                        "current_location": {"code": "L1", "name": ""},
-                    }
-                    # Prefer real location code/name
-                    if loc_id_seed:
-                        lrow = conn.execute(
-                            "SELECT code, name FROM locations WHERE id = ?", (loc_id_seed,)
-                        ).fetchone()
-                        if lrow:
-                            mini_ctx2["current_location"] = {
-                                "code": lrow["code"],
-                                "name": lrow["name"],
-                            }
-                            mini_ctx2["locations"] = [
-                                {"code": lrow["code"], "name": lrow["name"], "npcs": cast2}
-                            ]
-                    repaired2 = _repair_entity_names_in_turn(dict(result), mini_ctx2)
-                    if isinstance(repaired2, dict):
-                        result = repaired2
-                        narration = _narration_text(result)
-                except Exception:
-                    pass
-        except Exception:
-            pass
-
         _apply_relationships(conn, result.get("relationships") or [])
         # Inventory fidelity: strip hallucinated gains not grounded in narration/existing stack
         inv_changes = _filter_inventory_changes(
@@ -13733,6 +13936,63 @@ def apply_turn(
             entered = _settle_entered_venue(conn, movement_report, narration, prompt_context)
             if entered.get("keeper") or entered.get("moved_in"):
                 movement_report["settled"] = entered
+        except Exception:
+            pass
+        # Companions and the one followed go where the player went (playtest #32).
+        try:
+            moved_along = _move_companions_with_player(conn, movement_report, prompt_context, narration, player_input)
+            if moved_along:
+                movement_report["moved_along"] = moved_along
+        except Exception:
+            pass
+        # Opening/scene figures without structured npcs → seed cast so export isn't empty.
+        # Runs after the move (playtest #34, live): seeded before it, the scarred
+        # woman the prose showed at the farmer's field was stored at the place the
+        # player had just left, and the next turn seeded her a second time.
+        try:
+            loc_id_seed = None
+            prow2 = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+            if prow2 and prow2["current_location_id"]:
+                loc_id_seed = int(prow2["current_location_id"])
+            seeded = _ensure_npcs_from_narration(conn, result, narration, loc_id_seed)
+            if seeded:
+                # Re-run name repair so prose can pick up new codes/names if needed
+                try:
+                    from app.llm import _repair_entity_names_in_turn
+
+                    cast2 = rows_to_dicts(
+                        conn.execute(
+                            "SELECT code, name, role FROM npcs WHERE location_id = ? ORDER BY id",
+                            (loc_id_seed,),
+                        ).fetchall()
+                    ) if loc_id_seed else []
+                    mini_ctx2 = {
+                        "locations": [{"code": "L1", "name": "", "npcs": cast2}],
+                        "npcs": cast2,
+                        "inventory": rows_to_dicts(
+                            conn.execute("SELECT code, name FROM inventory ORDER BY id").fetchall()
+                        ),
+                        "current_location": {"code": "L1", "name": ""},
+                    }
+                    # Prefer real location code/name
+                    if loc_id_seed:
+                        lrow = conn.execute(
+                            "SELECT code, name FROM locations WHERE id = ?", (loc_id_seed,)
+                        ).fetchone()
+                        if lrow:
+                            mini_ctx2["current_location"] = {
+                                "code": lrow["code"],
+                                "name": lrow["name"],
+                            }
+                            mini_ctx2["locations"] = [
+                                {"code": lrow["code"], "name": lrow["name"], "npcs": cast2}
+                            ]
+                    repaired2 = _repair_entity_names_in_turn(dict(result), mini_ctx2)
+                    if isinstance(repaired2, dict):
+                        result = repaired2
+                        narration = _narration_text(result)
+                except Exception:
+                    pass
         except Exception:
             pass
         try:
@@ -13819,6 +14079,12 @@ def apply_turn(
         _maybe_spawn_offscreen_gm_event(conn, turn)
         scene_before = _settings(conn).get("active_scene")
         _apply_scene_cast(conn, result.get("scene_cast"))
+        try:
+            from app.conversation import bring_called_here
+
+            bring_called_here(conn, (prompt_context or {}).get("conversation_turn"), _narration_text(result))
+        except Exception:
+            pass
         try:
             from app.conversation import update_after_turn as update_conversation
 

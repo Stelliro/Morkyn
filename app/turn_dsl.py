@@ -230,9 +230,11 @@ def _decode_arg_escapes(text: str) -> str:
 _LEADING_POSITIONALS = {"FOCUS": 1, "INDEX": 2}
 _OPCODE_FLAG_KEYS: dict[str, set[str]] = {"QUEST": {"GIVER", "STEP", "AT", "REWARD"}}
 # Flags whose unquoted value may be several words ("ROLE net mender").
-_MULTIWORD_FLAGS = {"ROLE", "LOC"}
+# Playtest #34 (live): "NAME Umar Mendes" kept only "Umar", and the roster
+# lookup then minted a second person. A name runs to the next flag too.
+_MULTIWORD_FLAGS = {"ROLE", "LOC", "NAME"}
 # Longest unquoted run each multi-word flag may take.
-_MULTIWORD_LIMIT = {"ROLE": 4, "LOC": 6}
+_MULTIWORD_LIMIT = {"ROLE": 4, "LOC": 6, "NAME": 4}
 # A <slot> the model copied from a placeholder: "LOC <The Wasteland's Edge>"
 # (live Qwen3 8B, playtest #28). The wrapper is syntax, not text; the span is
 # read as one quoted argument. Only a bracket at a token edge counts, so
@@ -357,6 +359,10 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
                     # "ROLE baker Bo L1" keeps Bo as the NPC's name. Place
                     # names are capitalised all the way through, so not LOC.
                     if upper == "ROLE" and words[0][:1].islower() and parts[i][:1].isupper():
+                        break
+                    # A lower-case word after a capitalised name is a job:
+                    # "NAME Bo baker L1" keeps "baker" out of the name.
+                    if upper == "NAME" and words[0][:1].isupper() and not parts[i][:1].isupper():
                         break
                     words.append(_decode_arg_escapes(parts[i]))
                     i += 1
@@ -614,6 +620,9 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     elif op == "NPC_NEW":
         positional = _classify_npc_args(args)
         name = flags.get("NAME") or positional["name"]
+        if flags.get("NAME") and not positional["role"] and positional["name"][:1].islower():
+            # "NAME Bo baker LOC L1": the bare words after the name are the job.
+            positional["role"] = positional["name"]
         if not name:
             raise TurnDslError(f"NPC_NEW requires NAME on line {entry['line']}")
         npc = {
@@ -923,10 +932,24 @@ def _classify_npc_args(args: list[str]) -> dict[str, str]:
             words.append(token)
     if words:
         out["name"] = words[0]
-    if len(words) > 1:
+    rest_start = 1
+    # Playtest #34 (live): "NPC_NEW Umar Mendes LOC L1" stored "Umar" with the
+    # role "Mendes". Capitalised bare words after a capitalised first word are
+    # the rest of the name; the job is the lower-case words after it.
+    if words and words[0][:1].isupper() and " " not in words[0]:
+        while (
+            rest_start < len(words)
+            and rest_start < 4
+            and words[rest_start][:1].isupper()
+            and " " not in words[rest_start]
+            and words[rest_start].lower() != words[0].lower()
+        ):
+            out["name"] += " " + words[rest_start]
+            rest_start += 1
+    if len(words) > rest_start:
         # "Dockwick" "Dockwick": a repeated name is not a role.
-        rest = [w for w in words[1:] if w.lower() != out["name"].lower()]
-        out["role"] = rest[0] if rest else ""
+        rest = [w for w in words[rest_start:] if w.lower() != out["name"].lower() and w.lower() != words[0].lower()]
+        out["role"] = " ".join(rest[:4]) if rest else ""
     return out
 
 
