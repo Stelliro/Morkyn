@@ -53,6 +53,31 @@ _PURSUE_RE = re.compile(
     r")\s+(?P<target>[^.,;:!?\"“”]{2,80})",
     re.IGNORECASE,
 )
+# Pursuit verbs that are just as often nouns: "the frost trail", "deer tracks",
+# "a shadow", "its tail". Playtest #28: "I crouch and examine the frost trail on
+# the underbrush" was read as following "on the underbrush for tyre", and the
+# follow repair moved the player. These count as verbs only where a verb of the
+# player's own goes: at the start of a clause, after a subject or a helper
+# ("I", "we", "to", "and", "will"), or after an adverb ("quietly").
+_NOUN_LIKE_VERB_RE = re.compile(r"^(?:trail|track|shadow|tail)", re.IGNORECASE)
+_VERB_LEAD_WORDS = frozenset({
+    "i", "we", "you", "they", "he", "she", "to", "and", "then", "will", "shall", "can", "could", "would",
+    "should", "must", "might", "may", "let's", "lets", "let", "i'll", "we'll", "i'd", "we'd", "try", "please",
+    "now", "so", "or", "but", "also", "still", "just", "again",
+})
+
+
+def _verb_in_clause_position(text: str, start: int) -> bool:
+    before = text[:start].rstrip()
+    if not before or before[-1] in ".,;:!?(\"“”-—":
+        return True
+    prev = re.findall(r"[a-z'’]+", before.lower().replace("’", "'"))
+    if not prev:
+        return True
+    word = prev[-1]
+    return word in _VERB_LEAD_WORDS or (word.endswith("ly") and len(word) > 3)
+
+
 # Where a target phrase stops: "follow him down the alley" -> "him".
 _TARGET_STOP_RE = re.compile(
     r"\s+(?:and|but|or|to|into|in|inside|through|before|while|until|so|if|because|then|from|"
@@ -138,6 +163,8 @@ def pursuit_in(player_input: str) -> dict[str, str] | None:
     if not text:
         return None
     for match in _PURSUE_RE.finditer(text):
+        if _NOUN_LIKE_VERB_RE.match(match.group("verb")) and not _verb_in_clause_position(text, match.start()):
+            continue
         target = _clean_target(match.group("target"))
         if not target or _NOT_TARGET_RE.match(target):
             continue

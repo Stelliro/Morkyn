@@ -140,9 +140,16 @@ class TestAutomaticLimits(unittest.TestCase):
         return base
 
     def test_the_whole_trained_context_fits_on_a_12gb_card(self):
+        facts = self._facts(n_ctx_train=16384)
+        context, why = model_limits.auto_context_tokens(facts, {"total_bytes": 12 * GIB, "free_bytes": 10 * GIB})
+        self.assertEqual(context, 16384)
+        self.assertIn("trained to 16,384", why)
+
+    def test_a_roomy_card_stops_at_the_auto_ceiling(self):
+        # Playtest #36: more than a turn needs only costs memory and prompt time.
         context, why = model_limits.auto_context_tokens(self._facts(), {"total_bytes": 12 * GIB, "free_bytes": 10 * GIB})
-        self.assertEqual(context, 32768)
-        self.assertIn("trained to 32,768", why)
+        self.assertEqual(context, model_limits.AUTO_CONTEXT_CEILING)
+        self.assertIn("capped at", why)
 
     def test_a_big_model_on_a_small_card_gets_what_the_cache_allows(self):
         # 32B weights at 18 GB on a 24 GB card: ~4.3 GB left for cache at 160 KB per token.

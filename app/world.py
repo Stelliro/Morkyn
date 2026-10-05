@@ -595,6 +595,32 @@ _BARE_DIRECTION_RE = re.compile(
 )
 
 
+# Words that cannot name a place on their own: articles, prepositions,
+# determiners. A place "named" only by these is a fragment of a longer name.
+_PLACE_FUNCTION_WORDS = frozenset({
+    "the", "a", "an", "of", "in", "at", "to", "on", "by", "for", "from", "with", "into", "onto", "upon",
+    "near", "over", "under", "and", "or", "this", "that", "these", "those", "its", "his", "her", "their",
+    "our", "my", "your", "some", "any", "here", "there", "le", "la", "les", "el", "der", "die", "das",
+})
+
+
+def is_fragment_place_name(name: str) -> bool:
+    """
+    True for a "name" that is a piece of syntax, not a place: only function
+    words ("The", "of the"), or a bracket left over from a <slot> placeholder
+    ("<The", "Edge>"). Playtest #28: a live draft's LOC cut at the first space
+    minted a location "The", and the code tagger then linked every "the" in
+    the prose to it. Shared by place minting, the tagger and follow repair.
+    """
+    n = humanize_place_name(str(name or ""))
+    if not n.strip():
+        return True
+    if re.search(r"[<>\[\]{}]", n):
+        return True
+    words = re.findall(r"[^\W\d_]+(?:['\u2019][^\W\d_]+)?", n.lower())
+    return not words or all(word in _PLACE_FUNCTION_WORDS for word in words)
+
+
 def is_plausible_place_name(name: str) -> bool:
     """Places can be multi-word, but not full system/event sentences or bare props."""
     # Unwrap first, so this holds whether or not the caller ran the name through
@@ -602,6 +628,8 @@ def is_plausible_place_name(name: str) -> bool:
     # "[[L1]]" that is only judged inside _upsert_location is judged too late.
     n = humanize_place_name(str(name or ""))
     if len(n) < 2 or len(n) > 60:
+        return False
+    if is_fragment_place_name(n):
         return False
     # "East", "the far side", "ahead" — a heading, not a destination
     if _BARE_DIRECTION_RE.match(n):
@@ -8124,6 +8152,9 @@ def _known_place_named_in(rows: list[Any], text: str, current_name: str):
     for row in rows:
         name = str(row["name"] or "").strip()
         if len(name) < 3 or name.lower() == str(current_name or "").lower() or not row["code"]:
+            continue
+        # A stored "The" (playtest #28) matched every article in the prose.
+        if is_fragment_place_name(name):
             continue
         for match in re.finditer(rf"(?<![a-z0-9]){re.escape(name.lower())}(?![a-z0-9])", low):
             if match.start() > best_at:

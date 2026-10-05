@@ -11011,6 +11011,13 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
         n = str(name or "").strip()
         if not c or not n or len(n) < 3:
             continue
+        # Playtest #28: a save holding a place named "The" tagged every "the"
+        # in the prose as [[L4]]. A name made only of function words or with
+        # a stray bracket is a fragment, never linked (same rule as minting).
+        from app.world import is_fragment_place_name
+
+        if is_fragment_place_name(n):
+            continue
         if n.lower() in {
             "the street",
             "the road",

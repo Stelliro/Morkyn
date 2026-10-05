@@ -64,10 +64,18 @@ RESPONSE_CAPS_BY_PARAMS: tuple[tuple[float, int, int], ...] = (
 API_RESPONSE_CAPS = (1500, 2000)
 DEFAULT_RESPONSE_CAPS = (1500, 2000)
 
-# Memory the runtime needs beside weights and cache: compute buffers, the
-# scratch for prompt processing, and the display's own share of the card.
-RUNTIME_OVERHEAD_BYTES = 900 * 1024 * 1024
+# Memory the runtime needs beside weights and cache. Playtest #36: a fixed
+# 900 MiB sized against 92% of the whole card opened Qwen3 8B at 38,912 tokens
+# on a 12 GB card whose desktop already held 1.1 GB, and the first call never
+# came back from llama_decode. Now the plan is sized against what is free, the
+# compute buffers grow with the window, and a fixed share stays unclaimed for
+# the desktop and the driver to move about in.
+RUNTIME_OVERHEAD_BYTES = 512 * 1024 * 1024
+COMPUTE_BYTES_PER_TOKEN = 32 * 1024
 GPU_USABLE_FRACTION = 0.92
+# Past this the cache costs memory and prompt time and buys nothing: the turn
+# contract needs about 12-16k. Applies to the GPU fit; env and custom win.
+AUTO_CONTEXT_CEILING = 24576
 KV_BYTES_PER_ELEMENT = 2  # f16 cache, the llama.cpp default
 
 _GGUF_MAGIC = b"GGUF"
@@ -315,6 +323,21 @@ def _round_down(value: int, step: int = CONTEXT_STEP) -> int:
     return max(step, (int(value) // step) * step)
 
 
+def runtime_overhead_bytes(n_ctx: int) -> int:
+    """Compute and scratch buffers plus desktop headroom for a window of n_ctx tokens."""
+    return RUNTIME_OVERHEAD_BYTES + max(0, int(n_ctx)) * COMPUTE_BYTES_PER_TOKEN
+
+
+def _gpu_budget_bytes(gpu: dict[str, int]) -> int:
+    """What the model may claim: free memory plus what this process already holds, within 92% of the card."""
+    total = int(gpu.get("total_bytes") or 0)
+    cap = int(total * GPU_USABLE_FRACTION)
+    free = gpu.get("free_bytes")
+    if free is None:
+        return cap
+    return min(cap, int(free) + max(0, int(gpu.get("held_bytes") or 0)))
+
+
 def auto_context_tokens(facts: dict[str, Any], gpu: dict[str, int] | None) -> tuple[int, str]:
     """The context window to open the model with, and one line saying why."""
     trained = _int_or_none(facts.get("n_ctx_train"))
@@ -323,18 +346,23 @@ def auto_context_tokens(facts: dict[str, Any], gpu: dict[str, int] | None) -> tu
     kv_per_token = _int_or_none(facts.get("kv_bytes_per_token"))
     weights = _int_or_none(facts.get("file_bytes"))
     if gpu and kv_per_token and weights:
-        usable = int(int(gpu.get("total_bytes") or 0) * GPU_USABLE_FRACTION) - weights - RUNTIME_OVERHEAD_BYTES
+        budget = _gpu_budget_bytes(gpu)
+        usable = budget - weights - RUNTIME_OVERHEAD_BYTES
+        card = f"{int(gpu['total_bytes']) / 2**30:.1f} GB GPU ({budget / 2**30:.1f} GB free for the model)"
         if usable <= 0:
             fit = MIN_CONTEXT_TOKENS
-            why = f"the {weights / 2**30:.1f} GB of weights leave no room for a cache on this {int(gpu['total_bytes']) / 2**30:.1f} GB GPU"
+            why = f"the {weights / 2**30:.1f} GB of weights leave no room for a cache on this {card}"
         else:
-            fit = _round_down(usable // kv_per_token)
+            # Each token costs its cache plus its share of the compute buffers.
+            fit = _round_down(usable // (kv_per_token + COMPUTE_BYTES_PER_TOKEN))
             why = (
                 f"{fit:,} tokens of cache ({fit * kv_per_token / 2**30:.1f} GB) fit beside "
-                f"{weights / 2**30:.1f} GB of weights on a {int(gpu['total_bytes']) / 2**30:.1f} GB GPU"
+                f"{weights / 2**30:.1f} GB of weights on a {card}"
             )
-        chosen = max(MIN_CONTEXT_TOKENS, min(ceiling, fit))
-        if trained and fit >= trained:
+        chosen = max(MIN_CONTEXT_TOKENS, min(ceiling, fit, AUTO_CONTEXT_CEILING))
+        if chosen == AUTO_CONTEXT_CEILING and fit > AUTO_CONTEXT_CEILING and ceiling > AUTO_CONTEXT_CEILING:
+            why = f"capped at {AUTO_CONTEXT_CEILING:,}; more fits ({fit:,}) but a turn needs about 16k"
+        elif trained and fit >= trained:
             why = f"trained to {trained:,}; the cache for all of it fits beside {weights / 2**30:.1f} GB of weights"
         return chosen, why
     if params:
@@ -497,6 +525,10 @@ def resolve_limits(config: dict[str, Any] | None = None, *, with_facts: bool = T
             cfg = {}
     facts = model_facts(cfg)
     gpu = gpu_memory() if facts.get("kind") in {"gguf", "file", "name"} else None
+    if gpu:
+        held = _held_by_loaded_model(facts)
+        if held:
+            gpu = {**gpu, "held_bytes": held}
     auto = auto_limits(facts, gpu)
     custom = stored_limits(str(facts.get("key") or "")) or {}
     env_values = {
@@ -539,6 +571,22 @@ def resolve_limits(config: dict[str, Any] | None = None, *, with_facts: bool = T
         }
         out["gpu"] = gpu
     return out
+
+
+def _held_by_loaded_model(facts: dict[str, Any]) -> int:
+    """VRAM our own in-process model already holds, so re-resolving while it is loaded does not shrink the window."""
+    mle = sys.modules.get("app.mle")
+    if mle is None or getattr(mle, "_MODEL", None) is None:
+        return 0
+    path = str(getattr(mle, "_MODEL_PATH", "") or "")
+    n_ctx = int(getattr(mle, "_MODEL_CTX", 0) or 0)
+    if not path:
+        return 0
+    weights = _file_size(Path(path))
+    kv = _int_or_none(facts.get("kv_bytes_per_token")) or 0
+    same = str(facts.get("path") or "") and Path(str(facts.get("path"))).resolve() == Path(path).resolve()
+    cache = n_ctx * kv if same else 0
+    return weights + cache + (runtime_overhead_bytes(n_ctx) - RUNTIME_OVERHEAD_BYTES)
 
 
 def describe(resolved: dict[str, Any]) -> str:

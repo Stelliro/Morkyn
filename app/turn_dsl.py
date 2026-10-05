@@ -61,44 +61,46 @@ Do not percent-encode or HTML-escape text. Write normal readable characters; the
 
 Form:
 ===NAR===
-<continuous playable prose, about 1000-1800 characters, natural paragraphs in clear English>
+the scene as continuous playable prose, about 1000-1800 characters, natural paragraphs in clear English
 Use [[CODE]] after entity names when known (name [[A]], place [[L1]]).
 
 ===OPS===
-<zero or more opcode lines from the closed list below>
+zero or more opcode lines from the closed list below
 One op per line. Prefer entity codes from world_state. Use quoted strings for free text.
 
-Allowed opcodes:
-SUMMARY <compact memory line under 55 words, entity codes OK>
-SCENE <action|conversation|travel|survival|filler|lore|system>
-GOAL <one sentence scene goal>
-FOCUS <event|location|npc|risk|resource|choice|sensory> <short summary>
-NPC_NEW NAME "<real name, not a description>" ROLE <role> LOC <location code or name> [ATTITUDE <word>] [RACE <word>] [RANK <letter>]
-NPC_NOTE <code> "<durable fact>"
-TALK <npc_code> "<topic/summary of exchange>"
-GRANT "<item name>" QTY <band> [TYPE <type>] [DESC "<description>"] [RARITY <word>]
-TAKE "<item name>" QTY <band>
-GOLD <band>
-XP <band>
-HP <band>
-KARMA <band> [VIS <private|local|faction|public>] [REASON "<why>"]
-MOVE <place name — an existing one from movement_contract.known_places, or a new one you name>
-WALK <direction> [STEPS <1-4>]
-LOC_NEW "<name>" "<summary>"
-EVENT "<title>" [LOC <code>] [NPC <code>] [SUMMARY "<text>"]
-GM "<trigger>" "<private future note>"
-REL <source_code> <target_code> "<what source knows/thinks>"
-SKILL "<name>" DELTA <band> [NOTES "<why>"]
-CLAIM "<claim text>" VERDICT <true|false|unverified> [SKILL <skill>] [NOTES "<why>"]
-JOURNAL <fact|quest|rumor|event|system> "<content>"
-INDEX <npc|location|item|event> <code> "<summary_append>"
-NOTE "<short durable journal-style fact>"
-CAST present <npc_code>
-CAST interacting <npc_code>
-CAST off <npc_code>
-CAST keyword <one scene word>
-QUEST "<title>" GIVER <npc code or "name"> STEP "<first thing to do>" [AT <place code or "name">] [REWARD "<as promised>"]
-QUEST_DONE <Q-code or "title"> <accept|step_done|complete|fail|abandon>
+Allowed opcodes. UPPER-CASE words are written as shown. A lower_case_word is a slot: write
+your value in its place, and the slot word itself never appears in the line. a|b|c means
+write one of them. Parts after "optional:" may be left out.
+SUMMARY compact_memory_line_under_55_words
+SCENE action|conversation|travel|survival|filler|lore|system
+GOAL one_sentence_scene_goal
+FOCUS event|location|npc|risk|resource|choice|sensory short_summary
+NPC_NEW NAME "real_name" ROLE job_words LOC location_code_or_"place name" optional: ATTITUDE word RACE word RANK letter
+NPC_NOTE npc_code "durable_fact"
+TALK npc_code "topic_of_the_exchange"
+GRANT "item_name" QTY band optional: TYPE type DESC "description" RARITY word
+TAKE "item_name" QTY band
+GOLD band
+XP band
+HP band
+KARMA band optional: VIS private|local|faction|public REASON "why"
+MOVE place_name (one from movement_contract.known_places, or a new one you name)
+WALK direction optional: STEPS 1-4
+LOC_NEW "place_name" "summary"
+EVENT "title" optional: LOC location_code NPC npc_code SUMMARY "text"
+GM "trigger" "private_future_note"
+REL source_code target_code "what_source_knows_or_thinks"
+SKILL "skill_name" DELTA band optional: NOTES "why"
+CLAIM "claim_text" VERDICT true|false|unverified optional: SKILL skill_name NOTES "why"
+JOURNAL fact|quest|rumor|event|system "content"
+INDEX npc|location|item|event code "summary_append"
+NOTE "short_durable_journal_style_fact"
+CAST present npc_code
+CAST interacting npc_code
+CAST off npc_code
+CAST keyword one_scene_word
+QUEST "title" GIVER npc_code_or_"name" STEP "first_thing_to_do" optional: AT place_code_or_"name" REWARD "as_promised"
+QUEST_DONE quest_code_or_"title" accept|step_done|complete|fail|abandon
 
 Rules:
 CAST is the only way to change who is in the active scene.
@@ -143,13 +145,13 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
   name you gave it, do not substitute a known town that is merely nearby.
   Never guess a location code: "MOVE L2" is discarded and the player does not move.
 - Going indoors is a MOVE. A shop, inn, forge or temple the player steps into is a place, not
-  scenery: write MOVE <that building's name>. Prefer a name from movement_contract.venues_here;
+  scenery: write MOVE with that building's name. Prefer a name from movement_contract.venues_here;
   otherwise name the building and it is created. Stepping back outside is another MOVE, to
   movement_contract.current_location's parent. A scene that walks the player into a shop with no
   MOVE line leaves them standing in the street, and the shop stops existing the moment it scrolls
   out of context.
 - A hike is at most 4 tiles. One step does not cross inside a city. When map_space.step_budget
-  is present, that is this turn's limit. A hike across country is WALK <direction> STEPS <1-4>
+  is present, that is this turn's limit. A hike across country is WALK with a direction and STEPS 1-4
   (north, south, east, west, or a compound such as northeast) plus a MOVE naming the place
   where the walk stops. Do not invent a road, town, or wilderness farther than that walk.
   A door into a shop or room is MOVE only — do not WALK the grid for a room.
@@ -225,7 +227,14 @@ def _decode_arg_escapes(text: str) -> str:
 _LEADING_POSITIONALS = {"FOCUS": 1, "INDEX": 2}
 _OPCODE_FLAG_KEYS: dict[str, set[str]] = {"QUEST": {"GIVER", "STEP", "AT", "REWARD"}}
 # Flags whose unquoted value may be several words ("ROLE net mender").
-_MULTIWORD_FLAGS = {"ROLE"}
+_MULTIWORD_FLAGS = {"ROLE", "LOC"}
+# Longest unquoted run each multi-word flag may take.
+_MULTIWORD_LIMIT = {"ROLE": 4, "LOC": 6}
+# A <slot> the model copied from a placeholder: "LOC <The Wasteland's Edge>"
+# (live Qwen3 8B, playtest #28). The wrapper is syntax, not text; the span is
+# read as one quoted argument. Only a bracket at a token edge counts, so
+# "[[L1]]" and arrows inside quoted text are left alone.
+_ANGLE_SPAN_RE = re.compile(r"(?<!\S)<\s*([^<>\n]*?)\s*>(?!\S)")
 
 
 def _ends_multiword(token: str, flag_keys: set[str]) -> bool:
@@ -258,7 +267,20 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
         return f" __STR{len(strings) - 1}__ "
 
     working = re.sub(r'"((?:\\.|[^"\\])*)"', _pull_quoted, raw)
-    parts = [p for p in working.split() if p]
+
+    def _pull_angle(match: re.Match[str]) -> str:
+        body = match.group(1).strip()
+        if not body:
+            return " "
+        if "__STR" in body:
+            return f" {body} "
+        strings.append(_decode_arg_escapes(body))
+        return f" __STR{len(strings) - 1}__ "
+
+    working = _ANGLE_SPAN_RE.sub(_pull_angle, working)
+    # An unbalanced edge left over ("LOC <The"): drop the stray bracket.
+    parts = [p.strip("<>") for p in working.split()]
+    parts = [p for p in parts if p]
     if not parts:
         return "", [], {}
     opcode = parts[0].upper()
@@ -319,14 +341,19 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
             sm = re.fullmatch(r"__STR(\d+)__", nxt)
             flags[upper] = strings[int(sm.group(1))] if sm else _decode_arg_escapes(nxt)
             i += 2
-            if upper in _MULTIWORD_FLAGS and not sm:
+            if upper in _MULTIWORD_FLAGS and not sm and not (upper == "LOC" and _LOCATION_CODE_RE.match(nxt)):
                 # Playtest #16: "ROLE message runner LOC L1" stored Elara as a
                 # "message". An unquoted occupation runs to the next flag.
+                # Playtest #28: "LOC The Frostbound Crossroads ATTITUDE wary"
+                # stored three NPCs at a new place called "The". A place name
+                # runs to the next flag too; a location code stands alone.
                 words = [flags[upper]]
-                while i < len(parts) and len(words) < 4 and not _ends_multiword(parts[i], flag_keys):
+                limit = _MULTIWORD_LIMIT.get(upper, 4)
+                while i < len(parts) and len(words) < limit and not _ends_multiword(parts[i], flag_keys):
                     # A capitalised word after a lower-case job is a name:
-                    # "ROLE baker Bo L1" keeps Bo as the NPC's name.
-                    if words[0][:1].islower() and parts[i][:1].isupper():
+                    # "ROLE baker Bo L1" keeps Bo as the NPC's name. Place
+                    # names are capitalised all the way through, so not LOC.
+                    if upper == "ROLE" and words[0][:1].islower() and parts[i][:1].isupper():
                         break
                     words.append(_decode_arg_escapes(parts[i]))
                     i += 1
@@ -1088,7 +1115,7 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
         city_clause = " One step does not cross inside a city." if space.get("scale") == "world" else ""
         instructions.append(
             f"This turn walks at most {budget} tiles. If the prose crosses country, ===OPS=== MUST contain "
-            "WALK <direction> STEPS <n> and a MOVE naming where the scene stops. "
+            "WALK with a direction and STEPS, and a MOVE naming where the scene stops. "
             "Do not name a place beyond that walk. A door into a room is MOVE only."
             + city_clause
         )

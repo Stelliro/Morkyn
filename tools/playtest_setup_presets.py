@@ -15,9 +15,18 @@ Runs (each in a fresh browser profile against its own scratch database):
 
 Usage:
   python tools/playtest_setup_presets.py --model D:\\path\\Qwen3-8B-Q4_K_M.gguf [--random 3] [--seed 7] [--only op_mc,cyberpunk]
+      [--out DIR] [--no-launcher-env]
 
-Writes data/playtest_reports/setup_presets_<stamp>/<run>.json plus summary.json.
-Requires the system Python (llama_cpp + playwright). Stops nothing it did not start.
+The server runs with the player's launcher env (data/launcher_prefs.json, read
+only, mapped the way Morkyn.ps1 maps it): narration pipeline, consolidation,
+fast verification, DSL skip-verify, draft mode, flash attention, response caps
+and context. Without it the harness tests the shipped defaults, a narration
+path the player does not run (playtest #38). --no-launcher-env opts out.
+
+Writes <temp>/morkyn_setup_presets_<stamp>/<run>.json plus summary.json, or
+under --out. Never under data/. Every data store the server touches lives in
+its own temp dir. Requires the system Python (llama_cpp + playwright). Stops
+nothing it did not start.
 """
 from __future__ import annotations
 
@@ -100,19 +109,89 @@ def isolated_data_env(data_dir: str) -> dict[str, str]:
         "AI_RPG_SOURCE_INDEX": str(root / "source_index"),
         "AI_RPG_CONSOLIDATED_FACTS": str(root / "consolidated_facts.jsonl"),
         "AI_RPG_MODEL_TRACE_DIR": str(root / "model_traces"),
+        # Playtest #38: these four defaulted to the live data/ files.
+        "AI_RPG_IDEA_BANK": str(root / "idea_bank"),
+        "AI_RPG_LAUNCHER_PREFS": str(root / "launcher_prefs.json"),
+        "AI_RPG_SKILL_LIBRARY": str(root / "skill_library.json"),
+        "AI_RPG_PACK_DIR": str(root / "packs"),
     }
 
 
-def start_server(model: str) -> tuple[subprocess.Popen, str, str]:
+# The player's launcher prefs. Read, never written.
+LIVE_LAUNCHER_PREFS = ROOT / "data" / "launcher_prefs.json"
+
+
+def read_launcher_prefs(path: Path | None = None) -> dict:
+    """The player's launcher prefs (the file is saved by PowerShell with a BOM), or {}."""
+    source = Path(path or LIVE_LAUNCHER_PREFS)
+    try:
+        raw = json.loads(source.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def _pref_int(value) -> int:
+    text = str(value if value is not None else "").strip().lower()
+    if not text or text == "auto":
+        return 0
+    try:
+        number = int(float(text))
+    except ValueError:
+        return 0
+    return number if number > 0 else 0
+
+
+def launcher_env(prefs: dict) -> dict[str, str]:
+    """The env Morkyn.ps1 exports from the launcher prefs (the turn pipeline's switches)."""
+    on = lambda key, default=True: "1" if prefs.get(key, default) else "0"  # noqa: E731
+    env = {
+        "AI_RPG_DRAFT_MODE": str(prefs.get("draft_mode") or "dsl"),
+        "AI_RPG_NARRATION_PIPELINE": on("narration_pipeline"),
+        "AI_RPG_NARRATION_PIPELINE_CONSOLIDATE": on("narration_consolidate"),
+        "AI_RPG_FAST_VERIFICATION": on("fast_verification"),
+        "AI_RPG_DSL_SKIP_VERIFY": on("dsl_skip_verify", False),
+        "AI_RPG_LLAMA_CPP_FLASH_ATTN": "True" if prefs.get("llama_cpp_flash_attn") else "False",
+    }
+    if prefs.get("llama_cpp_gpu_layers") is not None:
+        env["AI_RPG_LLAMA_CPP_GPU_LAYERS"] = str(int(prefs.get("llama_cpp_gpu_layers")))
+    for key, name in (
+        ("llama_cpp_context", "AI_RPG_CONTEXT_TOKENS"),
+        ("soft_response_tokens", "AI_RPG_MAX_RESPONSE_TOKENS"),
+        ("hard_response_tokens", "AI_RPG_RESPONSE_HARD_CAP_TOKENS"),
+    ):
+        number = _pref_int(prefs.get(key))
+        if number:
+            env[name] = str(number)
+    return env
+
+
+def default_out_dir(stamp: str) -> str:
+    """Reports go to the temp dir, never under the live data/ tree."""
+    return str(Path(tempfile.gettempdir()) / f"morkyn_setup_presets_{stamp}")
+
+
+def start_server(model: str, *, use_launcher_env: bool = True) -> tuple[subprocess.Popen, str, str]:
     port = free_port()
     data_dir = tempfile.mkdtemp(prefix="morkyn_presets_")
     # Mørkyn has no single data-dir setting: every store has its own variable,
     # and each one left unset defaults to the player's real files under data/.
     # An earlier version of this tool set a non-existent AI_RPG_DATA_DIR and
     # wrote into the live world.db and save folder.
+    isolated = isolated_data_env(data_dir)
+    prefs = read_launcher_prefs() if use_launcher_env else {}
+    # The server reads (and Settings may save) a private copy, never the live file.
+    Path(isolated["AI_RPG_LAUNCHER_PREFS"]).write_text(json.dumps(prefs, indent=2), encoding="utf-8")
+    base_env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in ("AI_RPG_CONTEXT_TOKENS", "AI_RPG_MAX_RESPONSE_TOKENS", "AI_RPG_RESPONSE_HARD_CAP_TOKENS")
+        or not use_launcher_env
+    }
     env = {
-        **os.environ,
-        **isolated_data_env(data_dir),
+        **base_env,
+        **(launcher_env(prefs) if use_launcher_env else {}),
+        **isolated,
         "AI_RPG_MODEL_PROVIDER": "mle",
         "MLE_MODEL": model,
         "PYTHONIOENCODING": "utf-8",
@@ -264,12 +343,19 @@ def main() -> int:
     ap.add_argument("--only", default="")
     ap.add_argument("--timeout", type=int, default=1500)
     ap.add_argument("--skip-controls", action="store_true")
+    ap.add_argument("--out", default="", help="report folder (default: the temp dir; never under data/)")
+    ap.add_argument("--no-launcher-env", action="store_true", help="run the shipped defaults, not the player's launcher env")
     args = ap.parse_args()
 
     from playwright.sync_api import sync_playwright
 
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    OUT_DIR = str(ROOT / "data" / "playtest_reports" / f"setup_presets_{stamp}")
+    OUT_DIR = args.out or default_out_dir(stamp)
+    try:
+        Path(OUT_DIR).resolve().relative_to((ROOT / "data").resolve())
+        raise SystemExit("--out must not be under data/ (the player's live game)")
+    except ValueError:
+        pass
     Path(OUT_DIR).mkdir(parents=True, exist_ok=True)
     rng = random.Random(args.seed)
     if args.only:
@@ -300,7 +386,7 @@ def main() -> int:
             if not todo:
                 continue
             model = args.model if server_kind == "model" else str(ROOT / "data" / "no-such-model.gguf")
-            proc, base, data_dir = start_server(model)
+            proc, base, data_dir = start_server(model, use_launcher_env=not args.no_launcher_env)
             try:
                 summary[f"{server_kind}_server"] = {"base": base, "data_dir": data_dir, "status": warm_model(base)}
                 print(server_kind, "server", base, summary[f"{server_kind}_server"]["status"].get("ok"), flush=True)
