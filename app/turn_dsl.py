@@ -61,7 +61,7 @@ Do not percent-encode or HTML-escape text. Write normal readable characters; the
 
 Form:
 ===NAR===
-the scene as continuous playable prose, about 1000-1800 characters, natural paragraphs in clear English
+the scene as continuous playable prose, as long as narration_length asks, natural paragraphs in clear English
 Use [[CODE]] after entity names when known (name [[A]], place [[L1]]).
 
 ===OPS===
@@ -175,6 +175,9 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
 - Resolve the player's action. They already chose; show what happens. Never end ===NAR=== with the
   choice restated ("Do you approach X, or continue to Y?", "The choice is yours.") — that hands the
   turn back unplayed. End on a consequence, a new pressure, or a concrete detail, then stop.
+- player_line is the player's own input: the only words, reply, gesture, feeling or memory "you" have
+  this turn. Narrate its action and what the world does back. When someone speaks to the player, end
+  the exchange on that line; the player answers next turn.
 - Opening/continue: establish or advance scene; do not invent player commands.
 - Keep rewards small. Empty ===OPS=== is allowed when nothing structured changes.
 - Never put private GM text in ===NAR===.
@@ -1056,6 +1059,29 @@ def parse_dsl_turn(text: str, player_input: str = "") -> dict[str, Any]:
     return turn
 
 
+def player_line_of(player_input: str) -> str:
+    """The player's own input without the engine notes after it; "" for engine requests."""
+    text = str(player_input or "")
+    if not text.strip() or text.startswith("__"):
+        return ""
+    return re.split(r"\n\s*\n", text, maxsplit=1)[0].strip()
+
+
+def narration_length_target(player_input: str) -> str:
+    """
+    ===NAR=== length for this action. The floor stays at the engine's
+    1000-character depth minimum (MIN_TURN_NARRATION_CHARS), so a short turn
+    does not set off a depth retry; the ceiling shrinks with a short action.
+    """
+    own = player_line_of(player_input)
+    words = len(own.split())
+    if not own or words > 30:
+        return "about 1000-1800 characters"
+    if words <= 12:
+        return "about 1000-1200 characters"
+    return "about 1000-1500 characters"
+
+
 def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     """Slim prompt: reuse world packet but demand NAR+OPS output."""
     from app.prompts import build_user_prompt
@@ -1077,6 +1103,16 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
         "Fill ===OPS=== with zero or more closed opcodes only.",
         "Do not return JSON.",
     ]
+    # What the player said and did, as its own field, and a length that fits
+    # it (playtest #30): a one-line action asked for up to 1800 characters, and
+    # the model filled them by playing the player's side of the talk.
+    own = player_line_of(player_input)
+    if own:
+        packet["player_line"] = own
+        instructions.append(
+            "player_line is everything you (the player) say and do this turn; write no other words or replies for the player."
+        )
+    packet["narration_length"] = narration_length_target(player_input)
     # Fresh per turn (app/example_pools.py): options, not people who exist.
     cast = context.get("cast_options") if isinstance(context, dict) else None
     if isinstance(cast, dict) and (cast.get("names") or cast.get("jobs")):

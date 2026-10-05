@@ -13256,7 +13256,7 @@ def _make_pipeline_paragraph_writer(
     timeout: int,
     context: dict[str, Any] | None = None,
 ):
-    from app.narration_pipeline import polish_paragraph
+    from app.narration_pipeline import last_line, polish_paragraph
 
     from app.prompts import PROSE_VOICE
 
@@ -13275,6 +13275,10 @@ def _make_pipeline_paragraph_writer(
         "and never change anyone's job. "
         "may_mention lists each [[code]] with its name and kind. Put a code only right after that entity's own name. "
         "Words under player_speech are the player's own: only the player (you) says them; no other character speaks them. "
+        "player_line is the player's own input, and it is all that you (the player) say and do this turn. "
+        "Narrate its action and what the world does back. When draft_slice gives you other words, a reply, "
+        "a gesture or a memory that player_line does not, leave it out. When someone speaks to the player, "
+        "do not write the player's answer: the player gives it next turn. "
         "conversation says who the player is talking to: only someone in who_answers answers the player; "
         "people in listening_only may react, but do not answer for them. "
         "When reply_status is present, the player's line was answered in an earlier paragraph: do not answer it again. "
@@ -13289,7 +13293,8 @@ def _make_pipeline_paragraph_writer(
         "The player makes their own choices: never write that they decide, choose or put something off; "
         "end on the situation, not on a decision made for them. "
         "Do not repeat facts or spoken lines listed under forbidden_repeat or already_said. "
-        "Continue from previous_paragraph_tail without restarting the scene. "
+        "last_line_already_written is the line the player has just read at the end of the previous paragraph. "
+        "Open this beat on something new from draft_slice; never repeat or restate last_line_already_written. "
         "Always finish every sentence completely — never stop mid-word or mid-clause. "
         + PROSE_VOICE
     )
@@ -13311,7 +13316,10 @@ def _make_pipeline_paragraph_writer(
         ]
         if "draft_slice" in brief:
             if str(brief.get("draft_slice") or "").strip():
-                rules.append("Write what draft_slice says happens, in your own words; keep its speakers and facts.")
+                rules.append(
+                    "Write what draft_slice says happens, in your own words; keep what the other characters say "
+                    "and do, and its facts. What you (the player) say or do comes only from player_line."
+                )
             else:
                 rules.append("draft_slice is empty: deepen what is already established; no new event, place or person.")
         if brief.get("reply_status"):
@@ -13322,7 +13330,10 @@ def _make_pipeline_paragraph_writer(
         payload = {
             "task": "Write exactly one paragraph for this beat.",
             "brief": brief,
-            "previous_paragraph_tail": (previous_paragraph or "")[-400:],
+            # Only the last sentence (playtest #29). The 400-character tail was
+            # most of the previous paragraph, sent under "continue from", and the
+            # beat opened by restating it.
+            "last_line_already_written": last_line(previous_paragraph or ""),
             # Newest last: first sentences and spoken lines of earlier paragraphs.
             "already_said": list(ledger.forbidden_repeats())[-16:],
             "rejected_attempts": list(ledger.previously_attempted_texts(int(brief.get("beat_index") or 1) - 1))[:3],
@@ -13555,7 +13566,49 @@ def _ensure_narration_quality(
     voiced = _ensure_narration_voice(deep, context, player_input, prose_prompt, timeout, usage, phase, trace)
     answered = _ensure_answer_act(voiced, context, player_input, prose_prompt, timeout, usage, phase, trace)
     recalled = _ensure_recall_specifics(answered, context, player_input, prose_prompt, timeout, usage, phase, trace)
-    return _drop_decided_choice(_apply_menu_trim(recalled), player_input)
+    return _drop_invented_player_speech(_drop_decided_choice(_apply_menu_trim(recalled), player_input), player_input)
+
+
+def _drop_invented_player_speech(turn: dict[str, Any], player_input: str) -> dict[str, Any]:
+    """
+    Drop quoted lines the narration gives the player that the player did not
+    say (playtest #30: '"I don't think," you say. "I know."' for an input with
+    no speech in it). Whole units go; segments follow; the drop is recorded.
+    """
+    from app.narration_pipeline import drop_invented_player_speech
+
+    segments = turn.get("narration_segments")
+    if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
+        texts = [str(seg.get("text") or "") for seg in segments]
+        kept, dropped = drop_invented_player_speech(texts, player_input)
+        if not dropped:
+            return turn
+        new_segments = [{**seg, "text": kept[i]} for i, seg in enumerate(segments) if kept[i].strip()]
+        joined = "\n\n".join(seg["text"] for seg in new_segments).strip()
+        if not joined:
+            return turn
+        turn["narration_segments"] = new_segments
+        turn["narration"] = joined
+    else:
+        text = str(turn.get("narration") or "")
+        if not text.strip():
+            return turn
+        kept, dropped = drop_invented_player_speech(re.split(r"\n\s*\n", text), player_input)
+        if not dropped:
+            return turn
+        joined = "\n\n".join(p for p in kept if p.strip()).strip()
+        if not joined:
+            return turn
+        turn["narration"] = joined
+    check = turn.get("self_check")
+    if isinstance(check, dict):
+        made = check.get("corrections_made") if isinstance(check.get("corrections_made"), list) else []
+        check["corrections_made"] = [
+            *made,
+            f"Dropped {len(dropped)} line(s) of speech the narration gave the player that the player did not say.",
+        ]
+    turn["_invented_player_speech"] = dropped
+    return turn
 
 
 def _voice_repair_enabled() -> bool:

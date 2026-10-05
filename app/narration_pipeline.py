@@ -551,7 +551,11 @@ def looks_truncated(text: str) -> bool:
     t = _collapse_ws(text)
     if not t or len(t) < 12:
         return True
-    if re.search(r'[.!?]["\')\]]?\s*$', t):
+    # An unclosed quotation is a cut, not an ending (playtest #29): the next
+    # beat restated the line to finish the quote.
+    if _quote_marks(t) % 2:
+        return True
+    if _SENTENCE_END_AT_EOS_RE.search(t):
         return False
     # ellipsis / dash closeouts can be intentional
     if t.endswith(("…", "...", "—", "–")):
@@ -584,6 +588,12 @@ def looks_garbage_fragment(text: str) -> bool:
     return False
 
 
+# A sentence end: . ! ? and any closing quote or bracket after it. The curly
+# closers were missing, so '.”' was never a cut point (playtest #29).
+_SENTENCE_END_RE = re.compile(r'[.!?]["\'\u201d\u2019)\]]*(?=\s|$)')
+_SENTENCE_END_AT_EOS_RE = re.compile(r'[.!?]["\'\u201d\u2019)\]]*\s*$')
+
+
 def polish_paragraph(text: str, max_chars: int = 480) -> str:
     """
     Never hard-slice mid-word. Prefer the last complete sentence inside budget.
@@ -595,7 +605,13 @@ def polish_paragraph(text: str, max_chars: int = 480) -> str:
     max_chars = max(80, int(max_chars or 480))
 
     def _last_sentence_cut(window: str) -> str:
-        ends = [m.end() for m in re.finditer(r'[.!?]["\')\]]?(?=\s|$)', window)]
+        # Only where the quotes balance (playtest #29): a cut inside a quotation
+        # left an unclosed line the next beat restarted to finish.
+        ends = [
+            m.end()
+            for m in _SENTENCE_END_RE.finditer(window)
+            if _quote_marks(window[: m.end()]) % 2 == 0
+        ]
         if ends:
             cut = window[: ends[-1]].strip()
             if len(cut) >= 60:
@@ -612,7 +628,7 @@ def polish_paragraph(text: str, max_chars: int = 480) -> str:
         t = _last_sentence_cut(t)
         if looks_truncated(t) and " " in t:
             # drop the incomplete final clause after last punctuation
-            m = list(re.finditer(r'[.!?]["\')\]]?\s+', t))
+            m = [x for x in re.finditer(r'[.!?]["\'\u201d\u2019)\]]*\s+', t) if _quote_marks(t[: x.end()]) % 2 == 0]
             if m:
                 t = t[: m[-1].end()].strip()
             else:
@@ -994,6 +1010,74 @@ def drop_repeated_speech(paragraphs: list[str]) -> tuple[list[str], list[str]]:
     return kept_paragraphs, dropped
 
 
+def _echo_pieces(block: str) -> list[str]:
+    """Sentences of a block, also split after a closing quote, never merged."""
+    return [p.strip() for p in _UNIT_SPLIT_RE.split(str(block or "")) if p and p.strip()]
+
+
+def last_line(text: str, limit: int = 160) -> str:
+    """The last sentence of a paragraph, at most `limit` characters, cut at a word."""
+    blocks = [b for b in _BLOCK_SPLIT_RE.split(str(text or "").strip()) if b.strip()]
+    pieces = _echo_pieces(_collapse_ws(blocks[-1])) if blocks else []
+    line = pieces[-1] if pieces else ""
+    if len(line) > limit:
+        line = line[-limit:].split(" ", 1)[-1]
+    return line
+
+
+# How many of the previous paragraph's closing sentences a new paragraph may not open with.
+TAIL_ECHO_SENTENCES = 2
+
+
+def drop_tail_echo_openers(paragraphs: list[str]) -> tuple[list[str], list[str]]:
+    """
+    Drop a paragraph's opening sentences when they restate the last sentences
+    of the paragraph before it (playtest #29).
+
+    Live, a beat told to continue from the previous tail opened by repeating
+    it: 'He leans in, his voice low.' closed one paragraph and opened the next.
+    Those are short lines, below the length the turn-wide repeat pass compares,
+    so this rule ignores length but only fires at a paragraph boundary, on an
+    exact match. A short echo anywhere else is left alone.
+
+    Returns (paragraphs, dropped) with the input's length.
+    """
+    out: list[str] = []
+    dropped: list[str] = []
+    previous = ""
+    for para in paragraphs:
+        text = str(para or "")
+        if previous.strip() and text.strip():
+            prev_blocks = [b for b in _BLOCK_SPLIT_RE.split(previous.strip()) if b.strip()]
+            tail = {
+                key
+                for key in (_sentence_key(p) for p in _echo_pieces(prev_blocks[-1])[-TAIL_ECHO_SENTENCES:])
+                if len(key.split()) >= 2
+            }
+            blocks = [b for b in _BLOCK_SPLIT_RE.split(text.strip()) if b.strip()]
+            pieces = _echo_pieces(blocks[0])
+            count = 0
+            while count < min(len(pieces), TAIL_ECHO_SENTENCES) and _sentence_key(pieces[count]) in tail:
+                count += 1
+            if count:
+                head = pieces[:count]
+                rest = " ".join(pieces[count:]).strip()
+                # The echo opened a quotation the rest goes on with: give the
+                # rest its opening mark back, so no closer is left orphaned.
+                if rest and _quote_marks(rest) % 2 and not _quote_marks(blocks[0]) % 2:
+                    rest = ("\u201c" if any("\u201c" in h for h in head) else '"') + rest
+                dropped.extend(head)
+                if rest:
+                    blocks[0] = rest[0].upper() + rest[1:] if rest[0].islower() else rest
+                else:
+                    blocks.pop(0)
+                text = "\n\n".join(blocks).strip()
+        out.append(text)
+        if text.strip():
+            previous = text
+    return out, dropped
+
+
 def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]]:
     """
     Remove any sentence already said earlier in the same turn, however far back.
@@ -1009,7 +1093,9 @@ def drop_repeated_sentences(paragraphs: list[str]) -> tuple[list[str], list[str]
     holding parallel data (segment labels) stay aligned.
     """
     original = list(paragraphs)
+    paragraphs, echo_dropped = drop_tail_echo_openers(list(paragraphs))
     paragraphs, speech_dropped = drop_repeated_speech(list(paragraphs))
+    speech_dropped = echo_dropped + speech_dropped
     seen_keys: set[str] = set()
     seen_tokens: list[set[str]] = []
     seen_stems: list[set[str]] = []
@@ -1362,6 +1448,120 @@ def player_words_misattributed(text: str, quotes: list[str]) -> bool:
     return False
 
 
+# Speech verbs that attribute a quotation to the player. Narrower than
+# _PLAYER_SPEECH_VERB_RE, which also lists action verbs (offer, press, let,
+# add) that would claim an NPC's line in "You offer the coin. 'Fair,' she says."
+_YOU_SAID_RE = re.compile(
+    r"\byou(?:\s+\w+ly)?\s+(?:say|said|ask|asked|reply|replied|answer|answered|mutter|muttered|"
+    r"whisper|whispered|shout|shouted|murmur|murmured|retort|retorted|snap|snapped|growl|growled|"
+    r"hiss|hissed|speak|spoke|insist|insisted|declare|declared)\b",
+    re.IGNORECASE,
+)
+# Someone else's speech tag in the same unit: the line is theirs.
+_OTHER_SAID_RE = re.compile(
+    r"\b(?:says|asks|replies|answers|mutters|whispers|shouts|calls|growls|snaps|adds|continues|"
+    r"tells|warns|explains|murmurs|counters|insists|presses|barks|hisses|grunts|laughs|sighs|offers)\b",
+    re.IGNORECASE,
+)
+# The player asked to speak without giving the words ("I ask him about the
+# docks"): the narration may voice it, so nothing can be checked word for word.
+_INDIRECT_SPEECH_RE = re.compile(
+    r"\b(?:say|says|said|ask|asks|asked|tell|tells|told|reply|replies|answer|answers|shout|yell|"
+    r"whisper|call|calls|mutter|greet|greets|explain|explains|argue|plead|beg|begs|demand|demands|"
+    r"question|inquire|enquire|talk|talks|speak|speaks|chat|thank|thanks|apologi[sz]e|promise|agree|"
+    r"refuse|insist|warn|offer|request|introduce|haggle|bargain|negotiate|persuade|convince|lie|joke|"
+    r"threaten|respond|mention|admit|confess|suggest|reassure|comfort|accuse|discuss|inform)\w*\b",
+    re.IGNORECASE,
+)
+
+
+def _outside_quotes(unit: str) -> str:
+    return _QUOTE_SPAN_RE.sub(" ", str(unit or ""))
+
+
+def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
+    """The quoted words come from what the player typed (quoted, or plainly)."""
+    if quotes and _is_player_line(span, quotes):
+        return True
+    stems = content_stems(span)
+    if stems:
+        return len(stems & content_stems(own)) * 2 >= len(stems)
+    words = set(_speech_key(span).split())
+    return bool(words) and words <= set(_speech_key(own).split())
+
+
+def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tuple[list[str], list[str]]:
+    """
+    Remove quotations the narration gives the player when the player did not
+    say them (playtest #30).
+
+    A quotation is the player's when it is tagged "you say/ask/..." in its
+    own unit, continues straight on from such a line, or stands in a dialogue
+    paragraph that opens on the player's action and holds nothing but that
+    action and untagged quotation. It is invented when its words are not in
+    what the player typed. When the player asked to speak without giving the
+    words, nothing is checked. Whole units go, so no half quote is left.
+    Returns (paragraphs, dropped) with the input's length.
+    """
+    raw = str(player_input or "")
+    if not raw.strip() or raw.startswith("__"):
+        return list(paragraphs), []
+    own = re.split(r"\n\s*\n", raw, maxsplit=1)[0]
+    quotes = player_quotes(raw)
+    if not quotes and _INDIRECT_SPEECH_RE.search(own):
+        return list(paragraphs), []
+    out: list[str] = []
+    dropped: list[str] = []
+    for para in paragraphs:
+        kept_blocks: list[str] = []
+        for block in _BLOCK_SPLIT_RE.split(str(para or "")):
+            units = speech_units(block.strip())
+            if not units:
+                continue
+            bare = [not _outside_quotes(u).strip(" ,.;:!?\u2014-") for u in units]
+            # Dialogue paragraph by convention: the player's action, then their line.
+            lead = 0
+            while lead < len(units) and not quoted_spans(units[lead]) and re.match(r"^you\b", units[lead], re.I):
+                lead += 1
+            players_block = 0 < lead < len(units) and all(bare[lead:])
+            kept_units: list[str] = []
+            player_turn = False
+            for index, unit in enumerate(units):
+                spans = quoted_spans(unit)
+                if not spans or _quote_marks(unit) % 2:
+                    kept_units.append(unit)
+                    player_turn = False
+                    continue
+                outside = _outside_quotes(unit)
+                tagged = bool(_YOU_SAID_RE.search(outside)) and not _OTHER_SAID_RE.search(
+                    _YOU_SAID_RE.sub(" ", outside)
+                )
+                if tagged or (bare[index] and (player_turn or players_block)):
+                    player_turn = True
+                    if all(_words_from_player(span, own, quotes) for span in spans):
+                        kept_units.append(unit)
+                    else:
+                        dropped.append(unit)
+                    continue
+                player_turn = False
+                kept_units.append(unit)
+            block_text = " ".join(kept_units).strip()
+            if block_text:
+                kept_blocks.append(block_text)
+        out.append("\n\n".join(kept_blocks).strip())
+    if dropped and not any(p.strip() for p in out):
+        return list(paragraphs), []
+    return out, dropped
+
+
+def player_own_line(player_input: str) -> str:
+    """The player's own input, without the engine notes after it; "" for engine requests."""
+    text = str(player_input or "")
+    if text.startswith("__"):
+        return ""
+    return re.split(r"\n\s*\n", text, maxsplit=1)[0].strip()
+
+
 def entity_roster(context: dict[str, Any], draft: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """
     code -> name and kind for every entity the writer may tag.
@@ -1412,7 +1612,7 @@ def entity_roster(context: dict[str, Any], draft: dict[str, Any] | None = None) 
     return rows
 
 
-def draft_narration_text(draft: dict[str, Any] | None) -> str:
+def draft_narration_text(draft: dict[str, Any] | None, player_input: str = "") -> str:
     if not isinstance(draft, dict):
         return ""
     text = str(draft.get("narration") or "").strip()
@@ -1422,6 +1622,12 @@ def draft_narration_text(draft: dict[str, Any] | None) -> str:
             str(seg.get("text") or "") for seg in segments if isinstance(seg, dict)
         ).strip()
     text = _DSL_DIRECTIVE_LINE_RE.sub("", text)
+    if player_input:
+        # Lines the draft wrote for the player never reach the beat writer
+        # (playtest #30). Checked before the collapse, while dialogue
+        # paragraphs still show who speaks.
+        kept, _dropped = drop_invented_player_speech([text], player_input)
+        text = kept[0] if kept else text
     return _collapse_ws(text)
 
 
@@ -1596,9 +1802,10 @@ def build_paragraph_briefs(
     current = context.get("current_location")
     if isinstance(current, dict):
         loc = str(current.get("name") or current.get("code") or "")
-    draft_text = draft_narration_text(draft)
+    draft_text = draft_narration_text(draft, player_input)
     state_ops = _state_ops_only(ops_summary)
     must_pool = _must_cover_candidates(context, player_input, state_ops, draft_text)
+    own_line = player_own_line(player_input)
     roster = entity_roster(context, draft)
     may_mention = roster[:14]
     facts = scene_facts(context, draft, player_input, roster)
@@ -1663,6 +1870,9 @@ def build_paragraph_briefs(
             brief["draft_slice"] = slices[index]
         if quotes:
             brief["player_speech"] = [{"speaker": "player", "words": _trim(q, 300)} for q in quotes]
+        if own_line:
+            # Everything the player says and does this turn (playtest #30).
+            brief["player_line"] = _trim(own_line, 400)
         if talk:
             brief["conversation"] = talk
         if thread:
@@ -1824,8 +2034,9 @@ def run_narration_pipeline(
         previous = paragraphs[-1] if paragraphs else ""
         # refresh forbidden from ledger
         brief["forbidden_repeat"] = ledger.forbidden_repeats()[-20:]
-        if paragraphs:
-            brief["previous_paragraph_tail"] = previous[-400:]
+        # The writer gets the previous paragraph's last line once, from its own
+        # payload. A 400-character tail here as well was most of a 480-character
+        # paragraph, twice, and the beat opened by restating it (playtest #29).
         progress_update(
             "narration_write",
             f"Drafting paragraph {index + 1}/{total_beats} ({role})…",
@@ -1972,6 +2183,15 @@ def run_narration_pipeline(
                 continue
 
         if paragraphs:
+            trimmed, echo_dropped = drop_tail_echo_openers([paragraphs[-1], text])
+            if echo_dropped:
+                ledger.record_attempt(
+                    "drop_tail_echo", index, {"dropped": echo_dropped[:2]}, trimmed[-1], "accepted",
+                    issues=["opened_on_previous_last_line"],
+                )
+                text = polish_paragraph(trimmed[-1], max_chars=max_chars)
+                if not text or looks_garbage_fragment(text):
+                    continue
             trimmed, speech_dropped = drop_repeated_speech(paragraphs + [text])
             if speech_dropped:
                 ledger.record_attempt(
