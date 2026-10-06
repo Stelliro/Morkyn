@@ -114,11 +114,17 @@ class TestOwnedItemsAreNotExempt(unittest.TestCase):
         for narration, player_input in (
             ("You gather two more seeds from the pouch and add them to your pack.", "I gather seeds"),
             ("The farmer presses two more seeds into your palm.", "I talk to the farmer"),
-            ("You pick up two seeds from the sack.", "I look around"),
+            ("You pick up two seeds from the sack.", "I pick up seeds"),
         ):
             with self.subTest(narration=narration[:32]):
                 kept = _run("seed in hand", 2, owned=1, narration=narration, player_input=player_input)
                 self.assertEqual(len(kept), 1, "a real gain must still land")
+
+    def test_a_pickup_the_player_never_asked_for_is_not_a_gain(self):
+        # Playtest #42: "You pick up ..." after "I look around" is the model
+        # taking for the player. Only the player's own words make that a gain.
+        kept = _run("seed in hand", 2, owned=1, narration="You pick up two seeds from the sack.", player_input="I look around")
+        self.assertEqual(kept, [])
 
     def test_player_intent_alone_carries_a_gain(self):
         # The player said to take it. Terse narration must not lose the item.

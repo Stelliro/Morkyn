@@ -47,7 +47,9 @@ def setUpModule():
 _CONTEXT = {"player": {"name": "Ash"}, "turn_plan": {"turn_kind": "player_action"}}
 
 
-def _short_turn(chars: int = 700) -> dict:
+# Under the writer-off depth floor (AI_RPG_MIN_NARRATION_CHARS, default 600
+# since playtest #52), so the depth ladder runs.
+def _short_turn(chars: int = 500) -> dict:
     lines = [
         "You step into the yard and the wind pulls at your cloak.",
         "Mud has dried in ridges along the cart track, and a dog watches you from the gate.",

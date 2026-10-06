@@ -122,8 +122,9 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
   shorter and more reliable.
 - GRANT and TAKE QTY counts objects: trivial or small is one, moderate two,
   large three, huge five. A real stack may be a plain number. GRANT only what
-  ===NAR=== puts in the player's hands (given, bought, picked up, looted,
-  crafted); something looked at, touched, tasted or handed back is not granted.
+  someone in ===NAR=== gives, sells or awards the player, or what player_line itself
+  takes, buys or loots. Something only found, looked at, touched, tasted or handed
+  back is not granted; the player can take it next turn.
 - NPC_NEW NAME is the person's own given name, the one people call them by, made for this
   world and this person. How they look or what they do is not a name; the app overwrites
   description-only names. Never give a name already used by someone else in world_state.
@@ -175,9 +176,11 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
 - Resolve the player's action. They already chose; show what happens. Never end ===NAR=== with the
   choice restated ("Do you approach X, or continue to Y?", "The choice is yours.") — that hands the
   turn back unplayed. End on a consequence, a new pressure, or a concrete detail, then stop.
-- player_line is the player's own input: the only words, reply, gesture, feeling or memory "you" have
-  this turn. Narrate its action and what the world does back. When someone speaks to the player, end
-  the exchange on that line; the player answers next turn.
+- player_line is the player's own input and the whole of the player's turn. "you" does only what
+  player_line says: no further actions, words, replies, gestures, thoughts, feelings, memories,
+  conclusions or decisions. Narrate that action, then what the world and the people in it do in
+  response. When someone speaks to the player, end the exchange on that line; the player answers
+  next turn.
 - Opening/continue: establish or advance scene; do not invent player commands.
 - Keep rewards small. Empty ===OPS=== is allowed when nothing structured changes.
 - Never put private GM text in ===NAR===.
@@ -1090,19 +1093,60 @@ def player_line_of(player_input: str) -> str:
     return re.split(r"\n\s*\n", text, maxsplit=1)[0].strip()
 
 
+NARRATION_DEPTH_FLOOR_DEFAULT = 600
+NARRATION_DEPTH_FLOOR_RANGE = (300, 1500)
+
+
+def narration_depth_floor() -> int:
+    """
+    The prose depth floor with the paragraph writer off (playtest #52):
+    AI_RPG_MIN_NARRATION_CHARS, clamped, default 600. The draft is the prose
+    now, and a hard-coded 1000 sent about half of all live turns (700-860
+    characters, already whole scenes) through a second generation.
+    """
+    import os
+
+    raw = str(os.getenv("AI_RPG_MIN_NARRATION_CHARS", "") or "").strip()
+    try:
+        value = int(float(raw)) if raw else NARRATION_DEPTH_FLOOR_DEFAULT
+    except ValueError:
+        value = NARRATION_DEPTH_FLOOR_DEFAULT
+    low, high = NARRATION_DEPTH_FLOOR_RANGE
+    return max(low, min(high, value))
+
+
+def _writer_enabled() -> bool:
+    from app.narration_pipeline import pipeline_enabled
+
+    return pipeline_enabled()
+
+
 def narration_length_target(player_input: str) -> str:
     """
-    ===NAR=== length for this action. The floor stays at the engine's
-    1000-character depth minimum (MIN_TURN_NARRATION_CHARS), so a short turn
-    does not set off a depth retry; the ceiling shrinks with a short action.
+    ===NAR=== length for this action, kept in step with the depth floor so the
+    ask and the retry agree. A one-line action gets a short scene (playtest
+    #30): a fixed 1000-character demand was filled by playing the player's
+    side, following, nodding, wondering and deciding for them.
+
+    With the paragraph writer on, the writer sets the length, and the draft
+    keeps its old 1000-character ask.
     """
     own = player_line_of(player_input)
     words = len(own.split())
+    if _writer_enabled():
+        if not own or words > 30:
+            return "about 1000-1800 characters"
+        if words <= 12:
+            return "about 1000-1200 characters"
+        return "about 1000-1500 characters"
+    floor = narration_depth_floor()
     if not own or words > 30:
-        return "about 1000-1800 characters"
-    if words <= 12:
-        return "about 1000-1200 characters"
-    return "about 1000-1500 characters"
+        low, high = floor + 400, floor + 1200
+    elif words <= 12:
+        low, high = floor + 100, floor + 350
+    else:
+        low, high = floor + 300, floor + 800
+    return f"about {low}-{high} characters"
 
 
 def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
@@ -1133,7 +1177,8 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     if own:
         packet["player_line"] = own
         instructions.append(
-            "player_line is everything you (the player) say and do this turn; write no other words or replies for the player."
+            "player_line is the player's whole turn. Narrate only that action and how the world and its people respond; "
+            "the player's further actions, words, thoughts, feelings and decisions are theirs to write, not yours."
         )
     packet["narration_length"] = narration_length_target(player_input)
     # Fresh per turn (app/example_pools.py): options, not people who exist.

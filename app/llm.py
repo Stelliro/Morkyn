@@ -90,7 +90,9 @@ from app.turn_dsl import (
     TurnDslError,
     build_dsl_user_prompt,
     draft_mode_enabled,
+    narration_depth_floor,
     parse_dsl_turn,
+    player_line_of,
 )
 from app.narration_pipeline import (
     drop_repeated_sentences,
@@ -164,8 +166,13 @@ API_VERIFY_TOKENS = {
 # Size token that is not the tail of a larger count ("7b" yes, "70b"/"14b" no).
 _SMALL_LOCAL_MODEL_RE = re.compile(r"(?<![\d.])(?:0\.5|1\.5|[1-8])b\b", re.IGNORECASE)
 _SMALL_LOCAL_HINT_RE = re.compile(r"\b(?:tiny|phi-?3)\b", re.IGNORECASE)
+# The writer-on depth floor. With the paragraph writer off (the default) the
+# floor comes from AI_RPG_MIN_NARRATION_CHARS instead: see _depth_floor().
 MIN_TURN_NARRATION_CHARS = 1000
 TARGET_TURN_NARRATION_CHARS = 1500
+# The menu and option-list trims keep at least this much scene. Their own
+# number, so moving the depth floor never loosens or tightens menu trimming.
+MENU_TRIM_FLOOR_CHARS = 400
 MAX_TURN_NARRATION_CHARS = 2400
 VERIFICATION_POLICY_VERSION = "V0.1.0"
 DEFAULT_VERIFY_SKIP_CERTAINTY = 0.88
@@ -12527,7 +12534,7 @@ def _verification_policy(context: dict[str, Any], player_input: str, draft: dict
         remaining.append("scene_plan")
         certainty -= 0.12
 
-    if _narration_char_count(draft) >= MIN_TURN_NARRATION_CHARS:
+    if _narration_char_count(draft) >= _depth_floor():
         deterministic.append("narration_depth")
         certainty += 0.12
     else:
@@ -12690,22 +12697,30 @@ def _retry_narration_prose(
     invalid JSON, and leaves every state change from the draft untouched.
     """
     existing = str(turn.get("narration") or "")
-    plan = turn.get("scene_plan") if isinstance(turn.get("scene_plan"), dict) else {}
+    floor = _depth_floor()
+    target = _depth_target(floor)
+    # Playtest #52: this ask used to demand 1500 characters, pass the planner's
+    # "advance the scene" goal and the raw engine request ("include concrete
+    # hooks") as the player's action. The 8B filled the gap with new people,
+    # new speech and the player's own business. It now asks for a modest
+    # growth, carries only the player's own line, and states the same player
+    # boundary as the draft ask.
+    own = player_line_of(player_input)
     instruction = "\n".join(
         [
-            "Rewrite this scene as longer, richer prose. Return ONLY the prose.",
+            "Rewrite this scene as fuller prose. Return ONLY the prose.",
             "No JSON. No headers. No markdown fences. No commentary. Just the scene text.",
             "",
-            f"Target about {TARGET_TURN_NARRATION_CHARS} characters, never below "
-            f"{MIN_TURN_NARRATION_CHARS}, never above {MAX_TURN_NARRATION_CHARS}.",
-            "Keep every fact, name, and [[CODE]] reference from the draft. Add only texture:",
-            "the place, the light and sound, what the people already in the draft do, say, and show.",
-            "Nothing new happens: nobody hands over, gives, sells, or pays for anything that the",
-            "draft does not already hand over, no new offers or jobs, and no new people.",
-            "End where the draft ends. Do not decide the player's next action.",
+            f"Target about {target} characters, never below {floor}, never above {MAX_TURN_NARRATION_CHARS}.",
+            "Keep every fact, name, line of speech and [[CODE]] reference from the draft, in the same order.",
+            "Add only description of what the draft already shows: the place, the light and sound, and how",
+            "the people already in it look and move.",
+            "Nothing new happens: no new events, no new people, no new lines of speech, and nobody hands",
+            "over, gives, sells or pays for anything the draft does not.",
+            "The player does, says, thinks, feels and decides only what player_line says; add no thoughts,",
+            "feelings, actions or decisions for them. End where the draft ends.",
             "",
-            f"Scene goal: {str(plan.get('goal') or '')[:300]}",
-            f"Player action: {str(player_input or '')[:300]}",
+            f"player_line: {own[:300]}" if own else "player_line: (none; no player action this turn)",
             "",
             "Draft scene to expand:",
             existing[:4000],
@@ -12797,7 +12812,17 @@ _MENU_CLOSER_RE = re.compile(
     r"|(?:or,?\s+)?you\s+(?:could|might)\s+"
     r"(?!hear|see|smell|feel|taste|sense|tell|make\s+out|swear|imagine|almost|just|well|barely)"
     r"[^.?!]{0,160}[.?!]"
+    # "You have two choices: approach the refugees, or follow the lone figure."
+    r"|you\s+have\s+(?:two|three|four|several|a\s+few|some|many)\s+(?:choices|options|paths)\b[^.?!]{0,200}[.?!]"
     r")$",
+    re.I,
+)
+# The line a model tacks on after a menu: "Each path leads to something
+# different, and both are fraught with risk." Only trimmed straight after a menu.
+_MENU_SUMMARY_RE = re.compile(
+    r"^(?:each|either|both|whichever|whatever|all)\b[^.?!]{0,40}\b(?:path|paths|choice|choices|option|options|way|ways|road|roads)\b"
+    r"[^.?!]{0,200}[.?!]$"
+    r"|^either\s+way\b[^.?!]{0,200}[.?!]$",
     re.I,
 )
 
@@ -12816,7 +12841,7 @@ _LIST_LEAD_IN_RE = re.compile(
 )
 
 
-def _trim_option_list(narration: str, *, floor: int = MIN_TURN_NARRATION_CHARS) -> tuple[str, int]:
+def _trim_option_list(narration: str, *, floor: int = MENU_TRIM_FLOOR_CHARS) -> tuple[str, int]:
     """
     Cut a trailing bullet/numbered option list, plus the line that introduces it.
 
@@ -12857,7 +12882,7 @@ def _trim_option_list(narration: str, *, floor: int = MIN_TURN_NARRATION_CHARS) 
     return head, bulleted
 
 
-def _trim_menu_ending(narration: str, *, floor: int = MIN_TURN_NARRATION_CHARS) -> tuple[str, int]:
+def _trim_menu_ending(narration: str, *, floor: int = MENU_TRIM_FLOOR_CHARS) -> tuple[str, int]:
     """
     Drop trailing "The choice is yours." style closers.
 
@@ -12874,6 +12899,14 @@ def _trim_menu_ending(narration: str, *, floor: int = MIN_TURN_NARRATION_CHARS) 
     if not text:
         return text, 0
     removed = 0
+    # A summary line after a menu ("Each path leads somewhere different.") goes
+    # with it; on its own it is description and stays.
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    if len(parts) >= 3 and _MENU_SUMMARY_RE.match(parts[-1].strip()) and _MENU_CLOSER_RE.match(parts[-2].strip()):
+        candidate = _rejoin_kept_breaks(text, parts[:-2])
+        if len(candidate) >= floor:
+            return candidate, 2
+        return text, 0
     for _ in range(2):
         parts = re.split(r"(?<=[.!?])\s+", text.strip())
         if len(parts) < 2:
@@ -12887,6 +12920,20 @@ def _trim_menu_ending(narration: str, *, floor: int = MIN_TURN_NARRATION_CHARS) 
         text = candidate
         removed += 1
     return text, removed
+
+
+def _rejoin_kept_breaks(text: str, kept_parts: list[str]) -> str:
+    """The text up to the end of the kept sentences, paragraph breaks intact."""
+    if not kept_parts:
+        return ""
+    last = kept_parts[-1]
+    pos = 0
+    for part in kept_parts:
+        found = text.find(part, pos)
+        if found < 0:
+            return " ".join(kept_parts).rstrip()
+        pos = found + len(part)
+    return text[:pos].rstrip()
 
 
 def _apply_menu_trim(turn: dict[str, Any]) -> dict[str, Any]:
@@ -12925,6 +12972,192 @@ _DECISION_STOPWORDS = {
     "into", "onto", "from", "about", "later", "instead", "first", "more", "some", "back", "focus", "leave",
     "keep", "make", "take", "time", "moment", "matter", "rather", "while",
 }
+
+
+# Playtest #30, writer off: the draft's own prose acts, thinks and decides for
+# the player ("You nod, your mind already racing", "you wonder if...", "And you
+# have no choice but to follow.", "You pick it up ... You pocket it."). The
+# ask states the boundary; this pass is the narrow structural check behind it.
+# It reads only unquoted clauses whose subject is "you", at the start of a
+# sentence or after a coordinator, and only these verb families. Perception
+# ("you see", "you hear", "you feel the cold") and anything someone else does
+# to the player ("she hands you") never match.
+_PLAYER_CLAUSE_LEAD = r"(?:(?:and|but|so|then|yet|still|now|instead|finally|slowly|for\s+now|for\s+a\s+moment)\s*,?\s+)*"
+_PLAYER_CLAUSE_START_RE = re.compile(rf"^\s*{_PLAYER_CLAUSE_LEAD}you\s+", re.I)
+_PLAYER_CLAUSE_COORD_RE = re.compile(
+    r"(?:,|;|\u2014|\u2013|\s-)\s*(?:(?:and|but|yet|so|then)\s+)?(?:[^,.;:!?\u2014\u201c\u201d\"]{0,30},\s*)?you\s+",
+    re.I,
+)
+_ACT_ADVERBS = r"(?:\w+ly\s+){0,2}"
+_ACT_NEGATION = r"(?:(?:do\s+not|don'?t|can'?t|cannot|can\s+only|could\s+only|could\s+not|couldn'?t)\s+)?(?:help\s+but\s+)?"
+_PLAYER_COGNITION_RE = re.compile(
+    rf"^{_ACT_ADVERBS}{_ACT_NEGATION}(?P<v>"
+    # "you think you see a flicker" is a hedged sighting, perception not thought.
+    r"wonder(?:s|ed|ing)?|reali[sz]e[sd]?|know|knew|"
+    r"(?:think|thought)(?!\s+(?:you|that\s+you)\s+(?:see|saw|hear|heard|notice|catch|caught|spot|glimpse|smell|make\s+out))|"
+    r"suspect(?:s|ed)?|recall(?:s|ed)?|"
+    r"remember(?:s|ed)?|understand(?:s)?|understood|"
+    r"feel\s+(?:a\s+(?:pang|sense|surge|wave|flicker|twinge|rush|stab|knot|flash)\s+of|that|as\s+if|as\s+though|"
+    r"sympathy|pity|relief|hope|dread|uneasy|uncertain|guilty|sure|certain)|"
+    r"have\s+no\s+choice\s+but|had\s+no\s+choice\s+but|make\s+a\s+mental\s+note"
+    r")\b",
+    re.I,
+)
+_PLAYER_GESTURE_RE = re.compile(
+    rf"^{_ACT_ADVERBS}(?P<v>nod(?:s|ded)?|shrug(?:s|ged)?|smile[sd]?|grin(?:s|ned)?|sigh(?:s|ed)?|laugh(?:s|ed)?|"
+    r"chuckle[sd]?|frown(?:s|ed)?|wince[sd]?|shake\s+your\s+head|shook\s+your\s+head)\b",
+    re.I,
+)
+_PLAYER_SPEECH_ACT_RE = re.compile(
+    rf"^{_ACT_ADVERBS}(?:(?:do\s+not|don'?t)\s+)?(?P<v>say|said|reply|replied|answer(?:ed)?|respond(?:ed)?|ask(?:ed)?|"
+    r"tell|told|whisper(?:ed)?|murmur(?:ed)?|mutter(?:ed)?|agree[sd]?|thank(?:ed)?|promise[sd]?|call\s+out)\b",
+    re.I,
+)
+_PLAYER_ACQUIRE_ACT_RE = re.compile(
+    rf"^{_ACT_ADVERBS}(?P<v>pick(?:s|ed)?\s+(?:(?:it|them|\w+)\s+){{0,3}}?up|pocket(?:s|ed)?|grab(?:s|bed)?|"
+    r"snatch(?:es|ed)?|accept(?:s|ed)?|buy|bought|purchase[sd]?|"
+    r"tuck(?:s|ed)?\s+[\w\s]{0,30}?into\s+your|slip(?:s|ped)?\s+[\w\s]{0,30}?into\s+your)\b",
+    re.I,
+)
+_PLAYER_FOLLOW_RE = re.compile(rf"^{_ACT_ADVERBS}(?P<v>follow(?:s|ed)?)\b", re.I)
+_INPUT_SPEECH_RE = re.compile(
+    r"[\"\u201c\u201d?]|\b(?:say|ask|tell|reply|answer|respond|shout|call|whisper|greet|thank|agree|promise|talk|speak)\w*\b"
+    r"|^[A-Z][\w'\u2019-]*(?:\s+[A-Z][\w'\u2019-]*)?,",
+)
+_INPUT_ACQUIRE_RE = re.compile(
+    r"\b(?:pick\w*|take|took|grab\w*|pocket\w*|buy|bought|purchase\w*|loot\w*|steal|stole|collect\w*|"
+    r"gather\w*|claim\w*|accept\w*|keep|snatch\w*|scavenge\w*|salvage\w*|trade\w*)\b",
+    re.I,
+)
+_INPUT_MOVE_RE = re.compile(
+    r"\b(?:go|goes|went|head\w*|walk\w*|follow\w*|after|lead\w*|move\w*|travel\w*|run|ran|chase\w*|track\w*|"
+    r"pursue\w*|come|came|leave|return\w*|enter\w*|cross\w*|climb\w*|hurry|press\s+on|continue\w*)\b",
+    re.I,
+)
+_WORLD_TAIL_RE = re.compile(
+    r",\s+(?:and|but)\s+(?P<tail>(?!you\b)(?:he|she|they|it|the|a|an|his|her|their|(?-i:[A-Z][\w'\u2019-]+))\b.*)$",
+    re.I | re.S,
+)
+_ACT_SENTENCE_SPLIT_RE = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"\u201d\u2019]))\s+")
+
+
+def _verb_in_input(verb: str, own: str) -> bool:
+    word = re.findall(r"[a-z]+", verb.lower())
+    if not word:
+        return False
+    lemma = word[0]
+    if len(lemma) > 4:
+        lemma = re.sub(r"(?:ded|ned|ged|bed|ted|ed|ing|es|s)$", "", lemma)
+    stem = lemma[:5]
+    return bool(re.search(rf"\b{re.escape(stem)}", own.lower()))
+
+
+def _player_clause_invented(rest: str, clause: str, own: str, player_input: str) -> str:
+    """The family of an invented player act at the start of `rest`, or ""."""
+    m = _PLAYER_COGNITION_RE.match(rest)
+    if m:
+        return "" if _verb_in_input(m.group("v"), own) else "thought"
+    if _decided_for_player(clause, player_input):
+        return "decision"
+    m = _PLAYER_GESTURE_RE.match(rest)
+    if m:
+        return "" if _verb_in_input(m.group("v"), own) else "gesture"
+    m = _PLAYER_SPEECH_ACT_RE.match(rest)
+    if m:
+        return "" if _INPUT_SPEECH_RE.search(own) else "speech"
+    m = _PLAYER_ACQUIRE_ACT_RE.match(rest)
+    if m:
+        return "" if _INPUT_ACQUIRE_RE.search(own) else "taking"
+    m = _PLAYER_FOLLOW_RE.match(rest)
+    if m:
+        return "" if _INPUT_MOVE_RE.search(own) else "movement"
+    return ""
+
+
+def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str) -> tuple[str, str]:
+    """(kept text, dropped text) for one sentence. Quoted sentences are never touched."""
+    if re.search(r'["\u201c\u201d]', sentence):
+        return sentence, ""
+    start = _PLAYER_CLAUSE_START_RE.match(sentence)
+    if start and _player_clause_invented(sentence[start.end():], sentence, own, player_input):
+        # "You nod, and he gestures toward the shelves, where ..." : the
+        # player's half goes, the world's answer stays.
+        tail = _WORLD_TAIL_RE.search(sentence)
+        if tail and len(tail.group("tail")) >= 25:
+            kept = tail.group("tail")
+            return kept[0].upper() + kept[1:], sentence[: tail.start()].strip()
+        return "", sentence
+    for coord in _PLAYER_CLAUSE_COORD_RE.finditer(sentence):
+        clause = sentence[coord.start():].lstrip(",;\u2014\u2013- ")
+        if not _player_clause_invented(sentence[coord.end():], clause, own, player_input):
+            continue
+        head = sentence[: coord.start()].rstrip(" ,;\u2014\u2013-")
+        if len(head) < 20:
+            return "", sentence
+        end = sentence.rstrip()[-1:]
+        return head + (end if end in ".!?" else "."), sentence[coord.start():].strip()
+    return sentence, ""
+
+
+def drop_invented_player_acts_text(text: str, player_input: str) -> tuple[str, list[str]]:
+    """Remove unquoted clauses where "you" acts, thinks or decides beyond player_line."""
+    own = player_line_of(player_input)
+    dropped: list[str] = []
+    paragraphs = re.split(r"\n\s*\n", str(text or ""))
+    out: list[str] = []
+    for para in paragraphs:
+        sentences = _ACT_SENTENCE_SPLIT_RE.split(para.strip())
+        dropped_before = len(dropped)
+        kept: list[str] = []
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
+            keep, gone = _strip_player_acts_from_sentence(sentence, own, player_input)
+            if gone:
+                dropped.append(gone)
+            if keep.strip():
+                kept.append(keep.strip())
+        # An untouched paragraph keeps its own spacing.
+        out.append(" ".join(kept) if len(dropped) > dropped_before else para.strip())
+    return "\n\n".join(p for p in out if p.strip()), dropped
+
+
+def _drop_invented_player_acts(turn: dict[str, Any], player_input: str, *, floor: int = 200) -> dict[str, Any]:
+    """
+    Apply drop_invented_player_acts_text to the narration (per segment when the
+    turn has them), keep at least `floor` characters, and record the drop.
+    """
+    segments = turn.get("narration_segments")
+    dropped: list[str] = []
+    if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
+        new_segments = []
+        for seg in segments:
+            kept, gone = drop_invented_player_acts_text(str(seg.get("text") or ""), player_input)
+            dropped.extend(gone)
+            if kept.strip():
+                new_segments.append({**seg, "text": kept})
+        if not dropped:
+            return turn
+        joined = "\n\n".join(seg["text"] for seg in new_segments).strip()
+        if len(joined) < floor:
+            return turn
+        turn["narration_segments"] = new_segments
+        turn["narration"] = joined
+    else:
+        text = str(turn.get("narration") or "")
+        kept, dropped = drop_invented_player_acts_text(text, player_input)
+        if not dropped or len(kept.strip()) < floor:
+            return turn
+        turn["narration"] = kept.strip()
+    check = turn.get("self_check")
+    if isinstance(check, dict):
+        made = check.get("corrections_made") if isinstance(check.get("corrections_made"), list) else []
+        check["corrections_made"] = [
+            *made,
+            f"Dropped {len(dropped)} sentence(s) or clause(s) where the narration acted, thought or decided for the player.",
+        ]
+    turn["_invented_player_acts"] = dropped
+    return turn
 
 
 def _decision_words(text: str) -> set[str]:
@@ -13081,15 +13314,15 @@ def _retry_short_narration(
     prompt = {
         "repair_task": "The previous turn JSON was valid but the player-visible narration was too short. Return a complete full turn JSON with deeper narration while preserving the same facts and state changes.",
         "current_narration_chars": _narration_char_count(turn),
-        "minimum_narration_chars": MIN_TURN_NARRATION_CHARS,
-        "target_narration_chars": TARGET_TURN_NARRATION_CHARS,
+        "minimum_narration_chars": _depth_floor(),
+        "target_narration_chars": _depth_target(_depth_floor()),
         "maximum_narration_chars": MAX_TURN_NARRATION_CHARS,
         "world_turn_prompt": json.loads(build_user_prompt(cleaned_context, player_input)),
         "previous_turn": _turn_for_depth_retry(_clean_turn_for_handoff(turn, f"{phase}_previous_turn_cleanup", trace)),
         "rules": [
             "Return JSON only.",
             "Preserve scene_plan intent, existing entity references, player changes, inventory changes, events, gm_events, and turn_summary unless a contradiction must be corrected.",
-            f"Expand narration_segments and narration to at least {MIN_TURN_NARRATION_CHARS} visible characters, normally around {TARGET_TURN_NARRATION_CHARS}, and under {MAX_TURN_NARRATION_CHARS}.",
+            f"Expand narration_segments and narration to at least {_depth_floor()} visible characters, normally around {_depth_target(_depth_floor())}, and under {MAX_TURN_NARRATION_CHARS}.",
             "Add sensory detail, NPC reaction, immediate consequence, environmental pressure, and concrete choice context instead of padding or repeating text.",
             "For opening_scene or continue_scene, do not invent a player action.",
         ],
@@ -13122,6 +13355,62 @@ def _expansion_adds_handover(original: str, expanded: str) -> list[str]:
         phrase = match.group(0).lower()
         if phrase not in before and phrase not in added:
             added.append(phrase)
+    return added
+
+
+_QUOTED_SPAN_RE = re.compile(r'\u201c([^\u201d]{2,})\u201d|"([^"]{2,})"')
+_HUMAN_HEAD_NOUNS = (
+    "man", "men", "woman", "women", "child", "children", "boy", "boys", "girl", "girls", "kid", "kids", "baby",
+    "infant", "toddler", "leader", "elder", "elders", "stranger", "strangers", "guard", "guards", "soldier",
+    "soldiers", "merchant", "merchants", "priest", "priestess", "mother", "father", "son", "daughter", "widow",
+    "old-timer", "youth", "lad", "lass", "beggar", "beggars", "traveler", "traveller", "travelers", "travellers",
+    "farmer", "farmers", "worker", "workers", "sailor", "sailors", "hunter", "hunters", "mercenary", "mercenaries",
+    "officer", "officers", "clerk", "keeper", "innkeeper", "shopkeeper", "vendor", "vendors", "peddler",
+)
+_HUMAN_PLURALS = {"man": "men", "men": "man", "woman": "women", "women": "woman", "child": "children", "children": "child"}
+# A NEW person arrives with an indefinite determiner: "One woman", "A child",
+# "a man with a scar". "The shopkeeper" names someone already there under
+# another word (live: the draft's "a man in his fifties ... the shop's owner").
+_HUMAN_NOUN_RE = re.compile(
+    r"\b(?:a|an|one|another|two|three|four|several|some)\s+(?:[\w'\u2019-]+\s+){0,2}?("
+    + "|".join(re.escape(n) for n in _HUMAN_HEAD_NOUNS)
+    + r")\b",
+    re.I,
+)
+_NAME_TOKEN_RE = re.compile(r"(?<![.!?\n\u201c\"*]\s)(?<=\s)([A-Z][a-z][\w'\u2019-]+)")
+
+
+def _speech_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z']{3,}", text.lower())}
+
+
+def _expansion_adds_people_or_speech(original: str, expanded: str) -> list[str]:
+    """
+    New lines of speech, people or names the depth retry added (playtest #52).
+    A depth retry may describe; it may not add a speaker, a person or a line.
+    A quoted line counts as old when most of its words are in one draft line.
+    """
+    before_text = str(original or "")
+    after_text = str(expanded or "")
+    added: list[str] = []
+    old_lines = [_speech_words(a or b) for a, b in _QUOTED_SPAN_RE.findall(before_text)]
+    for a, b in _QUOTED_SPAN_RE.findall(after_text):
+        line = a or b
+        words = _speech_words(line)
+        if not words:
+            continue
+        if not any(len(words & old) * 2 >= len(words) for old in old_lines):
+            added.append(f"speech: {line[:80]}")
+    before_l = before_text.lower()
+    for noun in sorted({m.group(1).lower() for m in _HUMAN_NOUN_RE.finditer(after_text)}):
+        forms = {noun, _HUMAN_PLURALS.get(noun, noun)}
+        forms |= {f[:-1] for f in list(forms) if f.endswith("s") and len(f) > 3}
+        if not any(re.search(rf"\b{re.escape(f)}(?:s|es)?\b", before_l) for f in forms):
+            added.append(f"person: {noun}")
+    before_words = {re.sub(r"['\u2019]s$", "", w) for w in re.findall(r"[\w'\u2019-]+", before_text)}
+    for name in sorted({re.sub(r"['\u2019]s$", "", m.group(1)) for m in _NAME_TOKEN_RE.finditer(after_text)}):
+        if name not in before_words and name.lower() not in {"you", "your", "i"}:
+            added.append(f"name: {name}")
     return added
 
 
@@ -13159,10 +13448,12 @@ def _ensure_narration_depth(
     phase: str,
     trace: list[dict[str, Any]] | None = None,
     prose_system_prompt: str | None = None,
+    floor: int | None = None,
 ) -> dict[str, Any]:
     normalized = _normalize_turn(turn, context)
     original_chars = _narration_char_count(normalized)
-    if original_chars >= MIN_TURN_NARRATION_CHARS:
+    floor = int(floor or _depth_floor())
+    if original_chars >= floor:
         return normalized
 
     # Prose-only first: it is the smallest thing to ask for, cannot truncate
@@ -13204,7 +13495,27 @@ def _ensure_narration_depth(
                     },
                 )
                 return normalized
-            if expanded_chars >= MIN_TURN_NARRATION_CHARS or expanded_chars > original_chars:
+            additions = _expansion_adds_people_or_speech(
+                str(normalized.get("narration") or ""), str(expanded.get("narration") or "")
+            )
+            if additions:
+                # Playtest #52: an opening grew from 812 to 1960 characters by
+                # adding a woman at a stew pot, a child and a scarred leader, and
+                # a talk turn gained a whole new line of warning, none with an op.
+                _append_trace(
+                    trace,
+                    {
+                        "phase": phase,
+                        "event": "depth_retry_rejected",
+                        "mode": attempt,
+                        "reason": "expansion_adds_people_or_speech",
+                        "phrases": additions[:6],
+                        "before_chars": original_chars,
+                        "after_chars": expanded_chars,
+                    },
+                )
+                return normalized
+            if expanded_chars >= floor or expanded_chars > original_chars:
                 _append_trace(
                     trace,
                     {
@@ -13228,8 +13539,24 @@ def _ensure_narration_depth(
         normalized["self_check"] = self_check
     issues = self_check.setdefault("issues_found", [])
     if isinstance(issues, list):
-        issues.append(f"Narration was shorter than {MIN_TURN_NARRATION_CHARS} characters after depth retry.")
+        issues.append(f"Narration was shorter than {floor} characters after depth retry.")
     return normalized
+
+
+def _depth_floor() -> int:
+    """
+    The prose depth floor. Writer on: MIN_TURN_NARRATION_CHARS, as before.
+    Writer off (the default): AI_RPG_MIN_NARRATION_CHARS (default 600), the
+    same number the draft's length ask is built from (playtest #52).
+    """
+    return MIN_TURN_NARRATION_CHARS if pipeline_enabled() else narration_depth_floor()
+
+
+def _depth_target(floor: int) -> int:
+    """What a depth retry aims for: a modest growth over the floor."""
+    if floor >= MIN_TURN_NARRATION_CHARS:
+        return TARGET_TURN_NARRATION_CHARS
+    return min(MAX_TURN_NARRATION_CHARS, floor + 250)
 
 
 def _turn_number_hint(context: dict[str, Any]) -> int:
@@ -13549,7 +13876,7 @@ def _ensure_narration_quality(
     whole-turn JSON depth fallback, which needs the JSON shape.
     """
     prose_prompt = prose_system_prompt or system_prompt
-    floor = MIN_TURN_NARRATION_CHARS
+    floor = _depth_floor()
     if pipeline_enabled():
         refined = _apply_narration_pipeline(turn, context, player_input, usage, trace, timeout)
         budget = (refined.get("_narration_pipeline") or {}).get("budget") or {}
@@ -13571,7 +13898,7 @@ def _ensure_narration_quality(
     recalled = _ensure_recall_specifics(answered, context, player_input, prose_prompt, timeout, usage, phase, trace)
     trimmed = _drop_decided_choice(_apply_menu_trim(recalled), player_input)
     chars_before = _narration_char_count(trimmed)
-    final = _drop_invented_player_speech(trimmed, player_input)
+    final = _drop_player_overreach(trimmed, player_input, phase, trace)
     chars_after = _narration_char_count(final)
     if chars_after < chars_before and chars_after < floor:
         # The depth check ran before the drop; a turn the drop took under the
@@ -13580,8 +13907,24 @@ def _ensure_narration_quality(
         deeper = _ensure_narration_depth(
             final, context, player_input, system_prompt, timeout, usage, phase, trace, prose_system_prompt=prose_prompt
         )
-        final = _drop_invented_player_speech(deeper, player_input)
+        final = _drop_player_overreach(deeper, player_input, phase, trace)
     return final
+
+
+def _drop_player_overreach(
+    turn: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """Invented player speech, then invented player acts, thoughts and decisions (#30)."""
+    spoken = _drop_invented_player_speech(turn, player_input)
+    before = list(spoken.get("_invented_player_acts") or []) if isinstance(spoken, dict) else []
+    acted = _drop_invented_player_acts(spoken, player_input)
+    after = list(acted.get("_invented_player_acts") or [])
+    if after and after != before:
+        _append_trace(
+            trace,
+            {"phase": phase, "event": "invented_player_acts_dropped", "count": len(after), "dropped": [s[:160] for s in after[:6]]},
+        )
+    return acted
 
 
 def _drop_invented_player_speech(turn: dict[str, Any], player_input: str) -> dict[str, Any]:

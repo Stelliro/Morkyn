@@ -22,6 +22,7 @@ A **deterministic transcoder** (`app/turn_dsl.py`) maps opcodes into the turn di
 |----------|---------|---------|
 | `AI_RPG_DRAFT_MODE` | `dsl` | `dsl` / `ops` / `on` = NAR+OPS first; `json` = legacy JSON draft only |
 | `AI_RPG_DSL_SKIP_VERIFY` | `0` | If `1`, skip model verifier after a successful DSL draft |
+| `AI_RPG_MIN_NARRATION_CHARS` | `600` | Writer off: the prose depth floor (clamped 300-1500). Below it one depth retry runs; the draft's length ask is built from it. Writer on keeps 1000 |
 
 On DSL parse failure, the pipeline falls back to the legacy JSON draft path.
 

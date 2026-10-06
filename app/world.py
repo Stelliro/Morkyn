@@ -117,7 +117,7 @@ _REPLACE_ONLY_WHEN_EXPORTED = frozenset({
 })
 OPENING_SCENE_INPUT = (
     "__opening_scene_request__: Begin the playthrough before the player acts. "
-    "Establish the immediate situation, include concrete hooks, and wait for the player's first choice."
+    "Establish the immediate situation and its concrete hooks, then stop; the player acts first."
 )
 OPENING_SCENE_JOURNAL = "Opening scene: the model introduced the initial situation before the player acted."
 CONTINUE_SCENE_INPUT = (
@@ -10844,7 +10844,7 @@ _TAKE_PERCEPTION_RE = re.compile(
 # needs an inflection or an explicit "you pocket".
 _ACQUIRE_PROSE_RE = re.compile(
     r"\b("
-    r"pick(?:s|ed)?\s+up|picking\s+up|"
+    r"pick(?:s|ed)?\s+up|picking\s+up|pick(?:s|ed|ing)?\s+(?:it|them|one)\s+up|"
     # "take in the sight", "take note", "take stock", "take a look" are perception.
     rf"(?:take[sn]?|took|taking)(?!\s+{_TAKE_PERCEPTION_TAIL})|"
     r"receiv\w+|accept\w*|claim\w*|"
@@ -10927,6 +10927,15 @@ _ITEM_LOSS_RES: tuple[tuple[re.Pattern[str], bool], ...] = (
         r"\bwon'?t\s+sell\b|\bnot\s+for\s+sale\b",
         re.I,
     ), False),
+    # "You set the vial down and glance at the books." (playtest #42): a browse
+    # that puts the thing back. The player has to be the one doing it; "she sets
+    # the vial down in front of you" is the keeper serving.
+    (re.compile(
+        r"\b(?:set|sets|setting|put|puts|putting|lay|lays|laying|laid|place|places|placed|placing|"
+        r"leave|leaves|leaving|left)\s+(?:it|them|the\s+\w+(?:\s+\w+)?)\s+"
+        r"(?:back\s+)?(?:down|back|aside|on\s+the\s+(?:counter|shelf|shelves|table|rack|ground|floor|stall|tray))\b",
+        re.I,
+    ), True),
 )
 
 
@@ -10958,7 +10967,21 @@ def _subject_is_player(sentence: str, pos: int, verb: str = "") -> bool:
 
 def _sentence_item_events(sentence: str, name_l: str, tokens: list[str], *, owned: bool) -> list[tuple[int, str]]:
     """(position, "gain" | "loss") for one sentence already known to be about the item."""
-    events: list[tuple[int, str]] = []
+    return [(pos, kind) for pos, kind, _player in _sentence_item_events_detail(sentence, name_l, tokens, owned=owned)]
+
+
+# A gain the world makes: someone hands, gives, offers, presses or sells it to
+# the player, or it is received or given. Anything else the player does to get
+# an item (picks it up, pockets it, buys it, finds one) is the player's own act
+# and needs the player's own words behind it (playtest #42).
+_WORLD_GAIN_RE = re.compile(r"^(?:hand|give|gave|giving|offer|press|receiv|(?:is|are|was|were)\s+given)", re.I)
+
+
+def _sentence_item_events_detail(
+    sentence: str, name_l: str, tokens: list[str], *, owned: bool
+) -> list[tuple[int, str, bool | None]]:
+    """(position, "gain" | "loss", the player did it; None for a held-state) for one sentence about the item."""
+    events: list[tuple[int, str, bool | None]] = []
     taken: list[tuple[int, int]] = []
     lower = sentence.lower()
     for pattern, player_only in _ITEM_LOSS_RES:
@@ -10969,12 +10992,12 @@ def _sentence_item_events(sentence: str, name_l: str, tokens: list[str], *, owne
             if "back" in text_l and (tail.lstrip().startswith("to you") or not player):
                 # "she hands it back to you": the item comes to the player.
                 if tail.lstrip().startswith("to you"):
-                    events.append((m.start(), "gain"))
+                    events.append((m.start(), "gain", False))
                     taken.append(m.span())
                 continue
             if player_only and not player:
                 continue
-            events.append((m.start(), "loss"))
+            events.append((m.start(), "loss", player))
             taken.append(m.span())
 
     def overlaps(span: tuple[int, int]) -> bool:
@@ -10985,25 +11008,29 @@ def _sentence_item_events(sentence: str, name_l: str, tokens: list[str], *, owne
             continue
         text_l = m.group(0)
         if re.search(r"\byour?\b|\bgiven\b", text_l):
-            events.append((m.start(), "gain"))
+            world_gain = bool(_WORLD_GAIN_RE.match(text_l))
+            events.append((m.start(), "gain", not world_gain and _subject_is_player(sentence, m.start(), text_l)))
             continue
         player = _subject_is_player(sentence, m.start(), text_l)
         if text_l.startswith("hand"):
             if "over" in text_l:
-                events.append((m.start(), "loss" if player else "gain"))
+                events.append((m.start(), "loss" if player else "gain", player))
             elif player:
-                events.append((m.start(), "loss"))
+                events.append((m.start(), "loss", True))
             continue
         if player:
-            events.append((m.start(), "gain"))
+            events.append((m.start(), "gain", not text_l.startswith("receiv")))
     for m in _DISCOVER_GAIN_RE.finditer(lower):
         window = lower[m.end(): m.end() + _DISCOVER_NAME_WINDOW]
         if ((name_l and name_l in window) or any(tok in window for tok in tokens)) and _subject_is_player(sentence, m.start(), m.group(0)):
-            events.append((m.start(), "gain"))
+            events.append((m.start(), "gain", True))
     if not owned:
         for m in _POSSESSION_RE.finditer(sentence):
             if not overlaps(m.span()):
-                events.append((m.start(), "gain"))
+                # Holding something is a state, not an act: it keeps whoever
+                # made the last move ("You pick it up, turning it over in your
+                # palm" stays the player's), and alone it is nobody's taking.
+                events.append((m.start(), "gain", None))
     return sorted(events)
 
 
@@ -11015,7 +11042,15 @@ def _prose_item_outcome(text: str, name_l: str, tokens: list[str], *, owned: boo
     never moves it at all. A sentence that names the item counts, and so does
     the sentence right after it when it says "it" or "them".
     """
+    return _prose_item_outcome_detail(text, name_l, tokens, owned=owned)[0]
+
+
+def _prose_item_outcome_detail(
+    text: str, name_l: str, tokens: list[str], *, owned: bool = False
+) -> tuple[str | None, bool]:
+    """_prose_item_outcome plus whether the player's own act made the last move."""
     state: str | None = None
+    by_player = False
     carry = False
     for sentence in _SENTENCE_SPLIT_RE.split(str(text or "")):
         if not sentence.strip():
@@ -11024,11 +11059,31 @@ def _prose_item_outcome(text: str, name_l: str, tokens: list[str], *, owned: boo
         about = _sentence_mentions_item(lower, name_l, tokens)
         if not about and not (carry and _PRONOUN_CARRY_RE.search(lower)):
             carry = False
+            if state == "gain" and _player_puts_named_item_down(sentence, tokens):
+                state, by_player = "loss", True
             continue
         carry = about
-        for _pos, kind in _sentence_item_events(sentence, name_l, tokens, owned=owned):
+        for _pos, kind, player in _sentence_item_events_detail(sentence, name_l, tokens, owned=owned):
+            if player is None:
+                by_player = by_player if state == "gain" else False
+            else:
+                by_player = player
             state = kind
-    return state
+    return state, by_player
+
+
+def _player_puts_named_item_down(sentence: str, tokens: list[str]) -> bool:
+    """
+    "You set the vial down" after "You pick up a vial of deep blue liquid": the
+    short name is one word of the long one, too few to count as naming it, but
+    the item was just picked up and this puts "the vial" back.
+    """
+    pattern = _ITEM_LOSS_RES[-1][0]
+    for m in pattern.finditer(sentence):
+        words = set(re.findall(r"[a-z0-9']{4,}", m.group(0).lower()))
+        if words & set(tokens) and _subject_is_player(sentence, m.start(), m.group(0).lower()):
+            return True
+    return False
 
 
 _CHART_NAME_RE = re.compile(r"\b(?:map|maps|chart|charts|atlas|atlases|sea\s*chart|route\s*map)\b", re.I)
@@ -11161,10 +11216,14 @@ def _filter_inventory_changes(
     player_l = str(player_input or "").lower()
     # Strip perception-takes so "I take stock / a look" cannot authorize gains.
     player_l_intent = _TAKE_PERCEPTION_RE.sub(" ", player_l)
+    # Finding is not taking (playtest #42): "the first shop I can find" granted
+    # a bundle of herbs the prose only showed on a shelf. A find surfaces in
+    # the prose and the player takes it next turn.
     acquire_intent = bool(
         re.search(
-            r"\b(buy|bought|purchase|loot|pick(?:ed)?\s+up|take|took|steal|stole|"
-            r"craft|forage|find|found|receive|received|accept|gift|reward|claim|trade)\b",
+            r"\b(buy|bought|purchase|loot|pick(?:ed)?\s+up|pick\s+(?:\w+\s+){1,3}up|take|took|steal|stole|"
+            r"craft|forage|receive|received|accept|gift|reward|claim|trade|"
+            r"grab|grabbed|pocket|pocketed|gather|harvest|collect|scavenge|salvage|snatch)\b",
             player_l_intent,
         )
     )
@@ -11248,8 +11307,14 @@ def _filter_inventory_changes(
         # or a bite eaten on the spot, there is no gain whatever the draft said
         # (issue #9). The draft only falls in when there is no final text.
         final_text = str(narration or "") if str(narration or "").strip() else str(draft_narration or "")
-        outcome = _prose_item_outcome(final_text, name_l, tokens, owned=bool(existing))
-        arrived = outcome == "gain" or (outcome is None and acquire_intent)
+        outcome, by_player = _prose_item_outcome_detail(final_text, name_l, tokens, owned=bool(existing))
+        # Playtest #42: the narration is model-written, so "You pick it up ...
+        # You pocket it" after "I examine the ground" is the model taking for
+        # the player, then citing itself. A gain the player's own act made needs
+        # the player's own words (buy, take, loot, pick up...). A hand-over,
+        # sale or reward is the world acting and stands on the prose as before.
+        taken_unasked = outcome == "gain" and by_player and not acquire_intent
+        arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and acquire_intent)
         grounded = named and arrived
         # Never honor bare justified/true from the model
         # Opening: no free combat kit. This used to refuse every new item, so a
@@ -11272,7 +11337,8 @@ def _filter_inventory_changes(
                         "inventory_reject",
                         (
                             f"Rejected unearned gain: {name} x{delta} "
-                            f"(named={named}, prose_says_arrived={arrived}, prose_outcome={outcome}, owned={bool(existing)})"
+                            f"(named={named}, prose_says_arrived={arrived}, prose_outcome={outcome}, owned={bool(existing)}"
+                            f"{', taken_without_player_asking=True' if taken_unasked else ''})"
                         )[:900],
                     ),
                 )

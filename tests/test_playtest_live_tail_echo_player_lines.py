@@ -235,12 +235,17 @@ class DraftAskTests(unittest.TestCase):
     def test_draft_request_carries_player_line_and_scaled_length(self):
         packet = json.loads(build_dsl_user_prompt({}, G2_T5_INPUT))
         self.assertEqual(packet["player_line"], G2_T5_INPUT)
-        self.assertEqual(packet["narration_length"], "about 1000-1500 characters")
-        short = json.loads(build_dsl_user_prompt({}, "I open the door."))
-        self.assertEqual(short["narration_length"], "about 1000-1200 characters")
-        opening = json.loads(build_dsl_user_prompt({}, "__opening_scene_request__"))
-        self.assertNotIn("player_line", opening)
-        self.assertEqual(opening["narration_length"], "about 1000-1800 characters")
+        # Writer off (the default): the ask follows the depth floor (#52,
+        # AI_RPG_MIN_NARRATION_CHARS, default 600) and shrinks with the action.
+        with mock.patch.dict(os.environ, {"AI_RPG_NARRATION_PIPELINE": "0"}):
+            os.environ.pop("AI_RPG_MIN_NARRATION_CHARS", None)
+            packet = json.loads(build_dsl_user_prompt({}, G2_T5_INPUT))
+            self.assertEqual(packet["narration_length"], "about 900-1400 characters")
+            short = json.loads(build_dsl_user_prompt({}, "I open the door."))
+            self.assertEqual(short["narration_length"], "about 700-950 characters")
+            opening = json.loads(build_dsl_user_prompt({}, "__opening_scene_request__"))
+            self.assertNotIn("player_line", opening)
+            self.assertEqual(opening["narration_length"], "about 1000-1800 characters")
 
 
 class WriterBoundaryTests(unittest.TestCase):

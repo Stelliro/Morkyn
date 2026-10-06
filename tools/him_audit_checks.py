@@ -43,7 +43,8 @@ def main() -> int:
             c,
             [{"name": "rusty nail", "quantity_delta": 500}],
             narration="You find a rusty nail.",
-            player_input="I search",
+            # A find the player did not ask to take is not a gain (playtest #42).
+            player_input="I search and take what I find",
         )
         assert kept3 and kept3[0]["quantity_delta"] == 99, kept3
         kept4 = _filter_inventory_changes(
