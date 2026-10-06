@@ -98,7 +98,7 @@ That opens a **simple** pre-play menu. Click a row (or press its number), then *
 | **Play** / `1` | Start |
 | **Where** / `2` | Cycle local / LAN / VPN |
 | **Engine** / `3` | Cycle mle / llama_cpp / cloud API |
-| **Pipeline** / `4` | Toggle narration pipeline |
+| **Pipeline** / `4` | Toggle the paragraph writer (off by default: the draft's own prose ships, see *Local 8B turn times*) |
 | **Advanced** / `9` | Full Gatehouse board |
 | **Quit** / `0` | Exit |
 
@@ -158,6 +158,16 @@ Morkyn/
 - **Wilderness map.** The land is a seeded 16,383-cell grid. Cities are clumps inside a 9 by 9 neighborhood, not a one-cell line. The model does not place them — `app/world_scale.py`.
 - **Local intel.** Directions, heard-about cells, notice boards, and quest clocks belong to the engine — `app/local_intel.py`.
 - **Encounter board.** A fight tracks the named people in it, and a move is stored as what the player saw — `app/encounter_board.py`.
+- **Who you are talking to is decided by the engine.** An @tag, a name in your line, "everyone", whoever was just revealed or spoke last; a **Talking to** chip above the input shows it and lets you change it. Your quoted words stay yours in every stage — `app/conversation.py`.
+- **The scene remembers what you are doing.** A pursuit, the accepted quest step and who came along survive a side action; following someone moves you with them; the narration never decides for you — `app/scene_thread.py`.
+- **Shops are places.** Walking into a shop, inn or forge makes it a venue inside the town with its keeper; tradespeople have a workplace, so a baker in someone else's shop is a visitor — `app/venues.py`.
+- **Quests are instated by a parser.** The narrator offers work; a second pass validates the offer and the engine logs it — `app/quest_parser.py`.
+- **Structured starting gear.** One card per item with slot, description, rolled item stats and stat bonuses; feet, torso and legs are always filled and named for the world, sex and race — `app/gear.py`.
+- **World facts as small rows.** Races, lore, factions and customs become short linked rows filled at start and fetched by relevance each turn; custom proficiencies are settled into named skills with start rank, tracking and limit before turn 1 — `app/world_facts.py`, `app/proficiencies.py`.
+- **Fresh examples per call.** Prompts get 3-5 examples drawn from large world-filtered pools (names, jobs, shop names, appearance), never a fixed list; used names are not drawn again; hard values like eye colour are rolled by the engine — `app/example_pools.py`.
+- **A character that agrees with itself.** Name, sex and pronouns, the backstory's arrival and the start place, appearance and worn gear, and items the backstory carries are reconciled at setup and Start — `app/setup_coherence.py`.
+- **Play screen.** Scene history with *View more*, a side-panel toggle, the in-game day and time in the Scene header, and a World / Settlement switch on the map that draws a town's wards, streets and known shops.
+- **One map per save.** A new game prunes old world maps and a save carries only its campaign's pinned map.
 - **Setup rules.** The short choice stays short. The save stores a written rule for it before the first scene. A typed list such as common, uncommon, rare, epic, legendary, unique, and unknown becomes one rung per label — `app/setting_templates.py`.
 - **World themes.** Deep Caverns grows cavern, mushroom, crystal, lava, water, and cliff, and leans toward dark-dwelling creatures and dwarves. Other themes have their own ground and usual people. A new game rolls its own map seed. The older small board stays as the legacy map — `app/world_scale.py`.
 - **Fight / combat state.** NPCs can be initiated into combat from the UI or via `initiate_fight`. Ambient `fight_nearby` events fire as full combat turns during Wait and Rest — `app/world.py`.
@@ -264,13 +274,15 @@ $env:AI_RPG_GM_OFFSCREEN_INTERVAL="8"
 
 ## Local 8B turn times
 
-Measured on **local `qwen3:8b`** (Q4_K_M, 32k context). Times are wall-clock for a full turn pipeline on the machine under test.
+Measured on **Qwen3 8B** (Q4_K_M) through MLE on a 12 GB GPU, launcher context `auto` (it resolves to 24,576 tokens there), October 2026 live A/B: two scripted games, five turns each.
 
-| Step | Time |
-| --- | ---: |
-| Opening scene | ~**1–2 min** (pipeline on; quality pass improved) |
-| Typical player turn | ~**1–3.5 min** |
-| Dual-role 100-turn backend (no LLM) | ~**5 s** total |
+| Step | Paragraph writer off (default) | Paragraph writer on |
+| --- | ---: | ---: |
+| Opening scene | ~**30 s** | ~**38 s** |
+| Typical player turn | ~**18 s** | ~**32 s** |
+| Dual-role 100-turn backend (no LLM) | ~**5 s** total | |
+
+A blind score of the same games found 3 restated sentences with the writer off against 18 with it on, and better readability; the writer is kept as a launcher toggle. Turns where the fact-check runs take longer (up to ~50 s).
 
 Full tables: [`docs/turn-metrics/`](docs/turn-metrics/). Re-run:
 
@@ -300,6 +312,8 @@ python -m unittest discover -s tests -p "test_*.py"   # the full suite
 python tests/behavior_test.py                          # memory / token / slot checks
 python benchmarks/run_dual_role_playtest.py            # 100 turns over the real engine, no model
 ```
+
+Playtest findings and their status are tracked in [`docs/PLAYTEST_ISSUES.md`](docs/PLAYTEST_ISSUES.md). A staged live playtest (settings, people, relationships, fighting, items, map, skills, factions, magic, save/reload) runs on the local 8B in a temp data dir as a Claude Code workflow: `.claude/workflows/staged-playtest.js`. Every stage must report evidence before it counts as passed.
 
 ## Docs and license
 

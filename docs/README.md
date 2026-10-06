@@ -20,6 +20,7 @@
 | [UI_RULEBOOK.md](UI_RULEBOOK.md) | The three CSS layers, the iron-and-brass look, and how to change the UI safely |
 | [WeldingRig.md](WeldingRig.md) | Offline LoRA pack: datasets, adapter names, wiring |
 | [PLAYTEST_SMOKE.md](PLAYTEST_SMOKE.md) | Isekai opening + 3-turn smoke checklist |
+| [PLAYTEST_ISSUES.md](PLAYTEST_ISSUES.md) | Every reported or live-run playtest issue, its evidence, cause and status |
 | [TODO_NEXT.md](TODO_NEXT.md) | Priority queue (dispatch ids) |
 
 Project-level docs at repo root:
