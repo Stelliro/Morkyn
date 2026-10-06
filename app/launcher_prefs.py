@@ -30,7 +30,7 @@ def default_prefs() -> dict[str, Any]:
         "soft_response_tokens": 0,
         "hard_response_tokens": 0,
         "draft_mode": "dsl",
-        "narration_pipeline": True,
+        "narration_pipeline": False,
         "narration_consolidate": True,
         "fast_verification": True,
         "open_browser": True,

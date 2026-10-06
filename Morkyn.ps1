@@ -243,7 +243,7 @@ function New-DefaultPrefs {
         soft_response_tokens     = 0
         hard_response_tokens     = 0
         draft_mode               = "dsl"
-        narration_pipeline       = $true
+        narration_pipeline       = $false
         narration_consolidate    = $true
         fast_verification        = $true
         dsl_skip_verify          = $false
