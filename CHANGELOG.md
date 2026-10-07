@@ -23,6 +23,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Changed
+
+- [CLAUDE] The README opens on a cover composited from the key art and logo (`Media/morkyn-cover.png`) instead of the bare logo and a separate key-art block; the logo and key art stay in `Media/` because the main menu and loading marks use them. `Itch.io/` (page drafts, devlogs, upload art) is gitignored. - `README.md`, `Media/morkyn-cover.png`, `.gitignore`
+
 ## [0.10.0-dev.6] - 2026-10-07
 
 > Pre-release on the way to `0.10.0`. Writer-off fixes #30-#54 and the zoomable town grid (roads, plots, plotted shops).

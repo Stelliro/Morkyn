@@ -1,7 +1,7 @@
 # Mørkyn
 
 <p align="center">
-  <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
+  <img src="Media/morkyn-cover.png" alt="Mørkyn: the model narrates, the game decides what is true" width="72%" />
 </p>
 
 **Version `0.10.0-dev.6`** · pre-release builds on the way to `0.10.0`, not stable (see [CHANGELOG](CHANGELOG.md) for each `dev.N`). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
@@ -62,10 +62,6 @@ Metrics JSON: [docs/showcase/100-turn-metrics.json](docs/showcase/100-turn-metri
 ```powershell
 python benchmarks/run_dual_role_playtest.py
 ```
-
-<p align="center">
-  <img src="Media/morkyn-key-art.png" alt="Mørkyn key art" width="86%" />
-</p>
 
 ## Interface
 
