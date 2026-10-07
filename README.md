@@ -73,6 +73,10 @@ python benchmarks/run_dual_role_playtest.py
 | --- | --- | --- |
 | <img src="Media/screen-setup.png" alt="Mørkyn new game setup" width="100%"> | <img src="Media/screen-model-settings.png" alt="Mørkyn LLM settings" width="100%"> | <img src="Media/screen-play-menu.png" alt="Mørkyn play menu" width="100%"> |
 
+| Town streets | Town close-up |
+| --- | --- |
+| <img src="Media/screen-town.png" alt="Mørkyn town view with roads, plots and shops" width="100%"> | <img src="Media/screen-town-closeup.png" alt="Mørkyn town map close-up" width="100%"> |
+
 Assets: [`Media/`](Media/).
 
 ## Already have the repo

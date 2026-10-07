@@ -26,6 +26,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 ### Changed
 
 - [CLAUDE] The README opens on a cover composited from the key art and logo (`Media/morkyn-cover.png`) instead of the bare logo and a separate key-art block; the logo and key art stay in `Media/` because the main menu and loading marks use them. `Itch.io/` (page drafts, devlogs, upload art) is gitignored. - `README.md`, `Media/morkyn-cover.png`, `.gitignore`
+- [CLAUDE] Fresh 2x UI screenshots (menu, play, quests, setup, play menu) from a copy of the town run, plus two new town shots (streets view and a map close-up) in a new README row. The LLM settings shot was kept from before; the retake showed a temp model path. The pass found playtest #64-#68, including New game overwriting the current world map on open (#64). - `Media/screen-*.png`, `README.md`, `docs/PLAYTEST_ISSUES.md`
 
 ## [0.10.0-dev.6] - 2026-10-07
 
