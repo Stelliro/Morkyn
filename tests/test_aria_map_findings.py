@@ -65,7 +65,14 @@ class TestTheDepthRetryAddsNoEvents(unittest.TestCase):
 
 class TestTheSkipSettingSkipsOnlySafeTurns(unittest.TestCase):
     def test_low_certainty_or_risky_changes_are_checked(self):
-        self.assertFalse(llm._dsl_turn_safe_to_skip({}, {"certainty": 0.24}))
+        # The 0.24 turn: an item grant, an item take and a quest. Its changes
+        # keep it verified; the summed score no longer decides (playtest #43).
+        self.assertFalse(
+            llm._dsl_turn_safe_to_skip(
+                {"inventory_changes": [{"name": "map"}, {"name": "coin", "quantity_delta": -1}], "quest_marks": [{"op": "QUEST"}]},
+                {"certainty": 0.24},
+            )
+        )
         self.assertFalse(llm._dsl_turn_safe_to_skip({"inventory_changes": [{"name": "map"}]}, {"certainty": 0.95}))
         self.assertFalse(llm._dsl_turn_safe_to_skip({"quest_marks": [{"op": "QUEST"}]}, {"certainty": 0.95}))
         self.assertFalse(llm._dsl_turn_safe_to_skip({"player": {"gold_delta": -12}}, {"certainty": 0.95}))

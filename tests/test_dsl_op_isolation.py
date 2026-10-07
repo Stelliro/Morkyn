@@ -102,10 +102,14 @@ class TestMalformedOpsAreIsolated(unittest.TestCase):
     def test_the_skip_is_reported_not_silent(self):
         turn = parse_dsl_turn(_draft('MOVE L2\nINDEX npc\nTALK F "Mind the step."'))
         self.assertEqual(turn["_dsl"]["malformed_ops"], 1)
+        # Reported in the engine's own record and the corrections note. Not
+        # in issues_found: the verifier read it there as a draft problem and
+        # rewrote the prose to answer it (playtest #43).
         self.assertTrue(
-            any("INDEX" in str(i) for i in turn["self_check"]["issues_found"]),
-            "a dropped op has to show up in the self-check, or it is invisible",
+            any("INDEX" in str(i) for i in turn["_dsl"]["malformed_op_notes"]),
+            "a dropped op has to show up in the engine record, or it is invisible",
         )
+        self.assertEqual(turn["self_check"]["issues_found"], [])
         self.assertTrue(
             any("Skipped" in str(c) for c in turn["self_check"]["corrections_made"])
         )

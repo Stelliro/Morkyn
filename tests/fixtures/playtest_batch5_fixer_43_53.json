@@ -1,0 +1,2560 @@
+{
+ "_source": "verbatim from scratchpad\\smoke (ab/A, ab/B, batch4_r1) model traces: verify request draft_turn, verification_policy, player_input, model_input, turn_plan",
+ "ab_A_g1_t2": {
+  "trace": "ab\\A\\g1\\data\\model_traces\\turn-000002-player.json",
+  "player_input": "Mira, what are you selling here? And who is that cloaked figure by the archway?",
+  "model_input": "Mira, what are you selling here? And who is that cloaked figure by the archway?\n\nResolved player references: Conversation (engine decided) - the player is talking to Mira [[A]] (named in the player's line). Only Mira [[A]] answers the player.; Mira = Mira (@Cmira, A, NPC)",
+  "turn_plan": {
+   "turn_kind": "player_action",
+   "primary_intent": "conversation",
+   "secondary_intents": [
+    "trade"
+   ],
+   "focus_terms": [
+    "and",
+    "answers",
+    "archway",
+    "are",
+    "by",
+    "cloaked",
+    "cmira",
+    "conversation",
+    "decided",
+    "engine",
+    "figure",
+    "here",
+    "in",
+    "is",
+    "line",
+    "mira",
+    "named",
+    "npc",
+    "only",
+    "player",
+    "references",
+    "resolved",
+    "selling",
+    "talking"
+   ]
+  },
+  "verification_policy": {
+   "mode": "targeted_model_verifier",
+   "certainty": 0.2,
+   "primary_intent": "conversation",
+   "blockers": [
+    "high_risk_state_changes",
+    "intent_requires_model_verifier"
+   ],
+   "reasons": [
+    "Draft narration is short; depth retry handles length, not the verifier.",
+    "Low-risk records present (not a blocker): conversations",
+    "Draft changes require model verification: events, npcs",
+    "Referenced codes checked: A"
+   ]
+  },
+  "draft_turn": {
+   "scene_plan": {
+    "goal": "Advance the immediate scene with justified local consequences.",
+    "focus_points": [
+     {
+      "kind": "mystery",
+      "summary": "beat",
+      "event_worthy": false,
+      "persistence": "temporary"
+     }
+    ]
+   },
+   "narration_segments": [
+    {
+     "label": "paragraph",
+     "text": "You stand at the threshold of the Whispering Wastes, where the wind carries the scent of dust and ancient secrets. Mira, the trader, is hunched over her wares, her fingers deftly arranging bundles of dried herbs and odd trinkets. Her stall is modest but well-stocked, and the faint glow of a lantern casts flickering shadows across her face. You ask her what she sells here, and she smiles, revealing a set of sharp, white teeth."
+    },
+    {
+     "label": "paragraph",
+     "text": "\"Everything you need to survive these wastes,\" she says, her voice low and knowing. \"Spirit herbs for protection, cloth for warmth, and more. But be careful—what you buy here isn’t always what it seems.\""
+    },
+    {
+     "label": "paragraph",
+     "text": "As she speaks, your gaze drifts to the cloaked figure by the archway. They are tall, their silhouette barely visible against the pale light. No one speaks of them, and the air feels heavier near their presence. Mira doesn’t mention them, and you wonder if they’re a local or something more."
+    }
+   ],
+   "narration": "You stand at the threshold of the Whispering Wastes, where the wind carries the scent of dust and ancient secrets. Mira, the trader, is hunched over her wares, her fingers deftly arranging bundles of dried herbs and odd trinkets. Her stall is modest but well-stocked, and the faint glow of a lantern casts flickering shadows across her face. You ask her what she sells here, and she smiles, revealing a set of sharp, white teeth.\n\n\"Everything you need to survive these wastes,\" she says, her voice low and knowing. \"Spirit herbs for protection, cloth for warmth, and more. But be careful—what you buy here isn’t always what it seems.\"\n\nAs she speaks, your gaze drifts to the cloaked figure by the archway. They are tall, their silhouette barely visible against the pale light. No one speaks of them, and the air feels heavier near their presence. Mira doesn’t mention them, and you wonder if they’re a local or something more.",
+   "player": {
+    "move_to_location_code": null,
+    "karma_delta": 0,
+    "max_health_delta": 0,
+    "health_delta": 0,
+    "xp_delta": 0,
+    "karma_reason": "",
+    "karma_visibility": "private",
+    "move_to_location": null,
+    "gold_delta": 0,
+    "level_delta": 0
+   },
+   "self_check": {
+    "passed": true,
+    "issues_found": [],
+    "corrections_made": [
+     "deterministic_turn_dsl_transcoder",
+     "Deterministic entity name/code repair applied to narration. Replaced non-person labels: 'Cloaked Figure'→'Yan'",
+     "Deterministic entity name/code repair applied to narration. Replaced non-person labels: 'Yan'→'Bao'"
+    ],
+    "reference_check": "ops validated against closed opcode table",
+    "consistency_check": "structured fields produced by formula, not freeform model JSON"
+   },
+   "turn_summary": "player: Mira, what are you selling here? And who is that Bao by the archway?\n\nResolved player references: Conversation (engine decided) - the player is talking to Mira [[A]] (named in the player's line). Only Mira [[A]] answers the player.; Mira = Mira (@Cmira, A, NPC). response: You stand at the threshold of the Whispering Wastes, where the wind carries the scent of dust and ancient secrets. Mira, the trader, is hunched over her wares, her fingers deftly arranging bundles of dried herbs and odd trinkets.",
+   "scene_focus": "action",
+   "npcs": [
+    {
+     "code": null,
+     "name": "Bao",
+     "race": "shadowborn",
+     "location": "L1",
+     "role": "watcher",
+     "summary": "",
+     "attitude": "untrustworthy",
+     "personality": "",
+     "likes": "",
+     "principles": "",
+     "dislikes": "",
+     "rank": "E",
+     "stat_profile": {},
+     "skill_profile": {},
+     "trust_delta": 0,
+     "known_fact": "",
+     "mentioned_by": null
+    }
+   ],
+   "events": [
+    {
+     "code": null,
+     "title": "Mysterious Watcher",
+     "location_code": "L1",
+     "npc_code": "",
+     "summary": "A cloaked figure watches you from the archway, its presence unexplained and unsettling.",
+     "status": "active",
+     "persistence": "temporary",
+     "disappear_chance": 70,
+     "respawn_chance": 0,
+     "fame_score": 0,
+     "fame_scope": "local",
+     "rumor_summary": ""
+    }
+   ],
+   "conversations": [
+    {
+     "npc_code": "A",
+     "topic": "spirit herbs for protection, cloth for warmth, and more. But be careful—what you buy here isn’t always what it seems.",
+     "summary": "spirit herbs for protection, cloth for warmth, and more. But be careful—what you buy here isn’t always what it seems.",
+     "player_claims": []
+    }
+   ],
+   "scene_cast": {
+    "present": [],
+    "interacting": [],
+    "off": [],
+    "keywords": []
+   }
+  },
+  "draft_dsl_raw": "===NAR===\nYou stand at the threshold of the Whispering Wastes, where the wind carries the scent of dust and ancient secrets. Mira, the trader, is hunched over her wares, her fingers deftly arranging bundles of dried herbs and odd trinkets. Her stall is modest but well-stocked, and the faint glow of a lantern casts flickering shadows across her face. You ask her what she sells here, and she smiles, revealing a set of sharp, white teeth.\n\n\"Everything you need to survive these wastes,\" she says, her voice low and knowing. \"Spirit herbs for protection, cloth for warmth, and more. But be careful—what you buy here isn’t always what it seems.\"\n\nAs she speaks, your gaze drifts to the cloaked figure by the archway. They are tall, their silhouette barely visible against the pale light. No one speaks of them, and the air feels heavier near their presence. Mira doesn’t mention them, and you wonder if they’re a local or something more.\n\n===OPS===\nTALK A \"spirit herbs for protection, cloth for warmth, and more. But be careful—what you buy here isn’t always what it seems.\"\nFOCUS mystery\nNPC_NEW NAME \"Cloaked Figure\" ROLE \"watcher\" LOC \"L1\" ATTITUDE \"untrustworthy\" RACE \"shadowborn\" RANK \"E\"\nEVENT \"Mysterious Watcher\" LOC \"L1\" SUMMARY \"A cloaked figure watches you from the archway, its presence unexplained and unsettling.\""
+ },
+ "ab_A_g1_t5": {
+  "trace": "ab\\A\\g1\\data\\model_traces\\turn-000005-player.json",
+  "player_input": "I follow the cloaked figure through the archway into the wastes, with Mira beside me.",
+  "model_input": "I follow the cloaked figure through the archway into the wastes, with Mira beside me.\n\nResolved player references: Conversation (engine decided) - the player is talking to Mira [[A]] (named in the player's line). Only Mira [[A]] answers the player.; Mira = Mira (@Cmira, A, NPC)",
+  "turn_plan": {
+   "turn_kind": "player_action",
+   "primary_intent": "conversation",
+   "secondary_intents": [
+    "travel"
+   ],
+   "focus_terms": [
+    "answers",
+    "archway",
+    "beside",
+    "cloaked",
+    "cmira",
+    "conversation",
+    "decided",
+    "engine",
+    "figure",
+    "follow",
+    "in",
+    "into",
+    "is",
+    "line",
+    "me",
+    "mira",
+    "named",
+    "npc",
+    "only",
+    "player",
+    "references",
+    "resolved",
+    "talking",
+    "the"
+   ]
+  },
+  "verification_policy": {
+   "mode": "targeted_model_verifier",
+   "certainty": 0.2,
+   "primary_intent": "conversation",
+   "blockers": [
+    "high_risk_state_changes",
+    "intent_requires_model_verifier"
+   ],
+   "reasons": [
+    "Draft narration is short; depth retry handles length, not the verifier.",
+    "Low-risk records present (not a blocker): conversations",
+    "Draft changes require model verification: npcs, response_drafts",
+    "Referenced codes checked: A"
+   ]
+  },
+  "draft_turn": {
+   "scene_plan": {
+    "goal": "track the cloaked shape through the wastes",
+    "focus_points": [
+     {
+      "kind": "risk",
+      "summary": "beat",
+      "event_worthy": true,
+      "persistence": "temporary"
+     }
+    ]
+   },
+   "narration_segments": [
+    {
+     "label": "paragraph",
+     "text": "The cloaked shape moves with a quiet urgency, vanishing into the dunes beyond the archway. Mira stays close, her practiced eye scanning the shifting sands for threats. You follow, your steps echoing against the brittle stone of the arch, and the world narrows to the path ahead. The Whispering Wastes stretch out in all directions, a vast expanse of sun-scorched earth where the winds carry voices from the past. Mira’s hand brushes yours, a silent signal to stay alert. You press on, the sand shifting underfoot, the weight of the unknown pressing against your back. The cloaked form is gone, but the trail it left is clear—leading deeper into the wastes, where the light fades and the silence grows heavier."
+    }
+   ],
+   "narration": "The cloaked shape moves with a quiet urgency, vanishing into the dunes beyond the archway. Mira stays close, her practiced eye scanning the shifting sands for threats. You follow, your steps echoing against the brittle stone of the arch, and the world narrows to the path ahead. The Whispering Wastes stretch out in all directions, a vast expanse of sun-scorched earth where the winds carry voices from the past. Mira’s hand brushes yours, a silent signal to stay alert. You press on, the sand shifting underfoot, the weight of the unknown pressing against your back. The cloaked form is gone, but the trail it left is clear—leading deeper into the wastes, where the light fades and the silence grows heavier.",
+   "player": {
+    "move_to_location_code": null,
+    "karma_delta": 0,
+    "max_health_delta": 0,
+    "health_delta": 0,
+    "xp_delta": 0,
+    "karma_reason": "",
+    "karma_visibility": "private",
+    "move_to_location": "the threshold of the Whispering Wastes",
+    "gold_delta": 0,
+    "level_delta": 0
+   },
+   "self_check": {
+    "passed": true,
+    "issues_found": [
+     "INDEX requires type code summary on line 8"
+    ],
+    "corrections_made": [
+     "deterministic_turn_dsl_transcoder",
+     "Skipped 1 malformed op line(s); kept the rest.",
+     "Deterministic entity name/code repair applied to narration."
+    ],
+    "reference_check": "ops validated against closed opcode table",
+    "consistency_check": "structured fields produced by formula, not freeform model JSON"
+   },
+   "turn_summary": "player: I follow the cloaked figure through the archway into the wastes, with Mira beside me.\n\nResolved player references: Conversation (engine decided) - the player is talking to Mira [[A]] (named in the player's line). Only Mira [[A]] answers the player.; Mira = Mira (@Cmira, A, NPC). response: The cloaked shape moves with a quiet urgency, vanishing into the dunes beyond the archway. Mira stays close, her practiced eye scanning the shifting sands for threats.",
+   "scene_focus": "travel",
+   "npcs": [
+    {
+     "code": null,
+     "name": "Hu Chun",
+     "race": "human",
+     "location": "the threshold of the Whispering Wastes",
+     "role": "wandering friar",
+     "summary": "",
+     "attitude": "cautious",
+     "personality": "",
+     "likes": "",
+     "principles": "",
+     "dislikes": "",
+     "rank": "D",
+     "stat_profile": {},
+     "skill_profile": {},
+     "trust_delta": 0,
+     "known_fact": "",
+     "mentioned_by": null
+    }
+   ],
+   "conversations": [
+    {
+     "npc_code": "A",
+     "topic": "You're chasing a ghost, you know. The wastes don't forgive those who follow without purpose.",
+     "summary": "You're chasing a ghost, you know. The wastes don't forgive those who follow without purpose.",
+     "player_claims": []
+    }
+   ],
+   "response_drafts": [
+    {
+     "claim": "The cloaked shape is a shadowborn",
+     "verdict": "unverified",
+     "skill": "",
+     "difficulty_class": 12,
+     "result": "not_checked",
+     "notes": "Mira's suspicion"
+    }
+   ],
+   "scene_cast": {
+    "present": [],
+    "interacting": [],
+    "off": [],
+    "keywords": []
+   }
+  },
+  "draft_dsl_raw": "===NAR===\nThe cloaked shape moves with a quiet urgency, vanishing into the dunes beyond the archway. Mira stays close, her practiced eye scanning the shifting sands for threats. You follow, your steps echoing against the brittle stone of the arch, and the world narrows to the path ahead. The Whispering Wastes stretch out in all directions, a vast expanse of sun-scorched earth where the winds carry voices from the past. Mira’s hand brushes yours, a silent signal to stay alert. You press on, the sand shifting underfoot, the weight of the unknown pressing against your back. The cloaked form is gone, but the trail it left is clear—leading deeper into the wastes, where the light fades and the silence grows heavier.\n\n===OPS===\nMOVE \"the threshold of the Whispering Wastes\"\nFOCUS risk\nSCENE travel\nGOAL \"track the cloaked shape through the wastes\"\nNPC_NEW NAME \"Hu Chun\" \"Hu Chun\" ROLE \"wandering friar\" LOC \"the threshold of the Whispering Wastes\" ATTITUDE \"cautious\" RACE \"human\" RANK \"D\"\nTALK A \"You're chasing a ghost, you know. The wastes don't forgive those who follow without purpose.\"\nCLAIM \"The cloaked shape is a shadowborn\" VERDICT unverified NOTES \"Mira's suspicion\"\nINDEX A \"Mira's suspicion about the cloaked shape\""
+ },
+ "ab_A_g2_t6": {
+  "trace": "ab\\A\\g2\\data\\model_traces\\turn-000006-player.json",
+  "player_input": "I go into the first shop I can find in town to see what they sell.",
+  "model_input": "I go into the first shop I can find in town to see what they sell.\n\nResolved player references: Conversation (engine decided) - the player is talking to Kael Vorn [[A]] (the one the player was talking to). Only Kael Vorn [[A]] answers the player.",
+  "turn_plan": {
+   "turn_kind": "player_action",
+   "primary_intent": "conversation",
+   "secondary_intents": [
+    "trade",
+    "travel"
+   ],
+   "focus_terms": [
+    "answers",
+    "can",
+    "conversation",
+    "decided",
+    "engine",
+    "find",
+    "first",
+    "go",
+    "in",
+    "into",
+    "is",
+    "kael",
+    "one",
+    "only",
+    "player",
+    "references",
+    "resolved",
+    "see",
+    "sell",
+    "shop",
+    "talking",
+    "the",
+    "they",
+    "to"
+   ]
+  },
+  "verification_policy": {
+   "mode": "targeted_model_verifier",
+   "certainty": 0.28,
+   "primary_intent": "conversation",
+   "blockers": [
+    "high_risk_state_changes",
+    "intent_requires_model_verifier"
+   ],
+   "reasons": [
+    "Draft narration is short; depth retry handles length, not the verifier.",
+    "Low-risk records present (not a blocker): conversations",
+    "Draft changes require model verification: npcs",
+    "Referenced codes checked: A"
+   ]
+  },
+  "draft_turn": {
+   "scene_plan": {
+    "goal": "Advance the immediate scene with justified local consequences.",
+    "focus_points": [
+     {
+      "kind": "choice",
+      "summary": "Immediate reaction options after the latest beat",
+      "event_worthy": false,
+      "persistence": "temporary"
+     }
+    ]
+   },
+   "narration_segments": [
+    {
+     "label": "paragraph",
+     "text": "The Ridge is a rough, windswept place where the road narrows and the sky stretches wide. You step into the first shop you can find, a modest establishment with a sign that reads \"Trask and Daughters.\" Inside, the scent of oil and iron hangs in the stale, warm空气. A woman in her fifties, her hands calloused from years of work, looks up from a stack of tools. Her name is Odo Moorcroft, and she is a railway navvy, a woman who knows the value of a good tool. She offers you a choice: inspect the tools, or ask about the supplies they carry. The shop is small, but it holds a variety of items—some for crafting, some for survival, and a few that hint at the strange undercurrents of this frontier."
+    }
+   ],
+   "narration": "The Ridge is a rough, windswept place where the road narrows and the sky stretches wide. You step into the first shop you can find, a modest establishment with a sign that reads \"Trask and Daughters.\" Inside, the scent of oil and iron hangs in the stale, warm空气. A woman in her fifties, her hands calloused from years of work, looks up from a stack of tools. Her name is Odo Moorcroft, and she is a railway navvy, a woman who knows the value of a good tool. She offers you a choice: inspect the tools, or ask about the supplies they carry. The shop is small, but it holds a variety of items—some for crafting, some for survival, and a few that hint at the strange undercurrents of this frontier.",
+   "player": {
+    "karma_visibility": "private",
+    "level_delta": 0,
+    "karma_delta": 0,
+    "move_to_location_code": null,
+    "gold_delta": 0,
+    "health_delta": 0,
+    "move_to_location": null,
+    "karma_reason": "",
+    "xp_delta": 0,
+    "max_health_delta": 0
+   },
+   "self_check": {
+    "passed": true,
+    "issues_found": [],
+    "corrections_made": [
+     "deterministic_turn_dsl_transcoder",
+     "Deterministic entity name/code repair applied to narration."
+    ],
+    "reference_check": "ops validated against closed opcode table",
+    "consistency_check": "structured fields produced by formula, not freeform model JSON"
+   },
+   "turn_summary": "player: I go into the first shop I can find in town to see what they sell.\n\nResolved player references: Conversation (engine decided) - the player is talking to Kael Vorn [[A]] (the one the player was talking to). Only Kael Vorn [[A]] answers the player.. response: The Ridge is a rough, windswept place where the road narrows and the sky stretches wide.",
+   "scene_focus": "action",
+   "npcs": [
+    {
+     "code": null,
+     "name": "Odo Moorcroft",
+     "race": "human",
+     "location": "L3",
+     "role": "railway navvy",
+     "summary": "",
+     "attitude": "curious",
+     "personality": "",
+     "likes": "",
+     "principles": "",
+     "dislikes": "",
+     "rank": "",
+     "stat_profile": {},
+     "skill_profile": {},
+     "trust_delta": 0,
+     "known_fact": "",
+     "mentioned_by": null
+    }
+   ],
+   "conversations": [
+    {
+     "npc_code": "ODO MOORCROFT",
+     "topic": "tools and supplies",
+     "summary": "tools and supplies",
+     "player_claims": []
+    }
+   ],
+   "scene_cast": {
+    "present": [],
+    "interacting": [],
+    "off": [],
+    "keywords": []
+   }
+  },
+  "draft_dsl_raw": "===NAR===\nThe Ridge is a rough, windswept place where the road narrows and the sky stretches wide. You step into the first shop you can find, a modest establishment with a sign that reads \"Trask and Daughters.\" Inside, the scent of oil and iron hangs in the stale, warm空气. A woman in her fifties, her hands calloused from years of work, looks up from a stack of tools. Her name is Odo Moorcroft, and she is a railway navvy, a woman who knows the value of a good tool. She offers you a choice: inspect the tools, or ask about the supplies they carry. The shop is small, but it holds a variety of items—some for crafting, some for survival, and a few that hint at the strange undercurrents of this frontier.\n\n===OPS===\nNPC_NEW NAME \"Odo Moorcroft\" ROLE \"railway navvy\" LOC \"L3\" ATTITUDE \"curious\" RACE \"human\"\nTALK \"Odo Moorcroft\" \"tools and supplies\""
+ },
+ "ab_B_g1_t4": {
+  "trace": "ab\\B\\g1\\data\\model_traces\\turn-000004-player.json",
+  "player_input": "I crouch and examine the cracked earth by the archway for footprints or anything dropped.",
+  "model_input": "I crouch and examine the cracked earth by the archway for footprints or anything dropped.\n\nResolved player references: Conversation (engine decided) - the player is talking to Lin Zhuo [[A]] (the one the player was talking to). Only Lin Zhuo [[A]] answers the player.",
+  "turn_plan": {
+   "turn_kind": "player_action",
+   "primary_intent": "conversation",
+   "secondary_intents": [
+    "investigation",
+    "inventory"
+   ],
+   "focus_terms": [
+    "and",
+    "answers",
+    "anything",
+    "archway",
+    "by",
+    "conversation",
+    "cracked",
+    "crouch",
+    "decided",
+    "dropped",
+    "earth",
+    "engine",
+    "examine",
+    "footprints",
+    "for",
+    "is",
+    "lin",
+    "one",
+    "only",
+    "or",
+    "player",
+    "references",
+    "resolved",
+    "talking"
+   ]
+  },
+  "verification_policy": {
+   "mode": "targeted_model_verifier",
+   "certainty": 0.47,
+   "primary_intent": "conversation",
+   "blockers": [
+    "high_risk_state_changes",
+    "intent_requires_model_verifier"
+   ],
+   "reasons": [
+    "Low-risk records present (not a blocker): conversations",
+    "Draft changes require model verification: inventory_changes, response_drafts",
+    "Referenced codes checked: A"
+   ]
+  },
+  "draft_turn": {
+   "scene_plan": {
+    "goal": "Advance the immediate scene with justified local consequences.",
+    "focus_points": [
+     {
+      "kind": "resource",
+      "summary": "beat",
+      "event_worthy": false,
+      "persistence": "temporary"
+     }
+    ]
+   },
+   "narration_segments": [
+    {
+     "label": "paragraph",
+     "text": "The cracked earth by the archway is dry and brittle, the kind that crumbles under your fingers. You crouch, brushing away dust with careful sweeps of your gloved hands, searching for any sign of disturbance. The sun glints off the edges of the fissure, casting long shadows across the uneven terrain. Nothing here suggests movement, but the silence is thick, almost unnatural. A faint scent of damp earth and old stone lingers in the stillness. You press your palm against the archway, feeling the cold seep through your gloves. There’s a faint indentation where a boot might have pressed, but it’s too shallow to be certain. You straighten, eyes scanning the area for anything out of place — a loose stone, a stray object, a mark that doesn’t belong. The only thing that catches your eye is a single, rusted nail half-buried in the dirt, its head warped and twisted as if it had been driven in with force. You pick it up, turning it over in your hand, and notice the faint etching of a symbol on its shaft — one you don’t recognize."
+    }
+   ],
+   "narration": "The cracked earth by the archway is dry and brittle, the kind that crumbles under your fingers. You crouch, brushing away dust with careful sweeps of your gloved hands, searching for any sign of disturbance. The sun glints off the edges of the fissure, casting long shadows across the uneven terrain. Nothing here suggests movement, but the silence is thick, almost unnatural. A faint scent of damp earth and old stone lingers in the stillness. You press your palm against the archway, feeling the cold seep through your gloves. There’s a faint indentation where a boot might have pressed, but it’s too shallow to be certain. You straighten, eyes scanning the area for anything out of place — a loose stone, a stray object, a mark that doesn’t belong. The only thing that catches your eye is a single, rusted nail half-buried in the dirt, its head warped and twisted as if it had been driven in with force. You pick it up, turning it over in your hand, and notice the faint etching of a symbol on its shaft — one you don’t recognize.",
+   "player": {
+    "level_delta": 0,
+    "karma_reason": "",
+    "health_delta": 0,
+    "max_health_delta": 0,
+    "karma_delta": 0,
+    "karma_visibility": "private",
+    "xp_delta": 0,
+    "move_to_location": "the archway's shadow",
+    "move_to_location_code": null,
+    "gold_delta": 0
+   },
+   "self_check": {
+    "passed": true,
+    "issues_found": [],
+    "corrections_made": [
+     "deterministic_turn_dsl_transcoder",
+     "Deterministic entity name/code repair applied to narration."
+    ],
+    "reference_check": "ops validated against closed opcode table",
+    "consistency_check": "structured fields produced by formula, not freeform model JSON"
+   },
+   "turn_summary": "player: I crouch and examine the cracked earth by the archway for footprints or anything dropped.\n\nResolved player references: Conversation (engine decided) - the player is talking to Lin Zhuo [[A]] (the one the player was talking to). Only Lin Zhuo [[A]] answers the player.. response: The cracked earth by the archway is dry and brittle, the kind that crumbles under your fingers. You crouch, brushing away dust with careful sweeps of your gloved hands, searching for any sign of disturbance.",
+   "scene_focus": "action",
+   "inventory_changes": [
+    {
+     "name": "rusted nail",
+     "description": "",
+     "quantity_band": "trivial",
+     "weight": 1.0,
+     "slot_size": 1,
+     "item_type": "misc",
+     "rarity": "common",
+     "enchantments": [],
+     "stat_modifiers": {},
+     "granted_abilities": [],
+     "stack_limit": 20,
+     "carry_modifier": 1.0,
+     "container_bonus_weight": 0,
+     "container_bonus_slots": 0,
+     "dimensional_space": false
+    }
+   ],
+   "conversations": [
+    {
+     "npc_code": "A",
+     "topic": "the nail",
+     "summary": "the nail",
+     "player_claims": []
+    }
+   ],
+   "response_drafts": [
+    {
+     "claim": "the symbol on the nail is unfamiliar",
+     "verdict": "unverified",
+     "skill": "",
+     "difficulty_class": 12,
+     "result": "not_checked",
+     "notes": ""
+    }
+   ],
+   "map_walk": {
+    "direction": "east",
+    "steps": 2
+   },
+   "scene_cast": {
+    "present": [],
+    "interacting": [],
+    "off": [],
+    "keywords": []
+   }
+  },
+  "draft_dsl_raw": "===NAR===\nThe cracked earth by the archway is dry and brittle, the kind that crumbles under your fingers. You crouch, brushing away dust with careful sweeps of your gloved hands, searching for any sign of disturbance. The sun glints off the edges of the fissure, casting long shadows across the uneven terrain. Nothing here suggests movement, but the silence is thick, almost unnatural. A faint scent of damp earth and old stone lingers in the stillness. You press your palm against the archway, feeling the cold seep through your gloves. There’s a faint indentation where a boot might have pressed, but it’s too shallow to be certain. You straighten, eyes scanning the area for anything out of place — a loose stone, a stray object, a mark that doesn’t belong. The only thing that catches your eye is a single, rusted nail half-buried in the dirt, its head warped and twisted as if it had been driven in with force. You pick it up, turning it over in your hand, and notice the faint etching of a symbol on its shaft — one you don’t recognize.\n\n===OPS===\nGRANT \"rusted nail\" QTY trivial\nFOCUS resource\nTALK A \"the nail\"\nCLAIM \"the symbol on the nail is unfamiliar\" VERDICT unverified\nWALK east STEPS 2\nMOVE \"the archway's shadow\""
+ },
+ "ab_B_g2_t3": {
+  "trace": "ab\\B\\g2\\data\\model_traces\\turn-000003-player.json",
+  "player_input": "Kendra Sallow, come with me. Let's go after the refugee at the back of that group before they reach the town.",
+  "model_input": "Kendra Sallow, come with me. Let's go after the refugee at the back of that group before they reach the town.\n\nResolved player references: Conversation (engine decided) - the player is talking to Kendra Sallow [[A]] (named in the player's line). Only Kendra Sallow [[A]] answers the player.; Kendra = Kendra Sallow (@Ckendra_sallow, A, NPC)",
+  "turn_plan": {
+   "turn_kind": "player_action",
+   "primary_intent": "conversation",
+   "secondary_intents": [
+    "travel"
+   ],
+   "focus_terms": [
+    "after",
+    "answers",
+    "at",
+    "back",
+    "before",
+    "ckendra",
+    "come",
+    "conversation",
+    "decided",
+    "engine",
+    "go",
+    "group",
+    "in",
+    "is",
+    "kendra",
+    "let",
+    "line",
+    "me",
+    "named",
+    "npc",
+    "of",
+    "only",
+    "player",
+    "reach"
+   ]
+  },
+  "verification_policy": {
+   "mode": "targeted_model_verifier",
+   "certainty": 0.28,
+   "primary_intent": "conversation",
+   "blockers": [
+    "high_risk_state_changes",
+    "intent_requires_model_verifier"
+   ],
+   "reasons": [
+    "Draft narration is short; depth retry handles length, not the verifier.",
+    "Low-risk records present (not a blocker): conversations",
+    "Draft changes require model verification: response_drafts",
+    "Referenced codes checked: A"
+   ]
+  },
+  "draft_turn": {
+   "scene_plan": {
+    "goal": "Follow the refugee to the town's edge and find out where he's going",
+    "focus_points": [
+     {
+      "kind": "risk",
+      "summary": "beat",
+      "event_worthy": true,
+      "persistence": "temporary"
+     }
+    ]
+   },
+   "narration_segments": [
+    {
+     "label": "paragraph",
+     "text": "You push past the last of the stagecoach guards, and Kendra Sallow follows, her boots crunching over the dry earth. The refugee at the back of the group is a wiry man with a scar running from his temple to his jaw, his clothes patched and frayed. He moves with purpose, heading toward the town’s edge where the road curves into the hills. You catch up to him just as he reaches the bend, and he turns, eyes wide with recognition. “You’re not from here,” he says, his voice tight. “They’ll kill you if they find you.” You exchange a glance with Kendra, and she nods, understanding the unspoken warning. The man turns again, disappearing into the shadows of the trees, and you follow, the weight of the unknown pressing on your shoulders."
+    }
+   ],
+   "narration": "You push past the last of the stagecoach guards, and Kendra Sallow follows, her boots crunching over the dry earth. The refugee at the back of the group is a wiry man with a scar running from his temple to his jaw, his clothes patched and frayed. He moves with purpose, heading toward the town’s edge where the road curves into the hills. You catch up to him just as he reaches the bend, and he turns, eyes wide with recognition. “You’re not from here,” he says, his voice tight. “They’ll kill you if they find you.” You exchange a glance with Kendra, and she nods, understanding the unspoken warning. The man turns again, disappearing into the shadows of the trees, and you follow, the weight of the unknown pressing on your shoulders.",
+   "player": {
+    "move_to_location_code": null,
+    "karma_reason": "",
+    "level_delta": 0,
+    "karma_delta": 0,
+    "health_delta": 0,
+    "move_to_location": "The Hollow Trail",
+    "karma_visibility": "private",
+    "gold_delta": 0,
+    "max_health_delta": 0,
+    "xp_delta": 0
+   },
+   "self_check": {
+    "passed": true,
+    "issues_found": [
+     "INDEX requires type code summary on line 7"
+    ],
+    "corrections_made": [
+     "deterministic_turn_dsl_transcoder",
+     "Skipped 1 malformed op line(s); kept the rest.",
+     "Deterministic entity name/code repair applied to narration."
+    ],
+    "reference_check": "ops validated against closed opcode table",
+    "consistency_check": "structured fields produced by formula, not freeform model JSON"
+   },
+   "turn_summary": "player: Kendra Sallow, come with me. Let's go after the refugee at the back of that group before they reach the town.\n\nResolved player references: Conversation (engine decided) - the player is talking to Kendra Sallow [[A]] (named in the player's line). Only Kendra Sallow [[A]] answers the player.; Kendra = Kendra Sallow (@Ckendra_sallow, A, NPC). response: You push past the last of the stagecoach guards, and Kendra Sallow follows, her boots crunching over the dry earth. The refugee at the back of the group is a wiry man with a scar running from his temple to his jaw, his clothes patched and frayed.",
+   "scene_focus": "travel",
+   "conversations": [
+    {
+     "npc_code": "A",
+     "topic": "You're not from here, are you? They’ll kill you if they find you.",
+     "summary": "You're not from here, are you? They’ll kill you if they find you.",
+     "player_claims": []
+    }
+   ],
+   "response_drafts": [
+    {
+     "claim": "The refugee is hiding from the Iron Hand",
+     "verdict": "unverified",
+     "skill": "",
+     "difficulty_class": 12,
+     "result": "not_checked",
+     "notes": "He said they'll kill him if they find him"
+    }
+   ],
+   "scene_cast": {
+    "present": [],
+    "interacting": [],
+    "off": [],
+    "keywords": []
+   }
+  },
+  "draft_dsl_raw": "===NAR===\nYou push past the last of the stagecoach guards, and Kendra Sallow follows, her boots crunching over the dry earth. The refugee at the back of the group is a wiry man with a scar running from his temple to his jaw, his clothes patched and frayed. He moves with purpose, heading toward the town’s edge where the road curves into the hills. You catch up to him just as he reaches the bend, and he turns, eyes wide with recognition. “You’re not from here,” he says, his voice tight. “They’ll kill you if they find you.” You exchange a glance with Kendra, and she nods, understanding the unspoken warning. The man turns again, disappearing into the shadows of the trees, and you follow, the weight of the unknown pressing on your shoulders.\n\n===OPS===\nMOVE \"The Hollow Trail\"\nFOCUS risk\nSCENE travel\nGOAL \"Follow the refugee to the town's edge and find out where he's going\"\nTALK A \"You're not from here, are you? They’ll kill you if they find you.\"\nCLAIM \"The refugee is hiding from the Iron Hand\" VERDICT unverified NOTES \"He said they'll kill him if they find him\"\nINDEX A \"The refugee's warning\""
+ },
+ "ab_B_g2_t4": {
+  "trace": "ab\\B\\g2\\data\\model_traces\\turn-000004-player.json",
+  "player_input": "I crouch and examine the symbols etched into the shrine wall.",
+  "model_input": "I crouch and examine the symbols etched into the shrine wall.\n\nResolved player references: Conversation (engine decided) - the player is talking to Kendra Sallow [[A]] (the one the player was talking to). Only Kendra Sallow [[A]] answers the player.",
+  "turn_plan": {
+   "turn_kind": "player_action",
+   "primary_intent": "conversation",
+   "secondary_intents": [
+    "investigation"
+   ],
+   "focus_terms": [
+    "and",
+    "answers",
+    "conversation",
+    "crouch",
+    "decided",
+    "engine",
+    "etched",
+    "examine",
+    "into",
+    "is",
+    "kendra",
+    "one",
+    "only",
+    "player",
+    "references",
+    "resolved",
+    "sallow",
+    "shrine",
+    "symbols",
+    "talking",
+    "the",
+    "to",
+    "wall",
+    "was"
+   ]
+  },
+  "verification_policy": {
+   "mode": "targeted_model_verifier",
+   "certainty": 0.18,
+   "primary_intent": "conversation",
+   "blockers": [
+    "player_state_delta",
+    "intent_requires_model_verifier"
+   ],
+   "reasons": [
+    "Draft narration is short; depth retry handles length, not the verifier.",
+    "Low-risk records present (not a blocker): conversations",
+    "Referenced codes checked: A"
+   ]
+  },
+  "draft_turn": {
+   "scene_plan": {
+    "goal": "Advance the immediate scene with justified local consequences.",
+    "focus_points": [
+     {
+      "kind": "risk",
+      "summary": "beat",
+      "event_worthy": true,
+      "persistence": "temporary"
+     }
+    ]
+   },
+   "narration_segments": [
+    {
+     "label": "paragraph",
+     "text": "The shrine wall is cold beneath your fingers, its carvings worn smooth by time and weather. Symbols spiral outward from a central knot, their lines jagged and uneven, as if carved in a hurry or by someone with little skill. You trace the grooves, feeling a faint vibration beneath your touch—almost as if the stone itself is still alive. Kendra Sallow leans in, her brow furrowed. \"This isn't just decoration,\" she murmurs. \"It’s a warning. These markings… they’re the same as the ones we saw near the refugee camp.\" Her voice is low, wary. \"Someone carved them here to mark a place they didn’t want found.\" She steps back, her eyes scanning the surrounding terrain. \"We should keep moving. The longer we linger, the more likely we are to be noticed.\""
+    }
+   ],
+   "narration": "The shrine wall is cold beneath your fingers, its carvings worn smooth by time and weather. Symbols spiral outward from a central knot, their lines jagged and uneven, as if carved in a hurry or by someone with little skill. You trace the grooves, feeling a faint vibration beneath your touch—almost as if the stone itself is still alive. Kendra Sallow leans in, her brow furrowed. \"This isn't just decoration,\" she murmurs. \"It’s a warning. These markings… they’re the same as the ones we saw near the refugee camp.\" Her voice is low, wary. \"Someone carved them here to mark a place they didn’t want found.\" She steps back, her eyes scanning the surrounding terrain. \"We should keep moving. The longer we linger, the more likely we are to be noticed.\"",
+   "player": {
+    "move_to_location_code": null,
+    "karma_reason": "",
+    "level_delta": 0,
+    "karma_delta": 0,
+    "health_delta": 0,
+    "move_to_location": "The Hollow Trail",
+    "karma_visibility": "private",
+    "gold_delta": 0,
+    "max_health_delta": 0,
+    "xp_delta": 0
+   },
+   "self_check": {
+    "passed": true,
+    "issues_found": [],
+    "corrections_made": [
+     "deterministic_turn_dsl_transcoder",
+     "Deterministic entity name/code repair applied to narration."
+    ],
+    "reference_check": "ops validated against closed opcode table",
+    "consistency_check": "structured fields produced by formula, not freeform model JSON"
+   },
+   "turn_summary": "player: I crouch and examine the symbols etched into the shrine wall.\n\nResolved player references: Conversation (engine decided) - the player is talking to Kendra Sallow [[A]] (the one the player was talking to). Only Kendra Sallow [[A]] answers the player.. response: The shrine wall is cold beneath your fingers, its carvings worn smooth by time and weather. Symbols spiral outward from a central knot, their lines jagged and uneven, as if carved in a hurry or by someone with little skill.",
+   "scene_focus": "action",
+   "conversations": [
+    {
+     "npc_code": "A",
+     "topic": "warning",
+     "summary": "warning",
+     "player_claims": []
+    }
+   ],
+   "map_walk": {
+    "direction": "east",
+    "steps": 3
+   },
+   "scene_cast": {
+    "present": [],
+    "interacting": [],
+    "off": [],
+    "keywords": []
+   }
+  },
+  "draft_dsl_raw": "===NAR===\nThe shrine wall is cold beneath your fingers, its carvings worn smooth by time and weather. Symbols spiral outward from a central knot, their lines jagged and uneven, as if carved in a hurry or by someone with little skill. You trace the grooves, feeling a faint vibration beneath your touch—almost as if the stone itself is still alive. Kendra Sallow leans in, her brow furrowed. \"This isn't just decoration,\" she murmurs. \"It’s a warning. These markings… they’re the same as the ones we saw near the refugee camp.\" Her voice is low, wary. \"Someone carved them here to mark a place they didn’t want found.\" She steps back, her eyes scanning the surrounding terrain. \"We should keep moving. The longer we linger, the more likely we are to be noticed.\"\n\n===OPS===\nFOCUS risk\nTALK A \"warning\"\nWALK east STEPS 3\nMOVE The Hollow Trail"
+ },
+ "r1_t4": {
+  "trace": "batch4_r1\\data\\model_traces\\turn-000004-player.json",
+  "player_input": "I crouch and examine the ground where he stood for footprints or anything he dropped.",
+  "model_input": "I crouch and examine the ground where he stood for footprints or anything he dropped.\n\nResolved player references: Conversation (engine decided) - the player is talking to Nesta Grisham [[A]] (the one the player was talking to). Only Nesta Grisham [[A]] answers the player.",
+  "turn_plan": {
+   "turn_kind": "player_action",
+   "primary_intent": "conversation",
+   "secondary_intents": [
+    "investigation",
+    "inventory"
+   ],
+   "focus_terms": [
+    "and",
+    "answers",
+    "anything",
+    "conversation",
+    "crouch",
+    "decided",
+    "dropped",
+    "engine",
+    "examine",
+    "footprints",
+    "for",
+    "grisham",
+    "ground",
+    "he",
+    "is",
+    "nesta",
+    "one",
+    "only",
+    "or",
+    "player",
+    "references",
+    "resolved",
+    "stood",
+    "talking"
+   ]
+  },
+  "verification_policy": {
+   "mode": "targeted_model_verifier",
+   "certainty": 0.47,
+   "primary_intent": "conversation",
+   "blockers": [
+    "high_risk_state_changes",
+    "intent_requires_model_verifier"
+   ],
+   "reasons": [
+    "Low-risk records present (not a blocker): conversations",
+    "Draft changes require model verification: inventory_changes, npcs",
+    "Referenced codes checked: A"
+   ]
+  },
+  "draft_turn": {
+   "scene_plan": {
+    "goal": "Advance the immediate scene with justified local consequences.",
+    "focus_points": [
+     {
+      "kind": "risk",
+      "summary": "beat",
+      "event_worthy": true,
+      "persistence": "temporary"
+     }
+    ]
+   },
+   "narration_segments": [
+    {
+     "label": "paragraph",
+     "text": "You crouch and examine the ground where he stood, brushing away loose dirt with careful fingers. The soil is dry and packed, but there’s no sign of footprints—no deep indentations, no scattered gravel. You sweep your hand over the surface, feeling for anything he might have dropped. A small, jagged shard of metal glints in the morning light. You pick it up, turning it over in your palm. It’s too sharp to be a tool, too heavy for a trinket. The edges are uneven, as if it were broken from a larger object. You hold it up to the sun, trying to make out its shape. It looks like a shard of a broken compass, but the markings are unfamiliar. You pocket it, keeping it close."
+    },
+    {
+     "label": "paragraph",
+     "text": "Nesta Grisham [[A]] watches you from a few paces away, arms crossed, her expression unreadable. She hasn’t said a word since you arrived, and the silence between you is thick. You glance at her, expecting a question, but she only tilts her head slightly, as if testing your patience. The clearing is quiet, save for the occasional rustle of leaves in the breeze. You can hear the faint sound of a horse’s hooves in the distance, but it’s not close enough to be a threat."
+    },
+    {
+     "label": "paragraph",
+     "text": "You straighten, wiping your hands on your skirt. “You didn’t say much about the watcher,” you say, keeping your tone neutral. “Was it someone from the village?”"
+    },
+    {
+     "label": "paragraph",
+     "text": "She doesn’t answer immediately. Instead, she steps closer, her boots crunching on the dry ground. “You think everyone in this place is a smuggler,” she says, her tone flat. “You think everyone watches. You think everyone’s lying.”"
+    },
+    {
+     "label": "paragraph",
+     "text": "You don’t respond. You don’t know what to say. The idea that people here are all hiding secrets, all looking out for themselves, is a weight you’ve carried since you arrived. You’ve seen the signs—empty stalls, wary glances, the way the watchmen move like they’re always on edge. But you never imagined it would be this bad."
+    },
+    {
+     "label": "paragraph",
+     "text": "She exhales, a slow, measured breath, and looks away. “You want to find them,” she says, her words almost a whisper. “The ones who’ve been watching. You want to know who they are.”"
+    },
+    {
+     "label": "paragraph",
+     "text": "You nod, but you don’t say anything else. You don’t know what to say. You don’t know if she’s telling the truth, or if she’s just trying to get you to stop asking questions."
+    },
+    {
+     "label": "paragraph",
+     "text": "The silence lingers, heavy and unspoken. You feel the weight of it, and you know it’s not just the clearing that’s quiet. It’s the whole place."
+    }
+   ],
+   "narration": "You crouch and examine the ground where he stood, brushing away loose dirt with careful fingers. The soil is dry and packed, but there’s no sign of footprints—no deep indentations, no scattered gravel. You sweep your hand over the surface, feeling for anything he might have dropped. A small, jagged shard of metal glints in the morning light. You pick it up, turning it over in your palm. It’s too sharp to be a tool, too heavy for a trinket. The edges are uneven, as if it were broken from a larger object. You hold it up to the sun, trying to make out its shape. It looks like a shard of a broken compass, but the markings are unfamiliar. You pocket it, keeping it close.\n\nNesta Grisham [[A]] watches you from a few paces away, arms crossed, her expression unreadable. She hasn’t said a word since you arrived, and the silence between you is thick. You glance at her, expecting a question, but she only tilts her head slightly, as if testing your patience. The clearing is quiet, save for the occasional rustle of leaves in the breeze. You can hear the faint sound of a horse’s hooves in the distance, but it’s not close enough to be a threat.\n\nYou straighten, wiping your hands on your skirt. “You didn’t say much about the watcher,” you say, keeping your tone neutral. “Was it someone from the village?”\n\nShe doesn’t answer immediately. Instead, she steps closer, her boots crunching on the dry ground. “You think everyone in this place is a smuggler,” she says, her tone flat. “You think everyone watches. You think everyone’s lying.”\n\nYou don’t respond. You don’t know what to say. The idea that people here are all hiding secrets, all looking out for themselves, is a weight you’ve carried since you arrived. You’ve seen the signs—empty stalls, wary glances, the way the watchmen move like they’re always on edge. But you never imagined it would be this bad.\n\nShe exhales, a slow, measured breath, and looks away. “You want to find them,” she says, her words almost a whisper. “The ones who’ve been watching. You want to know who they are.”\n\nYou nod, but you don’t say anything else. You don’t know what to say. You don’t know if she’s telling the truth, or if she’s just trying to get you to stop asking questions.\n\nThe silence lingers, heavy and unspoken. You feel the weight of it, and you know it’s not just the clearing that’s quiet. It’s the whole place.",
+   "player": {
+    "max_health_delta": 0,
+    "karma_reason": "",
+    "xp_delta": 0,
+    "karma_delta": 0,
+    "health_delta": 0,
+    "karma_visibility": "private",
+    "move_to_location": null,
+    "gold_delta": 0,
+    "level_delta": 0,
+    "move_to_location_code": null
+   },
+   "self_check": {
+    "passed": true,
+    "issues_found": [],
+    "corrections_made": [
+     "deterministic_turn_dsl_transcoder",
+     "Deterministic entity name/code repair applied to narration."
+    ],
+    "reference_check": "ops validated against closed opcode table",
+    "consistency_check": "structured fields produced by formula, not freeform model JSON"
+   },
+   "turn_summary": "player: I crouch and examine the ground where he stood for footprints or anything he dropped.\n\nResolved player references: Conversation (engine decided) - the player is talking to Nesta Grisham [[A]] (the one the player was talking to). Only Nesta Grisham [[A]] answers the player.. response: You crouch and examine the ground where he stood, brushing away loose dirt with careful fingers. The soil is dry and packed, but there’s no sign of footprints—no deep indentations, no scattered gravel.",
+   "scene_focus": "action",
+   "inventory_changes": [
+    {
+     "name": "shard of broken compass",
+     "description": "a jagged, uneven piece of metal with unfamiliar markings",
+     "quantity_band": "small",
+     "weight": 1.0,
+     "slot_size": 1,
+     "item_type": "metal fragment",
+     "rarity": "scarce",
+     "enchantments": [],
+     "stat_modifiers": {},
+     "granted_abilities": [],
+     "stack_limit": 20,
+     "carry_modifier": 1.0,
+     "container_bonus_weight": 0,
+     "container_bonus_slots": 0,
+     "dimensional_space": false
+    }
+   ],
+   "npcs": [
+    {
+     "code": null,
+     "name": "Isolde Saxby",
+     "race": "human",
+     "location": "L2",
+     "role": "watcher",
+     "summary": "",
+     "attitude": "suspicious",
+     "personality": "",
+     "likes": "",
+     "principles": "",
+     "dislikes": "",
+     "rank": "",
+     "stat_profile": {},
+     "skill_profile": {},
+     "trust_delta": 0,
+     "known_fact": "",
+     "mentioned_by": null
+    }
+   ],
+   "conversations": [
+    {
+     "npc_code": "A",
+     "topic": "watcher",
+     "summary": "watcher",
+     "player_claims": []
+    }
+   ],
+   "scene_cast": {
+    "present": [],
+    "interacting": [],
+    "off": [],
+    "keywords": []
+   }
+  },
+  "draft_dsl_raw": "===NAR===\nYou crouch and examine the ground where he stood, brushing away loose dirt with careful fingers. The soil is dry and packed, but there’s no sign of footprints—no deep indentations, no scattered gravel. You sweep your hand over the surface, feeling for anything he might have dropped. A small, jagged shard of metal glints in the morning light. You pick it up, turning it over in your palm. It’s too sharp to be a tool, too heavy for a trinket. The edges are uneven, as if it were broken from a larger object. You hold it up to the sun, trying to make out its shape. It looks like a shard of a broken compass, but the markings are unfamiliar. You pocket it, keeping it close.\n\nNesta Grisham [[A]] watches you from a few paces away, arms crossed, her expression unreadable. She hasn’t said a word since you arrived, and the silence between you is thick. You glance at her, expecting a question, but she only tilts her head slightly, as if testing your patience. The clearing is quiet, save for the occasional rustle of leaves in the breeze. You can hear the faint sound of a horse’s hooves in the distance, but it’s not close enough to be a threat. \n\nYou straighten, wiping your hands on your skirt. “You didn’t say much about the watcher,” you say, keeping your tone neutral. “Was it someone from the village?”\n\nShe doesn’t answer immediately. Instead, she steps closer, her boots crunching on the dry ground. “You think everyone in this place is a smuggler,” she says, her tone flat. “You think everyone watches. You think everyone’s lying.”\n\nYou don’t respond. You don’t know what to say. The idea that people here are all hiding secrets, all looking out for themselves, is a weight you’ve carried since you arrived. You’ve seen the signs—empty stalls, wary glances, the way the watchmen move like they’re always on edge. But you never imagined it would be this bad. \n\nShe exhales, a slow, measured breath, and looks away. “You want to find them,” she says, her words almost a whisper. “The ones who’ve been watching. You want to know who they are.”\n\nYou nod, but you don’t say anything else. You don’t know what to say. You don’t know if she’s telling the truth, or if she’s just trying to get you to stop asking questions. \n\nThe silence lingers, heavy and unspoken. You feel the weight of it, and you know it’s not just the clearing that’s quiet. It’s the whole place. \n\n===OPS===\nFOCUS risk\nNPC_NEW NAME \"Isolde Saxby\" ROLE \"watcher\" LOC \"L2\" ATTITUDE \"suspicious\" RACE \"human\"\nGRANT \"shard of broken compass\" QTY small TYPE \"metal fragment\" DESC \"a jagged, uneven piece of metal with unfamiliar markings\" RARITY \"scarce\"\nTALK A \"watcher\""
+ },
+ "r1_t5": {
+  "trace": "batch4_r1\\data\\model_traces\\turn-000005-player.json",
+  "player_input": "I follow Elias Thorn into the trees, keeping low.",
+  "model_input": "I follow Elias Thorn into the trees, keeping low.\n\nResolved player references: Conversation (engine decided) - the player is talking to Elias Thorn [[B]] (named in the player's line). Only Elias Thorn [[B]] answers the player. Also present, listening (may react, does not answer for them): Nesta Grisham [[A]].; Elias = Elias Thorn (@Celias_thorn, B, NPC)",
+  "turn_plan": {
+   "turn_kind": "player_action",
+   "primary_intent": "conversation",
+   "secondary_intents": [
+    "investigation",
+    "travel"
+   ],
+   "focus_terms": [
+    "also",
+    "answer",
+    "answers",
+    "celias",
+    "conversation",
+    "decided",
+    "does",
+    "elias",
+    "engine",
+    "follow",
+    "for",
+    "grisham",
+    "in",
+    "into",
+    "is",
+    "keeping",
+    "line",
+    "listening",
+    "low",
+    "may",
+    "named",
+    "nesta",
+    "not",
+    "npc"
+   ]
+  },
+  "verification_policy": {
+   "mode": "targeted_model_verifier",
+   "certainty": 0.47,
+   "primary_intent": "conversation",
+   "blockers": [
+    "high_risk_state_changes",
+    "intent_requires_model_verifier"
+   ],
+   "reasons": [
+    "Low-risk records present (not a blocker): conversations",
+    "Draft changes require model verification: events, npcs",
+    "Referenced codes checked: A, B"
+   ]
+  },
+  "draft_turn": {
+   "scene_plan": {
+    "goal": "Advance the immediate scene with justified local consequences.",
+    "focus_points": [
+     {
+      "kind": "risk",
+      "summary": "beat",
+      "event_worthy": true,
+      "persistence": "temporary"
+     }
+    ]
+   },
+   "narration_segments": [
+    {
+     "label": "paragraph",
+     "text": "You follow Elias Thorn into the trees, keeping low. The forest floor is a patchwork of moss and fallen leaves, the scent of damp bark and rotting wood thick in the morning mist. Elias moves with the quiet confidence of someone used to the woods, his cloak blending into the shadows as he leads you deeper. The trees grow close, their branches weaving a canopy that filters the sunlight into dappled patterns on the forest floor. You stay behind him, your steps careful not to make too much noise. The clearing at the forest's edge is behind you now, and the world seems to narrow to the path ahead."
+    },
+    {
+     "label": "paragraph",
+     "text": "Elias pauses at a bend in the trail, his hand resting on the hilt of his dagger. He turns, his gaze sharp as he studies you. \"You're not supposed to be here,\" he says, his tone low but firm. \"This isn't a route for outsiders.\" His words are a warning, but there's no real hostility in them—just a cautious wariness. You can tell he's testing you, seeing if you're a threat or an inconvenience."
+    },
+    {
+     "label": "paragraph",
+     "text": "A rustle in the underbrush catches your attention. Elias stiffens, his hand moving to his dagger again. You follow his gaze, and a pair of eyes blink open from the shadows. A figure steps forward—tall, lean, and wrapped in a tattered cloak. The hood is pulled low, obscuring most of their face, but their posture is unmistakably that of a hunter. They carry a bow slung across their back, and their presence is a quiet threat."
+    },
+    {
+     "label": "paragraph",
+     "text": "Elias exhales slowly, his grip on his dagger loosening. \"Not here to start a fight,\" he murmurs, his tone more resigned than angry. \"But if you're not careful, you'll find out what the forest thinks of strangers.\" The hunter nods, their expression unreadable, and then they vanish back into the trees, leaving you and Elias in an uneasy truce."
+    }
+   ],
+   "narration": "You follow Elias Thorn into the trees, keeping low. The forest floor is a patchwork of moss and fallen leaves, the scent of damp bark and rotting wood thick in the morning mist. Elias moves with the quiet confidence of someone used to the woods, his cloak blending into the shadows as he leads you deeper. The trees grow close, their branches weaving a canopy that filters the sunlight into dappled patterns on the forest floor. You stay behind him, your steps careful not to make too much noise. The clearing at the forest's edge is behind you now, and the world seems to narrow to the path ahead.\n\nElias pauses at a bend in the trail, his hand resting on the hilt of his dagger. He turns, his gaze sharp as he studies you. \"You're not supposed to be here,\" he says, his tone low but firm. \"This isn't a route for outsiders.\" His words are a warning, but there's no real hostility in them—just a cautious wariness. You can tell he's testing you, seeing if you're a threat or an inconvenience.\n\nA rustle in the underbrush catches your attention. Elias stiffens, his hand moving to his dagger again. You follow his gaze, and a pair of eyes blink open from the shadows. A figure steps forward—tall, lean, and wrapped in a tattered cloak. The hood is pulled low, obscuring most of their face, but their posture is unmistakably that of a hunter. They carry a bow slung across their back, and their presence is a quiet threat.\n\nElias exhales slowly, his grip on his dagger loosening. \"Not here to start a fight,\" he murmurs, his tone more resigned than angry. \"But if you're not careful, you'll find out what the forest thinks of strangers.\" The hunter nods, their expression unreadable, and then they vanish back into the trees, leaving you and Elias in an uneasy truce.",
+   "player": {
+    "max_health_delta": 0,
+    "karma_reason": "",
+    "xp_delta": 0,
+    "karma_delta": 0,
+    "health_delta": 0,
+    "karma_visibility": "private",
+    "move_to_location": null,
+    "gold_delta": 0,
+    "level_delta": 0,
+    "move_to_location_code": null
+   },
+   "self_check": {
+    "passed": true,
+    "issues_found": [],
+    "corrections_made": [
+     "deterministic_turn_dsl_transcoder",
+     "Deterministic entity name/code repair applied to narration."
+    ],
+    "reference_check": "ops validated against closed opcode table",
+    "consistency_check": "structured fields produced by formula, not freeform model JSON"
+   },
+   "turn_summary": "player: I follow Elias Thorn into the trees, keeping low.\n\nResolved player references: Conversation (engine decided) - the player is talking to Elias Thorn [[B]] (named in the player's line). Only Elias Thorn [[B]] answers the player. Also present, listening (may react, does not answer for them): Nesta Grisham [[A]].; Elias = Elias Thorn (@Celias_thorn, B, NPC). response: You follow Elias Thorn into the trees, keeping low. The forest floor is a patchwork of moss and fallen leaves, the scent of damp bark and rotting wood thick in the morning mist.",
+   "scene_focus": "action",
+   "npcs": [
+    {
+     "code": null,
+     "name": "Mara Vey",
+     "race": "human",
+     "location": "L2",
+     "role": "hunter",
+     "summary": "",
+     "attitude": "suspicious",
+     "personality": "",
+     "likes": "",
+     "principles": "",
+     "dislikes": "",
+     "rank": "",
+     "stat_profile": {},
+     "skill_profile": {},
+     "trust_delta": 0,
+     "known_fact": "",
+     "mentioned_by": null
+    }
+   ],
+   "events": [
+    {
+     "code": null,
+     "title": "Forest Encounter",
+     "location_code": "L2",
+     "npc_code": "",
+     "summary": "A hunter named Mara Vey appears, warning of the dangers of the forest.",
+     "status": "active",
+     "persistence": "temporary",
+     "disappear_chance": 70,
+     "respawn_chance": 0,
+     "fame_score": 0,
+     "fame_scope": "local",
+     "rumor_summary": ""
+    }
+   ],
+   "conversations": [
+    {
+     "npc_code": "B",
+     "topic": "you are not supposed to be here",
+     "summary": "you are not supposed to be here",
+     "player_claims": []
+    }
+   ],
+   "scene_cast": {
+    "present": [],
+    "interacting": [],
+    "off": [],
+    "keywords": []
+   }
+  },
+  "draft_dsl_raw": "===NAR===\nYou follow Elias Thorn into the trees, keeping low. The forest floor is a patchwork of moss and fallen leaves, the scent of damp bark and rotting wood thick in the morning mist. Elias moves with the quiet confidence of someone used to the woods, his cloak blending into the shadows as he leads you deeper. The trees grow close, their branches weaving a canopy that filters the sunlight into dappled patterns on the forest floor. You stay behind him, your steps careful not to make too much noise. The clearing at the forest's edge is behind you now, and the world seems to narrow to the path ahead. \n\nElias pauses at a bend in the trail, his hand resting on the hilt of his dagger. He turns, his gaze sharp as he studies you. \"You're not supposed to be here,\" he says, his tone low but firm. \"This isn't a route for outsiders.\" His words are a warning, but there's no real hostility in them—just a cautious wariness. You can tell he's testing you, seeing if you're a threat or an inconvenience. \n\nA rustle in the underbrush catches your attention. Elias stiffens, his hand moving to his dagger again. You follow his gaze, and a pair of eyes blink open from the shadows. A figure steps forward—tall, lean, and wrapped in a tattered cloak. The hood is pulled low, obscuring most of their face, but their posture is unmistakably that of a hunter. They carry a bow slung across their back, and their presence is a quiet threat. \n\nElias exhales slowly, his grip on his dagger loosening. \"Not here to start a fight,\" he murmurs, his tone more resigned than angry. \"But if you're not careful, you'll find out what the forest thinks of strangers.\" The hunter nods, their expression unreadable, and then they vanish back into the trees, leaving you and Elias in an uneasy truce.\n\n===OPS===\nFOCUS risk\nNPC_NEW NAME \"Mara Vey\" ROLE \"hunter\" LOC \"L2\" ATTITUDE \"suspicious\" RACE \"human\"\nTALK \"B\" \"you are not supposed to be here\"\nEVENT \"Forest Encounter\" LOC \"L2\" SUMMARY \"A hunter named Mara Vey appears, warning of the dangers of the forest.\""
+ },
+ "r1_g2_setup": {
+  "trace": "batch4_r1/g2_setup.json setup_request.body (verbatim) and the stored mode",
+  "body": {
+   "player_name": "Jehane Larkin",
+   "player_public_name": "",
+   "player_title": "",
+   "player_age": "23",
+   "player_sex": "female",
+   "previous_life_age": "",
+   "previous_life_sex": "",
+   "backstory_mode": "nameless drifter",
+   "memory_policy": "former life fragments",
+   "character_backstory": "Jehane Larkin was a cartographer in a coastal city, mapping trade routes through treacherous wastelands. A sandstorm swallowed her caravan, and she awoke in The Empty Lot, her maps now useless, her skills untested in a world where magic is a fragile relic.",
+   "hair": "cropped copper hair, braided into a single thick rope",
+   "facial_features": "grey-green eyes, a cleft chin",
+   "appearance": "torso: ochre quilted vest; legs: wrap skirt; feet: wooden clogs; waist: leather belt with a pouch; outer: wool mantle",
+   "starter_equipment": "wooden clogs, ochre quilted vest, wrap skirt, leather belt with pouch, wool mantle, pouch of dried dates, rolled map fragment",
+   "starter_gear": [
+    {
+     "name": "wooden clogs",
+     "slot": "FEET",
+     "required": true,
+     "engine_default": false,
+     "keep": false,
+     "description": "Worn leather with carved wooden soles, sturdy for shifting sand and cracked earth.",
+     "stats": {},
+     "item_stats": {
+      "weight": 0.88,
+      "durability": 80,
+      "protection": 0,
+      "value": 5,
+      "rarity": "common"
+     },
+     "abilities": []
+    },
+    {
+     "name": "ochre quilted vest",
+     "slot": "TORSO",
+     "required": true,
+     "engine_default": false,
+     "keep": false,
+     "description": "A patched garment of thick wool and dyed cloth, warm against the cold nights of the wastelands.",
+     "stats": {},
+     "item_stats": {
+      "weight": 4,
+      "durability": 70,
+      "protection": 2,
+      "value": 10,
+      "rarity": "common"
+     },
+     "abilities": []
+    },
+    {
+     "name": "wrap skirt",
+     "slot": "LEGS",
+     "required": true,
+     "engine_default": false,
+     "keep": false,
+     "description": "A simple wrap of coarse fabric, tied at the waist with a leather strap, practical for movement and protection from debris.",
+     "stats": {},
+     "item_stats": {
+      "weight": 2,
+      "durability": 60,
+      "protection": 1,
+      "value": 5,
+      "rarity": "common"
+     },
+     "abilities": []
+    },
+    {
+     "name": "leather belt with pouch",
+     "slot": "WAIST",
+     "required": false,
+     "engine_default": false,
+     "keep": false,
+     "description": "A simple leather belt with a small pouch for holding essentials like tools or a few coins.",
+     "stats": {},
+     "item_stats": {
+      "weight": 1,
+      "durability": 75,
+      "protection": 0,
+      "value": 3,
+      "rarity": "common"
+     },
+     "abilities": []
+    },
+    {
+     "name": "wool mantle",
+     "slot": "MAIN",
+     "required": false,
+     "engine_default": false,
+     "keep": false,
+     "description": "A heavy wool cloak for protection against wind and cold, its frayed edges hinting at past journeys.",
+     "stats": {},
+     "item_stats": {
+      "weight": 1.1,
+      "durability": 65,
+      "protection": 3,
+      "value": 8,
+      "rarity": "common"
+     },
+     "abilities": []
+    },
+    {
+     "name": "pouch of dried dates",
+     "slot": "",
+     "required": false,
+     "engine_default": false,
+     "keep": false,
+     "description": "A small leather pouch containing a few dried dates, a meager snack for the road.",
+     "stats": {},
+     "item_stats": {
+      "weight": 0.5,
+      "durability": 90,
+      "protection": 0,
+      "value": 1,
+      "rarity": "common"
+     },
+     "abilities": []
+    },
+    {
+     "name": "rolled map fragment",
+     "slot": "",
+     "required": false,
+     "engine_default": false,
+     "keep": false,
+     "description": "A frayed corner of a once-grand map, its faded lines hinting at lost routes and forgotten places.",
+     "stats": {},
+     "item_stats": {
+      "weight": 0.2,
+      "durability": 85,
+      "protection": 0,
+      "value": 2,
+      "rarity": "uncommon"
+     },
+     "abilities": []
+    }
+   ],
+   "difficulty": "hard",
+   "narration_detail": "rich",
+   "world_style": "frontier dark fantasy",
+   "custom_style": "Magic broke the world already; survivors treat spells like radiation.",
+   "start_location": "The Empty Lot",
+   "leveling_system": false,
+   "game_system": false,
+   "system_style": "subtle blue-window system",
+   "special_ability_origin": "both",
+   "special_abilities": [
+    {
+     "name": "Rapier Tip",
+     "description": "You can keep point-control on a light blade for one exchange. Needs rapier/foil.",
+     "locked": false,
+     "keep": false,
+     "prerequisites": "",
+     "cost": "Leaves you socially flat — harder to charm for a short while",
+     "growth_math": "thresholds F0 E100 D250 C500 B1000 A2000 S4000 SS9000 SSS20000; practice 5 XP, contested 12, mentor 18, life-risk 25; rank +1 check / +12–20% compound; breakthrough after B and A before S-tier; passives at C/A/S",
+     "power_type": "compounding"
+    },
+    {
+     "name": "Smoke Cure",
+     "description": "You can keep meat/smoke from total waste. Needs smoke rack or fire.",
+     "locked": false,
+     "keep": false,
+     "prerequisites": "",
+     "cost": "Numb fingers / shaky hands for a few minutes",
+     "growth_math": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP × risk (1/2/3/4); soft cap after C ×0.55 until breakthrough; ladder F…S/SS/SSS; each rank +1 check / +14–22% effect",
+     "power_type": "compounding"
+    },
+    {
+     "name": "Anchor Nail",
+     "description": "You can drive a nail that makes a small object harder to move. Needs nail + hammer.",
+     "locked": true,
+     "keep": false,
+     "prerequisites": "Unlocks after you trade a comfort or privilege for focused training time.",
+     "cost": "2 energy; 3 mana; 30m cooldown",
+     "growth_math": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP × risk (1/2/3/4); soft cap after C ×0.55 until breakthrough; ladder F…S/SS/SSS; each rank +1 check / +14–22% effect",
+     "power_type": "compounding"
+    },
+    {
+     "name": "Tide Bone",
+     "description": "You can carry a bone that aches before storms or ambushes. Needs carried bone.",
+     "locked": false,
+     "keep": false,
+     "prerequisites": "",
+     "cost": "4 energy; +1 fatigue; 20m cooldown",
+     "growth_math": "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success ×2; soft cap at L6 (XP ×0.6 until setback recovery); effect magnitude +8% per level",
+     "power_type": "compounding"
+    }
+   ],
+   "special_ability": true,
+   "special_ability_locked": false,
+   "special_ability_name": "Rapier Tip",
+   "special_ability_description": "You can keep point-control on a light blade for one exchange. Needs rapier/foil.",
+   "skill_style": "standard",
+   "proficiency_system": false,
+   "proficiency_access": "only expert tasks require training",
+   "skill_levels_enabled": true,
+   "new_skill_frequency": "normal",
+   "skill_growth_speed": "normal",
+   "proficiency_growth_speed": "normal",
+   "xp_growth_speed": "normal",
+   "skill_growth_multiplier": null,
+   "proficiency_growth_multiplier": null,
+   "xp_growth_multiplier": null,
+   "skill_growth_note": "",
+   "proficiency_growth_note": "",
+   "xp_growth_note": "",
+   "custom_skills": "Cartography (E, tracked by completed maps, hard limit C), Survival (E, tracked by days survived, hard limit B), Blade Handling (E, tracked by successful strikes, hard limit A), Navigation (E, tracked by successful journeys, hard limit S), Stealth (E, tracked by undetected movements, hard limit SS), Weapon Proficiency (E, tracked by weapon mastery, Map Reading (E, tracked by map accuracy, Tracking (E, tracked by trail accuracy, Resourcefulness (E, tracked by improvised solutions, Adaptability (E, tracked by environmental adjustments",
+   "death_rules": "downed, not deleted",
+   "npc_stat_scaling": "relative ranks",
+   "npc_skill_frequency": "some trained NPCs",
+   "rank_scale": "F,E,D,C,B,A,S,SS,SSS",
+   "economy": "wages paid in kind as often as in coin",
+   "loot_rarity": "scarce mundane",
+   "inventory_weight_limit": 60,
+   "inventory_slot_limit": 24,
+   "inventory_rules": "",
+   "magic_level": "rare",
+   "world_races": "human, wastelanders",
+   "race_magic_enabled": false,
+   "race_magic_rarity": "same as world magic",
+   "race_magic_rules": "",
+   "race_ability_rules": "",
+   "tech_level": "iron age",
+   "tone": "Relentless survival and moral ambiguity in a lawless frontier.",
+   "npc_density": "sparse",
+   "quest_style": "Hauling jobs that go wrong in a world where magic broke the world already",
+   "faction_pressure": "smugglers paying off the watch",
+   "session_theme": {
+    "adapter_hint": "grimdark",
+    "genre": "Frontier Dark Fantasy",
+    "location_theme": "arctic",
+    "isekai": false,
+    "dm_stance": "always keep fair DM player-agency stance",
+    "power_fantasy": {
+     "start_power": "ordinary",
+     "growth": "steady",
+     "system_ui": false,
+     "skill_summary": "Crafting and survival skills are foundational; magic is rare and risky."
+    },
+    "tone": "Relentless survival and moral ambiguity in a lawless frontier.",
+    "edge": "Survival pressure: scarce resources, harsh weather, and dangerous terrain demand constant resource management.",
+    "keywords": [
+     "thin law",
+     "hard weather",
+     "long supply lines",
+     "small settlements",
+     "scarce economy",
+     "mundane loot",
+     "rare magic",
+     "crafting",
+     "community stakes"
+    ],
+    "style_notes": "Magic is rumor; problems are hunger, weather, and people with knives. Heroes look ordinary until cornered.",
+    "theme_model": ""
+   },
+   "setup_form": {
+    "format": "ai-rpg-setup-settings-v1",
+    "saved_at": "2026-10-05T21:37:13.535Z",
+    "setup_step": 0,
+    "controls": [
+     {
+      "name": "player_name",
+      "tag": "input",
+      "type": "text",
+      "value": "Jehane Larkin",
+      "checked": false
+     },
+     {
+      "name": "backstory_mode",
+      "tag": "select",
+      "type": "select-one",
+      "value": "nameless drifter",
+      "checked": false
+     },
+     {
+      "name": "difficulty",
+      "tag": "select",
+      "type": "select-one",
+      "value": "hard",
+      "checked": false
+     },
+     {
+      "name": "custom_style",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "Magic broke the world already; survivors treat spells like radiation.",
+      "checked": false
+     },
+     {
+      "name": "hair",
+      "tag": "input",
+      "type": "text",
+      "value": "cropped copper hair, braided into a single thick rope",
+      "checked": false
+     },
+     {
+      "name": "facial_features",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "grey-green eyes, a cleft chin",
+      "checked": false
+     },
+     {
+      "name": "appearance",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "torso: ochre quilted vest; legs: wrap skirt; feet: wooden clogs; waist: leather belt with a pouch; outer: wool mantle",
+      "checked": false
+     },
+     {
+      "name": "player_public_name",
+      "tag": "input",
+      "type": "text",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "player_title",
+      "tag": "input",
+      "type": "text",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "player_age",
+      "tag": "input",
+      "type": "text",
+      "value": "23",
+      "checked": false
+     },
+     {
+      "name": "player_sex",
+      "tag": "select",
+      "type": "select-one",
+      "value": "female",
+      "checked": false
+     },
+     {
+      "name": "starter_equipment",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "wooden clogs, ochre quilted vest, wrap skirt, leather belt with pouch, wool mantle, pouch of dried dates, rolled map fragment",
+      "checked": false
+     },
+     {
+      "name": "memory_policy",
+      "tag": "select",
+      "type": "select-one",
+      "value": "former life fragments",
+      "checked": false
+     },
+     {
+      "name": "previous_life_age",
+      "tag": "input",
+      "type": "text",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "previous_life_sex",
+      "tag": "select",
+      "type": "select-one",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "character_backstory",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "Jehane Larkin was a cartographer in a coastal city, mapping trade routes through treacherous wastelands. A sandstorm swallowed her caravan, and she awoke in The Empty Lot, her maps now useless, her skills untested in a world where magic is a fragile relic.",
+      "checked": false
+     },
+     {
+      "name": "world_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "frontier dark fantasy",
+      "checked": true
+     },
+     {
+      "name": "world_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "wuxia sect politics",
+      "checked": false
+     },
+     {
+      "name": "world_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "system apocalypse",
+      "checked": false
+     },
+     {
+      "name": "world_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "post-collapse settlement",
+      "checked": false
+     },
+     {
+      "name": "world_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "mage academy intrigue",
+      "checked": false
+     },
+     {
+      "name": "world_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "space frontier salvage",
+      "checked": false
+     },
+     {
+      "name": "world_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "random",
+      "checked": false
+     },
+     {
+      "name": "world_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "custom",
+      "checked": false
+     },
+     {
+      "name": "start_location",
+      "tag": "input",
+      "type": "text",
+      "value": "The Empty Lot",
+      "checked": false
+     },
+     {
+      "name": "tone",
+      "tag": "select",
+      "type": "select-one",
+      "value": "custom",
+      "checked": false
+     },
+     {
+      "name": "economy",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "scarce",
+      "checked": false
+     },
+     {
+      "name": "economy",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "barter-heavy",
+      "checked": false
+     },
+     {
+      "name": "economy",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "coin-driven",
+      "checked": false
+     },
+     {
+      "name": "economy",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "guild-controlled",
+      "checked": false
+     },
+     {
+      "name": "economy",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "random",
+      "checked": false
+     },
+     {
+      "name": "economy",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "custom",
+      "checked": true
+     },
+     {
+      "name": "magic_level",
+      "tag": "select",
+      "type": "select-one",
+      "value": "rare",
+      "checked": false
+     },
+     {
+      "name": "world_races",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "human",
+      "checked": true
+     },
+     {
+      "name": "world_races",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "elf",
+      "checked": false
+     },
+     {
+      "name": "world_races",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "dwarf",
+      "checked": false
+     },
+     {
+      "name": "world_races",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "orc",
+      "checked": false
+     },
+     {
+      "name": "world_races",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "beastfolk",
+      "checked": false
+     },
+     {
+      "name": "world_races",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "spirit-touched",
+      "checked": false
+     },
+     {
+      "name": "world_races",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "random",
+      "checked": false
+     },
+     {
+      "name": "world_races",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "custom",
+      "checked": true
+     },
+     {
+      "name": "race_magic_enabled",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": true
+     },
+     {
+      "name": "race_magic_enabled",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": false
+     },
+     {
+      "name": "race_magic_rarity",
+      "tag": "select",
+      "type": "select-one",
+      "value": "same as world magic",
+      "checked": false
+     },
+     {
+      "name": "tech_level",
+      "tag": "select",
+      "type": "select-one",
+      "value": "iron age",
+      "checked": false
+     },
+     {
+      "name": "race_magic_rules",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "race_ability_rules",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "npc_density",
+      "tag": "select",
+      "type": "select-one",
+      "value": "sparse",
+      "checked": false
+     },
+     {
+      "name": "quest_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "emergent",
+      "checked": false
+     },
+     {
+      "name": "quest_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "job board",
+      "checked": false
+     },
+     {
+      "name": "quest_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "faction chains",
+      "checked": false
+     },
+     {
+      "name": "quest_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "personal mysteries",
+      "checked": false
+     },
+     {
+      "name": "quest_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "random",
+      "checked": false
+     },
+     {
+      "name": "quest_style",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "custom",
+      "checked": true
+     },
+     {
+      "name": "faction_pressure",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "local disputes",
+      "checked": false
+     },
+     {
+      "name": "faction_pressure",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "sect hierarchy",
+      "checked": false
+     },
+     {
+      "name": "faction_pressure",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "guild control",
+      "checked": false
+     },
+     {
+      "name": "faction_pressure",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "military occupation",
+      "checked": false
+     },
+     {
+      "name": "faction_pressure",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "hidden cults",
+      "checked": false
+     },
+     {
+      "name": "faction_pressure",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "random",
+      "checked": false
+     },
+     {
+      "name": "faction_pressure",
+      "tag": "input",
+      "type": "checkbox",
+      "value": "custom",
+      "checked": true
+     },
+     {
+      "name": "npc_stat_scaling",
+      "tag": "select",
+      "type": "select-one",
+      "value": "relative ranks",
+      "checked": false
+     },
+     {
+      "name": "npc_skill_frequency",
+      "tag": "select",
+      "type": "select-one",
+      "value": "some trained NPCs",
+      "checked": false
+     },
+     {
+      "name": "rank_scale",
+      "tag": "select",
+      "type": "select-one",
+      "value": "F,E,D,C,B,A,S,SS,SSS",
+      "checked": false
+     },
+     {
+      "name": "death_rules",
+      "tag": "select",
+      "type": "select-one",
+      "value": "downed, not deleted",
+      "checked": false
+     },
+     {
+      "name": "narration_detail",
+      "tag": "select",
+      "type": "select-one",
+      "value": "rich",
+      "checked": false
+     },
+     {
+      "name": "loot_rarity",
+      "tag": "select",
+      "type": "select-one",
+      "value": "scarce mundane",
+      "checked": false
+     },
+     {
+      "name": "inventory_weight_limit",
+      "tag": "input",
+      "type": "number",
+      "value": "60",
+      "checked": false
+     },
+     {
+      "name": "inventory_slot_limit",
+      "tag": "input",
+      "type": "number",
+      "value": "24",
+      "checked": false
+     },
+     {
+      "name": "inventory_rules",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "skill_style",
+      "tag": "select",
+      "type": "select-one",
+      "value": "standard",
+      "checked": false
+     },
+     {
+      "name": "proficiency_system",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": false
+     },
+     {
+      "name": "proficiency_system",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": true
+     },
+     {
+      "name": "skill_levels_enabled",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "skill_levels_enabled",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "proficiency_access",
+      "tag": "select",
+      "type": "select-one",
+      "value": "only expert tasks require training",
+      "checked": false
+     },
+     {
+      "name": "custom_skills",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "Cartography (E, tracked by completed maps, hard limit C), Survival (E, tracked by days survived, hard limit B), Blade Handling (E, tracked by successful strikes, hard limit A), Navigation (E, tracked by successful journeys, hard limit S), Stealth (E, tracked by undetected movements, hard limit SS), Weapon Proficiency (E, tracked by weapon mastery, Map Reading (E, tracked by map accuracy, Tracking (E, tracked by trail accuracy, Resourcefulness (E, tracked by improvised solutions, Adaptability (E, tracked by environmental adjustments",
+      "checked": false
+     },
+     {
+      "name": "new_skill_frequency",
+      "tag": "select",
+      "type": "select-one",
+      "value": "normal",
+      "checked": false
+     },
+     {
+      "name": "xp_growth_speed",
+      "tag": "select",
+      "type": "select-one",
+      "value": "normal",
+      "checked": false
+     },
+     {
+      "name": "skill_growth_speed",
+      "tag": "select",
+      "type": "select-one",
+      "value": "normal",
+      "checked": false
+     },
+     {
+      "name": "proficiency_growth_speed",
+      "tag": "select",
+      "type": "select-one",
+      "value": "normal",
+      "checked": false
+     },
+     {
+      "name": "leveling_system",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": false
+     },
+     {
+      "name": "leveling_system",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": true
+     },
+     {
+      "name": "game_system",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": true
+     },
+     {
+      "name": "game_system",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": false
+     },
+     {
+      "name": "system_style",
+      "tag": "select",
+      "type": "select-one",
+      "value": "subtle blue-window system",
+      "checked": false
+     },
+     {
+      "name": "dice_checks_enabled",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": true
+     },
+     {
+      "name": "dice_checks_enabled",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": false
+     },
+     {
+      "name": "dice_sides",
+      "tag": "select",
+      "type": "select-one",
+      "value": "20",
+      "checked": false
+     },
+     {
+      "name": "check_difficulty",
+      "tag": "select",
+      "type": "select-one",
+      "value": "normal",
+      "checked": false
+     },
+     {
+      "name": "event_check_frequency",
+      "tag": "select",
+      "type": "select-one",
+      "value": "normal",
+      "checked": false
+     },
+     {
+      "name": "encounter_check_frequency",
+      "tag": "select",
+      "type": "select-one",
+      "value": "normal",
+      "checked": false
+     },
+     {
+      "name": "partial_on_specialized_skill",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "partial_on_specialized_skill",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "negative_outcomes",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "negative_outcomes",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "show_rolls_in_ui",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "show_rolls_in_ui",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "contested_checks",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "contested_checks",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "power_rng",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "power_rng",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "power_variance",
+      "tag": "input",
+      "type": "number",
+      "value": "3",
+      "checked": false
+     },
+     {
+      "name": "unskilled_mishaps",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "unskilled_mishaps",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "severe_mishap_on_crit_fail",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "severe_mishap_on_crit_fail",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "auto_check_on_risky_actions",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "auto_check_on_risky_actions",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "degree_flavor",
+      "tag": "input",
+      "type": "radio",
+      "value": "true",
+      "checked": true
+     },
+     {
+      "name": "degree_flavor",
+      "tag": "input",
+      "type": "radio",
+      "value": "false",
+      "checked": false
+     },
+     {
+      "name": "attribute_floor_for_partial",
+      "tag": "input",
+      "type": "number",
+      "value": "6",
+      "checked": false
+     },
+     {
+      "name": "specialized_skill_partial_threshold",
+      "tag": "input",
+      "type": "number",
+      "value": "2",
+      "checked": false
+     },
+     {
+      "name": "unskilled_rank_threshold",
+      "tag": "input",
+      "type": "number",
+      "value": "1",
+      "checked": false
+     },
+     {
+      "name": "custom_check_notes",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "setup_art_extra",
+      "tag": "textarea",
+      "type": "textarea",
+      "value": "",
+      "checked": false
+     },
+     {
+      "name": "setup_art_checkpoint",
+      "tag": "select",
+      "type": "select-one",
+      "value": "",
+      "checked": false
+     }
+    ],
+    "custom_inputs": [
+     {
+      "name": "backstory_mode",
+      "value": ""
+     },
+     {
+      "name": "difficulty",
+      "value": ""
+     },
+     {
+      "name": "player_sex",
+      "value": ""
+     },
+     {
+      "name": "memory_policy",
+      "value": ""
+     },
+     {
+      "name": "previous_life_sex",
+      "value": ""
+     },
+     {
+      "name": "tone",
+      "value": "Relentless survival and moral ambiguity in a lawless frontier."
+     },
+     {
+      "name": "magic_level",
+      "value": ""
+     },
+     {
+      "name": "race_magic_rarity",
+      "value": ""
+     },
+     {
+      "name": "tech_level",
+      "value": ""
+     },
+     {
+      "name": "npc_density",
+      "value": ""
+     },
+     {
+      "name": "npc_stat_scaling",
+      "value": ""
+     },
+     {
+      "name": "npc_skill_frequency",
+      "value": ""
+     },
+     {
+      "name": "rank_scale",
+      "value": ""
+     },
+     {
+      "name": "death_rules",
+      "value": ""
+     },
+     {
+      "name": "narration_detail",
+      "value": ""
+     },
+     {
+      "name": "loot_rarity",
+      "value": ""
+     },
+     {
+      "name": "skill_style",
+      "value": ""
+     },
+     {
+      "name": "proficiency_access",
+      "value": ""
+     },
+     {
+      "name": "new_skill_frequency",
+      "value": ""
+     },
+     {
+      "name": "xp_growth_speed",
+      "value": ""
+     },
+     {
+      "name": "skill_growth_speed",
+      "value": ""
+     },
+     {
+      "name": "proficiency_growth_speed",
+      "value": ""
+     }
+    ],
+    "list_custom": [
+     {
+      "name": "world_style",
+      "value": ""
+     },
+     {
+      "name": "economy",
+      "value": "wages paid in kind as often as in coin"
+     },
+     {
+      "name": "world_races",
+      "value": "wastelanders"
+     },
+     {
+      "name": "quest_style",
+      "value": "Hauling jobs that go wrong in a world where magic broke the world already"
+     },
+     {
+      "name": "faction_pressure",
+      "value": "smugglers paying off the watch"
+     }
+    ],
+    "gain_controls": [
+     {
+      "name": "xp_growth_speed",
+      "custom": false,
+      "slider": "1",
+      "number": "1.00",
+      "note": ""
+     },
+     {
+      "name": "skill_growth_speed",
+      "custom": false,
+      "slider": "1",
+      "number": "1.00",
+      "note": ""
+     },
+     {
+      "name": "proficiency_growth_speed",
+      "custom": false,
+      "slider": "1",
+      "number": "1.00",
+      "note": ""
+     }
+    ],
+    "locks": [],
+    "ability_count_locked": false,
+    "ability_count_min": 1,
+    "ability_count_max": 4,
+    "abilities": [
+     {
+      "name": "Rapier Tip",
+      "description": "You can keep point-control on a light blade for one exchange. Needs rapier/foil.",
+      "locked": false,
+      "keep": false,
+      "prerequisites": "",
+      "cost_mode": "custom",
+      "cost": "Leaves you socially flat — harder to charm for a short while",
+      "growth_math": "thresholds F0 E100 D250 C500 B1000 A2000 S4000 SS9000 SSS20000; practice 5 XP, contested 12, mentor 18, life-risk 25; rank +1 check / +12–20% compound; breakthrough after B and A before S-tier; passives at C/A/S",
+      "power_type": "compounding"
+     },
+     {
+      "name": "Smoke Cure",
+      "description": "You can keep meat/smoke from total waste. Needs smoke rack or fire.",
+      "locked": false,
+      "keep": false,
+      "prerequisites": "",
+      "cost_mode": "custom",
+      "cost": "Numb fingers / shaky hands for a few minutes",
+      "growth_math": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP × risk (1/2/3/4); soft cap after C ×0.55 until breakthrough; ladder F…S/SS/SSS; each rank +1 check / +14–22% effect",
+      "power_type": "compounding"
+     },
+     {
+      "name": "Anchor Nail",
+      "description": "You can drive a nail that makes a small object harder to move. Needs nail + hammer.",
+      "locked": true,
+      "keep": false,
+      "prerequisites": "Unlocks after you trade a comfort or privilege for focused training time.",
+      "cost_mode": "custom",
+      "cost": "2 energy; 3 mana; 30m cooldown",
+      "growth_math": "XP_to_next = 36 * rank_index^1.58 (F=1); use 5-11 XP × risk (1/2/3/4); soft cap after C ×0.55 until breakthrough; ladder F…S/SS/SSS; each rank +1 check / +14–22% effect",
+      "power_type": "compounding"
+     },
+     {
+      "name": "Tide Bone",
+      "description": "You can carry a bone that aches before storms or ambushes. Needs carried bone.",
+      "locked": false,
+      "keep": false,
+      "prerequisites": "",
+      "cost_mode": "custom",
+      "cost": "4 energy; +1 fatigue; 20m cooldown",
+      "growth_math": "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success ×2; soft cap at L6 (XP ×0.6 until setback recovery); effect magnitude +8% per level",
+      "power_type": "compounding"
+     }
+    ],
+    "gear": [
+     {
+      "name": "wooden clogs",
+      "slot": "FEET",
+      "required": true,
+      "engine_default": false,
+      "keep": false,
+      "description": "Worn leather with carved wooden soles, sturdy for shifting sand and cracked earth.",
+      "stats": {},
+      "item_stats": {
+       "weight": 0.88,
+       "durability": 80,
+       "protection": 0,
+       "value": 5,
+       "rarity": "common"
+      },
+      "abilities": []
+     },
+     {
+      "name": "ochre quilted vest",
+      "slot": "TORSO",
+      "required": true,
+      "engine_default": false,
+      "keep": false,
+      "description": "A patched garment of thick wool and dyed cloth, warm against the cold nights of the wastelands.",
+      "stats": {},
+      "item_stats": {
+       "weight": 4,
+       "durability": 70,
+       "protection": 2,
+       "value": 10,
+       "rarity": "common"
+      },
+      "abilities": []
+     },
+     {
+      "name": "wrap skirt",
+      "slot": "LEGS",
+      "required": true,
+      "engine_default": false,
+      "keep": false,
+      "description": "A simple wrap of coarse fabric, tied at the waist with a leather strap, practical for movement and protection from debris.",
+      "stats": {},
+      "item_stats": {
+       "weight": 2,
+       "durability": 60,
+       "protection": 1,
+       "value": 5,
+       "rarity": "common"
+      },
+      "abilities": []
+     },
+     {
+      "name": "leather belt with pouch",
+      "slot": "WAIST",
+      "required": false,
+      "engine_default": false,
+      "keep": false,
+      "description": "A simple leather belt with a small pouch for holding essentials like tools or a few coins.",
+      "stats": {},
+      "item_stats": {
+       "weight": 1,
+       "durability": 75,
+       "protection": 0,
+       "value": 3,
+       "rarity": "common"
+      },
+      "abilities": []
+     },
+     {
+      "name": "wool mantle",
+      "slot": "MAIN",
+      "required": false,
+      "engine_default": false,
+      "keep": false,
+      "description": "A heavy wool cloak for protection against wind and cold, its frayed edges hinting at past journeys.",
+      "stats": {},
+      "item_stats": {
+       "weight": 1.1,
+       "durability": 65,
+       "protection": 3,
+       "value": 8,
+       "rarity": "common"
+      },
+      "abilities": []
+     },
+     {
+      "name": "pouch of dried dates",
+      "slot": "",
+      "required": false,
+      "engine_default": false,
+      "keep": false,
+      "description": "A small leather pouch containing a few dried dates, a meager snack for the road.",
+      "stats": {},
+      "item_stats": {
+       "weight": 0.5,
+       "durability": 90,
+       "protection": 0,
+       "value": 1,
+       "rarity": "common"
+      },
+      "abilities": []
+     },
+     {
+      "name": "rolled map fragment",
+      "slot": "",
+      "required": false,
+      "engine_default": false,
+      "keep": false,
+      "description": "A frayed corner of a once-grand map, its faded lines hinting at lost routes and forgotten places.",
+      "stats": {},
+      "item_stats": {
+       "weight": 0.2,
+       "durability": 85,
+       "protection": 0,
+       "value": 2,
+       "rarity": "uncommon"
+      },
+      "abilities": []
+     }
+    ],
+    "randomize_idea": "Frontier dark fantasy: thin law, hard weather, long supply lines, small settlements. Hard difficulty; survival pressure tone; scarce economy; scarce mundane loot; magic rare. Survival and craft first; community stakes over empire plots."
+   }
+  },
+  "stored_backstory_mode": "transmigrated",
+  "starter_logic_summary": "Arrival=transmigrated_body. Vibe=keep_earth_origin_thin_kit. Kept 6, deferred 1, stripped 0."
+ }
+}

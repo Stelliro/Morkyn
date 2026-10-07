@@ -390,11 +390,30 @@ _RENAME_SYSTEM = (
 )
 
 
+def _setup_draw_rng(tag: str):
+    """
+    The example draw for a post-start pass, seeded from the campaign
+    (playtest #53): one setup shows the model the same name shapes, so one
+    form and one campaign seed settle the same rows. Unseeded when the seed is
+    not memoized yet; this never opens a connection, since a caller may hold
+    a write transaction.
+    """
+    try:
+        from app.rng import cached_campaign_seed, rng_for
+
+        seed = cached_campaign_seed()
+        return rng_for(tag, seed=seed) if seed is not None else None
+    except Exception:
+        return None
+
+
 def rename_prompt(items: list[dict[str, Any]], options: dict[str, Any], exclude: list[str] | None = None) -> str:
     try:
         from app.example_pools import setup_context, draw_proficiency_names
 
-        shapes = draw_proficiency_names(setup_context(options), 4, exclude=list(exclude or []))
+        shapes = draw_proficiency_names(
+            setup_context(options), 4, rng=_setup_draw_rng("proficiency_rename_shapes"), exclude=list(exclude or [])
+        )
     except Exception:
         shapes = []
     return json.dumps(
@@ -829,7 +848,9 @@ def settle_prompt(options: dict[str, Any], existing_skills: list[str], idea: str
     try:
         from app.example_pools import draw_proficiency_names, setup_context
 
-        shapes = draw_proficiency_names(setup_context(options), 4, exclude=existing_skills)
+        shapes = draw_proficiency_names(
+            setup_context(options), 4, rng=_setup_draw_rng("proficiency_settle_shapes"), exclude=existing_skills
+        )
     except Exception:
         shapes = []
     profile = start_profile(options, idea)

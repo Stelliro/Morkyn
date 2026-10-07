@@ -230,6 +230,11 @@ def reset_seed_cache() -> None:
     _SEED_CACHE.clear()
 
 
+def cached_campaign_seed() -> int | None:
+    """The campaign seed if it is already memoized, else None. Never opens a connection."""
+    return _SEED_CACHE.get(str(db_path()))
+
+
 def campaign_seed(conn: sqlite3.Connection | None = None) -> int:
     """
     Per-campaign root seed, created once and stored in ``settings``.

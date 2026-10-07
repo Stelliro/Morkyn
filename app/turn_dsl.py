@@ -1072,7 +1072,12 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
     if grants:
         turn["_dsl"]["grants"] = grants[:12]
     if malformed_ops:
-        turn["self_check"]["issues_found"].extend(malformed_ops[:6])
+        # The engine already skipped these lines; they are not draft issues.
+        # In self_check.issues_found the verifier echoed them back ("INDEX
+        # requires type code summary on line 7") and rewrote the narration
+        # to answer them, 27-36 s a turn that fixed no fact (playtest #43).
+        # They stay in _dsl, which the trace keeps and the verifier never sees.
+        turn["_dsl"]["malformed_op_notes"] = malformed_ops[:6]
         turn["self_check"]["corrections_made"].append(
             f"Skipped {len(malformed_ops)} malformed op line(s); kept the rest."
         )

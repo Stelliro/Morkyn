@@ -1301,12 +1301,23 @@ def run_post_start_passes() -> dict[str, Any]:
         options = {}
     if not isinstance(options, dict):
         options = {}
+    try:
+        from app.rng import campaign_seed
+
+        setup_seed: int | None = campaign_seed()
+    except Exception:
+        setup_seed = None
+    from app.llm import seeded_model_calls
+
     for name, fn in list(_POST_START_PASSES):
         if not report["model_allowed"]:
             report["passes"][name] = {"called": False, "reason": "model pass off or no model"}
             continue
         try:
-            result = fn(options)
+            # Each pass samples with seeds drawn from the campaign seed
+            # (playtest #53), so one setup gives one set of rows.
+            with seeded_model_calls(setup_seed, f"post_start:{name}"):
+                result = fn(options)
         except Exception as exc:  # a pass never blocks the opening turn
             result = {"called": True, "error": str(exc)[:200]}
         report["passes"][name] = result
@@ -1424,7 +1435,11 @@ def refine_from_model(options: dict[str, Any]) -> dict[str, Any]:
         ensure_seeded(conn)
         if not conn.execute("SELECT 1 FROM world_races LIMIT 1").fetchone():
             return {"called": False, "reason": "no races"}
-        user, plan = build_refine_request(conn, options)
+        # A fresh draw per campaign that the campaign repeats (playtest #53):
+        # unseeded, one form and one campaign seed asked about different lore.
+        from app.rng import campaign_seed, rng_for
+
+        user, plan = build_refine_request(conn, options, rng_for("world_fact_ask", seed=campaign_seed(conn)))
     # The first call after start may load the local model cold; 60s timed out
     # on Qwen3 8B with the reply two-thirds written.
     content = _chat_content(_REFINE_SYSTEM, user, timeout=180, temperature=0.4, max_tokens=1300, response_format="text")

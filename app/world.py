@@ -1878,6 +1878,19 @@ _SHELL_NAME_PARTS_B = (
 )
 
 
+def _campaign_draw_seed(conn, tag: str) -> int:
+    """
+    A fresh draw per call that one campaign repeats (playtest #53).
+
+    Keyed on how many NPCs exist, so each new face draws again, and on the
+    campaign seed, so the same setup draws the same faces.
+    """
+    from app.rng import campaign_seed, seed_from
+
+    count = int(conn.execute("SELECT COUNT(*) FROM npcs").fetchone()[0] or 0)
+    return seed_from(campaign_seed(conn), tag, count)
+
+
 def create_shell_npc(
     conn,
     location_id: int,
@@ -1913,7 +1926,7 @@ def create_shell_npc(
     # "Grainwick". Two of anyone reads as one character in two places.
     name = wanted or unique_person_name(
         conn,
-        seed if seed is not None else random.randint(1, 10**9),
+        seed if seed is not None else _campaign_draw_seed(conn, "shell_npc_name"),
         sex=sex,
     )
     code = _next_alpha_code(conn, "npcs")
@@ -4763,6 +4776,16 @@ def _floored_power_fantasy(raw: Any, options: dict[str, Any], setup_form: Any) -
         return pf
 
 
+def _player_chose_backstory_mode(mode: Any) -> bool:
+    """True for a canonical origin the player picked, other than the default "known"."""
+    try:
+        from app.setup_composer import BACKSTORY_MODE_CANON
+    except Exception:
+        return False
+    low = str(mode or "").strip().lower().replace("_", " ")
+    return bool(low) and low != "known" and low in BACKSTORY_MODE_CANON
+
+
 def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
     # The form snapshot is for the preset menu. It is not a play rule.
     setup_form = options.pop("setup_form", None) if isinstance(options, dict) else None
@@ -5143,7 +5166,10 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 character_backstory = str(starter_logic_report.get("character_backstory") or character_backstory)[
                     :1600
                 ]
-            if starter_logic_report.get("backstory_mode"):
+            # A canonical mode the player chose stands (playtest #45: a sent
+            # "nameless drifter" was stored as "transmigrated"). The fact
+            # check's own reading stays in starter_logic for the UI.
+            if starter_logic_report.get("backstory_mode") and not _player_chose_backstory_mode(backstory_mode):
                 backstory_mode = str(starter_logic_report.get("backstory_mode") or backstory_mode)[:60]
             if starter_logic_report.get("memory_policy"):
                 memory_policy = str(starter_logic_report.get("memory_policy") or memory_policy)[:80]
@@ -5988,6 +6014,17 @@ def _score_text(query_tokens: set[str], *parts: Any) -> int:
     return len(query_tokens & haystack)
 
 
+# _expand_input_references appends this footer for the model: who the
+# conversation engine decided the player is talking to, and what @mentions
+# resolved to. It is the engine's text, not the player's.
+PLAYER_REFERENCE_FOOTER = "\n\nResolved player references:"
+
+
+def _player_line(text: Any) -> str:
+    """What the player typed, without the engine's reference footer."""
+    return str(text or "").partition(PLAYER_REFERENCE_FOOTER)[0]
+
+
 def _turn_kind(player_input: str) -> str:
     if str(player_input).startswith("__opening_scene_request__"):
         return "opening_scene"
@@ -6103,6 +6140,12 @@ def _turn_intent(player_input: str) -> tuple[str, list[str]]:
     kind = _turn_kind(player_input)
     if kind != "player_action":
         return kind, []
+    # Classified from the player's own line (playtest #43). The engine footer
+    # ("Conversation (engine decided) - the player is talking to ...; nobody
+    # has to answer") rides on every turn, and its "talk" and "answer" made
+    # every turn a conversation, crouching and following included, which
+    # forced the verifier and conversation-sized context on all of them.
+    player_input = _player_line(player_input)
     tokens = _intent_tokens(player_input)
     travel_tokens = _intent_tokens(_travel_scoring_text(player_input))
     scores: list[tuple[str, int]] = []
@@ -9470,14 +9513,42 @@ def _action_context(
     return action_context
 
 
-def _turn_plan(player_input: str, state: dict[str, Any], query: set[str], refs: dict[str, list[str]], limits: dict[str, int]) -> dict[str, Any]:
+# Conversation rules where the player's own line picked who it is said to.
+# "partner", "last_speaker" and "only_present" carry a listener over from
+# before; the crouch-and-examine turn of playtest #43 had one and is not talk.
+_ADDRESSED_THIS_LINE_RULES = frozenset({"tag", "name", "group", "chosen", "called", "unseen"})
+
+
+def _planned_intent(state: dict[str, Any], player_input: str) -> tuple[str, list[str]]:
+    """
+    The turn intent the planner uses: the player's words, then the
+    conversation engine's decision.
+
+    A line the keyword table reads as "general" is a conversation turn when
+    the engine found the player addressing someone in that line ("Kael Vorn,
+    what is happening here?"). The engine footer's wording never counts
+    (playtest #43).
+    """
     intent, secondary = _turn_intent(player_input)
+    if intent != "general":
+        return intent, secondary
+    turn = state.get("conversation_turn") if isinstance(state, dict) else None
+    if isinstance(turn, dict) and turn.get("addressed") and str(turn.get("rule") or "") in _ADDRESSED_THIS_LINE_RULES:
+        return "conversation", secondary
+    return intent, secondary
+
+
+def _turn_plan(player_input: str, state: dict[str, Any], query: set[str], refs: dict[str, list[str]], limits: dict[str, int]) -> dict[str, Any]:
+    intent, secondary = _planned_intent(state, player_input)
     return {
         "version": TURN_CONTEXT_PLANNER_VERSION,
         "turn_kind": _turn_kind(player_input),
         "primary_intent": intent,
         "secondary_intents": secondary,
-        "focus_terms": sorted(query)[:24],
+        # The player's words, not the engine footer's ("engine", "decided",
+        # "references", "answers": playtest #43). Codes the footer resolved
+        # stay in explicit_references.
+        "focus_terms": sorted(_tokens(_player_line(player_input)) if PLAYER_REFERENCE_FOOTER in str(player_input or "") else query)[:24],
         "explicit_references": refs,
         "verification_checks": _turn_risk_checks(intent, state, refs),
         "context_limits": limits,
@@ -9690,7 +9761,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     _write_source_index(state)
     query = _tokens(player_input)
     refs = _explicit_turn_references(player_input)
-    intent, _secondary = _turn_intent(player_input)
+    intent, _secondary = _planned_intent(state, player_input)
     limits = _context_limit_profile(intent, state)
     current_code = (state.get("current_location") or {}).get("code")
     recognition = _recognition_candidates(state)
@@ -13886,6 +13957,22 @@ def _turn_without_private_trace(result: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in result.items() if key not in {"_model_trace", "_model_usage"}}
 
 
+def model_trace_file_name(turn: int, input_kind: str, suffix: str = "") -> str:
+    """
+    turn-<campaign>-<turn>-<kind>.json.
+
+    Turn numbers restart at 1 every game, so a name keyed on the turn alone
+    let a second game in the same trace dir overwrite the first game's traces
+    turn for turn (playtest #48). The campaign id is the one autosave slots
+    use. Every name still starts "turn-" and ends ".json" for the prune glob.
+    """
+    try:
+        cid = campaign_id()
+    except Exception:
+        cid = "nocampaign"
+    return f"turn-{cid}-{int(turn):06d}-{_safe_trace_kind(input_kind)}{suffix}.json"
+
+
 def _prune_model_trace_files() -> None:
     keep = max(1, min(500, int(_float(os.getenv("AI_RPG_MODEL_TRACE_KEEP"), 50))))
     files = sorted(model_trace_dir().glob("turn-*.json"), key=lambda path: path.stat().st_mtime, reverse=True)
@@ -13951,7 +14038,7 @@ def _write_model_trace_file(
         "model_trace": result.get("_model_trace") or [],
     }
     suffix = "-fallback" if used_fallback else ""
-    path = model_trace_dir() / f"turn-{turn:06d}-{_safe_trace_kind(input_kind)}{suffix}.json"
+    path = model_trace_dir() / model_trace_file_name(turn, input_kind, suffix)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, default=str), encoding="utf-8")
     _prune_model_trace_files()
     return _public_path(path)
@@ -17638,22 +17725,36 @@ def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True
 
 def start_playthrough_with_opening(options: dict[str, Any]) -> dict[str, Any]:
     state = start_playthrough(options)
+    # Every model call of this setup samples with a seed drawn from the
+    # campaign seed, one block per phase (playtest #53): the same form and
+    # campaign seed give the same templates, facts and opening.
+    from app.llm import seeded_model_calls
+
+    try:
+        from app.rng import campaign_seed
+
+        setup_seed: int | None = campaign_seed()
+    except Exception:
+        setup_seed = None
     try:
         from app.setting_templates import refresh_setting_templates_from_model
 
-        refresh_setting_templates_from_model()
+        with seeded_model_calls(setup_seed, "setting_templates"):
+            refresh_setting_templates_from_model()
     except Exception:
         pass
     # Post-start, pre-turn-1: small model passes that turn setup text into
     # validated engine rows (world facts, then custom proficiencies).
-    # Skippable; the opening never waits on a failure.
+    # Skippable; the opening never waits on a failure. Each pass seeds its
+    # own calls (world_facts.run_post_start_passes).
     try:
         from app.world_facts import run_post_start_passes
 
         run_post_start_passes()
     except Exception:
         pass
-    opening = play_opening_turn()
+    with seeded_model_calls(setup_seed, "opening"):
+        opening = play_opening_turn()
     # Surface gear fact-check to the UI (popup when items were stripped/deferred)
     try:
         opts = ((state or {}).get("settings") or {}).get("playthrough_options") or {}

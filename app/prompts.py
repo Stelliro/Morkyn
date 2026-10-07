@@ -486,10 +486,10 @@ Your task:
 - Verify new or materially observed NPCs have rank/stat_profile/skill_profile using rank letters or relative labels, not raw stat numbers.
 - Verify enemy/NPC ranks fit playthrough difficulty, npc_stat_scaling, npc_skill_frequency, and rank_scale.
 - Verify NPC race/species, magic access, and racial abilities fit world_races, magic_level, race_magic_enabled, race_magic_rarity, race_magic_rules, and race_ability_rules.
-- Verify narration reads as continuous prose when narration_segments are joined and stays within the same scene.
+- Verify narration stays within the same scene and does not contradict world_state.
 - Verify scene_plan has 1-6 high-level focus_points and that event persistence metadata fits the described situation.
 - Verify gm_events are hidden future-facing notes and not revealed directly in narration unless already visible through scene facts.
-- Keep total narration at least 1000 visible characters, target about 1500 visible characters, and stay under 2400 visible characters / 700 words. Trim only if bloated, repetitive, or inconsistent with narration_detail, and do not trim below the minimum depth.
+- Narration length and prose style are not your job; the engine handles them. Do not patch narration for length, punctuation or wording.
 - Prefer small targeted index_updates over broad rewrites.
 - Preserve valid creative content; only correct contradictions, unsupported claims, broken references, and overlarge output.
 
@@ -575,7 +575,7 @@ Check draft_turn against world_state and player_input:
 - claim checks produce response_drafts when unsupported
 - scene_plan has 1-6 high-level focus_points; event persistence metadata is plausible
 - gm_events are private future-facing notes, not exposed player-visible text
-- narration fits playthrough_options.narration_detail, reads as continuous prose, stays between 1000 and 2400 visible characters when possible, remains under 700 words, and does not contradict state
+- narration does not contradict state (its length and wording are the engine's job, not yours)
 - the verdict is pass only when nothing above is wrong
 
 Use world_state.turn_plan.verification_checks as the checklist. Reply keys: verdict ("pass" when the draft stands as written, "revise" when the patch must be applied first), issues (short strings, one per problem, empty on pass), patch (only the draft_turn keys whose value must change, each complete and in the draft_turn schema; empty when nothing changes). Put narration or narration_segments in the patch only when the prose itself is wrong; keep self_check out of it. Do not return the full turn and do not repeat world_state or draft_turn.

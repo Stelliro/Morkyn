@@ -10540,6 +10540,43 @@ def _chat_json(
             ) from exc
 
 
+# Sampling seeds for setup-time model calls (playtest #53). One form and one
+# campaign seed gave two different worlds because no call carried a seed.
+# seeded_model_calls(campaign_seed, "phase") gives every model call inside the
+# block its own seed, derived from the block and the call's place in it: the
+# same setup asks the same things in the same order and gets the same answers,
+# and a retry inside the block is still a fresh draw. Turn calls are outside
+# any block and stay unseeded.
+_CALL_SEED_BLOCK: ContextVar[dict[str, int] | None] = ContextVar(
+    "ai_rpg_call_seed_block", default=None
+)
+
+
+@contextmanager
+def seeded_model_calls(seed: int | None, tag: str = ""):
+    if seed is None:
+        yield
+        return
+    from app.rng import seed_from
+
+    token = _CALL_SEED_BLOCK.set({"root": seed_from(int(seed), "model_calls", tag), "n": 0})
+    try:
+        yield
+    finally:
+        _CALL_SEED_BLOCK.reset(token)
+
+
+def _next_call_seed() -> int | None:
+    block = _CALL_SEED_BLOCK.get()
+    if not block:
+        return None
+    from app.rng import seed_from
+
+    block["n"] += 1
+    # llama.cpp seeds are 32-bit and 0xFFFFFFFF means "random".
+    return seed_from(block["root"], block["n"]) % 0xFFFFFFFE
+
+
 def _chat_content(
     system_prompt: str,
     user_prompt: str,
@@ -10549,6 +10586,7 @@ def _chat_content(
     response_format: str | None = "json",
     hide_words: list[str] | None = None,
     keep_words: list[str] | None = None,
+    seed: int | None = None,
 ) -> str:
     from app.gpu_gate import gpu_session
 
@@ -10564,6 +10602,7 @@ def _chat_content(
             response_format=response_format,
             hide_words=hide_words,
             keep_words=keep_words,
+            seed=seed,
         )
 
 
@@ -10609,8 +10648,11 @@ def _chat_content_unlocked(
     response_format: str | None = "json",
     hide_words: list[str] | None = None,
     keep_words: list[str] | None = None,
+    seed: int | None = None,
 ) -> str:
     config = get_model_config()
+    if seed is None:
+        seed = _next_call_seed()
     if _model_is_qwen3(config) and "/no_think" not in user_prompt:
         # Qwen3's switch for this turn: answer directly, no hidden reasoning.
         # Thinking spent the token budget and the time of every call.
@@ -10626,6 +10668,7 @@ def _chat_content_unlocked(
             response_format=response_format,
             hide_words=hide_words,
             keep_words=keep_words,
+            seed=seed,
         )
     )
     # Out-of-script runs (playtest #49: "the stale, warm\u7a7a\u6c14"). The in-process
@@ -10663,9 +10706,15 @@ def _chat_content_dispatch(
     response_format: str | None = "json",
     hide_words: list[str] | None = None,
     keep_words: list[str] | None = None,
+    seed: int | None = None,
 ) -> str:
     response_tokens = _response_token_cap(config, system_prompt, user_prompt, max_tokens)
     provider = _normalize_provider(config.get("provider"))
+    if seed is None:
+        seed = _next_call_seed()
+    # Passed only when set, so a call outside a seeded block reaches the
+    # provider exactly as before.
+    seeded = {"seed": seed} if seed is not None else {}
     if provider in {"llama_cpp", "openai"}:
         return _chat_content_openai_compatible(
             config,
@@ -10676,6 +10725,7 @@ def _chat_content_dispatch(
             response_tokens,
             response_format=response_format,
             managed_llama=(provider == "llama_cpp"),
+            **seeded,
         )
 
     from app.mle import MleNotReady, chat as mle_chat
@@ -10692,6 +10742,7 @@ def _chat_content_dispatch(
             response_format=response_format,
             hide_words=hide_words,
             keep_words=keep_words,
+            **seeded,
         )
     except MleNotReady as exc:
         raise LlmError(str(exc)) from exc
@@ -10730,6 +10781,7 @@ def _chat_content_openai_compatible(
     max_tokens: int | None = None,
     response_format: str | None = "json",
     managed_llama: bool = True,
+    seed: int | None = None,
 ) -> str:
     provider = _normalize_provider(config.get("provider"))
     if provider == "openai" or not managed_llama:
@@ -10831,6 +10883,10 @@ def _chat_content_openai_compatible(
     # Local llama often wants stop tokens; cloud APIs usually do not.
     if managed_llama and provider != "openai":
         body["stop"] = ["<|im_end|>"]
+        # llama.cpp's server samples with this seed (playtest #53). Cloud APIs
+        # are left as they were: not every one accepts the field.
+        if seed is not None:
+            body["seed"] = int(seed)
     use_json_format = response_format == "json" and (
         (provider == "openai" and os.getenv("AI_RPG_API_RESPONSE_FORMAT", "1").strip().lower() in {"1", "true", "yes", "on"})
         or (
@@ -12593,20 +12649,16 @@ def _verification_policy(context: dict[str, Any], player_input: str, draft: dict
         remaining.append("scene_plan")
         certainty -= 0.12
 
-    if _narration_char_count(draft) >= _depth_floor():
-        deterministic.append("narration_depth")
-        certainty += 0.12
-    else:
-        # Short narration is NOT a verifier blocker. Length is the depth
-        # retry's job; the consistency verifier does not lengthen prose, and
-        # on small models forcing it here cost ~26s per turn to produce
-        # nothing. Measured on a 7B: verify+verify_repair fired on 42/42 turns
-        # and never once returned a usable object. Keep the certainty penalty
-        # so a short draft still leans toward verification when something
-        # *else* is also shaky.
+    # Length is not scored. It is the depth retry's job, and the retry runs
+    # after this score: a draft is short here and full on screen. The
+    # consistency verifier does not lengthen prose; on small models forcing it
+    # cost ~26s per turn to produce nothing (measured on a 7B: verify and
+    # verify_repair fired on 42/42 turns and never returned a usable object).
+    # The -0.15 a short draft used to cost kept every live DSL turn under the
+    # skip line (playtest #43).
+    deterministic.append("narration_depth")
+    if _narration_char_count(draft) < _depth_floor():
         reasons.append("Draft narration is short; depth retry handles length, not the verifier.")
-        remaining.append("narration_depth")
-        certainty -= 0.15
 
     self_check = draft.get("self_check") if isinstance(draft.get("self_check"), dict) else {}
     if self_check.get("passed") is True:
@@ -13473,7 +13525,52 @@ def _expansion_adds_people_or_speech(original: str, expanded: str) -> list[str]:
     return added
 
 
-DSL_SKIP_MIN_CERTAINTY = 0.6
+# What the "skip verify on DSL turns" setting still sends to the verifier:
+# changes to what the player owns, knows how to do, has done, or where they
+# are. NPCs, events, conversations, response drafts and locations are records
+# the engine validates on apply, so they do not count.
+DSL_SKIP_RISKY_KEYS = (
+    "inventory_changes",
+    "equipment_slots",
+    "equipment_changes",
+    "inventory_capacity_modifiers",
+    "quest_marks",
+    "quest_changes",
+    "skill_changes",
+    "ability_updates",
+    "map_walk",
+)
+DSL_SKIP_RISKY_PLAYER_KEYS = (
+    "gold_delta",
+    "gold_band",
+    "xp_delta",
+    "xp_band",
+    "level_delta",
+    "health_delta",
+    "health_band",
+    "max_health_delta",
+    "karma_delta",
+    "karma_band",
+    "move_to_location",
+    "move_to_location_code",
+)
+DSL_SKIP_RISKY_BLOCKERS = ("unresolved_entity_references",)
+
+
+def _dsl_skip_risks(draft: dict[str, Any], policy: dict[str, Any] | None) -> list[str]:
+    """The draft's changes that keep a DSL turn on the verifier, by name."""
+    risks = [key for key in DSL_SKIP_RISKY_KEYS if draft.get(key) not in (None, [], {}, "")]
+    player = draft.get("player") if isinstance(draft.get("player"), dict) else {}
+    for key in DSL_SKIP_RISKY_PLAYER_KEYS:
+        value = player.get(key)
+        if value in (None, "", 0, 0.0):
+            continue
+        if key.endswith("_band") and str(value).strip().lower().lstrip("-") in {"", "none", "0"}:
+            continue
+        risks.append(f"player.{key}")
+    blockers = (policy or {}).get("blockers") or []
+    risks.extend(name for name in DSL_SKIP_RISKY_BLOCKERS if name in blockers)
+    return risks
 
 
 def _dsl_turn_safe_to_skip(draft: dict[str, Any], policy: dict[str, Any] | None) -> bool:
@@ -13483,18 +13580,15 @@ def _dsl_turn_safe_to_skip(draft: dict[str, Any], policy: dict[str, Any] | None)
 
     It used to skip unconditionally: a turn scored 0.24 certainty, with an
     item grant, an item take and a quest, went to the world unchecked and its
-    self-check read "passed".
+    self-check read "passed". Those changes are still verified.
+
+    It then waited on the verifier's summed certainty (at least 0.6), which
+    already subtracts for NPC and event records, short narration and talk
+    intent. No live DSL turn reached it (33 of 33 went to verify, playtest
+    #43), so the setting did nothing. The decision now reads only what the
+    draft changes.
     """
-    try:
-        certainty = float((policy or {}).get("certainty") or 0.0)
-    except (TypeError, ValueError):
-        certainty = 0.0
-    if certainty < DSL_SKIP_MIN_CERTAINTY:
-        return False
-    player = draft.get("player") if isinstance(draft.get("player"), dict) else {}
-    risky = any(draft.get(key) for key in ("inventory_changes", "quest_marks", "skill_changes", "ability_updates"))
-    risky = risky or any(player.get(key) for key in ("gold_delta", "xp_delta", "gold_band", "xp_band", "level_delta"))
-    return not risky
+    return not _dsl_skip_risks(draft, policy)
 
 
 def _ensure_narration_depth(
@@ -14377,6 +14471,9 @@ def _try_dsl_draft(
                 "narration_chars": _narration_char_count(turn),
                 "ops_count": dsl_meta.get("ops_count"),
                 "malformed_ops": int(dsl_meta.get("malformed_ops") or 0),
+                # What each skipped line was (playtest #43: kept here, not in
+                # self_check, so the verifier does not try to answer them).
+                "malformed_op_notes": list(dsl_meta.get("malformed_op_notes") or [])[:6],
                 # Lines whose opcode is not on the list. They used to vanish
                 # untraced, so a model writing QUEST before it existed lost the
                 # line with no record.
@@ -14774,6 +14871,15 @@ def _generate_turn_body(
         _append_trace(trace, {"phase": "verification_policy", "event": "scored", **verification_policy})
         # Prefer skip-verify for low-risk DSL turns; still allow model verify when needed.
         skip_setting = os.getenv("AI_RPG_DSL_SKIP_VERIFY", "0").strip().lower() in {"1", "true", "yes", "on"}
+        if skip_setting:
+            _append_trace(
+                trace,
+                {
+                    "phase": "verification_policy",
+                    "event": "dsl_skip_rule",
+                    "risks": _dsl_skip_risks(draft, verification_policy),
+                },
+            )
         if verification_policy.get("mode") == "skip_model_verifier" or (
             skip_setting and _dsl_turn_safe_to_skip(draft, verification_policy)
         ):

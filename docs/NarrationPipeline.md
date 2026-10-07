@@ -135,7 +135,7 @@ Prefer editing the **later** paragraph. Earlier text is frozen unless consolidat
 Persisted per turn under model traces / temp (same turn id as existing traces):
 
 ```text
-data/model_traces/turn-000042-narration-ledger.json
+data/model_traces/turn-1a2b3c4d-000042-narration-ledger.json
 ```
 
 Shape:
@@ -201,7 +201,7 @@ After DSL/JSON draft (+ optional verify), `generate_turn` calls `_ensure_narrati
 2. If flag **on** → `run_narration_pipeline` with:
    - **writer** = packed `_chat_text` per paragraph  
    - **consolidator** = whole-stack `_chat_text` returning `===P1===` blocks  
-   - **ledger** under `AI_RPG_MODEL_TRACE_DIR` / `turn-NNNNNN-narration-ledger.json`  
+   - **ledger** under `AI_RPG_MODEL_TRACE_DIR` / `turn-<campaign id>-NNNNNN-narration-ledger.json` (the campaign id keeps a second game from overwriting the first)  
 3. If pipeline output is still under ~65% of tier soft target, fall back to legacy depth retry.
 
 OPS/state fields from the draft are kept; only `narration` / `narration_segments` are replaced.

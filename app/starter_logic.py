@@ -50,6 +50,21 @@ def _norm(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip().lower())
 
 
+def _has_phrase(text: str, phrase: str) -> bool:
+    """`phrase` as whole words in `text` ("awoke in" does not hold "woke in")."""
+    return re.search(rf"(?<![\w-]){re.escape(phrase)}(?![\w-])", text) is not None
+
+
+def _chosen_canon_mode(mode: str) -> str:
+    """The canonical origin the player picked, other than the default "known"; else ""."""
+    try:
+        from app.setup_composer import BACKSTORY_MODE_CANON
+    except Exception:
+        return ""
+    low = _norm(mode).replace("_", " ")
+    return low if low and low != "known" and low in BACKSTORY_MODE_CANON else ""
+
+
 def _split_items(raw: str | list[str] | None) -> list[str]:
     if isinstance(raw, list):
         parts = [str(x) for x in raw]
@@ -777,8 +792,9 @@ def harmonize_identity_to_world_vibe(
     fantasy_dest = register == REGISTER_FANTASY
     story_low = _norm(story)
     # Arrival / portal framing — keep Earth (or former-world) origin; never wipe into a local yard-mender template.
+    # Whole words only: "she awoke in The Empty Lot" is not "woke in" (playtest #45).
     arrival_framing = any(
-        m in story_low
+        _has_phrase(story_low, m)
         for m in (
             "just arrived",
             "just woke",
@@ -1082,6 +1098,16 @@ def harmonize_identity_to_world_vibe(
         path = "origin_matches_world"
     elif not modern_origin and fantasy_dest:
         path = "already_local"
+
+    # The player's canonical mode stands (playtest #45). The branches above
+    # infer a mode from the story; that inference is for an empty or "known"
+    # mode only. A sent "nameless drifter" whose story read like an arrival
+    # was stored as "transmigrated" and lost its memory rule with it.
+    chosen = _chosen_canon_mode(backstory_mode)
+    if chosen and _norm(out_mode) != chosen:
+        notes.append(f"Backstory mode kept as chosen ({chosen}); the story alone reads as {out_mode or 'unset'}.")
+        out_mode = chosen
+        out_memory = str(memory_policy or "")
 
     return {
         "register": register,

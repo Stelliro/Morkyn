@@ -138,8 +138,13 @@ def chat(
     response_format: str | None = None,
     hide_words: Iterable[str] | None = None,
     keep_words: Iterable[str] | None = None,
+    seed: int | None = None,
 ) -> str:
-    """Return the new completion text only. Raises when no GGUF is loaded."""
+    """Return the new completion text only. Raises when no GGUF is loaded.
+
+    `seed` fixes this call's sampling (setup passes, playtest #53); None
+    leaves llama-cpp's own seed chain alone.
+    """
     path = resolve_model_path(model)
     if path is None:
         raise MleNotReady(missing_model_detail(model))
@@ -157,6 +162,7 @@ def chat(
             response_format=response_format,
             hide_words=hide_words,
             keep_words=keep_words,
+            seed=seed,
         )
 
 
@@ -641,6 +647,7 @@ def _generate(
     response_format: str | None,
     hide_words,
     keep_words,
+    seed: int | None = None,
 ) -> str:
     import numpy as np
     from llama_cpp.llama import LogitsProcessorList
@@ -664,6 +671,16 @@ def _generate(
     if token_limit is not None and token_limit <= 0:
         token_limit = None
     fmt = str(response_format or "").strip().lower()
+    seeded = {"seed": int(seed)} if seed is not None else {}
+    if seed is not None and hasattr(model, "reset"):
+        # A seed alone is not enough: llama-cpp reuses the cached prompt
+        # prefix, and how much of the prompt was cached changes the logits a
+        # little (one prompt, one seed, asked twice in a row gave two answers).
+        # A seeded call (setup only) evaluates its whole prompt.
+        try:
+            model.reset()
+        except Exception:
+            pass
     try:
         payload = model.create_chat_completion(
             messages=[
@@ -675,6 +692,7 @@ def _generate(
             response_format={"type": "json_object"} if fmt == "json" else None,
             logits_processor=processor,
             stream=False,
+            **seeded,
         )
     except MleNotReady:
         raise

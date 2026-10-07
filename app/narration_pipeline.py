@@ -181,6 +181,17 @@ class NarrationLedger:
         return out[-8:]
 
 
+def ledger_file_name(turn: int) -> str:
+    """turn-<campaign>-<turn>-narration-ledger.json: a new game keeps the last one's (playtest #48)."""
+    try:
+        from app.rng import campaign_seed
+
+        cid = f"{campaign_seed() & 0xFFFFFFFF:08x}"
+    except Exception:
+        cid = "nocampaign"
+    return f"turn-{cid}-{int(turn):06d}-narration-ledger.json"
+
+
 def save_ledger(ledger: NarrationLedger, path: Path) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(ledger.to_dict(), ensure_ascii=True, indent=2), encoding="utf-8")
@@ -2342,7 +2353,7 @@ def run_narration_pipeline(
 
     if ledger_path is None:
         trace_dir = Path(os.getenv("AI_RPG_MODEL_TRACE_DIR") or (Path("data") / "model_traces"))
-        ledger_path = trace_dir / f"turn-{resolved_turn:06d}-narration-ledger.json"
+        ledger_path = trace_dir / ledger_file_name(resolved_turn)
     save_ledger(ledger, Path(ledger_path))
 
     segments = [{"label": "paragraph", "text": p} for p in paragraphs]
