@@ -1285,6 +1285,8 @@ const ACTION_HELP_TARGETS = [
   ["#exportButton", "Download the current world state as JSON so it can be backed up or imported later."],
   ["#importButton", "Import an exported world file. Asks first, because this replaces the current session."],
   ["#modelButton", "Open the model/settings tab in the side panel during play."],
+  ["#speechButton", "Read the story aloud: provider, voice and speed. Off by default; the Play bar sits under the narration when it is on."],
+  ["#closeSpeechModal", "Close the Speech settings dialog. Unsaved values are dropped."],
   ["#refreshButton", "Reload the current world state from the backend without taking a turn."],
   ["#closeModelModal", "Close the LLM settings dialog without changing any unsaved values."],
   ["#closeEntityMenu", "Close the selected entity details panel."],
@@ -7363,6 +7365,7 @@ async function refreshContinueButton() {
 }
 
 function showMainMenu() {
+  window.morkynSpeech?.stop("menu");
   mainMenuView?.classList.remove("hidden");
   setupView?.classList.add("hidden");
   gameView?.classList.add("hidden");
@@ -8034,6 +8037,7 @@ function restoreLastTurnPanels(resume = null) {
     }
     const narrationEntry = lastHistoryEntry(["narration"]);
     appendAsksForTurn(narrationEntry?.turn);
+    renderTtsPlayBar();
   }
 
   // Force history list even if renderShell ran before state was fully assigned.
@@ -9233,6 +9237,7 @@ function setWaitKind(kind) {
 }
 
 async function requestWait(minutes, kind = "wait") {
+  window.morkynSpeech?.stop("turn");
   closeWaitPopover();
   const raw = Number(minutes);
   // -1 = until dawn (server expands); else 1–1440
@@ -9256,7 +9261,8 @@ async function requestWait(minutes, kind = "wait") {
   if (!displayTurnPayload(payload, { animateNarration: true })) {
     renderShell(payload.state || payload);
     if (payload.narration) {
-      latestOutput.innerHTML = paragraphs(payload.narration);
+      latestOutput.innerHTML = `<article class="turnNarration">${paragraphs(payload.narration)}</article>`;
+      renderTtsPlayBar();
     }
   }
   // Fight scenes from fight_nearby wait events fire as separate scene turns.
@@ -19817,6 +19823,7 @@ function displayTurnPayload(payload, options = {}) {
         narrationEl.innerHTML = paragraphs(narrationText);
       }
       appendTurnMeta(payload);
+      renderTtsPlayBar();
       if (options.startSplash) {
         addStartSplashLine("Opening scene is ready.");
         window.setTimeout(hideStartSplash, 1200);
@@ -19825,6 +19832,7 @@ function displayTurnPayload(payload, options = {}) {
   } else {
     latestOutput.innerHTML = turnNarrationHtml(payload.turn);
     appendTurnMeta(payload);
+    renderTtsPlayBar();
   }
   renderSceneHistory();
   revealCurrentTurn();
@@ -19832,6 +19840,7 @@ function displayTurnPayload(payload, options = {}) {
 }
 
 async function requestTurn(text, options = {}) {
+  window.morkynSpeech?.stop("turn");
   const cleanText = String(text || "").trim();
   const isContinue = !cleanText;
   const displayText = options.displayText || (isContinue ? "Continue" : cleanText);
@@ -20681,6 +20690,7 @@ function writeRewindError(error) {
 }
 
 async function rewindTurn(snapshotId = null) {
+  window.morkynSpeech?.stop("turn");
   const options = snapshotId
     ? {
         method: "POST",
@@ -20729,6 +20739,7 @@ async function rewindTurn(snapshotId = null) {
 }
 
 async function regenerateTurn() {
+  window.morkynSpeech?.stop("turn");
   latestInput.innerHTML = paragraphs("Regenerate last response");
   showTurnWaitPanel("Regenerating response", "regenerate");
   clearSuggestions();
@@ -24265,7 +24276,10 @@ function applyTravelMoveFeedback(data) {
           (scene.turn && (scene.turn.narration || turnNarrationText?.(scene.turn))) ||
           data.narration ||
           "";
-        if (narr && latestOutput) latestOutput.innerHTML = paragraphs(String(narr));
+        if (narr && latestOutput) {
+          latestOutput.innerHTML = `<article class="turnNarration">${paragraphs(String(narr))}</article>`;
+          renderTtsPlayBar();
+        }
       }
       if (latestInput) {
         const kind = data.world_event?.kind || tr.queued_event?.kind || "travel event";
@@ -27059,6 +27073,905 @@ window.morkynMap = Object.assign(window.morkynMap || {}, {
   refreshFullMap,
 });
 
+/* ==========================================================================
+   Speech: read the narration aloud (TODO n24).
+
+   One Play bar under the turn's narration, a paragraph queue that prefetches
+   the next paragraph while the current one plays, and a Speech settings form
+   rendered into the main-menu Settings panel and the in-game Speech modal.
+   Speech never competes with a turn: every path that starts a turn calls
+   window.morkynSpeech.stop() first, and the server refuses local synthesis
+   while the model or the image engine holds the GPU (409). Nothing here is
+   drawn while the provider is off: ensureTtsPlayBar removes the bar and
+   interact.js asks morkynSpeech.enabled() before offering menu items.
+   ========================================================================== */
+
+let ttsConfig = null; // last GET /api/tts-config (public view); null until loaded
+let ttsCatalog = null; // GET /api/tts-catalog, loaded on the first settings render
+let ttsAudio = null; // the one shared <audio>, created on the first user gesture
+let ttsQueue = null; // the paragraph queue while a reading is active
+let ttsIdleText = ""; // status text shown on the bar when no queue is active
+let ttsIdleError = ""; // last error text (shown instead of ttsIdleText)
+let ttsPlayBarBound = false;
+let ttsSpeechModalBound = false;
+const TTS_MAX_PARAGRAPHS = 60;
+const TTS_MAX_PARAGRAPH_CHARS = 3500; // the route caps text at 4000; split long paragraphs under that
+const TTS_META_SELECTOR = ".askNote, .fallbackNotice, .turnDebugPanel, .rewardsPanel, .rewardBanner, .skillChecks, .scenePlan, .ttsPlayBar";
+
+/**
+ * Pure: narration text → what is read aloud. Drops [[A]] / [[L1]] codes, bare
+ * L1 / I2 / E3 codes, HTML tags and entities, markdown marks and bare URLs,
+ * then collapses spaces. Newlines are kept so ttsClientParagraphs can split.
+ * The server cleans again; this keeps the paragraph count on the bar honest.
+ */
+function ttsClientClean(text) {
+  let value = String(text ?? "");
+  if (!value.trim()) return "";
+  value = value.replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ");
+  value = value.replace(/<[^>\n]{1,200}>/g, " ");
+  value = value
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, "\x22")
+    .replace(/&#0?39;/g, "'")
+    .replace(/&amp;/gi, "&");
+  value = value.replace(/\[\[\s*[A-Za-z]{1,3}\d{0,4}\s*\]\]/g, " ");
+  value = value.replace(/(^|[^\w\x27])[A-Z]{1,2}\d{1,4}(?![\w\x27])/g, "$1 ");
+  value = value.replace(/\[([^\]\n]{1,200})\]\((?:https?:)?\/\/[^)\s]{1,400}\)/g, "$1");
+  value = value.replace(/https?:\/\/[^\s)]+/g, " ");
+  value = value.replace(/\*\*|__|~~|\x60/g, "");
+  value = value.replace(/(^|[\s(])[*_](?=\S)/g, "$1").replace(/(\S)[*_](?=[\s.,!?;:)]|$)/g, "$1");
+  value = value.replace(/^[ \t]{0,3}(?:#{1,6}[ \t]+|>[ \t]?|[-*•][ \t]+|\d{1,3}[.)][ \t]+)/gm, "");
+  value = value.replace(/…/g, "...");
+  value = value
+    .replace(/[ \t \r]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return value;
+}
+
+/**
+ * Pure: a block of narration → the list of paragraphs to synthesize, in order.
+ * Splits on newlines (the same rule paragraphs() renders with), drops empties,
+ * cuts a paragraph longer than the speak route accepts at a sentence end, and
+ * caps the list at 60 paragraphs.
+ */
+function ttsClientParagraphs(text) {
+  const cleaned = ttsClientClean(text);
+  if (!cleaned) return [];
+  const out = [];
+  for (const raw of cleaned.split(/\n+/)) {
+    let line = raw.trim();
+    while (line && out.length < TTS_MAX_PARAGRAPHS) {
+      if (line.length <= TTS_MAX_PARAGRAPH_CHARS) {
+        out.push(line);
+        break;
+      }
+      const head = line.slice(0, TTS_MAX_PARAGRAPH_CHARS);
+      let cut = Math.max(head.lastIndexOf(". "), head.lastIndexOf("! "), head.lastIndexOf("? "));
+      if (cut < TTS_MAX_PARAGRAPH_CHARS / 3) cut = head.lastIndexOf(" ");
+      if (cut < TTS_MAX_PARAGRAPH_CHARS / 3) cut = TTS_MAX_PARAGRAPH_CHARS - 1;
+      out.push(line.slice(0, cut + 1).trim());
+      line = line.slice(cut + 1).trim();
+    }
+    if (out.length >= TTS_MAX_PARAGRAPHS) break;
+  }
+  return out.filter(Boolean).slice(0, TTS_MAX_PARAGRAPHS);
+}
+
+/**
+ * DOM: the paragraphs of the narration currently on screen. Entity buttons
+ * contribute their label text; meta sections under the article are skipped.
+ * Returns [] while the article is still streaming (its text is not final).
+ */
+function ttsCollectNarrationParagraphs(root) {
+  if (!root || typeof root.querySelectorAll !== "function") return [];
+  const article = root.querySelector("article.turnNarration");
+  if (!article || article.classList.contains("streaming")) return [];
+  const out = [];
+  for (const p of article.querySelectorAll(":scope > p")) {
+    if (p.classList.contains("empty")) continue;
+    if (p.closest(TTS_META_SELECTOR)) continue;
+    const text = ttsClientClean(p.textContent || "");
+    if (text) out.push(text);
+    if (out.length >= TTS_MAX_PARAGRAPHS) break;
+  }
+  return out;
+}
+
+/** Pure: the Play bar's inner HTML for a view {playing, paused, index, total, text, error}. */
+function ttsPlayBarHtml(view) {
+  // No default parameter: tools/test_tts_ui.js extracts this by brace matching.
+  const playing = Boolean(view?.playing);
+  const paused = Boolean(view?.paused);
+  const action = paused ? "resume" : playing ? "pause" : "play";
+  const label = paused ? "Resume" : playing ? "Pause" : "Play";
+  const busy = playing || paused;
+  const index = Number(view?.index) || 0;
+  const total = Number(view?.total) || 0;
+  const error = String(view?.error || "");
+  const text = error || String(view?.text || "") || (busy && index > 0 && total > 0 ? `Paragraph ${index} of ${total}` : "");
+  return (
+    `<button type="button" class="chipBtn ttsPlayBtn" data-tts-action="${action}" aria-label="${label} narration">${label}</button>` +
+    `<button type="button" class="chipBtn secondaryButton ttsStopBtn" data-tts-action="stop"${busy ? "" : " hidden"}>Stop</button>` +
+    `<span class="ttsStatus${error ? " bad" : ""}" aria-live="polite"${text.length > 60 ? ` title="${escapeHtml(text)}"` : ""}>${escapeHtml(text)}</span>`
+  );
+}
+
+function ttsActive() {
+  return Boolean(ttsConfig && ttsConfig.active);
+}
+
+function ttsSpeedLabel(value) {
+  const speed = Math.max(0.5, Math.min(2, Number(value) || 1));
+  const hundredths = Math.round(speed * 100);
+  return `${(hundredths / 100).toFixed(hundredths % 10 === 0 ? 1 : 2)}×`;
+}
+
+function ttsBarView() {
+  const q = ttsQueue;
+  if (q && q.active) {
+    return {
+      playing: !q.paused,
+      paused: q.paused,
+      index: Math.min(q.items.length, q.index + 1),
+      total: q.items.length,
+      text: q.text || "",
+      error: "",
+    };
+  }
+  return { playing: false, paused: false, index: 0, total: 0, text: ttsIdleText, error: ttsIdleError };
+}
+
+/**
+ * Put the bar directly after the narration article (before rewards, rolls and
+ * the debug panel), or remove it when speech is off or there is no narration.
+ */
+function ensureTtsPlayBar() {
+  if (!latestOutput) return null;
+  const old = latestOutput.querySelector("#ttsPlayBar");
+  const article = latestOutput.querySelector("article.turnNarration");
+  if (!ttsActive() || !article || article.classList.contains("streaming")) {
+    old?.remove();
+    return null;
+  }
+  if (old && old.previousElementSibling === article) return old;
+  old?.remove();
+  const bar = document.createElement("div");
+  bar.id = "ttsPlayBar";
+  bar.className = "ttsPlayBar";
+  bar.setAttribute("role", "group");
+  bar.setAttribute("aria-label", "Read aloud");
+  article.insertAdjacentElement("afterend", bar);
+  return bar;
+}
+
+function renderTtsPlayBar() {
+  // A queue built from narration that is no longer on screen is over.
+  if (ttsQueue && ttsQueue.active && ttsQueue.article && !document.contains(ttsQueue.article)) ttsStop("render");
+  if (ttsQueue && ttsQueue.active && !ttsActive()) ttsStop("render");
+  const bar = ensureTtsPlayBar();
+  if (!bar) return null;
+  const hadFocus = document.activeElement && bar.contains(document.activeElement);
+  const focusedAction = hadFocus ? document.activeElement.getAttribute("data-tts-action") : "";
+  bar.innerHTML = ttsPlayBarHtml(ttsBarView());
+  if (hadFocus) {
+    const again = focusedAction === "stop" ? bar.querySelector(".ttsStopBtn:not([hidden])") : null;
+    (again || bar.querySelector(".ttsPlayBtn"))?.focus();
+  }
+  return bar;
+}
+
+function bindTtsPlayBar() {
+  if (ttsPlayBarBound || !latestOutput) return;
+  ttsPlayBarBound = true;
+  latestOutput.addEventListener("click", (event) => {
+    const btn = event.target.closest?.("[data-tts-action]");
+    if (!btn || !latestOutput.contains(btn)) return;
+    event.preventDefault();
+    const api = window.morkynSpeech;
+    if (!api) return;
+    const action = btn.getAttribute("data-tts-action");
+    if (action === "play") api.speakTurn();
+    else if (action === "pause") api.pause();
+    else if (action === "resume") api.resume();
+    else if (action === "stop") api.stop("user");
+  });
+}
+
+function ttsAudioElement() {
+  if (ttsAudio) return ttsAudio;
+  ttsAudio = new Audio();
+  ttsAudio.preload = "auto";
+  ttsAudio.addEventListener("ended", () => {
+    const q = ttsQueue;
+    if (!q || !q.active) return;
+    const item = q.items[q.index];
+    // Drop the finished source before revoking it: Resume pressed while the next
+    // paragraph is still being fetched must not restart this one from a dead URL.
+    ttsAudio.removeAttribute("src");
+    if (item?.url) {
+      URL.revokeObjectURL(item.url);
+      item.url = null;
+      item.state = "played";
+    }
+    q.index += 1;
+    ttsPlayNext().catch((error) => ttsStop("error", error?.message || String(error)));
+  });
+  ttsAudio.addEventListener("error", () => {
+    const q = ttsQueue;
+    if (!q || !q.active || !ttsAudio.getAttribute("src")) return;
+    ttsStop("error", "The browser could not play the audio it received.");
+  });
+  return ttsAudio;
+}
+
+function ttsDelay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function ttsErrorDetail(data, response) {
+  const detail = data && typeof data === "object" ? data.detail : null;
+  if (typeof detail === "string" && detail.trim()) return detail.trim();
+  if (Array.isArray(detail)) {
+    const parts = detail.map((entry) => String(entry?.msg || "")).filter(Boolean);
+    if (parts.length) return parts.join("; ");
+  }
+  return `The speech request failed (HTTP ${response.status}).`;
+}
+
+/** POST one paragraph; on success the item holds a blob URL and the applied speed. */
+async function ttsFetchParagraph(item, signal = null) {
+  const controller = signal ? null : new AbortController();
+  item.controller = controller;
+  item.state = "fetching";
+  item.error = "";
+  item.errorStatus = 0;
+  try {
+    const response = await fetch("/api/tts/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text: String(item.text || "").slice(0, 4000) }),
+      signal: signal || controller.signal,
+    });
+    if (!response.ok) {
+      let data = null;
+      try {
+        data = await response.json();
+      } catch (_) {
+        data = null;
+      }
+      const error = new Error(ttsErrorDetail(data, response));
+      error.status = response.status;
+      throw error;
+    }
+    const blob = await response.blob();
+    item.url = URL.createObjectURL(blob);
+    item.speedApplied = Number(response.headers.get("X-Morkyn-TTS-Speed-Applied")) || 1;
+    item.state = "ready";
+    return item;
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      item.state = "aborted";
+      throw error;
+    }
+    item.state = "failed";
+    item.error = error?.message || String(error);
+    item.errorStatus = Number(error?.status) || 0;
+    throw error;
+  } finally {
+    item.controller = null;
+    item.promise = null;
+  }
+}
+
+/** POST /api/tts/install for the configured voice only; never raises. */
+async function ttsDownloadVoice() {
+  try {
+    const response = await fetch("/api/tts/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ what: "voice" }),
+    });
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (_) {
+      data = null;
+    }
+    if (!response.ok) return { ok: false, detail: ttsErrorDetail(data, response) };
+    return { ok: true, detail: String(data?.status?.detail || "") };
+  } catch (error) {
+    return { ok: false, detail: `Could not download the voice: ${error?.message || error}` };
+  }
+}
+
+function ttsStartFetch(item) {
+  if (!item.promise) item.promise = ttsFetchParagraph(item);
+  return item.promise;
+}
+
+/** The queue step: make sure the current paragraph has audio, play it, prefetch the next. */
+async function ttsPlayNext() {
+  const q = ttsQueue;
+  if (!q || !q.active) return;
+  const item = q.items[q.index];
+  if (!item) {
+    ttsStop("done");
+    return;
+  }
+  if (item.state !== "ready") {
+    if (item.state === "idle" || item.state === "fetching") {
+      q.text = "Synthesizing…";
+      renderTtsPlayBar();
+      try {
+        await ttsStartFetch(item);
+      } catch (_) {
+        /* the item records what went wrong */
+      }
+    }
+    if (q !== ttsQueue || !q.active) return;
+    if (item.state === "aborted") return;
+    if (item.state !== "ready") {
+      const status = item.errorStatus;
+      const detail = item.error || "The speech request failed.";
+      const perParagraph = status === 422 || (status === 400 && /^(Nothing to read|Text is longer)\b/.test(detail));
+      if (perParagraph) {
+        // This paragraph cannot be read (empty after cleaning, too long); the next one may.
+        q.text = `Paragraph ${item.index + 1} could not be read: ${detail}`;
+        renderTtsPlayBar();
+        q.index += 1;
+        await ttsDelay(1200);
+        if (q !== ttsQueue || !q.active) return;
+        return ttsPlayNext();
+      }
+      const voiceMissing = status === 400 ? detail.match(/^The voice (\S+) is not downloaded yet\b/) : null;
+      if (voiceMissing && !q.voiceDownloadTried) {
+        // The voice downloads on first use: fetch it once, then read this paragraph.
+        q.voiceDownloadTried = true;
+        q.text = `Downloading the voice ${voiceMissing[1]}… this can take a minute.`;
+        renderTtsPlayBar();
+        const result = await ttsDownloadVoice();
+        if (q !== ttsQueue || !q.active) return;
+        if (!result.ok) {
+          ttsStop("error", result.detail);
+          return;
+        }
+        item.state = "idle";
+        item.error = "";
+        item.errorStatus = 0;
+        return ttsPlayNext();
+      }
+      if (status === 400) {
+        // Speech off, engine or voice missing, no key, no voice: the whole queue is
+        // affected. Stop with the sentence on the bar and reload the config.
+        ttsStop("error", detail);
+        window.morkynSpeech?.refreshConfig?.();
+        return;
+      }
+      // 409 (GPU busy), 503 (backend unreachable), network failure: stop and keep Play.
+      ttsStop("error", detail);
+      return;
+    }
+  }
+  const audio = ttsAudioElement();
+  audio.src = item.url;
+  const ratio = (Number(q.speed) || 1) / (Number(item.speedApplied) || 1);
+  audio.playbackRate = Math.max(0.25, Math.min(4, Number.isFinite(ratio) && ratio > 0 ? ratio : 1));
+  if (!q.paused) {
+    try {
+      await audio.play();
+    } catch (error) {
+      if (q !== ttsQueue || !q.active) return;
+      ttsStop("error", `Playback did not start: ${error?.message || error}`);
+      return;
+    }
+  }
+  if (q !== ttsQueue || !q.active) return;
+  q.text = `Paragraph ${item.index + 1} of ${q.items.length}`;
+  renderTtsPlayBar();
+  // Only now fetch the next paragraph: one speak request in flight at a time.
+  const next = q.items[q.index + 1];
+  if (next && next.state === "idle") ttsStartFetch(next).catch(() => {});
+}
+
+function ttsStop(reason = "user", message = "") {
+  const q = ttsQueue;
+  ttsQueue = null;
+  if (q) {
+    q.active = false;
+    for (const item of q.items) {
+      try {
+        item.controller?.abort();
+      } catch (_) {
+        /* ignore */
+      }
+      if (item.url) {
+        URL.revokeObjectURL(item.url);
+        item.url = null;
+      }
+    }
+  }
+  if (ttsAudio) {
+    try {
+      ttsAudio.pause();
+      ttsAudio.removeAttribute("src");
+      ttsAudio.load();
+    } catch (_) {
+      /* ignore */
+    }
+  }
+  ttsIdleError = reason === "error" ? String(message || "The reading stopped.") : "";
+  ttsIdleText = reason === "user" ? "Stopped." : "";
+  renderTtsPlayBar();
+}
+
+function ttsSpeakParagraphs(list, source = "turn") {
+  ttsStop("replace");
+  if (!ttsActive()) return false;
+  const items = (Array.isArray(list) ? list : [])
+    .map((text) => ttsClientClean(text))
+    .filter(Boolean)
+    .slice(0, TTS_MAX_PARAGRAPHS)
+    .map((text, index) => ({ index, text, url: null, speedApplied: 1, controller: null, promise: null, state: "idle", error: "", errorStatus: 0 }));
+  if (!items.length) {
+    ttsIdleText = "Nothing to read.";
+    renderTtsPlayBar();
+    return false;
+  }
+  ttsIdleText = "";
+  ttsIdleError = "";
+  ttsAudioElement(); // created inside the user's gesture so later paragraphs may autoplay
+  ttsQueue = {
+    items,
+    index: 0,
+    speed: Math.max(0.5, Math.min(2, Number(ttsConfig?.speed) || 1)),
+    article: latestOutput?.querySelector("article.turnNarration") || null,
+    source: String(source || "turn"),
+    paused: false,
+    active: true,
+    text: "",
+  };
+  ttsPlayNext().catch((error) => ttsStop("error", error?.message || String(error)));
+  return true;
+}
+
+function ttsPause() {
+  const q = ttsQueue;
+  if (!q || !q.active || q.paused) return;
+  q.paused = true;
+  try {
+    ttsAudio?.pause();
+  } catch (_) {
+    /* ignore */
+  }
+  renderTtsPlayBar();
+}
+
+function ttsResume() {
+  const q = ttsQueue;
+  if (!q || !q.active || !q.paused) return;
+  q.paused = false;
+  renderTtsPlayBar();
+  // Between paragraphs the element is finished (or empty) and the pending
+  // ttsPlayNext() starts the next one itself once its fetch resolves.
+  if (ttsAudio && ttsAudio.getAttribute("src") && !ttsAudio.ended) {
+    ttsAudio.play().catch((error) => ttsStop("error", `Playback did not resume: ${error?.message || error}`));
+  }
+}
+
+async function loadTtsConfig() {
+  try {
+    const response = await fetch("/api/tts-config");
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    ttsConfig = data && typeof data === "object" ? data : { active: false };
+  } catch (_) {
+    ttsConfig = { active: false };
+  }
+  return ttsConfig;
+}
+
+async function loadTtsCatalog() {
+  if (ttsCatalog) return ttsCatalog;
+  const response = await fetch("/api/tts-catalog");
+  if (!response.ok) throw new Error(`Could not load the speech catalog (HTTP ${response.status}).`);
+  const data = await response.json();
+  ttsCatalog = data && typeof data === "object" ? data : { providers: [], presets: {}, default_preset: {} };
+  return ttsCatalog;
+}
+
+function ttsPresetsFor(catalog, provider) {
+  const list = catalog?.presets?.[provider];
+  return Array.isArray(list) ? list : [];
+}
+
+function ttsPresetFor(catalog, provider, presetId) {
+  const presets = ttsPresetsFor(catalog, provider);
+  const wanted = String(presetId || "") || String(catalog?.default_preset?.[provider] || "");
+  return presets.find((preset) => preset.id === wanted) || presets[0] || null;
+}
+
+/** Pure: the Speech settings form. `cfg` is the public config (or a draft merged over it). */
+function ttsSettingsFormHtml(cfg, catalog) {
+  const view = cfg && typeof cfg === "object" ? cfg : {};
+  const providers = Array.isArray(catalog?.providers) && catalog.providers.length ? catalog.providers : [{ id: "off", label: "Off" }];
+  const provider = String(view.provider || "off");
+  const presets = ttsPresetsFor(catalog, provider);
+  const preset = ttsPresetFor(catalog, provider, view.preset);
+  const voice = String(view.voice || "");
+  const presetVoices = Array.isArray(preset?.voices) ? preset.voices : [];
+  const customAllowed = provider !== "piper";
+  const voiceOptions = provider === "piper" ? presets.map((p) => ({ id: p.id, label: p.label })) : presetVoices;
+  const voiceKnown = !voice || voiceOptions.some((option) => option.id === voice);
+  // A preset with no voices list (the custom URL) has nothing to pick from: the
+  // select starts on "Custom…" so the id typed below is what collectTtsForm saves.
+  const freeTextOnly = customAllowed && !voiceOptions.length && Boolean(preset?.custom_url);
+  const voiceSelectValue = (voice && !voiceKnown) || (!voice && freeTextOnly) ? "__custom__" : voice;
+  const customVoice = voice && !voiceKnown ? voice : "";
+  const showCustom = customAllowed && voiceSelectValue === "__custom__";
+  const defaultVoiceLabel = (() => {
+    const id = String(preset?.voice || "");
+    if (!id) return "Preset default";
+    const match = voiceOptions.find((option) => option.id === id);
+    return `Preset default (${match?.label || id})`;
+  })();
+  const speed = Math.max(0.5, Math.min(2, Number(view.speed) || 1));
+  const keyPlaceholder = view.api_key_set
+    ? `Saved (${String(view.api_key_hint || "••••")}). Leave blank to keep.`
+    : String(preset?.key_env || view.key_env || "Not needed for this provider");
+  const option = (value, label, selected) => `<option value="${escapeHtml(value)}"${selected ? " selected" : ""}>${escapeHtml(label)}</option>`;
+  const chunk = Math.max(0, Math.min(4000, Math.trunc(Number(view.chunk_chars) || 0)));
+  const timeout = Math.max(5, Math.min(300, Math.trunc(Number(view.timeout_seconds) || 60)));
+  const resolved = view.resolved && typeof view.resolved === "object" ? view.resolved : {};
+  return `
+    <form class="ttsForm" data-tts-form novalidate>
+      <label>
+        <span>Provider</span>
+        <select name="provider">
+          ${providers.map((p) => option(p.id, p.label, p.id === provider)).join("")}
+        </select>
+      </label>
+      <label class="ttsEnabled">
+        <input type="checkbox" name="enabled"${view.enabled ? " checked" : ""} />
+        <span>Read narration aloud</span>
+      </label>
+      <label>
+        <span>${provider === "piper" ? "Voice (downloads on first use)" : "Preset"}</span>
+        <select name="preset">
+          ${presets.map((p) => option(p.id, p.label, Boolean(preset) && p.id === preset.id)).join("")}
+        </select>
+      </label>
+      <label${provider === "piper" ? " hidden" : ""}>
+        <span>Voice</span>
+        <select name="voice">
+          ${option("", defaultVoiceLabel, voiceSelectValue === "")}
+          ${voiceOptions.map((v) => option(v.id, v.label || v.id, voiceSelectValue === v.id)).join("")}
+          ${customAllowed ? option("__custom__", "Custom…", voiceSelectValue === "__custom__") : ""}
+        </select>
+      </label>
+      <label${showCustom ? "" : " hidden"}>
+        <span>Custom voice id</span>
+        <input name="voice_custom" maxlength="120" value="${escapeHtml(customVoice)}" placeholder="${escapeHtml(provider === "elevenlabs" ? "A voice id from your ElevenLabs account" : "A voice name the server accepts")}" />
+      </label>
+      <label>
+        <span>Model</span>
+        <input name="model" maxlength="120" value="${escapeHtml(String(view.model || ""))}" placeholder="${escapeHtml(String(preset?.model || resolved.model || ""))}" />
+      </label>
+      <label>
+        <span>Base URL, without /v1</span>
+        <input name="base_url" maxlength="400" value="${escapeHtml(String(view.base_url || ""))}" placeholder="${escapeHtml(String(preset?.base_url || resolved.base_url || "https://api.openai.com"))}" />
+      </label>
+      <label>
+        <span>API key</span>
+        <input type="password" name="api_key" maxlength="500" autocomplete="off" value="" placeholder="${escapeHtml(keyPlaceholder)}" />
+      </label>
+      <label class="ttsSpeedRow">
+        <span>Speed</span>
+        <span class="ttsSpeedControls">
+          <input type="range" name="speed" min="0.5" max="2" step="0.05" value="${escapeHtml(speed.toFixed(2))}" />
+          <output class="ttsSpeedOut">${escapeHtml(ttsSpeedLabel(speed))}</output>
+        </span>
+      </label>
+      <details class="ttsMore">
+        <summary>More</summary>
+        <label>
+          <span>Characters per request (0 = preset default)</span>
+          <input type="number" name="chunk_chars" min="0" max="4000" step="50" value="${escapeHtml(String(chunk))}" />
+        </label>
+        <label>
+          <span>Timeout, seconds</span>
+          <input type="number" name="timeout_seconds" min="5" max="300" step="5" value="${escapeHtml(String(timeout))}" />
+        </label>
+      </details>
+      <div class="ttsFormActions">
+        <button type="submit" data-tts-save>Save</button>
+        <button type="button" class="secondaryButton" data-tts-test>Test</button>
+        <button type="button" class="secondaryButton" data-tts-install${provider === "piper" ? "" : " hidden"}>Install local speech engine</button>
+      </div>
+      <p class="empty ttsFormStatus" data-tts-status aria-live="polite"></p>
+      <p class="empty ttsVoiceDir" data-tts-voice-dir${provider === "piper" && view.voice_dir ? "" : " hidden"}>${provider === "piper" && view.voice_dir ? `Voices are stored in ${escapeHtml(String(view.voice_dir))}` : ""}</p>
+    </form>
+  `;
+}
+
+/** Read the form into a plain {key: value} draft (voice_custom folded into voice). */
+function collectTtsForm(form) {
+  if (!form) return {};
+  const data = new FormData(form);
+  const out = {};
+  out.provider = String(data.get("provider") || "off");
+  out.enabled = form.querySelector('[name="enabled"]')?.checked === true;
+  out.preset = String(data.get("preset") || "");
+  const voiceSel = String(data.get("voice") || "");
+  out.voice = voiceSel === "__custom__" ? String(data.get("voice_custom") || "").trim().slice(0, 120) : voiceSel;
+  out.model = String(data.get("model") || "").trim().slice(0, 120);
+  out.base_url = String(data.get("base_url") || "").trim().slice(0, 400);
+  out.api_key = String(data.get("api_key") || "").slice(0, 500);
+  const speed = Number(data.get("speed"));
+  out.speed = Number.isFinite(speed) ? Math.max(0.5, Math.min(2, Math.round(speed * 100) / 100)) : 1;
+  const chunk = Math.trunc(Number(data.get("chunk_chars")));
+  out.chunk_chars = Number.isFinite(chunk) ? Math.max(0, Math.min(4000, chunk)) : 0;
+  const timeout = Math.trunc(Number(data.get("timeout_seconds")));
+  out.timeout_seconds = Number.isFinite(timeout) ? Math.max(5, Math.min(300, timeout)) : 60;
+  return out;
+}
+
+function ttsSetFormStatus(form, text, kind = "") {
+  const status = form?.querySelector("[data-tts-status]");
+  if (!status) return;
+  status.textContent = String(text || "");
+  status.classList.toggle("bad", kind === "bad");
+  status.classList.toggle("good", kind === "good");
+}
+
+async function renderTtsSettings(mount, draft = null) {
+  if (!mount) return null;
+  if (!ttsConfig) await loadTtsConfig();
+  if (!ttsCatalog) {
+    try {
+      await loadTtsCatalog();
+    } catch (error) {
+      mount.innerHTML = `<p class="bad">${escapeHtml(error?.message || String(error))}</p>`;
+      return null;
+    }
+  }
+  const view = { ...(ttsConfig || {}), ...(draft || {}) };
+  const heading =
+    mount.id === "speechSettingsMount"
+      ? `<h3 class="ttsHeading">Speech</h3><p class="empty ttsIntro">Read the story aloud with a local engine or a speech API. Off by default; nothing plays while a turn is being written. Saved separately from the launcher settings above.</p>`
+      : "";
+  mount.innerHTML = `${heading}${ttsSettingsFormHtml(view, ttsCatalog)}`;
+  const form = mount.querySelector("form[data-tts-form]");
+  window.MorkynInteract?.applyProviderFields?.(mount);
+  bindTtsSettingsForm(mount);
+  return form;
+}
+
+/** POST the fields that differ from the loaded config (plus enabled); a blank key is never sent. */
+async function saveTtsSettings(form) {
+  const draft = collectTtsForm(form);
+  const base = ttsConfig || {};
+  const body = { enabled: draft.enabled };
+  for (const key of ["provider", "preset", "voice", "model", "base_url", "speed", "chunk_chars", "timeout_seconds"]) {
+    if (draft[key] !== base[key]) body[key] = draft[key];
+  }
+  if ("provider" in body || "preset" in body) {
+    // The server resets these on a provider or preset switch unless the same POST
+    // sets them; send what the form shows so the saved config matches the screen.
+    for (const key of ["voice", "model", "base_url", "chunk_chars"]) body[key] = draft[key];
+  }
+  if (draft.api_key) body.api_key = draft.api_key;
+  ttsSetFormStatus(form, "Saving…");
+  const response = await fetch("/api/tts-config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (_) {
+    data = null;
+  }
+  if (!response.ok) throw new Error(ttsErrorDetail(data, response));
+  ttsConfig = data && typeof data === "object" ? data : ttsConfig;
+  await window.morkynSpeech.refreshConfig();
+  return ttsConfig;
+}
+
+async function probeTtsStatus(form) {
+  ttsSetFormStatus(form, "Testing…");
+  const response = await fetch("/api/tts-status", { method: "POST" });
+  let data = null;
+  try {
+    data = await response.json();
+  } catch (_) {
+    data = null;
+  }
+  if (!response.ok) throw new Error(ttsErrorDetail(data, response));
+  const detail = String(data?.detail || "");
+  const ok = Boolean(data?.ok);
+  ttsSetFormStatus(form, `${ok ? "Ready." : "Not ready:"} ${detail}`.trim(), ok ? "good" : "bad");
+  return data;
+}
+
+async function installTtsEngine(form) {
+  const installBtn = form.querySelector("[data-tts-install]");
+  const draft = collectTtsForm(form);
+  if (draft.provider !== "piper") {
+    ttsSetFormStatus(form, 'Install applies to the local engine. Set Provider to "Local (Piper)" and save first.', "bad");
+    return null;
+  }
+  if (installBtn) installBtn.disabled = true;
+  try {
+    await saveTtsSettings(form);
+    const voice = String(ttsConfig?.resolved?.voice || ttsConfig?.voice || ttsConfig?.resolved?.preset || "the voice");
+    ttsSetFormStatus(form, `Installing the speech engine and downloading ${voice}… this can take a few minutes.`);
+    const response = await fetch("/api/tts/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ what: "all" }),
+    });
+    let data = null;
+    try {
+      data = await response.json();
+    } catch (_) {
+      data = null;
+    }
+    if (!response.ok) throw new Error(ttsErrorDetail(data, response));
+    const steps = Array.isArray(data?.steps) ? data.steps : [];
+    const summary = steps
+      .map((step) => `${step.step === "engine" ? "Engine" : step.step === "voice" ? "Voice" : String(step.step || "step")}: ${String(step.status || "")}${step.detail ? ` (${step.detail})` : ""}`)
+      .join(" · ");
+    const detail = String(data?.status?.detail || "");
+    ttsSetFormStatus(form, [summary, detail].filter(Boolean).join(" — ") || "Done.", data?.ok ? "good" : "");
+    return data;
+  } finally {
+    if (installBtn) installBtn.disabled = false;
+  }
+}
+
+function bindTtsSettingsForm(mount) {
+  if (!mount || mount.dataset.ttsBound === "1") return;
+  mount.dataset.ttsBound = "1";
+  mount.addEventListener("submit", (event) => {
+    const form = event.target.closest?.("form[data-tts-form]");
+    if (!form) return;
+    event.preventDefault();
+    saveTtsSettings(form)
+      .then(() => renderTtsSettings(mount))
+      .then((again) => again && ttsSetFormStatus(again, ttsConfig?.active ? "Saved. Speech is on." : "Saved. Speech is off.", "good"))
+      .catch((error) => ttsSetFormStatus(form, error?.message || String(error), "bad"));
+  });
+  mount.addEventListener("click", (event) => {
+    const form = event.target.closest?.("form[data-tts-form]");
+    if (!form) return;
+    if (event.target.closest("[data-tts-test]")) {
+      event.preventDefault();
+      probeTtsStatus(form).catch((error) => ttsSetFormStatus(form, error?.message || String(error), "bad"));
+    } else if (event.target.closest("[data-tts-install]")) {
+      event.preventDefault();
+      installTtsEngine(form).catch((error) => ttsSetFormStatus(form, error?.message || String(error), "bad"));
+    }
+  });
+  mount.addEventListener("change", (event) => {
+    const form = event.target.closest?.("form[data-tts-form]");
+    if (!form) return;
+    const name = event.target.getAttribute?.("name");
+    if (name === "provider" || name === "preset") {
+      // Switching provider or preset starts from that preset's own voice, model
+      // and URL (the server resets them the same way on save); coming back to
+      // the stored preset shows the stored values again.
+      const draft = collectTtsForm(form);
+      const stored = ttsConfig || {};
+      if (name === "provider") draft.preset = draft.provider === stored.provider ? String(stored.preset || "") : "";
+      const backToStored = draft.provider === stored.provider && draft.preset === String(stored.preset || "");
+      draft.voice = backToStored ? String(stored.voice || "") : "";
+      draft.model = backToStored ? String(stored.model || "") : "";
+      draft.base_url = backToStored ? String(stored.base_url || "") : "";
+      draft.chunk_chars = backToStored ? Number(stored.chunk_chars) || 0 : 0;
+      delete draft.api_key;
+      // The key is never part of the HTML; carry the typed value over by hand.
+      const typedKey = String(form.querySelector('[name="api_key"]')?.value || "");
+      renderTtsSettings(mount, draft)
+        .then((again) => {
+          const input = again?.querySelector('[name="api_key"]');
+          if (input && typedKey) input.value = typedKey;
+        })
+        .catch(() => {});
+    } else if (name === "voice") {
+      const row = form.querySelector('[name="voice_custom"]')?.closest("label");
+      if (row) row.hidden = event.target.value !== "__custom__";
+      if (event.target.value === "__custom__") form.querySelector('[name="voice_custom"]')?.focus();
+    }
+  });
+  mount.addEventListener("input", (event) => {
+    if (event.target.getAttribute?.("name") !== "speed") return;
+    const out = event.target.closest("form")?.querySelector(".ttsSpeedOut");
+    if (out) out.textContent = ttsSpeedLabel(event.target.value);
+  });
+}
+
+function openSpeechModal(opener = null) {
+  const modal = document.querySelector("#speechModal");
+  if (!modal) return;
+  closePlayMenu();
+  if (opener instanceof HTMLElement) modal.dataset.ttsReturn = opener.id || "";
+  modal.classList.remove("hidden");
+  const mount = document.querySelector("#speechModalContent");
+  renderTtsSettings(mount)
+    .then(() => focusWhenShown(document.querySelector("#closeSpeechModal")))
+    .catch((error) => {
+      if (mount) mount.innerHTML = `<p class="bad">${escapeHtml(error?.message || String(error))}</p>`;
+    });
+}
+
+function closeSpeechModal() {
+  const modal = document.querySelector("#speechModal");
+  if (!modal || modal.classList.contains("hidden")) return;
+  modal.classList.add("hidden");
+  const back = modal.dataset.ttsReturn ? document.getElementById(modal.dataset.ttsReturn) : null;
+  modal.dataset.ttsReturn = "";
+  if (back && document.contains(back)) focusWhenShown(back);
+}
+
+function bindSpeechModal() {
+  if (ttsSpeechModalBound) return;
+  ttsSpeechModalBound = true;
+  const modal = document.querySelector("#speechModal");
+  document.querySelector("#speechButton")?.addEventListener("click", (event) => openSpeechModal(event.currentTarget));
+  document.querySelector("#closeSpeechModal")?.addEventListener("click", (event) => {
+    event.preventDefault();
+    closeSpeechModal();
+  });
+  modal?.addEventListener("click", (event) => {
+    if (event.target === modal) closeSpeechModal();
+  });
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Escape" || !modal || modal.classList.contains("hidden")) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeSpeechModal();
+    },
+    true,
+  );
+}
+
+// The controller interact.js and the console talk to; see docs/TextToSpeech.md.
+window.morkynSpeech = Object.assign(window.morkynSpeech || {}, {
+  enabled: () => ttsActive(),
+  speakText: (text, source = "selection") => ttsSpeakParagraphs(ttsClientParagraphs(text), source),
+  speakParagraphs: (list, source = "turn") => ttsSpeakParagraphs(list, source),
+  speakTurn: () => ttsSpeakParagraphs(ttsCollectNarrationParagraphs(latestOutput), "turn"),
+  stop: (reason = "user") => ttsStop(reason),
+  pause: () => ttsPause(),
+  resume: () => ttsResume(),
+  toggle: () => {
+    if (ttsQueue?.active && ttsQueue.paused) ttsResume();
+    else if (ttsQueue?.active) ttsPause();
+    else ttsSpeakParagraphs(ttsCollectNarrationParagraphs(latestOutput), "turn");
+  },
+  isPlaying: () => Boolean(ttsQueue?.active && !ttsQueue.paused),
+  isPaused: () => Boolean(ttsQueue?.active && ttsQueue.paused),
+  status: () => {
+    const view = ttsBarView();
+    return { playing: view.playing, paused: view.paused, index: view.index, total: view.total, text: view.error || view.text };
+  },
+  refreshConfig: async () => {
+    await loadTtsConfig();
+    renderTtsPlayBar();
+    return ttsConfig;
+  },
+});
+
+bindTtsPlayBar();
+bindSpeechModal();
+
 function localNpcsFromState() {
   if (!state) return [];
   const loc = state.current_location || {};
@@ -28109,6 +29022,8 @@ function openAppSettings(opener = null) {
   }
   focusWhenShown(document.querySelector("#closeAppSettings"));
   loadAppSettingsForm();
+  // Speech posts to /api/tts-config, not to the launcher prefs form above it.
+  renderTtsSettings(document.querySelector("#speechSettingsMount")).catch(() => {});
 }
 
 function closeAppSettings(options = {}) {
@@ -28294,6 +29209,12 @@ loadState()
     showMainMenu();
     const status = document.querySelector("#mainMenuStatus");
     if (status) status.textContent = error.message || String(error);
+  })
+  .finally(() => {
+    // Speech is off until the config says otherwise; a failed load keeps it off.
+    loadTtsConfig()
+      .then(() => renderTtsPlayBar())
+      .catch(() => {});
   });
 
 

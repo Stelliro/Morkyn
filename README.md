@@ -146,9 +146,11 @@ Morkyn/
 - Local-only, LAN/phone, and trusted VPN launch modes.
 - Optional adaptive narration pipeline and agent bridge endpoints.
 - Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
+- Optional **read aloud**: the narration spoken paragraph by paragraph by a local CPU engine (Piper) or a speech API (OpenAI-compatible, ElevenLabs). Off by default — [docs/TextToSpeech.md](docs/TextToSpeech.md).
 
 ### New in 0.10.0 (dev builds)
 
+- **Read the story aloud.** A Play bar under the narration and a right-click menu (Play selected text, Play this paragraph) speak the prose paragraph by paragraph, through a local engine (Piper, runs on the CPU, installed from a button) or a speech API (OpenAI-compatible, ElevenLabs), with known-good voices and presets for each. Off by default; it stops when you send a turn and never competes with the model for the GPU — `app/tts.py`.
 - **Token limits follow the model.** Context window and response caps come from the GGUF header and your GPU, or a tokens-per-billion scale when only the name is known. Edit them and they are remembered for that model; the launcher defaults to `auto` — `app/model_limits.py`.
 - **Failsafes.** A model failure stops the turn and opens a dialog that names the problem, what to try, and a "Continue anyway". A context too small for the full story contract is announced at boot instead of on the server console — `app/failsafe.py`.
 - **Cheaper turns.** The verifier returns a verdict and a patch, not a rewritten turn; local models reuse one system prefix across the turn's calls; prose repairs carry a prose contract; a reply cut by its token cap is closed locally; a dead model costs one call instead of three — `app/llm.py`.
@@ -271,7 +273,12 @@ $env:AI_RPG_FAST_VERIFICATION="1"
 $env:AI_RPG_MEMORY_KEEP_SUMMARIES="12"
 $env:AI_RPG_MEMORY_MAX_FACTS="200"
 $env:AI_RPG_GM_OFFSCREEN_INTERVAL="8"
+$env:AI_RPG_TTS_PROVIDER="piper"        # read aloud: off (default) | piper | openai | elevenlabs
+$env:AI_RPG_TTS_ENABLED="1"
+$env:AI_RPG_TTS_API_KEY="..."           # speech API key; falls back to OPENAI_API_KEY / ELEVENLABS_API_KEY
 ```
+
+The full `AI_RPG_TTS_*` list (preset, voice, model, base URL, speed, chunk size, timeout, voice folder) is in [`.env.example`](.env.example) and [docs/TextToSpeech.md](docs/TextToSpeech.md).
 
 ## Local turn times
 

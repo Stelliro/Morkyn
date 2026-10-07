@@ -269,6 +269,8 @@
             </div>
             <p class="empty" id="appSettingsStatus">Changes apply to this running app where possible. Port/reach need a launcher restart.</p>
           </form>
+          <!-- Speech settings post to /api/tts-config; app.js renders the form here, outside the launcher form. -->
+          <div id="speechSettingsMount" class="speechSettingsMount"></div>
         </section>
       </div>
 
@@ -1589,6 +1591,19 @@
         </section>
       </div>
 
+      <div id="speechModal" class="modalBackdrop hidden" role="dialog" aria-modal="true" aria-labelledby="speechModalTitle">
+        <section class="modalPanel speechPanel">
+          <header class="modalHeader">
+            <div>
+              <h2 id="speechModalTitle">Speech</h2>
+              <p>Read the story aloud with a local engine or a speech API. Off by default.</p>
+            </div>
+            <button type="button" class="secondaryButton" id="closeSpeechModal">Close</button>
+          </header>
+          <div id="speechModalContent"></div>
+        </section>
+      </div>
+
       <section id="gameView" class="gameView mapPrimary hidden">
         <header class="topbar topbarCompact topbarPlay">
           <div class="topbarBrand topbarBrandPlay">
@@ -1637,6 +1652,7 @@
             <button type="button" class="playMenuItem" id="exportButton" data-play-menu-action="export">Export</button>
             <button type="button" class="playMenuItem" id="importButton" data-play-menu-action="import">Import</button>
             <button type="button" class="playMenuItem" id="modelButton" data-play-menu-action="llm">Model settings</button>
+            <button type="button" class="playMenuItem" id="speechButton" data-play-menu-action="speech">Speech</button>
             <button type="button" class="playMenuItem" id="playUpdatesButton" data-play-menu-action="updates">Updates</button>
             <button type="button" class="playMenuItem" id="compactModeButton" data-play-menu-action="compact" aria-pressed="false">Compact layout</button>
             <button type="button" class="playMenuItem" id="resetPlayLayoutBtn" data-play-menu-action="layout">Customize layout</button>
