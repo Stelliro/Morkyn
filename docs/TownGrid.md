@@ -107,6 +107,17 @@ Port = {
 - Ports carry their own `PORT_VERSION`. Changing the port rule would disconnect cells
   already generated in a save from cells generated later, so the rule is frozen once
   shipped (see 3.5).
+- **Joins (`GEN_VERSION` 2, playtest #70).** Ports alone left every other road that reached a
+  shared edge dead-ending there. `edge_joins(world, city)` lists every crossing of each shared
+  edge in metres: the ports, then both cells' `street_mask` avenues, then (for a cell generated
+  next to a stored v1 row) the roads that row already brings to the edge
+  (`stored_edge_arrivals`). Points closer than one tile of the coarser side are one crossing,
+  earlier kinds first. Each point is the middle of the tile that owns it, so `floor(m / tile)`
+  on either side lands on a tile holding that metre. A v2 cell lays a stub in from each join
+  tile (starting one tile in, so no connector runs along the edge row), keeps every other tile
+  of a shared edge row free of road, and stops side streets and alleys one tile short. The
+  walker crosses wherever road tiles face each other across the edge (`town_moves._crossings`),
+  on rows of any version.
 
 ### 3.2 Roads (per cell)
 
@@ -193,7 +204,8 @@ Plot = {
   "f": [fx, fy] | None,     # frontage: the road tile in front of the plot's middle
   "seg": int | None,        # segment id of that road tile
   "d": int,                 # index into cell["districts"]
-  "k": "shop"|"service"|"house"|"yard"|"temple"|"office"|"barracks"|"warehouse"|"square"|"gate"|"empty",
+  "k": "shop"|"service"|"house"|"yard"|"temple"|"office"|"barracks"|"warehouse"|"square"|"gate"|"empty"
+       |"field"|"pasture"|"orchard",   # the last three: a town's rural fringe (v2, playtest #72)
   "vk": "bakery"|...|"",     # venue kind (venues.VENUE_KINDS) for shop/service/temple
   "name": "...",            # shop/service/temple/office/gate only
   "fl": ["corner","stall","notice","guild","anchor"],   # flags
@@ -416,9 +428,9 @@ The key is absent whenever the player is not in a plotted city. It joins
 | Event | Where the player lands |
 | --- | --- |
 | World step (map arrows, `WALK`, story walk) from outside onto a city cell | The gate plot on the edge they crossed. With no gate on that edge, the road tile nearest that edge's midpoint ("you come in between the yards"). |
-| World step from one city cell to a neighbouring one | Walk the road from the current tile to the shared-edge port, then continue in the next cell. This is an ordinary town walk with town minutes, not a flat 10-minute step. |
+| World step from one city cell to a neighbouring one | Walk the road from the current tile to where the roads meet across the shared edge, then continue in the next cell. This is an ordinary town walk with town minutes, not a flat 10-minute step. Built in `town_moves.walk_to_cell` (playtest #70, #71). |
 | Game start or opening placed in a city | The road tile nearest the shopping district's anchor, or the centre cell's hub. |
-| World step out of the city | Walk to the nearest gate port on that side (or the edge), then clear `town_position`. |
+| World step out of the city | Walk the streets to the best way out (`town_moves.walk_out`: the outer edge whose outside cell is nearest the target, then the fewest cells, then the shortest walk), clear `town_position`, and take the world step from outside that exit. An open town's way out is any road on an outer edge; a walled town's is a gate (section 16). A gate that must stop the player stops the walk there instead (HTTP 200, `halted`). Built for playtest #71. |
 | Load or rewind with `town_position` set | Reconcile the world marker to `(cx, cy)` (section 9). |
 
 Entering a town makes or adopts the city's **settlement row**: one `locations` row per city
@@ -463,8 +475,10 @@ The road graph is hierarchical, so a 9 x 9 city never needs all of its cells loa
   runs out. The report says `"partial": true, "remaining_minutes": N`, and the draft is
   told the player is on the way (5.3). This is the same rule as the world's step budget.
 - **Gates still apply.** Confinement (`movement_locked`, `map_blank`) refuses any walk. A
-  walk that leaves the current cell needs `travel_ready`, like a long world jump. A walk
-  inside the current cell is always allowed, like an adjacent world step.
+  walk to another cell of the same town is a walk, not long travel, and does not wait for
+  `travel_ready` (playtest #70: after any "I go into ..." turn every click into the next
+  part of town was refused). Only the world part of a pick made from inside a town keeps
+  the long-jump rule.
 - **Encounters:** none per tile. The world encounter roll is for terrain. A town's events
   come from the scene, as now.
 
@@ -735,7 +749,7 @@ request computes at most 9 skeletons; a larger `r` is refused with 400.
 | `GET /api/tiles/map/settlement` (existing) | Unchanged shape, plus `town: {zoomable, player: {cx, cy, fx, fy, plot}}`. The marker uses the real fine position when `town_position` is set. |
 | `GET /api/town/view?city_id=&cx=&cy=&r=1` | The street view of cell `(cx, cy)` and its city neighbours within `r` (default: the player's cell). Per **seen** cell: `side`, `roads` (base64 class mask, **masked to seen tiles**), `segments` with names (seen only), `plots` (seen only: `id, r, k, vk, label, name if readable, open, hours, here, realized code`), `gates`, `notices`. Unseen cells in range: `{cx, cy, side, known: false}`. |
 | `GET /api/town/plot/{plot_id}` | Peek: name, kind label, street, ward, hours and open-now, keeper if met, whether it is realized. 404 when not known. |
-| `POST /api/town/walk` `{plot_id}` or `{cx, cy, fx, fy}` | The click-walk. Same gates as `/api/tiles/map/move` (confinement 409, `travel_ready` for leaving the cell). Walks the road to the plot's frontage, or the nearest road tile to the clicked tile, and **does not enter**. One connection: generates the walked cells, then runs `_spend_travel` in the preview, commit, advance order (4.3); a hard block returns 409 with the reasons and changes nothing. Returns the new view and a `travel` record. When inside a venue, it first leaves it (current location becomes the settlement row). |
+| `POST /api/town/walk` `{plot_id}` or `{cx, cy, fx, fy}` | The click-walk. Confinement answers 409; `travel_ready` does not gate it, a walk in the same town is never long travel (playtest #70). Walks the road to the plot's frontage, or the nearest road tile to the clicked tile, and **does not enter**. One connection: generates the walked cells, then runs `_spend_travel` in the preview, commit, advance order (4.3); a hard block returns 409 with the reasons and changes nothing. Returns the new view and a `travel` record. When inside a venue, it first leaves it (current location becomes the settlement row). |
 
 **Going in is a turn.** Entering lets the scene happen (a keeper, an event), so the UI never
 enters by itself. "Go in" writes "I go into <name>." into the composer and leaves Send to
@@ -1120,7 +1134,8 @@ and `app/venues.py`. Tested in `tests/test_town_movement.py` (42 tests, writer-o
 5. **Bearings (5.4)** are not a separate block. `places_here` entries carry minutes and a compass
    word for what is ahead, and `arrived` / `walking` name the target.
 6. **`travel_ready`** gates only the click-walk (leaving the cell). An in-turn walk is the player's
-   own action; confinement (`movement_locked`, `map_blank`) refuses both.
+   own action; confinement (`movement_locked`, `map_blank`) refuses both. *Superseded (playtest #70):
+   the click-walk no longer needs `travel_ready` either; see section 16.*
 7. **A slice A gap fixed here:** `town_seen` was in `AUTOINC_TABLES` but not in the rewind delete,
    so a rewound turn kept its seen rows. It is now deleted by max id, like the quest tables.
 8. `town_seen` compaction past 64 rows a cell is not built.
@@ -1169,3 +1184,54 @@ on a City cell zooms to its streets, World goes back and sets the flag; no page 
   Streets square is small there; + and drag make it usable. The layout itself is not part of this slice.
 - Clicking a road tile walks to the nearest road; there is no way to click an unseen tile, because unseen
   roads are not drawn.
+
+## 16. Playtest #70, #71, #72 build notes
+
+Built in `app/town_grid.py` (`GEN_VERSION` 2), `app/town_moves.py`, `app/main.py`, `static/app.js`,
+`static/index.html` and `static/styles.css`. Not tested yet; the user tests by hand.
+
+**Roads meet across shared edges (#70).** See the joins bullet in 3.1. A v2 cell never changes a stored
+row; next to a stored v1 cell it meets the dead ends that row already has. The walker no longer
+crosses only at ports: `_crossings` pairs road tiles whose metre spans overlap on the two edge rows,
+which already joins Harmere's stored 128-side cell to its neighbours wherever the roads line up.
+
+**Walls are a per-town fact (#71).** `town_walls(world, city, era)`, pure, stored nowhere: a hamlet or
+a village never; a post-collapse town or bigger sits behind a barricade with manned checkpoints;
+otherwise only the walled eras (`preindustrial`) wall a town, by a hashed chance of 0.45 (town), 0.75
+(city), 0.85 (large city), 0.9 (metropolis). `town_view` returns `walled`, `wall_kind` and each cell's
+`outer` edges; the Streets map strokes the wall along outer edges of a walled town and nothing for an
+open one.
+
+**Ways out (#71).** `cell_exits`: in an open town every road tile on an outer edge; in a walled town
+the gate ports plus a gate wherever an avenue runs through the wall, so no walled town is a one-exit
+trap. Gates with no plot (a stored cell whose gate square did not fit, an avenue gate) are listed in
+the view's `gates` with their tile and drawn. One planner, `town_moves._exit_walk`, serves a typed
+leave, the Leave control (`POST /api/town/leave {edge}`) and a world-map pick from inside a town
+(`/api/tiles/map/move`). A walk out stops only at a walled town's gate that must stop it: a manned
+checkpoint, or a gate shut for the night (`GATE_HOURS`, 06:00-21:00). The walk is written up to the
+gate and the answer is 200 with `halted {at, why}`. A player standing at that gate goes through on
+the next leave: the stop is where the scene with the guard happens, never a wall they cannot pass. A
+typed leave is not stopped (the turn is that scene; a checkpoint is named in `arrived.where`).
+
+**A typed leave stays out (#71).** The leave report carries `left`; `story_walk_skips` then skips the
+story walk, which had walked the player back into town toward the settlement row's anchor. A leave
+the player denies or complains about ("i cant leave the city due to a game bug") is not a leave
+(`_leave_asked`).
+
+**One town centre (#72).** `town_field(city)`: the fill point is the mean of the cell centres in town
+metres (a one-cell town fills from its middle, each extra cell pulls the point), `r` the distance to the
+farthest outer corner, `town_core` a smoothstep from 1 to 0. In v2 cells the shop chance scales by
+`0.4 + 1.2 * core`, the empty-lot chance by `(1 - core)^2`, frontage plots run back to the middle of
+their block toward the centre (no bare block middles), and where `core < 0.2` and the setting farms
+(not `space_opera`, `far_future` or the `future` era) the fringe becomes `field`, `pasture`, `orchard`
+and `yard`, leftover yards included. Stalls already told to players keep their wards.
+
+**Map drawing (user request).** Road widths are in metres (`cellPx / 800`): avenue 10 m, main 8 m,
+street 6 m, alley 3.5 m, each held between a pixel floor and ceiling, so they grow with the zoom and a
+class draws alike in cells of different sides. Alleys are solid `--thread-dim` like streets were; a
+thin `--thread` line runs down avenues and main roads. Supersedes slice C deviation 2.
+
+**Not built.** District anchors (`world_scale._pick_anchor`) still sit about each cell's own centre;
+moving them to the town centre would change world generation and only help new worlds, so the field
+acts on plot kinds and depths instead. Leftover yards in the built-up middle stay separate yard plots
+rather than merging into the plot in front.

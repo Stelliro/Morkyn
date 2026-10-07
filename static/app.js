@@ -23974,6 +23974,15 @@ function applyTravelMoveFeedback(data) {
   }
 }
 
+// A map move made from inside a town walks the streets first (playtest #71):
+// say where it stopped, at a gate that holds the player, or that they left.
+function townMoveNote(data) {
+  const banner = document.querySelector("#mapTravelBanner");
+  if (!banner || !data) return;
+  if (data.halted?.why) banner.textContent = String(data.halted.why);
+  else if (data.town_exit?.left || data.travel_result?.town_exit?.left) banner.textContent = "You walk the streets and out of town.";
+}
+
 async function walkStep(dx, dy, options = {}) {
   const stepX = Math.max(-1, Math.min(1, Number(dx) || 0));
   const stepY = Math.max(-1, Math.min(1, Number(dy) || 0));
@@ -24005,6 +24014,7 @@ async function walkStep(dx, dy, options = {}) {
     }
     updateTravelStatus(data.travel_ready !== false);
     applyTravelMoveFeedback(data);
+    townMoveNote(data);
     fullMapView = data.map || fullMapView;
     await refreshLocalMap();
     if (!document.querySelector("#mapOverlay")?.classList.contains("hidden")) {
@@ -25450,19 +25460,62 @@ function paintTownCanvas() {
           }
         }
       }
-      // Avenues and main roads are the wide thread, streets the thin one, so
-      // the way to follow reads above the plot outlines; alleys are dotted.
+      // Widths in metres (cellPx is one 800 m world cell, tg.CELL_METRES), so
+      // a class draws alike in every cell whatever its side and grows with
+      // the zoom, each held between a pixel floor and ceiling. User request
+      // (playtest #70-#72 round): roads wider, and alleys drawn solid the way
+      // streets were, so both read clearly. A thin thread down avenues and
+      // main roads keeps the way to follow above the plot outlines.
+      const pxPerMetre = geo.cellPx / 800;
+      const roadWidth = (metres, floor, ceiling) => Math.min(ceiling, Math.max(floor, metres * pxPerMetre));
       ctx.save();
       ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.strokeStyle = tokens.dim;
-      ctx.lineWidth = 3;
-      ctx.stroke(paths[1]);
-      ctx.stroke(paths[2]);
-      ctx.lineWidth = 1.5;
-      ctx.stroke(paths[3]);
-      ctx.strokeStyle = tokens.lineStrong;
-      ctx.setLineDash([1, 2]);
+      ctx.lineWidth = roadWidth(3.5, 1.25, 6);
       ctx.stroke(paths[4]);
+      ctx.lineWidth = roadWidth(6, 2, 10);
+      ctx.stroke(paths[3]);
+      ctx.lineWidth = roadWidth(8, 3, 13);
+      ctx.stroke(paths[2]);
+      ctx.lineWidth = roadWidth(10, 3.5, 16);
+      ctx.stroke(paths[1]);
+      ctx.strokeStyle = tokens.thread;
+      ctx.globalAlpha = 0.5;
+      ctx.lineWidth = Math.max(hair, roadWidth(1.5, 0.75, 2));
+      ctx.stroke(paths[2]);
+      ctx.stroke(paths[1]);
+      ctx.restore();
+    }
+    // A walled town's wall runs along its outer edges (playtest #71); an open
+    // town draws nothing there. Gates with no plot of their own are marked
+    // from their tiles, so every way out shows.
+    if (townData.walled && Array.isArray(cell.outer) && cell.outer.length) {
+      ctx.save();
+      ctx.strokeStyle = tokens.label;
+      ctx.lineWidth = Math.max(1.5, Math.min(4, geo.cellPx / 200));
+      ctx.setLineDash(townData.wall_kind === "barricade" ? [6, 3] : []);
+      ctx.beginPath();
+      for (const edge of cell.outer) {
+        const x1 = box.x0 + geo.cellPx;
+        const y1 = box.y0 + geo.cellPx;
+        if (edge === "N") { ctx.moveTo(box.x0, box.y0); ctx.lineTo(x1, box.y0); }
+        else if (edge === "S") { ctx.moveTo(box.x0, y1); ctx.lineTo(x1, y1); }
+        else if (edge === "W") { ctx.moveTo(box.x0, box.y0); ctx.lineTo(box.x0, y1); }
+        else if (edge === "E") { ctx.moveTo(x1, box.y0); ctx.lineTo(x1, y1); }
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+    for (const gate of cell.gates || []) {
+      if (!Number.isFinite(Number(gate.x)) || !Number.isFinite(Number(gate.y))) continue;
+      const gx = box.x0 + (Number(gate.x) + 0.5) * t;
+      const gy = box.y0 + (Number(gate.y) + 0.5) * t;
+      const half = Math.max(4, t * 1.5);
+      ctx.save();
+      ctx.strokeStyle = tokens.bright;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(gx - half, gy - half, half * 2, half * 2);
       ctx.restore();
     }
     for (const plot of cell.plots || []) {
@@ -25577,17 +25630,104 @@ function townCanEnter(plot) {
   return Boolean(plot) && ["shop", "service", "temple", "office", "barracks"].includes(String(plot.k || ""));
 }
 
-// Leaving the current cell is long travel: it waits for the scene, like the world map.
+// Walking to another part of the same town is a walk, not long travel, so it
+// does not wait for the scene (playtest #70); only confinement refuses it.
 function townWalkRefusal(cx, cy) {
   if (movementLocked || mapBlank) return "You cannot move while confined.";
   const you = townData?.player;
   if (!you) return "You are not in this town.";
-  const sameCell = Number(you.cx) === Number(cx) && Number(you.cy) === Number(cy);
-  if (!sameCell && !travelReady) return "Long travel waits until the scene clears; walk within this part of town.";
   return "";
 }
 
+const TOWN_EDGE_WORD = { N: "north", E: "east", S: "south", W: "west" };
+
+// The exit the player stands on, from the server's list for their cell
+// ([fx, fy, edge]); null when they are not at the edge of town.
+function townExitHere() {
+  const you = townData?.player;
+  const cell = you ? townCellAt(you.cx, you.cy) : null;
+  if (!cell || !Array.isArray(cell.exits)) return null;
+  const hit = cell.exits.find((e) => Number(e[0]) === Number(you.fx) && Number(e[1]) === Number(you.fy));
+  return hit ? { x: Number(hit[0]), y: Number(hit[1]), edge: String(hit[2] || "") } : null;
+}
+
+// The Leave control under the Streets map (playtest #71): shown in town;
+// at an exit it names the side, elsewhere it walks to the nearest way out.
+function renderTownLeave() {
+  const bar = document.querySelector("#townLeaveBar");
+  if (!bar) return;
+  const you = townData?.player;
+  const show = townStreetsActive() && Boolean(townData?.available) && Boolean(you);
+  bar.hidden = !show;
+  if (!show) return;
+  const exit = townExitHere();
+  const name = townData?.name || "town";
+  const btn = bar.querySelector("#townLeaveBtn");
+  const note = bar.querySelector("#townLeaveNote");
+  if (btn) {
+    btn.textContent = exit ? `Leave ${name}, ${TOWN_EDGE_WORD[exit.edge] || "out"}` : `Leave ${name}`;
+    btn.disabled = townBusy || movementLocked || mapBlank;
+  }
+  if (note) {
+    note.textContent = exit
+      ? townData.walled ? "You are at a gate." : "The road runs on out of town."
+      : townData.walled ? "Walks to the nearest gate." : "Walks to the nearest road out of town.";
+  }
+}
+
+async function townLeave(edge = "") {
+  if (townBusy) return;
+  if (movementLocked || mapBlank) {
+    const banner = document.querySelector("#mapTravelBanner");
+    if (banner) banner.textContent = "You cannot move while confined.";
+    return;
+  }
+  townBusy = true;
+  townStatus = "Walking out…";
+  renderTownLeave();
+  const banner = document.querySelector("#mapTravelBanner");
+  try {
+    const res = await fetch("/api/town/leave", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ edge: String(edge || "") }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      townStatus = townMessage(data, res.status);
+      if (banner) {
+        banner.textContent = townStatus;
+        banner.classList.add("locked");
+        window.setTimeout(() => updateTravelStatus(travelReady), 1600);
+      }
+      return;
+    }
+    if (data.state) state = { ...(state || {}), ...data.state };
+    const leave = data.leave || {};
+    applyTravelMoveFeedback({ state: data.state, travel: { minutes: Number(leave.minutes || 0), terrain: "town" } });
+    if (leave.halted) {
+      townStatus = String(leave.halted.why || "You stop at the gate.");
+      if (banner) banner.textContent = townStatus;
+      if (data.view?.available) townData = await townAttachMasks(data.view);
+    } else {
+      townStatus = "";
+      if (banner) banner.textContent = `You leave ${townData?.name || "town"}.`;
+    }
+    fullMapView = data.map || fullMapView;
+    townPan = { x: 0, y: 0 };
+    paintTownCanvas();
+    renderTownCard();
+    await refreshLocalMap();
+  } catch (error) {
+    townStatus = error?.message || String(error);
+  } finally {
+    townBusy = false;
+    renderTownLeave();
+  }
+}
+
 function renderTownCard() {
+  renderTownLeave();
   const card = document.querySelector("#townPlotCard");
   if (!card) return;
   const found = townStreetsActive() ? townFindSelected() : null;
@@ -25748,8 +25888,19 @@ function townArrowWalk(dx, dy) {
     townWalk({ cx: Number(next.cx), cy: Number(next.cy), fx: tx, fy: ty });
     return;
   }
+  // At the outer edge of town the arrow offers the way out (playtest #71).
+  const edge = dx > 0 ? "E" : dx < 0 ? "W" : dy > 0 ? "S" : "N";
+  const exit = (Array.isArray(cell.exits) ? cell.exits : []).find((e) => Number(e[0]) === x && Number(e[1]) === y && e[2] === edge);
+  if (!steps && exit && !townCellAt(Number(you.cx) + dx, Number(you.cy) + dy)) {
+    townLeave(edge);
+    return;
+  }
   if (!steps) {
-    if (banner) banner.textContent = "No road you know runs that way.";
+    if (banner) {
+      banner.textContent = atEdge && !townCellAt(Number(you.cx) + dx, Number(you.cy) + dy)
+        ? `Use Leave under the map to step out of ${townData?.name || "town"}.`
+        : "No road you know runs that way.";
+    }
     return;
   }
   townWalk({ cx: Number(you.cx), cy: Number(you.cy), fx: x, fy: y });
@@ -25942,6 +26093,7 @@ function bindTownCanvas() {
     if (btn) setSettlementZoom(btn.getAttribute("data-town-zoom"));
   });
   document.querySelector("#townWalkBtn")?.addEventListener("click", () => townWalkSelected());
+  document.querySelector("#townLeaveBtn")?.addEventListener("click", () => townLeave(townExitHere()?.edge || ""));
   document.querySelector("#townGoInBtn")?.addEventListener("click", () => townGoIn(townFindSelected()?.plot));
   document.querySelector("#townPlotClose")?.addEventListener("click", () => {
     townSelected = null;
@@ -26437,6 +26589,7 @@ async function walkToTile(x, y) {
     }
     updateTravelStatus(data.travel_ready);
     applyTravelMoveFeedback(data);
+    townMoveNote(data);
     fullMapView = data.map || fullMapView;
     await refreshLocalMap();
     if (!document.querySelector("#mapOverlay")?.classList.contains("hidden")) {
@@ -26444,7 +26597,7 @@ async function walkToTile(x, y) {
     } else if (fullMapView?.settlements) {
       renderSettlementList(fullMapView.settlements || []);
     }
-    if (!free && latestOutput) {
+    if (!free && latestOutput && !data.halted && !data.town_walk && data.step?.terrain !== "town") {
       const mins = data.travel?.minutes || data.step?.minutes || 0;
       latestOutput.innerHTML =
         paragraphs(

@@ -57,6 +57,15 @@ _LEAVE_RE = re.compile(
     r"|\b(?:out|through|via)\s+(?:the\s+)?(?:(?:north|south|east|west)(?:ern)?\s+)?gates?\b",
     re.I,
 )
+# Words just before a leave that say the player is not leaving: playtest #71,
+# "i cant leave the city due to a game bug" walked the player out of town.
+_LEAVE_NOT_RE = re.compile(
+    r"\b(?:can'?t|cannot|can\s+not|couldn'?t|could\s+not|unable\s+to|won'?t|will\s+not|wouldn'?t|don'?t|do\s+not|"
+    r"didn'?t|did\s+not|never|not|no\s+way\s+to|isn'?t\s+letting\s+me|not\s+allowed\s+to|stops?\s+me\s+from|"
+    r"stuck|trapped|before\s+i|instead\s+of|rather\s+than|without)\b[\w\s']{0,24}$",
+    re.I,
+)
+_STEP_EDGE = {(0, -1): "N", (1, 0): "E", (0, 1): "S", (-1, 0): "W"}
 # Walking up to a gate without going out of it.
 _TO_GATE_RE = re.compile(
     r"\b(?:to|for|toward|towards|by|at)\s+(?:the\s+)?(?:(?:north|south|east|west)(?:ern)?\s+)?gates?\b", re.I
@@ -340,6 +349,32 @@ def _port_index(port: dict[str, Any], side: int) -> int:
     return int(y) * int(side) + int(x)
 
 
+def _crossings(town_a: dict[str, Any], town_b: dict[str, Any], edge_a: str) -> list[tuple[int, int]]:
+    """Road tiles that meet across a shared edge: (tile in a, tile in b) (playtest #70).
+
+    Tile k of a side-s edge covers metres [k, k+1) * 800 / s. Two road tiles
+    whose spans overlap are one crossing, whatever generated them: ports,
+    avenues that happen to line up, v2 joins, or a v2 cell meeting the dead
+    ends of a stored v1 neighbour. Before this only the ports crossed.
+    """
+    sa, sb = int(town_a["side"]), int(town_b["side"])
+    ra, rb = town_a["roads"], town_b["roads"]
+    row_a = tg.edge_tiles(sa, edge_a)
+    row_b = tg.edge_tiles(sb, tg._OPPOSITE[edge_a])
+    pairs: list[tuple[int, int]] = []
+    for k, i in enumerate(row_a):
+        if not ra[i]:
+            continue
+        k0 = (k * sb) // sa
+        k1 = min(sb - 1, -(-((k + 1) * sb) // sa) - 1)
+        mid = (k + 0.5) * sb / sa - 0.5
+        hits = [kb for kb in range(k0, max(k0, k1) + 1) if rb[row_b[kb]]]
+        if hits:
+            kb = min(hits, key=lambda h: (abs(h - mid), h))
+            pairs.append((i, row_b[kb]))
+    return pairs
+
+
 class _CellSource:
     """Cells a turn may read or generate, with the per-turn generation cap (TownGrid.md 3.6)."""
 
@@ -365,9 +400,10 @@ def _walk(source: _CellSource, city: dict[str, Any], start: tuple[int, int, int]
           goals: set[int], *, budget: float) -> dict[str, Any]:
     """Walk the roads from ``start`` (cx, cy, tile) to any goal tile in cell ``dest``.
 
-    Fine BFS inside each cell, crossing cells at their shared ports. Stops where
-    the minutes run out (``partial``). Cells are generated only as the walk
-    reaches them.
+    Fine BFS inside each cell, crossing cells wherever roads meet across the
+    shared edge (_crossings; the ports when the next cell cannot be read).
+    Stops where the minutes run out (``partial``). Cells are generated only as
+    the walk reaches them.
     """
     route = _cell_route(city, (start[0], start[1]), dest)
     if not route:
@@ -391,8 +427,18 @@ def _walk(source: _CellSource, city: dict[str, Any], start: tuple[int, int, int]
             targets: dict[int, Any] = {g: None for g in goals}
         else:
             targets = {}
-            for p, q in _shared_ports(source.chart, city, (cx, cy), route[k + 1]):
-                targets.setdefault(_port_index(p, side), q)
+            nxt = route[k + 1]
+            # Read, never generate, the next cell here: it is generated only
+            # when the walk reaches it, and until then the ports cross.
+            ntown = tg.stored_cell(source.conn, source.chart, nxt[0], nxt[1])
+            if ntown is not None:
+                edge = _STEP_EDGE.get((nxt[0] - cx, nxt[1] - cy), "")
+                for ia, ib in _crossings(town, ntown, edge) if edge else []:
+                    targets.setdefault(ia, ib)
+            if not targets:
+                nside = tg._side(cells[nxt])
+                for p, q in _shared_ports(source.chart, city, (cx, cy), nxt):
+                    targets.setdefault(_port_index(p, side), _port_index(q, nside))
         path = _bfs_path(town, cur, set(targets))
         if path is None:
             return {"ok": False, "reason": "no_road", "legs": legs}
@@ -412,10 +458,7 @@ def _walk(source: _CellSource, city: dict[str, Any], start: tuple[int, int, int]
         minutes += cost
         legs.append({"cx": cx, "cy": cy, "side": side, "tiles": path})
         if not last:
-            q = targets[path[-1]]
-            nxt = route[k + 1]
-            nside = tg._side(cells[nxt])
-            cur = _port_index(q, nside)
+            cur = int(targets[path[-1]])
     if not legs:
         return {"ok": False, "reason": "ungenerated", "partial": True}
     end_leg = legs[-1]
@@ -892,6 +935,16 @@ def reconcile_marker(conn) -> bool:
 # ---------------------------------------------------------------------------
 
 
+def _leave_asked(words: str) -> re.Match | None:
+    """A "leave town" the player means, not one they deny or complain about (playtest #71)."""
+    for match in _LEAVE_RE.finditer(words or ""):
+        window = words[max(0, match.start() - 48): match.start()]
+        if _LEAVE_NOT_RE.search(window):
+            continue
+        return match
+    return None
+
+
 def _player_words(text: str) -> str:
     from app import world as W
 
@@ -1213,11 +1266,13 @@ def _preview(conn, minutes: int, context: dict[str, Any] | None) -> dict[str, An
 
 
 def _plan_walk(view: _CityView, dest: tuple[int, int], goals: set[int], *, kind: str, rule: str,
-               target: dict[str, Any], enter: bool, context: dict[str, Any] | None) -> dict[str, Any]:
+               target: dict[str, Any], enter: bool, context: dict[str, Any] | None,
+               budget: float | None = None) -> dict[str, Any]:
     pos = view.pos
     side = view.side_here()
     start = (int(pos["cx"]), int(pos["cy"]), _pos_index(pos, side))
-    walk = _walk(view.source, view.city, start, dest, goals, budget=float(tg.town_walk_budget()))
+    walk = _walk(view.source, view.city, start, dest, goals,
+                 budget=float(tg.town_walk_budget() if budget is None else budget))
     plan: dict[str, Any] = {
         "kind": kind,
         "rule": rule,
@@ -1247,6 +1302,204 @@ def _plan_walk(view: _CityView, dest: tuple[int, int], goals: set[int], *, kind:
     return plan
 
 
+# ---------------------------------------------------------------------------
+# Out of town (playtest #71): one exit planner for a typed leave, the Leave
+# control and a world-map pick made from inside a town
+# ---------------------------------------------------------------------------
+
+EXIT_CANDIDATES = 6
+
+
+def across_town_budget(city: dict[str, Any]) -> float:
+    """Minutes a walk across this whole town may take: a world-map pick from
+    inside a town is one walk through the streets, not a turn's stroll."""
+    return float(tg.town_walk_budget() + 2 * len(tg._city_cells(city)) * tg.cell_cross_minutes())
+
+
+def _exit_walk(view: _CityView, target: tuple[int, int] | None, *, edge: str = "",
+               context: dict[str, Any] | None, budget: float | None = None) -> dict[str, Any] | None:
+    """A "leave" plan through the streets to the best way out, or None when none is reachable.
+
+    Best: the outer edge whose world cell outside lies nearest ``target``,
+    then the fewest cells to cross, then the shortest walk. ``edge`` keeps
+    only exits on that side (a named gate, the Leave control). In an open
+    town any road that reaches an outer edge is a way out; in a walled one
+    only the gates are (tg.cell_exits).
+    """
+    walls = tg.town_walls(view.chart, view.city, _era(view.conn))
+    here = (int(view.pos["cx"]), int(view.pos["cy"]))
+    cands = []
+    for (cx, cy) in view.cells:
+        for e in tg.outer_edges(view.city, cx, cy):
+            if edge and e != edge:
+                continue
+            dx, dy = _HEADING_STEP[e]
+            out = (cx + dx, cy + dy)
+            far = max(abs(out[0] - target[0]), abs(out[1] - target[1])) if target else 0
+            route = _cell_route(view.city, here, (cx, cy)) or []
+            cands.append((far, len(route), (cx, cy) != here, cy, cx, e, out))
+    cands.sort()
+    best = None
+    tried = 0
+    for far, hops, _away, cy, cx, e, out in cands:
+        if best is not None and (far, hops) > best[0]:
+            break
+        if tried >= EXIT_CANDIDATES:
+            break
+        tried += 1
+        town = view.source.get(cx, cy)
+        if town is None:
+            continue
+        side = int(town["side"])
+        exits = [ex for ex in tg.cell_exits(view.chart, view.city, view.cells[(cx, cy)], town["roads"], walls)
+                 if ex["edge"] == e]
+        if not exits:
+            continue
+        goals = {int(ex["y"]) * side + int(ex["x"]) for ex in exits}
+        compass = _EDGE_COMPASS[e]
+        plan = _plan_walk(view, (cx, cy), goals, kind="leave", rule="town_leave",
+                          target={"name": f"the {compass} edge of town", "cx": cx, "cy": cy, "edge": e,
+                                  "out": [out[0], out[1]]},
+                          enter=False, context=context, budget=budget)
+        if not plan.get("legs") or not plan.get("reached"):
+            continue
+        end = int(plan["end"][2])
+        ex = next((x for x in exits if int(x["y"]) * side + int(x["x"]) == end), exits[0])
+        if ex.get("kind") == "gate":
+            label = str(ex.get("label") or f"{compass.title()} Gate")
+            plan["target"].update({"name": f"the {label}" if not label.lower().startswith("the ") else label,
+                                   "gate": str(ex.get("gate") or compass), "label": label})
+            if walls.get("manned"):
+                plan["target"]["checkpoint"] = True
+        plan["walls"] = walls
+        plan["exit"] = {"cx": cx, "cy": cy, "x": int(ex["x"]), "y": int(ex["y"]), "edge": e, "kind": ex.get("kind"),
+                        "out": [out[0], out[1]]}
+        key = ((far, hops), int(plan.get("minutes") or 0))
+        if best is None or key < (best[0], best[1]):
+            best = ((far, hops), int(plan.get("minutes") or 0), plan)
+    return best[2] if best else None
+
+
+def _gate_stop(conn, plan: dict[str, Any], pos: dict[str, Any]) -> str:
+    """Why a walk out must stop at its gate first, or "" (playtest #71).
+
+    Only a walled town's gate stops anyone: a manned checkpoint, or a gate
+    shut for the night. A player already standing at that gate was stopped
+    there before, so this time they go through: the stop is where the scene
+    with the guard happens, never a wall the player cannot pass.
+    """
+    ex = plan.get("exit") or {}
+    walls = plan.get("walls") or {}
+    if ex.get("kind") != "gate" or not walls.get("walled"):
+        return ""
+    if (int(pos.get("cx", -1)), int(pos.get("cy", -1)), int(pos.get("fx", -1)), int(pos.get("fy", -1))) == (
+        int(ex["cx"]), int(ex["cy"]), int(ex["x"]), int(ex["y"])
+    ):
+        return ""
+    label = str((plan.get("target") or {}).get("label") or "The gate")
+    if walls.get("manned"):
+        return f"{label} is a checkpoint; the guards stop whoever passes. Speak with them, or leave again to go through."
+    minute = (_world_minute(conn) + int(plan.get("minutes") or 0)) % (24 * 60)
+    if not venues.is_open(tg.GATE_HOURS[0], tg.GATE_HOURS[1], minute):
+        return (f"{label} is shut for the night (it opens at {venues.clock(tg.GATE_HOURS[0])}). "
+                "Rouse the gatekeeper, or leave again to try the postern.")
+    return ""
+
+
+def plan_exit(conn, target: tuple[int, int] | None = None, *, edge: str = "",
+              context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The walk out of town toward ``target`` (a world cell), planned but not written.
+
+    Raises ValueError when the player is not in a town or no way out is
+    reachable. May generate the cells the walk crosses (town_cells cache rows).
+    """
+    chart = world_chart(conn)
+    pos = get_position(conn)
+    if chart is None or not pos:
+        raise ValueError("You are not in a town.")
+    city = city_by_id(chart, str(pos.get("city_id") or ""))
+    if city is None:
+        raise ValueError("You are not in a town.")
+    view = _CityView(conn, chart, city, pos, _CellSource(conn, chart, generate=True))
+    plan = _exit_walk(view, target, edge=edge, context=context, budget=across_town_budget(city))
+    if plan is None and edge:
+        plan = _exit_walk(view, target, context=context, budget=across_town_budget(city))
+    if plan is None:
+        raise ValueError("No road you know leads out of town from here.")
+    plan["halt"] = _gate_stop(conn, plan, pos)
+    return plan
+
+
+def _commit_walk(conn, plan: dict[str, Any], pos: dict[str, Any], context: dict[str, Any] | None) -> dict[str, Any]:
+    """Preview, commit, advance one engine walk outside a turn (click-walk, Leave, map pick)."""
+    result: dict[str, Any] = {"player": {}}
+    report = apply_town_turn(conn, {"position": pos, "plan": plan, "placed": None}, result, context,
+                             turn=_turn(conn)) or {}
+    code = (result.get("player") or {}).get("move_to_location_code")
+    if code:
+        row = conn.execute("SELECT id FROM locations WHERE code = ?", (str(code),)).fetchone()
+        if row is not None:
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(row["id"]),))
+    return report
+
+
+def walk_out(conn, target: tuple[int, int] | None = None, *, edge: str = "", context: dict[str, Any] | None = None,
+             plan: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Walk through the streets and out of town (playtest #71). Writes the walk.
+
+    Returns {"left", "halted", "exit", "minutes", "report"}. A walk that must
+    stop at a gate is written up to the gate and comes back with ``halted``
+    ({"at", "why"}): the player has walked there. Raises ValueError (no way
+    out) and PermissionError (too tired to walk it).
+    """
+    pos = get_position(conn)
+    if plan is None:
+        plan = plan_exit(conn, target, edge=edge, context=context)
+    if plan.get("blocked"):
+        raise PermissionError("Too exhausted to walk out of town. Wait, meditate, or sleep to recover energy.")
+    halt = str(plan.get("halt") or "")
+    if halt:
+        plan = dict(plan, kind="walk", rule="town_walk")
+    report = _commit_walk(conn, plan, pos, context)
+    if report.get("blocked"):
+        raise PermissionError("Too exhausted to walk out of town. Wait, meditate, or sleep to recover energy.")
+    out = {"left": bool(report.get("left")), "exit": plan.get("exit"), "minutes": int(plan.get("minutes") or 0),
+           "report": report, "halted": None}
+    if halt:
+        out["halted"] = {"at": str((plan.get("target") or {}).get("label") or (plan.get("target") or {}).get("name") or ""),
+                         "why": halt}
+    return out
+
+
+def walk_to_cell(conn, cx: int, cy: int, *, context: dict[str, Any] | None = None) -> dict[str, Any]:
+    """A world-map pick of another cell of the same town: a walk through the streets, not a jump (#70, #71)."""
+    chart = world_chart(conn)
+    pos = get_position(conn)
+    if chart is None or not pos:
+        raise ValueError("You are not in a town.")
+    city = city_by_id(chart, str(pos.get("city_id") or ""))
+    if city is None:
+        raise ValueError("You are not in a town.")
+    view = _CityView(conn, chart, city, pos, _CellSource(conn, chart, generate=True))
+    dest = (int(cx), int(cy))
+    if dest not in view.cells:
+        raise ValueError("That tile is not in this town.")
+    town = view.source.get(*dest)
+    if town is None:
+        raise ValueError("That part of town is out of reach this turn.")
+    goal = entry_tile(chart, city, view.cells[dest], town, (int(pos["cx"]), int(pos["cy"])))
+    plan = _plan_walk(view, dest, {goal}, kind="walk", rule="town_walk",
+                      target={"name": street_at(town, goal) or "the road", "cx": dest[0], "cy": dest[1]},
+                      enter=False, context=context, budget=across_town_budget(city))
+    if not plan.get("legs"):
+        raise ValueError("No road you know leads there.")
+    if plan.get("blocked"):
+        raise PermissionError("Too exhausted to walk there. Wait, meditate, or sleep to recover energy.")
+    report = _commit_walk(conn, plan, pos, context)
+    return {"plan": {k: plan.get(k) for k in ("rule", "minutes", "partial", "remaining_minutes", "reached", "target")},
+            "report": report, "position": get_position(conn)}
+
+
 def plan_town_move(conn, chart: dict[str, Any], city: dict[str, Any], text: str, pos: dict[str, Any], *,
                    context: dict[str, Any] | None = None, generate: bool = True) -> dict[str, Any] | None:
     """This turn's town movement from the player's own words, or None when the line goes nowhere in town."""
@@ -1258,7 +1511,7 @@ def plan_town_move(conn, chart: dict[str, Any], city: dict[str, Any], text: str,
 
     doorway = W.venue_move_intent(words)
     moving = (
-        W.travel_intent(words) or bool(doorway) or bool(_GO_RE.search(words)) or bool(_LEAVE_RE.search(words))
+        W.travel_intent(words) or bool(doorway) or bool(_GO_RE.search(words)) or bool(_leave_asked(words))
         or bool(_TO_GATE_RE.search(words))
     )
     if not moving:
@@ -1272,8 +1525,22 @@ def plan_town_move(conn, chart: dict[str, Any], city: dict[str, Any], text: str,
     here_i = _pos_index(pos, side)
     inside = str(pos.get("inside") or "")
 
-    leave = _LEAVE_RE.search(words)
-    to_gate = None if leave else _TO_GATE_RE.search(words)
+    leave = _leave_asked(words)
+    to_gate = None if leave or _LEAVE_RE.search(words) else _TO_GATE_RE.search(words)
+    if leave:
+        # The same exit planner as the Leave control and a map pick: in an
+        # open town the nearest road out, in a walled one a gate (#71).
+        named_gate = _GATE_COMPASS_RE.search(words)
+        edge = _COMPASS_EDGE.get(str(named_gate.group("compass")).lower(), "") if named_gate else ""
+        if not edge:
+            named_side = re.search(r"\b(north|south|east|west)(?:ern)?\b", words, re.I)
+            edge = _COMPASS_EDGE.get(named_side.group(1).lower(), "") if named_side else ""
+        budget = across_town_budget(city)
+        plan = _exit_walk(view, None, edge=edge, context=context, budget=budget) if edge else None
+        if plan is None:
+            plan = _exit_walk(view, None, context=context, budget=budget)
+        if plan is not None:
+            return plan
     if leave or to_gate:
         named_gate = _GATE_COMPASS_RE.search(words)
         gate = _gate_target(view, str(named_gate.group("compass")).lower()) if named_gate else None
@@ -1593,7 +1860,12 @@ def town_contract(conn, chart: dict[str, Any], city: dict[str, Any], pos: dict[s
         elif walked or plan.get("kind") in ("walk", "enter", "leave"):
             arrived: dict[str, Any] = {"name": tname, "minutes": int(plan.get("minutes") or 0)}
             if plan.get("kind") == "leave":
-                arrived["where"] = "at the gate, leaving town"
+                if target.get("checkpoint"):
+                    arrived["where"] = "through the checkpoint, leaving town; the guards stop and question them first"
+                elif target.get("gate"):
+                    arrived["where"] = "at the gate, leaving town"
+                else:
+                    arrived["where"] = "at the edge of town, leaving it"
             elif plan.get("enter"):
                 arrived["where"] = "goes inside"
             elif plan.get("enter_wanted") and not plan.get("open", True):
@@ -2031,6 +2303,12 @@ def apply_town_turn(conn, town_turn: dict[str, Any] | None, result: dict[str, An
                 except Exception:
                     pass
         report["left"] = True
+        if step:
+            report["out"] = [cx + step[0], cy + step[1]]
+        # Out of a building and out of town: the location is the town itself,
+        # as after a world-map exit. story_walk_skips sees "left" and keeps the
+        # story walk from heading back to this row's anchor, inside the town
+        # (playtest #71: the player was walked back in at the south gate).
         if pos.get("inside") and settle_code:
             player_patch["move_to_location_code"] = settle_code
         return report
@@ -2057,7 +2335,14 @@ def apply_town_turn(conn, town_turn: dict[str, Any] | None, result: dict[str, An
 
 
 def story_walk_skips(conn, movement_report: dict[str, Any] | None, town_report: dict[str, Any] | None) -> bool:
-    """plan_story_walk's town skip: the player is still in a town and the town rules moved (or kept) them."""
+    """plan_story_walk's town skip: the player is still in a town and the town rules moved (or kept) them.
+
+    Also when the town rules just walked them out (``left``): the marker is
+    already outside, and a story walk toward the town's own row would walk
+    them straight back in (playtest #71).
+    """
+    if town_report and town_report.get("left"):
+        return True
     if not get_position(conn):
         return False
     rule = str((movement_report or {}).get("rule") or "")
@@ -2113,21 +2398,15 @@ def click_walk(conn, *, plot_ref: str = "", cx: int | None = None, cy: int | Non
             raise ValueError("There is no road there.")
         goals = {goal}
         target = {"name": street_at(town, goal) or "the road", "cx": dest[0], "cy": dest[1]}
-    if dest != (int(pos["cx"]), int(pos["cy"])) and not travel_ready:
-        raise PermissionError("Long travel is locked until the scene is free; walk within this part of town.")
+    # Walking to another cell of the same town is a walk, never long travel:
+    # travel_ready no longer gates it (playtest #70; ``travel_ready`` is kept
+    # for callers and ignored). Confinement is the route's own 409.
     plan = _plan_walk(view, dest, goals, kind="walk", rule="town_walk", target=target, enter=False, context=context)
     if not plan.get("legs"):
         raise ValueError("There is no road there.")
     if plan.get("blocked"):
         raise PermissionError("Too exhausted to walk there. Wait, meditate, or sleep to recover energy.")
-    result: dict[str, Any] = {"player": {}}
-    report = apply_town_turn(conn, {"position": pos, "plan": plan, "placed": None}, result, context,
-                             turn=_turn(conn)) or {}
-    code = (result.get("player") or {}).get("move_to_location_code")
-    if code:
-        row = conn.execute("SELECT id FROM locations WHERE code = ?", (str(code),)).fetchone()
-        if row is not None:
-            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(row["id"]),))
+    report = _commit_walk(conn, plan, pos, context)
     if plot_ref and not target.get("name"):
         # Reaching the door reads its sign; only then does the name go back.
         view._know.pop(dest, None)

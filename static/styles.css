@@ -6089,6 +6089,24 @@ button.chipBtn.activeChip {
   padding: 0 8px;
 }
 
+/* The way out of town under the Streets map (playtest #71). */
+.townLeaveBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 12px 0;
+  min-width: 0;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.townLeaveNote {
+  min-width: 0;
+  color: var(--muted);
+}
+
 /* Capped and scrolled, so a long place list never squeezes the map square. */
 .settlementInfo {
   flex: 0 1 auto;

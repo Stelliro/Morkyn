@@ -23,6 +23,17 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Fixed
+
+- [CLAUDE] Town roads meet across the edges between a town's cells: the walk crosses wherever road tiles face each other, cells generated from now on (GEN_VERSION 2) lay a road to every crossing of a shared edge, including the dead ends of an older stored neighbour, and a walk into another part of the same town no longer waits for travel_ready (#70). - `app/town_grid.py`, `app/town_moves.py`, `app/main.py`, `static/app.js`
+- [CLAUDE] Towns are walled only when they really are (town_walls by band, era and theme); an open town can be left by any road at its edge, a walled one by its gates, and a gate with no plot is drawn. A world-tile pick from inside a town walks the streets out instead of teleporting and stops only at a manned checkpoint or a night-shut gate; a typed leave stays out instead of being walked back in; 'i cant leave the city' is no longer a leave (#71). - `app/town_grid.py`, `app/town_moves.py`, `app/main.py`, `static/app.js`
+- [CLAUDE] Towns fill from one town centre: new cells put shops and built lots toward the centre of the whole town, run plots back to the middle of built-up blocks, and turn the thin fringe into fields, pasture and orchards where the setting farms (#72). - `app/town_grid.py`
+
+### Added
+
+- [CLAUDE] A Leave control under the Streets map walks to the nearest way out (or out by the side you stand at) and steps onto the world map (POST /api/town/leave); a walled town's wall is drawn along its outer edges (#71). - `app/main.py`, `app/town_moves.py`, `static/app.js`, `static/index.html`, `static/styles.css`
+- [CLAUDE] Streets map: road widths follow metres and the zoom (avenue 10 m, main 8 m, street 6 m, alley 3.5 m, with pixel floors and ceilings), alleys are drawn solid like streets were, and avenues and main roads carry a thin thread (user request). - `static/app.js`
+
 ## [0.10.0-dev.7] - 2026-10-07
 
 > Pre-release on the way to `0.10.0`. Fixes #64-#68 from the screenshot pass (New game no longer replaces the live map), fresh UI screenshots and the README cover.

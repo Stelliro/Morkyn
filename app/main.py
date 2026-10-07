@@ -2434,12 +2434,7 @@ def api_tile_map_move(request: MapMoveRequest):
         if dx == 0 and dy == 0:
             raise HTTPException(status_code=400, detail="Provide x,y or dx,dy.")
         tx, ty = px + dx, py + dy
-    manh = abs(tx - px) + abs(ty - py)
-    cheb = max(abs(tx - px), abs(ty - py))
-    # Orthogonal or diagonal one-tile steps stay free (no Continue / travel lock).
-    free_step = cheb <= 1 and manh > 0 and (request.mode or "free").lower() != "scene"
-    # Long jumps still respect travel_ready unless force
-    if not free_step and not request.force:
+    def _travel_ready() -> bool:
         with _connect() as conn:
             row = conn.execute("SELECT value FROM settings WHERE key = 'travel_ready'").fetchone()
         ready = True
@@ -2452,7 +2447,90 @@ def api_tile_map_move(request: MapMoveRequest):
                 )
             except Exception:
                 ready = str(row["value"]).lower() in {"1", "true", "yes", "on"}
-        if not ready:
+        return bool(ready)
+
+    # From inside a town a world pick is a walk through the streets, never a
+    # jump (playtest #70, #71, docs/TownGrid.md 4.2): another cell of the same
+    # town is a town walk; anywhere else the player walks out by the best way
+    # (stopping only at a gate that must stop them) and the world step starts
+    # outside that exit.
+    town_exit = None
+    try:
+        from app.town_moves import get_position as _town_position
+
+        with _connect() as conn:
+            in_town = _town_position(conn)
+    except Exception:
+        in_town = None
+    if in_town and str(in_town.get("map_id") or "") == str(data.get("id") or "") and (tx, ty) != (px, py):
+        from app.town_grid import _locate as _town_locate
+        from app.town_moves import plan_exit, walk_out, walk_to_cell
+
+        town_context = get_state(include_hidden=False)
+        target_city = _town_locate(data, tx, ty)
+        try:
+            if target_city and str(target_city[0].get("id") or "") == str(in_town.get("city_id") or ""):
+                with _connect() as conn:
+                    walked = walk_to_cell(conn, tx, ty, context=town_context)
+                try:
+                    autosave_campaign()
+                except Exception:
+                    pass
+                return {
+                    "ok": True,
+                    "map": get_map(None),
+                    "town_walk": walked,
+                    "travel_ready": _travel_ready(),
+                    "state": get_state(),
+                    "step": {"from": [px, py], "to": [tx, ty], "free": True,
+                             "minutes": int((walked.get("plan") or {}).get("minutes") or 0), "terrain": "town"},
+                    "travel": {},
+                    "travel_result": {},
+                }
+            with _connect() as conn:
+                exit_plan = plan_exit(conn, (tx, ty), context=town_context)
+            out_x, out_y = (int(v) for v in (exit_plan.get("exit") or {}).get("out") or (px, py))
+            rest_free = max(abs(tx - out_x), abs(ty - out_y)) <= 1
+            # The world part keeps its own rule: a long jump waits for the scene.
+            if not rest_free and not request.force and not _travel_ready():
+                raise HTTPException(
+                    status_code=409,
+                    detail="Long travel is locked until the scene is free — use adjacent steps (arrows) anytime.",
+                )
+            with _connect() as conn:
+                town_exit = walk_out(conn, (tx, ty), context=town_context, plan=exit_plan)
+        except PermissionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if town_exit.get("halted") or not town_exit.get("left") or (tx, ty) == (out_x, out_y):
+            # Stopped at a gate (HTTP 200: the player has walked there), or
+            # already standing where they picked.
+            try:
+                autosave_campaign()
+            except Exception:
+                pass
+            return {
+                "ok": True,
+                "map": get_map(None),
+                "town_exit": town_exit,
+                "halted": town_exit.get("halted"),
+                "travel_ready": _travel_ready(),
+                "state": get_state(),
+                "step": {"from": [px, py], "to": [tx, ty], "free": True,
+                         "minutes": int(town_exit.get("minutes") or 0), "terrain": "town"},
+                "travel": {},
+                "travel_result": {"town_exit": town_exit},
+            }
+        px, py = out_x, out_y
+        data = get_map(None) or data
+    manh = abs(tx - px) + abs(ty - py)
+    cheb = max(abs(tx - px), abs(ty - py))
+    # Orthogonal or diagonal one-tile steps stay free (no Continue / travel lock).
+    free_step = cheb <= 1 and manh > 0 and ((request.mode or "free").lower() != "scene" or town_exit is not None)
+    # Long jumps still respect travel_ready unless force
+    if not free_step and not request.force and town_exit is None:
+        if not _travel_ready():
             raise HTTPException(
                 status_code=409,
                 detail="Long travel is locked until the scene is free — use adjacent steps (arrows) anytime.",
@@ -2500,6 +2578,8 @@ def api_tile_map_move(request: MapMoveRequest):
                 "resource_spend": travel_result.get("resource_spend"),
             },
         )
+    if town_exit is not None and isinstance(travel_result, dict):
+        travel_result["town_exit"] = town_exit
     # Into or out of a town: town_position follows the marker (docs/TownGrid.md 4.1, 4.2).
     try:
         from app.town_moves import sync_after_world_move
@@ -2616,9 +2696,10 @@ class TownWalkRequest(BaseModel):
 def api_town_walk(request: TownWalkRequest):
     """Walk the roads to a plot's door (or a clicked tile) without going in (docs/TownGrid.md 7).
 
-    Same gates as /api/tiles/map/move: confinement answers 409, and leaving the
-    current cell needs travel_ready. Minutes, weather and energy are spent on
-    this one connection; a walk too tired to make answers 409 and changes nothing.
+    Confinement answers 409, like /api/tiles/map/move. A walk into another
+    cell of the same town is a walk, not long travel, so travel_ready does not
+    gate it (playtest #70). Minutes, weather and energy are spent on this one
+    connection; a walk too tired to make answers 409 and changes nothing.
     """
     from app.db import connect as _connect
     from app.town_grid import town_view
@@ -2674,6 +2755,58 @@ def api_town_walk(request: TownWalkRequest):
     finally:
         conn.close()
     return {"ok": True, "walk": walked, "view": view, "state": get_state()}
+
+
+class TownLeaveRequest(BaseModel):
+    """The Leave control under the Streets map: out by this edge ("N", "E", "S", "W"), or the nearest way out."""
+    edge: str = Field(default="", max_length=1)
+
+
+@app.post("/api/town/leave")
+def api_town_leave(request: TownLeaveRequest):
+    """Walk the streets to the best way out and step out of town (playtest #71).
+
+    Answers 200 with ``leave.halted`` when a walled town's gate stops the
+    player first (they have walked to it); 409 when confined or too tired,
+    400 when no way out is known.
+    """
+    from app.db import connect as _connect
+    from app.town_grid import town_view
+    from app.town_moves import walk_out
+    from app.world import get_state
+
+    runtime = _location_special_runtime()
+    if runtime.get("movement_locked") or runtime.get("map_blank"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": runtime.get("hint") or "You cannot move — confined (blank map / prison state).",
+                "movement_locked": True,
+                "map_blank": bool(runtime.get("map_blank")),
+            },
+        )
+    edge = str(request.edge or "").strip().upper()
+    if edge and edge not in {"N", "E", "S", "W"}:
+        raise HTTPException(status_code=400, detail="edge must be N, E, S or W.")
+    context = get_state(include_hidden=False)
+    try:
+        with _connect() as conn:
+            left = walk_out(conn, None, edge=edge, context=context)
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        autosave_campaign()
+    except Exception:
+        pass
+    data = get_map(None)
+    conn = _connect()
+    try:
+        view = town_view(conn, data, r=1) if data and not left.get("left") else {"available": False, "cells": []}
+    finally:
+        conn.close()
+    return {"ok": True, "leave": left, "view": view, "map": data, "state": get_state()}
 
 
 @app.get("/api/town/plot/{plot_id}")

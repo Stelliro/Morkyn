@@ -37,7 +37,10 @@ from typing import Any, Iterable
 
 from app.world_scale import CITY_CELL_MAX, clamp_int, mix_hash, normalize_density, street_mask
 
-GEN_VERSION = 1
+# 2: roads meet across a city's shared cell edges (edge_joins, playtest #70)
+# and plots fill from one town centre (town_field, playtest #72). Stored v1
+# rows stay as they are; a v2 cell next to one meets the roads it already has.
+GEN_VERSION = 2
 # Frozen once shipped: changing where ports sit would disconnect cells a save
 # already generated from cells it generates later (TownGrid.md 3.1, 3.5).
 PORT_VERSION = 1
@@ -66,6 +69,8 @@ _SALT_ROLLS = 7107
 _SALT_NAMES = 7108
 _SALT_STREETS = 7109
 _SALT_GATE = 7110
+_SALT_WALLS = 7111
+_SALT_RURAL = 7112
 
 _EDGE_COMPASS = {"N": "north", "E": "east", "S": "south", "W": "west"}
 _EDGE_STEP = {"N": (0, -1), "E": (1, 0), "S": (0, 1), "W": (-1, 0)}
@@ -106,6 +111,13 @@ OTHERWISE: dict[str, tuple[tuple[str, float], ...]] = {
     "government": (("office", 0.60), ("house", 0.40)),
     "temple": (("house", 0.50), ("yard", 0.50)),
 }
+
+# The thin outer fringe of a town, where the setting farms its edge (playtest
+# #72): what an otherwise-roll becomes there. These are not named kinds, so
+# they never enter places_here or the prompt.
+RURAL_KINDS: tuple[tuple[str, float], ...] = (("field", 0.35), ("pasture", 0.25), ("orchard", 0.15), ("yard", 0.25))
+FRINGE_CORE = 0.2
+_NO_RURAL_THEMES = frozenset({"space_opera", "far_future"})
 
 # Kinds that are not retail: a shop roll that lands on one is a service plot.
 SERVICE_KINDS = frozenset({
@@ -246,12 +258,14 @@ class _LRU:
 _CELL_CACHE = _LRU(CELL_LRU_SIZE)
 _SKELETON_CACHE = _LRU(SKELETON_LRU_SIZE)
 _PORTS_CACHE = _LRU(PORTS_LRU_SIZE)
+_JOINS_CACHE = _LRU(PORTS_LRU_SIZE)
 
 
 def clear_caches() -> None:
     _CELL_CACHE.clear()
     _SKELETON_CACHE.clear()
     _PORTS_CACHE.clear()
+    _JOINS_CACHE.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -457,6 +471,246 @@ def port_tile(port: dict[str, Any], side: int) -> tuple[int, int]:
 
 
 # ---------------------------------------------------------------------------
+# Shared edges, walls and the town field (playtest #70, #71, #72)
+# ---------------------------------------------------------------------------
+
+_OPPOSITE = {"N": "S", "S": "N", "E": "W", "W": "E"}
+
+
+def edge_tiles(side: int, edge: str) -> list[int]:
+    """Flat indices of one edge row of a cell, in order along the edge."""
+    side = int(side)
+    if edge == "N":
+        return [x for x in range(side)]
+    if edge == "S":
+        return [(side - 1) * side + x for x in range(side)]
+    if edge == "W":
+        return [y * side for y in range(side)]
+    return [y * side + side - 1 for y in range(side)]
+
+
+def _inward(i: int, side: int, edge: str) -> int:
+    dx, dy = _EDGE_STEP[edge]
+    return i - dy * side - dx
+
+
+def edge_arrivals(roads: bytearray, side: int, edge: str) -> list[int]:
+    """Positions along an edge where a road reaches it from inside the cell."""
+    out = []
+    for k, i in enumerate(edge_tiles(side, edge)):
+        j = _inward(i, side, edge)
+        if roads[i] and 0 <= j < side * side and roads[j]:
+            out.append(k)
+    return out
+
+
+def _avenue_edge_metres(cell: dict[str, Any], edge: str) -> list[float]:
+    """Where this cell's street_mask avenues cross one of its edges, in metres along it."""
+    side = _side(cell)
+    mask = street_mask(int(cell.get("seed") or 1), side)
+    if edge in ("N", "S"):
+        row = 0 if edge == "N" else side - 1
+        ks = sorted({x for x, y in mask if y == row})
+    else:
+        col = 0 if edge == "W" else side - 1
+        ks = sorted({y for x, y in mask if x == col})
+    return [(k + 0.5) * tile_metres(side) for k in ks]
+
+
+def edge_joins(world: dict[str, Any], city: dict[str, Any],
+               extra: dict[tuple[tuple[int, int], str], list[float]] | None = None) -> dict[tuple[tuple[int, int], str], list[float]]:
+    """Where roads cross every shared edge of a city's cells: (cell, edge) -> metres along the edge.
+
+    Playtest #70: only the ports were shared, so every other road that reached
+    an edge between two cells of one town dead-ended there. A join is a port,
+    or an avenue of either cell, or (``extra``) a road a stored neighbour
+    already brings to the edge. Points closer than one tile of the coarser
+    side are one crossing, and the earlier kind wins (ports first). Each point
+    is the middle of the tile that owns it, so ``port_tile`` on either side
+    lands on a tile holding that metre. Pure: the city record alone, plus
+    ``extra``, decides it, so cells can be generated in any order.
+    """
+    seed = int(world.get("seed") or 1)
+    cache_key = None
+    if not extra:
+        cache_key = (str(world.get("id") or ""), seed, str(city.get("id") or ""), PORT_VERSION, GEN_VERSION,
+                     tuple(city.get("bbox") or ()), int(city.get("footprint") or 0), len(world.get("roads") or []),
+                     len(world.get("cities") or []))
+        cached = _JOINS_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+    cells = _city_cells(city)
+    ports = city_ports(world, city)
+    out: dict[tuple[tuple[int, int], str], list[float]] = {}
+    for pos in sorted(cells):
+        for (dx, dy, edge_a, edge_b) in ((1, 0, "E", "W"), (0, 1, "S", "N")):
+            nb = (pos[0] + dx, pos[1] + dy)
+            if nb not in cells:
+                continue
+            a, b = cells[pos], cells[nb]
+            merge = tile_metres(min(_side(a), _side(b)))
+            points = [float(p.get("t") or 0.5) * CELL_METRES for p in ports.get(pos, [])
+                      if p.get("to") and (int(p["to"][0]), int(p["to"][1])) == nb]
+            points += _avenue_edge_metres(a, edge_a) + _avenue_edge_metres(b, edge_b)
+            if extra:
+                points += list(extra.get((pos, edge_a)) or []) + list(extra.get((nb, edge_b)) or [])
+            kept: list[float] = []
+            for m in points:
+                if all(abs(m - k) >= merge for k in kept):
+                    kept.append(m)
+            kept.sort()
+            out[(pos, edge_a)] = kept
+            out[(nb, edge_b)] = kept
+    if cache_key is not None:
+        _JOINS_CACHE.put(cache_key, out)
+    return out
+
+
+def _join_tile(metres: float, side: int, edge: str) -> int:
+    # Never a corner: a corner's inward tile lies on the other edge's row,
+    # which a second shared edge would keep free of road and so cut the stub.
+    k = clamp_int(int(float(metres) / tile_metres(side)), 1, max(1, side - 2))
+    return edge_tiles(side, edge)[k]
+
+
+def _cell_join_tiles(world: dict[str, Any], city: dict[str, Any], cell: dict[str, Any],
+                     extra: dict | None = None) -> dict[str, list[int]]:
+    """This cell's join tiles per shared edge (flat indices)."""
+    side = _side(cell)
+    pos = (int(cell.get("x") or 0), int(cell.get("y") or 0))
+    joins = edge_joins(world, city, extra)
+    out: dict[str, list[int]] = {}
+    for edge in ("N", "E", "S", "W"):
+        metres = joins.get((pos, edge))
+        if metres is None:
+            continue
+        out[edge] = sorted({_join_tile(m, side, edge) for m in metres})
+    return out
+
+
+# Walls (playtest #71). A town is walled only when it really is: a hamlet or a
+# village never; a town or a city of the walled eras by a hashed chance that
+# grows with size; a post-collapse town behind a barricade with checkpoints.
+WALL_CHANCE = {"town": 0.45, "city": 0.75, "large_city": 0.85, "metropolis": 0.9}
+WALLED_ERAS = frozenset({"preindustrial", ""})
+# Gates of a walled town shut overnight (minutes of the day they open and shut).
+GATE_HOURS = (6 * 60, 21 * 60)
+
+
+def town_walls(world: dict[str, Any], city: dict[str, Any], era: str) -> dict[str, Any]:
+    """{"walled", "kind": "wall" | "barricade" | "", "manned"}. Pure, stored nowhere."""
+    band = str(city.get("band") or "")
+    theme = str(world.get("theme") or "")
+    chance = WALL_CHANCE.get(band, 0.0)
+    if chance <= 0:
+        return {"walled": False, "kind": "", "manned": False}
+    roll = mix_hash(int(world.get("seed") or 1), zlib.crc32(str(city.get("id") or "").encode("utf-8")), 0,
+                    _SALT_WALLS) / 2**32
+    if theme == "post_collapse":
+        return {"walled": True, "kind": "barricade", "manned": True}
+    if str(era or "") not in WALLED_ERAS or theme in _NO_RURAL_THEMES:
+        return {"walled": False, "kind": "", "manned": False}
+    if roll < chance:
+        return {"walled": True, "kind": "wall", "manned": False}
+    return {"walled": False, "kind": "", "manned": False}
+
+
+def outer_edges(city: dict[str, Any], cx: int, cy: int) -> list[str]:
+    cells = _city_cells(city)
+    return [edge for edge in ("N", "E", "S", "W") if _outer(cells, int(cx), int(cy), edge)]
+
+
+def cell_exits(world: dict[str, Any], city: dict[str, Any], cell: dict[str, Any], roads: bytearray,
+               walls: dict[str, Any]) -> list[dict[str, Any]]:
+    """Where the player can step out of the town from this cell (playtest #71).
+
+    An open town: every road tile on an outer edge. A walled town: its gate
+    ports, plus a gate wherever one of its avenues runs through the wall, so
+    a walled town is not a one-exit trap. Works on stored rows of any version.
+    """
+    side = _side(cell)
+    cx, cy = int(cell.get("x") or 0), int(cell.get("y") or 0)
+    out: list[dict[str, Any]] = []
+    seen: set[int] = set()
+    ports = city_ports(world, city).get((cx, cy), [])
+    walled = bool(walls.get("walled"))
+    for port in ports:
+        if not port.get("gate"):
+            continue
+        x, y = port_tile(port, side)
+        i = y * side + x
+        if i in seen:
+            continue
+        seen.add(i)
+        out.append({"x": x, "y": y, "edge": str(port["edge"]), "gate": str(port.get("gate") or ""),
+                    "label": str(port.get("label") or ""), "kind": "gate"})
+    used: dict[str, int] = {}
+    for item in out:
+        used[item["gate"]] = used.get(item["gate"], 0) + 1
+    for edge in outer_edges(city, cx, cy):
+        for i in edge_tiles(side, edge):
+            if not roads[i] or i in seen:
+                continue
+            if walled and roads[i] != ROAD_AVENUE:
+                continue
+            seen.add(i)
+            item = {"x": i % side, "y": i // side, "edge": edge, "kind": "gate" if walled else "open"}
+            if walled:
+                compass = _EDGE_COMPASS[edge]
+                used[compass] = used.get(compass, 0) + 1
+                count = used[compass]
+                item["gate"] = compass
+                item["label"] = f"{compass.title()} Gate" if count == 1 else f"{compass.title()} Gate {count}"
+            out.append(item)
+    return out
+
+
+def town_field(city: dict[str, Any]) -> dict[str, float]:
+    """One town centre for the whole city, in town metres (playtest #72).
+
+    The fill point is the mean of the cell centres: a one-cell town fills from
+    its middle, and each extra cell pulls the point toward itself. ``r`` is
+    the distance to the farthest outer corner of the footprint.
+    """
+    cells = list(_city_cells(city).values())
+    if not cells:
+        return {"x": CELL_METRES / 2, "y": CELL_METRES / 2, "r": CELL_METRES * 0.75}
+    xs, ys = [], []
+    corners = []
+    for cell in cells:
+        local = cell.get("local") or [0, 0]
+        lx, ly = int(local[0]), int(local[1])
+        xs.append((lx + 0.5) * CELL_METRES)
+        ys.append((ly + 0.5) * CELL_METRES)
+        for ox in (0, 1):
+            for oy in (0, 1):
+                corners.append(((lx + ox) * CELL_METRES, (ly + oy) * CELL_METRES))
+    fx, fy = sum(xs) / len(xs), sum(ys) / len(ys)
+    r = max(((x - fx) ** 2 + (y - fy) ** 2) ** 0.5 for x, y in corners)
+    return {"x": fx, "y": fy, "r": max(1.0, r)}
+
+
+def town_core(field: dict[str, float], x_m: float, y_m: float) -> float:
+    """1 at the town centre falling smoothly to 0 at the farthest corner."""
+    d = ((x_m - field["x"]) ** 2 + (y_m - field["y"]) ** 2) ** 0.5 / field["r"]
+    t = min(1.0, max(0.0, d))
+    return 1.0 - t * t * (3 - 2 * t)
+
+
+def _core_fn(city: dict[str, Any], cell: dict[str, Any], side: int):
+    """core(x, y) for fine tiles of one cell."""
+    field = town_field(city)
+    local = cell.get("local") or [0, 0]
+    ox, oy = int(local[0]) * CELL_METRES, int(local[1]) * CELL_METRES
+    tm = tile_metres(side)
+
+    def core(x: float, y: float) -> float:
+        return town_core(field, ox + (x + 0.5) * tm, oy + (y + 0.5) * tm)
+
+    return core
+
+
+# ---------------------------------------------------------------------------
 # Grid helpers (flat arrays, index = y * side + x)
 # ---------------------------------------------------------------------------
 
@@ -555,11 +809,12 @@ def _carve(roads: bytearray, side: int, path: list[tuple[int, int]], cls: int, a
     return False
 
 
-def _nearest_road(roads_list: list[int], side: int, x: int, y: int, exclude: int = -1) -> tuple[int, int] | None:
+def _nearest_road(roads_list: list[int], side: int, x: int, y: int, exclude: int = -1,
+                  avoid: set[int] | None = None) -> tuple[int, int] | None:
     best = None
     best_d = 1 << 30
     for i in roads_list:
-        if i == exclude:
+        if i == exclude or (avoid and i in avoid):
             continue
         d = abs(i % side - x) + abs(i // side - y)
         if d < best_d:
@@ -569,8 +824,10 @@ def _nearest_road(roads_list: list[int], side: int, x: int, y: int, exclude: int
 
 
 def _connector(rng: random.Random, roads: bytearray, side: int, road_list: list[int],
-               sx: int, sy: int, first: str) -> None:
-    target = _nearest_road(road_list, side, sx, sy)
+               sx: int, sy: int, first: str, avoid: set[int] | None = None) -> None:
+    target = _nearest_road(road_list, side, sx, sy, avoid=avoid)
+    if target is None and avoid:
+        target = _nearest_road(road_list, side, sx, sy)
     if target is None:
         return
     tx, ty = target
@@ -597,7 +854,10 @@ def _cell_seed(world: dict[str, Any], cell: dict[str, Any], salt: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _skeleton_roads(world: dict[str, Any], city: dict[str, Any], cell: dict[str, Any]) -> tuple[bytearray, list[dict[str, Any]]]:
+def _skeleton_roads(world: dict[str, Any], city: dict[str, Any], cell: dict[str, Any],
+                    extra: dict | None = None) -> tuple[bytearray, list[dict[str, Any]], dict[str, set[int]]]:
+    """Stages 1 and 2. Also returns the shared-edge shape: join tiles, and the
+    other tiles of shared edge rows, which no road may use (playtest #70)."""
     side = _side(cell)
     roads = bytearray(side * side)
     for x, y in street_mask(int(cell.get("seed") or 1), side):
@@ -613,10 +873,39 @@ def _skeleton_roads(world: dict[str, Any], city: dict[str, Any], cell: dict[str,
         city_ports(world, city).get(pos, []),
         key=lambda p: (str(p.get("edge")), float(p.get("t") or 0), str(p.get("cls"))),
     )
+    joins = _cell_join_tiles(world, city, cell, extra)
+    join_set = {i for tiles in joins.values() for i in tiles}
+    shared: set[int] = set()
+    for edge in joins:
+        shared.update(edge_tiles(side, edge))
+    # A gate port near a corner may sit on a shared edge row too; it stays.
+    blocked = shared - join_set - {port_tile(p, side)[1] * side + port_tile(p, side)[0] for p in ports}
+    # Connectors aim at roads off every edge row (and one row in from a shared
+    # edge), so none runs along an edge: playtest #70 found a port connector
+    # lying along row 0 for 33 tiles.
+    band: set[int] = set()
+    for edge in ("N", "E", "S", "W"):
+        for i in edge_tiles(side, edge):
+            band.add(i)
+            if edge in joins:
+                band.add(_inward(i, side, edge))
     for port in ports:
+        if not port.get("gate"):
+            continue  # a port to another cell of the town is one of the joins below
         px, py = port_tile(port, side)
         first = "y" if port["edge"] in ("N", "S") else "x"
-        _connector(rng, roads, side, road_list, px, py, first)
+        _connector(rng, roads, side, road_list, px, py, first, avoid=band)
+    # Each join is a stub in from its edge tile, joined to the nearest road.
+    for edge in sorted(joins):
+        first = "y" if edge in ("N", "S") else "x"
+        for i in joins[edge]:
+            if not roads[i]:
+                roads[i] = ROAD_MAIN
+                road_list.append(i)
+            j = _inward(i, side, edge)
+            if roads[j]:
+                continue
+            _connector(rng, roads, side, road_list, j % side, j // side, first, avoid=band | {i})
     stored = [item for item in (cell.get("districts") or []) if isinstance(item, dict)]
     for district in stored:
         if district.get("type") == "street":
@@ -637,19 +926,31 @@ def _skeleton_roads(world: dict[str, Any], city: dict[str, Any], cell: dict[str,
             continue
         if not (0 <= sx < side and 0 <= sy < side):
             continue
-        _connector(rng, roads, side, road_list, sx, sy, first)
-    return roads, ports
+        _connector(rng, roads, side, road_list, sx, sy, first, avoid=band)
+    for i in blocked:
+        roads[i] = ROAD_NONE
+    return roads, ports, {"joins": join_set, "blocked": blocked}
 
 
-def skeleton(world: dict[str, Any], city: dict[str, Any], cell: dict[str, Any]) -> dict[str, Any]:
-    """Stages 1 and 2 of a cell, in memory: what generation will store for those classes."""
+def _extra_key(extra: dict | None) -> tuple:
+    if not extra:
+        return ()
+    return tuple(sorted((pos, edge, tuple(round(float(m), 3) for m in metres)) for (pos, edge), metres in extra.items()))
+
+
+def skeleton(world: dict[str, Any], city: dict[str, Any], cell: dict[str, Any], extra: dict | None = None) -> dict[str, Any]:
+    """Stages 1 and 2 of a cell, in memory: what generation will store for those classes.
+
+    ``extra`` is stored_edge_arrivals for this cell, the same joins get_cell
+    passes to generate_cell, so a seen cell draws the roads it will get.
+    """
     key = (str(world.get("id") or ""), int(world.get("seed") or 1), str(city.get("id") or ""),
            int(cell.get("x") or 0), int(cell.get("y") or 0), int(cell.get("seed") or 0), _side(cell),
-           GEN_VERSION, PORT_VERSION)
+           GEN_VERSION, PORT_VERSION, _extra_key(extra))
     cached = _SKELETON_CACHE.get(key)
     if cached is not None:
         return cached
-    roads, ports = _skeleton_roads(world, city, cell)
+    roads, ports, _shape = _skeleton_roads(world, city, cell, extra)
     side = _side(cell)
     out = {
         "side": side,
@@ -693,8 +994,12 @@ def _district_params(world: dict[str, Any], cell: dict[str, Any], stored: list[d
     return params
 
 
-def _bfs_to_road(roads: bytearray, side: int, start: int, limit: int, avoid: set[int]) -> list[int] | None:
-    """Shortest tile path from ``start`` to the nearest road tile not in ``avoid``, within ``limit`` steps."""
+def _bfs_to_road(roads: bytearray, side: int, start: int, limit: int, avoid: set[int],
+                 blocked: set[int] | None = None) -> list[int] | None:
+    """Shortest tile path from ``start`` to the nearest road tile not in ``avoid``, within ``limit`` steps.
+
+    ``blocked`` tiles are never stepped on unless they are road already.
+    """
     parent = {start: -1}
     frontier = deque([(start, 0)])
     while frontier:
@@ -713,14 +1018,14 @@ def _bfs_to_road(roads: bytearray, side: int, start: int, limit: int, avoid: set
             nx, ny = x + dx, y + dy
             if 0 <= nx < side and 0 <= ny < side:
                 j = ny * side + nx
-                if j not in parent:
+                if j not in parent and not (blocked and j in blocked and not roads[j]):
                     parent[j] = i
                     frontier.append((j, d + 1))
     return None
 
 
 def _side_streets(roads: bytearray, side: int, ward: list[int], params: list[dict[str, Any]],
-                  reserved: bytearray) -> None:
+                  reserved: bytearray, blocked: set[int] | None = None) -> None:
     if side < 16:
         return
     sources = [i for i in range(side * side) if roads[i]]
@@ -803,7 +1108,8 @@ def _side_streets(roads: bytearray, side: int, ward: list[int], params: list[dic
                         continue
                     for j in line:
                         roads[j] = ROAD_STREET
-                    ext = _bfs_to_road(roads, side, line[-1], min(len(line) - 1, 2 * prm["spacing"]), set(line))
+                    ext = _bfs_to_road(roads, side, line[-1], min(len(line) - 1, 2 * prm["spacing"]), set(line),
+                                       blocked)
                     if ext is None:
                         for j in line:
                             roads[j] = ROAD_NONE
@@ -885,9 +1191,19 @@ def _port_tiles(ports: list[dict[str, Any]], side: int) -> list[int]:
     return sorted({port_tile(p, side)[1] * side + port_tile(p, side)[0] for p in ports})
 
 
-def _connect_all(roads: bytearray, side: int, ports: list[dict[str, Any]]) -> None:
-    """Stage 5: every road tile reachable from the ports; join any island to the network."""
-    starts = [i for i in _port_tiles(ports, side) if roads[i]]
+def _connect_all(roads: bytearray, side: int, ports: list[dict[str, Any]], blocked: set[int] | None = None,
+                 joins: Iterable[int] = ()) -> None:
+    """Stage 5: every road tile reachable from the ports; join any island to the network.
+
+    ``blocked`` tiles (shared edge rows off the joins) never carry a joining
+    street; ``joins`` must end up on the network like the ports. With joins
+    the flood starts from one of them only, so two ports or joins on separate
+    pieces of road get joined instead of both counting as reached.
+    """
+    joins = sorted(set(int(i) for i in joins))
+    starts = [i for i in sorted(set(_port_tiles(ports, side)) | set(joins)) if roads[i]]
+    if joins:
+        starts = starts[:1]
     if not starts:
         starts = [next((i for i in range(side * side) if roads[i]), 0)]
     reached = bytearray(side * side)
@@ -940,7 +1256,7 @@ def _connect_all(roads: bytearray, side: int, ports: list[dict[str, Any]]) -> No
                 nx, ny = x + dx, y + dy
                 if 0 <= nx < side and 0 <= ny < side:
                     j = ny * side + nx
-                    if j not in parent:
+                    if j not in parent and not (blocked and j in blocked and not roads[j]):
                         parent[j] = i
                         frontier.append(j)
         if hit < 0:
@@ -955,7 +1271,7 @@ def _connect_all(roads: bytearray, side: int, ports: list[dict[str, Any]]) -> No
     for i in range(side * side):
         if roads[i] and not reached[i]:
             raise RuntimeError("town grid: a road tile is not connected to the network")
-    for i in _port_tiles(ports, side):
+    for i in sorted(set(_port_tiles(ports, side)) | set(joins)):
         if not roads[i]:
             raise RuntimeError("town grid: a port is not on a road")
 
@@ -1101,7 +1417,10 @@ def _rect_frontage(roads: bytearray, side: int, rect: tuple[int, int, int, int])
 
 
 def _cut_plots(rng: random.Random, roads: bytearray, side: int, ward: list[int], params: list[dict[str, Any]],
-               stored: list[dict[str, Any]], gates: list[dict[str, Any]], hseg: list[int], vseg: list[int]) -> list[dict[str, Any]]:
+               stored: list[dict[str, Any]], gates: list[dict[str, Any]], hseg: list[int], vseg: list[int],
+               core=None) -> list[dict[str, Any]]:
+    """``core(x, y)`` (town_field) lets frontage plots run deeper toward the
+    town centre, so built-up blocks have no bare middles (playtest #72)."""
     n_tiles = side * side
     taken = bytearray(n_tiles)
     plots: list[dict[str, Any]] = []
@@ -1131,19 +1450,23 @@ def _cut_plots(rng: random.Random, roads: bytearray, side: int, ward: list[int],
         plots.append(plot)
         return plot
 
-    # Gates first: a small square inside the edge beside each gate port.
+    # Gates first: a small square inside the edge beside each gate port. When
+    # no 2x2 fits, a single tile does: a gate with no plot was never drawn
+    # (playtest #71, Harmere's South Gate).
     g = 2 if side >= 48 else 1
     for port in gates:
         px, py = port_tile(port, side)
         edge = port["edge"]
-        if edge in ("N", "S"):
-            ys = list(range(0, g)) if edge == "N" else list(range(side - g, side))
-            options = [list(range(px + 1, px + 1 + g)), list(range(px - g, px))]
-            cands = [(xs, ys) for xs in options]
-        else:
-            xs = list(range(0, g)) if edge == "W" else list(range(side - g, side))
-            options = [list(range(py + 1, py + 1 + g)), list(range(py - g, py))]
-            cands = [(xs, ys) for ys in options]
+        cands = []
+        for gg in ((g, 1) if g > 1 else (g,)):
+            if edge in ("N", "S"):
+                ys = list(range(0, gg)) if edge == "N" else list(range(side - gg, side))
+                options = [list(range(px + 1, px + 1 + gg)), list(range(px - gg, px))]
+                cands += [(xs, ys) for xs in options]
+            else:
+                xs = list(range(0, gg)) if edge == "W" else list(range(side - gg, side))
+                options = [list(range(py + 1, py + 1 + gg)), list(range(py - gg, py))]
+                cands += [(xs, ys) for ys in options]
         for xs, ys in cands:
             if not all(0 <= xx < side for xx in xs) or not all(0 <= yy < side for yy in ys):
                 continue
@@ -1222,18 +1545,26 @@ def _cut_plots(rng: random.Random, roads: bytearray, side: int, ward: list[int],
             if prm is None:
                 continue
             ix, iy = step_in[road_edge]
+            deep = prm["depth"]
+            c = core(x, y) if core is not None else 0.0
             run = 0
             cx, cy = x, y
-            while 0 <= cx < side and 0 <= cy < side and (cy * side + cx) in block_set and not taken[cy * side + cx] and run < 2 * prm["depth"] + 2:
+            reach = side if c > 0 else 2 * deep + 2
+            while 0 <= cx < side and 0 <= cy < side and (cy * side + cx) in block_set and not taken[cy * side + cx] and run < reach:
                 run += 1
                 cx += ix
                 cy += iy
-            if run <= prm["depth"] + 1:
+            if c > 0:
+                # Toward the town centre a plot runs back to the middle of its
+                # block, so the block is built through (playtest #72).
+                deep = max(deep, int(round(deep + max(0, (run + 1) // 2 - deep) * c)))
+                run = min(run, 2 * deep + 2)
+            if run <= deep + 1:
                 depth = run
-            elif run < 2 * prm["depth"]:
+            elif run < 2 * deep:
                 depth = (run + 1) // 2
             else:
-                depth = prm["depth"]
+                depth = deep
             depth = max(1, depth)
             width = rng.randint(prm["front"][0], max(prm["front"][0], prm["front"][1]))
             ax_dx, ax_dy = (1, 0) if road_edge in ("N", "S") else (0, 1)
@@ -1395,8 +1726,21 @@ def _roll_otherwise(rng: random.Random, ward_type: str) -> str:
     return rows[-1][0]
 
 
+def _roll_rural(rng: random.Random) -> str:
+    total = sum(weight for _kind, weight in RURAL_KINDS)
+    pick = rng.random() * total
+    for kind, weight in RURAL_KINDS:
+        pick -= weight
+        if pick < 0:
+            return kind
+    return RURAL_KINDS[-1][0]
+
+
 def _assign_kinds(world: dict[str, Any], city: dict[str, Any], cell: dict[str, Any], stored: list[dict[str, Any]],
-                  plots: list[dict[str, Any]], roads: bytearray, side: int, era: str) -> dict[str, Any]:
+                  plots: list[dict[str, Any]], roads: bytearray, side: int, era: str, core=None) -> dict[str, Any]:
+    """Kinds for every plot. ``core(x, y)`` (town_field) puts the shops and
+    the built lots toward the town centre and the farmland at its fringe
+    (playtest #72); without it every ward rolls alike, as in v1."""
     from app.local_intel import stalls_for_district
     from app.world_scale import theme_allows_slavery
 
@@ -1495,9 +1839,23 @@ def _assign_kinds(world: dict[str, Any], city: dict[str, Any], cell: dict[str, A
 
     possible = set(plausible_kinds(size, era))
     rng = random.Random(_cell_seed(world, cell, _SALT_ROLLS))
+    rural_rng = random.Random(_cell_seed(world, cell, _SALT_RURAL))
+    rural_ok = theme not in _NO_RURAL_THEMES and str(era or "") != "future"
     empty_scale = 2.0 if theme == "post_collapse" else 1.0
+
+    def plot_core(plot: dict[str, Any]) -> float | None:
+        if core is None:
+            return None
+        r = plot["r"]
+        return core(r[0] + (r[2] - 1) / 2, r[1] + (r[3] - 1) / 2)
+
     for plot in plots:
         if plot.get("k") is not None:
+            # A leftover yard on the fringe is farmland, not a bare lot.
+            if plot.get("k") == "yard" and plot.get("f") is None and rural_ok:
+                c = plot_core(plot)
+                if c is not None and c < FRINGE_CORE:
+                    plot["k"] = _roll_rural(rural_rng)
             continue
         d = int(plot["d"])
         district = stored[d] if 0 <= d < len(stored) else {}
@@ -1508,6 +1866,14 @@ def _assign_kinds(world: dict[str, Any], city: dict[str, Any], cell: dict[str, A
         if ward_type == "residential" and "corner" in (plot.get("fl") or []):
             p_shop *= 3
         p_empty = max(0.0, 0.25 - density / 400) * empty_scale
+        c = plot_core(plot)
+        fringe = False
+        if c is not None:
+            # Shops gather toward the town centre; the built-up middle has
+            # almost no empty lots (playtest #72).
+            p_shop *= 0.4 + 1.2 * c
+            p_empty *= (1 - c) ** 2
+            fringe = rural_ok and c < FRINGE_CORE
         if rng.random() < p_shop:
             table = [(k, w.get(ward_type, 0)) for k, w in KIND_WEIGHTS.items() if k in possible and w.get(ward_type, 0) > 0]
             table = [(k, w) for k, w in table if cap_left(d, k)]
@@ -1526,9 +1892,12 @@ def _assign_kinds(world: dict[str, Any], city: dict[str, Any], cell: dict[str, A
             plot["k"] = _roll_otherwise(rng, ward_type)
             continue
         if rng.random() < p_empty:
-            plot["k"] = "empty"
+            plot["k"] = _roll_rural(rural_rng) if fringe else "empty"
             continue
-        plot["k"] = _roll_otherwise(rng, ward_type)
+        kind = _roll_otherwise(rng, ward_type)
+        if fringe and kind in ("house", "yard", "warehouse") and rural_rng.random() < 0.75 * (1 - c / FRINGE_CORE):
+            kind = _roll_rural(rural_rng)
+        plot["k"] = kind
     return report
 
 
@@ -1708,15 +2077,19 @@ def generate_cell(
     *,
     culture: str = "common",
     used_names: Iterable[str] = (),
+    extra_joins: dict | None = None,
 ) -> dict[str, Any]:
     """One city cell's roads, segments, street names and plots. Pure.
 
     ``used_names`` are the names other generated cells of this city already
-    hold; a draw that collides takes its slot's next draw.
+    hold; a draw that collides takes its slot's next draw. ``extra_joins`` is
+    stored_edge_arrivals: roads an older stored neighbour already brings to a
+    shared edge, which this cell meets (playtest #70).
     """
     side = _side(cell)
     era = str(era or "")
-    roads, ports = _skeleton_roads(world, city, cell)
+    roads, ports, shape = _skeleton_roads(world, city, cell, extra_joins)
+    blocked = shape["blocked"]
     avenue = bytearray(side * side)
     for x, y in street_mask(int(cell.get("seed") or 1), side):
         avenue[y * side + x] = 1
@@ -1736,15 +2109,22 @@ def generate_cell(
                 for xx in range(max(0, ax - half), min(side, ax + half + 1)):
                     if ward[yy * side + xx] == index:
                         reserved[yy * side + xx] = 1
-    _side_streets(roads, side, ward, params, reserved)
+    # Side streets and alleys stop one tile short of a shared edge instead of
+    # dead-ending on it; only the joins cross (playtest #70).
+    for i in blocked:
+        reserved[i] = 1
+    _side_streets(roads, side, ward, params, reserved, blocked)
     _alleys(roads, side, ward, params, reserved)
-    _connect_all(roads, side, ports)
+    for i in blocked:
+        roads[i] = ROAD_NONE
+    _connect_all(roads, side, ports, blocked, shape["joins"])
     segs = _segments(roads, side, ward)
     hseg, vseg = _segment_index(segs, side)
     gates = [p for p in ports if p.get("gate")]
     plot_rng = random.Random(_cell_seed(world, cell, _SALT_PLOTS))
-    plots = _cut_plots(plot_rng, roads, side, ward, params, stored, gates, hseg, vseg)
-    report = _assign_kinds(world, city, cell, stored, plots, roads, side, era)
+    core = _core_fn(city, cell, side)
+    plots = _cut_plots(plot_rng, roads, side, ward, params, stored, gates, hseg, vseg, core)
+    report = _assign_kinds(world, city, cell, stored, plots, roads, side, era, core)
     used = {_norm_name(name) for name in used_names if name}
     ctx = {"era": era or "preindustrial", "culture": culture or "common"}
     owners = NameOwners(world, city)
@@ -1964,6 +2344,42 @@ def city_used_names(conn, map_id: str, city_id: str, *, skip: tuple[int, int] | 
     return used
 
 
+def stored_edge_arrivals(conn, chart: dict[str, Any], city: dict[str, Any],
+                         cell: dict[str, Any]) -> dict[tuple[tuple[int, int], str], list[float]]:
+    """Roads that stored neighbours of an older GEN_VERSION bring to their shared edge with ``cell``.
+
+    Keyed (neighbour cell, neighbour edge) -> metres along the edge, for
+    edge_joins. A v1 row was laid without joins, so most of its edge roads
+    dead-end (playtest #70: 4 of 5 on Harmere's north edge); the new cell
+    lays a road to meet each one. Rows of this version already agree with
+    edge_joins and add nothing, so generation order does not matter.
+    """
+    out: dict[tuple[tuple[int, int], str], list[float]] = {}
+    cells = _city_cells(city)
+    cx, cy = int(cell.get("x") or 0), int(cell.get("y") or 0)
+    for edge, (dx, dy) in _EDGE_STEP.items():
+        nb = (cx + dx, cy + dy)
+        if nb not in cells:
+            continue
+        try:
+            town = stored_cell(conn, chart, nb[0], nb[1])
+        except Exception:
+            town = None
+        if town is None or int(town.get("gen_version") or 0) >= GEN_VERSION:
+            continue
+        nside = int(town["side"])
+        nedge = _OPPOSITE[edge]
+        ks = set(edge_arrivals(town["roads"], nside, nedge))
+        for port in city_ports(chart, city).get(nb, []):
+            if port.get("to") and (int(port["to"][0]), int(port["to"][1])) == (cx, cy):
+                px, py = port_tile(port, nside)
+                if town["roads"][py * nside + px]:
+                    ks.add(px if nedge in ("N", "S") else py)
+        if ks:
+            out[(nb, nedge)] = [(k + 0.5) * tile_metres(nside) for k in sorted(ks)]
+    return out
+
+
 def get_cell(conn, chart: dict[str, Any], cx: int, cy: int, *, create: bool = False) -> dict[str, Any] | None:
     """A city cell's town grid: the stored row, or (with ``create``) generated and stored now.
 
@@ -1985,7 +2401,7 @@ def get_cell(conn, chart: dict[str, Any], cx: int, cy: int, *, create: bool = Fa
     city_id = str(city.get("id") or "")
     used = city_used_names(conn, map_id, city_id)
     town = generate_cell(chart, city, cell, str(ctx.get("era") or ""), culture=str(ctx.get("culture") or "common"),
-                         used_names=used)
+                         used_names=used, extra_joins=stored_edge_arrivals(conn, chart, city, cell))
     cols = encode_cell(town)
     conn.execute(
         "INSERT OR IGNORE INTO town_cells (map_id, cx, cy, city_id, gen_version, port_version, side, era, roads, segments, streets, plots) "
@@ -2172,17 +2588,52 @@ def _segment_tiles(seg: dict[str, Any], side: int) -> Iterable[int]:
             yield yy * side + xx
 
 
+def town_era(conn) -> str:
+    try:
+        return str(_world_name_context(conn).get("era") or "")
+    except Exception:
+        return ""
+
+
+def _gate_items(world: dict[str, Any], city: dict[str, Any], cell: dict[str, Any], town: dict[str, Any],
+                walls: dict[str, Any]) -> list[dict[str, Any]]:
+    """Every gate of a generated cell: gate plots, and gates with no plot (a
+    stored cell whose gate square did not fit, a walled town's avenue gates),
+    drawn from their tiles (playtest #71)."""
+    side = int(town["side"])
+    out = []
+    plotted: set[tuple[int, int]] = set()
+    for p in town["plots"]:
+        if p.get("k") == "gate":
+            out.append({"plot": p["id"], "label": p.get("name") or "", "gate": p.get("gate"), "f": p.get("f")})
+            if p.get("f"):
+                plotted.add((int(p["f"][0]), int(p["f"][1])))
+    for item in cell_exits(world, city, cell, town["roads"], walls):
+        if item["kind"] != "gate" or (item["x"], item["y"]) in plotted:
+            continue
+        if any(p.get("f") and abs(int(p["f"][0]) - item["x"]) + abs(int(p["f"][1]) - item["y"]) <= 2
+               for p in town["plots"] if p.get("k") == "gate"):
+            continue
+        out.append({"label": item.get("label") or "", "gate": item.get("gate"), "x": item["x"], "y": item["y"],
+                    "edge": item["edge"]})
+    return out
+
+
 def _cell_view(conn, chart: dict[str, Any], city: dict[str, Any], cell: dict[str, Any], position: dict[str, Any] | None,
-               minute: int, realized: dict[str, dict[str, Any]], notices_meta: dict[str, dict[str, Any]]) -> dict[str, Any]:
+               minute: int, realized: dict[str, dict[str, Any]], notices_meta: dict[str, dict[str, Any]],
+               walls: dict[str, Any] | None = None) -> dict[str, Any]:
     from app.venues import describe_hours, default_hours, is_open
 
     cx, cy = int(cell.get("x") or 0), int(cell.get("y") or 0)
     side = _side(cell)
     local = [int((cell.get("local") or [0, 0])[0]), int((cell.get("local") or [0, 0])[1])]
     town = stored_cell(conn, chart, cx, cy)
-    out: dict[str, Any] = {"cx": cx, "cy": cy, "local": local, "side": side, "known": True}
+    out: dict[str, Any] = {"cx": cx, "cy": cy, "local": local, "side": side, "known": True,
+                           "outer": outer_edges(city, cx, cy)}
+    if walls is None:
+        walls = town_walls(chart, city, town_era(conn))
     if town is None:
-        sk = skeleton(chart, city, cell)
+        sk = skeleton(chart, city, cell, stored_edge_arrivals(conn, chart, city, cell))
         out["generated"] = False
         out["roads"] = _pack(bytes(sk["roads"]))
         out["segments"] = [
@@ -2252,13 +2703,13 @@ def _cell_view(conn, chart: dict[str, Any], city: dict[str, Any], cell: dict[str
             "roads": _pack(bytes(visible)),
             "segments": segments,
             "plots": plots,
-            "gates": [
-                {"plot": p["id"], "label": p.get("name") or "", "gate": p.get("gate"), "f": p.get("f")}
-                for p in town["plots"] if p.get("k") == "gate"
-            ],
+            "gates": _gate_items(chart, city, cell, town, walls),
             "notices": notices,
         }
     )
+    if position and (int(position.get("cx", -1)), int(position.get("cy", -1))) == (cx, cy):
+        # Where the player can step out of town from this cell (the Leave control).
+        out["exits"] = [[e["x"], e["y"], e["edge"]] for e in cell_exits(chart, city, cell, town["roads"], walls)]
     return out
 
 
@@ -2294,6 +2745,7 @@ def town_view(conn, chart: dict[str, Any] | None, *, city_id: str = "", cx: int 
     position = town_position(conn)
     minute = _world_minute(conn) % (24 * 60)
     realized = _realized(conn, wanted)
+    walls = town_walls(chart, city, town_era(conn))
     notices_meta: dict[str, dict[str, Any]] = {}
     for one in cells.values():
         for notice in one.get("notices") or []:
@@ -2308,9 +2760,9 @@ def town_view(conn, chart: dict[str, Any] | None, *, city_id: str = "", cx: int 
             if f"{xx},{yy}" not in seen_cells:
                 local = cell.get("local") or [0, 0]
                 out_cells.append({"cx": xx, "cy": yy, "local": [int(local[0]), int(local[1])], "side": _side(cell),
-                                  "known": False})
+                                  "known": False, "outer": outer_edges(city, xx, yy)})
                 continue
-            out_cells.append(_cell_view(conn, chart, city, cell, position, minute, realized, notices_meta))
+            out_cells.append(_cell_view(conn, chart, city, cell, position, minute, realized, notices_meta, walls))
     pos_out = None
     if position and str(position.get("city_id") or "") == wanted:
         pos_out = {k: position.get(k) for k in ("cx", "cy", "fx", "fy", "plot", "inside", "heading")}
@@ -2321,6 +2773,8 @@ def town_view(conn, chart: dict[str, Any] | None, *, city_id: str = "", cx: int 
         "band": str(city.get("band") or ""),
         "center": {"cx": int(cx), "cy": int(cy)},
         "r": r,
+        "walled": bool(walls.get("walled")),
+        "wall_kind": str(walls.get("kind") or ""),
         "cells": out_cells,
         "player": pos_out,
         "road_classes": {str(k): v for k, v in ROAD_CLASS_NAMES.items()},
@@ -2447,7 +2901,7 @@ def prune_town_rows(conn, keep: set[str]) -> int:
 
 _GLYPH = {
     "shop": "$", "service": "&", "house": "h", "yard": ".", "temple": "T", "office": "O", "barracks": "B",
-    "warehouse": "w", "square": "+", "gate": "G", "empty": "_",
+    "warehouse": "w", "square": "+", "gate": "G", "empty": "_", "field": ",", "pasture": "~", "orchard": "o",
 }
 
 
