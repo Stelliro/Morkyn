@@ -127,7 +127,8 @@ class UnquotedLocRunsToTheNextFlag(unittest.TestCase):
         self.assertEqual(npc["location"], "Old Mill Lane")
 
     def test_op_list_asks_for_a_code_or_a_quoted_name(self):
-        self.assertIn('LOC location_code_or_"place name"', DSL_SYSTEM_PROMPT)
+        # Said in words since playtest #39: a code, or a name in quotes.
+        self.assertIn("LOC and a known place's code or a place name in quotes", DSL_SYSTEM_PROMPT)
 
 
 class AngleBracketPlaceholders(unittest.TestCase):

@@ -42,6 +42,8 @@ _DETAIL = ""
 _MODEL_CTX_AUTO = False
 _KEY_CACHE: dict[str, tuple[str, ...]] = {}
 _BAN_CACHE: dict[tuple[str, tuple[str, ...]], tuple[int, ...]] = {}
+_PIECE_CACHE: dict[str, tuple[bytes, ...]] = {}
+_SCRIPT_BAN_CACHE: dict[str, tuple[int, ...]] = {}
 # The smaller context is used only once someone said yes to it (or the
 # policy is auto). Per process: a restart asks again, on purpose.
 _FALLBACK_ALLOWED = False
@@ -427,6 +429,8 @@ def _drop_model() -> None:
     _MODEL_CTX_AUTO = False
     _KEY_CACHE.clear()
     _BAN_CACHE.clear()
+    _PIECE_CACHE.clear()
+    _SCRIPT_BAN_CACHE.clear()
 
 
 def _open_model(path: str, n_ctx: int):
@@ -507,6 +511,19 @@ def _vocab_keys(model, path: str) -> tuple[str, ...]:
     cached = _KEY_CACHE.get(path)
     if cached is not None:
         return cached
+    stored = tuple(
+        _maskable_key(piece.decode("utf-8", errors="replace")) if piece else ""
+        for piece in _vocab_pieces(model, path)
+    )
+    _KEY_CACHE[path] = stored
+    return stored
+
+
+def _vocab_pieces(model, path: str) -> tuple[bytes, ...]:
+    """Every vocabulary piece as raw bytes, scanned once per loaded model."""
+    cached = _PIECE_CACHE.get(path)
+    if cached is not None:
+        return cached
     import ctypes
 
     from llama_cpp import llama_cpp
@@ -515,25 +532,48 @@ def _vocab_keys(model, path: str) -> tuple[str, ...]:
     n_vocab = int(model.n_vocab())
     size = 32
     buf = ctypes.create_string_buffer(size)
-    keys: list[str] = []
+    pieces: list[bytes] = []
     for token in range(n_vocab):
         n_chars = int(llama_cpp.llama_token_to_piece(vocab, token, buf, size, 0, True))
         if n_chars < 0:
             need = -n_chars
             size = max(size * 2, need + 8, 64)
             if size > 8192:
-                keys.append("")
+                pieces.append(b"")
                 continue
             buf = ctypes.create_string_buffer(size)
             n_chars = int(llama_cpp.llama_token_to_piece(vocab, token, buf, size, 0, True))
         if n_chars <= 0:
-            keys.append("")
+            pieces.append(b"")
             continue
-        piece = buf.raw[:n_chars].decode("utf-8", errors="replace")
-        keys.append(_maskable_key(piece))
-    stored = tuple(keys)
-    _KEY_CACHE[path] = stored
+        pieces.append(bytes(buf.raw[:n_chars]))
+    stored = tuple(pieces)
+    _PIECE_CACHE[path] = stored
     return stored
+
+
+def _script_ban_ids(model, path: str) -> tuple[int, ...]:
+    """
+    Token ids that write Han, Kana or Hangul (playtest #49: Qwen3 finished
+    "the stale, warm" with a Chinese word for air). The world is written in
+    English, so these are masked at sample time on every call. A logit mask,
+    not a text edit; the vocab scan is cached per model. AI_RPG_SCRIPT_GUARD=0
+    turns it off.
+    """
+    from app.script_guard import guard_enabled, piece_is_out_of_script
+
+    if not guard_enabled():
+        return ()
+    cached = _SCRIPT_BAN_CACHE.get(path)
+    if cached is not None:
+        return cached
+    try:
+        pieces = _vocab_pieces(model, path)
+    except Exception:
+        return ()
+    banned = tuple(index for index, piece in enumerate(pieces) if piece and piece_is_out_of_script(piece))
+    _SCRIPT_BAN_CACHE[path] = banned
+    return banned
 
 
 def _banned_ids(model, path: str, hide_words, keep_words) -> tuple[int, ...]:
@@ -606,6 +646,9 @@ def _generate(
     from llama_cpp.llama import LogitsProcessorList
 
     banned_tokens = _banned_ids(model, path, hide_words, keep_words)
+    script_tokens = _script_ban_ids(model, path)
+    if script_tokens:
+        banned_tokens = tuple(sorted(set(banned_tokens) | set(script_tokens)))
     banned = np.asarray(banned_tokens, dtype=np.int32)
     deadline = time.monotonic() + max(0, int(timeout)) if int(timeout or 0) > 0 else 0.0
     processor = None

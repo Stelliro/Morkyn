@@ -150,7 +150,8 @@ class MapWalkTests(unittest.TestCase):
         self.assertEqual(harrowford["distance"], 3)
 
     def test_walk_opcode_parses_and_clamps_steps(self):
-        self.assertIn("WALK direction optional: STEPS 1-4", DSL_SYSTEM_PROMPT)
+        # The op legend describes WALK in words since playtest #39 (no slot words).
+        self.assertIn("WALK: a compass direction. May add STEPS and a number from 1 to 4.", DSL_SYSTEM_PROMPT)
         turn = parse_dsl_turn(
             "===NAR===\nYou walk east until the ground runs out.\n\n===OPS===\nWALK east STEPS 99\n",
             "I walk east",

@@ -66,41 +66,37 @@ Use [[CODE]] after entity names when known (name [[A]], place [[L1]]).
 
 ===OPS===
 zero or more opcode lines from the closed list below
-One op per line. Prefer entity codes from world_state. Use quoted strings for free text.
+One op per line: the op word, a space, then its parts. Prefer entity codes from world_state.
+Put free text in double quotes.
 
-Allowed opcodes. UPPER-CASE words are written as shown. A lower_case_word is a slot: write
-your value in its place, and the slot word itself never appears in the line. a|b|c means
-write one of them. Parts after "optional:" may be left out.
-SUMMARY compact_memory_line_under_55_words
-SCENE action|conversation|travel|survival|filler|lore|system
-GOAL one_sentence_scene_goal
-FOCUS event|location|npc|risk|resource|choice|sensory short_summary
-NPC_NEW NAME "real_name" ROLE job_words LOC location_code_or_"place name" optional: ATTITUDE word RACE word RANK letter
-NPC_NOTE npc_code "durable_fact"
-TALK npc_code "topic_of_the_exchange"
-GRANT "item_name" QTY band optional: TYPE type DESC "description" RARITY word
-TAKE "item_name" QTY band
-GOLD band
-XP band
-HP band
-KARMA band optional: VIS private|local|faction|public REASON "why"
-MOVE place_name (one from movement_contract.known_places, or a new one you name)
-WALK direction optional: STEPS 1-4
-LOC_NEW "place_name" "summary"
-EVENT "title" optional: LOC location_code NPC npc_code SUMMARY "text"
-GM "trigger" "private_future_note"
-REL source_code target_code "what_source_knows_or_thinks"
-SKILL "skill_name" DELTA band optional: NOTES "why"
-CLAIM "claim_text" VERDICT true|false|unverified optional: SKILL skill_name NOTES "why"
-JOURNAL fact|quest|rumor|event|system "content"
-INDEX npc|location|item|event code "summary_append"
-NOTE "short_durable_journal_style_fact"
-CAST present npc_code
-CAST interacting npc_code
-CAST off npc_code
-CAST keyword one_scene_word
-QUEST "title" GIVER npc_code_or_"name" STEP "first_thing_to_do" optional: AT place_code_or_"name" REWARD "as_promised"
-QUEST_DONE quest_code_or_"title" accept|step_done|complete|fail|abandon
+Allowed opcodes. Each line below names an op and says in words what follows it on the line;
+write the real thing from this scene, never the description. Words in capitals (NAME, ROLE,
+LOC, QTY, STEPS and the like) are written as shown. "May add" parts can be left out.
+SUMMARY: in quotes, what this turn changed, in under 55 words, for memory.
+SCENE: one of action, conversation, travel, survival, filler, lore, system.
+GOAL: in quotes, one sentence on what the scene is about now.
+FOCUS: one of event, location, npc, risk, resource, choice, sensory, then in quotes a few words on what it is.
+NPC_NEW: NAME and the person's name in quotes, ROLE and their job, LOC and a known place's code or a place name in quotes. May add ATTITUDE, RACE and RANK, each with one word.
+NPC_NOTE: a person's code, then in quotes one fact about them that will stay true.
+TALK: the code of the person the player spoke with, then in quotes what the two of them talked about.
+GRANT: the item's name in quotes, then QTY and a band. May add TYPE with a kind of item, DESC with a description in quotes, RARITY with one word.
+TAKE: the item's name in quotes, then QTY and a band.
+GOLD, XP, HP: a band. A minus sign written right before the band makes it a loss.
+KARMA: a band, minus for a loss. May add VIS with one of private, local, faction, public, and REASON with the reason in quotes.
+MOVE: the name of the place the scene ends in (the movement rules below say which names).
+WALK: a compass direction. May add STEPS and a number from 1 to 4.
+LOC_NEW: the new place's name in quotes, then a description of it in quotes.
+EVENT: a title in quotes. May add LOC with a place code, NPC with a person's code, SUMMARY with text in quotes.
+GM: in quotes what would trigger it, then in quotes a private note for later.
+REL: the code of the one who knows, the code of the one known, then in quotes what the first knows or thinks of the second.
+SKILL: the skill's name in quotes, then DELTA and a band. May add NOTES with the reason in quotes.
+CLAIM: the claim in quotes, then VERDICT and one of true, false, unverified. May add SKILL with a skill's name and NOTES with the reason in quotes.
+JOURNAL: one of fact, quest, rumor, event, system, then the entry in quotes.
+INDEX: one of npc, location, item, event, then that one's code, then in quotes what to add to its summary.
+NOTE: in quotes, one fact worth keeping in the journal.
+CAST: one of present, interacting, off, then a person's code; or keyword, then one word for the scene.
+QUEST: the job's title in quotes, GIVER and the giver's code or name in quotes, STEP and the first thing to do in quotes. May add AT with a place code or name in quotes, REWARD with what was promised in quotes.
+QUEST_DONE: the quest's code or title in quotes, then one of accept, step_done, complete, fail, abandon.
 
 Rules:
 CAST is the only way to change who is in the active scene.
@@ -115,8 +111,7 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
 - Database/world_state is source of truth. Only propose justified changes.
 - playthrough_options.choices are this playthrough's labels. For RANK, use only the rungs named in choices.rank_scale. playthrough_options.setting_templates, when present, is the one written rule this action named. Follow that included rule. Do not replace its labels.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
-  Write "XP small", "GOLD -moderate", "HP -small"; GRANT takes the item's name in quotes,
-  then QTY and a band.
+  GRANT takes the item's name in quotes, then QTY and a band.
   A leading "-" means a loss. The app rolls the actual amount; a bare number on
   XP, GOLD, HP, KARMA or SKILL is read as a band hint and re-rolled, so bands are
   shorter and more reliable.
@@ -461,7 +456,8 @@ OPCODE_ALIASES = {
 
 def normalize_opcode(opcode: str) -> str:
     """Map a near-miss opcode onto the closed list, or return '' if unrecognized."""
-    token = str(opcode or "").strip().upper().replace("-", "_")
+    # "TALK:" -- the op legend describes each op after a colon (playtest #39).
+    token = str(opcode or "").strip().rstrip(":").upper().replace("-", "_")
     if token in OPCODES:
         return token
     return OPCODE_ALIASES.get(token, "")
@@ -490,6 +486,8 @@ def parse_ops_detailed(ops_block: str) -> tuple[list[dict[str, Any]], list[str]]
             # beats losing the scene's whole state because of a typo.
             skipped.append(stripped[:80])
             continue
+        if positionals and positionals[0] == ":":
+            positionals = positionals[1:]
         ops.append({"op": canonical, "args": positionals, "flags": flags, "line": line_no, "raw": stripped})
     if seen_lines and not ops:
         # Nothing at all parsed: this is not a typo, it is the wrong format.
@@ -591,6 +589,22 @@ def _walk_direction_and_steps(args: list[str], flags: dict[str, str]) -> tuple[s
     return direction, clamp_steps(step_token if step_token is not None else STEP_BUDGET)
 
 
+# A copied slot word (playtest #39): one all-lowercase identifier such as
+# "choose_direction" or "topic_of_the_exchange". No sentence, topic or summary
+# has that shape, so it is a malformed line, not a value. Structural only.
+_SLOT_TOKEN_RE = re.compile(r"[a-z][a-z0-9]*(?:_[a-z0-9]+)+")
+# Old op-list slot names that could come back as a destination.
+_PLACE_SLOT_WORDS = frozenset({
+    "place_name", "location_code", "location_code_or_place_name", "place_code", "place_code_or_name",
+})
+
+
+def is_slot_token(value: Any) -> bool:
+    """True when ``value`` is a lone snake_case identifier, not prose."""
+    text = str(value or "").strip().strip("\"'\u201c\u201d").strip()
+    return bool(text) and bool(_SLOT_TOKEN_RE.fullmatch(text))
+
+
 def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     """
     Apply one opcode to the turn under construction.
@@ -604,14 +618,20 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     flags: dict[str, str] = dict(entry.get("flags") or {})
 
     if op == "SUMMARY":
+        if is_slot_token(" ".join(args)):
+            raise TurnDslError(f"SUMMARY holds a slot word, not a summary, on line {entry['line']}")
         turn["turn_summary"] = " ".join(args)[:700] or turn["turn_summary"]
     elif op == "SCENE":
         turn["scene_focus"] = (args[0] if args else "action")[:40]
     elif op == "GOAL":
+        if is_slot_token(" ".join(args)):
+            raise TurnDslError(f"GOAL holds a slot word, not a goal, on line {entry['line']}")
         turn["scene_plan"]["goal"] = " ".join(args)[:400]
     elif op == "FOCUS":
         kind = (args[0] if args else "event")[:40]
         summary = " ".join(args[1:]) if len(args) > 1 else flags.get("SUMMARY", "beat")
+        if is_slot_token(summary):
+            raise TurnDslError(f"FOCUS holds a slot word, not a summary, on line {entry['line']}")
         turn["scene_plan"]["focus_points"].append(
             {
                 "kind": kind,
@@ -666,6 +686,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         topic = " ".join(args[1:]).strip() if len(args) > 1 else "conversation"
         if not code:
             raise TurnDslError(f"TALK requires npc code on line {entry['line']}")
+        if is_slot_token(topic):
+            raise TurnDslError(f"TALK holds a slot word, not a topic, on line {entry['line']}")
         turn["conversations"].append(
             {
                 "npc_code": code,
@@ -750,6 +772,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         dest = " ".join(args).strip()
         if not dest:
             raise TurnDslError(f"MOVE requires destination on line {entry['line']}")
+        if dest.strip("\"'").lower() in _PLACE_SLOT_WORDS:
+            raise TurnDslError(f"MOVE holds a slot word, not a place, on line {entry['line']}")
         if re.fullmatch(r"L\d+", dest, re.I):
             turn["player"]["move_to_location_code"] = dest.upper()
         else:
@@ -893,7 +917,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         value = " ".join(args[1:]).strip() if len(args) > 1 else ""
         cast = turn.setdefault("scene_cast", {"present": [], "interacting": [], "off": [], "keywords": []})
         if slot in {"present", "interacting", "off"} and value:
-            code = value.split()[0].upper()[:20]
+            # "CAST interacting [[B]]": the prose tag is not the code (playtest #46).
+            code = re.sub(r"^\[\[|\]\]$", "", value.split()[0]).strip("[]").upper()[:20]
             if code and code not in cast[slot]:
                 cast[slot].append(code)
         elif slot == "keyword" and value:
@@ -1032,6 +1057,18 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         except TurnDslError as exc:
             # One bad line must not cost the turn every other op it got right.
             malformed_ops.append(str(exc))
+    # What this draft granted. A later patch can empty inventory_changes; a GOLD
+    # loss that paid for these is void when none of them arrive (playtest #41).
+    grants = [
+        str(change.get("name") or "")[:120]
+        for change in turn["inventory_changes"]
+        if isinstance(change, dict)
+        and str(change.get("name") or "").strip()
+        and not str(change.get("quantity_band") or "").strip().startswith("-")
+        and int(change.get("quantity_delta") or 0) >= 0
+    ]
+    if grants:
+        turn["_dsl"]["grants"] = grants[:12]
     if malformed_ops:
         turn["self_check"]["issues_found"].extend(malformed_ops[:6])
         turn["self_check"]["corrections_made"].append(

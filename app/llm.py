@@ -10353,6 +10353,7 @@ def _chat_text(
             "duration_seconds": round(time.time() - started_at, 3),
             "response_chars": len(content),
             "raw_content": content,
+            **_script_repair_trace(),
         },
     )
     return content
@@ -10426,6 +10427,7 @@ def _chat_json(
             "duration_seconds": round(time.time() - started_at, 3),
             "response_chars": len(content),
             "raw_content": content,
+            **_script_repair_trace(),
         },
     )
     try:
@@ -10613,7 +10615,7 @@ def _chat_content_unlocked(
         # Qwen3's switch for this turn: answer directly, no hidden reasoning.
         # Thinking spent the token budget and the time of every call.
         user_prompt = f"{user_prompt}\n/no_think"
-    return strip_reasoning(
+    content = strip_reasoning(
         _chat_content_dispatch(
             config,
             system_prompt,
@@ -10626,6 +10628,28 @@ def _chat_content_unlocked(
             keep_words=keep_words,
         )
     )
+    # Out-of-script runs (playtest #49: "the stale, warm\u7a7a\u6c14"). The in-process
+    # provider masks them at sample time; this catches every other provider.
+    from app.script_guard import guard_enabled, repair_out_of_script
+
+    if guard_enabled():
+        content, hits = repair_out_of_script(content)
+        _script_repair_state.hits = [
+            {"run": hit["run"], "replacement": hit["replacement"]} for hit in hits[:12]
+        ]
+    return content
+
+
+import threading as _threading
+
+_script_repair_state = _threading.local()
+
+
+def _script_repair_trace() -> dict[str, Any]:
+    """The last call's out-of-script repairs, for its trace entry; cleared once read."""
+    hits = getattr(_script_repair_state, "hits", None) or []
+    _script_repair_state.hits = []
+    return {"script_repair": hits} if hits else {}
 
 
 def _chat_content_dispatch(
@@ -11053,18 +11077,49 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
             out,
             flags=re.IGNORECASE,
         )
-    for name_l, code in sorted(name_to_code.items(), key=lambda kv: -len(kv[0])):
-        # Capture original casing from first match via re.I; don't double-append [[code]]
-        # Look for name not already followed by [[same code]]
+    ordered_names = sorted(name_to_code.items(), key=lambda kv: -len(kv[0]))
+    # "charred ledger [[I4]] satchel [[I5]]": a tag that landed inside a longer
+    # tagged name is dropped so the longer name reads whole again (playtest #40).
+    for name_l, code in ordered_names:
+        words = name_l.split()
+        if len(words) < 2:
+            continue
+        inner = r"(?:\s*\[\[(?:[A-Z]{1,3}|L\d+|I\d+|E\d+)\]\])?\s+"
+        split_name = re.compile(
+            r"\b" + inner.join(re.escape(word) for word in words) + rf"\s*\[\[{re.escape(code)}\]\]",
+            flags=re.IGNORECASE,
+        )
+
+        def _rejoin(m: re.Match[str], _code: str = code) -> str:
+            whole = m.group(0)
+            body = REFERENCE_CODE_PATTERN.sub("", whole[: whole.rfind("[[")])
+            body = re.sub(r"\s+", " ", body).strip()
+            return f"{body} [[{_code}]]"
+
+        out = split_name.sub(_rejoin, out)
+    # Longest names first. Each tagged span is held out of the text until the
+    # end, so a shorter name never matches inside a longer one already tagged
+    # (playtest #40: "charred ledger" inside "charred ledger satchel [[I5]]"
+    # became "charred ledger [[I4]] satchel [[I5]]").
+    held: list[str] = []
+
+    def _hold(piece: str) -> str:
+        held.append(piece)
+        return f"\x00{len(held) - 1}\x00"
+
+    for name_l, code in ordered_names:
         pattern = re.compile(
-            rf"(?<!\[\[)\b({re.escape(name_l)})\b(?!\s*\[\[{re.escape(code)}\]\])",
+            rf"(?<!\[\[)\b({re.escape(name_l)})\b(\s*\[\[{re.escape(code)}\]\])?",
             flags=re.IGNORECASE,
         )
 
         def _repl(m: re.Match[str], _code: str = code) -> str:
-            return f"{m.group(1)} [[{_code}]]"
+            if m.group(2):
+                return _hold(m.group(0))
+            return _hold(f"{m.group(1)} [[{_code}]]")
 
         out = pattern.sub(_repl, out)
+    out = re.sub(r"\x00(\d+)\x00", lambda m: held[int(m.group(1))], out)
     # Collapse accidental "Name [[L1]] [[L1]]"
     out = re.sub(r"(\[\[(?:[A-Z]{1,3}|L\d+|I\d+|E\d+)\]\])(?:\s+\1)+", r"\1", out, flags=re.I)
     return out
@@ -11149,6 +11204,10 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         start = match.start()
         window = repaired[max(0, start - (len(name) + 8)) : start]
         if re.search(rf"{re.escape(name)}\s*$", window, flags=re.IGNORECASE):
+            return full
+        # The name with another tag inside it is still the name (playtest #40).
+        wide = REFERENCE_CODE_PATTERN.sub("", repaired[max(0, start - (len(name) + 48)) : start])
+        if re.search(rf"{re.escape(name)}\s*$", re.sub(r"\s+", " ", wide), flags=re.IGNORECASE):
             return full
         label = _code_follows_other_label(repaired[:start], name, is_person=bool(re.fullmatch(r"[A-Z]{1,3}", code)))
         if label == "other":

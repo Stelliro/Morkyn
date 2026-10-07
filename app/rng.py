@@ -802,7 +802,16 @@ def explain(result: dict[str, Any]) -> str:
         bits += f" x{factor:.2f}"
     if result.get("fixed"):
         bits += " fixed (band authority off)"
-    return f"{result.get('kind')} ({result.get('band')}): {bits} = {result.get('value')}"
+    value = result.get("value")
+    try:
+        signed = int(value)
+    except (TypeError, ValueError):
+        signed = 0
+    if signed < 0:
+        # The dice roll a magnitude and a loss negates it. "2d6+3 [1, 1] +3 = -5"
+        # read as broken arithmetic (playtest #41); say the 5 was lost.
+        return f"{result.get('kind')} ({result.get('band')}): {bits} = {abs(signed)}, lost ({signed})"
+    return f"{result.get('kind')} ({result.get('band')}): {bits} = {value}"
 
 
 # --- prompt-facing summary ---------------------------------------------------

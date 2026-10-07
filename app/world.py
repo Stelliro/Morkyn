@@ -4094,6 +4094,11 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
                 """
             ).fetchall()
         )
+        # A copied op-list slot word stored as the talk (playtest #39) is not a
+        # conversation; leaving it here fed it back through relevant_sources.
+        from app.turn_dsl import is_slot_token
+
+        conversations = [c for c in conversations if not is_slot_token(c.get("summary"))]
         response_drafts = rows_to_dicts(
             conn.execute("SELECT * FROM response_drafts ORDER BY id DESC LIMIT 40").fetchall()
         )
@@ -4504,6 +4509,21 @@ def _apply_scene_cast(conn, cast: Any) -> None:
     present = [str(code).upper() for code in current.get("present") or [] if str(code).strip()]
     interacting = [str(code).upper() for code in current.get("interacting") or [] if str(code).strip()]
     keywords = [str(word).lower() for word in current.get("keywords") or [] if str(word).strip()]
+    # "[[B]]" is the prose tag, not the code (playtest #46). Unwrap it, keep
+    # only codes the npcs table holds, and write the result back so the turn
+    # payload carries the same codes the scene does.
+    try:
+        known = {str(row["code"] or "").upper() for row in conn.execute("SELECT code FROM npcs").fetchall()}
+    except Exception:
+        known = set()
+    for bucket in ("present", "interacting", "off"):
+        cleaned: list[str] = []
+        for code in cast.get(bucket) or []:
+            token = re.sub(r"^\[+|\]+$", "", str(code).strip()).upper()
+            if token and (not known or token in known) and token not in cleaned:
+                cleaned.append(token)
+        if bucket in cast:
+            cast[bucket] = cleaned
 
     def add(bucket: list[str], codes: Any) -> None:
         for code in codes or []:
@@ -10302,7 +10322,17 @@ def _venue_parent_for_new_place(conn, kind: str) -> int:
     return parent_of_here or here_id
 
 
-def _upsert_location(conn, name: str, summary: str = "", *, parent_id: int | None = None, kind: str | None = None) -> int:
+def _upsert_location(
+    conn,
+    name: str,
+    summary: str = "",
+    *,
+    parent_id: int | None = None,
+    kind: str | None = None,
+    refusal: dict[str, Any] | None = None,
+) -> int:
+    """Find or create a place. ``refusal``, when given, is filled in when the
+    name is refused and another place id is handed back instead (playtest #46)."""
     name = humanize_place_name(name)
     if not name:
         raise ValueError("Location name is required.")
@@ -10340,9 +10370,19 @@ def _upsert_location(conn, name: str, summary: str = "", *, parent_id: int | Non
         resolved_parent = (
             _venue_parent_for_new_place(conn, resolved_kind) if parent_id is None else int(parent_id or 0)
         )
-        if resolved_parent and not venue_plausibility(conn, resolved_parent, resolved_kind)["ok"]:
+        plausible = venue_plausibility(conn, resolved_parent, resolved_kind) if resolved_parent else {"ok": True}
+        if not plausible["ok"]:
             # A hamlet has no apothecary. Asking for one used to conjure it; now
             # the player simply stays where they are and finds no such place.
+            if refusal is not None:
+                refusal.update(
+                    {
+                        "reason": str(plausible.get("reason") or "refused"),
+                        "detail": str(plausible.get("detail") or ""),
+                        "venue": name,
+                        "kind": resolved_kind,
+                    }
+                )
             return resolved_parent
 
     cursor = conn.execute(
@@ -10355,7 +10395,7 @@ def _upsert_location(conn, name: str, summary: str = "", *, parent_id: int | Non
     return new_id
 
 
-def _find_location_id(conn, name_or_code: str | None) -> int:
+def _find_location_id(conn, name_or_code: str | None, *, refusal: dict[str, Any] | None = None) -> int:
     if name_or_code:
         # Slugs must resolve to the same row as their readable form, or
         # "east_road" and "East Road" become two locations.
@@ -10378,7 +10418,7 @@ def _find_location_id(conn, name_or_code: str | None) -> int:
             if player and player["current_location_id"]:
                 return int(player["current_location_id"])
             value = "Nearby street"
-        return _upsert_location(conn, value)
+        return _upsert_location(conn, value, refusal=refusal)
     player = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     return int(player["current_location_id"])
 
@@ -12207,10 +12247,26 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     venue_note: dict[str, Any] | None = None
     via = int(player_patch.pop("_enter_via", 0) or 0)
     if move_to:
-        location_id = _find_location_id(conn, str(move_to))
+        refusal: dict[str, Any] = {}
+        location_id = _find_location_id(conn, str(move_to), refusal=refusal)
         gate = gate_venue_move(conn, previous_location_id, location_id, via=via)
         location_id = int(gate["location_id"] or previous_location_id)
         venue_note = gate.get("note")
+        if refusal and not venue_note:
+            # The place was refused (a village has no apothecary). Say so in the
+            # journal the way a closed or unreachable venue is (playtest #46).
+            venue = str(refusal.get("venue") or move_to)
+            venue_note = {
+                "kind": "venue_refused",
+                "venue": venue,
+                "detail": f"{venue} was not found: {refusal.get('detail') or refusal.get('reason')}.",
+                "reason": str(refusal.get("reason") or ""),
+            }
+        player_patch["_move_outcome"] = {
+            "location_id": location_id,
+            "previous_location_id": previous_location_id,
+            "note": venue_note,
+        }
         if location_id != previous_location_id:
             _settle_departed_location_events(conn, previous_location_id, turn)
             conn.execute("UPDATE locations SET visit_count = visit_count + 1 WHERE id = ?", (location_id,))
@@ -12469,10 +12525,17 @@ def _apply_gm_events(conn, gm_events: list[dict[str, Any]], turn: int) -> None:
 
 
 def _apply_conversations(conn, conversations: list[dict[str, Any]], turn: int) -> None:
+    from app.turn_dsl import is_slot_token
+
     for convo in conversations:
         summary = str(convo.get("summary") or "")[:1400]
         if not summary:
             continue
+        # A copied slot word is a malformed line, from the DSL or a verifier patch (playtest #39).
+        if is_slot_token(summary):
+            continue
+        if is_slot_token(convo.get("topic")):
+            convo = {**convo, "topic": ""}
         npc_id = _npc_id_by_ref(conn, convo.get("npc_code") or convo.get("npc"))
         # Fallback: attach orphan dialogue to a face at the player's location
         if npc_id is None:
@@ -14431,6 +14494,93 @@ def _apply_story_map_walk(
     return report
 
 
+def _gain_names(changes: Any) -> list[str]:
+    """Names of the positive inventory changes in a list (rolled or still banded)."""
+    names: list[str] = []
+    for change in changes if isinstance(changes, list) else []:
+        if not isinstance(change, dict):
+            continue
+        band = str(change.get("quantity_band") or "").strip().lower()
+        try:
+            delta = int(_float(change.get("quantity_delta"), 0))
+        except (TypeError, ValueError):
+            delta = 0
+        if delta > 0 or (not delta and band and not band.startswith(("-", "lose"))):
+            name = str(change.get("name") or "").strip()
+            if name:
+                names.append(name)
+    return names
+
+
+def _void_unbought_spend(
+    result: dict[str, Any],
+    proposed_gains: list[str],
+    kept_changes: list[dict[str, Any]],
+    band_report: dict[str, Any] | None,
+) -> bool:
+    """
+    A GOLD loss paid for GRANTs. When every one of them was removed (the
+    verifier patch, the grounding gate), nothing was bought, and the loss goes
+    too (playtest #41: gold fell 12 to 1 for coal, cloth and oddities the player
+    never received). Structural: a purchase with nothing purchased.
+
+    A loss on a turn that granted nothing (a toll, a bribe, a fine) is left alone.
+    """
+    player = result.get("player") if isinstance(result, dict) else None
+    if not isinstance(player, dict):
+        return False
+    try:
+        gold = int(_float(player.get("gold_delta"), 0))
+    except (TypeError, ValueError):
+        return False
+    if gold >= 0:
+        return False
+    dsl = result.get("_dsl") if isinstance(result.get("_dsl"), dict) else {}
+    bought = [str(name) for name in dsl.get("grants") or [] if str(name or "").strip()]
+    for name in proposed_gains or []:
+        if name not in bought:
+            bought.append(name)
+    if not bought or _gain_names(kept_changes):
+        return False
+    player["gold_delta"] = 0
+    line = f"gold loss voided ({gold}): nothing was bought; {', '.join(bought[:4])} did not change hands"
+    if isinstance(band_report, dict):
+        band_report.setdefault("lines", []).append(line)
+        band_report["voided_spend"] = {"gold_delta": gold, "items": bought[:8]}
+    return True
+
+
+def _reconcile_movement_report(report: Any, player_patch: Any) -> Any:
+    """
+    The movement report is written before the move is applied. When the apply
+    refused the place (a village has no apothecary, a closed shop, a venue out
+    of reach), the report said "model" with a destination while the player
+    stayed put (playtest #46). Make it say what happened.
+    """
+    if not isinstance(report, dict) or not isinstance(player_patch, dict):
+        return report
+    outcome = player_patch.pop("_move_outcome", None)
+    if not isinstance(outcome, dict):
+        return report
+    note = outcome.get("note") if isinstance(outcome.get("note"), dict) else None
+    if not note:
+        return report
+    kind = str(note.get("kind") or "")
+    stayed = int(outcome.get("location_id") or 0) == int(outcome.get("previous_location_id") or 0)
+    if kind == "venue_redirect":
+        report = {**report, "landed": str(note.get("landed") or ""), "reason": str(note.get("detail") or "")}
+    elif kind in {"venue_refused", "venue_closed", "venue_unreachable"}:
+        report = {
+            **report,
+            "status": "refused",
+            "refused": kind,
+            "reason": str(note.get("detail") or note.get("reason") or ""),
+        }
+        if not stayed:
+            report["landed_location_id"] = int(outcome.get("location_id") or 0)
+    return report
+
+
 # Per-turn measurements apply_turn puts on the state it returns. play_turn
 # re-reads state from the database on some paths (injuries) and must carry
 # every one of these across that refresh; keeping the list in one place is
@@ -14567,6 +14717,7 @@ def apply_turn(
             pass
 
         _apply_relationships(conn, result.get("relationships") or [])
+        proposed_gains = _gain_names(result.get("inventory_changes"))
         # Inventory fidelity: strip hallucinated gains not grounded in narration/existing stack
         inv_changes = _filter_inventory_changes(
             conn,
@@ -14578,6 +14729,7 @@ def apply_turn(
             if isinstance(result.get("_dsl"), dict)
             else "",
         )
+        _void_unbought_spend(result, proposed_gains, inv_changes, band_report)
         # A map that changes hands reveals ground instead of taking a slot.
         inv_changes, chart_items = _split_chart_items(inv_changes)
         result["inventory_changes"] = inv_changes
@@ -14604,6 +14756,7 @@ def apply_turn(
         _apply_inventory_capacity_modifiers(conn, result.get("inventory_capacity_modifiers") or [])
         _apply_skills(conn, result.get("skill_changes") or [])
         _apply_player(conn, result.get("player") or {})
+        movement_report = _reconcile_movement_report(movement_report, result.get("player"))
         # Who keeps the building the player just went into, who came in with
         # them, and whose workplace is whose (playtest #16).
         try:
