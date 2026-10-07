@@ -98,7 +98,7 @@ That opens a **simple** pre-play menu. Click a row (or press its number), then *
 | **Play** / `1` | Start |
 | **Where** / `2` | Cycle local / LAN / VPN |
 | **Engine** / `3` | Cycle mle / llama_cpp / cloud API |
-| **Pipeline** / `4` | Toggle the paragraph writer (off by default: the draft's own prose ships, see *Local 8B turn times*) |
+| **Pipeline** / `4` | Toggle the paragraph writer (off by default: the draft's own prose ships, see *Local turn times*) |
 | **Advanced** / `9` | Full Gatehouse board |
 | **Quit** / `0` | Exit |
 
@@ -273,9 +273,22 @@ $env:AI_RPG_MEMORY_MAX_FACTS="200"
 $env:AI_RPG_GM_OFFSCREEN_INTERVAL="8"
 ```
 
-## Local 8B turn times
+## Local turn times
 
-Measured on **Qwen3 8B** (Q4_K_M) through MLE on a 12 GB GPU, launcher context `auto` (it resolves to 24,576 tokens there), October 2026 live A/B: two scripted games, five turns each.
+Two measurements so far, both through MLE (the in-process engine) on the same 12 GB GPU with the launcher's `auto` context. A full timed playtest of `0.10.0-dev.7` has not been run yet; the numbers below are what has actually been measured.
+
+**Qwen2.5 7B Instruct (Q4_K_M), the default launcher setup.** A real hand-played game on `0.10.0-dev.7`, 7 October 2026: an opening and 12 player turns, paragraph writer off (the default). Times are from the first to the last step in each turn's trace (`data/model_traces`), so the browser round trip is not included.
+
+| Step | Time |
+| --- | ---: |
+| Opening scene | **13 s** |
+| Player turn, median | **8 s** |
+| Player turns, range | 3-17 s |
+| Turns where the fact-check ran (3 of 12) | 8-17 s |
+
+The launcher's default model name is `qwen3:8b`; when `data/mle-models` holds a single GGUF, MLE loads that file under the default name, which here is Qwen2.5 7B. To run Qwen3 8B, put its GGUF there (or set the MLE model to its path).
+
+**Qwen3 8B (Q4_K_M).** October 2026 live A/B: two scripted games, five turns each, context `auto` (24,576 tokens on that GPU).
 
 | Step | Paragraph writer off (default) | Paragraph writer on |
 | --- | ---: | ---: |
