@@ -185,5 +185,32 @@ class OneTakeVocabulary(WriterOffEnv):
         ):
             self.assertEqual(llm.player_take_intent(line), want, line)
 
+
+class NoSubordinateFragments(WriterOffEnv):
+    """Finding 3: cutting ', you <act>' after a subordinate head shipped a fragment."""
+
+    def test_a_subordinate_head_goes_with_its_clause(self):
+        for sentence in (
+            "When the bell finally stops ringing, you nod slowly toward the old man.",
+            "Before the guard can answer, you wonder whether the seal is forged.",
+            "As the cart rolls past, you remember the same crest on the gate of your father's house.",
+            "While the rain hammers the shutters, you realize the ledger is missing.",
+        ):
+            kept, dropped = llm.drop_invented_player_acts_text(sentence, "I wait by the cart.")
+            self.assertEqual(kept, "", sentence)
+            self.assertEqual(dropped, [sentence])
+
+    def test_a_main_clause_head_is_still_cut_at_the_comma(self):
+        kept, _ = llm.drop_invented_player_acts_text(
+            "The old man lowers the lantern to the step, and you nod slowly.", "I wait by the cart."
+        )
+        self.assertEqual(kept, "The old man lowers the lantern to the step.")
+
+    def test_perception_input_keeps_the_whole_sentence(self):
+        sentence = "As the cart rolls past, you remember the same crest on the gate of your father's house."
+        kept, dropped = llm.drop_invented_player_acts_text(sentence, "I watch the street.")
+        self.assertEqual(kept, sentence)
+        self.assertEqual(dropped, [])
+
 if __name__ == "__main__":
     unittest.main()

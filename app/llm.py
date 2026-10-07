@@ -13199,6 +13199,13 @@ _INPUT_PERCEIVE_RE = re.compile(
     re.I,
 )
 _PERCEPTION_PAYOFF_RE = re.compile(r"^(?:reali[sz]e|know|knew|understand|understood|remember|recall|suspect)", re.I)
+# "As the cart rolls past, you nod" cut at the comma ships "As the cart rolls
+# past." A head that opens on a subordinator has no main clause of its own.
+_SUBORDINATE_HEAD_RE = re.compile(
+    r"^\s*(?:as|when|whenever|while|whilst|before|after|if|though|although|even\s+though|once|until|till|"
+    r"since|because|unless|as\s+soon\s+as)\b",
+    re.I,
+)
 _ACT_SENTENCE_SPLIT_RE = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"\u201d\u2019]))\s+")
 
 
@@ -13263,7 +13270,7 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
         if not _player_clause_invented(sentence[coord.end():], clause, own, player_input):
             continue
         head = sentence[: coord.start()].rstrip(" ,;\u2014\u2013-")
-        if len(head) < 20:
+        if len(head) < 20 or _SUBORDINATE_HEAD_RE.match(head):
             return "", sentence
         end = sentence.rstrip()[-1:]
         return head + (end if end in ".!?" else "."), sentence[coord.start():].strip()
