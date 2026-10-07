@@ -13555,7 +13555,20 @@ _HUMAN_NOUN_RE = re.compile(
     + r")\b",
     re.I,
 )
-_NAME_TOKEN_RE = re.compile(r"(?<![.!?\n\u201c\"*]\s)(?<=\s)([A-Z][a-z][\w'\u2019-]+)")
+# A capital after a sentence end is not a name. The 8B prose ends sentences
+# inside curly quotes ("Stay close." She turns) and joins them with ; : and
+# dashes; each of those used to read the next "She" or "Somewhere" as a new name
+# and threw the whole depth retry away.
+_NAME_TOKEN_RE = re.compile(
+    r"(?<![.!?\n\u201c\u201d\u2018\u2019\"'*;:\u2014\u2013)\]-]\s)(?<=\s)([A-Z][a-z][\w'\u2019-]+)"
+)
+# Closed-class words are never names, wherever a capital lands on them.
+_NOT_NAME_WORDS = frozenset(
+    "i you your yours he him his she her hers it its they them their theirs we us our ours "
+    "this that these those there here then now when where while as and but or nor so yet for "
+    "the a an some any no not one each every all both either neither "
+    "somewhere somehow sometimes still even just only once again too also perhaps maybe".split()
+)
 
 
 def _speech_words(text: str) -> set[str]:
@@ -13587,7 +13600,7 @@ def _expansion_adds_people_or_speech(original: str, expanded: str) -> list[str]:
             added.append(f"person: {noun}")
     before_words = {re.sub(r"['\u2019]s$", "", w) for w in re.findall(r"[\w'\u2019-]+", before_text)}
     for name in sorted({re.sub(r"['\u2019]s$", "", m.group(1)) for m in _NAME_TOKEN_RE.finditer(after_text)}):
-        if name not in before_words and name.lower() not in {"you", "your", "i"}:
+        if name not in before_words and name.lower() not in _NOT_NAME_WORDS:
             added.append(f"name: {name}")
     return added
 

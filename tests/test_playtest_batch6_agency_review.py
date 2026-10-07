@@ -212,5 +212,34 @@ class NoSubordinateFragments(WriterOffEnv):
         self.assertEqual(kept, sentence)
         self.assertEqual(dropped, [])
 
+
+class DepthRetryNameCheck(WriterOffEnv):
+    """Finding 4: a capital after a closing quote, ; or a dash is not a new name."""
+
+    ORIGINAL = "The keeper wipes the counter. “Stay close,” she says, and the lamp gutters."
+
+    def test_sentence_starts_after_quote_semicolon_and_dash(self):
+        for expanded in (
+            "“Stay close.” She turns to the shelves; Their jars glint.",
+            "The keeper wipes the counter — Somewhere a kettle hisses.",
+            "The keeper wipes the counter: She sets the rag down.",
+        ):
+            self.assertEqual(llm._expansion_adds_people_or_speech(self.ORIGINAL, expanded), [], expanded)
+
+    def test_live_run1_his_after_a_curly_quote(self):
+        pair = FIXTURE["depth_retry_his_after_curly_quote"]
+        self.assertIn("” His", pair["expanded"])
+        names = [a for a in llm._expansion_adds_people_or_speech(pair["original"], pair["expanded"]) if a.startswith("name:")]
+        self.assertEqual(names, [])
+
+    def test_a_real_new_name_is_still_caught(self):
+        for expanded in (
+            "The keeper wipes the counter, and Mara Venn steps in from the rain.",
+            "“Stay close.” Behind her, Tobin coughs.",
+        ):
+            names = [a for a in llm._expansion_adds_people_or_speech(self.ORIGINAL, expanded) if a.startswith("name:")]
+            self.assertTrue(names, expanded)
+
+
 if __name__ == "__main__":
     unittest.main()
