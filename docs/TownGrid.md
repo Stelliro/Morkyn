@@ -199,17 +199,32 @@ Plot = {
 ```
 
 The `gate` plot is a 2 x 2 (scaled) square inside the edge at each gate port. It is where
-the player enters. Each notice from `cell["notices"]` is placed on the road tile nearest
-its `fine_x, fine_y`. It is recorded on the plot whose frontage is nearest, as flag
-`notice`. A `guild` notice turns that plot into `service`/`guild_hall`.
+the player enters.
+
+**Notices are collected by destination, not by the list that holds them.** A notice in
+cell A's `cell["notices"]` can point at another city cell B (`far: true`, with `x, y` = B
+and `home_x, home_y` = A; `local_intel.roll_notices_for_cell`). Generating cell
+`(cx, cy)` therefore scans the `notices` of **every** cell of the city (city meta only, no
+fine grid) and takes the entries whose `(x, y) == (cx, cy)`. Entries in this cell's own
+list that point elsewhere are ignored here. Each collected notice is placed on the road
+tile nearest its `fine_x, fine_y` and recorded on the plot whose frontage is nearest, as
+flag `notice`. A `guild` notice turns that plot into `service`/`guild_hall`.
 
 ### 3.4 Which plots are shops
 
 The rules use the existing numbers and nothing else.
 
-**Stalls are forced.** `local_intel.stalls_for_district` already gives each district
-`shop_count` positions with a good. The plot whose frontage is nearest each non-filler
-stall becomes a shop (flag `stall`), with a venue kind chosen from the good:
+**Stalls are forced, inside their own district.** `local_intel.stalls_for_district`
+already gives each district `shop_count` positions with a good. Those positions wrap
+modulo `side` and are never clamped to the district's flood region, so the raw nearest
+plot can sit in another ward, on a landmark, or across the cell. The rule is therefore:
+for each non-filler stall, take the nearest **frontage plot whose `d` is the stall's own
+district** and which is not a landmark (`temple`, `office`, `barracks`, `gate`). If an
+earlier stall already took that plot, take the next nearest. If the district has no free
+frontage plot left, the stall gets no plot (the probe counts these; it should be 0 above
+side 24). The stall coordinates themselves stay frozen (section 11); only the plot choice
+is constrained. That plot becomes a shop (flag `stall`), with a venue kind chosen from the
+good:
 
 | good | venue kinds, era-fitted with `venues.kind_for_era` |
 | --- | --- |
@@ -244,21 +259,33 @@ p_shop = base[district.type] * (0.5 + district.density / 100)
 | temple | 0.02 | house (clergy) 0.5, yard 0.5 |
 
 `empty` (vacant lot, ruin) takes a share of `max(0, 0.25 - density / 400)`. Post-collapse
-themes double it. That gives about 0.55 to 0.8 shops per frontage plot in a dense market
-ward and about 0.04 to 0.12 per residential plot, mostly on corners. A shop roll picks
+themes double it. **Before caps**, that gives about 0.55 to 0.8 shop rolls per frontage
+plot in a dense market ward and about 0.04 to 0.12 per residential plot, mostly on corners.
+The share after caps is what the slice A probe measures and reports per district type; the
+pre-cap numbers are not a promise. A shop roll picks
 **service** instead of shop for kinds that are not retail (inn, tavern, bar, bathhouse,
 stable, clinic, shrine, well, guildhall).
 
 **The venue kind** comes from a weighted table by district type, filtered by
 `venues.plausible_kinds(size, era)`. `size` is the city's band mapped to venue sizes:
 `hamlet`, `village`, `town`, and `city` for city, large_city and metropolis. `era` is
-`world._world_era(conn)` at generation time and is stored in the row (3.5). A per-cell
-**kind cap** keeps one ward from holding twenty apothecaries:
+`world._world_era(conn)` at generation time and is stored in the row (3.5). A **kind cap
+per district** (not per cell) keeps one ward from holding twenty apothecaries while
+leaving a city's several market wards room to be mostly shops:
 
 ```
-cap(kind, cell) = max(VENUE_KINDS[kind]["max"],
-                      round(VENUE_KINDS[kind]["max"] * side / 64 * max(density, 20) / 50))
+cap(kind, cell, district) = max(VENUE_KINDS[kind]["max"],
+                                round(VENUE_KINDS[kind]["max"] * side / 64
+                                      * max(district.density, 20) / 50))
 ```
+
+**Overflow rule.** When the weighted pick lands on a capped kind, that kind is removed
+from the district's table and the pick is redrawn from the kinds still under cap. When
+every eligible kind is capped, the roll falls through to the ward's "otherwise" row
+above (house, warehouse, ...), never to an uncapped kind from another ward's table. The
+same rule applies to a stall's kind; a stall whose good maps only to capped kinds keeps
+the flag `stall` and takes the least-filled kind of its good's row (stalls were already
+told to players, so they are never dropped for a cap).
 
 The weighted tables (food ward: bakery, butcher, tavern, inn, diner, mill, market_hall;
 craft ward: smithy, carpenter, tanner, tailor, garage, armorer, jeweller; and so on) live
@@ -274,10 +301,15 @@ context key, `venue_kind`. When it is present:
 - Forms without `{trade}` ("The Crooked Lantern", "The {noun}'s Rest") are allowed only for
   `inn`, `tavern` and `bar`. Classification ignores sign names (Venues.md, possessives), so
   the plot's `vk` is what gives the kind. It is stamped on the location row at realization.
-- `place_name` is the street's name, so `"{place} {trade}"` reads "Wheel Street Bakery".
+- `{place}` is **not** reused for streets: `_venue_place_word` deliberately reduces a
+  place name to its first proper word, so it would give "Wheel Bakery". The context gains
+  a second key, `street_name`, and the street forms use a new slot **`{street}`** that is
+  the full street name ("{street} {trade}" -> "Wheel Street Bakery"). Forms with
+  `{street}` are only drawn when `street_name` is present.
 
 Test: every drawn plot name either has `venues.venue_kind_from_name(name) == vk` or is a
-sign form on an inn, tavern or bar.
+sign form on an inn, tavern or bar. This includes the `{street}` forms: "Wheel Street
+Bakery" ends on the trade, not on the place-tail word, so it classifies.
 
 ### 3.5 What is stored and what is recomputed
 
@@ -344,12 +376,17 @@ measured yet.
 | Stored row | ≈ 20–40 KB after zlib | 96 KB |
 | `city_ports` for a 9 x 9 city | ≤ 5 ms | 50 ms |
 | Load and decode a stored row | ≤ 10 ms | |
-| Cells generated by one turn | at most the cells on the walked path (≤ 5) | |
-| Memory | decoded cells kept in an LRU of 9 per process | |
+| Cells generated by one turn | the cells on the walked path plus at most `TOWN_LOOKUP_CELLS` (2) for a lookup (5.1), never more than 5 | |
+| Skeleton (stages 1-2 only, in memory, 3.2) | ≤ 15 ms | 100 ms |
+| Skeletons computed by one GET | at most 9 (the `r = 1` view) | |
+| Memory | decoded cells kept in an LRU of 9 per process; skeletons in a separate LRU of 27 | |
 
-Generation runs inside a turn or a click-walk only for the cells being entered or walked
-through. Opening the map never generates a cell the player has not seen. Unseen cells are
-outlines (section 6).
+Full generation (plots, names) runs only inside a turn or a click-walk, and only for the
+cells being entered or walked through, plus the bounded lookup in 5.1. **No GET route
+ever generates or writes.** A cell that is seen but not generated is drawn from its
+**skeleton**: stages 1 and 2 of 3.2 (avenues plus port and anchor connectors) recomputed
+in memory, which is pure, cheap, unnamed and identical to what generation will later
+store, because each stage has its own RNG salt. Unseen cells are outlines (section 6).
 
 ---
 
@@ -384,9 +421,15 @@ The key is absent whenever the player is not in a plotted city. It joins
 
 Entering a town makes or adopts the city's **settlement row**: one `locations` row per city
 with `city_id` set, `name = city.name`, and `settlement_size` stamped explicitly from the
-band. A row is adopted when the top-level row the player stands in is anchored
-(`place_anchors`) on one of the city's cells and has the city's name. Otherwise a new row
-is made. Plot venues are children of the settlement row. Outdoor places the story names
+band. **Adoption comes first, by name:** `locations.name` is UNIQUE, so any existing
+top-level row with no venue `kind` whose name equals the city's name (case-folded) is
+adopted, whether or not it is the player's current location and whether or not it is
+anchored on a city cell. An opening or the story may have made it. Adoption stamps
+`city_id` and `settlement_size` on it. A new row is created only when no such row exists.
+If a row with that name exists but is a venue (it has a `kind`), it is not adopted, and the
+new settlement row takes the name with the city's band word appended ("Ashford town"),
+which is a place-tail word and so never classifies as a venue. Plot venues are children of
+the settlement row. Outdoor places the story names
 inside a city (a square, a lane) stay top-level rows as they are today. Section 5.4 covers
 how a typed street or ward name resolves to the grid first.
 
@@ -401,8 +444,19 @@ The road graph is hierarchical, so a 9 x 9 city never needs all of its cells loa
   over ports, then fine BFS only in the first and last cells. Cells in between are
   generated only when the walk actually crosses them, and those cells are seen anyway.
 - **Minutes** = `sum over walked tiles of tile_minutes(side of that tile's cell)`, rounded
-  up, minimum 1. Weather and load then apply exactly as `apply_map_travel_step` already
-  applies them. Terrain for energy is `"city"`.
+  up, minimum 1. Terrain for energy is `"city"`.
+- **Spending them on the caller's connection.** `apply_map_travel_step` opens its own
+  `connect()`, and a second connection cannot write while the turn's transaction holds
+  the lock (the deadlock recorded at `world.py` `settlement_size_for`). Slice B therefore
+  splits its time, weather and energy work into `_spend_travel(conn, minutes, terrain,
+  context) -> report`, which takes the connection, and `apply_map_travel_step` becomes a
+  thin wrapper that opens one and calls it. Every town walk (the turn path in 5.1 and
+  `POST /api/town/walk`) runs in this order: **preview** the spend (pure; the existing
+  `spend_preview`), then **commit** `town_position` and the world marker, then **advance**
+  the clock and weather and spend energy. On a hard block (`insufficient_energy` or any
+  other `travel_blocked` reason) nothing is written: `town_position`, the marker,
+  `town_seen` and the clock stay as they were, and the report says `blocked` with the
+  reasons.
 - **Budget:** a walk longer than `TOWN_WALK_BUDGET` stops at the road tile where the budget
   runs out. The report says `"partial": true, "remaining_minutes": N`, and the draft is
   told the player is on the way (5.3). This is the same rule as the world's step budget.
@@ -425,22 +479,33 @@ A plot is just data until one of these happens. Then it becomes a `locations` ro
 
 Realization goes through one function, `realize_plot(conn, chart, plot_id) -> location_id`.
 It is idempotent: an existing row with this `plot_id` is returned. On a name clash with an
-unrelated row (`locations.name` is UNIQUE), the street is appended: "The Crooked Lantern
-on Wheel Street".
+unrelated row (`locations.name` is UNIQUE), the row is stored as "The Crooked Lantern on
+Wheel Street" and the plain plot name is written to `aliases` for it. Because that stored
+name ends on a place-tail word, `venue_kind_from_name` returns `""` for it, so **rows with
+a `plot_id` are never classified from their name**: every venue rule that reads a row's
+kind (containment, keeper, hours, `venue_entry_check`) uses the stamped `kind` column for
+them, through one helper `venues.row_kind(row)` (stamped `kind` when set, else the name).
+Prose and MOVE matching try the alias as well as the stored name.
 
 **Keepers** use the existing path unchanged. `bind_venue_keeper` and `_trade_keeper_for`
 run on entry. Planned workplaces in a plotted town **claim a plot** instead of inventing a
 name:
 
 - `plan_npc_workplace`, plotted branch: if the NPC's trade kinds
-  (`workplace_kinds_for_role`) have an unclaimed shop or service plot of that kind in this
-  city, claim the nearest one by road from where the NPC stands (the player's tile when
-  they are in the scene). Unclaimed means no `npcs.workplace_plot` points at it and no
-  realized row with that `plot_id` has a keeper. The plan becomes
+  (`workplace_kinds_for_role`) have an unclaimed shop or service plot of that kind **in a
+  cell of this city that is already generated**, claim the nearest one by road from where
+  the NPC stands (the player's tile when they are in the scene). Planning never generates
+  a cell. Unclaimed means no `npcs.workplace_plot` points at it and no realized row with
+  that `plot_id` has a keeper. The plan becomes
   `{kind, name: plot.name, parent_id: settlement_row, plot_id}`, and `works_at` in the
   prompt now carries a real sign name.
-- With no free plot of the kind, the NPC works at an existing one (a second baker in a
-  bakery). Nothing is invented.
+- With no free plot of the kind in a generated cell but a claimed one there, the NPC works
+  at that one (a second baker in a bakery).
+- With no plot of the kind in any generated cell, the plan stays **unclaimed**:
+  `{kind, name: "", parent_id: settlement_row, plot_id: ""}`, and `works_at` reads as the
+  kind alone ("works at a bakery"). No name is invented. The claim is retried each time a
+  cell of the city is generated (the generation hook calls the claim pass for unclaimed
+  plans in that city).
 - `ensure_npc_workplace` with a `plot_id` in the plan calls `realize_plot` and binds the
   keeper. `venue_capacity_left` is not consulted for plotted cities, because the plots are
   the capacity.
@@ -455,42 +520,95 @@ on the grid.**
 
 ### 5.1 Typed targets
 
-`town_target(conn, chart, text, position) -> TownTarget | None` runs in `resolve_movement`
-ahead of the venue rules whenever `town_position` is set. It reads only the player's own
-words (with speech stripped, as `venue_move_intent` does), in this order:
+Town movement is **planned before the prompt and applied after the snapshot**. Two
+ordering facts force this. `movement_contract` is built into the prompt before the draft
+exists, while `resolve_movement` runs in `apply_turn` after the narration; and
+`resolve_movement` runs **before** `_save_snapshot`, which reads `SNAPSHOT_SETTING_KEYS`
+and computes `max_ids` itself, so rows it wrote would get ids at or below the snapshot's
+max ids and never be removed by a rewind.
+
+1. **Plan** (`plan_town_move(conn, chart, text, position) -> TownPlan | None`) runs in
+   `play_turn` before the prompt context is built, whenever `town_position` is set. It
+   reads only the player's own words (with speech stripped, as `venue_move_intent` does),
+   so the draft is not needed. It writes nothing except `town_cells` cache rows for cells
+   it has to generate (a deterministic cache, not rewound, 3.5). It computes the target,
+   path, minutes, `partial`, the `spend_preview` (blocked or not) and `enter`. The plan is
+   put into `movement_contract.town` (5.3) and carried to `apply_turn` as
+   `result["_town_plan"]`.
+2. **Resolve** (`resolve_movement`, which keeps its place before the snapshot) only edits the
+   `result` dict: for a plan with `enter` it sets `player.move_to_location`, and it
+   handles the model's own ops (5.2), which may re-aim a plan only towards a plot already
+   in a generated cell. It writes no rows.
+3. **Apply** (`apply_town_plan(conn, plan, result)`) runs in `apply_turn` **after**
+   `_save_snapshot` and before `_apply_player`, next to where `_apply_story_map_walk`
+   already runs late. So `town_position` is snapshotted with its pre-walk value, and the
+   `town_seen` and `locations` rows it appends get ids above the snapshot's max ids and are
+   removed by an ordinary rewind. `realize_plot` therefore runs before `_apply_player`
+   needs the row.
+
+`pre_rows` (`result["_snapshot_rows"]`) is not used for this. Deferring the writes is
+simpler than teaching `_save_snapshot` to prefer pre-walk max ids.
+
+The plan reads the player's words in this order:
 
 | # | Shape | Example | Resolves to |
 | --- | --- | --- | --- |
 | 1 | A plot name the player knows (seen, told or realized) in this city | "back to the Crooked Lantern" | that plot |
-| 2 | A trade word (`_KIND_WORDS`, era-fitted) with "the/a/an/nearest/some" | "go to the bakery", "find a smith" | the known plot of that kind nearest by road. When none is known, the nearest of that kind anywhere in the city (the player walks there asking the way, and it becomes seen). |
+| 2 | A trade word (`_KIND_WORDS`, era-fitted) with "the/a/an/nearest/some" | "go to the bakery", "find a smith" | the known plot of that kind nearest by road. When none is known, the nearest of that kind in a **generated** cell (the player walks there asking the way, and it becomes seen). When none is there either, the lookup below. |
 | 3 | A street or ward name | "head to Wheel Street", "the market" | that segment's nearest tile, or the plot at the ward's anchor |
 | 4 | A doorway with no name | "enter the inn", "go inside" | a plot of that kind (or any shop or service) whose frontage is the player's tile or adjacent to it |
 | 5 | "out", "leave the shop" while `inside` | | the frontage tile of the plot they are in |
 | 6 | Leaving the town | "leave town", "out the north gate" | the nearest gate (or the named one), then the world rules |
 
-A target carries `{plot_id | tile, enter: bool, walk_path, minutes, partial}`. The engine
-then does three things itself:
+**Lookup, bounded.** Plot kinds exist only after a cell is generated, and a 9 x 9 city
+must not be generated whole to answer "find a smith". When rule 2 (or a re-aimed trade
+name, 5.2) finds no plot of the kind in any generated cell:
 
-1. Walk the path (4.3) and write `town_position`. Mark everything seen on the way (7).
+- A city of at most 5 cells is generated whole by the lookup (it is within the per-turn
+  budget), so its answer is exact.
+- A larger city generates at most `TOWN_LOOKUP_CELLS` (2) more cells, the ungenerated city
+  cells nearest the player by port distance, and searches again.
+- Still nothing: `town_none` is asserted **only** when every cell of the city is generated.
+  Otherwise the report is `rule: "town_unknown", kind: "smithy"`: the player does not move
+  and the draft is told none is known nearby and the player can ask around (5.3). Nothing
+  is minted either way.
+
+A plan carries `{plot_id | tile, enter: bool, walk_path, minutes, partial, blocked}`.
+`apply_town_plan` then does three things itself:
+
+1. Walk the path (4.3) in the preview, commit, advance order and write `town_position`.
+   Mark everything seen on the way (6). A blocked plan writes nothing (4.3).
 2. When `enter` is set and the plot is reached this turn and is open (`venues.is_open`):
-   `realize_plot`, then set `player.move_to_location` to its name and let
-   `gate_venue_move` run. Containment for a row with `plot_id` is **positional**: the
-   player must be on its frontage tile, which the walk just ensured. The parent-equality
-   check is skipped for these rows. A closed plot leaves the player at the door with the
-   existing `venue_closed` note.
-3. Report `rule: "town_walk"` / `"town_enter"`, with `from`, `to`, `minutes` and `partial`.
+   `realize_plot`, so the row exists when `_apply_player` applies the
+   `move_to_location` that step 2 above set, and `gate_venue_move` runs as usual.
+   Containment for a row with `plot_id` is **positional**: the player must be on its
+   frontage tile, which the walk just ensured. The parent-equality check is skipped for
+   these rows. A plot that is closed, or not reached this turn, clears the
+   `move_to_location` and leaves the player at the door or on the way, with the existing
+   `venue_closed` note when closed. Openness and reach are known at plan time, so the
+   contract already said so.
+3. Report `rule: "town_walk"` / `"town_enter"`, with `from`, `to`, `minutes`, `partial`
+   and `blocked`.
 
-**No match** for a trade the city does not have (no smithy anywhere): the player does not
-move, the report says `rule: "town_none", kind: "smithy"`, and the draft is told that no
-such building stands here (5.3). Nothing is minted. `_mint_venue_from_request` and the
-`venue_opened` bootstrap are disabled in plotted cities.
+`_mint_venue_from_request` and the `venue_opened` bootstrap are disabled in plotted
+cities.
+
+**The world walk stays out of it.** `_apply_story_map_walk` runs after movement and, for a
+`model`/`repaired` report, steps the world token toward the destination's anchor, or
+`STEP_BUDGET` world steps for a compass word ("walk east to the bakery"). That would move
+the world marker off `town_position.cx, cy` and break the 4.1 invariant. `plan_story_walk`
+therefore returns `skip` (reason `town`) whenever `town_position` is set and the movement
+report's `rule` starts with `town_`, or a town plan was applied this turn. Leaving town
+(rule 6) is the one hand-off: the town plan walks to the gate tile, clears
+`town_position`, and the world walk then starts from the gate's world cell with its usual
+budget, minus the minutes already spent.
 
 ### 5.2 What the model's own ops and prose may do
 
 | Model output | In a plotted town |
 | --- | --- |
 | `MOVE <name>` that matches a plot name in `places_here`, a known plot or a realized plot | Walk and enter as in 5.1 |
-| `MOVE <name>` where the name holds a trade word and matches no plot ("Blind Owl Bakery") | Re-aimed at the plot of that kind nearest by road, within budget. The report records `renamed: {"from": "Blind Owl Bakery", "to": "<plot name>"}` so the shipped prose can be corrected (below). |
+| `MOVE <name>` where the name holds a trade word and matches no plot ("Blind Owl Bakery") | Re-aimed at the plot of that kind nearest by road **in a generated cell** (the apply phase walks it within budget; no lookup generation happens after the draft). The report records `renamed: {"from": "Blind Owl Bakery", "to": "<plot name>"}` so the shipped prose can be corrected (below). With no such plot generated, the move is dropped and the turn flagged `prose_mismatch`. |
 | `MOVE` to a new outdoor name ("the fountain") | Resolved by 5.1 rule 3 when it names a street or ward. Otherwise it stays where it is and no row is made. |
 | `venues.entry_in_prose` shows the player going into a building, with no MOVE | `_venue_shown_in_prose`, plotted branch: match the shown name or kind against `places_here`, then known plots, then the nearest plot of that kind. Never mint. |
 | `WALK <dir> STEPS n` inside a town | Ignored. In town, walking is by place. The DSL rule says so (5.3). |
@@ -549,15 +667,30 @@ says the fix is to remove an invitation, not to argue against it.
   its name. A trade not listed may stand elsewhere in town; the engine walks there if the
   player asks. A building that is not listed and not asked for does not appear in the
   prose. Closed places cannot be entered."
-- When the turn walked, the contract also carries `arrived`: the target's name, where it
-  is now, and the minutes spent. When the walk was partial, `walking` is set and the prose
-  ends on the way.
+- These lines come from **this turn's plan** (5.1), which exists before the prompt is
+  built, so they describe the turn being written, not the previous one. When the plan
+  walks, the contract carries `arrived` (the target's name, where it is, the minutes)
+  and `places_here` is computed at the plan's end tile. When the plan is partial,
+  `walking` is set and the prose ends on the way. When it is blocked, `blocked` gives the
+  reason and the prose keeps the player where they are.
 - `town_none` from 5.1 becomes one line: "No <kind> stands in <town>. Say so; do not
-  produce one."
-- `turn_dsl.py`'s movement rules gain one sentence, kept next to the existing indoors rule:
-  "In a town (movement_contract.town present) do not WALK; MOVE names a building from
-  town.places_here, or a street." The instruction "A hike is at most 4 tiles..." is
-  skipped while in town.
+  produce one." `town_unknown` becomes: "No <kind> is known nearby. The player can ask
+  around; do not produce one."
+- `turn_dsl.py`'s movement rules become **conditional** on the town block. Leaving the
+  general bullets in place beside a town sentence would keep the invitation to invent.
+  When `movement_contract.town` is present, the prompt shows the town versions instead of:
+  - "Prefer a name from movement_contract.venues_here; otherwise name the building and it
+    is created." The town version: "A building the player goes to or into is MOVE with a
+    name from town.places_here, or a street name. Nothing else is created."
+  - "Interiors are entered only from the place they stand in ... going in costs the next
+    turn. Do not narrate walking across the map and through a shop door in one turn." The
+    town version: "The engine walks the player along the road and may take them inside
+    within the same turn when town.arrived says so; otherwise the scene ends at the door
+    or on the way."
+  - "A hike is at most 4 tiles ..." and the WALK grammar: replaced by "In a town do not
+    WALK."
+  Outside towns and on legacy maps the DSL text is byte-identical to today's (a test
+  checks it).
 - `map_space` keeps its world block. `places_in_reach` still lists other cities.
 - `current_location.people` `works_at` now names real plots, so the draft and the map
   agree on whose shop is whose.
@@ -574,11 +707,11 @@ then heads the way the engine will walk, as #33 does for world places.
 
 | What | When it becomes known |
 | --- | --- |
-| Avenues and main roads of a cell | When the world cell is seen (`visited`/`revealed`), matching the #19 rule that a seen cell shows its wards. You can see the big streets. |
+| Avenues and main roads of a cell | When the world cell is seen (`visited`/`revealed`), matching the #19 rule that a seen cell shows its wards. You can see the big streets. A seen cell that is not generated shows its **skeleton** (3.6), unnamed, over its ward raster; a GET never generates it. |
 | Side streets and alleys | Within sight of a walk: every road tile within `max(3, round(40 m / tile_metres))` of a walked tile, plus the straight line of road ahead along the current segment up to 150 m |
 | A plot's kind (house, shop, ...) | When its frontage tile is seen |
 | A plot's name, hours | When its frontage is within `max(1, round(15 m / tile_metres))` of a walked tile (you can read the sign), or it is realized, or someone told you |
-| Told plots | A `local_intel` direction answer that pointed at a stall or a notice marks that plot `told` (name and kind, not its street) |
+| Told plots | A `local_intel` direction answer that pointed at a stall or a notice records it as `told`. In a generated cell that is the plot (name and kind, not its street). In a cell not yet generated the entry is the stall or notice id (`"stall:<district>:<index>"`, `"notice:<id>"`), which costs no generation; it is folded to its plot when that cell is generated, because the stall-to-plot rule (3.4) is deterministic. Telling never generates a cell. |
 | Gates | Always, for a city whose cell you have seen |
 
 Each walk appends **one** `town_seen` row per cell it touched, holding only the newly seen
@@ -590,14 +723,17 @@ cell passes 64 rows.
 
 ## 7. API
 
-All read routes are pure reads: they never generate a cell the player has not seen.
+All read routes are pure reads: they never generate or write anything, seen or not. A
+seen cell that is not generated is returned from its in-memory skeleton (3.6) with
+`generated: false`, roads masked to the avenue and main-road classes, and no plots. One
+request computes at most 9 skeletons; a larger `r` is refused with 400.
 
 | Route | Purpose |
 | --- | --- |
 | `GET /api/tiles/map/settlement` (existing) | Unchanged shape, plus `town: {zoomable, player: {cx, cy, fx, fy, plot}}`. The marker uses the real fine position when `town_position` is set. |
 | `GET /api/town/view?city_id=&cx=&cy=&r=1` | The street view of cell `(cx, cy)` and its city neighbours within `r` (default: the player's cell). Per **seen** cell: `side`, `roads` (base64 class mask, **masked to seen tiles**), `segments` with names (seen only), `plots` (seen only: `id, r, k, vk, label, name if readable, open, hours, here, realized code`), `gates`, `notices`. Unseen cells in range: `{cx, cy, side, known: false}`. |
 | `GET /api/town/plot/{plot_id}` | Peek: name, kind label, street, ward, hours and open-now, keeper if met, whether it is realized. 404 when not known. |
-| `POST /api/town/walk` `{plot_id}` or `{cx, cy, fx, fy}` | The click-walk. Same gates as `/api/tiles/map/move` (confinement 409, `travel_ready` for leaving the cell). Walks the road to the plot's frontage, or the nearest road tile to the clicked tile, and **does not enter**. Applies minutes through `apply_map_travel_step({"minutes": m, "terrain": "city", ...})`. Returns the new view and a `travel` record. When inside a venue, it first leaves it (current location becomes the settlement row). |
+| `POST /api/town/walk` `{plot_id}` or `{cx, cy, fx, fy}` | The click-walk. Same gates as `/api/tiles/map/move` (confinement 409, `travel_ready` for leaving the cell). Walks the road to the plot's frontage, or the nearest road tile to the clicked tile, and **does not enter**. One connection: generates the walked cells, then runs `_spend_travel` in the preview, commit, advance order (4.3); a hard block returns 409 with the reasons and changes nothing. Returns the new view and a `travel` record. When inside a venue, it first leaves it (current location becomes the settlement row). |
 
 **Going in is a turn.** Entering lets the scene happen (a keeper, an event), so the UI never
 enters by itself. "Go in" writes "I go into <name>." into the composer and leaves Send to
@@ -633,9 +769,13 @@ the look in `skin.css`, and colours come from `cssToken`.
   shard. On phone it goes in a card under the canvas (`#townPlotCard`), never floating.
   The card shows name, kind, street, hours and open-now, plus two buttons: **Walk here**
   (POST walk, disabled with the reason when the gate refuses) and **Go in** (writes the
-  sentence into the composer). Right-click on a plot opens the same menu through
-  `interact.js` `MENU_ANCHORS`. Arrow keys in Streets walk to the next junction in that
-  direction along the current road.
+  sentence into the composer). Right-click and long-press on a plot open a menu through
+  `interact.js` `MENU_ANCHORS`, following UI_RULEBOOK §3.7: **Go to <name>** writes
+  "I walk to <name>." into the composer, **Go in** writes "I go into <name>.", and the one
+  immediate item is labelled **Walk here now** and coloured with the red moon, because it
+  spends minutes and energy without a turn. Arrow keys in Streets walk to the next
+  junction in that direction along the current road (immediate, like the map's arrow
+  steps today).
 - **Phone, 390 px.** The canvas is full width and square, the chip bars wrap, the card sits
   below, and there is no sideways scroll. Pan is a one-finger drag on the canvas only
   (`touch-action: none` on the canvas, not the page).
@@ -645,18 +785,26 @@ the look in `skin.css`, and colours come from `cssToken`.
 
 ## 9. Saves, rewind, new game
 
-- **Export and import.** `town_cells` and `town_seen` join the exported table list and
-  `_REPLACE_ONLY_WHEN_EXPORTED`, so a save made before this loads with them empty. On
-  export both are filtered to `map_id in campaign_map_ids(conn)`, the same rule
+- **Export and import.** `town_cells` and `town_seen` join the exported table list as
+  ordinary world tables and are **not** added to `_REPLACE_ONLY_WHEN_EXPORTED`. That set
+  means "skip the table when the save does not name it", which would keep the previous
+  campaign's town rows and leak its seen streets into a loaded old save. As ordinary
+  tables they are cleared on every load and refilled from the save, so a save made before
+  this loads with them empty. On export both are filtered to `map_id in campaign_map_ids(conn)`, the same rule
   `campaign_map_rows` applies (#25). `prune_world_maps` deletes their rows for dropped
   maps. `town_position` travels in `settings`. The new `locations` and `npcs` columns
   travel with their tables. Old saves get `''` from the migrations.
-- **Rewind.** Each piece is covered by machinery that already exists:
-  - `town_position` is in `SNAPSHOT_SETTING_KEYS`;
-  - `town_seen` joins `AUTOINC_TABLES` and the delete order, so rows a turn appended are
-    removed by max id. It is append-only, so this is exact, with no snapshot rows at all;
-  - realized venues are new `locations` rows, removed by max id; `npcs.workplace_plot`
-    rides the `npcs` rows the turn already snapshots;
+- **Rewind.** Existing machinery covers it **only because the town writes happen after
+  `_save_snapshot`** (5.1, `apply_town_plan`). Had they stayed in `resolve_movement`, which
+  runs before the snapshot, every one of the lines below would be false:
+  - `town_position` is in `SNAPSHOT_SETTING_KEYS`, read by `_save_snapshot` before the
+    walk is applied, so a rewind restores the pre-walk position;
+  - `town_seen` joins `AUTOINC_TABLES` and the delete order, so rows a turn appended
+    (after the snapshot) are removed by max id. It is append-only, so this is exact, with
+    no snapshot rows at all;
+  - realized venues are new `locations` rows made after the snapshot, removed by max id;
+    `npcs.workplace_plot` rides the `npcs` rows the turn already snapshots;
+  - the plan phase writes only `town_cells` (below) before the snapshot;
   - `town_cells` is a deterministic cache and is not rewound. A cell generated in a
     rewound turn stays generated, which is harmless;
   - **reconcile after rewind and load:** when `town_position` is present, put the world
@@ -704,34 +852,45 @@ Tests (`tests/test_town_grid.py`):
   of every shared-edge port are road;
 - plots: no overlap, no plot on a road tile, every non-yard plot's frontage is a road tile
   orthogonally next to it, landmarks at temple and government anchors;
-- shops: every stall's nearest frontage plot is a shop with a fitting kind; shop share
-  ordered shopping > food/craft > residential > temple/government over a fixed set of
-  seeds; per-cell kind caps hold; every `VENUE_KINDS` key has a weight row;
+- shops: every stall maps to a shop plot **in its own district** with a fitting kind,
+  never a landmark, including a seed where the stall position wraps across the cell; shop
+  share (after caps) ordered shopping > food/craft > residential > temple/government over
+  a fixed set of seeds; per-district kind caps hold and a capped roll falls through to the
+  ward's "otherwise" row; every `VENUE_KINDS` key has a weight row;
+- notices: a far notice stored in cell A's list appears in cell B's plots and not A's;
+  generating A then B and B then A gives identical rows;
+- skeleton: stages 1-2 recomputed in memory equal the same stages of the stored row;
 - era: a modern world has no smithy or alchemist plots, and a preindustrial one has no
   garage;
 - names: unique per city; each one classifies to its `vk` or is a sign form on an inn,
-  tavern or bar; no name ends on a closed word;
+  tavern or bar, including `{street}` forms ("Wheel Street Bakery"); no name ends on a
+  closed word;
 - budget: a 128 cell generates in under 1 s and encodes to under 96 KB;
 - storage: a cached row is returned without regenerating, and a row with an older
   `gen_version` is kept as is;
-- read API: only seen plots and roads come back; a non-world or legacy map reports
-  `available: false`; a hamlet works;
-- saves: export filtered by map, import of an old save without the tables, prune.
+- read API: only seen plots and roads come back; a seen ungenerated cell returns its
+  skeleton and the request creates no `town_cells` row (row count unchanged); `r > 1` is
+  refused; a non-world or legacy map reports `available: false`; a hamlet works;
+- saves: export filtered by map, prune, and an old-format save without the tables loaded
+  **after a game that walked a town** leaves `town_seen` and `town_cells` empty.
 
 ### Slice B: engine integration
 
 1. `town_position` and the world-marker invariant; entering, leaving and crossing cells
    (4.2); start-in-city.
-2. Pathfinding with `port_dist`, minutes and budget, and `POST /api/town/walk`.
+2. Pathfinding with `port_dist`, minutes and budget; `_spend_travel(conn, ...)` split out
+   of `apply_map_travel_step`; `POST /api/town/walk`.
 3. Settlement-row adoption, `realize_plot`, positional containment in
    `venue_entry_check`/`gate_venue_move` for `plot_id` rows.
-4. `town_target` in `resolve_movement`; the plotted branches of `_venue_shown_in_prose`,
+4. `plan_town_move` before the prompt, `apply_town_plan` after `_save_snapshot`, the
+   bounded lookup, and the `plan_story_walk` town skip; in `resolve_movement` the plotted
+   branches of `_venue_shown_in_prose`,
    `_venue_for_named_move` and `_mint_venue_from_request` (disabled there); the rename
    report and the narrow prose rename.
 5. Workplaces claim plots (`plan_npc_workplace`, `ensure_npc_workplace`,
    `_realize_named_workplaces`).
 6. The `movement_contract.town` block; removal of `venue_name_options` and
-   `venue_kinds_possible` in town; the DSL sentence; road bearings.
+   `venue_kinds_possible` in town; the conditional town DSL bullets; road bearings.
 7. Knowledge (`town_seen` appends on every walk, told plots from `local_intel`).
 8. Rewind and load reconcile.
 
@@ -740,21 +899,37 @@ Tests (`tests/test_town_movement.py`, writer-off fixtures, no model):
   gate;
 - walk minutes equal the path sum for both side 128 and side 64; a 60-minute walk stops at
   40 with `partial`;
-- typed targets: plot name, "go to the bakery" (nearest known, else nearest), "enter the
-  inn" at the door, street name, "leave the shop", a trade the city lacks (no move,
-  `town_none`, no row made);
+- typed targets: plot name, "go to the bakery" (nearest known, else nearest generated,
+  else the bounded lookup), "enter the inn" at the door, street name, "leave the shop", a
+  trade a fully generated small city lacks (no move, `town_none`, no row made), a trade
+  missing from a 9 x 9 city's generated cells (`town_unknown`, at most 2 cells generated,
+  no row made);
+- plan before prompt: the prompt context of the walking turn carries `arrived`/`walking`
+  from the plan, and `apply_turn` applies the same path;
+- spend: an in-turn walk and `POST /api/town/walk` advance the clock on the caller's
+  connection (no second connection); an energy-blocked walk leaves `town_position`, the
+  marker, `town_seen` and the clock unchanged;
+- story walk: "walk east to the bakery" in town leaves `world_maps.player` equal to
+  `(cx, cy)`; "out the north gate" hands off to the world walk from the gate cell;
+- settlement row: an existing unanchored top-level row named like the city is adopted, not
+  duplicated (no UNIQUE error);
 - realization: a row with `plot_id`, parent settlement row, kind, hours; idempotent; name
-  clash gets the street suffix; closed shop leaves the player at the door;
+  clash stores "<name> on <street>" plus an alias, and `row_kind` still gives the plot's
+  kind; closed shop leaves the player at the door;
 - MOVE "Blind Owl Bakery" re-aimed at the real bakery and the prose name replaced; an
   unshown move still dropped (#6c rule unchanged);
 - prose entering a listed plot with no MOVE enters it; prose entering an unlisted kind
   mints nothing;
-- workplaces: a baker NPC claims a bakery plot, `works_at` carries the plot name, no row
-  is made until visited, two bakers never claim one plot;
+- workplaces: a baker NPC claims a bakery plot in a generated cell, `works_at` carries
+  the plot name, no row is made until visited, two bakers never claim one plot; with no
+  bakery generated the plan stays unclaimed with no name, and is claimed when a cell with
+  one is generated; planning generates no cell;
 - contract: `places_here` lists only seen plots, at most 8; no `venue_name_options` in
-  town; the legacy contract is unchanged outside towns and on legacy maps;
-- rewind: position, seen rows and realized rows are restored or removed, and the world
-  marker is reconciled;
+  town; the town DSL bullets replace the general invent/next-turn/hike bullets; the legacy
+  contract and DSL text are unchanged outside towns and on legacy maps;
+- rewind: rewinding a turn that walked, entered a plot and saw new tiles restores the
+  pre-walk `town_position`, deletes that turn's `town_seen` rows and the realized
+  `locations` row, and reconciles the world marker;
 - the existing venue, movement and #33/#50 tests still pass unchanged.
 
 A **live check** on the 8B uses the staged-playtest or setup-preset harness against an
@@ -763,14 +938,16 @@ isolated database: a town walk, entering a named shop, asking for a missing trad
 
 ### Slice C: UI
 
-1. The City | Streets chips, the Streets canvas painter, pan, plot hit-testing, peek, card
-   and menu, Walk here and Go in, arrow walking, auto-zoom on entering.
+1. The City | Streets chips, the Streets canvas painter (generated cells and skeletons),
+   pan, plot hit-testing, peek, card and menu (Go to, Go in, moon-coloured Walk here now),
+   Walk here and Go in on the card, arrow walking, auto-zoom on entering.
 2. Layout in `styles.css` and the look in `skin.css`, with no colour in `styles.css`.
 3. Verify with headless Playwright (system python) on an isolated scratch uvicorn
    (`AI_RPG_MODEL_PROVIDER=mle`, a nonexistent `MLE_MODEL`, a free port). Use a debug save
    that stands in a plotted city. At 1440 px and 390 px: open the map, switch to Streets,
    click a shop, Walk here, check that the marker moved and the clock advanced, check that
-   Go in writes the sentence, and check no page errors and no sideways scroll. Take
+   Go in and the menu's Go to write their sentences and that Walk here now carries the moon
+   class, and check no page errors and no sideways scroll. Take
    screenshots of both widths. Kill the server afterwards.
 
 ---
@@ -795,3 +972,32 @@ isolated database: a town walk, entering a named shop, asking for a missing trad
 - **NPCs on the street** (who stands outside which plot) are not part of this design. The
   scene's people stay attached to the location row, as now.
 - **Budgets in 3.6 are estimates** until the slice A probe measures them.
+- **Lookup trade-off.** Bounding lookups (5.1) means a large city can answer "no smithy
+  known nearby" while one exists in a far ward. That is honest (the player has not been
+  there) and the player can ask around or walk; a cheap per-city kind census was
+  considered and rejected for v1 because generation would then have to honour it, which
+  couples the plot rolls to a second, earlier set of rolls.
+
+---
+
+## 12. Review notes
+
+Critic review of the first draft, with each finding checked against the code before it
+was decided. All 14 were confirmed and accepted; none was rejected.
+
+| # | Finding | Decision | Where |
+| --- | --- | --- | --- |
+| R1 | The in-turn walk in `resolve_movement` runs before `_save_snapshot` (`world.py` around 14971-14985), so its `town_seen`/`locations` rows sit at or below `max_ids` and `town_position` is captured after the walk; rewind would not undo it. | **Accepted.** Chose the deferral option: town writes move to `apply_town_plan`, after `_save_snapshot` and before `_apply_player`. Rejected the `pre_rows` option because `_save_snapshot` computes `max_ids` itself and would need a new override path. Rewind test added. | 5.1, 9, slice B tests |
+| R2 | `movement_contract` is built before the draft; `resolve_movement` runs after it, so `arrived`, `walking` and `town_none` could not reach this turn's prose. | **Accepted.** Split into a pure `plan_town_move` before the prompt and an apply after the snapshot; the contract reads the plan. | 5.1, 5.3 |
+| R3 | Typed lookups, `town_none`, workplace claims and `told` needed every cell generated, breaking laziness. | **Accepted, option (b) with a bound.** Search generated cells; small cities (≤ 5 cells) generate whole; larger ones generate at most 2 more cells; `town_none` only when the city is fully generated, else `town_unknown`. Claims only in generated cells, else an unclaimed nameless plan retried on generation. `told` stores stall/notice ids for ungenerated cells. Option (a), a kind census, rejected (section 11). | 3.6, 4.4, 5.1, 5.2, 5.3, 6 |
+| R4 | `_REPLACE_ONLY_WHEN_EXPORTED` keeps the previous campaign's rows when an old save lacks the key: a fog leak, the opposite of what the draft said. | **Accepted.** Both tables are ordinary world tables, cleared on every load. Test loads an old save after a town walk. | 9, slice A tests |
+| R5 | `apply_map_travel_step` opens its own connection (deadlock risk inside the turn) and can hard-block on energy after the draft had written the position. | **Accepted.** `_spend_travel(conn, ...)` split out; preview, commit, advance order; a block writes nothing. Same for `POST /api/town/walk`. | 4.3, 5.1, 7 |
+| R6 | `_apply_story_map_walk`/`plan_story_walk` would step the world marker off `town_position` (up to `STEP_BUDGET` steps on a compass word). | **Accepted.** `plan_story_walk` skips with reason `town`; leaving town hands off from the gate cell. Test checks the marker stays on `(cx, cy)`. | 5.1, slice B tests |
+| R7 | `{place}` reduces to one word ("Wheel Bakery"), and the "on Wheel Street" clash suffix makes `venue_kind_from_name` return `""`. | **Accepted.** New `{street}` slot with the full street name; plot rows classified by stamped `kind` via `venues.row_kind`, with the plain name kept as an alias. | 3.4, 4.4, tests |
+| R8 | Stall positions wrap modulo `side`, so "nearest frontage plot" can land in another ward or on a landmark. | **Accepted.** Nearest frontage plot within the stall's own district, never a landmark, next nearest on a collision; wrap case tested. | 3.4, slice A tests |
+| R9 | Far notices live in the origin cell's list but point at another cell. | **Accepted.** A cell collects notices whose `(x, y)` is itself from every cell's list; A-then-B and B-then-A test with a far notice. | 3.3, slice A tests |
+| R10 | Per-cell caps (about 96-184 venues at side 128) cannot coexist with the stated shop rates over 900-1,500 plots, and the capped case was undefined. | **Accepted, both halves.** Caps are per district, the overflow rule is written (redraw among uncapped kinds, then the ward's "otherwise" row), and the stated rates are labelled pre-cap with the post-cap share measured by the probe. | 3.4 |
+| R11 | The existing DSL bullets still say "otherwise name the building and it is created" and "going in costs the next turn", contradicting walk-and-enter. | **Accepted.** Those bullets and the hike bullet are swapped for town versions while the town block is present; legacy text unchanged elsewhere (tested). | 5.3, slice B tests |
+| R12 | Creating the settlement row can hit `locations.name UNIQUE` when an unanchored row with the city's name exists. | **Accepted.** Adopt any kindless top-level row with the city's name first; create only when none exists; a venue row with that name forces the band-word form. | 4.2, slice B tests |
+| R13 | "Seen" covers vision and revealed maps, far more than walked cells, so the Streets view would generate inside a GET. | **Accepted.** GETs never generate or write; seen ungenerated cells show an in-memory skeleton (stages 1-2), at most 9 per request. | 3.6, 6, 7, slice A tests |
+| R14 | UI_RULEBOOK §3.7: immediate menu actions must say so and use the red moon. | **Accepted.** The menu's immediate item is "Walk here now" in moon colour; "Go to" and "Go in" write sentences. | 8, slice C |
