@@ -237,6 +237,14 @@ Morkyn/
 - **Dependencies:** `app.town_grid` (cells, ports, knowledge), `app.venues`, `app.player_resources.preview_travel_spend`, `app.world` helpers (lazy imports), `app.tile_world` (marker saves).
 - **Design Notes:** `town_position` is a settings row in `SNAPSHOT_SETTING_KEYS`; while it is present the world marker is on its cell. A walk is a fewest-cells route over the city (BFS), then a fine BFS per cell to wherever road tiles meet across the shared edge (`_crossings`, playtest #70; the ports when the next cell is not stored); minutes are `tile_minutes(side)` per tile including the step across an edge, rounded up; the turn's budget is `town_walk_budget()` (40). Cells are generated only as a walk reaches them (at most 5 a turn) or by a trade lookup (at most `TOWN_LOOKUP_CELLS` more, or the whole of a city of 5 cells or fewer). Order in a turn: plan before the prompt, resolve before the snapshot, apply after it, so every row a turn appends sits above the snapshot's max ids. Nothing here mints a building that is not a plot.
 
+#### Player Resources
+
+- **Files:** `app/player_resources.py`
+- **Purpose:** Energy, fatigue and mana pools: travel, action and ability costs, wait/meditate/sleep recovery, the condition band, and ability cost stamping and cooldowns.
+- **Key API:** `apply_travel_spend()` / `preview_travel_spend()` (every walk, via `world._spend_travel` and `town_moves`), `apply_action_spend()` (a turn's action; light kinds recover), `apply_regen()`, `apply_ability_use()`, `settle_resource_carry()` / `load_resource_carry()` / `save_resource_carry()` (the sub-point carry ledger), `condition_band()` / `fatigue_band()`, `collapse_state()`, `stamp_resource_cost()` / `merge_text_cost()` (card cost text merged into the charged cost).
+- **Consumers:** `app.world` (get_state, play_turn, `_spend_travel`, wait/sleep), `app.town_moves`, `app.llm` (ability cost repair), `app.setup_crosscheck`.
+- **Design Notes:** Playtest #80. Pools are whole numbers; every spend and restore goes through one carry ledger kept in the `resource_carry` settings row (in `SNAPSHOT_SETTING_KEYS`), so short walks and talks add up instead of rounding to 1 or 0. `resources.band` and `collapse.band` are the same `condition_band`; `fatigue_band` is the fatigue-only label. The action kind a turn is charged as comes from `world._action_cost_kind` (the engine's `_turn_intent` on the player's own line); a travel line costs nothing because the walk is charged by `_spend_travel`.
+
 #### Town Streets View
 
 - **Files:** `static/app.js` (the "Town streets" block after `paintSettlementInfo`), `static/index.html` (`#townZoomBar`, `#townPlotCard`), `static/styles.css` / `static/ui/skin.css` (`.townZoomBar`, `.townPlotCard`), `static/ui/interact.js` (the `#settlementCanvas` branch of the context menu), `tests/test_town_ui.py`; design in `docs/TownGrid.md` section 8, build notes in section 15.

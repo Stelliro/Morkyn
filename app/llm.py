@@ -5085,9 +5085,12 @@ def repair_ability_cross_field_consistency(ability: dict[str, Any]) -> dict[str,
 
         # Sync structured resource_cost from unified timing + stamina %
         try:
-            from app.player_resources import parse_resource_cost
+            from app.player_resources import merge_text_cost
 
-            rc = parse_resource_cost(out.get("resource_cost"))
+            # The unified cost text's stated amounts ("2 energy; 3 mana") go
+            # into the structured cost too, not just its cooldown, so the card
+            # and the charge agree from the start (playtest #80).
+            rc = merge_text_cost(out.get("resource_cost"), out.get("cost"))
             rech = d_facts.get("recharge_minutes")
             if rech is None:
                 rech = c_facts.get("recharge_minutes")

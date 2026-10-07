@@ -208,6 +208,10 @@ SNAPSHOT_SETTING_KEYS = (
     # The player's fine tile in a town (docs/TownGrid.md 4.1, 9). Written after
     # the snapshot by apply_town_turn, so a rewind restores the pre-walk tile.
     "town_position",
+    # Sub-point energy/fatigue/mana remainders (player_resources carry ledger,
+    # playtest #80). Snapshotted beside the player row so a rewind restores the
+    # pools and their remainders together, and cleared with a new game.
+    "resource_carry",
 )
 RESTORE_ORDER = [
     "turn_snapshots",
@@ -2414,6 +2418,7 @@ def _build_mechanics_context(state: dict[str, Any], player_input: str) -> dict[s
             "fatigue": resources.get("fatigue"),
             "max_fatigue": resources.get("max_fatigue"),
             "band": resources.get("band"),
+            "fatigue_band": resources.get("fatigue_band"),
             "fatigue_stamina_mult": resources.get("fatigue_stamina_mult"),
             "mana_enabled": resources.get("mana_enabled"),
         }
@@ -15871,6 +15876,86 @@ def _record_skill_check_rolls(conn, result: dict[str, Any], turn: int) -> None:
         )
 
 
+# What a turn's intent costs as an action (player_resources.action_resource_delta).
+# Playtest #80: the cost came from a second keyword classifier that read the
+# engine's reference footer (the #43 leak again), so "I go into the Forge" was
+# a free "talk" on the footer's "speak" and plain dialogue cost a point.
+_INTENT_COST_KIND = {
+    "conversation": "talk",
+    "claim_check": "talk",
+    "trade": "talk",
+    "investigation": "investigate",
+    "combat": "combat",
+    "training": "train",
+    "rest": "rest",
+    "ability": "ability",
+    "travel": "travel",
+}
+_ABILITY_USE_CLAUSE_RE = re.compile(
+    r"\b(?:use|uses|using|cast|casts|casting|activate|activates|invoke|invokes|channel|channels|trigger|triggers)\s+"
+    r"(?:my\s+|the\s+|his\s+|her\s+|their\s+)?(?:skill|ability|power|spell)?\b",
+    re.I,
+)
+
+
+def _action_cost_kind(player_line: str, context: dict[str, Any], ability: dict[str, Any] | None = None) -> str:
+    """The action kind a turn is charged as, from the engine's own reading of it.
+
+    Reads the player's line only (never the footer or the engine notes), takes the kind from
+    _turn_intent, the classifier that decides what the turn is, and asks the
+    keyword table only for what the intent table has no class for: physical
+    exertion, and a "general" line. A general line the conversation engine
+    resolved as said to someone is talk. On an ability turn the ability's name
+    and its "use my skill" clause are removed first, so the ability is paid by
+    its own cost and the rest of the line by this one (playtest #80).
+    """
+    from app.player_resources import action_kind_from_text
+
+    line = _player_line(player_line)
+    if isinstance(ability, dict) and str(ability.get("name") or "").strip():
+        line = re.sub(r"(?<!\w)" + re.escape(str(ability["name"]).strip()) + r"(?!\w)", " ", line, flags=re.I)
+        line = _ABILITY_USE_CLAUSE_RE.sub(" ", line)
+    if not re.search(r"[a-z]{2,}", line, re.I):
+        return "ability" if ability else "none"
+    intent, _secondary = _turn_intent(line)
+    words = action_kind_from_text(line)
+    kind = _INTENT_COST_KIND.get(intent, "general")
+    if words == "physical" and kind in {"general", "investigate", "travel", "ability"}:
+        return "physical"
+    if intent == "general":
+        if words != "general":
+            return words
+        conv = context.get("conversation_turn") if isinstance(context.get("conversation_turn"), dict) else {}
+        if conv.get("addressed") or conv.get("speech"):
+            return "talk"
+    return kind
+
+
+def _sync_turn_resources(context: dict[str, Any], mechanics_context: dict[str, Any], after: dict[str, Any] | None) -> None:
+    """Write one spend's resulting pools to every copy the prompt carries.
+
+    Playtest #80: the spends updated context.resources only, so the prompt held
+    the new energy beside get_state's stale player.resources and collapse
+    (15 vs 16, "fresh" vs "critical"). Mutates mechanics_context in place.
+    """
+    if not isinstance(after, dict) or not after:
+        return
+    from app.player_resources import collapse_state
+
+    col = collapse_state(after)
+    context["resources"] = after
+    context["collapse"] = col
+    player = context.get("player")
+    if isinstance(player, dict):
+        for key in ("energy", "max_energy", "mana", "max_mana", "fatigue", "max_fatigue"):
+            if key in after:
+                player[key] = after[key]
+        player["resources"] = after
+        player["collapse"] = col
+    mechanics_context["resources"] = after
+    mechanics_context["collapse"] = col
+
+
 def play_turn(
     player_input: str,
     input_kind: str = "player",
@@ -15881,6 +15966,7 @@ def play_turn(
     used_fallback = False
     fallback_reason = ""
     ability_use_pack: dict[str, Any] | None = None
+    ability_matched: dict[str, Any] | None = None
     action_spend_pack: dict[str, Any] | None = None
     # Rows this function changes before apply_turn takes the rewind snapshot.
     pre_snapshot_rows: dict[str, list[dict[str, Any]]] = {}
@@ -15906,6 +15992,10 @@ def play_turn(
             context, player_input if input_kind == "player" else "", context["conversation_turn"]
         )
         model_input = _expand_input_references(context, player_input)
+    # What the player typed, before the engine's footer and the __ability_use__ /
+    # __forced_world_events__ notes get appended: the cost classifiers read
+    # this, never engine text (playtest #80, the #43 leak).
+    player_line = _player_line(model_input)
 
     # Social walk-away / persist (player agency after cold reception)
     social_rep_note: dict[str, Any] | None = None
@@ -16014,13 +16104,10 @@ def play_turn(
             )
 
             abs_list = context.get("abilities") if isinstance(context.get("abilities"), list) else []
-            matched = match_ability_from_input(model_input, abs_list)
-            # Also try intent keyword path when "use my ability X"
-            if matched is None:
-                intent_chk, _ = _turn_intent(model_input)
-                if intent_chk == "ability" and abs_list:
-                    # Prefer unlocked actives with names present loosely
-                    matched = match_ability_from_input(model_input, abs_list)
+            # The player's line only: the engine footer names people and places
+            # an ability could share a word with (playtest #80, the #43 leak).
+            matched = match_ability_from_input(player_line, abs_list)
+            ability_matched = matched
             if matched is not None:
                 opts = ((context.get("settings") or {}).get("playthrough_options") or {})
                 wt = context.get("world_time") or get_world_time()
@@ -16056,9 +16143,7 @@ def play_turn(
                         "debuffs": ability_use_pack.get("debuffs") or [],
                         "resources_after": ability_use_pack.get("after"),
                     }
-                    if ability_use_pack.get("after"):
-                        mechanics_context["resources"] = ability_use_pack["after"]
-                        context["resources"] = ability_use_pack["after"]
+                    _sync_turn_resources(context, mechanics_context, ability_use_pack.get("after"))
                     block = ability_use_prompt_block(ability_use_pack)
                     if block:
                         model_input = model_input + "\n\n__ability_use__:\n" + block
@@ -16089,7 +16174,8 @@ def play_turn(
     # Spend in-world minutes for ordinary actions (walk/wait already advanced time)
     if input_kind == "player" and not str(model_input).startswith("__"):
         try:
-            spent = estimate_action_minutes(model_input)
+            # The player's line only, like _turn_intent (playtest #80, the #43 leak).
+            spent = estimate_action_minutes(player_line)
             if spent > 0:
                 with connect() as c_time:
                     advance_world_time(c_time, spent)
@@ -16098,49 +16184,48 @@ def play_turn(
                 context["mechanics_context"] = mechanics_context
                 context["world_time"] = get_world_time()
                 context["weather"] = get_weather()
-            # Action-kind energy/fatigue drain (ability spend is separate)
-            if ability_use_pack is None:
-                from app.player_resources import action_kind_from_text, apply_action_spend, collapse_state
+            # Action-kind energy/fatigue drain. It runs on ability turns too
+            # (playtest #80): "fix a rusty sword ... and use Whispering Echoes"
+            # skipped it, so the work went uncosted and past the 0-energy gate.
+            # The ability's name is removed from the line first, so a line that
+            # is only the ability is kind "ability" and costs nothing here.
+            from app.player_resources import apply_action_spend
 
-                akind = action_kind_from_text(model_input)
-                opts = ((context.get("settings") or {}).get("playthrough_options") or {})
-                player = context.get("player") if isinstance(context.get("player"), dict) else {}
-                stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
-                with connect() as c_act:
-                    action_spend_pack = apply_action_spend(
-                        c_act,
-                        kind=akind,
-                        minutes=spent if spent > 0 else estimate_action_minutes(model_input) or 6,
-                        options=opts if isinstance(opts, dict) else {},
-                        stats=stats,
-                        hard_block=True,
+            akind = _action_cost_kind(player_line, context, ability_matched)
+            opts = ((context.get("settings") or {}).get("playthrough_options") or {})
+            player = context.get("player") if isinstance(context.get("player"), dict) else {}
+            stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
+            with connect() as c_act:
+                action_spend_pack = apply_action_spend(
+                    c_act,
+                    kind=akind,
+                    minutes=spent if spent > 0 else 6,
+                    options=opts if isinstance(opts, dict) else {},
+                    stats=stats,
+                    hard_block=True,
+                )
+            if action_spend_pack:
+                mechanics_context = dict(context.get("mechanics_context") or {})
+                mechanics_context["action_spend"] = {
+                    "ok": action_spend_pack.get("ok"),
+                    "blocked": action_spend_pack.get("blocked"),
+                    "kind": action_spend_pack.get("kind"),
+                    "reasons": action_spend_pack.get("reasons") or [],
+                    "delta": action_spend_pack.get("delta"),
+                    "collapse": action_spend_pack.get("collapse"),
+                    "resources_after": action_spend_pack.get("after"),
+                }
+                _sync_turn_resources(context, mechanics_context, action_spend_pack.get("after"))
+                context["mechanics_context"] = mechanics_context
+                if action_spend_pack.get("blocked"):
+                    model_input = (
+                        model_input
+                        + "\n\n__action_blocked__: reasons="
+                        + ",".join(action_spend_pack.get("reasons") or ["exhausted"])
+                        + ". Player is too exhausted for this physical action. "
+                        "Narrate failure or forced rest — do not complete the full physical feat. "
+                        "Suggest wait/meditate/sleep."
                     )
-                if action_spend_pack:
-                    mechanics_context = dict(context.get("mechanics_context") or {})
-                    mechanics_context["action_spend"] = {
-                        "ok": action_spend_pack.get("ok"),
-                        "blocked": action_spend_pack.get("blocked"),
-                        "kind": action_spend_pack.get("kind"),
-                        "reasons": action_spend_pack.get("reasons") or [],
-                        "delta": action_spend_pack.get("delta"),
-                        "collapse": action_spend_pack.get("collapse"),
-                        "resources_after": action_spend_pack.get("after"),
-                    }
-                    if action_spend_pack.get("after"):
-                        mechanics_context["resources"] = action_spend_pack["after"]
-                        context["resources"] = action_spend_pack["after"]
-                        col = action_spend_pack.get("collapse") or collapse_state(action_spend_pack["after"])
-                        mechanics_context["collapse"] = col
-                    context["mechanics_context"] = mechanics_context
-                    if action_spend_pack.get("blocked"):
-                        model_input = (
-                            model_input
-                            + "\n\n__action_blocked__: reasons="
-                            + ",".join(action_spend_pack.get("reasons") or ["exhausted"])
-                            + ". Player is too exhausted for this physical action. "
-                            "Narrate failure or forced rest — do not complete the full physical feat. "
-                            "Suggest wait/meditate/sleep."
-                        )
         except Exception:
             action_spend_pack = None
 

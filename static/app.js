@@ -11870,7 +11870,11 @@ function renderPlayer() {
   const fatigue = resources.fatigue ?? player.fatigue;
   const maxFatigue = resources.max_fatigue ?? player.max_fatigue;
   const manaEnabled = resources.mana_enabled ?? (Number(maxMana) > 0);
-  const fatigueBand = resources.band ? String(resources.band) : "";
+  // band is the overall condition (critical at 0 energy); the Fatigue label
+  // reads the fatigue-only band so 0/20 never shows "Fatigue (critical)"
+  // (playtest #80). Older states without fatigue_band fall back to band.
+  const fatigueBandRaw = resources.fatigue_band ?? resources.band;
+  const fatigueBand = fatigueBandRaw ? String(fatigueBandRaw) : "";
   const collapse = state.collapse || player.collapse || {};
   const collapseNote =
     collapse.needs_rest
