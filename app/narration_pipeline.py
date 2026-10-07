@@ -2041,6 +2041,10 @@ def build_paragraph_briefs(
             act = declared_act(own_line)
             if act:
                 brief["player_act"] = act["phrase"]
+                # And how the dice decided it (playtest #85a): the writer keeps it.
+                mech = context.get("mechanics_context") if isinstance(context.get("mechanics_context"), dict) else {}
+                if isinstance(mech.get("act_outcome"), dict):
+                    brief["act_outcome"] = mech["act_outcome"]
         if talk:
             brief["conversation"] = talk
         if thread:

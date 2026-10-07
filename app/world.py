@@ -1294,6 +1294,16 @@ def estimate_action_minutes(player_input: str) -> int:
         return 0
     if re.search(r"\b(attack|fight|combat|chase|flee|run)\b", text):
         return 8
+    # Work takes the time of the work, from the same reading that rolls its
+    # check and costs its energy (playtest #85a: polishing swords was 6 minutes).
+    try:
+        from app.prose_state import act_rules
+
+        act = act_rules(player_input)
+    except Exception:
+        act = None
+    if act:
+        return int(act["minutes"])
     if re.search(r"\b(search|investigate|examine|study|read|craft|repair)\b", text):
         return 15
     if re.search(r"\b(talk|ask|speak|persuade|negotiate|lie|intimidate|greet)\b", text):
@@ -5817,11 +5827,13 @@ def _restore_world(data: dict[str, Any]) -> None:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA foreign_key_check")
             # Saves from before playtest #24 stored a placeholder as the summary.
-            from app.db import repair_npc_default_summaries, repair_npc_roles
+            from app.db import repair_dice_toggle, repair_npc_default_summaries, repair_npc_roles
 
             repair_npc_default_summaries(conn)
             # And roles that kept the DSL's list commas (playtest #74).
             repair_npc_roles(conn)
+            # And the Checks tab the setup payload dropped (playtest #85a).
+            repair_dice_toggle(conn)
             try:
                 from app.town_moves import reconcile_marker
 
@@ -16773,8 +16785,98 @@ def _record_skill_check_rolls(conn, result: dict[str, Any], turn: int) -> None:
                 "dc": check.get("dc"),
                 "degree": check.get("degree"),
                 "injury": bool(check.get("injury")),
+                # The declared act this roll decided (playtest #85a), so the
+                # next turn and practice read it back from the same row. A
+                # rewind deletes the row, so neither outlives the turn.
+                **(
+                    {
+                        "act": str(check.get("act"))[:100],
+                        "skill": str(skill.get("name") or code)[:60],
+                        "skill_match": str(check.get("skill_match") or ""),
+                    }
+                    if check.get("act")
+                    else {}
+                ),
             },
         )
+
+
+def _previous_act(conn, turn_now: int) -> dict[str, Any] | None:
+    """The player's last rolled act within two turns: {"act", "outcome", "turns_ago"} (playtest #85a).
+
+    T8 wrote "a stack of swords already polished" from free recall after a
+    T7 polish that no engine ever decided. The next replies follow the roll.
+    """
+    try:
+        row = conn.execute(
+            "SELECT turn, band, inputs FROM dice_rolls WHERE source = 'skill_check' AND turn BETWEEN ? AND ? "
+            "AND inputs LIKE '%\"act\"%' ORDER BY id DESC LIMIT 1",
+            (int(turn_now) - 1, int(turn_now)),
+        ).fetchone()
+    except sqlite3.Error:
+        return None
+    if not row:
+        return None
+    try:
+        inputs = json.loads(row["inputs"] or "{}")
+    except (TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(inputs, dict) or not inputs.get("act"):
+        return None
+    return {
+        "act": str(inputs["act"])[:100],
+        "outcome": str(row["band"] or ""),
+        "degree": str(inputs.get("degree") or ""),
+        "turns_ago": max(1, int(turn_now) + 1 - int(row["turn"] or 0)),
+    }
+
+
+def _practice_skill_change(conn, check: dict[str, Any], skills: list[dict[str, Any]], turn: int) -> dict[str, Any] | None:
+    """Engine-authored growth from doing the work (playtest #85a).
+
+    Practice points come from this skill's earlier rolled acts in dice_rolls
+    (2 for a success, 1 otherwise), so a rewind takes them back with the rows.
+    With no proficiency of that name the catalog skill is learned at the first
+    success or the second try; one the player has rises each 6 points. The
+    amount is a "trivial" band, rolled and speed-scaled like any skill gain.
+    """
+    if not isinstance(check, dict) or not check.get("act") or check.get("natural") is None:
+        return None
+    skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+    code = str(skill.get("code") or "")
+    name = str(skill.get("name") or "")
+    if not code or not name or code == "general":
+        return None
+
+    def _points(band: str) -> int:
+        return 2 if band in {"success", "critical_success"} else 1
+
+    before = 0
+    try:
+        for row in conn.execute(
+            "SELECT band FROM dice_rolls WHERE source = 'skill_check' AND tag = ? AND turn < ? "
+            "AND inputs LIKE '%\"act\"%'",
+            (f"check:{code}", int(turn)),
+        ).fetchall():
+            before += _points(str(row["band"] or ""))
+    except sqlite3.Error:
+        return None
+    after = before + _points(str(check.get("outcome") or ""))
+    if str(check.get("skill_match") or "") == "exact":
+        target = str(check.get("skill_source") or name)
+        if after // 6 <= before // 6:
+            return None
+        note = f"Practised: {str(check.get('act'))[:80]}"
+    else:
+        # No skill of this kind yet. A related trade does not grow from
+        # another trade's work; the work itself is learned.
+        if any(str(s.get("name") or "").strip().lower() == name.lower() for s in skills if isinstance(s, dict)):
+            return None
+        if after < 2:
+            return None
+        target = name
+        note = f"Learned by doing: {str(check.get('act'))[:80]}"
+    return {"name": target, "delta_band": "trivial", "notes": note, "_engine_practice": True}
 
 
 # What a turn's intent costs as an action (player_resources.action_resource_delta).
@@ -17209,6 +17311,19 @@ def play_turn(
         except Exception:
             action_spend_pack = None
 
+    # How the player's last rolled act turned out (playtest #85a, T8: "swords
+    # already polished" after a polish no engine decided). The draft follows it.
+    if input_kind == "player":
+        try:
+            with connect() as c_prev:
+                prev_act = _previous_act(c_prev, _current_turn_number())
+            if prev_act:
+                mechanics_context = dict(context.get("mechanics_context") or {})
+                mechanics_context["previous_act"] = prev_act
+                context["mechanics_context"] = mechanics_context
+        except Exception:
+            pass
+
     # Pre-resolve action checks so the LLM must honor social rolls / DCs.
     skill_check_results: list[dict[str, Any]] = []
     try:
@@ -17260,7 +17375,14 @@ def play_turn(
                     context_note=str(item.get("context_note") or item.get("note") or model_input)[:400],
                     weapon_or_tool=str(item.get("weapon_or_tool") or item.get("weapon") or ""),
                     rng=_skill_check_rng(check_turn, check_seed, index, pending_code),
+                    routine=bool(item.get("routine")),
                 )
+                # The declared act this roll decides (playtest #85a): the draft
+                # is told its outcome, the next turn reads it back, and practice
+                # counts it.
+                if item.get("act") and resolved.get("enabled"):
+                    resolved["act"] = str(item.get("act"))[:100]
+                    resolved["act_family"] = str(item.get("act_family") or "")
                 # LEGACY, deliberate: `resolve_check` returns `skill` as a dict
                 # and has never returned a `skill_code` key, so the right-hand
                 # side of this `or` is always False. Kept as-is by decision --
@@ -17351,6 +17473,12 @@ def play_turn(
             if skill_check_results:
                 mechanics_context = dict(mechanics_context or {})
                 mechanics_context["resolved_checks"] = skill_check_results
+                # The act's outcome in plain words, for the prose (playtest #85a).
+                from app.skill_checks import act_outcome
+
+                outcome_note = act_outcome(skill_check_results)
+                if outcome_note:
+                    mechanics_context["act_outcome"] = outcome_note
                 mechanics_context["social_attitudes"] = [
                     {
                         "skill": c.get("skill_code"),
@@ -17472,9 +17600,9 @@ def play_turn(
 
     result["_deterministic_combat"] = mechanics_context.get("combat") or {}
 
-    # Attach pre-resolved checks to turn output (and any extra model-proposed checks).
+    # Attach the checks rolled before the draft to the turn output.
     try:
-        from app.skill_checks import apply_check_to_turn, merge_check_settings, resolve_check
+        from app.skill_checks import apply_check_to_turn, merge_check_settings
 
         opts = ((context.get("settings") or {}).get("playthrough_options") or {})
         skills_on = _setup_flag_enabled(opts if isinstance(opts, dict) else {}, "skills_enabled", True)
@@ -17484,42 +17612,35 @@ def play_turn(
         if skills_on:
             for resolved in skill_check_results:
                 result = apply_check_to_turn(result, resolved)
-        if skills_on and check_cfg.get("dice_checks_enabled") and input_kind == "player":
-            player = context.get("player") or {}
-            raw_bonus = player.get("effective_stats")
-            if isinstance(raw_bonus, dict):
-                stats = _gear_scores(raw_bonus)
-            else:
-                raw_stats = player.get("stats")
-                stats = raw_stats if isinstance(raw_stats, dict) else {}
-            skills = context.get("skills") or []
-            check_turn, check_seed = _skill_check_seed()
-            for item in list(result.get("skill_checks") or [])[:4]:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("natural") is not None:
-                    continue
-                code = str(item.get("skill_code") or item.get("code") or "")
-                if any(str(r.get("skill_code")) == code for r in skill_check_results):
-                    continue
-                resolved = resolve_check(
-                    skill_code=code or "general",
-                    difficulty=item.get("difficulty"),
-                    dc=item.get("dc"),
-                    player_stats=stats if isinstance(stats, dict) else {},
-                    player_skills=skills if isinstance(skills, list) else [],
-                    inventory=context.get("inventory") if isinstance(context.get("inventory"), list) else None,
-                    abilities=context.get("abilities") if isinstance(context.get("abilities"), list) else None,
-                    opposition=item.get("opposition"),
-                    settings=check_cfg,
-                    context_note=str(item.get("context_note") or model_input)[:400],
-                    weapon_or_tool=str(item.get("weapon_or_tool") or ""),
-                    # Index continues the pre-resolved list so two checks on one
-                    # turn never share a stream.
-                    rng=_skill_check_rng(check_turn, check_seed, len(skill_check_results), code or "general"),
-                )
-                skill_check_results.append(resolved)
-                result = apply_check_to_turn(result, resolved)
+        # Checks the model proposed in its own turn are no longer rolled after
+        # the prose (playtest #85a): a roll made after the words cannot be in
+        # them, so the display could say failure under a scene of success.
+        # Every roll is decided before the draft (infer_check_from_action);
+        # an unrolled proposal is kept for the trace as a hint only.
+        proposed = [
+            item for item in list(result.get("skill_checks") or [])
+            if isinstance(item, dict) and item.get("natural") is None
+        ]
+        if proposed:
+            result["_unrolled_check_hints"] = [
+                {"skill": str(item.get("skill_code") or item.get("code") or item.get("skill") or "")[:60]}
+                for item in proposed[:4]
+            ]
+            result["skill_checks"] = [
+                item for item in list(result.get("skill_checks") or [])
+                if isinstance(item, dict) and item.get("natural") is not None
+            ]
+        # Doing the work is practice (playtest #85a): an engine-authored skill
+        # gain, banded and rolled like any other, never a model's guess.
+        if skills_on and input_kind == "player":
+            practice_turn, _practice_seed = _skill_check_seed()
+            with connect() as c_practice:
+                for resolved in skill_check_results:
+                    change = _practice_skill_change(
+                        c_practice, resolved, context.get("skills") or [], practice_turn
+                    )
+                    if change:
+                        result["skill_changes"] = list(result.get("skill_changes") or []) + [change]
         if skill_check_results:
             result["skill_checks"] = skill_check_results
             result["_skill_check_ui"] = {

@@ -184,6 +184,8 @@ the player still where they are, and the player answers with their own words or 
 - Resolve the player's action. They already chose; show what happens. Never end ===NAR=== with the
   choice restated ("Do you approach X, or continue to Y?", "The choice is yours.") — that hands the
   turn back unplayed. End on a consequence, a new pressure, or a concrete detail, then stop.
+- When act_outcome is present, the engine's dice already decided how player_act turns out: write
+  exactly that outcome, success or failure, and never a different one.
 - player_line is the player's own input and the whole of the player's turn. "you" does only what
   player_line says: no further actions, words, replies, gestures, thoughts, feelings, memories,
   conclusions or decisions. Narrate that action, then what the world and the people in it do in
@@ -1250,6 +1252,35 @@ def parse_dsl_turn(text: str, player_input: str = "") -> dict[str, Any]:
     return turn
 
 
+ACT_OUTCOME_RULE = (
+    "act_outcome was decided by the dice before you write: player_act turns out exactly as act_outcome.means "
+    "(outcome and degree say how well). Failure: it goes wrong or falls short, and the people watching react "
+    "to that. Success: it works. Do not soften it, upgrade it or leave it undecided. When act_outcome.injury "
+    "is present, that hurt happens in the scene."
+)
+PREVIOUS_ACT_RULE = (
+    "previous_act is how the player's last attempt turned out (outcome). Keep to it: work that failed is still "
+    "not done, work that succeeded stays done, and nobody remembers it differently."
+)
+
+
+def _mechanics_of(context: Any) -> dict[str, Any]:
+    mech = context.get("mechanics_context") if isinstance(context, dict) else None
+    return mech if isinstance(mech, dict) else {}
+
+
+def act_outcome_of(context: Any) -> dict[str, Any] | None:
+    """The engine's outcome for this turn's declared act (playtest #85a), or None."""
+    note = _mechanics_of(context).get("act_outcome")
+    return note if isinstance(note, dict) and note.get("outcome") else None
+
+
+def previous_act_of(context: Any) -> dict[str, Any] | None:
+    """How the last rolled act turned out (playtest #85a), or None."""
+    note = _mechanics_of(context).get("previous_act")
+    return note if isinstance(note, dict) and note.get("outcome") else None
+
+
 def player_line_of(player_input: str) -> str:
     """The player's own input without the engine notes after it; "" for engine requests."""
     text = str(player_input or "")
@@ -1356,6 +1387,18 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 "player_act is done by the player (you) in ===NAR===; others may help, watch or react, "
                 "but nobody does it for them."
             )
+        # The dice already decided how the act turns out (playtest #85a, T7:
+        # "Not bad, not bad at all" with no roll behind it). The prose follows.
+        outcome = act_outcome_of(context)
+        if outcome:
+            packet["act_outcome"] = outcome
+            instructions.append(ACT_OUTCOME_RULE)
+    # How the player's last act turned out, so this scene does not redo or
+    # undo it from memory (playtest #85a, T8: "swords already polished").
+    previous = previous_act_of(context)
+    if previous:
+        packet["previous_act"] = previous
+        instructions.append(PREVIOUS_ACT_RULE)
         # The player's own offer (playtest #75, T7: the last 3 gold offered for
         # directions was never paid). The engine takes the sum when it is accepted.
         offer = player_trade_offer(own)

@@ -23,6 +23,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Fixed
+
+- [CLAUDE] Work and craft actions roll real dice against the player's proficiencies (#85a). The setup payload now sends the Checks tab, so 'Dice checks: On' is kept (it was stored as off, and save 83a1ec4c rolled nothing); old saves take the Checks tab from their saved setup form once on load. A declared act (polish, mend, forge, cook, build, haul, treat, sing...) is one reading for the check skill, the energy kind and the minutes, so polishing a blade rolls Smithing, costs as physical work and takes 20 minutes; routine work is easier and only a natural 1 hurts. A check uses the best matching proficiency, read through its 'tracked by' note (Rigging tracked by carpentry counts for Craft), a neighbouring trade at half rank, or untrained at -2 for craft work, and the roll line names it. Doing the work is practice: a new trade is learned and a known one grows. The draft is told the act's outcome before it writes (act_outcome) and the next turns are told how it went (previous_act); checks the model proposes are no longer rolled after the prose. - `static/app.js`, `app/main.py`, `app/db.py`, `app/prose_state.py`, `app/skill_checks.py`, `app/player_resources.py`, `app/world.py`, `app/turn_dsl.py`, `app/llm.py`, `app/narration_pipeline.py`
+
 ## [0.10.0-dev.8] - 2026-10-08
 
 > Pre-release on the way to `0.10.0`. Fixes #69-#82 from the dev.7 hand-played game (town edges, Leave and walls, energy, prose/state agreement, NPC voice, quest offers) with Accept / Decline, Go with / Stay and Travel there prompts, and a UI layout pass. Not yet play-tested.

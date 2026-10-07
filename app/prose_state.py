@@ -336,6 +336,77 @@ def declared_act(own_line: str) -> dict[str, Any] | None:
     return {"verb": verb, "family": family, "phrase": phrase}
 
 
+# What each family is to the engine (playtest #85a). "i polish the blades the
+# best i can" was read here as a "mend" act, but the check table had no
+# polish, and the cost table had none either, so the work rolled no dice and
+# was costed like a glance. One reading now answers all three: which skill
+# rolls, what kind of exertion it costs, and how long it takes.
+ACT_FAMILY_RULES: dict[str, dict[str, Any]] = {
+    "mend": {"skill": "craft", "kind": "physical", "minutes": 20},
+    "smith": {"skill": "smithing", "kind": "physical", "minutes": 30},
+    "cook": {"skill": "cooking", "kind": "general", "minutes": 20},
+    "make": {"skill": "craft", "kind": "physical", "minutes": 30},
+    "labour": {"skill": "athletics", "kind": "physical", "minutes": 25},
+    "treat": {"skill": "healing", "kind": "general", "minutes": 10},
+    "perform": {"skill": "performance", "kind": "talk", "minutes": 10},
+}
+
+# Work on metal is smithing, whatever the verb: polishing a blade at an armory
+# is metalwork, and a player with no smithing rolls it untrained (#85a).
+_METAL_OBJECT_RE = re.compile(
+    r"\b(?:blades?|swords?|axes?|knife|knives|daggers?|armou?rs?|mail|helms?|helmets?|horseshoes?|nails?|"
+    r"steel|iron|bronze|metal|spears?|tongs|chains?|shields?|greaves|gauntlets?|hinges?)\b",
+    re.I,
+)
+_MECHANISM_RE = re.compile(r"\b(?:mechanisms?|gadgets?|traps?|locks?|gears?|springs?|clockwork|pulleys?|winch(?:es)?)\b", re.I)
+_POTION_RE = re.compile(r"\b(?:potions?|tinctures?|elixirs?|salves?|poultices?)\b", re.I)
+_ORE_RE = re.compile(r"\b(?:ore|veins?|tunnels?|shafts?)\b", re.I)
+# Routine work is still a roll, at an easier mark, and only a fumble hurts:
+# a novice polishing a sword should not cut themselves two times in five.
+_ROUTINE_VERBS = frozenset({"polish", "whet", "clean", "scrub", "sweep", "stack", "unload", "haul", "patch"})
+# Family words that are not work in this line: "we split up", "fix my gaze on
+# him", "treat her to a drink".
+_NOT_WORK_RE = re.compile(
+    r"^(?:split\w*\s+(?:up|off)\b|fix\w*\s+(?:\w+\s+)?(?:gaze|eyes|stare|attention)\b|treat\w*\s+\w+(?:\s+\w+)?\s+to\s+)",
+    re.I,
+)
+
+
+def act_rules(own_line: str) -> dict[str, Any] | None:
+    """The declared act with its check skill, cost kind and minutes, or None (playtest #85a).
+
+    {"verb", "family", "phrase", "skill_code", "kind", "minutes", "routine"}.
+    The single reading of a hands-on act that the dice (skill_checks), the
+    body cost (player_resources) and the clock (world) all share.
+    """
+    act = declared_act(own_line)
+    if not act:
+        return None
+    phrase = str(act.get("phrase") or "")
+    if _NOT_WORK_RE.search(phrase):
+        return None
+    rules = ACT_FAMILY_RULES.get(act["family"])
+    if not rules:
+        return None
+    skill = rules["skill"]
+    if act["family"] in {"mend", "make"}:
+        if _MECHANISM_RE.search(phrase):
+            skill = "tinkering"
+        elif _METAL_OBJECT_RE.search(phrase):
+            skill = "smithing"
+    elif act["family"] == "cook" and _POTION_RE.search(phrase):
+        skill = "alchemy"
+    elif act["family"] == "labour" and _ORE_RE.search(phrase):
+        skill = "mining"
+    return {
+        **act,
+        "skill_code": skill,
+        "kind": rules["kind"],
+        "minutes": int(rules["minutes"]),
+        "routine": act["verb"] in _ROUTINE_VERBS,
+    }
+
+
 def act_handed_off(narration: str, own_line: str) -> dict[str, Any] | None:
     """The player's declared act done in the prose by someone else and never by "you".
 

@@ -2172,6 +2172,13 @@ function boolField(formData, name) {
   return formData.get(name) === "true";
 }
 
+// A radio that is not in the form is left out of the payload (undefined is
+// dropped by JSON.stringify), so the server keeps its own default instead of
+// a false nobody chose (playtest #85a).
+function sentBoolField(formData, name) {
+  return formData.has(name) ? boolField(formData, name) : undefined;
+}
+
 function formerLifeSelected(formData = new FormData(setupForm)) {
   const text = [readSetupValue(formData, "backstory_mode"), readSetupValue(formData, "memory_policy"), formData.get("character_backstory") || ""].join(" ").toLowerCase();
   return ["reincarnated", "transmigrated", "former life", "former-life", "reborn"].some((marker) => text.includes(marker));
@@ -20286,6 +20293,23 @@ async function startGame(event) {
       npc_density: setupValueText(formData, "npc_density", "moderate", 80),
       quest_style: readListSetting(formData, "quest_style", "emergent"),
       faction_pressure: readListSetting(formData, "faction_pressure", "local disputes"),
+      // The Checks tab (playtest #85a). None of it was ever sent, so the
+      // server's default False replaced the player's "Dice checks: On" and the
+      // whole game rolled no dice.
+      dice_checks_enabled: sentBoolField(formData, "dice_checks_enabled"),
+      dice_sides: intField(formData, "dice_sides", 20, 2, 100),
+      check_difficulty: setupValueText(formData, "check_difficulty", "normal", 40),
+      event_check_frequency: setupValueText(formData, "event_check_frequency", "normal", 40),
+      encounter_check_frequency: setupValueText(formData, "encounter_check_frequency", "normal", 40),
+      partial_on_specialized_skill: sentBoolField(formData, "partial_on_specialized_skill"),
+      negative_outcomes: sentBoolField(formData, "negative_outcomes"),
+      show_rolls_in_ui: sentBoolField(formData, "show_rolls_in_ui"),
+      contested_checks: sentBoolField(formData, "contested_checks"),
+      unskilled_mishaps: sentBoolField(formData, "unskilled_mishaps"),
+      auto_check_on_risky_actions: sentBoolField(formData, "auto_check_on_risky_actions"),
+      attribute_floor_for_partial: intField(formData, "attribute_floor_for_partial", 6, 1, 20),
+      specialized_skill_partial_threshold: intField(formData, "specialized_skill_partial_threshold", 2, 1, 20),
+      custom_check_notes: textField(formData, "custom_check_notes", "", 1200),
     };
     // Prefer last Randomize compile; otherwise soft-compile idea box / world_style for session bias.
     let themeForSession = lastSessionTheme && typeof lastSessionTheme === "object" ? { ...lastSessionTheme } : null;

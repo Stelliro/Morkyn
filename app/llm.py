@@ -87,6 +87,7 @@ from app.prompts import (
 )
 from app.turn_dsl import (
     DSL_SYSTEM_PROMPT,
+    act_outcome_of,
     dsl_system_prompt_for,
     TurnDslError,
     build_dsl_user_prompt,
@@ -12830,6 +12831,17 @@ def _retry_narration_prose(
     # growth, carries only the player's own line, and states the same player
     # boundary as the draft ask.
     own = player_line_of(player_input)
+    # The rewrite keeps the dice's outcome (playtest #85a): the draft was told
+    # it, and an expansion must not turn a failed act into a success.
+    outcome_note = act_outcome_of(context)
+    outcome_lines = (
+        [
+            f"act_outcome (decided by the dice, keep it): {outcome_note['act']} -> "
+            f"{outcome_note['outcome']}; {outcome_note['means']}."
+        ]
+        if outcome_note
+        else []
+    )
     instruction = "\n".join(
         [
             "Rewrite this scene as fuller prose. Return ONLY the prose.",
@@ -12845,6 +12857,7 @@ def _retry_narration_prose(
             "feelings, actions or decisions for them. End where the draft ends.",
             "",
             f"player_line: {own[:300]}" if own else "player_line: (none; no player action this turn)",
+            *outcome_lines,
             "",
             "Draft scene to expand:",
             existing[:4000],
@@ -13942,6 +13955,7 @@ def _make_pipeline_paragraph_writer(
         "do not write the player's answer: the player gives it next turn. "
         "The act player_line states is done by the player (you), with their own hands: others may help, watch, "
         "hinder or react, but nobody does it in the player's place (player_act names it when there is one). "
+        "act_outcome, when present, is how the dice decided player_act: it turns out exactly so, never better or worse. "
         "Nothing is paid, bought or handed over on a deal player_line has not agreed to; an offer stays an offer. "
         "conversation says who the player is talking to: only someone in who_answers answers the player; "
         "people in listening_only may react, but do not answer for them. "

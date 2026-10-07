@@ -1211,6 +1211,17 @@ def action_kind_from_text(player_input: str) -> str:
         return "combat"
     if re.search(r"\b(cast|spell|invoke|channel|ability|power)\b", text):
         return "ability"
+    # A declared act is costed by the same reading that rolls its check
+    # (playtest #85a: "i polish the blades" was "general", 0.4 energy, like a
+    # glance, because polish was in the act table and not in this one).
+    try:
+        from app.prose_state import act_rules
+
+        act = act_rules(player_input)
+    except Exception:
+        act = None
+    if act:
+        return str(act["kind"])
     # Hands-on labour is physical work, not study: "fix a rusty sword" at a
     # forge was costed as nothing at 0 energy (playtest #80). Verbs only: the
     # noun "Forge" is a shop name ("I go into Blind Owl Forge").

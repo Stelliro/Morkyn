@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import sqlite3
@@ -996,6 +997,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
 
     repair_npc_default_summaries(conn)
     repair_npc_roles(conn)
+    # Saves that lost the Checks tab at setup (playtest #85a).
+    repair_dice_toggle(conn)
 
     # Written rules for short setup choices (rank ladder and the other selections).
     try:
@@ -1068,6 +1071,107 @@ def repair_npc_default_summaries(conn: sqlite3.Connection) -> int:
             (strip_introduced_prefix(row["summary"], row["name"]), int(row["id"])),
         )
     return len(rows)
+
+
+# The Checks tab as the dropped payload stored it (playtest #85a): the
+# SetupRequest defaults, which every save started before the fix carries.
+_CHECK_FIELD_DROPPED = {
+    "dice_checks_enabled": False,
+    "dice_sides": 20,
+    "check_difficulty": "normal",
+    "event_check_frequency": "normal",
+    "encounter_check_frequency": "normal",
+    "partial_on_specialized_skill": True,
+    "negative_outcomes": True,
+    "show_rolls_in_ui": True,
+    "contested_checks": True,
+    "unskilled_mishaps": True,
+    "auto_check_on_risky_actions": True,
+    "attribute_floor_for_partial": 6,
+    "specialized_skill_partial_threshold": 2,
+    "custom_check_notes": "",
+}
+
+
+def _form_check_values(form: dict[str, Any]) -> dict[str, Any]:
+    """The Checks-tab values a saved setup form shows, typed like the stored settings."""
+    out: dict[str, Any] = {}
+    for control in form.get("controls") or []:
+        if not isinstance(control, dict):
+            continue
+        name = str(control.get("name") or "")
+        if name not in _CHECK_FIELD_DROPPED:
+            continue
+        if str(control.get("type") or "") == "radio" and not control.get("checked"):
+            continue
+        value = control.get("value")
+        default = _CHECK_FIELD_DROPPED[name]
+        if isinstance(default, bool):
+            out[name] = str(value).strip().lower() == "true"
+        elif isinstance(default, int):
+            try:
+                out[name] = int(float(str(value)))
+            except (TypeError, ValueError):
+                continue
+        else:
+            out[name] = str(value or "")[: 1200 if name == "custom_check_notes" else 40]
+    return out
+
+
+def repair_dice_toggle(conn: sqlite3.Connection) -> bool:
+    """Give saves started before playtest #85a the Checks tab the player chose.
+
+    The setup payload never sent the Checks tab, so "Dice checks: On" was
+    stored as off and the game rolled no dice (save 83a1ec4c). The form the
+    player filled in was kept as game_start_form; where a stored check setting
+    still holds the value the dropped payload wrote and the form says
+    otherwise, the form wins. Runs once per save (the marker), so a later
+    choice is never overridden. The marker is its own settings row, not a
+    key on playthrough_options, which rides in every turn prompt. Returns
+    True when it wrote.
+    """
+    try:
+        rows = {
+            str(row[0]): row[1]
+            for row in conn.execute(
+                "SELECT key, value FROM settings WHERE key IN "
+                "('playthrough_options', 'game_start_form', 'check_settings_repaired')"
+            ).fetchall()
+        }
+    except sqlite3.Error:
+        return False
+    try:
+        options = json.loads(rows.get("playthrough_options") or "{}")
+        form = json.loads(rows.get("game_start_form") or "{}")
+    except (TypeError, ValueError):
+        return False
+    if rows.get("check_settings_repaired") or not isinstance(options, dict) or not options:
+        return False
+    if not isinstance(form, dict):
+        return False
+    chosen = _form_check_values(form)
+    if "dice_checks_enabled" not in chosen:
+        # No Checks tab in the saved form: nothing to restore from.
+        return False
+    # The turn reads the nested block when there is one, else the top level;
+    # write where it reads.
+    has_nested = isinstance(options.get("skill_check_settings"), dict)
+    target = dict(options["skill_check_settings"]) if has_nested else options
+    changed = []
+    for name, value in chosen.items():
+        stored = target.get(name, options.get(name))
+        if stored == _CHECK_FIELD_DROPPED[name] and value != stored:
+            target[name] = value
+            changed.append(name)
+    if has_nested:
+        options["skill_check_settings"] = target
+    if "dice_checks_enabled" in changed:
+        options["dice_checks_enabled"] = bool(target["dice_checks_enabled"])
+    upsert = "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value"
+    if changed:
+        conn.execute(upsert, ("playthrough_options", json.dumps(options)))
+    conn.execute(upsert, ("check_settings_repaired", json.dumps({"playtest": "85a", "fields": changed})))
+    return bool(changed)
 
 
 def clean_role_text(role: Any) -> str:

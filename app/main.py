@@ -366,7 +366,8 @@ SETUP_BOOL_DEFAULTS = {
     "skill_levels_enabled": True,
     "proficiency_system": True,
     "race_magic_enabled": False,
-    "dice_checks_enabled": False,
+    # dice_checks_enabled is deliberately absent (playtest #85a): a hard False
+    # here overwrote "not sent" and threw the player's own "On" away.
     "partial_on_specialized_skill": True,
     "negative_outcomes": True,
     "show_rolls_in_ui": True,
@@ -499,7 +500,10 @@ class SetupRequest(BaseModel):
     # Dice / skill checks (setup tab 5)
     # Compiled Randomize intent → durable DM+genre lean for this playthrough.
     session_theme: dict = Field(default_factory=dict)
-    dice_checks_enabled: bool = False
+    # None = the client did not say (playtest #85a). settings_from_setup then
+    # applies its own default (on for system playthroughs) instead of a False
+    # that nobody chose.
+    dice_checks_enabled: bool | None = None
     dice_sides: int = Field(default=20)
     check_difficulty: str = Field(default="normal", max_length=40)
     event_check_frequency: str = Field(default="normal", max_length=40)
@@ -533,6 +537,11 @@ class SetupRequest(BaseModel):
             normalized[key] = text[: SETUP_TEXT_LIMITS[key]]
         for key, default in SETUP_BOOL_DEFAULTS.items():
             normalized[key] = _clean_setup_bool(normalized.get(key, default), default)
+        # Sent: clean it to a bool. Not sent: leave it None (playtest #85a).
+        if normalized.get("dice_checks_enabled") not in (None, ""):
+            normalized["dice_checks_enabled"] = bool(_clean_setup_bool(normalized["dice_checks_enabled"], False))
+        else:
+            normalized["dice_checks_enabled"] = None
         for key, default in SETUP_INT_DEFAULTS.items():
             normalized[key] = _clean_setup_int(normalized.get(key, default), default)
         for key in SETUP_FLOAT_FIELDS:

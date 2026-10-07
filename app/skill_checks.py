@@ -155,6 +155,9 @@ def default_check_settings() -> dict[str, Any]:
         "unskilled_rank_threshold": 1,
         "severe_mishap_on_crit_fail": True,
         "auto_check_on_risky_actions": True,
+        # Craft and trade work with no matching or related proficiency rolls at
+        # this penalty (playtest #85a). Talk and look are not trained-only.
+        "untrained_penalty": 2,
         # Always attempt a social reaction when the player opens talk
         "auto_social_on_talk": True,
         "degree_flavor": True,
@@ -193,6 +196,7 @@ def merge_check_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
             "auto_check_on_risky_actions",
             "degree_flavor",
             "append_roll_to_narration",
+            "untrained_penalty",
         }:
             out[key] = value
     # normalize types
@@ -235,6 +239,10 @@ def merge_check_settings(raw: dict[str, Any] | None) -> dict[str, Any]:
         out["unskilled_rank_threshold"] = max(0, min(10, int(out.get("unskilled_rank_threshold") or 1)))
     except (TypeError, ValueError):
         out["unskilled_rank_threshold"] = 1
+    try:
+        out["untrained_penalty"] = max(0, min(6, int(out.get("untrained_penalty"))))
+    except (TypeError, ValueError):
+        out["untrained_penalty"] = 2
     freq_ok = {"rare", "normal", "frequent", "off"}
     for fk in ("event_check_frequency", "encounter_check_frequency"):
         val = str(out.get(fk) or "normal").lower()
@@ -261,9 +269,9 @@ def settings_from_setup(options: dict[str, Any] | None) -> dict[str, Any]:
     raw = {**nested}
 
     def _bool(name: str, default: bool = False) -> bool:
-        if name in raw:
+        if raw.get(name) is not None:
             return bool(raw[name])
-        if name in opts:
+        if opts.get(name) is not None:
             val = opts[name]
             if isinstance(val, bool):
                 return val
@@ -276,7 +284,12 @@ def settings_from_setup(options: dict[str, Any] | None) -> dict[str, Any]:
         "isekai_rpg",
         "system_rpg",
     }
-    dice_default = True if systemish and "dice_checks_enabled" not in opts and "dice_checks_enabled" not in raw else False
+    # A None is "the client did not say" (playtest #85a): SetupRequest used to
+    # fill a missing toggle with a hard False, so this default never ran and
+    # the player's own "On" was thrown away by a payload that omitted it.
+    dice_default = bool(
+        systemish and opts.get("dice_checks_enabled") is None and raw.get("dice_checks_enabled") is None
+    )
     raw["dice_checks_enabled"] = _bool("dice_checks_enabled", dice_default)
     # Align check difficulty with playthrough difficulty when not set.
     if "check_difficulty" not in raw and "check_difficulty" not in opts:
@@ -539,6 +552,10 @@ def resolve_skill_code(text: Any, library: list[dict[str, Any]] | None = None) -
     hits = {tags[word] for word in re.findall("[a-z0-9]+", normalized) if word in tags}
     if len(hits) == 1:
         return hits.pop()
+    traded = {TRADE_ALIASES[word] for word in normalized.split() if word in TRADE_ALIASES}
+    traded = {code for code in traded if code in by_code}
+    if len(traded) == 1:
+        return traded.pop()
     inferred = infer_check_from_action(raw)
     if inferred and inferred.get("skill_code") in by_code:
         return str(inferred["skill_code"])
@@ -716,6 +733,143 @@ def player_with_gear_scores(player: dict[str, Any] | None) -> dict[str, Any]:
     return view
 
 
+# Trade words a player skill's name or its "tracked by" note uses, for the
+# catalog skill they practise (playtest #85a). Setup writes free names --
+# "Rigging ... tracked by carpentry", "Storytelling ... tracked by performance"
+# -- and the check matched only an exact catalog name, so every one of them
+# counted as 0 and a carpenter rolled a craft check as a stranger to tools.
+TRADE_ALIASES: dict[str, str] = {
+    "carpentry": "craft",
+    "carpenter": "craft",
+    "woodwork": "craft",
+    "woodworking": "craft",
+    "joinery": "craft",
+    "rigging": "craft",
+    "whittling": "craft",
+    "sewing": "craft",
+    "tailoring": "craft",
+    "leatherwork": "craft",
+    "crafting": "craft",
+    "blacksmith": "smithing",
+    "blacksmithing": "smithing",
+    "metalwork": "smithing",
+    "metalworking": "smithing",
+    "armorer": "smithing",
+    "armourer": "smithing",
+    "smith": "smithing",
+    "smithy": "smithing",
+    "storytelling": "performance",
+    "stagecraft": "performance",
+    "acting": "performance",
+    "singing": "performance",
+    "music": "performance",
+    "herbalism": "nature",
+    "herbs": "nature",
+    "mechanics": "tinkering",
+    "clockwork": "tinkering",
+    "engineering": "tinkering",
+    "baking": "cooking",
+    "brewing": "cooking",
+    "labour": "athletics",
+    "labor": "athletics",
+}
+
+# A neighbouring trade gives half its rank and spares the untrained penalty
+# (playtest #85a): a carpenter polishing a blade is not a stranger to tools.
+RELATED_SKILLS: dict[str, tuple[str, ...]] = {
+    "smithing": ("craft", "tinkering"),
+    "craft": ("smithing", "tinkering"),
+    "tinkering": ("craft", "smithing"),
+    "cooking": ("alchemy",),
+    "alchemy": ("cooking", "nature"),
+    "healing": ("medicine",),
+    "medicine": ("healing",),
+    "performance": ("persuasion",),
+    "persuasion": ("performance", "etiquette"),
+    "mining": ("athletics",),
+    "athletics": ("strength", "constitution"),
+}
+
+# Categories where a check with no proficiency at all takes the untrained
+# penalty. Everyone talks, looks and climbs; not everyone works metal.
+UNTRAINED_PENALTY_CATEGORIES = frozenset({"craft"})
+
+_TRACKED_BY_RE = re.compile(r"\btracked by\s+([^;]+)", re.I)
+
+
+def _skill_value(skill: dict[str, Any]) -> int:
+    try:
+        return max(0, min(20, int(skill.get("level") or skill.get("rank") or skill.get("value") or 0)))
+    except (TypeError, ValueError):
+        return 1
+
+
+def player_skill_codes(skill: dict[str, Any], library: list[dict[str, Any]] | None = None) -> set[str]:
+    """Catalog codes one player skill practises: its own name, its trade words, and its "tracked by" note."""
+    lib = library if library is not None else load_skill_library()
+    texts = [str(skill.get("code") or ""), str(skill.get("name") or "")]
+    tracked = _TRACKED_BY_RE.search(str(skill.get("notes") or skill.get("tracking") or ""))
+    if tracked:
+        texts.append(tracked.group(1))
+    elif skill.get("tracking"):
+        texts.append(str(skill.get("tracking")))
+    by_code = {s.get("code") for s in lib if s.get("code")}
+    codes: set[str] = set()
+    for text in texts:
+        if not text.strip():
+            continue
+        for word in _norm(text).split():
+            if TRADE_ALIASES.get(word) in by_code:
+                codes.add(TRADE_ALIASES[word])
+        coded = _codeify(text)
+        if coded in by_code:
+            codes.add(coded)
+        for row in lib:
+            if _norm(str(row.get("name") or "")) == _norm(text):
+                codes.add(str(row.get("code")))
+    return codes
+
+
+def best_proficiency(
+    skills: list[dict[str, Any]] | None,
+    skill_code: str,
+    library: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """The player's best footing for one catalog skill (playtest #85a).
+
+    {"rank", "source", "match"}: match is "exact" (a skill that is, or is
+    tracked as, this one), "related" (a neighbouring trade, half rank rounded
+    down) or "untrained" (rank 0, source "").
+    """
+    code = _codeify(skill_code)
+    exact: tuple[int, str] | None = None
+    related: tuple[int, str] | None = None
+    if skills:
+        lib = library if library is not None else load_skill_library()
+        neighbours = set(RELATED_SKILLS.get(code, ()))
+        # A registered skill's own related_codes count too: the library keeps them.
+        for row in lib:
+            if row.get("code") == code:
+                neighbours.update(str(c) for c in (row.get("related_codes") or []))
+        for skill in skills:
+            if not isinstance(skill, dict):
+                continue
+            name = str(skill.get("name") or skill.get("code") or "")
+            codes = player_skill_codes(skill, lib)
+            value = _skill_value(skill)
+            if code in codes or _codeify(name) == code:
+                if exact is None or value > exact[0]:
+                    exact = (value, name)
+            elif codes & neighbours:
+                if related is None or value // 2 > related[0]:
+                    related = (value // 2, name)
+    if exact:
+        return {"rank": exact[0], "source": exact[1], "match": "exact"}
+    if related:
+        return {"rank": related[0], "source": related[1], "match": "related"}
+    return {"rank": 0, "source": "", "match": "untrained"}
+
+
 def _skill_rank(skills: list[dict[str, Any]] | None, code_or_name: str) -> int:
     if not skills:
         return 0
@@ -725,16 +879,16 @@ def _skill_rank(skills: list[dict[str, Any]] | None, code_or_name: str) -> int:
         if not isinstance(skill, dict):
             continue
         if _codeify(str(skill.get("code") or skill.get("name") or "")) == code:
-            try:
-                return max(0, min(20, int(skill.get("level") or skill.get("rank") or skill.get("value") or 0)))
-            except (TypeError, ValueError):
-                return 1
+            return _skill_value(skill)
         if _norm(str(skill.get("name") or "")) == needle:
-            try:
-                return max(0, min(20, int(skill.get("level") or skill.get("rank") or skill.get("value") or 0)))
-            except (TypeError, ValueError):
-                return 1
-    return 0
+            return _skill_value(skill)
+    # A skill tracked as this one counts as this one (playtest #85a): the
+    # rosters were there and the lookup ignored them.
+    try:
+        found = best_proficiency(skills, code)
+    except Exception:
+        return 0
+    return int(found["rank"]) if found["match"] == "exact" else 0
 
 
 def attribute_modifier(score: int) -> int:
@@ -957,8 +1111,12 @@ def resolve_check(
     inventory: list[dict[str, Any]] | None = None,
     abilities: list[dict[str, Any]] | None = None,
     roll_modifiers: dict[str, Any] | None = None,
+    routine: bool = False,
 ) -> dict[str, Any]:
     """
+    ``routine`` marks everyday work (polishing, sweeping, hauling): the mark is
+    two easier and only a natural 1 can hurt (playtest #85a).
+
     Roll a check with:
       - attribute base + skill modifier + equipped gear/power modifiers
       - DC from skill base, global difficulty, and optional contested opposition power
@@ -1001,8 +1159,15 @@ def resolve_check(
     attr_key = str(skill.get("attribute") or "intelligence")
     attr_score = _attr_score(player_stats, attr_key)
     attr_mod = attribute_modifier(attr_score)
-    skill_rank = _skill_rank(player_skills, skill.get("code") or skill.get("name") or "")
-    skill_mod = skill_rank
+    # The player's own proficiencies, read through their tracking notes and
+    # neighbouring trades (playtest #85a), not an exact-name match only.
+    footing = best_proficiency(player_skills, str(skill.get("code") or skill.get("name") or ""), lib_rows)
+    skill_rank = int(footing["rank"])
+    skill_match = str(footing["match"])
+    untrained_penalty = 0
+    if skill_match == "untrained" and str(skill.get("category") or "") in UNTRAINED_PENALTY_CATEGORIES:
+        untrained_penalty = int(cfg.get("untrained_penalty") or 0)
+    skill_mod = skill_rank - untrained_penalty
     skill_key = str(skill.get("code") or "")
 
     # Equipped gear and passive/granted powers shift the roll automatically.
@@ -1020,10 +1185,11 @@ def resolve_check(
         situational_mod = int(situational.get(skill_key, 0))
 
     total_mod = attr_mod + skill_mod + gear_mod + situational_mod
-    unskilled = skill_rank < int(cfg.get("unskilled_rank_threshold") or 1)
+    # A neighbouring trade is footing, even at half of rank 1.
+    unskilled = skill_rank < int(cfg.get("unskilled_rank_threshold") or 1) and skill_match != "related"
 
     # Contested DC: base skill DC + difficulty + opposition power (stats + RNG)
-    base_dc = int(skill.get("base_dc") or 12) + shift
+    base_dc = int(skill.get("base_dc") or 12) + shift - (2 if routine else 0)
     opp_info: dict[str, Any] | None = None
     if dc is not None:
         target_dc = int(dc)
@@ -1096,7 +1262,7 @@ def resolve_check(
         cfg.get("unskilled_mishaps")
         and unskilled
         and outcome in {"failure", "critical_failure"}
-        and (fumble or degree in {"critical_failure", "bad_nothing"} or margin <= -4)
+        and (fumble or (not routine and (degree in {"critical_failure", "bad_nothing"} or margin <= -4)))
     ):
         mishap = True
         degree = "unskilled_mishap" if not fumble else "critical_failure"
@@ -1131,7 +1297,14 @@ def resolve_check(
             f"{injury['summary']}"
         )
 
-    mod_parts = [f"attr {attr_mod:+d}", f"skill {skill_mod:+d}"]
+    # The roll says which proficiency it used (playtest #85a).
+    if skill_match == "untrained":
+        skill_part = f"skill {skill_rank:+d} (untrained)"
+    else:
+        skill_part = f"skill {skill_rank:+d} ({footing['source']}{', related' if skill_match == 'related' else ''})"
+    mod_parts = [f"attr {attr_mod:+d}", skill_part]
+    if untrained_penalty:
+        mod_parts.append(f"untrained -{untrained_penalty}")
     if gear_mod:
         mod_parts.append(f"gear {gear_mod:+d}")
     if situational_mod:
@@ -1161,6 +1334,10 @@ def resolve_check(
         "attribute_mod": attr_mod,
         "skill_rank": skill_rank,
         "skill_mod": skill_mod,
+        "skill_source": footing["source"],
+        "skill_match": skill_match,
+        "untrained_penalty": untrained_penalty,
+        "routine": bool(routine),
         "gear_mod": gear_mod,
         "gear_sources": gear_sources,
         "situational_mod": situational_mod,
@@ -1420,11 +1597,45 @@ def _trigger_text_variants(text: str) -> list[str]:
     return variants
 
 
+# Verb forms only: "stab" must not catch "the stable" a player is mucking out.
+_COMBAT_LINE_RE = re.compile(
+    r"\b(?:attack|fight|strike|slash|stab|punch|kick|shoot)(?:s|es|ed|ing|bed|bing)?\b", re.I
+)
+
+
 def infer_check_from_action(player_input: str, context: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """Pick a skill code + optional opposition for auto-checks on player actions."""
     text = (player_input or "").lower()
     if not text or text.startswith("__"):
         return None
+    # A declared hands-on act is the check (playtest #85a). "i polish the
+    # blades the best i can" was read as an act for the prose and missed by
+    # this table, so the work rolled nothing. A fight in the same line still
+    # rolls the fight. Read from the player's own line only, never the
+    # engine notes after it (#43), and in its own case so "the Forge" stays
+    # a name.
+    own = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0].strip()
+    if not _COMBAT_LINE_RE.search(own):
+        try:
+            from app.prose_state import act_rules
+
+            act = act_rules(own)
+        except Exception:
+            act = None
+        if act:
+            return {
+                "skill_code": act["skill_code"],
+                # Work is against the task, not against the smith watching it.
+                "opposition": None,
+                "weapon_or_tool": "",
+                "social": False,
+                "npc_ref": None,
+                "act": act["phrase"],
+                "act_family": act["family"],
+                "act_verb": act["verb"],
+                "labour": True,
+                "routine": bool(act["routine"]),
+            }
     pairs = list(SKILL_TRIGGER_PATTERNS)
     # Pack triggers are checked first so a campaign can route "pole the barge"
     # to its own skill instead of falling through to a built-in near-match.
@@ -1521,6 +1732,44 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         if matched_npc
         else None,
     }
+
+
+_ACT_OUTCOME_WORDS = {
+    "critical_success": "it goes better than expected: the work is done, and done well",
+    "success": "it works: the work is done",
+    "partial": "it is only half done or done poorly: someone can see the flaws",
+    "failure": "it goes wrong or falls short: the work is not done",
+    "critical_failure": "it goes badly wrong: the work is spoiled or the player is hurt",
+}
+
+
+def act_outcome(checks: Any) -> dict[str, Any] | None:
+    """What the dice decided for the player's declared act, for the prose (playtest #85a).
+
+    The draft wrote "Not bad, not bad at all" with no roll behind it. This is
+    the engine's answer, written before the prose so the prose can follow it:
+    {"act", "skill", "proficiency", "outcome", "degree", "means", "injury"?}.
+    """
+    for check in checks if isinstance(checks, list) else []:
+        if not isinstance(check, dict) or not check.get("act") or check.get("natural") is None:
+            continue
+        outcome = str(check.get("outcome") or "failure")
+        skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+        match = str(check.get("skill_match") or "")
+        source = str(check.get("skill_source") or "")
+        out: dict[str, Any] = {
+            "act": str(check.get("act"))[:100],
+            "skill": str(skill.get("name") or skill.get("code") or ""),
+            "proficiency": "untrained" if match == "untrained" or not source else f"{source} ({match})",
+            "outcome": outcome,
+            "degree": str(check.get("degree") or outcome),
+            "means": _ACT_OUTCOME_WORDS.get(outcome, _ACT_OUTCOME_WORDS["failure"]),
+        }
+        injury = check.get("injury") if isinstance(check.get("injury"), dict) else None
+        if injury and injury.get("summary"):
+            out["injury"] = str(injury["summary"])[:160]
+        return out
+    return None
 
 
 def apply_check_to_turn(turn: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
