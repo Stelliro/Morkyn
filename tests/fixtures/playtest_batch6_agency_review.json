@@ -1,0 +1,49 @@
+{
+ "_source": "Verbatim live text: scratchpad/smoke/ab (blind A/B, A=writer on, B=writer off) payloads, plus the smoke/run1 model traces for the depth-retry pair.",
+ "depth_retry_his_after_curly_quote": {
+  "trace": "run1\\data\\model_traces\\turn-000003-player.json",
+  "original": "You push Eli Dasgupta [[A]] toward the hills, the drifter’s rain jacket still damp from the morning mist. The farmer’s field lies just beyond the ridge, his crops swaying in the wind despite the dryness of the land. As you approach, the farmer’s gaze flicks toward the hills, his face unreadable. He’s not the only one watching — a group of halflings in patched coats huddle near the well, their eyes darting between you and the distant road. They’ve seen the bandits before, and they know the dangers that come with them. The farmer’s hands tremble as he gestures toward the hills, his voice low. “They’re not just bandits,” he mutters. “They’re looking for someone. Someone who left the valley.”",
+  "expanded": "You push Eli Dasgupta [[A]] toward the hills, the drifter’s rain jacket still damp from the morning mist. The air carries the sharp tang of earth and the distant clang of a blacksmith’s hammer from the village below, a sound that fades as you climb the ridge. The farmer’s field lies just beyond the ridge, his crops swaying in the wind despite the dryness of the land, their stalks brittle and cracked. As you approach, the farmer’s gaze flicks toward the hills, his face a mask of wary calculation. He’s not the only one watching — a group of halflings in patched coats huddle near the well, their eyes darting between you and the distant road, where the sun bleeds through the haze like a wound. They’ve seen the bandits before, and they know the dangers that come with them. One of them, a wiry woman with a scar across her cheek, leans in and whispers something to the others, her fingers tracing a pattern in the dust. \n\nThe farmer’s hands tremble as he gestures toward the hills, his voice low and rough, like gravel in a bottle. “They’re not just bandits,” he mutters. “They’re looking for someone. Someone who left the valley.” His words hang in the air, heavy with the weight of unspoken secrets. Eli’s eyes narrow, his jaw tightening as he studies the landscape, the way the hills curve like the spine of a sleeping beast. A gust of wind stirs the dry grass, sending up a cloud of dust that swirls around your feet. The halflings shift, their posture tense, as if the very ground beneath them is holding its breath. \n\nYou glance back at the village, its thatched roofs dark against the sky, the smoke from a distant hearth curling into the blue. The farmer’s gaze lingers on the hills, his expression unreadable, as though he’s waiting for something — or someone — to appear. The silence between you is thick, broken only by the creak of a branch in the distance and the faint murmur of the river that cuts through the valley like a silver thread. Eli exhales slowly, his breath a steady rhythm, and for a moment, it feels as though the world has stopped turning. Then, with a sharp nod, he steps forward, his boots crunching against the dry earth, and the chase begins."
+ },
+ "ab_B_g1_t3": {
+  "input": "I crouch and examine the cracked earth by the archway for footprints or anything dropped.",
+  "draft_narration": "The cracked earth by the archway is dry and brittle, the kind that crumbles under your fingers. You crouch, brushing away dust with careful sweeps of your gloved hands, searching for any sign of disturbance. The sun glints off the edges of the fissure, casting long shadows across the uneven terrain. Nothing here suggests movement, but the silence is thick, almost unnatural. A faint scent of damp earth and old stone lingers in the stillness. You press your palm against the archway, feeling the cold seep through your gloves. There’s a faint indentation where a boot might have pressed, but it’s too shallow to be certain. You straighten, eyes scanning the area for anything out of place — a loose stone, a stray object, a mark that doesn’t belong. The only thing that catches your eye is a single, rusted nail half-buried in the dirt, its head warped and twisted as if it had been driven in with force. You pick it up, turning it over in your hand, and notice the faint etching of a symbol on its shaft — one you don’t recognize.",
+  "inventory_changes": [
+   {
+    "name": "rusted nail",
+    "description": "",
+    "weight": 1.0,
+    "slot_size": 1,
+    "item_type": "misc",
+    "rarity": "common",
+    "enchantments": [],
+    "stat_modifiers": {},
+    "granted_abilities": [],
+    "stack_limit": 20,
+    "carry_modifier": 1.0,
+    "container_bonus_weight": 0,
+    "container_bonus_slots": 0,
+    "dimensional_space": false,
+    "quantity_delta": 1
+   }
+  ],
+  "response_drafts": [
+   {
+    "claim": "the symbol on the nail is unfamiliar",
+    "verdict": "unverified",
+    "skill": "",
+    "difficulty_class": 12,
+    "result": "not_checked",
+    "notes": ""
+   }
+  ],
+  "conversations": [
+   {
+    "npc_code": "A",
+    "topic": "the nail",
+    "summary": "the nail",
+    "player_claims": []
+   }
+  ]
+ }
+}

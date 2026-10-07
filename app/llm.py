@@ -13149,6 +13149,28 @@ _WORLD_TAIL_RE = re.compile(
     r",\s+(?:and|but)\s+(?P<tail>(?!you\b)(?:he|she|they|it|the|a|an|his|her|their|(?-i:[A-Z][\w'\u2019-]+))\b.*)$",
     re.I | re.S,
 )
+# Review of #30 (live B g1 t3): "You pick it up, turning it over in your hand,
+# and notice the faint etching of a symbol on its shaft" after "I examine the
+# cracked earth". The pickup was not asked for; the etching is what the search
+# found, and the turn's claim and topic stand on it. When the player's half of
+# a sentence goes, a perception half after it stays.
+_PERCEPTION_TAIL_RE = re.compile(
+    r"(?:,\s*|\s+)(?:and|then|before)\s+(?:you\s+)?(?P<tail>(?:notice[sd]?|see|saw|spot(?:s|ted)?|"
+    r"find|finds|found|discover(?:s|ed)?|glimpse[sd]?|make\s+out|catch\s+sight\s+of|hear|heard|smell|smelled)\b.*)$",
+    re.I | re.S,
+)
+# A perception or search act asks what the player learns. "You realize one of
+# them is the innkeeper" after "I listen at the door" is the answer to that act,
+# not a thought the draft invented for the player. Wondering, deciding and
+# feelings stay the player's own whatever the act.
+_INPUT_PERCEIVE_RE = re.compile(
+    r"\b(?:listen\w*|examin\w*|read|reads|reading|search\w*|stud(?:y|ies|ied|ying)|watch\w*|look\w*|"
+    r"inspect\w*|check\w*|peer\w*|observ\w*|investigat\w*|scan|scans|scann\w*|survey\w*|scrutini[sz]\w*|"
+    r"eavesdrop\w*|overhear\w*|sniff\w*|smell\w*|explor\w*|decipher\w*|translat\w*|analy[sz]\w*|"
+    r"spy|spies|spying|scout\w*|recall\w*|remember\w*|think\s+back)\b",
+    re.I,
+)
+_PERCEPTION_PAYOFF_RE = re.compile(r"^(?:reali[sz]e|know|knew|understand|understood|remember|recall|suspect)", re.I)
 _ACT_SENTENCE_SPLIT_RE = re.compile(r"(?:(?<=[.!?])|(?<=[.!?][\"\u201d\u2019]))\s+")
 
 
@@ -13167,7 +13189,12 @@ def _player_clause_invented(rest: str, clause: str, own: str, player_input: str)
     """The family of an invented player act at the start of `rest`, or ""."""
     m = _PLAYER_COGNITION_RE.match(rest)
     if m:
-        return "" if _verb_in_input(m.group("v"), own) else "thought"
+        verb = m.group("v")
+        if _verb_in_input(verb, own):
+            return ""
+        if _PERCEPTION_PAYOFF_RE.match(verb) and _INPUT_PERCEIVE_RE.search(own):
+            return ""
+        return "thought"
     if _decided_for_player(clause, player_input):
         return "decision"
     m = _PLAYER_GESTURE_RE.match(rest)
@@ -13197,6 +13224,11 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
         if tail and len(tail.group("tail")) >= 25:
             kept = tail.group("tail")
             return kept[0].upper() + kept[1:], sentence[: tail.start()].strip()
+        seen = _PERCEPTION_TAIL_RE.search(sentence)
+        if seen:
+            kept, gone = _strip_player_acts_from_sentence("You " + seen.group("tail"), own, player_input)
+            head = sentence[: seen.start()].strip()
+            return kept, f"{head} {gone}".strip()
         return "", sentence
     for coord in _PLAYER_CLAUSE_COORD_RE.finditer(sentence):
         clause = sentence[coord.start():].lstrip(",;\u2014\u2013- ")
