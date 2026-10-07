@@ -23,6 +23,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+## [0.10.0-dev.7] - 2026-10-07
+
+> Pre-release on the way to `0.10.0`. Fixes #64-#68 from the screenshot pass (New game no longer replaces the live map), fresh UI screenshots and the README cover.
+
 ### Fixed
 
 - [CLAUDE] Opening New game no longer replaces the live game's world map: while a game is live the setup roll is a draft, and Start promotes the map the screen showed (playtest #64). - `app/tile_world.py`, `app/world.py`, `app/main.py`, `static/app.js`
