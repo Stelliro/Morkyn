@@ -548,12 +548,8 @@
         run: () => {
           // Same gate as a long click: long trips wait for the scene to clear.
           if (typeof travelReady !== "undefined" && !travelReady) {
-            const banner = document.querySelector("#mapTravelBanner");
-            if (banner) {
-              banner.textContent = "Adjacent steps only while the scene holds long travel.";
-              banner.classList.add("locked");
-              window.setTimeout(() => window.updateTravelStatus?.(travelReady), 1600);
-            }
+            // app.js's setTravelBanner owns the banner's words and colour (playtest #61).
+            window.setTravelBanner?.("Adjacent steps only while the scene holds long travel.", "refusal", 1600);
             return;
           }
           window.walkToTile(t.cx, t.cy);

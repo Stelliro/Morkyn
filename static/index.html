@@ -1561,7 +1561,7 @@
                 <p class="modelLimitsAuto">Automatic limits appear once a model is selected.</p>
                 <label class="modelLimitsMode">
                   <input type="checkbox" name="limits_custom" />
-                  <span>Use my own numbers for this model and remember them</span>
+                  <span>Use my own numbers for this model</span>
                 </label>
                 <div class="modelTokenGrid modelTokenGridThree">
                   <label>
@@ -1844,31 +1844,37 @@
           <!-- Map column source order is the screen order: header, map, pad, dock, place, Present, places. -->
           <section class="mapMain playPanel" id="mapMain" data-play-panel="map" aria-label="World map">
             <header class="mapMainHeader playPanelHeader" data-play-drag="map" title="Drag to reorder panels">
+              <!-- Playtest #82: one header row. The view switch is the title; the
+                   focus switch lives in the topbar only, and the tile line is the
+                   Tile row of This place, so neither is repeated here. -->
               <div class="mapMainHeaderTitle">
                 <span class="playDragGrip" aria-hidden="true">⋮⋮</span>
-                <h2>Map</h2>
+                <h2 class="srOnly">Map</h2>
+                <div class="mapViewBar" id="mapViewBar" role="group" aria-label="Map view">
+                  <button type="button" class="chipBtn secondaryButton activeChip" data-map-view="world" aria-pressed="true">World</button>
+                  <button type="button" class="chipBtn secondaryButton" data-map-view="settlement" aria-pressed="false" title="The settlement you are in, or one you know, drawn on its own grid">Settlement</button>
+                </div>
               </div>
               <div class="mapMainHeaderActions">
-                <button type="button" class="chipBtn secondaryButton" id="whoIsHereJump">Who is here</button>
-                <button type="button" class="chipBtn secondaryButton" id="sideOpenMapBtn">Details</button>
-                <button type="button" class="chipBtn secondaryButton" id="mapFocusChatBtn" title="Make narration the main view">Scene</button>
+                <button type="button" class="chipBtn secondaryButton" id="whoIsHereJump" title="Jump to the people here, under the map">Who is here</button>
+                <button type="button" class="chipBtn secondaryButton" id="sideOpenMapBtn" title="Open the world map full size">Large map</button>
               </div>
             </header>
-            <p id="mapMemoryLine" class="mapMemoryLine">No map yet</p>
-            <div class="mapViewBar" id="mapViewBar" role="group" aria-label="Map view">
-              <button type="button" class="chipBtn secondaryButton activeChip" data-map-view="world" aria-pressed="true">World</button>
-              <button type="button" class="chipBtn secondaryButton" data-map-view="settlement" aria-pressed="false" title="The settlement you are in, or one you know, drawn on its own grid">Settlement</button>
+            <!-- Town row: only in Settlement view, and the picker only when there is a choice. -->
+            <div class="mapTownBar" id="mapTownBar">
               <select id="mapSettlementSelect" class="mapSettlementSelect" aria-label="Settlement to show" hidden></select>
               <span id="townZoomBar" class="townZoomBar" role="group" aria-label="Settlement zoom" hidden>
                 <button type="button" class="chipBtn secondaryButton activeChip" data-town-zoom="city" aria-pressed="true" title="The whole settlement, ward by ward">City</button>
                 <button type="button" class="chipBtn secondaryButton" data-town-zoom="streets" aria-pressed="false" title="Zoom in: roads, buildings and shops you have seen. Click one to walk there.">Streets</button>
-                <button type="button" class="chipBtn secondaryButton townScaleBtn" data-town-scale="-1" aria-label="Zoom out" title="Zoom out" hidden>−</button>
-                <button type="button" class="chipBtn secondaryButton townScaleBtn" data-town-scale="1" aria-label="Zoom in" title="Zoom in" hidden>+</button>
               </span>
             </div>
             <div class="mapSquareSlot">
               <div class="mapMainStage">
                 <canvas id="playMapCanvas" class="mapCanvas playMapCanvas mapMainCanvas" width="480" height="480" aria-label="Main map"></canvas>
+                <span id="townScaleChips" class="townScaleChips" role="group" aria-label="Streets zoom" hidden>
+                  <button type="button" class="chipBtn secondaryButton townScaleBtn" data-town-scale="-1" aria-label="Zoom out" title="Zoom out">−</button>
+                  <button type="button" class="chipBtn secondaryButton townScaleBtn" data-town-scale="1" aria-label="Zoom in" title="Zoom in">+</button>
+                </span>
                 <div id="mapHoverTip" class="mapHoverTip hidden"></div>
                 <div id="settlementView" class="settlementView" hidden>
                   <canvas id="settlementCanvas" class="settlementCanvas" width="480" height="480" role="img" aria-label="Settlement map"></canvas>
@@ -1910,7 +1916,7 @@
                   <button type="button" class="mapDpadBtn mapDpadS" data-dx="0" data-dy="1" aria-label="South">South</button>
                 </div>
               </div>
-              <p id="mapTravelBanner" class="mapTravelBanner">Arrow keys or the pad walk one tile. Long trips wait until the scene clears.</p>
+              <p id="mapTravelBanner" class="mapTravelBanner" title="Arrow keys walk only when What will you do? is not focused.">Arrow keys or the pad walk one tile. Long trips wait until the scene clears.</p>
               <h3 class="mapSectionTitle mapSubTitle" data-fold-default="closed">Map art</h3>
                 <div class="mapAvatarTools">
                   <label class="mapTilePx">

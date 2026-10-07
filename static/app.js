@@ -7811,6 +7811,9 @@ function bindPlaySideRail() {
 
   document.querySelector("#sceneFocusMapBtnHeader")?.addEventListener("click", () => {
     closeCharacterSheet();
+    // Asking for the map shows it, even with the side panel hidden; at phone
+    // width Side is not offered, so this is the way back (playtest #61).
+    if (sidePanelCollapsed()) setSidePanelCollapsed(false);
     setSceneFocus(false);
   });
   document.querySelector("#sceneFocusChatBtnHeader")?.addEventListener("click", () => {
@@ -9815,6 +9818,11 @@ function insertRawToken(token, options = {}) {
       active.focus();
     }
   } else {
+    // Playtest #61/#82: at phone width only one panel shows, so a sentence
+    // written from the map (Go in, Go to, a cast card) brings the scene forward
+    // with it; otherwise it lands in a composer nobody can see.
+    const gameShown = gameView && !gameView.classList.contains("hidden");
+    if (gameShown && !turnInput.offsetParent && !hasCustomPlayLayout()) setSceneFocus(true, { scroll: false });
     turnInput.focus();
     try {
       turnInput.setSelectionRange(nextPos, nextPos);
@@ -12465,7 +12473,7 @@ function renderOfferedQuestSection() {
         </article>`;
     })
     .join("");
-  return `<h3 class="questSectionTitle">Offered</h3>${cards}<h3 class="questSectionTitle">Active</h3>`;
+  return `<h3 class="questSectionTitle">Offered</h3>${cards}`;
 }
 
 /** Accept / Decline / Ask about it, the same on the play-view prompt and the Quests list (TODO n20). */
@@ -12696,13 +12704,14 @@ document.querySelector("#movePrompt")?.addEventListener("click", (event) => {
   }
 });
 
+// Playtest #82: the player's own quests lead the drawer. One quiet Seed link
+// in the empty state only; Advance step is a GM action and lives in GM tools.
 function renderPlayerQuestSection() {
   const offered = renderOfferedQuestSection();
   if (!playerQuestData || playerQuestData.length === 0) {
-    return `${offered}<p class="empty">No active quests. Use <strong>Seed starter quests</strong> below to add a few, or quests will appear as you play.</p>
-      <div class="composerActions" style="margin-bottom:0.5rem">
-        <button type="button" class="chipBtn secondaryButton" id="seedQuestsBtn">Seed starter quests</button>
-      </div>`;
+    if (offered) return `${offered}<p class="empty">No active quests yet.</p>`;
+    return `<p class="empty">No quests yet. They appear when someone offers you work and you accept it.
+      <button type="button" class="questSeedLink" id="seedQuestsBtn" title="Add a handful of starter quests">Seed starter quests</button></p>`;
   }
   const cards = playerQuestData.map((q) => {
     const stepPct = Math.round((q.current_step / Math.max(q.total_steps, 1)) * 100);
@@ -12725,12 +12734,22 @@ function renderPlayerQuestSection() {
         </header>
         <div class="questProgressBar" title="${stepPct}% complete"><div class="questProgressFill" style="width:${stepPct}%"></div></div>
         <ul class="questStepList">${stepList}</ul>
-        <div class="composerActions">
-          <button type="button" class="chipBtn secondaryButton" data-advance-quest="${q.id}">Advance step</button>
-        </div>
       </article>`;
   }).join("");
-  return offered + cards + `<div class="composerActions" style="margin-top:0.5rem"><button type="button" class="chipBtn secondaryButton" id="seedQuestsBtn" title="Add a handful of starter quests">Seed starter quests</button></div>`;
+  // Offered and Active are labels inside the one Quests section, so the
+  // section title is not doubled when offers are open.
+  return offered + (offered ? `<h3 class="questSectionTitle">Active</h3>` : "") + cards;
+}
+
+/** GM: push a quest on by one step, by hand (was a button on every quest card). */
+function renderQuestAdvanceTools() {
+  if (!playerQuestData || playerQuestData.length === 0) return "";
+  const buttons = playerQuestData
+    .map((q) => `<button type="button" class="chipBtn secondaryButton" data-advance-quest="${q.id}" title="Mark the current step done">${escapeHtml(q.code)} — ${escapeHtml(q.title)}</button>`)
+    .join("");
+  return `
+        <h4 class="questGmSubhead">Advance a quest step</h4>
+        <div class="composerActions">${buttons}</div>`;
 }
 
 function renderQuests() {
@@ -12769,11 +12788,18 @@ function renderQuests() {
         })
         .join("")
     : `<p class="empty">No pending quest bus events.</p>`;
+  // Playtest #82: one open section (the player's quests) and one folded GM
+  // tools section. The GM parts are h4 labels inside a single block, so
+  // interact.js folds them together (data-fold-default; a stored choice wins).
   return `
     <div class="questStageEditor">
-      <h3 class="settingsSubhead">Active quests</h3>
+      <h3 class="settingsSubhead">Quests</h3>
       <div class="playerQuestList">${renderPlayerQuestSection()}</div>
-      <h3 class="settingsSubhead">Create quest</h3>
+      <h3 class="settingsSubhead" data-fold-default="closed">GM tools</h3>
+      <div class="questGmTools">
+        <p class="empty">Make, force and inspect quests by hand. The story makes its own as you play.</p>
+        ${renderQuestAdvanceTools()}
+        <h4 class="questGmSubhead">Create quest</h4>
       <details class="questCreateDetails">
         <summary class="chipBtn secondaryButton" style="cursor:pointer;display:inline-block;margin-bottom:0.5rem">＋ New quest</summary>
         <form id="questCreateForm" class="questStageForm modelForm" style="margin-top:0.5rem">
@@ -12800,10 +12826,9 @@ function renderQuests() {
           <p id="questCreateStatus" class="empty" hidden></p>
         </form>
       </details>
-      <h3 class="settingsSubhead">GM stage tools</h3>
+        <h4 class="questGmSubhead">Mark a stage</h4>
       <p class="empty">Current turn <strong>${escapeHtml(turn)}</strong>. Force stages fire on the next Continue / Wait / action once due (player is the trigger).</p>
       <form id="questStageForm" class="questStageForm modelForm">
-        <h3 class="settingsSubhead">Mark stage</h3>
         <label>
           Stage id
           <input name="stage_id" maxlength="80" required placeholder="portal_opens" autocomplete="off" />
@@ -12833,10 +12858,11 @@ function renderQuests() {
         </div>
         <p id="questStageStatus" class="empty" hidden></p>
       </form>
-      <h3 class="settingsSubhead">Reached stages</h3>
+        <h4 class="questGmSubhead">Reached stages</h4>
       <div class="questStageList">${stageCards}</div>
-      <h3 class="settingsSubhead">Pending quest events</h3>
+        <h4 class="questGmSubhead">Pending quest events</h4>
       <div class="questPendingList">${pendingCards}</div>
+      </div>
     </div>
   `;
 }
@@ -13741,8 +13767,11 @@ function sceneFocusWidthMap() {
   return { chat: 58, map: 42, tabs: 0, history: 0 };
 }
 
+// Playtest #68/#82: these maps decide the column widths. styles.css caps the
+// map column (to the circle's size) only in Scene focus, so Map focus really
+// is the large map, Streets included. 40 keeps about 560 px of narration at 1440.
 function mapPrimaryWidthMap() {
-  return { chat: 36, map: 64, tabs: 0, history: 0 };
+  return { chat: 40, map: 60, tabs: 0, history: 0 };
 }
 
 function loadPlayLayoutState() {
@@ -14448,14 +14477,12 @@ function syncStageFocusControls() {
   const mapRow = document.querySelector('#playMenuDrawer [data-play-menu="map"]');
   const headerScene = document.querySelector("#sceneFocusChatBtnHeader");
   const headerMap = document.querySelector("#sceneFocusMapBtnHeader");
-  const panelScene = document.querySelector("#mapFocusChatBtn");
   const panelMap = document.querySelector("#sceneFocusMapBtn");
   [
     [sceneRow, sceneOn],
     [mapRow, !sceneOn],
     [headerScene, sceneOn],
     [headerMap, !sceneOn],
-    [panelScene, sceneOn],
     [panelMap, !sceneOn],
   ].forEach(([el, on]) => {
     if (!el) return;
@@ -14492,9 +14519,7 @@ function setSceneFocus(on, options = {}) {
       ? "Narration is main — Map for travel"
       : "Map is main while idle";
   }
-  const sceneBtn = document.querySelector("#mapFocusChatBtn");
   const mapBtn = document.querySelector("#sceneFocusMapBtn");
-  if (sceneBtn) sceneBtn.classList.toggle("activeChip", enabled);
   if (mapBtn) mapBtn.classList.toggle("activeChip", !enabled);
   syncStageFocusControls();
   if (enabled && options.scroll !== false) {
@@ -16012,19 +16037,21 @@ function renderModelLimitsFields(config) {
   const auto = limits.auto || {};
   const basis = auto.basis || {};
   const custom = limits.mode === "custom";
-  const label = limits.label || config.mle_model || "this model";
   const source = limits.source || {};
   const tag = (key) => (source[key] === "env" ? " (set by env, read-only)" : "");
+  // Playtest #82: the model is named once, in the legend. The auto line and
+  // the checkbox repeated the full name, the second time in field-title caps.
   const autoLine = auto.context_tokens
-    ? `Auto for ${escapeHtml(label)}: ${Number(auto.context_tokens).toLocaleString()} context, ${Number(auto.response_token_cap).toLocaleString()} / ${Number(auto.response_token_hard_cap).toLocaleString()} response (${escapeHtml(basis.context || "")}).`
+    ? `Auto: ${Number(auto.context_tokens).toLocaleString()} context · ${Number(auto.response_token_cap).toLocaleString()} / ${Number(auto.response_token_hard_cap).toLocaleString()} reply${basis.context ? ` (${escapeHtml(basis.context)})` : ""}`
     : "Automatic limits appear once a model is selected.";
+  const legendName = limits.label || config.mle_model || "";
   return `
       <fieldset class="modelLimits" data-model-key="${escapeHtml(limits.model_key || "")}">
-        <legend>Token limits</legend>
+        <legend>Token limits${legendName ? ` <span class="modelLimitsName">· ${escapeHtml(legendName)}</span>` : ""}</legend>
         <p class="modelLimitsAuto">${autoLine}</p>
         <label class="modelLimitsMode">
           <input type="checkbox" name="limits_custom" ${custom ? "checked" : ""} />
-          <span>Use my own numbers for ${escapeHtml(label)} and remember them</span>
+          <span>Use my own numbers for this model</span>
         </label>
         <div class="modelTokenGrid modelTokenGridThree">
           <label>
@@ -16041,8 +16068,7 @@ function renderModelLimitsFields(config) {
           </label>
         </div>
         <div class="modelLimitsRow">
-          <button class="secondaryButton resetModelLimits" type="button" ${auto.context_tokens ? "" : "disabled"}>Back to auto</button>
-          <small>Editing a number switches this model to your own limits; Save Model keeps them.</small>
+          <button class="secondaryButton resetModelLimits" type="button" title="Editing a number switches this model to your own limits; Save Model keeps them." ${auto.context_tokens ? "" : "disabled"}>Back to auto</button>
         </div>
       </fieldset>
   `;
@@ -22033,13 +22059,11 @@ listenPlaySurface("click", (event) => {
   }
 });
 
-document.querySelector("#mapFocusChatBtn")?.addEventListener("click", () => {
-  setSceneFocus(true, { scroll: true, focusInput: true });
-});
 document.querySelector("#sceneFocusMapBtn")?.addEventListener("click", () => {
   if (sidePanelCollapsed()) {
     setSidePanelCollapsed(false);
-    return;
+    // Playtest #61: at phone width the map also needs Map focus to be on stage.
+    if (document.querySelector("#mapMain")?.offsetParent) return;
   }
   setSceneFocus(false, { scroll: false });
   document.querySelector("#mapMain")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
@@ -22224,6 +22248,14 @@ function syncSceneMapButton() {
   const floated = Boolean(floatWindowState?.map?.open);
   const offStage = !mapPanel || mapPanel.hidden || !mapPanel.offsetParent;
   button.hidden = !(sidePanelCollapsed() || hasCustomPlayLayout() || floated || offStage);
+}
+
+// Playtest #61: at 720 px and under styles.css shows one panel at a time, so
+// crossing that width hides or shows the map without any layout call.
+try {
+  window.matchMedia?.("(max-width: 720px)")?.addEventListener?.("change", () => syncSceneMapButton());
+} catch (_) {
+  /* old engines: the next focus switch syncs the button */
 }
 
 window.addEventListener("resize", () => {
@@ -24105,7 +24137,23 @@ const npcPortraitCache = {};
 let movementLocked = false;
 let mapBlank = false;
 
-const WALK_FOCUS_NOTE = "Arrow keys walk only when What will you do? is not focused.";
+// Playtest #61: one setter owns the banner's words and its colour. Writers used
+// to change only the text, so a walk that worked was drawn in the refusal
+// colour an earlier state had left. "refusal" is the --moon line (confined, a
+// failed or refused walk); everything else is the muted info line. revertMs
+// puts the standing status back after a passing refusal; any newer line
+// cancels a pending revert so it cannot overwrite that line.
+let travelBannerRevert = 0;
+function setTravelBanner(text, tone = "info", revertMs = 0) {
+  window.clearTimeout(travelBannerRevert);
+  travelBannerRevert = 0;
+  const banner = document.querySelector("#mapTravelBanner");
+  if (!banner) return false;
+  banner.textContent = String(text || "");
+  banner.classList.toggle("locked", tone === "refusal");
+  if (revertMs > 0) travelBannerRevert = window.setTimeout(() => updateTravelStatus(travelReady), revertMs);
+  return true;
+}
 
 function updateTravelStatus(ready, opts) {
   const o = opts && typeof opts === "object" ? opts : {};
@@ -24125,7 +24173,6 @@ function updateTravelStatus(ready, opts) {
   }
   if (movementLocked || mapBlank) travelReady = false;
   const line = document.querySelector("#travelStatusLine");
-  const banner = document.querySelector("#mapTravelBanner");
   const walkBtn = document.querySelector("#settlementWalkBtn");
   let text;
   if (mapBlank || movementLocked) {
@@ -24142,14 +24189,14 @@ function updateTravelStatus(ready, opts) {
   } else {
     text = "Arrow keys or the pad walk one tile. Long trips wait until the scene clears.";
   }
+  // Long trips waiting on a scene is the normal state of play, not an error:
+  // only confinement is a refusal (playtest #61).
+  const tone = movementLocked || mapBlank ? "refusal" : "info";
   if (line) {
     line.textContent = text;
-    line.classList.toggle("locked", !travelReady || movementLocked || mapBlank);
+    line.classList.toggle("locked", tone === "refusal");
   }
-  if (banner) {
-    banner.textContent = text;
-    banner.classList.toggle("locked", !travelReady || movementLocked || mapBlank);
-  }
+  setTravelBanner(text, tone);
   // Settlement long-walk still respects the scene gate / prison.
   if (walkBtn) walkBtn.disabled = !travelReady || movementLocked || mapBlank;
 }
@@ -24178,7 +24225,6 @@ function applyTravelMoveFeedback(data) {
   if (data.weather) updateWeatherLine(data.weather);
   else if (data.state?.weather) updateWeatherLine(data.state.weather);
   else if (data.travel_result?.weather) updateWeatherLine(data.travel_result.weather);
-  const banner = document.querySelector("#mapTravelBanner");
   const travel = data.travel || {};
   const tr = data.travel_result || {};
   const mins = Number(travel.minutes || data.step?.minutes || 0);
@@ -24191,9 +24237,8 @@ function applyTravelMoveFeedback(data) {
   if (enc.happened) parts.push(String(enc.kind || "encounter").replace(/_/g, " "));
   if (tr.ruler?.name) parts.push(`authority: ${tr.ruler.name}`);
   if (tr.scene_fired || data.scene_turn) parts.push("scene!");
-  if (banner && parts.length) {
-    banner.textContent = `Walk ${parts.join(" · ")}. ${WALK_FOCUS_NOTE}`;
-  }
+  // The arrow-key note is the banner's title in index.html, not repeated on every step.
+  if (parts.length) setTravelBanner(`Walk ${parts.join(" · ")}.`);
   // Ambient DM line — does NOT lock movement or require a choice
   const ambient = data.ambient || tr.ambient || "";
   if (ambient && !(tr.scene_fired || data.scene_turn)) {
@@ -24225,10 +24270,9 @@ function applyTravelMoveFeedback(data) {
 // A map move made from inside a town walks the streets first (playtest #71):
 // say where it stopped, at a gate that holds the player, or that they left.
 function townMoveNote(data) {
-  const banner = document.querySelector("#mapTravelBanner");
-  if (!banner || !data) return;
-  if (data.halted?.why) banner.textContent = String(data.halted.why);
-  else if (data.town_exit?.left || data.travel_result?.town_exit?.left) banner.textContent = "You walk the streets and out of town.";
+  if (!data) return;
+  if (data.halted?.why) setTravelBanner(String(data.halted.why), "refusal");
+  else if (data.town_exit?.left || data.travel_result?.town_exit?.left) setTravelBanner("You walk the streets and out of town.");
 }
 
 async function walkStep(dx, dy, options = {}) {
@@ -24239,8 +24283,7 @@ async function walkStep(dx, dy, options = {}) {
     const tip =
       state?.location_special_flags?.hint ||
       "You cannot move — confined (blank map / prison state).";
-    const banner = document.querySelector("#mapTravelBanner");
-    if (banner) banner.textContent = tip;
+    setTravelBanner(tip, "refusal");
     return;
   }
   if (mapMoveBusy) return;
@@ -24275,14 +24318,7 @@ async function walkStep(dx, dy, options = {}) {
     if (options.silent) return;
     const msg = error.message || String(error);
     // Soft feedback on banner instead of alert spam for blocked tiles
-    const banner = document.querySelector("#mapTravelBanner");
-    if (banner) {
-      banner.textContent = msg;
-      banner.classList.add("locked");
-      window.setTimeout(() => updateTravelStatus(travelReady), 1600);
-    } else {
-      window.alert(msg);
-    }
+    if (!setTravelBanner(msg, "refusal", 1600)) window.alert(msg);
   } finally {
     mapMoveBusy = false;
     document.querySelectorAll(".mapDpadBtn[data-dx]").forEach((btn) => {
@@ -24387,12 +24423,7 @@ function bindLocalMapClick() {
     }
     // Longer click: only if travel open
     if (!travelReady) {
-      const banner = document.querySelector("#mapTravelBanner");
-      if (banner) {
-        banner.textContent = "Adjacent steps only while the scene holds long travel.";
-        banner.classList.add("locked");
-        window.setTimeout(() => updateTravelStatus(travelReady), 1600);
-      }
+      setTravelBanner("Adjacent steps only while the scene holds long travel.", "refusal", 1600);
       return;
     }
     const tile = (localMapView.tiles || []).find((t) => Number(t.x) === cx && Number(t.y) === cy);
@@ -25093,7 +25124,7 @@ function setMapViewMode(mode) {
   const pick = document.querySelector("#mapSettlementSelect");
   if (view) view.hidden = !on;
   if (info) info.hidden = !on;
-  if (pick) pick.hidden = !on || !(settlementData?.settlements || []).length;
+  if (pick) pick.hidden = !settlementPickerWanted(settlementData);
   paintTownZoomBar();
   renderTownCard();
   if (on) refreshSettlementView();
@@ -25117,11 +25148,19 @@ async function refreshSettlementView() {
   else paintSettlementCanvas(settlementData);
 }
 
+// Playtest #82: the picker is shown only when there is a choice to make, more
+// than one known settlement or none chosen yet. A lone "Harmere (here)" was a
+// row of chrome that chose nothing; the settlement's name is in the summary.
+function settlementPickerWanted(data) {
+  const list = Array.isArray(data?.settlements) ? data.settlements : [];
+  return mapViewMode === "settlement" && (list.length > 1 || (list.length === 1 && !data?.selected));
+}
+
 function paintSettlementPicker(data) {
   const pick = document.querySelector("#mapSettlementSelect");
   if (!pick) return;
   const list = Array.isArray(data?.settlements) ? data.settlements : [];
-  pick.hidden = mapViewMode !== "settlement" || !list.length;
+  pick.hidden = !settlementPickerWanted(data);
   const options = [];
   if (!data?.selected) options.push(`<option value="">Choose a settlement</option>`);
   for (const item of list) {
@@ -25926,14 +25965,12 @@ function renderTownLeave() {
 async function townLeave(edge = "") {
   if (townBusy) return;
   if (movementLocked || mapBlank) {
-    const banner = document.querySelector("#mapTravelBanner");
-    if (banner) banner.textContent = "You cannot move while confined.";
+    setTravelBanner("You cannot move while confined.", "refusal");
     return;
   }
   townBusy = true;
   townStatus = "Walking out…";
   renderTownLeave();
-  const banner = document.querySelector("#mapTravelBanner");
   try {
     const res = await fetch("/api/town/leave", {
       method: "POST",
@@ -25943,11 +25980,7 @@ async function townLeave(edge = "") {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       townStatus = townMessage(data, res.status);
-      if (banner) {
-        banner.textContent = townStatus;
-        banner.classList.add("locked");
-        window.setTimeout(() => updateTravelStatus(travelReady), 1600);
-      }
+      setTravelBanner(townStatus, "refusal", 1600);
       return;
     }
     if (data.state) state = { ...(state || {}), ...data.state };
@@ -25955,11 +25988,11 @@ async function townLeave(edge = "") {
     applyTravelMoveFeedback({ state: data.state, travel: { minutes: Number(leave.minutes || 0), terrain: "town" } });
     if (leave.halted) {
       townStatus = String(leave.halted.why || "You stop at the gate.");
-      if (banner) banner.textContent = townStatus;
+      setTravelBanner(townStatus, "refusal");
       if (data.view?.available) townData = await townAttachMasks(data.view);
     } else {
       townStatus = "";
-      if (banner) banner.textContent = `You leave ${townData?.name || "town"}.`;
+      setTravelBanner(`You leave ${townData?.name || "town"}.`);
     }
     fullMapView = data.map || fullMapView;
     townPan = { x: 0, y: 0 };
@@ -26049,7 +26082,6 @@ async function townWalk(target) {
   townBusy = true;
   townStatus = "Walking…";
   renderTownCard();
-  const banner = document.querySelector("#mapTravelBanner");
   try {
     const res = await fetch("/api/town/walk", {
       method: "POST",
@@ -26059,11 +26091,7 @@ async function townWalk(target) {
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
       townStatus = townMessage(data, res.status);
-      if (banner) {
-        banner.textContent = townStatus;
-        banner.classList.add("locked");
-        window.setTimeout(() => updateTravelStatus(travelReady), 1600);
-      }
+      setTravelBanner(townStatus, "refusal", 1600);
       return;
     }
     if (data.state) state = { ...(state || {}), ...data.state };
@@ -26107,7 +26135,6 @@ function townArrowWalk(dx, dy) {
   const you = townData?.player;
   const cell = you ? townCellAt(you.cx, you.cy) : null;
   const mask = cell?._mask;
-  const banner = document.querySelector("#mapTravelBanner");
   if (!you || !mask) return;
   const side = Math.max(1, Number(cell.side) || 1);
   const road = (x, y) => x >= 0 && y >= 0 && x < side && y < side && mask[y * side + x];
@@ -26130,7 +26157,7 @@ function townArrowWalk(dx, dy) {
     const ty = dy > 0 ? 0 : dy < 0 ? nside - 1 : scale(y);
     const refusal = townWalkRefusal(next.cx, next.cy);
     if (refusal) {
-      if (banner) banner.textContent = refusal;
+      setTravelBanner(refusal, "refusal");
       return;
     }
     townWalk({ cx: Number(next.cx), cy: Number(next.cy), fx: tx, fy: ty });
@@ -26144,10 +26171,10 @@ function townArrowWalk(dx, dy) {
     return;
   }
   if (!steps) {
-    if (banner) {
-      banner.textContent = atEdge && !townCellAt(Number(you.cx) + dx, Number(you.cy) + dy)
-        ? `Use Leave under the map to step out of ${townData?.name || "town"}.`
-        : "No road you know runs that way.";
+    if (atEdge && !townCellAt(Number(you.cx) + dx, Number(you.cy) + dy)) {
+      setTravelBanner(`Use Leave under the map to step out of ${townData?.name || "town"}.`);
+    } else {
+      setTravelBanner("No road you know runs that way.", "refusal");
     }
     return;
   }
@@ -26206,9 +26233,11 @@ function paintTownZoomBar() {
   if (!bar) return;
   const zoomable = Boolean(settlementData?.town?.zoomable);
   bar.hidden = mapViewMode !== "settlement" || !zoomable;
-  bar.querySelectorAll("[data-town-scale]").forEach((btn) => {
+  // The - / + chips sit on the canvas corner, shown only on Streets (playtest #82).
+  const scaleChips = document.querySelector("#townScaleChips");
+  if (scaleChips) scaleChips.hidden = mapViewMode !== "settlement" || !townStreetsActive();
+  document.querySelectorAll("#townScaleChips [data-town-scale]").forEach((btn) => {
     const step = Number(btn.getAttribute("data-town-scale"));
-    btn.hidden = !townStreetsActive();
     btn.disabled = step > 0 ? townScale >= TOWN_SCALE_MAX : townScale <= TOWN_SCALE_MIN;
   });
   const shown = townStreetsActive() ? "streets" : "city";
@@ -26331,12 +26360,11 @@ function bindTownCanvas() {
     },
     { passive: false }
   );
-  document.querySelector("#townZoomBar")?.addEventListener("click", (event) => {
+  document.querySelector("#townScaleChips")?.addEventListener("click", (event) => {
     const scale = event.target?.closest?.("[data-town-scale]");
-    if (scale) {
-      townZoomBy(Number(scale.getAttribute("data-town-scale")) > 0 ? 1.5 : 1 / 1.5);
-      return;
-    }
+    if (scale) townZoomBy(Number(scale.getAttribute("data-town-scale")) > 0 ? 1.5 : 1 / 1.5);
+  });
+  document.querySelector("#townZoomBar")?.addEventListener("click", (event) => {
     const btn = event.target?.closest?.("[data-town-zoom]");
     if (btn) setSettlementZoom(btn.getAttribute("data-town-zoom"));
   });
@@ -26366,20 +26394,33 @@ document.querySelector("#mapSettlementSelect")?.addEventListener("change", (even
   settlementPick = String(event.target?.value || "");
   refreshSettlementView();
 });
-window.addEventListener("resize", () => {
+function repaintSettlementForSize() {
   if (townStreetsActive()) paintTownCanvas();
   else if (mapViewMode === "settlement" && settlementData) paintSettlementCanvas(settlementData);
-});
+}
+window.addEventListener("resize", repaintSettlementForSize);
+// Playtest #68/#82: the square follows its column (Map / Scene focus, a
+// splitter drag, the phone panel switch), not only the window, so the town
+// bitmap is redrawn whenever the slot itself changes size.
+if (typeof ResizeObserver === "function") {
+  const slot = document.querySelector(".mapSquareSlot");
+  let slotFrame = 0;
+  if (slot) {
+    new ResizeObserver(() => {
+      window.cancelAnimationFrame(slotFrame);
+      slotFrame = window.requestAnimationFrame(repaintSettlementForSize);
+    }).observe(slot);
+  }
+}
 
 async function refreshLocalMap() {
   const canvas = document.querySelector("#playMapCanvas");
   // The settlement view follows the player too; entering a town zooms to its streets once.
   if (!townAutoZoomCheck() && mapViewMode === "settlement") refreshSettlementView();
   const meta = document.querySelector("#playMapMeta");
-  const memoryLine = document.querySelector("#mapMemoryLine");
+  // Playtest #82: the line under the map header repeated this Tile row word for word.
   const showMapLine = (text) => {
     if (meta) meta.textContent = text;
-    if (memoryLine) memoryLine.textContent = text;
   };
   try {
     // Nearby ground stays large. Every explored tile is still returned; far ones mark the rim.

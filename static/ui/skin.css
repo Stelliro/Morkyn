@@ -389,6 +389,25 @@ legend,
   color: var(--label);
 }
 
+/* Playtest #82: a checkbox or radio caption is a sentence beside its box, not
+   a field title, so it is not set in tracked capitals like the inputs' titles
+   ("label span" in styles.css catches every label). */
+label:has(> input[type="checkbox"], > input[type="radio"]) > span {
+  font-size: inherit;
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--text);
+}
+
+/* The model named once, beside the Token limits legend. */
+.modelLimits legend .modelLimitsName {
+  font-weight: 500;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--muted);
+}
+
 /* Narration reads as a page. */
 .sceneBox,
 .turnNarration,
@@ -1090,11 +1109,6 @@ a.mainMenuGhost:hover {
   box-shadow: none;
 }
 
-.mapMemoryLine {
-  font-style: italic;
-  color: var(--muted);
-}
-
 /* The settlement grid is a square shard of the same void: one hairline. */
 .settlementCanvas {
   border: 1px solid var(--thread-dim);
@@ -1139,6 +1153,11 @@ a.mainMenuGhost:hover {
 .townWalkStatus {
   font-style: italic;
   color: var(--muted-2);
+}
+
+/* Streets zoom chips sit on the map: the void behind them, one hairline (#82). */
+.townScaleChips .chipBtn {
+  background: var(--ink);
 }
 
 .mapSection .mapTravelBanner {
@@ -1616,4 +1635,34 @@ body.aiBusy:not(.llmChatThinking)::after {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+
+/* ==========================================================================
+   14 Quests drawer (playtest #82)
+   ========================================================================== */
+
+/* Offered / Active and the GM tools' parts: small tracked labels under the
+   section heading, not more headings of the same weight. */
+.questStageEditor .questSectionTitle,
+.questStageEditor .questGmSubhead {
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Seed starter quests is a quiet link in the empty state, not a button. */
+.questStageEditor button.questSeedLink {
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.questStageEditor button.questSeedLink:hover,
+.questStageEditor button.questSeedLink:focus-visible {
+  color: var(--text);
 }

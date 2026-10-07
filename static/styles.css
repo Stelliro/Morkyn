@@ -1965,6 +1965,29 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
   margin: 0.85rem 0 0.4rem;
   font-size: 0.95rem;
 }
+
+/* Playtest #82: inside the drawer's two sections (Quests, GM tools) the parts
+   are small labels, not more headings of the same weight. Look in skin.css. */
+.questStageEditor .questSectionTitle,
+.questStageEditor .questGmSubhead {
+  margin: 0.75rem 0 0.35rem;
+  font-size: 0.72rem;
+}
+
+.questGmTools {
+  display: grid;
+  align-content: start;
+  gap: 0.25rem;
+}
+
+.questStageEditor button.questSeedLink {
+  display: inline;
+  min-height: 0;
+  margin: 0 0 0 0.25rem;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
 .starterLogicPanel {
   max-width: min(520px, 94vw);
 }
@@ -5249,8 +5272,12 @@ body.play-menu-split .playMenuNav::after {
   overflow: hidden;
 }
 
-/* Default column matches the circle. Custom resize can make the column wider. */
-.gameView:not(.customLayout) .playRow > .mapMain {
+/* Playtest #68/#82: app.js's width maps decide the column. In Scene focus
+   (and while the model writes) the column is capped to the circle's size; in
+   Map focus it is not, so Map focus is the large map. Custom resize sets its
+   own widths. */
+.gameView.sceneFocus:not(.customLayout) .playRow > .mapMain,
+.gameView.isGenerating:not(.customLayout) .playRow > .mapMain {
   max-width: min(100%, max(12.5rem, 40vh));
 }
 
@@ -5817,6 +5844,46 @@ button.chipBtn.activeChip {
   flex: 1 1 0 !important;
 }
 
+/* Playtest #61/#82: at phone width two columns left the map 152 px and cut
+   its header. The stage shows one panel at a time instead: the topbar Map /
+   Scene chips switch it, and the Scene header's Map button appears whenever
+   the map is off stage. isGenerating forces Scene focus, so the narration is
+   up while the model writes. Side is redundant here, so it is hidden. */
+@media (max-width: 720px) {
+  .gameView:not(.customLayout) .playSplitterCol,
+  .gameView #sidePanelToggle {
+    display: none !important;
+  }
+
+  .gameView.sceneFocus:not(.customLayout) [data-play-panel="map"],
+  .gameView.isGenerating:not(.customLayout) [data-play-panel="map"],
+  .gameView.mapPrimary:not(.customLayout):not(.isGenerating):not(.sidePanelCollapsed) [data-play-panel="chat"] {
+    display: none !important;
+  }
+
+  .gameView:not(.customLayout) .playRow > .playPanel {
+    flex: 1 1 0 !important;
+    min-width: 0;
+  }
+
+  /* A custom layout keeps its panels (the focus chips are off there) but
+     stacks them instead of squeezing two columns side by side. */
+  .gameView.customLayout .playRow {
+    flex-direction: column;
+  }
+
+  .gameView.customLayout .playRow > .playPanel,
+  .gameView.customLayout .playRow > .playStack {
+    flex: 1 1 0 !important;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .gameView.customLayout .playSplitterCol {
+    display: none !important;
+  }
+}
+
 .chatComposer textarea {
   min-height: 56px;
   font-size: 0.9rem;
@@ -6047,22 +6114,29 @@ button.chipBtn.activeChip {
   text-shadow: 0 0 12px var(--neon-dim);
 }
 
+/* Playtest #61/#82: the actions wrap under the view switch on a narrow
+   column instead of being clipped by .mapMain's overflow. */
 .mapMainHeaderActions {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
+  min-width: 0;
 }
 
-.mapMemoryLine {
-  margin: 0;
-  padding: 6px 12px 0;
-  font-size: 0.78rem;
-  line-height: 1.35;
-  color: var(--muted);
-}
-
-/* World / Settlement switch (playtest #19). The settlement grid sits over the
-   lens in the same square, so the world canvas keeps its size underneath. */
+/* World / Settlement switch (playtest #19), now the header's title (#82).
+   The settlement grid sits over the lens in the same square, so the world
+   canvas keeps its size underneath. */
 .mapViewBar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+/* The town row: picker and City / Streets, only in Settlement view (#82). */
+.mapTownBar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -6071,7 +6145,25 @@ button.chipBtn.activeChip {
   min-width: 0;
 }
 
-.mapViewBar .mapSettlementSelect {
+.mapTownBar:has(> #mapSettlementSelect[hidden]):has(> #townZoomBar[hidden]) {
+  display: none;
+}
+
+/* Streets zoom sits on the map's corner, not in a row above it (#82). */
+.townScaleChips {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 3;
+  display: inline-flex;
+  gap: 4px;
+}
+
+.townScaleChips .chipBtn {
+  min-width: 1.9em;
+}
+
+.mapTownBar .mapSettlementSelect {
   flex: 0 1 13rem;
   width: auto;
   min-width: 0;
@@ -6234,10 +6326,25 @@ button.chipBtn.activeChip {
 }
 
 /* Playtest #68: streets are unreadable at 22vh (198 px at 1440x900). The
-   town view may take the column's width, up to half the window. */
+   town view may take the column's width, up to half the window. These caps
+   now hold in Scene focus and custom layouts; Map focus is below. */
 .mapSquareSlot:has(.settlementCanvas.isStreets) {
   flex-basis: min(380px, 50vh);
   max-height: min(380px, 50vh);
+}
+
+/* Playtest #68/#82: in Map focus the square is sized by the column it sits
+   in, not by the viewport: as wide as the column, shrinking only when the
+   window is too short. This is the large town view (Streets fills it). The
+   list under it keeps a floor and scrolls. */
+.gameView.mapPrimary:not(.customLayout):not(.isGenerating) .mapSquareSlot {
+  flex: 0 1 auto;
+  aspect-ratio: 1;
+  max-height: none;
+}
+
+.gameView.mapPrimary:not(.customLayout):not(.isGenerating) .mapColumnList {
+  min-height: clamp(7rem, 24vh, 14rem);
 }
 
 .mapMainCanvas {
@@ -12295,6 +12402,9 @@ button.miniItemMore {
     overflow: hidden;
   }
 
+  /* Playtest #61: .playPane, .sidePane and .currentTurn are the old play grid;
+     no play markup has them now, so these rules match nothing. The phone
+     stage is the max-width 720px block next to .sidePanelCollapsed. */
   .playPane {
     border-right: 0;
     border-bottom: 1px solid var(--line);
@@ -12742,6 +12852,9 @@ button.miniItemMore {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  /* Playtest #61: .playPane, .sidePane and .currentTurn are the old play grid;
+     no play markup has them now, so these rules match nothing. The phone
+     stage is the max-width 720px block next to .sidePanelCollapsed. */
   .playPane {
     min-height: 100svh;
   }
@@ -12879,6 +12992,9 @@ button.miniItemMore {
     flex-direction: column !important;
   }
 
+  /* Playtest #61: .playPane, .sidePane and .currentTurn are the old play grid;
+     no play markup has them now, so these rules match nothing. The phone
+     stage is the max-width 720px block next to .sidePanelCollapsed. */
   .playPane {
     border-right: 1px solid var(--line);
     border-bottom: 0;
