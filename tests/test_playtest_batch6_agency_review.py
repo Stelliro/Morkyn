@@ -135,5 +135,55 @@ class PerceptionPayoffIsKept(WriterOffEnv):
         self.assertEqual(kept, "You see a second one glinting under the bench.")
         self.assertEqual(dropped, ["You pocket the coin"])
 
+
+class OneTakeVocabulary(WriterOffEnv):
+    """Finding 2: the drop pass and the grant gate disagreed on what a take is."""
+
+    CASES = (
+        ("I forage for berries along the hedge.",
+         "The hedge is heavy with fruit after the rain. You pocket a handful of ripe berries, their juice staining your fingers.",
+         {"name": "ripe berries", "quantity_delta": 1, "source": "forage"}, "ripe berries"),
+        ("I craft a torch from the rags.",
+         "The rags are dry enough. You pick up the flint and strike until it catches, and the torch flares.",
+         {"name": "torch", "quantity_delta": 1, "source": "craft"}, "flint"),
+        ("I harvest some herbs from the bank.",
+         "Wild thyme grows thick on the bank. You pocket a fistful of thyme sprigs.",
+         {"name": "thyme sprigs", "quantity_delta": 1, "source": "found"}, "thyme sprigs"),
+    )
+
+    def test_take_words_keep_the_prose_and_the_grant_together(self):
+        for player, scene, change, shown in self.CASES:
+            narration = FILL + "\n\n" + scene
+            out = _overreach(narration, player)
+            final = out["narration"]
+            self.assertIn(shown, final, player)
+            self.assertFalse(out.get("_invented_player_acts"), player)
+            kept = world._filter_inventory_changes(
+                _conn(), [dict(change)], narration=final, player_input=player,
+                input_kind="action", draft_narration=narration,
+            )
+            self.assertEqual([c["name"] for c in kept], [change["name"]], player)
+
+    def test_without_a_take_word_both_refuse(self):
+        player = "I walk along the hedge."
+        narration = FILL + "\n\n" + "The hedge is heavy with fruit. You pocket a handful of ripe berries."
+        out = _overreach(narration, player)
+        self.assertNotIn("You pocket", out["narration"])
+        kept = world._filter_inventory_changes(
+            _conn(), [{"name": "ripe berries", "quantity_delta": 1, "source": "forage"}],
+            narration=out["narration"], player_input=player, input_kind="action", draft_narration=narration,
+        )
+        self.assertEqual(kept, [])
+
+    def test_the_two_passes_share_one_check(self):
+        self.assertIs(world.player_take_intent, llm.player_take_intent)
+        for line, want in (
+            ("I forage for mushrooms", True), ("I receive the reward", True), ("I accept the gift", True),
+            ("I keep the coin", True), ("I pick the satchel up", True), ("I take stock of my injuries", False),
+            ("I take a look at the seed", False), ("I keep walking", False), ("I examine the ground", False),
+            ("the first shop I can find", False),
+        ):
+            self.assertEqual(llm.player_take_intent(line), want, line)
+
 if __name__ == "__main__":
     unittest.main()

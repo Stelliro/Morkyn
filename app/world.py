@@ -24,6 +24,7 @@ from app.llm import (
     generate_ambient_move_line,
     generate_input_suggestions,
     generate_turn,
+    player_take_intent,
 )
 
 # Runtime paths are resolved per call, never frozen at import.
@@ -11091,19 +11092,9 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     return new_id
 
 
-# "take stock / take a look / take in" are perception, not pickup. Shared by
-# prose grounding and player-input acquire_intent — a bare \\btake\\b on
-# "I take stock of my injuries" used to mark every named item as arrived.
-_TAKE_PERCEPTION_TAIL = (
-    r"(?:in|note|stock|care|aim|cover|"
-    # "take a bite / a sip" eats or drinks on the spot; nothing goes in the pack.
-    r"a\s+(?:look|gander|peek|moment|breath|step|bite|sip|swig|taste|mouthful|seat)|"
-    r"your\s+time)"
-)
-_TAKE_PERCEPTION_RE = re.compile(
-    rf"\b(?:take[sn]?|took|taking)\s+{_TAKE_PERCEPTION_TAIL}\b",
-    re.I,
-)
+# "take stock / take a look / take in" are perception, not pickup. One
+# definition, in app.llm, shared with the player-act drop pass.
+from app.llm import _TAKE_PERCEPTION_RE, _TAKE_PERCEPTION_TAIL  # noqa: E402
 
 # Prose that says something actually arrived. Unambiguous transfer verbs only:
 # perception verbs go in _DISCOVER_GAIN_RE below, where they are held to a
@@ -11486,20 +11477,12 @@ def _filter_inventory_changes(
     if not isinstance(changes, list):
         return []
     text = f"{narration}\n{player_input}".lower()
-    player_l = str(player_input or "").lower()
-    # Strip perception-takes so "I take stock / a look" cannot authorize gains.
-    player_l_intent = _TAKE_PERCEPTION_RE.sub(" ", player_l)
     # Finding is not taking (playtest #42): "the first shop I can find" granted
     # a bundle of herbs the prose only showed on a shelf. A find surfaces in
-    # the prose and the player takes it next turn.
-    acquire_intent = bool(
-        re.search(
-            r"\b(buy|bought|purchase|loot|pick(?:ed)?\s+up|pick\s+(?:\w+\s+){1,3}up|take|took|steal|stole|"
-            r"craft|forage|receive|received|accept|gift|reward|claim|trade|"
-            r"grab|grabbed|pocket|pocketed|gather|harvest|collect|scavenge|salvage|snatch)\b",
-            player_l_intent,
-        )
-    )
+    # the prose and the player takes it next turn. "Take stock / a look" is
+    # perception. The vocabulary is the one the player-act drop pass uses, so
+    # the two can never disagree about whether the player asked to take.
+    acquire_intent = player_take_intent(str(player_input or ""))
     kept: list[dict[str, Any]] = []
     for change in changes:
         if not isinstance(change, dict):

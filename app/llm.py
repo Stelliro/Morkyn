@@ -13135,11 +13135,39 @@ _INPUT_SPEECH_RE = re.compile(
     r"[\"\u201c\u201d?]|\b(?:say|ask|tell|reply|answer|respond|shout|call|whisper|greet|thank|agree|promise|talk|speak)\w*\b"
     r"|^[A-Z][\w'\u2019-]*(?:\s+[A-Z][\w'\u2019-]*)?,",
 )
-_INPUT_ACQUIRE_RE = re.compile(
-    r"\b(?:pick\w*|take|took|grab\w*|pocket\w*|buy|bought|purchase\w*|loot\w*|steal|stole|collect\w*|"
-    r"gather\w*|claim\w*|accept\w*|keep|snatch\w*|scavenge\w*|salvage\w*|trade\w*)\b",
+# "take stock / take a look / take in" are perception, not pickup. Shared by
+# prose grounding and player-input take intent; a bare \\btake\\b on
+# "I take stock of my injuries" used to mark every named item as arrived.
+_TAKE_PERCEPTION_TAIL = (
+    r"(?:in|note|stock|care|aim|cover|"
+    # "take a bite / a sip" eats or drinks on the spot; nothing goes in the pack.
+    r"a\s+(?:look|gander|peek|moment|breath|step|bite|sip|swig|taste|mouthful|seat)|"
+    r"your\s+time)"
+)
+_TAKE_PERCEPTION_RE = re.compile(
+    rf"\b(?:take[sn]?|took|taking)\s+{_TAKE_PERCEPTION_TAIL}\b",
     re.I,
 )
+# One take vocabulary (review of #30/#42). The drop pass used to read "I forage
+# for berries" as no take and delete "You pocket a handful of ripe berries",
+# while the grant gate read the same line as a take and granted the berries:
+# the item arrived and the prose that showed it was gone. Both now ask this.
+_PLAYER_TAKE_INTENT_RE = re.compile(
+    r"\b(?:buy|buys|buying|bought|purchas\w*|loot\w*|"
+    r"pick(?:s|ed|ing)?\s+up|pick(?:s|ed|ing)?\s+(?:\w+\s+){1,3}up|"
+    r"take|takes|taking|taken|took|steal|steals|stealing|stole|stolen|"
+    r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
+    r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|salvag\w*|snatch\w*|"
+    r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b)",
+    re.I,
+)
+
+
+def player_take_intent(player_text: str) -> bool:
+    """True when the player's own words ask to take, buy, make or receive something."""
+    return bool(_PLAYER_TAKE_INTENT_RE.search(_TAKE_PERCEPTION_RE.sub(" ", str(player_text or ""))))
+
+
 _INPUT_MOVE_RE = re.compile(
     r"\b(?:go|goes|went|head\w*|walk\w*|follow\w*|after|lead\w*|move\w*|travel\w*|run|ran|chase\w*|track\w*|"
     r"pursue\w*|come|came|leave|return\w*|enter\w*|cross\w*|climb\w*|hurry|press\s+on|continue\w*)\b",
@@ -13205,7 +13233,7 @@ def _player_clause_invented(rest: str, clause: str, own: str, player_input: str)
         return "" if _INPUT_SPEECH_RE.search(own) else "speech"
     m = _PLAYER_ACQUIRE_ACT_RE.match(rest)
     if m:
-        return "" if _INPUT_ACQUIRE_RE.search(own) else "taking"
+        return "" if player_take_intent(own) else "taking"
     m = _PLAYER_FOLLOW_RE.match(rest)
     if m:
         return "" if _INPUT_MOVE_RE.search(own) else "movement"
