@@ -945,6 +945,25 @@ def _leave_asked(words: str) -> re.Match | None:
     return None
 
 
+# Going along with someone: "I follow him", "lead the way", "take me there".
+_GO_ALONG_RE = re.compile(
+    r"\b(?:follow\w*|go\s+with|come\s+with|walk\s+with|lead\s+the\s+way|take\s+me|show\s+me\s+(?:the\s+way|there|where)|"
+    r"after\s+(?:him|her|them)|lead\s+on|let'?s\s+go)\b",
+    re.I,
+)
+
+
+def _led_walk_asked(player_input: str, place: str, by: str) -> bool:
+    """The player's own words ask to go to ``place``, or to go along with ``by`` (playtest #76)."""
+    words = _player_words(player_input)
+    if not words.strip():
+        return False
+    norm_words = _norm(words)
+    if place and _norm(place) and _norm(place) in norm_words:
+        return True
+    return bool(_GO_ALONG_RE.search(words))
+
+
 def _player_words(text: str) -> str:
     from app import world as W
 
@@ -2183,7 +2202,42 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
         clear_moves()
         return {**base, "status": "unresolved", "rule": "town_stay", "dropped": name}
 
-    # No MOVE: the prose may still walk the player through a door (TownGrid.md 5.2).
+    # No MOVE: someone in the prose leads the player to a building (playtest
+    # #76, T11: "Bertram leads you to the Blind Owl Forge [[L4]]", and the
+    # player stayed in the street). The player's own words decide: asked to
+    # go there (or with them), the walk happens whatever its length, because
+    # the player chose it; not asked, the player stays, and the report names
+    # the sentence so the prose is cut where the unchosen walk began.
+    led = venues.led_to_in_prose(narration)
+    if led:
+        led_plot = None
+        if led.get("code"):
+            led_row = conn.execute(
+                "SELECT plot_id FROM locations WHERE code = ? COLLATE NOCASE", (str(led["code"]).upper(),)
+            ).fetchone()
+            if led_row is not None and str(led_row["plot_id"] or ""):
+                led_plot = str(led_row["plot_id"])
+        if led_plot is None and led.get("name"):
+            found = _plot_named(view, _norm(str(led["name"])), known=False)
+            if found is not None:
+                led_plot = str(found[2]["id"])
+        if led_plot is not None and led_plot != str(pos.get("inside") or ""):
+            target_row = locate_plot(conn, chart, led_plot)
+            target_name = str((target_row[3] if target_row else {}).get("name") or led.get("name") or "")
+            if _led_walk_asked(player_input, target_name, str(led.get("by") or "")):
+                new_plan = plan_to_plot(conn, chart, pos, led_plot, enter=True, rule="town_led")
+                if new_plan is not None:
+                    town_turn["plan"] = new_plan
+                    result["map_walk"] = None
+                    if new_plan.get("enter"):
+                        player_patch["move_to_location"] = target_name[:120] or None
+                    rep = report_for(new_plan, "repaired")
+                    rep["rule"] = "town_led"
+                    rep["led_by"] = str(led.get("by") or "")
+                    return rep
+            result["map_walk"] = None
+            return {**base, "status": "dropped", "rule": "town_led_unasked", "destination": target_name,
+                    "led_by": str(led.get("by") or ""), "prose_mismatch": target_name, "trim_from": led["sentence"]}
     if not pos.get("inside"):
         people = [str(r["name"] or "") for r in conn.execute(
             "SELECT name FROM npcs WHERE location_id = ?", (int(current.get("id") or 0),)

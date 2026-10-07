@@ -1947,6 +1947,12 @@ def build_paragraph_briefs(
         if own_line:
             # Everything the player says and does this turn (playtest #30).
             brief["player_line"] = _trim(own_line, 400)
+            # The hands-on act the player declared, which only "you" do (playtest #77).
+            from app.prose_state import declared_act
+
+            act = declared_act(own_line)
+            if act:
+                brief["player_act"] = act["phrase"]
         if talk:
             brief["conversation"] = talk
         if thread:

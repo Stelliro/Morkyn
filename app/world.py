@@ -6182,7 +6182,13 @@ def _travel_scoring_text(player_input: str) -> str:
         if asking and not _FIRST_PERSON_RE.search(body):
             continue
         kept.append(part)
-    return " ".join(kept)
+    # A clause the player denies is not a move (playtest #76, T9: "i cant
+    # leave the city due to a game bug" walked the player to the south gate).
+    # Every movement reader of the player's words goes through here: the
+    # intent table, the doorway rules and the town planner.
+    from app.prose_state import strip_negated_clauses
+
+    return strip_negated_clauses(" ".join(kept))
 
 
 def _turn_intent(player_input: str) -> tuple[str, list[str]]:
@@ -11498,6 +11504,24 @@ def _prose_item_outcome_detail(
     return state, by_player
 
 
+def _prose_item_handed_over(text: str, name_l: str, tokens: list[str], *, owned: bool = False) -> bool:
+    """True when someone other than the player gives the item to the player somewhere in the prose."""
+    carry = False
+    for sentence in _SENTENCE_SPLIT_RE.split(str(text or "")):
+        if not sentence.strip():
+            continue
+        lower = sentence.lower()
+        about = _sentence_mentions_item(lower, name_l, tokens)
+        if not about and not (carry and _PRONOUN_CARRY_RE.search(lower)):
+            carry = False
+            continue
+        carry = about
+        for _pos, kind, player in _sentence_item_events_detail(sentence, name_l, tokens, owned=owned):
+            if kind == "gain" and player is False:
+                return True
+    return False
+
+
 def _player_puts_named_item_down(sentence: str, tokens: list[str]) -> bool:
     """
     "You set the vial down" after "You pick up a vial of deep blue liquid": the
@@ -11611,6 +11635,38 @@ def _is_opening_kit(change: dict[str, Any]) -> bool:
     return bool(_OPENING_KIT_NAME_RE.search(str(change.get("name") or "")))
 
 
+# Words that count an item rather than name it: "set of tools" is tools.
+_ITEM_MEASURE_WORDS = frozenset({
+    "set", "pair", "bundle", "bunch", "handful", "stack", "piece", "pieces", "bolt", "roll", "coil", "length",
+    "slice", "chunk", "sheaf", "loaf", "wheel", "hunk", "scrap", "strip", "lump", "measure", "portion", "cut",
+})
+
+
+def _item_name_tokens(name_l: str) -> list[str]:
+    """
+    The words that name an item in prose, its head noun last.
+
+    Only words of four letters or more were kept, so "Map of the Plains" was
+    read as "plains" and a map handed over was refused as never named
+    (playtest #75, T7). Modifiers keep the four-letter rule; the head noun
+    ("map", "set of tools" -> "tool") is kept whatever its length. A plural
+    head is cut to its singular, which also finds the plural.
+    """
+    words = re.findall(r"[a-z0-9']+", str(name_l or "").lower())
+    parts = re.split(r"\s+(?:of|with|from|for)\s+", " ".join(words), maxsplit=1)
+    front = [w for w in parts[0].split() if w not in {"a", "an", "the", "some"}]
+    head = front[-1] if front else ""
+    if (not head or head in _ITEM_MEASURE_WORDS) and len(parts) > 1:
+        back = [w for w in parts[1].split() if w not in {"a", "an", "the", "some"}]
+        head = back[-1] if back else head
+    if head.endswith("s") and not head.endswith("ss") and len(head) > 4:
+        head = head[:-1]
+    tokens = [tok for tok in re.findall(r"[a-z0-9']{4,}", str(name_l or "").lower()) if tok.rstrip("s") != head]
+    if len(head) >= 3:
+        tokens.append(head)
+    return tokens
+
+
 def _filter_inventory_changes(
     conn,
     changes: list[dict[str, Any]],
@@ -11619,6 +11675,7 @@ def _filter_inventory_changes(
     player_input: str = "",
     input_kind: str = "player",
     draft_narration: str = "",
+    rejected: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """
     Drop positive inventory gains the prose does not actually describe happening.
@@ -11694,7 +11751,7 @@ def _filter_inventory_changes(
         # Everything below is a GAIN -- including a gain on something already
         # owned, which used to be waved through without any check at all.
         name_l = name.lower()
-        tokens = [tok for tok in re.findall(r"[a-z0-9']{4,}", name_l)]
+        tokens = _item_name_tokens(name_l)
         token_hits = sum(1 for tok in tokens if tok in text)
         token_ok = bool(tokens) and token_hits >= max(1, (len(tokens) + 1) // 2)
         name_in_text = name_l in text
@@ -11731,7 +11788,12 @@ def _filter_inventory_changes(
         # the player, then citing itself. A gain the player's own act made needs
         # the player's own words (buy, take, loot, pick up...). A hand-over,
         # sale or reward is the world acting and stands on the prose as before.
-        taken_unasked = outcome == "gain" and by_player and not acquire_intent
+        # Taking what someone just handed over is accepting it (playtest #75,
+        # T7: the baker hands over a map and "you" slip it into a jerkin).
+        taken_unasked = (
+            outcome == "gain" and by_player and not acquire_intent
+            and not _prose_item_handed_over(final_text, name_l, tokens, owned=bool(existing))
+        )
         arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and acquire_intent)
         grounded = named and arrived
         # Never honor bare justified/true from the model
@@ -11747,6 +11809,10 @@ def _filter_inventory_changes(
         if grounded:
             kept.append(_strip_unearned_dimensional(change))
         else:
+            if rejected is not None:
+                # The prose may still show this item arriving; the caller trims
+                # that so the page never shows a gain the state refused (#75).
+                rejected.append({"name": name, "tokens": list(tokens), "outcome": outcome, "taken_unasked": taken_unasked})
             try:
                 conn.execute(
                     "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
@@ -15040,6 +15106,239 @@ def _void_unbought_spend(
     return True
 
 
+def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, Any] | None:
+    """
+    Make the gold the prose names the gold that moves (playtest #69).
+
+    T6: the prose said "You thank him and pay 7 gold", the op said GOLD -7,
+    and the band roller read -7 as "small" and took 2d6+3 = 9. A price or a
+    payment the prose states is a fact of the scene, not a size hint, so it
+    passes through unrolled (``_server_authored``). Bands still roll for
+    rewards nobody names.
+
+    With a GOLD op: its own number when the prose names it; else the one
+    amount the prose names in that direction; else the player's own offer.
+    With no GOLD op: the player's offer when the prose accepts it (#75, T7:
+    "I'll give you my last 3 gold for that", answered "Certainly", and the
+    gold was never taken), or the one payment the prose shows the player
+    make or receive. Returns a note for the trace, or None.
+    """
+    from app import prose_state
+
+    if not isinstance(result, dict):
+        return None
+    player = result.get("player") if isinstance(result.get("player"), dict) else {}
+    narration = _narration_text(result)
+    own = _player_line(player_input)
+    band = str(player.get("gold_band") or "").strip()
+    try:
+        raw = int(_float(player.get("gold_delta"), 0))
+    except (TypeError, ValueError):
+        raw = 0
+    losing = raw < 0 or band.lower().startswith(("-", "lose", "spend"))
+    said = prose_state.stated_coin_amounts(narration)
+    offer = prose_state.player_trade_offer(own)
+    value: int | None = None
+    source = ""
+    if band or raw:
+        if losing:
+            pool = said["paid"] + [a for a in said["priced"] if a not in said["paid"]]
+        else:
+            pool = said["received"]
+        if raw and abs(raw) in pool:
+            value, source = raw, "stated"
+        elif len(pool) == 1:
+            value, source = (-pool[0] if losing else pool[0]), "prose"
+        elif losing and offer and (not pool or offer in pool):
+            value, source = -offer, "offer"
+    elif offer:
+        answer = prose_state.offer_answer(narration, own)
+        if answer != "accepted":
+            # Refused or left unanswered: nothing is paid, and the trace says why.
+            return {"source": f"offer_{answer or 'unanswered'}", "offer": offer, "gold_delta": 0}
+        value, source = -offer, "offer_accepted"
+    elif len(said["paid"]) == 1 and not said["received"]:
+        value, source = -said["paid"][0], "prose_paid"
+    elif len(said["received"]) == 1 and not said["paid"]:
+        value, source = said["received"][0], "prose_received"
+    if value is None:
+        return None
+    player["gold_delta"] = value
+    player.pop("gold_band", None)
+    result["player"] = player
+    authored = [str(p) for p in (result.get("_server_authored") or [])]
+    if "player.gold_delta" not in authored:
+        authored.append("player.gold_delta")
+    result["_server_authored"] = authored
+    return {"source": source, "gold_delta": value, "offer": offer, "model": raw or band or None}
+
+
+def _settle_purse(
+    conn,
+    result: dict[str, Any],
+    kept_changes: list[dict[str, Any]],
+    band_report: dict[str, Any] | None,
+    rejected: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    """
+    A cost larger than the purse (playtest #69). The player row clamps gold at
+    0, so a 9-gold cost on a 3-gold purse used to become "all you have" and
+    the goods still changed hands. A purchase the player cannot pay for does
+    not happen: the gains are refused and join ``rejected`` so the prose trim
+    takes them out. A cost with nothing bought (a toll, a fine) takes what
+    there is, as before.
+    """
+    player = result.get("player") if isinstance(result.get("player"), dict) else None
+    if player is None:
+        return kept_changes, None
+    try:
+        gold = int(_float(player.get("gold_delta"), 0))
+    except (TypeError, ValueError):
+        return kept_changes, None
+    if gold >= 0 or not _play_system_enabled(conn, "economy_enabled", True):
+        return kept_changes, None
+    row = conn.execute("SELECT gold FROM player WHERE id = 1").fetchone()
+    purse = int((row["gold"] if row else 0) or 0)
+    if -gold <= purse:
+        return kept_changes, None
+    gains = [c for c in kept_changes if isinstance(c, dict) and int(_float(c.get("quantity_delta"), 0)) > 0]
+    if not gains:
+        player["gold_delta"] = -purse
+        return kept_changes, {"clamped": True, "cost": -gold, "purse": purse}
+    player["gold_delta"] = 0
+    names = [str(c.get("name") or "") for c in gains]
+    for change in gains:
+        name_l = str(change.get("name") or "").lower()
+        rejected.append({"name": str(change.get("name") or ""), "tokens": _item_name_tokens(name_l), "outcome": "gain"})
+    line = f"purchase refused: {', '.join(names[:4])} cost {-gold} gold and the purse holds {purse}"
+    if isinstance(band_report, dict):
+        band_report.setdefault("lines", []).append(line)
+        band_report["refused_purchase"] = {"cost": -gold, "purse": purse, "items": names[:8]}
+    try:
+        conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (_turn_value(conn), "system", line[:900]))
+    except Exception:
+        pass
+    return [c for c in kept_changes if c not in gains], {"refused_purchase": True, "cost": -gold, "purse": purse, "items": names[:8]}
+
+
+_MOVE_SENTENCE_RE = re.compile(
+    r"\byou\b[^.!?\"\u201c\u201d]{0,40}\b(?:step|walk|go|goes|went|head|enter|slip|duck|push|make\s+your\s+way|"
+    r"follow|cross|return|arrive|reach)\w*"
+    r"|\b(?:leads?|led|takes?|took|brings?|brought|guides?|ushers?|escorts?|shows?|walks?)\s+you\b",
+    re.I,
+)
+
+
+def _reconcile_prose_with_state(
+    conn,
+    result: dict[str, Any],
+    *,
+    rejected: list[dict[str, Any]],
+    movement_report: Any,
+    gold_note: dict[str, Any] | None,
+    purse_note: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """
+    One step after the gates: the prose shows what the state holds (#55, #75, #76).
+
+    Each gate refuses on its own (an unearned gain, a move to a far or
+    unasked place, a purchase the purse cannot cover) and used to leave the
+    prose that shows it. T8 read "You take the tools and leather" with no
+    tools in the pack; T11 was led to the Blind Owl Forge and stayed in the
+    street. Here the sentences that show a refused gain arriving go, the
+    scene ends where a refused move would have begun, and a stated price the
+    purse cut is rewritten to what was paid. What cannot be matched safely
+    is left and listed as unreconciled, for measurement.
+    """
+    from app import prose_state
+
+    report: dict[str, Any] = {"trimmed": [], "unreconciled": []}
+    text = _narration_text(result)
+    original = text
+
+    for item in rejected or []:
+        if not isinstance(item, dict) or item.get("outcome") != "gain":
+            continue
+        name = str(item.get("name") or "")
+        name_l = name.lower()
+        tokens = list(item.get("tokens") or _item_name_tokens(name_l))
+        carry = {"on": False}
+
+        def shows_arrival(sentence: str, name_l: str = name_l, tokens: list[str] = tokens, carry: dict = carry) -> bool:
+            lower = sentence.lower()
+            about = _sentence_mentions_item(lower, name_l, tokens)
+            if not about and not (carry["on"] and _PRONOUN_CARRY_RE.search(lower)):
+                carry["on"] = False
+                return False
+            carry["on"] = about
+            return any(kind == "gain" for _pos, kind, _player in _sentence_item_events_detail(sentence, name_l, tokens, owned=False))
+
+        new_text, dropped = prose_state.drop_sentences(text, shows_arrival)
+        if dropped:
+            text = new_text
+            report["trimmed"].append({"why": "gain_refused", "item": name, "sentences": [s[:160] for s in dropped[:4]]})
+        else:
+            report["unreconciled"].append({"why": "gain_refused", "item": name})
+
+    move = movement_report if isinstance(movement_report, dict) else {}
+    status = str(move.get("status") or "")
+    shown = str(move.get("prose_mismatch") or "")
+    if status in {"dropped", "unresolved", "dropped_unshown"} and (move.get("trim_from") or shown):
+        at = -1
+        anchor = str(move.get("trim_from") or "")
+        if anchor:
+            at = text.find(anchor[:60])
+        if at < 0 and shown:
+            for start, _end, sentence in prose_state.sentence_spans(text):
+                plain = venues.strip_speech(sentence)
+                if shown.lower() in sentence.lower() and _MOVE_SENTENCE_RE.search(plain):
+                    at = start
+                    break
+        head = prose_state.cut_from(text, at) if at >= 0 else None
+        if head:
+            report["trimmed"].append(
+                {"why": f"move_{status}", "destination": shown or str(move.get("destination") or ""), "cut_chars": len(text) - len(head)}
+            )
+            text = head
+        else:
+            report["unreconciled"].append({"why": f"move_{status}", "destination": shown})
+    elif shown:
+        # The state moved and the prose never names where (measurement only).
+        report["unreconciled"].append({"why": "move_not_in_prose", "destination": shown, "status": status})
+
+    if isinstance(purse_note, dict) and purse_note.get("refused_purchase"):
+        names = [str(n) for n in purse_note.get("items") or [] if str(n).strip()]
+        items = (", ".join(names[:-1]) + " and " + names[-1]) if len(names) > 1 else (names[0] if names else "it")
+        stays = "stay where they are" if len(names) > 1 else "stays where it is"
+        text = (
+            text.rstrip()
+            + f"\n\nYou have {purse_note.get('purse', 0)} gold, short of the {purse_note.get('cost', 0)} "
+            + f"asked, so the {items} {stays}."
+        ).strip()
+        report["trimmed"].append({"why": "purchase_refused", **purse_note})
+    elif isinstance(purse_note, dict) and purse_note.get("clamped") and isinstance(gold_note, dict):
+        cost, purse = int(purse_note.get("cost") or 0), int(purse_note.get("purse") or 0)
+        pattern = re.compile(rf"\b{cost}(\s+(?:gold|coins?|crowns?))\b", re.I)
+        if pattern.search(text):
+            text = pattern.sub(rf"{purse}\1", text, count=1)
+            report["trimmed"].append({"why": "price_clamped_to_purse", "from": cost, "to": purse})
+    if isinstance(gold_note, dict):
+        report["gold"] = gold_note
+
+    if text != original:
+        _set_narration_text(result, text)
+    try:
+        turn = _turn_value(conn)
+        for entry in report["trimmed"]:
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (turn, "system", f"Prose matched to state: {json.dumps(entry, ensure_ascii=False)}"[:900]),
+            )
+    except Exception:
+        pass
+    return report
+
+
 def _reconcile_movement_report(report: Any, player_patch: Any) -> Any:
     """
     The movement report is written before the move is applied. When the apply
@@ -15149,6 +15448,12 @@ def apply_turn(
             if town_report and isinstance(movement_report, dict):
                 movement_report["town"] = town_report
 
+        # A price or payment the prose names is the gold that moves; it is
+        # marked server-authored so the band roller below leaves it (#69).
+        try:
+            gold_note = _settle_stated_gold(result, player_input)
+        except Exception as exc:
+            gold_note = {"error": f"{type(exc).__name__}: {exc}"[:200]}
         # Every "how much" the model proposed becomes a server-rolled amount
         # before anything touches the database. Runs first so the snapshot
         # above still holds the model's raw proposal for debugging.
@@ -15242,6 +15547,7 @@ def apply_turn(
         _apply_relationships(conn, result.get("relationships") or [])
         proposed_gains = _gain_names(result.get("inventory_changes"))
         # Inventory fidelity: strip hallucinated gains not grounded in narration/existing stack
+        inv_rejected: list[dict[str, Any]] = []
         inv_changes = _filter_inventory_changes(
             conn,
             result.get("inventory_changes") or [],
@@ -15251,8 +15557,14 @@ def apply_turn(
             draft_narration=str((result.get("_dsl") or {}).get("draft_narration") or "")
             if isinstance(result.get("_dsl"), dict)
             else "",
+            rejected=inv_rejected,
         )
         _void_unbought_spend(result, proposed_gains, inv_changes, band_report)
+        purse_note = None
+        try:
+            inv_changes, purse_note = _settle_purse(conn, result, inv_changes, band_report, inv_rejected)
+        except Exception:
+            purse_note = None
         # A map that changes hands reveals ground instead of taking a slot.
         inv_changes, chart_items = _split_chart_items(inv_changes)
         result["inventory_changes"] = inv_changes
@@ -15280,6 +15592,20 @@ def apply_turn(
         _apply_skills(conn, result.get("skill_changes") or [])
         _apply_player(conn, result.get("player") or {})
         movement_report = _reconcile_movement_report(movement_report, result.get("player"))
+        # The gates above refused what they refused; the prose now matches
+        # (#55, #75, #76). Before the cast seeding below reads the prose.
+        try:
+            result["_prose_state"] = _reconcile_prose_with_state(
+                conn,
+                result,
+                rejected=inv_rejected,
+                movement_report=movement_report,
+                gold_note=gold_note,
+                purse_note=purse_note,
+            )
+            narration = _narration_text(result)
+        except Exception as exc:
+            result["_prose_state"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
         # Who keeps the building the player just went into, who came in with
         # them, and whose workplace is whose (playtest #16).
         try:

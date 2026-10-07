@@ -54,6 +54,7 @@ Morkyn/
 |   |-- main.py                      # FastAPI routes (turns, slots, diagnostics, model)
 |   |-- narration_pipeline.py        # Adaptive paragraph quality pipeline
 |   |-- prompts.py                   # System/verifier prompts + agentic CoD steps
+|   |-- prose_state.py               # What the prose states (prices, offers, the declared act) and trims to the state
 |   |-- rng.py                       # Dice, magnitude bands, deterministic seeds, roll audit
 |   |-- venues.py                    # Shop/inn kinds, opening hours, settlement commonality, trade->workplace kind, prose entry reader
 |   |-- world_facts.py               # Per-world race and lore rows, post-start passes, per-turn fetch
@@ -155,6 +156,14 @@ Morkyn/
 - **Key API:** `begin_turn()` (pure, before the draft: pursuit, invitation, drop), `next_thread()` (pure post-turn update from the quest report, prose and location), `update_after_turn()`, `world_view()`, `writer_view()`, `suggestion_view()`, `pursuit_in()`, `follow_target()`.
 - **Consumers:** `app.world.play_turn` (`context['scene_thread']`), `app.world.apply_turn` (after the quest report), `app.world.get_state` (`state['scene_thread']`), `app.world.travel_intent` and `resolve_movement` (follow rule), `app.prompts._visible_world` (`world_state.scene_thread`, `movement_contract.following`), `app.turn_dsl.build_dsl_user_prompt`, `app.narration_pipeline.build_paragraph_briefs`, the consolidator and `generate_input_suggestions` in `app.llm`.
 - **Design Notes:** State is the `settings.scene_thread` row (in `SNAPSHOT_SETTING_KEYS`, exported with saves); deleted when the thread ends. Companions are recorded, not moved: NPC rows keep their location.
+
+#### Prose and State Agreement
+
+- **Files:** `app/prose_state.py` (pure readers and trimmers), `app/world.py` (`_settle_stated_gold`, `_settle_purse`, `_reconcile_prose_with_state`, `_item_name_tokens`, `_prose_item_handed_over`), `app/llm.py` (`_cut_scene_at_invented_request`, `_drop_ops_of_cut_tail`), `app/venues.py` (`led_to_in_prose`), `app/town_moves.py` (led moves in `resolve_town_movement`)
+- **Purpose:** The engine owns the facts the prose states and the prose shows only what the state holds (playtests #55, #69, #75, #76, #77). A price or payment the prose names is the gold taken; the player's own accepted offer is paid; an invented answer to someone's line ends the scene there with the ops it supported; a gain, move or purchase a gate refused is trimmed from the prose.
+- **Key API:** `stated_coin_amounts()`, `player_trade_offer()`, `offer_answer()`, `strip_negated_clauses()`, `declared_act()`, `act_handed_off()`, `sentence_spans()`, `cut_from()`, `drop_sentences()`; `venues.led_to_in_prose()`.
+- **Consumers:** `app.world.apply_turn` (stated gold before `resolve_turn_bands`, purse after `_void_unbought_spend`, reconciliation after `_apply_player`; result `_prose_state`), `app.world._travel_scoring_text` (negation), `app.llm._drop_player_overreach` (scene cut, `act_handed_off`), `app.turn_dsl.build_dsl_user_prompt` (`player_act`, `trade_offer`), `app.narration_pipeline.build_paragraph_briefs` (`player_act`).
+- **Design Notes:** Turn-time only: no schema change and no stored row rewritten. Trims keep a 200-character floor; what cannot be matched safely is listed under `_prose_state.unreconciled` for measurement. Handing the declared act to an NPC is measured (`act_handed_off`), not refused.
 
 #### Starting Gear
 

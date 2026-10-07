@@ -13079,6 +13079,13 @@ _DECIDED_FOR_PLAYER_RE = re.compile(
     r"\byou\s+(?:\w+\s+){0,2}?"
     r"(?:decide[sd]?|choose|chose|opt(?:s|ed)?|resolve[sd]?|elect(?:s|ed)?|determine[sd]?)"
     r"\s+(?:to|that|against|not\s+to|instead)\b"
+    # Playtest #77 (T12): "You consider for a moment, then decide to help out."
+    # A longer run of the player's own clause, joined by then/and, still makes
+    # the choice. No other subject may stand in the gap ("you watch as she
+    # decides" is hers), and only the base and past forms count.
+    r"|\byou\s+(?:(?!(?:he|she|they|we|it)\b)[\w'\u2019]+,?\s+){1,6}?(?:then\s+|and\s+(?:then\s+)?)"
+    r"(?:decide|decided|choose|chose|opt|opted|resolve|resolved|agree|agreed|settle\s+on|settled\s+on)"
+    r"\s+(?:to|that|against|not\s+to|instead|on)\b"
     r"|\byou\s+make\s+up\s+your\s+mind\b",
     re.I,
 )
@@ -13102,7 +13109,10 @@ _DECISION_STOPWORDS = {
 _PLAYER_CLAUSE_LEAD = r"(?:(?:and|but|so|then|yet|still|now|instead|finally|slowly|for\s+now|for\s+a\s+moment)\s*,?\s+)*"
 _PLAYER_CLAUSE_START_RE = re.compile(rf"^\s*{_PLAYER_CLAUSE_LEAD}you\s+", re.I)
 _PLAYER_CLAUSE_COORD_RE = re.compile(
-    r"(?:,|;|\u2014|\u2013|\s-)\s*(?:(?:and|but|yet|so|then)\s+)?(?:[^,.;:!?\u2014\u201c\u201d\"]{0,30},\s*)?you\s+",
+    r"(?:,|;|\u2014|\u2013|\s-)\s*(?:(?:and|but|yet|so|then)\s+)?(?:[^,.;:!?\u2014\u201c\u201d\"]{0,30},\s*)?you\s+"
+    # "The scent of bread wafts from the bakery as you make your way to the
+    # general store" (playtest #76, T4): the player's half rides on "as".
+    r"|\s+as\s+you\s+",
     re.I,
 )
 _ACT_ADVERBS = r"(?:\w+ly\s+){0,2}"
@@ -13114,6 +13124,10 @@ _PLAYER_COGNITION_RE = re.compile(
     r"(?:think|thought)(?!\s+(?:you|that\s+you)\s+(?:see|saw|hear|heard|notice|catch|caught|spot|glimpse|smell|make\s+out))|"
     r"suspect(?:s|ed)?|recall(?:s|ed)?|"
     r"remember(?:s|ed)?|understand(?:s)?|understood|"
+    # Deliberating is the player's too (playtest #77, T6 "You consider,
+    # weighing the options."; T12 "You consider for a moment").
+    r"consider(?:s|ed)?|ponder(?:s|ed)?|hesitate[sd]?|mull(?:s|ed)?|deliberate[sd]?|contemplate[sd]?|"
+    r"weigh(?:s|ed)?\s+(?:your|the|his|her|their|its)\s+(?:options|choices|offer|words|decision|chances)|"
     r"feel\s+(?:a\s+(?:pang|sense|surge|wave|flicker|twinge|rush|stab|knot|flash)\s+of|that|as\s+if|as\s+though|"
     r"sympathy|pity|relief|hope|dread|uneasy|uncertain|guilty|sure|certain)|"
     r"have\s+no\s+choice\s+but|had\s+no\s+choice\s+but|make\s+a\s+mental\s+note"
@@ -13127,16 +13141,51 @@ _PLAYER_GESTURE_RE = re.compile(
 )
 _PLAYER_SPEECH_ACT_RE = re.compile(
     rf"^{_ACT_ADVERBS}(?:(?:do\s+not|don'?t)\s+)?(?P<v>say|said|reply|replied|answer(?:ed)?|respond(?:ed)?|ask(?:ed)?|"
-    r"tell|told|whisper(?:ed)?|murmur(?:ed)?|mutter(?:ed)?|agree[sd]?|thank(?:ed)?|promise[sd]?|call\s+out)\b",
+    r"tell|told|whisper(?:ed)?|murmur(?:ed)?|mutter(?:ed)?|agree[sd]?|thank(?:ed)?|promise[sd]?|call\s+out|"
+    # Reported speech is speech (playtest #75, T8: "You explain that you are
+    # looking for supplies" after "I go into Blind Owl Forge.").
+    r"explain(?:s|ed)?|mention(?:s|ed)?|inquire[sd]?|enquire[sd]?|insist(?:s|ed)?|admit(?:s|ted)?|"
+    r"confess(?:es|ed)?|introduce[sd]?\s+yourself|offer(?:s|ed)?\s+(?:to|him|her|them|your\s+thanks))\b",
     re.I,
 )
+# "take stock / take a look / take in" are perception, not pickup. Shared by
+# prose grounding and player-input take intent; a bare \\btake\\b on
+# "I take stock of my injuries" used to mark every named item as arrived.
+_TAKE_PERCEPTION_TAIL = (
+    r"(?:in|note|stock|care|aim|cover|"
+    # "take a bite / a sip" eats or drinks on the spot; nothing goes in the pack.
+    r"a\s+(?:look|gander|peek|moment|breath|step|bite|sip|swig|taste|mouthful|seat)|"
+    r"your\s+time)"
+)
+# One take vocabulary with the grant gate (playtest #75): "You take the tools
+# and leather" was kept here while the gate read it as a take the player never
+# asked for and refused the items, so the prose showed goods the state did not
+# have. A take, and a payment (#77, T6 "You thank him and pay 7 gold"), are the
+# player's to make.
 _PLAYER_ACQUIRE_ACT_RE = re.compile(
     rf"^{_ACT_ADVERBS}(?P<v>pick(?:s|ed)?\s+(?:(?:it|them|\w+)\s+){{0,3}}?up|pocket(?:s|ed)?|grab(?:s|bed)?|"
     r"snatch(?:es|ed)?|accept(?:s|ed)?|buy|bought|purchase[sd]?|"
+    rf"(?:take|takes|took)(?!\s+(?:{_TAKE_PERCEPTION_TAIL}|off|a\s+deep\s+breath|a\s+\w+\s+(?:look|breath|step)|"
+    r"(?:it|them|this|that|everything)\s+in|your\s+(?:leave|place|seat|turn)|a\s+seat|hold|heart|refuge|shelter|cover|"
+    r"the\s+(?:lead|stairs|path|road|trail|street|turn|left|right|seat|chance)|over|part)\b)|"
+    r"(?:pay|pays|paid)(?!\s+(?:close\s+|careful\s+|little\s+|no\s+)?(?:attention|heed|mind|respects?|homage|tribute|a\s+visit))|"
+    r"hand(?:s|ed)?\s+(?:over|him|her|them)|count(?:s|ed)?\s+out|"
     r"tuck(?:s|ed)?\s+[\w\s]{0,30}?into\s+your|slip(?:s|ped)?\s+[\w\s]{0,30}?into\s+your)\b",
     re.I,
 )
-_PLAYER_FOLLOW_RE = re.compile(rf"^{_ACT_ADVERBS}(?P<v>follow(?:s|ed)?)\b", re.I)
+_PAY_VERB_RE = re.compile(r"^(?:pay|pays|paid|hand|count)", re.I)
+_INPUT_PAY_RE = re.compile(r"\b(?:pay\w*|paid|give|gives|giving|gave|offer\w*|hand\w*|buy\w*|bought|purchas\w*|trad\w*)\b", re.I)
+# Movement the player did not state (playtest #76, T4: "as you make your way
+# to the general store" after "Use your lantern to peer into the shadows").
+_PLAYER_FOLLOW_RE = re.compile(
+    rf"^{_ACT_ADVERBS}(?P<v>follow(?:s|ed)?|make\s+your\s+way|made\s+your\s+way|"
+    r"head(?:s|ed)?\s+(?:to|toward|towards|for|back|out|off|into|inside|down|up|over)|"
+    r"walk(?:s|ed)?\s+(?:to|toward|towards|into|out|over|back|away|off|inside|through)|"
+    r"step(?:s|ped)?\s+(?:into|out|inside|outside|back\s+into|through)|"
+    r"leave|leaves|left\s+(?:the|for)|set(?:s)?\s+off|push(?:es|ed)?\s+(?:on|forward|onward|ahead)|"
+    r"go\s+(?:to|into|back|out|inside)|return(?:s|ed)?\s+to|cross(?:es|ed)?\s+(?:to|over|the))\b",
+    re.I,
+)
 # Live gate N1 (g2 t3): "You press your palm against it, and the ground beneath
 # shudders" after "I crouch and examine the symbols". Working a mechanism, a
 # door or a lever changes the world; the player chooses that. "You press on"
@@ -13158,15 +13207,6 @@ _INPUT_MANIPULATE_RE = re.compile(
 _INPUT_SPEECH_RE = re.compile(
     r"[\"\u201c\u201d?]|\b(?:say|ask|tell|reply|answer|respond|shout|call|whisper|greet|thank|agree|promise|talk|speak)\w*\b"
     r"|^[A-Z][\w'\u2019-]*(?:\s+[A-Z][\w'\u2019-]*)?,",
-)
-# "take stock / take a look / take in" are perception, not pickup. Shared by
-# prose grounding and player-input take intent; a bare \\btake\\b on
-# "I take stock of my injuries" used to mark every named item as arrived.
-_TAKE_PERCEPTION_TAIL = (
-    r"(?:in|note|stock|care|aim|cover|"
-    # "take a bite / a sip" eats or drinks on the spot; nothing goes in the pack.
-    r"a\s+(?:look|gander|peek|moment|breath|step|bite|sip|swig|taste|mouthful|seat)|"
-    r"your\s+time)"
 )
 _TAKE_PERCEPTION_RE = re.compile(
     rf"\b(?:take[sn]?|took|taking)\s+{_TAKE_PERCEPTION_TAIL}\b",
@@ -13264,6 +13304,8 @@ def _player_clause_invented(rest: str, clause: str, own: str, player_input: str)
         return "" if _INPUT_SPEECH_RE.search(own) else "speech"
     m = _PLAYER_ACQUIRE_ACT_RE.match(rest)
     if m:
+        if _PAY_VERB_RE.match(m.group("v")):
+            return "" if (_INPUT_PAY_RE.search(own) or player_take_intent(own)) else "taking"
         return "" if player_take_intent(own) else "taking"
     m = _PLAYER_FOLLOW_RE.match(rest)
     if m:
@@ -13880,6 +13922,9 @@ def _make_pipeline_paragraph_writer(
         "Narrate its action and what the world does back. When draft_slice gives you other words, a reply, "
         "a gesture or a memory that player_line does not, leave it out. When someone speaks to the player, "
         "do not write the player's answer: the player gives it next turn. "
+        "The act player_line states is done by the player (you), with their own hands: others may help, watch, "
+        "hinder or react, but nobody does it in the player's place (player_act names it when there is one). "
+        "Nothing is paid, bought or handed over on a deal player_line has not agreed to; an offer stays an offer. "
         "conversation says who the player is talking to: only someone in who_answers answers the player; "
         "people in listening_only may react, but do not answer for them. "
         "When reply_status is present, the player's line was answered in an earlier paragraph: do not answer it again. "
@@ -14186,7 +14231,29 @@ def _ensure_narration_quality(
 def _drop_player_overreach(
     turn: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
 ) -> dict[str, Any]:
-    """Invented player speech, then invented player acts, thoughts and decisions (#30)."""
+    """Invented player speech, then invented player acts, thoughts and decisions (#30).
+
+    First the scene is cut at an invented request (playtests #75, #77): when
+    the prose answers someone's line with words or a take the player did not
+    give, it ends on that line, and the ops that only the cut part supported
+    go with it.
+    """
+    cut_before = turn.get("_scene_cut") if isinstance(turn, dict) else None
+    turn = _cut_scene_at_invented_request(turn, player_input)
+    cut = turn.get("_scene_cut") if isinstance(turn, dict) else None
+    if cut and cut is not cut_before:
+        _append_trace(
+            trace,
+            {
+                "phase": phase,
+                "event": "scene_cut_at_invented_request",
+                "family": cut.get("family"),
+                "trigger": str(cut.get("trigger") or "")[:160],
+                "npc_line": str(cut.get("npc_line") or "")[:160],
+                "tail_chars": int(cut.get("tail_chars") or 0),
+                "cut_ops": list(cut.get("cut_ops") or [])[:8],
+            },
+        )
     spoken = _drop_invented_player_speech(turn, player_input)
     before = list(spoken.get("_invented_player_acts") or []) if isinstance(spoken, dict) else []
     acted = _drop_invented_player_acts(spoken, player_input)
@@ -14196,7 +14263,270 @@ def _drop_player_overreach(
             trace,
             {"phase": phase, "event": "invented_player_acts_dropped", "count": len(after), "dropped": [s[:160] for s in after[:6]]},
         )
+    # Measured, not refused (playtest #77, T13): the act the player declared,
+    # done in the prose by someone else and never by "you". Ownership is fixed
+    # in the ask (PROSE_VOICE); this counts how often the ask is ignored.
+    from app.prose_state import act_handed_off
+
+    handed = act_handed_off(str(acted.get("narration") or ""), player_line_of(player_input))
+    if handed:
+        acted["_act_handed_off"] = handed
+        _append_trace(trace, {"phase": phase, "event": "act_handed_off", **handed})
+    else:
+        acted.pop("_act_handed_off", None)
     return acted
+
+
+# Families of invented player units the world answers: a line, a take, a
+# choice or a step somewhere. A nod or a thought sets nothing off.
+_SCENE_CUT_FAMILIES = frozenset({"speech", "taking", "decision", "movement"})
+_SCENE_QUOTE_RE = re.compile(r'"([^"\n]{2,600})"|\u201c([^\u201d]{2,600})\u201d')
+_ADDRESSED_RE = re.compile(r"\byou(?:r|rs|rself)?\b|\?\s*$", re.I)
+_SPEECH_TAG_TAIL_RE = re.compile(r'[^\S\n]*(?=[a-z,])[^.!?\n"\u201c]*[.!?]')
+_CUT_STOPWORDS = frozenset({
+    "that", "this", "with", "your", "you're", "from", "have", "they", "them", "their", "there", "then", "what",
+    "will", "would", "could", "should", "some", "into", "onto", "about", "just", "like", "been", "were", "here",
+    "says", "said", "asks", "asked", "player", "turn", "scene",
+})
+_TAIL_PAY_RE = re.compile(
+    r"\byou\b[^.!?\"\u201c\u201d]{0,30}\b(?:pay|paid|hand\s+over|handed\s+over|count\s+out|counted\s+out)\b", re.I
+)
+_TAIL_EXIT_RE = re.compile(
+    r"\byou\b[^.!?\"\u201c\u201d]{0,30}\b(?:leave|leaves|left\s+(?:the|for)|exit|step\s+out|steps\s+out|stepped\s+out|"
+    r"head\s+out|walk\s+out|make\s+your\s+way|made\s+your\s+way|set\s+off)\b",
+    re.I,
+)
+
+
+def _invented_unit_family(sentence: str, own: str, player_input: str) -> str:
+    """The family of the first invented player act in one unquoted sentence, or ""."""
+    if re.search(r'["\u201c\u201d]', sentence):
+        return ""
+    # A choice made for the player is one even when the sentence opens on a
+    # thought ("You consider for a moment, then decide to help out", T12).
+    if _decided_for_player(sentence, player_input):
+        return "decision"
+    start = _PLAYER_CLAUSE_START_RE.match(sentence)
+    if start:
+        family = _player_clause_invented(sentence[start.end():], sentence, own, player_input)
+        if family:
+            return family
+    for coord in _PLAYER_CLAUSE_COORD_RE.finditer(sentence):
+        clause = sentence[coord.start():].lstrip(",;\u2014\u2013- ")
+        family = _player_clause_invented(sentence[coord.end():], clause, own, player_input)
+        if family:
+            return family
+    return ""
+
+
+def _scene_cut_point(text: str, player_input: str) -> dict[str, Any] | None:
+    """
+    Where the scene should end: right after the line someone spoke to the
+    player, when the next thing the prose does is answer it for them.
+
+    The trigger is the earliest invented unit the world answers (speech the
+    player did not say, a take, a choice, a step). The line before it has to
+    be someone else's, addressed to the player, and close: nothing else is
+    said between them. Returns {"cut", "trigger", "family", "npc_line"} or None.
+    """
+    from app.narration_pipeline import _words_from_player, drop_invented_player_speech, player_quotes
+    from app.prose_state import sentence_spans
+
+    own = player_line_of(player_input)
+    body = str(text or "")
+    if not own or not body.strip():
+        return None
+    triggers: list[tuple[int, str, str]] = []
+    _kept, spoken = drop_invented_player_speech(re.split(r"\n\s*\n", body), player_input)
+    for unit in spoken:
+        at = body.find(unit)
+        if at < 0:
+            at = body.find(unit[:40])  # units are re-joined with single spaces
+        if at >= 0:
+            triggers.append((at, unit, "speech"))
+    for start, _end, sentence in sentence_spans(body):
+        family = _invented_unit_family(sentence, own, player_input)
+        if family in _SCENE_CUT_FAMILIES:
+            triggers.append((start, sentence, family))
+            break
+    if not triggers:
+        return None
+    at, unit, family = min(triggers)
+    last = None
+    for match in _SCENE_QUOTE_RE.finditer(body, 0, at):
+        last = match
+    if last is None:
+        return None
+    span = (last.group(1) or last.group(2) or "").strip()
+    if _words_from_player(span, own, player_quotes(player_input)):
+        return None  # the player's own line came last; the invented part is not an answer to anyone
+    if not _ADDRESSED_RE.search(span):
+        return None
+    between = body[last.end():at]
+    if between.count("\n\n") > 2 or len(between) > 700:
+        return None
+    tag = _SPEECH_TAG_TAIL_RE.match(between)
+    cut = last.end() + (tag.end() if tag else 0)
+    if cut > at:
+        cut = last.end()
+    return {"cut": cut, "trigger": unit, "family": family, "npc_line": span}
+
+
+def _cut_words(text: str) -> set[str]:
+    return {
+        w[:6]
+        for w in re.findall(r"[a-z][a-z'\u2019]+", str(text or "").lower())
+        if len(w) >= 4 and w not in _CUT_STOPWORDS
+    }
+
+
+def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str) -> list[str]:
+    """
+    Remove the ops whose only support was the cut part of the prose.
+
+    Grants, gold and moves are also judged later by the world gates against
+    the final prose; text ops (TALK, NPC_NOTE, INDEX, JOURNAL, GM, EVENT, REL,
+    QUEST) are not, so a request the player never made was stored as their
+    topic (T8). An op goes when more of its words are only in the cut part
+    than are in the kept part, and at least two are.
+    """
+    from app.narration_pipeline import _item_head
+    from app.prose_state import stated_coin_amounts
+
+    head_words = _cut_words(head)
+    tail_only = _cut_words(tail) - head_words
+    if not tail_only:
+        return []
+
+    def tail_bound(text: str) -> bool:
+        words = _cut_words(text)
+        hits = len(words & tail_only)
+        return hits >= 2 and hits > len(words & head_words)
+
+    dropped: list[str] = []
+    text_ops = (
+        ("conversations", ("topic", "summary"), "TALK"),
+        ("index_updates", ("summary_append", "known_fact"), "NOTE"),
+        ("journal", ("content",), "JOURNAL"),
+        ("gm_events", ("trigger", "summary"), "GM"),
+        ("events", ("title", "summary"), "EVENT"),
+        ("relationships", ("summary",), "REL"),
+        ("quest_marks", ("title", "step", "reward"), "QUEST"),
+        ("response_drafts", ("claim",), "CLAIM"),
+    )
+    for key, fields, label in text_ops:
+        rows = turn.get(key)
+        if not isinstance(rows, list) or not rows:
+            continue
+        kept_rows = []
+        for row in rows:
+            if isinstance(row, dict) and row.get("op") != "QUEST_DONE":
+                text = " ".join(str(row.get(f) or "") for f in fields)
+                if text.strip() and tail_bound(text):
+                    dropped.append(f"{label} {text.strip()[:100]}")
+                    continue
+            kept_rows.append(row)
+        turn[key] = kept_rows
+    head_l, tail_l = head.lower(), tail.lower()
+    changes = turn.get("inventory_changes")
+    if isinstance(changes, list) and changes:
+        kept_changes = []
+        for change in changes:
+            if isinstance(change, dict):
+                band = str(change.get("quantity_band") or "")
+                try:
+                    delta = float(change.get("quantity_delta") or 0)
+                except (TypeError, ValueError):
+                    delta = 0.0
+                gain = (delta > 0) or (band and not band.startswith("-") and not delta)
+                noun = _item_head(str(change.get("name") or ""))
+                if gain and noun and re.search(rf"\b{re.escape(noun)}", tail_l) and not re.search(rf"\b{re.escape(noun)}", head_l):
+                    dropped.append(f"GRANT {str(change.get('name') or '')[:60]}")
+                    continue
+            kept_changes.append(change)
+        turn["inventory_changes"] = kept_changes
+    player = turn.get("player")
+    if isinstance(player, dict):
+        band = str(player.get("gold_band") or "")
+        try:
+            gold = float(player.get("gold_delta") or 0)
+        except (TypeError, ValueError):
+            gold = 0.0
+        losing = gold < 0 or band.startswith("-")
+        tail_paid = _TAIL_PAY_RE.search(tail) or stated_coin_amounts(tail)["paid"]
+        head_paid = _TAIL_PAY_RE.search(head) or stated_coin_amounts(head)["paid"]
+        if losing and tail_paid and not head_paid:
+            player.pop("gold_band", None)
+            player.pop("gold_delta", None)
+            dropped.append("GOLD (paid only in the cut part)")
+        dest = str(player.get("move_to_location") or player.get("move_to_location_code") or "").strip()
+        if dest:
+            dest_l = dest.lower()
+            named_tail = dest_l in tail_l and dest_l not in head_l
+            left_in_tail = _TAIL_EXIT_RE.search(tail) and not _TAIL_EXIT_RE.search(head)
+            if named_tail or left_in_tail:
+                player["move_to_location"] = None
+                player["move_to_location_code"] = None
+                turn["map_walk"] = None
+                dropped.append(f"MOVE {dest[:60]}")
+    return dropped
+
+
+def _cut_scene_at_invented_request(turn: dict[str, Any], player_input: str, *, floor: int = 200) -> dict[str, Any]:
+    """
+    End the narration on the line someone spoke to the player when the prose
+    went on to answer it for them (playtests #75, #77).
+
+    T6: the speech pass dropped the invented "I'll take the rye bread and
+    cheese" but kept the sale it set off, so the bread, the cheese and the
+    gold changed hands on a deal the player never made. T8: "You tell her you
+    are looking for a sturdy set of tools" was dropped and her hand-over of
+    the tools stayed. Cutting the scene at her question leaves the answer to
+    the player, which is what the prose contract already asks. The kept part
+    must still hold ``floor`` characters after the ordinary drops; otherwise
+    the clause drops alone run, as before.
+    """
+    from app.narration_pipeline import drop_invented_player_speech
+
+    if not isinstance(turn, dict):
+        return turn
+    text = str(turn.get("narration") or "")
+    point = _scene_cut_point(text, player_input)
+    if not point:
+        return turn
+    head = text[: point["cut"]].rstrip()
+    tail = text[point["cut"]:].strip()
+    if not tail:
+        return turn
+    probe_kept, _ = drop_invented_player_speech(re.split(r"\n\s*\n", head), player_input)
+    probe, _ = drop_invented_player_acts_text("\n\n".join(p for p in probe_kept if p.strip()), player_input)
+    if len(probe.strip()) < floor:
+        return turn
+    turn["narration"] = head
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", head) if p.strip()]
+    if isinstance(turn.get("narration_segments"), list):
+        turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in paragraphs] or [{"label": "paragraph", "text": head}]
+    cut_ops = _drop_ops_of_cut_tail(turn, head, tail)
+    dsl = turn.get("_dsl")
+    if isinstance(dsl, dict):
+        dsl["cut_ops"] = list(dsl.get("cut_ops") or []) + cut_ops
+    turn["_scene_cut"] = {
+        "family": point["family"],
+        "trigger": str(point["trigger"])[:300],
+        "npc_line": str(point["npc_line"])[:300],
+        "tail": tail[:1200],
+        "tail_chars": len(tail),
+        "cut_ops": cut_ops,
+    }
+    check = turn.get("self_check")
+    if isinstance(check, dict):
+        made = check.get("corrections_made") if isinstance(check.get("corrections_made"), list) else []
+        check["corrections_made"] = [
+            *made,
+            "Ended the scene on the line spoken to the player; the prose had answered it for them"
+            + (f" and {len(cut_ops)} op(s) that rested on that answer were dropped." if cut_ops else "."),
+        ]
+    return turn
 
 
 def _drop_invented_player_speech(turn: dict[str, Any], player_input: str) -> dict[str, Any]:

@@ -546,6 +546,49 @@ def _entry_from(word: str, obj: str, sentences: list[str], index: int) -> tuple[
     return (kind, noun, "") if kind else None
 
 
+# Someone takes the player somewhere (playtest #76, T11): "Bertram leads you to
+# the Blind Owl Forge [[L4]]". _LED_ENTER_RE needs in/into/through, so a lead
+# "to" a place was never read and the prose moved the player while the state
+# did not. The one leading is a name or a pronoun; the place runs to the next
+# comma or stop, with its [[L#]] code when the prose has one.
+_LED_TO_RE = re.compile(
+    r"(?P<by>\b[A-Z][\w'\u2019-]*(?:\s+[A-Z][\w'\u2019-]*)?|\b[a-z][\w'\u2019-]*)\s*(?:\[\[[A-Z]{1,2}\d{0,3}\]\])?\s+"
+    # Third-person and past forms only: "I'll take you to the forge" is an offer.
+    r"(?:\w+ly\s+)?(?i:leads|led|takes|took|brings|brought|walks|guides|guided|escorts|escorted|ushers|ushered|steers|steered)\s+(?i:you)\s+"
+    r"(?:(?i:over|back|out|across\s+the\s+\w+|down\s+the\s+\w+|up\s+the\s+\w+|through\s+the\s+\w+)\s+)?"
+    r"(?i:to|toward|towards)\s+(?P<obj>[^.!?,;:\"\u201c\u201d\n]{2,80})"
+)
+_PLACE_CODE_RE = re.compile(r"\[\[(L\d+)\]\]")
+
+
+def led_to_in_prose(text: str) -> dict[str, Any] | None:
+    """The first place the prose has someone lead the player to: {"name", "code", "by", "sentence"}, or None.
+
+    Only unquoted narration counts; "I'll take you to the forge" is an offer.
+    """
+    body = str(text or "")
+    # Split without _sentences' code strip: the [[L#]] code names the place.
+    for sentence in (s for s in re.split(r"(?<=[.!?\"\u201d])\s+", body) if s.strip()):
+        for match in _LED_TO_RE.finditer(sentence):
+            quotes = sum(sentence[: match.start()].count(mark) for mark in ('"', "\u201c", "\u201d"))
+            if quotes % 2:
+                continue
+            obj = match.group("obj").strip()
+            code_match = _PLACE_CODE_RE.search(obj)
+            name = _PLACE_CODE_RE.sub("", obj)
+            name = re.sub(r"\s+(?:where|which|that|who|as|while|and|so)\b.*$", "", name, flags=re.I)
+            name = re.sub(r"^(?:the|a|an|his|her|their)\s+", "", name.strip(), flags=re.I).strip()
+            if not name and not code_match:
+                continue
+            return {
+                "name": name[:80],
+                "code": code_match.group(1).upper() if code_match else "",
+                "by": match.group("by").strip(),
+                "sentence": sentence.strip(),
+            }
+    return None
+
+
 def entry_in_prose(text: str, people: list[str] | tuple[str, ...] = ()) -> dict[str, Any] | None:
     """Where the prose takes the player indoors, or None.
 

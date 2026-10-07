@@ -81,7 +81,8 @@ NPC_NOTE: a person's code, then in quotes one fact about them that will stay tru
 TALK: the code of the person the player spoke with, then in quotes what the two of them talked about.
 GRANT: the item's name in quotes, then QTY and a band. May add TYPE with a kind of item, DESC with a description in quotes, RARITY with one word.
 TAKE: the item's name in quotes, then QTY and a band.
-GOLD, XP, HP: a band. A minus sign written right before the band makes it a loss.
+GOLD: the number of coins ===NAR=== names as paid or handed over, or a band when no number is said. A minus sign makes it a loss.
+XP, HP: a band. A minus sign written right before the band makes it a loss.
 KARMA: a band, minus for a loss. May add VIS with one of private, local, faction, public, and REASON with the reason in quotes.
 MOVE: the name of the place the scene ends in (the movement rules below say which names).
 WALK: a compass direction. May add STEPS and a number from 1 to 4.
@@ -113,8 +114,12 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
   GRANT takes the item's name in quotes, then QTY and a band.
   A leading "-" means a loss. The app rolls the actual amount; a bare number on
-  XP, GOLD, HP, KARMA or SKILL is read as a band hint and re-rolled, so bands are
+  XP, HP, KARMA or SKILL is read as a band hint and re-rolled, so bands are
   shorter and more reliable.
+- GOLD is the one exception. When someone in ===NAR=== names a price, a payment
+  or a sum handed over, GOLD takes that same number (with "-" when the player
+  pays), and the app takes exactly that. Use a band only when no number is said.
+  A price only offered is not paid: no GOLD until the player agrees to it.
 - GRANT and TAKE QTY counts objects: trivial or small is one, moderate two,
   large three, huge five. A real stack may be a plain number. GRANT only what
   someone in ===NAR=== gives, sells or awards the player, or what player_line itself
@@ -1315,6 +1320,26 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
             "player_line is the player's whole turn. Narrate only that action and how the world and its people respond; "
             "the player's further actions, words, thoughts, feelings and decisions are theirs to write, not yours."
         )
+        from app.prose_state import declared_act, player_trade_offer
+
+        # Who does the act (playtest #77, T13: "fix a rusty sword" was done by
+        # the smith). The phrase is the player's own words, not an example.
+        act = declared_act(own)
+        if act:
+            packet["player_act"] = act["phrase"]
+            instructions.append(
+                "player_act is done by the player (you) in ===NAR===; others may help, watch or react, "
+                "but nobody does it for them."
+            )
+        # The player's own offer (playtest #75, T7: the last 3 gold offered for
+        # directions was never paid). The engine takes the sum when it is accepted.
+        offer = player_trade_offer(own)
+        if offer:
+            packet["trade_offer"] = {"gold": offer}
+            instructions.append(
+                f"trade_offer: the player offers {offer} gold. If the other side accepts, ===OPS=== has GOLD -{offer} "
+                "and ===NAR=== shows the coin handed over; if they refuse, there is no GOLD line and ===NAR=== says so."
+            )
     packet["narration_length"] = narration_length_target(player_input)
     # Fresh per turn (app/example_pools.py): options, not people who exist.
     cast = context.get("cast_options") if isinstance(context, dict) else None
