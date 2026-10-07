@@ -433,6 +433,27 @@ def is_speech(player_input: str) -> bool:
     )
 
 
+def venue_entry_kind(player_input: str) -> str:
+    """The kind of venue a line walks the player into ("general_store"), or "".
+
+    Playtest #33 (live, four shop-entry turns): "I go into the first shop I
+    can find to see what they sell" carried the previous partner over the
+    doorway, so the draft was told the companion was the only one who answers
+    and cast them as the shopkeeper.
+    """
+    text = own_text(player_input)
+    if not text:
+        return ""
+    try:
+        from app import venues
+        from app.world import venue_move_intent
+    except Exception:
+        return ""
+    if venue_move_intent(text) != "enter":
+        return ""
+    return str(venues.venue_kind_from_name(text.lower()) or "")
+
+
 def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     Who this line is said to. Deterministic; no model call.
@@ -496,6 +517,23 @@ def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | 
         group = present or [row["code"] for row in rows]
         if group:
             return done(group, "group", group=len(group) > 1)
+    # "You, come into the shop with me" is still said to someone.
+    venue_kind = venue_entry_kind(player_input) if text and not out["second_person"] else ""
+    if venue_kind:
+        try:
+            from app.scene_thread import invites_along
+
+            if invites_along(player_input):
+                venue_kind = ""
+        except Exception:
+            pass
+    if venue_kind:
+        # Through a shop door the line is for whoever works there; the people
+        # with the player come in as visitors and listen (playtest #33).
+        done([], "none")
+        out["rule"] = "venue"
+        out["venue_kind"] = venue_kind
+        return out
     target = [c for c in state.get("target") or [] if c in here]
     if target:
         if state.get("chosen"):
@@ -521,6 +559,17 @@ def _label(code: str, names: dict[str, str]) -> str:
     return f"{name} [[{code}]]" if name else code
 
 
+def _venue_label(kind: str) -> str:
+    try:
+        from app import venues
+
+        label = venues.kind_label(kind) if kind else ""
+    except Exception:
+        label = ""
+    label = label or "the place"
+    return label if label.startswith("the ") else f"the {label}"
+
+
 def model_note(resolution: dict[str, Any] | None) -> str:
     """One line for the draft's "Resolved player references" footer."""
     if not isinstance(resolution, dict):
@@ -529,7 +578,7 @@ def model_note(resolution: dict[str, Any] | None) -> str:
     addressed = list(resolution.get("addressed") or [])
     listening = list(resolution.get("listening") or [])
     called = list(resolution.get("called") or []) if not addressed else []
-    if not addressed and not listening and not called:
+    if not addressed and not listening and not called and resolution.get("rule") != "venue":
         return ""
     if called:
         who = ", ".join(_label(c, names) for c in called)
@@ -541,6 +590,13 @@ def model_note(resolution: dict[str, Any] | None) -> str:
         line = (
             "Conversation (engine decided) - the player calls out to someone unseen or not yet in the scene; "
             "whoever was called may answer, and nobody present answers for them."
+        )
+    elif not addressed and resolution.get("rule") == "venue":
+        place = _venue_label(str(resolution.get("venue_kind") or ""))
+        line = (
+            f"Conversation (engine decided) - the player goes into {place} to deal with whoever works there. "
+            "Someone who keeps or works in that place answers the player; anyone who came in with the player is "
+            "a visitor there and does not serve, sell or speak for the place."
         )
     elif addressed:
         who = ", ".join(_label(c, names) for c in addressed)
@@ -572,11 +628,14 @@ def world_view(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
     if not addressed and not listening and not called:
         return None
     unseen = not addressed and resolution.get("rule") in {"unseen", "called"}
+    venue = not addressed and resolution.get("rule") == "venue"
     view: dict[str, Any] = {
         "talking_to": [{"name": names.get(c, c), "code": c} for c in addressed],
         "answers": (
             "whoever the player called out to, not the listeners"
             if unseen
+            else "whoever works in the place the player enters, not the listeners"
+            if venue
             else "any of talking_to" if resolution.get("group") else "talking_to only"
         ),
         "why": RULE_TEXT.get(str(resolution.get("rule") or ""), ""),
@@ -599,10 +658,12 @@ def writer_view(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
     if not addressed and not listening and not called:
         return None
     unseen = not addressed and resolution.get("rule") == "unseen"
+    venue = not addressed and resolution.get("rule") == "venue"
     view: dict[str, Any] = {
         "player_talks_to": [_label(c, names) for c in addressed]
         or [f"{_label(c, names)} (called; not here yet)" for c in called]
-        or (["someone unseen or not yet in the scene"] if unseen else ["nobody in particular"]),
+        or (["someone unseen or not yet in the scene"] if unseen else [])
+        or (["whoever works in the place the player enters"] if venue else ["nobody in particular"]),
         "who_answers": [_label(c, names) for c in addressed] if addressed else [],
     }
     if listening:

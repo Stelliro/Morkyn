@@ -337,6 +337,17 @@ _TITLE_TAIL = _DETERMINERS | _PREPOSITIONS | {
 }
 _PRONOUN_SUBJECTS = {"nobody", "everyone", "everybody", "none", "anyone", "someone", "somebody", "nothing", "everything", "no-one"}
 _PARENTHETICAL = re.compile(r",\s*(?:when|where|if|though|although|once|unless|while|as)\b[^,]{0,60},\s*", re.I)
+# A noun phrase ends at a subordinator or relative word: "Frontier dark
+# fantasy where thin law..." is titled "Frontier dark fantasy" (playtest #35).
+_SUBORDINATORS = {"where", "when", "which", "that", "who", "whom", "whose", "while", "whereas"}
+# A fact split off the tail of a sentence can open on a participle clause
+# ("ensuring that strength is not inherited..."): the clause is not the subject.
+_LEAD_PARTICIPLE = re.compile(r"^[a-z]+ing\s+that\s+", re.I)
+
+
+def _cut_at_subordinator(words: list[str]) -> list[str]:
+    cut = next((i for i, w in enumerate(words) if i and w.lower() in _SUBORDINATORS), None)
+    return words[:cut] if cut is not None else words
 
 
 def _trim_tail(words: list[str]) -> list[str]:
@@ -386,6 +397,7 @@ def _clause_words(text: str) -> tuple[list[str], int | None]:
     """The words of a fact after any lead-in clause, and the index of its main verb if one is found."""
     body = _clean(text).rstrip(".!?")
     trimmed = _LEAD_IN.sub("", body, count=1)
+    trimmed = _LEAD_PARTICIPLE.sub("", trimmed or body, count=1)
     # "Magic, when it exists, is a secret": the aside is not the subject.
     trimmed = _PARENTHETICAL.sub(" ", trimmed or body)
     words = re.findall(r"[A-Za-z][A-Za-z'/-]*", trimmed or body)
@@ -397,7 +409,13 @@ def _clause_words(text: str) -> tuple[list[str], int | None]:
         guessed = None
         if len(words) > start + 2:
             noun, guess = words[start].lower(), words[start + 1].lower()
-            if guess.endswith("s") and not guess.endswith("ss") and not noun.endswith("s") and guess not in _DETERMINERS:
+            # "Small settlements struggle...": an adjective then a plural
+            # noun is a noun phrase, not a noun and its verb (playtest #35).
+            adjective_first = noun in _COMMON_ADJECTIVES or noun.endswith(_ADJECTIVE_ENDINGS)
+            if (
+                not adjective_first
+                and guess.endswith("s") and not guess.endswith("ss") and not noun.endswith("s") and guess not in _DETERMINERS
+            ):
                 guessed = start + 1
         if guessed is None:
             # "Survivors harness forbidden magic", "Modern urban elements
@@ -438,6 +456,7 @@ def _title_for(text: str) -> str:
         subject = words[: min(5, len(words))]
         while subject and subject[0].lower() in _DETERMINERS:
             subject = subject[1:]
+        subject = _cut_at_subordinator(subject)
         # The noun phrase stops at the first verb-like word.
         cut = next((i for i, w in enumerate(subject) if i and _is_verbish(w)), None)
         if cut is not None:
@@ -449,7 +468,7 @@ def _title_for(text: str) -> str:
     subject = words[:verb]
     while len(subject) > 1 and subject[0].lower() in _DETERMINERS:
         subject = subject[1:]
-    subject = subject[:5]
+    subject = _cut_at_subordinator(subject)[:5]
     rest = words[verb + 1:]
     content = [word for word in subject if word.lower() not in _DETERMINERS | _TITLE_TAIL | {"and", "or", "of"}]
     verb_word = words[verb].lower()
@@ -458,14 +477,30 @@ def _title_for(text: str) -> str:
         if obj:
             return _cap([*obj, "of", *[w.lower() if w[:1].isupper() and w.lower() in _DETERMINERS else w for w in subject]])
     if len(content) <= 1 and rest:
+        if verb_word in {"is", "are", "was", "were"} and len(rest) > 1 and _is_verbish(rest[0]) and rest[0].lower() not in _VERB_WORDS:
+            # "The tone is grounded, with a focus on..." -> "Grounded tone":
+            # the comma closes the predicate (playtest #35).
+            after = re.search(
+                r"\b" + re.escape(words[verb]) + r"\s+" + re.escape(rest[0]) + r"\s*[,;]", _clean(text), re.I
+            )
+            if after:
+                return _cap([rest[0], *(word.lower() if word != word.upper() else word for word in subject)])
         index = 0
-        while index < len(rest) and (_is_verbish(rest[index]) or rest[index].lower() in {"not", "never", "often", "always"}):
+        while index < len(rest) and (
+            _is_verbish(rest[index]) or rest[index].lower() in {"not", "never", "often", "always"}
+            # "is not inherited but earned through..." reads past the "but".
+            or (rest[index].lower() == "but" and index and rest[index - 1].lower() not in _PREPOSITIONS)
+        ):
             index += 1
         if index < len(rest) and rest[index].lower() in _PREPOSITIONS:
             obj = _object_words(rest[index + 1:])
             if obj:
                 # "Power is earned through calculated risks" -> "Power earned through calculated risks".
-                participles = [w for w in rest[:index] if _is_verbish(w) and w.lower() not in _VERB_WORDS]
+                lead = rest[:index]
+                if any(w.lower() == "but" for w in lead):
+                    # "not inherited but earned" -> the affirmed half: "earned".
+                    lead = lead[max(i for i, w in enumerate(lead) if w.lower() == "but") + 1:]
+                participles = [w for w in lead if _is_verbish(w) and w.lower() not in _VERB_WORDS]
                 return _cap([*subject, *participles, rest[index].lower(), *obj])
         elif verb_word in {"is", "are", "was", "were"} and rest and rest[0].lower() in {"a", "an", "the"}:
             # "The land is a brutal frontier" -> "Land is a brutal frontier".

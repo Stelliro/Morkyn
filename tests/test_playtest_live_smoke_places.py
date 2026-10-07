@@ -238,9 +238,16 @@ class OpeningNpcsStandBesideThePlayer(unittest.TestCase):
     def setUp(self):
         seed_crossroads()
 
+    # Playtest #34: an NPC_NEW the prose never shows is not stored, so the
+    # prose here shows everyone the ops create.
+    NAR = (
+        R2_G2_OPENING_NAR
+        + " Victor Silva and Carlos Barnes wait by a stalled truck, and Umar Mendes kneels beside it."
+    )
+
     def _play(self, ops: str) -> dict:
-        npcs = turn(ops, R2_G2_OPENING_NAR)["npcs"]
-        with mock.patch.object(world, "generate_turn", side_effect=fake_turn(R2_G2_OPENING_NAR, npcs=npcs)):
+        npcs = turn(ops, self.NAR)["npcs"]
+        with mock.patch.object(world, "generate_turn", side_effect=fake_turn(self.NAR, npcs=npcs)):
             return world.play_turn("I look around.")
 
     def test_round2_opening(self):

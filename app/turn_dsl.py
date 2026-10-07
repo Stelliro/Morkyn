@@ -124,6 +124,8 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
   world and this person. How they look or what they do is not a name; the app overwrites
   description-only names. Never give a name already used by someone else in world_state.
   cast_options.names are unused names drawn for this turn: take one or make one like them.
+  NPC_NEW records someone ===NAR=== shows, and ===NAR=== calls them by that same name; a
+  person the prose does not show gets no NPC_NEW.
 - world_state.current_location.people: works_here marks someone who works in this place;
   works_at is that person's own workplace somewhere else, so here they are a visitor and do not
   sell, keep or own what is here. current_location.keeper keeps the place the player is inside.

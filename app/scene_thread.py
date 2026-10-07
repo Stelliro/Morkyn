@@ -732,6 +732,13 @@ def update_after_turn(
         location=location,
         turn=turn,
     )
+    # Playtest #51: who came along joins the party the UI and combat read.
+    try:
+        from app.party import sync_scene_companions
+
+        sync_scene_companions(conn, list((thread or {}).get("with") or []), narration, turn)
+    except Exception:
+        pass  # the party never blocks a turn
     if thread is None:
         if previous is not None:
             conn.execute("DELETE FROM settings WHERE key = ?", (SETTING_KEY,))

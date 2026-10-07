@@ -197,6 +197,62 @@ def invite_npc_to_party(npc_id: int, role: str = "companion", conn=None) -> dict
             conn.close()
 
 
+def sync_scene_companions(conn, companions: list[dict[str, Any]], narration: str, turn: int) -> dict[str, list[str]]:
+    """Keep the party in step with who the scene shows travelling with the player.
+
+    Playtest #51 (live, all four A/B games): "Mira, come with me" put Mira on
+    the scene thread's ``with`` list and moved her along, but party_members,
+    which the Party tab, party_combat_bonus and morale read, was only ever
+    filled by the manual invite button. An invitation the prose shows accepted
+    is a join; the engine decides, so the button's affinity gate does not
+    apply to it. Someone the prose shows staying behind, and whom the move
+    really left at another place, leaves without the dismissal penalty.
+    """
+    out: dict[str, list[str]] = {"joined": [], "left": []}
+    try:
+        if "party_members" not in _tables(conn):
+            init_party(conn)
+    except Exception:
+        return out
+    from app.scene_thread import left_behind
+
+    stayed = left_behind(narration)
+    here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    here_id = int((here[0] if here else 0) or 0)
+    for member in rows_to_dicts(
+        conn.execute(
+            "SELECT pm.npc_id, pm.npc_name, n.name AS name, n.location_id AS location_id "
+            "FROM party_members pm LEFT JOIN npcs n ON n.id = pm.npc_id"
+        ).fetchall()
+    ):
+        name = str(member.get("name") or member.get("npc_name") or "")
+        if name and stayed(name) and here_id and int(member.get("location_id") or 0) != here_id:
+            conn.execute("DELETE FROM party_members WHERE npc_id = ?", (int(member["npc_id"]),))
+            out["left"].append(name)
+    for person in companions or []:
+        if not isinstance(person, dict):
+            continue
+        row = None
+        if person.get("code"):
+            row = conn.execute("SELECT id, name FROM npcs WHERE code = ?", (str(person["code"]),)).fetchone()
+        if row is None and person.get("name"):
+            row = conn.execute(
+                "SELECT id, name FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (str(person["name"]),)
+            ).fetchone()
+        if row is None or str(row["name"]) in out["left"]:
+            continue
+        if stayed(str(row["name"])):
+            continue
+        if conn.execute("SELECT 1 FROM party_members WHERE npc_id = ?", (int(row["id"]),)).fetchone():
+            continue
+        conn.execute(
+            "INSERT INTO party_members (npc_id, npc_name, joined_turn, role, morale) VALUES (?, ?, ?, 'companion', 50)",
+            (int(row["id"]), str(row["name"]), int(turn or 0)),
+        )
+        out["joined"].append(str(row["name"]))
+    return out
+
+
 def remove_from_party(npc_id: int, reason: str = "dismissed", conn=None) -> dict[str, Any]:
     """
     Remove an NPC from the party.

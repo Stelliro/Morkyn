@@ -6494,6 +6494,111 @@ def _mint_venue_from_request(conn, parent_id: int, player_input: str, narration:
     return str(row["name"] or "") if row is not None else ""
 
 
+def _kind_for_told_venue(conn, parent_id: int, name: str, player_input: str, narration: str) -> str:
+    """The trade of a shop the turn named: its own name first, then a trade the
+    player asked for, then its goods in the prose, else a general store.
+
+    The player's generic "shop" says nothing about the trade (playtest #50,
+    live: "Blind Pike Pharmacy" was refused for not being a general store).
+    """
+    text = str(player_input or "").lower()
+    asked = ""
+    for candidate in venues.VENUE_KINDS:
+        label = venues.kind_label(candidate).lower()
+        if label and re.search(rf"\b{re.escape(label)}\b", text):
+            asked = candidate
+            break
+    if not asked:
+        asked = venues.venue_kind_from_name(text)
+        if asked == "general_store":
+            asked = ""
+    shown = str((venues.entry_in_prose(narration) or {}).get("kind") or "") if narration else ""
+    for kind in (venues.venue_kind_from_name(name), asked, shown, "general_store"):
+        if kind and venue_plausibility(conn, parent_id, kind)["ok"]:
+            return kind
+    return ""
+
+
+def _open_told_venue(conn, name: str, parent_id: int, player_input: str, narration: str):
+    """The venue the turn itself named, opened inside ``parent_id``; the row, or None.
+
+    Playtest #50 (live): the turn named the shop (a MOVE, a LOC_NEW, the sign
+    in the prose) and the engine still invented "<Place> General Store" or
+    "<Name> Shop" beside it, so one shop became two rows. The name the turn
+    supplied is the shop.
+    """
+    name = humanize_place_name(str(name or ""))
+    if not parent_id or not name or not is_plausible_place_name(name) or is_fragment_place_name(name):
+        return None
+    existing = _match_location_by_name(conn, name)
+    if existing is not None:
+        if int(venues._field(existing, "parent_id", 0) or 0) == int(parent_id) and str(venues._field(existing, "kind", "") or ""):
+            return existing
+        return None
+    kind = _kind_for_told_venue(conn, int(parent_id), name, player_input, narration)
+    if not kind:
+        return None
+    new_id = _upsert_location(conn, name, "", parent_id=int(parent_id), kind=kind)
+    row = _location_row(conn, new_id) if new_id else None
+    if row is None or int(row["id"]) == int(parent_id) or int(venues._field(row, "parent_id", 0) or 0) != int(parent_id):
+        return None
+    return row
+
+
+def _told_venue_name(conn, result: dict[str, Any], narration: str) -> tuple[str, dict[str, Any] | None]:
+    """The building name this turn supplied for the place it walks into, and its LOC_NEW row.
+
+    A LOC_NEW counts when it is the name the entry (or the sign) shows, or a
+    name that says it is a shop; a new town named on the way does not.
+    """
+    shown = str((venues.entry_in_prose(narration) or {}).get("name") or "").strip() if narration else ""
+    for location in result.get("locations") or []:
+        if not isinstance(location, dict):
+            continue
+        name = norm_name(str(location.get("name") or ""))
+        if not name or _is_place_or_item_code(name) or _match_location_by_name(conn, name) is not None:
+            continue
+        if (shown and name.lower() == shown.lower()) or venues.venue_kind_from_name(name):
+            return name, location
+    if shown and _match_location_by_name(conn, shown) is None:
+        return shown, None
+    return "", None
+
+
+def _parent_named_in_input(conn, player_input: str, current_id: int):
+    """An ordinary place the player's line walks to before going in, or None.
+
+    batch4_r2 (live): "walk back to the outskirts and go inside the first
+    trading post" opened the post inside the haze the player stood in.
+    """
+    text = str(player_input or "")
+    line = _travel_scoring_text(text)
+    # Up to the last "in/into/inside": the building named after it is not the parent.
+    enters = [m.end() for m in _VENUE_ENTER_RE.finditer(line)]
+    before = (line[: enters[-1]] if enters else line).lower()
+    if not before.strip():
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT * FROM locations WHERE parent_id = 0 AND (kind IS NULL OR kind = '') AND id != ?",
+            (int(current_id or 0),),
+        ).fetchall()
+    except Exception:
+        return None
+    exact = _known_place_named_in(rows, before, "")
+    if exact is not None:
+        return exact
+    hits = []
+    for row in rows:
+        words = [w for w in re.findall(r"[a-z]+", str(row["name"] or "").lower()) if len(w) >= 5]
+        if any(
+            re.search(rf"\b(?:to|toward|towards|for|reach|reaching)\s+(?:the\s+)?(?:[a-z'-]+\s+){{0,2}}?{re.escape(w)}\b", before)
+            for w in words
+        ):
+            hits.append(row)
+    return hits[0] if len(hits) == 1 else None
+
+
 def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
     """A venue standing in `parent_id` that the player's line (or the prose) names.
 
@@ -6779,6 +6884,16 @@ def _move_companions_with_player(
     for row in list(thread.get("with") or []) + st.companions_shown(thread.get("asked_along") or [], narration):
         if isinstance(row, dict) and row.get("name") and not left_behind(str(row.get("name"))):
             wanted.append({"code": str(row.get("code") or ""), "name": str(row["name"])})
+    # Playtest #51: the party travels with the player too, after the thread
+    # that brought them along has gone quiet.
+    try:
+        for row in conn.execute(
+            "SELECT n.code, n.name FROM party_members pm JOIN npcs n ON n.id = pm.npc_id"
+        ).fetchall():
+            if row["name"] and not left_behind(str(row["name"])):
+                wanted.append({"code": str(row["code"] or ""), "name": str(row["name"])})
+    except Exception:
+        pass
     followed = st.follow_target(player_input)
     if followed:
         people = [
@@ -7043,8 +7158,35 @@ def _venue_for_named_move(
             return fields
         place = resolved
     else:
+        settlement_id = int(venues._field(current, "parent_id", 0) or 0) or current_id if current is not None else 0
+        named_parent = _parent_named_in_input(conn, player_input, current_id) if doorway == "enter" else None
+        parent_id = int(named_parent["id"]) if named_parent is not None else settlement_id
+        in_input = bool(re.search(rf"(?<!\w){re.escape(name.lower())}(?!\w)", str(player_input or "").lower()))
         if venues.venue_kind_from_name(name):
-            return {}  # a new building: _upsert_location makes it a venue where the player stands
+            if named_parent is None or parent_id == settlement_id:
+                return {}  # a new building: _upsert_location makes it a venue where the player stands
+            in_input = False  # "walk back to the outskirts and go inside the first trading post"
+        # Playtest #50 (live): on a going-in turn a new MOVE name the player
+        # never said is the building itself (the DSL asks for exactly that),
+        # not a place outside it that still needs a "<Name> Shop" opened.
+        if doorway == "enter" and parent_id and not in_input and (shown or venues.venue_kind_from_name(name)):
+            opened = _open_told_venue(conn, name, parent_id, player_input, narration)
+            if opened is not None and int(opened["id"]) != current_id:
+                player_patch["move_to_location"] = str(opened["name"] or "")[:120]
+                fields: dict[str, Any] = {
+                    "status": "repaired",
+                    "rule": "venue_named",
+                    "destination": str(opened["name"] or ""),
+                    "keeper": str(shown.get("keeper") or ""),
+                    "with": list(shown.get("with") or []),
+                    "minted": True,
+                }
+                if parent_id != settlement_id:
+                    player_patch["_enter_via"] = parent_id
+                    fields["via"] = str(named_parent["name"] or "") if named_parent is not None else ""
+                return fields
+        if venues.venue_kind_from_name(name):
+            return {}
         place = None
     if doorway != "enter" or not shown:
         return {}
@@ -8654,6 +8796,26 @@ def resolve_movement(
                         "rule": "venue_enter",
                         "from": current_code,
                         "destination": str(target["name"] or ""),
+                    }
+                # The turn named the shop it walks into (a LOC_NEW, the sign in
+                # the prose): that is the shop, not a second one beside it
+                # (playtest #50, live).
+                named_parent = _parent_named_in_input(conn, player_input, here_id)
+                open_in = int(named_parent["id"]) if named_parent is not None else parent_for_venues
+                told, told_row = _told_venue_name(conn, result, narration)
+                opened = _open_told_venue(conn, told, open_in, player_input, narration) if told else None
+                if opened is not None and int(opened["id"]) != here_id:
+                    if isinstance(told_row, dict):
+                        told_row["_venue_consumed"] = True
+                    player_patch["move_to_location"] = str(opened["name"] or "")[:120]
+                    if open_in != parent_for_venues:
+                        player_patch["_enter_via"] = open_in
+                    return {
+                        "status": "repaired",
+                        "rule": "venue_opened",
+                        "from": current_code,
+                        "destination": str(opened["name"] or ""),
+                        "named": True,
                     }
                 # Bootstrap: the player asked to walk into a kind of shop this
                 # settlement supports and none exists yet. Rules that pick an
@@ -13072,6 +13234,78 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     return hints
 
 
+def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
+    """Keep a new person only if the prose shows them.
+
+    Playtest #34 (live, A/B openings): the draft wrote NPC_NEW "Lin Zhuo" and
+    NPC_NEW "Kendra Sallow" while the prose showed only "a lone figure in a
+    tattered cloak" or a few unnamed refugees. Both were stored as full people
+    and the player's next lines were bound to someone the story never showed.
+    A new name the prose does not use is given to the one unnamed figure the
+    prose describes (the figure is that person), or to the figure whose noun is
+    the op's role; otherwise it is dropped and prose seeding makes the faces
+    the prose really shows. People already in the world are always kept.
+    """
+    text = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(narration or ""))
+    if not text.strip() or not npcs:
+        return npcs
+
+    def known(npc: dict[str, Any]) -> bool:
+        code = str(npc.get("code") or "").strip()
+        name = norm_name(str(npc.get("name") or ""))
+        if not name:
+            return True
+        try:
+            if code and conn.execute("SELECT 1 FROM npcs WHERE code = ? COLLATE NOCASE", (code,)).fetchone():
+                return True
+            return bool(conn.execute("SELECT 1 FROM npcs WHERE name = ? COLLATE NOCASE", (name,)).fetchone())
+        except Exception:
+            return True
+
+    def shown(name: str) -> bool:
+        parts = [p for p in re.findall(r"[A-Za-z][A-Za-z'-]+", name) if len(p) >= 3 and p.lower() not in _NOT_A_NAME]
+        forms = [name, *parts]
+        return any(re.search(r"(?<!\w)" + re.escape(form) + r"(?!\w)", text, re.I) for form in forms if form)
+
+    unshown = [npc for npc in npcs if not known(npc) and not shown(norm_name(str(npc.get("name") or "")))]
+    if not unshown:
+        return npcs
+    try:
+        known_names = [str(r[0] or "") for r in conn.execute("SELECT name FROM npcs").fetchall()]
+    except Exception:
+        known_names = []
+    known_names += [str(n.get("name") or "") for n in npcs if n not in unshown]
+    figures = [h for h in _figure_hints(text, known_names) if h.split()[0].lower() in {"a", "an", "the"}]
+    free = list(figures)
+    keep_ids = {id(npc) for npc in npcs if npc not in unshown}
+    bound: dict[int, str] = {}
+    for npc in unshown:
+        role_words = {w for w in re.findall(r"[a-z]+", str(npc.get("role") or "").lower()) if len(w) >= 3}
+        # "The trader at the post, a woman with a sharp gaze": the role is in the figure's sentence.
+        match = next((h for h in free if role_words & set(re.findall(r"[a-z]+", _hint_sentence(text, h).lower()))), None)
+        if match is None and len(unshown) == 1 and len(free) == 1:
+            match = free[0]
+        if match is None:
+            continue
+        free.remove(match)
+        keep_ids.add(id(npc))
+        bound[id(npc)] = match
+    out: list[dict[str, Any]] = []
+    for npc in npcs:
+        if id(npc) not in keep_ids:
+            continue
+        hint = bound.get(id(npc))
+        if hint:
+            npc = dict(npc)
+            sentence = _hint_sentence(text, hint)
+            if sentence and not str(npc.get("summary") or "").strip():
+                npc["summary"] = sentence
+            if not str(npc.get("appearance") or "").strip():
+                npc["appearance"] = _appearance_note(hint)
+        out.append(npc)
+    return out
+
+
 def _hint_sentence(text: str, hint: str) -> str:
     """The prose's own sentence about a seeded face, codes stripped."""
     flat = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))
@@ -14697,10 +14931,17 @@ def apply_turn(
             loc_name = str(location.get("name") or "")
             if _is_place_or_item_code(loc_name):
                 continue
+            if location.get("_venue_consumed"):
+                continue  # already opened as the venue the player went into (playtest #50)
             _upsert_location(conn, loc_name, str(location.get("summary") or ""))
 
         # Flatten nested locations[].npcs + conversation speakers; drop place-as-person junk
         collected_npcs = _collect_npcs_from_turn_result(result)
+        # A new person the prose never shows is not stored (playtest #34).
+        try:
+            collected_npcs = _npcs_shown_in_prose(conn, collected_npcs, narration)
+        except Exception:
+            pass
         result["npcs"] = collected_npcs
         for npc in collected_npcs:
             _upsert_npc(conn, npc)

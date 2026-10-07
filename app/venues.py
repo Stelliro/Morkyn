@@ -445,6 +445,24 @@ _KEEPER_CUE_RE = re.compile(
 )
 
 
+# A shop's sign, read out with its name set off: 'a sign that reads *The Hare
+# and Goose*', 'a sign reading "Trask and Daughters."' (playtest #50, live).
+_SIGN_NAME_RE = re.compile(
+    r"\bsign(?:board)?\b[^.!?\n]{0,60}?\b(?:reads?|reading|says|saying|bears?|bearing|proclaims?|announces?|declares?)"
+    r"\s*:?\s*(?P<open>\*{1,2}|[\"\u201c\u2018'])(?P<name>[A-Z0-9][^*\"\u201d\u2019\n]{1,48}?)[.,!]?(?:\*{1,2}|[\"\u201d\u2019'])",
+)
+
+
+def sign_name(text: str) -> str:
+    """The last shop name the prose reads off a sign, or ""."""
+    found = ""
+    for match in _SIGN_NAME_RE.finditer(str(text or "")):
+        name = re.sub(r"\s+", " ", match.group("name")).strip(" .,!;:")
+        if 1 <= len(name.split()) <= 6:
+            found = name
+    return found
+
+
 def _sentences(text: str) -> list[str]:
     flat = re.sub(r"\s*\[\[[A-Za-z0-9]+\]\]", "", str(text or ""))
     return [s for s in re.split(r"(?<=[.!?\"\u201d])\s+", flat) if s.strip()]
@@ -578,6 +596,9 @@ def entry_in_prose(text: str, people: list[str] | tuple[str, ...] = ()) -> dict[
     if found is None:
         return None
     index, kind, noun, name = found
+    if not name:
+        # The prose names the place on its sign rather than in the entry clause.
+        name = sign_name(text)
     if kind == "general_store" and noun in {"shop", "store"}:
         kind = _goods_kind(" ".join(sentences[index: index + 3])) or kind
     names = [str(p).strip() for p in people if str(p or "").strip()]
