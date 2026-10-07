@@ -4,7 +4,7 @@
   <img src="Media/morkyn-logo.png" alt="Mørkyn logo" width="68%" />
 </p>
 
-**Version `0.10.0-wip`** · WIP — not stable, not yet tagged; ships as `0.10.0`. Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.10.0-dev.6`** · pre-release builds on the way to `0.10.0`, not stable (see [CHANGELOG](CHANGELOG.md) for each `dev.N`). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
 ## This is not the usual AI RPG
 
@@ -147,7 +147,7 @@ Morkyn/
 - Optional adaptive narration pipeline and agent bridge endpoints.
 - Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
 
-### New in 0.10.0-wip
+### New in 0.10.0 (dev builds)
 
 - **Token limits follow the model.** Context window and response caps come from the GGUF header and your GPU, or a tokens-per-billion scale when only the name is known. Edit them and they are remembered for that model; the launcher defaults to `auto` — `app/model_limits.py`.
 - **Failsafes.** A model failure stops the turn and opens a dialog that names the problem, what to try, and a "Continue anyway". A context too small for the full story contract is announced at boot instead of on the server console — `app/failsafe.py`.
@@ -329,7 +329,7 @@ Playtest findings and their status are tracked in [`docs/PLAYTEST_ISSUES.md`](do
 | Field | Value |
 | --- | --- |
 | Product | **Mørkyn** |
-| Version | **0.10.0-wip** |
+| Version | **0.10.0-dev.6** |
 | GitHub | https://github.com/Stelliro/Morkyn |
 
 Formerly published as AI RPG Consistency Prototype (`ai-rpg-consistency-prototype`).
