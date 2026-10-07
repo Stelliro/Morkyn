@@ -2077,6 +2077,72 @@ body.setup-mode-simple .setupSimpleArtMount .portraitFrameTall {
   display: none;
 }
 
+/* Pending choice strip between the narration and the input (TODO n20).
+   Job offers waiting for Accept / Decline; kept generic (data-kind) for the
+   walk-with and travel-to prompts. One thread of light down the left, no fill. */
+.pendingChoice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  align-items: flex-start;
+  margin: 0;
+  padding: 6px 0 6px 12px;
+  max-height: 40vh;
+  overflow-y: auto;
+  border-left: 1px solid var(--thread, #c9b3f0);
+  box-shadow: inset 1px 0 0 0 var(--thread-dim, rgba(190, 160, 240, 0.38));
+  background: transparent;
+}
+
+.pendingChoice[hidden] {
+  display: none;
+}
+
+.pendingChoiceCard {
+  flex: 1 1 16rem;
+  min-width: 0;
+}
+
+.pendingChoiceKicker {
+  margin: 0;
+  font-size: 0.72rem;
+  letter-spacing: var(--track-label, 0.18em);
+  text-transform: uppercase;
+  color: var(--thread, #c9b3f0);
+}
+
+.pendingChoiceTitle {
+  margin: 2px 0 0;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pendingChoiceDetail {
+  margin: 2px 0 0;
+  font-size: 0.82rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.pendingChoiceActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.pendingChoiceMore {
+  align-self: center;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 0.8rem;
+  color: var(--thread, #c9b3f0);
+  text-decoration: underline;
+  text-decoration-color: var(--thread-dim, rgba(190, 160, 240, 0.38));
+  cursor: pointer;
+}
+
 .socialChoiceLabel {
   font-size: 0.8rem;
   color: var(--muted);

@@ -4625,6 +4625,53 @@ def api_advance_quest(quest_id: int):
     return result
 
 
+def _answer_offer(quest_id: int, action: str) -> dict:
+    """
+    Accept or Decline on an offered quest (TODO n20). quests.accept_offered and
+    quests.decline_offered are the one place an offer changes; the scene thread
+    hears about it as a quest-report row, as it would from a turn.
+    """
+    from app.quests import accept_offered, decline_offered
+    from app.db import connect
+
+    with connect() as conn:
+        row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+        turn = int(row["value"]) if row else 0
+        helper = accept_offered if action == "accept" else decline_offered
+        quest = helper(conn, int(quest_id), turn=turn)
+        if quest is None:
+            raise HTTPException(status_code=409, detail="That offer is no longer open.")
+        try:
+            from app.scene_thread import update_after_turn as update_scene_thread
+
+            update_scene_thread(
+                conn,
+                turn_thread=None,
+                quest_report={"created": [], "updated": [{"code": quest.get("code"), "action": action}]},
+                narration="",
+                player_input="",
+                turn=turn,
+            )
+        except Exception:
+            pass  # the thread never blocks an answer
+    try:
+        autosave_campaign()
+    except Exception:
+        pass
+    slim = {k: quest.get(k) for k in ("id", "code", "title", "status")}
+    return {"ok": True, "quest": slim, "state": get_state()}
+
+
+@app.post("/api/quests/{quest_id}/accept")
+def api_accept_quest_offer(quest_id: int):
+    return _answer_offer(quest_id, "accept")
+
+
+@app.post("/api/quests/{quest_id}/decline")
+def api_decline_quest_offer(quest_id: int):
+    return _answer_offer(quest_id, "decline")
+
+
 class QuestCreateRequest(BaseModel):
     title: str = Field(max_length=120)
     description: str = Field(default="", max_length=800)

@@ -1709,6 +1709,8 @@
               <div id="latestOutput" class="singleBox sceneBox" tabindex="0" role="status" aria-live="polite" aria-labelledby="latestOutputHeading"></div>
             </div>
             </div>
+            <!-- Pending choice strip between the narration and the input (TODO n20): job offers waiting for Accept / Decline. Built generic (data-kind) so walk-with and travel-to prompts can reuse it. -->
+            <div id="offerPrompt" class="pendingChoice offerPrompt" data-kind="offer" role="region" aria-label="Offers waiting for your answer" aria-live="polite" hidden></div>
             <form id="turnForm" class="composer chatComposer">
               <div class="composerField">
                 <div class="turnInputHead">

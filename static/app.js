@@ -8957,6 +8957,7 @@ function renderShell(nextState, options = {}) {
   refreshLocalMap();
   refreshNpcStage();
   paintPlayDock();
+  renderOfferPrompt();
   pushAllPopouts();
   queueAutoNpcPortraits();
 }
@@ -12459,11 +12460,106 @@ function renderOfferedQuestSection() {
             <span class="meta">${giver} · ${escapeHtml(promised ? promised[1] : reward)}</span>
           </header>
           ${first ? `<p>${escapeHtml(first.title || "")}${first.location_name ? ` · ${escapeHtml(first.location_name)}` : ""}</p>` : ""}
+          ${offerAnswerButtons(q.id)}
         </article>`;
     })
     .join("");
   return `<h3 class="questSectionTitle">Offered</h3>${cards}<h3 class="questSectionTitle">Active</h3>`;
 }
+
+/** Accept / Decline / Ask about it, the same on the play-view prompt and the Quests list (TODO n20). */
+function offerAnswerButtons(id, { ask = false } = {}) {
+  const qid = Number(id) || 0;
+  if (!qid) return "";
+  return `
+    <div class="pendingChoiceActions">
+      <button type="button" class="chipBtn" data-offer-answer="accept" data-offer-id="${qid}">Accept</button>
+      <button type="button" class="chipBtn secondaryButton" data-offer-answer="decline" data-offer-id="${qid}">Decline</button>
+      ${ask ? `<button type="button" class="chipBtn secondaryButton" data-offer-ask="${qid}" title="Keep talking about it first">Ask about it</button>` : ""}
+    </div>`;
+}
+
+/**
+ * The pending-offer strip between the narration and the input (TODO n20).
+ * Painted from state.open_quest_offers after every turn and load, so a job
+ * offered in the story is answered where the player is looking, not in the
+ * Tools drawer. Only Accept makes it a quest; Decline records the refusal.
+ */
+function renderOfferPrompt() {
+  const host = document.querySelector("#offerPrompt");
+  if (!host) return;
+  const offers = Array.isArray(state?.open_quest_offers) ? state.open_quest_offers.filter((q) => Number(q?.id)) : [];
+  if (!offers.length) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  const shown = offers.slice(0, 2);
+  const more = offers.length - shown.length;
+  host.innerHTML = shown
+    .map((q) => {
+      const who = q.giver ? `${escapeHtml(q.giver)} offers` : "Posted";
+      const promise = String(q.promised || "").trim() || String(q.reward || "").trim();
+      const step = [q.first_step || q.current_objective || "", q.location || ""].map((part) => String(part || "").trim()).filter(Boolean);
+      return `
+        <article class="pendingChoiceCard" data-offer-card="${Number(q.id)}">
+          <p class="pendingChoiceKicker">${who}</p>
+          <p class="pendingChoiceTitle">${escapeHtml(q.title || "a job")}</p>
+          ${step.length ? `<p class="pendingChoiceDetail">${step.map((part) => escapeHtml(part)).join(" · ")}</p>` : ""}
+          ${promise ? `<p class="pendingChoiceDetail">${escapeHtml(promise)}</p>` : ""}
+          ${offerAnswerButtons(q.id, { ask: true })}
+        </article>`;
+    })
+    .join("") + (more > 0 ? `<button type="button" class="pendingChoiceMore" data-offer-more="1">${more} more in Quests</button>` : "");
+  host.hidden = false;
+}
+
+async function answerQuestOffer(id, action) {
+  const qid = Number(id) || 0;
+  if (!qid || (action !== "accept" && action !== "decline")) return;
+  if (aiBusy) {
+    showAmbientMoveLine("Wait for the scene to finish, then answer the offer.");
+    return;
+  }
+  const buttons = document.querySelectorAll(`[data-offer-id="${qid}"]`);
+  buttons.forEach((b) => { b.disabled = true; });
+  try {
+    const response = await fetch(`/api/quests/${qid}/${action}`, { method: "POST" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok || !payload.ok) throw new Error(payload.detail || payload.error || "That offer is no longer open.");
+    if (payload.state) renderShell(payload.state);
+    const title = payload.quest?.title || "the job";
+    showAmbientMoveLine(action === "accept" ? `You took on: ${title}.` : `You turned down: ${title}.`);
+    if (activeTab === "quests" || characterSheetOpen) loadPlayerQuests().catch(() => {});
+  } catch (error) {
+    showAmbientMoveLine(error?.message || String(error || "Could not answer the offer."));
+    buttons.forEach((b) => { b.disabled = false; });
+  }
+}
+
+/** One click handler for offer buttons wherever they are drawn. Returns true when it handled the click. */
+function handleOfferClick(event) {
+  const answer = event.target.closest?.("[data-offer-answer]");
+  if (answer) {
+    event.preventDefault();
+    answerQuestOffer(answer.getAttribute("data-offer-id"), answer.getAttribute("data-offer-answer"));
+    return true;
+  }
+  if (event.target.closest?.("[data-offer-ask]")) {
+    event.preventDefault();
+    // Keep talking first: the offer stays open; nothing is typed for the player.
+    turnInput?.focus();
+    return true;
+  }
+  if (event.target.closest?.("[data-offer-more]")) {
+    event.preventDefault();
+    setActiveTab("quests");
+    return true;
+  }
+  return false;
+}
+
+document.querySelector("#offerPrompt")?.addEventListener("click", handleOfferClick);
 
 function renderPlayerQuestSection() {
   const offered = renderOfferedQuestSection();
@@ -22185,6 +22281,7 @@ listenPlaySurface("click", (event) => {
     loadPlayerQuests().catch(() => {});
     return;
   }
+  if (handleOfferClick(event)) return;
   if (event.target.closest("#seedQuestsBtn")) {
     event.preventDefault();
     const btn = event.target.closest("#seedQuestsBtn");

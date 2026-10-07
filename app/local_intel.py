@@ -1145,7 +1145,7 @@ def tick_quest_clocks(conn, *, from_day: int, to_day: int) -> list[int]:
     return posted
 
 
-def accept_offered_quest(conn, text: str) -> dict[str, Any] | None:
+def accept_offered_quest(conn, text: str, turn: int | None = None) -> dict[str, Any] | None:
     if not re.search(r"\b(quest|job|notice|errand|contract|work|take|accept)\b", text or "", re.I):
         return None
     try:
@@ -1163,29 +1163,45 @@ def accept_offered_quest(conn, text: str) -> dict[str, Any] | None:
         if title and title.lower() in low:
             chosen = row
             break
-    if chosen is None and _ACCEPT_RE.search(text or ""):
+    # A typed "I'll take the job" stands for the Accept button only when it can
+    # mean one offer (TODO n20). It used to take the newest of several.
+    if chosen is None and len(rows) == 1 and _ACCEPT_RE.search(text or ""):
         chosen = rows[0]
     if chosen is None:
         return None
-    conn.execute(
-        "UPDATE quests SET status = 'active' WHERE id = ? AND status = 'offered'",
-        (int(chosen["id"]),),
-    )
+    from app.quests import accept_offered
+
+    if turn is None:
+        try:
+            row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+            turn = int(row["value"]) if row else 0
+        except Exception:
+            turn = 0
+    if accept_offered(conn, int(chosen["id"]), turn=turn) is None:
+        return None
     return {"id": int(chosen["id"]), "title": str(chosen["title"] or "the offer")}
 
 
 def list_open_offers(limit: int = 8) -> list[dict[str, Any]]:
     from app.db import connect
 
+    from app.quests import DECLINE_MEMORY_TURNS
+
     conn = connect()
     try:
+        turn_row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+        turn = int(turn_row["value"]) if turn_row else 0
+        # Offers the player turned down lately ride along as "declined", so the
+        # narrator and the quest parser are told not to offer them again (TODO n20).
         rows = conn.execute(
             """
-            SELECT id, title, notes, giver_npc_id
-            FROM quests WHERE status = 'offered'
-            ORDER BY id DESC LIMIT ?
+            SELECT q.id, q.title, q.notes, q.giver_npc_id, q.status, n.name AS giver_name
+            FROM quests q LEFT JOIN npcs n ON n.id = q.giver_npc_id
+            WHERE q.status = 'offered'
+               OR (q.status = 'declined' AND COALESCE(q.failed_turn, 0) >= ?)
+            ORDER BY (q.status = 'offered') DESC, q.id DESC LIMIT ?
             """,
-            (max(1, min(8, int(limit))),),
+            (turn - DECLINE_MEMORY_TURNS, max(1, min(12, int(limit) + 4))),
         ).fetchall()
     except Exception:
         return []
@@ -1205,6 +1221,8 @@ def list_open_offers(limit: int = 8) -> list[dict[str, Any]]:
                 "id": int(row["id"]),
                 "title": str(row["title"] or ""),
                 "source": source,
+                "giver": str(row["giver_name"] or ""),
+                "status": str(row["status"] or "offered"),
             }
         )
     return found
@@ -1402,9 +1420,9 @@ def apply_turn_intel(conn, player_input: str, turn: int) -> str:
                             (gold - BRIBE_GOLD,),
                         )
                         notes.append(f"You paid {BRIBE_GOLD} coin for the direction.")
-    accepted = accept_offered_quest(conn, player_input) if _play_flag_on(conn, "quests_enabled") else None
-    if accepted:
-        notes.append(f"You took the offer: {accepted['title']}.")
+    # quests.accept_offered journals the acceptance itself, so no second note here.
+    if _play_flag_on(conn, "quests_enabled"):
+        accept_offered_quest(conn, player_input, turn)
     return " ".join(notes)[:1400]
 
 

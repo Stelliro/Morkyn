@@ -27,16 +27,17 @@ The turn carries the proposals under ``turn["quest_changes"]``:
           "title": "Escort the silk to the western border",   # 3-80 chars
           "summary": "one sentence: what is asked and why",
           "giver": "A1" | "Carter" | "",                      # NPC code or name, or a notice/board
-          "status": "offered" | "active",                      # active only if the player accepted
+          "status": "offered",                                 # always; Accept makes it active (TODO n20)
           "steps": [ {"title": "...", "description": "...", "location": "L3" | "Western Border" | ""} ],  # 1-6
           "reward": {"gold": 0, "xp": 0, "items": ["..."], "text": "as promised in the story"},
           "difficulty": "easy" | "normal" | "hard" | "deadly",
           "timer_turns": 0,
+          "offer_line": "the giver's own words offering or agreeing to it",
           "evidence": "exact words from the narration or the player's line",
         }
       ],
       "updates": [
-        {"quest": "Q3" | "<title>", "action": "accept" | "step_done" | "complete" | "fail" | "abandon",
+        {"quest": "Q3" | "<title>", "action": "accept" | "decline" | "step_done" | "complete" | "fail" | "abandon",
          "evidence": "exact words"}
       ],
     }
@@ -58,7 +59,7 @@ PARSER_MAX_TOKENS = 450
 MAX_NEW_PER_TURN = 2
 MAX_UPDATES_PER_TURN = 4
 
-QUEST_ACTIONS = ("accept", "step_done", "complete", "fail", "abandon")
+QUEST_ACTIONS = ("accept", "decline", "step_done", "complete", "fail", "abandon")
 DIFFICULTIES = ("trivial", "easy", "normal", "hard", "deadly")
 MAX_STEPS = 6
 REWARD_GOLD_CAP = 500
@@ -82,7 +83,38 @@ _JOB_RE = re.compile(
     # with the nets", "The captain needs help loading cargo".
     r"(?:looking|asking) for (?:a hand|hands|help|someone|somebody|workers?|a crew)|"
     r"needs? (?:a hand|hands|help|someone|somebody|workers?)|could use (?:a hand|help|someone)|"
-    r"wants? (?:someone|somebody|a hand)|lend (?:a|me a|us a) hand|hands? you (?:a|the) (?:pouch|purse|coins?|advance))\b",
+    r"wants? (?:someone|somebody|a hand)|lend (?:a|me a|us a) hand|hands? you (?:a|the) (?:pouch|purse|coins?|advance)|"
+    # Playtest #81 (live): ordinary determiners and plurals slipped past the
+    # fixed phrasings, so three real offers never reached the parser: "needs a
+    # bit of help", "could use an extra hand", "the deliveries", "a bit of work
+    # here and there", "agrees to teach you". The gate and the offer check
+    # share this one list, so they cannot fall out of step.
+    r"needs? (?:a bit of|a little|some|any|an extra|extra|more) (?:help|hands?)|"
+    r"could use (?:an extra|another|a|some|your|a bit of|an extra set of) (?:hands?|help|skills?|set of hands)|"
+    r"(?:extra|spare) (?:set of )?hands|every hand helps|deliver\w*|"
+    r"(?:any|some|a bit of|odd|plenty of|honest|steady|paying) work|work (?:here|to do|for you|for me|for us)|"
+    r"(?:teach|train) you|show you how|apprentic\w*|take you on|"
+    r"(?:start|begin) (?:there|tomorrow|today|in the morning|at dawn|first thing))\b",
+    re.I,
+)
+# The player asking for work or training. A conversation trigger for the gate:
+# when the player asks, the answer is worth reading even if it is phrased in
+# words the job list has never seen (playtest #81: "any work i can do?" was
+# answered with an offer on T10, and nothing read it).
+_ASKS_WORK_RE = re.compile(
+    r"\b(?:any|some|a|the|honest|paying|more) (?:work|jobs?|tasks?|errands?|employment)\b|"
+    r"\b(?:need|needs|want|wanted|use) (?:a |an |an extra |another |some |any )?(?:help|hand|hands|set of hands|helper|worker)\b|"
+    r"\b(?:can|could|may|shall) i (?:help|assist|lend|work|be of use)\b|"
+    r"\b(?:hire|employ) me\b|\bhiring\b|\bapprentic\w*|\b(?:teach|train|show) me\b|\blearn (?:to|how|the|your)\b|"
+    r"\bearn (?:some |a |my )?(?:coin|money|gold|silver|keep|living|wage)\b|\bwork for (?:you|coin|pay|food)\b|"
+    r"\blooking for (?:work|a job|employment)\b",
+    re.I,
+)
+# A giver saying yes to what the player asked for. Counts as an offer only
+# beside a player line that asked for work (see judge_offer).
+_AGREES_RE = re.compile(
+    r"\b(?:agree[sd]?|says? yes|said yes|nods?|nodded|nodding|you'?re hired|welcome aboard|it'?s settled|"
+    r"accepts? your offer|take you on|(?:start|begin) (?:there|tomorrow|today|in the morning))\b",
     re.I,
 )
 _ADDRESS_RE = re.compile(
@@ -135,6 +167,60 @@ def _title_words(title: str) -> set[str]:
     return {w for w in re.findall(r"[a-z]{4,}", str(title or "").lower()) if w not in stop}
 
 
+def player_asks_for_work(text: str) -> bool:
+    """The player's line asks for work, a hand to lend, or to be taught."""
+    return bool(_ASKS_WORK_RE.search(str(text or "")))
+
+
+def quest_parse_gate(
+    narration: str,
+    player_input: str = "",
+    *,
+    marks: list[dict[str, Any]] | None = None,
+    active_quests: list[dict[str, Any]] | None = None,
+    open_offers: list[dict[str, Any]] | None = None,
+    previous_input: str = "",
+    talking_to_someone: bool = False,
+) -> str:
+    """
+    Cheap gate: the reason this turn may hold quest material, or "" when not.
+
+    Recall comes first (playtest #81). A wasted parser call costs a few
+    seconds; a missed offer is lost for good, because nothing reads the turn
+    again. So the player asking for work opens the gate on its own, and so does
+    an answer to last turn's ask while the same conversation goes on.
+    """
+    if marks:
+        return "marks"
+    narration = str(narration or "")
+    player_input = str(player_input or "")
+    for sentence in _SENTENCE_SPLIT.split(narration):
+        if _JOB_RE.search(sentence) and (_ADDRESS_RE.search(sentence) or _DELIVERABLE_RE.search(sentence)):
+            return "narration_offer"
+    if player_asks_for_work(player_input):
+        return "player_asks_work"
+    if _JOB_RE.search(player_input) and (_ADDRESS_RE.search(player_input) or _DELIVERABLE_RE.search(player_input)):
+        # The player names a job ("any work for me?").
+        if re.search(r"\b(?:job|work|task|errand|bounty|contract|hire|quest)\b", player_input, re.I):
+            return "player_names_job"
+    if talking_to_someone and player_asks_for_work(previous_input):
+        # The giver may answer a turn late ("I go into the forge" after asking
+        # Bertram for work on the turn before).
+        return "answer_to_last_ask"
+    open_rows = list(active_quests or []) + list(open_offers or [])
+    if open_rows:
+        if player_accepts(player_input) or _DECLINE_RE.search(player_input):
+            return "answer_to_open_quest"
+        if _PROGRESS_RE.search(narration):
+            return "open_quest_progress"
+        low = narration.lower()
+        for quest in open_rows:
+            words = _title_words(str(quest.get("title") or ""))
+            if words and sum(1 for w in words if w in low) >= max(1, min(2, len(words))):
+                return "open_quest_named"
+    return ""
+
+
 def needs_quest_parse(
     narration: str,
     player_input: str = "",
@@ -142,31 +228,21 @@ def needs_quest_parse(
     marks: list[dict[str, Any]] | None = None,
     active_quests: list[dict[str, Any]] | None = None,
     open_offers: list[dict[str, Any]] | None = None,
+    previous_input: str = "",
+    talking_to_someone: bool = False,
 ) -> bool:
     """Cheap gate: True when this turn may hold quest material worth a parser call."""
-    if marks:
-        return True
-    narration = str(narration or "")
-    player_input = str(player_input or "")
-    for sentence in _SENTENCE_SPLIT.split(narration):
-        if _JOB_RE.search(sentence) and (_ADDRESS_RE.search(sentence) or _DELIVERABLE_RE.search(sentence)):
-            return True
-    if _JOB_RE.search(player_input) and (_ADDRESS_RE.search(player_input) or _DELIVERABLE_RE.search(player_input)):
-        # The player asks for work or names a job ("any work for me?").
-        if re.search(r"\b(?:job|work|task|errand|bounty|contract|hire|quest)\b", player_input, re.I):
-            return True
-    open_rows = list(active_quests or []) + list(open_offers or [])
-    if open_rows:
-        if player_accepts(player_input) or _DECLINE_RE.search(player_input):
-            return True
-        if _PROGRESS_RE.search(narration):
-            return True
-        low = narration.lower()
-        for quest in open_rows:
-            words = _title_words(str(quest.get("title") or ""))
-            if words and sum(1 for w in words if w in low) >= max(1, min(2, len(words))):
-                return True
-    return False
+    return bool(
+        quest_parse_gate(
+            narration,
+            player_input,
+            marks=marks,
+            active_quests=active_quests,
+            open_offers=open_offers,
+            previous_input=previous_input,
+            talking_to_someone=talking_to_someone,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +286,8 @@ def build_parser_prompt(
             {
                 "code": row.get("code") or (f"Q{row['id']}" if row.get("id") else ""),
                 "title": row.get("title") or "",
+                # "declined": the player turned it down; the rules below say
+                # not to propose it again (TODO n20).
                 "status": row.get("status") or ("offered" if row in (open_offers or []) else "active"),
                 "current_step": row.get("current_objective") or row.get("current_step_title") or "",
             }
@@ -231,23 +309,26 @@ def build_parser_prompt(
                     "title": "short name of the job, 3-8 words",
                     "summary": "one sentence: what is asked and why",
                     "giver": "known_npcs code or name of whoever offers it; empty for a notice or board",
-                    "status": "offered, or active only if the player accepted it in player_input",
                     "steps": [{"title": "concrete action", "description": "what doing it means", "location": "known_places code or the place name the story gives, else empty"}],
                     "reward": {"gold": "number only if the story names an amount, else 0", "xp": 0, "items": ["only items the story promises"], "text": "the promise in the story's words"},
                     "difficulty": "easy, normal, hard or deadly",
                     "timer_turns": "0 unless the story sets a deadline",
+                    "offer_line": "the giver's own words, or the sentence where the giver offers or agrees to the work, copied word for word",
                     "evidence": "a phrase copied word for word from narration or player_input",
                 }
             ],
             "updates": [
-                {"quest": "open_quests code", "action": "accept, step_done, complete, fail or abandon", "evidence": "a phrase copied word for word"}
+                {"quest": "open_quests code", "action": "accept, decline, step_done, complete, fail or abandon", "evidence": "a phrase copied word for word"}
             ],
         },
         "rules": [
             "Only record work the story actually offers or the player actually takes. Scenery, rumours with no ask, and the player's own idle plans are not quests.",
-            "evidence must be copied word for word from narration or player_input.",
-            "status is offered unless player_input clearly accepts the job in this turn.",
+            "evidence and offer_line must be copied word for word from narration or player_input.",
+            "For offer_line quote the giver offering or agreeing to the work, not the player's wish or question.",
+            "A new quest is always an offer. The player takes it or turns it down later.",
             "At most two new quests. Do not repeat anything already in open_quests; use updates for those.",
+            "open_quests with status declined were turned down by the player. Never list them again under new.",
+            "decline only for an offered quest that player_input turns down.",
             "Steps are concrete actions, one to six, each with the place the story names when it names one.",
             "Rewards only as the story states them; leave gold and xp at 0 when no amount is named.",
             "updates only for quests listed in open_quests, and only when the story shows the change.",
@@ -408,27 +489,125 @@ _NO_WORK_RE = re.compile(
 )
 
 
-def evidence_offers_work(evidence: str, narration: str = "", player_input: str = "") -> bool:
-    """
-    The sentence holding the evidence offers, asks for, or takes on work.
-
-    It must carry job language (_JOB_RE) and must not be a refusal ("no one is
-    hiring"). The sentence is read whole, so "if you bring the shipment up from
-    the cellar" counts and "the shipment is in the cellar" alone does not.
-    """
-    quote = re.sub(r"\s+", " ", str(evidence or "")).strip().lower()
+def _quote_sentences(quote_text: str, *texts: str) -> list[str]:
+    quote = re.sub(r"\s+", " ", str(quote_text or "")).strip().lower()
     if not quote:
-        return False
+        return []
     sentences: list[str] = []
-    for text in (narration, player_input):
+    for text in texts:
         for sentence in _SENTENCE_SPLIT.split(str(text or "")):
             flat = re.sub(r"\s+", " ", sentence).strip()
             if flat and (quote[:40] in flat.lower() or flat.lower() in quote):
                 sentences.append(flat)
-    pool = sentences or [quote]
-    if any(_NO_WORK_RE.search(s) for s in pool):
-        return False
-    return any(_JOB_RE.search(s) or _ACCEPTS_WORK_RE.search(s) for s in pool)
+    return sentences
+
+
+def _giver_sentences(narration: str, player_input: str, giver: dict[str, Any] | None, giver_ref: str, npcs: list[dict[str, Any]] | None) -> list[str]:
+    """What the giver says in the prose, and the narration sentences that name them."""
+    out: list[str] = []
+    code = str((giver or {}).get("code") or "").strip()
+    name = str((giver or {}).get("name") or "").strip()
+    if code:
+        try:
+            from app.conversation import spoken_lines
+
+            rows = [n for n in npcs or [] if isinstance(n, dict) and str(n.get("code") or "").strip()]
+            if giver and not any(str(r.get("code")) == code for r in rows):
+                rows.append(giver)
+            for entry in spoken_lines(narration, rows, player_input):
+                if entry.get("code") == code:
+                    out.extend(_SENTENCE_SPLIT.split(str(entry.get("unit") or "")))
+        except Exception:
+            pass
+    forms = []
+    if code:
+        forms.append(re.compile(r"\[\[\s*" + re.escape(code) + r"\s*\]\]"))
+    for form in {name, name.split()[0] if name else "", re.sub(r"^the\s+", "", str(giver_ref or "").strip(), flags=re.I)}:
+        if form and len(form) >= 3 and not re.fullmatch(r"[A-Z]\d*", form):
+            forms.append(re.compile(r"(?<!\w)" + re.escape(form) + r"(?!\w)", re.I))
+    if forms:
+        for sentence in _SENTENCE_SPLIT.split(str(narration or "")):
+            # "You approach Bertram and ask if he needs a hand" is the
+            # player's ask, not the giver's offer.
+            if re.match(r"\s*[\"'“]?you\b", sentence, re.I):
+                continue
+            if any(p.search(sentence) for p in forms):
+                out.append(sentence)
+    return [re.sub(r"\s+", " ", s).strip() for s in out if str(s or "").strip()]
+
+
+def judge_offer(
+    evidence: str,
+    narration: str = "",
+    player_input: str = "",
+    *,
+    offer_line: str = "",
+    giver: dict[str, Any] | None = None,
+    giver_ref: str = "",
+    npcs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    Does the exchange offer, ask for, or take on work? {"ok", "why", "checked"}.
+
+    Playtest #81 (live, T11): the parser rightly proposed "Learn to forge
+    steel", but quoted the player's wish ("you explain your desire to learn")
+    instead of Bertram agreeing to teach, and a sentence-local check overruled
+    it on that one sentence. The offer is judged on the exchange: the quote's
+    own sentence, the parser's offer_line, and what the giver says or does in
+    the prose. A player who asked for work plus a giver who agrees is an offer.
+    A refusal in the quote's own sentence still vetoes ("no one is hiring").
+    ``checked`` is the sentence the verdict rests on, for the turn report.
+    """
+    own = _quote_sentences(evidence, narration, player_input)
+    quote = re.sub(r"\s+", " ", str(evidence or "")).strip()
+    if not quote:
+        return {"ok": False, "why": "no_quote", "checked": ""}
+    pool = own or [quote]
+    for sentence in pool:
+        if _NO_WORK_RE.search(sentence):
+            return {"ok": False, "why": "refusal", "checked": sentence[:240]}
+    for sentence in pool:
+        if _JOB_RE.search(sentence) or _ACCEPTS_WORK_RE.search(sentence):
+            return {"ok": True, "why": "quote", "checked": sentence[:240]}
+    if offer_line and evidence_found(offer_line, narration, player_input):
+        for sentence in _quote_sentences(offer_line, narration, player_input) or [offer_line]:
+            if not _NO_WORK_RE.search(sentence) and (_JOB_RE.search(sentence) or _ACCEPTS_WORK_RE.search(sentence)):
+                return {"ok": True, "why": "offer_line", "checked": sentence[:240]}
+    giver_lines = [s for s in _giver_sentences(narration, player_input, giver, giver_ref, npcs) if not _NO_WORK_RE.search(s)]
+    for sentence in giver_lines:
+        if _JOB_RE.search(sentence):
+            return {"ok": True, "why": "giver_offers", "checked": sentence[:240]}
+    if player_asks_for_work(player_input):
+        for sentence in giver_lines:
+            if _AGREES_RE.search(sentence):
+                return {"ok": True, "why": "giver_agrees_to_ask", "checked": sentence[:240]}
+    return {"ok": False, "why": "no_offer_in_exchange", "checked": pool[0][:240]}
+
+
+def evidence_offers_work(
+    evidence: str,
+    narration: str = "",
+    player_input: str = "",
+    *,
+    offer_line: str = "",
+    giver: dict[str, Any] | None = None,
+    giver_ref: str = "",
+    npcs: list[dict[str, Any]] | None = None,
+) -> bool:
+    """
+    The exchange around the evidence offers, asks for, or takes on work.
+
+    The quote's sentence must carry job language (_JOB_RE) and must not be a
+    refusal ("no one is hiring"); failing that, the offer_line or the giver's
+    own words can carry it (see judge_offer). The sentence is read whole, so
+    "if you bring the shipment up from the cellar" counts and "the shipment is
+    in the cellar" alone does not.
+    """
+    return bool(
+        judge_offer(
+            evidence, narration, player_input, offer_line=offer_line, giver=giver, giver_ref=giver_ref, npcs=npcs
+        )["ok"]
+    )
 
 
 _ACCEPTS_WORK_RE = re.compile(
@@ -526,9 +705,14 @@ def _resolve_quest(ref: Any, existing: list[dict[str, Any]] | None) -> dict[str,
 def _is_duplicate(item: dict[str, Any], existing: list[dict[str, Any]] | None, giver_id: Any, first_place: str) -> dict[str, Any] | None:
     title = _norm(item.get("title"))
     for quest in existing or []:
-        if str(quest.get("status") or "active") not in {"active", "offered"}:
+        status = str(quest.get("status") or "active")
+        if status not in {"active", "offered", "declined"}:
             continue
-        if SequenceMatcher(None, title, _norm(quest.get("title"))).ratio() >= 0.6:
+        ratio = SequenceMatcher(None, title, _norm(quest.get("title"))).ratio()
+        if ratio >= 0.6:
+            return quest
+        if status == "declined" and giver_id and quest.get("giver_npc_id") == giver_id and ratio >= 0.4:
+            # The same giver rewording a job the player turned down (TODO n20).
             return quest
         if (
             giver_id
@@ -542,6 +726,7 @@ def _is_duplicate(item: dict[str, Any], existing: list[dict[str, Any]] | None, g
 
 _LEGAL = {
     "accept": {"offered"},
+    "decline": {"offered"},
     "step_done": {"active"},
     "complete": {"active"},
     "fail": {"active", "offered"},
@@ -578,15 +763,25 @@ def validate_quest_changes(
         elif _norm(title) in seen_titles:
             reasons.append("duplicate_in_turn")
         evidence = str(raw.get("evidence") or "").strip()
-        if not evidence_found(evidence, narration, player_input):
-            reasons.append("evidence_not_in_text")
-        elif not raw.get("_from_mark") and not evidence_offers_work(evidence, narration, player_input):
-            # Grounded is not enough: the words have to offer or ask for work.
-            # Qwen3 8B turned "the shipment is in the cellar" (said right after
-            # "no one is hiring") into an offered quest.
-            reasons.append("evidence_is_not_an_offer")
+        offer_line = str(raw.get("offer_line") or "").strip()
+        if not evidence_found(evidence, narration, player_input) and evidence_found(offer_line, narration, player_input):
+            # The giver's words are grounded even when the other quote drifted.
+            evidence = offer_line
         giver_ref = str(raw.get("giver") or "").strip()
         giver = _resolve_npc(giver_ref, npcs)
+        checked = ""
+        if not evidence_found(evidence, narration, player_input):
+            reasons.append("evidence_not_in_text")
+        elif not raw.get("_from_mark"):
+            # Grounded is not enough: the exchange has to offer or ask for
+            # work. Qwen3 8B turned "the shipment is in the cellar" (said right
+            # after "no one is hiring") into an offered quest.
+            verdict = judge_offer(
+                evidence, narration, player_input, offer_line=offer_line, giver=giver, giver_ref=giver_ref, npcs=npcs
+            )
+            checked = verdict["checked"]
+            if not verdict["ok"]:
+                reasons.append("evidence_is_not_an_offer")
         giver_named_in_story = bool(giver_ref) and _norm(giver_ref).replace("the ", "", 1) in _norm(f"{narration} {player_input}")
         if giver_ref and giver is None and not _BOARD_RE.search(giver_ref) and not giver_named_in_story:
             reasons.append("unknown_giver")
@@ -615,9 +810,11 @@ def validate_quest_changes(
         first_place = steps[0]["location_name"] if steps else ""
         dup = _is_duplicate({"title": title}, existing, giver.get("id") if giver else None, first_place)
         if dup is not None:
-            reasons.append(f"duplicate_of:{dup.get('code') or dup.get('id')}")
+            ref = dup.get("code") or dup.get("id")
+            # A job the player turned down is not offered again (TODO n20).
+            reasons.append(f"declined_before:{ref}" if str(dup.get("status") or "") == "declined" else f"duplicate_of:{ref}")
         if reasons:
-            rejected.append({"kind": "new", "item": raw, "reasons": reasons})
+            rejected.append({"kind": "new", "item": raw, "reasons": reasons, "checked": checked})
             continue
         reward = raw.get("reward") if isinstance(raw.get("reward"), dict) else {}
         gold = max(0, min(REWARD_GOLD_CAP, _int(reward.get("gold"), 0)))
@@ -626,7 +823,9 @@ def validate_quest_changes(
         difficulty = str(raw.get("difficulty") or "normal").strip().lower()
         if difficulty not in DIFFICULTIES:
             difficulty = "normal"
-        status = "active" if (str(raw.get("status") or "").lower() == "active" and accepts_now) else "offered"
+        # Every new quest is an offer (TODO n20): only Accept, or a later
+        # accept the engine can tie to this one offer, makes it the player's.
+        status = "offered"
         seen_titles.add(_norm(title))
         accepted["new"].append(
             {
@@ -660,20 +859,25 @@ def validate_quest_changes(
         action = str(raw.get("action") or "").strip().lower().replace(" ", "_")
         if action == "done":
             action = "step_done"
-        quest = _resolve_quest(raw.get("quest"), existing)
+        elif action in {"refuse", "reject", "turn_down"}:
+            action = "decline"
+        # Turned-down rows are kept only for the re-offer check; no update may touch them.
+        quest = _resolve_quest(raw.get("quest"), [q for q in existing or [] if str(q.get("status") or "") != "declined"])
+        if action == "accept" and quest is not None and str(quest.get("status") or "") == "active":
+            continue  # already taken this turn (a typed accept or the Accept button)
         if action not in QUEST_ACTIONS:
             reasons.append("unknown_action")
         if quest is None:
             reasons.append("unknown_quest")
         evidence = str(raw.get("evidence") or "").strip()
         if not evidence_found(evidence, narration, player_input):
-            # An accept the player typed is evidence enough on its own.
-            if not (action == "accept" and accepts_now):
+            # An accept or a refusal the player typed is evidence enough on its own.
+            if not ((action == "accept" and accepts_now) or (action == "decline" and _DECLINE_RE.search(str(player_input or "")))):
                 reasons.append("evidence_not_in_text")
         if quest is not None and action in _LEGAL and str(quest.get("status") or "") not in _LEGAL[action]:
             reasons.append(f"illegal_transition:{quest.get('status')}->{action}")
         if reasons:
-            rejected.append({"kind": "update", "item": raw, "reasons": reasons})
+            rejected.append({"kind": "update", "item": raw, "reasons": reasons, "checked": evidence[:240]})
             continue
         accepted["updates"].append(
             {"quest_id": quest.get("id"), "code": quest.get("code"), "title": quest.get("title"), "action": action, "evidence": evidence[:300]}
@@ -697,8 +901,14 @@ def _journal(conn, turn: int, content: str) -> None:
     conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (int(turn), "quest", str(content)[:1400]))
 
 
-def load_quest_context(conn) -> dict[str, list[dict[str, Any]]]:
-    """NPCs, places and open quests from the live DB, in the shapes validation reads."""
+def load_quest_context(conn, turn: int = 0) -> dict[str, list[dict[str, Any]]]:
+    """NPCs, places and open quests from the live DB, in the shapes validation reads.
+
+    Offers turned down in the last DECLINE_MEMORY_TURNS turns come along too, so
+    the same job is not filed again every time the giver mentions it (TODO n20).
+    """
+    from app.quests import DECLINE_MEMORY_TURNS
+
     npcs = _rows(conn, "SELECT id, code, name, role FROM npcs ORDER BY id DESC LIMIT 200")
     locations = _rows(conn, "SELECT id, code, name FROM locations ORDER BY id DESC LIMIT 200")
     existing = _rows(
@@ -706,8 +916,12 @@ def load_quest_context(conn) -> dict[str, list[dict[str, Any]]]:
         """
         SELECT q.id, q.code, q.title, q.status, q.giver_npc_id, q.current_step, q.total_steps,
                (SELECT s.location_name FROM quest_steps s WHERE s.quest_id = q.id AND s.step_number = 1) AS first_step_location
-        FROM quests q WHERE q.status IN ('active', 'offered') ORDER BY q.id DESC LIMIT 40
+        FROM quests q
+        WHERE q.status IN ('active', 'offered')
+           OR (q.status = 'declined' AND COALESCE(q.failed_turn, 0) >= ?)
+        ORDER BY q.id DESC LIMIT 40
         """,
+        (int(turn) - DECLINE_MEMORY_TURNS,),
     )
     return {"npcs": npcs, "locations": locations, "existing": existing}
 
@@ -724,9 +938,9 @@ def apply_quest_changes(conn, changes: dict[str, Any], *, narration: str, player
     try:
         if not isinstance(changes, dict) or not (changes.get("new") or changes.get("updates")):
             return report
-        from app.quests import advance_quest_step, create_quest, fail_quest, pay_quest_completion
+        from app.quests import accept_offered, advance_quest_step, create_quest, decline_offered, fail_quest, pay_quest_completion
 
-        ctx = load_quest_context(conn)
+        ctx = load_quest_context(conn, int(turn))
         accepted, rejected = validate_quest_changes(
             changes,
             narration=narration,
@@ -736,7 +950,14 @@ def apply_quest_changes(conn, changes: dict[str, Any], *, narration: str, player
             existing=ctx["existing"],
         )
         report["rejected"] = [
-            {"kind": r["kind"], "title": str(r["item"].get("title") or r["item"].get("quest") or "")[:80], "reasons": r["reasons"]}
+            # "quote": the sentence the offer check judged, so a review can see
+            # which words were read (playtest #81).
+            {
+                "kind": r["kind"],
+                "title": str(r["item"].get("title") or r["item"].get("quest") or "")[:80],
+                "reasons": r["reasons"],
+                "quote": str(r.get("checked") or "")[:240],
+            }
             for r in rejected
         ]
         for item in accepted["new"]:
@@ -766,18 +987,19 @@ def apply_quest_changes(conn, changes: dict[str, Any], *, narration: str, player
             )
             code = f"Q{quest_id}"
             giver = f" (from {item['giver_name']})" if item["giver_name"] else ""
-            if item["status"] == "active":
-                _journal(conn, turn, f"Quest accepted: {item['title']}{giver}")
-            else:
-                _journal(conn, turn, f"New job offered: {item['title']}{giver}")
+            _journal(conn, turn, f"New job offered: {item['title']}{giver}")
             report["created"].append({"code": code, "title": item["title"], "status": item["status"]})
         for upd in accepted["updates"]:
             qid = int(upd["quest_id"])
             action = upd["action"]
             title = upd["title"] or upd["code"]
             if action == "accept":
-                conn.execute("UPDATE quests SET status = 'active' WHERE id = ? AND status = 'offered'", (qid,))
-                _journal(conn, turn, f"Quest accepted: {title}")
+                # One path for every accept (TODO n20); it journals.
+                if accept_offered(conn, qid, turn=int(turn)) is None:
+                    continue
+            elif action == "decline":
+                if decline_offered(conn, qid, turn=int(turn)) is None:
+                    continue
             elif action == "step_done":
                 res = advance_quest_step(conn, qid, turn=int(turn))
                 pay_quest_completion(conn, qid, res)

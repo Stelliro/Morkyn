@@ -1416,8 +1416,9 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     offers = context.get("open_offers") if isinstance(context, dict) else None
     if isinstance(offers, list) and offers:
         instructions.append(
-            "open_offers are posted and not yet taken. They can be accepted. The story may offer other work "
-            "that fits this scene and quest_style, but not a pile of offers at once."
+            "open_offers were already offered. An offer still waiting for an answer: do not offer it again or "
+            "write the player taking it. An offer the player turned down (declined): do not offer it again. "
+            "The story may offer other work that fits this scene and quest_style, but not a pile of offers at once."
         )
     options = {}
     if isinstance(context, dict):

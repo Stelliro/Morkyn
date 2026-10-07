@@ -5,7 +5,7 @@ Quests are chains of up to 6 location steps. Each quest has:
 - title, description, reward (gold/XP/items)
 - optional timer
 - optional hidden sub-tasks revealed on arrival
-- status: active | offered | completed | failed | abandoned | expired
+- status: active | offered | declined | completed | failed | abandoned | expired
 
 Reward scales with length (steps) and difficulty.
 """
@@ -172,10 +172,83 @@ def get_offered_quests(conn) -> list[dict[str, Any]]:
     quests = _quests_with_status(conn, "offered")
     for quest in quests:
         quest["giver_name"] = ""
+        quest["giver_code"] = ""
         if quest.get("giver_npc_id"):
-            row = conn.execute("SELECT name FROM npcs WHERE id = ?", (quest["giver_npc_id"],)).fetchone()
+            row = conn.execute("SELECT name, code FROM npcs WHERE id = ?", (quest["giver_npc_id"],)).fetchone()
             quest["giver_name"] = str(row["name"] or "") if row else ""
+            quest["giver_code"] = str(row["code"] or "") if row else ""
     return quests
+
+
+def get_declined_offers(conn, *, since_turn: int = 0, limit: int = 8) -> list[dict[str, Any]]:
+    """Offers the player turned down at or after ``since_turn``: id, code, title, giver_npc_id, failed_turn."""
+    try:
+        rows = conn.execute(
+            "SELECT id, code, title, giver_npc_id, failed_turn FROM quests "
+            "WHERE status = 'declined' AND COALESCE(failed_turn, 0) >= ? ORDER BY id DESC LIMIT ?",
+            (int(since_turn), max(1, int(limit))),
+        ).fetchall()
+    except Exception:
+        return []
+    return [dict(r) for r in rows]
+
+
+# How long a refusal holds before the same job may be offered again.
+DECLINE_MEMORY_TURNS = 30
+
+
+def _offer_journal(conn, turn: int, content: str) -> None:
+    conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)", (int(turn), "quest", str(content)[:1400]))
+
+
+def _giver_suffix(conn, quest: dict[str, Any]) -> str:
+    if not quest.get("giver_npc_id"):
+        return ""
+    row = conn.execute("SELECT name FROM npcs WHERE id = ?", (quest["giver_npc_id"],)).fetchone()
+    name = str(row["name"] or "") if row else ""
+    return f" (from {name})" if name else ""
+
+
+def accept_offered(conn, quest_id: int, *, turn: int = 0) -> dict[str, Any] | None:
+    """
+    The one place an offer becomes the player's quest (TODO n20).
+
+    The Accept button, the parser's ``accept`` update and a typed "I'll take
+    the job" all come here, so an offer cannot be taken twice or by a path that
+    skips the journal. A timer starts now, not when the job was offered.
+    Returns the quest, or None when it was not an open offer.
+    """
+    quest = get_quest(conn, int(quest_id))
+    if not quest or str(quest.get("status") or "") != "offered":
+        return None
+    conn.execute(
+        "UPDATE quests SET status = 'active', turns_remaining = timer_turns WHERE id = ? AND status = 'offered'",
+        (int(quest_id),),
+    )
+    _offer_journal(conn, turn, f"Quest accepted: {quest['title']}{_giver_suffix(conn, quest)}")
+    quest["status"] = "active"
+    return quest
+
+
+def decline_offered(conn, quest_id: int, *, turn: int = 0) -> dict[str, Any] | None:
+    """
+    Record that the player turned an offer down (TODO n20).
+
+    ``declined`` keeps the row so the quest parser can refuse the same job when
+    the giver brings it up again (see quest_parser._is_duplicate). failed_turn
+    holds the turn of the refusal. Returns the quest, or None when it was not an
+    open offer.
+    """
+    quest = get_quest(conn, int(quest_id))
+    if not quest or str(quest.get("status") or "") != "offered":
+        return None
+    conn.execute(
+        "UPDATE quests SET status = 'declined', failed_turn = ? WHERE id = ? AND status = 'offered'",
+        (int(turn), int(quest_id)),
+    )
+    _offer_journal(conn, turn, f"Turned down: {quest['title']}{_giver_suffix(conn, quest)}")
+    quest["status"] = "declined"
+    return quest
 
 
 def pay_quest_completion(conn, quest_id: int, result: dict[str, Any]) -> None:

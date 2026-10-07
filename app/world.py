@@ -4413,14 +4413,22 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
     try:
         from app.quests import get_offered_quests
 
+        # id, giver_code, place and the promise feed the Accept / Decline
+        # prompt in the play view (TODO n20); the rest is what prompts read.
         state["open_quest_offers"] = [
             {
+                "id": q.get("id"),
                 "code": q.get("code"),
                 "title": q.get("title"),
                 "status": "offered",
                 "giver": q.get("giver_name") or "",
+                "giver_code": q.get("giver_code") or "",
                 "reward": f"{q.get('reward_gold') or 0}g / {q.get('reward_xp') or 0}xp",
+                "promised": (re.search(r"Promised: (.+)$", str(q.get("description") or "")) or [None, ""])[1],
                 "current_objective": (q.get("steps") or [{}])[0].get("description", ""),
+                "first_step": (q.get("steps") or [{}])[0].get("title", ""),
+                "location": (q.get("steps") or [{}])[0].get("location_name", ""),
+                "offered_turn": q.get("created_turn") or 0,
             }
             for q in get_offered_quests(conn)[:8]
         ]
@@ -16115,6 +16123,15 @@ def apply_turn(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                 (turn, "system", str(map_report.get("journal") or "")[:1400]),
             )
+        # Offers open before the typed-accept check, so an offer taken by a
+        # typed "I'll take the job" reaches the quest report and the scene
+        # thread like one taken by the Accept button (TODO n20).
+        try:
+            offered_before = {
+                int(r[0]): str(r[1] or "") for r in conn.execute("SELECT id, code FROM quests WHERE status = 'offered'").fetchall()
+            }
+        except Exception:
+            offered_before = {}
         try:
             from app.local_intel import apply_turn_intel
 
@@ -16145,6 +16162,24 @@ def apply_turn(
                 )
             except Exception as exc:
                 quest_report = {"status": "error", "error": str(exc)[:300], "created": [], "updated": [], "rejected": []}
+        if offered_before:
+            try:
+                taken = [
+                    int(r[0])
+                    for r in conn.execute(
+                        f"SELECT id FROM quests WHERE status = 'active' AND id IN ({','.join('?' * len(offered_before))})",
+                        tuple(offered_before),
+                    ).fetchall()
+                ]
+            except Exception:
+                taken = []
+            reported = {str(row.get("code") or "") for row in quest_report.get("updated") or [] if isinstance(row, dict)}
+            for quest_id in taken:
+                code = offered_before.get(quest_id) or f"Q{quest_id}"
+                if code not in reported:
+                    quest_report = {**quest_report, "updated": [*(quest_report.get("updated") or []), {"code": code, "action": "accept"}]}
+                    if quest_report.get("status") in {"skipped", "empty", "rejected"}:
+                        quest_report["status"] = "applied"
         result["quest_report"] = quest_report
         # The scene thread after this turn (playtest #20): a quest taken or
         # finished, who came along, where it now is. After the quest and the

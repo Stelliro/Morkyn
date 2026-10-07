@@ -15250,8 +15250,36 @@ def _quest_parser_inputs(context: dict[str, Any] | None) -> dict[str, list[dict[
         "npcs": npcs[:16],
         "locations": places[:12],
         "active_quests": [q for q in (ctx.get("active_quests") or []) if isinstance(q, dict)][:8],
-        "open_offers": [o for o in (ctx.get("open_offers") or []) if isinstance(o, dict)][:8],
+        "open_offers": [o for o in (ctx.get("open_offers") or []) if isinstance(o, dict)][:12],
     }
+
+
+def _quest_gate_memory(context: dict[str, Any] | None) -> dict[str, Any]:
+    """
+    Last turn's player line and whether a conversation is still going, for the
+    quest gate (playtest #81). A giver can answer an ask for work a turn late,
+    so the gate reads the ask from the engine's own turn summaries, not from
+    the narration it is judging.
+    """
+    ctx = context if isinstance(context, dict) else {}
+    previous = ""
+    rows = [r for r in (ctx.get("turn_summaries") or []) if isinstance(r, dict)]
+    if rows:
+        last = max(rows, key=lambda r: _int_or_zero(r.get("turn")))
+        summary = str(last.get("summary") or "")
+        if summary.startswith("player:"):
+            previous = re.split(r"\n\nResolved player references|\.\s+response:", summary[len("player:"):], maxsplit=1)[0].strip()
+    conversation = ctx.get("conversation") if isinstance(ctx.get("conversation"), dict) else {}
+    turn_conv = ctx.get("conversation_turn") if isinstance(ctx.get("conversation_turn"), dict) else {}
+    talking = bool(conversation.get("target") or turn_conv.get("addressed") or turn_conv.get("listening"))
+    return {"previous_input": previous[:600], "talking_to_someone": talking}
+
+
+def _int_or_zero(value: Any) -> int:
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _run_quest_parser(
@@ -15295,16 +15323,19 @@ def _run_quest_parser(
 
         record["phase"] = qp.PARSER_PHASE
         inputs = _quest_parser_inputs(context)
-        gate = bool(
-            qp.needs_quest_parse(
-                narration,
-                player_input,
-                marks=marks,
-                active_quests=inputs["active_quests"],
-                open_offers=inputs["open_offers"],
-            )
+        # Which branch opened the gate, or "" when it stayed shut, so a turn
+        # review can see why an offer was or was not read (playtest #81).
+        gate_reason = qp.quest_parse_gate(
+            narration,
+            player_input,
+            marks=marks,
+            active_quests=inputs["active_quests"],
+            open_offers=inputs["open_offers"],
+            **_quest_gate_memory(context),
         )
+        gate = bool(gate_reason)
         record["gate"] = gate
+        record["gate_reason"] = gate_reason
         parsed: dict[str, Any] = dict(empty)
         if gate and use_model and record["enabled"]:
             system, user = qp.build_parser_prompt(narration, player_input, marks=marks, **inputs)

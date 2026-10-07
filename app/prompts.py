@@ -1268,7 +1268,13 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
         slim_offers = []
         for row in offers[:8]:
             if isinstance(row, dict):
-                slim_offers.append({"title": row.get("title") or "", "source": row.get("source") or ""})
+                # Who offered it and whether the player has answered (TODO n20),
+                # so the narrator lets the talk go on instead of offering it again.
+                slim = {"title": row.get("title") or "", "source": row.get("source") or ""}
+                if row.get("giver"):
+                    slim["giver"] = row.get("giver")
+                slim["status"] = "turned_down" if row.get("status") == "declined" else "waiting_for_answer"
+                slim_offers.append(slim)
             else:
                 slim_offers.append(row)
         world["open_offers"] = slim_offers
@@ -1443,9 +1449,11 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "When world_state.direction_hint is present and direction_hint.told is true, "
         "say direction_hint.wording and do not add another place or a coordinate. "
         "When world_state.direction_hint is present and told is false, do not name a location for that question. "
-        "When world_state.open_offers is present, those jobs are posted and not yet taken. "
-        "The player can accept one. The story may offer other work that fits the scene and quest_style, "
-        "but not a pile of offers at once. "
+        "When world_state.open_offers is present, those jobs were already offered. "
+        "status waiting_for_answer: the player has not answered yet and answers with their own words or the Accept and "
+        "Decline buttons; do not offer it again and do not write the player taking or refusing it, but the giver can "
+        "answer questions about it. status turned_down: the player refused it; do not offer it again. "
+        "The story may offer other work that fits the scene and quest_style, but not a pile of offers at once. "
         "When world_state.active_quests is present, those are the player's jobs and the step each is on; "
         "keep them consistent, and let the story move a step only when the player's action earns it. "
         "When world_state.naming_contract is present the player asked for a name: "
