@@ -337,6 +337,25 @@ def _render_name(culture: str, given: str, family: str) -> str:
     return f"{family} {given}" if culture in _FAMILY_FIRST else f"{given} {family}"
 
 
+_ROSTER_PARTS: frozenset[str] | None = None
+
+
+def is_roster_name_part(word: str) -> bool:
+    """True when ``word``, exactly as written, is a given or family name in the pools.
+
+    Live gate N1: "Li Ping", drawn from these pools for cast_options, failed the
+    person-name check because "Ping" reads as the verb "pings", and the name
+    repair renamed the merchant in the prose. The engine's own roster is
+    the answer to "is this a name".
+    """
+    global _ROSTER_PARTS
+    if _ROSTER_PARTS is None:
+        _ROSTER_PARTS = frozenset(
+            part for pools in _NAMES.values() for names in pools.values() for part in names
+        )
+    return str(word or "") in _ROSTER_PARTS
+
+
 def _name_tokens(name: str) -> set[str]:
     return {part for part in re.split(r"[\s\-']+", _norm(name)) if len(part) >= 2}
 
@@ -1250,6 +1269,32 @@ def draw_names(
     return out
 
 
+# Words that cannot stand for a place in "{place}": a venue name never ends on one.
+_VENUE_CLOSED_WORDS = frozenset({
+    "the", "a", "an", "of", "at", "in", "on", "to", "by", "and", "or", "for", "from", "with", "near",
+    "over", "under", "upon", "into", "this", "that", "its", "his", "her", "their", "our", "my", "your",
+})
+
+
+def _venue_place_word(place_name: str) -> str:
+    """The place's own proper word for "{place}", or "".
+
+    Live gate N1: the first word was taken, so "The Refugees' Trail" gave
+    "The Kettle at The"; the draft used it as the town's name, MOVE and
+    LOC_NEW stored it and a shopkeeper was named "Mira Kettle" after it.
+    """
+    out = []
+    for raw in str(place_name or "").split():
+        word = raw.strip(",.;:!?\"()[]")
+        for suffix in ("'s", "\u2019s"):
+            if word.endswith(suffix):
+                word = word[: -len(suffix)]
+        word = word.strip("'\u2019")
+        if word and word.lower() not in _VENUE_CLOSED_WORDS and word[:1].isupper():
+            out.append(word)
+    return out[0] if out else ""
+
+
 def _render_venue(form: str, ctx: dict[str, Any], rng: random.Random, exclude_tokens: set[str]) -> str:
     era = ctx.get("era") or "preindustrial"
     group = "new" if era in NEW else "old"
@@ -1257,9 +1302,7 @@ def _render_venue(form: str, ctx: dict[str, Any], rng: random.Random, exclude_to
     noun = rng.choice(nouns)
     noun2 = rng.choice([x for x in nouns if x != noun])
     family_pool = [f for f in _family_names(str(ctx.get("culture") or "common"), "male") if _norm(f) not in exclude_tokens]
-    place = str(ctx.get("place_name") or "").split(" ")[0].strip(",.'") or rng.choice(nouns)
-    if place.endswith("'s"):
-        place = place[:-2]
+    place = _venue_place_word(str(ctx.get("place_name") or "")) or rng.choice(nouns)
     return form.format(
         adj=rng.choice(_VENUE_ADJ[group]),
         noun=noun,
@@ -1381,6 +1424,8 @@ def draw(
         if kind == "venue_name":
             forms = [text for text, tags in _VENUE_FORMS if _fits(tags, ctx)]
             text = _render_venue(rng.choice(forms), ctx, rng, tokens)
+            if text.split()[-1].lower() in _VENUE_CLOSED_WORDS:
+                continue  # a name cut mid-phrase is no name
         elif kind == "hair":
             text = _render_hair(ctx, rng, rolled)
         elif kind == "facial_features":

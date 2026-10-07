@@ -425,6 +425,35 @@ def begin_turn(
     return {"status": "none", "asked_along": asked} if asked else None
 
 
+# A sentence that goes on about the last person named: "He gestures...",
+# or their quoted reply.
+_CONTINUES_RE = re.compile(r"^[\"\u201c\u2018']|^(?:he|she|they|his|her|their)\b", re.IGNORECASE)
+
+
+def _sentences_about(sentences: list[str], name: str) -> list[str]:
+    """The sentences that name ``name``, each with the run of "he/she/they" and
+    quoted sentences straight after it.
+
+    Live gate N1: "Elias Thorn, come with me." The prose named him once, then
+    went on "He gestures toward the group..." and "\u201cCome on, if you're
+    determined to follow, we might still catch up.\u201d" Only the sentence with
+    his name was read, so his yes was missed and he never joined. The run stops
+    at the first sentence that is not his.
+    """
+    pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
+    out: list[str] = []
+    following = False
+    for sentence in sentences:
+        if pattern.search(sentence):
+            out.append(sentence)
+            following = True
+        elif following and _CONTINUES_RE.match(sentence.strip()):
+            out.append(sentence)
+        else:
+            following = False
+    return out
+
+
 def _companions_shown(asked: list[dict[str, str]], narration: str) -> list[dict[str, str]]:
     """Of those asked along, the ones the prose shows going along and not refusing."""
     sentences = re.split(r"(?<=[.!?])\s+", re.sub(r"\[\[[^\]]*\]\]", "", str(narration or "")))
@@ -433,8 +462,7 @@ def _companions_shown(asked: list[dict[str, str]], narration: str) -> list[dict[
         name = str(person.get("name") or "")
         if not name:
             continue
-        pattern = re.compile(rf"\b{re.escape(name)}\b", re.IGNORECASE)
-        mine = [s for s in sentences if pattern.search(s)]
+        mine = _sentences_about(sentences, name)
         if any(_REFUSE_RE.search(s) for s in mine):
             continue
         if any(_ALONG_RE.search(s) for s in mine):

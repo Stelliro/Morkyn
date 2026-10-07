@@ -540,7 +540,11 @@ def is_plausible_person_name(name: str) -> bool:
     # Descriptions are not names ("Woman", "Hooded Figure", "The Old Guard")
     if is_generic_person_label(n):
         return False
-    if _NAME_VERB_RE.search(n) or _NAME_SYSTEM_RE.search(n):
+    from app.example_pools import is_roster_name_part
+
+    # A given or family name from the engine's own pools is a name even when it
+    # spells a verb: "Li Ping" is a person, "System pings a local job" is not.
+    if any(not is_roster_name_part(m.group(0)) for m in _NAME_VERB_RE.finditer(n)) or _NAME_SYSTEM_RE.search(n):
         return False
     # Architecture / props are not people
     if _NAME_SCENERY_RE.search(n):
@@ -559,8 +563,9 @@ def is_plausible_person_name(name: str) -> bool:
     # Ordinal + object ("first window", "second gate") is not a person
     if re.search(r"\b(first|second|third|last|only)\s+\w+\b", n, re.I) and len(words) <= 3:
         return False
-    # Bare entity codes (case-insensitive): L1, I2, E3, A, AB — never people
-    if re.fullmatch(r"[A-Za-z]{1,3}\d{0,3}", n):
+    # Bare entity codes (case-insensitive): L1, I2, E3, A, AB — never people.
+    # A short given name from the pools ("Ned", "Una", "Bo") is not a code.
+    if re.fullmatch(r"[A-Za-z]{1,3}\d{0,3}", n) and not is_roster_name_part(n):
         return False
     if re.fullmatch(r"[LIElie]\d+", n):
         return False
@@ -10840,6 +10845,37 @@ def _different_people(stored: str, given: str) -> bool:
     return not (words(stored) & words(given))
 
 
+def _known_person_place(conn, code: str, name: str, loc_ref: Any) -> int:
+    """Where a person the world already has stays when their LOC names no known place; 0 otherwise.
+
+    Live gate N1: the context listed Mira's planned, unbuilt workplace
+    ("works_at": "Mira's Scribe's Office"); the draft repeated NPC_NEW for
+    Mira with that LOC, and the lookup minted the place and moved her into a
+    building the prose never showed. A new name in someone's LOC does not
+    build a place for a person who is already somewhere; a known place still
+    moves them, and a new person's LOC is read as before.
+    """
+    ref = str(loc_ref or "").strip()
+    if not ref or not name or re.fullmatch(r"\[?\[?L\d+\]?\]?", ref, re.I):
+        return 0
+    value = humanize_place_name(ref)
+    value = _alias_target(conn, value, "location") or value
+    if conn.execute("SELECT 1 FROM locations WHERE code = ?", (value.upper(),)).fetchone():
+        return 0
+    if _match_location_by_name(conn, value) or not is_plausible_place_name(value):
+        return 0
+    row = None
+    if code and re.fullmatch(r"[A-Za-z]{1,3}", code):
+        row = conn.execute("SELECT name, location_id FROM npcs WHERE code = ?", (code,)).fetchone()
+        if row is not None and _different_people(str(row["name"] or ""), name):
+            row = None
+    if row is None:
+        row = conn.execute(
+            "SELECT name, location_id FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 1", (name,)
+        ).fetchone()
+    return int(row["location_id"] or 0) if row is not None else 0
+
+
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     if not isinstance(npc, dict):
         return None
@@ -10871,7 +10907,7 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     if _is_place_or_item_code(str(loc_ref or "")):
         # Keep L1 as a place ref (good) — _find_location_id handles L#
         pass
-    location_id = _find_location_id(conn, loc_ref)
+    location_id = _known_person_place(conn, code, name, loc_ref) or _find_location_id(conn, loc_ref)
     race = str(npc.get("race") or npc.get("species") or "human")[:80]
     role = _sanitize_npc_role(npc.get("role") or "local")
     summary = str(npc.get("summary") or "")[:1400]
@@ -13253,6 +13289,12 @@ _HINT_FEMALE_RE = re.compile(r"\b(?:woman|girl|widow|crone|lady|barmaid|she|her|
 _HINT_MALE_RE = re.compile(r"\b(?:man|boy|barman|fellow|he|him|his|himself)\b", re.I)
 
 
+# "Mira, a wiry woman" / "Mira [[A]], a wiry woman": the name right before the figure.
+_APPOSITIVE_NAME_RE = re.compile(
+    r"(?P<full>(?P<first>[A-Z][\w'\u2019-]+)(?:\s+[A-Z][\w'\u2019-]+)?)\s*(?:\[\[[A-Z0-9]+\]\])?\s*,\s*$"
+)
+
+
 def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     """People the prose shows who might be new: described strangers and named
     speakers. A later "the <...> <noun>" with the noun of an earlier hint is the
@@ -13263,6 +13305,12 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     for match in _FIGURE_HINT_RE.finditer(str(text or "")):
         if re.search(r"\b(?:like|as|than|as\s+if|as\s+though)\s*$", str(text)[: match.start()], re.I):
             continue  # a simile: "like a man waiting for a trap to spring"
+        # Live gate N1: "Mira, a wiry woman with a sharp gaze" seeded Zihan the
+        # beekeeper from Mira's own description. A figure in apposition to a
+        # known name is that person.
+        appos = _APPOSITIVE_NAME_RE.search(str(text)[: match.start()])
+        if appos and (appos.group("full").lower() in known or appos.group("first").lower() in known):
+            continue
         hint = match.group(0).strip()
         words = hint.lower().split()
         noun = words[-2] if len(words) > 1 and re.match(r"(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)$", words[-1]) else words[-1]

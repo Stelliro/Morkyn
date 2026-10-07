@@ -13131,6 +13131,24 @@ _PLAYER_ACQUIRE_ACT_RE = re.compile(
     re.I,
 )
 _PLAYER_FOLLOW_RE = re.compile(rf"^{_ACT_ADVERBS}(?P<v>follow(?:s|ed)?)\b", re.I)
+# Live gate N1 (g2 t3): "You press your palm against it, and the ground beneath
+# shudders" after "I crouch and examine the symbols". Working a mechanism, a
+# door or a lever changes the world; the player chooses that. "You press on"
+# is walking, not working anything.
+_PLAYER_MANIPULATE_RE = re.compile(
+    rf"^{_ACT_ADVERBS}(?P<v>(?:press(?:es|ed)?|push(?:es|ed)?)"
+    r"(?!\s+(?:on|onward|onwards|forward|ahead|through|deeper|further|past|your\s+way)\b)|"
+    r"pull(?:s|ed)?|pr(?:y|ies|ied)|twist(?:s|ed)?|"
+    r"yank(?:s|ed)?|insert(?:s|ed)?|wedge[sd]?|lever(?:s|ed)?|force[sd]?)\b",
+    re.I,
+)
+# The player's line already works something: "I try to open the door" covers "You push the door".
+_INPUT_MANIPULATE_RE = re.compile(
+    r"\b(?:press\w*|push\w*|pull\w*|pr(?:y|ies|ied)|prise\w*|twist\w*|yank\w*|insert\w*|wedge\w*|lever\w*|"
+    r"forc\w*|open\w*|use|uses|using|used|touch\w*|try|tries|tried|activat\w*|turn\w*|work\w*|operat\w*|"
+    r"put|puts|place[sd]?|placing|lift\w*|tap|taps|tapp\w*|knock\w*|unlock\w*)\b",
+    re.I,
+)
 _INPUT_SPEECH_RE = re.compile(
     r"[\"\u201c\u201d?]|\b(?:say|ask|tell|reply|answer|respond|shout|call|whisper|greet|thank|agree|promise|talk|speak)\w*\b"
     r"|^[A-Z][\w'\u2019-]*(?:\s+[A-Z][\w'\u2019-]*)?,",
@@ -13244,6 +13262,16 @@ def _player_clause_invented(rest: str, clause: str, own: str, player_input: str)
     m = _PLAYER_FOLLOW_RE.match(rest)
     if m:
         return "" if _INPUT_MOVE_RE.search(own) else "movement"
+    m = _PLAYER_MANIPULATE_RE.match(rest)
+    if m:
+        if _verb_in_input(m.group("v"), own) or _INPUT_MANIPULATE_RE.search(own):
+            return ""
+        # "You press your palm against the archway, feeling the cold" while
+        # examining it is the examining (review of #30). Only a press that
+        # sets the world off in the same sentence is a new act.
+        if _INPUT_PERCEIVE_RE.search(own) and not _WORLD_TAIL_RE.search(clause):
+            return ""
+        return "manipulation"
     return ""
 
 
@@ -13252,7 +13280,12 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
     if re.search(r'["\u201c\u201d]', sentence):
         return sentence, ""
     start = _PLAYER_CLAUSE_START_RE.match(sentence)
-    if start and _player_clause_invented(sentence[start.end():], sentence, own, player_input):
+    family = _player_clause_invented(sentence[start.end():], sentence, own, player_input) if start else ""
+    if family == "manipulation":
+        # The world's half is what the invented press set off ("and the ground
+        # beneath shudders"); it is not an answer to anything the player did.
+        return "", sentence
+    if family:
         # "You nod, and he gestures toward the shelves, where ..." : the
         # player's half goes, the world's answer stays.
         tail = _WORLD_TAIL_RE.search(sentence)

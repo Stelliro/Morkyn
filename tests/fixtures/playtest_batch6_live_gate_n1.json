@@ -1,0 +1,199 @@
+{
+ "_source": "scratchpad\\smoke\\ab\\transcript_N1.json and N1\\g*\\data\\model_traces (live gate N1, writer off, Qwen3 8B)",
+ "g1t1": {
+  "input": "Mira, what are you selling here? And who is that cloaked figure by the archway?",
+  "draft_narration": "You stand at the threshold of the Whispering Wastes, where the air is dry and the wind carries the faintest whisper of distant voices. Mira, a wiry woman with a sharp gaze and a satchel slung over her shoulder, is the first to speak. She's selling a variety of oddities—dried herbs, cracked gemstones, and a rusted wrench that looks more like a relic than a tool. Her stall is modest, but the items she offers seem to carry a strange weight, as if they hold secrets of the land. \n\nThe cloaked figure by the archway is not speaking, but their presence is undeniable. Their hood obscures their face, and their posture is rigid, as though they are waiting for something—or someone. Mira glances at them briefly before returning her attention to you, her expression unreadable.\n\n\"Are you looking for something specific?\" she asks, her voice low and steady.",
+  "final_narration": "You stand at the threshold of the Whispering Wastes [[L1]], where the air is dry and the wind carries the faintest whisper of distant voices. Mira [[A]], a wiry woman with a sharp gaze and a satchel slung over her shoulder, is the first to speak. She's selling a variety of oddities—dried herbs, cracked gemstones, and a rusted wrench [[I6]] that looks more like a relic than a tool. Her stall is modest, but the items she offers seem to carry a strange weight, as if they hold secrets of the land.\n\nThe cloaked figure by the archway is not speaking, but their presence is undeniable. Their hood obscures their face, and their posture is rigid, as though they are waiting for something—or someone. Mira [[A]] glances at them briefly before returning her attention to you, her expression unreadable.\n\n\"Are you looking for something specific?\" she asks, her voice low and steady.",
+  "raw_ops": "SUMMARY: \"Mira introduces herself and her wares, while the cloaked figure remains silent and enigmatic.\"\nSCENE: conversation\nGOAL: \"To understand Mira's wares and the significance of the cloaked figure.\"\nFOCUS: event, \"Mira's stall and the cloaked figure's presence\"\nNPC_NEW: NAME \"Mira\", ROLE \"talisman scribe\", LOC \"the threshold of the Whispering Wastes\"\nTALK: \"Mira\", \"What are you selling here? And who is that cloaked figure by the archway?\"",
+  "state_changes": {
+   "inventory": [],
+   "moved": null,
+   "npcs_created": [
+    {
+     "code": "A",
+     "name": "Mira",
+     "role": "talisman scribe",
+     "location": "the threshold of the Whispering Wastes"
+    },
+    {
+     "code": "B",
+     "name": "Zihan",
+     "role": "beekeeper",
+     "location": "the threshold of the Whispering Wastes"
+    }
+   ],
+   "locations_created": [],
+   "gold": null,
+   "xp": null,
+   "party": null
+  }
+ },
+ "g1t3": {
+  "input": "I crouch and examine the cracked earth by the archway for footprints or anything dropped.",
+  "draft_narration": "The cracked earth by the archway is dry and brittle, its surface a mosaic of fine fractures. You crouch low, fingers sifting through the dust, looking for signs of passage or anything the cloaked figure might have left behind. Your gloves catch the faint glint of metal — a fragment of a broken chain, perhaps, or a shard of a weapon. The scent of scorched stone lingers in the dry breeze, and the distant howl of a wolf echoes across the wastes. No footprints, but the ground feels disturbed, as though someone has passed through here recently. Mira watches from a few paces away, her gaze sharp, her fingers tracing the edge of a parchment she holds. She doesn’t speak, but her silence is heavy, as if she knows more than she lets on.",
+  "final_narration": "The cracked earth by the archway is dry and brittle, its surface a mosaic of fine fractures. You crouch low, fingers sifting through the dust, looking for signs of passage or anything the cloaked figure might have left behind. Your gloves catch the faint glint of metal — a fragment of a broken chain, perhaps, or a shard of a weapon. The scent of scorched stone lingers in the dry breeze, and the distant howl of a wolf echoes across the wastes. No footprints, but the ground feels disturbed, as though someone has passed through here recently. Mira [[A]] watches from a few paces away, her gaze sharp, her fingers tracing the edge of a parchment she holds. She doesn’t speak, but her silence is heavy, as if she knows more than she lets on.",
+  "raw_ops": "SUMMARY: You find a broken chain fragment and sense the area was recently disturbed.\nSCENE: action\nGOAL: \"Investigate the disturbance and the cloaked figure's trail.\"\nFOCUS: event, disturbance\nNPC_NEW: NAME \"Mira\", ROLE \"talisman scribe\", LOC \"Mira's Scribe's Office\"\nTALK: A \"You find a broken chain fragment and sense the area was recently disturbed.\"\nGRANT: \"broken chain fragment\" QTY moderate\nWALK: north\nMOVE: \"the edge of the Whispering Wastes\"",
+  "state_changes": {
+   "inventory": [],
+   "moved": null,
+   "npcs_created": [],
+   "locations_created": [
+    {
+     "code": "L3",
+     "name": "Mira's Scribe's Office",
+     "kind": "",
+     "parent": null
+    }
+   ],
+   "gold": null,
+   "xp": null,
+   "party": [
+    1
+   ]
+  }
+ },
+ "g1t5": {
+  "input": "I head back and go into the nearest shop to see what they sell.",
+  "draft_narration": "You head back and step into the nearest shop, a modest general store at the edge of the Whispering Wastes. The scent of dried herbs and aged wood fills the small space, and the faint sound of a bell above the door jingles as you enter. Inside, a burly man with a thick beard and calloused hands is hunched over a counter, stacking bundles of dried meat. He looks up, surprised to see you, and his eyes narrow slightly. Mira [[A]], who has been quietly observing from the doorway, steps forward with a cautious glance. The man, who introduces himself as Li Ping [[B]], a local merchant, offers a gruff greeting and asks what you need. You glance around the shop, noting the sparse selection—salt, dried fish, and a few bolts of cloth. The silence between you is thick, and the weight of the cloaked figures you've been following lingers in the back of your mind.",
+  "final_narration": "You head back and step into the nearest shop, a modest general store at the edge of the Whispering Wastes [[L2]]. The scent of dried herbs and aged wood fills the small space, and the faint sound of a bell above the door jingles as you enter. Inside, a burly man with a thick beard and calloused hands is hunched over a counter, stacking bundles of dried meat. He looks up, surprised to see you, and his eyes narrow slightly. Mira [[A]], who has been quietly observing from the doorway, steps forward with a cautious glance. The man, who introduces himself as Fang, a local merchant, offers a gruff greeting and asks what you need. You glance around the shop, noting the sparse selection—salt, dried fish, and a few bolts of cloth. The silence between you is thick, and the weight of the cloaked figures you've been following lingers in the back of your mind.",
+  "raw_ops": "SUMMARY: You enter a general store and interact with the merchant Li Ping [[B]].\nSCENE: conversation\nGOAL: \"to speak with the merchant about what he sells\"\nFOCUS: resource, \"the shop's goods\"\nNPC_NEW: NAME \"Li Ping\", ROLE \"merchant\", LOC \"the edge of the Whispering Wastes\"\nTALK: B \"what you need\"\nGRANT: \"dried fish\" QTY moderate\nMOVE: \"the edge of the Whispering Wastes\"",
+  "state_changes": {
+   "inventory": [],
+   "moved": null,
+   "npcs_created": [
+    {
+     "code": "D",
+     "name": "Fang",
+     "role": "merchant",
+     "location": "the edge of the Whispering Wastes"
+    }
+   ],
+   "locations_created": [],
+   "gold": null,
+   "xp": null,
+   "party": [
+    1
+   ]
+  },
+  "cast_options": {
+   "names": [
+    "Li Ping",
+    "Hu Chun",
+    "Han Xiang",
+    "Liu Jun"
+   ],
+   "jobs": [
+    "woodcutter",
+    "hunter",
+    "quarryman",
+    "deserter"
+   ],
+   "venue_names": [
+    "Zhu's Forge",
+    "The Hare and Goose",
+    "The Ferret's Rest"
+   ],
+   "rule": "cast_options were drawn fresh for this turn and are not people or places yet. When the story needs a new person, give them one of cast_options.names or a name in the same style, and a job from cast_options.jobs or another that fits this place. A new building may take one of cast_options.venue_names. Use them only if the scene needs them; never give anyone a name already used in world_state."
+  }
+ },
+ "g2t2": {
+  "input": "Elias Thorn, come with me. Let's go after the refugee at the back of that group before they reach the town.",
+  "draft_narration": "Elias Thorn shifts his weight, the leather of his belt creaking as he steps forward. \"You're not exactly the type to chase rumors, are you?\" he says, his voice rough with gravel. \"That refugee's got a ways to go before reaching the main road, and the last thing we need is to get caught in the crossfire of the Iron Covenant's patrols.\" He gestures toward the group of travelers disappearing into the distance, their shadows stretching across the muddy path. \"Come on, if you're determined to follow, we might still catch up.\"",
+  "final_narration": "Elias Thorn [[A]] shifts his weight, the leather of his belt creaking as he steps forward. \"You're not exactly the type to chase rumors, are you?\" he says, his voice rough with gravel. \"That refugee's got a ways to go before reaching the main road, and the last thing we need is to get caught in the crossfire of the Iron Covenant's patrols.\" He gestures toward the group of travelers disappearing into the distance, their shadows stretching across the muddy path. \"Come on, if you're determined to follow, we might still catch up.\" The wind carries the distant clang of a blacksmith's hammer and the scent of burning wood from the roadside fire. A few of the refugees glance back, their faces gaunt with exhaustion, their cloaks tattered by the journey. The path ahead is a narrow ribbon of dirt, flanked by gnarled trees and the remnants of an old fence, its posts half-buried in the earth.",
+  "raw_ops": "SUMMARY: Elias agrees to accompany the player to track the refugee before they reach the main road.\nSCENE: action\nGOAL: \"To track the refugee before they reach the main road.\"\nFOCUS: event, refugee\nMOVE: \"The Refugees' Trail\"\nWALK: north STEPS 2\nNPC_NEW: NAME \"Kael Voss\" ROLE \"stranded traveler\" LOC \"The Refugees' Trail\" ATTITUDE \"anxious\" RACE \"human\"\nTALK: \"A\" \"Elias Thorn, come with me. Let's go after the refugee at the back of that group before they reach the towns.\"",
+  "state_changes": {
+   "inventory": [],
+   "moved": {
+    "from": "Mudflat Shrine Path",
+    "to": "The Refugees' Trail"
+   },
+   "npcs_created": [],
+   "locations_created": [
+    {
+     "code": "L2",
+     "name": "The Refugees' Trail",
+     "kind": "",
+     "parent": null
+    }
+   ],
+   "gold": null,
+   "xp": null,
+   "party": null
+  },
+  "asked_along": [
+   {
+    "code": "A",
+    "name": "Elias Thorn"
+   }
+  ]
+ },
+ "g2t3": {
+  "input": "I crouch and examine the symbols etched into the shrine wall.",
+  "draft_narration": "The shrine wall is cool beneath your fingers, its carvings worn smooth by time and weather. You trace the symbols, their edges faintly raised like raised ridges on a map. They form a pattern—spirals intersecting with jagged lines, as if the carver had tried to depict a storm without ever seeing one. A faint scent of damp stone and something metallic lingers in the air. You notice a small indentation near the base of the wall, just large enough to hold a coin. You press your palm against it, and the ground beneath shudders slightly. Dust falls from the ceiling, and a low, grinding sound echoes through the hollow space. The shrine is not empty. Something is still here, waiting.",
+  "final_narration": "The shrine wall is cool beneath your fingers, its carvings worn smooth by time and weather. You trace the symbols, their edges faintly raised like raised ridges on a map. They form a pattern—spirals intersecting with jagged lines, as if the carver had tried to depict a storm without ever seeing one. A faint scent of damp stone and something metallic lingers in the air. You notice a small indentation near the base of the wall, just large enough to hold a coin. You press your palm against it, and the ground beneath shudders slightly. Dust falls from the ceiling, and a low, grinding sound echoes through the hollow space. The shrine is not empty. Something is still here, waiting.",
+  "raw_ops": "SUMMARY: The shrine's symbols trigger a hidden compartment, revealing a faint tremor and a metallic scent.\nSCENE: action\nGOAL: \"Investigate the shrine's hidden compartment.\"\nFOCUS: event, tremor\nNPC_NEW: NAME \"Una Gilchrist\" ROLE \"nurse\" LOC \"The Refugees' Trail\"\nNPC_NOTE: \"Una Gilchrist is a nurse who tends to the injured along the trail. She is cautious and observant.\"\nTALK: \"Una Gilchrist\" \"You found something, didn't you? The ground shook when you pressed against the wall. That's not natural.\"\nGRANT: \"a small, rusted coin\" QTY \"trivial\" TYPE \"coin\" DESC \"A small, rusted coin with no markings, as if it was lost long ago.\" RARITY \"common\"\nMOVE: \"The Shrine's Hollow\"",
+  "state_changes": {
+   "inventory": [],
+   "moved": null,
+   "npcs_created": [],
+   "locations_created": [],
+   "gold": null,
+   "xp": null,
+   "party": null
+  }
+ },
+ "g2t4": {
+  "input": "I follow the refugees east along the path toward the town, with Elias Thorn beside me.",
+  "draft_narration": "The path ahead is a narrow strip of packed earth, flanked by skeletal trees and the distant hum of the river. The refugees move in a tight cluster, their belongings slung over shoulders or dragged along by children. You keep pace with them, your steps matching the rhythm of their hurried march. Elias Thorn stays close, his posture tense, his eyes scanning the horizon as if expecting trouble. The air is sharp with the smell of dust and damp wool, and the sun casts long shadows over the trail. A group of women with children and a few elderly men lag behind, their faces etched with exhaustion. You notice a man in the group clutching a bundle of dried herbs, his hands trembling as he tucks them into his satchel. The path winds toward a settlement you've only heard of in whispers—a place called the Kettle at The.",
+  "final_narration": "The path ahead is a narrow strip of packed earth, flanked by skeletal trees and the distant hum of the river. The refugees move in a tight cluster, their belongings slung over shoulders or dragged along by children. You keep pace with them, your steps matching the rhythm of their hurried march. Elias Thorn [[A]] stays close, his posture tense, his eyes scanning the horizon as if expecting trouble. The air is sharp with the smell of dust and damp wool, and the sun casts long shadows over the trail. A group of women with children and a few elderly men lag behind, their faces etched with exhaustion. You notice a man in the group clutching a bundle of dried herbs, his hands trembling as he tucks them into his satchel. The path winds toward a settlement you've only heard of in whispers—a place called the Kettle at The.",
+  "raw_ops": "MOVE \"The Kettle at The\"\nSUMMARY: You press on with the refugees, reaching the outskirts of the settlement.\nSCENE: travel\nGOAL: \"Reach the settlement and assess the situation.\"\nFOCUS: location \"the outskirts of the settlement\"\nNPC_NEW \"Mira Kettle\" \"shopkeeper\" \"The Kettle at The\" ATTITUDE wary RACE human\nNPC_NOTE \"A\" \"Elias Thorn is a watchman for the settlement.\"\nTALK \"A\" \"You're not welcome here, stranger. The refugees are already burdened enough without more mouths to feed.\"\nGRANT \"bread\" \"small\" TYPE food DESC \"Flat, coarse loaves baked in the hearth.\" RARITY mundane\nWALK east STEPS 2\nLOC_NEW \"The Kettle at The\" \"A modest shop with a thatched roof and a wooden sign hanging above the door. The air inside is thick with the smell of smoke and tanned leather.\"",
+  "state_changes": {
+   "inventory": [],
+   "moved": {
+    "from": "The Refugees' Trail",
+    "to": "The Kettle at The"
+   },
+   "npcs_created": [
+    {
+     "code": "B",
+     "name": "Mira Kettle",
+     "role": "shopkeeper The Kettle at The",
+     "location": "The Refugees' Trail"
+    }
+   ],
+   "locations_created": [
+    {
+     "code": "L3",
+     "name": "The Kettle at The",
+     "kind": "",
+     "parent": null
+    }
+   ],
+   "gold": null,
+   "xp": null,
+   "party": null
+  },
+  "current_location": "The Refugees' Trail",
+  "cast_options": {
+   "names": [
+    "Tilda Garner",
+    "Aubrey Draper",
+    "Sibyl Prowse",
+    "Osbert Radley"
+   ],
+   "jobs": [
+    "lamplighter",
+    "stable hand",
+    "organ grinder",
+    "typesetter",
+    "police constable"
+   ],
+   "venue_names": [
+    "Joliffe and Sons",
+    "Kettle and Daughters",
+    "The Kettle at The"
+   ],
+   "rule": "cast_options were drawn fresh for this turn and are not people or places yet. When the story needs a new person, give them one of cast_options.names or a name in the same style, and a job from cast_options.jobs or another that fits this place. A new building may take one of cast_options.venue_names. Use them only if the scene needs them; never give anyone a name already used in world_state."
+  }
+ }
+}

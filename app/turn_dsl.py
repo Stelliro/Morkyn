@@ -672,6 +672,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             "known_fact": "",
             "mentioned_by": None,
         }
+        if positional.get("places") and not flags.get("ROLE"):
+            npc["_place_candidates"] = list(positional["places"])
         turn["npcs"].append(npc)
     elif op == "NPC_NOTE":
         code = (args[0] if args else "").upper()
@@ -946,7 +948,7 @@ def _classify_npc_args(args: list[str]) -> dict[str, str]:
     a place called Dockwick and moved the carter there. A location now comes
     only from a location code (L1, [[L1]]) or the LOC flag, never a bare word.
     """
-    out = {"name": "", "location": "", "role": "", "attitude": ""}
+    out: dict[str, Any] = {"name": "", "location": "", "role": "", "attitude": ""}
     words: list[str] = []
     for raw in args:
         token = str(raw or "").strip()
@@ -980,7 +982,36 @@ def _classify_npc_args(args: list[str]) -> dict[str, str]:
         # "Dockwick" "Dockwick": a repeated name is not a role.
         rest = [w for w in words[rest_start:] if w.lower() != out["name"].lower() and w.lower() != words[0].lower()]
         out["role"] = " ".join(rest[:4]) if rest else ""
+        # A quoted capitalised phrase after the job may be a place (live gate N1:
+        # NPC_NEW "Mira Kettle" "shopkeeper" "The Kettle at The"). ops_to_turn
+        # reads it as the place only when this turn's MOVE or LOC_NEW names it.
+        places = [w for w in rest[:4] if " " in w and w[:1].isupper()]
+        if places:
+            out["places"] = places
     return out
+
+
+def _settle_npc_place_candidates(turn: dict[str, Any]) -> None:
+    """A positional NPC_NEW phrase that this turn's MOVE or LOC_NEW names is the
+    person's place, not part of their job; anything else stays in the role."""
+    named = {
+        str(loc.get("name") or "").strip().lower()
+        for loc in turn.get("locations") or []
+        if isinstance(loc, dict) and str(loc.get("name") or "").strip()
+    }
+    move = str((turn.get("player") or {}).get("move_to_location") or "").strip().lower()
+    if move:
+        named.add(move)
+    for npc in turn.get("npcs") or []:
+        candidates = npc.pop("_place_candidates", None) if isinstance(npc, dict) else None
+        for phrase in candidates or []:
+            if phrase.strip().lower() not in named:
+                continue
+            role = re.sub(r"\s+", " ", str(npc.get("role") or "").replace(phrase, " ")).strip()
+            npc["role"] = role or "local"
+            if not str(npc.get("location") or "").strip():
+                npc["location"] = phrase
+            break
 
 
 def _first_sentences(text: str, limit: int) -> str:
@@ -1059,6 +1090,7 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
         except TurnDslError as exc:
             # One bad line must not cost the turn every other op it got right.
             malformed_ops.append(str(exc))
+    _settle_npc_place_candidates(turn)
     # What this draft granted. A later patch can empty inventory_changes; a GOLD
     # loss that paid for these is void when none of them arrive (playtest #41).
     grants = [
