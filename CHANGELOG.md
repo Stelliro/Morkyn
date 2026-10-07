@@ -23,6 +23,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+## [0.10.0-dev.8] - 2026-10-08
+
+> Pre-release on the way to `0.10.0`. Fixes #69-#82 from the dev.7 hand-played game (town edges, Leave and walls, energy, prose/state agreement, NPC voice, quest offers) with Accept / Decline, Go with / Stay and Travel there prompts, and a UI layout pass. Not yet play-tested.
+
 ### Fixed
 
 - [CLAUDE] Review repairs, town (#70, #71): a port to another cell of the same town that the edge joins merged into a nearby point (or that the metre rounding put one tile off its join) gets its own stub again, so those cells no longer fail with 'a port is not on a road' (four cities of the live world did); the exit planner skips an outer edge that faces water or a mountain and the marker is never set on one; a world-map pick from inside a town is checked (walkable, within a walk of the exit) before the walk out is written, and a step refused after the walk out answers with the walk out instead of an error; a typed leave is a denial only when the negation governs the leave itself ('without a word I leave the city' leaves). Stored cells are unchanged; only cells generated from now on get the stubs. - `app/town_grid.py`, `app/town_moves.py`, `app/main.py`
