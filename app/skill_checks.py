@@ -1615,6 +1615,7 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # engine notes after it (#43), and in its own case so "the Forge" stays
     # a name.
     own = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0].strip()
+    act = None
     if not _COMBAT_LINE_RE.search(own):
         try:
             from app.prose_state import act_rules
@@ -1622,20 +1623,6 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
             act = act_rules(own)
         except Exception:
             act = None
-        if act:
-            return {
-                "skill_code": act["skill_code"],
-                # Work is against the task, not against the smith watching it.
-                "opposition": None,
-                "weapon_or_tool": "",
-                "social": False,
-                "npc_ref": None,
-                "act": act["phrase"],
-                "act_family": act["family"],
-                "act_verb": act["verb"],
-                "labour": True,
-                "routine": bool(act["routine"]),
-            }
     pairs = list(SKILL_TRIGGER_PATTERNS)
     # Pack triggers are checked first so a campaign can route "pole the barge"
     # to its own skill instead of falling through to a built-in near-match.
@@ -1648,21 +1635,56 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         pack_pairs, disabled = [], set()
 
     skill = None
+    from_pack = False
     # Patterns outer, variants inner: table order still decides which skill
     # wins, so a de-inflected match can never outrank an earlier pattern that
     # matched the sentence as typed.
     variants = _trigger_text_variants(text)
-    for pattern, code in list(pack_pairs) + pairs:
+    pack_list = list(pack_pairs)
+    for index, (pattern, code) in enumerate(pack_list + pairs):
         if code in disabled:
             continue
         try:
             if any(re.search(pattern, variant) for variant in variants):
                 skill = code
+                from_pack = index < len(pack_list)
                 break
         except re.error:
             continue
+    if act and act["skill_code"] not in disabled:
+        # The act decides the check (#85a), after the pack triggers and the
+        # disabled list (#85 review): a campaign that routes "haul the nets"
+        # to its own skill still rolls that skill, now as the act.
+        act_keys = {"act": act["phrase"], "act_family": act["family"], "routine": bool(act["routine"])}
+        if from_pack and skill:
+            return {**_check_with_opposition(skill, text, context), **act_keys}
+        if act["family"] == "perform":
+            # A performance is for someone: social, with the NPC it is for.
+            return {**_check_with_opposition(act["skill_code"], text, context), **act_keys}
+        # Work is against the task, not against the smith watching it.
+        check = {
+            "skill_code": act["skill_code"],
+            "opposition": None,
+            "weapon_or_tool": "",
+            "social": False,
+            "npc_ref": None,
+            **act_keys,
+        }
+        # Work and talk in one line keep both rolls (#85 review): "i polish
+        # the blades and ask Finnian what he pays" also rolls the ask against
+        # Finnian, as it did before the act took the turn's check.
+        if skill and skill != act["skill_code"]:
+            also = _check_with_opposition(skill, text, context)
+            if also.get("social"):
+                check["also_check"] = also
+        return check
     if not skill:
         return None
+    return _check_with_opposition(skill, text, context)
+
+
+def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None) -> dict[str, Any]:
+    """One inferred check for ``skill``: the opposing NPC or foe the line names, and the tool."""
     opposition: dict[str, Any] = {}
     ctx = context or {}
     matched_npc: dict[str, Any] | None = None

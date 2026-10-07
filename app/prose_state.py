@@ -311,6 +311,65 @@ def _act_word_is_verb(text: str, match: re.Match) -> bool:
     return True
 
 
+# Since #85a this reading also rolls the dice, costs the energy, passes the
+# clock and finishes quest steps, so a line that only names work is not the
+# player doing it (#85 review): "I ask Finnian to sharpen my sword", "I watch
+# Finnian polish the swords", "I tell Finnian I'll polish them after lunch".
+# A request, a look or a promise before the verb hands the act to someone or
+# to later, unless a fresh "I" takes it back ("I watch closely as I polish").
+_HANDED_OFF_BEFORE_RE = re.compile(
+    r"\b(?:ask|asks|asked|asking|tell|tells|told|telling|order|orders|ordered|beg|begs|begged|let|lets|"
+    r"watch|watches|watched|watching|observe|observes|observed|see|sees|saw|say|says|said|"
+    r"promise|promises|promised|agree|agrees|agreed|offer|offers|offered|plan|plans|planned|"
+    r"intend|intends|wait(?:s|ed)?\s+for)\b",
+    re.I,
+)
+_FRESH_PLAYER_SUBJECT_RE = re.compile(
+    r"\b(?:i|we)\b(?!['\u2019](?:ll|d)\b|\s+(?:will|shall|would|could|might|can|may)\b)", re.I
+)
+# Someone else as the subject right before the verb: "as Finnian forges", "while he polishes".
+_OTHER_DOER_BEFORE_RE = re.compile(r"\b(?:he|she|they)\s+(?:\w+ly\s+)?$|\b([A-Z][\w'\u2019-]*)\s+(?:\w+ly\s+)?$")
+# Work put off to later in the same sentence: "I'll polish them after lunch".
+_FUTURE_BEFORE_RE = re.compile(r"\b(?:i['\u2019]ll|we['\u2019]ll|i\s+will|we\s+will|going\s+to|gonna)\s+(?:[\w'-]+\s+){0,2}$", re.I)
+_LATER_AFTER_RE = re.compile(
+    r"\b(?:later|tomorrow|tonight|soon|next|after\s+(?:lunch|dinner|supper|breakfast|this|that|we|i)|in\s+the\s+morning)\b", re.I
+)
+
+
+def _act_is_players_now(text: str, match: re.Match, clause: str) -> bool:
+    """Whether the player does this act now, in their own voice (#85 review).
+
+    Not when it is inside quoted speech, in a question ("can I help you
+    polish the blades?"), asked of or watched in someone else, done by a
+    named or pronoun subject, or promised for later.
+    """
+    before = text[: match.start()]
+    if before.count('"') % 2 == 1 or before.count("\u201c") > before.count("\u201d"):
+        return False
+    after = text[match.end():]
+    clause_end = re.search(r"[,.;!?\n]", after)
+    if clause_end and clause_end.group(0) == "?":
+        return False
+    if not clause_end and after.rstrip().endswith("?"):
+        return False
+    lead = re.split(r"\s+(?:and|then|but)\s+", clause)[-1]
+    handed = None
+    for handed in _HANDED_OFF_BEFORE_RE.finditer(lead):
+        pass
+    if handed is not None and not _FRESH_PLAYER_SUBJECT_RE.search(lead[handed.end():]):
+        return False
+    other = _OTHER_DOER_BEFORE_RE.search(lead)
+    name = other.group(1) if other else ""
+    # "I help Finnian polish the swords" is the player's work too (Q1's own step).
+    helping = re.search(r"\bhelp(?:s|ed|ing)?\s+(?:[\w'\u2019-]+\s+){1,3}(?:to\s+)?$", lead, re.I)
+    if other and not helping and (not name or (name not in _NOT_A_SUBJECT and name not in {"I", "You", "We"} and not name.lower().endswith("ly"))):
+        return False
+    sentence_rest = re.split(r"[.!?\n]", after, maxsplit=1)[0]
+    if _FUTURE_BEFORE_RE.search(lead) and _LATER_AFTER_RE.search(sentence_rest):
+        return False
+    return True
+
+
 def declared_act(own_line: str) -> dict[str, Any] | None:
     """The hands-on act the player's own line declares: {"verb", "family", "phrase"}, or None."""
     text = str(own_line or "")
@@ -323,6 +382,8 @@ def declared_act(own_line: str) -> dict[str, Any] | None:
                 if _NEGATION_RE.search(clause) or _WISH_BEFORE_RE.search(clause):
                     continue
                 if not _act_word_is_verb(text, match):
+                    continue
+                if not _act_is_players_now(text, match, clause):
                     continue
                 if best is None or match.start() < best[0]:
                     best = (match.start(), family, verb)
@@ -365,9 +426,22 @@ _ORE_RE = re.compile(r"\b(?:ore|veins?|tunnels?|shafts?)\b", re.I)
 # a novice polishing a sword should not cut themselves two times in five.
 _ROUTINE_VERBS = frozenset({"polish", "whet", "clean", "scrub", "sweep", "stack", "unload", "haul", "patch"})
 # Family words that are not work in this line: "we split up", "fix my gaze on
-# him", "treat her to a drink".
+# him", "treat her to a drink". Since #85a this list also keeps idioms off the
+# dice, the energy and the clock (#85 review): "split the gold", "stack the
+# coins", "build up my courage", "fix him with a look", "dig through my bag",
+# "treat the innkeeper with respect".
 _NOT_WORK_RE = re.compile(
-    r"^(?:split\w*\s+(?:up|off)\b|fix\w*\s+(?:\w+\s+)?(?:gaze|eyes|stare|attention)\b|treat\w*\s+\w+(?:\s+\w+)?\s+to\s+)",
+    r"^(?:split\w*\s+(?:up|off)\b|fix\w*\s+(?:\w+\s+)?(?:gaze|eyes|stare|attention)\b|treat\w*\s+\w+(?:\s+\w+)?\s+to\s+"
+    r"|split\w*\s+(?:it\b|(?:the|our|my)\s+(?:gold|coins?|money|silver|cost|bill|loot|take|pay|difference|reward)\b)"
+    r"|stack\w*\s+(?:\w+\s+)?(?:coins?|gold|silver|chips?|cards?)\b"
+    r"|sweep\w*\s+(?:my|his|her|their|a|the)\s+(?:\w+\s+)?(?:gaze|eyes|look|glance|hand|arm)\b"
+    r"|hammer\w*\s+(?:on|at)\s+(?:the|a|his|her|their)\s+(?:\w+\s+)?(?:door|gate|wall|table|shutters?)\b"
+    r"|build\w*\s+(?:up\b|(?:\w+\s+)?(?:courage|nerve|trust|rapport|confidence|reputation|hopes?)\b)"
+    r"|fix\w*\s+\w+(?:\s+\w+)?\s+with\s+(?:a|an|my|the)\s+(?:\w+\s+)?(?:look|glare|stare|gaze|glance|eye)\b"
+    r"|dig\w*\s+(?:through|in|into|around\s+in)\s+(?:my|his|her|their|the|a)\s+(?:\w+\s+)?"
+    r"(?:bag|pack|pockets?|purse|satchel|pouch|memory|memories|notes)\b"
+    r"|treat\w*\s+\w+(?:\s+\w+)?\s+(?:like|as|kindly|fairly|badly|with\s+(?:\w+\s+)?"
+    r"(?:respect|kindness|contempt|suspicion|disdain|courtesy|caution|scorn|deference))\b)",
     re.I,
 )
 

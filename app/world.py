@@ -5995,6 +5995,22 @@ def _save_snapshot(
         _snapshot_setting(conn, key, rows)
     _snapshot_row(conn, "quests", "id >= 0", (), rows)
     _snapshot_row(conn, "quest_steps", "id >= 0", (), rows)
+    # Quest reward items reach the pack through quests.pay_quest_reward, not
+    # inventory_changes (playtest #85b), so a reward that stacks onto an item
+    # already held must be snapshotted here or a rewind keeps the extra and a
+    # regenerate pays it again (#85 review).
+    try:
+        for quest_row in conn.execute("SELECT reward_items FROM quests WHERE status = 'active'").fetchall():
+            try:
+                reward_names = json.loads(quest_row["reward_items"] or "[]")
+            except (TypeError, ValueError):
+                continue
+            for reward_name in reward_names if isinstance(reward_names, list) else []:
+                value = norm_name(str(reward_name or ""))
+                if value:
+                    _snapshot_row(conn, "inventory", "name = ?", (value,), rows)
+    except sqlite3.Error:
+        pass
     # Whole table, empty list included: the restore replaces it outright.
     try:
         rows["quest_clocks"] = rows_to_dicts(conn.execute("SELECT * FROM quest_clocks").fetchall())
@@ -16000,13 +16016,13 @@ def apply_turn(
             _cut_prose_at_refused_move(result, movement_report, player_input)
         except Exception:
             pass
-        # A price or payment the prose names is the gold that moves; it is
-        # marked server-authored so the band roller below leaves it (#69).
         if quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest"):
             # The quest's reward is the engine's payout (playtest #85b); a
             # reward the model adds for the same work would pay it twice.
             # Costs and payments (negative gold) still go through.
             _drop_model_rewards(result)
+        # A price or payment the prose names is the gold that moves; it is
+        # marked server-authored so the band roller below leaves it (#69).
         try:
             gold_note = _settle_stated_gold(result, player_input)
         except Exception as exc:
@@ -16471,6 +16487,9 @@ def apply_turn(
         settled_quest_ids: set[int] = set()
         if quest_attempt and _play_system_enabled(conn, "quests_enabled", True):
             settled_quest_ids.add(int(quest_attempt["quest_id"]))
+            # And every sibling the same act matched (#85 review): one polish
+            # must not pay Q1 through the engine and Q2 through the parser.
+            settled_quest_ids.update(int(i) for i in quest_attempt.get("candidate_ids") or [] if i)
             engine_row: dict[str, Any] = {
                 "code": quest_attempt["code"],
                 "action": "attempt",
@@ -16674,6 +16693,9 @@ def _turn_reward_summary(before_state: dict[str, Any], after_state: dict[str, An
             items_gained.append(
                 {"name": norm_name(str(name)), "quantity": units, "rarity": "common", "item_type": "misc", "description": "Quest reward."}
             )
+    # Every gold rise this turn, like xp_gain: a quest's pay, a sale, a refund
+    # or a found purse all show (#85 review: on purpose, the player's own purse
+    # is the one source, not the quest rows).
     gold_gain = max(0, int(after_player.get("gold") or 0) - int(before_player.get("gold") or 0))
     return {
         "xp_gain": xp_gain,
@@ -16876,6 +16898,9 @@ def _record_skill_check_rolls(conn, result: dict[str, Any], turn: int) -> None:
                         "act": str(check.get("act"))[:100],
                         "skill": str(skill.get("name") or code)[:60],
                         "skill_match": str(check.get("skill_match") or ""),
+                        # So a retry of the same work is told apart from new
+                        # work (#85 review): play_turn drops previous_act then.
+                        "act_family": str(check.get("act_family") or "")[:20],
                     }
                     if check.get("act")
                     else {}
@@ -16911,6 +16936,7 @@ def _previous_act(conn, turn_now: int) -> dict[str, Any] | None:
         "outcome": str(row["band"] or ""),
         "degree": str(inputs.get("degree") or ""),
         "turns_ago": max(1, int(turn_now) + 1 - int(row["turn"] or 0)),
+        **({"act_family": str(inputs["act_family"])} if inputs.get("act_family") else {}),
     }
 
 
@@ -16943,8 +16969,14 @@ def _quest_step_match(player_input: str) -> dict[str, Any] | None:
             here = {int(r["id"]) for r in conn.execute("SELECT id FROM npcs WHERE location_id = ?", (prow["lid"],)).fetchall()}
             for quest in quests:
                 if quest.get("giver_npc_id"):
-                    row = conn.execute("SELECT name FROM npcs WHERE id = ?", (quest["giver_npc_id"],)).fetchone()
+                    row = conn.execute(
+                        "SELECT n.name, COALESCE(l.code, '') AS place FROM npcs n "
+                        "LEFT JOIN locations l ON l.id = n.location_id WHERE n.id = ?",
+                        (quest["giver_npc_id"],),
+                    ).fetchone()
                     quest["giver_name"] = str(row["name"] or "") if row else ""
+                    # Work at the giver's own place needs the giver there (#85 review).
+                    quest["giver_location_code"] = str(row["place"] or "") if row else ""
             match = match_quest_step(own, quests, location_code=str(prow["code"] or ""), present_npc_ids=here)
             if match and match.get("completes_quest"):
                 quest = next((q for q in quests if int(q.get("id") or 0) == int(match["quest_id"])), None)
@@ -16990,17 +17022,23 @@ def _quest_step_attempt(
         return None
     done = outcome in STEP_DONE_OUTCOMES
     giver = str(match.get("giver_name") or "") or "whoever gave the job"
+    # Who sees it is who is here (#85 review: the note had an absent giver
+    # watching and paying).
+    giver_here = match.get("giver_present", True) is not False
     if done and match.get("completes_quest"):
         paid = str(match.get("reward_text") or "")
-        result = (
-            f"done: this finishes the job \"{match['title']}\"; {giver} sees it finished"
-            + (f" and pays {paid}" if paid else "")
-            + ". The engine pays it: no GOLD or XP op for it."
-        )
+        if giver_here:
+            result = (
+                f"done: this finishes the job \"{match['title']}\"; {giver} sees it finished"
+                + (f" and pays {paid}" if paid else "")
+            )
+        else:
+            result = f"done: this finishes the job \"{match['title']}\"" + (f"; it earns {paid}" if paid else "")
+        result += ". The engine pays it: no GOLD or XP op for it."
     elif done:
         result = f"done: the step \"{match['step']}\" of \"{match['title']}\" is finished; the job goes on."
     else:
-        result = f"not done: \"{match['title']}\" is still unfinished, and {giver} can see that."
+        result = f"not done: \"{match['title']}\" is still unfinished" + (f", and {giver} can see that." if giver_here else ".")
     return {
         "quest_id": int(match["quest_id"]),
         "code": match["code"],
@@ -17012,6 +17050,8 @@ def _quest_step_attempt(
         "done": done,
         "rolled": rolled,
         "matched": match.get("matched") or [],
+        # Every quest the same act matched: closed to the parser with this one.
+        "candidate_ids": [int(i) for i in match.get("candidate_ids") or [] if i],
         "act": str((match.get("act") or {}).get("phrase") or "")[:100],
         "note": {"quest": match["code"], "job": match["title"], "step": match.get("step") or "", "result": result},
     }
@@ -17542,26 +17582,36 @@ def play_turn(
             pending: list[dict[str, Any]] = []
             if check_cfg.get("auto_check_on_risky_actions") or check_cfg.get("auto_social_on_talk"):
                 inferred = infer_check_from_action(model_input, context)
-                if inferred and (inferred.get("social") or check_cfg.get("auto_check_on_risky_actions")):
-                    pending = [inferred]
+                # Work and talk in one line roll both (#85 review): the act's
+                # check and the social one it carries, each through its gate.
+                also = inferred.pop("also_check", None) if isinstance(inferred, dict) else None
+                for candidate in (inferred, also):
+                    if isinstance(candidate, dict) and (
+                        candidate.get("social") or check_cfg.get("auto_check_on_risky_actions")
+                    ):
+                        pending.append(candidate)
             quest_dice_ran = True
             if quest_match:
                 # A quest task always rolls, even with auto-checks off: the
                 # step is done or not on this roll (playtest #85b). The act is
                 # the player's own, read the way infer_check_from_action reads it.
                 act = quest_match.get("act") or {}
-                if not pending and act.get("skill_code"):
-                    pending = [
+                # Only a talk roll may already be pending; an act or a fight
+                # roll there decides the line itself.
+                if act.get("skill_code") and all(
+                    isinstance(i, dict) and i.get("social") and not i.get("act") for i in pending
+                ):
+                    pending.insert(
+                        0,
                         {
                             "skill_code": act["skill_code"],
                             "opposition": None,
                             "social": False,
                             "act": act.get("phrase") or "",
                             "act_family": act.get("family") or "",
-                            "labour": True,
                             "routine": bool(act.get("routine")),
-                        }
-                    ]
+                        },
+                    )
                 from app.quests import QUEST_CHECK_DIFFICULTY
 
                 for item in pending:
@@ -17694,6 +17744,18 @@ def play_turn(
                 outcome_note = act_outcome(skill_check_results)
                 if outcome_note:
                     mechanics_context["act_outcome"] = outcome_note
+                    # A retry of the same work: this roll is the one that
+                    # stands, so last turn's failure is not sent beside it as
+                    # a second, contrary rule (#85 review).
+                    this_family = next(
+                        (str(c.get("act_family") or "") for c in skill_check_results if c.get("act")), ""
+                    )
+                    prev_note = mechanics_context.get("previous_act")
+                    if isinstance(prev_note, dict) and (
+                        (this_family and prev_note.get("act_family") == this_family)
+                        or prev_note.get("act") == outcome_note.get("act")
+                    ):
+                        mechanics_context.pop("previous_act", None)
                 mechanics_context["social_attitudes"] = [
                     {
                         "skill": c.get("skill_code"),
@@ -17725,15 +17787,18 @@ def play_turn(
         if quest_step_attempt:
             mechanics_context = dict(context.get("mechanics_context") or {})
             outcome_note = dict(mechanics_context.get("act_outcome") or {})
-            if not outcome_note:
-                # No roll (dice off, or too spent to work): the engine still decided.
+            blocked = quest_step_attempt["outcome"] == "blocked"
+            if not outcome_note or blocked:
+                # No roll (dice off), or too spent to work: the engine still
+                # decided. A roll made while the spend was blocked does not
+                # stand over it (#85 review: "the work is done" beside a quest
+                # result of "not done").
                 from app.skill_checks import _ACT_OUTCOME_WORDS
 
-                blocked = quest_step_attempt["outcome"] == "blocked"
                 outcome_note = {
-                    "act": quest_step_attempt["act"],
-                    "skill": "",
-                    "proficiency": "",
+                    "act": outcome_note.get("act") or quest_step_attempt["act"],
+                    "skill": outcome_note.get("skill") or "",
+                    "proficiency": outcome_note.get("proficiency") or "",
                     "outcome": "failure" if blocked else "success",
                     "degree": "too exhausted to work" if blocked else "no roll",
                     "means": _ACT_OUTCOME_WORDS["failure" if blocked else "success"],
@@ -17890,7 +17955,25 @@ def play_turn(
                         c_practice, resolved, context.get("skills") or [], practice_turn
                     )
                     if change:
-                        result["skill_changes"] = list(result.get("skill_changes") or []) + [change]
+                        # The engine is the one source of practice growth (#85
+                        # review): a model SKILL op for the same skill this turn
+                        # would pay the same work twice.
+                        skill_row = resolved.get("skill") if isinstance(resolved.get("skill"), dict) else {}
+                        same = {
+                            str(n).strip().lower()
+                            for n in (change["name"], skill_row.get("name"), skill_row.get("code"))
+                            if str(n or "").strip()
+                        }
+
+                        def _same_skill(item: Any) -> bool:
+                            if not isinstance(item, dict) or item.get("_engine_practice"):
+                                return False
+                            raw = str(item.get("name") or "").strip()
+                            shown = _display_skill_name(norm_name(raw)) if raw else ""
+                            return raw.lower() in same or str(shown or "").lower() in same
+
+                        kept = [i for i in list(result.get("skill_changes") or []) if not _same_skill(i)]
+                        result["skill_changes"] = kept + [change]
         if skill_check_results:
             result["skill_checks"] = skill_check_results
             result["_skill_check_ui"] = {

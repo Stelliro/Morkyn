@@ -501,13 +501,17 @@ def match_quest_step(
 
     Pure. The line must declare a hands-on act (prose_state.act_rules, the
     reading the dice use). A step counts when the act's verb, or a verb of the
-    same family, is in the step's or quest's text, or two of the line's words
-    are; when the step names a place, the player is there; when it names the
-    giver, the giver is here. At most one quest is returned, so one "polish"
-    cannot finish two quests that both mention polishing: the most words, then
-    the most in the quest's title, then the oldest.
+    same family, is in the step's or quest's text together with a word of the
+    line that is not the verb (what it is done to), or two such words are;
+    when the step names a place, the player is there; when it names the giver,
+    or is at the giver's own place, the giver is here. At most one quest is
+    returned, so one "polish" cannot finish two quests that both mention
+    polishing: the most words, then the most in the quest's title, then the
+    oldest. ``candidate_ids`` lists every quest the act matched, the pick
+    included, so the parser cannot finish a sibling for the same act.
     Each quest needs "id", "code", "title", "current_step", "total_steps",
-    "steps" and optionally "giver_npc_id", "giver_name", "difficulty".
+    "steps" and optionally "giver_npc_id", "giver_name", "giver_location_code",
+    "difficulty".
     """
     own = str(own_line or "").strip()
     if not own or own.startswith("__") or _QUESTION_RE.search(own):
@@ -522,9 +526,17 @@ def match_quest_step(
         return None
     family_verbs = set(dict(_ACT_FAMILIES).get(act["family"]) or ())
     verb_forms = _word_forms(act["verb"])
+    # Every form of the act's own verbs: a line's verb is not also its object
+    # (#85 review: "i polish my boots" finished "Polish swords" on "polish" alone).
+    all_verb_forms = set(verb_forms)
+    for verb in family_verbs:
+        all_verb_forms |= _word_forms(verb)
     present = set(present_npc_ids or set())
     here = str(location_code or "").strip().upper()
     best: tuple[tuple[int, int, int], dict[str, Any]] | None = None
+    # Every quest this act would do, so the turn can close all of them to the
+    # parser, not only the one the engine picked (#85 review: Q2 beside Q1).
+    candidates: list[int] = []
     for quest in quests or []:
         if str(quest.get("status") or "active") != "active":
             continue
@@ -538,8 +550,15 @@ def match_quest_step(
         giver_name = str(quest.get("giver_name") or "").strip()
         step_text = f"{step.get('title') or ''} {step.get('description') or ''}"
         giver_first = giver_name.split()[0].lower() if giver_name else ""
-        if giver_first and quest.get("giver_npc_id") and giver_first in step_text.lower() and int(quest["giver_npc_id"]) not in present:
-            continue  # "helping Finnian polish" needs Finnian here
+        giver_away = bool(quest.get("giver_npc_id")) and int(quest["giver_npc_id"]) not in present
+        giver_place = str(quest.get("giver_location_code") or "").strip().upper()
+        if giver_away and (
+            (giver_first and giver_first in step_text.lower()) or (step_place and giver_place and step_place == giver_place)
+        ):
+            # "helping Finnian polish" needs Finnian here, and so does work at
+            # the giver's own place whether the step names them or not (#85
+            # review: with Finnian out, the same polish finished Q2 instead).
+            continue
         drop = {giver_first} if giver_first else set()
         words = _content_words(own, drop=drop)
         text_forms: set[str] = set()
@@ -549,9 +568,12 @@ def match_quest_step(
         for forms in _content_words(str(quest.get("title") or ""), drop=drop):
             title_forms |= forms
         hits = _overlap(words, text_forms)
+        object_hits = _overlap([w for w in words if not (w & all_verb_forms)], text_forms)
         verb_hit = bool(verb_forms & text_forms) or bool(family_verbs & text_forms)
-        if not (verb_hit and hits) and len(set(hits)) < 2:
+        # The verb plus something it is done to, or two such words.
+        if not ((verb_hit and object_hits) or len(set(object_hits)) >= 2):
             continue
+        candidates.append(int(quest.get("id") or 0))
         score = (len(set(hits)) + (1 if verb_hit else 0), len(set(_overlap(words, title_forms))), -int(quest.get("id") or 0))
         if best is None or score > best[0]:
             best = (
@@ -568,11 +590,14 @@ def match_quest_step(
                     "difficulty": str(quest.get("difficulty") or "normal"),
                     "giver_npc_id": quest.get("giver_npc_id"),
                     "giver_name": giver_name,
+                    "giver_present": not giver_away,
                     "matched": sorted(set(hits))[:6],
                     "act": act,
                 },
             )
-    return best[1] if best else None
+    if not best:
+        return None
+    return {**best[1], "candidate_ids": candidates}
 
 
 def _quests_with_status(conn, status: str) -> list[dict[str, Any]]:

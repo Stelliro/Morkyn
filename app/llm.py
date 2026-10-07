@@ -95,6 +95,7 @@ from app.turn_dsl import (
     narration_depth_floor,
     parse_dsl_turn,
     player_line_of,
+    previous_act_of,
 )
 from app.narration_pipeline import (
     drop_repeated_sentences,
@@ -12847,6 +12848,14 @@ def _retry_narration_prose(
     quest_note = outcome_note.get("quest") if outcome_note else None
     if isinstance(quest_note, dict) and quest_note.get("result"):
         outcome_lines.append(f"quest (decided by the engine, keep it): {quest_note['result']}")
+    # And how the last attempt went (#85 review: only the draft had it, so an
+    # expansion could still write T8's "already polished" from recall).
+    previous_note = previous_act_of(context)
+    if previous_note:
+        outcome_lines.append(
+            f"previous_act (decided by the dice, keep it): {previous_note.get('act', '')} -> {previous_note['outcome']}"
+            + (" (this turn's act_outcome is the new attempt and stands)" if outcome_note else "")
+        )
     instruction = "\n".join(
         [
             "Rewrite this scene as fuller prose. Return ONLY the prose.",
@@ -13962,6 +13971,8 @@ def _make_pipeline_paragraph_writer(
         "hinder or react, but nobody does it in the player's place (player_act names it when there is one). "
         "act_outcome, when present, is how the dice decided player_act: it turns out exactly so, never better or worse. "
         "act_outcome.quest.result, when present, is what the act did for a quest: done or not done exactly as it says. "
+        "previous_act, when present, is how the player's last attempt turned out: failed work is still not done, "
+        "finished work stays done (act_outcome, when also present, is the new attempt and stands). "
         "Nothing is paid, bought or handed over on a deal player_line has not agreed to; an offer stays an offer. "
         "conversation says who the player is talking to: only someone in who_answers answers the player; "
         "people in listening_only may react, but do not answer for them. "

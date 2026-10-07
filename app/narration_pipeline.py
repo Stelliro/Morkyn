@@ -2045,6 +2045,12 @@ def build_paragraph_briefs(
                 mech = context.get("mechanics_context") if isinstance(context.get("mechanics_context"), dict) else {}
                 if isinstance(mech.get("act_outcome"), dict):
                     brief["act_outcome"] = mech["act_outcome"]
+            # How the last rolled act went, so a writer does not redo or undo
+            # it from recall (playtest #85a, T8 "already polished"; #85 review:
+            # only the draft had it).
+            mech = context.get("mechanics_context") if isinstance(context.get("mechanics_context"), dict) else {}
+            if isinstance(mech.get("previous_act"), dict) and mech["previous_act"].get("outcome"):
+                brief["previous_act"] = mech["previous_act"]
         if talk:
             brief["conversation"] = talk
         if thread:

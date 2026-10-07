@@ -1269,7 +1269,8 @@ ACT_QUEST_RULE = (
 )
 PREVIOUS_ACT_RULE = (
     "previous_act is how the player's last attempt turned out (outcome). Keep to it: work that failed is still "
-    "not done, work that succeeded stays done, and nobody remembers it differently."
+    "not done, work that succeeded stays done, and nobody remembers it differently. When act_outcome is also "
+    "present, it is a new attempt this turn and its outcome is the one that stands now."
 )
 
 
@@ -1404,12 +1405,6 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
             instructions.append(ACT_OUTCOME_RULE)
             if isinstance(outcome.get("quest"), dict):
                 instructions.append(ACT_QUEST_RULE)
-    # How the player's last act turned out, so this scene does not redo or
-    # undo it from memory (playtest #85a, T8: "swords already polished").
-    previous = previous_act_of(context)
-    if previous:
-        packet["previous_act"] = previous
-        instructions.append(PREVIOUS_ACT_RULE)
         # The player's own offer (playtest #75, T7: the last 3 gold offered for
         # directions was never paid). The engine takes the sum when it is accepted.
         offer = player_trade_offer(own)
@@ -1419,6 +1414,15 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 f"trade_offer: the player offers {offer} gold. If the other side accepts, ===OPS=== has GOLD -{offer} "
                 "and ===NAR=== shows the coin handed over; if they refuse, there is no GOLD line and ===NAR=== says so."
             )
+    # How the player's last act turned out, so this scene does not redo or
+    # undo it from memory (playtest #85a, T8: "swords already polished").
+    # After the #75 offer, which belongs to every player line, not only to
+    # turns after a rolled act (#85 review). The engine leaves it out when
+    # this turn retries the same work (world.play_turn).
+    previous = previous_act_of(context)
+    if previous:
+        packet["previous_act"] = previous
+        instructions.append(PREVIOUS_ACT_RULE)
     packet["narration_length"] = narration_length_target(player_input)
     # Fresh per turn (app/example_pools.py): options, not people who exist.
     cast = context.get("cast_options") if isinstance(context, dict) else None
