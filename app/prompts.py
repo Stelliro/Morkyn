@@ -1278,6 +1278,11 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
             else:
                 slim_offers.append(row)
         world["open_offers"] = slim_offers
+    # Walk-with offers waiting for Go with / Stay, and people the player chose
+    # not to go with (TODO n21): the narrator does not walk them or ask again.
+    leads = context.get("open_leads")
+    if isinstance(leads, list) and leads:
+        world["open_leads"] = [row for row in leads[:6] if isinstance(row, dict)]
     if context.get("naming_contract"):
         world["naming_contract"] = context.get("naming_contract")
     if context.get("recall_contract"):
@@ -1453,6 +1458,9 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "status waiting_for_answer: the player has not answered yet and answers with their own words or the Accept and "
         "Decline buttons; do not offer it again and do not write the player taking or refusing it, but the giver can "
         "answer questions about it. status turned_down: the player refused it; do not offer it again. "
+        "When world_state.open_leads is present, someone already asked the player along. status waiting_for_answer: "
+        "the player has not gone with them; do not write the player going. status player_stayed: the player chose "
+        "to stay; do not ask again. "
         "The story may offer other work that fits the scene and quest_style, but not a pile of offers at once. "
         "When world_state.active_quests is present, those are the player's jobs and the step each is on; "
         "keep them consistent, and let the story move a step only when the player's action earns it. "

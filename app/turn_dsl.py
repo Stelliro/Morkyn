@@ -45,6 +45,9 @@ OPCODES = {
     # Quest marks. Optional: the engine's quest parser also reads the prose.
     "QUEST",
     "QUEST_DONE",
+    # Someone asks the player along or offers to take them somewhere (TODO
+    # n21). An offer, not a move: the engine turns it into Go with / Stay.
+    "LEAD",
 }
 
 QUEST_DONE_ACTIONS = ("accept", "step_done", "complete", "fail", "abandon")
@@ -98,6 +101,7 @@ NOTE: in quotes, one fact worth keeping in the journal.
 CAST: one of present, interacting, off, then a person's code; or keyword, then one word for the scene.
 QUEST: the job's title in quotes, GIVER and the giver's code or name in quotes, STEP and the first thing to do in quotes. May add AT with a place code or name in quotes, REWARD with what was promised in quotes.
 QUEST_DONE: the quest's code or title in quotes, then one of accept, step_done, complete, fail, abandon.
+LEAD: the code of the person who asks the player to come along or offers to take them somewhere. May add TO with the place they named, in quotes.
 
 Rules:
 CAST is the only way to change who is in the active scene.
@@ -109,6 +113,8 @@ QUEST marks work the story just offered or the player just took on. Marking is o
 engine also reads the prose for offered work, so write the offer in ===NAR=== either way. At most
 one QUEST per turn, and only for real work with a giver and a first step, not idle talk.
 QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dropped.
+LEAD marks an offer to take the player along. The player has not gone: ===NAR=== ends on the offer with
+the player still where they are, and the player answers with their own words or the Go with and Stay buttons.
 - Database/world_state is source of truth. Only propose justified changes.
 - playthrough_options.choices are this playthrough's labels. For RANK, use only the rungs named in choices.rank_scale. playthrough_options.setting_templates, when present, is the one written rule this action named. Follow that included rule. Do not replace its labels.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
@@ -292,13 +298,13 @@ def _decode_arg_escapes(text: str) -> str:
 # "INDEX npc F \"...\"" parsed as flags={NPC: F} with one positional left, failed
 # INDEX's own arity check, and cost the turn every op on every other line.
 _LEADING_POSITIONALS = {"FOCUS": 1, "INDEX": 2}
-_OPCODE_FLAG_KEYS: dict[str, set[str]] = {"QUEST": {"GIVER", "STEP", "AT", "REWARD"}}
+_OPCODE_FLAG_KEYS: dict[str, set[str]] = {"QUEST": {"GIVER", "STEP", "AT", "REWARD"}, "LEAD": {"TO"}}
 # Flags whose unquoted value may be several words ("ROLE net mender").
 # Playtest #34 (live): "NAME Umar Mendes" kept only "Umar", and the roster
 # lookup then minted a second person. A name runs to the next flag too.
-_MULTIWORD_FLAGS = {"ROLE", "LOC", "NAME"}
+_MULTIWORD_FLAGS = {"ROLE", "LOC", "NAME", "TO"}
 # Longest unquoted run each multi-word flag may take.
-_MULTIWORD_LIMIT = {"ROLE": 4, "LOC": 6, "NAME": 4}
+_MULTIWORD_LIMIT = {"ROLE": 4, "LOC": 6, "NAME": 4, "TO": 6}
 # A <slot> the model copied from a placeholder: "LOC <The Wasteland's Edge>"
 # (live Qwen3 8B, playtest #28). The wrapper is syntax, not text; the span is
 # read as one quoted argument. Only a bracket at a token edge counts, so
@@ -521,6 +527,11 @@ OPCODE_ALIASES = {
     "QUEST_UPDATE": "QUEST_DONE",
     "QUESTDONE": "QUEST_DONE",
     "QUEST_STEP": "QUEST_DONE",
+    "FOLLOW_ME": "LEAD",
+    "INVITE": "LEAD",
+    "ESCORT": "LEAD",
+    "GUIDE": "LEAD",
+    "LEAD_TO": "LEAD",
 }
 
 
@@ -984,6 +995,16 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         if not quest or action not in QUEST_DONE_ACTIONS:
             raise TurnDslError(f"QUEST_DONE requires a quest and one of {', '.join(QUEST_DONE_ACTIONS)} on line {entry['line']}")
         turn.setdefault("quest_marks", []).append({"op": "QUEST_DONE", "quest": quest[:80], "action": action})
+    elif op == "LEAD":
+        # Kept on _dsl, which the trace keeps and the verifier never sees: an
+        # offer is checked by the engine (app/turn_prompts.py), not rewritten.
+        who = re.sub(r"^\[\[|\]\]$", "", str(args[0] if args else flags.get("NPC", "")).strip()).strip("[]")
+        if not who:
+            raise TurnDslError(f"LEAD requires the person's code on line {entry['line']}")
+        to = str(flags.get("TO") or (" ".join(args[1:]) if len(args) > 1 else "")).strip()
+        if re.fullmatch(r"to", to.split(" ")[0] if to else "", re.I):
+            to = to.split(" ", 1)[1] if " " in to else ""
+        turn["_dsl"].setdefault("leads", []).append({"npc": who[:40], "to": to[:120]})
     elif op == "CAST":
         slot = str(args[0] if args else "").strip().lower()
         value = " ".join(args[1:]).strip() if len(args) > 1 else ""
@@ -1419,6 +1440,12 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
             "open_offers were already offered. An offer still waiting for an answer: do not offer it again or "
             "write the player taking it. An offer the player turned down (declined): do not offer it again. "
             "The story may offer other work that fits this scene and quest_style, but not a pile of offers at once."
+        )
+    leads = context.get("open_leads") if isinstance(context, dict) else None
+    if isinstance(leads, list) and leads:
+        instructions.append(
+            "open_leads were already offered. waiting_for_answer: the player has not gone with them; do not write the "
+            "player going, and do not offer it again. player_stayed: the player chose to stay; do not ask again."
         )
     options = {}
     if isinstance(context, dict):

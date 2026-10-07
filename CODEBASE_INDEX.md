@@ -65,6 +65,7 @@ Morkyn/
 |   |-- town_grid.py                 # City cells' roads, plots and plotted shops (lazy per cell), town_seen, read API
 |   |-- town_moves.py                # The player inside a town: position, road walks, typed targets, plots made places
 |   |-- turn_dsl.py                  # NAR+OPS draft language
+|   |-- turn_prompts.py              # Go with / Stay and Travel there buttons, the set destination, engine routes
 |   |-- updates.py                   # Optional GitHub update/rollback
 |   `-- world.py                     # State, planner, memory consolidation, slots, index
 |-- content/
@@ -164,6 +165,14 @@ Morkyn/
 - **Key API:** `stated_coin_amounts()`, `player_trade_offer()`, `offer_answer()`, `strip_negated_clauses()`, `declared_act()`, `act_handed_off()`, `sentence_spans()`, `cut_from()`, `drop_sentences()`; `venues.led_to_in_prose()`.
 - **Consumers:** `app.world.apply_turn` (stated gold before `resolve_turn_bands`, purse after `_void_unbought_spend`, reconciliation after `_apply_player`; result `_prose_state`), `app.world._travel_scoring_text` (negation), `app.llm._drop_player_overreach` (scene cut, `act_handed_off`), `app.turn_dsl.build_dsl_user_prompt` (`player_act`, `trade_offer`), `app.narration_pipeline.build_paragraph_briefs` (`player_act`).
 - **Design Notes:** Turn-time only: no schema change and no stored row rewritten. Trims keep a 200-character floor; what cannot be matched safely is listed under `_prose_state.unreconciled` for measurement. Handing the declared act to an NPC is measured (`act_handed_off`), not refused.
+
+#### Walk-with and Travel-to Prompts
+
+- **Files:** `app/turn_prompts.py`, `app/main.py` (`POST /api/prompts/{id}`, `POST /api/travel`, `_travel_press`), `app/turn_dsl.py` (LEAD op, kept on `_dsl.leads`), `app/town_moves.py` (`_answer_pending_lead`, the lead plot on `town_led_unasked`), `app/local_intel.py` (`turn_direction_hint`, `_record_hint`), `static/app.js` (`renderMovePrompt`, `postMoveChoice`), `static/index.html` (`#movePrompt`)
+- **Purpose:** What a turn offered, as buttons (TODO n21, n22): Go with <name> / Stay for a lead, Go to / Set as destination / Not now for a place someone told the player about, and a Travel button while a destination is set. Offers come from engine facts only; nothing moves until a button is pressed, and every walk is the engine's own (town walks, the exit planner, world-map steps as a map click).
+- **Key API:** `gate_after_turn()` (apply_turn, after the scene thread), `state_view()`, `leads_for_draft()`, `pending_lead()`, `find()`, `remove()`, `destination()`, `set_destination()`, `quest_prompt()`, `resolve_place()`, `plot_target()`, `location_target()`, `quest_step_target()`, `walk_in_town()`, `next_world_step()`, `bring_along()`, `join_companion()`.
+- **Consumers:** `app.world.apply_turn` (gate; result `_turn_prompts`), `app.world.get_state` (`prompts`, `travel_destination`), `app.world.build_prompt_context` (`open_leads`), `app.prompts._visible_world` and `app.turn_dsl.build_dsl_user_prompt` (open_leads rule), `app.town_moves.plan_turn` (typed answer), `app.main._answer_offer` (quest Travel there on Accept).
+- **Design Notes:** State is two settings rows, `turn_prompts` ({turn, items, stayed}) and `travel_destination`, both in `SNAPSHOT_SETTING_KEYS`; a typed turn replaces the prompts. No schema change. A Travel press walks at most `tile_world.STEP_BUDGET` world tiles and stops where the route stops (gate halt, 409 refusal, blocked way, encounter scene).
 
 #### Speech Memory and People
 

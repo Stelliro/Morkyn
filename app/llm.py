@@ -415,6 +415,8 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "map_space",
     "direction_hint",
     "open_offers",
+    # Walk-with offers waiting for Go with / Stay (TODO n21, app/turn_prompts.py).
+    "open_leads",
     # The player's quests and their current step. prompts.py shows them every
     # turn; this key was missing, so that view never fired.
     "active_quests",
@@ -9994,6 +9996,7 @@ WORLD_STATE_DROP_ORDER: tuple[str, ...] = (
     "named",
     "relevant_asks",
     "open_offers",
+    "open_leads",
     "active_quests",
     "narrative_voice",
     "skill_check_context",

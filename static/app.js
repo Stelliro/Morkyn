@@ -8958,6 +8958,7 @@ function renderShell(nextState, options = {}) {
   refreshNpcStage();
   paintPlayDock();
   renderOfferPrompt();
+  renderMovePrompt();
   pushAllPopouts();
   queueAutoNpcPortraits();
 }
@@ -12560,6 +12561,140 @@ function handleOfferClick(event) {
 }
 
 document.querySelector("#offerPrompt")?.addEventListener("click", handleOfferClick);
+
+// Go with / Stay, Travel there and the set destination (TODO n21, n22).
+let moveBusy = false;
+let moveNote = { text: "", turn: -1 };
+
+function moveSourceKicker(source) {
+  const kind = String(source?.kind || "");
+  if (kind === "direction_hint") return "You were told the way";
+  if (kind === "quest") return "Quest step";
+  if (kind === "person_named") return "Someone named them";
+  return "Someone mentioned it";
+}
+
+/**
+ * Painted from state.prompts and state.travel_destination after every turn and
+ * load, in the same strip as the job offers. The server decided what is on
+ * offer (app/turn_prompts.py) and does all the walking; nothing here moves the
+ * player until a button is pressed.
+ */
+function renderMovePrompt() {
+  const host = document.querySelector("#movePrompt");
+  if (!host) return;
+  const prompts = Array.isArray(state?.prompts) ? state.prompts.filter((p) => p && p.id) : [];
+  const dest = state?.travel_destination?.target ? state.travel_destination : null;
+  const cards = prompts
+    .map((p) => {
+      const id = escapeHtml(String(p.id));
+      if (p.kind === "walk_with") {
+        const who = escapeHtml(p.npc_name || "Someone");
+        const where = p.to_label ? ` to ${escapeHtml(p.to_label)}` : "";
+        return `
+        <article class="pendingChoiceCard" data-move-card="${id}">
+          <p class="pendingChoiceKicker">${who} asks you along</p>
+          <p class="pendingChoiceTitle">Go with ${who}${where}?</p>
+          <div class="pendingChoiceActions">
+            <button type="button" class="chipBtn" data-move-prompt="${id}" data-move-choice="go">Go with ${who}</button>
+            <button type="button" class="chipBtn secondaryButton" data-move-prompt="${id}" data-move-choice="stay">Stay</button>
+          </div>
+        </article>`;
+      }
+      if (p.kind === "travel_to") {
+        const label = escapeHtml(p.label || "there");
+        return `
+        <article class="pendingChoiceCard" data-move-card="${id}">
+          <p class="pendingChoiceKicker">${escapeHtml(moveSourceKicker(p.source))}</p>
+          <p class="pendingChoiceTitle">${label}</p>
+          <div class="pendingChoiceActions">
+            <button type="button" class="chipBtn" data-move-prompt="${id}" data-move-choice="go">Go to ${label}</button>
+            <button type="button" class="chipBtn secondaryButton" data-move-prompt="${id}" data-move-choice="set">Set as destination</button>
+            <button type="button" class="chipBtn secondaryButton" data-move-prompt="${id}" data-move-choice="dismiss" title="Leave it">Not now</button>
+          </div>
+        </article>`;
+      }
+      return "";
+    })
+    .join("");
+  const note = moveNote.text && Number(moveNote.turn) === Number(state?.turn) ? moveNote.text : "";
+  const destCard = dest
+    ? `
+        <article class="pendingChoiceCard" data-move-dest="1">
+          <p class="pendingChoiceKicker">Destination</p>
+          <p class="pendingChoiceTitle">${escapeHtml(dest.label || "a place")}</p>
+          ${note ? `<p class="pendingChoiceDetail">${escapeHtml(note)}</p>` : ""}
+          <div class="pendingChoiceActions">
+            <button type="button" class="chipBtn" data-move-travel="go">Travel to ${escapeHtml(dest.label || "it")}</button>
+            <button type="button" class="chipBtn secondaryButton" data-move-travel="clear">Clear</button>
+          </div>
+        </article>`
+    : "";
+  const html = cards + destCard;
+  if (!html.trim()) {
+    host.hidden = true;
+    host.innerHTML = "";
+    return;
+  }
+  host.innerHTML = html;
+  host.hidden = false;
+  host.querySelectorAll("button").forEach((b) => {
+    b.disabled = moveBusy;
+  });
+}
+
+async function postMoveChoice(url, body) {
+  if (aiBusy || moveBusy) {
+    showAmbientMoveLine("Wait for the scene to finish first.");
+    return;
+  }
+  moveBusy = true;
+  renderMovePrompt();
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(apiErrorMessage(data, response.status));
+    const text = String(data.note || data.travel?.why || "").trim();
+    moveNote = { text, turn: Number(data.state?.turn ?? state?.turn ?? -1) };
+    if (data.map) fullMapView = data.map;
+    if (data.state) renderShell(data.state);
+    if (data.travel || data.scene_turn) {
+      applyTravelMoveFeedback({
+        state: data.state,
+        scene_turn: data.scene_turn,
+        narration: data.narration,
+        travel: { minutes: Number(data.travel?.minutes || 0), terrain: "travel" },
+      });
+    }
+    if (text && !data.scene_turn) showAmbientMoveLine(text);
+    await refreshLocalMap();
+    if (typeof refreshTownView === "function") refreshTownView().catch(() => {});
+  } catch (error) {
+    showAmbientMoveLine(error?.message || String(error || "That choice is no longer open."));
+  } finally {
+    moveBusy = false;
+    renderMovePrompt();
+  }
+}
+
+document.querySelector("#movePrompt")?.addEventListener("click", (event) => {
+  const choice = event.target.closest?.("[data-move-prompt]");
+  if (choice) {
+    event.preventDefault();
+    const id = choice.getAttribute("data-move-prompt");
+    postMoveChoice(`/api/prompts/${encodeURIComponent(id)}`, { choice: choice.getAttribute("data-move-choice") });
+    return;
+  }
+  const travel = event.target.closest?.("[data-move-travel]");
+  if (travel) {
+    event.preventDefault();
+    postMoveChoice("/api/travel", { action: travel.getAttribute("data-move-travel") });
+  }
+});
 
 function renderPlayerQuestSection() {
   const offered = renderOfferedQuestSection();

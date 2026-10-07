@@ -1947,12 +1947,43 @@ def plan_turn(conn, text: str, *, input_kind: str = "player", context: dict[str,
         except Exception as exc:  # a planning bug must not cost the turn
             plan = {"kind": "error", "rule": "town_error", "error": f"{type(exc).__name__}: {exc}"[:200], "legs": [],
                     "minutes": 0, "enter": False, "blocked": False}
+        try:
+            plan = _answer_pending_lead(conn, chart, pos, text, plan, context)
+        except Exception:
+            pass  # the Go with button still answers it
     try:
         contract = town_contract(conn, chart, city, pos, plan if plan and plan.get("kind") != "error" else None)
     except Exception:
         contract = None
     return {"position": pos, "placed": placed, "plan": plan, "contract": contract,
             "map_id": str(chart.get("id") or ""), "city_id": str(city.get("id") or "")}
+
+
+def _answer_pending_lead(conn, chart: dict[str, Any], pos: dict[str, Any], text: str, plan: dict[str, Any] | None,
+                         context: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A typed "I go with him" answers last turn's Go with prompt (TODO n21): the walk to where they lead,
+    with the leader named on the plan so the gate brings them along. Anything else keeps ``plan``."""
+    from app.turn_prompts import pending_lead
+
+    lead = pending_lead(conn)
+    target = (lead or {}).get("to") or {}
+    plot = str(target.get("plot") or "")
+    if not lead or not plot or str(target.get("city") or "") != str(pos.get("city_id") or ""):
+        return plan
+    name = str(lead.get("npc_name") or "")
+    if plan and plan.get("kind") in ("walk", "enter") and str((plan.get("target") or {}).get("plot") or "") == plot:
+        return dict(plan, led_by=name)
+    if plan or not _led_walk_asked(text, str(lead.get("to_label") or ""), name):
+        return plan
+    words = _norm(_player_words(text))
+    first = _norm(name).split(" ")[0] if name else ""
+    if not (re.search(r"\b(?:him|her|them|you)\b", words) or (first and first in words.split())
+            or _norm(str(lead.get("to_label") or "")) in words):
+        return plan
+    led = plan_to_plot(conn, chart, pos, plot, enter=True, rule="town_led", context=context)
+    if led is None or led.get("kind") == "stay":
+        return plan
+    return dict(led, led_by=name)
 
 
 _BUILDING_MOVE_KEYS = ("move_to_location", "move_to_location_code")
@@ -2071,6 +2102,8 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
         if plan.get("enter"):
             player_patch["move_to_location"] = str((plan.get("target") or {}).get("name") or "")[:120] or None
         rep = report_for(plan, "repaired")
+        if plan.get("led_by"):
+            rep["led_by"] = str(plan["led_by"])  # a lead the player took (TODO n21); the gate brings them along
         if dropped:
             rep["dropped_buildings"] = dropped
         return rep
@@ -2236,8 +2269,11 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
                     rep["led_by"] = str(led.get("by") or "")
                     return rep
             result["map_walk"] = None
+            # The plot rides on the report: the walk not taken becomes a Go with
+            # button (TODO n21, app/turn_prompts.py), not a lost offer.
             return {**base, "status": "dropped", "rule": "town_led_unasked", "destination": target_name,
-                    "led_by": str(led.get("by") or ""), "prose_mismatch": target_name, "trim_from": led["sentence"]}
+                    "led_by": str(led.get("by") or ""), "prose_mismatch": target_name, "trim_from": led["sentence"],
+                    "plot": led_plot}
     if not pos.get("inside"):
         people = [str(r["name"] or "") for r in conn.execute(
             "SELECT name FROM npcs WHERE location_id = ?", (int(current.get("id") or 0),)

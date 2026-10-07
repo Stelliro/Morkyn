@@ -1711,6 +1711,8 @@
             </div>
             <!-- Pending choice strip between the narration and the input (TODO n20): job offers waiting for Accept / Decline. Built generic (data-kind) so walk-with and travel-to prompts can reuse it. -->
             <div id="offerPrompt" class="pendingChoice offerPrompt" data-kind="offer" role="region" aria-label="Offers waiting for your answer" aria-live="polite" hidden></div>
+            <!-- Go with / Stay, Travel there and the set destination (TODO n21, n22): the same strip, drawn from state.prompts and state.travel_destination. Nothing moves until a button is pressed. -->
+            <div id="movePrompt" class="pendingChoice movePrompt" data-kind="move" role="region" aria-label="Where you could go" aria-live="polite" hidden></div>
             <form id="turnForm" class="composer chatComposer">
               <div class="composerField">
                 <div class="turnInputHead">

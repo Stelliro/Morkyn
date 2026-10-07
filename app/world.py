@@ -212,6 +212,10 @@ SNAPSHOT_SETTING_KEYS = (
     # playtest #80). Snapshotted beside the player row so a rewind restores the
     # pools and their remainders together, and cleared with a new game.
     "resource_carry",
+    # Go with / Travel there buttons and the set destination (TODO n21, n22,
+    # app/turn_prompts.py): a rewind takes back the offers that turn made.
+    "turn_prompts",
+    "travel_destination",
 )
 RESTORE_ORDER = [
     "turn_snapshots",
@@ -4434,6 +4438,15 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         ]
     except Exception:
         state["open_quest_offers"] = []
+    # Go with / Stay and Travel there buttons, and the set destination (TODO
+    # n21, n22): drawn under the narration by static/app.js renderMovePrompt.
+    try:
+        from app.turn_prompts import state_view
+
+        state.update(state_view(conn))
+    except Exception:
+        state["prompts"] = []
+        state["travel_destination"] = None
     try:
         from app.relationships import all_relationships_for_llm
         state["npc_player_relationships"] = all_relationships_for_llm(conn)
@@ -6198,7 +6211,20 @@ def _travel_scoring_text(player_input: str) -> str:
     # intent table, the doorway rules and the town planner.
     from app.prose_state import strip_negated_clauses
 
-    return strip_negated_clauses(" ".join(kept))
+    # A movement word inside an idiom is not a move (TODO n21, T11: "it may
+    # prove useful in the long run" made a talk turn a travel turn, and the
+    # draft was told the walk ends somewhere it never planned).
+    return _MOVE_IDIOM_RE.sub(" ", strip_negated_clauses(" ".join(kept)))
+
+
+_MOVE_IDIOM_RE = re.compile(
+    r"\b(?:in\s+the\s+(?:long|short)\s+run|(?:run|runs|ran|running)\s+(?:out|low|short)\b(?:\s+(?:of|on))?|"
+    r"(?:run|runs|ran|running)\s+(?:a|an|the|my|his|her|their|this)\s+"
+    r"(?:shop|store|stall|business|inn|tavern|forge|smithy|bakery|farm|house|household|guild|crew|town|place)|"
+    r"(?:it\s+)?goes\s+without\s+saying|let\s+(?:it|that|this)\s+go|on\s+the\s+go|"
+    r"(?:go|goes|going|went)\s+(?:wrong|bad|well|badly|smoothly)|head\s+start|running\s+late)\b",
+    re.IGNORECASE,
+)
 
 
 def _turn_intent(player_input: str) -> tuple[str, list[str]]:
@@ -10209,14 +10235,29 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
     prompt_context["retrieval"]["verification_memory_hits"] = len(verification_memory.get("entries") or [])
     prompt_context["retrieval"]["verification_memory_covered_checks"] = verification_memory.get("covered_checks") or []
     try:
-        from app.local_intel import direction_hint_for_prompt, list_open_offers
+        from app.local_intel import list_open_offers, prompt_direction_hint, turn_direction_hint
 
-        hint = direction_hint_for_prompt(state, player_input)
+        # Resolved once, from the player's own line (never the engine footer:
+        # "goes into the smithy" read as a where-question, playtest TODO n22).
+        # play_turn hands the same hint to apply_turn, so what the prompt told
+        # the model is what the map records.
+        raw_hint = turn_direction_hint(state, _player_line(player_input))
+        prompt_context["_direction_hint_raw"] = {"resolved": True, "hint": raw_hint}
+        hint = prompt_direction_hint(raw_hint)
         if hint:
             prompt_context["direction_hint"] = hint
         offers = list_open_offers()
         if offers:
             prompt_context["open_offers"] = offers
+    except Exception:
+        pass
+    try:
+        from app.turn_prompts import leads_for_draft
+
+        with connect() as c_leads:
+            leads = leads_for_draft(c_leads, _current_turn_number() + 1)
+        if leads:
+            prompt_context["open_leads"] = leads
     except Exception:
         pass
     return prompt_context
@@ -15662,6 +15703,8 @@ def apply_turn(
             movement_report["town_error"] = town_error
         pre_rows = result.pop("_snapshot_rows", None)
         town_turn = result.pop("_town_turn", None)
+        direction_resolved = result.pop("_direction_hint", None)
+        direction_resolved = direction_resolved if isinstance(direction_resolved, dict) else None
         if town_turn:
             # Rows the town write changes in place join the rewind record now.
             if not isinstance(pre_rows, dict):
@@ -16135,7 +16178,10 @@ def apply_turn(
         try:
             from app.local_intel import apply_turn_intel
 
-            intel_note = apply_turn_intel(conn, player_input, turn)
+            if direction_resolved is not None:
+                intel_note = apply_turn_intel(conn, player_input, turn, hint=direction_resolved.get("hint"), resolved=True)
+            else:
+                intel_note = apply_turn_intel(conn, player_input, turn)
             if intel_note:
                 conn.execute(
                     "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
@@ -16197,6 +16243,26 @@ def apply_turn(
             )
         except Exception:
             pass  # the thread never blocks a turn; the old row still stands
+        # Go with / Stay and Travel there (TODO n21, n22): what this turn
+        # offered, from engine facts (a lead the town resolver did not walk, a
+        # LEAD op, a told direction, a known place or person named by someone
+        # here, a quest step's place). Buttons only; nothing moves until pressed.
+        try:
+            from app.turn_prompts import gate_after_turn
+
+            result["_turn_prompts"] = gate_after_turn(
+                conn,
+                narration=narration,
+                movement_report=movement_report if isinstance(movement_report, dict) else None,
+                quest_report=quest_report,
+                prompt_context=prompt_context,
+                dsl=result.get("_dsl") if isinstance(result.get("_dsl"), dict) else None,
+                direction_hint=(direction_resolved or {}).get("hint"),
+                player_input=player_input if input_kind == "player" else "",
+                turn=turn,
+            )
+        except Exception as exc:
+            result["_turn_prompts"] = {"error": f"{type(exc).__name__}: {exc}"[:200]}
         if gear_report.get("status") == "unequipped" and gear_report.get("items"):
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
@@ -17061,6 +17127,9 @@ def play_turn(
         context["town_contract"] = town_turn["contract"]
 
     prompt_context = build_prompt_context(context, model_input)
+    # The direction the prompt told the model (if any) is the one apply_turn
+    # writes to the map; it is not re-derived from different text (TODO n22).
+    direction_resolved = prompt_context.pop("_direction_hint_raw", None)
 
     # --- Hidden NPC psychology: narrator-only block --------------------------
     # Fetch psychology context for all NPCs currently in the scene and attach it
@@ -17259,6 +17328,8 @@ def play_turn(
         result["_snapshot_rows"] = pre_snapshot_rows
     if town_turn and isinstance(result, dict):
         result["_town_turn"] = town_turn
+    if isinstance(direction_resolved, dict) and isinstance(result, dict):
+        result["_direction_hint"] = direction_resolved
     actual_player_input = journal_input if journal_input is not None else player_input
     state = apply_turn(
         result,

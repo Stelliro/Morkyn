@@ -125,10 +125,19 @@ def contraband_goods(theme: str, slavery: bool) -> tuple[str, ...]:
     return tuple(goods)
 
 
+# The player asking the way, not doing business where they stand (TODO n22):
+# "I want to sell this sword" to a smith, or "I go into Blind Owl Forge" with
+# the engine footer's "sell" and "smithy", is not a where-question.
+_ASKS_WAY_RE = re.compile(
+    r"\b(?:where|closest|nearest|district|directions?|point\s+me|show\s+me\s+the\s+way|"
+    r"how\s+(?:do|can|would|should)\s+(?:i|we|one)\s+(?:get|find|reach)|know\s+(?:of|where|any)|looking\s+for)\b"
+)
+
+
 def parse_direction_question(text: str) -> dict[str, Any] | None:
     """Return the ask, or None when the line is not a where-question."""
     low = _norm_question(text)
-    if not low or not re.search(r"\b(where|closest|nearest|buy|sell|district)\b", low):
+    if not low or not _ASKS_WAY_RE.search(low):
         return None
     good = "general"
     found = False
@@ -1292,6 +1301,18 @@ def _hydrate_speaker(conn, speaker: dict[str, Any]) -> dict[str, Any]:
 
 
 def direction_hint_for_prompt(state: dict[str, Any], player_input: str) -> dict[str, Any] | None:
+    return prompt_direction_hint(turn_direction_hint(state, player_input))
+
+
+def turn_direction_hint(state: dict[str, Any], player_input: str) -> dict[str, Any] | None:
+    """The whole hint for this turn's ask (true place included), or None.
+
+    ``player_input`` is the player's own line: world.build_prompt_context
+    strips the reference footer first, since "does not serve, sell or speak for
+    the place" and "goes into the smithy" read as a where-question about tools
+    (TODO n22: T5, T8, T12 'I go into ...' got a district hint). The prompt
+    shows prompt_direction_hint() of it; apply_turn_intel writes this same hint.
+    """
     if parse_direction_question(player_input) is None:
         return None
     from app.db import connect
@@ -1326,8 +1347,7 @@ def direction_hint_for_prompt(state: dict[str, Any], player_input: str) -> dict[
         if speaker:
             speaker = _hydrate_speaker(conn, speaker)
         day = int(((state.get("world_time") or {}) if isinstance(state.get("world_time"), dict) else {}).get("day") or _world_day(conn))
-        hint = resolve_direction(chart, player_input, speaker, day=day, gold=_player_gold(conn))
-        return prompt_direction_hint(hint)
+        return resolve_direction(chart, player_input, speaker, day=day, gold=_player_gold(conn))
     finally:
         conn.close()
 
@@ -1356,9 +1376,23 @@ def _play_flag_on(conn, key: str) -> bool:
     return bool(value)
 
 
-def apply_turn_intel(conn, player_input: str, turn: int) -> str:
-    """Save a heard-about patch, charge a bribe, or accept a posted offer."""
+def apply_turn_intel(conn, player_input: str, turn: int, *, hint: dict[str, Any] | None = None,
+                     resolved: bool = False) -> str:
+    """Save a heard-about patch, charge a bribe, or accept a posted offer.
+
+    With ``resolved`` the direction is the ``hint`` the prompt already told
+    the model (world.play_turn passes it through), so the map records what the
+    prose was told; without it the ask is parsed from ``player_input`` here.
+    """
     notes: list[str] = []
+    if resolved:
+        if isinstance(hint, dict) and hint.get("told"):
+            faction_held = hint.get("good") == "guild" and not _play_flag_on(conn, "factions_enabled")
+            if not faction_held:
+                notes.extend(_record_hint(conn, hint, turn))
+        if _play_flag_on(conn, "quests_enabled"):
+            accept_offered_quest(conn, player_input, turn)
+        return " ".join(notes)[:1400]
     asked = parse_direction_question(player_input)
     faction_held = bool(asked and asked.get("good") == "guild" and not _play_flag_on(conn, "factions_enabled"))
     if asked is not None and not faction_held:
@@ -1392,38 +1426,56 @@ def apply_turn_intel(conn, player_input: str, turn: int) -> str:
                     day=_world_day(conn),
                     gold=0,
                 )
-            applied = apply_hint_to_map(chart, hint, save=False)
-            if applied.get("told") and hint:
-                _save_map_payload(chart, conn=conn)
-                # The stall or notice it pointed at is now told (docs/TownGrid.md 6):
-                # its plot's name shows once that cell is generated. Generates nothing.
-                try:
-                    from app.town_moves import record_told
-
-                    record_told(conn, chart, hint.get("place"), turn)
-                except Exception:
-                    pass
-                distance = max(
-                    abs(int(hint["x"]) - int((chart.get("player") or {}).get("x") or 0)),
-                    abs(int(hint["y"]) - int((chart.get("player") or {}).get("y") or 0)),
-                )
-                where = "in this cell" if distance <= 0 else f"about {distance} cells {hint.get('compass') or 'away'}"
-                notes.append(
-                    f"Heard about {hint.get('label') or 'a place'}, {where}. "
-                    f"The map marks ({hint.get('x')}, {hint.get('y')})."
-                )
-                if hint.get("reason") == "bribe" and _play_flag_on(conn, "economy_enabled"):
-                    gold = _player_gold(conn)
-                    if gold >= BRIBE_GOLD:
-                        conn.execute(
-                            "UPDATE player SET gold = ? WHERE id = 1",
-                            (gold - BRIBE_GOLD,),
-                        )
-                        notes.append(f"You paid {BRIBE_GOLD} coin for the direction.")
+            notes.extend(_record_hint(conn, hint, turn, chart=chart))
     # quests.accept_offered journals the acceptance itself, so no second note here.
     if _play_flag_on(conn, "quests_enabled"):
         accept_offered_quest(conn, player_input, turn)
     return " ".join(notes)[:1400]
+
+
+def _record_hint(conn, hint: dict[str, Any] | None, turn: int, *, chart: dict[str, Any] | None = None) -> list[str]:
+    """Mark a told direction on the map, tell its plot, charge the bribe. Returns journal notes."""
+    from app.tile_world import _save_map_payload, get_map
+
+    if not isinstance(hint, dict) or not hint.get("told"):
+        return []
+    if chart is None:
+        chart = get_map(None, conn=conn)
+    if not chart or str(chart.get("scale") or "") != "world":
+        return []
+    notes: list[str] = []
+    applied = apply_hint_to_map(chart, hint, save=False)
+    if not applied.get("told"):
+        return []
+    _save_map_payload(chart, conn=conn)
+    # The stall or notice it pointed at is now told (docs/TownGrid.md 6):
+    # its plot's name shows once that cell is generated. Generates nothing.
+    try:
+        from app.town_moves import record_told
+
+        record_told(conn, chart, hint.get("place"), turn)
+    except Exception:
+        pass
+    distance = max(
+        abs(int(hint["x"]) - int((chart.get("player") or {}).get("x") or 0)),
+        abs(int(hint["y"]) - int((chart.get("player") or {}).get("y") or 0)),
+    )
+    where = "in this cell" if distance <= 0 else f"about {distance} cells {hint.get('compass') or 'away'}"
+    notes.append(
+        f"Heard about {hint.get('label') or 'a place'}, {where}. "
+        f"The map marks ({hint.get('x')}, {hint.get('y')})."
+    )
+    if hint.get("reason") == "bribe" and _play_flag_on(conn, "economy_enabled"):
+        gold = _player_gold(conn)
+        # The prompt already told the direction; a purse emptied during the
+        # turn pays nothing rather than going below zero.
+        if gold >= BRIBE_GOLD:
+            conn.execute(
+                "UPDATE player SET gold = ? WHERE id = 1",
+                (gold - BRIBE_GOLD,),
+            )
+            notes.append(f"You paid {BRIBE_GOLD} coin for the direction.")
+    return notes
 
 
 def _journal_map(conn, text: str) -> None:

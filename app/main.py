@@ -2809,6 +2809,331 @@ def api_town_leave(request: TownLeaveRequest):
     return {"ok": True, "leave": left, "view": view, "map": data, "state": get_state()}
 
 
+# ---------------------------------------------------------------------------
+# Go with / Stay and Travel there (TODO n21, n22). The gate in apply_turn
+# (app/turn_prompts.py) decides what is on offer; these endpoints act only when
+# the player presses a button, and every step is the engine's own walk.
+# ---------------------------------------------------------------------------
+
+
+class PromptAnswerRequest(BaseModel):
+    """walk_with: go | stay. travel_to: go | set | dismiss."""
+    choice: str = Field(default="", max_length=20)
+
+
+class TravelRequest(BaseModel):
+    """go: one press toward the set destination. clear: forget it."""
+    action: str = Field(default="go", max_length=20)
+
+
+def _refuse_if_confined() -> None:
+    runtime = _location_special_runtime()
+    if runtime.get("movement_locked") or runtime.get("map_blank"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": runtime.get("hint") or "You cannot move — confined (blank map / prison state).",
+                "movement_locked": True,
+                "map_blank": bool(runtime.get("map_blank")),
+            },
+        )
+
+
+def _pacing_turn(conn) -> int:
+    row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+    return int(row["value"]) if row else 0
+
+
+def _http_message(exc: HTTPException) -> str:
+    detail = exc.detail
+    if isinstance(detail, dict):
+        return str(detail.get("message") or detail.get("detail") or "That way is closed.")
+    return str(detail or "That way is closed.")
+
+
+def _travel_press(dest: dict[str, Any]) -> dict[str, Any]:
+    """One press of Travel toward ``dest`` (TODO n22). Writes the walk.
+
+    The route is the engine's: streets inside a town (turn_prompts.walk_in_town),
+    out of town by the exit planner (town_moves.walk_out, which halts at a gate
+    that must stop the player, #71), then world-map steps through the same
+    handler as a map click (api_tile_map_move), at most tile_world.STEP_BUDGET
+    tiles a press. It stops only where one of those stops: a gate, a refusal
+    (too tired, confined), a blocked way, an encounter that plays its scene, or
+    the end of the press. Arrival clears the destination.
+    """
+    from app.db import connect as _connect
+    from app import turn_prompts as TP
+    from app.tile_world import STEP_BUDGET
+    from app.town_grid import _locate as _town_locate
+    from app.town_moves import get_position as _town_position, walk_out
+    from app.world import get_state
+
+    target = dest.get("target") if isinstance(dest.get("target"), dict) else {}
+    label = str(dest.get("label") or "there")
+    with_codes = [str(code) for code in dest.get("with") or [] if code]
+    tx, ty = int(target.get("x", 0) or 0), int(target.get("y", 0) or 0)
+    out: dict[str, Any] = {"to": label, "arrived": False, "stopped": "", "why": "", "minutes": 0, "legs": []}
+    scene_turn = None
+
+    def target_city(chart: dict[str, Any] | None) -> str:
+        if target.get("city"):
+            return str(target["city"])
+        found = _town_locate(chart, tx, ty) if chart else None
+        return str(found[0].get("id") or "") if found else ""
+
+    for _leg in range(3):
+        context = get_state(include_hidden=False)
+        with _connect() as conn:
+            chart = get_map(None, conn=conn)
+            pos = _town_position(conn)
+            city = target_city(chart)
+            if pos and city and str(pos.get("city_id") or "") == city:
+                plot = str(target.get("plot") or "")
+                # A town's own row is reached anywhere in it; a district tile at its cell; a plot inside it.
+                town_itself = not plot and bool(target.get("location_code")) and bool(target.get("city"))
+                if (plot and str(pos.get("inside") or "") == plot) or town_itself or (
+                    not plot and (int(pos.get("cx", -1)), int(pos.get("cy", -1))) == (tx, ty)
+                ):
+                    out["arrived"] = True
+                    break
+                try:
+                    walked = TP.walk_in_town(conn, target, enter=bool(dest.get("enter")), context=context)
+                except PermissionError as exc:
+                    out.update(stopped="tired", why=str(exc))
+                    break
+                except ValueError as exc:
+                    out.update(stopped="no_road", why=str(exc))
+                    break
+                out["minutes"] += int(walked.get("minutes") or 0)
+                out["legs"].append({"kind": "town", "minutes": int(walked.get("minutes") or 0), "entered": walked.get("entered")})
+                TP.bring_along(conn, with_codes)
+                if walked.get("refused"):
+                    out.update(stopped="closed", why=f"{label} is closed now.")
+                elif walked.get("partial") or not walked.get("reached"):
+                    out.update(stopped="partial", why="Part of the way there. Press Travel to go on.")
+                else:
+                    out["arrived"] = True
+                break
+            if pos:
+                # In a town and the place is elsewhere: out by the best way (#71).
+                try:
+                    left = walk_out(conn, (tx, ty), context=context)
+                except PermissionError as exc:
+                    out.update(stopped="tired", why=str(exc))
+                    break
+                except ValueError as exc:
+                    out.update(stopped="no_road", why=str(exc))
+                    break
+                out["minutes"] += int(left.get("minutes") or 0)
+                out["legs"].append({"kind": "leave", "minutes": int(left.get("minutes") or 0)})
+                TP.bring_along(conn, with_codes)
+                if left.get("halted"):
+                    out.update(stopped="gate", why=str(left["halted"].get("why") or "You stop at the gate."))
+                    break
+                if not left.get("left"):
+                    out.update(stopped="town", why="You are still in town.")
+                    break
+        # World-map steps, each one a map click's step (minutes, energy, encounters).
+        steps = 0
+        while steps < STEP_BUDGET and not out["stopped"]:
+            with _connect() as conn:
+                chart = get_map(None, conn=conn)
+            if not chart:
+                out.update(stopped="no_map", why="No map.")
+                break
+            px, py = int((chart.get("player") or {}).get("x") or 0), int((chart.get("player") or {}).get("y") or 0)
+            if (px, py) == (tx, ty):
+                break
+            nxt = TP.next_world_step(chart, tx, ty)
+            if nxt is None:
+                out.update(stopped="blocked", why="The way straight there is blocked. Pick a way round on the map.")
+                break
+            try:
+                step = api_tile_map_move(MapMoveRequest(x=nxt[0], y=nxt[1], mode="free"))
+            except HTTPException as exc:
+                out.update(stopped="refused", why=_http_message(exc))
+                break
+            steps += 1
+            out["minutes"] += int(((step.get("step") or {}).get("minutes")) or 0)
+            out["legs"].append({"kind": "world", "to": list(nxt)})
+            with _connect() as conn:
+                TP.bring_along(conn, with_codes)
+            if step.get("scene_turn"):
+                scene_turn = step
+                out.update(stopped="encounter", why="Something happens on the road.")
+                break
+            if step.get("halted"):
+                out.update(stopped="gate", why=str((step.get("halted") or {}).get("why") or "You stop at the gate."))
+                break
+            with _connect() as conn:
+                pos = _town_position(conn)
+                chart = get_map(None, conn=conn)
+            if pos and target_city(chart) and str(pos.get("city_id") or "") == target_city(chart):
+                break  # into the place's own town: its streets are the next leg
+        if out["stopped"]:
+            break
+        with _connect() as conn:
+            chart = get_map(None, conn=conn)
+            pos = _town_position(conn)
+        city = target_city(chart)
+        if pos and city and str(pos.get("city_id") or "") == city:
+            continue  # in the place's town now: the next leg walks its streets
+        player = (chart or {}).get("player") or {}
+        if (int(player.get("x") or 0), int(player.get("y") or 0)) != (tx, ty):
+            out.update(stopped="budget", why="You stop for now. Press Travel to go on.")
+            break
+        out["arrived"] = True
+        break
+    else:
+        out.update(stopped="budget", why="You stop for now. Press Travel to go on.")
+    with _connect() as conn:
+        turn = _pacing_turn(conn)
+        if out["arrived"]:
+            TP.set_destination(conn, None)
+        conn.execute(
+            "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+            (turn, "system", (f"Travelled to {label}." if out["arrived"] else
+                              f"Travelling to {label}: {out['why'] or 'on the way'}")[:900]),
+        )
+    try:
+        autosave_campaign()
+    except Exception:
+        pass
+    if scene_turn:
+        out["scene"] = True
+    return {"travel": out, "scene_turn": (scene_turn or {}).get("scene_turn"),
+            "narration": (scene_turn or {}).get("narration")}
+
+
+@app.post("/api/prompts/{prompt_id}")
+def api_answer_prompt(prompt_id: str, request: PromptAnswerRequest):
+    """Answer a Go with / Stay or Travel there prompt (TODO n21, n22). 409 when it is no longer open."""
+    from app.db import connect as _connect
+    from app import turn_prompts as TP
+    from app.world import get_state
+
+    choice = str(request.choice or "").strip().lower()
+    with _connect() as conn:
+        item = TP.find(conn, prompt_id)
+        turn = _pacing_turn(conn)
+    if item is None:
+        raise HTTPException(status_code=409, detail="That choice is no longer open.")
+    kind = str(item.get("kind") or "")
+    travel: dict[str, Any] | None = None
+    pressed: dict[str, Any] = {}
+    note = ""
+    if kind == "walk_with":
+        person = {"code": str(item.get("npc_code") or ""), "name": str(item.get("npc_name") or "")}
+        target = item.get("to") if isinstance(item.get("to"), dict) else None
+        if choice == "stay":
+            with _connect() as conn:
+                TP.remove(conn, prompt_id, stayed={"npc_code": person["code"], "npc_name": person["name"],
+                                                   "to_label": str(item.get("to_label") or ""), "turn": turn})
+                conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                             (turn, "system", f"Stayed rather than go with {person['name']}."[:900]))
+            note = "You stay where you are."
+        elif choice == "go":
+            _refuse_if_confined()
+            context = get_state(include_hidden=False)
+            label = str(item.get("to_label") or "")
+            with _connect() as conn:
+                from app.town_moves import get_position as _town_position
+
+                pos = _town_position(conn)
+                in_town = bool(target and target.get("plot") and pos and str(pos.get("city_id") or "") == str(target.get("city") or ""))
+                if in_town:
+                    try:
+                        walked = TP.walk_in_town(conn, target, enter=True, context=context, rule="town_led")
+                    except PermissionError as exc:
+                        raise HTTPException(status_code=409, detail=str(exc)) from exc
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+                    TP.bring_along(conn, [person["code"]])
+                    TP.remove(conn, prompt_id)
+                    if walked.get("partial") or not walked.get("reached"):
+                        TP.set_destination(conn, {"target": target, "label": label, "enter": True,
+                                                  "with": [person["code"]], "set_turn": turn})
+                        note = f"You set off with {person['name']}; {label} is further on. Press Travel to go on."
+                    elif walked.get("refused"):
+                        note = f"You go with {person['name']} to {label}, but it is closed."
+                    else:
+                        note = f"You go with {person['name']} to {label}."
+                    travel = {"to": label, "arrived": bool(walked.get("reached")), "minutes": walked.get("minutes")}
+                    conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                                 (turn, "system", f"Went with {person['name']} toward {label}."[:900]))
+                elif target:
+                    TP.remove(conn, prompt_id)
+                    TP.set_destination(conn, {"target": target, "label": label, "enter": bool(target.get("plot")),
+                                              "with": [person["code"]], "set_turn": turn})
+                else:
+                    # No place named: they come along, and the player's moves carry them.
+                    TP.join_companion(conn, person, turn)
+                    TP.remove(conn, prompt_id)
+                    conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                                 (turn, "system", f"Going along with {person['name']}."[:900]))
+                    note = f"{person['name']} goes with you."
+            if target and not in_town:
+                with _connect() as conn:
+                    dest = TP.destination(conn)
+                pressed = _travel_press(dest or {"target": target, "label": label, "with": [person["code"]]})
+                travel = pressed["travel"]
+                note = f"You set off with {person['name']}. " + (travel.get("why") or "")
+        else:
+            raise HTTPException(status_code=400, detail="choice must be go or stay.")
+    elif kind == "travel_to":
+        target = item.get("target") if isinstance(item.get("target"), dict) else {}
+        label = str(item.get("label") or "there")
+        if choice == "dismiss":
+            with _connect() as conn:
+                TP.remove(conn, prompt_id)
+        elif choice in {"go", "set"}:
+            dest = {"target": target, "label": label, "enter": bool(target.get("plot")), "with": [],
+                    "set_turn": turn, "source": item.get("source") or {}}
+            with _connect() as conn:
+                TP.set_destination(conn, dest)
+                TP.remove(conn, prompt_id)
+            note = f"Destination: {label}."
+            if choice == "go":
+                _refuse_if_confined()
+                pressed = _travel_press(dest)
+                travel = pressed["travel"]
+                note = travel.get("why") or (f"You reach {label}." if travel.get("arrived") else note)
+        else:
+            raise HTTPException(status_code=400, detail="choice must be go, set or dismiss.")
+    else:
+        raise HTTPException(status_code=409, detail="That choice is no longer open.")
+    try:
+        autosave_campaign()
+    except Exception:
+        pass
+    return {"ok": True, "kind": kind, "choice": choice, "note": note, "travel": travel, "map": get_map(None),
+            "scene_turn": pressed.get("scene_turn"), "narration": pressed.get("narration"), "state": get_state()}
+
+
+@app.post("/api/travel")
+def api_travel(request: TravelRequest):
+    """The Travel button: one press toward the set destination, or clear it (TODO n22)."""
+    from app.db import connect as _connect
+    from app import turn_prompts as TP
+    from app.world import get_state
+
+    action = str(request.action or "go").strip().lower()
+    with _connect() as conn:
+        dest = TP.destination(conn)
+        if action == "clear":
+            TP.set_destination(conn, None)
+    if action == "clear":
+        return {"ok": True, "travel": None, "state": get_state()}
+    if action != "go":
+        raise HTTPException(status_code=400, detail="action must be go or clear.")
+    if dest is None:
+        raise HTTPException(status_code=409, detail="No destination is set.")
+    _refuse_if_confined()
+    pressed = _travel_press(dest)
+    return {"ok": True, **pressed, "map": get_map(None), "state": get_state()}
+
+
 @app.get("/api/town/plot/{plot_id}")
 def api_town_plot(plot_id: str):
     """What the player knows of one plot; 404 when they do not know it. Read-only."""
@@ -4654,6 +4979,14 @@ def _answer_offer(quest_id: int, action: str) -> dict:
             )
         except Exception:
             pass  # the thread never blocks an answer
+        if action == "accept":
+            # A first step with a place gets a Travel there button (TODO n22).
+            try:
+                from app.turn_prompts import quest_prompt
+
+                quest_prompt(conn, int(quest_id), turn)
+            except Exception:
+                pass
     try:
         autosave_campaign()
     except Exception:
