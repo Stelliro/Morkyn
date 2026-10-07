@@ -294,14 +294,17 @@ def _store_note(kind: str, code: str, name: str, note: str, replace: bool) -> bo
 
 
 def _item_history(name: str, limit: int = 4) -> list[str]:
-    """Journal lines that mention this item (how and when it arrived), oldest first. Ask rows excluded."""
+    """Journal lines that mention this item (how and when it arrived), oldest first.
+
+    Ask rows and out-of-character notes (playtest #79) are not world history.
+    """
     name = str(name or "").strip()
     if not name:
         return []
     try:
         with connect() as conn:
             rows = conn.execute(
-                "SELECT turn, kind, content FROM journal WHERE kind != 'ask' AND content LIKE ? ORDER BY id DESC LIMIT ?",
+                "SELECT turn, kind, content FROM journal WHERE kind NOT IN ('ask', 'ooc') AND content LIKE ? ORDER BY id DESC LIMIT ?",
                 (f"%{name}%", limit),
             ).fetchall()
     except Exception:

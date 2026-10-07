@@ -13119,7 +13119,9 @@ _PLAYER_CLAUSE_COORD_RE = re.compile(
     r"(?:,|;|\u2014|\u2013|\s-)\s*(?:(?:and|but|yet|so|then)\s+)?(?:[^,.;:!?\u2014\u201c\u201d\"]{0,30},\s*)?you\s+"
     # "The scent of bread wafts from the bakery as you make your way to the
     # general store" (playtest #76, T4): the player's half rides on "as".
-    r"|\s+as\s+you\s+",
+    # "just as you asked" points back at what the player said; it is no new act.
+    r"|\s+as\s+you\s+(?!(?:asked|requested|said|wished|wanted|suggested|instructed|ordered|described|promised|"
+    r"expected|hoped|feared|thought|say|ask|wish|like|please)\b)",
     re.I,
 )
 _ACT_ADVERBS = r"(?:\w+ly\s+){0,2}"
@@ -13164,6 +13166,17 @@ _TAKE_PERCEPTION_TAIL = (
     r"a\s+(?:look|gander|peek|moment|breath|step|bite|sip|swig|taste|mouthful|seat)|"
     r"your\s+time)"
 )
+# Every "take" that acquires nothing, for the act pass here and the grant
+# gate's _ACQUIRE_PROSE_RE alike (playtest #75): one list, so "You take the
+# opportunity to ask her" is neither an invented taking nor a gain.
+_TAKE_NOT_ACQUIRE_TAIL = (
+    rf"(?:{_TAKE_PERCEPTION_TAIL}|off|a\s+deep\s+breath|a\s+\w+\s+(?:look|breath|step)|"
+    # "take it in" is looking; "take it in your hand" is a take.
+    r"(?:it|them|this|that|everything)\s+in(?!\s+(?:your|my|his|her|both|one|hand))|"
+    r"your\s+(?:leave|place|seat|turn)|a\s+seat|hold|heart|refuge|shelter|cover|"
+    r"heed|aside|(?:him|her|them|me|us)\s+aside|(?:the|this|that|an?)\s+(?:opportunity|chance|moment)|"
+    r"the\s+(?:lead|stairs|path|road|trail|street|turn|left|right|seat|chance)|over|part|charge|place|shape|root)"
+)
 # One take vocabulary with the grant gate (playtest #75): "You take the tools
 # and leather" was kept here while the gate read it as a take the player never
 # asked for and refused the items, so the prose showed goods the state did not
@@ -13172,9 +13185,7 @@ _TAKE_PERCEPTION_TAIL = (
 _PLAYER_ACQUIRE_ACT_RE = re.compile(
     rf"^{_ACT_ADVERBS}(?P<v>pick(?:s|ed)?\s+(?:(?:it|them|\w+)\s+){{0,3}}?up|pocket(?:s|ed)?|grab(?:s|bed)?|"
     r"snatch(?:es|ed)?|accept(?:s|ed)?|buy|bought|purchase[sd]?|"
-    rf"(?:take|takes|took)(?!\s+(?:{_TAKE_PERCEPTION_TAIL}|off|a\s+deep\s+breath|a\s+\w+\s+(?:look|breath|step)|"
-    r"(?:it|them|this|that|everything)\s+in|your\s+(?:leave|place|seat|turn)|a\s+seat|hold|heart|refuge|shelter|cover|"
-    r"the\s+(?:lead|stairs|path|road|trail|street|turn|left|right|seat|chance)|over|part)\b)|"
+    rf"(?:take|takes|took)(?!\s+{_TAKE_NOT_ACQUIRE_TAIL}\b)|"
     r"(?:pay|pays|paid)(?!\s+(?:close\s+|careful\s+|little\s+|no\s+)?(?:attention|heed|mind|respects?|homage|tribute|a\s+visit))|"
     r"hand(?:s|ed)?\s+(?:over|him|her|them)|count(?:s|ed)?\s+out|"
     r"tuck(?:s|ed)?\s+[\w\s]{0,30}?into\s+your|slip(?:s|ped)?\s+[\w\s]{0,30}?into\s+your)\b",
@@ -14222,9 +14233,13 @@ def _ensure_narration_quality(
     recalled = _ensure_recall_specifics(answered, context, player_input, prose_prompt, timeout, usage, phase, trace)
     trimmed = _drop_decided_choice(_apply_menu_trim(recalled), player_input)
     chars_before = _narration_char_count(trimmed)
+    cut_before = trimmed.get("_scene_cut") if isinstance(trimmed, dict) else None
     final = _drop_player_overreach(trimmed, player_input, phase, trace)
     chars_after = _narration_char_count(final)
-    if chars_after < chars_before and chars_after < floor:
+    # A scene cut at an NPC's question is meant to be short: the answer is the
+    # player's. Lengthening it re-adds what the cut took out (#75, #77).
+    cut_now = isinstance(final, dict) and final.get("_scene_cut") is not None and final.get("_scene_cut") is not cut_before
+    if chars_after < chars_before and chars_after < floor and not cut_now:
         # The depth check ran before the drop; a turn the drop took under the
         # floor gets the same depth retry a short draft would have had.
         _append_trace(trace, {"phase": phase, "event": "depth_after_speech_drop", "chars": chars_after, "floor": floor})
@@ -14281,6 +14296,18 @@ def _apply_speech_memory(
     names = [str(n) for n in memory.get("player_names") or [] if str(n or "").strip()]
     if names:
         knows = {str(c).upper() for c in memory.get("knows_name") or []}
+        # The turn the player gives their name, the people it was said to hear
+        # it now: the same rule world._note_player_name_told writes after the
+        # prose, so "I'm Bartholomew" can be answered "Well met, Bartholomew."
+        from app.conversation import introduces_self
+
+        if introduces_self(player_input, names):
+            conv = context.get("conversation_turn") if isinstance(context.get("conversation_turn"), dict) else {}
+            heard = [str(c).upper() for c in list(conv.get("addressed") or []) + list(conv.get("listening") or []) if c]
+            if not heard:
+                heard = [str(p.get("code") or "").upper() for p in memory.get("people") or []
+                         if isinstance(p, dict) and p.get("code") and p.get("here")]
+            knows |= set(heard)
         rows = [
             {"code": str(p.get("code") or "").upper(), "name": str(p.get("name") or ""), "aliases": []}
             for p in memory.get("people") or []
@@ -14458,7 +14485,7 @@ def _cut_words(text: str) -> set[str]:
     }
 
 
-def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str) -> list[str]:
+def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_input: str = "") -> list[str]:
     """
     Remove the ops whose only support was the cut part of the prose.
 
@@ -14466,10 +14493,25 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str) -> list[st
     the final prose; text ops (TALK, NPC_NOTE, INDEX, JOURNAL, GM, EVENT, REL,
     QUEST) are not, so a request the player never made was stored as their
     topic (T8). An op goes when more of its words are only in the cut part
-    than are in the kept part, and at least two are.
+    than are in the kept part, and at least two are. A move, a take or a
+    payment the player's own line asked for stays (T7: "i will be on my way
+    then" kept its MOVE although the leave was written after the cut).
     """
     from app.narration_pipeline import _item_head
-    from app.prose_state import stated_coin_amounts
+    from app.prose_state import player_trade_offer, stated_coin_amounts
+
+    own = str(player_input or "")
+    asked_move = asked_take = asked_pay = False
+    if own:
+        try:
+            from app.world import _player_line, travel_intent
+
+            own = _player_line(own)
+            asked_move = bool(travel_intent(own))
+        except Exception:
+            asked_move = False
+        asked_take = player_take_intent(own)
+        asked_pay = player_trade_offer(own) is not None
 
     head_words = _cut_words(head)
     tail_only = _cut_words(tail) - head_words
@@ -14518,7 +14560,7 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str) -> list[st
                     delta = 0.0
                 gain = (delta > 0) or (band and not band.startswith("-") and not delta)
                 noun = _item_head(str(change.get("name") or ""))
-                if gain and noun and re.search(rf"\b{re.escape(noun)}", tail_l) and not re.search(rf"\b{re.escape(noun)}", head_l):
+                if gain and not asked_take and noun and re.search(rf"\b{re.escape(noun)}", tail_l) and not re.search(rf"\b{re.escape(noun)}", head_l):
                     dropped.append(f"GRANT {str(change.get('name') or '')[:60]}")
                     continue
             kept_changes.append(change)
@@ -14533,12 +14575,12 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str) -> list[st
         losing = gold < 0 or band.startswith("-")
         tail_paid = _TAIL_PAY_RE.search(tail) or stated_coin_amounts(tail)["paid"]
         head_paid = _TAIL_PAY_RE.search(head) or stated_coin_amounts(head)["paid"]
-        if losing and tail_paid and not head_paid:
+        if losing and tail_paid and not head_paid and not asked_pay:
             player.pop("gold_band", None)
             player.pop("gold_delta", None)
             dropped.append("GOLD (paid only in the cut part)")
         dest = str(player.get("move_to_location") or player.get("move_to_location_code") or "").strip()
-        if dest:
+        if dest and not asked_move:
             dest_l = dest.lower()
             named_tail = dest_l in tail_l and dest_l not in head_l
             left_in_tail = _TAIL_EXIT_RE.search(tail) and not _TAIL_EXIT_RE.search(head)
@@ -14584,7 +14626,7 @@ def _cut_scene_at_invented_request(turn: dict[str, Any], player_input: str, *, f
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", head) if p.strip()]
     if isinstance(turn.get("narration_segments"), list):
         turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in paragraphs] or [{"label": "paragraph", "text": head}]
-    cut_ops = _drop_ops_of_cut_tail(turn, head, tail)
+    cut_ops = _drop_ops_of_cut_tail(turn, head, tail, player_input)
     dsl = turn.get("_dsl")
     if isinstance(dsl, dict):
         dsl["cut_ops"] = list(dsl.get("cut_ops") or []) + cut_ops
@@ -15266,8 +15308,13 @@ def _quest_gate_memory(context: dict[str, Any] | None) -> dict[str, Any]:
     """
     ctx = context if isinstance(context, dict) else {}
     previous = ""
+    memory = ctx.get("speech_memory") if isinstance(ctx.get("speech_memory"), dict) else {}
     rows = [r for r in (ctx.get("turn_summaries") or []) if isinstance(r, dict)]
-    if rows:
+    if "previous_player_line" in memory:
+        # The engine's own record of last turn's line; turn_summaries is
+        # filtered by relevance and can drop that turn.
+        previous = str(memory.get("previous_player_line") or "")
+    elif rows:
         last = max(rows, key=lambda r: _int_or_zero(r.get("turn")))
         summary = str(last.get("summary") or "")
         if summary.startswith("player:"):

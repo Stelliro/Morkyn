@@ -1021,6 +1021,9 @@ def drop_repeated_speech(paragraphs: list[str]) -> tuple[list[str], list[str]]:
     return kept_paragraphs, dropped
 
 
+_UNIT_NOT_A_NAME = frozenset({"He", "She", "They", "It", "The", "A", "An", "His", "Her", "Their", "Its", "You", "Your"})
+
+
 def drop_speech_said_before(
     paragraphs: list[str], earlier_speech: list[str], earlier_units: list[str] = (), player_input: str = ""
 ) -> tuple[list[str], list[str]]:
@@ -1056,7 +1059,12 @@ def drop_speech_said_before(
                     kept_units.append(unit)
                     continue
                 speech = " ".join(spans)
-                if _speech_key(unit) in unit_keys or (earlier and speech_repeats(earlier, speech)):
+                # A whole unit said before goes only when it is that person's
+                # line: a named speaker ('"Understood," Juliana says') or speech
+                # long enough to be theirs. '"Yes," she says.' is anyone's answer.
+                named = any(w not in _UNIT_NOT_A_NAME for w in re.findall(r"\b[A-Z][a-z][\w'-]*", outside))
+                whole = _speech_key(unit) in unit_keys and (named or len(speech.split()) >= SPEECH_RUN_MIN_CONTENT)
+                if whole or (earlier and speech_repeats(earlier, speech)):
                     dropped.append(unit)
                     continue
                 kept_units.append(unit)

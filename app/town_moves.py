@@ -59,10 +59,12 @@ _LEAVE_RE = re.compile(
 )
 # Words just before a leave that say the player is not leaving: playtest #71,
 # "i cant leave the city due to a game bug" walked the player out of town.
+# The negation must govern the leave itself ("can't seem to leave"), with at
+# most two words between: "without a word I leave the city" is a leave.
 _LEAVE_NOT_RE = re.compile(
     r"\b(?:can'?t|cannot|can\s+not|couldn'?t|could\s+not|unable\s+to|won'?t|will\s+not|wouldn'?t|don'?t|do\s+not|"
     r"didn'?t|did\s+not|never|not|no\s+way\s+to|isn'?t\s+letting\s+me|not\s+allowed\s+to|stops?\s+me\s+from|"
-    r"stuck|trapped|before\s+i|instead\s+of|rather\s+than|without)\b[\w\s']{0,24}$",
+    r"before\s+i|instead\s+of|rather\s+than|without)\s+(?:[\w']+\s+){0,2}$",
     re.I,
 )
 _STEP_EDGE = {(0, -1): "N", (1, 0): "E", (0, 1): "S", (-1, 0): "W"}
@@ -97,6 +99,23 @@ def world_chart(conn) -> dict[str, Any] | None:
     if not chart or str(chart.get("scale") or "") != "world" or not chart.get("cities"):
         return None
     return chart
+
+
+def outside_walkable(chart: dict[str, Any], x: int, y: int) -> bool:
+    """Whether the world cell (x, y) is ground a walk out of town may end on.
+
+    The same rule move_player applies to a map pick: an exit edge facing
+    water or a mountain is no way out, or the marker would stand on it.
+    """
+    from app.tile_world import _cell_at
+
+    try:
+        cell = _cell_at(chart, int(x), int(y))
+    except Exception:
+        return True
+    if not cell:
+        return False
+    return bool(cell.get("walkable", True)) and str(cell.get("state") or "") not in {"void", "water", "lava", "cliff"}
 
 
 def player_cell(chart: dict[str, Any]) -> tuple[int, int]:
@@ -1357,6 +1376,10 @@ def _exit_walk(view: _CityView, target: tuple[int, int] | None, *, edge: str = "
             far = max(abs(out[0] - target[0]), abs(out[1] - target[1])) if target else 0
             route = _cell_route(view.city, here, (cx, cy)) or []
             cands.append((far, len(route), (cx, cy) != here, cy, cx, e, out))
+    # An edge facing water or a mountain is no way out; a town with only
+    # such edges keeps them all rather than trapping the player.
+    dry = [c for c in cands if outside_walkable(view.chart, c[6][0], c[6][1])]
+    cands = dry or cands
     cands.sort()
     best = None
     tried = 0
@@ -2387,7 +2410,7 @@ def apply_town_turn(conn, town_turn: dict[str, Any] | None, result: dict[str, An
         step = {"N": (0, -1), "S": (0, 1), "E": (1, 0), "W": (-1, 0)}.get(str(target.get("edge") or ""))
         if step:
             out_x, out_y = cx + step[0], cy + step[1]
-            if tg._locate(chart, out_x, out_y) is None:
+            if tg._locate(chart, out_x, out_y) is None and outside_walkable(chart, out_x, out_y):
                 try:
                     _set_marker(conn, chart, out_x, out_y)
                 except Exception:

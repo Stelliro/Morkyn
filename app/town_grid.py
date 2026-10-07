@@ -906,6 +906,23 @@ def _skeleton_roads(world: dict[str, Any], city: dict[str, Any], cell: dict[str,
             if roads[j]:
                 continue
             _connector(rng, roads, side, road_list, j % side, j // side, first, avoid=band | {i})
+    # A port to another cell that edge_joins merged into a nearby point, or
+    # whose tile the metre rounding puts one off its join, still needs its own
+    # stub: _connect_all requires every port tile on a road.
+    for port in ports:
+        if port.get("gate"):
+            continue
+        px, py = port_tile(port, side)
+        i = py * side + px
+        if i in join_set or roads[i]:
+            continue
+        roads[i] = ROAD_MAIN
+        road_list.append(i)
+        edge = str(port.get("edge") or "N")
+        j = _inward(i, side, edge)
+        if 0 <= j < side * side and not roads[j]:
+            first = "y" if edge in ("N", "S") else "x"
+            _connector(rng, roads, side, road_list, j % side, j // side, first, avoid=band | {i})
     stored = [item for item in (cell.get("districts") or []) if isinstance(item, dict)]
     for district in stored:
         if district.get("type") == "street":

@@ -1273,7 +1273,9 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                 slim = {"title": row.get("title") or "", "source": row.get("source") or ""}
                 if row.get("giver"):
                     slim["giver"] = row.get("giver")
-                slim["status"] = "turned_down" if row.get("status") == "declined" else "waiting_for_answer"
+                slim["status"] = {"declined": "turned_down", "accepted_now": "player_takes_it_now"}.get(
+                    str(row.get("status") or ""), "waiting_for_answer"
+                )
                 slim_offers.append(slim)
             else:
                 slim_offers.append(row)
@@ -1457,9 +1459,11 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "When world_state.open_offers is present, those jobs were already offered. "
         "status waiting_for_answer: the player has not answered yet and answers with their own words or the Accept and "
         "Decline buttons; do not offer it again and do not write the player taking or refusing it, but the giver can "
-        "answer questions about it. status turned_down: the player refused it; do not offer it again. "
+        "answer questions about it. status player_takes_it_now: the player's line takes this job and the app has "
+        "accepted it; show the giver's answer to that. status turned_down: the player refused it; do not offer it again. "
         "When world_state.open_leads is present, someone already asked the player along. status waiting_for_answer: "
-        "the player has not gone with them; do not write the player going. status player_stayed: the player chose "
+        "the player has not gone with them; do not write the player going. status player_going_now: the player's "
+        "line goes with them and the walk is world_state.town; write them walking together. status player_stayed: the player chose "
         "to stay; do not ask again. "
         "The story may offer other work that fits the scene and quest_style, but not a pile of offers at once. "
         "When world_state.active_quests is present, those are the player's jobs and the step each is on; "

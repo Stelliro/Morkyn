@@ -130,7 +130,10 @@ def contraband_goods(theme: str, slavery: bool) -> tuple[str, ...]:
 # the engine footer's "sell" and "smithy", is not a where-question.
 _ASKS_WAY_RE = re.compile(
     r"\b(?:where|closest|nearest|district|directions?|point\s+me|show\s+me\s+the\s+way|"
-    r"how\s+(?:do|can|would|should)\s+(?:i|we|one)\s+(?:get|find|reach)|know\s+(?:of|where|any)|looking\s+for)\b"
+    r"how\s+(?:do|can|would|should)\s+(?:i|we|one)\s+(?:get|find|reach)|know\s+(?:of|where|any)|looking\s+for|"
+    # "Who sells rope here?", "anyone buying pelts?": asking for a trader, not
+    # the player's own "I want to sell this sword" (n22 review).
+    r"(?:who|anyone|anybody|someone|somebody)\s+(?:\w+\s+)?(?:sells?|selling|buys?|buying|trades?|trading))\b"
 )
 
 
@@ -1154,28 +1157,35 @@ def tick_quest_clocks(conn, *, from_day: int, to_day: int) -> list[int]:
     return posted
 
 
-def accept_offered_quest(conn, text: str, turn: int | None = None) -> dict[str, Any] | None:
-    if not re.search(r"\b(quest|job|notice|errand|contract|work|take|accept)\b", text or "", re.I):
+def typed_offer_choice(rows: list[Any], text: str) -> Any | None:
+    """The one offered row a typed acceptance takes, or None.
+
+    A typed "I'll take the job" stands for the Accept button only when it can
+    mean one offer (TODO n20): the line names its title, or it is the only
+    offer open. It used to take the newest of several. ``rows`` hold "title"
+    (sqlite rows or dicts). One rule for the engine's accept and for the
+    prompt, which is told the player takes it this turn.
+    """
+    if not rows or not re.search(r"\b(quest|job|notice|errand|contract|work|take|accept)\b", text or "", re.I):
         return None
+    low = str(text or "").lower()
+    for row in rows:
+        title = str(row["title"] or "")
+        if title and title.lower() in low:
+            return row
+    if len(rows) == 1 and _ACCEPT_RE.search(text or ""):
+        return rows[0]
+    return None
+
+
+def accept_offered_quest(conn, text: str, turn: int | None = None) -> dict[str, Any] | None:
     try:
         rows = conn.execute(
             "SELECT id, title FROM quests WHERE status = 'offered' ORDER BY id DESC"
         ).fetchall()
     except Exception:
         return None
-    if not rows:
-        return None
-    low = str(text or "").lower()
-    chosen = None
-    for row in rows:
-        title = str(row["title"] or "")
-        if title and title.lower() in low:
-            chosen = row
-            break
-    # A typed "I'll take the job" stands for the Accept button only when it can
-    # mean one offer (TODO n20). It used to take the newest of several.
-    if chosen is None and len(rows) == 1 and _ACCEPT_RE.search(text or ""):
-        chosen = rows[0]
+    chosen = typed_offer_choice(list(rows), text)
     if chosen is None:
         return None
     from app.quests import accept_offered

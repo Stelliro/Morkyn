@@ -9806,6 +9806,12 @@ function insertRawToken(token, options = {}) {
         : "Added to the scene box. Close the sheet to edit it.";
   }
   const restoreSheet = sheetOpen && active instanceof HTMLElement && active !== turnInput && sheet.contains(active) && document.contains(active);
+  // Playtest #61/#82: at phone width only one panel shows, so a sentence
+  // written from the map (Go in, Go to, a cast card) or from the character
+  // sheet brings the scene forward with it; otherwise it lands in a composer
+  // nobody can see, and closing the sheet would show only the map.
+  const gameShown = gameView && !gameView.classList.contains("hidden");
+  if (gameShown && !turnInput.offsetParent && !hasCustomPlayLayout()) setSceneFocus(true, { scroll: false });
   if (restoreSheet) {
     try {
       turnInput.setSelectionRange(nextPos, nextPos);
@@ -9818,11 +9824,6 @@ function insertRawToken(token, options = {}) {
       active.focus();
     }
   } else {
-    // Playtest #61/#82: at phone width only one panel shows, so a sentence
-    // written from the map (Go in, Go to, a cast card) brings the scene forward
-    // with it; otherwise it lands in a composer nobody can see.
-    const gameShown = gameView && !gameView.classList.contains("hidden");
-    if (gameShown && !turnInput.offsetParent && !hasCustomPlayLayout()) setSceneFocus(true, { scroll: false });
     turnInput.focus();
     try {
       turnInput.setSelectionRange(nextPos, nextPos);
@@ -12798,6 +12799,7 @@ function renderQuests() {
       <h3 class="settingsSubhead" data-fold-default="closed">GM tools</h3>
       <div class="questGmTools">
         <p class="empty">Make, force and inspect quests by hand. The story makes its own as you play.</p>
+        <p><button type="button" class="chipBtn secondaryButton" data-seed-quests title="Add a handful of starter quests">Seed starter quests</button></p>
         ${renderQuestAdvanceTools()}
         <h4 class="questGmSubhead">Create quest</h4>
       <details class="questCreateDetails">
@@ -19856,6 +19858,13 @@ async function requestTurn(text, options = {}) {
     } catch (_) {
       /* the note still shows */
     }
+    // The wait panel and the typed line replaced the last turn on screen; put
+    // that turn back so the note sits under the scene the player was answering.
+    try {
+      restoreLastTurnPanels();
+    } catch (_) {
+      /* the note still shows */
+    }
     appendComposerNote(cleanText, payload.answer);
     return;
   }
@@ -22449,9 +22458,11 @@ listenPlaySurface("click", (event) => {
     return;
   }
   if (handleOfferClick(event)) return;
-  if (event.target.closest("#seedQuestsBtn")) {
+  // The empty-state link and the GM tools chip (always there, so seeding
+  // stays possible once a quest or an offer exists; #82 review).
+  if (event.target.closest("#seedQuestsBtn, [data-seed-quests]")) {
     event.preventDefault();
-    const btn = event.target.closest("#seedQuestsBtn");
+    const btn = event.target.closest("#seedQuestsBtn, [data-seed-quests]");
     btn.disabled = true;
     fetch("/api/quests/seed", { method: "POST" })
       .then(async (response) => {
@@ -27983,6 +27994,10 @@ function openNpcRoster() {
 
 document.querySelector("#openMapOverlayBtn")?.addEventListener("click", () => openMapOverlay());
 document.querySelector("#whoIsHereJump")?.addEventListener("click", () => {
+  // At phone width Scene focus hides the map panel that holds the list; bring
+  // it forward first, the mirror of insertRawToken's guard (#61, #82).
+  const mapMain = document.querySelector("#mapMain");
+  if (mapMain && !mapMain.offsetParent && !hasCustomPlayLayout()) setSceneFocus(false, { scroll: false });
   document.querySelector("#whoIsHereHeading")?.scrollIntoView({ block: "nearest", inline: "nearest" });
   document.querySelector("#sceneCastList .castDetailsBtn")?.focus();
 });

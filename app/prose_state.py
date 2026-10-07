@@ -76,13 +76,17 @@ def _match_number(match: re.Match) -> int | None:
 def stated_coin_amounts(text: str) -> dict[str, list[int]]:
     """The gold amounts the prose names: paid by the player, priced, and received.
 
-    Read across quotes too: a shopkeeper's "That'll be 7 gold" is the price.
+    A price is read across quotes too: a shopkeeper's "That'll be 7 gold" is
+    the price. Paid and received are read from the narration outside quotes
+    only: "You pay me five gold and the sword is yours," is terms, not a
+    payment, and an offer stays open until the player agrees (#77).
     Each list holds distinct amounts in order of first appearance.
     """
     out: dict[str, list[int]] = {"paid": [], "priced": [], "received": []}
     body = str(text or "")
+    unquoted = _QUOTE_RE.sub(" ", body)
     for key, pattern in (("paid", _PAID_RE), ("priced", _PRICED_RE), ("received", _RECEIVED_RE)):
-        for match in pattern.finditer(body):
+        for match in pattern.finditer(body if key == "priced" else unquoted):
             value = _match_number(match)
             if value and value not in out[key]:
                 out[key].append(value)
@@ -94,7 +98,9 @@ def stated_coin_amounts(text: str) -> dict[str, list[int]]:
 _OFFER_RE = re.compile(
     r"\b(?:give|pay|offer|hand(?:\s+over)?|trade|slide|toss)\s+(?:(?:you|him|her|them|[A-Z][\w'\u2019-]*)\s+)?"
     r"(?:(?:my|the|all\s+my)\s+)?(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _COIN
-    + r"|\b(?:buy|take|get|purchase)\b[^.!?\n]{0,40}?\bfor\s+" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN,
+    # "I'll take the job for 10 gold" asks to be paid: only taking the thing
+    # on sale ("I'll take it for 4 gold") is an offer to pay.
+    + r"|\b(?:buy|purchase|take\s+(?:it|that|this|them|those|these|one))\b[^.!?\n]{0,40}?\bfor\s+" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN,
     re.I,
 )
 _NEGATION_RE = re.compile(
@@ -133,37 +139,58 @@ _ACCEPT_WORDS_RE = re.compile(
     r"\b(?:certainly|deal|agreed|done|very\s+well|fair\s+enough|of\s+course|sure|yes|alright|all\s+right|gladly)\b",
     re.I,
 )
+# Taking the coin, or handing over a thing: "gives you a warm nod" (T5) and
+# "passes you by" are gestures, not a deal.
 _ACCEPT_ACT_RE = re.compile(
     r"\b(?:takes|took|accepts|accepted|pockets|pocketed|sweeps\s+up|swept\s+up)\s+(?:the|your)\s+(?:coin|coins|gold|money)\b|"
-    r"\b(?:hands|handed|gives|gave|passes|passed|slides|slid|tosses|tossed)\s+(?:it|them|\w+(?:\s+\w+){0,3})?\s*(?:over\s+)?(?:to\s+)?you\b",
+    r"\b(?:hands|handed|gives|gave|passes|passed|slides|slid|tosses|tossed)\s+"
+    r"(?:you\s+(?!(?:a|an|one)\s+(?:\w+\s+)?(?:nod|smile|look|glance|wink|shrug|grin|frown|sigh|stare|pat|warning)\b)"
+    r"(?:the|a|an|it|them|his|her|their|your)\b|"
+    r"(?:it|them|(?:the|a|an|his|her|their)\s+\w+(?:\s+\w+){0,2})\s+(?:over\s+)?to\s+you\b)",
     re.I,
 )
 
 
 def offer_answer(narration: str, own_line: str = "") -> str:
-    """How the prose answers the player's offer: "refused", "accepted" or "" (not answered)."""
+    """How the prose answers the player's offer: "refused", "accepted" or "" (not answered).
+
+    The player's own words echoed in the prose are neither ("I know 3 gold is
+    not enough"), and only the first quote that answers counts: a stock
+    "what's done is done" later in the scene is not the reply.
+    """
     text = str(narration or "")
-    if _REFUSE_RE.search(text):
-        return "refused"
     own_words = set(re.findall(r"[a-z']+", str(own_line or "").lower()))
-    for match in _QUOTE_RE.finditer(text):
-        span = match.group(1) or match.group(2) or ""
+
+    def echo(span: str) -> bool:
         words = set(re.findall(r"[a-z']+", span.lower()))
-        # The player's own line repeated in the prose is not the answer.
-        if words and len(words & own_words) * 2 >= len(words):
-            continue
-        if _ACCEPT_WORDS_RE.search(span):
-            return "accepted"
+        return bool(words) and len(words & own_words) * 2 >= len(words)
+
+    answers = [m.group(1) or m.group(2) or "" for m in _QUOTE_RE.finditer(text)]
+    answers = [span for span in answers if not echo(span)]
+    unechoed = _QUOTE_RE.sub(lambda m: " " if echo(m.group(1) or m.group(2) or "") else m.group(0), text)
+    if _REFUSE_RE.search(unechoed):
+        return "refused"
+    if answers and _ACCEPT_WORDS_RE.search(answers[0]):
+        return "accepted"
     if _ACCEPT_ACT_RE.search(_QUOTE_RE.sub(" ", text)):
         return "accepted"
     return ""
 
 
-_NEGATED_CLAUSE_RE = re.compile(_NEGATION_RE.pattern + r"[^,.;:!?\n]*", re.I)
+def shows_payment(sentence: str) -> bool:
+    """Whether a sentence shows the player paying coin (outside quotes)."""
+    return bool(_PAID_RE.search(_QUOTE_RE.sub(" ", str(sentence or ""))))
+
+
+# A denied clause ends at a comma or stop, or where a conjunction starts a new
+# subject: "i dont have the coin so i head to the bakery" still heads there.
+_NEGATED_CLAUSE_RE = re.compile(
+    _NEGATION_RE.pattern + r"[^,.;:!?\n]*?(?=\s+(?:so|and|but|then|yet)\s+(?:i|we)\b|[,.;:!?\n]|$)", re.I
+)
 
 
 def strip_negated_clauses(text: str) -> str:
-    """The text with each denied clause blanked, from the negation to the next comma or stop.
+    """The text with each denied clause blanked, from the negation to the next comma, stop or new clause.
 
     Playtest #76 (T9): "i cant leave the city due to a game bug" walked the
     player to the south gate. A clause the player denies is not something they do.
@@ -261,6 +288,29 @@ _NOT_A_SUBJECT = frozenset({
 })
 
 
+# A family word used as a noun ("the forge", "a hammer", "my temper").
+_NOUN_BEFORE_RE = re.compile(
+    r"\b(?:a|an|the|my|your|his|her|their|our|its|this|that|these|those|some|any|every|each)\s+(?:[\w'-]+\s+)?$", re.I
+)
+# A wish or a lesson is not a declared act: "i would love to learn how to forge steel" (T11).
+_WISH_BEFORE_RE = re.compile(
+    r"\b(?:would\s+(?:love|like)|want|wanted|wish|hope|hoping|like|learn|learning|teach\s+me|show\s+me|"
+    r"know|knows)\s+(?:how\s+)?to\s+(?:[\w'-]+\s+){0,2}$",
+    re.I,
+)
+
+
+def _act_word_is_verb(text: str, match: re.Match) -> bool:
+    """Whether a family word heads something done, not a name, a noun or a wish."""
+    before = text[: match.start()]
+    if _NOUN_BEFORE_RE.search(before):
+        return False
+    # "Blind Owl Forge": a capital inside a name, not the first word of a clause.
+    if match.group(0)[:1].isupper() and re.search(r"\b[A-Z][\w'-]*\s+$", before):
+        return False
+    return True
+
+
 def declared_act(own_line: str) -> dict[str, Any] | None:
     """The hands-on act the player's own line declares: {"verb", "family", "phrase"}, or None."""
     text = str(own_line or "")
@@ -269,7 +319,10 @@ def declared_act(own_line: str) -> dict[str, Any] | None:
         for verb in verbs:
             for match in re.finditer(rf"\b{_verb_forms(verb)}\b", text, re.I):
                 clause_start = max(text.rfind(mark, 0, match.start()) for mark in (",", ".", ";", "!", "?", "\n"))
-                if _NEGATION_RE.search(text[clause_start + 1: match.start()]):
+                clause = text[clause_start + 1: match.start()]
+                if _NEGATION_RE.search(clause) or _WISH_BEFORE_RE.search(clause):
+                    continue
+                if not _act_word_is_verb(text, match):
                     continue
                 if best is None or match.start() < best[0]:
                     best = (match.start(), family, verb)
@@ -299,6 +352,8 @@ def act_handed_off(narration: str, own_line: str) -> dict[str, Any] | None:
     other: tuple[str, str, bool] | None = None  # (who, sentence, named)
     for _start, _end, sentence in sentence_spans(unquoted):
         for match in verb_re.finditer(sentence):
+            if not _act_word_is_verb(sentence, match):
+                continue  # "Bertram is at the forge" hands nothing off
             before = sentence[: match.start()]
             mine = list(_PLAYER_SUBJECT_RE.finditer(before))
             theirs = [m for m in _OTHER_SUBJECT_RE.finditer(before) if m.group(0) not in _NOT_A_SUBJECT]

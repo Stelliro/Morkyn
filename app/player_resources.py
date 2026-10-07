@@ -1263,6 +1263,10 @@ def action_resource_delta(
         # (_spend_travel, docs/TownGrid.md 4.3). Charging the line as well paid
         # twice, and paid for moves that never happened (playtest #80).
         base_e, base_f = 0.0, 0.0
+    elif kind_l == "journey":
+        # A typed move outside a town: the legacy MOVE path charges no walk,
+        # so the line pays its old travel point (playtest #80 review).
+        base_e, base_f = 1.0, 0.0
     else:
         # investigate / general: looking, handling, small errands. They were a
         # whole point per 6-minute beat, five times a street walk's rate, and a
@@ -1327,7 +1331,10 @@ def apply_action_spend(
     cfg = resource_settings(options)
     kind = str(kind or "general").lower()
     if kind in LIGHT_ACTION_KINDS and minutes > 0:
-        regen = apply_regen(conn, minutes=int(minutes), kind="wait", options=options)
+        # A typed rest or meditation recovers at the Wait control's rate for
+        # the same act; talk recovers at the waiting rate.
+        regen_kind = kind if kind in {"rest", "sleep", "meditate"} else "wait"
+        regen = apply_regen(conn, minutes=int(minutes), kind=regen_kind, options=options)
         after = regen.get("after") or get_player_resources(conn, options)
         return {
             "ok": True,
@@ -1347,9 +1354,10 @@ def apply_action_spend(
     before = get_player_resources(conn, options)
     col = collapse_state(before)
     if cfg.get("zero_energy_blocks_physical") and col.get("blocks_physical"):
-        # Not travel: a walk is gated by its own cost in preview_travel_spend,
-        # which is the only thing that charges it (playtest #80).
-        if kind in {"combat", "physical", "train"}:
+        # Not a town walk: that is gated by its own cost in preview_travel_spend,
+        # which is the only thing that charges it (playtest #80). A journey
+        # outside a town has no such walk, so it keeps the gate.
+        if kind in {"combat", "physical", "train", "journey"}:
             return {
                 "ok": False,
                 "blocked": True,

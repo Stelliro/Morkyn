@@ -2497,6 +2497,15 @@ def api_tile_map_move(request: MapMoveRequest):
                     status_code=409,
                     detail="Long travel is locked until the scene is free — use adjacent steps (arrows) anytime.",
                 )
+            # The world step from the exit is checked before the walk out is
+            # written: a refused pick changes nothing (move_player's own rules).
+            if (tx, ty) != (out_x, out_y):
+                from app.town_moves import outside_walkable
+
+                if not outside_walkable(data, tx, ty):
+                    raise ValueError("That tile is not walkable.")
+                if not rest_free and abs(tx - out_x) + abs(ty - out_y) > 8:
+                    raise ValueError("Too far for a single walk — step with arrows or pick a closer tile.")
             with _connect() as conn:
                 town_exit = walk_out(conn, (tx, ty), context=town_context, plan=exit_plan)
         except PermissionError as exc:
@@ -2535,9 +2544,31 @@ def api_tile_map_move(request: MapMoveRequest):
                 status_code=409,
                 detail="Long travel is locked until the scene is free — use adjacent steps (arrows) anytime.",
             )
+    def _stopped_outside(why: str) -> dict[str, Any]:
+        # The walk out is already written: answer with it (and save), so the
+        # client shows the player outside the gate instead of an error.
+        try:
+            autosave_campaign()
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "map": get_map(None),
+            "town_exit": town_exit,
+            "halted": {"at": "outside town", "why": f"You walk out of town and stop there. {why}"},
+            "travel_ready": _travel_ready(),
+            "state": get_state(),
+            "step": {"from": [px, py], "to": [tx, ty], "free": True,
+                     "minutes": int(town_exit.get("minutes") or 0), "terrain": "town"},
+            "travel": {},
+            "travel_result": {"town_exit": town_exit, "refused": why},
+        }
+
     try:
         view = move_player(None, tx, ty)
     except ValueError as exc:
+        if town_exit is not None:
+            return _stopped_outside(str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     # Adjacent free steps keep travel open so the player can keep walking.
     # Scene/settlement jumps still close travel for a beat.
@@ -2561,6 +2592,8 @@ def api_tile_map_move(request: MapMoveRequest):
             from app.tile_world import restore_player_position
 
             view = restore_player_position(None, px, py)
+            if town_exit is not None:
+                return _stopped_outside("Too exhausted to travel on — wait, meditate, or sleep to recover energy.")
             # Keep travel meta for UI feedback
             if isinstance(view, dict):
                 view["travel"] = travel if isinstance(travel, dict) else {}

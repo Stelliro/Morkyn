@@ -91,9 +91,12 @@ _JOB_RE = re.compile(
     # share this one list, so they cannot fall out of step.
     r"needs? (?:a bit of|a little|some|any|an extra|extra|more) (?:help|hands?)|"
     r"could use (?:an extra|another|a|some|your|a bit of|an extra set of) (?:hands?|help|skills?|set of hands)|"
-    r"(?:extra|spare) (?:set of )?hands|every hand helps|deliver\w*|"
+    # Review of #81: a bare "apprentice", "deliveries" or "show you how" also
+    # named a smith's helper at the anvil, late carts and street directions.
+    r"(?:extra|spare) (?:set of )?hands|every hand helps|deliver (?:this|these|it|them|the)|"
     r"(?:any|some|a bit of|odd|plenty of|honest|steady|paying) work|work (?:here|to do|for you|for me|for us)|"
-    r"(?:teach|train) you|show you how|apprentic\w*|take you on|"
+    r"(?:teach|train) you|show you (?:how (?:it'?s done|to work|the trade|the craft)|the ropes)|"
+    r"(?:an|my|as an?|need an?|take on an?) apprentice|apprenticeship|take you on|"
     r"(?:start|begin) (?:there|tomorrow|today|in the morning|at dawn|first thing))\b",
     re.I,
 )
@@ -103,9 +106,13 @@ _JOB_RE = re.compile(
 # answered with an offer on T10, and nothing read it).
 _ASKS_WORK_RE = re.compile(
     r"\b(?:any|some|a|the|honest|paying|more) (?:work|jobs?|tasks?|errands?|employment)\b|"
-    r"\b(?:need|needs|want|wanted|use) (?:a |an |an extra |another |some |any )?(?:help|hand|hands|set of hands|helper|worker)\b|"
+    # Asked of the other person: "do you need a hand", "you wanted an extra set
+    # of hands" (T11). "I need a hand finding the inn" is not asking for work.
+    r"\b(?:you|ya)\s+(?:\w+\s+)?(?:need|needs|want|wanted|use) (?:a |an |an extra |another |some |any )?"
+    r"(?:help|hand|hands|set of hands|extra set of hands|helper|worker)\b|"
     r"\b(?:can|could|may|shall) i (?:help|assist|lend|work|be of use)\b|"
-    r"\b(?:hire|employ) me\b|\bhiring\b|\bapprentic\w*|\b(?:teach|train|show) me\b|\blearn (?:to|how|the|your)\b|"
+    r"\b(?:hire|employ) me\b|\bhiring\b|\bapprentic\w*|\b(?:teach|train) me\b|\bshow me how\b|"
+    r"\blearn (?:to|how to|your (?:trade|craft)|the (?:trade|craft))\b|"
     r"\bearn (?:some |a |my )?(?:coin|money|gold|silver|keep|living|wage)\b|\bwork for (?:you|coin|pay|food)\b|"
     r"\blooking for (?:work|a job|employment)\b",
     re.I,
@@ -113,7 +120,8 @@ _ASKS_WORK_RE = re.compile(
 # A giver saying yes to what the player asked for. Counts as an offer only
 # beside a player line that asked for work (see judge_offer).
 _AGREES_RE = re.compile(
-    r"\b(?:agree[sd]?|says? yes|said yes|nods?|nodded|nodding|you'?re hired|welcome aboard|it'?s settled|"
+    # Not a bare nod: "Bertram nods and points down the lane" agrees to nothing.
+    r"\b(?:agree[sd]?|says? yes|said yes|you'?re hired|welcome aboard|it'?s settled|"
     r"accepts? your offer|take you on|(?:start|begin) (?:there|tomorrow|today|in the morning))\b",
     re.I,
 )
@@ -165,6 +173,25 @@ def player_accepts(player_input: str) -> bool:
 def _title_words(title: str) -> set[str]:
     stop = {"the", "a", "an", "of", "to", "for", "and", "in", "on", "at", "from", "with", "word"}
     return {w for w in re.findall(r"[a-z]{4,}", str(title or "").lower()) if w not in stop}
+
+
+# A typed refusal of the job itself: a bare "pass on" ("I pass on the message")
+# or "refuse" is not one (n20 review).
+_TYPED_DECLINE_RE = re.compile(
+    r"\b(?:i(?:'ll| will)? decline|no thanks|not interested|"
+    r"turn (?:it|them|the (?:job|offer|work|task|errand)) down|"
+    r"(?:refuse|pass on|say no to) (?:it|that|this|the (?:job|offer|work|task|errand)))\b",
+    re.I,
+)
+
+
+def _means_this_offer(quest: dict[str, Any], existing: list[dict[str, Any]] | None, player_input: str) -> bool:
+    """A typed answer can only mean ``quest``: it is the one offer open, or the line names its title."""
+    words = _title_words(str(quest.get("title") or ""))
+    if words and words & set(re.findall(r"[a-z]{4,}", str(player_input or "").lower())):
+        return True
+    offered = [q for q in existing or [] if str(q.get("status") or "") == "offered"]
+    return len(offered) == 1 and offered[0].get("id") == quest.get("id")
 
 
 def player_asks_for_work(text: str) -> bool:
@@ -484,7 +511,9 @@ def _ws(text: Any) -> str:
 
 _NO_WORK_RE = re.compile(
     r"\b(?:no one|nobody|no-one|none)(?:'s| is| are)? (?:hiring|paying|needs? (?:help|hands|anyone))\b|"
-    r"\bno (?:work|jobs?|hiring|coin to spare)\b|\bnot hiring\b|\bnothing (?:for you|to do)\b",
+    r"\bno (?:work|jobs?|hiring|coin to spare)\b|\bnot hiring\b|\bnothing (?:for you|to do)\b|"
+    r"\b(?:i|we) work alone\b|\b(?:don'?t|do not) need (?:help|a hand|any help|anyone|hands|you)\b|"
+    r"\b(?:can'?t|cannot) afford (?:help|a hand|to pay|another)\b",
     re.I,
 )
 
@@ -566,14 +595,25 @@ def judge_offer(
     for sentence in pool:
         if _NO_WORK_RE.search(sentence):
             return {"ok": False, "why": "refusal", "checked": sentence[:240]}
+    # The giver's refusal anywhere in this exchange vetoes it: "Sorry, I have
+    # nothing for you today" answers "do you have any work?" (#81 review).
+    all_giver = _giver_sentences(narration, player_input, giver, giver_ref, npcs)
+    for sentence in all_giver:
+        if _NO_WORK_RE.search(sentence):
+            return {"ok": False, "why": "giver_refuses", "checked": sentence[:240]}
+    # The player's own words, or the prose retelling them ("You ask ..."), are
+    # the ask, never the offer: job words count only in someone else's
+    # sentence. The player taking a job on ("I'll take the job") still counts.
+    own_flat = re.sub(r"\s+", " ", str(player_input or "")).strip().lower()
     for sentence in pool:
-        if _JOB_RE.search(sentence) or _ACCEPTS_WORK_RE.search(sentence):
+        players = sentence.lower() in own_flat or re.match(r"^\W*you\b", sentence, re.I)
+        if _ACCEPTS_WORK_RE.search(sentence) or (not players and _JOB_RE.search(sentence)):
             return {"ok": True, "why": "quote", "checked": sentence[:240]}
     if offer_line and evidence_found(offer_line, narration, player_input):
-        for sentence in _quote_sentences(offer_line, narration, player_input) or [offer_line]:
+        for sentence in _quote_sentences(offer_line, narration) or [offer_line]:
             if not _NO_WORK_RE.search(sentence) and (_JOB_RE.search(sentence) or _ACCEPTS_WORK_RE.search(sentence)):
                 return {"ok": True, "why": "offer_line", "checked": sentence[:240]}
-    giver_lines = [s for s in _giver_sentences(narration, player_input, giver, giver_ref, npcs) if not _NO_WORK_RE.search(s)]
+    giver_lines = all_giver
     for sentence in giver_lines:
         if _JOB_RE.search(sentence):
             return {"ok": True, "why": "giver_offers", "checked": sentence[:240]}
@@ -871,8 +911,14 @@ def validate_quest_changes(
             reasons.append("unknown_quest")
         evidence = str(raw.get("evidence") or "").strip()
         if not evidence_found(evidence, narration, player_input):
-            # An accept or a refusal the player typed is evidence enough on its own.
-            if not ((action == "accept" and accepts_now) or (action == "decline" and _DECLINE_RE.search(str(player_input or "")))):
+            # An accept or a refusal the player typed is evidence enough on its
+            # own only when it can mean this one offer: the only one open, or
+            # the line names it. The rule local_intel.accept_offered_quest uses
+            # for a typed accept, so the parser cannot pick a different offer.
+            typed = (action == "accept" and accepts_now) or (
+                action == "decline" and _TYPED_DECLINE_RE.search(str(player_input or ""))
+            )
+            if not (typed and quest is not None and _means_this_offer(quest, existing, player_input)):
                 reasons.append("evidence_not_in_text")
         if quest is not None and action in _LEGAL and str(quest.get("status") or "") not in _LEGAL[action]:
             reasons.append(f"illegal_transition:{quest.get('status')}->{action}")

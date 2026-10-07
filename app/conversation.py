@@ -154,7 +154,11 @@ def roster(context: dict[str, Any]) -> list[dict[str, Any]]:
             if not here and int(npc.get("id") or 0) not in party_ids:
                 continue
             seen.add(code)
-            rows.append({"code": code, "name": name, "aliases": []})
+            row = {"code": code, "name": name, "aliases": []}
+            # The keeper of the venue the player stands in (playtest #73 review).
+            if here and cid is not None and int(npc.get("workplace_id") or 0) == int(cid or 0) and int(cid or 0):
+                row["keeper"] = True
+            rows.append(row)
     by_code = {row["code"]: row for row in rows}
     for alias in context.get("aliases") or []:
         if not isinstance(alias, dict) or str(alias.get("entity_type") or "") != "npc":
@@ -341,38 +345,53 @@ def split_out_of_character(text: str) -> tuple[str, str]:
     you ... cannot leave the city due to a game bug") and its "leave the city"
     walked the player out of the forge. Bracketed notes ("(ooc: ...)", "((...))",
     "[...]", but not "[[L1]]" codes) and clauses with a clear meta marker come
-    out; what is left is what the player does in the story. Engine notes after
-    a blank line ride with the in-fiction part untouched.
+    out; what is left is what the player does in the story. Every paragraph
+    the player typed is read (the line is split before any engine note is
+    added): an all-note first paragraph no longer throws away the move typed
+    under it, and a note in a later paragraph no longer reaches the fiction.
     """
     raw = str(text or "")
     if raw.startswith("__"):
         return raw, ""
-    head, sep, tail = raw.partition("\n\n")
     removed: list[str] = []
 
     def _take(match: re.Match[str]) -> str:
         removed.append(match.group(0).strip(" ()[]"))
         return " "
 
-    working = _OOC_BRACKET_RE.sub(_take, head)
-    if _OOC_META_RE.search(working):
-        # Clause by clause: a meta clause goes, the rest of the line stays.
-        pieces = re.split(r"(?<=[.!?;,])\s+|\s+(?=\b(?:but|so|and\s+so)\b)", working)
-        kept: list[str] = []
-        for piece in pieces:
-            if _OOC_META_RE.search(piece) and not re.search(r'["“”]', piece):
-                removed.append(piece.strip(" ,;"))
-            else:
-                kept.append(piece)
-        working = " ".join(kept)
+    def _clean(paragraph: str) -> str:
+        before = len(removed)
+        working = _OOC_BRACKET_RE.sub(_take, paragraph)
+        if _OOC_META_RE.search(_QUOTE_RE.sub(" ", working)):
+            # Clause by clause: a meta clause goes, the rest of the line stays.
+            # Quoted speech is masked first, so a comma inside the player's
+            # own words never splits a clause out of them.
+            quotes: list[str] = []
+
+            def _mask(match: re.Match[str]) -> str:
+                quotes.append(match.group(0))
+                return f"\x00{len(quotes) - 1}\x00"
+
+            masked = _QUOTE_RE.sub(_mask, working)
+            pieces = re.split(r"(?<=[.!?;,])\s+|\s+(?=\b(?:but|so|and\s+so)\b)", masked)
+            kept: list[str] = []
+            for piece in pieces:
+                if _OOC_META_RE.search(re.sub(r"\x00\d+\x00", " ", piece)):
+                    removed.append(re.sub(r"\x00(\d+)\x00", lambda m: quotes[int(m.group(1))], piece).strip(" ,;"))
+                else:
+                    kept.append(piece)
+            working = re.sub(r"\x00(\d+)\x00", lambda m: quotes[int(m.group(1))], " ".join(kept))
+        if len(removed) == before:
+            return paragraph
+        clean = re.sub(r"\s+([,.;!?])", r"\1", re.sub(r"\s+", " ", working)).strip(" ,;")
+        clean = re.sub(r"^(?:so|but|and)\b[\s,]*", "", clean, flags=re.IGNORECASE).strip()
+        return clean if re.search(r"[A-Za-z]{2,}", clean) else ""
+
+    paragraphs = [_clean(p) for p in re.split(r"\n\s*\n", raw)]
     if not removed:
         return raw, ""
-    clean = re.sub(r"\s+([,.;!?])", r"\1", re.sub(r"\s+", " ", working)).strip(" ,;")
-    clean = re.sub(r"^(?:so|but|and)\b[\s,]*", "", clean, flags=re.IGNORECASE).strip()
     ooc = "; ".join(r for r in removed if r)
-    if not re.search(r"[A-Za-z]{2,}", clean):
-        clean = ""
-    return (clean + (sep + tail if sep and clean else "")), ooc
+    return "\n\n".join(p for p in paragraphs if p.strip()), ooc
 
 
 def _quote_ranges(text: str) -> list[tuple[int, int]]:
@@ -659,8 +678,11 @@ def _last_narration(context: dict[str, Any]) -> str:
 
 def _shown_to_player(context: dict[str, Any], state: dict[str, Any], row: dict[str, Any]) -> bool:
     """The player has met this person here: the last scene named them, or the
-    conversation at this same place already had them in it."""
+    conversation at this same place already had them in it, or they keep the
+    venue the player is inside (the prose may call her only "the baker")."""
     code = row["code"]
+    if row.get("keeper"):
+        return True
     location = str(_current_location(context).get("code") or "")
     if location and location == str(state.get("location") or ""):
         seen = _codes(

@@ -541,15 +541,18 @@ def gate_after_turn(
     here = _here(conn)
     rows = _roster(prompt_context)
     moved_leader = False
-    if str(report.get("rule") or "") == "town_led" and report.get("led_by") and str(report.get("status") or "") in {
-        "model", "repaired"
-    }:
-        # The player asked to go along and the engine walked them: the one who led comes too.
+    if report.get("led_by") and str(report.get("status") or "") in {"model", "repaired"}:
+        # The player asked to go along and the engine walked them: the one who
+        # led comes too. Whatever the walk's rule: a typed "I go into Blind Owl
+        # Forge" that answers the lead keeps the planner's town_enter (n21 review).
         moved_leader = _move_npc_here(conn, name=str(report["led_by"]), origin_code=str(report.get("from") or ""))
     items: list[dict[str, Any]] = []
     stayed_codes = {str(row.get("npc_code") or "") for row in stayed}
     for lead in _leads(conn, report, dsl or {}, rows, here, notes):
-        if lead["npc_code"] in stayed_codes and not lead.get("to"):
+        # Stay holds for STAYED_TURNS whatever place the next lead names: a
+        # prose lead always carries a plot, so the old "no place" test let the
+        # same Go with card back the next time the prose led (n21 review).
+        if lead["npc_code"] in stayed_codes:
             notes.append(f"lead_after_stay:{lead['npc_code']}")
             continue
         items.append(lead)
@@ -557,9 +560,18 @@ def gate_after_turn(
     candidates: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
     hint = direction_hint if isinstance(direction_hint, dict) else None
     if hint and hint.get("told") and hint.get("x") is not None and hint.get("y") is not None:
-        candidates.append(({"x": int(hint["x"]), "y": int(hint["y"])},
-                           str(hint.get("name") or hint.get("label") or "the place you were told of"),
-                           {"kind": "direction_hint"}))
+        # Labelled with what the prose was told: the true place name only when
+        # the answer was exact and not a hidden trade. A blurred answer stops
+        # short of the place, and a forbidden one never names it (n22 review).
+        if hint.get("exact") and not hint.get("forbidden"):
+            told_label = str(hint.get("name") or hint.get("label") or "the place you were told of")
+        else:
+            good = str(hint.get("good") or hint.get("label") or "").strip()
+            compass = str(hint.get("compass") or "").strip()
+            told_label = (f"where you were pointed for {good}" if good else "where you were pointed") + (
+                f", {compass}" if compass else ""
+            )
+        candidates.append(({"x": int(hint["x"]), "y": int(hint["y"])}, told_label, {"kind": "direction_hint"}))
     candidates.extend(_quest_places(conn, quest_report if isinstance(quest_report, dict) else {}))
     candidates.extend(_speech_places(conn, narration, rows, player_input, here))
     travel = 0
