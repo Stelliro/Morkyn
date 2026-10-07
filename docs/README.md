@@ -4,6 +4,7 @@
 | --- | --- |
 | [ConnectAPIs.md](ConnectAPIs.md) | Cloud / OpenAI-compatible APIs and agent bridge |
 | [ConnectImages.md](ConnectImages.md) | Optional local Forge / ComfyUI image backends |
+| [TextToSpeech.md](TextToSpeech.md) | Read the story aloud: local Piper engine or a speech API, presets, Play bar and right-click controls, troubleshooting |
 | [NarrationPipeline.md](NarrationPipeline.md) | Adaptive paragraph narration pipeline |
 | [TurnDsl.md](TurnDsl.md) | NAR+OPS draft language and opcodes |
 | [WorldMap.md](WorldMap.md) | Planned procgen map, travel limits, event pins |

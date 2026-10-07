@@ -9959,6 +9959,122 @@ body.popoutBody .iibEmbedFrame {
   line-height: 1.35;
 }
 
+/* ==========================================================================
+   Speech (tts): the Play bar under the narration and the Speech settings
+   form. Layout only; the look lives in ui/skin.css ("Speech" section).
+   ========================================================================== */
+
+.ttsPlayBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 0 0 0 10px;
+}
+
+.ttsPlayBar [hidden] {
+  display: none !important;
+}
+
+.ttsPlayBar .ttsStatus {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.8rem;
+}
+
+/* An error is the whole answer: let it wrap instead of clipping. */
+.ttsPlayBar .ttsStatus.bad {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.speechSettingsMount {
+  margin-top: 14px;
+  padding-top: 12px;
+}
+
+.speechSettingsMount:empty {
+  display: none;
+}
+
+.speechPanel {
+  max-width: 560px;
+}
+
+#speechModal:not(.hidden) {
+  z-index: 28;
+}
+
+.ttsForm {
+  display: grid;
+  gap: 10px;
+}
+
+.ttsForm label {
+  display: grid;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
+.ttsForm label.ttsEnabled {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.ttsForm [hidden] {
+  display: none !important;
+}
+
+.ttsForm .ttsSpeedControls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 3.5em;
+  align-items: center;
+  gap: 8px;
+}
+
+.ttsForm .ttsSpeedOut {
+  text-align: right;
+}
+
+.ttsForm .ttsMore {
+  display: grid;
+  gap: 10px;
+}
+
+.ttsForm .ttsMore > summary {
+  cursor: pointer;
+  width: max-content;
+}
+
+.ttsFormActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ttsForm .ttsFormStatus,
+.ttsForm .ttsVoiceDir {
+  margin: 0;
+  min-height: 1.2em;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 640px) {
+  .ttsPlayBar {
+    flex-wrap: wrap;
+  }
+
+  .ttsPlayBar .ttsStatus {
+    flex-basis: 100%;
+    white-space: normal;
+  }
+}
+
 .checkCatalogCard {
   margin-top: 16px;
   padding: 14px;

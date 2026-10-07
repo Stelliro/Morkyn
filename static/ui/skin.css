@@ -1562,6 +1562,74 @@ body.aiBusy:not(.llmChatThinking)::after {
 }
 
 
+/* --- Speech: the Play bar under the narration and the settings form ------- */
+
+.ttsPlayBar {
+  border-left: 1px solid var(--thread);
+  box-shadow: inset 1px 0 0 0 var(--thread-dim);
+  background: transparent;
+}
+
+.ttsPlayBar .ttsStatus {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.ttsPlayBar .ttsStatus.bad {
+  color: var(--bad);
+  font-style: normal;
+}
+
+.ttsHeading {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--thread);
+}
+
+.speechSettingsMount {
+  border-top: 1px solid var(--line);
+}
+
+.ttsForm label > span:first-child {
+  color: var(--label);
+  font-weight: 750;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.ttsForm label.ttsEnabled > span {
+  color: var(--text);
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  font-size: 0.85rem;
+}
+
+.ttsForm .ttsSpeedOut {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ttsForm .ttsMore > summary {
+  color: var(--label-dim);
+  font-size: 0.72rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+
+.ttsForm .ttsFormStatus.bad {
+  color: var(--bad);
+}
+
+.ttsForm .ttsFormStatus.good {
+  color: var(--good);
+}
+
+
 /* --- ui/failsafe.js: the model-problem dialog ------------------------------ */
 
 .failsafePanel {
