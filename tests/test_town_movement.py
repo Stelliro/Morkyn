@@ -655,7 +655,25 @@ class ModelMoves(unittest.TestCase):
         self.chart = _fresh()
         _play("I look around.", "You look about the lane.")
 
+    def _stand_near_a_bakery(self):
+        """Two road tiles from the nearest bakery's door: inside the near cap, not at the door."""
+        with connect() as conn:
+            chart = get_map(None, conn=conn)
+            pos = tm.get_position(conn)
+            town = tg.stored_cell(conn, chart, pos["cx"], pos["cy"])
+            side = town["side"]
+            here = tm._pos_index(pos, side)
+            bakeries = [p for p in town["plots"] if p.get("vk") == "bakery" and p.get("f")]
+            dist = tm._road_dist(town, here)
+            door = min(bakeries, key=lambda p: dist.get(p["f"][1] * side + p["f"][0], 10 ** 9))
+            around = tm._road_dist(town, door["f"][1] * side + door["f"][0], limit=2)
+            spot = next(i for i, d in sorted(around.items(), key=lambda kv: -kv[1])
+                        if d == 2 and (tm._frontage_plot(town, i) or {}).get("vk") != "bakery")
+            city = tg._locate(chart, pos["cx"], pos["cy"])[0]
+            tm.write_position(conn, tm._make_position(chart, city, pos["cx"], pos["cy"], town, spot))
+
     def test_an_invented_bakery_is_re_aimed_and_renamed(self):
+        self._stand_near_a_bakery()
         out = _play("I go inside.", "You push open the door and step into the Blind Owl Bakery.",
                     player={"move_to_location": "Blind Owl Bakery"})
         movement = out["state"]["movement"]
@@ -897,6 +915,132 @@ class Rewind(unittest.TestCase):
         self.assertEqual(_scalar("SELECT MAX(id) FROM town_seen"), before_seen)
         self.assertEqual(_scalar("SELECT COUNT(*) FROM locations WHERE plot_id != ''"), 0)
         self.assertEqual(tm.player_cell(get_map(None)), (before_pos["cx"], before_pos["cy"]))
+
+
+class ReviewFixes(unittest.TestCase):
+    """Slice B/C review findings: rewind of in-place writes, town errors, far re-aims, click-walk fog."""
+
+    def setUp(self):
+        self.chart = _fresh()
+        self.city, self.cell = _city(self.chart)
+
+    def test_rewinding_an_entry_restores_a_keeper_away_from_the_player(self):
+        _play("I look around.", "You look about the lane.")
+        plot_ref = str(_plan("I go into the bakery.")["plan"]["target"]["plot"])
+        plan_json = json.dumps({"name": "probe bakery", "kind": "bakery"})
+        with connect() as conn:
+            far = conn.execute("INSERT INTO locations (code, name, summary, visit_count) VALUES ('LPROBE', 'Probe Farm', '', 0)").lastrowid
+            npc = conn.execute(
+                "INSERT INTO npcs (code, name, location_id, workplace_plot, workplace_plan, workplace_id) VALUES (?, 'Probe Baker', ?, ?, ?, 0)",
+                (world._next_alpha_code(conn), far, plot_ref, plan_json),
+            ).lastrowid
+        out = _play("I go into the bakery.", "You walk down the lane and step into the bakery.")
+        self.assertEqual(out["state"]["movement"]["rule"], "town_enter")
+        self.assertTrue(_scalar("SELECT workplace_id FROM npcs WHERE id = ?", npc))
+        world.rewind_last_turn()
+        self.assertEqual(_scalar("SELECT COUNT(*) FROM locations WHERE plot_id != ''"), 0)
+        self.assertEqual(_scalar("SELECT workplace_id FROM npcs WHERE id = ?", npc), 0)
+        self.assertEqual(_scalar("SELECT workplace_plan FROM npcs WHERE id = ?", npc), plan_json)
+        self.assertEqual(_scalar("SELECT workplace_plot FROM npcs WHERE id = ?", npc), plot_ref)
+
+    def test_rewinding_the_entry_turn_un_adopts_the_settlement_row(self):
+        with connect() as conn:
+            row_id = conn.execute(
+                "INSERT INTO locations (code, name, summary) VALUES ('L77', ?, '')", (self.city["name"],)
+            ).lastrowid
+        _play("I look around.", "You look about the lane.")
+        self.assertEqual(_scalar("SELECT city_id FROM locations WHERE id = ?", row_id), self.city["id"])
+        world.rewind_last_turn()
+        self.assertFalse(_scalar("SELECT COALESCE(city_id, '') FROM locations WHERE id = ?", row_id))
+
+    def test_a_town_code_error_falls_back_to_the_legacy_rules(self):
+        _play("I look around.", "You look about the lane.")
+        rows = _scalar("SELECT COUNT(*) FROM locations")
+
+        def broken(*_a, **_k):
+            raise RuntimeError("probe")
+
+        with mock.patch.object(tm, "resolve_town_movement", side_effect=broken):
+            out = _play('I say, "Nice weather."', "The baker nods and goes back to her bread.",
+                        player={"move_to_location": "Blind Owl Bakery"})
+        movement = out["state"]["movement"]
+        self.assertEqual(movement["status"], "dropped_unshown", movement)
+        self.assertIn("probe", movement.get("town_error", ""))
+        self.assertEqual(_scalar("SELECT COUNT(*) FROM locations"), rows)
+        self.assertIsNone(_scalar("SELECT id FROM locations WHERE name = 'Blind Owl Bakery'"))
+
+    def test_an_invented_shop_beyond_the_near_cap_is_dropped_not_walked(self):
+        _play("I look around.", "You look about the lane.")
+        before = _pos()
+        rows = _scalar("SELECT COUNT(*) FROM locations")
+        with mock.patch.object(tm, "_NEAR_MINUTES", -1):
+            out = _play("I go inside.", "You push open the door and step into the Blind Owl Bakery.",
+                        player={"move_to_location": "Blind Owl Bakery"})
+        movement = out["state"]["movement"]
+        self.assertEqual(movement["rule"], "town_far", movement)
+        self.assertEqual(movement["prose_mismatch"], "Blind Owl Bakery")
+        self.assertNotIn("renamed", movement)
+        self.assertEqual(_scalar("SELECT COUNT(*) FROM locations"), rows)
+        after = _pos()
+        self.assertEqual((after["cx"], after["cy"], after["fx"], after["fy"], after["inside"]),
+                         (before["cx"], before["cy"], before["fx"], before["fy"], before["inside"]))
+        with connect() as conn:
+            self.assertNotIn("town", movement, "nothing was walked or entered")
+
+    def _door_plot(self):
+        with connect() as conn:
+            pos = tm.get_position(conn)
+            chart = get_map(None, conn=conn)
+            town = tg.stored_cell(conn, chart, pos["cx"], pos["cy"])
+            plot = max((p for p in town["plots"] if p.get("k") == "shop" and p.get("f") and p.get("name")
+                        and abs(p["f"][0] - pos["fx"]) + abs(p["f"][1] - pos["fy"]) <= 40),
+                       key=lambda p: abs(p["f"][0] - pos["fx"]) + abs(p["f"][1] - pos["fy"]))
+            tg.record_seen(conn, chart["id"], pos["cx"], pos["cy"], town["side"],
+                           road_tiles=[plot["f"][1] * town["side"] + plot["f"][0]])
+            know = tm._Knowledge(conn, chart, town)
+        self.assertTrue(know.kind_known(plot))
+        self.assertFalse(know.name_known(plot), "the probe needs a plot whose sign is unread")
+        return plot
+
+    def test_click_walk_hides_an_unread_sign(self):
+        _apply(_plan("I look around."))
+        plot = self._door_plot()
+        with mock.patch.object(tm, "_record_walk_seen", lambda *a, **k: None), connect() as conn:
+            walked = tm.click_walk(conn, plot_ref=plot["id"])
+        self.assertEqual(walked["plan"]["target"]["name"], "")
+        self.assertEqual(walked["report"].get("to"), "")
+        self.assertNotIn(plot["name"], json.dumps(walked))
+
+    def test_click_walk_names_the_plot_once_its_sign_is_read(self):
+        _apply(_plan("I look around."))
+        plot = self._door_plot()
+        with connect() as conn:
+            walked = tm.click_walk(conn, plot_ref=plot["id"])
+        if walked["plan"].get("partial"):
+            self.skipTest("the door is beyond one walk")
+        self.assertEqual(walked["plan"]["target"]["name"], plot["name"])
+
+    def test_click_walk_refuses_an_unseen_cell(self):
+        _apply(_plan("I look around."))
+        chart = get_map(None)
+        here = tm.player_cell(chart)
+        cells = tg._city_cells(self.city)
+        other = next((c for c in cells if c != tuple(here)), None)
+        if other is None:
+            self.skipTest("a one-cell city")
+        key = f"{other[0]},{other[1]}"
+        chart["visited"] = [v for v in (chart.get("visited") or []) if str(v) != key]
+        chart["revealed"] = [v for v in (chart.get("revealed") or []) if str(v) != key]
+        with connect() as conn:
+            _save_map_payload(chart, conn=conn)
+            self.assertNotIn(key, tg._seen_world_cells(get_map(None, conn=conn)))
+        made = _scalar("SELECT COUNT(*) FROM town_cells")
+        with connect() as conn, self.assertRaises(ValueError):
+            tm.click_walk(conn, cx=other[0], cy=other[1], fx=64, fy=64)
+        self.assertEqual(_scalar("SELECT COUNT(*) FROM town_cells"), made, "an unseen cell is not generated")
+        with self.assertRaises(main.HTTPException) as caught:
+            main.api_town_walk(main.TownWalkRequest(cx=other[0], cy=other[1], fx=64, fy=64))
+        self.assertEqual(caught.exception.status_code, 400)
 
 
 if __name__ == "__main__":

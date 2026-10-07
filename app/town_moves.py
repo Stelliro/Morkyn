@@ -618,6 +618,44 @@ def settlement_row(conn, city: dict[str, Any], *, create: bool = True) -> int:
     return int(cursor.lastrowid)
 
 
+def snapshot_town_rows(conn, town_turn: dict[str, Any] | None, rows: dict[str, list[dict[str, Any]]]) -> None:
+    """Add to the rewind record the rows apply_town_turn changes in place (TownGrid.md 9).
+
+    apply_town_turn runs after the snapshot. Rows it inserts sit above the
+    snapshot's max ids, but two writes change existing rows: realize_plot sets
+    workplace_id and clears workplace_plan on the plot's claimants, and
+    settlement_row adopts a same-named row by stamping city_id. Those rows go
+    into the record here, before the turn writes them.
+    """
+    from app import world as W
+
+    if not town_turn:
+        return
+    chart = world_chart(conn)
+    if chart is None:
+        return
+    pos = town_turn.get("position") or {}
+    city = city_by_id(chart, str(pos.get("city_id") or ""))
+    if city is not None:
+        city_id = str(city.get("id") or "")
+        own = conn.execute(
+            "SELECT 1 FROM locations WHERE city_id = ? AND COALESCE(plot_id, '') = '' AND COALESCE(kind, '') = '' "
+            "AND COALESCE(parent_id, 0) = 0 LIMIT 1",
+            (city_id,),
+        ).fetchone()
+        if own is None:
+            name = str(city.get("name") or "").strip() or city_id
+            W._snapshot_row(
+                conn, "locations",
+                "COALESCE(parent_id, 0) = 0 AND COALESCE(kind, '') = '' AND COALESCE(city_id, '') = '' "
+                "AND name = ? COLLATE NOCASE",
+                (name,), rows,
+            )
+    plot_ref = str(((town_turn.get("plan") or {}).get("target") or {}).get("plot") or "")
+    if plot_ref:
+        W._snapshot_row(conn, "npcs", "workplace_plot = ?", (plot_ref,), rows)
+
+
 def locate_plot(conn, chart: dict[str, Any], plot_ref: str) -> tuple[dict, dict, dict, dict] | None:
     """(city, cell meta, generated town, plot) for a plot id in a generated cell, else None."""
     parsed = tg.parse_plot_id(plot_ref)
@@ -1671,6 +1709,10 @@ def _shown_entry_plot(view: _CityView, here_town: dict[str, Any], here_i: int, s
     return int(view.pos["cx"]), int(view.pos["cy"]), hits[0][2]
 
 
+# A door the prose walks through unasked is at most this many minutes away.
+_NEAR_MINUTES = 2
+
+
 def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, intent: str,
                           narration: str) -> dict[str, Any] | None:
     """resolve_movement in a plotted town (TownGrid.md 5.1-5.2). Edits only the turn dict; None means legacy rules.
@@ -1820,6 +1862,11 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
             clear_moves()
             if near is not None:
                 new_plan = plan_to_plot(conn, chart, pos, str(near[2]["id"]), enter=True, rule="town_enter")
+                if new_plan is not None and int(new_plan.get("minutes") or 0) > _NEAR_MINUTES:
+                    # The prose was written with the door right there; a walk
+                    # across town is not that scene (TownGrid.md 5.2).
+                    return {**base, "status": "dropped", "rule": "town_far", "destination": name,
+                            "prose_mismatch": name, "trade": kind, "far_minutes": int(new_plan.get("minutes") or 0)}
                 if new_plan is not None:
                     town_turn["plan"] = new_plan
                     real = str(near[2].get("name") or "")
@@ -1875,7 +1922,7 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
             result["map_walk"] = None
             if found is not None:
                 new_plan = plan_to_plot(conn, chart, pos, str(found[2]["id"]), enter=True, rule="town_enter")
-                if new_plan is not None and new_plan.get("minutes", 0) <= 2:
+                if new_plan is not None and new_plan.get("minutes", 0) <= _NEAR_MINUTES:
                     town_turn["plan"] = new_plan
                     if new_plan.get("enter"):
                         player_patch["move_to_location"] = str(found[2].get("name") or "")[:120]
@@ -2048,12 +2095,16 @@ def click_walk(conn, *, plot_ref: str = "", cx: int | None = None, cy: int | Non
         side = int(town["side"])
         goals = {int(plot["f"][1]) * side + int(plot["f"][0])}
         target = _target_entry(dest[0], dest[1], plot, side)
+        if not know.name_known(plot):
+            target["name"] = ""  # a sign not yet read; the walk may read it
     else:
         if cx is None or cy is None or fx is None or fy is None:
             raise ValueError("Give a plot id or a tile.")
         dest = (int(cx), int(cy))
         if dest not in view.cells:
             raise ValueError("That tile is not in this town.")
+        if f"{dest[0]},{dest[1]}" not in tg._seen_world_cells(chart):
+            raise ValueError("You have not seen that part of town.")
         town = view.source.get(*dest)
         if town is None:
             raise ValueError("That part of town is out of reach this turn.")
@@ -2077,6 +2128,14 @@ def click_walk(conn, *, plot_ref: str = "", cx: int | None = None, cy: int | Non
         row = conn.execute("SELECT id FROM locations WHERE code = ?", (str(code),)).fetchone()
         if row is not None:
             conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(row["id"]),))
+    if plot_ref and not target.get("name"):
+        # Reaching the door reads its sign; only then does the name go back.
+        view._know.pop(dest, None)
+        after = view.know(*dest)
+        if after is not None and after.name_known(plot):
+            target["name"] = str(plot.get("name") or "")
+            if report.get("to") == "":
+                report["to"] = target["name"]
     return {"plan": {k: plan.get(k) for k in ("rule", "minutes", "partial", "remaining_minutes", "reached", "target")},
             "report": report, "position": get_position(conn)}
 

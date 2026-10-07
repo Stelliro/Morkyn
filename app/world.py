@@ -8806,7 +8806,11 @@ def resolve_movement(
 
         town = resolve_town_movement(conn, result, player_input, intent=intent, narration=narration)
     except Exception as exc:
-        town = {"status": "error", "rule": "town_error", "error": f"{type(exc).__name__}: {exc}"[:200]}
+        # A town-code bug must not wave the model's move through: fall back to
+        # the legacy rules (#6c, MOVE repair) and leave the error on the turn.
+        town = None
+        result["_town_error"] = f"{type(exc).__name__}: {exc}"[:200]
+        result.pop("_town_turn", None)
     if town is not None:
         return town
 
@@ -15107,8 +15111,21 @@ def apply_turn(
         except Exception as exc:
             movement_report = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200]}
 
+        town_error = result.pop("_town_error", None)
+        if town_error and isinstance(movement_report, dict):
+            movement_report["town_error"] = town_error
         pre_rows = result.pop("_snapshot_rows", None)
         town_turn = result.pop("_town_turn", None)
+        if town_turn:
+            # Rows the town write changes in place join the rewind record now.
+            if not isinstance(pre_rows, dict):
+                pre_rows = {}
+            try:
+                from app.town_moves import snapshot_town_rows
+
+                snapshot_town_rows(conn, town_turn, pre_rows)
+            except Exception:
+                pass
         _save_snapshot(conn, next_turn, result, pre_rows=pre_rows if isinstance(pre_rows, dict) else None)
         turn = _next_turn(conn)
         # The town walk is written after the snapshot (docs/TownGrid.md 5.1, 9):
