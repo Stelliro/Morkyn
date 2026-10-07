@@ -1101,6 +1101,13 @@ def prune_world_maps(conn) -> dict[str, Any]:
             conn.execute(f"DELETE FROM tile_image_run_disable WHERE run_id IN ({marks})", chunk)
         except Exception:
             pass
+    # Town grid rows go with their map (docs/TownGrid.md 9).
+    try:
+        from app.town_grid import prune_town_rows
+
+        prune_town_rows(conn, keep)
+    except Exception:
+        pass
     return {"removed": len(drop), "kept": sorted(keep)}
 
 

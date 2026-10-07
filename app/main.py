@@ -2559,15 +2559,55 @@ def api_tile_settlement(city_id: str = ""):
     from app.db import connect as _connect
     from app.tile_world import settlement_places, settlement_view
 
+    from app.town_grid import settlement_town_block
+
     data = get_map(None)
     if not data:
         return {"available": False, "reason": "No map yet.", "settlements": []}
     conn = _connect()
     try:
         places = settlement_places(data, conn)
+        out = settlement_view(data, city_id=city_id, places=places)
+        out["town"] = settlement_town_block(conn, data, out)
     finally:
         conn.close()
-    return settlement_view(data, city_id=city_id, places=places)
+    return out
+
+
+@app.get("/api/town/view")
+def api_town_view(city_id: str = "", cx: int | None = None, cy: int | None = None, r: int = 1):
+    """The street view of a town cell and its neighbours (docs/TownGrid.md 7). Read-only:
+    it never generates a cell; a seen cell nobody has walked shows its skeleton."""
+    from app.db import connect as _connect
+    from app.town_grid import MAX_VIEW_RADIUS, town_view
+
+    if r < 0 or r > MAX_VIEW_RADIUS:
+        raise HTTPException(status_code=400, detail=f"r must be between 0 and {MAX_VIEW_RADIUS}.")
+    data = get_map(None)
+    if not data:
+        return {"available": False, "reason": "No map yet.", "cells": []}
+    conn = _connect()
+    try:
+        return town_view(conn, data, city_id=city_id, cx=cx, cy=cy, r=r)
+    finally:
+        conn.close()
+
+
+@app.get("/api/town/plot/{plot_id}")
+def api_town_plot(plot_id: str):
+    """What the player knows of one plot; 404 when they do not know it. Read-only."""
+    from app.db import connect as _connect
+    from app.town_grid import plot_peek
+
+    data = get_map(None)
+    conn = _connect()
+    try:
+        found = plot_peek(conn, data, plot_id)
+    finally:
+        conn.close()
+    if found is None:
+        raise HTTPException(status_code=404, detail="No plot you know of has that id.")
+    return found
 
 
 @app.get("/api/travel-status")

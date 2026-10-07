@@ -61,6 +61,7 @@ Morkyn/
 |   |-- setup_coherence.py           # Setup cross-checks: sex/pronouns/name, backstory arrival, appearance vs worn gear, backstory items
 |   |-- proficiencies.py             # Custom proficiencies settled into rows before turn 1
 |   |-- world_scale.py               # Seeded wilderness, theme ground, materials, people leanings
+|   |-- town_grid.py                 # City cells' roads, plots and plotted shops (lazy per cell), town_seen, read API
 |   |-- turn_dsl.py                  # NAR+OPS draft language
 |   |-- updates.py                   # Optional GitHub update/rollback
 |   `-- world.py                     # State, planner, memory consolidation, slots, index
@@ -216,6 +217,15 @@ Morkyn/
 - **Consumers:** `app.tile_world`, map save and load, prompt map clauses.
 - **Dependencies:** stdlib only for the band tables. Map persistence goes through `app.tile_world` and `app.world`.
 - **Design Notes:** A city stays a connected clump inside a 9 by 9 neighborhood. The center cell is 128 by 128. Outer cells are smaller. The widest fine span is 1,152. Theme bands are separate from that city math. Deep Caverns uses cavern, mushroom, crystal, lava, water, and cliff. Its usual people are dark-dwelling creatures and dwarves. A kind is a leaning for a province of ground, not a census, and a stretch may be empty. Stored `terrain_bands` win over the theme. A world with none falls back to the theme's bands. The model does not place cities, notices, or coordinates.
+
+#### Town Grid
+
+- **Files:** `app/town_grid.py`, `tools/probe_town_grid.py`, `tests/test_town_grid.py`; design in `docs/TownGrid.md` (slice A built; B engine integration and C UI not yet).
+- **Purpose:** Turns a city world cell's fine grid (8 to 128 tiles a side, always one world cell) into roads, plots and plotted shops, one cell at a time, the first time something needs it.
+- **Key API:** `city_ports()` (joins between city cells and the gates out, from the city record alone), `skeleton()` (stages 1-2 in memory: avenues and port/anchor connectors), `generate_cell()` (pure: roads, segments, street names, plots, shop rolls, names), `encode_cell()` / `decode_row()`, `get_cell(conn, chart, cx, cy, create=)` (stored row, or generate and store when `create`), `stored_cell()`, `fold_seen()` / `record_seen()` (append-only `town_seen`), `town_view()`, `plot_peek()`, `settlement_town_block()`, `campaign_town_rows()`, `prune_town_rows()`, `ascii_render()`, `NameOwners`, `KIND_WEIGHTS`, `kind_cap()`.
+- **Consumers:** `app.main` (`/api/town/view`, `/api/town/plot/{id}`, the `town` block of `/api/tiles/map/settlement`), `app.world` (export filter, save tables, rewind max-id set, new playthrough clear), `app.tile_world.prune_world_maps`.
+- **Dependencies:** `app.world_scale` (`street_mask`, `mix_hash`), `app.local_intel.stalls_for_district`, `app.venues` (kinds, eras, hours, classification), `app.example_pools` (`street_name` and `venue_name` draws).
+- **Design Notes:** Road classes 1 avenue (the legacy `street_mask`, unchanged, so ward ownership and `cell_raster` do not move), 2 main, 3 street, 4 alley. Every stage has its own seeded `random.Random`, so names never move roads and the skeleton equals the stored classes 1-2. Stalls are forced into frontage plots of their own district; the rest roll `SHOP_BASE[type] * (0.5 + density/100)` (x3 on residential corners), then `OTHERWISE`. A kind cap is per district and scales with the district's frontage plots (`CAP_PLOTS_PER_UNIT`), a build deviation from the design's `side / 64` that measured market wards below craft wards. A name belongs to one cell of its city by hash (`NameOwners`, streets weighted by side, buildings by side squared), so names are unique per city with no cross-cell reads; a building that finds no owned name in 40 renders takes a "{street} {trade}" name on a street of its own cell. Stored rows are text (base64 of zlib) so saves carry them as JSON, and are never regenerated, even under a newer `GEN_VERSION`. Read routes never generate or write. Plot ids are `city.local_x.local_y.n` and are not stored inside the row. Per-process LRUs: 9 decoded cells (validated against the row's rowid and created_at, so a loaded save is never served from a stale cache), 27 skeletons, 16 port maps.
 
 #### Dice Authority
 
@@ -523,7 +533,9 @@ There is no production build step. This is a local prototype served directly by 
 | GET | `/` | Serve `static/index.html` |
 | GET | `/api/state` | Return current visible world state |
 | GET | `/api/world-facts` | Read-only race and lore rows for this world plus the last post-start pass report |
-| GET | `/api/tiles/map/settlement` | Read-only grid of one known settlement (`?city_id=`; default the one you stand in): known settlements, each world tile's ward raster when seen, your position, known places and venues |
+| GET | `/api/tiles/map/settlement` | Read-only grid of one known settlement (`?city_id=`; default the one you stand in): known settlements, each world tile's ward raster when seen, your position, known places and venues; `town: {zoomable, player}` for the street zoom |
+| GET | `/api/town/view` | Street view of a town cell and its city neighbours (`?city_id=&cx=&cy=&r=0|1`; default the cell you stand in): seen roads (base64 zlib class mask), named segments you walked, plots you have seen, gates, notices; a seen ungenerated cell returns its skeleton with `generated: false`; `r > 1` is 400. Never generates or writes |
+| GET | `/api/town/plot/{plot_id}` | What you know of one plot: name, kind, street, ward, hours and open now, whether it is a realized place; 404 when you do not know it |
 | POST | `/api/conversation/target` | Pick who the player is talking to (`codes`, or `group: true`; empty clears); returns the chip view |
 | GET | `/api/player-art/{kind}` | Stored player face or fullbody image bytes (`?v=<token>` from `state.player_portrait.url`); immutable cache headers for the current token, 404 when none |
 | GET | `/api/version` | Return local app, planner, and mechanics version metadata |

@@ -610,6 +610,39 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_family_ties_relative
             ON npc_family_ties(relative_id);
+
+            -- Town grid (docs/TownGrid.md 3.5): one generated city cell per row,
+            -- made the first time a turn needs it and never regenerated.
+            CREATE TABLE IF NOT EXISTS town_cells (
+                map_id       TEXT    NOT NULL,
+                cx           INTEGER NOT NULL,
+                cy           INTEGER NOT NULL,
+                city_id      TEXT    NOT NULL,
+                gen_version  INTEGER NOT NULL,
+                port_version INTEGER NOT NULL,
+                side         INTEGER NOT NULL,
+                era          TEXT    NOT NULL DEFAULT '',
+                roads        TEXT    NOT NULL,
+                segments     TEXT    NOT NULL,
+                streets      TEXT    NOT NULL,
+                plots        TEXT    NOT NULL,
+                created_at   TEXT    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (map_id, cx, cy)
+            );
+
+            -- What the player has seen of a town cell: append-only, newly seen bits per row.
+            CREATE TABLE IF NOT EXISTS town_seen (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                map_id  TEXT    NOT NULL,
+                cx      INTEGER NOT NULL,
+                cy      INTEGER NOT NULL,
+                roads   TEXT    NOT NULL DEFAULT '',
+                plots   TEXT    NOT NULL DEFAULT '',
+                told    TEXT    NOT NULL DEFAULT '',
+                turn    INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE INDEX IF NOT EXISTS town_seen_cell ON town_seen (map_id, cx, cy);
             """
         )
 
@@ -679,6 +712,10 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("close_minute", "INTEGER NOT NULL DEFAULT -1"),
         ("settlement_size", "TEXT NOT NULL DEFAULT ''"),
         ("keeper_npc_id", "INTEGER NOT NULL DEFAULT 0"),
+        # Town grid: the plot a venue row was realized from, and the city a
+        # settlement row stands for (docs/TownGrid.md 3.5, 4.4).
+        ("plot_id", "TEXT NOT NULL DEFAULT ''"),
+        ("city_id", "TEXT NOT NULL DEFAULT ''"),
     ):
         if column not in location_columns:
             conn.execute(f"ALTER TABLE locations ADD COLUMN {column} {definition}")
@@ -732,6 +769,8 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         # parent_id}. world.plan_npc_workplace writes it; the location row is
         # only made when the player goes there, asks for it, or the story names it.
         ("workplace_plan", "TEXT NOT NULL DEFAULT ''"),
+        # Town grid: the plot this NPC's planned workplace claims (TownGrid.md 4.4).
+        ("workplace_plot", "TEXT NOT NULL DEFAULT ''"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")

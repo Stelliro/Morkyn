@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import random
 import re
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 # ---------------------------------------------------------------------------
 # Entries and filtering
@@ -544,6 +544,81 @@ _VENUE_FORMS: list[Entry] = [
     _e("{noun} {trade}", era=NEW),
     _e("The {noun} at {place}", era=OLD),
     _e("{place} {trade}"),
+    # Town grid (docs/TownGrid.md 3.4): the full street name, drawn only when
+    # the context carries ``street_name``. "{place}" keeps its one-word form.
+    _e("{street} {trade}"),
+]
+
+# Town grid: a plot's own trade words by era. A word not listed fits every era.
+# The kind words in venues._KIND_WORDS carry no era, so a preindustrial
+# bakery could otherwise be drawn as a "Cafe" or an inn as a "Motel".
+_TRADE_WORD_ERAS: dict[str, tuple[str, ...]] = {
+    "hotel": ("industrial", "modern", "future"),
+    "motel": NEW,
+    "hostel": ("industrial", "modern", "future"),
+    "bunkhouse": ("industrial", "modern", "future"),
+    "roadhouse": ("industrial", "modern"),
+    "pub": ("industrial", "modern"),
+    "beerhall": ("industrial", "modern"),
+    "chemist": ("industrial", "modern"),
+    "hardware": ("industrial", "modern", "future"),
+    "mart": NEW,
+    "convenience store": NEW,
+    "corner store": ("industrial", "modern"),
+    "bodega": NEW,
+    "supply": ("industrial", "modern", "future"),
+    "supplies": ("industrial", "modern", "future"),
+    "outfitters": ("industrial", "modern"),
+    "mercantile": ("industrial",),
+    "dry goods": ("industrial",),
+    "cafe": ("industrial", "modern", "future"),
+    "deli": NEW,
+    "coffee shop": NEW,
+    "restaurant": ("industrial", "modern", "future"),
+    "bistro": ("industrial", "modern"),
+    "cafeteria": NEW,
+    "noodle bar": NEW,
+    "noodle shop": NEW,
+    "noodle stand": NEW,
+    "cookshop": OLD,
+    "hospital": ("industrial", "modern", "future"),
+    "med bay": FUT,
+    "medbay": FUT,
+    "medical bay": FUT,
+    "sickbay": FUT,
+    "sick bay": FUT,
+    "med center": NEW,
+    "medcenter": FUT,
+    "nightclub": NEW,
+    "lounge": NEW,
+    "saloon": ("industrial",),
+    "speakeasy": ("industrial", "modern"),
+    "bank": ("industrial", "modern", "future"),
+    "fab shop": FUT,
+    "repair bay": FUT,
+    "auto shop": MOD,
+    "body shop": MOD,
+    "chop shop": NEW,
+    "motor works": ("industrial", "modern"),
+    "pump": ("industrial", "modern", "future"),
+    "archive": ("preindustrial", "industrial", "modern", "future"),
+}
+# Forms with no {trade} are signs ("The Crooked Lantern"). Only these kinds
+# may wear one: classification ignores sign names, so any other plot named
+# that way would read as no venue at all.
+SIGN_FORM_KINDS = frozenset({"inn", "tavern", "bar"})
+
+_STREET_TAIL = {
+    "old": ("Street", "Lane", "Row", "Way", "Road", "Alley", "Court", "Walk"),
+    "new": ("Street", "Avenue", "Road", "Drive", "Boulevard", "Lane", "Place", "Way"),
+}
+_STREET_FORMS: list[Entry] = [
+    _e("{noun} {tail}"),
+    _e("{adj} {tail}"),
+    _e("{family} {tail}"),
+    _e("{adj} {noun} {tail}"),
+    _e("{noun}gate {tail}", era=OLD),
+    _e("Old {noun} {tail}"),
 ]
 
 
@@ -1295,21 +1370,93 @@ def _venue_place_word(place_name: str) -> str:
     return out[0] if out else ""
 
 
+def venue_trade_words(kind: str, era: str) -> list[str]:
+    """A venue kind's own trade words for a sign, title-cased, only those the era has."""
+    try:
+        from app.venues import _KIND_WORDS
+    except Exception:
+        return []
+    era = str(era or "").strip().lower()
+    out: list[str] = []
+    for word in _KIND_WORDS.get(str(kind or ""), ()):
+        eras = _TRADE_WORD_ERAS.get(word)
+        if era and eras and era not in eras:
+            continue
+        out.append(" ".join(part[:1].upper() + part[1:] for part in word.split()))
+    return out
+
+
 def _render_venue(form: str, ctx: dict[str, Any], rng: random.Random, exclude_tokens: set[str]) -> str:
     era = ctx.get("era") or "preindustrial"
     group = "new" if era in NEW else "old"
     nouns = list(_VENUE_NOUN[group])
     noun = rng.choice(nouns)
     noun2 = rng.choice([x for x in nouns if x != noun])
-    family_pool = [f for f in _family_names(str(ctx.get("culture") or "common"), "male") if _norm(f) not in exclude_tokens]
+    family_pool = _family_names(str(ctx.get("culture") or "common"), "male")
+    if exclude_tokens:
+        family_pool = [f for f in family_pool if _norm(f) not in exclude_tokens]
     place = _venue_place_word(str(ctx.get("place_name") or "")) or rng.choice(nouns)
+    kind = str(ctx.get("venue_kind") or "")
+    trades = venue_trade_words(kind, str(era)) if kind else []
     return form.format(
         adj=rng.choice(_VENUE_ADJ[group]),
         noun=noun,
         noun2=noun2,
-        trade=rng.choice(_VENUE_TRADE.get(era) or _VENUE_TRADE["preindustrial"]),
+        trade=rng.choice(trades) if trades else rng.choice(_VENUE_TRADE.get(era) or _VENUE_TRADE["preindustrial"]),
         family=rng.choice(family_pool) if family_pool else rng.choice(nouns),
         place=place,
+        street=str(ctx.get("street_name") or ""),
+    )
+
+
+def _venue_forms(ctx: dict[str, Any]) -> list[str]:
+    """The venue forms this context may draw.
+
+    Without ``venue_kind`` and ``street_name`` this is exactly the list the
+    draft's cast_options always drew from, so its seeded draws do not move.
+    """
+    kind = str(ctx.get("venue_kind") or "")
+    has_street = bool(str(ctx.get("street_name") or "").strip())
+    # True: only "{street}" forms; False: none of them; absent: either.
+    street_form = ctx.get("street_form")
+    forms: list[str] = []
+    for text, tags in _VENUE_FORMS:
+        if not _fits(tags, ctx):
+            continue
+        if "{street}" in text and not has_street:
+            continue
+        if street_form is True and "{street}" not in text:
+            continue
+        if street_form is False and "{street}" in text:
+            continue
+        if kind and "{trade}" not in text and kind not in SIGN_FORM_KINDS:
+            continue
+        forms.append(text)
+    return forms
+
+
+def _venue_name_fits(text: str, form: str, kind: str) -> bool:
+    """A drawn plot name must read as its own kind, or be a sign on an inn, tavern or bar."""
+    try:
+        from app.venues import venue_kind_from_name
+    except Exception:
+        return True
+    found = venue_kind_from_name(text)
+    if found == kind:
+        return True
+    return "{trade}" not in form and kind in SIGN_FORM_KINDS and found == ""
+
+
+def _render_street(form: str, ctx: dict[str, Any], rng: random.Random) -> str:
+    era = ctx.get("era") or "preindustrial"
+    group = "new" if era in NEW else "old"
+    nouns = list(_VENUE_NOUN[group])
+    family_pool = _family_names(str(ctx.get("culture") or "common"), "male")
+    return form.format(
+        noun=rng.choice(nouns),
+        adj=rng.choice(_VENUE_ADJ[group]),
+        family=rng.choice(family_pool) if family_pool else rng.choice(nouns),
+        tail=rng.choice(_STREET_TAIL[group]),
     )
 
 
@@ -1388,7 +1535,7 @@ def _render_face(ctx: dict[str, Any], rng: random.Random, rolled: dict[str, Any]
     return ", ".join(bits)
 
 
-RENDERED_KINDS = ("person_name", "venue_name", "hair", "facial_features", "appearance", "starter_equipment", "race_magic_rules", "race_ability_rules", "proficiency_name")
+RENDERED_KINDS = ("person_name", "venue_name", "street_name", "hair", "facial_features", "appearance", "starter_equipment", "race_magic_rules", "race_ability_rules", "proficiency_name")
 DRAWN_KINDS = ("npc_role", *sorted(_PHRASES))
 KINDS = (*DRAWN_KINDS, *RENDERED_KINDS)
 
@@ -1399,11 +1546,18 @@ def draw(
     n: int = 4,
     rng: random.Random | None = None,
     exclude: Iterable[Any] = (),
+    *,
+    accept: Callable[[str], bool] | None = None,
+    max_attempts: int | None = None,
 ) -> list[str]:
     """``n`` fresh entries of ``kind`` that fit ``context`` and are not in ``exclude``.
 
     Deterministic for a seeded ``rng``. Pool order is fixed (lists, not sets),
     so the same seed and context always give the same draw.
+
+    For rendered kinds, ``accept`` may veto a rendered entry before the fit
+    checks run (the town grid uses it to keep a name inside the one city cell
+    that owns it), and ``max_attempts`` replaces the default ``n * 8`` renders.
     """
     rng = rng or random.Random()
     ctx = dict(context or {})
@@ -1419,13 +1573,27 @@ def draw(
     rolled = ctx.get("rolled") if isinstance(ctx.get("rolled"), dict) else None
     out: list[str] = []
     attempts = 0
-    while len(out) < n and attempts < n * 8:
+    limit = int(max_attempts) if max_attempts else n * 8
+    venue_forms = _venue_forms(ctx) if kind == "venue_name" else []
+    street_forms = [text for text, tags in _STREET_FORMS if _fits(tags, ctx)] if kind == "street_name" else []
+    if (kind == "venue_name" and not venue_forms) or (kind == "street_name" and not street_forms):
+        return []
+    while len(out) < n and attempts < limit:
         attempts += 1
         if kind == "venue_name":
-            forms = [text for text, tags in _VENUE_FORMS if _fits(tags, ctx)]
-            text = _render_venue(rng.choice(forms), ctx, rng, tokens)
+            form = rng.choice(venue_forms)
+            text = _render_venue(form, ctx, rng, tokens)
+            if accept is not None and not accept(text):
+                continue
             if text.split()[-1].lower() in _VENUE_CLOSED_WORDS:
                 continue  # a name cut mid-phrase is no name
+            venue_kind = str(ctx.get("venue_kind") or "")
+            if venue_kind and not _venue_name_fits(text, form, venue_kind):
+                continue  # a bakery is never "Blind Owl Smithy"
+        elif kind == "street_name":
+            text = _render_street(rng.choice(street_forms), ctx, rng)
+            if accept is not None and not accept(text):
+                continue
         elif kind == "hair":
             text = _render_hair(ctx, rng, rolled)
         elif kind == "facial_features":

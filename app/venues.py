@@ -254,8 +254,8 @@ def venue_kind_from_name(name: str) -> str:
     best_kind, best_len, best_end = "", 0, 0
     for kind, words in _KIND_WORDS.items():
         for word in words:
-            if len(word) <= best_len:
-                continue
+            if len(word) <= best_len or word not in text:
+                continue  # the substring test only skips words that cannot match
             # A weak word counts only as the name's last word ("Rustwater
             # Supply"), not as a modifier ("Supply Depot", "Iron Bar Crossing").
             tail = r"$" if word in _WEAK_KIND_WORDS else r"(?:\s|$)"

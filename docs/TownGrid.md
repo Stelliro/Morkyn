@@ -1,6 +1,7 @@
 # Town grid
 
-Status: **design**, not built. Builders follow this in three slices (A, B, C, at the end).
+Status: **slice A built** (generator, storage, read API; see "Slice A build notes" at the
+end). Slices B and C are not built. Builders follow this in three slices (A, B, C, at the end).
 
 The player asked for three things. Entering a town should let them zoom in and see its
 sub-grid. Any plot on that grid may be a shop. A road network should run through it for
@@ -1001,3 +1002,69 @@ was decided. All 14 were confirmed and accepted; none was rejected.
 | R12 | Creating the settlement row can hit `locations.name UNIQUE` when an unanchored row with the city's name exists. | **Accepted.** Adopt any kindless top-level row with the city's name first; create only when none exists; a venue row with that name forces the band-word form. | 4.2, slice B tests |
 | R13 | "Seen" covers vision and revealed maps, far more than walked cells, so the Streets view would generate inside a GET. | **Accepted.** GETs never generate or write; seen ungenerated cells show an in-memory skeleton (stages 1-2), at most 9 per request. | 3.6, 6, 7, slice A tests |
 | R14 | UI_RULEBOOK §3.7: immediate menu actions must say so and use the red moon. | **Accepted.** The menu's immediate item is "Walk here now" in moon colour; "Go to" and "Go in" write sentences. | 8, slice C |
+
+---
+
+## 13. Slice A build notes
+
+Built in `app/town_grid.py`, tested in `tests/test_town_grid.py` (37 tests), measured with
+`tools/probe_town_grid.py` (seed 20261007, `forest_march`, density 60, warm imports).
+
+### Measured (replaces the estimates in 3.6)
+
+| Item | Target | Measured |
+| --- | --- | --- |
+| Generate + store the 128 centre cell | ≤ 150 ms (limit 1 s) | **~200 ms** (over target, under the limit). About 90 ms is roads and plots, the rest names. |
+| Outer cell (side 44) / hamlet (side 28) | | 83 ms / 9 ms |
+| Plots in the 128 cell | 900–1,500 | 1,906 |
+| Stored row, 128 cell | 20–40 KB (limit 96 KB) | 38.5 KiB; largest seen 41.2 KiB |
+| `city_ports`, 25-cell city | ≤ 5 ms | 0.3 ms |
+| Load and decode a row | ≤ 10 ms | 3–5 ms |
+| Skeleton, 128 cell | ≤ 15 ms | 5 ms |
+| Memory | | 2.0 MiB peak to generate a 128 cell; the 9-cell LRU of decoded rows holds about 8.5 MiB |
+| Whole largest real city (25 cells) | | 3.1 s, per cell median 127 ms, max 227 ms, 712 KiB stored |
+| Synthetic 9 x 9 box (47 cells, sides 46–128), in memory | | 8.4 s, per cell median 171 ms, max 291 ms, 1.3 MiB encoded |
+| Stalls placed on plots | 0 unplaced above side 24 | 277 of 277 |
+
+Shop share after caps (shop + service per frontage plot, landmarks and gates excluded), 25-cell
+city: shopping 0.52, food 0.37, craft 0.32, black market 0.17, residential 0.04, temple 0.02,
+government 0.02, military 0.01.
+
+### Deviations from this design
+
+1. **Kind caps scale with the ward, not the cell.** 3.4's `max * side / 64 * density / 50`
+   measured market wards at 0.19 shops per frontage plot, below craft wards (0.21): a market
+   ward has hundreds of frontage plots and the per-kind caps ran out long before the rolls.
+   `kind_cap` now uses `max * frontage_plots_in_district / 32 * max(density, 20) / 50`. The
+   overflow rule is unchanged. A big market ward can now hold a couple of dozen bakeries.
+2. **Names are owned by one cell, not excluded by what is stored.** `draw(..., exclude=used_in_city)`
+   contradicts the slice A test "A first or B first gives identical rows": with a few hundred
+   street names per city, two cells drew the same name in the first seed tried. Each name now
+   hashes to one owning cell of its city (`NameOwners`, streets weighted by side, buildings by
+   side squared) and a cell draws until it renders a name it owns (`example_pools.draw` gained
+   `accept` and `max_attempts`). A building with no owned name after 40 renders takes a
+   `{street} {trade}` name on a street of its own cell, which is unique because the street is.
+   Large cities therefore have more street-form names in their outer wards. Stored names of
+   rows from another `GEN_VERSION` are still excluded.
+3. **Side streets run on across ward boundaries** until they meet a road. Stopping one tile past
+   the boundary left most lines dangling and dropped, and the cells were mostly yards.
+   `SIDE_STREET_PASSES = 4` passes of cross streets fill the grid outwards. Cells below side 16
+   get no side streets (connectors only).
+4. **Stored extras:** plots carry `st` (`"<district id>:<stall index>"`, to fold `told` stall ids),
+   `nt` (notice ids) and `gate` (compass word). The plot `id` is not stored; it is rebuilt on
+   decode. `town_seen` bitsets are zlib-compressed before base64. Gate names are city-unique
+   labels from `city_ports` ("North Gate", "South Gate 2"). Landmark offices and barracks take
+   their district's existing name.
+5. **Read API fog.** A plot's kind shows once its frontage tile is in a `town_seen` road bitset;
+   its name once its bit is in a `town_seen` plots bitset, it is told, or it is realized. Avenues
+   and main roads of a seen cell are always drawn, but a segment's name only once one of its
+   tiles was seen. Nothing writes `town_seen` yet (slice B).
+6. **New playthrough** clears `town_cells` and `town_seen` (the era may differ).
+
+### Known limits
+
+- District names (offices, barracks) can repeat between cells of one city; they come from the
+  fixed `_DISTRICT_NAMES` (section 11).
+- Big blocks keep large interior yards: plot depth follows 3.2, so a residential block of
+  75–105 m keeps back gardens.
+

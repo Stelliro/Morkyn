@@ -104,6 +104,11 @@ WORLD_TABLES = [
     # Settled custom proficiencies (app/proficiencies.py). A slot from
     # before this table loads it empty; its custom_skills text stands.
     "player_proficiencies",
+    # Town grid (docs/TownGrid.md 9). Ordinary world tables, not replace-only:
+    # a slot from before them loads them empty, so a loaded old save never
+    # keeps the last campaign's generated streets or what it had seen.
+    "town_cells",
+    "town_seen",
 ]
 # Slots written before a table joined the export do not name it. Loading one
 # must not wipe rows that slot never stored. An empty list still replaces:
@@ -183,6 +188,9 @@ AUTOINC_TABLES = [
     # quest one turn early, and offers posted inside the turn stayed.
     "quests",
     "quest_steps",
+    # Town grid knowledge is append-only, so a rewind removes a turn's rows by
+    # max id with no snapshot rows at all (docs/TownGrid.md 9).
+    "town_seen",
 ]
 # Settings rows a turn writes after the snapshot (apply_turn) or just
 # before it (play_turn's social check). Snapshotted by key, absence
@@ -233,6 +241,8 @@ RESTORE_ORDER = [
     "world_races",
     "world_facts",
     "player_proficiencies",
+    "town_cells",
+    "town_seen",
 ]
 
 
@@ -4680,12 +4690,15 @@ def _clear_playthrough(conn) -> None:
         "npcs",
         "player",
         "locations",
+        # A new campaign has seen no streets, and its era may differ.
+        "town_seen",
+        "town_cells",
     ):
         conn.execute(f"DELETE FROM {table}")
     conn.execute(
         """
         DELETE FROM sqlite_sequence
-        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships')
+        WHERE name IN ('locations', 'npcs', 'inventory', 'equipment_slots', 'inventory_capacity_modifiers', 'player_skills', 'abilities', 'events', 'conversations', 'response_drafts', 'aliases', 'player_aliases', 'karma_history', 'turn_summaries', 'model_logs', 'verification_memory', 'gm_events', 'turn_snapshots', 'journal', 'quests', 'quest_steps', 'npc_player_relationships', 'town_seen')
         """
     )
     conn.execute("DELETE FROM pacing")
@@ -5673,6 +5686,15 @@ def export_world() -> dict[str, Any]:
             from app.tile_world import campaign_map_rows
 
             tables["world_maps"] = campaign_map_rows(conn, list(tables.get("world_maps") or []))
+        # Town rows ride with their map: only the campaign's maps (#25).
+        try:
+            from app.town_grid import campaign_town_rows
+
+            for table in ("town_cells", "town_seen"):
+                if table in tables:
+                    tables[table] = campaign_town_rows(conn, list(tables.get(table) or []))
+        except Exception:
+            pass
         if "settings" in tables:
             tables["settings"] = _scrub_settings_rows(list(tables.get("settings") or []))
         return {
