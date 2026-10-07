@@ -205,6 +205,9 @@ SNAPSHOT_SETTING_KEYS = (
     "player_conditions",
     "association_heat",
     "area_reputation",
+    # The player's fine tile in a town (docs/TownGrid.md 4.1, 9). Written after
+    # the snapshot by apply_town_turn, so a rewind restores the pre-walk tile.
+    "town_position",
 )
 RESTORE_ORDER = [
     "turn_snapshots",
@@ -4075,6 +4078,10 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             elif isinstance(plan, dict) and plan.get("name"):
                 # Planned, not yet a place (playtest #27); still not here.
                 npc["workplace"] = str(plan["name"])
+            elif isinstance(plan, dict) and plan.get("kind") and plan.get("city_id"):
+                # A plotted town with no plot of the trade generated yet: the
+                # kind alone, never an invented name (docs/TownGrid.md 4.4).
+                npc["workplace"] = f"a {venues.kind_label(str(plan['kind']))}"
         relationships = rows_to_dicts(
             conn.execute(
                 """
@@ -5775,6 +5782,12 @@ def _restore_world(data: dict[str, Any]) -> None:
             from app.db import repair_npc_default_summaries
 
             repair_npc_default_summaries(conn)
+            try:
+                from app.town_moves import reconcile_marker
+
+                reconcile_marker(conn)
+            except Exception:
+                pass
         except Exception:
             conn.rollback()
             raise
@@ -6390,7 +6403,24 @@ def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute:
         return {"ok": True, "reason": ""}
     if venue_id and int(player_location_id or 0) == venue_id:
         return {"ok": True, "reason": ""}
-    if parent_id and int(player_location_id or 0) != parent_id:
+    plot_ref = str(venues._field(venue_row, "plot_id", "") or "")
+    if plot_ref:
+        # A plot's door is a tile, not a parent row (docs/TownGrid.md 5.1): the
+        # player must stand at its frontage, which the town walk just ensured.
+        try:
+            from app.town_moves import get_position
+
+            pos = get_position(conn) or {}
+        except Exception:
+            pos = {}
+        if plot_ref not in (str(pos.get("plot") or ""), str(pos.get("inside") or "")):
+            return {
+                "ok": False,
+                "reason": "unreachable",
+                "redirect_to": parent_id,
+                "detail": "a building in town is entered from its door",
+            }
+    elif parent_id and int(player_location_id or 0) != parent_id:
         return {
             "ok": False,
             "reason": "unreachable",
@@ -7010,7 +7040,8 @@ def npc_workplace_plan(conn, npc_id: int) -> dict[str, Any]:
     except Exception:
         return {}
     plan = _json(str((row["workplace_plan"] if row else "") or "") or "{}", {})
-    if not isinstance(plan, dict) or not plan.get("kind") or not plan.get("name"):
+    # A plotted town's plan may be nameless until a plot of the trade exists.
+    if not isinstance(plan, dict) or not plan.get("kind") or not (plan.get("name") or plan.get("city_id")):
         return {}
     return plan
 
@@ -7057,6 +7088,17 @@ def plan_npc_workplace(conn, npc_id: int) -> int:
             # when someone else keeps it (Randy in Victor's garage, playtest #33).
             conn.execute("UPDATE npcs SET workplace_id = ?, workplace_plan = '' WHERE id = ?", (int(home["id"]), int(npc_id)))
             return int(home["id"])
+        # In a plotted town the workplace is a plot, never an invented name
+        # (docs/TownGrid.md 4.4): a free plot of the trade in a generated cell
+        # is claimed, else the plan stays nameless until one is generated.
+        try:
+            from app.town_moves import plan_plotted_workplace
+
+            plotted = plan_plotted_workplace(conn, npc, home, kinds)
+        except Exception:
+            plotted = None
+        if plotted is not None:
+            return int(plotted)
         settlement_id = int(venues._field(home, "parent_id", 0) or 0) or int(home["id"])
         settlement = _location_row(conn, settlement_id)
         if settlement is None or settlement_size_for(conn, settlement) == "wilds":
@@ -7298,6 +7340,11 @@ def ensure_npc_workplace(conn, npc_id: int) -> int:
     npc = conn.execute("SELECT * FROM npcs WHERE id = ?", (int(npc_id),)).fetchone()
     if not plan or npc is None:
         return 0
+    if plan.get("city_id"):
+        # Plotted: the claimed plot becomes the place; an unclaimed plan makes none.
+        from app.town_moves import realize_workplace
+
+        return realize_workplace(conn, int(npc_id), plan)
     kind = str(plan["kind"])
     name = str(plan["name"])
     settlement_id = int(plan.get("parent_id") or 0)
@@ -7374,7 +7421,9 @@ def _realize_named_workplaces(conn, player_input: str, *texts: str) -> list[str]
     plans: list[tuple[int, dict[str, Any], str]] = []
     for row in rows:
         plan = npc_workplace_plan(conn, int(row["id"]))
-        if plan:
+        # A plotted town's workplaces are plots, reached by the town walk and
+        # realized after the snapshot (docs/TownGrid.md 4.4, 5.1).
+        if plan and not plan.get("city_id"):
             plans.append((int(row["id"]), plan, str(row["name"] or "")))
     realized: list[str] = []
     for npc_id, plan, npc_name in plans:
@@ -7523,6 +7572,17 @@ def movement_contract(
             f"known one with its qualifier stripped off: {_movement_rule_example(known, current_name)}"
         ),
     }
+    # In a plotted town the grid already holds every building (docs/TownGrid.md
+    # 5.3, playtest #55). The town block replaces venue_name_options,
+    # venue_kinds_possible and "give the new building its own name": those are
+    # what invited the draft to invent a shop the engine never had.
+    town = state.get("town_contract") if isinstance(state.get("town_contract"), dict) else None
+    if town:
+        contract["town"] = town
+        contract["rule"] += (
+            " In this town a building comes only from town.places_here or a walk the engine planned; "
+            "a new name never creates one."
+        )
     # Venues here, so the model works from what exists instead of conjuring a shop.
     #
     # The rule ships even when nothing has been built yet: without it the model
@@ -7531,7 +7591,7 @@ def movement_contract(
     # move, and which kinds of place could plausibly be here.
     here_venues = [v for v in (current.get("venues_here") or []) if isinstance(v, dict)]
     settlement = str(current.get("settlement_size") or "")
-    if here_venues or (settlement and not current.get("inside_venue")):
+    if not town and (here_venues or (settlement and not current.get("inside_venue"))):
         if here_venues:
             contract["venues_here"] = [
                 {"name": v.get("name"), "kind": v.get("kind"), "hours": v.get("hours")} for v in here_venues[:8]
@@ -7633,7 +7693,13 @@ def movement_contract(
             f" The wilderness is the fixed {map_space['width']}×{map_space['height']} map in map_space. "
             f"A new place name can only be as far as {budget} tiles this turn."
         )
-    if travel:
+    if travel and town:
+        contract["expectation"] = (
+            "This input is travel inside the town. The engine walks the roads: town.arrived says where the "
+            "walk ends, town.walking that it is still on the way, town.blocked or town.none that it does not "
+            "go. The prose follows that and ends there. Do not WALK in a town."
+        )
+    elif travel:
         if isinstance(map_space, dict) and map_space.get("width") and map_space.get("height"):
             budget = int(map_space.get("step_budget") or 4)
             contract["expectation"] = (
@@ -8731,6 +8797,18 @@ def resolve_movement(
     if not isinstance(player_patch, dict):
         player_patch = {}
         result["player"] = player_patch
+
+    # In a plotted town the grid already holds every building (docs/TownGrid.md
+    # 5, playtest #55): moves resolve to plots, streets and gates, and nothing
+    # is minted. None means the legacy rules below (no town, or a journey out).
+    try:
+        from app.town_moves import resolve_town_movement
+
+        town = resolve_town_movement(conn, result, player_input, intent=intent, narration=narration)
+    except Exception as exc:
+        town = {"status": "error", "rule": "town_error", "error": f"{type(exc).__name__}: {exc}"[:200]}
+    if town is not None:
+        return town
 
     row = conn.execute(
         """
@@ -10018,6 +10096,12 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         from app.example_pools import turn_cast_options
 
         prompt_context["cast_options"] = turn_cast_options(state, turn=current_turn)
+        if isinstance(state.get("town_contract"), dict) and isinstance(prompt_context.get("cast_options"), dict):
+            # Town buildings are plots with their own names (docs/TownGrid.md 5.3).
+            from app.example_pools import CAST_OPTIONS_RULE_TOWN
+
+            prompt_context["cast_options"].pop("venue_names", None)
+            prompt_context["cast_options"]["rule"] = CAST_OPTIONS_RULE_TOWN
     except Exception:
         pass
     # Character art is never prompt material. Left in, the two base64 strings
@@ -10136,8 +10220,9 @@ def _restore_snapshot_rows(conn, rows: dict[str, list[dict[str, Any]]]) -> None:
         max_id = int(max_ids.get(table, 0))
         conn.execute(f"DELETE FROM {table} WHERE id > ?", (max_id,))
     # Quest tables joined the record later; a snapshot without their
-    # max id must not wipe them.
-    for table in ("quest_steps", "quests"):
+    # max id must not wipe them. town_seen is append-only, so its rows a
+    # rewound turn added go by max id alone (docs/TownGrid.md 9).
+    for table in ("quest_steps", "quests", "town_seen"):
         if table in max_ids:
             conn.execute(f"DELETE FROM {table} WHERE id > ?", (int(max_ids.get(table) or 0),))
     if "quest_clocks" in rows:
@@ -10222,6 +10307,13 @@ def rewind_last_turn(snapshot_id: int | None = None) -> dict[str, Any]:
             history_summary_path().write_text(str(snapshot.get("history_summaries") or ""), encoding="utf-8")
         else:
             _restore_world(snapshot)
+        # The world marker is not rewound; town_position is (docs/TownGrid.md 9).
+        try:
+            from app.town_moves import reconcile_marker
+
+            reconcile_marker(conn)
+        except Exception:
+            pass
         # Drop this snapshot and any newer ones (they are no longer valid after rewind)
         conn.execute("DELETE FROM turn_snapshots WHERE id >= ?", (row["id"],))
         # Also drop journal/summary rows that may have been written for the rewound turn
@@ -14842,6 +14934,12 @@ def _apply_story_map_walk(
     chart = get_map(None, conn=conn)
     if not chart:
         return {"status": "no_map", "steps_taken": 0, "reason": "no_map"}
+    # In a town the engine walks the roads; the world token stays on the town
+    # cell (docs/TownGrid.md 5.1, R6).
+    from app.town_moves import story_walk_skips, sync_after_world_move
+
+    in_town = story_walk_skips(conn, movement_report, (movement_report or {}).get("town"))
+    start = (int((chart.get("player") or {}).get("x") or 0), int((chart.get("player") or {}).get("y") or 0))
     origin = _location_brief_by_code(conn, str((movement_report or {}).get("from") or ""))
     here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     dest_id = int(here["current_location_id"] or 0) if here and here["current_location_id"] else 0
@@ -14862,9 +14960,15 @@ def _apply_story_map_walk(
         dest=dest,
         travel=travel_intent(player_input) or str((movement_report or {}).get("status") or "") == "unresolved",
         save=False,
+        town=in_town,
     )
     if report.get("status") in {"walked", "blocked"}:
         _save_map_payload(chart, conn=conn)
+    if report.get("status") == "walked":
+        try:
+            report["town"] = sync_after_world_move(conn, chart, start, move_location=False, turn=_turn_value(conn))
+        except Exception:
+            pass
     return report
 
 
@@ -15004,8 +15108,21 @@ def apply_turn(
             movement_report = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200]}
 
         pre_rows = result.pop("_snapshot_rows", None)
+        town_turn = result.pop("_town_turn", None)
         _save_snapshot(conn, next_turn, result, pre_rows=pre_rows if isinstance(pre_rows, dict) else None)
         turn = _next_turn(conn)
+        # The town walk is written after the snapshot (docs/TownGrid.md 5.1, 9):
+        # its town_seen and realized plot rows sit above the snapshot's max ids,
+        # and town_position was snapshotted with its pre-walk value.
+        if town_turn:
+            try:
+                from app.town_moves import apply_town_turn
+
+                town_report = apply_town_turn(conn, town_turn, result, prompt_context, turn=turn)
+            except Exception as exc:
+                town_report = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+            if town_report and isinstance(movement_report, dict):
+                movement_report["town"] = town_report
 
         # Every "how much" the model proposed becomes a server-rolled amount
         # before anything touches the database. Runs first so the snapshot
@@ -16167,6 +16284,22 @@ def play_turn(
     except Exception:
         skill_check_results = []
 
+    # The town side of this turn (docs/TownGrid.md 5.1): planned before the
+    # prompt from the player's own words, so the draft is told where the walk
+    # ends; written after the rewind snapshot by apply_turn.
+    town_turn: dict[str, Any] | None = None
+    try:
+        from app.town_moves import plan_turn as plan_town_turn
+
+        with connect() as c_town:
+            town_turn = plan_town_turn(
+                c_town, player_input if input_kind == "player" else "", input_kind=input_kind, context=context
+            )
+    except Exception:
+        town_turn = None
+    if town_turn and isinstance(town_turn.get("contract"), dict):
+        context["town_contract"] = town_turn["contract"]
+
     prompt_context = build_prompt_context(context, model_input)
 
     # --- Hidden NPC psychology: narrator-only block --------------------------
@@ -16364,6 +16497,8 @@ def play_turn(
 
     if pre_snapshot_rows and isinstance(result, dict):
         result["_snapshot_rows"] = pre_snapshot_rows
+    if town_turn and isinstance(result, dict):
+        result["_town_turn"] = town_turn
     actual_player_input = journal_input if journal_input is not None else player_input
     state = apply_turn(
         result,
@@ -17292,6 +17427,129 @@ def ensure_settlement_ruler(
     return out
 
 
+def _spend_travel(conn, travel: dict[str, Any], context: dict[str, Any] | None, out: dict[str, Any]) -> bool:
+    """Preview, then spend, a walk's minutes on the caller's connection; True when blocked.
+
+    Split out of apply_map_travel_step (docs/TownGrid.md 4.3): a town walk inside a
+    turn cannot open a second connection while the turn's transaction holds the
+    lock. Fills ``out`` with time, weather and resources. A hard block (too tired)
+    changes nothing: no clock, no energy.
+    """
+    minutes = max(0, int(travel.get("minutes") or 0))
+    opts = ((context or {}).get("settings") or {}).get("playthrough_options") or {}
+    if not isinstance(opts, dict):
+        opts = _settings(conn).get("playthrough_options") or {}
+    if not isinstance(opts, dict):
+        opts = {}
+
+    # Preview travel cost BEFORE advancing time — hard-block if too exhausted
+    travel_blocked = False
+    spend_preview: dict[str, Any] = {}
+    if minutes > 0:
+        try:
+            from app.player_resources import apply_travel_spend, get_player_resources
+
+            inv_sum = (context or {}).get("inventory_summary") or {}
+            cap = max(1.0, float(inv_sum.get("weight_capacity") or 60.0))
+            eff = max(0.0, float(inv_sum.get("effective_weight") or 0.0))
+            load_ratio = min(2.2, eff / cap) if cap else 0.4
+            wx0 = get_weather(conn)
+            kind0 = str((wx0 or {}).get("kind") or "clear")
+            wmult = float(WEATHER_TRAVEL_MULT.get(kind0, 1.0))
+            strength = max(0.0, min(1.0, float(_float((wx0 or {}).get("strength"), 0.0))))
+            if wmult > 1.0:
+                wmult = 1.0 + (wmult - 1.0) * (0.5 + 0.5 * strength)
+            if travel.get("weather_mult"):
+                try:
+                    wmult = float(travel.get("weather_mult") or wmult)
+                except (TypeError, ValueError):
+                    pass
+            player = (context or {}).get("player") if isinstance((context or {}).get("player"), dict) else {}
+            stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
+            # Dry-run via apply with hard_block; spend only if ok (transaction-like)
+            before_res = get_player_resources(conn, opts)
+            spend_preview = apply_travel_spend(
+                conn,
+                terrain=str(travel.get("terrain") or ""),
+                minutes=minutes,
+                load_ratio=load_ratio,
+                weather_mult=wmult,
+                options=opts,
+                stats=stats,
+                hard_block=True,
+            )
+            if spend_preview.get("blocked"):
+                travel_blocked = True
+                # Undo accidental spend if any (hard_block path does not spend)
+                out["resources"] = before_res
+                out["resource_spend"] = {
+                    "blocked": True,
+                    "reasons": spend_preview.get("reasons") or ["insufficient_energy"],
+                    "travel": spend_preview.get("travel"),
+                    "collapse": spend_preview.get("collapse"),
+                }
+                out["blocked"] = True
+                out["block_reason"] = "insufficient_energy"
+                out["weather"] = wx0
+        except Exception:
+            spend_preview = {}
+
+    if travel_blocked:
+        # Do not advance clock, spawn encounters, or journal this step
+        return True
+
+    if minutes > 0:
+        out["time"] = advance_world_time(conn, minutes)
+        out["weather"] = (out["time"] or {}).get("weather") or get_weather(conn)
+        out["weather_changed"] = bool((out["time"] or {}).get("weather_changed"))
+        out["weather_announce"] = (out["time"] or {}).get("weather_announce")
+    else:
+        out["weather"] = get_weather(conn)
+
+    # Terrain / weather / load energy+fatigue spend (already applied if preview ran)
+    if minutes > 0 and spend_preview and not spend_preview.get("blocked"):
+        out["resources"] = spend_preview.get("after") or {}
+        out["resource_spend"] = {
+            "deltas": spend_preview.get("deltas"),
+            "travel": spend_preview.get("travel"),
+            "soft_blocked": spend_preview.get("soft_blocked"),
+            "reasons": spend_preview.get("reasons") or [],
+            "collapse": spend_preview.get("collapse"),
+        }
+    elif minutes > 0 and not spend_preview:
+        try:
+            from app.player_resources import apply_travel_spend
+
+            inv_sum = (context or {}).get("inventory_summary") or {}
+            cap = max(1.0, float(inv_sum.get("weight_capacity") or 60.0))
+            eff = max(0.0, float(inv_sum.get("effective_weight") or 0.0))
+            load_ratio = min(2.2, eff / cap) if cap else 0.4
+            wx = out.get("weather") if isinstance(out.get("weather"), dict) else get_weather(conn)
+            kind = str((wx or {}).get("kind") or "clear")
+            wmult = float(WEATHER_TRAVEL_MULT.get(kind, 1.0))
+            player = (context or {}).get("player") if isinstance((context or {}).get("player"), dict) else {}
+            stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
+            spend = apply_travel_spend(
+                conn,
+                terrain=str(travel.get("terrain") or ""),
+                minutes=minutes,
+                load_ratio=load_ratio,
+                weather_mult=wmult,
+                options=opts,
+                stats=stats,
+            )
+            out["resources"] = spend.get("after") or {}
+            out["resource_spend"] = {
+                "deltas": spend.get("deltas"),
+                "travel": spend.get("travel"),
+                "soft_blocked": spend.get("soft_blocked"),
+                "reasons": spend.get("reasons") or [],
+            }
+        except Exception:
+            out["resources"] = None
+    return False
+
+
 def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any] | None = None) -> dict[str, Any]:
     """
     After map move: advance world clock, seed rulers, optionally spawn encounter shells.
@@ -17313,117 +17571,9 @@ def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any]
         "ambient": "",
     }
     with connect() as conn:
-        opts = ((context or {}).get("settings") or {}).get("playthrough_options") or {}
-        if not isinstance(opts, dict):
-            opts = _settings(conn).get("playthrough_options") or {}
-        if not isinstance(opts, dict):
-            opts = {}
-
-        # Preview travel cost BEFORE advancing time — hard-block if too exhausted
-        travel_blocked = False
-        spend_preview: dict[str, Any] = {}
-        if minutes > 0:
-            try:
-                from app.player_resources import apply_travel_spend, get_player_resources
-
-                inv_sum = (context or {}).get("inventory_summary") or {}
-                cap = max(1.0, float(inv_sum.get("weight_capacity") or 60.0))
-                eff = max(0.0, float(inv_sum.get("effective_weight") or 0.0))
-                load_ratio = min(2.2, eff / cap) if cap else 0.4
-                wx0 = get_weather(conn)
-                kind0 = str((wx0 or {}).get("kind") or "clear")
-                wmult = float(WEATHER_TRAVEL_MULT.get(kind0, 1.0))
-                strength = max(0.0, min(1.0, float(_float((wx0 or {}).get("strength"), 0.0))))
-                if wmult > 1.0:
-                    wmult = 1.0 + (wmult - 1.0) * (0.5 + 0.5 * strength)
-                if travel.get("weather_mult"):
-                    try:
-                        wmult = float(travel.get("weather_mult") or wmult)
-                    except (TypeError, ValueError):
-                        pass
-                player = (context or {}).get("player") if isinstance((context or {}).get("player"), dict) else {}
-                stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
-                # Dry-run via apply with hard_block; spend only if ok (transaction-like)
-                before_res = get_player_resources(conn, opts)
-                spend_preview = apply_travel_spend(
-                    conn,
-                    terrain=str(travel.get("terrain") or ""),
-                    minutes=minutes,
-                    load_ratio=load_ratio,
-                    weather_mult=wmult,
-                    options=opts,
-                    stats=stats,
-                    hard_block=True,
-                )
-                if spend_preview.get("blocked"):
-                    travel_blocked = True
-                    # Undo accidental spend if any (hard_block path does not spend)
-                    out["resources"] = before_res
-                    out["resource_spend"] = {
-                        "blocked": True,
-                        "reasons": spend_preview.get("reasons") or ["insufficient_energy"],
-                        "travel": spend_preview.get("travel"),
-                        "collapse": spend_preview.get("collapse"),
-                    }
-                    out["blocked"] = True
-                    out["block_reason"] = "insufficient_energy"
-                    out["weather"] = wx0
-            except Exception:
-                spend_preview = {}
-
-        if travel_blocked:
+        if _spend_travel(conn, travel, context, out):
             # Do not advance clock, spawn encounters, or journal this step
             return out
-
-        if minutes > 0:
-            out["time"] = advance_world_time(conn, minutes)
-            out["weather"] = (out["time"] or {}).get("weather") or get_weather(conn)
-            out["weather_changed"] = bool((out["time"] or {}).get("weather_changed"))
-            out["weather_announce"] = (out["time"] or {}).get("weather_announce")
-        else:
-            out["weather"] = get_weather(conn)
-
-        # Terrain / weather / load energy+fatigue spend (already applied if preview ran)
-        if minutes > 0 and spend_preview and not spend_preview.get("blocked"):
-            out["resources"] = spend_preview.get("after") or {}
-            out["resource_spend"] = {
-                "deltas": spend_preview.get("deltas"),
-                "travel": spend_preview.get("travel"),
-                "soft_blocked": spend_preview.get("soft_blocked"),
-                "reasons": spend_preview.get("reasons") or [],
-                "collapse": spend_preview.get("collapse"),
-            }
-        elif minutes > 0 and not spend_preview:
-            try:
-                from app.player_resources import apply_travel_spend
-
-                inv_sum = (context or {}).get("inventory_summary") or {}
-                cap = max(1.0, float(inv_sum.get("weight_capacity") or 60.0))
-                eff = max(0.0, float(inv_sum.get("effective_weight") or 0.0))
-                load_ratio = min(2.2, eff / cap) if cap else 0.4
-                wx = out.get("weather") if isinstance(out.get("weather"), dict) else get_weather(conn)
-                kind = str((wx or {}).get("kind") or "clear")
-                wmult = float(WEATHER_TRAVEL_MULT.get(kind, 1.0))
-                player = (context or {}).get("player") if isinstance((context or {}).get("player"), dict) else {}
-                stats = _gear_scores(player.get("effective_stats")) if isinstance(player.get("effective_stats"), dict) else None
-                spend = apply_travel_spend(
-                    conn,
-                    terrain=str(travel.get("terrain") or ""),
-                    minutes=minutes,
-                    load_ratio=load_ratio,
-                    weather_mult=wmult,
-                    options=opts,
-                    stats=stats,
-                )
-                out["resources"] = spend.get("after") or {}
-                out["resource_spend"] = {
-                    "deltas": spend.get("deltas"),
-                    "travel": spend.get("travel"),
-                    "soft_blocked": spend.get("soft_blocked"),
-                    "reasons": spend.get("reasons") or [],
-                }
-            except Exception:
-                out["resources"] = None
 
         loc = (context or {}).get("current_location") or {}
         # Prefer player location id from DB

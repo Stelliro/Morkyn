@@ -3622,8 +3622,16 @@ def plan_story_walk(
     origin: dict[str, Any] | None = None,
     dest: dict[str, Any] | None = None,
     travel: bool = False,
+    town: bool = False,
 ) -> dict[str, Any]:
-    """Decide whether this turn steps the grid. Does not move the token."""
+    """Decide whether this turn steps the grid. Does not move the token.
+
+    ``town``: the player is inside a plotted town and the town rules moved (or
+    kept) them this turn, so the world token stays on the town cell, explicit
+    WALK included (docs/TownGrid.md 5.1).
+    """
+    if town:
+        return {"action": "skip", "reason": "town"}
     explicit = normalize_map_walk(map_walk)
     if explicit:
         return {
@@ -3708,6 +3716,7 @@ def apply_story_map_walk(
     dest: dict[str, Any] | None = None,
     travel: bool = False,
     save: bool = False,
+    town: bool = False,
 ) -> dict[str, Any]:
     """Move the token for one story turn and pin outdoor places to the tiles they occupy."""
     plan = plan_story_walk(
@@ -3719,6 +3728,7 @@ def apply_story_map_walk(
         origin=origin,
         dest=dest,
         travel=travel,
+        town=town,
     )
     if plan.get("action") == "skip":
         return {"status": "skipped", "reason": plan.get("reason") or "no_step", "steps_taken": 0}

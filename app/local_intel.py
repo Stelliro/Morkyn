@@ -1377,6 +1377,14 @@ def apply_turn_intel(conn, player_input: str, turn: int) -> str:
             applied = apply_hint_to_map(chart, hint, save=False)
             if applied.get("told") and hint:
                 _save_map_payload(chart, conn=conn)
+                # The stall or notice it pointed at is now told (docs/TownGrid.md 6):
+                # its plot's name shows once that cell is generated. Generates nothing.
+                try:
+                    from app.town_moves import record_told
+
+                    record_told(conn, chart, hint.get("place"), turn)
+                except Exception:
+                    pass
                 distance = max(
                     abs(int(hint["x"]) - int((chart.get("player") or {}).get("x") or 0)),
                     abs(int(hint["y"]) - int((chart.get("player") or {}).get("y") or 0)),

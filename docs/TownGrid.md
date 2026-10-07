@@ -1,7 +1,8 @@
 # Town grid
 
-Status: **slice A built** (generator, storage, read API; see "Slice A build notes" at the
-end). Slices B and C are not built. Builders follow this in three slices (A, B, C, at the end).
+Status: **slices A and B built** (generator, storage, read API; the engine: position, walks,
+plots made places, the draft's town block; see the build notes at the end). Slice C (UI) is not
+built. Builders follow this in three slices (A, B, C, at the end).
 
 The player asked for three things. Entering a town should let them zoom in and see its
 sub-grid. Any plot on that grid may be a shop. A road network should run through it for
@@ -1068,3 +1069,65 @@ government 0.02, military 0.01.
 - Big blocks keep large interior yards: plot depth follows 3.2, so a residential block of
   75–105 m keeps back gardens.
 
+## 14. Slice B build notes
+
+Built in `app/town_moves.py`, wired into `app/world.py` (play_turn, resolve_movement, apply_turn,
+the story walk, workplaces, rewind, load), `app/main.py` (`POST /api/town/walk`, map steps),
+`app/turn_dsl.py`, `app/prompts.py`, `app/llm.py`, `app/local_intel.py`, `app/player_resources.py`
+and `app/venues.py`. Tested in `tests/test_town_movement.py` (42 tests, writer-off, no model).
+
+### What a turn does
+
+1. `plan_turn` (play_turn, before the prompt): places the player when they stand on a city cell
+   with no `town_position` (game start, an old save; the shopping ward's road, else the hub),
+   reads the player's own words and returns the plan and the `movement_contract.town` block. It
+   writes only `town_cells`.
+2. `resolve_town_movement` (first thing in `resolve_movement`, before the snapshot): engine plans
+   win over the draft's MOVE; a MOVE naming a plot, a realized plot row, a street or a ward is
+   re-planned with no generation; a MOVE whose name holds a trade word is re-aimed at the nearest
+   generated plot of that trade (`renamed`, and the narrow prose rename when the name occurs
+   verbatim and no other invented building does), else dropped with `prose_mismatch`. The #6c
+   unshown-move rule runs first, unchanged. With no MOVE, an entry the prose shows goes into the
+   plot at or beside the player's door that matches it; nothing is minted. LOC_NEW rows whose name
+   is a building the grid does not have are not stored. A MOVE to a known place outside the grid
+   (no kind, no parent) returns to the legacy rules, which is how world travel out of town works.
+3. `apply_town_turn` (apply_turn, right after the snapshot): preview the spend on the caller's
+   connection, commit `town_position` and the marker, record `town_seen`, then `_spend_travel`;
+   realize the plot when the plan enters and it is open, and set the move to its row (or to the
+   settlement row when a walk leaves a building).
+
+### Measured (tests and a scratch probe, seed 20261007, `forest_march`)
+
+- `plan_turn` with a typed target in a generated 128 cell: 15-40 ms; first placement including
+  the cell's generation about 0.12 s; a full fake-draft `play_turn` in town about 0.2-0.45 s.
+- A walk to the nearest bakery from the shopping ward's road: 2-3 minutes; the nearest gate of a
+  three-cell city: 25 minutes.
+
+### Deviations from this design
+
+1. **No `port_dist` cache.** A route is the fewest-cells path over the city's cells (BFS), then a
+   fine BFS in each cell from the entry port to the exit port. That is not a Dijkstra over port
+   distances, so a cross-city walk can be longer by road than the best one. Cells are generated as
+   the walk reaches them, at most 5 per turn (`MAX_CELLS_PER_TURN`); a walk stops where the cells
+   or the 40 minutes run out (`partial`, with an estimate of the minutes left).
+2. **Map arrow steps between cells of one city** keep the flat 10-minute world step and put the
+   player on the shared port of the new cell, instead of a town walk with town minutes.
+3. **Leaving through a gate** puts the world marker one cell outside the gate edge, so the next
+   turn does not place the player back in town. The world walk after it keeps its full budget
+   (the town minutes are not subtracted).
+4. **Entering by a map step** moves the current location to the settlement row (unless it already
+   is one of this city's rows). A story walk into a city does not: the turn's MOVE decides.
+5. **Bearings (5.4)** are not a separate block. `places_here` entries carry minutes and a compass
+   word for what is ahead, and `arrived` / `walking` name the target.
+6. **`travel_ready`** gates only the click-walk (leaving the cell). An in-turn walk is the player's
+   own action; confinement (`movement_locked`, `map_blank`) refuses both.
+7. **A slice A gap fixed here:** `town_seen` was in `AUTOINC_TABLES` but not in the rewind delete,
+   so a rewound turn kept its seen rows. It is now deleted by max id, like the quest tables.
+8. `town_seen` compaction past 64 rows a cell is not built.
+
+### Not done in slice B
+
+- **The live check on the 8B** (a town walk, entering a named shop, asking for a missing trade,
+  and the #55 count from the transcript) was not run: the GPU was in use by the user's own
+  application when this slice was built. It is the first thing to run before slice C.
+- The UI (slice C): the click-walk route exists, nothing calls it yet.

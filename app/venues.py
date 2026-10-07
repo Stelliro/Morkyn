@@ -735,6 +735,19 @@ def hours_note(row: Any, world_minute: int) -> str:
     return f"{state} now ({window})"
 
 
+def row_kind(row: Any) -> str:
+    """A location row's venue kind: the stamped ``kind``, else what its name says.
+
+    A row made from a town plot (docs/TownGrid.md 4.4) is never read from its
+    name: "The Crooked Lantern on Wheel Street" ends on a place-tail word and
+    would classify as nothing, so its stamped kind is the only answer.
+    """
+    kind = str(_field(row, "kind", "") or "")
+    if kind or str(_field(row, "plot_id", "") or ""):
+        return kind
+    return venue_kind_from_name(str(_field(row, "name", "") or ""))
+
+
 def _field(row: Any, key: str, default: Any = None) -> Any:
     if isinstance(row, dict):
         return row.get(key, default)

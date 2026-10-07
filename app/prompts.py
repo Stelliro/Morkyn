@@ -1265,6 +1265,12 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
         lines = [str(item)[:240] for item in asks[:3] if str(item).strip()]
         if lines:
             world["relevant_asks"] = lines
+    # The plotted town around the player (docs/TownGrid.md 5.3): every turn in
+    # town, not only travel turns, because a talk turn can still walk through
+    # a door. It replaces the invented-venue options.
+    town_contract = context.get("movement_contract") if isinstance(context.get("movement_contract"), dict) else {}
+    if isinstance(town_contract.get("town"), dict):
+        world["town"] = town_contract["town"]
     if _is_travel(context, player_input):
         contract = context.get("movement_contract") if isinstance(context.get("movement_contract"), dict) else {}
         current = contract.get("current_location") if isinstance(contract.get("current_location"), dict) else {}

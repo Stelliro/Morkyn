@@ -87,6 +87,7 @@ from app.prompts import (
 )
 from app.turn_dsl import (
     DSL_SYSTEM_PROMPT,
+    dsl_system_prompt_for,
     TurnDslError,
     build_dsl_user_prompt,
     draft_mode_enabled,
@@ -9992,6 +9993,8 @@ WORLD_STATE_DROP_ORDER: tuple[str, ...] = (
     "map_space",
     "settings",
     "direction_hint",
+    # The plotted town around the player (docs/TownGrid.md 5.3).
+    "town",
     # Kept until last, in this order.
     "mechanics_context",
     "recall_contract",
@@ -14656,7 +14659,8 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     if prompt_degraded:
         _warn_compact_contract_once(context_window_tokens(config))
     theme_block = theme_prompt_block(session_theme, playthrough_options)
-    dsl_system_prompt = DSL_SYSTEM_PROMPT
+    # In a plotted town the movement bullets are the town ones (docs/TownGrid.md 5.3).
+    dsl_system_prompt = dsl_system_prompt_for(context)
     # Depth, voice, answer, and recall repairs ask for prose only. They used
     # to carry the full JSON contract (~9.5k tokens) as their system prompt,
     # a prefix no other call in the turn shares, so every repair re-read the
@@ -14665,7 +14669,7 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
     is_opening = str(player_input or "").startswith("__opening_scene_request__")
     if theme_block:
         system_prompt = f"{system_prompt.rstrip()}\n\n{theme_block}"
-        dsl_system_prompt = f"{DSL_SYSTEM_PROMPT.rstrip()}\n\n{theme_block}"
+        dsl_system_prompt = f"{dsl_system_prompt.rstrip()}\n\n{theme_block}"
         prose_system_prompt = f"{prose_system_prompt.rstrip()}\n\n{theme_block}"
     avoid_block = anti_repetition_block(context)
     if avoid_block:

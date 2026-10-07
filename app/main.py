@@ -2498,6 +2498,14 @@ def api_tile_map_move(request: MapMoveRequest):
                 "resource_spend": travel_result.get("resource_spend"),
             },
         )
+    # Into or out of a town: town_position follows the marker (docs/TownGrid.md 4.1, 4.2).
+    try:
+        from app.town_moves import sync_after_world_move
+
+        with _connect() as conn:
+            travel_result["town"] = sync_after_world_move(conn, get_map(None, conn=conn), (px, py))
+    except Exception as exc:
+        travel_result["town"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"[:200]}
     # Ambush / path event → full scene turn (RNG already decided)
     if travel_result.get("needs_scene") and travel_result.get("queued_event"):
         try:
@@ -2591,6 +2599,79 @@ def api_town_view(city_id: str = "", cx: int | None = None, cy: int | None = Non
         return town_view(conn, data, city_id=city_id, cx=cx, cy=cy, r=r)
     finally:
         conn.close()
+
+
+class TownWalkRequest(BaseModel):
+    """A click-walk in town: a plot's door, or the road nearest a clicked fine tile."""
+    plot_id: str = Field(default="", max_length=80)
+    cx: int | None = None
+    cy: int | None = None
+    fx: int | None = None
+    fy: int | None = None
+
+
+@app.post("/api/town/walk")
+def api_town_walk(request: TownWalkRequest):
+    """Walk the roads to a plot's door (or a clicked tile) without going in (docs/TownGrid.md 7).
+
+    Same gates as /api/tiles/map/move: confinement answers 409, and leaving the
+    current cell needs travel_ready. Minutes, weather and energy are spent on
+    this one connection; a walk too tired to make answers 409 and changes nothing.
+    """
+    from app.db import connect as _connect
+    from app.town_grid import town_view
+    from app.town_moves import click_walk
+    from app.world import get_state
+
+    runtime = _location_special_runtime()
+    if runtime.get("movement_locked") or runtime.get("map_blank"):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": runtime.get("hint") or "You cannot move — confined (blank map / prison state).",
+                "movement_locked": True,
+                "map_blank": bool(runtime.get("map_blank")),
+            },
+        )
+    context = get_state(include_hidden=False)
+    ready = True
+    try:
+        with _connect() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key = 'travel_ready'").fetchone()
+        if row:
+            try:
+                ready = bool(json.loads(row["value"]))
+            except Exception:
+                ready = str(row["value"]).lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        ready = True
+    try:
+        with _connect() as conn:
+            walked = click_walk(
+                conn,
+                plot_ref=str(request.plot_id or "").strip(),
+                cx=request.cx,
+                cy=request.cy,
+                fx=request.fx,
+                fy=request.fy,
+                context=context,
+                travel_ready=ready,
+            )
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        autosave_campaign()
+    except Exception:
+        pass
+    data = get_map(None)
+    conn = _connect()
+    try:
+        view = town_view(conn, data, r=1) if data else {"available": False, "cells": []}
+    finally:
+        conn.close()
+    return {"ok": True, "walk": walked, "view": view, "state": get_state()}
 
 
 @app.get("/api/town/plot/{plot_id}")

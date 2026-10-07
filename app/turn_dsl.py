@@ -185,6 +185,65 @@ QUEST_DONE marks a step or a job the prose just finished, accepted, failed or dr
 """
 
 
+# In a plotted town (docs/TownGrid.md 5.3) three of the general movement
+# bullets invite the draft to invent a building ("otherwise name the building
+# and it is created"), say going in costs the next turn while the engine may
+# walk and enter in one, and ask for WALK. While movement_contract.town is
+# present they are swapped for town versions; everywhere else the system
+# prompt is DSL_SYSTEM_PROMPT, byte for byte.
+_GENERAL_MOVE_BULLETS = (
+    (
+        "- Going indoors is a MOVE. A shop, inn, forge or temple the player steps into is a place, not\n"
+        "  scenery: write MOVE with that building's name. Prefer a name from movement_contract.venues_here;\n"
+        "  otherwise name the building and it is created. Stepping back outside is another MOVE, to\n"
+        "  movement_contract.current_location's parent. A scene that walks the player into a shop with no\n"
+        "  MOVE line leaves them standing in the street, and the shop stops existing the moment it scrolls\n"
+        "  out of context.\n",
+        "- Going indoors is a MOVE. A building the player goes to or into is MOVE with a name from\n"
+        "  world_state.town.places_here, or a street name. Nothing else is created. Stepping back outside\n"
+        "  is another MOVE, to movement_contract.current_location's parent.\n",
+    ),
+    (
+        "- A hike is at most 4 tiles. One step does not cross inside a city. When map_space.step_budget\n"
+        "  is present, that is this turn's limit. A hike across country is WALK with a direction and STEPS 1-4\n"
+        "  (north, south, east, west, or a compound such as northeast) plus a MOVE naming the place\n"
+        "  where the walk stops. Do not invent a road, town, or wilderness farther than that walk.\n"
+        "  A door into a shop or room is MOVE only — do not WALK the grid for a room.\n",
+        "- In a town do not WALK. The engine walks the player along the roads to the place they asked for.\n",
+    ),
+    (
+        "- Interiors are entered only from the place they stand in. A player two locations away cannot\n"
+        "  MOVE straight into a shop — that move lands them outside it instead, and going in costs the next\n"
+        "  turn. Do not narrate walking across the map and through a shop door in one turn.\n",
+        "- The engine walks the player along the road and may take them inside within the same turn when\n"
+        "  world_state.town.arrived says so; otherwise the scene ends at the door or on the way.\n",
+    ),
+)
+
+
+def _town_system_prompt() -> str:
+    text = DSL_SYSTEM_PROMPT
+    for general, town in _GENERAL_MOVE_BULLETS:
+        if text.count(general) != 1:
+            raise RuntimeError("turn_dsl: a general movement bullet changed; update _GENERAL_MOVE_BULLETS")
+        text = text.replace(general, town)
+    return text
+
+
+DSL_SYSTEM_PROMPT_TOWN = _town_system_prompt()
+
+
+def in_town(context: Any) -> bool:
+    """Does this turn's movement contract carry a plotted town block?"""
+    contract = context.get("movement_contract") if isinstance(context, dict) else None
+    return isinstance(contract, dict) and isinstance(contract.get("town"), dict)
+
+
+def dsl_system_prompt_for(context: Any) -> str:
+    """The DSL system prompt for this turn: the town bullets while the player is in a plotted town."""
+    return DSL_SYSTEM_PROMPT_TOWN if in_town(context) else DSL_SYSTEM_PROMPT
+
+
 class TurnDslError(ValueError):
     """Raised when DSL text cannot be parsed into a usable turn."""
 
@@ -1292,13 +1351,25 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     # Going indoors is a move on any turn, not only a travel turn (playtest #16:
     # a talk turn ended inside a herb shop with no MOVE, and the shop never existed).
     here_loc = context.get("current_location") if isinstance(context, dict) else None
+    town_turn = in_town(context)
     if not (isinstance(here_loc, dict) and here_loc.get("inside_venue")):
-        instructions.append(
-            "If ===NAR=== takes the player through a door into a shop, inn, forge, temple or other building, "
-            "===OPS=== MUST contain MOVE with that building's name."
-        )
+        if town_turn:
+            instructions.append(
+                "If ===NAR=== takes the player through a door, it is a building in world_state.town.places_here "
+                "and ===OPS=== MUST contain MOVE with that name. No other building appears."
+            )
+        else:
+            instructions.append(
+                "If ===NAR=== takes the player through a door into a shop, inn, forge, temple or other building, "
+                "===OPS=== MUST contain MOVE with that building's name."
+            )
     space = context.get("map_space") if isinstance(context, dict) else None
-    if isinstance(space, dict) and space.get("width") and space.get("height"):
+    if town_turn:
+        instructions.append(
+            "In a town do not WALK. Where the walk ends is world_state.town.arrived (or town.walking when it is "
+            "still on the way); the prose ends there."
+        )
+    elif isinstance(space, dict) and space.get("width") and space.get("height"):
         budget = int(space.get("step_budget") or 4)
         city_clause = " One step does not cross inside a city." if space.get("scale") == "world" else ""
         instructions.append(

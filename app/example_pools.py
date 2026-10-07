@@ -1984,6 +1984,16 @@ CAST_OPTIONS_RULE = (
 )
 
 
+# In a plotted town the buildings are plots with names of their own
+# (docs/TownGrid.md 5.3): no venue names are offered and none is invited.
+CAST_OPTIONS_RULE_TOWN = (
+    "cast_options were drawn fresh for this turn and are not people yet. When the story needs "
+    "a new person, give them one of cast_options.names or a name in the same style, and a job from "
+    "cast_options.jobs or another that fits this place. Use them only if the scene needs them; never "
+    "give anyone a name already used in world_state."
+)
+
+
 def cast_options(
     options: dict[str, Any] | None,
     location: dict[str, Any] | None,

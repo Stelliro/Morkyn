@@ -1855,6 +1855,9 @@ def _player_stays_in(context: dict[str, Any], draft: dict[str, Any], player_inpu
     contract = context.get("movement_contract") if isinstance(context.get("movement_contract"), dict) else {}
     places = [str(p) for p in contract.get("known_places") or [] if str(p or "").strip()]
     places += [str(v.get("name") or "") for v in contract.get("venues_here") or [] if isinstance(v, dict)]
+    # In a plotted town the buildings beside the player (docs/TownGrid.md 5.3).
+    town = contract.get("town") if isinstance(contract.get("town"), dict) else {}
+    places += [str(v.get("name") or "") for v in town.get("places_here") or [] if isinstance(v, dict)]
     if any(len(p) >= 3 and p.lower() in text for p in places):
         return ""
     return name

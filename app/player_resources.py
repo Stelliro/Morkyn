@@ -610,7 +610,7 @@ def apply_regen(
     }
 
 
-def apply_travel_spend(
+def preview_travel_spend(
     conn,
     *,
     terrain: str = "",
@@ -621,6 +621,12 @@ def apply_travel_spend(
     stats: dict[str, Any] | None = None,
     hard_block: bool | None = None,
 ) -> dict[str, Any]:
+    """What a walk of ``minutes`` would cost, and whether it is blocked. Writes nothing.
+
+    apply_travel_spend spends exactly this when it is not blocked; a town walk
+    previews first so a block leaves the position and the clock untouched
+    (docs/TownGrid.md 4.3).
+    """
     cfg = resource_settings(options)
     if hard_block is None:
         hard_block = bool(cfg.get("travel_hard_block"))
@@ -656,6 +662,35 @@ def apply_travel_spend(
             "travel": delta,
             "collapse": col,
         }
+    return {"ok": True, "blocked": False, "reasons": [], "before": before, "travel": delta, "collapse": col}
+
+
+def apply_travel_spend(
+    conn,
+    *,
+    terrain: str = "",
+    minutes: int = 0,
+    load_ratio: float = 0.4,
+    weather_mult: float = 1.0,
+    options: dict[str, Any] | None = None,
+    stats: dict[str, Any] | None = None,
+    hard_block: bool | None = None,
+) -> dict[str, Any]:
+    preview = preview_travel_spend(
+        conn,
+        terrain=terrain,
+        minutes=minutes,
+        load_ratio=load_ratio,
+        weather_mult=weather_mult,
+        options=options,
+        stats=stats,
+        hard_block=hard_block,
+    )
+    if preview["blocked"]:
+        return preview
+    before = preview["before"]
+    delta = preview["travel"]
+    need_e = int(delta.get("energy") or 0)
 
     result = spend_resources(
         conn,
