@@ -248,7 +248,7 @@ def context_notice(window: int, needed: int, provider: str = "mle") -> dict[str,
         "tips": [
             "Raise Context tokens in the Gatehouse menu (option C) to 32768, or set AI_RPG_CONTEXT_TOKENS, then restart Mørkyn.",
             "If the larger context does not fit in memory, a smaller quantization of the same model (Q4 instead of Q8) frees room for it.",
-            "If you chose the smaller size on purpose, nothing is wrong; this notice stays quiet for ten minutes at a time.",
+            "If you chose the smaller size on purpose, nothing is wrong; this notice shows once for each context size.",
         ],
         "detail": f"context_window={window} needed={needed}",
         "actions": [SETTINGS_ACTION],

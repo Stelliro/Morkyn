@@ -264,6 +264,46 @@
 
   const NOTICE_QUIET_MS = 10 * 60 * 1000;
 
+  // Playtest #67: the in-memory quiet window reset on every page load, so a
+  // setting the player chose on purpose (a small context) nagged on each one.
+  // A notice about a setting is shown once per value; others once per ten
+  // minutes across reloads. Storage can be missing (private windows): then
+  // only the in-memory window applies.
+  const NOTICE_SEEN_KEY = "morkyn.noticeSeen.v1";
+  const ONCE_PER_VALUE = new Set(["context_below_contract"]);
+
+  function noticeStore() {
+    try {
+      const raw = window.localStorage.getItem(NOTICE_SEEN_KEY);
+      const data = raw ? JSON.parse(raw) : {};
+      return data && typeof data === "object" ? data : {};
+    } catch (_) {
+      return {};
+    }
+  }
+
+  function noticeSeenKey(problem) {
+    const code = String(problem?.code || "unknown");
+    return ONCE_PER_VALUE.has(code) ? `${code}|${String(problem?.detail || "")}` : code;
+  }
+
+  function noticeSeen(problem) {
+    const code = String(problem?.code || "unknown");
+    const at = Number(noticeStore()[noticeSeenKey(problem)] || 0);
+    if (!at) return false;
+    return ONCE_PER_VALUE.has(code) || at > Date.now() - NOTICE_QUIET_MS;
+  }
+
+  function markNoticeSeen(problem) {
+    try {
+      const data = noticeStore();
+      data[noticeSeenKey(problem)] = Date.now();
+      window.localStorage.setItem(NOTICE_SEEN_KEY, JSON.stringify(data));
+    } catch (_) {
+      /* storage unavailable: the in-memory window still applies */
+    }
+  }
+
   function remember(problem) {
     recent.set(String(problem?.code || "unknown"), Date.now());
   }
@@ -296,7 +336,9 @@
     // player has just answered in a turn dialog.
     const key = String(problem.code || "unknown");
     if ((recent.get(key) || 0) > Date.now() - NOTICE_QUIET_MS) return;
+    if (noticeSeen(problem)) return;
     remember(problem);
+    markNoticeSeen(problem);
     if (resolver) return; // a blocking ask is already up
     render(problem, { allowFallback: false, title: "Model status" });
     resolver = () => {};

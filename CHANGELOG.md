@@ -23,6 +23,14 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Fixed
+
+- [CLAUDE] Opening New game no longer replaces the live game's world map: while a game is live the setup roll is a draft, and Start promotes the map the screen showed (playtest #64). - `app/tile_world.py`, `app/world.py`, `app/main.py`, `static/app.js`
+- [CLAUDE] The model size guess and the token-limits label use the model's file name, not the folders above it (#65). - `app/model_limits.py`
+- [CLAUDE] Seed starter quests shows the quests in Tools / quests at once; quest labels lose their stray separators; the map header says 'quest marks' (#66). - `static/app.js`
+- [CLAUDE] The small-context notice shows once per context size instead of on every page load; other notices keep their ten-minute quiet across reloads (#67). - `static/ui/failsafe.js`, `app/failsafe.py`
+- [CLAUDE] The town streets view frames the town while keeping the player in view, and gets up to the column's width (359 px at 1440x900, was 198) (#68). - `static/app.js`, `static/styles.css`
+
 ### Changed
 
 - [CLAUDE] The README opens on a cover composited from the key art and logo (`Media/morkyn-cover.png`) instead of the bare logo and a separate key-art block; the logo and key art stay in `Media/` because the main menu and loading marks use them. `Itch.io/` (page drafts, devlogs, upload art) is gitignored. - `README.md`, `Media/morkyn-cover.png`, `.gitignore`

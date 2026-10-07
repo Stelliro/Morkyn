@@ -733,15 +733,7 @@ def generate_map(
                 ),
             ),
         )
-        pin_live_campaign_map(conn)
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_world_map_id', ?)",
-            (map_id,),
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)",
-            (json.dumps(True),),
-        )
+        take_rolled_map(conn, map_id)
     payload["visited"] = [f"{start[0]},{start[1]}"]
     payload["knowledge"] = {"settlements": [], "danger": [], "notes": [], "sources": []}
     payload["scale"] = "board"
@@ -819,15 +811,7 @@ def generate_scaled_world(
                 json.dumps(meta, ensure_ascii=True),
             ),
         )
-        pin_live_campaign_map(conn)
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('active_world_map_id', ?)",
-            (run_id,),
-        )
-        conn.execute(
-            "INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)",
-            (json.dumps(True),),
-        )
+        take_rolled_map(conn, run_id)
         conn.commit()
     finally:
         conn.close()
@@ -981,11 +965,10 @@ def active_map_id(conn) -> str:
     return value
 
 
-# The map a campaign started on, recorded at Start. Opening New game rolls a
-# fresh map and makes it active straight away, before Start; a player who
-# then goes back and keeps playing the old game has an active map that is
-# not that game's. Saves and pruning keep the pinned map too, so that stray
-# roll can never cost a campaign its own map.
+# The map a campaign started on, recorded at Start. A roll on the New game
+# screen stays a draft while a game is live (take_rolled_map, playtest #64);
+# saves and pruning keep the pinned map too, so no stray roll can cost a
+# campaign its own map.
 CAMPAIGN_MAP_KEY = "campaign_world_map_id"
 
 
@@ -1036,6 +1019,59 @@ def pin_live_campaign_map(conn) -> str:
         return ""
     conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (CAMPAIGN_MAP_KEY, chosen))
     return chosen
+
+
+# Playtest #64: opening New game rolls a map while the last game is still
+# live. That roll is a setup draft until Start; making it active at once put
+# a player who backed out on a world they never chose.
+SETUP_DRAFT_MAP_KEY = "setup_draft_world_map_id"
+
+
+def _campaign_live(conn) -> bool:
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'setup_complete'").fetchone()
+    except Exception:
+        return False
+    return bool(row) and str(row[0] or "").strip().strip('"').lower() == "true"
+
+
+def _map_exists(conn, map_id: str) -> bool:
+    return bool(map_id) and conn.execute("SELECT id FROM world_maps WHERE id = ?", (map_id,)).fetchone() is not None
+
+
+def _make_active(conn, map_id: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('active_world_map_id', ?)", (map_id,))
+    conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('travel_ready', ?)", (json.dumps(True),))
+
+
+def take_rolled_map(conn, map_id: str) -> bool:
+    """A freshly rolled map: active at once, or a setup draft while a game is live.
+
+    Returns True when it became the active map.
+    """
+    if _campaign_live(conn) and _map_exists(conn, active_map_id(conn)):
+        pin_live_campaign_map(conn)
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (SETUP_DRAFT_MAP_KEY, map_id))
+        return False
+    conn.execute("DELETE FROM settings WHERE key = ?", (SETUP_DRAFT_MAP_KEY,))
+    _make_active(conn, map_id)
+    return True
+
+
+def promote_setup_draft_map(conn, map_id: str = "") -> str:
+    """At Start: the map the setup screen showed becomes the active one.
+
+    ``map_id`` is the map the screen named; the stored draft is the fallback.
+    Returns the map made active, or "" when the active map stays as it was.
+    """
+    row = conn.execute("SELECT value FROM settings WHERE key = ?", (SETUP_DRAFT_MAP_KEY,)).fetchone()
+    draft = str((row[0] if row else "") or "").strip().strip('"')
+    conn.execute("DELETE FROM settings WHERE key = ?", (SETUP_DRAFT_MAP_KEY,))
+    for chosen in (str(map_id or "").strip(), draft):
+        if _map_exists(conn, chosen):
+            _make_active(conn, chosen)
+            return chosen
+    return ""
 
 
 def campaign_map_ids(conn) -> set[str]:

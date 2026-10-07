@@ -6149,6 +6149,13 @@ button.chipBtn.activeChip {
   }
 }
 
+/* Playtest #68: streets are unreadable at 22vh (198 px at 1440x900). The
+   town view may take the column's width, up to half the window. */
+.mapSquareSlot:has(.settlementCanvas.isStreets) {
+  flex-basis: min(380px, 50vh);
+  max-height: min(380px, 50vh);
+}
+
 .mapMainCanvas {
   width: 100% !important;
   height: 100% !important;

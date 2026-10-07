@@ -4997,8 +4997,11 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
         # stored map is a reroll or an earlier game (playtest #25). Saved slots
         # carry their own maps in world.json, so none of theirs is lost.
         try:
-            from app.tile_world import pin_campaign_map, prune_world_maps
+            from app.tile_world import pin_campaign_map, promote_setup_draft_map, prune_world_maps
 
+            # The map the setup screen rolled while the last game was live is
+            # only a draft until now (playtest #64).
+            promote_setup_draft_map(conn, str(options.get("world_map_id") or ""))
             # The pin is this game's now; the last game's pin goes with it.
             pin_campaign_map(conn)
             prune_world_maps(conn)

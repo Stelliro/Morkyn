@@ -189,6 +189,16 @@ def params_from_text(text: str) -> float | None:
     return best
 
 
+def model_file_name(name: str) -> str:
+    """The model's own name from a path or a repo id: the last part, no .gguf.
+
+    Folders above the file say nothing about the model (playtest #65: a
+    session folder with '430b' in it sized an 8B model as 430B).
+    """
+    last = re.split(r"[\\/]", str(name or "").strip())[-1]
+    return re.sub(r"\.gguf$", "", last, flags=re.I)
+
+
 def model_facts(config: dict[str, Any] | None = None) -> dict[str, Any]:
     """Everything auto sizing can learn about the configured model without loading it."""
     cfg = dict(config or {})
@@ -198,7 +208,8 @@ def model_facts(config: dict[str, Any] | None = None) -> dict[str, Any]:
         return {"key": f"api:{name.lower()}", "label": name or "API model", "kind": "api", "params_b": params_from_text(name), "name": name}
     path = _gguf_path_for(cfg)
     name = str(cfg.get("mle_model") or cfg.get("model") or "").strip()
-    facts: dict[str, Any] = {"kind": "name", "name": name, "params_b": params_from_text(name)}
+    short = model_file_name(name)
+    facts: dict[str, Any] = {"kind": "name", "name": name, "params_b": params_from_text(short)}
     if path is not None:
         meta = read_gguf_metadata(path)
         facts["kind"] = "gguf" if meta else "file"
@@ -234,7 +245,7 @@ def model_facts(config: dict[str, Any] | None = None) -> dict[str, Any]:
             facts["params_b"] = params_from_text(path.stem)
     else:
         facts["key"] = f"mle:{name.lower()}" if name else "mle:unknown"
-        facts["label"] = name or "local model"
+        facts["label"] = short or "local model"
     return facts
 
 

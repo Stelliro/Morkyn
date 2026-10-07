@@ -429,6 +429,8 @@ def _clean_optional_float(value: Any) -> float | None:
 
 class SetupRequest(BaseModel):
     player_name: str = Field(default="Wanderer", max_length=80)
+    # The map the setup screen rolled and showed (playtest #64).
+    world_map_id: str = Field(default="", max_length=120)
     player_public_name: str = Field(default="", max_length=100)
     player_title: str = Field(default="", max_length=100)
     player_age: str = Field(default="", max_length=60)

@@ -12431,6 +12431,9 @@ async function loadPlayerQuests() {
     playerQuestData = payload.quests || [];
     playerQuestOffers = Array.isArray(payload.offered) ? payload.offered : [];
     if (activeTab === "quests") renderIndex();
+    // Tools / quests in the play menu is the sheet drawer, not the index tab
+    // (playtest #66: seeded quests stayed hidden there until a reload).
+    if (characterSheetOpen) paintCharacterSheet({ load: false });
   } catch (_) {
     // Silently ignore — the quest system may not be seeded yet.
   }
@@ -12468,7 +12471,12 @@ function renderPlayerQuestSection() {
   }
   const cards = playerQuestData.map((q) => {
     const stepPct = Math.round((q.current_step / Math.max(q.total_steps, 1)) * 100);
-    const timerNote = q.turns_remaining ? ` · ⏱ ${q.turns_remaining} turns left` : "";
+    // Only the parts that have a value, so an empty reward leaves no stray dot (playtest #66).
+    const metaLine = [
+      String(q.difficulty || "normal").trim(),
+      String(q.reward || "").trim(),
+      q.turns_remaining ? `⏱ ${q.turns_remaining} turns left` : "",
+    ].filter(Boolean).map((part) => escapeHtml(part)).join(" · ");
     const stepList = (q.steps || []).map((s) => {
       const done = s.status === "completed";
       const active = s.status === "active";
@@ -12478,7 +12486,7 @@ function renderPlayerQuestSection() {
       <article class="card questCard">
         <header>
           <strong>${escapeHtml(q.code)} — ${escapeHtml(q.title)}</strong>
-          <span class="meta">${escapeHtml(q.difficulty || "normal")} · ${escapeHtml(q.reward || "")}${timerNote}</span>
+          <span class="meta">${metaLine}</span>
         </header>
         <div class="questProgressBar" title="${stepPct}% complete"><div class="questProgressFill" style="width:${stepPct}%"></div></div>
         <ul class="questStepList">${stepList}</ul>
@@ -20022,6 +20030,8 @@ async function startGame(event) {
     delete formSnap.compose_intent;
     delete formSnap.session_theme;
     setupPayload.setup_form = formSnap;
+    // The roll is a draft on the server until Start names it (playtest #64).
+    setupPayload.world_map_id = String(newGameMap?.id || newGameMap?.run_id || "");
     const response = await fetch("/api/setup", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -22164,7 +22174,10 @@ listenPlaySurface("click", (event) => {
     const btn = event.target.closest("#seedQuestsBtn");
     btn.disabled = true;
     fetch("/api/quests/seed", { method: "POST" })
-      .then(() => loadPlayerQuests())
+      .then(async (response) => {
+        if (!response.ok) throw new Error((await response.text()) || "Could not seed quests.");
+        return loadPlayerQuests();
+      })
       .catch((error) => playSurfaceError(btn, error))
       .finally(() => { btn.disabled = false; });
     return;
@@ -25249,6 +25262,29 @@ function townGeometry(canvas) {
     if (Number(you.cx) !== center.cx || Number(you.cy) !== center.cy) {
       focusX = cellPx / 2;
       focusY = cellPx / 2;
+    } else {
+      // Playtest #68: a player at a gate sat at the centre with the whole town
+      // off to one side. Aim at the middle of the cell's plots instead, as far
+      // as keeps the player inside the view; zoomed in, that is the player.
+      const plots = (own.plots || []).filter((p) => Array.isArray(p.r) && p.r.length === 4);
+      if (plots.length) {
+        let x0 = Infinity;
+        let y0 = Infinity;
+        let x1 = -Infinity;
+        let y1 = -Infinity;
+        for (const p of plots) {
+          const [x, y, w, h] = p.r.map(Number);
+          x0 = Math.min(x0, x);
+          y0 = Math.min(y0, y);
+          x1 = Math.max(x1, x + w);
+          y1 = Math.max(y1, y + h);
+        }
+        const builtX = (Number(you.cx) - center.cx) * cellPx + ((x0 + x1) / 2) * tile;
+        const builtY = (Number(you.cy) - center.cy) * cellPx + ((y0 + y1) / 2) * tile;
+        const reach = Math.max(0, css / 2 - Math.max(18, tile * 2));
+        focusX += Math.max(-reach, Math.min(reach, builtX - focusX));
+        focusY += Math.max(-reach, Math.min(reach, builtY - focusY));
+      }
     }
   }
   return {
@@ -26042,7 +26078,7 @@ async function refreshLocalMap() {
     const marks = (data.markers || []).length;
     const qmarks = (_lastQuestMarkers || []).length;
     const nmarks = (_lastNpcMarkers || []).length;
-    showMapLine(`@(${data.player?.x},${data.player?.y}) · remembers ${remembered}${heard ? ` · heard ${heard}` : ""} · map ${mapW}×${mapH} · vision ${vision}${marks ? ` · intel ${marks}` : ""}${qmarks ? ` · quests ${qmarks}` : ""}${nmarks ? ` · npcs ${nmarks}` : ""}`);
+    showMapLine(`@(${data.player?.x},${data.player?.y}) · remembers ${remembered}${heard ? ` · heard ${heard}` : ""} · map ${mapW}×${mapH} · vision ${vision}${marks ? ` · intel ${marks}` : ""}${qmarks ? ` · quest marks ${qmarks}` : ""}${nmarks ? ` · npcs ${nmarks}` : ""}`);
     // Settlement strip: only places the player knows
     if (data.settlements_nearby) {
       renderSettlementList(data.settlements_nearby);

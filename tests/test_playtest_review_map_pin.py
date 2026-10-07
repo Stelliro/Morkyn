@@ -91,7 +91,9 @@ class TheCampaignMapIsPinned(unittest.TestCase):
             conn.execute("DELETE FROM settings WHERE key = ?", (tile_world.CAMPAIGN_MAP_KEY,))
         rolled = tile_world.generate_scaled_world(preset_id="frontier_any", seed=4321)
         with connect() as conn:
-            self.assertEqual(tile_world.active_map_id(conn), rolled["id"])
+            # The roll is a setup draft while the game is live (playtest #64).
+            self.assertEqual(tile_world.active_map_id(conn), "world-game-a")
+            self.assertNotEqual(rolled["id"], "world-game-a")
             self.assertEqual(tile_world.pinned_map_id(conn), "world-game-a")
         saved = [r["id"] for r in world.export_world()["tables"]["world_maps"]]
         self.assertIn("world-game-a", saved)
