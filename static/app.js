@@ -19590,6 +19590,18 @@ async function requestTurn(text, options = {}) {
   } finally {
     clearTurnWaitTimer();
   }
+  // A line that was all out-of-character (playtest #79) is noted, not played.
+  // Same handling as a /command note: redraw the shell, then show the note.
+  if (payload && payload.advanced_turn === false && payload.answer) {
+    try {
+      const next = await fetch("/api/state").then((response) => response.json());
+      if (next) renderShell(next, { forceGame: true });
+    } catch (_) {
+      /* the note still shows */
+    }
+    appendComposerNote(cleanText, payload.answer);
+    return;
+  }
   if (!displayTurnPayload(payload, { animateNarration: true })) throw new Error("Turn response did not include narration.");
 }
 

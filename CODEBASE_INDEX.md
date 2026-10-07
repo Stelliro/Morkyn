@@ -101,7 +101,7 @@ Morkyn/
 
 - **Files:** `app/db.py`
 - **Purpose:** Opens SQLite connections, enables foreign keys, creates the schema, and performs additive column migrations.
-- **Key API:** `connect()`, `init_db()`, `row_to_dict()`, `rows_to_dicts()`
+- **Key API:** `connect()`, `init_db()`, `row_to_dict()`, `rows_to_dicts()`, `clean_role_text()` (the one role cleaner, playtest #74; called by `world._sanitize_npc_role`), `repair_npc_roles()` (init_db and slot load, beside `repair_npc_default_summaries()`)
 - **Consumers:** `app.main` startup and most of `app.world`.
 - **Dependencies:** Python `sqlite3`, `pathlib`, environment variable `AI_RPG_DB`.
 - **Design Notes:** `data/world.db` is the default source of truth. Player setup identity columns include `age`, `sex`, `previous_life_age`, and `previous_life_sex` as additive text migrations. The path is resolved by `db_path()` on every `connect()`, never frozen at import, so `AI_RPG_DB` is authoritative regardless of import order; tests must still re-apply their env in `setUpModule()` because the variable itself is process-global. `dice_rolls` stores the audit trail for every server-rolled amount. `content_packs` / `content_pack_entries` register installed content so uninstall is exact. `inventory` carries `stat_links` (canonical attribute keys), `power_codes` (references into `abilities.code`), and `roll_profile` (flat check modifiers applied while equipped); `abilities` carries `read_only`, `roll_profile`, `magnitude_kind`/`magnitude_band`, and `activation` so powers are fixed rules the dice roller consults rather than text the model re-derives.
@@ -145,7 +145,7 @@ Morkyn/
 
 - **Files:** `app/conversation.py`
 - **Purpose:** Decides, in the engine and before any model call, who the player's line is said to, and who the turn leaves facing the player next.
-- **Key API:** `resolve()` (order: @tag, present NPC named as the addressee, group phrase, chip pick, then the stored target: revealed / answering partner / last speaker), `next_state()` (pure post-turn update), `update_after_turn()`, `choose()`, `view()`, `model_note()`, `world_view()`, `writer_view()`, `speakers_in()`.
+- **Key API:** `resolve()` (order: @tag, present NPC named as the addressee, group phrase, chip pick, then the stored target: revealed / answering partner / last speaker), `next_state()` (pure post-turn update), `update_after_turn()`, `choose()`, `view()`, `model_note()`, `world_view()`, `writer_view()`, `speakers_in()`, `spoken_lines()` ({code, line, unit} for every non-player line in the prose; seeding, the talk log and `world._speech_memory` read it, playtests #73/#78), `split_out_of_character()` (play_turn's first step: in-story text and the OOC note, playtest #79), `introduces_self()` and `player_name_forms()` (who was told the player's name, #78).
 - **Consumers:** `app.world.play_turn` (`context['conversation_turn']`, draft footer via `_expand_input_references`), `app.world.apply_turn` (after the scene cast), `app.world.get_state` (`state['conversation']`), `app.prompts._visible_world` (`world_state.conversation_turn`), `app.narration_pipeline.build_paragraph_briefs` and the consolidator in `app.llm`, `/api/conversation/target`, the "Talking to" chip in `static/app.js`.
 - **Design Notes:** State is the `settings.conversation` row (in `SNAPSHOT_SETTING_KEYS`, exported with saves); `active_scene.interacting` is rewritten to the target. The roster is NPCs at the player's location plus party members; a name or tag of someone elsewhere is never the addressee.
 
@@ -164,6 +164,14 @@ Morkyn/
 - **Key API:** `stated_coin_amounts()`, `player_trade_offer()`, `offer_answer()`, `strip_negated_clauses()`, `declared_act()`, `act_handed_off()`, `sentence_spans()`, `cut_from()`, `drop_sentences()`; `venues.led_to_in_prose()`.
 - **Consumers:** `app.world.apply_turn` (stated gold before `resolve_turn_bands`, purse after `_void_unbought_spend`, reconciliation after `_apply_player`; result `_prose_state`), `app.world._travel_scoring_text` (negation), `app.llm._drop_player_overreach` (scene cut, `act_handed_off`), `app.turn_dsl.build_dsl_user_prompt` (`player_act`, `trade_offer`), `app.narration_pipeline.build_paragraph_briefs` (`player_act`).
 - **Design Notes:** Turn-time only: no schema change and no stored row rewritten. Trims keep a 200-character floor; what cannot be matched safely is listed under `_prose_state.unreconciled` for measurement. Handing the declared act to an NPC is measured (`act_handed_off`), not refused.
+
+#### Speech Memory and People
+
+- **Files:** `app/world.py` (`_speech_memory`, `_unattributed_dialogue`, `_seed_summary`, `_figure_alias`, `_store_figure_aliases`, `_apply_conversations`, `_note_player_name_told`, `_journal_ooc`), `app/narration_pipeline.py`, `app/llm.py` (`_apply_speech_memory`), `app/prompts.py` (`_summary_line`, `_already_said`)
+- **Purpose:** People are made, addressed and quoted only from what the player saw and heard (playtests #73, #74, #78, #79): no face is seeded from a line a known person speaks, a person's stored summary goes to the model only when it describes them, what they said lately is shown as `already_said` and a restatement is dropped from the final prose, and only people told the player's name (`npcs.knows_player_name`) may say it.
+- **Key API:** `narration_pipeline.drop_speech_said_before()`, `narration_pipeline.drop_untold_name()`; the `speech_memory` prompt-context key (`recent` lines with speaker codes, `knows_name`, `people`, `player_names`, in `HANDOFF_BASE_CONTEXT_KEYS`).
+- **Consumers:** `app.world.build_prompt_context`, `app.llm._ensure_narration_quality` (last step), `app.prompts._visible_world`.
+- **Design Notes:** `knows_player_name` is an additive column (default 0); the npc rows at the player's place are snapshotted before a self-introduction marks them, so a rewind untells it. Prompt-side cleanup is read-only, so old saves' prose-sentence summaries stop shipping without a write.
 
 #### Starting Gear
 

@@ -442,6 +442,10 @@ HANDOFF_BASE_CONTEXT_KEYS = {
     "world_facts",
     # Names, jobs and venue names drawn for this turn (app/example_pools.py).
     "cast_options",
+    # Lines people said in the last scenes and who knows the player's name
+    # (world._speech_memory, playtest #78): the prompt's already_said and the
+    # final-prose speech gates read it.
+    "speech_memory",
 }
 HANDOFF_OPTIONAL_CONTEXT_KEYS = {
     "gm_events",
@@ -14225,7 +14229,78 @@ def _ensure_narration_quality(
             final, context, player_input, system_prompt, timeout, usage, phase, trace, prose_system_prompt=prose_prompt
         )
         final = _drop_player_overreach(deeper, player_input, phase, trace)
-    return final
+    return _apply_speech_memory(final, context, player_input, phase, trace)
+
+
+def _apply_speech_memory(
+    turn: dict[str, Any], context: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """
+    Engine gates over the final prose from world._speech_memory (playtest #78).
+
+    A spoken line that restates one from the last scenes is dropped (the ask
+    shows it as already_said; this catches the 8B saying it anyway), and the
+    player's name is taken out of a line said by someone never told it.
+    """
+    memory = context.get("speech_memory") if isinstance(context, dict) else None
+    if not isinstance(turn, dict) or not isinstance(memory, dict):
+        return turn
+    from app.conversation import spoken_lines
+    from app.narration_pipeline import drop_speech_said_before, drop_untold_name
+
+    recent = [row for row in memory.get("recent") or [] if isinstance(row, dict)]
+    earlier = [str(row.get("line") or "") for row in recent]
+    units = [str(row.get("unit") or "") for row in recent]
+    dropped: list[str] = []
+    segments = turn.get("narration_segments")
+    if earlier or units:
+        if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
+            kept, dropped = drop_speech_said_before([str(seg.get("text") or "") for seg in segments], earlier, units, player_input)
+            new_segments = [{**seg, "text": kept[i]} for i, seg in enumerate(segments) if kept[i].strip()]
+            joined = "\n\n".join(seg["text"] for seg in new_segments).strip()
+            if dropped and joined:
+                turn["narration_segments"] = new_segments
+                turn["narration"] = joined
+            elif dropped:
+                dropped = []  # never trade a repeated line for no turn at all
+        else:
+            text = str(turn.get("narration") or "")
+            kept, dropped = drop_speech_said_before(re.split(r"\n\s*\n", text), earlier, units, player_input)
+            joined = "\n\n".join(p for p in kept if p.strip()).strip()
+            if dropped and joined:
+                turn["narration"] = joined
+            elif dropped:
+                dropped = []
+    if dropped:
+        turn["_speech_said_before"] = dropped
+        _append_trace(trace, {"phase": phase, "event": "speech_said_before_dropped", "dropped": [u[:160] for u in dropped[:6]]})
+
+    names = [str(n) for n in memory.get("player_names") or [] if str(n or "").strip()]
+    if names:
+        knows = {str(c).upper() for c in memory.get("knows_name") or []}
+        rows = [
+            {"code": str(p.get("code") or "").upper(), "name": str(p.get("name") or ""), "aliases": []}
+            for p in memory.get("people") or []
+            if isinstance(p, dict) and p.get("code") and p.get("name")
+        ]
+        renamed: list[str] = []
+        for entry in spoken_lines(str(turn.get("narration") or ""), rows, player_input):
+            if entry["code"] and entry["code"] in knows:
+                continue
+            fixed, removed = drop_untold_name(entry["unit"], names)
+            if not removed:
+                continue
+            renamed.extend(removed)
+            turn["narration"] = str(turn.get("narration") or "").replace(entry["unit"], fixed)
+            segments = turn.get("narration_segments")
+            if isinstance(segments, list):
+                for seg in segments:
+                    if isinstance(seg, dict) and entry["unit"] in str(seg.get("text") or ""):
+                        seg["text"] = str(seg["text"]).replace(entry["unit"], fixed)
+        if renamed:
+            turn["_untold_name_dropped"] = renamed
+            _append_trace(trace, {"phase": phase, "event": "untold_player_name_dropped", "lines": [s[:160] for s in renamed[:6]]})
+    return turn
 
 
 def _drop_player_overreach(

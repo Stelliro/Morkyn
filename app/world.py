@@ -5787,9 +5787,11 @@ def _restore_world(data: dict[str, Any]) -> None:
             conn.execute("PRAGMA foreign_keys = ON")
             conn.execute("PRAGMA foreign_key_check")
             # Saves from before playtest #24 stored a placeholder as the summary.
-            from app.db import repair_npc_default_summaries
+            from app.db import repair_npc_default_summaries, repair_npc_roles
 
             repair_npc_default_summaries(conn)
+            # And roles that kept the DSL's list commas (playtest #74).
+            repair_npc_roles(conn)
             try:
                 from app.town_moves import reconcile_marker
 
@@ -9881,6 +9883,61 @@ def _ask_relevant_to_input(content: str, player_l: str) -> bool:
     return any(word in player_l for word in words)
 
 
+def _speech_memory(state: dict[str, Any], turns: int = 3, limit: int = 12) -> dict[str, Any]:
+    """
+    What people said in the last few scenes, and who knows the player's name
+    (playtest #78). The prompt shows a person what they already said; the
+    final-prose gate drops a line that says it again; nobody who was never told
+    the name calls the player by it.
+    """
+    from app.conversation import player_name_forms, spoken_lines
+
+    player = state.get("player") if isinstance(state.get("player"), dict) else {}
+    here_id = int(player.get("current_location_id") or 0)
+    rows: list[dict[str, Any]] = []
+    knows: list[str] = []
+    people: list[dict[str, str]] = []
+    for location in state.get("locations") or []:
+        for npc in (location.get("npcs") or []) if isinstance(location, dict) else []:
+            if not isinstance(npc, dict):
+                continue
+            code = str(npc.get("code") or "").strip().upper()
+            name = str(npc.get("name") or "").strip()
+            if code and name:
+                rows.append({"code": code, "name": name, "aliases": []})
+                knows_name = bool(int(npc.get("knows_player_name") or 0))
+                if knows_name:
+                    knows.append(code)
+                if knows_name or (here_id and int(location.get("id") or 0) == here_id):
+                    people.append({"code": code, "name": name})
+    recent: list[dict[str, str]] = []
+    history = [row for row in state.get("history") or [] if isinstance(row, dict)]
+    seen_turns: list[Any] = []
+    for index, row in enumerate(history):
+        if str(row.get("kind") or "") != "narration":
+            continue
+        turn = row.get("turn")
+        if turn not in seen_turns:
+            seen_turns.append(turn)
+        if len(seen_turns) > turns:
+            break
+        said_by_player = next(
+            (str(h.get("content") or "") for h in history[index + 1 :] if str(h.get("kind") or "") == "player" and h.get("turn") == turn),
+            "",
+        )
+        try:
+            lines = spoken_lines(str(row.get("content") or ""), rows, said_by_player)
+        except Exception:
+            lines = []
+        recent.extend({"code": entry["code"], "line": entry["line"][:240], "unit": entry["unit"][:320]} for entry in lines)
+    return {
+        "recent": recent[:limit],
+        "knows_name": knows,
+        "people": people[:24],
+        "player_names": player_name_forms([player.get("name")]),
+    }
+
+
 def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, Any]:
     _write_source_index(state)
     query = _tokens(player_input)
@@ -10081,6 +10138,7 @@ def build_prompt_context(state: dict[str, Any], player_input: str) -> dict[str, 
         "history": [],
         "last_narration": last_narration,
         "relevant_asks": relevant_asks,
+        "speech_memory": _speech_memory(state),
         "world_facts": world_facts,
         "turn_plan": turn_plan,
         "action_context": action_context,
@@ -10950,7 +11008,10 @@ _MAP_KIND_AS_ROLE: dict[str, str] = {
 
 def _sanitize_npc_role(role: Any) -> str:
     """Keep role as a job/social identity; never a map landmark kind."""
-    text = str(role or "").strip()
+    from app.db import clean_role_text
+
+    # One chokepoint for list punctuation (playtest #74: ", woodward ,").
+    text = clean_role_text(role)
     if not text:
         return "local"
     key = re.sub(r"\s+", " ", text.lower())
@@ -12968,9 +13029,97 @@ def _apply_gm_events(conn, gm_events: list[dict[str, Any]], turn: int) -> None:
         applied += 1
 
 
-def _apply_conversations(conn, conversations: list[dict[str, Any]], turn: int) -> None:
+def _prose_talk_lines(conn, narration: str, player_input: str = "") -> tuple[list[dict[str, Any]], set[int]]:
+    """Who speaks which line in the final prose ({id, line}), and the ids of the
+    people standing at the player's location."""
+    here: set[int] = set()
+    lines: list[dict[str, Any]] = []
+    try:
+        prow = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        loc_id = int(prow["current_location_id"]) if prow and prow["current_location_id"] else 0
+        if loc_id:
+            here = {int(r["id"]) for r in conn.execute("SELECT id FROM npcs WHERE location_id = ?", (loc_id,)).fetchall()}
+        if not str(narration or "").strip():
+            return lines, here
+        from app.conversation import spoken_lines
+
+        ids: dict[str, int] = {}
+        rows: list[dict[str, Any]] = []
+        for r in conn.execute("SELECT id, code, name FROM npcs").fetchall():
+            code = str(r["code"] or "").strip().upper()
+            if code and str(r["name"] or "").strip():
+                ids[code] = int(r["id"])
+                rows.append({"code": code, "name": str(r["name"]), "aliases": []})
+        for entry in spoken_lines(narration, rows, player_input):
+            if entry["code"] in ids:
+                lines.append({"id": ids[entry["code"]], "line": entry["line"]})
+    except Exception:
+        return [], here
+    return lines, here
+
+
+def _note_player_name_told(conn, player_input: str, resolution: Any, narration: str) -> list[str]:
+    """Mark who heard the player give their name (playtest #78: Juliana called
+    the player Bartholomew though no input ever said it). The listeners are the
+    people the line was said to or who stood in on it; with nobody resolved, the
+    people here the prose names. Returns the codes marked."""
+    from app.conversation import introduces_self
+
+    try:
+        player = conn.execute("SELECT name, public_name FROM player WHERE id = 1").fetchone()
+    except Exception:
+        try:
+            player = conn.execute("SELECT name, '' AS public_name FROM player WHERE id = 1").fetchone()
+        except Exception:
+            return []
+    if not player or not introduces_self(player_input, [player["name"], player["public_name"]]):
+        return []
+    res = resolution if isinstance(resolution, dict) else {}
+    codes = [str(c).upper() for c in list(res.get("addressed") or []) + list(res.get("listening") or []) if c]
+    try:
+        prow = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        loc_id = int(prow["current_location_id"]) if prow and prow["current_location_id"] else 0
+        here = rows_to_dicts(conn.execute("SELECT code, name FROM npcs WHERE location_id = ?", (loc_id,)).fetchall())
+        if not codes:
+            from app.conversation import _names_in
+
+            rows = [{"code": str(r["code"]).upper(), "name": str(r["name"]), "aliases": []} for r in here if r.get("code") and r.get("name")]
+            codes = [code for _pos, code in _names_in(str(narration or ""), rows)]
+        here_codes = {str(r.get("code") or "").upper() for r in here}
+        marked = sorted({c for c in codes if c in here_codes})
+        for code in marked:
+            conn.execute("UPDATE npcs SET knows_player_name = 1 WHERE code = ?", (code,))
+        return marked
+    except Exception:
+        return []
+
+
+def _talk_line_owner(summary: str, lines: list[dict[str, Any]]) -> int | None:
+    """The person whose prose line this logged talk restates, if exactly one."""
+    from app.narration_pipeline import _speech_key, speech_repeats
+
+    key = _speech_key(summary)
+    owners = {
+        entry["id"]
+        for entry in lines
+        if speech_repeats([entry["line"]], summary)
+        or (len(key.split()) >= 3 and key in _speech_key(entry["line"]))
+    }
+    return next(iter(owners)) if len(owners) == 1 else None
+
+
+def _apply_conversations(
+    conn, conversations: list[dict[str, Any]], turn: int, narration: str = "", player_input: str = ""
+) -> None:
     from app.turn_dsl import is_slot_token
 
+    # Playtest #73 (live, T12): TALK "B" filed Bertram's and Juliana's lines
+    # under Reinald, who was in the bakery; an unknown code went to whoever
+    # stood here. The prose says who spoke: a logged line goes to the person the
+    # prose gives it to, and a code that names nobody here or speaking is not
+    # trusted over the prose.
+    prose_lines, here_ids = _prose_talk_lines(conn, narration, player_input)
+    speaker_ids = list(dict.fromkeys(entry["id"] for entry in prose_lines))
     for convo in conversations:
         summary = str(convo.get("summary") or "")[:1400]
         if not summary:
@@ -12981,25 +13130,18 @@ def _apply_conversations(conn, conversations: list[dict[str, Any]], turn: int) -
         if is_slot_token(convo.get("topic")):
             convo = {**convo, "topic": ""}
         npc_id = _npc_id_by_ref(conn, convo.get("npc_code") or convo.get("npc"))
-        # Fallback: attach orphan dialogue to a face at the player's location
-        if npc_id is None:
-            try:
-                prow = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
-                loc_id = int(prow["current_location_id"]) if prow and prow["current_location_id"] else None
-            except Exception:
-                loc_id = None
-            if loc_id:
-                row = conn.execute(
-                    """
-                    SELECT id FROM npcs
-                    WHERE location_id = ?
-                    ORDER BY CASE WHEN shell = 0 THEN 0 ELSE 1 END, id DESC
-                    LIMIT 1
-                    """,
-                    (loc_id,),
-                ).fetchone()
-                if row:
-                    npc_id = int(row["id"])
+        owner = _talk_line_owner(summary, prose_lines) if prose_lines else None
+        if owner is not None:
+            npc_id = owner
+        elif npc_id is None or (npc_id not in here_ids and npc_id not in speaker_ids):
+            # Nobody the code names is in this scene: the one person who spoke
+            # in it, or nobody at all.
+            if len(speaker_ids) == 1:
+                npc_id = speaker_ids[0]
+            elif npc_id is None and len(here_ids) == 1:
+                npc_id = next(iter(here_ids))
+            else:
+                continue
         claims = convo.get("player_claims") or []
         conn.execute(
             "INSERT INTO conversations (turn, npc_id, topic, summary, player_claims) VALUES (?, ?, ?, ?, ?)",
@@ -13591,13 +13733,36 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         hint = bound.get(id(npc))
         if hint:
             npc = dict(npc)
-            sentence = _hint_sentence(text, hint)
+            sentence = _seed_summary(_hint_sentence(text, hint), known_names)
             if sentence and not str(npc.get("summary") or "").strip():
                 npc["summary"] = sentence
             if not str(npc.get("appearance") or "").strip():
                 npc["appearance"] = _appearance_note(hint)
+            # Playtest #74: the hooded figure was bound to Fenella, but nothing
+            # said so, and later prose ran both as two people. The figure's
+            # phrase becomes her alias, so "the hooded figure" resolves to her.
+            alias = _figure_alias(hint)
+            if alias:
+                npc["_figure_alias"] = alias
         out.append(npc)
     return out
+
+
+def _store_figure_aliases(conn, npc: dict[str, Any], npc_id: int | None) -> None:
+    """Record the figure phrase a new name was bound to (_npcs_shown_in_prose)."""
+    alias = str(npc.get("_figure_alias") or "").strip() if isinstance(npc, dict) else ""
+    if not alias or not npc_id:
+        return
+    try:
+        row = conn.execute("SELECT code FROM npcs WHERE id = ?", (int(npc_id),)).fetchone()
+        code = str(row["code"] or "").strip() if row else ""
+        if code:
+            conn.execute(
+                "INSERT OR IGNORE INTO aliases (alias, entity_type, entity_code) VALUES (?, 'npc', ?)",
+                (alias, code),
+            )
+    except Exception:
+        pass
 
 
 def _hint_sentence(text: str, hint: str) -> str:
@@ -13612,6 +13777,67 @@ def _hint_sentence(text: str, hint: str) -> str:
             if re.search(r'[“"]', sentence):
                 return sentence.strip()[:300]
     return ""
+
+
+def _unattributed_dialogue(conn, text: str, result: dict[str, Any] | None = None) -> str:
+    """The prose's spoken lines that no known person says: each speech unit the
+    prose gives to a stored NPC (by name, alias or [[code]], or by a pronoun
+    after one) is left out, and so are the player's own lines (playtest #73)."""
+    try:
+        from app.conversation import spoken_lines
+
+        rows: list[dict[str, Any]] = []
+        for r in conn.execute("SELECT code, name FROM npcs").fetchall():
+            if str(r["code"] or "").strip() and str(r["name"] or "").strip():
+                rows.append({"code": str(r["code"]).upper(), "name": str(r["name"]), "aliases": []})
+        for npc in (result or {}).get("npcs") or []:
+            if isinstance(npc, dict) and str(npc.get("name") or "").strip():
+                code = str(npc.get("code") or "").strip().upper() or f"_NEW{len(rows)}"
+                rows.append({"code": code, "name": str(npc["name"]).strip(), "aliases": []})
+        by_code = {row["code"]: row for row in rows}
+        for r in conn.execute("SELECT alias, entity_code FROM aliases WHERE entity_type = 'npc'").fetchall():
+            row = by_code.get(str(r["entity_code"] or "").upper())
+            if row is not None and str(r["alias"] or "").strip():
+                row["aliases"].append(str(r["alias"]).strip())
+        units = [entry["unit"] for entry in spoken_lines(str(text or ""), rows) if not entry["code"]]
+    except Exception:
+        return str(text or "")
+    return " ".join(units)
+
+
+def _seed_summary(sentence: str, known_names: Any = ()) -> str:
+    """What a seeded person's record says about them, from the prose's sentence:
+    "" when the sentence is speech or names someone already known (playtest #78:
+    Bertram's summary was Juliana's spoken line, shipped back as his every turn)."""
+    text = str(sentence or "").strip()
+    if not text or re.search(r'["“”]', text):
+        return ""
+    # "A hooded figure watches you, narrowing their gaze." is the scene, not the
+    # person; shipped back as Fenella's line it kept a second watcher on stage (#74).
+    if re.search(r"\byou(?:r|rs|rself)?\b", text, re.I):
+        return ""
+    for name in known_names or ():
+        for form in {str(name or "").strip(), *str(name or "").split()[:1]}:
+            if len(form) >= 3 and form.lower() not in _NOT_A_NAME and re.search(
+                r"(?<!\w)" + re.escape(form) + r"(?!\w)", text
+            ):
+                return ""
+    return text
+
+
+_FIGURE_ALIAS_NOUNS = frozenset({"figure", "stranger", "watcher", "shape", "silhouette", "rider", "traveler", "traveller"})
+
+
+def _figure_alias(hint: str) -> str:
+    """'A hooded figure' -> 'hooded figure': the phrase later prose uses for the
+    person a name was bound to (playtest #74). Only a described nameless-figure
+    noun, never a bare 'woman' that the next stranger would also be."""
+    words = re.sub(r"\s+", " ", str(hint or "")).strip().lower().split()
+    if words and words[0] in {"a", "an", "the"}:
+        words = words[1:]
+    if len(words) < 2 or len(words) > 3 or words[-1] not in _FIGURE_ALIAS_NOUNS:
+        return ""
+    return " ".join(words)
 
 
 def _hint_sex(hint: str, sentence: str) -> str:
@@ -13679,8 +13905,10 @@ def _ensure_npcs_from_narration(
         known_names = []
     known_names += [str(n.get("name") or "") for n in (result.get("npcs") or []) if isinstance(n, dict)]
     hints = _figure_hints(text, known_names)
-    # Dialogue without a listed speaker still implies at least one face
-    has_dialogue = bool(re.search(r'[“"][^”"]{8,}[”"]', text))
+    # Dialogue without a listed speaker still implies at least one face, but
+    # only dialogue nobody known speaks (playtest #73: '"Understood," Juliana
+    # says' minted Bertram at the street the player had just walked out to).
+    has_dialogue = bool(re.search(r'[“"][^”"]{8,}[”"]', _unattributed_dialogue(conn, text, result)))
     existing = [n for n in (result.get("npcs") or []) if isinstance(n, dict)]
     # Also count DB faces at this location (already upserted this turn)
     skip = {int(x) for x in companions or () if x}
@@ -13711,6 +13939,9 @@ def _ensure_npcs_from_narration(
             continue
         role = keeper_role if keeper_role and not created else _seed_role_for(conn, int(location_id), hint, i, salt=text[:40])
         sentence = _hint_sentence(text, hint)
+        # The stored summary is shipped back as this person's line every turn
+        # (playtest #78): never a quoted line, never someone else's sentence.
+        summary = _seed_summary(sentence, known_names) if hint else ""
         speaker = _NAMED_SPEAKER_RE.fullmatch(hint) if hint else None
         try:
             shell = create_shell_npc(
@@ -13721,7 +13952,7 @@ def _ensure_npcs_from_narration(
                 role=role,
                 seed=name_seed("shell_npc", location_id, hint, i, text[:40]),
                 appearance=_appearance_note(hint),
-                summary=sentence,
+                summary=summary,
                 sex=_hint_sex(hint, sentence),
                 name=speaker.group(1) if speaker else "",
             )
@@ -15433,6 +15664,24 @@ def apply_turn(
                 snapshot_town_rows(conn, town_turn, pre_rows)
             except Exception:
                 pass
+        # A self-introduction marks people as told the name after this point
+        # (_note_player_name_told); keep their rows so a rewind untells it.
+        if input_kind == "player":
+            try:
+                from app.conversation import introduces_self
+
+                prow_n = conn.execute("SELECT name, public_name FROM player WHERE id = 1").fetchone()
+                if prow_n and introduces_self(player_input, [prow_n["name"], prow_n["public_name"]]):
+                    pre_rows = pre_rows if isinstance(pre_rows, dict) else {}
+                    _snapshot_row(
+                        conn,
+                        "npcs",
+                        "location_id = (SELECT current_location_id FROM player WHERE id = 1)",
+                        (),
+                        pre_rows,
+                    )
+            except Exception:
+                pass
         _save_snapshot(conn, next_turn, result, pre_rows=pre_rows if isinstance(pre_rows, dict) else None)
         turn = _next_turn(conn)
         # The town walk is written after the snapshot (docs/TownGrid.md 5.1, 9):
@@ -15531,7 +15780,7 @@ def apply_turn(
             pass
         result["npcs"] = collected_npcs
         for npc in collected_npcs:
-            _upsert_npc(conn, npc)
+            _store_figure_aliases(conn, npc, _upsert_npc(conn, npc))
 
         # Pin one keeper per venue. Without this the model reinvented whoever was
         # behind the counter on every visit -- the same apothecary was staffed by
@@ -15712,7 +15961,7 @@ def apply_turn(
             }
         _apply_events(conn, result.get("events") or [], turn)
         _apply_gm_events(conn, result.get("gm_events") or [], turn)
-        _apply_conversations(conn, result.get("conversations") or [], turn)
+        _apply_conversations(conn, result.get("conversations") or [], turn, narration, player_input)
         _apply_response_drafts(conn, result.get("response_drafts") or [], turn)
         _apply_index_updates(conn, result.get("index_updates") or [])
         _apply_ability_updates(conn, result.get("ability_updates") or [])
@@ -15796,6 +16045,8 @@ def apply_turn(
             )
         except Exception:
             pass  # the conversation never blocks a turn; the old scene row still stands
+        if input_kind == "player":
+            _note_player_name_told(conn, player_input, (prompt_context or {}).get("conversation_turn"), _narration_text(result))
         try:
             from app.quests import tick_quest_timers
             tick_quest_timers(conn, turn=turn)
@@ -16282,12 +16533,55 @@ def _sync_turn_resources(context: dict[str, Any], mechanics_context: dict[str, A
     mechanics_context["collapse"] = col
 
 
+def _journal_ooc(note: str) -> None:
+    """Keep the player's out-of-character note where they can see it, as its
+    own journal row, never in the prose or the model's input (playtest #79)."""
+    try:
+        with connect() as conn:
+            row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
+            turn = int(row["value"]) if row else 0
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (turn, "ooc", f"Out of character, kept out of the story: {str(note)[:500]}"),
+            )
+    except Exception:
+        pass
+
+
+def _ooc_only_reply(note: str) -> dict[str, Any]:
+    """A line that was all out-of-character: noted, the story does not advance."""
+    _journal_ooc(note)
+    return {
+        "ok": True,
+        "command": "ooc",
+        "answer": "Out of character, so the story did not advance. Your note is kept in the journal.",
+        "refresh": True,
+        "advanced_turn": False,
+    }
+
+
 def play_turn(
     player_input: str,
     input_kind: str = "player",
     journal_input: str | None = None,
     allow_fallback: bool = True,
 ) -> dict[str, Any]:
+    # Out-of-character text never enters the fiction (playtest #79): T9's "i
+    # cant leave the city due to a game bug" was narrated in-world and walked
+    # the player out of the forge. Everything below reads the in-story part
+    # only; the note is kept in the journal, and a line that is all note does
+    # not advance the story.
+    ooc_note = ""
+    if input_kind == "player":
+        from app.conversation import split_out_of_character
+
+        in_fiction, ooc_note = split_out_of_character(player_input)
+        if ooc_note:
+            if not in_fiction.strip():
+                return _ooc_only_reply(ooc_note)
+            player_input = in_fiction
+            if journal_input is None:
+                journal_input = in_fiction
     context = get_state(include_hidden=True)
     used_fallback = False
     fallback_reason = ""
@@ -16939,6 +17233,10 @@ def play_turn(
         input_kind=input_kind,
         prompt_context=prompt_context,
     )
+    if ooc_note:
+        _journal_ooc(ooc_note)
+        if isinstance(result, dict):
+            result["out_of_character"] = ooc_note
     # apply_turn annotates the state it returns; later code re-reads state from
     # the database on some paths (injuries), which silently dropped these on
     # about half the turns. Keep them locally and re-attach after any refresh.

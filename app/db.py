@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 from pathlib import Path
 from typing import Any
@@ -771,6 +772,9 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("workplace_plan", "TEXT NOT NULL DEFAULT ''"),
         # Town grid: the plot this NPC's planned workplace claims (TownGrid.md 4.4).
         ("workplace_plot", "TEXT NOT NULL DEFAULT ''"),
+        # 1 once the player has told this person their name (playtest #78):
+        # until then nobody in the fiction calls the player by it.
+        ("knows_player_name", "INTEGER NOT NULL DEFAULT 0"),
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
@@ -991,6 +995,7 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             pass
 
     repair_npc_default_summaries(conn)
+    repair_npc_roles(conn)
 
     # Written rules for short setup choices (rank ladder and the other selections).
     try:
@@ -1063,6 +1068,46 @@ def repair_npc_default_summaries(conn: sqlite3.Connection) -> int:
             (strip_introduced_prefix(row["summary"], row["name"]), int(row["id"])),
         )
     return len(rows)
+
+
+def clean_role_text(role: Any) -> str:
+    """A job as words: list punctuation trimmed, spaces collapsed (playtest #74:
+    ", woodward ," from a comma-separated NPC_NEW line)."""
+    text = re.sub(r"\s+", " ", str(role or "")).strip()
+    return text.strip(" ,;").strip()
+
+
+def repair_npc_roles(conn: sqlite3.Connection) -> int:
+    """Clean stored roles and logged talk lines that kept the DSL's list commas
+    (playtest #74); returns NPC rows changed. Clean rows are never touched."""
+    changed = 0
+    try:
+        rows = conn.execute(
+            "SELECT id, role FROM npcs WHERE role LIKE ',%' OR role LIKE '%,' OR role LIKE ';%' OR role LIKE '%;' "
+            "OR role LIKE ' %' OR role LIKE '% '"
+        ).fetchall()
+    except sqlite3.Error:
+        return 0
+    for row in rows:
+        clean = clean_role_text(row["role"]) or "local"
+        if clean != row["role"]:
+            conn.execute("UPDATE npcs SET role = ? WHERE id = ?", (clean, int(row["id"])))
+            changed += 1
+    try:
+        for row in conn.execute(
+            "SELECT id, topic, summary FROM conversations WHERE topic LIKE ',%' OR summary LIKE ',%'"
+        ).fetchall():
+            conn.execute(
+                "UPDATE conversations SET topic = ?, summary = ? WHERE id = ?",
+                (
+                    str(row["topic"] or "").lstrip(" ,;"),
+                    str(row["summary"] or "").lstrip(" ,;"),
+                    int(row["id"]),
+                ),
+            )
+    except sqlite3.Error:
+        pass
+    return changed
 
 
 def _alpha_code(number: int) -> str:

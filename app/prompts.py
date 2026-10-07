@@ -43,13 +43,21 @@ Resolve the action the player took (this is the most common failure):
 Populate the world with workers, not omens:
 - Most people have a job and a reason to be here, one that fits this place and this world.
   Give them that, not a hood and a stare.
-- "A hooded figure watches you" is the default a small model falls back on. Across a real run it
-  produced a world where 24 of 27 people were hooded strangers or cloaked locals. Ration it: at
-  most one genuinely mysterious watcher on screen, and only when the scene has earned it.
+- A nameless stranger whose only act is to stare at the player is the default a small model falls
+  back on. Across a real run it produced a world where 24 of 27 people were concealed strangers.
+  Ration it: at most one genuinely mysterious watcher on screen, and only when the scene has earned it.
 - Ordinary people can still carry the plot through what they heard, saw or refuse to do.
   Interest comes from what they want, not from concealment.
-- Vary how people are introduced. Not every arrival is at "the edge of your vision", not every
-  gaze "narrows", not every cloak "rustles".
+- Vary how people are introduced: give each arrival its own place in the scene, its own gesture and
+  its own reason to be there, never the stock stare or the stock entrance of the scene before.
+
+What people say:
+- A person's already_said lines were spoken in earlier scenes. They do not say them again, word for
+  word or reworded, and no one else says them; the talk moves on to something new.
+- Replies do not open on the same one-word acknowledgement and nod, scene after scene. Each reply
+  starts with what this person actually answers.
+- People only call the player by name when their entry says knows_your_name. Everyone else has not
+  been told it: they use no name, or what they can see.
 
 Point of view (fixed for the whole campaign — never drifts mid-scene or between turns):
 - Second person, present tense. The player is "you". Never narrate them in third person and never
@@ -806,6 +814,9 @@ def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
             entry["works_here"] = True
         elif npc.get("workplace"):
             entry["works_at"] = str(npc.get("workplace"))
+        # Told the player's name on screen (playtest #78); absent means not told.
+        if int(npc.get("knows_player_name") or 0):
+            entry["knows_your_name"] = True
         people.append(entry)
     if people:
         place["people"] = people
@@ -845,6 +856,70 @@ def _player_view(context: dict[str, Any]) -> dict[str, Any] | None:
     return view or None
 
 
+# Engine placeholders for a seeded face: true of anyone, and pasted if shipped.
+_PLACEHOLDER_SUMMARY_RE = re.compile(
+    r"^(?:someone at the edge of the scene|a brief face in the crowd|present in the opening scene)\b", re.I
+)
+
+
+def _known_people_names(context: dict[str, Any]) -> list[str]:
+    names: list[str] = []
+    for loc in context.get("locations") or []:
+        for npc in (loc.get("npcs") or []) if isinstance(loc, dict) else []:
+            if isinstance(npc, dict) and str(npc.get("name") or "").strip():
+                names.append(str(npc["name"]).strip())
+    return names
+
+
+def _summary_line(context: dict[str, Any], npc: dict[str, Any]) -> str:
+    """
+    A person's stored summary as a line the model may read, or "".
+
+    Playtest #78 (live): seeded summaries are prose sentences, and they were
+    shipped back every turn as the person's "line". Bertram's was Juliana's
+    '"Understood," Juliana says, nodding.', and the 8B said it again on two
+    later turns; Fenella's was the scene sentence of the hooded figure, which
+    kept a second watcher on stage (#74). Spoken lines, sentences about the
+    player, sentences naming somebody else and engine placeholders are not a
+    description of the person, so they are not shipped.
+    """
+    line = _one_line(npc.get("summary"))
+    if not line or re.search(r'["“”]', line) or _PLACEHOLDER_SUMMARY_RE.match(line):
+        return ""
+    if re.search(r"\byou(?:r|rs|rself)?\b", line, re.I):
+        return ""
+    own = str(npc.get("name") or "").strip().lower()
+    for other in _known_people_names(context):
+        if other.lower() == own:
+            continue
+        first = other.split()[0]
+        forms = {other, first} if len(first) >= 3 else {other}
+        if own and first.lower() == own.split()[0]:
+            forms = {other}
+        if any(re.search(rf"(?<![A-Za-z]){re.escape(form)}(?![A-Za-z])", line) for form in forms):
+            return ""
+    return line
+
+
+def _already_said(context: dict[str, Any], code: str, logged: str = "", limit: int = 3) -> list[str]:
+    """The last lines this person spoke in recent scenes (world._speech_memory),
+    newest first, clipped; `logged` (their latest logged talk) leads when given."""
+    code = str(code or "").strip().upper()
+    memory = context.get("speech_memory") if isinstance(context.get("speech_memory"), dict) else {}
+    out: list[str] = []
+    for line in [logged] + [
+        str(row.get("line") or "")
+        for row in memory.get("recent") or []
+        if isinstance(row, dict) and code and str(row.get("code") or "").upper() == code
+    ]:
+        text = re.sub(r"\s+", " ", str(line or "")).strip()[:120]
+        if text and text.lower() not in {t.lower() for t in out}:
+            out.append(text)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _person_line(context: dict[str, Any], person: dict[str, Any]) -> str:
     code = str(person.get("code") or "")
     name = str(person.get("name") or "")
@@ -857,7 +932,7 @@ def _person_line(context: dict[str, Any], person: dict[str, Any]) -> str:
             same_code = code and str(npc.get("code") or "") == code
             same_name = name and str(npc.get("name") or "") == name
             if same_code or same_name:
-                return _one_line(npc.get("summary"))
+                return _summary_line(context, npc)
     return ""
 
 
@@ -893,12 +968,13 @@ def _named_records(context: dict[str, Any], focus: str, here_codes: set[str]) ->
                 continue
             if not _named_in(focus, str(npc.get("name") or ""), code):
                 continue
-            people.append({
-                "name": npc.get("name") or "",
-                "code": code,
-                "role": npc.get("role") or "",
-                "line": _one_line(npc.get("summary")),
-            })
+            entry = {"name": npc.get("name") or "", "code": code, "role": npc.get("role") or ""}
+            line = _summary_line(context, npc)
+            if line:
+                entry["line"] = line
+            if int(npc.get("knows_player_name") or 0):
+                entry["knows_your_name"] = True
+            people.append(entry)
     if people:
         named["people"] = people[:4]
     items = []
@@ -1244,11 +1320,26 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
         if latest and talking_codes and str(latest.get("npc_code") or latest.get("code") or "") not in talking_codes:
             latest = None
         if latest:
+            # Playtest #78 (live, T12): shipped as "line", Bertram's T10 reply
+            # came back word for word. What a person already said is shown as
+            # said, with the rule that it is not said again.
             world["conversations"] = [{
                 "npc": latest.get("npc_name") or latest.get("name") or "",
                 "code": latest.get("npc_code") or latest.get("code") or "",
-                "line": _one_line(latest.get("summary") or latest.get("topic") or latest.get("text")),
+                "already_said": _already_said(
+                    context,
+                    str(latest.get("npc_code") or latest.get("code") or ""),
+                    _one_line(latest.get("summary") or latest.get("topic") or latest.get("text")),
+                ),
             }]
+    # The people the player talks to, with what they said in the last scenes;
+    # a line said again anyway is dropped from the final prose (llm.py).
+    for person in (place or {}).get("people") or []:
+        if str(person.get("code") or "") not in talking_codes:
+            continue
+        said = _already_said(context, str(person.get("code") or ""))
+        if said:
+            person["already_said"] = said
     # The player's quests ride every turn, small: title, code and the step
     # they are on. This used to need the word "quest" or "job" in the focus
     # text, and the handoff dropped the key besides, so it never showed.

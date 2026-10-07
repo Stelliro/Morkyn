@@ -281,6 +281,100 @@ def own_text(player_input: str) -> str:
     return re.split(r"\n\s*\n", text, maxsplit=1)[0].strip()
 
 
+def player_name_forms(names: Any) -> list[str]:
+    """The player's name as people could say it: full, first and last, longest first."""
+    forms: list[str] = []
+    for name in names or ():
+        text = re.sub(r"\s+", " ", str(name or "")).strip()
+        if not text:
+            continue
+        for form in [text, *text.split()]:
+            if len(form) >= 3 and form.lower() not in {f.lower() for f in forms}:
+                forms.append(form)
+    return sorted(forms, key=len, reverse=True)
+
+
+def introduces_self(player_input: str, names: Any) -> bool:
+    """The player's own line gives their name: "I'm Bartholomew", "my name is
+    Hurst", "call me Bart..." (playtest #78)."""
+    text = own_text(player_input)
+    forms = player_name_forms(names)
+    if not text or not forms:
+        return False
+    alternatives = "|".join(re.escape(form) for form in forms)
+    return bool(
+        re.search(
+            r"\b(?:my\s+name(?:'s|\s+is)|name's|i\s+am|i'm|im|call\s+me|they\s+call\s+me|known\s+as)\s+"
+            r"(?:called\s+)?(?:" + alternatives + r")\b(?!['’]s)",
+            text,
+            re.IGNORECASE,
+        )
+    )
+
+
+# Out-of-character text (playtest #79): what the player says to the game, not
+# in the story. Bracketed notes always; a clause only on a strong meta marker,
+# never on a bare "game" (hunted animals) or "bug" (an insect).
+_OOC_BRACKET_RE = re.compile(
+    r"\(\(.*?\)\)|\((?:\s*ooc\b|\s*out\s+of\s+character\b)[^)]*\)|(?<!\[)\[(?!\[)[^\[\]]*\](?!\])|\booc\s*:.*$",
+    re.IGNORECASE | re.DOTALL,
+)
+# Words a setting can use in the fiction stay out: a starship's "the AI", an
+# "engine error", a "server", a terminal that "glitches".
+_OOC_META_RE = re.compile(
+    r"\b(?:(?:game|app|ui|save)\s+(?:bug|glitch|error|issue|crash)(?:s|ed|es)?|"
+    r"bug(?:ged|gy)?\s+(?:in|with)\s+the\s+(?:game|app|ui)|"
+    r"out\s+of\s+character|ooc\b|"
+    r"the\s+(?:llm|narrator|dm|gm|game\s+master)\b|"
+    r"(?:reload|refresh|restart)\s+(?:the\s+)?(?:game|page|app|browser)|"
+    r"(?:in|the)\s+(?:game'?s?\s+)?(?:ui|settings\s+menu)\b|playtest(?:ing)?\b)",
+    re.IGNORECASE,
+)
+
+
+def split_out_of_character(text: str) -> tuple[str, str]:
+    """
+    (in_fiction, ooc) for the player's typed line (playtest #79).
+
+    T9 "its all good, i have no gold, i cant leave the city due to a game bug,
+    so i will not be buying anything" was narrated in-world ("You explain that
+    you ... cannot leave the city due to a game bug") and its "leave the city"
+    walked the player out of the forge. Bracketed notes ("(ooc: ...)", "((...))",
+    "[...]", but not "[[L1]]" codes) and clauses with a clear meta marker come
+    out; what is left is what the player does in the story. Engine notes after
+    a blank line ride with the in-fiction part untouched.
+    """
+    raw = str(text or "")
+    if raw.startswith("__"):
+        return raw, ""
+    head, sep, tail = raw.partition("\n\n")
+    removed: list[str] = []
+
+    def _take(match: re.Match[str]) -> str:
+        removed.append(match.group(0).strip(" ()[]"))
+        return " "
+
+    working = _OOC_BRACKET_RE.sub(_take, head)
+    if _OOC_META_RE.search(working):
+        # Clause by clause: a meta clause goes, the rest of the line stays.
+        pieces = re.split(r"(?<=[.!?;,])\s+|\s+(?=\b(?:but|so|and\s+so)\b)", working)
+        kept: list[str] = []
+        for piece in pieces:
+            if _OOC_META_RE.search(piece) and not re.search(r'["“”]', piece):
+                removed.append(piece.strip(" ,;"))
+            else:
+                kept.append(piece)
+        working = " ".join(kept)
+    if not removed:
+        return raw, ""
+    clean = re.sub(r"\s+([,.;!?])", r"\1", re.sub(r"\s+", " ", working)).strip(" ,;")
+    clean = re.sub(r"^(?:so|but|and)\b[\s,]*", "", clean, flags=re.IGNORECASE).strip()
+    ooc = "; ".join(r for r in removed if r)
+    if not re.search(r"[A-Za-z]{2,}", clean):
+        clean = ""
+    return (clean + (sep + tail if sep and clean else "")), ooc
+
+
 def _quote_ranges(text: str) -> list[tuple[int, int]]:
     return [(m.start(), m.end()) for m in _QUOTE_RE.finditer(text)]
 
@@ -544,9 +638,41 @@ def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | 
         return done(target, why, group=bool(state.get("group")))
     if len(present) == 1:
         return done(present, "only_present")
-    if not present and len(rows) == 1:
+    # Playtest #73 (live, T10): the only person on record at the street was
+    # Bertram, minted the turn before from a line Juliana spoke at the forge.
+    # The player had never seen him, yet "only_present" made him the one who
+    # answers. The lone row counts only once the prose has shown that person.
+    if not present and len(rows) == 1 and _shown_to_player(context, state, rows[0]):
         return done([rows[0]["code"]], "only_present")
     return done([], "none")
+
+
+def _last_narration(context: dict[str, Any]) -> str:
+    text = str(context.get("last_narration") or "")
+    if text.strip():
+        return text
+    for row in context.get("history") or []:
+        if isinstance(row, dict) and str(row.get("kind") or "") == "narration":
+            return str(row.get("content") or "")
+    return ""
+
+
+def _shown_to_player(context: dict[str, Any], state: dict[str, Any], row: dict[str, Any]) -> bool:
+    """The player has met this person here: the last scene named them, or the
+    conversation at this same place already had them in it."""
+    code = row["code"]
+    location = str(_current_location(context).get("code") or "")
+    if location and location == str(state.get("location") or ""):
+        seen = _codes(
+            list(state.get("present") or [])
+            + list(state.get("target") or [])
+            + list(state.get("revealed") or [])
+            + list(state.get("partner") or [])
+            + [state.get("last_speaker") or ""]
+        )
+        if code in seen:
+            return True
+    return any(hit_code == code for _pos, hit_code in _names_in(_last_narration(context), [row]))
 
 
 # ---------------------------------------------------------------------------
@@ -692,9 +818,10 @@ def _names_in(text: str, rows: list[dict[str, Any]]) -> list[tuple[int, str]]:
     return hits
 
 
-def speakers_in(narration: str, rows: list[dict[str, Any]], player_input: str = "") -> list[str]:
+def spoken_lines(narration: str, rows: list[dict[str, Any]], player_input: str = "") -> list[dict[str, str]]:
     """
-    NPC codes in the order they speak in the final prose.
+    Every line someone other than the player speaks in the prose, in order:
+    {code, line, unit}. ``code`` is "" when no known person can be named for it.
 
     A spoken line goes to the first name outside its quotes; with only a
     pronoun ("she asks") it goes to the last person named before it. The
@@ -710,19 +837,22 @@ def speakers_in(narration: str, rows: list[dict[str, Any]], player_input: str = 
 
     quotes = player_quotes(player_input)
     flat = re.sub(r"\s+", " ", str(narration or "")).strip()
-    out: list[str] = []
+    out: list[dict[str, str]] = []
     last_named = ""
     for unit in speech_units(flat):
         outside = _QUOTE_RE.sub(" ", unit)
         named = [code for _pos, code in _names_in(outside, rows)]
         spans = quoted_spans(unit)
         if spans and not all(_is_player_line(s, quotes) for s in spans) and not _PLAYER_SPEECH_VERB_RE.search(outside):
-            speaker = named[0] if named else last_named
-            if speaker:
-                out.append(speaker)
+            out.append({"code": named[0] if named else last_named, "line": " ".join(spans), "unit": unit})
         if named:
             last_named = named[-1]
     return out
+
+
+def speakers_in(narration: str, rows: list[dict[str, Any]], player_input: str = "") -> list[str]:
+    """NPC codes in the order they speak in the final prose (see spoken_lines)."""
+    return [entry["code"] for entry in spoken_lines(narration, rows, player_input) if entry["code"]]
 
 
 def next_state(

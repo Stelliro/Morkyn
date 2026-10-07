@@ -67,7 +67,7 @@ Use [[CODE]] after entity names when known (name [[A]], place [[L1]]).
 ===OPS===
 zero or more opcode lines from the closed list below
 One op per line: the op word, a space, then its parts. Prefer entity codes from world_state.
-Put free text in double quotes.
+Put free text in double quotes. Parts are separated by spaces only, never by commas.
 
 Allowed opcodes. Each line below names an op and says in words what follows it on the line;
 write the real thing from this scene, never the description. Words in capitals (NAME, ROLE,
@@ -76,7 +76,7 @@ SUMMARY: in quotes, what this turn changed, in under 55 words, for memory.
 SCENE: one of action, conversation, travel, survival, filler, lore, system.
 GOAL: in quotes, one sentence on what the scene is about now.
 FOCUS: one of event, location, npc, risk, resource, choice, sensory, then in quotes a few words on what it is.
-NPC_NEW: NAME and the person's name in quotes, ROLE and their job, LOC and a known place's code or a place name in quotes. May add ATTITUDE, RACE and RANK, each with one word.
+NPC_NEW: the word NAME followed by the person's name in quotes, the word ROLE followed by their job, the word LOC followed by a known place's code or a place name in quotes. May add ATTITUDE, RACE and RANK, each followed by one word.
 NPC_NOTE: a person's code, then in quotes one fact about them that will stay true.
 TALK: the code of the person the player spoke with, then in quotes what the two of them talked about.
 GRANT: the item's name in quotes, then QTY and a band. May add TYPE with a kind of item, DESC with a description in quotes, RARITY with one word.
@@ -347,8 +347,12 @@ def _tokenize_line(line: str) -> tuple[str, list[str], dict[str, str]]:
         return f" __STR{len(strings) - 1}__ "
 
     working = _ANGLE_SPAN_RE.sub(_pull_angle, working)
+    # Playtest #74 (live): `NPC_NEW: "Fenella Goodwin", "woodward", "L1"` stored
+    # the role ", woodward ,"; `TALK A, "..."` stored the code "A,". Commas and
+    # semicolons between parts are list punctuation, never part of a value.
+    strings[:] = [s.strip().strip(",;").strip() for s in strings]
     # An unbalanced edge left over ("LOC <The"): drop the stray bracket.
-    parts = [p.strip("<>") for p in working.split()]
+    parts = [p.strip("<>").strip(",;") for p in working.split()]
     parts = [p for p in parts if p]
     if not parts:
         return "", [], {}

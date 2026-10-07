@@ -1021,6 +1021,86 @@ def drop_repeated_speech(paragraphs: list[str]) -> tuple[list[str], list[str]]:
     return kept_paragraphs, dropped
 
 
+def drop_speech_said_before(
+    paragraphs: list[str], earlier_speech: list[str], earlier_units: list[str] = (), player_input: str = ""
+) -> tuple[list[str], list[str]]:
+    """
+    Remove a spoken line that restates one from an earlier scene (playtest #78).
+
+    drop_repeated_speech only compares lines inside one turn. Live, Bertram's
+    T10 reply came back word for word in T12, and '"Understood," Juliana says,
+    nodding.' from T9 opened T12 again. A unit goes when its speech restates an
+    earlier line (shared run or re-worded) or the whole unit is one already
+    written. The player's own lines are never dropped here.
+    """
+    quotes = player_quotes(player_input)
+    unit_keys = {key for key in (_speech_key(u) for u in earlier_units or ()) if len(key.split()) >= 3}
+    earlier = [s for s in earlier_speech or () if str(s or "").strip()]
+    if not earlier and not unit_keys:
+        return list(paragraphs), []
+    kept_paragraphs: list[str] = []
+    dropped: list[str] = []
+    for para in paragraphs:
+        kept_blocks: list[str] = []
+        for block in _BLOCK_SPLIT_RE.split(str(para or "")):
+            kept_units: list[str] = []
+            for unit in speech_units(block):
+                spans = quoted_spans(unit)
+                outside = _QUOTE_SPAN_RE.sub(" ", unit)
+                if (
+                    not spans
+                    or _quote_marks(unit) % 2
+                    or all(_is_player_line(s, quotes) for s in spans)
+                    or _PLAYER_SPEECH_VERB_RE.search(outside)
+                ):
+                    kept_units.append(unit)
+                    continue
+                speech = " ".join(spans)
+                if _speech_key(unit) in unit_keys or (earlier and speech_repeats(earlier, speech)):
+                    dropped.append(unit)
+                    continue
+                kept_units.append(unit)
+            block_text = " ".join(kept_units).strip()
+            if block_text:
+                kept_blocks.append(block_text)
+        kept_paragraphs.append("\n\n".join(kept_blocks).strip())
+    return kept_paragraphs, dropped
+
+
+def drop_untold_name(text: str, names: list[str]) -> tuple[str, list[str]]:
+    """
+    Take the player's name out of one quoted line said by someone who was never
+    told it (playtest #78: '"What can I do for you, Bartholomew?"'). Only the
+    name said to the player goes: ', Bartholomew?' becomes '?', and a leading
+    'Bartholomew, ' goes with the next word capitalised.
+    """
+    forms = [str(n) for n in names or () if len(str(n or "")) >= 3]
+    if not forms:
+        return text, []
+    alternatives = "|".join(re.escape(n) for n in sorted(forms, key=len, reverse=True))
+    trailing = re.compile(r",\s*(?:" + alternatives + r")\b(?=\s*[.!?,…]|\s*$)")
+    leading = re.compile(r"^(\s*)(?:" + alternatives + r")\s*,\s*")
+    removed: list[str] = []
+
+    def _fix_body(body: str) -> str:
+        new = trailing.sub("", body)
+        lead = leading.match(new)
+        if lead:
+            rest = new[lead.end():]
+            new = lead.group(1) + rest[:1].upper() + rest[1:]
+        if new != body:
+            removed.append(body)
+        return new
+
+    def _fix(match: re.Match[str]) -> str:
+        if match.group(1) is not None:
+            return '"' + _fix_body(match.group(1)) + '"'
+        return "“" + _fix_body(match.group(2)) + "”"
+
+    out = re.sub(r'"([^"]+)"|“([^”]+)”', _fix, str(text or ""))
+    return out, removed
+
+
 def _echo_pieces(block: str) -> list[str]:
     """Sentences of a block, also split after a closing quote, never merged."""
     return [p.strip() for p in _UNIT_SPLIT_RE.split(str(block or "")) if p and p.strip()]
