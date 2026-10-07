@@ -221,7 +221,7 @@ Morkyn/
 
 #### Town Grid
 
-- **Files:** `app/town_grid.py`, `tools/probe_town_grid.py`, `tests/test_town_grid.py`; design in `docs/TownGrid.md` (slices A and B built; C, the UI, not yet). The engine side is `app/town_moves.py` (Town Movement, below).
+- **Files:** `app/town_grid.py`, `tools/probe_town_grid.py`, `tests/test_town_grid.py`; design in `docs/TownGrid.md` (slices A, B and C built). The engine side is `app/town_moves.py` (Town Movement, below); the map's Streets view is in `static/app.js` (Town Streets View, below).
 - **Purpose:** Turns a city world cell's fine grid (8 to 128 tiles a side, always one world cell) into roads, plots and plotted shops, one cell at a time, the first time something needs it.
 - **Key API:** `city_ports()` (joins between city cells and the gates out, from the city record alone), `skeleton()` (stages 1-2 in memory: avenues and port/anchor connectors), `generate_cell()` (pure: roads, segments, street names, plots, shop rolls, names), `encode_cell()` / `decode_row()`, `get_cell(conn, chart, cx, cy, create=)` (stored row, or generate and store when `create`), `stored_cell()`, `fold_seen()` / `record_seen()` (append-only `town_seen`), `town_view()`, `plot_peek()`, `settlement_town_block()`, `campaign_town_rows()`, `prune_town_rows()`, `ascii_render()`, `NameOwners`, `KIND_WEIGHTS`, `kind_cap()`.
 - **Consumers:** `app.main` (`/api/town/view`, `/api/town/plot/{id}`, the `town` block of `/api/tiles/map/settlement`), `app.world` (export filter, save tables, rewind max-id set, new playthrough clear), `app.tile_world.prune_world_maps`.
@@ -236,6 +236,13 @@ Morkyn/
 - **Consumers:** `app.world` (play_turn, resolve_movement, apply_turn, `_apply_story_map_walk`, `plan_npc_workplace`, `ensure_npc_workplace`, `venue_entry_check`, rewind and load), `app.main` (`POST /api/town/walk`, map steps), `app.local_intel.apply_turn_intel` (told stalls and notices).
 - **Dependencies:** `app.town_grid` (cells, ports, knowledge), `app.venues`, `app.player_resources.preview_travel_spend`, `app.world` helpers (lazy imports), `app.tile_world` (marker saves).
 - **Design Notes:** `town_position` is a settings row in `SNAPSHOT_SETTING_KEYS`; while it is present the world marker is on its cell. A walk is a fewest-cells route over the city (BFS), then a fine BFS per cell between shared ports; minutes are `tile_minutes(side)` per tile including the step across an edge, rounded up; the turn's budget is `town_walk_budget()` (40). Cells are generated only as a walk reaches them (at most 5 a turn) or by a trade lookup (at most `TOWN_LOOKUP_CELLS` more, or the whole of a city of 5 cells or fewer). Order in a turn: plan before the prompt, resolve before the snapshot, apply after it, so every row a turn appends sits above the snapshot's max ids. Nothing here mints a building that is not a plot.
+
+#### Town Streets View
+
+- **Files:** `static/app.js` (the "Town streets" block after `paintSettlementInfo`), `static/index.html` (`#townZoomBar`, `#townPlotCard`), `static/styles.css` / `static/ui/skin.css` (`.townZoomBar`, `.townPlotCard`), `static/ui/interact.js` (the `#settlementCanvas` branch of the context menu), `tests/test_town_ui.py`; design in `docs/TownGrid.md` section 8, build notes in section 15.
+- **Purpose:** The Settlement view's second zoom: draws a city cell and its neighbours from `GET /api/town/view` and lets the player click a plot to walk there through `POST /api/town/walk`.
+- **Key API:** `refreshTownView()`, `paintTownCanvas()`, `townGeometry()` / `townCellBox()` / `townHitTest()`, `townDecodeRoads()` (zlib road mask via `DecompressionStream`), `townPreviewPath()`, `townWalk(target)`, `townArrowWalk(dx, dy)`, `townCanvasMenu(event)` (read by interact.js), `townAutoZoomCheck()`, `setSettlementZoom()`, `townZoomBy()`.
+- **Design Notes:** Read-only except `townWalk`, which posts the same click-walk the engine uses. "Go to" and "Go in" only write sentences; "Walk here now" is the one immediate item and carries the moon class. Leaving the cell needs `travelReady`. The auto-zoom flag is `localStorage` `morkyn-town-autozoom-v1` (`"world"` after the player picks World while in a town), wrapped in try/catch.
 
 #### Dice Authority
 

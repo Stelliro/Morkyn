@@ -579,6 +579,17 @@
   }
 
   document.addEventListener("contextmenu", (event) => {
+    // The town's Streets view (docs/TownGrid.md 8): app.js builds the plot's
+    // items (Go to, Go in, and the moon-coloured "Walk here now").
+    const streets = event.target.closest?.("#settlementCanvas");
+    if (streets && has("townCanvasMenu")) {
+      const spec = window.townCanvasMenu(event);
+      if (spec) {
+        event.preventDefault();
+        openMenuWith(spec, event.clientX, event.clientY, streets);
+        return;
+      }
+    }
     const canvas = event.target.closest?.(MAP_CANVASES);
     if (canvas) {
       const t = tileAt(canvas, event);
@@ -639,5 +650,5 @@
   else boot();
 
   // A small public surface for the console and for tests.
-  window.MorkynInteract = { applyFolds, applyProviderFields, resolve, tileAt, mapActions, closeMenu, hidePeek };
+  window.MorkynInteract = { applyFolds, applyProviderFields, resolve, tileAt, mapActions, closeMenu, hidePeek, openMenu: openMenuWith };
 })();

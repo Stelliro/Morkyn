@@ -1131,3 +1131,41 @@ and `app/venues.py`. Tested in `tests/test_town_movement.py` (42 tests, writer-o
   and the #55 count from the transcript) was not run: the GPU was in use by the user's own
   application when this slice was built. It is the first thing to run before slice C.
 - The UI (slice C): the click-walk route exists, nothing calls it yet.
+
+## 15. Slice C build notes
+
+Built in `static/app.js` (the "Town streets" block), `static/index.html`, `static/styles.css`,
+`static/ui/skin.css` and `static/ui/interact.js`. Tested in `tests/test_town_ui.py` (14 tests: the JS
+functions run in node with stubs, plus the markup and file-split contract) and checked headless with
+Playwright at 1440 x 960 and 390 x 844 on an isolated scratch server (seed 20261007, `forest_march`, the
+player in Moorford, a three-cell city): auto-zoom on entry, click a shop, Go in writes its sentence, Walk
+here moves the marker to the plot's door and advances the clock, the menu's Go to writes its sentence and
+Walk here now carries the moon class, an arrow key walks to the next junction, drag pans, + zooms, a click
+on a City cell zooms to its streets, World goes back and sets the flag; no page errors, no sideways scroll.
+
+### Deviations from this design
+
+1. **The card is used at every width.** Section 8 put a desktop plot in the peek shard; the peek system is
+   for entities with a code, and a plot has none until it is realized. The card sits under the canvas on
+   desktop and phone alike; desktop also gets the map's hover tip with name, kind and open or closed.
+2. **Road strokes are heavier.** Streets as a `--line-strong` hairline were not visible beside the plot
+   outlines in the screenshots. Avenues and main roads are `--thread-dim` at 3 px, streets `--thread-dim` at
+   1.5 px, alleys `--line-strong` dotted.
+3. **Zoom.** − / + chips and the mouse wheel scale the view (0.5x to 3x, about 6 px a tile by default);
+   pinch is not handled. Every world cell is drawn the same size, so a cell with a smaller side has bigger
+   tiles.
+4. **Gated wards are not drawn in the moon colour.** The view's plots carry no ward, so `requires_entry`
+   cannot reach the painter; the City zoom still marks gated wards.
+5. **The preview thread** is drawn only inside the player's own cell, over the roads the player knows,
+   in `--thread` fading out (`--thread-soft` was too faint to read).
+6. **Arrow keys and the pad** walk to the next junction in the player's cell; at the cell's edge they walk
+   into the neighbouring cell at the matching tile (needs `travelReady`).
+7. **Long-press** is a 550 ms pointer timer on the canvas that opens the same interact.js menu
+   (`MorkynInteract.openMenu`), because iOS sends no `contextmenu` for a touch.
+
+### Known limits
+
+- At 390 px the game's existing two-column phone layout leaves the map column about 200 px wide, so the
+  Streets square is small there; + and drag make it usable. The layout itself is not part of this slice.
+- Clicking a road tile walks to the nearest road; there is no way to click an unseen tile, because unseen
+  roads are not drawn.

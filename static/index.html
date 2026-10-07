@@ -1855,6 +1855,12 @@
               <button type="button" class="chipBtn secondaryButton activeChip" data-map-view="world" aria-pressed="true">World</button>
               <button type="button" class="chipBtn secondaryButton" data-map-view="settlement" aria-pressed="false" title="The settlement you are in, or one you know, drawn on its own grid">Settlement</button>
               <select id="mapSettlementSelect" class="mapSettlementSelect" aria-label="Settlement to show" hidden></select>
+              <span id="townZoomBar" class="townZoomBar" role="group" aria-label="Settlement zoom" hidden>
+                <button type="button" class="chipBtn secondaryButton activeChip" data-town-zoom="city" aria-pressed="true" title="The whole settlement, ward by ward">City</button>
+                <button type="button" class="chipBtn secondaryButton" data-town-zoom="streets" aria-pressed="false" title="Zoom in: roads, buildings and shops you have seen. Click one to walk there.">Streets</button>
+                <button type="button" class="chipBtn secondaryButton townScaleBtn" data-town-scale="-1" aria-label="Zoom out" title="Zoom out" hidden>−</button>
+                <button type="button" class="chipBtn secondaryButton townScaleBtn" data-town-scale="1" aria-label="Zoom in" title="Zoom in" hidden>+</button>
+              </span>
             </div>
             <div class="mapSquareSlot">
               <div class="mapMainStage">
@@ -1864,6 +1870,19 @@
                   <canvas id="settlementCanvas" class="settlementCanvas" width="480" height="480" role="img" aria-label="Settlement map"></canvas>
                 </div>
               </div>
+            </div>
+            <div id="townPlotCard" class="townPlotCard" aria-live="polite" hidden>
+              <div class="townPlotHead">
+                <strong id="townPlotName" class="townPlotName"></strong>
+                <button type="button" class="chipBtn secondaryButton townPlotClose" id="townPlotClose" aria-label="Close">×</button>
+              </div>
+              <p id="townPlotMeta" class="townPlotMeta"></p>
+              <p id="townPlotHours" class="townPlotHours"></p>
+              <div class="townPlotActions">
+                <button type="button" class="chipBtn secondaryButton" id="townWalkBtn">Walk here</button>
+                <button type="button" class="chipBtn secondaryButton" id="townGoInBtn" title="Writes the sentence into What will you do?; going in is a turn">Go in</button>
+              </div>
+              <p id="townWalkStatus" class="townWalkStatus"></p>
             </div>
             <div id="settlementInfo" class="settlementInfo" aria-live="polite" hidden>
               <p id="settlementSummary" class="settlementSummary"></p>

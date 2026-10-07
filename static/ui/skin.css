@@ -1119,6 +1119,28 @@ a.mainMenuGhost:hover {
   color: var(--muted-2);
 }
 
+/* The selected plot in Streets: a shard of the void with one hairline. */
+.townPlotCard {
+  border: 1px solid var(--thread-dim);
+  background: var(--ink);
+  color: var(--text);
+}
+
+.townPlotName {
+  color: var(--thread-bright);
+  font-weight: 600;
+}
+
+.townPlotMeta,
+.townPlotHours {
+  color: var(--muted);
+}
+
+.townWalkStatus {
+  font-style: italic;
+  color: var(--muted-2);
+}
+
 .mapSection .mapTravelBanner {
   font-style: italic;
   color: var(--muted-2);

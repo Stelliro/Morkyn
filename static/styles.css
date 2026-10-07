@@ -6031,6 +6031,64 @@ button.chipBtn.activeChip {
   min-height: 0;
 }
 
+/* Town streets (docs/TownGrid.md 8): City | Streets chips, a draggable canvas,
+   and the selected plot's card under the map at every width. */
+.townZoomBar {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settlementCanvas.isStreets {
+  touch-action: none;
+  cursor: grab;
+}
+
+.settlementCanvas.isStreets:active {
+  cursor: grabbing;
+}
+
+.townPlotCard {
+  display: grid;
+  gap: 4px;
+  margin: 6px 12px 0;
+  padding: 8px 10px;
+  min-width: 0;
+  font-size: 0.8rem;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.townPlotHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.townPlotName {
+  min-width: 0;
+  font-size: 0.9rem;
+}
+
+.townPlotCard p {
+  margin: 0;
+}
+
+.townPlotActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.townPlotClose {
+  flex: 0 0 auto;
+  padding: 0 8px;
+}
+
 /* Capped and scrolled, so a long place list never squeezes the map square. */
 .settlementInfo {
   flex: 0 1 auto;

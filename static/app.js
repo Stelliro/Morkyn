@@ -24028,6 +24028,10 @@ function bindMapMovement() {
       const btn = event.target.closest(".mapDpadBtn[data-dx]");
       if (!btn) return;
       event.preventDefault();
+      if (townStreetsActive() && townData?.player) {
+        townArrowWalk(Number(btn.getAttribute("data-dx")) || 0, Number(btn.getAttribute("data-dy")) || 0);
+        return;
+      }
       walkStep(btn.getAttribute("data-dx"), btn.getAttribute("data-dy"));
     });
   }
@@ -24055,6 +24059,10 @@ function bindMapMovement() {
     else if (event.key === "ArrowRight") dx = 1;
     else return;
     event.preventDefault();
+    if (townStreetsActive() && townData?.player) {
+      townArrowWalk(dx, dy);
+      return;
+    }
     walkStep(dx, dy, { silent: true });
   });
 }
@@ -24815,6 +24823,8 @@ function setMapViewMode(mode) {
   if (view) view.hidden = !on;
   if (info) info.hidden = !on;
   if (pick) pick.hidden = !on || !(settlementData?.settlements || []).length;
+  paintTownZoomBar();
+  renderTownCard();
   if (on) refreshSettlementView();
 }
 
@@ -24830,8 +24840,10 @@ async function refreshSettlementView() {
   }
   settlementData = data || { available: false, reason: "The settlement map could not be loaded.", settlements: [] };
   paintSettlementPicker(settlementData);
-  paintSettlementCanvas(settlementData);
+  paintTownZoomBar();
   paintSettlementInfo(settlementData);
+  if (townStreetsActive()) await refreshTownView();
+  else paintSettlementCanvas(settlementData);
 }
 
 function paintSettlementPicker(data) {
@@ -24851,7 +24863,7 @@ function paintSettlementPicker(data) {
 
 function paintSettlementCanvas(data) {
   const canvas = document.querySelector("#settlementCanvas");
-  if (!canvas || mapViewMode !== "settlement") return;
+  if (!canvas || mapViewMode !== "settlement" || townStreetsActive()) return;
   const rect = canvas.getBoundingClientRect();
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   const size = Math.max(160, Math.round(Math.min(rect.width || 320, rect.height || rect.width || 320) * dpr));
@@ -24884,6 +24896,8 @@ function paintSettlementCanvas(data) {
   const unit = Math.floor((size * 0.92) / Math.max(spanW, spanH));
   const ox = Math.round((size - unit * spanW) / 2);
   const oy = Math.round((size - unit * spanH) / 2);
+  // A click on a seen cell zooms to its streets (bindTownCanvas reads this).
+  canvas._cityMeta = { ox, oy, unit, dpr, cells: city.cells || [] };
   const labels = [];
   for (const cell of city.cells || []) {
     const x0 = ox + Number(cell.local?.[0] || 0) * unit;
@@ -25050,22 +25064,881 @@ function paintSettlementInfo(data) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Town streets (docs/TownGrid.md 8). The Settlement view's second zoom: one
+// city cell and its neighbours at fine resolution, roads, the plots the player
+// has seen, the player on their real road tile. The server sends only what the
+// player knows (GET /api/town/view never generates anything). Clicking a plot
+// selects it; "Walk here" posts the same click-walk the engine uses for typed
+// moves (POST /api/town/walk), "Go in" only writes a sentence, because going
+// in is a turn. Light is a line: roads and plots are strokes, nothing filled.
+const TOWN_ZOOM_PREF_KEY = "morkyn-town-autozoom-v1";
+const TOWN_ROAD_CACHE_MAX = 24;
+let settlementZoom = "city";
+let townData = null;
+let townFocus = null; // {cityId, cx, cy, follow}: the cell the Streets view is centred on
+let townPan = { x: 0, y: 0 }; // CSS px, from dragging
+let townScale = 1; // the − / + chips and the mouse wheel
+const TOWN_SCALE_MIN = 0.5;
+const TOWN_SCALE_MAX = 3;
+let townSelected = null; // {type: "plot", id, cx, cy} | {type: "tile", cx, cy, fx, fy}
+let townHover = "";
+let townBusy = false;
+let townStatus = "";
+let townPeek = null; // GET /api/town/plot/{id} for the selected plot
+let townLastCity; // city of the last town_position seen; undefined until the first check
+const townRoadCache = new Map();
+
+function townPrefGet() {
+  try {
+    return window.localStorage.getItem(TOWN_ZOOM_PREF_KEY) || "";
+  } catch (_) {
+    return "";
+  }
+}
+
+function townPrefSet(value) {
+  try {
+    if (value) window.localStorage.setItem(TOWN_ZOOM_PREF_KEY, value);
+    else window.localStorage.removeItem(TOWN_ZOOM_PREF_KEY);
+  } catch (_) {
+    /* a private window keeps no preference; the view still works */
+  }
+}
+
+function townPositionFromState() {
+  let value = state?.settings?.town_position;
+  if (typeof value === "string") {
+    try {
+      value = JSON.parse(value);
+    } catch (_) {
+      value = null;
+    }
+  }
+  return value && typeof value === "object" && value.city_id ? value : null;
+}
+
+// Streets is the chosen zoom and the shown settlement has streets to draw
+// (before the first fetch answers, assume it does, so the choice survives).
+function townStreetsActive() {
+  const zoomable = settlementData ? Boolean(settlementData.town?.zoomable) : true;
+  return mapViewMode === "settlement" && settlementZoom === "streets" && zoomable;
+}
+
+// Entering a town shows its streets once, unless the player chose World since.
+function townAutoZoomCheck() {
+  const pos = townPositionFromState();
+  const city = pos ? String(pos.city_id) : "";
+  const entered = Boolean(city) && city !== townLastCity;
+  townLastCity = city;
+  if (!entered || townPrefGet() === "world") return false;
+  if (townStreetsActive()) return false;
+  settlementPick = "";
+  settlementZoom = "streets";
+  townFocus = null;
+  townPan = { x: 0, y: 0 };
+  setMapViewMode("settlement");
+  return true;
+}
+
+async function townDecodeRoads(text) {
+  if (!text) return null;
+  if (townRoadCache.has(text)) return townRoadCache.get(text);
+  let bytes = null;
+  try {
+    const raw = Uint8Array.from(atob(text), (c) => c.charCodeAt(0));
+    if (typeof DecompressionStream === "function") {
+      const stream = new Blob([raw]).stream().pipeThrough(new DecompressionStream("deflate"));
+      bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+    }
+  } catch (_) {
+    bytes = null;
+  }
+  if (townRoadCache.size >= TOWN_ROAD_CACHE_MAX) townRoadCache.delete(townRoadCache.keys().next().value);
+  townRoadCache.set(text, bytes);
+  return bytes;
+}
+
+async function townAttachMasks(data) {
+  for (const cell of data?.cells || []) {
+    if (!cell.known || !cell.roads) continue;
+    const mask = await townDecodeRoads(cell.roads);
+    const side = Math.max(1, Number(cell.side) || 1);
+    cell._mask = mask && mask.length === side * side ? mask : null;
+  }
+  return data;
+}
+
+async function refreshTownView() {
+  const city = settlementData?.settlement;
+  const zoomable = Boolean(settlementData?.town?.zoomable);
+  if (!city || !zoomable) {
+    townData = { available: false, reason: settlementData?.reason || "No streets to show for this settlement.", cells: [] };
+    paintTownCanvas();
+    renderTownCard();
+    return;
+  }
+  const cityId = String(city.id || "");
+  if (townFocus && townFocus.cityId !== cityId) townFocus = null;
+  // A view that follows the player re-centres when a turn walked them into another cell.
+  const pos = townPositionFromState();
+  if (townFocus?.follow && pos && String(pos.city_id) === cityId && (Number(pos.cx) !== townFocus.cx || Number(pos.cy) !== townFocus.cy)) {
+    townFocus = null;
+    townPan = { x: 0, y: 0 };
+  }
+  const params = new URLSearchParams({ city_id: cityId, r: "1" });
+  if (townFocus) {
+    params.set("cx", String(townFocus.cx));
+    params.set("cy", String(townFocus.cy));
+  }
+  let data = null;
+  try {
+    const res = await fetch(`/api/town/view?${params.toString()}`, { cache: "no-store" });
+    data = res.ok ? await res.json() : null;
+  } catch (_) {
+    data = null;
+  }
+  townData = await townAttachMasks(data || { available: false, reason: "The streets could not be loaded.", cells: [] });
+  if (townData?.available && !townFocus) townFocus = { cityId, cx: townData.center.cx, cy: townData.center.cy, follow: true };
+  if (townSelected && !townFindSelected()) {
+    townSelected = null;
+    townPeek = null;
+  }
+  paintTownCanvas();
+  renderTownCard();
+}
+
+function townCellAt(cx, cy) {
+  return (townData?.cells || []).find((c) => Number(c.cx) === Number(cx) && Number(c.cy) === Number(cy)) || null;
+}
+
+function townFindPlot(id) {
+  for (const cell of townData?.cells || []) {
+    const plot = (cell.plots || []).find((p) => p.id === id);
+    if (plot) return { cell, plot };
+  }
+  return null;
+}
+
+function townFindSelected() {
+  if (!townSelected) return null;
+  if (townSelected.type === "plot") return townFindPlot(townSelected.id);
+  const cell = townCellAt(townSelected.cx, townSelected.cy);
+  return cell ? { cell, plot: null } : null;
+}
+
+// One square per world cell, the same size for every cell: a world cell is
+// 800 m whatever its fine side, so a smaller side means bigger tiles.
+function townGeometry(canvas) {
+  const rect = canvas.getBoundingClientRect();
+  const css = Math.max(160, Math.round(Math.min(rect.width || 320, rect.height || rect.width || 320)));
+  const center = townData?.center || { cx: 0, cy: 0 };
+  const centre = townCellAt(center.cx, center.cy);
+  const side = Math.max(1, Number(centre?.side) || 64);
+  // About 6 CSS px a tile at the default zoom, never under 2 or over 24.
+  const base = Math.min(Math.max(side * 6, css * 0.85), side * 8);
+  const cellPx = Math.min(Math.max(base * townScale, side * 2), side * 24);
+  const you = townData?.player;
+  let focusX = cellPx / 2;
+  let focusY = cellPx / 2;
+  if (you && townCellAt(you.cx, you.cy)) {
+    const own = townCellAt(you.cx, you.cy);
+    const tile = cellPx / Math.max(1, Number(own.side) || 1);
+    focusX = (Number(you.cx) - center.cx) * cellPx + (Number(you.fx) + 0.5) * tile;
+    focusY = (Number(you.cy) - center.cy) * cellPx + (Number(you.fy) + 0.5) * tile;
+    if (Number(you.cx) !== center.cx || Number(you.cy) !== center.cy) {
+      focusX = cellPx / 2;
+      focusY = cellPx / 2;
+    }
+  }
+  return {
+    css,
+    cellPx,
+    originX: css / 2 - focusX + townPan.x,
+    originY: css / 2 - focusY + townPan.y,
+    center,
+  };
+}
+
+function townCellBox(geo, cell) {
+  const x0 = geo.originX + (Number(cell.cx) - geo.center.cx) * geo.cellPx;
+  const y0 = geo.originY + (Number(cell.cy) - geo.center.cy) * geo.cellPx;
+  return { x0, y0, tile: geo.cellPx / Math.max(1, Number(cell.side) || 1) };
+}
+
+// CSS px on the canvas -> the cell, fine tile and plot under it.
+function townHitTest(cssX, cssY) {
+  const canvas = document.querySelector("#settlementCanvas");
+  if (!canvas || !townData?.available) return null;
+  const geo = townGeometry(canvas);
+  for (const cell of townData.cells || []) {
+    const box = townCellBox(geo, cell);
+    if (cssX < box.x0 || cssY < box.y0 || cssX >= box.x0 + geo.cellPx || cssY >= box.y0 + geo.cellPx) continue;
+    const fx = Math.floor((cssX - box.x0) / box.tile);
+    const fy = Math.floor((cssY - box.y0) / box.tile);
+    const plot = (cell.plots || []).find((p) => {
+      const [x, y, w, h] = p.r || [];
+      return fx >= x && fx < x + w && fy >= y && fy < y + h;
+    });
+    return { cell, fx, fy, plot: plot || null };
+  }
+  return null;
+}
+
+function townPlotStroke(plot, tokens) {
+  if (plot.k === "shop" || plot.k === "service") return tokens.thread;
+  if (plot.k === "gate") return tokens.bright;
+  if (plot.k === "temple" || plot.k === "office" || plot.k === "barracks") return tokens.label;
+  return tokens.lineStrong;
+}
+
+// Shortest walk over the known road tiles of one cell, for the preview thread.
+function townPreviewPath(cell, from, goal) {
+  const mask = cell?._mask;
+  const side = Math.max(1, Number(cell?.side) || 1);
+  if (!mask || !from || !goal) return null;
+  const start = from[1] * side + from[0];
+  const end = goal[1] * side + goal[0];
+  if (!mask[start] || !mask[end] || start === end) return null;
+  const prev = new Int32Array(side * side).fill(-1);
+  prev[start] = start;
+  const queue = [start];
+  for (let head = 0; head < queue.length; head += 1) {
+    const at = queue[head];
+    if (at === end) break;
+    const x = at % side;
+    const y = (at - x) / side;
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= side || ny >= side) continue;
+      const next = ny * side + nx;
+      if (!mask[next] || prev[next] !== -1) continue;
+      prev[next] = at;
+      queue.push(next);
+    }
+  }
+  if (prev[end] === -1) return null;
+  const path = [];
+  for (let at = end; at !== start; at = prev[at]) path.push(at);
+  path.push(start);
+  return path.reverse().map((i) => [i % side, Math.floor(i / side)]);
+}
+
+function townSelectedGoal() {
+  const found = townFindSelected();
+  if (!found) return null;
+  if (found.plot) return found.plot.f ? { cell: found.cell, tile: found.plot.f } : null;
+  return { cell: found.cell, tile: [townSelected.fx, townSelected.fy] };
+}
+
+function paintTownCanvas() {
+  const canvas = document.querySelector("#settlementCanvas");
+  if (!canvas || !townStreetsActive()) return;
+  const geo = townGeometry(canvas);
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  const size = Math.round(geo.css * dpr);
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const tokens = {
+    ink: cssToken("--ink", "#07050b"),
+    thread: cssToken("--thread", "#c9b3f0"),
+    bright: cssToken("--thread-bright", "#ece4fb"),
+    dim: cssToken("--thread-dim", "rgba(190,160,240,0.38)"),
+    soft: cssToken("--thread-soft", "rgba(190,160,240,0.12)"),
+    lineStrong: cssToken("--line-strong", "rgba(200,190,230,0.22)"),
+    muted: cssToken("--muted", "#9a94a6"),
+    label: cssToken("--label", "#c4b8da"),
+    font: cssToken("--font", "sans-serif"),
+  };
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = tokens.ink;
+  ctx.fillRect(0, 0, geo.css, geo.css);
+  if (!townData?.available) {
+    ctx.fillStyle = tokens.muted;
+    ctx.font = `13px ${tokens.font}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText(townData?.reason || "Loading the streets…", geo.css / 2, geo.css / 2, geo.css - 24);
+    return;
+  }
+  canvas.setAttribute("aria-label", `Streets of ${townData.name || "the settlement"}`);
+  const hair = 1 / dpr;
+  const labels = [];
+  for (const cell of townData.cells || []) {
+    const box = townCellBox(geo, cell);
+    if (box.x0 > geo.css || box.y0 > geo.css || box.x0 + geo.cellPx < 0 || box.y0 + geo.cellPx < 0) continue;
+    ctx.save();
+    ctx.lineWidth = hair;
+    ctx.strokeStyle = cell.known ? tokens.lineStrong : tokens.dim;
+    ctx.setLineDash(cell.known ? [] : [3, 4]);
+    ctx.strokeRect(box.x0 + 0.5, box.y0 + 0.5, geo.cellPx - 1, geo.cellPx - 1);
+    ctx.restore();
+    if (!cell.known) continue;
+    const side = Math.max(1, Number(cell.side) || 1);
+    const t = box.tile;
+    const mask = cell._mask;
+    if (mask) {
+      // Roads are strokes between the centres of neighbouring road tiles; a
+      // join takes the smaller road's class.
+      const paths = { 1: new Path2D(), 2: new Path2D(), 3: new Path2D(), 4: new Path2D() };
+      for (let y = 0; y < side; y += 1) {
+        for (let x = 0; x < side; x += 1) {
+          const cls = mask[y * side + x];
+          if (!cls) continue;
+          const px = box.x0 + (x + 0.5) * t;
+          const py = box.y0 + (y + 0.5) * t;
+          let joined = false;
+          const right = x + 1 < side ? mask[y * side + x + 1] : 0;
+          const down = y + 1 < side ? mask[(y + 1) * side + x] : 0;
+          if (right) {
+            const p = paths[Math.max(cls, right)] || paths[3];
+            p.moveTo(px, py);
+            p.lineTo(px + t, py);
+            joined = true;
+          }
+          if (down) {
+            const p = paths[Math.max(cls, down)] || paths[3];
+            p.moveTo(px, py);
+            p.lineTo(px, py + t);
+            joined = true;
+          }
+          const left = x > 0 ? mask[y * side + x - 1] : 0;
+          const up = y > 0 ? mask[(y - 1) * side + x] : 0;
+          if (!joined && !left && !up) {
+            const p = paths[cls] || paths[3];
+            p.moveTo(px - t * 0.3, py);
+            p.lineTo(px + t * 0.3, py);
+          }
+        }
+      }
+      // Avenues and main roads are the wide thread, streets the thin one, so
+      // the way to follow reads above the plot outlines; alleys are dotted.
+      ctx.save();
+      ctx.lineCap = "round";
+      ctx.strokeStyle = tokens.dim;
+      ctx.lineWidth = 3;
+      ctx.stroke(paths[1]);
+      ctx.stroke(paths[2]);
+      ctx.lineWidth = 1.5;
+      ctx.stroke(paths[3]);
+      ctx.strokeStyle = tokens.lineStrong;
+      ctx.setLineDash([1, 2]);
+      ctx.stroke(paths[4]);
+      ctx.restore();
+    }
+    for (const plot of cell.plots || []) {
+      const [x, y, w, h] = plot.r || [0, 0, 0, 0];
+      const rx = box.x0 + x * t + 0.5;
+      const ry = box.y0 + y * t + 0.5;
+      const rw = Math.max(1, w * t - 1);
+      const rh = Math.max(1, h * t - 1);
+      if (rx > geo.css || ry > geo.css || rx + rw < 0 || ry + rh < 0) continue;
+      ctx.save();
+      if (plot.id === townHover) {
+        ctx.strokeStyle = tokens.soft;
+        ctx.lineWidth = 4;
+        ctx.strokeRect(rx, ry, rw, rh);
+      }
+      const selected = townSelected?.type === "plot" && townSelected.id === plot.id;
+      ctx.strokeStyle = selected ? tokens.bright : townPlotStroke(plot, tokens);
+      ctx.lineWidth = selected ? 1.5 : hair;
+      if (plot.open === false) ctx.setLineDash([2, 2]);
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.restore();
+      const named = plot.name && (plot.k === "shop" || plot.k === "service" || plot.k === "temple" || plot.k === "gate" || plot.k === "office");
+      if (named || selected) {
+        labels.push({ plot, x: rx + rw / 2, y: ry + rh / 2, w: rw, h: rh, selected, color: townPlotStroke(plot, tokens) });
+      }
+    }
+  }
+  // The walk the selection would take, as a thread that fades out (same cell only).
+  const you = townData.player;
+  const goal = townSelectedGoal();
+  if (you && goal && Number(goal.cell.cx) === Number(you.cx) && Number(goal.cell.cy) === Number(you.cy)) {
+    const path = townPreviewPath(goal.cell, [Number(you.fx), Number(you.fy)], goal.tile);
+    if (path && path.length > 1) {
+      const box = townCellBox(geo, goal.cell);
+      ctx.save();
+      ctx.strokeStyle = tokens.thread;
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
+      for (let i = 1; i < path.length; i += 1) {
+        ctx.globalAlpha = Math.max(0.08, 0.85 * (1 - i / path.length));
+        ctx.beginPath();
+        ctx.moveTo(box.x0 + (path[i - 1][0] + 0.5) * box.tile, box.y0 + (path[i - 1][1] + 0.5) * box.tile);
+        ctx.lineTo(box.x0 + (path[i][0] + 0.5) * box.tile, box.y0 + (path[i][1] + 0.5) * box.tile);
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+  if (townSelected?.type === "tile") {
+    const cell = townCellAt(townSelected.cx, townSelected.cy);
+    if (cell) {
+      const box = townCellBox(geo, cell);
+      ctx.save();
+      ctx.strokeStyle = tokens.bright;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(box.x0 + townSelected.fx * box.tile + 0.5, box.y0 + townSelected.fy * box.tile + 0.5, Math.max(2, box.tile - 1), Math.max(2, box.tile - 1));
+      ctx.restore();
+    }
+  }
+  // A name only where it fits inside its plot without touching another name;
+  // otherwise a point. The selected plot's name is always shown, beside it.
+  ctx.font = `10px ${tokens.font}`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  const placed = [];
+  const pad = 3;
+  labels.sort((a, b) => Number(b.selected) - Number(a.selected));
+  for (const item of labels) {
+    const text = item.plot.name || item.plot.label || "";
+    const width = ctx.measureText(text).width;
+    let cx = item.x;
+    let cy = item.y;
+    const fits = width + pad * 2 <= item.w && 10 + pad <= item.h;
+    if (!fits && item.selected) {
+      cx = Math.min(Math.max(item.x, width / 2 + pad), geo.css - width / 2 - pad);
+      cy = item.y - item.h / 2 - 9 < 8 ? item.y + item.h / 2 + 9 : item.y - item.h / 2 - 9;
+    }
+    const boxed = { x0: cx - width / 2 - pad, x1: cx + width / 2 + pad, y0: cy - 5 - pad, y1: cy + 5 + pad };
+    const clash = placed.some((b) => boxed.x0 < b.x1 && boxed.x1 > b.x0 && boxed.y0 < b.y1 && boxed.y1 > b.y0);
+    ctx.fillStyle = item.selected ? tokens.bright : item.color;
+    if ((fits || item.selected) && !clash) {
+      ctx.fillText(text, cx, cy);
+      placed.push(boxed);
+    } else {
+      ctx.fillRect(item.x - 1, item.y - 1, 2, 2);
+    }
+  }
+  if (you && townCellAt(you.cx, you.cy)) {
+    const box = townCellBox(geo, townCellAt(you.cx, you.cy));
+    const px = box.x0 + (Number(you.fx) + 0.5) * box.tile;
+    const py = box.y0 + (Number(you.fy) + 0.5) * box.tile;
+    ctx.strokeStyle = tokens.bright;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(px, py, 6, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(px, py - 11);
+    ctx.lineTo(px, py + 11);
+    ctx.stroke();
+  }
+}
+
+function townTargetName(plot) {
+  if (!plot) return "the road";
+  if (plot.name) return plot.name;
+  const label = String(plot.label || plot.k || "place").replace(/_/g, " ");
+  return `the ${label}`;
+}
+
+function townCanEnter(plot) {
+  return Boolean(plot) && ["shop", "service", "temple", "office", "barracks"].includes(String(plot.k || ""));
+}
+
+// Leaving the current cell is long travel: it waits for the scene, like the world map.
+function townWalkRefusal(cx, cy) {
+  if (movementLocked || mapBlank) return "You cannot move while confined.";
+  const you = townData?.player;
+  if (!you) return "You are not in this town.";
+  const sameCell = Number(you.cx) === Number(cx) && Number(you.cy) === Number(cy);
+  if (!sameCell && !travelReady) return "Long travel waits until the scene clears; walk within this part of town.";
+  return "";
+}
+
+function renderTownCard() {
+  const card = document.querySelector("#townPlotCard");
+  if (!card) return;
+  const found = townStreetsActive() ? townFindSelected() : null;
+  card.hidden = !found;
+  if (!found) return;
+  const plot = found.plot;
+  const you = townData?.player;
+  const peek = plot && townPeek?.id === plot.id ? townPeek : null;
+  const title = plot ? plot.name || `A ${String(plot.label || plot.k || "place").replace(/_/g, " ")}` : "The road here";
+  const bits = [];
+  if (plot?.name && plot.label) bits.push(plot.label);
+  if (peek?.street) bits.push(`on ${peek.street}`);
+  if (peek?.ward) bits.push(peek.ward);
+  const hours = [];
+  if (plot?.hours) hours.push(plot.hours);
+  if (plot && typeof plot.open === "boolean") hours.push(plot.open ? "open now" : "closed now");
+  if (peek?.keeper) hours.push(`kept by ${peek.keeper}`);
+  const here = plot ? Boolean(plot.here) : Boolean(you && Number(you.cx) === Number(townSelected.cx) && Number(you.cy) === Number(townSelected.cy) && Number(you.fx) === Number(townSelected.fx) && Number(you.fy) === Number(townSelected.fy));
+  const refusal = here ? "You are already here." : townWalkRefusal(found.cell.cx, found.cell.cy);
+  card.querySelector("#townPlotName").textContent = title;
+  card.querySelector("#townPlotMeta").textContent = bits.join(" · ");
+  const hoursEl = card.querySelector("#townPlotHours");
+  hoursEl.textContent = hours.join(" · ");
+  hoursEl.hidden = !hours.length;
+  const walk = card.querySelector("#townWalkBtn");
+  walk.disabled = Boolean(refusal) || townBusy;
+  walk.title = refusal || "Walk the roads there now. It spends minutes and energy without a turn.";
+  const goIn = card.querySelector("#townGoInBtn");
+  goIn.hidden = !townCanEnter(plot);
+  const status = card.querySelector("#townWalkStatus");
+  status.textContent = townStatus || (refusal && !here ? refusal : here ? "You are at its door." : "");
+  status.hidden = !status.textContent;
+}
+
+async function townSelectAt(hit) {
+  if (!hit) return;
+  townStatus = "";
+  if (hit.plot) {
+    townSelected = { type: "plot", id: hit.plot.id, cx: Number(hit.cell.cx), cy: Number(hit.cell.cy) };
+    townPeek = null;
+    paintTownCanvas();
+    renderTownCard();
+    try {
+      const res = await fetch(`/api/town/plot/${encodeURIComponent(hit.plot.id)}`, { cache: "no-store" });
+      const data = res.ok ? await res.json() : null;
+      if (data && townSelected?.id === hit.plot.id) {
+        townPeek = data;
+        renderTownCard();
+      }
+    } catch (_) {
+      /* the card already shows what the view knew */
+    }
+    return;
+  }
+  if (!hit.cell.known) return;
+  townSelected = { type: "tile", cx: Number(hit.cell.cx), cy: Number(hit.cell.cy), fx: hit.fx, fy: hit.fy };
+  townPeek = null;
+  paintTownCanvas();
+  renderTownCard();
+}
+
+function townMessage(data, status) {
+  const detail = data?.detail;
+  if (typeof detail === "string") return detail;
+  if (detail && typeof detail === "object" && detail.message) return String(detail.message);
+  return `The walk failed (${status}).`;
+}
+
+async function townWalk(target) {
+  if (townBusy || !target) return;
+  townBusy = true;
+  townStatus = "Walking…";
+  renderTownCard();
+  const banner = document.querySelector("#mapTravelBanner");
+  try {
+    const res = await fetch("/api/town/walk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(target),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      townStatus = townMessage(data, res.status);
+      if (banner) {
+        banner.textContent = townStatus;
+        banner.classList.add("locked");
+        window.setTimeout(() => updateTravelStatus(travelReady), 1600);
+      }
+      return;
+    }
+    if (data.state) state = { ...(state || {}), ...data.state };
+    const plan = data.walk?.plan || {};
+    const minutes = Number(plan.minutes || 0);
+    applyTravelMoveFeedback({ state: data.state, travel: { minutes, terrain: "town" } });
+    townStatus = minutes
+      ? `Walked ${minutes} min${plan.partial ? `; ${Number(plan.remaining_minutes || 0)} min still to go` : ""}.`
+      : "You are there.";
+    townLastCity = String(townPositionFromState()?.city_id || townLastCity || "");
+    townPan = { x: 0, y: 0 };
+    if (data.view?.available) {
+      townData = await townAttachMasks(data.view);
+      townFocus = { cityId: String(data.view.city_id || ""), cx: data.view.center.cx, cy: data.view.center.cy, follow: true };
+    }
+    paintTownCanvas();
+    renderTownCard();
+    refreshLocalMap();
+  } catch (error) {
+    townStatus = error?.message || String(error);
+  } finally {
+    townBusy = false;
+    renderTownCard();
+  }
+}
+
+function townWalkSelected() {
+  const found = townFindSelected();
+  if (!found) return;
+  if (found.plot) townWalk({ plot_id: found.plot.id });
+  else townWalk({ cx: townSelected.cx, cy: townSelected.cy, fx: townSelected.fx, fy: townSelected.fy });
+}
+
+function townGoIn(plot) {
+  if (!plot) return;
+  insertRawToken(`I go into ${townTargetName(plot)}.`);
+}
+
+// Arrow keys in Streets: walk along the road you are on to the next junction.
+function townArrowWalk(dx, dy) {
+  const you = townData?.player;
+  const cell = you ? townCellAt(you.cx, you.cy) : null;
+  const mask = cell?._mask;
+  const banner = document.querySelector("#mapTravelBanner");
+  if (!you || !mask) return;
+  const side = Math.max(1, Number(cell.side) || 1);
+  const road = (x, y) => x >= 0 && y >= 0 && x < side && y < side && mask[y * side + x];
+  let x = Number(you.fx);
+  let y = Number(you.fy);
+  let steps = 0;
+  while (road(x + dx, y + dy)) {
+    x += dx;
+    y += dy;
+    steps += 1;
+    const sideways = dx ? road(x, y - 1) || road(x, y + 1) : road(x - 1, y) || road(x + 1, y);
+    if (sideways) break;
+  }
+  const atEdge = (dx > 0 && x === side - 1) || (dx < 0 && x === 0) || (dy > 0 && y === side - 1) || (dy < 0 && y === 0);
+  const next = atEdge ? townCellAt(Number(you.cx) + dx, Number(you.cy) + dy) : null;
+  if (next?.known && (steps === 0 || !road(x + dx, y + dy))) {
+    const nside = Math.max(1, Number(next.side) || 1);
+    const scale = (v) => Math.max(0, Math.min(nside - 1, Math.round(((v + 0.5) * nside) / side - 0.5)));
+    const tx = dx > 0 ? 0 : dx < 0 ? nside - 1 : scale(x);
+    const ty = dy > 0 ? 0 : dy < 0 ? nside - 1 : scale(y);
+    const refusal = townWalkRefusal(next.cx, next.cy);
+    if (refusal) {
+      if (banner) banner.textContent = refusal;
+      return;
+    }
+    townWalk({ cx: Number(next.cx), cy: Number(next.cy), fx: tx, fy: ty });
+    return;
+  }
+  if (!steps) {
+    if (banner) banner.textContent = "No road you know runs that way.";
+    return;
+  }
+  townWalk({ cx: Number(you.cx), cy: Number(you.cy), fx: x, fy: y });
+}
+
+// Right-click and long-press menu for a plot (interact.js opens it, UI_RULEBOOK 3.7).
+function townCanvasMenu(event) {
+  if (!townStreetsActive()) return null;
+  const canvas = document.querySelector("#settlementCanvas");
+  const rect = canvas?.getBoundingClientRect();
+  if (!rect) return null;
+  const hit = townHitTest(event.clientX - rect.left, event.clientY - rect.top);
+  if (!hit?.plot) return null;
+  const plot = hit.plot;
+  const name = townTargetName(plot);
+  const items = [{ text: `Go to ${plot.name || name}`, run: () => insertRawToken(`I walk to ${name}.`) }];
+  if (townCanEnter(plot)) items.push({ text: "Go in", run: () => townGoIn(plot) });
+  const refusal = plot.here ? "here" : townWalkRefusal(hit.cell.cx, hit.cell.cy);
+  if (!refusal) items.push({ text: "Walk here now", danger: true, run: () => townWalk({ plot_id: plot.id }) });
+  items.push({ text: "Details", run: () => townSelectAt(hit) });
+  return { name: plot.name || String(plot.label || "Place"), type: String(plot.label || plot.k || "plot"), items };
+}
+window.townCanvasMenu = townCanvasMenu;
+
+function setSettlementZoom(zoom) {
+  settlementZoom = zoom === "streets" ? "streets" : "city";
+  townPrefSet("");
+  paintTownZoomBar();
+  const canvas = document.querySelector("#settlementCanvas");
+  canvas?.classList.toggle("isStreets", settlementZoom === "streets");
+  if (settlementZoom === "streets") {
+    townPan = { x: 0, y: 0 };
+    refreshTownView();
+  } else {
+    townSelected = null;
+    townPeek = null;
+    renderTownCard();
+    if (settlementData) paintSettlementCanvas(settlementData);
+  }
+}
+
+// Zoom about the canvas centre: the point under it stays under it.
+function townZoomBy(factor) {
+  const next = Math.min(TOWN_SCALE_MAX, Math.max(TOWN_SCALE_MIN, townScale * factor));
+  if (next === townScale) return;
+  const k = next / townScale;
+  townScale = next;
+  townPan = { x: townPan.x * k, y: townPan.y * k };
+  paintTownCanvas();
+  paintTownZoomBar();
+}
+
+function paintTownZoomBar() {
+  const bar = document.querySelector("#townZoomBar");
+  if (!bar) return;
+  const zoomable = Boolean(settlementData?.town?.zoomable);
+  bar.hidden = mapViewMode !== "settlement" || !zoomable;
+  bar.querySelectorAll("[data-town-scale]").forEach((btn) => {
+    const step = Number(btn.getAttribute("data-town-scale"));
+    btn.hidden = !townStreetsActive();
+    btn.disabled = step > 0 ? townScale >= TOWN_SCALE_MAX : townScale <= TOWN_SCALE_MIN;
+  });
+  const shown = townStreetsActive() ? "streets" : "city";
+  bar.querySelectorAll("[data-town-zoom]").forEach((btn) => {
+    const active = btn.getAttribute("data-town-zoom") === shown;
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+    btn.classList.toggle("activeChip", active);
+  });
+  document.querySelector("#settlementCanvas")?.classList.toggle("isStreets", townStreetsActive());
+}
+
+function bindTownCanvas() {
+  const canvas = document.querySelector("#settlementCanvas");
+  if (!canvas || canvas.dataset.townBound === "1") return;
+  canvas.dataset.townBound = "1";
+  const tip = document.querySelector("#mapHoverTip");
+  let drag = null;
+  let pressTimer = 0;
+  const local = (event) => {
+    const rect = canvas.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+  canvas.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || mapViewMode !== "settlement") return;
+    drag = { id: event.pointerId, start: local(event), last: local(event), moved: false, pressed: false };
+    if (townStreetsActive()) {
+      try {
+        canvas.setPointerCapture(event.pointerId);
+      } catch (_) {
+        /* fine */
+      }
+    }
+    if (event.pointerType !== "mouse" && townStreetsActive()) {
+      const at = { clientX: event.clientX, clientY: event.clientY };
+      pressTimer = window.setTimeout(() => {
+        if (!drag || drag.moved) return;
+        drag.pressed = true;
+        const spec = townCanvasMenu(at);
+        if (spec) window.MorkynInteract?.openMenu?.(spec, at.clientX, at.clientY, canvas);
+      }, 550);
+    }
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    const at = local(event);
+    if (drag && drag.id === event.pointerId && townStreetsActive()) {
+      if (!drag.moved && Math.hypot(at.x - drag.start.x, at.y - drag.start.y) > 5) {
+        drag.moved = true;
+        window.clearTimeout(pressTimer);
+      }
+      if (drag.moved) {
+        townPan = { x: townPan.x + at.x - drag.last.x, y: townPan.y + at.y - drag.last.y };
+        drag.last = at;
+        tip?.classList.add("hidden");
+        paintTownCanvas();
+        return;
+      }
+    }
+    if (!townStreetsActive() || event.pointerType !== "mouse") return;
+    const hit = townHitTest(at.x, at.y);
+    const id = hit?.plot?.id || "";
+    if (id !== townHover) {
+      townHover = id;
+      paintTownCanvas();
+    }
+    if (tip) {
+      if (hit?.plot) {
+        const plot = hit.plot;
+        const open = typeof plot.open === "boolean" ? (plot.open ? " · open" : " · closed") : "";
+        tip.textContent = `${plot.name || plot.label || "Place"}${plot.name && plot.label ? ` · ${plot.label}` : ""}${open}`;
+        tip.style.left = `${at.x + 12}px`;
+        tip.style.top = `${at.y + 12}px`;
+        tip.classList.remove("hidden");
+      } else {
+        tip.classList.add("hidden");
+      }
+    }
+  });
+  const finish = (event) => {
+    window.clearTimeout(pressTimer);
+    const was = drag;
+    drag = null;
+    if (!was || was.id !== event.pointerId || was.moved || was.pressed) return;
+    const at = local(event);
+    if (townStreetsActive()) {
+      townSelectAt(townHitTest(at.x, at.y));
+      return;
+    }
+    // City zoom: a click on a seen cell zooms to its streets.
+    const meta = canvas._cityMeta;
+    if (!meta || !settlementData?.town?.zoomable) return;
+    const lx = Math.floor((at.x * meta.dpr - meta.ox) / meta.unit);
+    const ly = Math.floor((at.y * meta.dpr - meta.oy) / meta.unit);
+    const cell = (meta.cells || []).find((c) => Number(c.local?.[0]) === lx && Number(c.local?.[1]) === ly);
+    if (!cell?.known) return;
+    townFocus = { cityId: String(settlementData.settlement?.id || ""), cx: Number(cell.x), cy: Number(cell.y), follow: false };
+    settlementZoom = "streets";
+    townPrefSet("");
+    townPan = { x: 0, y: 0 };
+    paintTownZoomBar();
+    refreshTownView();
+  };
+  canvas.addEventListener("pointerup", finish);
+  canvas.addEventListener("pointercancel", () => {
+    window.clearTimeout(pressTimer);
+    drag = null;
+  });
+  canvas.addEventListener("pointerleave", () => {
+    tip?.classList.add("hidden");
+    if (townHover) {
+      townHover = "";
+      paintTownCanvas();
+    }
+  });
+  canvas.addEventListener(
+    "wheel",
+    (event) => {
+      if (!townStreetsActive()) return;
+      event.preventDefault();
+      townZoomBy(event.deltaY < 0 ? 1.25 : 0.8);
+    },
+    { passive: false }
+  );
+  document.querySelector("#townZoomBar")?.addEventListener("click", (event) => {
+    const scale = event.target?.closest?.("[data-town-scale]");
+    if (scale) {
+      townZoomBy(Number(scale.getAttribute("data-town-scale")) > 0 ? 1.5 : 1 / 1.5);
+      return;
+    }
+    const btn = event.target?.closest?.("[data-town-zoom]");
+    if (btn) setSettlementZoom(btn.getAttribute("data-town-zoom"));
+  });
+  document.querySelector("#townWalkBtn")?.addEventListener("click", () => townWalkSelected());
+  document.querySelector("#townGoInBtn")?.addEventListener("click", () => townGoIn(townFindSelected()?.plot));
+  document.querySelector("#townPlotClose")?.addEventListener("click", () => {
+    townSelected = null;
+    townPeek = null;
+    townStatus = "";
+    renderTownCard();
+    paintTownCanvas();
+  });
+}
+
 document.querySelector("#mapViewBar")?.addEventListener("click", (event) => {
   const btn = event.target?.closest?.("[data-map-view]");
-  if (btn) setMapViewMode(btn.getAttribute("data-map-view"));
+  if (!btn) return;
+  const mode = btn.getAttribute("data-map-view");
+  // Choosing World while in a town stops the automatic zoom on the next entry.
+  if (mode === "world" && townPositionFromState()) townPrefSet("world");
+  else if (mode === "settlement") townPrefSet("");
+  setMapViewMode(mode);
 });
+bindTownCanvas();
 document.querySelector("#mapSettlementSelect")?.addEventListener("change", (event) => {
   settlementPick = String(event.target?.value || "");
   refreshSettlementView();
 });
 window.addEventListener("resize", () => {
-  if (mapViewMode === "settlement" && settlementData) paintSettlementCanvas(settlementData);
+  if (townStreetsActive()) paintTownCanvas();
+  else if (mapViewMode === "settlement" && settlementData) paintSettlementCanvas(settlementData);
 });
 
 async function refreshLocalMap() {
   const canvas = document.querySelector("#playMapCanvas");
-  // The settlement view follows the player too.
-  if (mapViewMode === "settlement") refreshSettlementView();
+  // The settlement view follows the player too; entering a town zooms to its streets once.
+  if (!townAutoZoomCheck() && mapViewMode === "settlement") refreshSettlementView();
   const meta = document.querySelector("#playMapMeta");
   const memoryLine = document.querySelector("#mapMemoryLine");
   const showMapLine = (text) => {
