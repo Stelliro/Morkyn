@@ -12842,6 +12842,11 @@ def _retry_narration_prose(
         if outcome_note
         else []
     )
+    # And what that did for the quest (playtest #85b): a rewrite must not
+    # finish a job the engine left open, or leave out the pay it named.
+    quest_note = outcome_note.get("quest") if outcome_note else None
+    if isinstance(quest_note, dict) and quest_note.get("result"):
+        outcome_lines.append(f"quest (decided by the engine, keep it): {quest_note['result']}")
     instruction = "\n".join(
         [
             "Rewrite this scene as fuller prose. Return ONLY the prose.",
@@ -13956,6 +13961,7 @@ def _make_pipeline_paragraph_writer(
         "The act player_line states is done by the player (you), with their own hands: others may help, watch, "
         "hinder or react, but nobody does it in the player's place (player_act names it when there is one). "
         "act_outcome, when present, is how the dice decided player_act: it turns out exactly so, never better or worse. "
+        "act_outcome.quest.result, when present, is what the act did for a quest: done or not done exactly as it says. "
         "Nothing is paid, bought or handed over on a deal player_line has not agreed to; an offer stays an offer. "
         "conversation says who the player is talking to: only someone in who_answers answers the player; "
         "people in listening_only may react, but do not answer for them. "

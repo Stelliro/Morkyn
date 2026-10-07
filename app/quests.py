@@ -12,6 +12,7 @@ Reward scales with length (steps) and difficulty.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from app.db import connect
@@ -76,10 +77,12 @@ def create_quest(
     created_turn: int = 0,
     notes: str = "",
     status: str = "active",
+    reward_karma: int = 0,
 ) -> int:
     """Create a quest with its steps. Returns the quest id.
 
     ``offered`` is posted and not yet taken. Every older caller stays ``active``.
+    ``reward_karma`` is paid with the rest by pay_quest_reward (playtest #85b).
     """
     if not steps:
         raise ValueError("Quest must have at least one step")
@@ -127,6 +130,10 @@ def create_quest(
     quest_id = int(cur.lastrowid)
     code = _quest_code(conn, quest_id)
     conn.execute("UPDATE quests SET code = ? WHERE id = ?", (code, quest_id))
+    if reward_karma:
+        # Written only when there is some, so a database the column has not
+        # reached yet still creates quests (db._migrate_columns adds it).
+        conn.execute("UPDATE quests SET reward_karma = ? WHERE id = ?", (max(-25, min(25, int(reward_karma))), quest_id))
 
     for i, step in enumerate(steps, 1):
         loc_name = str(step.get("location_name", "") or "")
@@ -251,20 +258,117 @@ def decline_offered(conn, quest_id: int, *, turn: int = 0) -> dict[str, Any] | N
     return quest
 
 
-def pay_quest_completion(conn, quest_id: int, result: dict[str, Any]) -> None:
-    """Pay gold/xp and credit the giver when ``result`` (from advance_quest_step) completed the quest."""
-    if not result.get("completed"):
-        return
-    try:
-        conn.execute(
-            "UPDATE player SET gold = gold + ?, xp = xp + ? WHERE id = 1",
-            (int(result.get("reward_gold") or 0), int(result.get("reward_xp") or 0)),
+def quest_reward_amounts(conn, quest: dict[str, Any], *, units: int = 1) -> dict[str, Any]:
+    """What completing ``quest`` pays now, after the game's own rules (playtest #85b).
+
+    The same gates the turn's own rewards pass (world._apply_player): no gold
+    when the economy is off, no XP when leveling is off, XP scaled by the
+    growth speed. Read by the narrator's note before the prose and by the
+    payout after it, so the prose names the sum that is paid.
+    ``units`` is how many times a repeatable task was done (TODO n27).
+    """
+    from app.world import _play_system_enabled, _scaled_delta, _settings
+
+    units = max(1, int(units or 1))
+    options = _settings(conn).get("playthrough_options") or {}
+    options = options if isinstance(options, dict) else {}
+    gold = max(0, int(quest.get("reward_gold") or 0)) * units
+    if not _play_system_enabled(conn, "economy_enabled", True):
+        gold = 0
+    xp = max(0, int(quest.get("reward_xp") or 0)) * units
+    if not options.get("leveling_system", True):
+        xp = 0
+    elif xp:
+        multiplier = options.get("xp_growth_multiplier")
+        xp = _scaled_delta(
+            xp,
+            str(options.get("xp_growth_speed") or "normal"),
+            float(multiplier) if multiplier else None,
         )
-    except Exception:
-        pass
+    karma = max(-25, min(25, int(quest.get("reward_karma") or 0))) * units
+    items = quest.get("reward_items")
+    if isinstance(items, str):
+        try:
+            items = json.loads(items or "[]")
+        except ValueError:
+            items = []
+    items = [str(i).strip()[:80] for i in (items or []) if str(i or "").strip()]
+    if not _play_system_enabled(conn, "items_enabled", True):
+        items = []
+    return {"gold": gold, "xp": xp, "karma": karma, "items": items, "units": units}
+
+
+def reward_text(paid: dict[str, Any] | None) -> str:
+    """'+11 gold, +18 XP' for the journal, the toast and the narrator's note."""
+    if not isinstance(paid, dict):
+        return ""
+    bits = []
+    if paid.get("gold"):
+        bits.append(f"+{int(paid['gold'])} gold")
+    if paid.get("xp"):
+        bits.append(f"+{int(paid['xp'])} XP")
+    if paid.get("karma"):
+        bits.append(f"{int(paid['karma']):+d} karma")
+    units = max(1, int(paid.get("units") or 1))
+    for name in paid.get("items") or []:
+        bits.append(f"{name} x{units}" if units > 1 else str(name))
+    return ", ".join(bits)
+
+
+def pay_quest_reward(conn, quest_id: int, *, turn: int = 0, units: int = 1, source: str = "") -> dict[str, Any]:
+    """
+    The one quest payout (playtest #85b). Every completion path comes here:
+    the engine's step matcher, the quest parser and the Advance step button.
+
+    The old payout added gold and XP by raw SQL past the economy and leveling
+    rules, dropped the reward items it was handed, had no karma, journaled
+    nothing and swallowed every error, so nobody could show what was paid.
+    This pays gold, XP, karma and items through the game's own gates, credits
+    the giver, writes one journal line naming the amounts and returns them:
+    {"gold", "xp", "karma", "items", "units", "text", "errors"?}.
+    """
+    quest = get_quest(conn, int(quest_id))
+    paid: dict[str, Any] = {"gold": 0, "xp": 0, "karma": 0, "items": [], "units": max(1, int(units or 1)), "text": ""}
+    if not quest:
+        paid["errors"] = ["quest_not_found"]
+        return paid
+    errors: list[str] = []
     try:
-        quest_row = conn.execute("SELECT giver_npc_id FROM quests WHERE id = ?", (quest_id,)).fetchone()
-        giver_npc_id = int(quest_row["giver_npc_id"]) if quest_row and quest_row["giver_npc_id"] else None
+        paid.update(quest_reward_amounts(conn, quest, units=units))
+    except Exception as exc:
+        errors.append(f"amounts: {type(exc).__name__}: {exc}"[:200])
+    try:
+        if paid["gold"] or paid["xp"] or paid["karma"]:
+            row = conn.execute("SELECT gold, xp, karma FROM player WHERE id = 1").fetchone()
+            if row:
+                gold = max(0, min(1_000_000, int(row["gold"] or 0) + int(paid["gold"])))
+                xp = max(0, min(1_000_000, int(row["xp"] or 0) + int(paid["xp"])))
+                karma = max(-1000, min(1000, int(row["karma"] or 0) + int(paid["karma"])))
+                conn.execute("UPDATE player SET gold = ?, xp = ?, karma = ? WHERE id = 1", (gold, xp, karma))
+                if paid["karma"]:
+                    conn.execute(
+                        "INSERT INTO karma_history (turn, delta, total, reason, visibility) VALUES (?, ?, ?, ?, ?)",
+                        (int(turn), int(paid["karma"]), karma, f"Quest complete: {quest['title']}"[:900], "local"),
+                    )
+    except Exception as exc:
+        errors.append(f"player: {type(exc).__name__}: {exc}"[:200])
+    if paid["items"]:
+        try:
+            from app.world import _apply_inventory
+
+            # Reward items used to ride back in advance_quest_step's result and
+            # nothing read them.
+            _apply_inventory(
+                conn,
+                [
+                    {"name": name, "quantity_delta": paid["units"], "description": f"Reward for {quest['title']}."[:700]}
+                    for name in paid["items"]
+                ],
+            )
+        except Exception as exc:
+            errors.append(f"items: {type(exc).__name__}: {exc}"[:200])
+    try:
+        giver_npc_id = int(quest["giver_npc_id"]) if quest.get("giver_npc_id") else None
         if giver_npc_id:
             from app.relationships import RELATIONSHIP_EVENTS, update_relationship
 
@@ -274,8 +378,201 @@ def pay_quest_completion(conn, quest_id: int, result: dict[str, Any]) -> None:
                 reason=f"Player completed quest {quest_id}",
                 **RELATIONSHIP_EVENTS["quest_complete_for_npc"],
             )
+    except Exception as exc:
+        errors.append(f"giver: {type(exc).__name__}: {exc}"[:200])
+    paid["text"] = reward_text(paid)
+    line = f"Quest complete: {quest['title']}{_giver_suffix(conn, quest)}"
+    _offer_journal(conn, turn, f"{line}: {paid['text']}" if paid["text"] else line)
+    if source:
+        paid["source"] = str(source)[:40]
+    if errors:
+        paid["errors"] = errors
+    return paid
+
+
+def pay_quest_completion(conn, quest_id: int, result: dict[str, Any], *, turn: int = 0, source: str = "") -> dict[str, Any] | None:
+    """Pay when ``result`` (from advance_quest_step) completed the quest; the paid amounts, else None."""
+    if not result.get("completed"):
+        return None
+    return pay_quest_reward(conn, int(quest_id), turn=int(turn), source=source)
+
+
+def complete_quest_step(conn, quest_id: int, *, turn: int = 0, to_end: bool = False, source: str = "") -> dict[str, Any]:
+    """
+    Finish the quest's current step (or every step, ``to_end``) and pay on
+    completion (playtest #85b). The one state change for a step done, so the
+    engine's matcher, the parser and the Advance step button cannot each
+    journal and pay their own way. Returns
+    {"ok", "code", "title", "action": "step_done"|"complete", "completed", "paid"?, "next_step"?, "error"?}.
+    """
+    quest = get_quest(conn, int(quest_id))
+    if not quest:
+        return {"ok": False, "error": "Quest not found"}
+    out: dict[str, Any] = {"ok": False, "quest_id": int(quest_id), "code": quest.get("code") or _quest_code(conn, int(quest_id)), "title": quest.get("title") or ""}
+    step_title = ""
+    for step in quest.get("steps") or []:
+        if int(step.get("step_number") or 0) == int(quest.get("current_step") or 0):
+            step_title = str(step.get("title") or "")
+    res: dict[str, Any] = {}
+    for _ in range(MAX_QUEST_STEPS if to_end else 1):
+        res = advance_quest_step(conn, int(quest_id), turn=int(turn))
+        if not res.get("ok") or res.get("completed"):
+            break
+    out["ok"] = bool(res.get("ok"))
+    if not out["ok"]:
+        out["error"] = res.get("error") or "not advanced"
+        return out
+    out["completed"] = bool(res.get("completed"))
+    out["action"] = "complete" if out["completed"] else "step_done"
+    if out["completed"]:
+        out["paid"] = pay_quest_reward(conn, int(quest_id), turn=int(turn), source=source)
+    else:
+        out["next_step"] = res.get("next_step")
+        _offer_journal(conn, turn, f"Step done: {quest['title']}" + (f" ({step_title})" if step_title and step_title != quest["title"] else ""))
+    return out
+
+
+MAX_QUEST_STEPS = 6
+
+
+# ---------------------------------------------------------------------------
+# A quest task done in play (playtest #85b)
+# ---------------------------------------------------------------------------
+# "i polish the blades the best i can" at the armory, with "Polish swords"
+# active there, advanced nothing: only the quest parser could move a step,
+# and its model returned no update. The engine now reads the player's own
+# declared act against each open step before the prose is written.
+
+# The checks' own reading of a quest's difficulty (quests say "deadly").
+QUEST_CHECK_DIFFICULTY = {"trivial": "trivial", "easy": "easy", "normal": "normal", "hard": "hard", "deadly": "brutal"}
+# A step is done only on these; a partial job is visibly not finished.
+STEP_DONE_OUTCOMES = frozenset({"success", "critical_success"})
+
+_STEP_STOP_WORDS = frozenset({
+    "the", "and", "for", "with", "this", "that", "these", "those", "some", "any", "all", "you", "your", "his", "her",
+    "their", "them", "they", "him", "she", "its", "our", "from", "into", "onto", "then", "than", "can", "best",
+    "try", "tries", "trying", "start", "starting", "starts", "help", "helping", "helps", "more", "about", "again",
+    "just", "will", "would", "could", "should", "here", "there", "what", "who", "how", "where", "when", "why",
+    "learn", "learning", "work", "job", "task", "finish", "carefully", "quickly", "well", "good", "very", "few",
+    "one", "two", "each", "every", "other", "own", "out", "off", "over", "under", "around", "back", "now",
+})
+# Words the prose and the quest text use for one thing (TODO: grow with play).
+_STEP_SYNONYMS = {
+    "blade": "sword", "sabre": "sword", "saber": "sword",
+    "shine": "polish", "buff": "polish", "burnish": "polish",
+    "hone": "sharpen", "whet": "sharpen",
+    "mend": "repair", "fix": "repair",
+    "scrub": "clean", "wash": "clean",
+    "carry": "haul", "lug": "haul",
+}
+_STEP_WORD_RE = re.compile(r"[a-z]+")
+_QUESTION_RE = re.compile(r"^\s*(?:who|what|where|when|why|how|which|is|are|do|does|can|could|would|will|should)\b|\?\s*$", re.I)
+
+
+def _word_forms(word: str) -> set[str]:
+    from app.skill_checks import _word_stems
+
+    forms = {word, *_word_stems(word)}
+    return forms | {_STEP_SYNONYMS[f] for f in forms if f in _STEP_SYNONYMS}
+
+
+def _content_words(text: str, *, drop: set[str] | None = None) -> list[set[str]]:
+    out = []
+    for word in _STEP_WORD_RE.findall(str(text or "").lower()):
+        if len(word) < 3 or word in _STEP_STOP_WORDS or (drop and word in drop):
+            continue
+        out.append(_word_forms(word))
+    return out
+
+
+def _overlap(player_words: list[set[str]], forms: set[str]) -> list[str]:
+    return [sorted(w)[0] for w in player_words if w & forms]
+
+
+def match_quest_step(
+    own_line: str,
+    quests: list[dict[str, Any]],
+    *,
+    location_code: str = "",
+    present_npc_ids: set[int] | None = None,
+) -> dict[str, Any] | None:
+    """
+    The one open quest step the player's own line is doing, or None (playtest #85b).
+
+    Pure. The line must declare a hands-on act (prose_state.act_rules, the
+    reading the dice use). A step counts when the act's verb, or a verb of the
+    same family, is in the step's or quest's text, or two of the line's words
+    are; when the step names a place, the player is there; when it names the
+    giver, the giver is here. At most one quest is returned, so one "polish"
+    cannot finish two quests that both mention polishing: the most words, then
+    the most in the quest's title, then the oldest.
+    Each quest needs "id", "code", "title", "current_step", "total_steps",
+    "steps" and optionally "giver_npc_id", "giver_name", "difficulty".
+    """
+    own = str(own_line or "").strip()
+    if not own or own.startswith("__") or _QUESTION_RE.search(own):
+        return None
+    try:
+        from app.prose_state import _ACT_FAMILIES, act_rules
+
+        act = act_rules(own)
     except Exception:
-        pass
+        return None
+    if not act:
+        return None
+    family_verbs = set(dict(_ACT_FAMILIES).get(act["family"]) or ())
+    verb_forms = _word_forms(act["verb"])
+    present = set(present_npc_ids or set())
+    here = str(location_code or "").strip().upper()
+    best: tuple[tuple[int, int, int], dict[str, Any]] | None = None
+    for quest in quests or []:
+        if str(quest.get("status") or "active") != "active":
+            continue
+        current = int(quest.get("current_step") or 0)
+        step = next((s for s in quest.get("steps") or [] if int(s.get("step_number") or 0) == current), None)
+        if not step:
+            continue
+        step_place = str(step.get("location_code") or "").strip().upper()
+        if step_place and here and step_place != here:
+            continue  # the work is somewhere else
+        giver_name = str(quest.get("giver_name") or "").strip()
+        step_text = f"{step.get('title') or ''} {step.get('description') or ''}"
+        giver_first = giver_name.split()[0].lower() if giver_name else ""
+        if giver_first and quest.get("giver_npc_id") and giver_first in step_text.lower() and int(quest["giver_npc_id"]) not in present:
+            continue  # "helping Finnian polish" needs Finnian here
+        drop = {giver_first} if giver_first else set()
+        words = _content_words(own, drop=drop)
+        text_forms: set[str] = set()
+        for forms in _content_words(f"{step_text} {quest.get('title') or ''}", drop=drop):
+            text_forms |= forms
+        title_forms: set[str] = set()
+        for forms in _content_words(str(quest.get("title") or ""), drop=drop):
+            title_forms |= forms
+        hits = _overlap(words, text_forms)
+        verb_hit = bool(verb_forms & text_forms) or bool(family_verbs & text_forms)
+        if not (verb_hit and hits) and len(set(hits)) < 2:
+            continue
+        score = (len(set(hits)) + (1 if verb_hit else 0), len(set(_overlap(words, title_forms))), -int(quest.get("id") or 0))
+        if best is None or score > best[0]:
+            best = (
+                score,
+                {
+                    "quest_id": int(quest.get("id") or 0),
+                    "code": str(quest.get("code") or f"Q{quest.get('id')}"),
+                    "title": str(quest.get("title") or ""),
+                    "step_number": current,
+                    "step": str(step.get("title") or "")[:120],
+                    "objective": str(step.get("description") or "")[:240],
+                    "total_steps": int(quest.get("total_steps") or 1),
+                    "completes_quest": current >= int(quest.get("total_steps") or 1),
+                    "difficulty": str(quest.get("difficulty") or "normal"),
+                    "giver_npc_id": quest.get("giver_npc_id"),
+                    "giver_name": giver_name,
+                    "matched": sorted(set(hits))[:6],
+                    "act": act,
+                },
+            )
+    return best[1] if best else None
 
 
 def _quests_with_status(conn, status: str) -> list[dict[str, Any]]:

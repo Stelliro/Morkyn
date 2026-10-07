@@ -994,6 +994,13 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
             conn.execute("ALTER TABLE quest_steps ADD COLUMN location_coords TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+    # A quest may pay karma with its gold and XP (playtest #85b). Older quests read 0.
+    q_cols = {row["name"] for row in conn.execute("PRAGMA table_info(quests)").fetchall()}
+    if "reward_karma" not in q_cols:
+        try:
+            conn.execute("ALTER TABLE quests ADD COLUMN reward_karma INTEGER NOT NULL DEFAULT 0")
+        except Exception:
+            pass
 
     repair_npc_default_summaries(conn)
     repair_npc_roles(conn)

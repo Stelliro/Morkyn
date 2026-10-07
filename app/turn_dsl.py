@@ -185,7 +185,8 @@ the player still where they are, and the player answers with their own words or 
   choice restated ("Do you approach X, or continue to Y?", "The choice is yours.") — that hands the
   turn back unplayed. End on a consequence, a new pressure, or a concrete detail, then stop.
 - When act_outcome is present, the engine's dice already decided how player_act turns out: write
-  exactly that outcome, success or failure, and never a different one.
+  exactly that outcome, success or failure, and never a different one. A quest task is finished only
+  when act_outcome.quest.result says done.
 - player_line is the player's own input and the whole of the player's turn. "you" does only what
   player_line says: no further actions, words, replies, gestures, thoughts, feelings, memories,
   conclusions or decisions. Narrate that action, then what the world and the people in it do in
@@ -1258,6 +1259,14 @@ ACT_OUTCOME_RULE = (
     "to that. Success: it works. Do not soften it, upgrade it or leave it undecided. When act_outcome.injury "
     "is present, that hurt happens in the scene."
 )
+# The act was the work of an open quest (playtest #85b, T7: the job was done in
+# the prose and never in the game). The engine has decided the step already.
+ACT_QUEST_RULE = (
+    "act_outcome.quest says what this act did for the player's quest, decided by the engine: write "
+    "act_outcome.quest.result as it says. Done: the job or step is finished and whoever gave it sees that, and pays "
+    "exactly what result names. Not done: the job is still open. Never call a quest task finished, or pay for it, "
+    "unless result says done."
+)
 PREVIOUS_ACT_RULE = (
     "previous_act is how the player's last attempt turned out (outcome). Keep to it: work that failed is still "
     "not done, work that succeeded stays done, and nobody remembers it differently."
@@ -1393,6 +1402,8 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
         if outcome:
             packet["act_outcome"] = outcome
             instructions.append(ACT_OUTCOME_RULE)
+            if isinstance(outcome.get("quest"), dict):
+                instructions.append(ACT_QUEST_RULE)
     # How the player's last act turned out, so this scene does not redo or
     # undo it from memory (playtest #85a, T8: "swords already polished").
     previous = previous_act_of(context)

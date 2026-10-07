@@ -65,6 +65,7 @@ MAX_STEPS = 6
 REWARD_GOLD_CAP = 500
 REWARD_XP_CAP = 1000
 REWARD_ITEMS_CAP = 3
+REWARD_KARMA_CAP = 10
 
 # ---------------------------------------------------------------------------
 # The gate
@@ -358,6 +359,7 @@ def build_parser_prompt(
             "decline only for an offered quest that player_input turns down.",
             "Steps are concrete actions, one to six, each with the place the story names when it names one.",
             "Rewards only as the story states them; leave gold and xp at 0 when no amount is named.",
+            "One offer is one quest. A promise of later work in the same offer (an apprenticeship, more jobs) is that quest's reward text, not a second quest.",
             "updates only for quests listed in open_quests, and only when the story shows the change.",
             "narrator_marks are hints from the narrator; still copy evidence from the text.",
             "Return {\"new\": [], \"updates\": []} when nothing applies.",
@@ -782,14 +784,27 @@ def validate_quest_changes(
     npcs: list[dict[str, Any]] | None = None,
     locations: list[dict[str, Any]] | None = None,
     existing: list[dict[str, Any]] | None = None,
+    settled_ids: set[int] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Pure check. Returns (accepted_changes, rejected) where each rejected row is {"kind", "item", "reasons"}."""
+    """Pure check. Returns (accepted_changes, rejected) where each rejected row is {"kind", "item", "reasons"}.
+
+    ``settled_ids``: quests whose step the engine already decided this turn
+    from the player's act and its roll (playtest #85b). No step_done or
+    complete may touch them, so a failed roll is not completed by the parser
+    reading the prose.
+    """
     accepted: dict[str, Any] = {"source": (changes or {}).get("source") or "parser", "new": [], "updates": []}
     rejected: list[dict[str, Any]] = []
     accepts_now = player_accepts(player_input)
     npc_names = {str(n.get("name") or "").strip().lower() for n in npcs or []}
     place_names = {str(p.get("name") or "").strip().lower() for p in locations or []}
     seen_titles: set[str] = set()
+    # Offers accepted earlier in this turn, in the shape _is_duplicate reads
+    # (playtest #85b, T6: one offer sentence became "Polish swords" and
+    # "Learn metalworking", same giver, same place, same evidence; only the
+    # pre-turn rows were checked, so the second passed).
+    taken_this_turn: list[dict[str, Any]] = []
+    settled = {int(i) for i in settled_ids or set()}
 
     for raw in list((changes or {}).get("new") or [])[: MAX_NEW_PER_TURN * 2]:
         if not isinstance(raw, dict):
@@ -848,8 +863,27 @@ def validate_quest_changes(
             else:
                 reasons.append("no_steps")
         first_place = steps[0]["location_name"] if steps else ""
-        dup = _is_duplicate({"title": title}, existing, giver.get("id") if giver else None, first_place)
-        if dup is not None:
+        same_offer = next(
+            (
+                prior
+                for prior in taken_this_turn
+                # A sentence, not a stray word or two both quotes happen to share.
+                if len(_norm(evidence)) >= 20
+                and len(_norm(prior["evidence"])) >= 20
+                and (_norm(evidence) in _norm(prior["evidence"]) or _norm(prior["evidence"]) in _norm(evidence))
+            ),
+            None,
+        )
+        if same_offer is not None:
+            # One offer is one quest. A promise of more work in the same words
+            # ("we'll talk about a proper apprenticeship") is that quest's
+            # reward, not a second job.
+            reasons.append(f"same_offer_as:{same_offer['title']}")
+            prior_item = same_offer["item"]
+            if offer_line and not prior_item["reward"]["text"] and _norm(offer_line) != _norm(prior_item["evidence"]):
+                prior_item["reward"]["text"] = offer_line[:200]
+        dup = _is_duplicate({"title": title}, list(existing or []) + taken_this_turn, giver.get("id") if giver else None, first_place)
+        if dup is not None and same_offer is None:
             ref = dup.get("code") or dup.get("id")
             # A job the player turned down is not offered again (TODO n20).
             reasons.append(f"declined_before:{ref}" if str(dup.get("status") or "") == "declined" else f"duplicate_of:{ref}")
@@ -860,6 +894,8 @@ def validate_quest_changes(
         gold = max(0, min(REWARD_GOLD_CAP, _int(reward.get("gold"), 0)))
         xp = max(0, min(REWARD_XP_CAP, _int(reward.get("xp"), 0)))
         items = [re.sub(r"\s+", " ", str(i)).strip()[:80] for i in (reward.get("items") or []) if str(i or "").strip()]
+        # Karma only as the story states it, like gold (playtest #85b).
+        karma = max(-REWARD_KARMA_CAP, min(REWARD_KARMA_CAP, _int(reward.get("karma"), 0)))
         difficulty = str(raw.get("difficulty") or "normal").strip().lower()
         if difficulty not in DIFFICULTIES:
             difficulty = "normal"
@@ -881,12 +917,24 @@ def validate_quest_changes(
                     "gold": gold or None,
                     "xp": xp or None,
                     "items": items[:REWARD_ITEMS_CAP],
+                    "karma": karma,
                     "text": str(reward.get("text") or "").strip()[:200],
                 },
                 "difficulty": difficulty,
                 "timer_turns": max(0, min(60, _int(raw.get("timer_turns"), 0))),
                 "evidence": evidence[:300],
                 "target_location_id": None,
+            }
+        )
+        taken_this_turn.append(
+            {
+                "code": title,
+                "title": title,
+                "status": "offered",
+                "giver_npc_id": giver.get("id") if giver else None,
+                "first_step_location": first_place,
+                "evidence": evidence,
+                "item": accepted["new"][-1],
             }
         )
         if len(accepted["new"]) >= MAX_NEW_PER_TURN:
@@ -909,6 +957,9 @@ def validate_quest_changes(
             reasons.append("unknown_action")
         if quest is None:
             reasons.append("unknown_quest")
+        elif int(quest.get("id") or 0) in settled and action in {"step_done", "complete"}:
+            # The engine decided this step from the player's act (playtest #85b).
+            reasons.append("engine_decided")
         evidence = str(raw.get("evidence") or "").strip()
         if not evidence_found(evidence, narration, player_input):
             # An accept or a refusal the player typed is evidence enough on its
@@ -972,8 +1023,19 @@ def load_quest_context(conn, turn: int = 0) -> dict[str, list[dict[str, Any]]]:
     return {"npcs": npcs, "locations": locations, "existing": existing}
 
 
-def apply_quest_changes(conn, changes: dict[str, Any], *, narration: str, player_input: str = "", turn: int = 0) -> dict[str, Any]:
-    """Validate against the live DB, create/advance quests, journal + event-log each one. Returns a report for the trace."""
+def apply_quest_changes(
+    conn,
+    changes: dict[str, Any],
+    *,
+    narration: str,
+    player_input: str = "",
+    turn: int = 0,
+    settled_ids: set[int] | None = None,
+) -> dict[str, Any]:
+    """Validate against the live DB, create/advance quests, journal + event-log each one. Returns a report for the trace.
+
+    ``settled_ids``: quests the engine already advanced or refused this turn (playtest #85b).
+    """
     report: dict[str, Any] = {
         "status": "skipped",
         "source": str((changes or {}).get("source") or "parser"),
@@ -984,7 +1046,7 @@ def apply_quest_changes(conn, changes: dict[str, Any], *, narration: str, player
     try:
         if not isinstance(changes, dict) or not (changes.get("new") or changes.get("updates")):
             return report
-        from app.quests import accept_offered, advance_quest_step, create_quest, decline_offered, fail_quest, pay_quest_completion
+        from app.quests import accept_offered, complete_quest_step, create_quest, decline_offered, fail_quest
 
         ctx = load_quest_context(conn, int(turn))
         accepted, rejected = validate_quest_changes(
@@ -994,6 +1056,7 @@ def apply_quest_changes(conn, changes: dict[str, Any], *, narration: str, player
             npcs=ctx["npcs"],
             locations=ctx["locations"],
             existing=ctx["existing"],
+            settled_ids=settled_ids,
         )
         report["rejected"] = [
             # "quote": the sentence the offer check judged, so a review can see
@@ -1030,6 +1093,7 @@ def apply_quest_changes(conn, changes: dict[str, Any], *, narration: str, player
                 created_turn=int(turn),
                 notes=f"parser:{accepted['source']}; evidence: {item['evidence']}"[:900],
                 status=item["status"],
+                reward_karma=int(item["reward"].get("karma") or 0),
             )
             code = f"Q{quest_id}"
             giver = f" (from {item['giver_name']})" if item["giver_name"] else ""
@@ -1046,17 +1110,17 @@ def apply_quest_changes(conn, changes: dict[str, Any], *, narration: str, player
             elif action == "decline":
                 if decline_offered(conn, qid, turn=int(turn)) is None:
                     continue
-            elif action == "step_done":
-                res = advance_quest_step(conn, qid, turn=int(turn))
-                pay_quest_completion(conn, qid, res)
-                _journal(conn, turn, f"Quest complete: {title}" if res.get("completed") else f"Step done: {title}")
-            elif action == "complete":
-                for _ in range(MAX_STEPS):
-                    res = advance_quest_step(conn, qid, turn=int(turn))
-                    pay_quest_completion(conn, qid, res)
-                    if not res.get("ok") or res.get("completed"):
-                        break
-                _journal(conn, turn, f"Quest complete: {title}")
+            elif action in {"step_done", "complete"}:
+                # The one step-done path (playtest #85b): it journals, and on
+                # completion pays through pay_quest_reward and says what.
+                done = complete_quest_step(conn, qid, turn=int(turn), to_end=action == "complete", source="parser")
+                if not done.get("ok"):
+                    continue
+                row = {"code": upd["code"], "action": done["action"]}
+                if done.get("paid"):
+                    row["paid"] = done["paid"]
+                report["updated"].append(row)
+                continue
             elif action == "fail":
                 fail_quest(conn, qid, turn=int(turn), reason=f"Failed in play: {upd['evidence'][:200]}")
                 _journal(conn, turn, f"Quest failed: {title}")

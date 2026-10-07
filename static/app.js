@@ -7516,6 +7516,17 @@ function playSurfaceError(anchor, error) {
   host.appendChild(note);
 }
 
+// A good-news line on the same surface (playtest #85b: a paid quest showed
+// as an error line).
+function playSurfaceNote(anchor, text) {
+  const host = anchor?.closest?.("#characterSheetBody, .floatPanelBody, .popoutTabInner") || indexContent;
+  if (!host) return;
+  const note = document.createElement("p");
+  note.className = "good";
+  note.textContent = String(text || "");
+  host.appendChild(note);
+}
+
 function playActionSurface(node) {
   return node?.closest?.("#characterSheetBody, .floatPanelBody, .popoutTabInner, #indexContent") || document;
 }
@@ -19767,7 +19778,17 @@ function turnRewardsHtml(payload) {
       description: String(item?.description || "").trim(),
     }))
     .filter((item) => item.name && item.quantity > 0);
-  if (!xpGain && !items.length) return "";
+  // A quest the engine finished this turn and what it paid (playtest #85b).
+  const goldGain = Math.max(0, Number(rewards.gold_gain || 0) || 0);
+  const questsDone = (Array.isArray(rewards.quests_completed) ? rewards.quests_completed : [])
+    .filter((row) => row && row.code);
+  if (!xpGain && !items.length && !goldGain && !questsDone.length) return "";
+  const questRows = questsDone.map((row) => `
+      <li>
+        <span class="rewardName">Quest complete: ${escapeHtml(row.code)}</span>
+        ${row.text ? `<span class="rewardMeta">${escapeHtml(row.text)}</span>` : ""}
+      </li>
+    `).join("");
   const itemRows = items.map((item) => {
     const details = [item.rarity, item.itemType].filter(Boolean).join(" ");
     const meta = [details, item.description].filter(Boolean).join(" - ");
@@ -19784,8 +19805,10 @@ function turnRewardsHtml(payload) {
       <strong>Rewards Gained</strong>
       <div class="rewardSummary">
         ${xpGain ? `<div class="rewardPill"><span>XP</span><b>+${escapeHtml(Math.round(xpGain))}</b></div>` : ""}
+        ${goldGain ? `<div class="rewardPill"><span>Gold</span><b>+${escapeHtml(Math.round(goldGain))}</b></div>` : ""}
         ${items.length ? `<div class="rewardPill"><span>Items</span><b>+${escapeHtml(items.reduce((total, item) => total + item.quantity, 0))}</b></div>` : ""}
       </div>
+      ${questRows ? `<ul class="rewardItems">${questRows}</ul>` : ""}
       ${itemRows ? `<ul class="rewardItems">${itemRows}</ul>` : ""}
     </section>
   `;
@@ -22506,12 +22529,16 @@ listenPlaySurface("click", (event) => {
       fetch(`/api/quests/${qid}/advance`, { method: "POST" })
         .then((r) => r.json())
         .then((payload) => {
+          // What the server paid, after the economy and leveling rules
+          // (playtest #85b), as a note, not an error line.
           if (payload.completed) {
-            const gold = payload.reward_gold || 0;
-            const xp = payload.reward_xp || 0;
-            playSurfaceError(advanceQuestBtn, `Quest complete! +${gold}g +${xp}xp`);
+            const paid = payload.paid?.text ? `: ${payload.paid.text}` : "";
+            playSurfaceNote(advanceQuestBtn, `Quest complete${paid}`);
+          } else if (payload.ok === false && payload.error) {
+            playSurfaceError(advanceQuestBtn, payload.error);
           }
           loadPlayerQuests();
+          loadState().catch(() => {});
         })
         .catch((error) => playSurfaceError(advanceQuestBtn, error))
         .finally(() => { advanceQuestBtn.disabled = false; });

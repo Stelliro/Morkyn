@@ -15504,6 +15504,33 @@ def _void_unbought_spend(
     return True
 
 
+def _drop_model_rewards(result: dict[str, Any]) -> list[str]:
+    """Take out the model's own XP and gold gains for a turn the engine pays a quest (playtest #85b).
+
+    Losses (a price, a payment) stay. Returns the dropped fields for the trace.
+    """
+    player = result.get("player") if isinstance(result.get("player"), dict) else None
+    if not player:
+        return []
+    dropped: list[str] = []
+    if _float(player.get("xp_delta"), 0) > 0:
+        player.pop("xp_delta", None)
+        dropped.append("xp_delta")
+    if player.get("xp_band"):
+        player.pop("xp_band", None)
+        dropped.append("xp_band")
+    if _float(player.get("gold_delta"), 0) > 0:
+        player.pop("gold_delta", None)
+        dropped.append("gold_delta")
+    band = str(player.get("gold_band") or "").strip().lower()
+    if band and not band.startswith(("-", "lose", "spend")):
+        player.pop("gold_band", None)
+        dropped.append("gold_band")
+    if dropped:
+        result["_quest_reward_dropped"] = dropped
+    return dropped
+
+
 def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, Any] | None:
     """
     Make the gold the prose names the gold that moves (playtest #69).
@@ -15903,6 +15930,8 @@ def apply_turn(
             movement_report["town_error"] = town_error
         pre_rows = result.pop("_snapshot_rows", None)
         town_turn = result.pop("_town_turn", None)
+        quest_attempt = result.pop("_quest_step_attempt", None)
+        quest_attempt = quest_attempt if isinstance(quest_attempt, dict) else None
         direction_resolved = result.pop("_direction_hint", None)
         direction_resolved = direction_resolved if isinstance(direction_resolved, dict) else None
         if town_turn:
@@ -15973,6 +16002,11 @@ def apply_turn(
             pass
         # A price or payment the prose names is the gold that moves; it is
         # marked server-authored so the band roller below leaves it (#69).
+        if quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest"):
+            # The quest's reward is the engine's payout (playtest #85b); a
+            # reward the model adds for the same work would pay it twice.
+            # Costs and payments (negative gold) still go through.
+            _drop_model_rewards(result)
         try:
             gold_note = _settle_stated_gold(result, player_input)
         except Exception as exc:
@@ -16430,6 +16464,33 @@ def apply_turn(
         # turn resolves) and after the offer-accept regex above.
         quest_changes = result.get("quest_changes") if isinstance(result.get("quest_changes"), dict) else None
         quest_marks = result.get("quest_marks") if isinstance(result.get("quest_marks"), list) else None
+        # The step the player did this turn, decided before the prose by the
+        # act's roll (playtest #85b): advanced and paid here, first, through
+        # the one step-done path, and closed to the parser for this turn.
+        engine_quest_rows: list[dict[str, Any]] = []
+        settled_quest_ids: set[int] = set()
+        if quest_attempt and _play_system_enabled(conn, "quests_enabled", True):
+            settled_quest_ids.add(int(quest_attempt["quest_id"]))
+            engine_row: dict[str, Any] = {
+                "code": quest_attempt["code"],
+                "action": "attempt",
+                "outcome": quest_attempt["outcome"],
+                "source": "engine",
+            }
+            if quest_attempt.get("done"):
+                try:
+                    from app.quests import complete_quest_step
+
+                    done = complete_quest_step(conn, int(quest_attempt["quest_id"]), turn=turn, source="engine")
+                    if done.get("ok"):
+                        engine_row["action"] = done["action"]
+                        if done.get("paid"):
+                            engine_row["paid"] = done["paid"]
+                    else:
+                        engine_row["error"] = str(done.get("error") or "")[:200]
+                except Exception as exc:
+                    engine_row["error"] = f"{type(exc).__name__}: {exc}"[:200]
+            engine_quest_rows.append(engine_row)
         if (quest_changes or quest_marks) and _play_system_enabled(conn, "quests_enabled", True):
             try:
                 from app.quest_parser import apply_quest_changes, merge_marks
@@ -16439,10 +16500,14 @@ def apply_turn(
                     source_before = changes.get("source")
                     changes = merge_marks({**changes, "_parser_ran": bool(quest_changes), "source": source_before or "parser"}, quest_marks)
                 quest_report = apply_quest_changes(
-                    conn, changes, narration=narration, player_input=player_input, turn=turn
+                    conn, changes, narration=narration, player_input=player_input, turn=turn, settled_ids=settled_quest_ids
                 )
             except Exception as exc:
                 quest_report = {"status": "error", "error": str(exc)[:300], "created": [], "updated": [], "rejected": []}
+        if engine_quest_rows:
+            quest_report = {**quest_report, "updated": [*engine_quest_rows, *(quest_report.get("updated") or [])]}
+            if quest_report.get("status") in {"skipped", "empty", "rejected"}:
+                quest_report["status"] = "applied"
         if offered_before:
             try:
                 taken = [
@@ -16594,9 +16659,27 @@ def _turn_reward_summary(before_state: dict[str, Any], after_state: dict[str, An
                 "description": str(change.get("description") or "")[:240],
             }
         )
+    # Quests finished this turn and what they paid (playtest #85b): the items
+    # came through pay_quest_reward, not inventory_changes, and gold had no
+    # line at all.
+    quests_done: list[dict[str, Any]] = []
+    report = result.get("quest_report") if isinstance(result.get("quest_report"), dict) else {}
+    for row in report.get("updated") or []:
+        paid = row.get("paid") if isinstance(row, dict) else None
+        if not isinstance(paid, dict):
+            continue
+        quests_done.append({"code": str(row.get("code") or ""), "text": str(paid.get("text") or "")[:200]})
+        units = max(1, int(paid.get("units") or 1))
+        for name in paid.get("items") or []:
+            items_gained.append(
+                {"name": norm_name(str(name)), "quantity": units, "rarity": "common", "item_type": "misc", "description": "Quest reward."}
+            )
+    gold_gain = max(0, int(after_player.get("gold") or 0) - int(before_player.get("gold") or 0))
     return {
         "xp_gain": xp_gain,
+        "gold_gain": gold_gain,
         "items_gained": items_gained,
+        "quests_completed": quests_done,
     }
 
 
@@ -16828,6 +16911,109 @@ def _previous_act(conn, turn_now: int) -> dict[str, Any] | None:
         "outcome": str(row["band"] or ""),
         "degree": str(inputs.get("degree") or ""),
         "turns_ago": max(1, int(turn_now) + 1 - int(row["turn"] or 0)),
+    }
+
+
+def _quest_step_match(player_input: str) -> dict[str, Any] | None:
+    """The open quest step the player's own line is doing here, with what finishing it pays (playtest #85b).
+
+    T7 "i polish the blades the best i can" at the armory, with "Polish
+    swords" active there and its giver watching: nothing compared the act with
+    the quest, so only the parser model could finish it, and it did not.
+    Read before the draft, so the outcome is decided before the words.
+    """
+    own = re.split(r"\n\s*\n", _player_line(player_input), maxsplit=1)[0].strip()
+    if not own:
+        return None
+    try:
+        from app.quests import get_active_quests, match_quest_step, quest_reward_amounts, reward_text
+
+        with connect() as conn:
+            if not _play_system_enabled(conn, "quests_enabled", True):
+                return None
+            quests = get_active_quests(conn)
+            if not quests:
+                return None
+            prow = conn.execute(
+                "SELECT p.current_location_id AS lid, COALESCE(l.code, '') AS code "
+                "FROM player p LEFT JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+            ).fetchone()
+            if not prow:
+                return None
+            here = {int(r["id"]) for r in conn.execute("SELECT id FROM npcs WHERE location_id = ?", (prow["lid"],)).fetchall()}
+            for quest in quests:
+                if quest.get("giver_npc_id"):
+                    row = conn.execute("SELECT name FROM npcs WHERE id = ?", (quest["giver_npc_id"],)).fetchone()
+                    quest["giver_name"] = str(row["name"] or "") if row else ""
+            match = match_quest_step(own, quests, location_code=str(prow["code"] or ""), present_npc_ids=here)
+            if match and match.get("completes_quest"):
+                quest = next((q for q in quests if int(q.get("id") or 0) == int(match["quest_id"])), None)
+                if quest:
+                    # The sum the prose names is the sum pay_quest_reward pays.
+                    match["reward"] = quest_reward_amounts(conn, quest)
+                    match["reward_text"] = reward_text(match["reward"])
+            return match
+    except Exception:
+        return None
+
+
+def _quest_step_attempt(
+    match: dict[str, Any] | None,
+    checks: list[dict[str, Any]],
+    *,
+    dice_ran: bool,
+    blocked: bool = False,
+) -> dict[str, Any] | None:
+    """The engine's answer for a quest step the player did this turn (playtest #85b).
+
+    Done only on a success of the act's own roll; a failure, a partial job or
+    a body too spent to work leaves it open. With dice off the declared work
+    is done, as any unrolled act is. With dice on and no act roll (a fight in
+    the same line) the engine does not decide, and the parser may. Returns
+    the attempt for apply_turn, with ``note`` for the prose.
+    """
+    if not match:
+        return None
+    from app.quests import STEP_DONE_OUTCOMES
+
+    check = next(
+        (c for c in checks or [] if isinstance(c, dict) and c.get("act") and c.get("natural") is not None),
+        None,
+    )
+    if blocked:
+        outcome, rolled = "blocked", False
+    elif check is not None:
+        outcome, rolled = str(check.get("outcome") or "failure"), True
+    elif not dice_ran:
+        outcome, rolled = "success", False
+    else:
+        return None
+    done = outcome in STEP_DONE_OUTCOMES
+    giver = str(match.get("giver_name") or "") or "whoever gave the job"
+    if done and match.get("completes_quest"):
+        paid = str(match.get("reward_text") or "")
+        result = (
+            f"done: this finishes the job \"{match['title']}\"; {giver} sees it finished"
+            + (f" and pays {paid}" if paid else "")
+            + ". The engine pays it: no GOLD or XP op for it."
+        )
+    elif done:
+        result = f"done: the step \"{match['step']}\" of \"{match['title']}\" is finished; the job goes on."
+    else:
+        result = f"not done: \"{match['title']}\" is still unfinished, and {giver} can see that."
+    return {
+        "quest_id": int(match["quest_id"]),
+        "code": match["code"],
+        "title": match["title"],
+        "step_number": int(match.get("step_number") or 0),
+        "step": match.get("step") or "",
+        "completes_quest": bool(match.get("completes_quest")),
+        "outcome": outcome,
+        "done": done,
+        "rolled": rolled,
+        "matched": match.get("matched") or [],
+        "act": str((match.get("act") or {}).get("phrase") or "")[:100],
+        "note": {"quest": match["code"], "job": match["title"], "step": match.get("step") or "", "result": result},
     }
 
 
@@ -17324,6 +17510,11 @@ def play_turn(
         except Exception:
             pass
 
+    # A quest step the player is doing right now (playtest #85b). Its roll is
+    # the act's roll below, and the prose is told the outcome before it is written.
+    quest_match = _quest_step_match(player_input) if input_kind == "player" else None
+    quest_dice_ran = False
+
     # Pre-resolve action checks so the LLM must honor social rolls / DCs.
     skill_check_results: list[dict[str, Any]] = []
     try:
@@ -17353,6 +17544,30 @@ def play_turn(
                 inferred = infer_check_from_action(model_input, context)
                 if inferred and (inferred.get("social") or check_cfg.get("auto_check_on_risky_actions")):
                     pending = [inferred]
+            quest_dice_ran = True
+            if quest_match:
+                # A quest task always rolls, even with auto-checks off: the
+                # step is done or not on this roll (playtest #85b). The act is
+                # the player's own, read the way infer_check_from_action reads it.
+                act = quest_match.get("act") or {}
+                if not pending and act.get("skill_code"):
+                    pending = [
+                        {
+                            "skill_code": act["skill_code"],
+                            "opposition": None,
+                            "social": False,
+                            "act": act.get("phrase") or "",
+                            "act_family": act.get("family") or "",
+                            "labour": True,
+                            "routine": bool(act.get("routine")),
+                        }
+                    ]
+                from app.quests import QUEST_CHECK_DIFFICULTY
+
+                for item in pending:
+                    if isinstance(item, dict) and item.get("act") and not item.get("difficulty"):
+                        # The mark is the job's: an easy job is an easy roll.
+                        item["difficulty"] = QUEST_CHECK_DIFFICULTY.get(str(quest_match.get("difficulty") or ""), None)
             # The d20 is seeded like every other server roll: an unseeded
             # Random() made a rewind + regenerate of the same input roll a
             # different check (and apply a different injury) while every band
@@ -17496,6 +17711,41 @@ def play_turn(
                 context["mechanics_context"] = mechanics_context
     except Exception:
         skill_check_results = []
+
+    # The quest step's outcome, decided once here (playtest #85b): apply_turn
+    # advances and pays it, and the prose is told it through act_outcome.quest.
+    quest_step_attempt: dict[str, Any] | None = None
+    try:
+        quest_step_attempt = _quest_step_attempt(
+            quest_match,
+            skill_check_results,
+            dice_ran=quest_dice_ran,
+            blocked=bool((action_spend_pack or {}).get("blocked")),
+        )
+        if quest_step_attempt:
+            mechanics_context = dict(context.get("mechanics_context") or {})
+            outcome_note = dict(mechanics_context.get("act_outcome") or {})
+            if not outcome_note:
+                # No roll (dice off, or too spent to work): the engine still decided.
+                from app.skill_checks import _ACT_OUTCOME_WORDS
+
+                blocked = quest_step_attempt["outcome"] == "blocked"
+                outcome_note = {
+                    "act": quest_step_attempt["act"],
+                    "skill": "",
+                    "proficiency": "",
+                    "outcome": "failure" if blocked else "success",
+                    "degree": "too exhausted to work" if blocked else "no roll",
+                    "means": _ACT_OUTCOME_WORDS["failure" if blocked else "success"],
+                }
+            outcome_note["quest"] = quest_step_attempt["note"]
+            mechanics_context["act_outcome"] = outcome_note
+            mechanics_context["quest_step_attempt"] = {
+                k: quest_step_attempt[k] for k in ("code", "title", "step", "outcome", "done", "completes_quest")
+            }
+            context["mechanics_context"] = mechanics_context
+    except Exception:
+        quest_step_attempt = None
 
     # The town side of this turn (docs/TownGrid.md 5.1): planned before the
     # prompt from the player's own words, so the draft is told where the walk
@@ -17719,6 +17969,8 @@ def play_turn(
         result["_snapshot_rows"] = pre_snapshot_rows
     if town_turn and isinstance(result, dict):
         result["_town_turn"] = town_turn
+    if quest_step_attempt and isinstance(result, dict):
+        result["_quest_step_attempt"] = quest_step_attempt
     if isinstance(direction_resolved, dict) and isinstance(result, dict):
         result["_direction_hint"] = direction_resolved
     actual_player_input = journal_input if journal_input is not None else player_input

@@ -4979,16 +4979,29 @@ def api_npc_watch_toggle(npc_id: int):
 
 @app.post("/api/quests/{quest_id}/advance")
 def api_advance_quest(quest_id: int):
-    from app.quests import advance_quest_step
+    # The same step-done path as play (playtest #85b): it journals, pays
+    # through pay_quest_reward and returns what was paid, so the button shows
+    # the real sums and not the quest's unscaled reward_gold / reward_xp.
+    from app.quests import complete_quest_step
     from app.db import connect
     with connect() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         turn = int(row["value"]) if row else 0
-        result = advance_quest_step(conn, quest_id, turn=turn)
-        # Same payout the quest parser uses when the story completes a quest.
-        from app.quests import pay_quest_completion
+        result = complete_quest_step(conn, quest_id, turn=turn, source="advance_button")
+        if result.get("ok"):
+            try:
+                from app.scene_thread import update_after_turn as update_scene_thread
 
-        pay_quest_completion(conn, quest_id, result)
+                update_scene_thread(
+                    conn,
+                    turn_thread=None,
+                    quest_report={"created": [], "updated": [{"code": result.get("code"), "action": result.get("action")}]},
+                    narration="",
+                    player_input="",
+                    turn=turn,
+                )
+            except Exception:
+                pass  # the thread never blocks the button
     return result
 
 
