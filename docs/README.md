@@ -4,6 +4,7 @@
 | --- | --- |
 | [ConnectAPIs.md](ConnectAPIs.md) | Cloud / OpenAI-compatible APIs and agent bridge |
 | [ConnectImages.md](ConnectImages.md) | Optional local Forge / ComfyUI image backends |
+| [TextToSpeech.md](TextToSpeech.md) | Read the story aloud: local Piper engine or a speech API, presets, Play bar and right-click controls, troubleshooting |
 | [NarrationPipeline.md](NarrationPipeline.md) | Adaptive paragraph narration pipeline |
 | [TurnDsl.md](TurnDsl.md) | NAR+OPS draft language and opcodes |
 | [WorldMap.md](WorldMap.md) | Planned procgen map, travel limits, event pins |
@@ -21,6 +22,7 @@
 | [WeldingRig.md](WeldingRig.md) | Offline LoRA pack: datasets, adapter names, wiring |
 | [PLAYTEST_SMOKE.md](PLAYTEST_SMOKE.md) | Isekai opening + 3-turn smoke checklist |
 | [PLAYTEST_ISSUES.md](PLAYTEST_ISSUES.md) | Every reported or live-run playtest issue, its evidence, cause and status |
+| [BuiltNotWired.md](BuiltNotWired.md) | Modules built for the remaining TODO items but not called by the live game: the rule, every hook point and Turn on checklist, the shared shapes, the open decisions |
 | [TODO_NEXT.md](TODO_NEXT.md) | Priority queue (dispatch ids) |
 
 Project-level docs at repo root:

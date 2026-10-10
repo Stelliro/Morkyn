@@ -4052,6 +4052,12 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
     with connect() as conn:
         settings = _settings(conn)
         settings.pop("game_start_form", None)
+        # The speech API key only ever leaves masked (/api/tts-config). Every payload
+        # that embeds the state (turns, slot loads, the agent API) comes through here,
+        # so the key is blanked at the source rather than route by route.
+        tts_cfg = settings.get("tts_config")
+        if isinstance(tts_cfg, dict) and tts_cfg.get("api_key"):
+            tts_cfg["api_key"] = ""
         try:
             from app.setting_templates import overlay_setting_templates
 

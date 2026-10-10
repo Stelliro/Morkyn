@@ -1,6 +1,6 @@
 # Mørkyn 0.10.0-wip — Release Notes
 
-Notes extended 2026-10-04. Still untagged.
+Notes extended 2026-10-08. Still untagged.
 
 **Status:** WIP release — systems under active development, not stable. Not yet tagged; it ships as `0.10.0`. Builds on the [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12) stable release.
 
@@ -10,6 +10,7 @@ Notes extended 2026-10-04. Still untagged.
 
 ### Since 2026-10-04
 
+- **Read the story aloud.** A Play bar under the narration and a right-click menu (Play selected text, Play this paragraph) speak the shipped prose paragraph by paragraph, through a local CPU engine (Piper, installed from a button, voices downloaded on first use) or a speech API (OpenAI-compatible, ElevenLabs), with known-good presets for each. Off by default; speech stops when a turn is sent and never runs while the model holds the GPU — `app/tts.py`, `docs/TextToSpeech.md`.
 - **Token limits follow the model.** Context window and response caps come from the GGUF header and the GPU, or a tokens-per-billion scale; your own numbers are kept per model; launcher prefs default to `auto` — `app/model_limits.py`.
 - **Failsafes.** A model failure opens a dialog that names the problem and what to try, with "Continue anyway"; a context too small for the full contract is announced at boot — `app/failsafe.py`, `static/ui/failsafe.js`.
 - **Cheaper turns.** The verifier returns a verdict and a patch, local models share one system prefix per turn, prose repairs carry a prose contract, truncated JSON is closed locally, a dead model costs one call — `app/llm.py`, `app/prompts.py`.
