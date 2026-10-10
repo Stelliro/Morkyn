@@ -216,6 +216,10 @@ SNAPSHOT_SETTING_KEYS = (
     # app/turn_prompts.py): a rewind takes back the offers that turn made.
     "turn_prompts",
     "travel_destination",
+    # The drop and the death (playtest #88, the You died screen): a rewind of
+    # the turn that set them takes them back; a new game starts alive.
+    "player_downed",
+    "player_dead",
 )
 RESTORE_ORDER = [
     "turn_snapshots",
@@ -3696,7 +3700,9 @@ def has_continuable_save() -> dict[str, Any]:
     # Live DB first
     try:
         state = get_state(include_hidden=False)
-        if state.get("setup_complete"):
+        # A dead character is not continued (playtest #88); Load still offers
+        # the earlier autosaves when the rule left them.
+        if state.get("setup_complete") and not state.get("dead"):
             loc = (state.get("current_location") or {}).get("name") or ""
             player = (state.get("player") or {}).get("name") or ""
             turn = 0
@@ -4529,6 +4535,10 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             "foes": [],
             "seen_moves": [],
         }
+    # The death, when there was one (playtest #88): the browser shows the You
+    # died screen from this and play_turn refuses to go on.
+    dead = settings.get("player_dead")
+    state["dead"] = dead if isinstance(dead, dict) and dead else None
     raw_conditions = settings.get("player_conditions")
     if isinstance(raw_conditions, list):
         state["conditions"] = raw_conditions
@@ -5391,6 +5401,9 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
             "economy_enabled": _setup_flag_enabled(options, "economy_enabled", True),
             "system_style": options.get("system_style") or "subtle blue-window system",
             "death_rules": options.get("death_rules") or "downed, not deleted",
+            # Ironman: health 0 is death, and the character's saves go with
+            # them (a copy is kept in data/graveyard; the screen does not say so).
+            "ironman_mode": _setup_flag_enabled(options, "ironman_mode", False),
             "economy": options.get("economy") or "scarce",
             # Same reasoning as tech_level below: "rare" is what this field
             # holds when nobody picked, and a world set up for "open magic"
@@ -17261,6 +17274,17 @@ def play_turn(
             if journal_input is None:
                 journal_input = in_fiction
     context = get_state(include_hidden=True)
+    # The story ended (playtest #88): no turn after the death. The browser
+    # shows the You died screen from this; a new game or a loaded save plays on.
+    if isinstance(context.get("dead"), dict) and context.get("dead"):
+        return {
+            "turn": None,
+            "state": context,
+            "dead": context["dead"],
+            "advanced_turn": False,
+            "answer": "The story has ended. Start a new game or load a save.",
+            "input_kind": input_kind,
+        }
     used_fallback = False
     fallback_reason = ""
     ability_use_pack: dict[str, Any] | None = None
@@ -17789,6 +17813,7 @@ def play_turn(
     # the player drops is narrated as the drop, and the turn after is the
     # coming round, by the setup's death rule (_downed_recovery).
     recovery: dict[str, Any] | None = None
+    death_this_turn: dict[str, Any] | None = None
     downed_turn = False
     if input_kind == "player" and not str(model_input).startswith("__"):
         try:
@@ -17799,6 +17824,12 @@ def play_turn(
             with connect() as c_hp:
                 downed = _settings(c_hp).get("player_downed")
             mechanics_context = dict(context.get("mechanics_context") or {})
+            ironman = _setup_flag_enabled(options, "ironman_mode", False)
+            if isinstance(downed, dict) and downed and health_now > 0:
+                # A rewind took the drop back: the mark is stale.
+                with connect() as c_hp:
+                    c_hp.execute("DELETE FROM settings WHERE key = 'player_downed'")
+                downed = None
             if isinstance(downed, dict) and downed:
                 recovery_turn, recovery_seed = _skill_check_seed()
                 recovery = _downed_recovery(downed, options, max_hp, _skill_check_rng(recovery_turn, recovery_seed, 9, "recovery"))
@@ -17808,15 +17839,30 @@ def play_turn(
                 for key in ("resolved_checks", "act_outcome", "social_attitudes", "previous_act"):
                     mechanics_context.pop(key, None)
                 mechanics_context["recovery"] = recovery
-                mechanics_context["health_state"] = _health_state(
-                    max(1, min(max_hp, health_now + int(recovery["health_delta"]))), max_hp, context.get("conditions")
-                )
-                model_input = (
-                    model_input
-                    + "\n\n__downed__: the player collapsed last turn and is coming round now. "
-                    + str(recovery.get("what_happens") or "")
-                    + " Do not carry out the action in the player's line."
-                )
+                if recovery.get("died"):
+                    death_this_turn = {
+                        "rule": recovery.get("rule"),
+                        "cause": str(downed.get("cause") or "")[:200],
+                        "limb": downed.get("limb"),
+                        "death_roll": recovery.get("death_roll"),
+                    }
+                    mechanics_context["death"] = death_this_turn
+                    mechanics_context["health_state"] = _health_state(0, max_hp, context.get("conditions"))
+                    model_input = (
+                        model_input
+                        + "\n\n__death__: the player collapsed last turn and does not come round. "
+                        + str(recovery.get("what_happens") or "")
+                    )
+                else:
+                    mechanics_context["health_state"] = _health_state(
+                        max(1, min(max_hp, health_now + int(recovery["health_delta"]))), max_hp, context.get("conditions")
+                    )
+                    model_input = (
+                        model_input
+                        + "\n\n__downed__: the player collapsed last turn and is coming round now. "
+                        + str(recovery.get("what_happens") or "")
+                        + " Do not carry out the action in the player's line."
+                    )
                 with connect() as c_hp:
                     conn_minutes = int(recovery.get("minutes") or 0)
                     if conn_minutes > 0:
@@ -17842,26 +17888,43 @@ def play_turn(
                         None,
                     )
                     health_state["downed"] = True
-                    model_input = (
-                        model_input
-                        + "\n\n__downed__: the player's health reaches 0 with this action. They go down at the end "
-                        "of it: the action does not finish, and the scene ends with the player on the ground, "
-                        "losing consciousness. Do not write them acting past that."
-                    )
-                    with connect() as c_hp:
-                        _set_setting(
-                            c_hp,
-                            "player_downed",
-                            {
-                                "turn": _current_turn_number(),
-                                "rule": _death_rule(options),
-                                "limb": (cause or {}).get("limb") or "body",
-                                "cause": str((cause or {}).get("summary") or "")[:200],
-                            },
+                    if ironman:
+                        # Ironman: the drop is the death. No coming round, and
+                        # the save goes with the character (_wipe_campaign_saves).
+                        death_this_turn = {
+                            "rule": "ironman",
+                            "cause": str((cause or {}).get("summary") or "")[:200],
+                            "limb": (cause or {}).get("limb") or "body",
+                        }
+                        mechanics_context["death"] = death_this_turn
+                        model_input = (
+                            model_input
+                            + "\n\n__death__: the player's health reaches 0 with this action and they die. The action "
+                            "does not finish: narrate the death from inside the scene, who or what is there, and let "
+                            "the scene close on it. This is the last turn of the story. Do not write them acting past it."
                         )
+                    else:
+                        model_input = (
+                            model_input
+                            + "\n\n__downed__: the player's health reaches 0 with this action. They go down at the end "
+                            "of it: the action does not finish, and the scene ends with the player on the ground, "
+                            "losing consciousness. Do not write them acting past that."
+                        )
+                        with connect() as c_hp:
+                            _set_setting(
+                                c_hp,
+                                "player_downed",
+                                {
+                                    "turn": _current_turn_number(),
+                                    "rule": _death_rule(options),
+                                    "limb": (cause or {}).get("limb") or "body",
+                                    "cause": str((cause or {}).get("summary") or "")[:200],
+                                },
+                            )
             context["mechanics_context"] = mechanics_context
         except Exception:
             recovery = None
+            death_this_turn = None
 
     # The quest step's outcome, decided once here (playtest #85b): apply_turn
     # advances and pays it, and the prose is told it through act_outcome.quest.
@@ -18341,16 +18404,33 @@ def play_turn(
     except Exception:
         travel_ready = True
 
+    # The death, recorded before the autosave so the save carries it (playtest
+    # #88). Ironman then takes the character's saves with them, after a copy.
+    dead_record: dict[str, Any] | None = None
+    if death_this_turn:
+        try:
+            dead_record = _record_death(death_this_turn, state if isinstance(state, dict) else {}, result)
+            if isinstance(state, dict):
+                state["dead"] = dead_record
+        except Exception:
+            dead_record = None
+
     # Always persist after a choice so Continue / Load last works.
     autosave_meta = None
     try:
         autosave_meta = autosave_campaign()
     except Exception:
         autosave_meta = None
+    if dead_record and dead_record.get("rule") == "ironman":
+        try:
+            dead_record["saves_removed"] = _wipe_campaign_saves(campaign_id())
+        except Exception:
+            dead_record["saves_removed"] = 0
 
     payload = {
         "turn": result,
         "state": state,
+        "dead": dead_record,
         "rewards": rewards,
         "used_fallback": used_fallback,
         "fallback_reason": fallback_reason,
@@ -18518,14 +18598,19 @@ def _downed_recovery(downed: dict[str, Any], options: dict[str, Any] | None, max
         }
         out["what_happens"] += " The collapse leaves a lasting wound; the prose shows it."
     elif rule == "permadeath threat":
-        # No game-over contract exists yet (docs/TODO_NEXT.md n23 design). The
-        # threat is real in the body: a roll, and a bad one costs health that
-        # does not come back.
+        # The threat is real: a d20, and on a 1-3 the player does not come
+        # round. The turn is then the death, and the game ends (player_dead).
         roll = rng.randint(1, 20)
         out["death_roll"] = roll
         if roll <= 3:
-            out["max_health_delta"] = -2
-            out["what_happens"] += " Death came close: the player is permanently weaker for it (max health falls)."
+            out["died"] = True
+            out["health_delta"] = 0
+            out["minutes"] = 0
+            out["what_happens"] = (
+                "The player collapsed last turn and does not come round. This turn is their death: narrate it "
+                "from where they fell, who or what is there, and let the scene close on it. The action in "
+                "player_input did not happen. This is the last turn of the story."
+            )
         else:
             out["what_happens"] += " Death came close and passed by this time."
     elif rule == "narrative setback":
@@ -18535,6 +18620,82 @@ def _downed_recovery(downed: dict[str, Any], options: dict[str, Any] | None, max
             "to the cost of it."
         )
     return out
+
+
+def graveyard_dir() -> Path:
+    """Where a dead ironman character's saves are kept. The screen never mentions it."""
+    return Path(os.getenv("AI_RPG_GRAVEYARD", str(campaign_slots_dir().parent / "graveyard")))
+
+
+def _record_death(death: dict[str, Any], state: dict[str, Any], turn: dict[str, Any]) -> dict[str, Any]:
+    """Write settings.player_dead: the record the You died screen reads (playtest #88).
+
+    Written after apply_turn, so a rewind of the death turn takes it back
+    (SNAPSHOT_SETTING_KEYS), and before the autosave, so the save carries it.
+    """
+    player = state.get("player") if isinstance(state.get("player"), dict) else {}
+    location = state.get("current_location") if isinstance(state.get("current_location"), dict) else {}
+    world_time = state.get("world_time") if isinstance(state.get("world_time"), dict) else {}
+    turn_number = _current_turn_number()
+    record = {
+        "rule": str(death.get("rule") or ""),
+        "cause": str(death.get("cause") or "")[:200],
+        "limb": str(death.get("limb") or ""),
+        "death_roll": death.get("death_roll"),
+        "turn": turn_number,
+        "turns_survived": max(0, turn_number - 1),
+        "day": world_time.get("day"),
+        "time_label": str(world_time.get("label") or ""),
+        "player_name": str(player.get("name") or ""),
+        "title": str(player.get("title") or ""),
+        "level": player.get("level"),
+        "location": str(location.get("name") or ""),
+        "last_words": str((turn or {}).get("turn_summary") or "")[:200],
+        "at": datetime.now(timezone.utc).isoformat(),
+        "ironman": str(death.get("rule") or "") == "ironman",
+    }
+    with connect() as conn:
+        _set_setting(conn, "player_dead", record)
+        conn.execute("DELETE FROM settings WHERE key = 'player_downed'")
+    return record
+
+
+def _wipe_campaign_saves(cid: str) -> int:
+    """Ironman: the character's saves go with them. A full export is kept first
+    in graveyard_dir(), which the player is not told about; the slots they could
+    load are removed. Returns the number of slots removed.
+    """
+    grave = graveyard_dir() / f"{cid}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+    grave.mkdir(parents=True, exist_ok=True)
+    try:
+        payload = export_world()
+        (grave / "world.json").write_text(json.dumps(payload, ensure_ascii=True), encoding="utf-8")
+    except Exception:
+        pass
+    removed = 0
+    for slot in list_campaign_slots():
+        name = str(slot.get("slot") or "")
+        if not name:
+            continue
+        parsed = parse_autosave_slot(name)
+        belongs = (parsed is not None and parsed[0] == cid) or str(slot.get("campaign_id") or "") == cid
+        if not belongs:
+            continue
+        slot_dir = campaign_slots_dir() / name
+        try:
+            shutil.copytree(slot_dir, grave / "slots" / name, dirs_exist_ok=True)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(slot_dir)
+            removed += 1
+        except OSError:
+            continue
+    try:
+        gc_campaign_blobs()
+    except Exception:
+        pass
+    return removed
 
 
 def _current_turn_number() -> int:

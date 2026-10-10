@@ -202,9 +202,11 @@ class HealthStateAndRecovery(unittest.TestCase):
             world._downed_recovery(downed, {"death_rules": "permadeath threat"}, 20, random.Random(seed))
             for seed in range(60)
         ]
-        self.assertTrue(any(t["max_health_delta"] == -2 for t in threats))
-        self.assertTrue(any(t["max_health_delta"] == 0 for t in threats))
+        # A 1-3 on the d20 is the death; the rest come round like anyone else.
+        self.assertTrue(any(t.get("died") for t in threats))
+        self.assertTrue(any(not t.get("died") and t["health_delta"] == 5 for t in threats))
         self.assertTrue(all("death_roll" in t for t in threats))
+        self.assertTrue(all(t["max_health_delta"] == 0 for t in threats))
 
 
 class ThePromptsCarryTheBody(unittest.TestCase):
@@ -400,6 +402,165 @@ class DownedThenComingRound(unittest.TestCase):
         mechanics = seen[0][0].get("mechanics_context", {})
         self.assertNotIn("recovery", mechanics)
         self.assertEqual((mechanics.get("health_state") or {}).get("band"), "critical")
+
+
+class _AlwaysOne(random.Random):
+    """A d20 that only ever shows 1: the permadeath roll fails."""
+
+    def randint(self, a, b):  # noqa: D401 - test double
+        return a
+
+
+class PermadeathRoll(unittest.TestCase):
+    def test_a_failed_death_roll_is_the_death_not_a_weaker_body(self):
+        out = world._downed_recovery({"turn": 3, "limb": "leg", "cause": "a fall"}, {"death_rules": "permadeath threat"}, 20, _AlwaysOne())
+        self.assertTrue(out["died"])
+        self.assertEqual(out["death_roll"], 1)
+        self.assertEqual(out["health_delta"], 0)
+        self.assertEqual(out["minutes"], 0)
+        self.assertIn("last turn of the story", out["what_happens"])
+        self.assertEqual(out["max_health_delta"], 0)
+
+
+class IronmanDeath(unittest.TestCase):
+    """Ironman: the drop is the death; the saves go with the character, a copy kept quietly."""
+
+    @classmethod
+    def setUpClass(cls):
+        from app import db
+
+        os.environ.update(_ENV)
+        cls.grave = _TMP / "graveyard"
+        os.environ["AI_RPG_GRAVEYARD"] = str(cls.grave)
+        db.init_db()
+        world.start_playthrough(
+            {
+                "player_name": "Mara Quill",
+                "start_location": "Iron Spire",
+                "special_ability_origin": "none",
+                "dice_checks_enabled": True,
+                "death_rules": "downed, not deleted",
+                "ironman_mode": True,
+            }
+        )
+        with db.connect() as conn:
+            conn.execute("UPDATE player SET health = 0, max_health = 20 WHERE id = 1")
+
+    @classmethod
+    def tearDownClass(cls):
+        os.environ.pop("AI_RPG_GRAVEYARD", None)
+
+    def _play(self, line: str, seen: list) -> dict:
+        from unittest import mock
+
+        def fake(prompt_context, model_input):
+            seen.append((prompt_context, model_input))
+            return _stub_turn()
+
+        with mock.patch.object(world, "generate_turn", side_effect=fake):
+            return world.play_turn(line)
+
+    def test_the_drop_is_the_death_and_the_saves_are_gone(self):
+        from app import db
+
+        cid = world.campaign_id()
+        # A save the player could have loaded.
+        world.save_campaign_slot(world.autosave_slot_name(cid, 1))
+        self.assertTrue(any(world.parse_autosave_slot(str(s.get("slot"))) for s in world.list_campaign_slots()))
+
+        seen: list = []
+        payload = self._play("ask Vael about the Irond's true purpose", seen)
+        _prompt_context, model_input = seen[0]
+        self.assertIn("__death__", model_input)
+        self.assertIn("last turn of the story", model_input)
+        mechanics = _prompt_context.get("mechanics_context", {})
+        self.assertEqual((mechanics.get("death") or {}).get("rule"), "ironman")
+        dead = payload.get("dead") or {}
+        self.assertEqual(dead.get("rule"), "ironman")
+        self.assertTrue(dead.get("ironman"))
+        self.assertEqual(dead.get("player_name"), "Mara Quill")
+        self.assertGreaterEqual(int(dead.get("saves_removed") or 0), 1)
+        self.assertEqual((payload.get("state") or {}).get("dead", {}).get("rule"), "ironman")
+        # The record is in settings and the state reports it.
+        with db.connect() as conn:
+            settings = world._settings(conn)
+        self.assertEqual(settings.get("player_dead", {}).get("rule"), "ironman")
+        self.assertNotIn("player_downed", settings)
+        self.assertEqual((world.get_state().get("dead") or {}).get("rule"), "ironman")
+        # No slot of this character is left to load; the graveyard has the copy.
+        for slot in world.list_campaign_slots():
+            parsed = world.parse_autosave_slot(str(slot.get("slot")))
+            self.assertFalse(parsed and parsed[0] == cid, slot.get("slot"))
+            self.assertNotEqual(str(slot.get("campaign_id") or ""), cid, slot.get("slot"))
+        graves = list(self.grave.glob(f"{cid}-*/world.json"))
+        self.assertEqual(len(graves), 1)
+        # Continue does not offer a dead character, and no turn follows.
+        self.assertFalse(world.has_continuable_save().get("ok"))
+        seen.clear()
+        refused = self._play("get up", seen)
+        self.assertEqual(seen, [])
+        self.assertIs(refused.get("advanced_turn"), False)
+        self.assertEqual((refused.get("dead") or {}).get("rule"), "ironman")
+        self.assertIsNone(refused.get("turn"))
+
+
+class PermadeathEndsTheStory(unittest.TestCase):
+    """permadeath threat: the drop, then a failed roll on the coming round is the death; saves stay."""
+
+    @classmethod
+    def setUpClass(cls):
+        from app import db
+
+        os.environ.update(_ENV)
+        db.init_db()
+        world.start_playthrough(
+            {
+                "player_name": "Mara Quill",
+                "start_location": "Iron Spire",
+                "special_ability_origin": "none",
+                "dice_checks_enabled": True,
+                "death_rules": "permadeath threat",
+            }
+        )
+        with db.connect() as conn:
+            conn.execute("UPDATE player SET health = 0, max_health = 20 WHERE id = 1")
+
+    def _play(self, line: str, seen: list) -> dict:
+        from unittest import mock
+
+        def fake(prompt_context, model_input):
+            seen.append((prompt_context, model_input))
+            return _stub_turn()
+
+        with mock.patch.object(world, "generate_turn", side_effect=fake), mock.patch.object(
+            world, "_skill_check_rng", return_value=_AlwaysOne()
+        ):
+            return world.play_turn(line)
+
+    def test_drop_then_failed_roll_is_the_death_and_saves_stay(self):
+        from app import db
+
+        cid = world.campaign_id()
+        world.save_campaign_slot(world.autosave_slot_name(cid, 1))
+        seen: list = []
+        first = self._play("ask Vael about the seal", seen)
+        self.assertIsNone(first.get("dead"))
+        self.assertIn("__downed__", seen[0][1])
+        seen.clear()
+        second = self._play("ask Vael about the Irond", seen)
+        _prompt_context, model_input = seen[0]
+        self.assertIn("__death__", model_input)
+        self.assertEqual((_prompt_context.get("mechanics_context", {}).get("death") or {}).get("rule"), "permadeath threat")
+        dead = second.get("dead") or {}
+        self.assertEqual(dead.get("rule"), "permadeath threat")
+        self.assertEqual(dead.get("death_roll"), 1)
+        self.assertFalse(dead.get("ironman"))
+        self.assertNotIn("saves_removed", dead)
+        kept = [s for s in world.list_campaign_slots() if (world.parse_autosave_slot(str(s.get("slot"))) or ("", 0))[0] == cid]
+        self.assertTrue(kept, "the earlier autosave stays loadable")
+        with db.connect() as conn:
+            player = dict(conn.execute("SELECT health FROM player WHERE id = 1").fetchone())
+        self.assertEqual(player["health"], 0)
 
 
 if __name__ == "__main__":

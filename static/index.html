@@ -1286,6 +1286,12 @@
                   <label><input type="radio" name="game_system" value="false" checked /> No</label>
                   <label><input type="radio" name="game_system" value="true" /> Yes</label>
                 </fieldset>
+
+                <fieldset class="toggleSet" data-help-text="Ironman: when health reaches 0 the character dies, whatever Death says above, and their saves are gone with them. One life.">
+                  <legend>Ironman</legend>
+                  <label><input type="radio" name="ironman_mode" value="false" checked /> Off</label>
+                  <label><input type="radio" name="ironman_mode" value="true" /> One life</label>
+                </fieldset>
               </div>
 
               <div id="systemOptions" class="conditional">
@@ -2296,6 +2302,7 @@
     <script src="/static/app.js?v=__BUNDLE__"></script>
     <script src="/static/ui/interact.js?v=__BUNDLE__"></script>
     <script src="/static/ui/failsafe.js?v=__BUNDLE__"></script>
+    <script src="/static/ui/death.js?v=__BUNDLE__"></script>
     <script>
       // Fallback if app.js 404s without setting boot flag — already handled by timeout above.
     </script>

@@ -14141,6 +14141,62 @@ body.compact-mode .indexContent {
 }
 
 /* ==========================================================================
+   ui/death.js — the "You died" screen. Layout only; look in skin.css.
+   ========================================================================== */
+
+#deathModal:not(.hidden) {
+  display: grid;
+  z-index: 200;
+}
+
+.deathPanel {
+  width: min(680px, 100%);
+  text-align: center;
+  padding: 36px 28px 28px;
+}
+
+.deathEyebrow {
+  margin: 0 0 10px;
+}
+
+.deathTitle {
+  margin: 0 0 14px;
+}
+
+.deathWho,
+.deathCause,
+.deathNote {
+  margin: 0 auto;
+  max-width: 44ch;
+}
+
+.deathCause {
+  margin-top: 10px;
+  line-height: 1.5;
+}
+
+.deathFacts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 18px;
+  margin: 18px 0 0;
+}
+
+.deathNote {
+  margin-top: 18px;
+  line-height: 1.45;
+}
+
+.deathActions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+/* ==========================================================================
    ui/failsafe.js — the "model problem" dialog. Layout only; look in skin.css.
    ========================================================================== */
 

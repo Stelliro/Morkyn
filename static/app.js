@@ -1183,6 +1183,9 @@ const SETTING_INFO = {
   leveling_system: {
     description: "If enabled, the player gains levels and XP. If disabled, growth is handled through training, items, and story changes.",
   },
+  ironman_mode: {
+    description: "One life. When health reaches 0 the character dies, whatever Death says, and their saves are gone with them.",
+  },
   xp_growth_speed: {
     description: "Controls how quickly XP is awarded when leveling is enabled.",
     customPlaceholder: "Example: XP only from major completed goals",
@@ -3896,7 +3899,7 @@ function setupSnapshotValue(formData, name) {
   if (setupForm.querySelector(`[data-list-setting="${name}"]`)) return readListSetting(formData, name, "");
   if (name === "special_abilities") return collectAbilities();
   if (name === "starter_gear") return collectGearItems();
-  if (["race_magic_enabled", "proficiency_system", "skill_levels_enabled", "leveling_system", "game_system"].includes(name)) return boolField(formData, name);
+  if (["race_magic_enabled", "proficiency_system", "skill_levels_enabled", "leveling_system", "game_system", "ironman_mode"].includes(name)) return boolField(formData, name);
   if (["player_name", "player_public_name", "player_title", "player_age", "previous_life_age", "character_backstory", "hair", "facial_features", "appearance", "starter_equipment", "start_location", "custom_style", "race_magic_rules", "race_ability_rules", "custom_skills", "inventory_rules"].includes(name)) {
     return formData.get(name) || "";
   }
@@ -8955,6 +8958,9 @@ function renderShell(nextState, options = {}) {
   }
 
   showGameView();
+  // A dead character's save opens on the You died screen (playtest #88). The
+  // death turn itself shows it after its prose (displayTurnPayload), not here.
+  if (state.dead && !options.fromTurn) window.MorkynDeath?.show(state.dead, { fromState: true });
 
   const location = state.current_location || {};
   // Short location line only — long summaries destroy the top bar layout.
@@ -19823,8 +19829,12 @@ function turnRewardsHtml(payload) {
 function displayTurnPayload(payload, options = {}) {
   clearTurnWaitTimer();
   if (!payload?.state || !payload?.turn) return false;
+  // The death turn (playtest #88): the prose plays out, then the screen.
+  if (payload.dead && !options.afterNarration) {
+    options = { ...options, afterNarration: () => window.MorkynDeath?.show(payload.dead, { fromTurn: true }) };
+  }
   clearSuggestions();
-  renderShell(payload.state);
+  renderShell(payload.state, { fromTurn: Boolean(payload.dead) });
   // Cold social attitudes → offer walk away / keep talking without forcing a verb
   try {
     const checks = payload.skill_checks || payload.turn?.skill_checks || [];
@@ -19858,11 +19868,13 @@ function displayTurnPayload(payload, options = {}) {
         addStartSplashLine("Opening scene is ready.");
         window.setTimeout(hideStartSplash, 1200);
       }
+      if (typeof options.afterNarration === "function") window.setTimeout(options.afterNarration, 900);
     }, { durationMs: options.startSplash ? 9000 : 4200 });
   } else {
     latestOutput.innerHTML = turnNarrationHtml(payload.turn);
     appendTurnMeta(payload);
     renderTtsPlayBar();
+    if (typeof options.afterNarration === "function") window.setTimeout(options.afterNarration, 600);
   }
   renderSceneHistory();
   revealCurrentTurn();
@@ -19887,6 +19899,17 @@ async function requestTurn(text, options = {}) {
     payload = await postTurnWithFailsafe(isContinue ? "/api/continue" : "/api/turn", isContinue ? {} : { text: cleanText });
   } finally {
     clearTurnWaitTimer();
+  }
+  // After the death there is no turn (playtest #88): the screen, not a note.
+  if (payload && payload.dead && payload.advanced_turn === false) {
+    try {
+      if (payload.state) renderShell(payload.state, { forceGame: true });
+      restoreLastTurnPanels();
+    } catch (_) {
+      /* the screen still shows */
+    }
+    window.MorkynDeath?.show(payload.dead, { fromState: true });
+    return;
   }
   // A line that was all out-of-character (playtest #79) is noted, not played.
   // Same handling as a /command note: redraw the shell, then show the note.
@@ -20306,6 +20329,8 @@ async function startGame(event) {
       xp_growth_note: xpGain.note,
       custom_skills: customSkills,
       death_rules: setupValueText(formData, "death_rules", "downed, not deleted", 80),
+      // Ironman (playtest #88): health 0 is death and the saves go with the character.
+      ironman_mode: boolField(formData, "ironman_mode"),
       npc_stat_scaling: setupValueText(formData, "npc_stat_scaling", "relative ranks", 80),
       npc_skill_frequency: setupValueText(formData, "npc_skill_frequency", "some trained NPCs", 100),
       rank_scale: setupValueText(formData, "rank_scale", "F,E,D,C,B,A,S,SS,SSS", 100),
