@@ -82,8 +82,8 @@ def _table_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return {name: int(conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]) for name in names}
 
 
-def _setting_keys(conn: sqlite3.Connection) -> set[str]:
-    return {row["key"] for row in conn.execute("SELECT key FROM settings")}
+def _setting_rows(conn: sqlite3.Connection) -> dict[str, str]:
+    return {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM settings")}
 
 
 def _spring_row(profile: dict, category: str, *, stock: float = economy.EQUILIBRIUM_DAYS) -> dict:
@@ -337,6 +337,8 @@ class ProductionTests(unittest.TestCase):
         self.assertEqual(economy.SCARCITY_EVENTS["blight"]["price_delta"], 0.60)
         self.assertEqual(economy.SCARCITY_EVENTS["glut"]["price_delta"], -0.35)
         self.assertEqual(economy.SCARCITY_EVENTS["war_levy"]["duration"], (10, 30))
+        self.assertEqual(economy.IMPORT_PULL, 0.15)
+        self.assertEqual(economy.EQUILIBRIUM_DAYS, 5.0)
 
     def test_initial_rows_cover_categories_and_drop_magic_when_no_magic(self):
         town = economy.settlement_profile(BOARD_TOWN)
@@ -461,6 +463,8 @@ class MultiplierTests(unittest.TestCase):
         recovered = economy.advance_market_row(short, season=self.spring, events=[], day=6)
         blocked = economy.advance_market_row(short, season=self.spring, events=[blight], day=6)
         self.assertGreater(recovered["stock"], blocked["stock"])
+        # The import pull is pinned, not just bounded: 1.9 + (5.0 - 1.9) x 0.15 = 2.365.
+        self.assertAlmostEqual(recovered["stock"], 1.9 + (economy.EQUILIBRIUM_DAYS - 1.9) * economy.IMPORT_PULL, places=6)
         self.assertGreater(recovered["stock"], 2.0)
         self.assertEqual(recovered["updated_day"], 6)
         self.assertEqual(short["stock"], 2.0)  # the input row is not changed
@@ -778,6 +782,31 @@ class EconomyDbTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 economy.ensure_settlement(conn, BOARD_TOWN, day=0, seed=SEED)
 
+    def test_tick_day_skips_hidden_base_and_landmark_rows(self):
+        # tile_world.list_settlements hands a discovered hidden camp in twice: as a landmark row whose
+        # state is farm (or ruins) and as a hidden_base row. Neither is a settlement and neither gets a market.
+        camp_as_farm = {"id": "hb:3", "x": 5, "y": 6, "state": "farm", "name": "Hidden camp",
+                        "summary": "Discovered camp hideout.", "kind": "hidden_base", "discovered": True}
+        camp = {"id": "hb:3", "x": 5, "y": 6, "state": "hidden_base", "name": "Hidden camp",
+                "summary": "Discovered camp hideout.", "kind": "hidden_base", "discovered": True}
+        shrine = {"id": "lm:1", "x": 1, "y": 1, "state": "shrine", "name": "Old shrine", "summary": "",
+                  "kind": "landmark", "discovered": True}
+        with connect() as conn:
+            economy.update_economy_config(conn, {"event_chance": 0.2})
+            self.assertEqual(economy.ensure_settlement(conn, camp_as_farm, day=1, seed=SEED), [])
+            out = economy.tick_day(conn, from_day=1, to_day=30, settlements=[camp_as_farm, camp, shrine], seed=SEED)
+            self.assertEqual(out["ticked"], 0)
+            self.assertEqual(out["new_events"], [])
+            self.assertEqual(out["lines"], [])
+            self.assertEqual(out["event_proposals"], [])
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM market_state").fetchone()[0], 0)
+            self.assertEqual(conn.execute("SELECT COUNT(*) FROM market_events").fetchone()[0], 0)
+            # A real list_settlements blob row beside them still ticks.
+            out = economy.tick_day(conn, from_day=1, to_day=3, settlements=[camp_as_farm, LIST_ROW_VILLAGE], seed=SEED)
+            self.assertEqual(out["ticked"], 1)
+            ids = {row["settlement_id"] for row in conn.execute("SELECT settlement_id FROM market_state")}
+            self.assertEqual(ids, {"S5"})
+
     def test_tick_day_writes_rows_and_events_and_is_replayable(self):
         settlements = [BOARD_TOWN, BOARD_FARM, WORLD_CITY]
 
@@ -933,7 +962,7 @@ class EconomyDbTests(unittest.TestCase):
                 (json.dumps({"economy": "scarce", "magic_level": "none"}),),
             )
             before_counts = _table_counts(conn)
-            before_settings = _setting_keys(conn)
+            before_settings = _setting_rows(conn)
             before_player = dict(conn.execute("SELECT * FROM player WHERE id = 1").fetchone())
             economy.ensure_settlement(conn, BOARD_TOWN, day=1, seed=SEED)
             economy.ensure_settlement(conn, WORLD_CITY, day=1, seed=SEED, options={"economy": "scarce"})
@@ -944,14 +973,16 @@ class EconomyDbTests(unittest.TestCase):
             economy.market_snapshot(conn, "S3", day=15, seed=SEED)
             economy.active_events(conn, "S3", day=15)
             after_counts = _table_counts(conn)
-            after_settings = _setting_keys(conn)
+            after_settings = _setting_rows(conn)
             after_player = dict(conn.execute("SELECT * FROM player WHERE id = 1").fetchone())
         self.assertEqual(set(after_counts) - set(before_counts), set())
         changed = {name for name in after_counts if after_counts[name] != before_counts.get(name)}
         self.assertEqual(changed - own_tables - {"settings"}, set(), changed)
         self.assertGreater(after_counts["market_state"], 0)
         self.assertGreater(after_counts["market_events"], 0)
-        self.assertEqual(after_settings - before_settings, {economy.CONFIG_KEY})
+        # Every foreign settings row keeps its value (an UPDATE of playthrough_options would show here).
+        self.assertEqual({k: v for k, v in after_settings.items() if k != economy.CONFIG_KEY}, before_settings)
+        self.assertIn(economy.CONFIG_KEY, after_settings)
         self.assertNotIn("campaign_rng_seed", after_settings)  # an explicit seed never asks for the campaign seed
         self.assertEqual(after_player, before_player)
         for name in ("player", "inventory", "npcs", "journal", "gm_events", "locations", "pacing"):
@@ -1001,9 +1032,13 @@ class LeafTests(unittest.TestCase):
         doc = economy.__doc__ or ""
         for name in ("advance_world_time", "apply_map_travel_step", "queue_world_event", "build_prompt_context",
                      "get_weather", "get_world_time", "tick_weather", "ensure_settlement_ruler", "_clear_playthrough",
-                     "_save_snapshot", "_restore_snapshot_rows"):
+                     "_save_snapshot", "_restore_snapshot_rows", "_play_system_enabled", "_settings",
+                     "play_wait_turn", "apply_turn", "export_world"):
             self.assertIn(name, doc)
             self.assertTrue(callable(getattr(world, name)), name)
+        # The build_prompt_context line reads these state keys; get_state sets both.
+        for name in ("world_time", "settlement_meta", "event_proposals"):
+            self.assertIn(name, doc)
         for name in ("WORLD_TABLES", "RESTORE_ORDER", "AUTOINC_TABLES", "_REPLACE_ONLY_WHEN_EXPORTED"):
             self.assertIn(name, doc)
             self.assertTrue(hasattr(world, name), name)

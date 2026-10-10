@@ -20,7 +20,7 @@ own tables body_wounds and body_health_log. The live game does not call anything
 Wiring (not done):
   app/db.py:_migrate_columns() tail -> try: from app.body_health import ensure_schema; ensure_schema(conn) except Exception: pass
   app/world.py:_apply_player() where health_delta is clamped -> body, wounds = body_health.wounds_from_health_delta(
-      body_health.load_body(conn, max_health=row.max_health), delta, cause=..., turn=, abs_minute=); write
+      body_health.load_body(conn, max_health=max_health), delta, cause=..., turn=, abs_minute=); write
       body_health.health_from_body(body)["health"] instead of the raw sum and save_body(conn, body).
   app/world.py:play_turn() where injuries are copied into settings.player_conditions -> body_health.wounds_from_injury(body,
       check["injury"], ...) replaces the player_conditions append; body_health.conditions_view(body) feeds state["conditions"].
@@ -44,7 +44,11 @@ Wiring (not done):
 Turn on:
   [ ] playthrough_options.body_health_enabled (default off), read by the wiring
   [ ] init_db: the ensure_schema call; app/world.py: WORLD_TABLES, AUTOINC_TABLES, RESTORE_ORDER and the tuple in
-      _restore_snapshot_rows += "body_wounds", "body_health_log"; _clear_playthrough DELETE FROM both
+      _restore_snapshot_rows += "body_wounds", "body_health_log"; _clear_playthrough DELETE FROM both.
+      The max-id entry only trims rows a turn created; wound rows are changed in place (state, damage, severity,
+      dressing_age_minutes, status), so _save_snapshot also needs _snapshot_row(conn, "body_wounds", "id >= 0", (), rows)
+      the way quests are captured, and "body_wounds" in the restore_order list inside _restore_snapshot_rows.
+      body_health_log is append-only and needs the max-id entry alone.
   [ ] the _apply_player mapping; the advance_world_time tick; the treatment detection; the capability hooks in travel and checks
   [ ] prompt: the prompt block line
   [ ] UI: a body panel from state.body
@@ -209,7 +213,11 @@ TREATMENT_INTENT_WORDS = {
     "salve":   ("salve", "ointment", "poultice", "apply the", "rub", "smear", "treat"),
     "stitch":  ("stitch", "sew", "suture", "close the cut"),
 }
-TREATMENT_INTENT_ORDER = ("stitch", "splint", "bandage", "clean", "salve")   # the most specific verb wins
+TREATMENT_INTENT_ORDER = ("stitch", "splint", "bandage", "clean", "salve")   # tie-break when two phrases start together
+# Phrases that are ordinary speech on their own ("set my pack down", "press on down the road"): they count
+# only when a LIMB_WORDS word follows within this many words.
+LIMB_BOUND_PHRASES = ("set my", "press on")
+LIMB_BOUND_WINDOW = 3
 MIN_SEVERITY_FOR_STITCH = 2             # a stitch on a minor cut is just a bandage
 CLEAR_CHANCE_RANGE = (0.05, 0.95)
 # Same-state table entries that are not a re-dress but do nothing: (treatment, state) -> ok False, reason no_effect.
@@ -349,9 +357,13 @@ CREATE TABLE IF NOT EXISTS body_wounds (
   created_abs INTEGER NOT NULL DEFAULT 0,
   closed_turn INTEGER NOT NULL DEFAULT 0,
   closed_abs INTEGER,
-  status TEXT NOT NULL DEFAULT 'open'
+  status TEXT NOT NULL DEFAULT 'open',
+  loss_carry REAL NOT NULL DEFAULT 0,
+  fatigue_carry REAL NOT NULL DEFAULT 0
 )
 """
+# loss_carry and fatigue_carry hold the fraction of a health loss or fever fatigue that the last tick did not
+# charge, so ten 6-minute ticks cost the same whole points as one 60-minute tick (needs keeps its own carry).
 _BODY_WOUNDS_INDEX_SQL = "CREATE INDEX IF NOT EXISTS idx_body_wounds_status ON body_wounds (status, location)"
 _BODY_HEALTH_LOG_SQL = """
 CREATE TABLE IF NOT EXISTS body_health_log (
@@ -634,7 +646,7 @@ def _new_wound(location: str, kind: str, damage: float, severity: int, state: st
         "id": None, "location": location, "kind": kind, "severity": int(severity), "damage": float(damage),
         "state": state, "state_since_abs": int(abs_minute), "dressing_age_minutes": 0, "care_quality": 1.0,
         "modifiers": [], "cause": str(cause or "")[:120], "created_turn": int(turn), "created_abs": int(abs_minute),
-        "closed_turn": 0, "closed_abs": None, "status": "open",
+        "closed_turn": 0, "closed_abs": None, "status": "open", "loss_carry": 0.0, "fatigue_carry": 0.0,
     }
 
 
@@ -844,14 +856,36 @@ def _location_hint(text: str) -> str:
     return ""
 
 
+def _intent_position(text: str, words: tuple) -> int:
+    """The earliest word index at which one of words starts in text, else -1; LIMB_BOUND_PHRASES need a limb word close behind."""
+    tokens = _norm_words(text).split()
+    best = -1
+    for phrase in words:
+        parts = phrase.split()
+        for idx in range(len(tokens) - len(parts) + 1):
+            if tokens[idx:idx + len(parts)] != parts:
+                continue
+            after = tokens[idx + len(parts):idx + len(parts) + LIMB_BOUND_WINDOW]
+            if phrase in LIMB_BOUND_PHRASES and not any(word in LIMB_WORDS for word in after):
+                continue
+            if best < 0 or idx < best:
+                best = idx
+            break
+    return best
+
+
 def detect_treatment(player_input: str) -> dict:
-    """{"treatment", "location_hint", "item_hint"} from the player's own words; quoted or denied lines count for nothing."""
+    """{"treatment", "location_hint", "item_hint"} from the player's own words; quoted or denied lines count for nothing.
+
+    The treatment phrase that appears earliest in the line wins; TREATMENT_INTENT_ORDER only breaks ties.
+    """
     text = strip_negated_clauses(_unquoted(player_input))
     found = None
+    found_at = -1
     for key in TREATMENT_INTENT_ORDER:
-        if _word_in(text, TREATMENT_INTENT_WORDS[key]):
-            found = key
-            break
+        pos = _intent_position(text, TREATMENT_INTENT_WORDS[key])
+        if pos >= 0 and (found is None or pos < found_at):
+            found, found_at = key, pos
     if found is None:
         return {"treatment": None, "location_hint": "", "item_hint": ""}
     item_hint = ""
@@ -1024,12 +1058,22 @@ def tick(body: dict, *, minutes: int, abs_minute: int, rest_kind: str = "none", 
         sev = int(_clamp(_int(wound.get("severity"), 1), 1, 4))
         rule = BASIC_STATES[wound["state"]]
         age_before = _int(wound.get("dressing_age_minutes"), 0)
-        # 1. losses to the body
+        # 1. losses to the body; the wound keeps the fraction the whole-point delta does not charge this tick
         if rule["loses_health"]:
-            deltas["health_exact"] -= LOSS_TABLES[rule["loses_health"]][sev] * hours
+            loss = LOSS_TABLES[rule["loses_health"]][sev] * hours
+            exact = loss + _float(wound.get("loss_carry"), 0.0)
+            whole = _whole(exact)
+            wound["loss_carry"] = exact - whole
+            deltas["health_exact"] -= loss
+            deltas["health"] -= whole
             deltas["reasons"].append(f"{wound['state']}:{wound['location']}")
         if rule["fatigue_table"]:
-            deltas["fatigue_exact"] += LOSS_TABLES[rule["fatigue_table"]][sev] * hours
+            gain = LOSS_TABLES[rule["fatigue_table"]][sev] * hours
+            exact = gain + _float(wound.get("fatigue_carry"), 0.0)
+            whole = _whole(exact)
+            wound["fatigue_carry"] = exact - whole
+            deltas["fatigue_exact"] += gain
+            deltas["fatigue"] += whole
             deltas["reasons"].append(f"fever:{wound['location']}")
         # 2. healing
         if rule["heal_mult"] > 0:
@@ -1094,8 +1138,6 @@ def tick(body: dict, *, minutes: int, abs_minute: int, rest_kind: str = "none", 
     out["wounds"] = [w for w in out["wounds"] if w["status"] == "open"]
     _refresh_locations(out)
     out["updated_abs"] = abs_minute
-    for key in ("energy", "fatigue", "health"):
-        deltas[key] = _whole(deltas[key + "_exact"])
     return {"body": out, "deltas": deltas, "transitions": transitions, "healed": healed, "lines": status_lines(out),
             "health": health_from_body(out), "hours": hours, "minutes": minutes}
 
@@ -1322,6 +1364,7 @@ def _row_values(wound: dict) -> tuple:
         json.dumps(list(wound.get("modifiers") or []), ensure_ascii=True), str(wound.get("cause") or "")[:120],
         int(wound["created_turn"]), int(wound["created_abs"]), int(wound["closed_turn"]),
         wound["closed_abs"] if wound.get("closed_abs") is None else int(wound["closed_abs"]), wound["status"],
+        _float(wound.get("loss_carry"), 0.0), _float(wound.get("fatigue_carry"), 0.0),
     )
 
 
@@ -1348,14 +1391,32 @@ def _wound_from_row(row: Any) -> dict:
         "closed_turn": _int(_field(row, "closed_turn"), 0),
         "closed_abs": None if closed_abs is None else _int(closed_abs, 0),
         "status": str(_field(row, "status", "open")),
+        "loss_carry": _float(_field(row, "loss_carry"), 0.0),
+        "fatigue_carry": _float(_field(row, "fatigue_carry"), 0.0),
     }
+
+
+LOG_DETAIL_MAX = 900
+LOG_REASONS_MAX = 12
+
+
+def _detail_json(event: str, detail: dict) -> str:
+    """The detail as JSON that always parses: long reason lists are capped first, and a dump still over the limit is replaced."""
+    detail = dict(detail or {})
+    reasons = detail.get("reasons")
+    if isinstance(reasons, list) and len(reasons) > LOG_REASONS_MAX:
+        detail["reasons"] = [str(r) for r in reasons[:LOG_REASONS_MAX]] + [f"+{len(reasons) - LOG_REASONS_MAX} more"]
+    text = json.dumps(detail, ensure_ascii=True)
+    if len(text) > LOG_DETAIL_MAX:
+        text = json.dumps({"truncated": True, "event": str(event)[:40]}, ensure_ascii=True)
+    return text
 
 
 def log_event(conn, *, turn: int, abs_minute: int, wound_id: int | None, event: str, detail: dict) -> None:
     conn.execute(
         "INSERT INTO body_health_log (turn, abs_minute, wound_id, event, detail) VALUES (?, ?, ?, ?, ?)",
         (int(turn), int(abs_minute), None if wound_id is None else int(wound_id), str(event)[:40],
-         json.dumps(detail or {}, ensure_ascii=True)[:900]),
+         _detail_json(event, detail)),
     )
 
 
@@ -1374,18 +1435,21 @@ def load_body(conn, *, max_health: int, abs_minute: int = 0) -> dict:
 
 _INSERT_WOUND_SQL = """
 INSERT INTO body_wounds (location, kind, severity, damage, state, state_since_abs, dressing_age_minutes,
-                         care_quality, modifiers, cause, created_turn, created_abs, closed_turn, closed_abs, status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         care_quality, modifiers, cause, created_turn, created_abs, closed_turn, closed_abs, status,
+                         loss_carry, fatigue_carry)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 _INSERT_WOUND_WITH_ID_SQL = """
 INSERT INTO body_wounds (id, location, kind, severity, damage, state, state_since_abs, dressing_age_minutes,
-                         care_quality, modifiers, cause, created_turn, created_abs, closed_turn, closed_abs, status)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         care_quality, modifiers, cause, created_turn, created_abs, closed_turn, closed_abs, status,
+                         loss_carry, fatigue_carry)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 _UPDATE_WOUND_SQL = """
 UPDATE body_wounds
    SET location = ?, kind = ?, severity = ?, damage = ?, state = ?, state_since_abs = ?, dressing_age_minutes = ?,
-       care_quality = ?, modifiers = ?, cause = ?, created_turn = ?, created_abs = ?, closed_turn = ?, closed_abs = ?, status = ?
+       care_quality = ?, modifiers = ?, cause = ?, created_turn = ?, created_abs = ?, closed_turn = ?, closed_abs = ?, status = ?,
+       loss_carry = ?, fatigue_carry = ?
  WHERE id = ?
 """
 
@@ -1476,15 +1540,19 @@ def treat_from_inventory(conn, intent: dict, *, rows, world_time: dict, max_heal
     return result
 
 
-def add_modifier_and_save(conn, wound_id: int, name: str, *, note: str = "", turn: int = 0,
+def add_modifier_and_save(conn, wound_id: int | None, name: str, *, note: str = "", turn: int = 0,
                           world_time: dict | None = None, max_health: int) -> dict:
+    """add_modifier persisted; a None wound_id means the wound pick_wound would choose, as in add_modifier."""
     abs_minute = world_abs_minutes(world_time) if isinstance(world_time, dict) else 0
     body = load_body(conn, max_health=max_health, abs_minute=abs_minute)
     result = add_modifier(body, wound_id, name, note=note, turn=turn)
     if result["ok"]:
         wound = _find_wound(result["body"], wound_id)
+        if wound is None or wound.get("id") is None:
+            return _modifier_result(False, "no_such_wound", body, None)
+        saved_id = int(wound["id"])
         conn.execute("UPDATE body_wounds SET modifiers = ? WHERE id = ?",
-                     (json.dumps(list(wound.get("modifiers") or []), ensure_ascii=True), int(wound_id)))
-        log_event(conn, turn=turn, abs_minute=abs_minute, wound_id=int(wound_id), event="modifier",
+                     (json.dumps(list(wound.get("modifiers") or []), ensure_ascii=True), saved_id))
+        log_event(conn, turn=turn, abs_minute=abs_minute, wound_id=saved_id, event="modifier",
                   detail={"name": result["modifier"]["name"], "refines": result["modifier"]["refines"]})
     return result

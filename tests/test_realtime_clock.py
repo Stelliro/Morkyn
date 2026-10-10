@@ -152,7 +152,8 @@ class LeafTests(unittest.TestCase):
             "app/main.py": ["def api_tts_config(", "def api_update_tts_config("],
             "app/world.py": ["def advance_world_time(", "def roll_wait_events(", "def play_turn(",
                              "def play_wait_turn(", "def start_playthrough(", "def get_state(",
-                             "def init_world_clock(", "def apply_turn(", "def get_world_time("],
+                             "def init_world_clock(", "def apply_turn(", "def get_world_time(",
+                             "def rewind_last_turn("],
             "app/player_resources.py": ["def apply_regen(", "def world_abs_minutes("],
             "static/app.js": ["function startGenerationProgressPolling("],
         }
@@ -366,6 +367,9 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(rc.describe(_running_cfg(paused=True)), "One world day passes in 2.0 real hours (ratio 12.0). Paused.")
         self.assertEqual(rc.describe(rc.normalize_config({})), "Real-time clock is off. One world day passes in 2.0 real hours (ratio 12.0).")
         self.assertEqual(rc.describe(_running_cfg(ratio=96.0)), "One world day passes in 15 real minutes (ratio 96.0). Running.")
+        # a count of one takes the singular unit word
+        self.assertEqual(rc.describe(_running_cfg(ratio=1440.0)), "One world day passes in 1 real minute (ratio 1440.0). Running.")
+        self.assertEqual(rc.describe(_running_cfg(ratio=24.0)), "One world day passes in 1.0 real hour (ratio 24.0). Running.")
         self.assertEqual(rc.describe(_running_cfg(anchor_wall=None)), "One world day passes in 2.0 real hours (ratio 12.0). Not anchored yet.")
         cfg = _running_cfg()
         self.assertEqual(rc.next_tick_seconds(cfg, NOW), 300)          # a 60-minute slice at ratio 12
@@ -469,6 +473,17 @@ class RealtimeClockDbTests(unittest.TestCase):
             cfg3 = rc.update_config(conn, {"max_catch_up_minutes": None}, now_wall=NOW)
             self.assertEqual(cfg3["max_catch_up_minutes"], 1440)
             self.assertEqual(cfg3["ratio"], 4.0)
+            # a null ratio beside a preset does not mask the preset
+            cfg4 = rc.update_config(conn, {"ratio": None, "preset": "day_in_hour"}, now_wall=NOW)
+            self.assertEqual((cfg4["ratio"], cfg4["preset"]), (24.0, "day_in_hour"))
+            # unreadable values leave the stored field alone instead of resetting it to the default
+            bad_ratio = rc.update_config(conn, {"ratio": "fast"}, now_wall=NOW)
+            self.assertEqual((bad_ratio["ratio"], bad_ratio["slice_minutes"]), (24.0, 30))
+            bad_slice = rc.update_config(conn, {"slice_minutes": "abc", "max_catch_up_minutes": "nan",
+                                                "enabled": "maybe"}, now_wall=NOW)
+            self.assertEqual((bad_slice["ratio"], bad_slice["slice_minutes"]), (24.0, 30))
+            self.assertEqual(bad_slice["max_catch_up_minutes"], 1440)
+            self.assertFalse(bad_slice["enabled"])
             stored = conn.execute("SELECT value FROM settings WHERE key = ?", (rc.SETTING_KEY,)).fetchone()
             self.assertIsNotNone(stored)
 
@@ -646,6 +661,20 @@ class RealtimeClockDbTests(unittest.TestCase):
             self.assertEqual(nxt["status"], "tick")
             self.assertEqual(nxt["due_minutes"], 90)
             self.assertEqual([s["minutes"] for s in nxt["slices"]], [60, 30])
+            # the first slice failing: nothing ran, so no tick is stamped and the anchor stays put
+            rc.reset_anchor(conn, now_wall=NOW, world_abs_now=480)
+
+            def apply_first_fails(item):
+                raise RuntimeError("advance failed")
+
+            failed = rc.catch_up(conn, now_wall=NOW + 750, apply=apply_first_fails, busy=False)
+            self.assertEqual(failed["applied"], [])
+            self.assertEqual(failed["applied_minutes"], 0)
+            self.assertEqual(failed["error"], "RuntimeError: advance failed")
+            cfg = failed["config"]
+            self.assertIsNone(cfg["last_tick_wall"])
+            self.assertEqual((cfg["anchor_wall"], cfg["anchor_world_minute"]), (NOW, 480))
+            self.assertEqual(rc.plan_catch_up(cfg, now_wall=NOW + 750, world_abs_now=480)["due_minutes"], 150)
 
     def test_catch_up_never_raises_when_busy_paused_or_disabled(self):
         with connect() as conn:

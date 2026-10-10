@@ -7,9 +7,10 @@
    rim arrow when the cell is off the drawn window), on the Settlement canvas on the target city cell, and on
    the Streets canvas around the target plot (or the cell centre when the target is a cell). Reads only the
    canvas, the meta the painter stored on it (canvas._mapMeta / canvas._cityMeta) and the arguments it is
-   given; app.js globals (cssToken, settlementData, townData, townGeometry, townCellBox) are read by bare
-   name, guarded, and only inside draw() for the two town modes. Nothing here fetches, stores or binds events,
-   and nothing in the live page loads or calls this file.
+   given. The colour helper cssToken is read by bare name, guarded, wherever a painter needs a theme colour;
+   settlementData, townData, townGeometry and townCellBox are read the same way only inside draw() for the
+   two town modes. Nothing here fetches, stores or binds events, and nothing in the live page loads or calls
+   this file.
 
    Wiring (not done):
      static/app.js:refreshLocalMap() -> after drawNpcMarkersOnCanvas(canvas, _lastNpcMarkers, data.player, "local"):
@@ -67,7 +68,9 @@
      Small helpers
      ------------------------------------------------------------------------ */
 
-  const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : NaN);
+  // Only a finite number counts; null, "", booleans and arrays read as NaN so
+  // targetCell agrees with TARGET_KIND (every coordinate reaches the page as a JSON number).
+  const num = (v) => (typeof v === "number" && Number.isFinite(v) ? v : NaN);
   const isObj = (v) => v !== null && typeof v === "object";
 
   // A colour from the page's theme when app.js is loaded, else the fallback.

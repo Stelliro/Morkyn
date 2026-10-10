@@ -41,7 +41,7 @@ from app import trade  # noqa: E402
 from app import world  # noqa: E402
 from app.db import connect, db_path, init_db  # noqa: E402
 from app.relationships import get_relationship_summary  # noqa: E402
-from app.rng import rng_for  # noqa: E402
+from app.rng import campaign_seed, rng_for  # noqa: E402
 from app.skill_checks import OUTCOME_RANK  # noqa: E402
 
 CSET = currency.theme_set("coin_medieval")
@@ -422,6 +422,11 @@ class HaggleTests(unittest.TestCase):
         # a bid at the price on the table is simply taken, no roll needed
         full = trade.resolve_haggle(offer, bid=1000, check={"outcome": "failure"}, relationship=None, keeper_row=None, cset=CSET)
         self.assertEqual((full["decision"], full["price"], full["outcome"]), ("accept", 1000, "not_rolled"))
+        # the same without a check at all, and for a free offer the bid is taken at the table price of 0
+        self.assertEqual(trade.resolve_haggle(offer, bid=1000, check=None, relationship=None, keeper_row=None, cset=CSET)["decision"], "accept")
+        free = trade.resolve_haggle(_offer(unit_price=0), bid=100, check={"outcome": "partial"}, relationship=None,
+                                    keeper_row=None, cset=CSET)
+        self.assertEqual((free["decision"], free["price"], free["outcome"]), ("accept", 0, "not_rolled"))
         # an outcome the table does not know (dice off) is read as partial
         odd = trade.resolve_haggle(offer, bid=860, check={"outcome": "narrative"}, relationship=None, keeper_row=None, cset=CSET)
         self.assertEqual(odd["outcome"], "partial")
@@ -529,6 +534,16 @@ class AnswerFromLineTests(unittest.TestCase):
                          {"offer_id": 4, "action": "haggle", "bid": 700})
         # a negated clause is not an answer
         self.assertIsNone(trade.answer_from_line([bread], "I won't say deal", cset=CSET))
+        # a bare accept word inside ordinary prose is not an answer either: not a question, and short or
+        # naming the item or a coin
+        self.assertIsNone(trade.answer_from_line([bread], "What have you done?", cset=CSET))
+        self.assertIsNone(trade.answer_from_line([bread], "Are we done here, then?", cset=CSET))
+        self.assertIsNone(trade.answer_from_line([bread], "he sold me out", cset=CSET))
+        self.assertIsNone(trade.answer_from_line([bread], "When the baking is done I will come back for a word with you.", cset=CSET))
+        self.assertEqual(trade.answer_from_line([bread], "Done, then.", cset=CSET)["action"], "accept")
+        self.assertEqual(trade.answer_from_line([bread], "Agreed, the bread is worth every coin you ask of me today.", cset=CSET)["action"], "accept")
+        self.assertEqual(trade.answer_from_line([bread], "Very well, it is a deal, the silver is yours once I have counted it.", cset=CSET)["action"], "accept")
+        self.assertEqual(trade.answer_from_line([bread], "I'll pay, though it is dear and I would rather not have to.", cset=CSET)["action"], "accept")
         # a countered offer compares against the counter price
         countered = {**bread, "status": "countered", "counter_price": 900, "total_price": 900}
         self.assertEqual(trade.answer_from_line([countered], "9 silver then", cset=CSET)["action"], "accept")
@@ -677,6 +692,17 @@ class QuoteDbTests(unittest.TestCase):
                                       "multiplier", "known_here", "samples", "display"})
         _assert_shape(self, quote["multiplier"], _MULTIPLIER_SHAPE)
 
+    def test_settlement_price_first_price_survives_a_long_ledger(self):
+        """The anchor is the first price ever recorded here, however many later rows the settlement holds."""
+        neutral = economy.neutral_multiplier("S1", "food", day=1, reason="ok")
+        with connect() as conn:
+            for n in range(1001):
+                trade.record_price(conn, item_name="nail", unit_price=100 + n, settlement_id="S1", turn=n)
+            quote = trade.settlement_price(conn, "nail", "S1", day=1, cset=CSET, multiplier=neutral)
+            elsewhere = trade.settlement_price(conn, "nail", "S2", day=1, cset=CSET, multiplier=neutral)
+        self.assertEqual((quote["basis"], quote["anchor"], quote["known_here"]), ("ledger_first", 100, True))
+        self.assertEqual((elsewhere["basis"], elsewhere["known_here"]), ("ledger_avg", False))
+
     def test_settlement_price_uses_average_elsewhere_with_multiplier(self):
         dear = {**economy.neutral_multiplier("S9", "food", day=1, reason="ok"), "mult": 1.25}
         with connect() as conn:
@@ -772,10 +798,15 @@ class OfferDbTests(unittest.TestCase):
             self.assertIsNone(trade.mark_settled(conn, b, turn=8))
             d = trade.open_offer(conn, _offer(quantity=2, unit_price=500))["id"]
             cheaper = trade.accept_offer(conn, d, turn=9, price=800)
-            self.assertEqual((cheaper["total_price"], cheaper["unit_price"]), (800, 400))
+            self.assertEqual((cheaper["total_price"], cheaper["unit_price"], cheaper["price_basis"]), (800, 400, "counter"))
+            at_table = trade.accept_offer(conn, trade.open_offer(conn, _offer(price_basis="reference"))["id"], turn=9, price=1000)
+            self.assertEqual(at_table["price_basis"], "reference")  # the table price keeps its basis
+            e = trade.open_offer(conn, _offer())["id"]
             with self.assertRaises(ValueError):
-                trade.accept_offer(conn, trade.open_offer(conn, _offer())["id"], turn=9, price=-1)
-            self.assertEqual(trade.open_offers(conn)[0]["id"], trade.open_offers(conn)[0]["id"])
+                trade.accept_offer(conn, e, turn=9, price=-1)
+            # the rejected price left the offer open and newest
+            self.assertEqual(trade.open_offers(conn)[0]["id"], e)
+            self.assertEqual(trade.get_offer(conn, e)["status"], "offered")
 
     def test_counter_increments_rounds_and_sets_prices(self):
         with connect() as conn:
@@ -785,10 +816,12 @@ class OfferDbTests(unittest.TestCase):
             self.assertEqual((countered["status"], countered["counter_price"], countered["total_price"], countered["unit_price"],
                               countered["rounds"], countered["last_player_bid"], countered["asking_price"]),
                              ("countered", 900, 900, 450, 1, 800, 1000))
+            self.assertEqual(countered["price_basis"], "counter")
             again = trade.counter_offer(conn, oid, price=850, turn=7, bid=820)
             self.assertEqual((again["rounds"], again["counter_price"]), (2, 850))
             taken = trade.accept_offer(conn, oid, turn=8)
             self.assertEqual(taken["total_price"], 850)  # the counter price is what is accepted
+            self.assertEqual(taken["price_basis"], "counter")
             self.assertIsNone(trade.counter_offer(conn, oid, price=800, turn=9))
             with self.assertRaises(ValueError):
                 trade.counter_offer(conn, trade.open_offer(conn, _offer())["id"], price=0)
@@ -896,13 +929,38 @@ class RunHaggleDbTests(unittest.TestCase):
         self.assertEqual(seen["insulted"]["offer"]["note"], "insulted")
 
     def test_run_haggle_hostile_keeper_refuses_and_spends_the_round(self):
+        r = rng_for("test", seed=SEED)
+        before = r.getstate()
         with connect() as conn:
             location_id, npc_id = _make_keeper(conn, attitude="hostile")
             oid = trade.open_offer(conn, _offer(seller_npc_id=npc_id, location_id=location_id))["id"]
             out = trade.run_haggle(conn, oid, bid=860, turn=6, cset=CSET, player_stats=None, player_skills=None,
-                                   check_settings=None, rng=rng_for("test", seed=SEED))
+                                   check_settings=None, rng=r)
         self.assertEqual((out["haggle"]["decision"], out["haggle"]["outcome"], out["haggle"]["mood"]), ("refuse", "not_rolled", "hostile"))
         self.assertEqual((out["offer"]["status"], out["offer"]["rounds"], out["offer"]["last_player_bid"]), ("offered", 1, 860))
+        # the refusal came before any roll: no check, and the caller's rng was not touched
+        self.assertIsNone(out["check"])
+        self.assertEqual(r.getstate(), before)
+
+    def test_run_haggle_full_price_is_taken_without_a_roll(self):
+        r = rng_for("test", seed=SEED)
+        before = r.getstate()
+        with connect() as conn:
+            location_id, npc_id = _make_keeper(conn)
+            oid = trade.open_offer(conn, _offer(seller_npc_id=npc_id, location_id=location_id))["id"]
+            out = trade.run_haggle(conn, oid, bid=1000, turn=6, cset=CSET, player_stats=None, player_skills=None,
+                                   check_settings=None, rng=r)
+        self.assertEqual((out["haggle"]["decision"], out["haggle"]["price"], out["haggle"]["outcome"]), ("accept", 1000, "not_rolled"))
+        self.assertEqual((out["offer"]["status"], out["offer"]["total_price"]), ("accepted", 1000))
+        self.assertIsNone(out["check"])
+        self.assertEqual(r.getstate(), before)
+        # a bid under the table price does roll, and the roll moves the rng
+        with connect() as conn:
+            oid = trade.open_offer(conn, _offer(seller_npc_id=npc_id, location_id=location_id))["id"]
+            rolled = trade.run_haggle(conn, oid, bid=860, turn=7, cset=CSET, player_stats=None, player_skills=None,
+                                      check_settings=None, rng=r)
+        self.assertIn("natural", rolled["check"])
+        self.assertNotEqual(r.getstate(), before)
 
     def test_run_haggle_exhausted_rounds_raises(self):
         with connect() as conn:
@@ -923,11 +981,24 @@ class RunHaggleDbTests(unittest.TestCase):
             scarce = {**economy.neutral_multiplier("S3", "food", day=1, reason="ok"), "mult": 2.0}
             out = trade.run_haggle(conn, oid, bid=990, turn=6, cset=CSET, player_stats=None, player_skills=None,
                                    check_settings=None, rng=rng_for("test", seed=SEED), multiplier=scarce)
-            self.assertLessEqual(out["haggle"]["ceiling_pct"], 0.10)  # a scarce market halves the Neutral ceiling
+            # a scarce market halves the Neutral ceiling of 0.10
+            self.assertEqual((out["haggle"]["band"], out["haggle"]["mood"]), ("Neutral", "neutral"))
+            self.assertAlmostEqual(out["haggle"]["ceiling_pct"], 0.05, places=4)
+            self.assertEqual(out["haggle"]["floor"], currency.round_price(round(1000 * (1 - 0.05))))
             oid2 = trade.open_offer(conn, _offer(seller_npc_id=npc_id, location_id=location_id, settlement_id="S3"))["id"]
             out2 = trade.run_haggle(conn, oid2, bid=990, turn=6, cset=CSET, player_stats=None, player_skills=None,
                                     check_settings=None, rng=rng_for("test", seed=SEED), day=1, seed=SEED)
+            market = economy.settlement_multiplier(conn, "S3", "food", day=1, seed=SEED)
+            self.assertEqual(market["reason"], "ok")
+            self.assertAlmostEqual(out2["haggle"]["ceiling_pct"],
+                                   trade.discount_ceiling(band="Neutral", mood="neutral", multiplier=market), places=4)
+            self.assertEqual(out2["haggle"]["floor"], currency.round_price(round(1000 * (1 - out2["haggle"]["ceiling_pct"]))))
             self.assertIn(out2["haggle"]["decision"], ("accept", "counter", "insulted", "refuse"))
+            # without a day the market is neutral and the ceiling is the plain band value
+            oid3 = trade.open_offer(conn, _offer(seller_npc_id=npc_id, location_id=location_id, settlement_id="S3"))["id"]
+            out3 = trade.run_haggle(conn, oid3, bid=990, turn=6, cset=CSET, player_stats=None, player_skills=None,
+                                    check_settings=None, rng=rng_for("test", seed=SEED))
+            self.assertAlmostEqual(out3["haggle"]["ceiling_pct"], 0.10, places=4)
 
     def test_alternatives_for_fetches_rows_and_market(self):
         with connect() as conn:
@@ -1027,6 +1098,9 @@ class LeafTests(unittest.TestCase):
         with connect() as conn:
             location_id, npc_id = _make_keeper(conn)
             get_relationship_summary(conn, npc_id)  # the documented side effect, taken before the count
+            campaign_seed(conn)  # the other documented side effect: economy's seed=None fallback creates this row once
+            economy.ensure_settlement(conn, {"id": "S3", "state": "town", "population_band": "medium", "name": "Ashbarrow"},
+                                      day=1, seed=SEED)
             conn.execute("INSERT INTO settings (key, value) VALUES ('playthrough_options', ?)",
                          (json.dumps({"economy": "scarce"}),))
             before_counts = _table_counts(conn)
@@ -1040,6 +1114,7 @@ class LeafTests(unittest.TestCase):
                                      seller={"settlement_id": "S3", "location_id": location_id, "npc_id": npc_id},
                                      turn=1, day=1, cset=CSET)
             trade.settlement_price(conn, "bread", "S3", day=1, cset=CSET, seed=SEED)
+            trade.settlement_price(conn, "bread", "S3", day=1, cset=CSET)  # the default seed=None path, as the wiring line calls it
             a = trade.open_offer(conn, _offer(seller_npc_id=npc_id, location_id=location_id))["id"]
             b = trade.open_offer(conn, _offer(seller_npc_id=npc_id, location_id=location_id))["id"]
             c = trade.open_offer(conn, _offer(seller_npc_id=npc_id, location_id=location_id, turn=1))["id"]

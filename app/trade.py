@@ -8,18 +8,25 @@ running average, and both are moved by app.economy's per-settlement multiplier. 
 trade_offers row (status offered) that only accept_offer() turns into a purse and inventory proposal;
 haggling and alternatives are pure functions over the offer, the keeper's npcs row, the relationship
 summary and a skill check result. Every amount is an int of the active currency set's smallest unit
-(app.currency). The module writes only its own three tables and no settings row. Nothing here moves gold
-or items, inserts a journal line or touches the player, inventory, npcs or quests: fulfilment_proposal()
-returns the changes and the wiring pass applies them. The live game does not call anything in this file.
+(app.currency). The module writes only its own three tables and no settings row of its own; a seed=None
+default on settlement_price, run_haggle or alternatives_for lets app.economy fall back to the campaign seed,
+which creates the campaign_rng_seed settings row once when it is absent. Nothing here moves gold or items,
+inserts a journal line or touches the player, inventory, npcs or quests: fulfilment_proposal() returns the
+changes and the wiring pass applies them. The live game does not call anything in this file.
 
 Wiring (not done):
   app/world.py:apply_turn() -> between the gold_note = _settle_stated_gold(result, player_input) line and the
       resolve_turn_bands(...) call: trade.record_turn_prices(conn, result=result, narration=_narration_text(result),
       gold_note=gold_note, seller=seller, turn=turn, day=day, cset=cset) and, when the prose names no price,
-      trade.settlement_price(conn, name, settlement_id, day=day, cset=cset) for the GOLD op's amount.
+      trade.settlement_price(conn, name, settlement_id, day=day, cset=cset) for the GOLD op's amount. Only conn,
+      result, gold_note and turn are locals there; the hook adds cset = currency.active_set(conn),
+      day = get_world_time(conn)["day"] and seller = {"settlement_id", "location_id", "npc_id"} built from the
+      scene keeper (the npcs row the purchase names, or None when there is no keeper).
   app/world.py:_settle_purse() -> instead of applying a named purchase: trade.open_offer(conn, trade.make_offer(
-      kind="buy", item_name=..., quantity=..., unit_price=..., cset=cset, seller_npc_id=..., location_id=...,
-      settlement_id=..., turn=turn)) and park result["player"]["gold_delta"] = 0 with gold_note["source"] = "offer_parked".
+      kind="buy", item_name=..., quantity=..., unit_price=..., cset=currency.active_set(conn), seller_npc_id=...,
+      location_id=..., settlement_id=..., turn=_turn_value(conn))) and park result["player"]["gold_delta"] = 0 with
+      gold_note["source"] = "offer_parked". That function has no turn or cset local; it already calls _turn_value(conn)
+      for its journal line.
   app/world.py:get_state() -> beside state["open_quest_offers"]: state["open_trade_offers"] =
       trade.state_view(conn, cset=currency.active_set(conn))["open_trade_offers"].
   app/main.py:_answer_offer() -> the same shape for POST /api/trade/{id}/accept|decline|haggle|alternatives through
@@ -30,8 +37,8 @@ Wiring (not done):
       relationships.update_relationship(conn, npc_id, reason="haggle", **RELATIONSHIP_EVENTS[result["relationship_event"]]).
   app/world.py:_apply_inventory() and _apply_player() -> fulfilment_proposal(offer, cset=cset): its inventory_changes go to
       _apply_inventory(conn, changes) and its gold_delta_legacy to result["player"]["gold_delta"]; then trade.mark_settled(conn, id, turn=turn).
-  app/world.py:apply_turn() -> after the player's position for the turn is known:
-      trade.expire_stale(conn, turn=turn, location_id=player.current_location_id).
+  app/world.py:apply_turn() -> after the SELECT current_location_id FROM player WHERE id = 1 that sets _cur_loc_id
+      (there is no player object in apply_turn): trade.expire_stale(conn, turn=turn, location_id=_cur_loc_id).
 
 Turn on:
   [ ] playthrough_options.trade_offers_enabled (default off) gates all of it; read by the wiring, never here
@@ -198,10 +205,12 @@ MARKET_SCARCE_ABOVE = 1.3
 MARKET_GLUT_BELOW = 0.8
 MARKET_GLUT_BONUS = 0.05
 
-# Typed answers. Decline words are read before accept words ("no deal" holds "deal").
-_ACCEPT_WORDS_RE = re.compile(
-    r"\b(?:i(?:'| wi)ll take it|deal|done|agreed|i(?:'| wi)ll pay|i accept|i(?:'| wi)ll buy it|sold)\b", re.I
-)
+# Typed answers. Decline words are read before accept words ("no deal" holds "deal"). The phrases accept
+# wherever they appear; the bare words (deal, done, agreed) only when the line is not a question and is
+# short, names the item or names a coin, so "What have you done?" does not buy the bread.
+_ACCEPT_PHRASES_RE = re.compile(r"\b(?:i(?:'| wi)ll take it|i(?:'| wi)ll pay|i accept|i(?:'| wi)ll buy it)\b", re.I)
+_ACCEPT_BARE_RE = re.compile(r"\b(?:deal|done|agreed)\b", re.I)
+ACCEPT_BARE_MAX_WORDS = 6
 _DECLINE_WORDS_RE = re.compile(
     r"\b(?:no deal|too much|too dear|i(?:'| wi)ll pass|not today|keep it|no thanks|no thank you|forget it)\b", re.I
 )
@@ -641,11 +650,16 @@ def settlement_price(
     cat = str(category or "").strip().lower() or (str(index["category"]) if index else categorize(name))
     qty = max(1, _int(quantity, 1))
     day_value = max(1, _int(day, 1))
-    here = ledger_for(conn, name, settlement_id=settlement_id, limit=1000) if settlement_id else []
+    first_here = None
+    if settlement_id:
+        first_here = conn.execute(
+            "SELECT unit_price FROM price_ledger WHERE item_key = ? AND settlement_id = ? ORDER BY id ASC LIMIT 1",
+            (key, str(settlement_id)),
+        ).fetchone()
     anchor = 0
     basis = "none"
-    if here:
-        anchor = int(here[-1]["unit_price"])
+    if first_here is not None:
+        anchor = int(first_here["unit_price"])
         basis = "ledger_first"
     elif index:
         anchor = max(1, int(round(float(index["avg_price"]))))
@@ -669,7 +683,7 @@ def settlement_price(
         "basis": basis,
         "anchor": anchor,
         "multiplier": multiplier,
-        "known_here": bool(here),
+        "known_here": first_here is not None,
         "samples": int(index["sample_count"]) if index else 0,
         "display": _display(unit, cset) if unit else "",
     }
@@ -888,23 +902,26 @@ def open_offer(conn: sqlite3.Connection, offer: dict) -> dict[str, Any]:
 def accept_offer(
     conn: sqlite3.Connection, offer_id: int, *, turn: int = 0, price: int | None = None
 ) -> dict[str, Any] | None:
-    """offered | countered -> accepted at the price on the table (or the given one). None when not open."""
+    """offered | countered -> accepted at the price on the table (or the given one; a given price that
+    differs from the table price sets price_basis to counter). None when not open."""
     ensure_schema(conn)
     offer = get_offer(conn, offer_id)
     if offer is None or offer["status"] not in OPEN_STATES:
         return None
+    on_table = offer["counter_price"] if offer["status"] == "countered" and offer["counter_price"] else offer["total_price"]
     if price is not None:
         agreed = _int(price, -1)
         if agreed < 0:
             raise ValueError(f"price may not be negative, got {price!r}")
     else:
-        agreed = offer["counter_price"] if offer["status"] == "countered" and offer["counter_price"] else offer["total_price"]
+        agreed = on_table
+    basis = "counter" if agreed != on_table else offer["price_basis"]
     cur = conn.execute(
         """
-        UPDATE trade_offers SET status = 'accepted', total_price = ?, unit_price = ?, answered_turn = ?
+        UPDATE trade_offers SET status = 'accepted', total_price = ?, unit_price = ?, price_basis = ?, answered_turn = ?
         WHERE id = ? AND status IN ('offered', 'countered')
         """,
-        (agreed, max(0, agreed // max(1, offer["quantity"])), _int(turn), offer["id"]),
+        (agreed, max(0, agreed // max(1, offer["quantity"])), basis, _int(turn), offer["id"]),
     )
     if not cur.rowcount:
         return None
@@ -940,8 +957,8 @@ def withdraw_offer(conn: sqlite3.Connection, offer_id: int, *, turn: int = 0, re
 def counter_offer(
     conn: sqlite3.Connection, offer_id: int, *, price: int, turn: int = 0, bid: int = 0
 ) -> dict[str, Any] | None:
-    """The seller names a new total: open -> countered, rounds + 1, the player's bid remembered. None when
-    not open; price < 1 is ValueError."""
+    """The seller names a new total: open -> countered, rounds + 1, the player's bid remembered, price_basis
+    counter. None when not open; price < 1 is ValueError."""
     ensure_schema(conn)
     new_price = _int(price, 0)
     if new_price < 1:
@@ -952,8 +969,8 @@ def counter_offer(
     cur = conn.execute(
         """
         UPDATE trade_offers
-        SET status = 'countered', counter_price = ?, total_price = ?, unit_price = ?, rounds = rounds + 1,
-            last_player_bid = ?, answered_turn = ?
+        SET status = 'countered', counter_price = ?, total_price = ?, unit_price = ?, price_basis = 'counter',
+            rounds = rounds + 1, last_player_bid = ?, answered_turn = ?
         WHERE id = ? AND status IN ('offered', 'countered')
         """,
         (new_price, new_price, max(1, new_price // max(1, offer["quantity"])), max(0, _int(bid)), _int(turn), offer["id"]),
@@ -1136,7 +1153,7 @@ def resolve_haggle(
     offer: dict,
     *,
     bid: int,
-    check: dict,
+    check: dict | None,
     relationship: dict | None,
     keeper_row: dict | None,
     cset: dict,
@@ -1144,9 +1161,11 @@ def resolve_haggle(
 ) -> dict[str, Any]:
     """The HaggleResult for one round, pure. bid <= 0 is ValueError.
 
-    Hostile band or mood refuses before any roll; a bid under LOWBALL_FRACTION of the asking price insults
-    unless the band is Devoted; otherwise the check outcome decides against the floor (asking less the
-    discount ceiling). An accept names relationship_event traded_npc, a lowball insult lied_to_npc_caught.
+    Hostile band or mood refuses before any roll, and a bid at or above the price on the table is taken at
+    that price (outcome not_rolled in both cases, so check may be None there); a bid under LOWBALL_FRACTION
+    of the asking price insults unless the band is Devoted; otherwise the check outcome decides against the
+    floor (asking less the discount ceiling). An accept names relationship_event traded_npc, a lowball
+    insult lied_to_npc_caught.
     """
     bid_value = _int(bid, 0)
     if bid_value <= 0:
@@ -1180,7 +1199,7 @@ def resolve_haggle(
 
     if band == "Hostile" or mood == "hostile":
         return result("refuse", on_table, outcome="not_rolled", left=rounds_left, event=None)
-    if asking > 0 and bid_value >= on_table:
+    if bid_value >= on_table:
         return result("accept", on_table, outcome="not_rolled", left=rounds_left, event="traded_npc")
     lowball = asking > 0 and bid_value < asking * LOWBALL_FRACTION and band != "Devoted"
     outcome = _text((check or {}).get("outcome") if isinstance(check, dict) else "").lower()
@@ -1234,8 +1253,11 @@ def run_haggle(
     (relationships.get_relationship_summary, which creates the row when missing) and the market multiplier
     (the given one, else economy.settlement_multiplier for the given day, else neutral), rolls
     skill_checks.resolve_check with the caller's rng, resolves, then moves the row by the decision.
+    No roll is made, and the rng is left untouched, when the answer needs none: a Hostile band or a hostile
+    keeper refuses, and a bid at or above the price on the table is taken; "check" is then None.
     None when the offer is not open; ValueError when its rounds are spent or the bid is not positive.
-    Returns {"offer", "haggle", "check"}. dice_rolls is not written here; the wiring records the check.
+    Returns {"offer", "haggle", "check"}. dice_rolls is not written here; the wiring records the check
+    when there is one.
     """
     ensure_schema(conn)
     bid_value = _int(bid, 0)
@@ -1261,17 +1283,20 @@ def run_haggle(
             )
         else:
             multiplier = _neutral_multiplier(offer["settlement_id"], offer["category"])
-    inputs = haggle_check_inputs(offer, keeper, player_line=player_line, cset=cset)
-    check = resolve_check(
-        skill_code=inputs["skill_code"],
-        opposition=inputs["opposition"],
-        context_note=inputs["context_note"],
-        weapon_or_tool=inputs["weapon_or_tool"],
-        settings=check_settings,
-        rng=rng,
-        player_stats=player_stats,
-        player_skills=player_skills,
-    )
+    on_table = offer["counter_price"] or offer["total_price"] or offer["asking_price"]
+    check = None
+    if band != "Hostile" and keeper_mood(keeper) != "hostile" and bid_value < on_table:
+        inputs = haggle_check_inputs(offer, keeper, player_line=player_line, cset=cset)
+        check = resolve_check(
+            skill_code=inputs["skill_code"],
+            opposition=inputs["opposition"],
+            context_note=inputs["context_note"],
+            weapon_or_tool=inputs["weapon_or_tool"],
+            settings=check_settings,
+            rng=rng,
+            player_stats=player_stats,
+            player_skills=player_skills,
+        )
     haggle = resolve_haggle(
         offer, bid=bid_value, check=check, relationship=relationship, keeper_row=keeper, cset=cset,
         multiplier=multiplier,
@@ -1408,7 +1433,9 @@ def answer_from_line(open_rows: list[dict], line: str, *, cset: dict) -> dict[st
 
     The row is the one local_intel.typed_offer_choice picks (the line names its item, or it is the only
     open offer). Decline words are read first, then an amount under the price on the table is a haggle
-    bid, then accept words; an amount at or above the price is an accept.
+    bid, then accept words; an amount at or above the price is an accept. A bare "deal", "done" or
+    "agreed" only accepts when the line is not a question and is short (ACCEPT_BARE_MAX_WORDS words at
+    most), names the item or names a coin; the longer accept phrases accept wherever they stand.
     """
     text = strip_negated_clauses(str(line or ""))
     if not text.strip():
@@ -1425,8 +1452,16 @@ def answer_from_line(open_rows: list[dict], line: str, *, cset: dict) -> dict[st
         if units < on_table:
             return {"offer_id": _int(row.get("id")), "action": "haggle", "bid": units}
         return {"offer_id": _int(row.get("id")), "action": "accept", "bid": None}
-    if _ACCEPT_WORDS_RE.search(text):
+    if _ACCEPT_PHRASES_RE.search(text):
         return {"offer_id": _int(row.get("id")), "action": "accept", "bid": None}
+    if _ACCEPT_BARE_RE.search(text) and "?" not in text:
+        low = text.lower()
+        words = _words(low)
+        short = len(re.findall(r"[a-z']+", low)) <= ACCEPT_BARE_MAX_WORDS
+        names_item = bool(_text(row.get("item_name"))) and _text(row.get("item_name")).lower() in low
+        names_coin = any(word in words for word in currency.coin_words(cset) if " " not in word)
+        if short or names_item or names_coin:
+            return {"offer_id": _int(row.get("id")), "action": "accept", "bid": None}
     return None
 
 

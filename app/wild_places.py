@@ -16,21 +16,30 @@ caves, ruins, stones and camps are answered there only when a knowledge marker e
 not call this module.
 
 Wiring (not done):
-  app/local_intel.py:turn_direction_hint() (line 1317) -> after parse_direction_question(player_input) is None:
-      hint = wild_places.resolve_wild_question(chart, player_input, speaker, day=day, gold=gold) and return it
-      (prompt_direction_hint, apply_hint_to_map and gate_after_turn then work unchanged).
-  app/local_intel.py:apply_turn_intel() (line 1389) unresolved branch -> the same call when
-      parse_direction_question(player_input) is None.
+  app/local_intel.py:turn_direction_hint() (line 1317) -> its first statement returns None when
+      parse_direction_question(player_input) is None. Make that `asked = parse_direction_question(player_input)`
+      and return None only when asked is None and not wild_places.is_wild_question(player_input). Then, after
+      chart, speaker and day are built, the last line becomes
+      `return resolve_direction(chart, player_input, speaker, day=day, gold=_player_gold(conn)) if asked is not
+      None else wild_places.resolve_wild_question(chart, player_input, speaker, day=day, gold=_player_gold(conn))`.
+      prompt_direction_hint and apply_hint_to_map then work unchanged.
+  app/local_intel.py:apply_turn_intel() (line 1389) unresolved branch -> chart, speaker and gold are built
+      inside `if asked is not None and not faction_held`; hoist that block out so it also runs when asked is
+      None and wild_places.is_wild_question(player_input), and in that case call the same
+      resolve_wild_question (day=_world_day(conn)) before _record_hint.
   app/local_intel.py:_record_hint() (line 1446) -> lift the `scale != "world"` early return for hints whose
       place["kind"] == "wild" (apply_hint_to_map already works on boards); town_moves.record_told returns ""
-      for a wild place and needs no change.
-  app/turn_prompts.py:gate_after_turn() (line 524) -> nothing: a told hint with x/y already becomes a
-      travel_to prompt; wild_places.travel_candidate(hint) shows the tuple it will build, for a label that
-      names the feature.
+      for a wild place and needs no change. turn_direction_hint and apply_turn_intel keep their own
+      `scale != "world"` early returns (lines 1333 and 1413), so board answers need those lifted as well.
+  app/turn_prompts.py:gate_after_turn() (line 524) direction_hint branch -> when
+      (hint.get("place") or {}).get("kind") == "wild", candidates.append(wild_places.travel_candidate(hint))
+      in place of the inline tuple. The inline rule builds a blurred or forbidden label from hint["good"],
+      which for a wild hint is the FEATURES key ("where you were pointed for hunting_grounds, north");
+      travel_candidate reads the spoken label and carries the feature key in source["feature"].
 
 Turn on:
   [ ] no playthrough_options flag: a gap fix that turns on with its hook lines
-  [ ] the two local_intel calls and the _record_hint guard
+  [ ] the two local_intel calls, the _record_hint guard and the gate_after_turn candidate line
   [ ] no schema, no settings, no route, no UI
   [ ] prompt: none (the hint rides the existing direction_hint line)
 
@@ -132,13 +141,14 @@ _FEATURE_WORDS: dict[str, re.Pattern[str]] = {key: re.compile(spec["words"]) for
 #  water_crossing  a "bridge" cell (score 3); or a "water" cell W with walkable land on both sides along one axis,
 #                  W-d and W+d for d in ((1,0),(0,1)) (a one-cell-wide run); the candidate cell is the land cell on the
 #                  player's side so Travel there can reach it (score 2)
-#  shore           a waterfall tile/landmark (score 3); else a walkable cell with a "water" neighbour (score 1);
-#                  the candidate is the walkable cell
+#  shore           a waterfall tile/landmark (score 3); else a walkable non-settlement cell with a "water" neighbour
+#                  (score 1); the candidate is the walkable cell
 #  hidden_base     hidden_bases rows (discovered -> public candidate named "Bandit camp"/"Hidden camp"; undiscovered ->
 #                  candidate with discovered False, answered only through will_tell's forbidden branch and always blurred),
 #                  landmarks with kind "hidden_base", and knowledge.danger rows whose id starts "lived-" (label kept as
 #                  the candidate name, discovered True, source "knowledge")
-# Settlement cells never qualify for any rule except as "land" in water_crossing/shore. A settlement cell is one
+# Settlement cells never qualify as a candidate for the state, wood_edge or shore rules; water_crossing counts
+# them only as the "land" on either side of a run. A settlement cell is one
 # stamped with a settlement_id (board blob) or city_id (world city), or whose state is a settlement word; the
 # landmark words ruins, dungeon and gate sit in tile_world.SETTLEMENT_STATES as map states, not settlements
 # (contracts 1.8), so they stay open to the state rule.
@@ -494,6 +504,8 @@ def _scan_cell(
                 _add(found, _candidate(key, spec, x=near[0], y=near[1], state=_state_of(land), source="tile",
                                        score=SCORE_FORD, center=center, chart=chart))
         elif rule == "shore":
+            if settlement:
+                continue
             if state in states:
                 _add(found, _candidate(key, spec, x=x, y=y, state=state, source="tile", score=SCORE_WATERFALL,
                                        center=center, chart=chart))
@@ -719,10 +731,12 @@ def resolve_wild_question(
     told_x, told_y, near = blur_cell(px, py, true_x, true_y)
     if forbidden and near:
         # A forbidden answer is never exact: within EXACT_WITHIN the told cell is pulled back one cell
-        # toward the asker (kept where it is when already adjacent, so the answer still points somewhere).
+        # toward the asker, and an adjacent camp is told as "right here", so the true cell is never named.
         dx, dy = true_x - px, true_y - py
         if max(abs(dx), abs(dy)) >= 2:
             told_x, told_y = true_x - _sign(dx), true_y - _sign(dy)
+        else:
+            told_x, told_y = px, py
         near = False
     hint["compass"] = compass_word(told_x - px, told_y - py)
     if not hint["told"]:

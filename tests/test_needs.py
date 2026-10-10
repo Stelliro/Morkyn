@@ -103,6 +103,12 @@ class StateTests(unittest.TestCase):
         self.assertFalse(cfg["sustained_penalty"])
         self.assertEqual(needs.needs_settings(None), dict(needs.DEFAULT_NEEDS_SETTINGS))
         self.assertFalse(needs.DEFAULT_NEEDS_SETTINGS["enabled"])
+        # contracts.md 6.3: the registered flag is playthrough_options.needs_enabled; it wins over the nested one.
+        self.assertTrue(needs.needs_settings({"needs_enabled": "on"})["enabled"])
+        self.assertTrue(needs.needs_settings({"needs_enabled": True, "needs_settings": {"enabled": False}})["enabled"])
+        self.assertFalse(needs.needs_settings({"needs_enabled": "off", "needs_settings": {"enabled": "yes"}})["enabled"])
+        self.assertTrue(needs.needs_settings({"needs_settings": {"enabled": "yes"}})["enabled"])
+        self.assertFalse(needs.needs_settings({"needs_enabled": ""})["enabled"])
 
 
 class BandTests(unittest.TestCase):
@@ -315,6 +321,37 @@ class ClassifyTests(unittest.TestCase):
         drink = self._cls("gnarl", item_type="drink")
         self.assertEqual((drink["kind"], drink["drink"], drink["thirst_gain"]), ("water", True, 40.0))
         self.assertEqual(self._cls("gnarl", item_type="weapon")["kind"], "none")
+
+    def test_classify_non_food_item_types_ignore_food_words(self):
+        for name, item_type in (("bread knife", "weapon"), ("meat cleaver", "weapon"), ("fish hook", "tool"),
+                                ("honey-coloured cloak", "clothing"), ("wine cup", "container"), ("rice sack", "backpack")):
+            cls = self._cls(name, item_type=item_type)
+            self.assertEqual((cls["kind"], cls["food"], cls["drink"]), ("none", False, False), name)
+        rows = [{"name": "bread knife", "quantity": 1, "item_type": "weapon"}, {"name": "wine cup", "quantity": 1, "item_type": "container"},
+                {"name": "fish hook", "quantity": 3, "item_type": "tool"}]
+        self.assertIsNone(needs.pick_item(rows, "eat"))
+        self.assertIsNone(needs.pick_item(rows, "drink"))
+        self.assertEqual(needs.eat(_state(hunger=40.0), rows[0], abs_minute=10)["reason"], "not_food")
+        # The same words in a consumable row still count.
+        self.assertEqual(self._cls("bread knife", item_type="consumable")["kind"], "staple")
+
+    def test_classify_named_drink_in_a_container(self):
+        ale = self._cls("flask of ale", item_type="consumable")
+        self.assertEqual((ale["kind"], ale["thirst_gain"], ale["hunger_gain"], ale["matched"]), ("drink", 25.0, 5.0, "ale"))
+        self.assertEqual(self._cls("bottle of wine", item_type="drink")["matched"], "wine")
+        self.assertEqual(self._cls("skin of milk", item_type="consumable")["thirst_gain"], 30.0)
+        for name in ("waterskin", "flask", "canteen"):
+            self.assertEqual(self._cls(name, item_type="consumable")["kind"], "water", name)
+        self.assertEqual(needs.drink(_state(thirst=40.0), {"name": "flask of ale", "quantity": 1, "item_type": "consumable"}, abs_minute=10)["line"], "You drink the flask of ale.")
+
+    def test_broth_is_soup_not_drink(self):
+        broth = {"name": "bone broth", "quantity": 1, "item_type": "consumable"}
+        self.assertEqual((self._cls("bone broth", item_type="consumable")["kind"], self._cls("bone broth", item_type="consumable")["drink"]), ("soup", False))
+        self.assertEqual(needs.drink(_state(thirst=40.0), broth, abs_minute=10)["reason"], "not_drink")
+        fed = needs.eat(_state(hunger=40.0, thirst=40.0), broth, abs_minute=10)
+        self.assertTrue(fed["ok"])
+        self.assertEqual((fed["state"]["hunger"], fed["state"]["thirst"]), (70.0, 60.0))
+        self.assertFalse(any("broth" in words for words, _k, _h, _t in needs.DRINK_TABLE))
 
     def test_classify_description_only_for_consumables(self):
         self.assertEqual(self._cls("wedge", item_type="consumable", description="a wedge of cheese")["kind"], "staple")

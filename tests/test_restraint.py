@@ -228,6 +228,19 @@ class StateTests(unittest.TestCase):
         self.assertEqual(restraint.FREE_STATE["mode"], "free")
         with self.assertRaises(ValueError):
             restraint.normalize_condition({"type": "moon", "phase": "full"})
+        # A stored list can never shut conversation or waiting; travel is always dropped.
+        emptied = restraint.normalize_state(_custody_state(allowed=[]))
+        self.assertIn("talk", emptied["allowed"])
+        self.assertIn("wait", emptied["allowed"])
+        self.assertTrue(restraint.allowed_actions(emptied, "I talk to the guard.")["allowed"])
+        trimmed = restraint.normalize_state(_confined_state(allowed=["rest", "travel"]))
+        self.assertEqual(trimmed["allowed"], ["rest", "talk", "wait"])
+        # The whole game-state dict is the wrong argument and must not pass as a free state.
+        with self.assertRaises(TypeError):
+            restraint.normalize_state({"player": {"name": "T"}, "restraint": _bonds_state()})
+        with self.assertRaises(TypeError):
+            restraint.allowed_actions({"player": {}, "restraint": _bonds_state()}, "I walk out of here.")
+        self.assertEqual(restraint.prompt_block(None, WT), "")
 
     def test_place_and_target_converters_roundtrip(self):
         forms = (
@@ -387,6 +400,20 @@ class ClassifyTests(unittest.TestCase):
         self.assertEqual(v["verdict"], "none")
         self.assertEqual(v["evidence"], [])
         self.assertEqual(v["kind"], "")
+        self.assertTrue(restraint._negated("They could not hold you."))
+        self.assertTrue(restraint._negated("You twist free before they bind you."))
+
+    def test_classify_negation_matches_whole_words_only(self):
+        check = {"outcome": "failure", "skill": {"code": "melee"}, "opposition": {"name": "Guard", "code": "C"}}
+        for text in (
+            "They bind your wrists with a tight knot and haul you to the wagon.",
+            "The guards seize you and march you off; you cannot break their grip.",
+            "Almighty blows rain down and they chain your hands.",
+        ):
+            self.assertFalse(restraint._negated(text), text)
+            v = restraint.classify_capture(narration=text, checks=[check])
+            self.assertEqual(v["verdict"], "capture", text)
+            self.assertEqual(v["confidence"], 0.75, text)
 
     def test_classify_quoted_speech_ignored(self):
         v = restraint.classify_capture(narration='"We\'ll chain you up," he laughs.')
@@ -495,6 +522,18 @@ class ClassifyTests(unittest.TestCase):
         custody = restraint.propose_capture(dict(cell, kind="custody"), world_time=WT, turn=4, location=None)
         self.assertEqual(custody["conditions"], [])
         self.assertEqual(custody["label"], "In their custody")
+        # A fine of nothing adds no payment condition (0 units would be met on the first tick).
+        unfined = restraint.propose_capture(cell, world_time=WT, turn=4, location=None, fine_units=0, currency_set="coin_medieval")
+        self.assertEqual([c["type"] for c in unfined["conditions"]], ["time"])
+        # A named captor with no power_rank counts as rank 10 (the npcs default): the lowest row, shift -2.
+        unranked = restraint.classify_capture(narration="They run you down and march you off.", checks=[{"outcome": "failure", "skill": {"code": "pursuit"}, "opposition": {"name": "Sheriff", "code": "B"}}])
+        self.assertEqual(unranked["verdict"], "capture")
+        self.assertNotIn("power_rank", unranked["captor"])
+        self.assertEqual(restraint.propose_capture(unranked, world_time=WT, turn=4, location=None)["escape"]["dc"], 14)
+        self.assertEqual(restraint.propose_capture(dict(unranked, kind="bonds"), world_time=WT, turn=4, location=None)["escape"]["dc"], 12)
+        ranked = dict(unranked, captor=dict(unranked["captor"], power_rank=10))
+        self.assertEqual(restraint.propose_capture(ranked, world_time=WT, turn=4, location=None)["escape"]["dc"], 14)
+        self.assertEqual(restraint.propose_capture(dict(ranked, kind="bonds"), world_time=WT, turn=4, location=None)["escape"]["dc"], 12)
         with self.assertRaises(ValueError):
             restraint.propose_capture(cell, world_time=WT, turn=4, location=None, extra_conditions=[{"type": "moon", "phase": "full"}])
         with self.assertRaises(ValueError):
@@ -856,6 +895,22 @@ class RestraintDbTests(unittest.TestCase):
         self.assertTrue(restraint.evaluate_conditions(dict(word, notes=["released_by:A"]), base)["release"])
         self.assertIsNone(restraint.evaluate_conditions(_confined_state(conditions=[]), base)["next_check_abs_minute"])
         self.assertFalse(restraint.evaluate_conditions(_confined_state(conditions=[]), base)["release"], "no conditions means indefinite")
+        # A skill name that only resolves through the library loads it once per evaluation, not once per row.
+        from unittest import mock
+
+        from app import skill_checks
+
+        rows = [{"name": f"Skill {n}", "value": 9} for n in range(25)] + [{"name": "Lockpicking", "value": 3}]
+        spelled = _confined_state(conditions=[{"type": "skill", "name": "lock picking", "level": 3}])
+        with mock.patch.object(skill_checks, "load_skill_library", wraps=skill_checks.load_skill_library) as loader:
+            self.assertTrue(restraint.evaluate_conditions(spelled, dict(base, skills=rows))["release"])
+            self.assertEqual(loader.call_count, 1)
+            self.assertFalse(restraint.evaluate_conditions(spelled, dict(base, skills=rows[:-1]))["release"])
+            self.assertFalse(restraint.evaluate_conditions(spelled, dict(base, skills=rows[:-1] + [{"name": "Lockpicking", "value": 2}]))["release"])
+        with mock.patch.object(skill_checks, "load_skill_library", wraps=skill_checks.load_skill_library) as loader:
+            exact = _confined_state(conditions=[{"type": "skill", "name": "lockpicking", "level": 3}])
+            self.assertTrue(restraint.evaluate_conditions(exact, dict(base, skills=rows))["release"])
+            self.assertEqual(loader.call_count, 0, "an exact name match never opens the library")
 
     def test_gather_facts_reads_tables(self):
         from app.player_resources import world_abs_minutes
@@ -991,6 +1046,15 @@ class RestraintDbTests(unittest.TestCase):
             restraint.apply_position(self.conn, dict(plan, ok=False), writers=writers, turn=5, world_time=WT)
         with self.assertRaises(RuntimeError):
             restraint.apply_position(self.conn, plan, writers={"location": writers["location"]}, turn=5, world_time=WT)
+        # Bonds travel with the player: a restrained state keeps place None after a position set.
+        with self.conn:
+            restraint.capture(self.conn, _bonds_state(), turn=6, world_time=WT)
+            bound_plan = restraint.plan_position(restraint.load_state(self.conn), {"x": 50, "y": 50, "city": "C7", "location_code": "L9"}, actor="A", trust="escort", chart=world, current_location_id=5, current_town=None, locations=locations)
+            self.assertTrue(bound_plan["ok"])
+            restraint.apply_position(self.conn, bound_plan, writers=writers, turn=6, world_time=WT)
+        held = restraint.load_state(self.conn)
+        self.assertEqual(held["mode"], "restrained")
+        self.assertIsNone(held["place"])
 
     def test_begin_and_advance_escort(self):
         plan = restraint.plan_escort(_board(), start=(1, 1), dest={"x": 6, "y": 1, "plot": "C9.0.0.3", "city": "C9"})
@@ -1024,6 +1088,13 @@ class RestraintDbTests(unittest.TestCase):
         self.assertEqual(restraint.load_state(self.conn)["by"]["name"], "Captain Ror", "a missing captor keeps the previous one")
         with self.assertRaises(ValueError):
             restraint.begin_escort(self.conn, dict(plan, ok=False), by=None, turn=8, world_time=WT)
+        # A plan with nothing to walk never starts an escort, or the block would never clear.
+        same_cell = restraint.plan_escort(_board(), start=(1, 1), dest={"x": 1, "y": 1})
+        self.assertTrue(same_cell["ok"])
+        self.assertEqual(same_cell["legs"], [])
+        with self.assertRaises(ValueError):
+            restraint.begin_escort(self.conn, same_cell, by=None, turn=8, world_time=WT)
+        self.assertEqual(self._log_events(), ["captured", "transferred"])
 
     def test_transfer_moves_confinement(self):
         with self.conn:

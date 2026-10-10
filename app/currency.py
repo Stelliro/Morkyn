@@ -14,7 +14,9 @@ anything in this file.
 Wiring (not done):
   app/world.py:_apply_player() -> units = currency.from_legacy_gold(player_patch["gold_delta"], cset) before
       the gold clamp, once player.purse_units exists (MIGRATION_PLAN step 1).
-  app/prose_state.py:stated_coin_amounts() -> currency.parse_all_amounts(text, cset) in place of the _COIN regex.
+  app/prose_state.py:stated_coin_amounts() -> currency.coin_pattern(cset) in place of _COIN inside _PAID_RE /
+      _PRICED_RE / _RECEIVED_RE (they carry the pay / price / receive context and the quote split), and
+      currency.parse_amount(match.group(0), cset)["units"] in place of _match_number so the lists hold units.
   app/world.py:_reconcile_prose_with_state() -> currency.format_amount(units, cset) for the "You have N gold"
       sentence and currency.coin_pattern(cset) for the clamp regex.
   app/world.py:resolve_turn_bands() -> money_delta = currency.from_legacy_gold(gold_delta, cset); the dice in
@@ -27,6 +29,8 @@ Wiring (not done):
 Turn on:
   [ ] settings row currency_config is read by get_state through currency.active_set(conn) (no snapshot:
       it is a world rule, not turn state)
+  [ ] _clear_playthrough(): DELETE FROM settings WHERE key = 'currency_config' so a new world re-detects its
+      set from its own playthrough_options instead of keeping the set the last world chose
   [ ] MIGRATION_PLAN steps 1-12 in order; step 1 is the only schema change (additive player columns);
       ensure_schema here is a no-op, so no WORLD_TABLES / AUTOINC_TABLES / snapshot / export entry is needed
   [ ] route GET/POST /api/currency-config (pattern: /api/tts-config) if the user should pick a set
@@ -389,7 +393,12 @@ def _round_half_up(value: Decimal) -> int:
 
 
 def from_legacy_gold(gold: int | float, cset: dict[str, Any]) -> int:
-    """One old ``player.gold`` into units: round(gold * per_legacy_gold). 12 -> 120000 copper; 0.05 -> 500."""
+    """One old ``player.gold`` into units: round(gold * per_legacy_gold). 12 -> 120000 copper; 0.05 -> 500.
+    A value that is not a finite number raises ValueError."""
+    if isinstance(gold, bool) or not isinstance(gold, (int, float)):
+        raise ValueError(f"gold must be a number: {gold!r}")
+    if isinstance(gold, float) and not math.isfinite(gold):
+        raise ValueError(f"gold must be a finite number: {gold!r}")
     per = Decimal(int(cset.get("per_legacy_gold") or 1))
     return _round_half_up(Decimal(str(gold)) * per)
 
@@ -440,7 +449,9 @@ def format_amount(units: int, cset: dict[str, Any], style: str = "long") -> str:
     "24 bundles, 34 scrip"; zero is "no copper" / "$0.00"), "short" ("12g 34s 56c", "1,234 cr", "$12.34",
     "24b 34 scrip"), "largest" (only the biggest non-zero denomination, rounded down: "12 gold",
     "1 kilocredit", "$12", "24 bundles") and "display" (the display denomination as a decimal with trailing
-    zeros trimmed: "12.35 gold", "1,234 credits", "$12.34", "1,234 scrip"). Negative amounts get a leading "-"."""
+    zeros trimmed: "12.35 gold", "1,234 credits", "$12.34", "1,234 scrip"). Negative amounts get a leading "-",
+    dropped when the rounded text is zero. An unknown style raises ValueError (a programmer error, the one
+    ValueError here that is not a bad set id, a bad denomination or a negative count)."""
     units = int(units)
     style = str(style or "long").strip().lower()
     if style not in ("long", "short", "largest", "display"):
@@ -453,6 +464,8 @@ def format_amount(units: int, cset: dict[str, Any], style: str = "long") -> str:
 
     if decimal_set:
         if style == "largest":
+            if magnitude < max(1, int(display["value"])):
+                sign = ""
             return sign + _decimal_text(magnitude, cset, places=0)
         return sign + _decimal_text(magnitude, cset)
 
@@ -466,6 +479,8 @@ def format_amount(units: int, cset: dict[str, Any], style: str = "long") -> str:
         if value == 1:
             return f"{sign}{magnitude:,} {_name(display, magnitude)}"
         quantized = (Decimal(magnitude) / Decimal(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if quantized == 0:
+            sign = ""
         text = _trim_decimal(f"{quantized:,.2f}")
         count_for_name = magnitude // value if magnitude % value == 0 else 2
         return f"{sign}{text} {_name(display, count_for_name)}"
@@ -543,7 +558,11 @@ def coin_pattern(cset: dict[str, Any]) -> str:
 _NUMBER_WORD_ALTERNATION = "|".join(
     sorted((w.replace(" ", r"\s+") for w in _NUMBER_WORDS), key=len, reverse=True)
 )
-_AMOUNT_RE = r"(?:\d{1,3}(?:,\d{3}){1,2}|\d{1,7}(?:\.\d{1,2})?|" + _NUMBER_WORD_ALTERNATION + r")"
+_AMOUNT_RE = r"(?:\d{1,3}(?:,\d{3})+|\d{1,7}(?:\.\d{1,2})?|" + _NUMBER_WORD_ALTERNATION + r")"
+# A money phrase may not start inside a word, right after a currency symbol, after a hyphen ("twenty-five
+# gold" has a compound number the grammar cannot read, so it is None rather than 5 gold) or inside a
+# comma-grouped number ("1,234,567 credits" is never read from its second group).
+_START_RE = r"(?<![\w$-])(?<!\d,)"
 _JOIN_RE = r"(?:\s*,\s*and\s+|\s*,\s*|\s+and\s+)"
 
 
@@ -560,12 +579,12 @@ def _amount_value(text: str) -> Decimal | None:
 
 def _compiled(cset: dict[str, Any]) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str] | None]:
     words = coin_pattern(cset)
-    first = re.compile(r"(?<![\w$])(?P<n>" + _AMOUNT_RE + r")\s+(?P<w>" + words + r")", re.I)
+    first = re.compile(_START_RE + r"(?P<n>" + _AMOUNT_RE + r")\s+(?P<w>" + words + r")", re.I)
     more = re.compile(_JOIN_RE + r"(?P<n>" + _AMOUNT_RE + r")\s+(?P<w>" + words + r")", re.I)
     symbol = None
     if cset.get("decimal") and cset.get("symbol"):
         symbol = re.compile(
-            r"(?<!\w)" + re.escape(str(cset["symbol"])) + r"\s?(?P<d>\d{1,3}(?:,\d{3}){1,2}(?:\.\d{1,2})?|\d{1,7}(?:\.\d{1,2})?)(?!\d)",
+            r"(?<!\w)" + re.escape(str(cset["symbol"])) + r"\s?(?P<d>\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?|\d{1,7}(?:\.\d{1,2})?)(?!\d)",
             re.I,
         )
     return first, more, symbol
@@ -707,8 +726,8 @@ MIGRATION_PLAN: tuple[dict[str, Any], ...] = (
                "Old exports load through the same backfill in _restore_world after the INSERT."},
     {"step": 2, "file": "app/world.py", "function": "get_state", "schema": False,
      "change": "state['purse'] = currency.purse_view(row['purse_units'], cset); player['gold'] becomes "
-               "to_legacy_gold(purse_units), derived and no longer authoritative; player_limits_snapshot "
-               "gains 'purse' = state['purse']['display']."},
+               "to_legacy_gold(purse_units), derived and no longer authoritative. _action_context builds "
+               "player_limits_snapshot['purse'] from state['purse']['display']."},
     {"step": 3, "file": "app/world.py", "function": "resolve_turn_bands", "schema": False,
      "change": "rng.DEFAULT_MAGNITUDE_TABLES['gold'] keeps its dice (they are in the display denomination); "
                "the resolved gold_delta is multiplied by per_legacy_gold into money_delta (units); "
@@ -718,8 +737,10 @@ MIGRATION_PLAN: tuple[dict[str, Any], ...] = (
                "goes through currency.parse_amount, so GOLD -5 silver means -500 copper. Result key "
                "player['money_delta'] (units) beside the old gold_delta for one release."},
     {"step": 5, "file": "app/prose_state.py", "function": "stated_coin_amounts", "schema": False,
-     "change": "With a currency set, use currency.parse_all_amounts and return units; without one keep "
-               "today's behaviour. _settle_stated_gold passes the active set and writes money_delta."},
+     "change": "With a currency set, _COIN inside _PAID_RE / _PRICED_RE / _RECEIVED_RE becomes "
+               "currency.coin_pattern(cset) and each match is read with currency.parse_amount(match.group(0), "
+               "cset)['units'], so the paid / priced / received lists hold units and keep their split; without "
+               "a set keep today's behaviour. _settle_stated_gold passes the active set and writes money_delta."},
     {"step": 6, "file": "app/quests.py", "function": "pay_quest_completion", "schema": False,
      "change": "reward_gold stays and is read as the display denomination; create_quest also computes "
                "reward_units; pay_quest_completion adds to purse_units, mirrors gold, and goes through the "

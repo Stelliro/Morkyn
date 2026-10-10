@@ -17,8 +17,12 @@ Wiring (not done):
       visit["journal"], and ensure_settlement_ruler only when visit["seed"] is not None (today it runs
       unconditionally and is idempotent, so the order does not matter).
   app/town_moves.py:enter_town() (after settlement_row(conn, city, create=True)) ->
-      settlement_visits.enter_from_city(conn, city, location_id=settle, turn=turn, map_id=chart["id"])
-      (the live map kind reaches a town only through this path).
+      settlement_visits.enter_from_city(conn, city, location_id=settle, turn=turn, map_id=chart["id"],
+      world_time=world.get_world_time(conn)) (the live map kind reaches a town only through this path).
+      enter_town's turn defaults to 0 and the live travel route reaches it through
+      app/main.py sync_after_world_move(conn, get_map(None, conn=conn), (px, py)) with no turn, so that
+      call must pass turn=_turn_value(conn) as well; without the turn and the clock every entry to a city
+      on that route looks like turn 0, minute 0 and re-entries are never counted.
   app/world.py:build_ambient_move_line() "You enter the bounds of" branch -> say "for the first time"
       when (travel_result.get("visit") or {}).get("first_visit").
   app/world.py:get_state() next to the turn_prompts.state_view merge -> state.update(settlement_visits.state_view(conn)).
@@ -43,6 +47,11 @@ from typing import Any
 from app.db import row_to_dict, rows_to_dicts
 from app.player_resources import world_abs_minutes
 from app.tile_world import SETTLEMENT_STATES
+
+# The settlement members of tile_world.SETTLEMENT_STATES. That set also holds the map states ruins,
+# dungeon and gate, which are not settlements: a step from one of them onto a town cell is an entry.
+NOT_SETTLEMENTS = frozenset({"ruins", "dungeon", "gate"})
+SETTLEMENT_TERRAINS = frozenset(SETTLEMENT_STATES) - NOT_SETTLEMENTS
 
 # ---------------------------------------------------------------------------
 # Rules tables (data)
@@ -208,7 +217,7 @@ def is_entry_step(travel: dict | None) -> bool:
     if not travel.get("settlement_id"):
         return False
     from_terrain = str(travel.get("from_terrain") or "").strip().lower()
-    return from_terrain not in SETTLEMENT_STATES
+    return from_terrain not in SETTLEMENT_TERRAINS
 
 
 def _settlement_power(settlement: dict | None) -> tuple[int, str]:
@@ -234,6 +243,9 @@ def seed_proposal(settlement: dict | None, *, location_id: int, ruler_exists: bo
     officer_roles = OFFICER_ROLES.get(cls, OFFICER_ROLES_DEFAULT)
     worker_roles = WORKER_ROLES.get(cls, WORKER_ROLES_DEFAULT)
     record = dict(settlement) if isinstance(settlement, dict) else {"id": sid}
+    # The seeder reads only state and class, so a band-only record (a world city) would seed a town.
+    if not (record.get("state") or record.get("class")):
+        record["class"] = cls
     return {
         "settlement_id": sid,
         "location_id": loc,
@@ -339,9 +351,11 @@ def record_enter(conn, settlement_id: str, turn: int, *, settlement: dict | None
     """Upsert the visit row for one settlement entry and return the EnterResult.
 
     A new id is a first visit. An existing row entered again on the same turn within
-    REENTRY_GRACE_MINUTES is the same visit (nothing changes, no journal). Otherwise the last
-    visit moves and the count grows. Blank or zero stored fields are filled from the arguments,
-    never overwritten. Writes only settlement_visits.
+    REENTRY_GRACE_MINUTES is the same visit (no count, no journal). Otherwise the last visit moves
+    and the count grows. On every entry blank or zero stored fields are filled from the arguments
+    and never overwritten, with one exception: a stored class of "town" is also the default for a
+    record that carried no class word, so a later record naming another class replaces it.
+    Writes only settlement_visits.
     """
     sid = settlement_key(settlement_id)
     if not sid:
@@ -349,7 +363,7 @@ def record_enter(conn, settlement_id: str, turn: int, *, settlement: dict | None
     turn_value = max(0, _int(turn))
     abs_minute = world_abs_minutes(world_time if isinstance(world_time, dict) else None)
     record = dict(settlement) if isinstance(settlement, dict) else {}
-    record.setdefault("id", sid)
+    record["id"] = sid
     name = settlement_name(record) if record.get("name") or record.get("label") else ""
     cls = settlement_class(record)
     loc = max(0, _int(location_id))
@@ -412,7 +426,11 @@ def record_enter(conn, settlement_id: str, turn: int, *, settlement: dict | None
 
 def _fill_blanks(conn, existing: dict[str, Any], sid: str, *, map_id: str, name: str, cls: str,
                  location_id: int, x: int | None, y: int | None) -> None:
-    """Fill stored fields that are blank or 0 from the new arguments; never overwrite a stored value."""
+    """Fill stored fields that are blank or 0 from the new arguments; never overwrite a stored value.
+
+    The class column is the one exception: "town" is both a real class and the default written when
+    the record carried no class word, so a stored "town" gives way to a later, more specific class.
+    """
     updates: list[tuple[str, Any]] = []
     if not str(existing.get("map_id") or "") and map_id:
         updates.append(("map_id", map_id))
@@ -438,7 +456,8 @@ def enter_from_travel(conn, travel: dict | None, *, location_id: int, turn: int,
     pack = travel if isinstance(travel, dict) else {}
     settlement = pack.get("settlement") if isinstance(pack.get("settlement"), dict) else {}
     record = dict(settlement)
-    record.setdefault("id", settlement_key(str(pack.get("settlement_id") or "")))
+    if not settlement_key(record.get("id")):
+        record["id"] = settlement_key(str(pack.get("settlement_id") or ""))
     to = pack.get("to")
     x = y = None
     if isinstance(to, (list, tuple)) and len(to) >= 2:

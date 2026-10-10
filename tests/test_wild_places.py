@@ -377,6 +377,33 @@ class ScanRuleTests(unittest.TestCase):
         self.assertEqual(cand["source"], "landmark")
         self.assertEqual(cand["name"], "Silver Fall")
 
+    def test_shore_rule_skips_settlement_cells(self):
+        """The settlement the player stands in is never the fresh-water answer, water neighbour or not."""
+        board = _board(player=(10, 10))
+        for row in board["grid"]:
+            for cell in row:
+                cell["state"] = "town"
+                cell["settlement_id"] = "S1"
+        _paint(board, 11, 10, "water")
+        self.assertIsNone(wp.nearest(board, "spring"))
+        hint = wp.resolve_wild_question(board, "where is fresh water?", _npc(), day=1)
+        self.assertFalse(hint["told"])
+        self.assertEqual(hint["reason"], "unknown")
+        _paint(board, 12, 10, "plains", settlement_id=None)
+        cand = wp.nearest(board, "spring")
+        self.assertEqual((cand["x"], cand["y"]), (12, 10))
+        self.assertEqual(cand["score"], 1)
+        # A waterfall stamped on a settlement cell is a town feature, not a wild one.
+        _paint(board, 10, 12, "waterfall")
+        self.assertEqual((wp.nearest(board, "spring")["x"], wp.nearest(board, "spring")["y"]), (12, 10))
+        # The generated board's start cell is a town with water beside it (forest_march, seed 7).
+        gen = _GENERATED_BOARD
+        hint = wp.resolve_wild_question(gen, "where is fresh water?", _npc(), day=1)
+        if hint["told"]:
+            cell = tile_world._cell_at(gen, hint["place"]["x"], hint["place"]["y"])
+            self.assertFalse(cell.get("settlement_id"), cell)
+            self.assertNotIn(cell.get("state"), wp.SETTLEMENT_CELL_STATES)
+
     def test_hidden_camp_undiscovered_not_in_default_scan(self):
         board = _board(player=(10, 10))
         board["hidden_bases"].append(_hidden_base(12, 12))
@@ -505,6 +532,19 @@ class ResolveTests(unittest.TestCase):
         self.assertIsNone(wp.travel_candidate(refused))
         target, label, source = wp.travel_candidate(told)
         self.assertEqual(label, "where you were pointed for the camp, east")
+        # One cell away the answer is "right here": the true cell is never named, so apply_hint_to_map
+        # and travel_candidate cannot give the camp away.
+        near = _board(player=(10, 10))
+        near["hidden_bases"].append(_hidden_base(11, 10))
+        close = wp.resolve_wild_question(near, "where is the bandit hideout?", _npc(role="smuggler"), day=1, roll=10)
+        _assert_hint_shape(self, close)
+        self.assertTrue(close["told"])
+        self.assertFalse(close["exact"])
+        self.assertEqual((close["place"]["x"], close["place"]["y"]), (11, 10))
+        self.assertNotEqual((close["x"], close["y"]), (close["place"]["x"], close["place"]["y"]))
+        self.assertEqual((close["x"], close["y"], close["distance"]), (10, 10, 0))
+        self.assertEqual(close["compass"], "here")
+        self.assertEqual(close["wording"], wp.WORDING["forbidden_here"])
 
     def test_discovered_camp_is_public(self):
         board = _board(player=(10, 10))
@@ -679,6 +719,31 @@ class ShapeTests(unittest.TestCase):
         self.assertIsNone(wp.travel_candidate(None))
         self.assertIsNone(wp.travel_candidate({"told": False}))
         self.assertIsNone(wp.travel_candidate({"told": True, "x": None, "y": 3}))
+
+    def test_gate_after_turn_inline_label_differs_from_travel_candidate(self):
+        """turn_prompts.gate_after_turn builds a blurred label from hint["good"], the FEATURES key, so a wild
+        hint must go through travel_candidate (the docstring's hook line) to read as spoken words."""
+        board = _board(player=(10, 10))
+        for y in range(0, 3):
+            for x in range(9, 12):
+                _paint(board, x, y, "forest")
+        hint = wp.resolve_wild_question(board, "where are the hunting grounds?", _npc(), day=1)
+        self.assertTrue(hint["told"])
+        self.assertFalse(hint["exact"])
+        self.assertEqual(hint["place"]["kind"], "wild")
+        # The live rule, copied from gate_after_turn's direction_hint branch.
+        good = str(hint.get("good") or hint.get("label") or "").strip()
+        compass = str(hint.get("compass") or "").strip()
+        inline = (f"where you were pointed for {good}" if good else "where you were pointed") + (
+            f", {compass}" if compass else ""
+        )
+        target, label, source = wp.travel_candidate(hint)
+        self.assertEqual(inline, "where you were pointed for hunting_grounds, north")
+        self.assertEqual(label, "where you were pointed for hunting grounds, north")
+        self.assertNotEqual(inline, label)
+        self.assertNotIn("_", label)
+        self.assertEqual(target, {"x": hint["x"], "y": hint["y"]})
+        self.assertEqual(source, {"kind": "direction_hint", "feature": "hunting_grounds"})
 
     def test_hint_rides_apply_hint_to_map_and_record_told(self):
         """The existing map side effects accept a wild hint unchanged (copy of the chart; nothing saved)."""
