@@ -236,6 +236,7 @@ Continuity rules:
 - If mechanics_context.action_spend or mechanics_context.collapse is present: zero energy or full fatigue means the player is collapsing — physical feats fail or stagger; suggest rest/meditate/sleep. Do not invent free recovery mid-action.
 - mechanics_context.health_state is the player's body as the engine has it: health, band (fine / bruised / hurt / critical / down) and conditions. Keep to it: a critical player moves and speaks like one; a listed injury is there. When health_state.downed is true the player goes down at the end of this action and the scene ends with them losing consciousness; do not write them acting past that.
 - If mechanics_context.recovery is present, the player collapsed last turn and this turn is the coming round, as recovery.what_happens says. The action in player_input did not happen; narrate the waking, who or what is there, and the rule's mark (a lasting wound, a close call, a lost scene). No free full healing: health is back to a quarter, no more.
+- If mechanics_context.death is present, this turn is the player's death and the last turn of the story: narrate it from inside the scene (death.cause is what did it), who or what is there, and let the scene close on it. No rescue, no waking, no next step offered. The player does nothing after it.
 - If mechanics_context.social_reputation is present, the player already walked away or kept pushing after a cold reception — honor that reputation change lightly.
 - mechanics_context.area_reputation is local standing (-100..100). Cold locals + low area rep = harder social outcomes; do not ignore it.
 - mechanics_context.player_inventory_codes (when present) is the gear the player currently holds. Do not invent pocket items, keys, knives, or coupons not listed. If mechanics_context.player_inventory_truncated is present that list is only the first part of a longer pack, and world_state.inventory is the complete record — treat that as authoritative and never tell the player something is missing on the strength of the short list.
@@ -1165,6 +1166,9 @@ def _mechanics_view(context: dict[str, Any]) -> dict[str, Any] | None:
         wound = recovery.get("lasting_injury") if isinstance(recovery.get("lasting_injury"), dict) else None
         if wound and wound.get("summary"):
             view["recovery"]["lasting_injury"] = _one_line(wound.get("summary"), 160)
+    death = mechanics.get("death")
+    if isinstance(death, dict) and death:
+        view["death"] = {key: death.get(key) for key in ("rule", "cause", "death_roll") if death.get(key) not in (None, "")}
     reputation = mechanics.get("area_reputation")
     if isinstance(reputation, (int, float)) and not isinstance(reputation, bool) and int(reputation) != 0:
         view["area_reputation"] = int(reputation)

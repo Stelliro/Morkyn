@@ -1630,6 +1630,61 @@ body.aiBusy:not(.llmChatThinking)::after {
 }
 
 
+/* --- ui/death.js: the You died screen --------------------------------------- */
+
+.deathBackdrop {
+  background: hsl(var(--thread-h) 30% 2% / 0.92);
+}
+
+.deathPanel {
+  --shard-line: var(--moon);
+}
+
+.deathEyebrow {
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--moon);
+}
+
+.deathTitle {
+  font-family: var(--font-display);
+  font-weight: 400;
+  font-size: clamp(2.6rem, 7vw, 4.4rem);
+  line-height: 1;
+  letter-spacing: var(--track-title);
+  text-transform: none;
+  color: var(--text);
+  text-shadow: 0 0 28px var(--moon-soft);
+}
+
+.deathWho {
+  font-size: 0.92rem;
+  letter-spacing: 0.04em;
+  color: var(--label);
+}
+
+.deathCause {
+  font-family: var(--font-narration);
+  font-style: italic;
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.deathFacts span {
+  font-size: 0.72rem;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.deathNote {
+  font-family: var(--font-narration);
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
 /* --- ui/failsafe.js: the model-problem dialog ------------------------------ */
 
 .failsafePanel {

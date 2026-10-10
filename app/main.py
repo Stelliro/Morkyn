@@ -371,6 +371,7 @@ SETUP_TEXT_LIMITS = {
 SETUP_BOOL_DEFAULTS = {
     "leveling_system": True,
     "game_system": False,
+    "ironman_mode": False,
     "special_ability": False,
     "special_ability_locked": False,
     "skill_levels_enabled": True,
@@ -462,6 +463,8 @@ class SetupRequest(BaseModel):
     start_location: str = Field(default="", max_length=100)
     leveling_system: bool = True
     game_system: bool = False
+    # Ironman: health 0 is death and the character's saves are removed (playtest #88).
+    ironman_mode: bool = False
     system_style: str = Field(default="subtle blue-window system", max_length=120)
     special_ability_origin: str = Field(default="none", max_length=40)
     special_ability: bool = False
@@ -834,7 +837,15 @@ def startup() -> None:
         print(f"[saves] archive pass skipped: {exc}")
 
 
-BUNDLE_ASSETS: tuple[str, ...] = ("app.js", "styles.css", "ui/tokens.css", "ui/skin.css", "ui/interact.js", "ui/failsafe.js")
+BUNDLE_ASSETS: tuple[str, ...] = (
+    "app.js",
+    "styles.css",
+    "ui/tokens.css",
+    "ui/skin.css",
+    "ui/interact.js",
+    "ui/failsafe.js",
+    "ui/death.js",
+)
 BUNDLE_PLACEHOLDER = "__BUNDLE__"
 _bundle_cache: dict[str, Any] = {"stamp": None, "token": "", "html": ""}
 

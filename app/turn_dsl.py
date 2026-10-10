@@ -195,6 +195,9 @@ the player still where they are, and the player answers with their own words or 
   turn is the coming round, as recovery.what_happens says. The action in player_line did not happen.
   Narrate the waking, who or what is there, and the rule's mark. No HEALTH or XP line for it: the
   engine already set the player's health.
+- When world_state.mechanics_context.death is present, this turn is the player's death and the last
+  turn of the story: narrate it from inside the scene (death.cause is what did it), who or what is
+  there, and let the scene close on it. No rescue, no waking, no next step offered, no HEALTH line.
 - player_line is the player's own input and the whole of the player's turn. "you" does only what
   player_line says: no further actions, words, replies, gestures, thoughts, feelings, memories,
   conclusions or decisions. Narrate that action, then what the world and the people in it do in

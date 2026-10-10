@@ -363,6 +363,7 @@ def _mechanics_context():
             # The body and the coming round after a collapse (playtest #88).
             "health_state": {"health": 3, "max_health": 20, "band": "critical", "conditions": ["Injured leg"], "downed": False},
             "recovery": {"rule": "lasting injuries", "what_happens": "comes round an hour later", "health_delta": 5},
+            "death": {"rule": "permadeath threat", "cause": "a fall from the spire", "death_roll": 2},
         },
     }
 
