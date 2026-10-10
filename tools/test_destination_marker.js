@@ -49,7 +49,19 @@ function makeCtx() {
     };
   });
   ctx.measureText = () => ({ width: 0 });
+  // Colour assignments are recorded as "set:fillStyle" / "set:strokeStyle" calls.
+  ["fillStyle", "strokeStyle"].forEach((prop) => {
+    let value = "";
+    Object.defineProperty(ctx, prop, {
+      get: () => value,
+      set: (v) => {
+        value = v;
+        ctx.calls.push({ name: `set:${prop}`, args: [v] });
+      },
+    });
+  });
   ctx.count = (name) => ctx.calls.filter((c) => c.name === name).length;
+  ctx.colours = (prop) => ctx.calls.filter((c) => c.name === `set:${prop}`).map((c) => c.args[0]);
   return ctx;
 }
 
@@ -491,14 +503,21 @@ test("draw_with_page_globals_uses_them", () => {
     g.townData = t.townData;
     g.townGeometry = () => t.geo;
     g.townCellBox = t.cellBoxFn;
-    g.cssToken = (name, fallback) => (name === "--moon" ? "#123456" : fallback);
+    let tokenHits = 0;
+    g.cssToken = (name, fallback) => {
+      tokenHits += 1;
+      return name === "--moon" ? "#123456" : fallback;
+    };
     const sCanvas = makeCanvas(216, 216, { _cityMeta: f.cityMeta });
     assertEqual(api.draw(sCanvas, DEST_CITY, null, "settlement"), { drawn: "pin" }, "settlement through the page global");
     const tCanvas = makeCanvas(320, 320);
     assertEqual(api.draw(tCanvas, DEST_PLOT, null, "streets"), { drawn: "pin" }, "streets through the page globals");
-    // cssToken was consulted for the accent colour.
+    // cssToken was consulted for the accent colour and its answer reached the context.
     const fills = tCanvas.ctx.calls.filter((c) => c.name === "fill");
     assert(fills.length > 0, "the corner flag filled");
+    assert(tokenHits > 0, "cssToken was called");
+    assert(tCanvas.ctx.colours("fillStyle").includes("#123456"), "the token colour was set as fillStyle");
+    assert(sCanvas.ctx.colours("fillStyle").includes("#123456"), "the settlement flag used the token colour too");
     g.townGeometry = () => {
       throw new Error("no canvas");
     };
@@ -550,6 +569,10 @@ test("painters_balance_save_restore_and_honour_style", () => {
   api.paintBox(ctx, { x0: 10, y0: 10, w: 20, h: 10, tile: 5, kind: "cell" });
   assertEqual(ctx.count("save"), ctx.count("restore"), "every painter restores");
   assert(ctx.count("save") >= 5, "each painter saved once");
+  // No cssToken on this page: the accent falls back to the table's colour.
+  assert(typeof cssToken === "undefined", "no cssToken in the harness");
+  assert(ctx.colours("fillStyle").includes(api.STYLE.accent[1]), "fallback accent set as fillStyle");
+  assert(ctx.colours("strokeStyle").includes(api.STYLE.accent[1]), "fallback accent set as strokeStyle");
   // The pole never shrinks below minPx: a 2 px cell still draws a 5 px pole.
   const tiny = makeCtx();
   api.paintFlag(tiny, 0, 0, 2);
@@ -578,7 +601,7 @@ test("painters_balance_save_restore_and_honour_style", () => {
 
 test("junk_inputs_never_throw", () => {
   const api = window[EXPORT_NAME];
-  const junk = [undefined, null, 0, "", "x", [], {}, { target: 5 }, { target: { x: "a" } }, { target: { plot: 7 } }];
+  const junk = [undefined, null, 0, "", "x", [], {}, { target: 5 }, { target: { x: "a" } }, { target: { plot: 7 } }, { target: { city: "C7", x: null, y: null } }, { target: { x: "12", y: "9" } }];
   const modes = ["local", "full", "settlement", "streets", "", null, 42];
   junk.forEach((d) => {
     modes.forEach((m) => {
@@ -594,6 +617,8 @@ test("junk_inputs_never_throw", () => {
     assert(typeof api.targetKind(d && d.target) === "string", "targetKind returns a string");
   });
   assertEqual(api.worldPoint({ cell: 16 }, { x: 1, y: 1 }, null, "local"), { px: 16, py: 16, relX: 1, relY: 1, inside: true }, "no player: offsets from 0");
+  assertEqual(api.worldPoint({ minX: 0, minY: 0, cell: 16 }, { city: "C7", x: null, y: null }, null, "full"), null, "null coordinates name no cell");
+  assertEqual(api.drawWorld(lensCanvas(), { target: { city: "C7", x: null, y: null } }, PLAYER, "local"), { drawn: "none", reason: "unknown_cell" }, "a city target with null coordinates draws nothing");
   assertEqual(api.worldPoint({ cell: -1 }, { x: 1, y: 1 }, null, "local"), null, "a negative cell is no meta");
   const r = api.rimPoint({}, {}, NaN, NaN);
   assert(isNum(r.px) && isNum(r.py) && isNum(r.angle), "rimPoint on an empty canvas gives numbers");

@@ -15,25 +15,32 @@ Wiring (not done):
   app/world.py:advance_world_time() after tick_weather() -> needs.tick_and_save(conn, minutes=add, world_time=after,
       activity="wait", weather=get_weather(conn)), mirroring the tick_quest_clocks call (try/except, gated by
       playthrough_options.needs_enabled).
-  app/world.py:_spend_travel() and app/world.py:play_wait_turn() (right after apply_regen) -> pass the real activity
-      ("travel", or kind_l), fold the returned deltas into res_delta / res_block, append needs.prompt_block(state) to
-      model_input next to resource_regen.
+  app/world.py:_spend_travel() after out["time"] = advance_world_time(conn, minutes) -> needs.tick_and_save(conn,
+      minutes=minutes, world_time=out["time"]["after"], activity="travel", weather=out["weather"]), its deltas folded into
+      out["resource_spend"].
+  app/world.py:play_wait_turn() right after apply_regen -> needs.tick_and_save(..., activity=kind_l), its deltas folded
+      into res_delta / res_block, and needs.prompt_block(result["state"]) appended to model_input next to resource_regen.
+      Both callers already run advance_world_time themselves, so the tick must run once per span: either inside the
+      advance_world_time hook with the activity passed through, or in these two callers, never both.
   app/world.py:play_turn() after advance_world_time(c_time, spent) -> intent = needs.detect_intent(player_line); when
-      intent["action"]: needs.consume_from_inventory(conn, intent, rows=state["inventory"], world_time=...) and append its
-      consume InventoryChange to result["inventory_changes"], its line to mechanics_context["needs"].
+      intent["action"]: needs.consume_from_inventory(conn, intent, rows=context.get("inventory") or [], world_time=...)
+      (the game state local there is `context`) and append its consume InventoryChange to result["inventory_changes"],
+      its line to mechanics_context["needs"].
   app/player_resources.py:apply_regen() -> multiply the *_exact regen values by
       needs.merge_recovery(needs.recovery_modifier(ns), body_health.recovery_modifier(body))["mult"] before settle_resource_carry.
   app/world.py:apply_turn() beside _apply_player() -> add tick deltas["health"] to result["player"]["health_delta"] and list
       "player.health_delta" in result["_server_authored"]; energy/fatigue deltas through
       player_resources.spend_resources(conn, energy=-d, fatigue=d).
   app/world.py:get_state() near the turn_prompts.state_view merge -> state["needs"] = needs.state_view(needs.load_state(conn)).
-  app/world.py:build_prompt_context() -> append needs.prompt_block(state) beside the resource lines.
+  app/world.py:_build_mechanics_context() -> mechanics["needs"] = needs.prompt_block(state.get("needs") or {}) beside
+      mechanics["resources"], once the get_state hook above adds state["needs"] (the state_view output normalizes
+      cleanly). The argument is the NeedsState, never the whole game state, which would read as the 85/85 default.
 
 Turn on:
   [ ] playthrough_options.needs_enabled (default off), read by the wiring
   [ ] app/world.py:SNAPSHOT_SETTING_KEYS += "player_needs" (rewind and new game); no init_db change (settings row only)
   [ ] the advance_world_time tick; the eat/drink detection in play_turn; the apply_regen multiplier
-  [ ] prompt: the prompt block line in build_prompt_context
+  [ ] prompt: the prompt block line in _build_mechanics_context
   [ ] UI: two chips under the resource bars from state.needs
 
 Tests: tests/test_needs.py
@@ -55,7 +62,7 @@ NEEDS_KEY = "player_needs"
 STATE_VERSION = 1
 
 DEFAULT_NEEDS_SETTINGS: dict[str, Any] = {
-    "enabled": False,            # the turn-on flag a wiring pass reads
+    "enabled": False,            # mirrors playthrough_options.needs_enabled (the registered flag); a nested needs_settings.enabled is the fallback
     "start_value": 85.0,
     "hunger_rate_mult": 1.0,     # scales HUNGER_PER_HOUR
     "thirst_rate_mult": 1.0,
@@ -132,14 +139,18 @@ FOOD_TABLE = (
     (("fruit", "apple", "pear", "berries", "berry", "nuts", "nut", "snack", "egg", "honey", "cake", "sweet",
       "dried", "roots", "mushroom"),                                                                        "light",  15.0, 5.0),
 )
+# Named drinks come before the container words, so a "flask of ale" is ale and a bare "flask" is water.
 DRINK_TABLE = (
-    (WATER_WORDS,                                                                   "water", 0.0, 40.0),
-    (("tea", "milk", "juice", "cider", "broth"),                                     "drink", 5.0, 30.0),
+    (("tea", "milk", "juice", "cider"),                                              "drink", 5.0, 30.0),
     (("ale", "beer", "wine", "mead", "spirits", "whisky", "whiskey", "rum", "grog"), "drink", 5.0, 25.0),
+    (WATER_WORDS,                                                                   "water", 0.0, 40.0),
 )
 FOOD_ITEM_TYPES = ("food", "ration", "rations", "provisions", "meal")
 DRINK_ITEM_TYPES = ("drink", "beverage", "water")
 CONSUMABLE_ITEM_TYPES = ("consumable", "food", "drink", "ration", "rations", "provisions", "meal", "beverage", "water", "")
+# Item types the engine writes for things that are never eaten or drunk, whatever their name says ("bread knife",
+# "wine cup"); classify_item answers "none" for them before the word tables run.
+NON_FOOD_ITEM_TYPES = ("weapon", "tool", "armor", "armour", "clothing", "container", "backpack", "pack", "storage", "focus")
 # Item types whose description is read for food words (design_survival 0.6, shared with body_health).
 DESCRIPTION_ITEM_TYPES = ("consumable", "food", "drink", "provisions", "medical", "medicine", "kit", "supplies", "")
 NOT_FOOD_WORDS = ("oil", "poison", "ink", "powder", "acid", "lamp", "iron", "steel", "soap", "potion",
@@ -255,6 +266,8 @@ def needs_settings(options: dict | None) -> dict[str, Any]:
         raw = nested if isinstance(nested, dict) else options
     out = dict(DEFAULT_NEEDS_SETTINGS)
     out["enabled"] = _flag(raw.get("enabled"), bool(DEFAULT_NEEDS_SETTINGS["enabled"]))
+    if isinstance(options, dict):
+        out["enabled"] = _flag(options.get("needs_enabled"), out["enabled"])
     out["start_value"] = _clamp(_float(raw.get("start_value"), DEFAULT_NEEDS_SETTINGS["start_value"]), 0.0, 100.0)
     out["hunger_rate_mult"] = _clamp(_float(raw.get("hunger_rate_mult"), 1.0), 0.25, 3.0)
     out["thirst_rate_mult"] = _clamp(_float(raw.get("thirst_rate_mult"), 1.0), 0.25, 3.0)
@@ -509,7 +522,7 @@ def classify_item(row: Any) -> dict[str, Any]:
     description = str(_field(row, "description", "") or "").strip().lower()
     quantity = _int(_field(row, "quantity", 0), 0)
     out: dict[str, Any] = {"food": False, "drink": False, "kind": "none", "hunger_gain": 0.0, "thirst_gain": 0.0, "matched": "", "name": name}
-    if any(_has_word(name_l, w) for w in NOT_FOOD_WORDS):
+    if any(_has_word(name_l, w) for w in NOT_FOOD_WORDS) or item_type in NON_FOOD_ITEM_TYPES:
         return out
     consumable_ish = item_type in CONSUMABLE_ITEM_TYPES
     hit = _match_table(name_l, FOOD_TABLE, consumable_ish)

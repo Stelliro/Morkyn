@@ -14,15 +14,28 @@ not call it.
 
 Wiring (not done):
   app/world.py:advance_world_time() -> on the days_add > 0 branch after tick_weather, beside the
-      tick_quest_clocks call (same try/except shape, gated by playthrough_options economy_enabled and
-      economy_sim_enabled): economy.tick_day(conn, from_day=int(before["day"]), to_day=int(new_day),
-      settlements=tile_world.list_settlements(tile_world.get_map(None, conn)), options=playthrough_options,
-      weather_kind=get_weather(conn)["kind"])
+      tick_quest_clocks call (same try/except shape), gated by
+      _play_system_enabled(conn, "economy_enabled", True) and _play_system_enabled(conn, "economy_sim_enabled", False).
+      Inside the try: from app.tile_world import get_map, list_settlements; map_data = get_map(None, conn);
+      skip when map_data is None (no active map); else
+      tick = economy.tick_day(conn, from_day=int(before["day"]), to_day=int(new_day),
+      settlements=list_settlements(map_data), options=_settings(conn).get("playthrough_options") or {},
+      weather_kind=get_weather(conn)["kind"]). Only before, new_day and conn are locals of that function;
+      tile_world is not imported at module level in world.py, so the import is lazy.
   app/world.py:apply_map_travel_step() -> next to the ensure_settlement_ruler(conn, location_id=, settlement=)
-      call: economy.ensure_settlement(conn, settlement, day=int(get_world_time(conn)["day"]), options=playthrough_options)
-  app/world.py:queue_world_event() -> for each entry of tick_day(...)["event_proposals"]: queue_world_event(**entry)
-  app/world.py:build_prompt_context() -> one or two world facts beside the location facts:
-      economy.market_lines(economy.market_snapshot(conn, sid, day=day)["multipliers"], economy.settlement_profile(meta))
+      call: economy.ensure_settlement(conn, settlement, day=int(get_world_time(conn)["day"]),
+      options=_settings(conn).get("playthrough_options") or {})
+  app/world.py:queue_world_event() -> for each entry of tick_day(...)["event_proposals"]: queue_world_event(**entry).
+      That loop may not run inside advance_world_time: queue_world_event opens its own connection and
+      advance_world_time already holds an uncommitted write on conn, so a second writer would wait on the
+      busy timeout. advance_world_time returns the proposals in its result dict (key "event_proposals",
+      beside "weather") and the caller (play_wait_turn, apply_turn and the other advance_world_time callers)
+      runs the loop after its with connect() block has committed.
+  app/world.py:build_prompt_context() -> one or two world facts beside the location facts, read from the
+      state dict (the function holds no connection and no sid, day or meta locals):
+      meta = state.get("settlement_meta"); day = int((state.get("world_time") or {}).get("day") or 1);
+      when meta carries an id: with connect() as c: lines = economy.market_lines(
+      economy.market_snapshot(c, str(meta["id"]), day=day)["multipliers"], economy.settlement_profile(meta))
   app/trade.py:settlement_price() -> economy.settlement_multiplier(conn, settlement_id, category, day=day)
       (trade is a new module of this same pass; this is the one in-cluster consumer and the only call that
       exists in code today)
@@ -33,6 +46,8 @@ Turn on:
   [ ] app/world.py:WORLD_TABLES and RESTORE_ORDER gain market_state and market_events; AUTOINC_TABLES gains
       market_events; market_state (text key) joins _REPLACE_ONLY_WHEN_EXPORTED and the two quest_clocks
       snapshot sites in _save_snapshot and _restore_snapshot_rows; _clear_playthrough deletes from both
+      (WORLD_TABLES membership also puts both tables into export_world / import of ai-rpg-world-v1; neither
+      has a map_id, so no per-map export filter applies and nothing else is needed for export)
   [ ] settings row economy_config is read by the tick (not snapshotted: it is a world rule, not turn state)
   [ ] the tick call and the ensure call above; no route needed (GET /api/market/{settlement_id} optional for Tools)
   [ ] UI: none
@@ -975,6 +990,18 @@ def _write_events(conn: sqlite3.Connection, events: list[dict]) -> None:
         event["id"] = int(cur.lastrowid or 0)
 
 
+def _is_settlement_row(meta: Any) -> bool:
+    """False for a list_settlements row that is not a settlement (kind landmark or hidden_base).
+
+    settlements_meta rows and world city records carry no kind and count as settlements. A discovered
+    hidden camp reaches list_settlements twice, once as a landmark with state farm or ruins and once with
+    state hidden_base; without this guard the farm row would be given a market.
+    """
+    if not isinstance(meta, dict):
+        return False
+    return str(meta.get("kind") or "settlement").strip().lower() == "settlement"
+
+
 def ensure_settlement(
     conn: sqlite3.Connection,
     meta: dict,
@@ -988,6 +1015,8 @@ def ensure_settlement(
     """Insert the settlement's market rows when missing (INSERT OR IGNORE); returns the rows now stored."""
     ensure_schema(conn)
     value = _check_day(day)
+    if not _is_settlement_row(meta):
+        return []
     profile = settlement_profile(meta, location_row)
     if not profile["settlement_id"]:
         return []
@@ -1040,6 +1069,8 @@ def tick_day(
         "event_proposals": [],
     }
     for meta in settlements or []:
+        if not _is_settlement_row(meta):
+            continue
         profile = settlement_profile(meta)
         if not profile["settlement_id"]:
             continue

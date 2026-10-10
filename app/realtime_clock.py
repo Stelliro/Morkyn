@@ -30,6 +30,10 @@ Wiring (not done):
       after apply_turn, so play minutes and real minutes never double count.
   app/world.py:start_playthrough() -> realtime_clock.reset_anchor(conn, world_abs_now=480) right after the
       init_world_clock call.
+  app/world.py:rewind_last_turn() -> realtime_clock.resume(conn, world_abs_now=world_abs_minutes(get_world_time(conn)))
+      when the clock is running, else realtime_clock.reset_anchor(conn, world_abs_now=...) with the same
+      value, after the pacing rows are restored. The anchor is not in the snapshot (the row is a table rule,
+      not turn state), so without this line a rewound turn's minutes would be owed again at the next tick.
   app/world.py:get_state() -> state.update(realtime_clock.state_view(conn)).
   static/app.js:startGenerationProgressPolling() -> the pattern for a poller hitting the tick route while the
       tab is visible and aiBusy is false; the wait summary line for each applied slice.
@@ -39,7 +43,7 @@ Turn on:
       not in SNAPSHOT_SETTING_KEYS (a table rule, like tts_config); no init_db / WORLD_TABLES / export entry
       because there is no table
   [ ] the tick route and the config routes
-  [ ] pause/resume around play_turn, reset_anchor in start_playthrough
+  [ ] pause/resume around play_turn, reset_anchor in start_playthrough, re-anchor in rewind_last_turn
   [ ] UI: ratio and pause controls in Settings; the poller
   [ ] prompt: none (the world_time line already carries the clock)
 
@@ -354,9 +358,11 @@ def describe(cfg: dict[str, Any]) -> str:
     ratio = float(cfg["ratio"])
     real_hours = 24.0 / ratio
     if real_hours >= 1.0:
-        span = f"{real_hours:.1f} real hours"
+        count = f"{real_hours:.1f}"
+        span = f"{count} real hour" if count == "1.0" else f"{count} real hours"
     else:
-        span = f"{real_hours * 60.0:.0f} real minutes"
+        count = f"{real_hours * 60.0:.0f}"
+        span = f"{count} real minute" if count == "1" else f"{count} real minutes"
     ratio_text = f"{ratio:.2f}".rstrip("0")
     if ratio_text.endswith("."):
         ratio_text += "0"
@@ -503,18 +509,37 @@ def _playthrough_options(conn) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _payload_value_readable(key: str, value: Any) -> bool:
+    """True when a payload value for `key` parses; an unreadable one leaves the stored value alone."""
+    if key == "ratio":
+        if isinstance(value, str) and value.strip().lower() in RATIO_PRESETS:
+            return True
+        parsed = _opt_float(value)
+        return parsed is not None and parsed > 0
+    if key in ("slice_minutes", "max_catch_up_minutes"):
+        return _opt_int(value) is not None
+    if key == "enabled":
+        if isinstance(value, (bool, int, float)):
+            return True
+        return str(value).strip().lower() in {"1", "true", "yes", "on", "0", "false", "no", "off"}
+    return True
+
+
 def update_config(conn, payload: dict[str, Any], *, now_wall: float | None = None) -> dict[str, Any]:
-    """Partial update of the config keys; unknown keys are ignored. A ratio change on a running clock
-    re-anchors at the world minute the old ratio had reached, so no owed minute is lost or doubled."""
+    """Partial update of the config keys; unknown keys and unreadable values are ignored. A ratio change on
+    a running clock re-anchors at the world minute the old ratio had reached, so no owed minute is lost or
+    doubled."""
     if not isinstance(payload, dict):
         raise ValueError("realtime_clock.update_config needs a dict payload")
     stored = _stored_config(conn)
     merged = dict(stored)
+    used: set[str] = set()
     for key in CONFIG_KEYS:
-        if key not in payload or payload[key] is None:
+        if key not in payload or payload[key] is None or not _payload_value_readable(key, payload[key]):
             continue
         merged[key] = payload[key]
-    if "preset" in payload and "ratio" not in payload:
+        used.add(key)
+    if "preset" in payload and "ratio" not in used:
         preset = str(payload.get("preset") or "").strip().lower()
         if preset in RATIO_PRESETS:
             merged["ratio"] = RATIO_PRESETS[preset]
@@ -575,7 +600,8 @@ def reset_anchor(conn, *, now_wall: float | None = None, world_abs_now: int = 48
 
 
 def commit_tick(conn, plan: dict[str, Any], *, now_wall: float) -> dict[str, Any]:
-    """Move anchor_* (and last_tick_wall) after a tick; a skip plan re-bases only for nothing_due."""
+    """Move anchor_* (and last_tick_wall) after a tick; a skip plan re-bases only for nothing_due. A tick plan
+    carrying applied_minutes of 0 (every slice failed) moves the anchor but does not stamp last_tick_wall."""
     plan = plan if isinstance(plan, dict) else {}
     status = str(plan.get("status") or "")
     reason = str(plan.get("reason") or "")
@@ -589,7 +615,8 @@ def commit_tick(conn, plan: dict[str, Any], *, now_wall: float) -> dict[str, Any
         return get_config(conn)
     cfg["anchor_wall"] = wall
     cfg["anchor_world_minute"] = max(0, minute)
-    if status == "tick":
+    applied = _as_int(plan.get("applied_minutes", plan.get("apply_minutes")), 0)
+    if status == "tick" and applied > 0:
         cfg["last_tick_wall"] = float(now_wall)
     _write_row(conn, cfg)
     return get_config(conn)
@@ -633,6 +660,7 @@ def catch_up(
     commit_plan = plan
     if plan["status"] == "tick" and applied_minutes < plan["apply_minutes"]:
         commit_plan = dict(plan)
+        commit_plan["applied_minutes"] = applied_minutes
         commit_plan["anchor_after"] = rebase_after(cfg, plan, applied_minutes=applied_minutes, now_wall=now)
     report["applied"] = applied
     report["applied_minutes"] = applied_minutes

@@ -152,6 +152,13 @@ class PureTests(unittest.TestCase):
         self.assertFalse(sv.is_entry_step({"settlement_id": "", "from_terrain": "forest"}))
         self.assertFalse(sv.is_entry_step(None))
         self.assertTrue(sv.is_entry_step({"settlement_id": "S3", "from_terrain": ""}))
+        # ruins, dungeon and gate are map states, not settlements: a step from one onto a town is an entry.
+        for word in ("ruins", "dungeon", "gate"):
+            self.assertTrue(sv.is_entry_step({"settlement_id": "S3", "from_terrain": word}), word)
+        self.assertEqual(sv.SETTLEMENT_TERRAINS,
+                         {"city", "town", "village", "station", "colony", "harbor", "shipyard"})
+        from app.tile_world import SETTLEMENT_STATES
+        self.assertEqual(sv.SETTLEMENT_TERRAINS | sv.NOT_SETTLEMENTS, set(SETTLEMENT_STATES))
 
     def test_seed_proposal_pure(self):
         seed = sv.seed_proposal({"id": "S3", "state": "town", "ruler_power_rank": 57}, location_id=5)
@@ -194,6 +201,15 @@ class PureTests(unittest.TestCase):
         self.assertEqual(band["power_source"], "band")
         self.assertEqual(band["class"], "city")
         self.assertEqual(band["ruler"]["role"], "city reeve")
+        # The apply line's record must resolve to the same class under the seeder, which reads state or class.
+        import json
+        applied = json.loads(band["apply"].split("settlement=", 1)[1].rstrip(")"))
+        self.assertEqual(applied.get("state") or applied.get("class"), "city")
+        self.assertEqual(applied["band"], "large_city")
+        kept = json.loads(sv.seed_proposal({"id": "S1", "state": "harbor"}, location_id=1)["apply"]
+                          .split("settlement=", 1)[1].rstrip(")"))
+        self.assertEqual(kept["state"], "harbor")
+        self.assertNotIn("class", kept)
         plain = sv.seed_proposal({"id": "C8"}, location_id=1)
         self.assertEqual(plain["ruler"]["power_rank"], 50)
         self.assertEqual(plain["power_source"], "default")
@@ -380,12 +396,24 @@ class SettlementVisitsDbTests(unittest.TestCase):
         self.assertEqual(result["visit"]["last_visit_turn"], 5)
 
     def test_day_boundary_uses_abs_minutes(self):
+        # Raw minutes would read day 1 minute 10 to day 2 minute 15 as five minutes; absolute it is 1445.
         with connect() as conn:
-            sv.record_enter(conn, "S3", 4, settlement={"id": "S3"}, location_id=5, world_time=_world_time(1, 1430))
+            first = sv.record_enter(conn, "S3", 4, settlement={"id": "S3"}, location_id=5,
+                                    world_time=_world_time(1, 10))
             result = sv.record_enter(conn, "S3", 4, settlement={"id": "S3"}, location_id=5,
-                                     world_time=_world_time(2, 5))
+                                     world_time=_world_time(2, 15))
+        self.assertEqual(first["visit"]["first_visit_minute"], 10)
+        self.assertTrue(result["counted"])
+        self.assertEqual(result["visit"]["visit_count"], 2)
+        self.assertEqual(result["visit"]["last_visit_minute"], 1455)
+        # Across midnight within the grace: day 2 minute 1430 then day 3 minute 5 is 15 minutes, not counted.
+        with connect() as conn:
+            sv.record_enter(conn, "S4", 4, settlement={"id": "S4"}, location_id=5, world_time=_world_time(2, 1430))
+            result = sv.record_enter(conn, "S4", 4, settlement={"id": "S4"}, location_id=5,
+                                     world_time=_world_time(3, 5))
         self.assertFalse(result["counted"])
-        self.assertEqual(result["visit"]["last_visit_minute"], 1430)
+        self.assertEqual(result["visit"]["visit_count"], 1)
+        self.assertEqual(result["visit"]["last_visit_minute"], 2870)
 
     def test_fields_fill_only_when_blank(self):
         with connect() as conn:
@@ -408,6 +436,38 @@ class SettlementVisitsDbTests(unittest.TestCase):
         self.assertEqual(third["visit"]["class"], "harbor")
         self.assertEqual((third["visit"]["x"], third["visit"]["y"]), (3, 4))
         self.assertEqual(third["visit"]["visit_count"], 3)
+
+    def test_stored_town_class_gives_way_to_a_named_class(self):
+        # "town" is also the default for a record with no class word, so a later class replaces it.
+        with connect() as conn:
+            first = sv.record_enter(conn, "S3", 1, settlement={"id": "S3", "state": "town"}, location_id=2)
+            self.assertEqual(first["visit"]["class"], "town")
+            second = sv.record_enter(conn, "S3", 2, settlement={"id": "S3", "state": "city"}, location_id=2,
+                                     world_time=_world_time(1, 100))
+            self.assertEqual(second["visit"]["class"], "city")
+            self.assertEqual(second["seed"]["ruler"]["role"], "city reeve")
+            third = sv.record_enter(conn, "S3", 3, settlement={"id": "S3", "state": "village"}, location_id=2,
+                                    world_time=_world_time(1, 200))
+        self.assertEqual(third["visit"]["class"], "city")
+
+    def test_settlement_id_argument_wins_over_the_record_id(self):
+        with connect() as conn:
+            result = sv.record_enter(conn, "S3", 1, settlement={"id": "S4", "state": "town"}, location_id=2)
+            self.assertIsNotNone(sv.get_visit(conn, "S3"))
+            self.assertIsNone(sv.get_visit(conn, "S4"))
+        self.assertEqual(result["settlement_id"], "S3")
+        self.assertEqual(result["seed"]["settlement_id"], "S3")
+        self.assertEqual(result["seed"]["flag_key"], "settlement_ruler:S3")
+        self.assertIn('"id": "S3"', result["seed"]["apply"])
+
+    def test_enter_from_travel_with_a_none_record_id(self):
+        travel = {"settlement_id": "S5", "from_terrain": "forest", "to": [2, 2],
+                  "settlement": {"id": None, "name": "Reedham"}}
+        with connect() as conn:
+            result = sv.enter_from_travel(conn, travel, location_id=3, turn=2)
+        self.assertEqual(result["settlement_id"], "S5")
+        self.assertEqual(result["visit"]["name"], "Reedham")
+        self.assertEqual(result["seed"]["settlement_id"], "S5")
 
     def test_seed_uses_stored_location_when_call_has_none(self):
         with connect() as conn:

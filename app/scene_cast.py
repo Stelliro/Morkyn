@@ -21,7 +21,7 @@ Wiring (not done):
   app/llm.py:_verification_policy() beside the unresolved_entity_references blocker -> v = scene_cast.verify(draft, involved, binding, entity_map); blockers += v["policy_blockers"]
   app/llm.py:generate_turn() at the _run_quest_parser seat (final prose) -> v2 = scene_cast.verify(...); r = scene_cast.propose_repairs(result, v2, binding, entity_map, seed=...); r["mode"] in ("refill", "cut") -> result = scene_cast.apply_repairs(result, r); r["needs_model_call"] -> one _retry_narration_prose-style call built by llm.py from r["reask_slots"] (that prompt text lives in llm.py)
   app/world.py:apply_turn() between the name repair and _collect_npcs_from_turn_result -> scene_cast.npc_rows_for_apply(result) gives the NPC_NEW-shaped rows for new slots so _npcs_shown_in_prose keeps them (a bound slot is shown by construction)
-  app/world.py:apply_turn() at _apply_scene_cast(conn, result.get("scene_cast")) -> result["scene_cast"] = scene_cast.resolve_pending_cast(result, code_by_name) appends the codes _upsert_npc minted this turn to scene_cast.present / interacting
+  app/world.py:apply_turn() at _apply_scene_cast(conn, result.get("scene_cast")) -> in the loop over collected_npcs keep ids = {npc["name"]: _upsert_npc(conn, npc)} (it returns the npcs row id, not the code), read code_by_name with one SELECT name, code FROM npcs WHERE id IN (...), then result["scene_cast"] = scene_cast.resolve_pending_cast(result, code_by_name) appends the codes minted this turn to scene_cast.present / interacting
   app/llm.py:_clean_turn_for_handoff() -> nothing: reports live under _dsl, which is already preserved
   app/turn_dsl.py:DSL_SYSTEM_PROMPT and app/prompts.py:SYSTEM_PROMPT / VERIFY_PROMPT -> the placeholder rule and the slot legend (prompt text, written there, not here)
 
@@ -169,7 +169,8 @@ _PLACE_CODE_AGENT_RE = re.compile(
 )
 _GEAR_WORD_RE = re.compile(rf"\b(?:{_GEAR_ALT})\b", re.I)
 _SCENERY_WORD_RE = re.compile(r"\b(?:" + "|".join(re.escape(w) for w in SCENERY_WORDS) + r")\b", re.I)
-_SENTENCE_SPLIT_RE = re.compile(r"(?:(?<=[.!?…])|(?<=[.!?…][\"'”’)\]]))\s+")
+# A sentence ends at terminal punctuation or at a blank line, so a cut never spans two paragraphs.
+_SENTENCE_SPLIT_RE = re.compile(r"(?:(?<=[.!?…])|(?<=[.!?…][\"'”’)\]]))\s+|\n[ \t]*\n")
 _CODE_TAG_RE = re.compile(r"\s*\[\[[A-Za-z]{1,3}\d{0,4}\]\]")
 _SLOT_TOKEN_RE = re.compile(r"^(?:\{\{?|\[\[?|<)?\s*(NPC|ITEM|PLACE)[_\- ]?(\d{1,2})(?:\|(\w+))?\s*(?:\}\}?|\]\]?|>)?$", re.I)
 _WORD_RE = re.compile(r"[a-z0-9][a-z0-9'’-]*")
@@ -768,17 +769,21 @@ def build_involved(
     places: list[dict[str, Any]] = []
     place_codes: set[str] = set()
 
-    def add_place(ref: dict[str, Any] | None, kind: str, name: str = "") -> None:
+    def add_place(ref: dict[str, Any] | None, kind: str, name: str = "") -> bool:
+        """True when a slot was added; False when the place was already listed or the limit refused it."""
         if len(places) >= lim["places"]:
-            return
+            return False
         if ref is not None:
             key = ref["code"] or ref["name"].lower()
             if key in place_codes:
-                return
+                return False
             place_codes.add(key)
             places.append({"slot": f"PLACE_{len(places) + 1}", "code": ref["code"] or None, "name": ref["name"], "kind": kind})
-        elif name:
+            return True
+        if name:
             places.append({"slot": f"PLACE_{len(places) + 1}", "code": None, "name": name, "kind": kind})
+            return True
+        return False
 
     here_place = next((p for p in em.get("places", []) if p.get("here")), None)
     if here_place is None and location_code and location_code in by_code:
@@ -797,8 +802,10 @@ def build_involved(
             add_place(place, "nearby")
     unknown = _unknown_place_in_input(line, em) if line else ""
     if unknown and not any(p["name"].lower() == unknown.lower() for p in places):
-        add_place(None, "new", unknown)
-        notes.append(f"PLACE_{len(places)}: new place named in the input")
+        if add_place(None, "new", unknown):
+            notes.append(f"PLACE_{len(places)}: new place named in the input")
+        else:
+            notes.append(f"left out: {unknown} (places limit {lim['places']})")
 
     involved = {
         "version": VERSION,
@@ -939,20 +946,27 @@ def find_placeholders(text: str, *, where: str = "narration") -> list[dict[str, 
     return out
 
 
-def _scene_plan_strings(plan: Any) -> list[tuple[list[Any], Any, str]]:
+def _scene_plan_strings(plan: Any) -> list[tuple[Any, Any, str]]:
     """(container, key, text) for every string a scene_plan carries, so each can be rewritten in place."""
     found: list[tuple[Any, Any, str]] = []
     if not isinstance(plan, dict):
         return found
     if isinstance(plan.get("goal"), str):
         found.append((plan, "goal", plan["goal"]))
-    for point in plan.get("focus_points") or []:
+    points = plan.get("focus_points")
+    if isinstance(points, dict):
+        entries = list(points.items())  # the handoff cleanup reads a dict of points as its values; here they stay keyed in place
+    elif isinstance(points, list):
+        entries = list(enumerate(points))  # by index, so two equal strings are both rewritten
+    else:
+        return found  # a string or a number is left for the handoff cleanup to shape
+    for key, point in entries:
         if isinstance(point, dict):
-            for key in ("summary", "label", "text"):
-                if isinstance(point.get(key), str):
-                    found.append((point, key, point[key]))
+            for field in ("summary", "label", "text"):
+                if isinstance(point.get(field), str):
+                    found.append((point, field, point[field]))
         elif isinstance(point, str):
-            found.append((plan["focus_points"], plan["focus_points"].index(point), point))
+            found.append((points, key, point))
     return found
 
 
@@ -1041,6 +1055,8 @@ def _slot_entries(involved: dict[str, Any] | None, entity_map: dict[str, Any], *
         known = bool(code)
         if known:
             ref = by_code.get(code)
+            if ref is None and not name:
+                continue  # a code the map does not know and no name: nothing to render, so the placeholder stays and is listed unbound
             if ref is not None and not name:
                 name = ref["name"]
             ref = dict(ref) if ref is not None else _entity_ref(code, name, "person", entry.get("role_hint"))
@@ -1304,7 +1320,7 @@ def bind(turn: dict[str, Any], involved: dict[str, Any] | None, entity_map: dict
         "fixes": fixes,
         "seed": int(seed or 0),
     }
-    return {"turn": new_turn, "binding": binding, "text_changed": bool(replacements)}
+    return {"turn": new_turn, "binding": binding, "text_changed": bool(replacements or fixes)}
 
 
 def npc_rows_for_apply(turn: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1356,6 +1372,13 @@ def _distinct_spans(hits: list[tuple[int, int, str]]) -> list[str]:
             continue
         kept.append((start, end, evidence))
     return [evidence for _s0, _e0, evidence in kept]
+
+
+def _item_names(turn: dict[str, Any], entity_map: dict[str, Any]) -> list[str]:
+    """The item names the agent gates and their repairs both watch: the entity map's items plus the names this turn grants."""
+    return [i["name"] for i in entity_map.get("items", [])] + [
+        _s(c.get("name")) for c in turn.get("inventory_changes") or [] if isinstance(c, dict) and _s(c.get("name"))
+    ]
 
 
 def gate_item_as_agent(text: str, item_names: list[str]) -> list[dict[str, Any]]:
@@ -1537,10 +1560,7 @@ def verify(
     gates.append(_evidence("slot_name_is_clothing", not clothing, clothing, "block"))
 
     # item_as_agent / place_as_agent
-    item_names = [i["name"] for i in entity_map.get("items", [])] + [
-        _s(c.get("name")) for c in turn.get("inventory_changes") or [] if isinstance(c, dict) and _s(c.get("name"))
-    ]
-    item_rows = gate_item_as_agent(prose, item_names)
+    item_rows = gate_item_as_agent(prose, _item_names(turn, entity_map))
     counts["agent_items"] = len(item_rows)
     gates.append(item_rows[0] if item_rows else _evidence("item_as_agent", True, "", "block"))
     place_names = [p["name"] for p in entity_map.get("places", [])] + [
@@ -1627,8 +1647,28 @@ def verify(
 # ---------------------------------------------------------------------------
 
 
-def _apply_text_plan(text: str, replacements: list[dict[str, str]], cuts: list[str]) -> str:
+def _split_replacements(replacements: list[dict[str, str]]) -> tuple[dict[str, list[dict[str, str]]], list[dict[str, str]]]:
+    """Refill rows carry a `where` and apply one occurrence each, in text order, to that text only (so the
+    first mention keeps its code tag and later ones stay bare); every other row applies everywhere."""
+    queues: dict[str, list[dict[str, str]]] = {}
+    general: list[dict[str, str]] = []
+    for rep in replacements:
+        if not isinstance(rep, dict) or not rep.get("from"):
+            continue
+        if rep.get("why") == "refill_unbound" and _s(rep.get("where")):
+            queues.setdefault(_s(rep.get("where")), []).append(rep)
+        else:
+            general.append(rep)
+    return queues, general
+
+
+def _apply_text_plan(text: str, replacements: list[dict[str, str]], cuts: list[str], *, queue: list[dict[str, str]] | None = None) -> str:
+    """The queue's single-occurrence refills (consumed as they are found), the replace-all rows, then the cuts."""
     out = str(text or "")
+    if queue is not None:
+        while queue and queue[0].get("from") and queue[0]["from"] in out:
+            out = out.replace(queue[0]["from"], queue[0].get("to", ""), 1)
+            queue.pop(0)
     for rep in replacements:
         if rep.get("from"):
             out = out.replace(rep["from"], rep.get("to", ""))
@@ -1638,6 +1678,15 @@ def _apply_text_plan(text: str, replacements: list[dict[str, str]], cuts: list[s
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
+
+
+def _repair_texts(turn: dict[str, Any], prose: str) -> list[tuple[str, str]]:
+    """(where, text) the repair walks: the joined prose, then the summary and the scene_plan strings, each normalised."""
+    out: list[tuple[str, str]] = [("narration", prose)]
+    for where, text in _turn_texts(turn):
+        if where != "narration":
+            out.append((where, normalize_placeholder_text(text)[0]))
+    return out
 
 
 def propose_repairs(
@@ -1677,35 +1726,46 @@ def propose_repairs(
             plan["reasons"].append(check)
 
     def add_cut(sentence: str, slot: str = "") -> None:
-        if sentence and sentence not in plan["cut_sentences"]:
+        # A sentence that already holds a listed cut (the summary echoing a prose sentence) needs no cut of its own.
+        if sentence and sentence not in plan["cut_sentences"] and not any(c in sentence for c in plan["cut_sentences"]):
             plan["cut_sentences"].append(sentence)
         if slot and slot not in plan["reask_slots"]:
             plan["reask_slots"].append(slot)
 
-    # refill_unbound / cut_unfixable for placeholders left in the text
+    def head_rewrite(text: str, pos: int, to: str) -> str:
+        if _at_sentence_start(text, pos) and to[:1].islower():
+            return to[:1].upper() + to[1:]
+        return to
+
+    # refill_unbound / cut_unfixable for placeholders left in the prose, the summary and the scene_plan.
+    # Each `where` is its own first-mention scope, as in bind; a refill row carries its `where` so apply_repairs
+    # fills one occurrence at a time in that text.
     if "placeholder_unbound" in fired:
         add_reason("placeholder_unbound")
-        mentioned = {s for s, e in slots.items() if e.get("render_bare") and _s(e.get("render_bare")).lower() in prose.lower()}
-        for ph in find_placeholders(prose):
-            entry = slots.get(ph["slot"])
-            if entry is not None:
-                first = ph["slot"] not in mentioned and not ph["form"]
-                rendered = render_slot(entry, form=ph["form"], first=first)
-                if _at_sentence_start(prose, ph["start"]) and rendered[:1].islower():
-                    rendered = rendered[:1].upper() + rendered[1:]
-                if not ph["form"]:
-                    mentioned.add(ph["slot"])
-                plan["replacements"].append({"from": ph["raw"], "to": rendered, "why": "refill_unbound"})
-            else:
-                add_cut(_sentence_holding(prose, ph["start"]), ph["slot"])
+        texts = _repair_texts(turn, prose)
+        scopes: dict[str, set[str]] = {}
+        for where, text in texts:
+            low = " ".join(t for w, t in texts if w == where).lower()
+            mentioned = scopes.setdefault(where, {s for s, e in slots.items() if _s(e.get("render_bare")) and _s(e.get("render_bare")).lower() in low})
+            for ph in find_placeholders(text, where=where):
+                entry = slots.get(ph["slot"])
+                if entry is not None:
+                    first = ph["slot"] not in mentioned and not ph["form"]
+                    rendered = head_rewrite(text, ph["start"], render_slot(entry, form=ph["form"], first=first))
+                    if not ph["form"]:
+                        mentioned.add(ph["slot"])
+                    plan["replacements"].append({"from": ph["raw"], "to": rendered, "why": "refill_unbound", "where": where})
+                else:
+                    add_cut(_sentence_holding(text, ph["start"]), ph["slot"])
 
     # fix_agent_heads
     if "item_as_agent" in fired or "place_as_agent" in fired:
         add_reason("item_as_agent")
         add_reason("place_as_agent")
         for match in _GEAR_GROUP_RE.finditer(prose):
-            plan["replacements"].append({"from": match.group(0), "to": AGENT_HEAD_REWRITE["group"].format(group=match.group(1).lower()), "why": "fix_agent_heads"})
-        item_names = [i["name"] for i in entity_map.get("items", [])]
+            to = head_rewrite(prose, match.start(), AGENT_HEAD_REWRITE["group"].format(group=match.group(1).lower()))
+            plan["replacements"].append({"from": match.group(0), "to": to, "why": "fix_agent_heads"})
+        item_names = _item_names(turn, entity_map)
         for name in sorted({_s(n) for n in item_names if len(_s(n)) >= 4}, key=len, reverse=True):
             poss = re.compile(rf"(?<![\w]){re.escape(name)}(?:\s*\[\[I\d+\]\])?{_POSS}\s+({_GROUP_ALT}|voice|hand|eyes?|gaze)\b", re.I)
             for match in poss.finditer(prose):
@@ -1714,7 +1774,7 @@ def propose_repairs(
                     to = AGENT_HEAD_REWRITE["group"].format(group=head)
                 else:
                     to = AGENT_HEAD_REWRITE.get("eyes" if head.startswith("eye") or head == "gaze" else head, f"its {head}")
-                plan["replacements"].append({"from": match.group(0), "to": to, "why": "fix_agent_heads"})
+                plan["replacements"].append({"from": match.group(0), "to": head_rewrite(prose, match.start(), to), "why": "fix_agent_heads"})
             verb = re.compile(rf"(?<![\w]){re.escape(name)}(?:\s*\[\[I\d+\]\])?\s+(?:{_VERB_ALT})\b", re.I)
             for match in verb.finditer(prose):
                 add_cut(_sentence_holding(prose, match.start()))
@@ -1723,7 +1783,8 @@ def propose_repairs(
         for match in _PLACE_CODE_AGENT_RE.finditer(prose):
             if re.search(_POSS, match.group(0)):
                 group = match.group(0).split()[-1].lower()
-                plan["replacements"].append({"from": match.group(0), "to": AGENT_HEAD_REWRITE["group"].format(group=group), "why": "fix_agent_heads"})
+                to = head_rewrite(prose, match.start(), AGENT_HEAD_REWRITE["group"].format(group=group))
+                plan["replacements"].append({"from": match.group(0), "to": to, "why": "fix_agent_heads"})
             else:
                 add_cut(_sentence_holding(prose, match.start()))
         place_forms: set[str] = set()
@@ -1735,7 +1796,8 @@ def propose_repairs(
         for form in sorted(place_forms, key=len, reverse=True):
             poss = re.compile(rf"(?<![\w]){re.escape(form)}(?:\s*\[\[L\d+\]\])?{_POSS}\s+({_GROUP_ALT})\b", re.I)
             for match in poss.finditer(prose):
-                plan["replacements"].append({"from": match.group(0), "to": AGENT_HEAD_REWRITE["group"].format(group=match.group(1).lower()), "why": "fix_agent_heads"})
+                to = head_rewrite(prose, match.start(), AGENT_HEAD_REWRITE["group"].format(group=match.group(1).lower()))
+                plan["replacements"].append({"from": match.group(0), "to": to, "why": "fix_agent_heads"})
             verb = re.compile(rf"(?<![\w]){re.escape(form)}(?:\s*\[\[L\d+\]\])?\s+(?:{_VERB_ALT})\b", re.I)
             for match in verb.finditer(prose):
                 add_cut(_sentence_holding(prose, match.start()))
@@ -1788,7 +1850,8 @@ def propose_repairs(
                         if _s(row.get("_slot")) not in plan["reask_slots"]:
                             plan["reask_slots"].append(_s(row.get("_slot")))
 
-    repaired = _apply_text_plan(prose, plan["replacements"], plan["cut_sentences"])
+    queues, general = _split_replacements(plan["replacements"])
+    repaired = _apply_text_plan(prose, general, plan["cut_sentences"], queue=list(queues.get("narration") or []))
     overflow = "cast_overflow" in fired
     if overflow:
         add_reason("cast_overflow")
@@ -1821,25 +1884,33 @@ def apply_repairs(turn: dict[str, Any], plan: dict[str, Any]) -> dict[str, Any]:
     attach_report(new_turn, {"repairs": copy.deepcopy(plan)})
     if _s(plan.get("mode")) not in ("refill", "cut"):
         return new_turn
-    replacements = [r for r in plan.get("replacements") or [] if isinstance(r, dict)]
+    queues, general = _split_replacements([r for r in plan.get("replacements") or [] if isinstance(r, dict)])
     cuts = [c for c in plan.get("cut_sentences") or [] if _s(c)]
+
+    def fix_text(where: str, text: str) -> str:
+        fixed, _f = normalize_placeholder_text(str(text or ""))
+        return _apply_text_plan(fixed, general, cuts, queue=queues.get(where))
+
+    # The narration queue runs on across the segments, which are the prose in order.
     segments = new_turn.get("narration_segments") if isinstance(new_turn.get("narration_segments"), list) else []
     seg_rows = [seg for seg in segments if isinstance(seg, dict)]
     if any(_s(seg.get("text")) for seg in seg_rows):
         kept: list[dict[str, Any]] = []
         for seg in seg_rows:
-            fixed, _f = normalize_placeholder_text(str(seg.get("text") or ""))
-            seg["text"] = _apply_text_plan(fixed, replacements, cuts)
+            seg["text"] = fix_text("narration", seg.get("text"))
             if seg["text"]:
                 kept.append(seg)
         new_turn["narration_segments"] = kept
         new_turn["narration"] = "\n\n".join(seg["text"] for seg in kept).strip()
     elif isinstance(new_turn.get("narration"), str):
-        fixed, _f = normalize_placeholder_text(new_turn["narration"])
-        new_turn["narration"] = _apply_text_plan(fixed, replacements, cuts)
+        new_turn["narration"] = fix_text("narration", new_turn["narration"])
     if isinstance(new_turn.get("turn_summary"), str):
-        fixed, _f = normalize_placeholder_text(new_turn["turn_summary"])
-        new_turn["turn_summary"] = _apply_text_plan(fixed, replacements, [])
+        new_turn["turn_summary"] = fix_text("turn_summary", new_turn["turn_summary"])
+    for container, key, text in _scene_plan_strings(new_turn.get("scene_plan")):
+        container[key] = fix_text("scene_plan", text)
+    plan_points = (new_turn.get("scene_plan") or {}).get("focus_points") if isinstance(new_turn.get("scene_plan"), dict) else None
+    if isinstance(plan_points, list):
+        new_turn["scene_plan"]["focus_points"] = [p for p in plan_points if not (isinstance(p, str) and not p.strip())]
     renamed = {r["old"]: r["new"] for r in plan.get("renamed") or [] if isinstance(r, dict) and _s(r.get("old"))}
     dropped = {_s(n).lower() for n in plan.get("npcs_dropped") or []}
     rows: list[Any] = []

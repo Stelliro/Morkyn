@@ -5,6 +5,7 @@ ensure_schema(), and check that the writers touch only body_wounds and body_heal
 """
 from __future__ import annotations
 
+import json
 import os
 import random
 import re
@@ -392,6 +393,13 @@ class TreatmentTests(unittest.TestCase):
         self.assertIsNone(bh.detect_treatment("I won't bandage it yet")["treatment"])
         self.assertIsNone(bh.detect_treatment("I look around the room")["treatment"])
         self.assertEqual(bh.detect_treatment("stitch the gash on my right hand using a needle")["location_hint"], "right_hand")
+        # The earliest treatment phrase wins; "set my" and "press on" count only with a limb word close behind.
+        res = bh.detect_treatment("I set my pack down and bandage my arm")
+        self.assertEqual((res["treatment"], res["location_hint"]), ("bandage", "arm"))
+        self.assertIsNone(bh.detect_treatment("I press on down the road")["treatment"])
+        self.assertEqual(bh.detect_treatment("I press on my thigh to slow the blood")["treatment"], "bandage")
+        self.assertEqual(bh.detect_treatment("set my arm with a stick")["treatment"], "splint")
+        self.assertEqual(bh.detect_treatment("wash the cut, then bandage it")["treatment"], "clean")
 
     def test_find_treatment_item_words_fallback_consumes(self):
         rows = [{"name": "linen bandages", "quantity": 2, "item_type": "misc", "description": ""}]
@@ -472,6 +480,40 @@ class TickTests(unittest.TestCase):
         self.assertAlmostEqual(_wound_of(res["body"], 1)["damage"], wound["damage"])
         self.assertEqual(set(res), {"body", "deltas", "transitions", "healed", "lines", "health", "hours", "minutes"})
         _assert_status_lines(self, res["lines"])
+
+    def test_tick_carry_charges_the_same_over_short_ticks(self):
+        # A sev2 bleed (1.5 per hour) at live tick sizes: ten 6-minute ticks charge the same whole points as one hour.
+        start, _ = _with_wound(100, location="left_arm", severity=2)
+        body = start
+        acc = bh.zero_deltas()
+        for i in range(10):
+            res = bh.tick(body, minutes=6, abs_minute=6 * (i + 1))
+            body = res["body"]
+            acc = bh.merge_deltas(acc, res["deltas"])
+        whole = bh.tick(start, minutes=60, abs_minute=60)
+        self.assertEqual(acc["health"], whole["deltas"]["health"])
+        self.assertEqual(whole["deltas"]["health"], -2)
+        self.assertAlmostEqual(acc["health_exact"], -1.5)
+        self.assertAlmostEqual(_wound_of(body, 1)["loss_carry"], _wound_of(whole["body"], 1)["loss_carry"], places=6)
+        # Three 20-minute ticks do not overcharge either.
+        body = start
+        acc = bh.zero_deltas()
+        for i in range(3):
+            res = bh.tick(body, minutes=20, abs_minute=20 * (i + 1))
+            body = res["body"]
+            acc = bh.merge_deltas(acc, res["deltas"])
+        self.assertEqual(acc["health"], -2)
+        # Fever fatigue carries the same way on an infected wound.
+        start, _ = _with_wound(100, location="torso", severity=2, state="infected")
+        body = start
+        acc = bh.zero_deltas()
+        for i in range(10):
+            res = bh.tick(body, minutes=6, abs_minute=6 * (i + 1), rng=FixedRng(0.99))
+            body = res["body"]
+            acc = bh.merge_deltas(acc, res["deltas"])
+        whole = bh.tick(start, minutes=60, abs_minute=60, rng=FixedRng(0.99))
+        self.assertEqual(acc["fatigue"], whole["deltas"]["fatigue"])
+        self.assertEqual(acc["health"], whole["deltas"]["health"])
 
     def test_tick_bleeding_self_stops_minor(self):
         body, _ = _with_wound(100, severity=1)
@@ -790,7 +832,8 @@ class BodyHealthDbTests(unittest.TestCase):
             self.assertIn("idx_body_wounds_status", names)
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(body_wounds)")}
             self.assertEqual(cols, {"id", "location", "kind", "severity", "damage", "state", "state_since_abs", "dressing_age_minutes",
-                                    "care_quality", "modifiers", "cause", "created_turn", "created_abs", "closed_turn", "closed_abs", "status"})
+                                    "care_quality", "modifiers", "cause", "created_turn", "created_abs", "closed_turn", "closed_abs", "status",
+                                    "loss_carry", "fatigue_carry"})
 
     def test_save_and_load_roundtrip_ids(self):
         body = _body(20)
@@ -912,6 +955,37 @@ class BodyHealthDbTests(unittest.TestCase):
             self.assertEqual(_table_counts(conn), after)
             missing = bh.add_modifier_and_save(conn, 999, "dirty", turn=2, max_health=20)
             self.assertEqual(missing["reason"], "no_such_wound")
+            picked = bh.add_modifier_and_save(conn, None, "swollen", turn=2, max_health=20)
+            self.assertTrue(picked["ok"])
+            raw = conn.execute("SELECT modifiers FROM body_wounds WHERE id = ?", (wound_id,)).fetchone()["modifiers"]
+            self.assertIn('"swollen"', raw)
+            self.assertEqual(_table_counts(conn)["body_health_log"] - after["body_health_log"], 1)
+            conn.execute("DELETE FROM body_wounds")
+            none_left = bh.add_modifier_and_save(conn, None, "dirty", turn=2, max_health=20)
+            self.assertEqual(none_left["reason"], "no_such_wound")
+
+    def test_log_event_detail_always_parses(self):
+        reasons = [f"bleeding:right_hand_{i:02d}" for i in range(40)]
+        with connect() as conn:
+            bh.log_event(conn, turn=1, abs_minute=10, wound_id=None, event="tick_loss", detail={"health": -3, "reasons": reasons})
+            bh.log_event(conn, turn=1, abs_minute=10, wound_id=None, event="wound", detail={"cause": "x" * 2000})
+            rows = [r["detail"] for r in conn.execute("SELECT detail FROM body_health_log ORDER BY id")]
+        self.assertEqual(len(rows), 2)
+        first = json.loads(rows[0])
+        self.assertEqual(first["health"], -3)
+        self.assertEqual(len(first["reasons"]), bh.LOG_REASONS_MAX + 1)
+        self.assertEqual(first["reasons"][-1], f"+{40 - bh.LOG_REASONS_MAX} more")
+        second = json.loads(rows[1])
+        self.assertEqual(second, {"truncated": True, "event": "wound"})
+        for raw in rows:
+            self.assertLessEqual(len(raw), bh.LOG_DETAIL_MAX)
+
+    def test_private_imports_still_exist(self):
+        from app import player_resources, prose_state
+
+        for name in ("_int", "_float", "world_abs_minutes"):
+            self.assertTrue(hasattr(player_resources, name), name)
+        self.assertTrue(hasattr(prose_state, "strip_negated_clauses"))
 
     def test_module_is_a_leaf(self):
         offenders = []

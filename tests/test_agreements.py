@@ -330,6 +330,13 @@ class TermsTests(unittest.TestCase):
         back = agreements.haggle_terms({**terms, "leftovers_policy": "returned"}, {"decision": "counter", "price": 150000})
         self.assertEqual(back["leftovers_policy"], "split")
         self.assertEqual(back["player_gives"][0]["quantity"], 15)
+        # The known-product requirement is fixed (8 ore), but a default-fraction deal follows the raised goods.
+        self.assertEqual(countered["required"], [{"item_key": "iron ore", "quantity": 8}])
+        basket = _terms(player_gives=[{"item_name": "reeds", "quantity": 10}], counterparty_gives=None, work="weave a basket")
+        self.assertEqual(basket["required"], [{"item_key": "reeds", "quantity": 6}])
+        raised = agreements.haggle_terms(basket, {"decision": "counter", "price": 1000})
+        self.assertEqual(raised["player_gives"][0]["quantity"], 13)
+        self.assertEqual(raised["required"], [{"item_key": "reeds", "quantity": 8}])
         refused = agreements.haggle_terms(terms, {"decision": "refuse", "price": 0})
         self.assertEqual(refused, terms)
 
@@ -403,6 +410,16 @@ class ProposalTests(unittest.TestCase):
         self.assertTrue(named["journal"]["content"].startswith("Mara hands you"))
         bare = agreements.hand_over_proposal(self._row(counterparty_name=""))
         self.assertIn("to the other party for", bare["journal"]["content"])
+        # service_for_coin: the player did the work, so the journal says so and the counterparty only pays.
+        guided = agreements.delivery_proposal(self._row(
+            kind="service_for_coin", counterparty_name="Ida", player_gives=[], counterparty_gives=[],
+            counterparty_pays_units=30000, work="guide them to the ford", work_category="services", work_minutes=240,
+            required=[], leftovers_policy="counterparty_keeps",
+        ))
+        self.assertEqual(guided["inventory_changes"], [])
+        self.assertEqual(guided["money_delta_units"], 30000)
+        _assert_journal(self, guided["journal"])
+        self.assertEqual(guided["journal"]["content"], "You finish guide them to the ford for Ida; Ida pays 3 gold.")
 
     def test_cancel_proposal_returns_goods_unless_forfeit(self):
         # Handed over, early in the work: the goods come back.
@@ -423,6 +440,9 @@ class ProposalTests(unittest.TestCase):
         late = agreements.cancel_proposal(self._row(status="in_progress"), now_abs_minute=480 + 1500)
         self.assertFalse(late["returned"])
         self.assertEqual(late["reason"], "work_past_half")
+        # An open row (handed over, not closed) without now_abs_minute cannot be judged and is refused.
+        with self.assertRaises(ValueError):
+            agreements.cancel_proposal(self._row(status="in_progress"))
         # Nothing handed over: nothing to return.
         none = agreements.cancel_proposal(self._row(status="cancelled", handed_over_abs_minute=0, closed_abs_minute=600))
         self.assertFalse(none["returned"])
@@ -465,7 +485,11 @@ class ProposalTests(unittest.TestCase):
         self.assertEqual(by_key["agreement:G3"]["severity"], "mild")
         self.assertEqual(by_key["agreement:G3"]["line"], "Agreement G3 with Bertram: ready; collect 1 forged blade from Bertram.")
         self.assertEqual(by_key["agreement:G4"]["severity"], "serious")
-        self.assertIn("lapsed", by_key["agreement:G4"]["line"])
+        self.assertEqual(by_key["agreement:G4"]["line"], "Agreement G4 with Bertram: lapsed; 1 forged blade is still held by Bertram.")
+        self.assertNotIn("ready", by_key["agreement:G4"]["line"])
+        long_lapsed = agreements.status_lines([rows[3]], _wt_at(480 + 2880 + 9 * DAY), CSET)[0]
+        self.assertEqual(long_lapsed["line"],
+                         "Agreement G4 with Bertram: lapsed, uncollected for 9 days; 1 forged blade is still held by Bertram.")
         late = agreements.status_lines([rows[1]], _wt_at(480 + 2880 + 2 * DAY), CSET)[0]
         self.assertEqual(late["severity"], "serious")
         self.assertEqual(late["line"], "Agreement G2 with Bertram: 1 forged blade overdue 2 days.")
@@ -577,16 +601,35 @@ class AgreementsDbTests(unittest.TestCase):
             self.assertEqual(moved["handed_over_abs_minute"], world_abs_minutes(later))
             self.assertEqual(moved["due_abs_minute"], world_abs_minutes(later) + 480 + 2880)
 
+    def test_hand_over_counts_only_jobs_ahead(self):
+        with connect() as conn:
+            location_id, npc_id = _make_smith(conn)
+            first = self._agree(conn, npc_id=npc_id, location_id=location_id)
+            second = self._agree(conn, npc_id=npc_id, location_id=location_id)
+            self.assertEqual(second["due_abs_minute"], 480 + 480 + 2880)
+            # The first-made job has nothing ahead of it: the later agreement stands behind it.
+            moved = agreements.mark_handed_over(conn, first["id"], world_time=_wt(1, 480), turn=2)
+            self.assertEqual(moved["due_abs_minute"], 480 + 2880)
+            # The second job queues behind the first, now in progress.
+            moved = agreements.mark_handed_over(conn, second["id"], world_time=_wt(1, 480), turn=2)
+            self.assertEqual(moved["due_abs_minute"], 480 + 480 + 2880)
+            # agree() still counts every open job, whatever its order.
+            third = self._agree(conn, npc_id=npc_id, location_id=location_id)
+            self.assertEqual(third["due_abs_minute"], 480 + 2 * 480 + 2880)
+
     def test_tick_moves_in_progress_to_ready_at_due(self):
         with connect() as conn:
             row = self._agree(conn)
             agreements.mark_handed_over(conn, row["id"], world_time=_wt(1, 480), turn=1)
             due = 480 + 2880
             early = agreements.tick(conn, world_time=_wt_at(due - 1), turn=2)
-            self.assertEqual(early, {"ready": [], "lapsed": [], "forfeit": [], "lines": [], "event_proposals": []})
+            self.assertEqual(early, {"ready": [], "lapsed": [], "forfeit": [], "lines": [], "journal": [], "event_proposals": []})
             self.assertEqual(agreements.get_agreement(conn, row["id"])["status"], "in_progress")
             result = agreements.tick(conn, world_time=_wt_at(due), turn=3)
-            self.assertEqual(set(result), {"ready", "lapsed", "forfeit", "lines", "event_proposals"})
+            self.assertEqual(set(result), {"ready", "lapsed", "forfeit", "lines", "journal", "event_proposals"})
+            self.assertEqual(len(result["journal"]), 1)
+            _assert_journal(self, result["journal"][0])
+            self.assertEqual(result["journal"][0]["content"], result["lines"][0])
             self.assertEqual([r["id"] for r in result["ready"]], [row["id"]])
             self.assertEqual(result["ready"][0]["status"], "ready")
             self.assertEqual(result["ready"][0]["ready_abs_minute"], due)
@@ -620,6 +663,9 @@ class AgreementsDbTests(unittest.TestCase):
             self.assertEqual(stored["closed_abs_minute"], limit)
             self.assertEqual(stored["closed_turn"], 9)
             self.assertIn("forfeit", result["lines"][0])
+            self.assertEqual(len(result["journal"]), 1)
+            _assert_journal(self, result["journal"][0])
+            self.assertIn("is forfeit", result["journal"][0]["content"])
             _assert_event_proposal(self, result["event_proposals"][0])
             self.assertEqual(result["event_proposals"][0]["payload"]["status"], "forfeit")
             self.assertEqual(agreements.open_agreements(conn), [])
@@ -636,6 +682,9 @@ class AgreementsDbTests(unittest.TestCase):
             self.assertEqual([r["id"] for r in result["lapsed"]], [row["id"]])
             self.assertEqual(result["lapsed"][0]["status"], "lapsed")
             self.assertIn("lapsed", result["lines"][0])
+            self.assertEqual(len(result["journal"]), 1)
+            _assert_journal(self, result["journal"][0])
+            self.assertIn("has lapsed", result["journal"][0]["content"])
             self.assertEqual(result["event_proposals"][0]["payload"]["status"], "lapsed")
             self.assertEqual([e["kind"] for e in agreements.events_for(conn, row["id"])], ["agree", "hand_over", "ready", "lapse"])
             # A lapsed row is still open and still collectable.
@@ -734,6 +783,11 @@ class AgreementsDbTests(unittest.TestCase):
             self.assertEqual([r["id"] for r in result["ready"]], [good["id"]])
             reported = [line for line in result["lines"] if f"Agreement {bad['id']} could not be ticked" in line]
             self.assertEqual(len(reported), 1)
+            # The diagnostic is log text only: the journal holds the good row's entry and nothing else.
+            self.assertEqual(len(result["journal"]), 1)
+            _assert_journal(self, result["journal"][0])
+            self.assertIn(good["code"], result["journal"][0]["content"])
+            self.assertNotIn("could not be ticked", result["journal"][0]["content"])
             self.assertEqual(agreements.get_agreement(conn, bad["id"])["status"], "in_progress")
             # The lenient reader still returns the row, with the bad column as an empty list.
             self.assertEqual(agreements.get_agreement(conn, bad["id"])["player_gives"], [])

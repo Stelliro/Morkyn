@@ -138,18 +138,22 @@ class LeafTests(unittest.TestCase):
         self.assertEqual(before, after)
 
     def test_no_db_access(self):
-        import app.db as app_db
+        import sqlite3
 
         ctx = _context()
         em = scene_cast.entity_map_from_context(ctx)
         inv = _involved(ctx)
         turn = _turn(f"{{NPC_1}} nods. {{NPC_9}} waves. {_LONG}")
+        # sqlite3.connect is the one chokepoint every app.db / app.world path opens the database through;
+        # app.world binds connect by name at import, so patching app.db.connect alone would not see it.
         with mock.patch.dict(os.environ, {"AI_RPG_DB": str(_TMP / "missing" / "nope.db")}):
-            with mock.patch.object(app_db, "connect", side_effect=AssertionError("scene_cast opened the database")):
+            with mock.patch("sqlite3.connect", side_effect=AssertionError("scene_cast opened the database")):
                 b = scene_cast.bind(turn, inv, em, seed=4)
                 v = scene_cast.verify(b["turn"], inv, b["binding"], em)
-                scene_cast.propose_repairs(b["turn"], v, b["binding"], em, seed=4)
+                plan = scene_cast.propose_repairs(b["turn"], v, b["binding"], em, seed=4)
+                scene_cast.apply_repairs(b["turn"], plan)
         self.assertFalse(v["ok"])
+        self.assertFalse((_TMP / "missing").exists())
 
     def test_no_foreign_writes(self):
         conn = connect()
@@ -285,6 +289,15 @@ class BuildInvolvedTests(unittest.TestCase):
         inv = _involved(ctx, "I walk toward the Old Mill.")
         self.assertEqual(inv["places"][-1], {"slot": f"PLACE_{len(inv['places'])}", "code": None, "name": "Old Mill", "kind": "new"})
 
+    def test_build_involved_place_limit_notes_the_dropped_place(self):
+        ctx = _context()
+        ctx["current_location"]["parent_code"] = "L2"
+        ctx["locations"].append({"id": 3, "code": "L3", "name": "Old Mill", "npcs": []})
+        out = scene_cast.build_involved(ctx, "I leave the Old Mill and walk toward the Black Tower.", turn=3)
+        self.assertEqual([p["name"] for p in out["involved"]["places"]], ["Second Shadow Inn", "Market Square", "Old Mill"])
+        self.assertIn("left out: Black Tower (places limit 3)", out["notes"])
+        self.assertFalse(any(n.startswith("PLACE_") for n in out["notes"]), out["notes"])
+
     def test_involved_legend_lines_and_normalize_roundtrip(self):
         ctx = _context(conversation_turn={"addressed": ["A"], "speech": True})
         inv = _involved(ctx, "I ask Mara and someone else about my coat.")
@@ -394,6 +407,33 @@ class BindTests(unittest.TestCase):
         self.assertEqual(b["binding"]["unbound"], ["NPC_7"])
         self.assertEqual(b["binding"]["fixes"], ["{npc_7} -> {NPC_7}"])
         self.assertTrue(b["text_changed"])
+        # A normalisation alone changes the text too.
+        b = scene_cast.bind(_turn("{npc_7} waves."), self.inv, self.em)
+        self.assertEqual((b["turn"]["narration"], b["binding"]["replacements"], b["binding"]["fixes"]), ("{NPC_7} waves.", [], ["{npc_7} -> {NPC_7}"]))
+        self.assertTrue(b["text_changed"])
+
+    def test_bind_known_slot_with_unknown_code_and_no_name_stays_unbound(self):
+        inv = scene_cast.normalize_involved({"npcs": [{"slot": "NPC_1", "code": "Q"}]})
+        em = scene_cast.entity_map_from_rows([], [], [])
+        b = scene_cast.bind({"narration": "{NPC_1} nods."}, inv, em)
+        self.assertEqual(b["turn"]["narration"], "{NPC_1} nods.")
+        self.assertEqual(b["binding"]["unbound"], ["NPC_1"])
+        self.assertEqual(scene_cast.verify(b["turn"], inv, b["binding"], em)["policy_blockers"], ["placeholder_unbound"])
+
+    def test_bind_scene_plan_focus_point_shapes(self):
+        turn = _turn("{NPC_1} nods. " + _LONG)
+        turn["scene_plan"]["goal"] = "Meet {NPC_1}."
+        turn["scene_plan"]["focus_points"] = "watch {NPC_1}"  # a string, as a draft may send it
+        b = scene_cast.bind(turn, self.inv, self.em)
+        self.assertEqual(b["turn"]["scene_plan"], {"goal": "Meet Mara [[A]].", "focus_points": "watch {NPC_1}"})
+        turn["scene_plan"]["goal"] = "Keep the peace."  # the plan is one first-mention scope, so the goal must not name her first
+        turn["scene_plan"]["focus_points"] = ["{NPC_1} cup", "{NPC_1} cup"]
+        b = scene_cast.bind(turn, self.inv, self.em)
+        self.assertEqual(b["turn"]["scene_plan"]["focus_points"], ["Mara [[A]] cup", "Mara cup"])
+        self.assertEqual(b["binding"]["unbound"], [])
+        turn["scene_plan"]["focus_points"] = {"a": "{NPC_1} cup", "b": {"summary": "{NPC_1|their} cup"}}
+        b = scene_cast.bind(turn, self.inv, self.em)
+        self.assertEqual(b["turn"]["scene_plan"]["focus_points"], {"a": "Mara [[A]] cup", "b": {"summary": "Her cup"}})
 
     def test_bind_structured_keys_untouched(self):
         turn = _turn("{NPC_1} hands you bread. " + _LONG, 'GRANT "bread" QTY 1\nGOLD -2\nSUMMARY {NPC_1} sells bread.')
@@ -581,7 +621,7 @@ class RepairTests(unittest.TestCase):
         turn["narration_segments"][-1]["text"] += " Later {NPC_1} waves."
         v, plan = self._plan(turn, binding)
         self.assertEqual(plan["mode"], "refill")
-        self.assertEqual(plan["replacements"], [{"from": "{NPC_1}", "to": "Mara", "why": "refill_unbound"}])
+        self.assertEqual(plan["replacements"], [{"from": "{NPC_1}", "to": "Mara", "why": "refill_unbound", "where": "narration"}])
         self.assertTrue(plan["text"].endswith("Later Mara waves."))
         self.assertEqual(plan["reasons"], ["placeholder_unbound"])
         turn, binding = self._bound("Mara [[A]] nods. " + _LONG)
@@ -597,19 +637,81 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(fixed["player"], turn["player"])
         self.assertTrue(scene_cast.verify(fixed, self.inv, binding, self.em)["ok"])
 
+    def test_propose_repairs_covers_summary_and_scene_plan(self):
+        turn, binding = self._bound("Mara [[A]] nods. " + _LONG, "SUMMARY {NPC_8} laughs.")
+        turn["scene_plan"]["goal"] = "Find {NPC_2} at the ford."
+        v, plan = self._plan(turn, binding)
+        self.assertEqual(v["policy_blockers"], ["placeholder_unbound"])
+        self.assertEqual(plan["mode"], "cut")
+        self.assertEqual(plan["replacements"], [{"from": "{NPC_2}", "to": "Dorn [[B]]", "why": "refill_unbound", "where": "scene_plan"}])
+        self.assertEqual((plan["cut_sentences"], plan["reask_slots"]), (["{NPC_8} laughs."], ["NPC_8"]))
+        fixed = scene_cast.apply_repairs(turn, plan)
+        self.assertEqual(fixed["scene_plan"]["goal"], "Find Dorn [[B]] at the ford.")
+        self.assertEqual(fixed["turn_summary"], "")
+        self.assertEqual(fixed["narration"], turn["narration"])
+        self.assertTrue(scene_cast.verify(fixed, self.inv, binding, self.em)["ok"])
+
+    def test_propose_repairs_cut_reaches_the_derived_summary(self):
+        # With no SUMMARY op the summary is derived from the narration, so the leftover sits in both.
+        turn = _turn("Then {NPC_8} laughs at you. Mara [[A]] nods. " + _LONG)
+        self.assertIn("{NPC_8}", turn["turn_summary"])
+        v, plan = self._plan(turn, None)
+        self.assertEqual(plan["mode"], "cut")
+        self.assertEqual(plan["cut_sentences"], ["Then {NPC_8} laughs at you."])
+        fixed = scene_cast.apply_repairs(turn, plan)
+        self.assertNotIn("{NPC_8}", fixed["turn_summary"])
+        self.assertTrue(fixed["turn_summary"].startswith("player: I nod.. response: Mara nods."))
+        self.assertTrue(scene_cast.verify(fixed, self.inv, None, self.em)["ok"])
+
+    def test_propose_repairs_cut_stays_inside_one_segment(self):
+        turn = _turn("Mara [[A]] nods and the fire pops\n\nThen {NPC_8} laughs at you. " + _LONG)
+        v, plan = self._plan(turn, None)
+        self.assertEqual(plan["mode"], "cut")
+        self.assertEqual(plan["cut_sentences"], ["Then {NPC_8} laughs at you."])
+        fixed = scene_cast.apply_repairs(turn, plan)
+        self.assertEqual([seg["text"] for seg in fixed["narration_segments"]], ["Mara [[A]] nods and the fire pops", _LONG])
+        self.assertTrue(scene_cast.verify(fixed, self.inv, None, self.em)["ok"])
+
+    def test_propose_repairs_refill_twice_tags_only_the_first_mention(self):
+        turn, binding = self._bound("Mara [[A]] nods. " + _LONG)
+        tail = " Later {NPC_2} waves. {NPC_2} leaves."
+        turn["narration"] += tail
+        turn["narration_segments"][-1]["text"] += tail
+        _v, plan = self._plan(turn, binding)
+        self.assertEqual(plan["mode"], "refill")
+        self.assertEqual([r["to"] for r in plan["replacements"]], ["Dorn [[B]]", "Dorn"])
+        fixed = scene_cast.apply_repairs(turn, plan)
+        self.assertTrue(fixed["narration"].endswith("Later Dorn [[B]] waves. Dorn leaves."))
+        self.assertTrue(plan["text"].endswith("Later Dorn [[B]] waves. Dorn leaves."))
+        # The same slot across two segments: the queue runs on from one segment to the next.
+        turn = _turn("Mara [[A]] nods. {NPC_2} waves.\n\n{NPC_2} leaves. " + _LONG)
+        _v, plan = self._plan(turn, binding)
+        fixed = scene_cast.apply_repairs(turn, plan)
+        self.assertEqual([seg["text"][:30] for seg in fixed["narration_segments"]], ["Mara [[A]] nods. Dorn [[B]] wa", "Dorn leaves. The common room h"])
+        self.assertTrue(scene_cast.verify(fixed, self.inv, binding, self.em)["ok"])
+
+    def test_propose_repairs_cuts_a_granted_item_used_as_agent(self):
+        turn, binding = self._bound("Mara [[A]] nods. The bread says nothing. " + _LONG, 'GRANT "bread" QTY 1')
+        v, plan = self._plan(turn, binding)
+        self.assertEqual(v["policy_blockers"], ["item_as_agent"])
+        self.assertEqual((plan["mode"], plan["cut_sentences"]), ("cut", ["The bread says nothing."]))
+        fixed = scene_cast.apply_repairs(turn, plan)
+        self.assertNotIn("bread says", fixed["narration"])
+        self.assertTrue(scene_cast.verify(fixed, self.inv, binding, self.em)["ok"])
+
     def test_propose_repairs_agent_head_rewrite(self):
         turn, binding = self._bound("Mara [[A]] nods. The coat's rebels wait outside. " + _LONG)
         _v, plan = self._plan(turn, binding)
         self.assertEqual(plan["mode"], "refill")
-        self.assertEqual(plan["replacements"], [{"from": "The coat's rebels", "to": "the rebels", "why": "fix_agent_heads"}])
-        self.assertIn("the rebels wait outside", scene_cast.apply_repairs(turn, plan)["narration"])
+        self.assertEqual(plan["replacements"], [{"from": "The coat's rebels", "to": "The rebels", "why": "fix_agent_heads"}])
+        self.assertIn("Mara [[A]] nods. The rebels wait outside.", scene_cast.apply_repairs(turn, plan)["narration"])
         turn, binding = self._bound("Mara [[A]] nods. [[I3]] says 'Go.' " + _LONG)
         _v, plan = self._plan(turn, binding)
         self.assertEqual(plan["mode"], "cut")
         self.assertEqual(plan["cut_sentences"], ["[[I3]] says 'Go.'"])
         turn, binding = self._bound("Mara [[A]] nods. Rope's voice hums and the rope's hand twitches. " + _LONG)
         _v, plan = self._plan(turn, binding)
-        self.assertEqual(sorted(r["to"] for r in plan["replacements"]), ["its strap", "its voice"])
+        self.assertEqual(sorted(r["to"] for r in plan["replacements"]), ["Its voice", "its strap"])  # sentence start keeps its capital
 
     def test_propose_repairs_rename_clothing_slot(self):
         clothing = copy.deepcopy(self.inv)

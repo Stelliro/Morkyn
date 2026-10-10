@@ -165,6 +165,9 @@ class ConversionTests(unittest.TestCase):
         self.assertEqual(currency.from_legacy_gold(12, CASH), 12000)
         self.assertEqual(currency.from_legacy_gold(12, SCRIP), 60)
         self.assertIsInstance(currency.from_legacy_gold(0.05, MEDIEVAL), int)
+        for bad in (True, None, "abc", float("inf"), float("nan")):
+            with self.subTest(gold=bad), self.assertRaises(ValueError):
+                currency.from_legacy_gold(bad, MEDIEVAL)
 
     def test_convert_between_sets(self):
         self.assertEqual(currency.convert(120000, MEDIEVAL, CREDITS), 120)
@@ -190,7 +193,7 @@ class FormatTests(unittest.TestCase):
             ("credits", -40): ("-40 credits", "-40 cr", "-40 credits", "-40 credits"),
             ("cash", 1234): ("$12.34", "$12.34", "$12", "$12.34"),
             ("cash", 0): ("$0.00", "$0.00", "$0", "$0.00"),
-            ("cash", -5): ("-$0.05", "-$0.05", "-$0", "-$0.05"),
+            ("cash", -5): ("-$0.05", "-$0.05", "$0", "-$0.05"),
             ("scrip", 1234): ("24 bundles, 34 scrip", "24b 34 scrip", "24 bundles", "1,234 scrip"),
             ("scrip", 50): ("1 bundle", "1b", "1 bundle", "50 scrip"),
             ("scrip", 0): ("no scrip", "no scrip", "no scrip", "no scrip"),
@@ -203,6 +206,16 @@ class FormatTests(unittest.TestCase):
                     self.assertEqual(currency.format_amount(units, cset, style), want)
         with self.assertRaises(ValueError):
             currency.format_amount(1, MEDIEVAL, "fancy")
+
+    def test_format_drops_the_sign_on_a_rounded_zero(self):
+        # A debt smaller than the rounding step is "0 gold", never "-0 gold".
+        self.assertEqual(currency.format_amount(-1, MEDIEVAL, "display"), "0 gold")
+        self.assertEqual(currency.format_amount(-49, MEDIEVAL, "display"), "0 gold")
+        self.assertEqual(currency.format_amount(-50, MEDIEVAL, "display"), "-0.01 gold")
+        self.assertEqual(currency.format_amount(-5, CASH, "largest"), "$0")
+        self.assertEqual(currency.format_amount(-100, CASH, "largest"), "-$1")
+        self.assertEqual(currency.purse_view(-30, MEDIEVAL)["display"], "0 gold")
+        self.assertEqual(currency.format_amount(-1, MEDIEVAL, "long"), "-1 copper")
 
     def test_format_cash_decimal(self):
         self.assertEqual(currency.format_amount(1234, CASH), "$12.34")
@@ -277,6 +290,9 @@ class ParseTests(unittest.TestCase):
         self.assertIsNone(currency.parse_amount("The gold light fades.", MEDIEVAL))
         self.assertEqual(currency.parse_amount("a hundred coins", MEDIEVAL)["units"], 1000000)
         self.assertEqual(currency.parse_amount("12 money", MEDIEVAL)["units"], 120000)
+        # A hyphenated compound is a number the grammar cannot read: None, not the last word.
+        self.assertIsNone(currency.parse_amount("twenty-five gold", MEDIEVAL))
+        self.assertIsNone(currency.parse_amount("pay twenty-five gold for it", MEDIEVAL))
 
     def test_parse_cash_symbol(self):
         parsed = currency.parse_amount("It costs $4.50 at the diner.", CASH)
@@ -292,6 +308,11 @@ class ParseTests(unittest.TestCase):
 
     def test_parse_credits(self):
         self.assertEqual(currency.parse_amount("2,500 credits", CREDITS)["units"], 2500)
+        # Three or more thousands groups parse whole, never from the second group.
+        big = currency.parse_amount("1,234,567,890 credits", CREDITS)
+        self.assertEqual((big["units"], big["span"]), (1234567890, [0, 21]))
+        self.assertEqual(currency.parse_amount("$1,234,567.89", CASH)["units"], 123456789)
+        self.assertEqual(currency.parse_amount("3 gold, 20 silver", MEDIEVAL)["units"], 32000)
         self.assertEqual(currency.parse_amount("pay 40 cr for the part", CREDITS)["units"], 40)
         self.assertEqual(currency.parse_amount("2 kilocredits", CREDITS)["units"], 2000)
         self.assertEqual(currency.parse_amount("ten creds", CREDITS)["units"], 10)

@@ -303,6 +303,42 @@ test("same_turn_ambient_shown", () => {
   assertEqual(rec.shown, ["Same turn.", "Newer."], "newer line shown");
 });
 
+test("ambient_after_waiting_scene_waits_for_it", () => {
+  // requestWait: scene A streams, fight scene B is queued, then a free map
+  // step holds an ambient line. The line sorts after B (same turn, higher
+  // seq), so it must not be shown before B renders over it.
+  const h = harness();
+  const a = heldScene(h.seq, 5, "wait");
+  const b = heldScene(h.seq, 5, "fight-1");
+  const rec = recordingShow();
+  h.seq.enqueueAmbient({ token: { turn: 5 }, text: "You step east.", show: rec.show });
+  assertEqual(h.seq.pending().ambients, 1, "held while a streams");
+  a.done();
+  assertEqual(rec.shown, [], "not shown between a and b");
+  assertEqual(h.seq.pending().ambients, 1, "still held while b streams");
+  assertEqual(b.rendered, 1, "b started");
+  assertEqual(h.named("ambient-dropped").length, 0, "not dropped");
+  b.done();
+  assertEqual(rec.shown, ["You step east."], "shown once after b");
+  assertEqual(h.seq.pending(), { inFlight: null, scenes: 0, ambients: 0 }, "nothing left");
+  // The same with the ambient's turn above the waiting scene's turn.
+  const c = heldScene(h.seq, 6, "c");
+  const d = heldScene(h.seq, 6, "d");
+  h.seq.enqueueAmbient({ token: { turn: 7 }, text: "Later turn.", show: rec.show });
+  c.done();
+  assertEqual(rec.shown.length, 1, "later-turn line waits for d");
+  d.done();
+  assertEqual(rec.shown, ["You step east.", "Later turn."], "shown after d");
+  // A line held before the second scene was queued sorts before it and is shown first.
+  const e = heldScene(h.seq, 8, "e");
+  h.seq.enqueueAmbient({ token: { turn: 8 }, text: "Before f.", show: rec.show });
+  const f = heldScene(h.seq, 8, "f");
+  e.done();
+  assertEqual(rec.shown[2], "Before f.", "earlier line shown between e and f");
+  assertEqual(f.rendered, 1, "f started after it");
+  f.done();
+});
+
 test("overflow_drops_oldest", () => {
   const h = harness();
   const scene = heldScene(h.seq, 2, "turn");
@@ -571,8 +607,9 @@ test("rules_override_through_create", () => {
 });
 
 test("default_export_is_a_sequencer_with_global_timers", () => {
-  // The default object was created with window timers; window = {} has none,
-  // so node's own timers are used. A scene that calls done() synchronously
+  // The default object was created with window timers; window = {} has no
+  // setTimeout at all, so its watchdog is never armed (in the browser
+  // window.setTimeout backs it). A scene that calls done() synchronously
   // never needs the watchdog, so this stays deterministic.
   const api = window.MorkynSceneSequence;
   assert(!api.isBusy(), "starts idle");

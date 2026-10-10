@@ -15,8 +15,9 @@ this file.
 Wiring (not done):
   app/world.py:advance_world_time() -> after the tick_weather call and before the return, in the shape of
       the tick_quest_clocks call (try/except, gated by playthrough_options.agreements_enabled):
-      agreements.tick(conn, world_time=after, turn=_turn_value(conn)); its event_proposals go to
-      queue_world_event(**proposal) and its lines to the journal.
+      result = agreements.tick(conn, world_time=after, turn=_turn_value(conn)); its event_proposals go to
+      queue_world_event(**proposal), its journal entries ({kind, content}, one per ready / lapsed / forfeit
+      row) to INSERT INTO journal (turn, kind, content), and its lines (engine text and diagnostics) to the log.
   app/world.py:apply_turn() -> where an accepted trade offer of kind service or barter is settled:
       row = agreements.agree(conn, terms=terms, offer_id=offer["id"], turn=turn, world_time=get_world_time(conn)),
       then _apply_inventory(conn, agreements.hand_over_proposal(row)["inventory_changes"]) (engine-authored,
@@ -26,8 +27,9 @@ Wiring (not done):
       then agreements.mark_delivered(conn, row["id"], world_time=..., turn=turn).
   app/world.py:get_state() -> beside state["open_quest_offers"]:
       state["agreements"] = agreements.state_view(conn, world_time=state["world_time"], cset=currency.active_set(conn))["agreements"].
-  app/world.py:build_prompt_context() -> one block from
-      agreements.prompt_block(agreements.open_agreements(conn), state["world_time"], cset) joined after the resources block.
+  app/world.py:build_prompt_context() -> beside the open_leads block, in its shape (try/except, a short-lived connection):
+      with connect() as c_agr: block = agreements.prompt_block(agreements.open_agreements(c_agr), state["world_time"], currency.active_set(c_agr))
+      stored as prompt_context["agreements_block"] when it is not ""; the prompt builder prints it where it prints open_leads.
   app/main.py:_answer_offer() -> the same shape for GET /api/agreements (open_agreements + state_view) and
       POST /api/agreements/{id}/cancel through agreements.cancel(conn, id, world_time=..., turn=turn, by="player"), 409 when None.
 
@@ -585,6 +587,7 @@ def haggle_terms(terms: dict, haggle: dict) -> dict[str, Any]:
                 {**g, "quantity": int(math.ceil(g["quantity"] * (1.0 + COUNTER_GOODS_RAISE)))}
                 for g in _goods(out.get("player_gives"))
             ]
+            out["required"] = material_requirements(_text(out.get("work")), _goods(out.get("counterparty_gives")), out["player_gives"])
     elif decision == "insulted":
         out["leftovers_policy"] = "forfeit"
         out["work_minutes"] = int(round(max(0, _int(out.get("work_minutes"))) * INSULT_WORK_MULT))
@@ -704,14 +707,23 @@ def _event(conn: sqlite3.Connection, agreement_id: int, kind: str, *, abs_minute
     )
 
 
-def _jobs_ahead(conn: sqlite3.Connection, npc_id: int, *, exclude_id: int = 0) -> int:
-    """Open jobs the counterparty already has in hand (agreed or in progress)."""
+def _jobs_ahead(conn: sqlite3.Connection, npc_id: int, *, before_id: int = 0) -> int:
+    """Open jobs the counterparty already has in hand (agreed or in progress). With before_id, only the jobs
+    ahead of that row count: every job already in progress and the agreed ones made before it; agreed jobs
+    made after it stand behind it in the queue."""
     if _int(npc_id) <= 0:
         return 0
-    row = conn.execute(
-        "SELECT COUNT(*) AS n FROM agreements WHERE counterparty_npc_id = ? AND status IN ('agreed', 'in_progress') AND id != ?",
-        (_int(npc_id), _int(exclude_id)),
-    ).fetchone()
+    if _int(before_id) > 0:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM agreements WHERE counterparty_npc_id = ? AND id != ? "
+            "AND (status = 'in_progress' OR (status = 'agreed' AND id < ?))",
+            (_int(npc_id), _int(before_id), _int(before_id)),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            "SELECT COUNT(*) AS n FROM agreements WHERE counterparty_npc_id = ? AND status IN ('agreed', 'in_progress')",
+            (_int(npc_id),),
+        ).fetchone()
     return int(row["n"]) if row else 0
 
 
@@ -791,13 +803,13 @@ def open_agreements(conn: sqlite3.Connection, *, npc_id: int | None = None, loca
 
 def mark_handed_over(conn: sqlite3.Connection, agreement_id: int, *, world_time: dict, turn: int) -> dict[str, Any] | None:
     """agreed -> in_progress once the goods have left the player; the due time is recomputed from now
-    (queue behind the counterparty's other jobs plus the work). None unless the row is agreed."""
+    (queue behind the counterparty's jobs ahead of this one plus the work). None unless the row is agreed."""
     ensure_schema(conn)
     row = _load(conn, agreement_id)
     if row is None or row["status"] != "agreed":
         return None
     now = world_abs_minutes(world_time)
-    queue = queue_minutes(_jobs_ahead(conn, row["counterparty_npc_id"], exclude_id=row["id"]))
+    queue = queue_minutes(_jobs_ahead(conn, row["counterparty_npc_id"], before_id=row["id"]))
     due = now + queue + row["work_minutes"]
     cur = conn.execute(
         "UPDATE agreements SET status = 'in_progress', handed_over_abs_minute = ?, due_abs_minute = ? WHERE id = ? AND status = 'agreed'",
@@ -888,10 +900,12 @@ def _product_text(row: dict[str, Any]) -> str:
 def tick(conn: sqlite3.Connection, *, world_time: dict, turn: int) -> dict[str, Any]:
     """Apply the clock transitions to every open row: agreed past due plus grace with nothing handed over
     forfeits; in_progress at due becomes ready; ready a week past due lapses. Never raises: a row that
-    cannot be read or moved is reported in lines. Returns {ready, lapsed, forfeit, lines, event_proposals}."""
+    cannot be read or moved is reported in lines. Returns {ready, lapsed, forfeit, lines, journal,
+    event_proposals}: lines is engine text plus diagnostics for the log; journal holds one JournalNote
+    {kind "agreement", content} per transition and never a diagnostic."""
     ensure_schema(conn)
     now = world_abs_minutes(world_time)
-    out: dict[str, Any] = {"ready": [], "lapsed": [], "forfeit": [], "lines": [], "event_proposals": []}
+    out: dict[str, Any] = {"ready": [], "lapsed": [], "forfeit": [], "lines": [], "journal": [], "event_proposals": []}
     try:
         rows = conn.execute(
             "SELECT * FROM agreements WHERE status IN ('agreed', 'in_progress', 'ready') ORDER BY id ASC"
@@ -914,6 +928,7 @@ def tick(conn: sqlite3.Connection, *, world_time: dict, turn: int) -> dict[str, 
                     out["forfeit"].append(row)
                     line = f"Agreement {row['code']} with {who} is forfeit: nothing was handed over in time."
                     out["lines"].append(line)
+                    out["journal"].append({"kind": "agreement", "content": line[:MAX_JOURNAL]})
                     out["event_proposals"].append(_event_proposal(row, turn=turn, summary=line))
                 continue
             if row["status"] == "in_progress" and now >= row["due_abs_minute"]:
@@ -927,6 +942,7 @@ def tick(conn: sqlite3.Connection, *, world_time: dict, turn: int) -> dict[str, 
                     out["ready"].append(row)
                     line = f"Agreement {row['code']} with {who} is ready: {_product_text(row)} waits to be collected."
                     out["lines"].append(line)
+                    out["journal"].append({"kind": "agreement", "content": line[:MAX_JOURNAL]})
                     out["event_proposals"].append(_event_proposal(row, turn=turn, summary=line))
             if row["status"] == "ready" and now >= row["due_abs_minute"] + LAPSE_AFTER_MINUTES:
                 cur = conn.execute(
@@ -939,6 +955,7 @@ def tick(conn: sqlite3.Connection, *, world_time: dict, turn: int) -> dict[str, 
                     out["lapsed"].append(row)
                     line = f"Agreement {row['code']} with {who} has lapsed: {_product_text(row)} is still held for you."
                     out["lines"].append(line)
+                    out["journal"].append({"kind": "agreement", "content": line[:MAX_JOURNAL]})
                     out["event_proposals"].append(_event_proposal(row, turn=turn, summary=line))
         except Exception as exc:  # noqa: BLE001 - a bad row must not stop the clock
             out["lines"].append(f"Agreement {_int(_field(raw, 'id'))} could not be ticked: {exc}")
@@ -1011,9 +1028,16 @@ def delivery_proposal(row: dict, *, npc: dict | None = None, cset: dict | None =
     leftovers = compute_leftovers(gives, required, policy)
     changes = [_change(g, +1, "delivery") for g in receives] + [_change(g, +1, "delivery") for g in leftovers["to_player"]]
     paid = max(0, _int(row.get("counterparty_pays_units")))
-    sentence = f"{who} hands you {_goods_text(receives)}" if receives else f"{who} finishes {_text(row.get('work')) or 'the work'}"
-    if paid > 0:
-        sentence += f" and pays {_display(paid, money)}"
+    work_text = _text(row.get("work")) or "the work"
+    if _text(row.get("kind")) == "service_for_coin":
+        # The player did the work; the counterparty only pays.
+        sentence = f"You finish {work_text} for {who}"
+        if paid > 0:
+            sentence += f"; {who} pays {_display(paid, money)}"
+    else:
+        sentence = f"{who} hands you {_goods_text(receives)}" if receives else f"{who} finishes {work_text}"
+        if paid > 0:
+            sentence += f" and pays {_display(paid, money)}"
     tails: list[str] = []
     if leftovers["to_player"]:
         tails.append(f"{_goods_text(leftovers['to_player'])} come back to you")
@@ -1033,13 +1057,16 @@ def delivery_proposal(row: dict, *, npc: dict | None = None, cset: dict | None =
 def cancel_proposal(row: dict, *, npc: dict | None = None, now_abs_minute: int | None = None) -> dict[str, Any]:
     """What a cancellation gives back: the goods and coin handed over, unless nothing was handed over, the
     policy is forfeit, or the work was past its halfway point (judged at now_abs_minute, else at the row's
-    closed_abs_minute). Pure; nothing is applied."""
+    closed_abs_minute). A row that was handed over but not yet closed needs now_abs_minute; without it the
+    progress cannot be judged and ValueError is raised rather than a guess. Pure; nothing is applied."""
     who = _who(row, npc)
     gives = _goods(row.get("player_gives"))
     pays = max(0, _int(row.get("player_pays_units")))
     handed_at = _int(row.get("handed_over_abs_minute"))
     policy = _text(row.get("leftovers_policy")).lower()
     at = _int(now_abs_minute) if now_abs_minute is not None else _int(row.get("closed_abs_minute"))
+    if handed_at > 0 and at <= 0:
+        raise ValueError("cancel_proposal needs now_abs_minute for a row that is not closed")
     work_minutes = max(0, _int(row.get("work_minutes")))
     past_half = handed_at > 0 and at > 0 and (at - handed_at) * 2 > work_minutes
     returned = handed_at > 0 and policy != "forfeit" and not past_half
@@ -1111,7 +1138,9 @@ def _status_line(row: dict, world_time: dict, cset: dict) -> dict[str, Any] | No
     elif status == "ready":
         severity, text = "mild", f"ready; collect {product} from {who}."
     else:
-        severity, text = "serious", f"lapsed, {left['label']}; {product} is still held by {who}."
+        waited = max(0, world_abs_minutes(world_time) - _int(row.get("due_abs_minute")))
+        since = f", uncollected for {_span_label(waited)}" if waited >= 1 else ""
+        severity, text = "serious", f"lapsed{since}; {product} is still held by {who}."
     line = (head + text).strip()
     if len(line) > MAX_LINE:
         line = line[: MAX_LINE - 1].rstrip() + "."

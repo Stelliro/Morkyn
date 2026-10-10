@@ -22,6 +22,7 @@
 | [WeldingRig.md](WeldingRig.md) | Offline LoRA pack: datasets, adapter names, wiring |
 | [PLAYTEST_SMOKE.md](PLAYTEST_SMOKE.md) | Isekai opening + 3-turn smoke checklist |
 | [PLAYTEST_ISSUES.md](PLAYTEST_ISSUES.md) | Every reported or live-run playtest issue, its evidence, cause and status |
+| [BuiltNotWired.md](BuiltNotWired.md) | Modules built for the remaining TODO items but not called by the live game: the rule, every hook point and Turn on checklist, the shared shapes, the open decisions |
 | [TODO_NEXT.md](TODO_NEXT.md) | Priority queue (dispatch ids) |
 
 Project-level docs at repo root:

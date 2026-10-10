@@ -20,14 +20,14 @@ Wiring (not done):
   app/world.py:_clear_playthrough() -> DELETE FROM restraint_log (not keyed by campaign_id)
   app/main.py:_location_special_runtime() -> merge restraint.runtime_flags() (movement_locked |= flags["movement_locked"], label, hint, reason)
   app/world.py:_map_is_locked() -> `or restraint.is_locked(conn)` (covers the story walk and town_moves.plan_turn)
-  app/world.py:_apply_player() before _find_location_id -> v = restraint.may_move(conn, "location_move", {"location_code": code}); blocked -> patch["move_to_location"] = patch["move_to_location_code"] = None, journal v["message"]
-  app/world.py:apply_turn() after resolve_movement -> movement_report["status"] = "blocked_restrained" when blocked so _cut_prose_at_refused_move trims the prose
+  app/world.py:_apply_player() before _find_location_id -> v = restraint.may_move(conn, "location_move", {"location_code": move_to}); blocked -> player_patch["move_to_location"] = player_patch["move_to_location_code"] = None, journal v["message"] (move_to is the place name or code the patch carried; any non-empty string refuses while locked)
+  app/world.py:apply_turn() after resolve_movement -> when blocked set movement_report["status"] = "dropped" and movement_report["prose_mismatch"] = the refused destination (or "trim_from" = the move sentence) so _cut_prose_at_refused_move trims the prose; it only acts on status dropped | unresolved | dropped_unshown with one of those two keys, so a new status word alone trims nothing
   app/town_moves.py:plan_exit() / walk_out() / walk_to_cell() / click_walk() -> restraint.may_move(conn, "town_leave" | "town_walk", target); blocked -> raise PermissionError(v["message"]) (the "too tired" path)
   app/turn_prompts.py:walk_in_town() and app/main.py:_travel_press() -> restraint.may_move(conn, "travel_press", None) first
   app/main.py:api_tile_map_move() -> restraint.may_move(conn, "map_step", {"x": tx, "y": ty}) beside the 409 guard
-  app/world.py:play_turn() before the prompt -> a = restraint.allowed_actions(state, player_input); refused -> mechanics_context["restraint"] = a and the draft is told
-  app/world.py:build_prompt_context() -> restraint.prompt_block(state, world_time) beside the resource lines
-  app/world.py:play_wait_turn() -> restraint.wait_allowed(state, minutes) (always allowed; clamps nothing today)
+  app/world.py:play_turn() before the prompt -> a = restraint.allowed_actions(restraint.load_state(conn), player_input); refused -> mechanics_context["restraint"] = a and the draft is told (the first argument is the RestraintState row, never the get_state() dict: a dict without a known mode normalises to free and would allow everything)
+  app/world.py:build_prompt_context() -> restraint.prompt_block(state.get("restraint"), world_time) beside the resource lines (state["restraint"] is the RestraintState or None once the get_state() hook below merges state_view)
+  app/world.py:play_wait_turn() -> restraint.wait_allowed(restraint.load_state(conn), minutes) (always allowed; clamps nothing today)
   app/world.py:advance_world_time() after tick_weather -> restraint.tick(conn, world_time=after) (time conditions)
   app/world.py:apply_turn() after quests are applied -> restraint.tick(conn) again (quest, skill, payment, event conditions change without minutes passing)
   app/world.py:play_turn() after the skill checks -> verdict = restraint.classify_capture(narration=..., checks=..., combat=..., player_input=...); verdict["verdict"] == "capture" -> restraint.capture(conn, restraint.propose_capture(verdict, ...), turn=, world_time=) with _capture_pre_turn_rows(..., setting_keys=("restraint",)) first
@@ -242,6 +242,9 @@ _CODE_TAG_RE = re.compile(r"\[\[([A-Za-z]{1,2}\d{0,4})\]\]")
 _CAPTURE_RES = tuple((re.compile(pattern, re.IGNORECASE), kind, weight) for pattern, kind, weight in CAPTURE_PHRASES)
 _FLAVOUR_RES = tuple(re.compile(pattern, re.IGNORECASE) for pattern in FLAVOUR_PHRASES)
 _SURRENDER_RE = re.compile(SURRENDER_INPUT, re.IGNORECASE)
+# Negation words match as whole words (letter boundaries), so "knot", "cannot" and "almighty" never cancel
+# a capture sentence the way a bare substring test would.
+_NEGATION_RE = re.compile("|".join(r"(?<![a-z])" + re.escape(word.strip()) + r"(?![a-z])" for word in NEGATION_WORDS))
 
 
 # ---------------------------------------------------------------------------
@@ -447,6 +450,10 @@ def normalize_state(raw: Any) -> dict[str, Any]:
     escape dc clamped 12..22; conditions of an unknown type dropped."""
     if not isinstance(raw, dict):
         return free_state()
+    if "player" in raw and "mode" not in raw:
+        # The whole get_state() dict was handed over instead of its "restraint" entry; it would normalise
+        # to free and silently allow everything, so refuse it here where the mistake is visible.
+        raise TypeError("normalize_state wants the RestraintState row, not the game state dict (pass state['restraint'] or load_state(conn))")
     mode = str(raw.get("mode") or "").strip().lower()
     if mode not in MODES or mode == "free":
         return free_state()
@@ -466,6 +473,10 @@ def normalize_state(raw: Any) -> dict[str, Any]:
         allowed = list(ALLOWED_BY_MODE[mode])
     if "travel" in allowed:
         allowed.remove("travel")
+    # Conversation and waiting stay open in every locked mode, whatever a stored list says.
+    for always_open in ("talk", "wait"):
+        if always_open not in allowed:
+            allowed.append(always_open)
     since = raw.get("since") if isinstance(raw.get("since"), dict) else {}
     notes = [str(n)[:120] for n in (raw.get("notes") or []) if str(n).strip()][-6:]
     return {
@@ -754,8 +765,7 @@ def _sentences(text: str) -> list[str]:
 
 
 def _negated(sentence: str) -> bool:
-    lowered = " " + sentence.lower() + " "
-    return any(word in lowered for word in NEGATION_WORDS)
+    return bool(_NEGATION_RE.search(sentence.lower()))
 
 
 def _check_skill_code(check: dict[str, Any]) -> str:
@@ -940,15 +950,17 @@ def propose_capture(verdict: dict[str, Any], *, world_time: dict[str, Any], turn
     conditions: list[dict[str, Any]] = []
     if minutes > 0:
         conditions.append({"type": "time", "abs_minute": now + minutes + RELEASE_GRACE_MINUTES})
-    if fine_units is not None:
-        conditions.append({"type": "payment", "units": max(0, _int(fine_units, 0)), "currency_set": _text(currency_set, 40)})
+    # A fine of nothing is no condition at all: a payment of 0 units would count as paid on the first tick.
+    if fine_units is not None and _int(fine_units, 0) > 0:
+        conditions.append({"type": "payment", "units": _int(fine_units, 0), "currency_set": _text(currency_set, 40)})
     for extra in extra_conditions or []:
         conditions.append(normalize_condition(extra))
 
     captor = _entity_ref(verdict.get("captor"))
-    # The shift needs a captor whose power_rank is known; an unnamed or unranked captor leaves the table dc.
+    # The shift follows the captor's power_rank; an absent rank means 10, the npcs table default (so a
+    # named captor with no rank gets the lowest row). No captor at all leaves the table dc.
     shift = 0
-    if captor and captor.get("power_rank") is not None:
+    if captor:
         power = _int(captor.get("power_rank"), 10)
         for threshold, delta in ESCAPE_DC_BY_CAPTOR_POWER:
             if power >= threshold:
@@ -1249,17 +1261,24 @@ def gather_facts(conn, world_time: dict[str, Any] | None = None) -> dict[str, An
     return facts
 
 
-def _skill_matches(cond_name: str, row_name: str) -> bool:
-    if cond_name.strip().lower() == row_name.strip().lower():
-        return True
+def _skill_rows_match(cond_name: str, rows: list[Any]) -> list[dict[str, Any]]:
+    """The player_skills rows that name the condition's skill: an exact name first, else the rows whose
+    name resolves to the same library code. The library is loaded once per call, not once per row."""
+    want_name = cond_name.strip().lower()
+    rows = [row for row in rows if isinstance(row, dict)]
+    exact = [row for row in rows if str(row.get("name") or "").strip().lower() == want_name]
+    if exact or not rows:
+        return exact
     try:
         from app.skill_checks import load_skill_library, resolve_skill_code
 
         library = load_skill_library()
         want = resolve_skill_code(cond_name, library)
-        return want is not None and want == resolve_skill_code(row_name, library)
+        if want is None:
+            return []
+        return [row for row in rows if resolve_skill_code(str(row.get("name") or ""), library) == want]
     except Exception:
-        return False
+        return []
 
 
 def _condition_met(cond: dict[str, Any], state: dict[str, Any], facts: dict[str, Any]) -> bool:
@@ -1269,10 +1288,7 @@ def _condition_met(cond: dict[str, Any], state: dict[str, Any], facts: dict[str,
     if kind == "turns":
         return _int(facts.get("turn"), 0) >= int(cond["turn"])
     if kind == "skill":
-        for row in facts.get("skills") or []:
-            if isinstance(row, dict) and _skill_matches(cond["name"], str(row.get("name") or "")) and _int(row.get("value"), 0) >= int(cond["level"]):
-                return True
-        return False
+        return any(_int(row.get("value"), 0) >= int(cond["level"]) for row in _skill_rows_match(cond["name"], list(facts.get("skills") or [])))
     if kind == "quest_stage":
         stages = facts.get("quest_stages")
         return isinstance(stages, dict) and cond["stage_id"] in stages
@@ -1508,7 +1524,8 @@ def apply_position(conn, plan: dict[str, Any], *, writers: dict[str, Any] | None
         applied.append("town")
     now = world_abs_minutes(_world_time_or_now(conn, world_time))
     state = load_state(conn)
-    if state["mode"] != "free" and plan.get("target"):
+    # Only custody and confinement are held at a place; bonds travel with the player and keep place None.
+    if state["mode"] in ("custody", "confined") and plan.get("target"):
         state["place"] = _normalize_place(plan["target"])
         save_state(conn, state)
     log_id = _log(
@@ -1644,6 +1661,10 @@ def begin_escort(conn, plan: dict[str, Any], *, by: dict[str, Any] | None, turn:
     """Put the player in custody with an escort block for a planned path. Logs captured or transferred."""
     if not isinstance(plan, dict) or not plan.get("ok"):
         raise ValueError("begin_escort needs an escort plan with ok True")
+    if not plan.get("legs"):
+        # A plan with nothing to walk (same cell, or a zero budget) would leave the escort block in place
+        # with no leg loop ever reaching advance_escort; plain custody is the right state for that.
+        raise ValueError("begin_escort needs a plan with at least one leg; use capture() for custody in place")
     ensure_schema(conn)
     now = world_abs_minutes(_world_time_or_now(conn, world_time))
     previous = load_state(conn)

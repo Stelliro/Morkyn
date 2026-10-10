@@ -4,7 +4,8 @@
    Status: built, not wired (TODO g17).
 
    A queue for the one narration area. Scenes (turn payloads) are shown one at a time; an ambient line that
-   arrives while a scene is streaming is held and shown when that stream has finished; an ambient line whose
+   arrives while a scene is streaming is held and shown when that stream has finished, or after the next
+   waiting scene when the line was queued behind it (order is turn, then seq); an ambient line whose
    turn is older than the last scene shown is dropped. A second scene waits for the first; when a third
    arrives the current one is finished at once instead of being cut (requestWait fight scenes). Pure
    sequencing: callers pass render(done) and show(text) callbacks, so this file never touches the DOM. Nothing
@@ -349,16 +350,21 @@
 
     // Shows the held ambient lines in order, dropping the stale ones. While a
     // scene is in flight nothing is shown and {0, 0} comes back; the scene's
-    // own end calls flush again.
+    // own end calls flush again. A held line that sorts after the next waiting
+    // scene (turn, then seq) stays held until that scene has finished, so the
+    // scene's render cannot paint over it.
     function flush() {
       const result = { shown: 0, dropped: 0 };
       if (state.inFlight !== null) return result;
       const held = state.ambients;
+      const next = state.scenes.length > 0 ? state.scenes[0].token : null;
       state.ambients = [];
       held.forEach((ambient) => {
         if (state.lastShown && ambient.token.turn < state.lastShown.turn) {
           dropAmbient(ambient, "stale");
           result.dropped += 1;
+        } else if (next && compareTokens(ambient.token, next) > 0) {
+          state.ambients.push(ambient);
         } else {
           showAmbient(ambient);
           result.shown += 1;
