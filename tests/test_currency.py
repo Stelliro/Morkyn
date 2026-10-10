@@ -523,6 +523,11 @@ class CurrencyDbTests(unittest.TestCase):
 
 
 class LeafTests(unittest.TestCase):
+    # The other unwired leaves of this pass that format money through app.currency (contracts 5.3: trade and
+    # agreements import it directly, restraint lazily inside one function). Each must itself be an unwired
+    # leaf, which the Status line proves; any other file under app/ or static/ is an offender.
+    _ALLOWED_IMPORTERS = {"app/trade.py", "app/agreements.py", "app/restraint.py"}
+
     def test_module_is_a_leaf(self):
         needle = re.compile(r"app\.currency\b|from app import currency\b|import currency\b")
         offenders = []
@@ -536,8 +541,13 @@ class LeafTests(unittest.TestCase):
                     text = path.read_text(encoding="utf-8")
                 except UnicodeDecodeError:
                     continue
-                if needle.search(text):
-                    offenders.append(str(path.relative_to(ROOT)))
+                if not needle.search(text):
+                    continue
+                rel = path.relative_to(ROOT).as_posix()
+                if rel in self._ALLOWED_IMPORTERS:
+                    self.assertIn("Status: built, not wired", text, f"{rel} imports currency but is not an unwired leaf")
+                    continue
+                offenders.append(rel)
         self.assertEqual(offenders, [], "the live game must not import app.currency in this pass")
         doc = currency.__doc__ or ""
         self.assertIn("Status: built, not wired (TODO n17).", doc)
