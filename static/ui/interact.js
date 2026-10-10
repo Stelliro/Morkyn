@@ -13,14 +13,17 @@
      3. Context   right-click (or Shift+F10 / long-press) on a name opens a
                   menu of actions. Most actions put a sentence into "What will
                   you do?" and leave the player to press Send; the ones that
-                  act immediately say so in their label.
-     4. Provider  the LLM and app settings forms show only the fields that
-                  belong to the selected provider.
+                  act immediately say so in their label. Inside the narration
+                  the menu also reads text aloud (Play selected text / Play
+                  this paragraph / Stop) when speech is on.
+     4. Provider  the LLM, app and speech settings forms show only the fields
+                  that belong to the selected provider.
 
    This is a classic script loaded after app.js and relies on its globals:
    getEntityMap, entityLabel, showEntity, insertRef, insertRawToken,
    inventoryRowIndex, itemOverlayHtml, positionFloatingOverlay, escapeHtml,
-   enqueueAiTask, requestTurn, _watchedNpcIds, refreshLocalMap, activeTab.
+   enqueueAiTask, requestTurn, _watchedNpcIds, refreshLocalMap, activeTab,
+   morkynSpeech (the read-aloud controller: enabled, speakText, stop, …).
    Every call is guarded, so a renamed global degrades to "feature off",
    not a broken page.
 
@@ -175,6 +178,17 @@
         llama_cpp: ["gguf_model_path"],
         mle: ["mle_model"],
         openai: ["api_base_url", "api_model"],
+      },
+    },
+    {
+      // Speech settings (app.js renderTtsSettings); "off" hides every provider field.
+      form: ".ttsForm",
+      select: '[name="provider"]',
+      fields: {
+        off: [],
+        piper: ["preset", "voice", "speed", "chunk_chars", "timeout_seconds"],
+        openai: ["preset", "voice", "voice_custom", "model", "base_url", "api_key", "speed", "chunk_chars", "timeout_seconds"],
+        elevenlabs: ["preset", "voice", "voice_custom", "model", "api_key", "speed", "chunk_chars", "timeout_seconds"],
       },
     },
   ];
@@ -574,6 +588,32 @@
     return items;
   }
 
+  /**
+   * Read-aloud items for a right-click inside the current narration. Empty
+   * unless app.js says speech is on, so an "off" provider shows no trace of
+   * the feature. A selection inside the narration wins over the paragraph
+   * under the pointer; Stop is offered while something is playing or paused.
+   */
+  function speechItems(event) {
+    const api = window.morkynSpeech;
+    if (!api || typeof api.enabled !== "function" || !api.enabled()) return [];
+    const narration = event.target.closest?.("#latestOutput article.turnNarration");
+    if (!narration) return [];
+    const items = [];
+    const sel = window.getSelection?.();
+    const selText = sel && !sel.isCollapsed ? String(sel).trim() : "";
+    const inside = Boolean(selText) && narration.contains(sel.anchorNode) && narration.contains(sel.focusNode);
+    if (inside) items.push({ text: "Play selected text", run: () => api.speakText(selText, "selection") });
+    else {
+      const p = event.target.closest("p");
+      if (p && narration.contains(p) && !p.classList.contains("empty") && p.textContent.trim()) {
+        items.push({ text: "Play this paragraph", run: () => api.speakText(p.textContent, "paragraph") });
+      }
+    }
+    if (api.isPlaying?.() || api.isPaused?.()) items.push({ text: "Stop", danger: true, run: () => api.stop("user") });
+    return items;
+  }
+
   document.addEventListener("contextmenu", (event) => {
     // The town's Streets view (docs/TownGrid.md 8): app.js builds the plot's
     // items (Go to, Go in, and the moon-coloured "Walk here now").
@@ -594,10 +634,27 @@
       openMenuWith({ name: tileLabel(t), type: `tile · ${t.cx}, ${t.cy}`, items: mapActions(t) }, event.clientX, event.clientY, canvas);
       return;
     }
+    // Inside the narration, plain prose gets a read-aloud menu; a name keeps
+    // its own menu and gains the read-aloud items after "Copy name".
+    const speech = speechItems(event);
     const anchor = event.target.closest?.(MENU_ANCHORS);
-    if (!anchor) return;
-    const found = resolve(anchor);
-    if (!found) return;
+    const found = anchor ? resolve(anchor) : null;
+    if (!found) {
+      if (!speech.length) return;
+      event.preventDefault();
+      const narration = event.target.closest("#latestOutput article.turnNarration");
+      const block = event.target.closest("p") || narration;
+      // Shift+F10 and the Menu key arrive at (0,0); anchor the menu to the paragraph.
+      let sx = event.clientX;
+      let sy = event.clientY;
+      if (!sx && !sy && block) {
+        const r = block.getBoundingClientRect();
+        sx = r.left + 8;
+        sy = r.bottom + 4;
+      }
+      openMenuWith({ name: "Narration", type: "speech", items: speech }, sx, sy, block);
+      return;
+    }
     event.preventDefault();
     // Shift+F10 and the Menu key arrive at (0,0); anchor the menu to the element.
     let x = event.clientX;
@@ -607,7 +664,9 @@
       x = r.left + 8;
       y = r.bottom + 4;
     }
-    openMenu(found, x, y, anchor);
+    const spec = buildActions(found);
+    if (speech.length) spec.items.push(...speech);
+    openMenuWith(spec, x, y, anchor);
   });
   document.addEventListener(
     "pointerdown",
@@ -646,5 +705,5 @@
   else boot();
 
   // A small public surface for the console and for tests.
-  window.MorkynInteract = { applyFolds, applyProviderFields, resolve, tileAt, mapActions, closeMenu, hidePeek, openMenu: openMenuWith };
+  window.MorkynInteract = { applyFolds, applyProviderFields, resolve, tileAt, mapActions, speechItems, closeMenu, hidePeek, openMenu: openMenuWith };
 })();

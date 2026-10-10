@@ -48,6 +48,16 @@ from app.image_backends import (
     update_image_config,
 )
 from app.gpu_gate import gate_status as gpu_gate_status
+from app.tts import (
+    TtsError,
+    install_piper,
+    probe_tts,
+    public_tts_config,
+    scrub_tts_export,
+    speak_bytes,
+    tts_catalog,
+    update_tts_config,
+)
 from app.tile_world import (
     add_tile_image,
     apply_survey,
@@ -922,6 +932,7 @@ def api_updates_rollback(request: RollbackRequest):
 
 @app.get("/api/state")
 def api_state():
+    # get_state() blanks the speech key itself; it only ever leaves masked (/api/tts-config).
     return get_state()
 
 
@@ -1098,6 +1109,86 @@ def api_update_image_config(request: ImageConfigRequest):
 def api_image_status():
     """Probe the configured local image server (no generation)."""
     return probe_image_backend()
+
+
+# --- Speech (text to speech for the narration) ---------------------------------
+
+
+class TtsConfigRequest(BaseModel):
+    provider: str | None = Field(default=None, max_length=40)
+    enabled: bool | None = None
+    preset: str | None = Field(default=None, max_length=80)
+    voice: str | None = Field(default=None, max_length=120)
+    model: str | None = Field(default=None, max_length=120)
+    base_url: str | None = Field(default=None, max_length=400)
+    api_key: str | None = Field(default=None, max_length=500)
+    speed: float | None = Field(default=None, ge=0.5, le=2.0)
+    chunk_chars: int | None = Field(default=None, ge=0, le=4000)
+    timeout_seconds: int | None = Field(default=None, ge=5, le=300)
+
+
+class TtsSpeakRequest(BaseModel):
+    # One paragraph (or a selection); the client splits turns.
+    text: str = Field(min_length=1, max_length=4000)
+    voice: str = Field(default="", max_length=120)
+    speed: float | None = Field(default=None, ge=0.5, le=2.0)
+
+
+class TtsInstallRequest(BaseModel):
+    what: str = Field(default="all", max_length=12)  # all | engine | voice
+    voice: str = Field(default="", max_length=120)
+
+
+@app.get("/api/tts-config")
+def api_tts_config():
+    """Speech settings. Off by default; the stored key is never returned."""
+    return public_tts_config()
+
+
+@app.post("/api/tts-config")
+def api_update_tts_config(request: TtsConfigRequest):
+    # Only apply fields the client actually sent; a full dump would reset keys on partial posts.
+    return update_tts_config(request.model_dump(exclude_unset=True))
+
+
+@app.get("/api/tts-catalog")
+def api_tts_catalog():
+    """Known-good presets and voices for every speech backend."""
+    return tts_catalog()
+
+
+@app.post("/api/tts-status")
+def api_tts_status():
+    """Is the configured speech backend ready? Never raises for a failed probe."""
+    return probe_tts()
+
+
+@app.post("/api/tts/speak")
+def api_tts_speak(request: TtsSpeakRequest):
+    """One paragraph of narration to audio bytes (wav for the local engine, mp3 for the APIs)."""
+    try:
+        result = speak_bytes(request.text, voice=request.voice, speed=request.speed)
+    except TtsError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    return Response(
+        content=result.audio,
+        media_type=result.media_type,
+        headers={
+            "Cache-Control": "no-store",
+            "X-Morkyn-TTS-Provider": result.provider,
+            "X-Morkyn-TTS-Speed-Applied": f"{result.speed_applied:.2f}",
+            "X-Morkyn-TTS-Chars": str(result.chars),
+        },
+    )
+
+
+@app.post("/api/tts/install")
+def api_tts_install(request: TtsInstallRequest):
+    """Install the local speech engine and/or download the configured voice."""
+    try:
+        return install_piper(what=request.what, voice=request.voice)
+    except TtsError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
 
 
 class ImageCatalogRequest(BaseModel):
@@ -4559,7 +4650,8 @@ def api_regenerate(request: RegenerateRequest | None = None):
 
 @app.get("/api/export")
 def api_export():
-    return JSONResponse(export_world())
+    # An export is shared; the speech API key stays on this machine.
+    return JSONResponse(scrub_tts_export(export_world()))
 
 
 @app.post("/api/import")
