@@ -9730,6 +9730,14 @@ def _suggestion_scene(context: dict[str, Any]) -> dict[str, Any]:
         thread = suggestion_view(context.get("scene_thread"))
     except Exception:
         thread = None
+    # What the player already tried (playtest #88): the idea model had no
+    # memory of its own ideas, so "ask Vael about the Irond" came back 20
+    # times. The last lines, newest first, so the next one is a new move.
+    recent_inputs = [
+        _suggestion_plain(line, 160)
+        for line in (context.get("recent_player_inputs") or [])
+        if isinstance(line, str) and line.strip()
+    ][:6]
     scene = {
         "place": (context.get("current_location") or {}).get("name"),
         # What the player is in the middle of (playtest #20).
@@ -9739,6 +9747,7 @@ def _suggestion_scene(context: dict[str, Any]) -> dict[str, Any]:
         "people": people[:5],
         "active_quests": quests,
         "open_offers": offers,
+        "recent_player_inputs": recent_inputs,
     }
     return {key: value for key, value in scene.items() if value not in (None, "", [])}
 
@@ -9756,6 +9765,24 @@ def _suggestion_world(context: dict[str, Any]) -> dict[str, Any]:
             for item in context.get("inventory") or []
             if isinstance(item, dict) and item.get("name")
         ][:12]
+    player_view = {key: player.get(key) for key in keep_player if player.get(key) not in (None, "")}
+    # The body as the engine has it (playtest #88): health 0 sat in the packet
+    # with no word for it, and the ideas kept asking questions.
+    try:
+        hp = int(player.get("health") or 0)
+        max_hp = int(player.get("max_health") or 0)
+    except (TypeError, ValueError):
+        hp, max_hp = 0, 0
+    if max_hp > 0:
+        ratio = hp / max_hp
+        player_view["condition"] = (
+            "down, unconscious" if hp <= 0 else "critical: badly hurt" if ratio <= 0.25 else "hurt" if ratio <= 0.5 else "bruised" if ratio < 0.75 else "fine"
+        )
+    injuries = [
+        str(row.get("name")) for row in context.get("conditions") or [] if isinstance(row, dict) and row.get("name")
+    ]
+    if injuries:
+        player_view["injuries"] = sorted(set(injuries))[:6]
     world = {
         "tone": {
             "world_style": options.get("world_style"),
@@ -9763,7 +9790,7 @@ def _suggestion_world(context: dict[str, Any]) -> dict[str, Any]:
             "magic_level": options.get("magic_level"),
             "difficulty": options.get("difficulty"),
         },
-        "player": {key: player.get(key) for key in keep_player if player.get(key) not in (None, "")},
+        "player": player_view,
         "active_player_alias": context.get("active_player_alias"),
         # Names, counts and worn slots; the capacity summary is item codes and weights.
         "carried_items": carried,
@@ -9792,6 +9819,13 @@ def generate_input_suggestions(context: dict[str, Any], instruction: str = "", d
         "If user_instruction is present, use it to steer the suggestions while staying consistent with the scene.",
         "Use the current scene and known indexed facts; do not reveal hidden information or future outcomes.",
         "Do not continue the story, narrate results, or decide that the player already chose an option.",
+        # Playtest #88: 20 of 59 ideas were the previous one again, and a player
+        # at 0 health kept asking questions.
+        "scene.recent_player_inputs is what the player already tried, newest first. Do not repeat or rephrase "
+        "any of them: a question already asked is answered or refused; move to a different person, place, "
+        "item or approach.",
+        "If world_state.player.condition says hurt, critical or down, the move answers the body first: rest, "
+        "treat a wound, find help or shelter, or leave the danger. Nothing idle while bleeding.",
     ]
     if context.get("scene_thread"):
         shared_rules.append(
