@@ -9369,7 +9369,10 @@ def _verification_scope_basis(context: dict[str, Any], check_name: str) -> dict[
         "secondary_intents": turn_plan.get("secondary_intents") or [],
         "current_location_code": current_location.get("code"),
         "refs": refs.get("all", []),
-        "focus_terms": turn_plan.get("focus_terms") or [],
+        # Not the player's words. focus_terms are the tokens of the player's
+        # line, so every utterance was a new scope: the 59-turn run wrote 282
+        # rows under 282 signatures and never retired a check (playtest #88).
+        # What the check is about is in the per-check basis below.
     }
     if check_name in {"entity_references", "explicit_reference_resolution"}:
         basis["working_set"] = context.get("working_set") or {}
@@ -17780,6 +17783,86 @@ def play_turn(
     except Exception:
         skill_check_results = []
 
+    # Health is a fact the prose keeps (playtest #88). The run that found this
+    # hit 0 health at turn 15 and played 44 more turns: the number was clamped
+    # and nothing read it. The draft now gets health_state every turn; the turn
+    # the player drops is narrated as the drop, and the turn after is the
+    # coming round, by the setup's death rule (_downed_recovery).
+    recovery: dict[str, Any] | None = None
+    downed_turn = False
+    if input_kind == "player" and not str(model_input).startswith("__"):
+        try:
+            player_row = context.get("player") if isinstance(context.get("player"), dict) else {}
+            health_now = int(player_row.get("health") or 0)
+            max_hp = max(1, int(player_row.get("max_health") or 1))
+            options = _playthrough_options(context)
+            with connect() as c_hp:
+                downed = _settings(c_hp).get("player_downed")
+            mechanics_context = dict(context.get("mechanics_context") or {})
+            if isinstance(downed, dict) and downed:
+                recovery_turn, recovery_seed = _skill_check_seed()
+                recovery = _downed_recovery(downed, options, max_hp, _skill_check_rng(recovery_turn, recovery_seed, 9, "recovery"))
+                downed_turn = True
+                # Nothing the player tried this turn stands: no roll, no work.
+                skill_check_results = []
+                for key in ("resolved_checks", "act_outcome", "social_attitudes", "previous_act"):
+                    mechanics_context.pop(key, None)
+                mechanics_context["recovery"] = recovery
+                mechanics_context["health_state"] = _health_state(
+                    max(1, min(max_hp, health_now + int(recovery["health_delta"]))), max_hp, context.get("conditions")
+                )
+                model_input = (
+                    model_input
+                    + "\n\n__downed__: the player collapsed last turn and is coming round now. "
+                    + str(recovery.get("what_happens") or "")
+                    + " Do not carry out the action in the player's line."
+                )
+                with connect() as c_hp:
+                    conn_minutes = int(recovery.get("minutes") or 0)
+                    if conn_minutes > 0:
+                        advance_world_time(c_hp, conn_minutes)
+                    c_hp.execute("DELETE FROM settings WHERE key = 'player_downed'")
+                context["world_time"] = get_world_time()
+            else:
+                pending_delta = 0
+                for check in skill_check_results:
+                    injury = check.get("injury") if isinstance(check, dict) and isinstance(check.get("injury"), dict) else None
+                    if injury:
+                        pending_delta += int(injury.get("health_delta") or 0)
+                after = max(0, health_now + pending_delta)
+                health_state = _health_state(after, max_hp, context.get("conditions"))
+                mechanics_context["health_state"] = health_state
+                if after <= 0:
+                    cause = next(
+                        (
+                            check.get("injury")
+                            for check in skill_check_results
+                            if isinstance(check, dict) and isinstance(check.get("injury"), dict)
+                        ),
+                        None,
+                    )
+                    health_state["downed"] = True
+                    model_input = (
+                        model_input
+                        + "\n\n__downed__: the player's health reaches 0 with this action. They go down at the end "
+                        "of it: the action does not finish, and the scene ends with the player on the ground, "
+                        "losing consciousness. Do not write them acting past that."
+                    )
+                    with connect() as c_hp:
+                        _set_setting(
+                            c_hp,
+                            "player_downed",
+                            {
+                                "turn": _current_turn_number(),
+                                "rule": _death_rule(options),
+                                "limb": (cause or {}).get("limb") or "body",
+                                "cause": str((cause or {}).get("summary") or "")[:200],
+                            },
+                        )
+            context["mechanics_context"] = mechanics_context
+        except Exception:
+            recovery = None
+
     # The quest step's outcome, decided once here (playtest #85b): apply_turn
     # advances and pays it, and the prose is told it through act_outcome.quest.
     quest_step_attempt: dict[str, Any] | None = None
@@ -17788,7 +17871,7 @@ def play_turn(
             quest_match,
             skill_check_results,
             dice_ran=quest_dice_ran,
-            blocked=bool((action_spend_pack or {}).get("blocked")),
+            blocked=bool((action_spend_pack or {}).get("blocked")) or downed_turn,
         )
         if quest_step_attempt:
             mechanics_context = dict(context.get("mechanics_context") or {})
@@ -17933,6 +18016,35 @@ def play_turn(
         if skills_on:
             for resolved in skill_check_results:
                 result = apply_check_to_turn(result, resolved)
+        # The coming round after a collapse (playtest #88): health back to a
+        # quarter and the death rule's mark, engine-authored like an injury.
+        if recovery:
+            player_patch = dict(result.get("player") or {})
+            player_patch["health_delta"] = int(player_patch.get("health_delta") or 0) + int(recovery.get("health_delta") or 0)
+            if int(recovery.get("max_health_delta") or 0):
+                player_patch["max_health_delta"] = int(player_patch.get("max_health_delta") or 0) + int(recovery["max_health_delta"])
+            result["player"] = player_patch
+            authored = list(result.get("_server_authored") or [])
+            for path in ("player.health_delta", "player.max_health_delta"):
+                if path not in authored:
+                    authored.append(path)
+            result["_server_authored"] = authored
+            wound = recovery.get("lasting_injury") if isinstance(recovery.get("lasting_injury"), dict) else None
+            if wound:
+                conditions = list(result.get("condition_changes") or [])
+                conditions.append(
+                    {
+                        "id": f"wound_{wound.get('limb') or 'body'}",
+                        "name": wound.get("name") or f"Lasting wound ({wound.get('limb') or 'body'})",
+                        "summary": wound.get("summary") or "",
+                        "penalties": wound.get("combat_penalty") or {},
+                        "severe": True,
+                    }
+                )
+                result["condition_changes"] = conditions
+            journal = list(result.get("journal") or [])
+            journal.append({"kind": "recovery", "content": str(recovery.get("what_happens") or "")[:400]})
+            result["journal"] = journal
         # Checks the model proposed in its own turn are no longer rolled after
         # the prose (playtest #85a): a roll made after the words cannot be in
         # them, so the display could say failure under a scene of success.
@@ -18113,10 +18225,19 @@ def play_turn(
             pass
     # Store lasting conditions on player via settings when injuries fired.
     try:
-        if skill_check_results:
+        if skill_check_results or recovery:
             from app.db import connect as _db_connect
 
-            injuries = [c.get("injury") for c in skill_check_results if isinstance(c.get("injury"), dict)]
+            # Only a lasting injury (a natural 1) becomes a condition; a scratch
+            # from a bad miss does not (playtest #88). Rolls from before the flag
+            # carry none and count as lasting.
+            injuries = [
+                c.get("injury")
+                for c in skill_check_results
+                if isinstance(c.get("injury"), dict) and c["injury"].get("lasting", True)
+            ]
+            if recovery and isinstance(recovery.get("lasting_injury"), dict):
+                injuries.append(recovery["lasting_injury"])
             if injuries:
                 with _db_connect() as conn:
                     row = conn.execute("SELECT value FROM settings WHERE key = 'player_conditions'").fetchone()
@@ -18128,17 +18249,7 @@ def play_turn(
                             existing = []
                     if not isinstance(existing, list):
                         existing = []
-                    for inj in injuries:
-                        existing.append(
-                            {
-                                "id": f"inj_{inj.get('limb')}_{_current_turn_number()}",
-                                "name": f"Injured {inj.get('limb')}",
-                                "summary": inj.get("summary"),
-                                "penalties": inj.get("combat_penalty") or {},
-                                "severe": bool(inj.get("severe")),
-                                "turn": _current_turn_number(),
-                            }
-                        )
+                    existing = _merge_player_conditions(existing, injuries, _current_turn_number())
                     conn.execute(
                         "INSERT OR REPLACE INTO settings (key, value) VALUES ('player_conditions', ?)",
                         (json.dumps(existing[-40:], ensure_ascii=True),),
@@ -18287,6 +18398,143 @@ def play_opening_turn(allow_fallback: bool = True) -> dict[str, Any]:
         journal_input=OPENING_SCENE_JOURNAL,
         allow_fallback=allow_fallback,
     )
+
+
+def _merge_player_conditions(existing: list[Any], injuries: list[dict[str, Any]], turn: int) -> list[dict[str, Any]]:
+    """The stored conditions with this turn's lasting injuries folded in (playtest #88).
+
+    The old store appended a row per injury under a per-turn id, so 44 turns
+    at the same question left 35 rows, eight of them 'Injured side'. The same
+    limb hurt again is the one condition, worse: its count rises, its
+    penalties take the deeper of the two, and it is marked severe once either
+    hit was.
+    """
+    rows: list[dict[str, Any]] = [dict(row) for row in existing if isinstance(row, dict)]
+    for inj in injuries:
+        if not isinstance(inj, dict):
+            continue
+        limb = str(inj.get("limb") or "body")
+        name = str(inj.get("name") or f"Injured {limb}")
+        penalties = inj.get("combat_penalty") if isinstance(inj.get("combat_penalty"), dict) else {}
+        severe = bool(inj.get("severity") or inj.get("severe"))
+        match = next((row for row in rows if str(row.get("name") or "") == name), None)
+        if match is None:
+            rows.append(
+                {
+                    "id": str(inj.get("id") or (f"wound_{limb}" if inj.get("name") else f"inj_{limb}")),
+                    "name": name,
+                    "summary": inj.get("summary"),
+                    "penalties": dict(penalties),
+                    "severe": severe,
+                    "turn": int(turn),
+                    "count": 1,
+                }
+            )
+            continue
+        merged = dict(match.get("penalties") or {})
+        for key, value in penalties.items():
+            try:
+                merged[key] = min(int(merged.get(key, 0)), int(value))
+            except (TypeError, ValueError):
+                continue
+        match["penalties"] = merged
+        match["severe"] = bool(match.get("severe")) or severe
+        match["summary"] = inj.get("summary") or match.get("summary")
+        match["turn"] = int(turn)
+        match["count"] = int(match.get("count") or 1) + 1
+    return rows
+
+
+def _health_state(health: int, max_health: int, conditions: list[Any] | None = None) -> dict[str, Any]:
+    """The player's health as a fact for the prose (playtest #88).
+
+    The draft and the verifier were given name, title and race and nothing
+    else, so a player at 0 health with 35 injuries asked questions for 44
+    turns and nobody wrote otherwise. This is the compact view both get.
+    """
+    max_hp = max(1, int(max_health or 1))
+    hp = max(0, int(health or 0))
+    ratio = hp / max_hp
+    if hp <= 0:
+        band = "down"
+    elif ratio <= 0.25:
+        band = "critical"
+    elif ratio <= 0.5:
+        band = "hurt"
+    elif ratio < 0.75:
+        band = "bruised"
+    else:
+        band = "fine"
+    names: list[str] = []
+    for row in conditions or []:
+        if not isinstance(row, dict) or not row.get("name"):
+            continue
+        count = int(row.get("count") or 1)
+        label = f"{row['name']} (x{count})" if count > 1 else str(row["name"])
+        if label not in names:
+            names.append(label)
+    return {"health": hp, "max_health": max_hp, "band": band, "conditions": names[:6], "downed": hp <= 0}
+
+
+def _death_rule(options: dict[str, Any] | None) -> str:
+    raw = str((options or {}).get("death_rules") or "").strip().lower()
+    for key in ("permadeath", "lasting", "setback"):
+        if key in raw:
+            return {"permadeath": "permadeath threat", "lasting": "lasting injuries", "setback": "narrative setback"}[key]
+    return "downed, not deleted"
+
+
+def _downed_recovery(downed: dict[str, Any], options: dict[str, Any] | None, max_health: int, rng: random.Random) -> dict[str, Any]:
+    """What the turn after a collapse does to the player, by the setup's death rule (playtest #88).
+
+    Health 0 used to be a number the engine clamped and nothing read. Now the
+    turn the player drops is narrated as the drop, and the next turn is the
+    coming round: health back to a quarter, and the rule's mark on top.
+    """
+    max_hp = max(1, int(max_health or 1))
+    rule = _death_rule(options)
+    restore = max(1, max_hp // 4)
+    limb = str(downed.get("limb") or "body")
+    out: dict[str, Any] = {
+        "rule": rule,
+        "health_delta": restore,
+        "max_health_delta": 0,
+        "minutes": 60,
+        "lasting_injury": None,
+        "what_happens": (
+            "The player collapsed last turn and comes round now, weak, an hour later, where they fell or where "
+            "someone dragged them. They cannot act this turn beyond waking: narrate the waking and who or what "
+            "is there. The action in player_input did not happen."
+        ),
+    }
+    if rule == "lasting injuries":
+        out["lasting_injury"] = {
+            "limb": limb,
+            "severity": True,
+            "lasting": True,
+            "summary": f"Lasting wound ({limb}): the collapse left a mark that will not fully heal.",
+            "combat_penalty": {"mobility": -1 if limb in {"leg", "body"} else 0, "attack": -1, "defense": -1},
+            "name": f"Lasting wound ({limb})",
+        }
+        out["what_happens"] += " The collapse leaves a lasting wound; the prose shows it."
+    elif rule == "permadeath threat":
+        # No game-over contract exists yet (docs/TODO_NEXT.md n23 design). The
+        # threat is real in the body: a roll, and a bad one costs health that
+        # does not come back.
+        roll = rng.randint(1, 20)
+        out["death_roll"] = roll
+        if roll <= 3:
+            out["max_health_delta"] = -2
+            out["what_happens"] += " Death came close: the player is permanently weaker for it (max health falls)."
+        else:
+            out["what_happens"] += " Death came close and passed by this time."
+    elif rule == "narrative setback":
+        out["setback"] = True
+        out["what_happens"] += (
+            " The scene is lost: whoever was there has moved on or taken what they wanted; the player wakes "
+            "to the cost of it."
+        )
+    return out
 
 
 def _current_turn_number() -> int:
@@ -19560,6 +19808,21 @@ def get_input_suggestions(instruction: str = "", deeper: bool = False) -> dict[s
     scene_words = re.sub(r"\[\[[^\]]*\]\]", " ", last_narration)[-600:]
     query = f"{instruction} {scene_words}".strip() or "suggest next player inputs"
     prompt_context = build_prompt_context(context, query)
+    # What the player already tried, newest first (playtest #88): the idea
+    # model repeated itself because the packet had no memory of its own ideas.
+    # From the journal, the player's own line of each turn.
+    recent_inputs: list[str] = []
+    for row in context.get("history") or []:
+        if not isinstance(row, dict) or str(row.get("kind") or "") != "player":
+            continue
+        line = _player_line(str(row.get("content") or "")).strip()
+        if line and line not in recent_inputs:
+            recent_inputs.append(line[:200])
+        if len(recent_inputs) >= 6:
+            break
+    prompt_context["recent_player_inputs"] = recent_inputs
+    # The body, for the condition the ideas answer to (the planner trims it).
+    prompt_context["conditions"] = list(context.get("conditions") or [])[:12]
     # Every carried item by name: the turn planner keeps only items the query
     # names, and the inventory is what the player found most useful here.
     prompt_context["carried_items"] = [

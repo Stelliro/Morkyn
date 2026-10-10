@@ -1202,8 +1202,13 @@ def resolve_check(
             power_rng=bool(cfg.get("power_rng")),
             power_variance=int(cfg.get("power_variance") or 3),
         )
-        # Blend skill floor with how powerful the other side is.
-        target_dc = max(base_dc, int(round((base_dc + opp_info["power_total"]) / 1.15)))
+        # The other side moves the mark around the skill's own base: an average
+        # person (power 8: score 10, rank F, no sway) leaves it where a static
+        # check would put it, a strong one raises it, a weak one lowers it a
+        # little. The old blend, max(base, (base + power) / 1.15), could only
+        # raise it, so a guarded nobody was DC 15-20 for a plain question and an
+        # untrained speaker needed a natural 15 or better (playtest #88).
+        target_dc = max(base_dc - 4, base_dc + int(opp_info["power_total"]) - 8)
         dc_source = "contested"
     else:
         target_dc = base_dc
@@ -1257,25 +1262,45 @@ def resolve_check(
 
     mishap = False
     injury: dict[str, Any] | None = None
+    blunder: dict[str, Any] | None = None
     tool = (weapon_or_tool or "").strip() or str((opposition or {}).get("weapon") or "")
+    social = str(skill.get("category") or "") == "social"
+    # An unskilled miss goes wrong on a natural 1, or on a miss by a lot
+    # (degree bad_nothing, margin -7 or worse). A miss by 4 used to count too
+    # and was promoted to a critical failure, so an untrained +0 speaker
+    # against DC 18 "fumbled" on any roll of 14 or less: 28 of 49 asks in
+    # playtest #88. Only the natural 1 is critical now; the rest stays a
+    # failure that went badly.
     if (
         cfg.get("unskilled_mishaps")
         and unskilled
         and outcome in {"failure", "critical_failure"}
-        and (fumble or (not routine and (degree in {"critical_failure", "bad_nothing"} or margin <= -4)))
+        and (fumble or (not routine and degree == "bad_nothing"))
     ):
         mishap = True
-        degree = "unskilled_mishap" if not fumble else "critical_failure"
-        outcome = "critical_failure" if fumble or cfg.get("severe_mishap_on_crit_fail") else outcome
-        # Suggest lasting harm — apply_turn can consume this.
-        limb = roller.choice(["leg", "arm", "hand", "side", "eye", "ribs"])
-        if fumble or cfg.get("severe_mishap_on_crit_fail"):
+        degree = "critical_failure" if fumble else "unskilled_mishap"
+        if fumble:
+            outcome = "critical_failure"
+        # Lasting harm is the natural 1's; a bad miss costs a scratch and no
+        # lasting condition. apply_turn stores only lasting injuries.
+        lasting = bool(fumble and cfg.get("severe_mishap_on_crit_fail"))
+        if social:
+            # Words do not break bones (playtest #88: "Botched Persuasion:
+            # you hurt your leg" 28 times). A social fumble is a blunder the
+            # other side remembers: the attitude already went cold for it.
+            blunder = {
+                "kind": "social_blunder",
+                "severity": bool(fumble),
+                "summary": f"Botched {skill.get('name')}: {roller.choice(_BLUNDER_LINES)}",
+            }
+        else:
+            limb = roller.choice(["leg", "arm", "hand", "side", "eye", "ribs"])
             injury = {
-                "severity": True,
                 "kind": "self_injury",
                 "limb": limb,
-                "severity": bool(fumble or degree == "critical_failure"),
-                "health_delta": -roller.randint(2, 6) if fumble else -roller.randint(1, 3),
+                "severity": bool(fumble),
+                "lasting": lasting,
+                "health_delta": -roller.randint(2, 6) if fumble else -1,
                 "summary": (
                     f"Unskilled with {tool or skill.get('name')}: you injure your own {limb}."
                     if tool or skill.get("category") == "combat"
@@ -1285,7 +1310,9 @@ def resolve_check(
                     "mobility": -2 if limb in {"leg"} else 0,
                     "attack": -2 if limb in {"arm", "hand"} else -1,
                     "defense": -1,
-                },
+                }
+                if lasting
+                else {},
             }
 
     negative = bool(cfg.get("negative_outcomes")) and outcome in {"failure", "critical_failure"}
@@ -1296,6 +1323,8 @@ def resolve_check(
             f"you end up taking your own {injury['limb']} into the mess. "
             f"{injury['summary']}"
         )
+    elif mishap and blunder:
+        flavor = f"{flavor} {blunder['summary']}"
 
     # The roll says which proficiency it used (playtest #85a).
     if skill_match == "untrained":
@@ -1354,6 +1383,7 @@ def resolve_check(
         "unskilled": unskilled,
         "mishap": mishap,
         "injury": injury,
+        "blunder": blunder,
         "negative_outcome_suggested": negative,
         "crit": crit,
         "fumble": fumble,
@@ -1680,7 +1710,35 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         return check
     if not skill:
         return None
-    return _check_with_opposition(skill, text, context)
+    check = _check_with_opposition(skill, text, context)
+    # A plain question or greeting is everyday speech, not a persuasion attempt
+    # (playtest #88): "ask Vael about the seal" rolled an untrained contested
+    # check against the NPC's power every turn, and the misses were read as
+    # mishaps. Routine: two easier, and only a natural 1 can go badly. A line
+    # that pushes (convince, demand, haggle, plead) keeps the full roll.
+    if skill == "persuasion" and not any(_PERSUADE_RE.search(variant) for variant in variants):
+        check["routine"] = True
+        check["plain_talk"] = True
+    return check
+
+
+# Speech that leans on someone: the full roll. Anything else that the talk
+# pattern catches (ask, greet, say hello) is routine.
+_PERSUADE_RE = re.compile(
+    r"\b(persuade|convinc\w*|negotiat\w*|haggl\w*|bargain\w*|plead\w*|beg|demand\w*|insist\w*|press\w*|argu\w*|"
+    r"talk \w+ (into|out of)|win \w+ over)\b"
+)
+
+# How a social fumble goes wrong. The attitude already turned cold for it;
+# this is the line the prose can show.
+_BLUNDER_LINES = (
+    "the words come out wrong.",
+    "you say the one thing they did not want to hear.",
+    "you talk over them and lose the moment.",
+    "you misjudge the moment and give offense.",
+    "you push when you should have waited.",
+    "you let slip more than you meant to.",
+)
 
 
 def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None) -> dict[str, Any]:
@@ -1790,6 +1848,9 @@ def act_outcome(checks: Any) -> dict[str, Any] | None:
         injury = check.get("injury") if isinstance(check.get("injury"), dict) else None
         if injury and injury.get("summary"):
             out["injury"] = str(injury["summary"])[:160]
+        blunder = check.get("blunder") if isinstance(check.get("blunder"), dict) else None
+        if blunder and blunder.get("summary"):
+            out["blunder"] = str(blunder["summary"])[:160]
         return out
     return None
 
@@ -1831,17 +1892,23 @@ def apply_check_to_turn(turn: dict[str, Any], check: dict[str, Any]) -> dict[str
                 "content": json.dumps(injury, ensure_ascii=True)[:900],
             }
         )
-        conditions = list(result.get("condition_changes") or [])
-        conditions.append(
-            {
-                "id": f"inj_{injury.get('limb') or 'wound'}",
-                "name": f"Injured {injury.get('limb') or 'body'}",
-                "summary": injury.get("summary") or "",
-                "penalties": injury.get("combat_penalty") or {},
-                "severe": bool(injury.get("severe")),
-            }
-        )
-        result["condition_changes"] = conditions
+        # A scratch from a bad miss heals on its own; only a natural 1 leaves
+        # a condition (playtest #88). Older rolls carry no flag: lasting.
+        if injury.get("lasting", True):
+            conditions = list(result.get("condition_changes") or [])
+            conditions.append(
+                {
+                    "id": f"inj_{injury.get('limb') or 'wound'}",
+                    "name": f"Injured {injury.get('limb') or 'body'}",
+                    "summary": injury.get("summary") or "",
+                    "penalties": injury.get("combat_penalty") or {},
+                    "severe": bool(injury.get("severity") or injury.get("severe")),
+                }
+            )
+            result["condition_changes"] = conditions
+    blunder = check.get("blunder") if isinstance(check.get("blunder"), dict) else None
+    if blunder:
+        journal.append({"kind": "blunder", "content": str(blunder.get("summary") or "")[:300]})
     result["journal"] = journal
     return result
 

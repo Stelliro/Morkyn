@@ -187,6 +187,14 @@ the player still where they are, and the player answers with their own words or 
 - When act_outcome is present, the engine's dice already decided how player_act turns out: write
   exactly that outcome, success or failure, and never a different one. A quest task is finished only
   when act_outcome.quest.result says done.
+- world_state.mechanics_context.health_state is the player's body as the engine has it (health, band,
+  conditions). Keep to it: a critical player moves and speaks like one. When health_state.downed is
+  true the player goes down at the end of this action: the action does not finish, the scene ends
+  with them losing consciousness, and "you" does nothing after that.
+- When world_state.mechanics_context.recovery is present, the player collapsed last turn and this
+  turn is the coming round, as recovery.what_happens says. The action in player_line did not happen.
+  Narrate the waking, who or what is there, and the rule's mark. No HEALTH or XP line for it: the
+  engine already set the player's health.
 - player_line is the player's own input and the whole of the player's turn. "you" does only what
   player_line says: no further actions, words, replies, gestures, thoughts, feelings, memories,
   conclusions or decisions. Narrate that action, then what the world and the people in it do in

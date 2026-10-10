@@ -234,6 +234,8 @@ Continuity rules:
 - If world_state.player.resources or mechanics_context.resources is present, energy/stamina, fatigue, and mana/focus are server truth. Do not invent free full rests, free long magic casting when mana is 0, or ignore fatigue when the player is exhausted.
 - If mechanics_context.ability_use is present, the server already resolved the power attempt. When blocked=true, narrate failure/inability (locked, cooldown, or insufficient energy/mana/health) — do not grant the full effect. When ok=true, the listed cost/cooldown/debuffs already applied; do not refund them or ignore the cooldown. Prefer ability.resource_cost over free-text cost when both exist.
 - If mechanics_context.action_spend or mechanics_context.collapse is present: zero energy or full fatigue means the player is collapsing — physical feats fail or stagger; suggest rest/meditate/sleep. Do not invent free recovery mid-action.
+- mechanics_context.health_state is the player's body as the engine has it: health, band (fine / bruised / hurt / critical / down) and conditions. Keep to it: a critical player moves and speaks like one; a listed injury is there. When health_state.downed is true the player goes down at the end of this action and the scene ends with them losing consciousness; do not write them acting past that.
+- If mechanics_context.recovery is present, the player collapsed last turn and this turn is the coming round, as recovery.what_happens says. The action in player_input did not happen; narrate the waking, who or what is there, and the rule's mark (a lasting wound, a close call, a lost scene). No free full healing: health is back to a quarter, no more.
 - If mechanics_context.social_reputation is present, the player already walked away or kept pushing after a cold reception — honor that reputation change lightly.
 - mechanics_context.area_reputation is local standing (-100..100). Cold locals + low area rep = harder social outcomes; do not ignore it.
 - mechanics_context.player_inventory_codes (when present) is the gear the player currently holds. Do not invent pocket items, keys, knives, or coupons not listed. If mechanics_context.player_inventory_truncated is present that list is only the first part of a longer pack, and world_state.inventory is the complete record — treat that as authoritative and never tell the player something is missing on the strength of the short list.
@@ -839,6 +841,31 @@ def _player_view(context: dict[str, Any]) -> dict[str, Any] | None:
     for key in ("name", "public_name", "title", "race"):
         if player.get(key):
             view[key] = player.get(key)
+    # Health is a fact the prose keeps (playtest #88): the view carried name,
+    # title and race only, so a player at 0 health with 35 injuries asked
+    # questions for 44 turns. Compact: the numbers, the band, the conditions.
+    if player.get("max_health") is not None:
+        try:
+            hp = max(0, int(player.get("health") or 0))
+            max_hp = max(1, int(player.get("max_health") or 1))
+        except (TypeError, ValueError):
+            hp, max_hp = 0, 0
+        if max_hp:
+            ratio = hp / max_hp
+            band = (
+                "down" if hp <= 0 else "critical" if ratio <= 0.25 else "hurt" if ratio <= 0.5 else "bruised" if ratio < 0.75 else "fine"
+            )
+            view["health"] = f"{hp}/{max_hp} ({band})"
+    conditions = []
+    for row in context.get("conditions") or []:
+        if not isinstance(row, dict) or not row.get("name"):
+            continue
+        count = int(row.get("count") or 1)
+        label = f"{row['name']} (x{count})" if count > 1 else str(row["name"])
+        if label not in conditions:
+            conditions.append(label)
+    if conditions:
+        view["conditions"] = conditions[:6]
     worn = []
     for item in context.get("inventory") or []:
         if not isinstance(item, dict):
@@ -1101,6 +1128,9 @@ def _mechanics_view(context: dict[str, Any]) -> dict[str, Any] | None:
         injury = check.get("injury") if isinstance(check.get("injury"), dict) else None
         if injury and injury.get("summary"):
             row["injury"] = _one_line(injury.get("summary"), 160)
+        blunder = check.get("blunder") if isinstance(check.get("blunder"), dict) else None
+        if blunder and blunder.get("summary"):
+            row["blunder"] = _one_line(blunder.get("summary"), 160)
         checks.append(row)
     if checks:
         view["resolved_checks"] = checks[:4]
@@ -1116,6 +1146,25 @@ def _mechanics_view(context: dict[str, Any]) -> dict[str, Any] | None:
         view["collapse"] = collapse
     elif isinstance(collapse, str) and collapse.strip():
         view["collapse"] = collapse.strip()[:200]
+    # The player's body and the coming round after a collapse (playtest #88):
+    # engine facts the prose keeps, carried whole, they are small.
+    health_state = mechanics.get("health_state")
+    if isinstance(health_state, dict) and health_state:
+        view["health_state"] = {
+            key: health_state.get(key)
+            for key in ("health", "max_health", "band", "conditions", "downed")
+            if health_state.get(key) not in (None, [], False) or key in ("health", "band")
+        }
+    recovery = mechanics.get("recovery")
+    if isinstance(recovery, dict) and recovery:
+        view["recovery"] = {
+            key: recovery.get(key)
+            for key in ("rule", "what_happens", "health_delta", "max_health_delta", "setback", "death_roll")
+            if recovery.get(key) not in (None, 0, False, "")
+        }
+        wound = recovery.get("lasting_injury") if isinstance(recovery.get("lasting_injury"), dict) else None
+        if wound and wound.get("summary"):
+            view["recovery"]["lasting_injury"] = _one_line(wound.get("summary"), 160)
     reputation = mechanics.get("area_reputation")
     if isinstance(reputation, (int, float)) and not isinstance(reputation, bool) and int(reputation) != 0:
         view["area_reputation"] = int(reputation)
