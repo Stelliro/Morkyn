@@ -1328,6 +1328,11 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                 slim["status"] = {"declined": "turned_down", "accepted_now": "player_takes_it_now"}.get(
                     str(row.get("status") or ""), "waiting_for_answer"
                 )
+                if slim["status"] == "waiting_for_answer" and row.get("voiced") is False:
+                    # Posted by the engine's quest clock and never said in the
+                    # story (Saltmarrow #114: "A debt of bread" read as Una's
+                    # offer waiting for an answer).
+                    slim["status"] = "not_raised_yet"
                 slim_offers.append(slim)
             else:
                 slim_offers.append(row)
@@ -1513,6 +1518,8 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "Decline buttons; do not offer it again and do not write the player taking or refusing it, but the giver can "
         "answer questions about it. status player_takes_it_now: the player's line takes this job and the app has "
         "accepted it; show the giver's answer to that. status turned_down: the player refused it; do not offer it again. "
+        "status not_raised_yet: work the giver has, or a notice on its board, that the story has not told the player; "
+        "it may come up when it fits, and nobody treats it as already asked. "
         "When world_state.open_leads is present, someone already asked the player along. status waiting_for_answer: "
         "the player has not gone with them; do not write the player going. status player_going_now: the player's "
         "line goes with them and the walk is world_state.town; write them walking together. status player_stayed: the player chose "

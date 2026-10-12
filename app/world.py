@@ -18098,6 +18098,17 @@ def play_turn(
     # A typed answer to a walk-with (TODO n21): the engine is walking the player
     # with the leader this turn, so the draft is told so, not "waiting" (#n21 review).
     led_by = str(((town_turn or {}).get("plan") or {}).get("led_by") or "") if isinstance(town_turn, dict) else ""
+    if not led_by and input_kind == "player" and isinstance(prompt_context.get("open_leads"), list):
+        # A typed go-with the town planner could not walk to a plot still
+        # answers the lead (Saltmarrow #115); apply_turn joins them up.
+        try:
+            from app.turn_prompts import typed_go_with
+
+            with connect() as c_lead:
+                answered = typed_go_with(c_lead, player_input)
+            led_by = str((answered or {}).get("npc_name") or "")
+        except Exception:
+            led_by = ""
     if led_by and isinstance(prompt_context.get("open_leads"), list):
         prompt_context["open_leads"] = [
             dict(row, status="player_going_now")

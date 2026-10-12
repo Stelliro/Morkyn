@@ -168,7 +168,16 @@ _SIMPLE_ACCEPT_RE = re.compile(
 
 def player_accepts(player_input: str) -> bool:
     text = str(player_input or "")
-    return bool(_accept_re().search(text) or _SIMPLE_ACCEPT_RE.search(text))
+    if _accept_re().search(text) or _SIMPLE_ACCEPT_RE.search(text):
+        return True
+    try:
+        from app.local_intel import typed_accept
+
+        # Signing for it and "we'll take it" (Saltmarrow #114): one vocabulary
+        # for the engine's accept, the prompt and this parser.
+        return typed_accept(text)
+    except Exception:  # pragma: no cover - local_intel always importable in the app
+        return False
 
 
 def _title_words(title: str) -> set[str]:
@@ -744,6 +753,11 @@ def _resolve_quest(ref: Any, existing: list[dict[str, Any]] | None) -> dict[str,
     return best if best_score >= 0.6 else None
 
 
+def _lead_verb(title: str) -> str:
+    words = re.findall(r"[a-z]+", _norm(title))
+    return words[0] if words else ""
+
+
 def _is_duplicate(item: dict[str, Any], existing: list[dict[str, Any]] | None, giver_id: Any, first_place: str) -> dict[str, Any] | None:
     title = _norm(item.get("title"))
     for quest in existing or []:
@@ -751,6 +765,14 @@ def _is_duplicate(item: dict[str, Any], existing: list[dict[str, Any]] | None, g
         if status not in {"active", "offered", "declined"}:
             continue
         ratio = SequenceMatcher(None, title, _norm(quest.get("title"))).ratio()
+        # Another giver asking for another thing is another job (Saltmarrow
+        # #117): Mara's "Ring the customs bell" was filed as a duplicate of the
+        # guild's "Raise the customs-house bell" on the shared words alone.
+        # From a different giver the titles must also open on the same verb,
+        # or be near-identical.
+        other_giver = bool(giver_id) and quest.get("giver_npc_id") != giver_id
+        if other_giver and ratio < 0.9 and _lead_verb(title) != _lead_verb(str(quest.get("title") or "")):
+            ratio = 0.0
         if ratio >= 0.6:
             return quest
         if status == "declined" and giver_id and quest.get("giver_npc_id") == giver_id and ratio >= 0.4:
@@ -1122,6 +1144,17 @@ def apply_quest_changes(
             }
             for r in rejected
         ]
+        # The story just offered a job the engine's quest clock had posted:
+        # it is now said aloud, no longer a notice nobody has raised (#114).
+        for r in rejected:
+            for reason in r["reasons"]:
+                if reason.startswith("duplicate_of:"):
+                    ref = reason.split(":", 1)[1]
+                    conn.execute(
+                        "UPDATE quests SET notes = notes || '; voiced' WHERE (code = ? OR CAST(id AS TEXT) = ?) "
+                        "AND notes LIKE 'clock:%' AND notes NOT LIKE '%voiced%'",
+                        (ref, ref),
+                    )
         for item in accepted["new"]:
             target_id = None
             first_code = item["steps"][0].get("location_code") if item["steps"] else ""
@@ -1158,7 +1191,7 @@ def apply_quest_changes(
             title = upd["title"] or upd["code"]
             if action == "accept":
                 # One path for every accept (TODO n20); it journals.
-                if accept_offered(conn, qid, turn=int(turn)) is None:
+                if accept_offered(conn, qid, turn=int(turn), player_line=player_input) is None:
                     continue
             elif action == "decline":
                 if decline_offered(conn, qid, turn=int(turn)) is None:
