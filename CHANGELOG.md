@@ -23,6 +23,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+## [0.10.0-dev.11] - 2026-10-13
+
+> Pre-release on the way to `0.10.0`. A new 100-turn lore teaser, Saltmarrow, played with Claude as player and GM through the cloud-API path; the API bridge harness and a read-only world database exporter; the run's findings logged as #100-#122 with ten older issues reopened.
+
 ### Added
 
 - [TOOL] `tools/api_bridge_playtest.py`: play Mørkyn through its cloud-API path with an agent answering every model call. A local OpenAI-compatible server writes each request to `<dir>/calls/NNNN.request.json` (with a readable view) and waits for `NNNN.reply.txt`; player lines arrive as `<dir>/inbox/NNN.txt`, `!wait <minutes> <kind>` presses the Wait/Meditate/Sleep button, `STOP` ends the run, and `--resume` continues a run dir. Each turn is recorded in `<dir>/turns/NNN.json` and the world database is exported every 10 turns. All data paths are isolated inside the run dir.
