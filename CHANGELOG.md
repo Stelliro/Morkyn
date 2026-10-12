@@ -23,6 +23,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+## [0.10.0-dev.9] - 2026-10-12
+
+> Pre-release on the way to `0.10.0`. Mørkyn's own window with the launcher settings in the game, abilities whose growth the engine computes from a model-picked template and seed, a theme ability library that learns verified new powers, a death screen and Ironman, read-aloud narration, fixes #85-#94, thirteen built-but-not-wired modules, and the README's MLE section with changelogs split out.
+
 ### Added
 
 - [CLAUDE] Theme ability templates that the library learns from. `content/ability_templates/` holds 204 hand-written abilities over the 17 director themes (12 each, every one through the same quality gate as a generated card, in the two-part growth shape, flagged supernatural or not). `app/ability_library.py` scores the setup against each theme's keywords so a custom setting draws from its best two or three themes (a "neon megacity where corporate sects teach qi" mixes cyberpunk and wuxia), and hands the model eight fresh templates per call, the least used first, none supernatural in a no-magic world. The model adapts a template (`template_id`) or invents a new power (`"new"`); a new one that passes the quality gate on engine growth, is not a near-copy of anything in the library and is not a fallback card is stored in `data/ability_library.json` (beside the world database; `AI_RPG_ABILITY_LIBRARY` overrides) with the setup's themes, and is offered in later calls. Abilities a game starts with count as chosen and come up more. Fallbacks draw theme templates before the generic pool, and every pool card is now tagged and never learned. Measured before (8B, 125 independent abilities, 4 themes): no repeat inside one batch, 0-6 repeats per ~30 across separate rolls, "echo" in 22 of 125 names across every theme, and 27 pool cards unlabelled. - `app/ability_library.py`, `content/ability_templates/*.json`, `app/llm.py`, `app/world.py`, `app/main.py`, `static/app.js`, `tools/playtest_setup_presets.py`
