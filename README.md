@@ -147,7 +147,7 @@ Morkyn/
 
 ## MLE — the Mørkyn Large Language Model Engine
 
-MLE is the layer between the language model and the game. It covers what the model is told, what it may answer with, and what the game engine does with the answer. `app/mle.py` is the part that runs a local model. The contract below is the same whether the model is MLE, llama.cpp or a cloud API.
+MLE is the layer between the language model and the game. It covers what the model is told, what it may answer with, and what the game engine does with the answer. `app/mle.py` is the part that runs a local model. **MLE runs in place of a llama.cpp server:** it is the same llama.cpp engine, loaded inside the game process, so you do not start `llama-server` or anything else. It is the default provider. A separate llama.cpp server or a cloud API can still be chosen in Settings, and the contract below is the same for all three.
 
 The rule: **the LLM writes words. The engine owns every fact and every number.**
 
@@ -200,7 +200,7 @@ If the model fails, the turn stops with a dialog that says why, or it falls back
 
 ### Example: one real turn
 
-This is a turn from a copy of a live save, played on Qwen3 8B (Q4) on a 12 GB card on 2026-10-12. It is cut for length: some packet fields and op lines are left out and quotes are straightened, but the words are the model's own. It also shows four open bugs, which are explained at the end.
+This is a turn from a copy of a live save, played on Qwen3 8B (Q4) on a 12 GB card on 2026-10-12. It is cut for length: some packet fields and op lines are left out and quotes are straightened, but the words are the model's own. It also shows four engine bugs it exposed, and the same turn after they were fixed.
 
 **1. The player types**
 
@@ -278,14 +278,25 @@ quests    new "Learn more about sword polishing" REFUSED: duplicate of Q2
 result    gold 12 -> 34, inventory unchanged, 35.7 s for the whole turn
 ```
 
-**Where this turn went wrong.** Every decision above was made by the engine. Four of them were wrong, and they are logged as open issues:
+**Where this turn went wrong, and the fix.** Every decision above was made by the engine. Four of them were wrong:
 
-- **#96.** The whetstone was refused although the prose hands it over ("handing it to you").
-- **#97.** The trim cut the coins the player offered, so "Finnian takes the coins" is left with no coins given. The draft had followed its own instruction (`trade_offer`), and the trim rule disagrees with it.
+- **#96.** The whetstone was refused although the prose hands it over ("handing it to you"). Asking to buy was not read as asking for anything.
+- **#97.** The trim cut the coins the player offered, so "Finnian takes the coins" was left with no coins given. The draft had followed its own instruction (`trade_offer`), and the trim rule disagreed with it.
 - **#98.** One action finished two quests.
 - **#99.** "A whetstone" rolled a count of 2.
 
-See [docs/PLAYTEST_ISSUES.md](docs/PLAYTEST_ISSUES.md).
+All four are fixed in the engine. The same turn, replayed on the same save and model, gave the same draft, and the engine now does this with it:
+
+```text
+prose     kept "You pull out two gold coins from your pouch and hand them over."  (the player offered it)
+dice      whetstone count: named once -> band "small" -> 1
+items     whetstone x1 granted
+gold      2 paid
+quests    Q1 "Polish swords" complete: +11 gold, +27 XP     (Q2 stays open)
+result    gold 12 -> 21, whetstone in the pack
+```
+
+Details and causes: [docs/PLAYTEST_ISSUES.md](docs/PLAYTEST_ISSUES.md), #96-#99.
 
 ### Setup works the same way
 
@@ -299,7 +310,7 @@ Gear stats, eye colour, map placement and town layout are rolled by the engine i
 
 ### The local runtime (`app/mle.py`)
 
-- **In-process model.** One GGUF loads inside the game through llama-cpp-python, so no separate server is needed. The context size fits your free VRAM, and a missing file says so instead of answering.
+- **In-process llama.cpp.** One GGUF loads inside the game through llama-cpp-python (the llama.cpp engine), in place of a separate llama.cpp server. The context size fits your free VRAM, and a missing file says so instead of answering.
 - **Word masking.** While drafting, it can hide an overused word at the moment the next token is chosen. Names, titles and op keys always stay choosable, and stray CJK script tokens are masked.
 - **Nothing rewritten.** The weights file is never changed, and the model's text is not edited by the runtime. All cuts happen afterwards, in the engine, and are logged.
 
@@ -350,12 +361,22 @@ Mørkyn is **local-first**: no analytics, no metrics, no automatic phone-home.
 
 ### Local (GGUF / MLE)
 
+There are two ways to run a local GGUF. Both use llama.cpp; the difference is where it runs.
+
+- **MLE (default):** llama.cpp is loaded inside the game process, in place of a llama.cpp server. Give it the full path to the file, or put the file in `data/mle-models/`.
+- **llama.cpp server:** the launcher starts and manages a separate `llama-server` with the file you name.
+
 ```powershell
-$env:AI_RPG_GGUF_MODEL="D:\path\to\model.gguf"
-# or MLE:
+# MLE: in-process llama.cpp (default)
 $env:AI_RPG_MODEL_PROVIDER="mle"
-$env:MLE_MODEL="qwen3:8b"
+$env:MLE_MODEL="D:\path\to\Qwen3-8B-Q4_K_M.gguf"
+
+# or a separate llama.cpp server
+$env:AI_RPG_MODEL_PROVIDER="llama_cpp"
+$env:AI_RPG_GGUF_MODEL="D:\path\to\model.gguf"
 ```
+
+Both can also be set in the game under **Settings**.
 
 ### Cloud / agents (xAI Grok, OpenAI, any OpenAI-compatible gateway)
 

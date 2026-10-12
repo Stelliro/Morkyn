@@ -23,6 +23,16 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Fixed
+
+- [CLAUDE] Buying from someone is asking for the item (playtest #96, the README example turn on the 8B): 'ask Finnian if he'd sell me a whetstone. I'll pay 2 gold for it' was not read as wanting anything, so the whetstone the prose hands over was refused and the 2 gold voided. 'sell me' and 'pay ... for' join the one take vocabulary that the grant gate and the overreach trim share. - `app/llm.py`
+- [CLAUDE] The coins the player offered stay in the scene (#97): 'You pull out two gold coins and hand them over' was cut as an act the player never asked for, although the line offered the gold and the draft was told to show it. A sentence about coin is the player's own when their line pays, buys or gives coin. - `app/llm.py`
+- [CLAUDE] One act advances one quest (#98): 'I set the last polished blade on the rack' completed both 'Polish swords' and 'Learn metalworking' and paid both. Step and completion updates that cite the same sentence now advance only the quest whose title and current step fit it best; the rest are rejected as same_act_as. - `app/quest_parser.py`
+- [CLAUDE] One thing named once is one (#99): 'a whetstone' drafted as QTY moderate rolled two. An item the line or prose names with a/an/one/the, never plural and never with a count, rolls band small (one); stacks still roll. - `app/world.py`
+- [CLAUDE] A rare-magic world no longer draws theme abilities as often as a cultivation world: since the library, the offline fallback drew templates by theme alone, so 'rare' and 'cultivation' both came out 86-90% supernatural and test_magic_coherence failed about two runs in three. Supernatural templates now weigh 0.4 in a rare world and mundane ones 0.5 in a common one; magic off still draws none. - `app/ability_library.py`
+- [TEST] tests/test_playtest96_whetstone.py: 11 cases; 9 fail on the code before the fix. The 8B turn replayed on a save copy now grants one whetstone, pays 2 gold and completes one quest.
+- [DOCS] README: MLE runs in place of a llama.cpp server (the same engine, in-process, the default), and Model setup shows MLE and the llama.cpp server side by side with full GGUF paths.
+
 ## [0.10.0-dev.9] - 2026-10-12
 
 > Pre-release on the way to `0.10.0`. Mørkyn's own window with the launcher settings in the game, abilities whose growth the engine computes from a model-picked template and seed, a theme ability library that learns verified new powers, a death screen and Ironman, read-aloud narration, fixes #85-#94, thirteen built-but-not-wired modules, and the README's MLE section with changelogs split out.

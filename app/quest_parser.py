@@ -981,7 +981,58 @@ def validate_quest_changes(
         )
         if len(accepted["updates"]) >= MAX_UPDATES_PER_TURN:
             break
+    _one_act_one_quest(accepted, rejected, existing)
     return accepted, rejected
+
+
+def _stems(text: Any) -> set[str]:
+    return {w[:5] for w in re.findall(r"[a-z][a-z']+", str(text or "").lower()) if len(w) > 2}
+
+
+def _one_act_one_quest(accepted: dict[str, Any], rejected: list[dict[str, Any]], existing: list[dict[str, Any]] | None) -> None:
+    """One quoted act advances one quest (playtest #98).
+
+    "I set the last polished blade on the rack" was cited for both "Polish
+    swords" and "Learn metalworking", and both were completed and paid. When
+    two step_done / complete updates rest on the same sentence, the quest
+    whose title and current step share the most words with it keeps the
+    update; the first listed wins a tie.
+    """
+    by_id = {int(q.get("id") or 0): q for q in existing or []}
+    advancing = [u for u in accepted["updates"] if u["action"] in {"step_done", "complete"} and len(_norm(u["evidence"])) >= 12]
+    dropped: set[int] = set()
+    for i, upd in enumerate(advancing):
+        if id(upd) in dropped:
+            continue
+        same = [
+            other
+            for other in advancing[i + 1 :]
+            if id(other) not in dropped
+            and (_norm(upd["evidence"]) in _norm(other["evidence"]) or _norm(other["evidence"]) in _norm(upd["evidence"]))
+        ]
+        if not same:
+            continue
+        group = [upd, *same]
+        words = _stems(upd["evidence"])
+
+        def fit(u: dict[str, Any]) -> int:
+            quest = by_id.get(int(u.get("quest_id") or 0)) or {}
+            return len(words & _stems(f"{quest.get('title') or ''} {quest.get('current_step_text') or ''}"))
+
+        keep = max(group, key=fit)  # max keeps the first of equal scores
+        for other in group:
+            if other is not keep:
+                dropped.add(id(other))
+                rejected.append(
+                    {
+                        "kind": "update",
+                        "item": {"quest": other.get("code") or other.get("title"), "action": other["action"]},
+                        "reasons": [f"same_act_as:{keep.get('code') or keep.get('title')}"],
+                        "checked": other["evidence"][:240],
+                    }
+                )
+    if dropped:
+        accepted["updates"] = [u for u in accepted["updates"] if id(u) not in dropped]
 
 
 # ---------------------------------------------------------------------------
@@ -1012,7 +1063,9 @@ def load_quest_context(conn, turn: int = 0) -> dict[str, list[dict[str, Any]]]:
         conn,
         """
         SELECT q.id, q.code, q.title, q.status, q.giver_npc_id, q.current_step, q.total_steps,
-               (SELECT s.location_name FROM quest_steps s WHERE s.quest_id = q.id AND s.step_number = 1) AS first_step_location
+               (SELECT s.location_name FROM quest_steps s WHERE s.quest_id = q.id AND s.step_number = 1) AS first_step_location,
+               (SELECT s.title || ' ' || COALESCE(s.description, '') FROM quest_steps s
+                 WHERE s.quest_id = q.id AND s.step_number = MAX(1, COALESCE(q.current_step, 1))) AS current_step_text
         FROM quests q
         WHERE q.status IN ('active', 'offered')
            OR (q.status = 'declined' AND COALESCE(q.failed_turn, 0) >= ?)
