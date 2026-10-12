@@ -846,6 +846,7 @@ BUNDLE_ASSETS: tuple[str, ...] = (
     "ui/interact.js",
     "ui/failsafe.js",
     "ui/death.js",
+    "ui/frame.js",
 )
 BUNDLE_PLACEHOLDER = "__BUNDLE__"
 _bundle_cache: dict[str, Any] = {"stamp": None, "token": "", "html": ""}

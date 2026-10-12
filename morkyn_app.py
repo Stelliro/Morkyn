@@ -52,6 +52,70 @@ POPOUT_TITLES = {
 }
 
 
+# The native title bar in the theme's colours (static/ui/frame.js sends the live
+# ones; these are dusk, for the boot page and the moment before a page loads).
+FRAME_DEFAULT = {"caption": "#08060b", "text": "#bfa0ee", "border": "#463a58"}
+_FRAME_BY_WINDOW: dict[str, dict[str, str]] = {}
+
+
+def _colorref(value: str) -> int | None:
+    text = str(value or "").strip().lstrip("#")
+    if len(text) != 6 or any(ch not in "0123456789abcdefABCDEF" for ch in text):
+        return None
+    r, g, b = int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16)
+    return r | (g << 8) | (b << 16)  # COLORREF is 0x00BBGGRR
+
+
+def paint_frame(win: Any, colors: dict[str, str] | None = None) -> None:
+    """Windows 11: caption = the void, title = the thread, border = a dim thread line.
+
+    Earlier Windows ignores the colour attributes and keeps its dark frame.
+    """
+    if os.name != "nt" or win is None:
+        return
+    chosen = {**FRAME_DEFAULT, **{k: v for k, v in (colors or {}).items() if _colorref(v) is not None}}
+    _FRAME_BY_WINDOW[str(getattr(win, "uid", id(win)))] = chosen
+    try:
+        import ctypes
+
+        hwnd = ctypes.c_void_p(int(win.native.Handle.ToInt64()))
+        dwm = ctypes.windll.dwmapi
+        attrs = (
+            (20, 1),  # immersive dark mode: light caption-button glyphs
+            (38, 1),  # no Mica backdrop under the caption
+            (34, _colorref(chosen["border"])),
+            (35, _colorref(chosen["caption"])),
+            (36, _colorref(chosen["text"])),
+        )
+        for attr, value in attrs:
+            number = ctypes.c_int(int(value))
+            dwm.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(number), ctypes.sizeof(number))
+    except Exception:
+        pass
+
+
+def _keep_frame_painted() -> None:
+    """pywebview resets the frame when the system switches light/dark; paint ours back on top."""
+    try:
+        from webview.platforms.winforms import BrowserView
+    except Exception:
+        return
+    form_class = getattr(BrowserView, "BrowserForm", None)
+    original = getattr(form_class, "update_title_bar_theme", None)
+    if form_class is None or original is None:
+        return
+
+    def update_title_bar_theme(self: Any) -> None:
+        original(self)
+        win = getattr(self, "pywebview_window", None)
+        paint_frame(win, _FRAME_BY_WINDOW.get(str(getattr(win, "uid", id(win)))))
+
+    try:
+        form_class.update_title_bar_theme = update_title_bar_theme
+    except Exception:
+        pass  # a .NET-derived class may refuse it; the frame then resets only on a system theme switch
+
+
 def parse_args(argv: list[str]) -> dict[str, Any]:
     opts: dict[str, Any] = {"overrides": {}, "console": False, "window": None}
     for raw in argv:
@@ -87,29 +151,43 @@ def prepare_assets() -> tuple[str, str | None]:
     """(logo data URI for the boot page, .ico path for the window). Built once from Media/."""
     WEBVIEW_DIR.mkdir(parents=True, exist_ok=True)
     thumb = WEBVIEW_DIR / "boot-logo.png"
-    ico = WEBVIEW_DIR / "morkyn.ico"
+    ico = WEBVIEW_DIR / "morkyn-mark.ico"
     source = ROOT / "Media" / "morkyn-logo.png"
     try:
-        if source.is_file() and (not thumb.is_file() or not ico.is_file()
-                                 or thumb.stat().st_mtime < source.stat().st_mtime):
+        if source.is_file() and (not thumb.is_file() or thumb.stat().st_mtime < source.stat().st_mtime):
             from PIL import Image
 
             with Image.open(source) as image:
-                image = image.convert("RGBA")
-                small = image.copy()
+                small = image.convert("RGBA")
                 small.thumbnail((192, 288))
                 small.save(thumb, "PNG", optimize=True)
-                # The mark sits in the upper part of the key art; square it for the icon.
-                side = min(image.size)
-                top = max(0, (image.size[1] - side) // 3)
-                square = image.crop((0, top, side, top + side))
-                square.save(ico, sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
+        if not ico.is_file():
+            draw_mark().save(ico, sizes=[(16, 16), (20, 20), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)])
     except Exception:
         pass
     logo = ""
     if thumb.is_file():
         logo = "data:image/png;base64," + base64.b64encode(thumb.read_bytes()).decode("ascii")
     return logo, (str(ico) if ico.is_file() else None)
+
+
+def draw_mark() -> Any:
+    """The title-bar icon: the logo's Ø as one thread of light (ring + slash, no fill) with a faint halo.
+
+    The key art itself turns to mud at 16 px, so the mark is drawn, in the
+    thread colour, on transparency so it sits on the void caption.
+    """
+    from PIL import Image, ImageDraw, ImageFilter
+
+    size = 256
+    thread = (191, 160, 238, 255)  # tokens.css --thread (dusk)
+    line = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    pen = ImageDraw.Draw(line)
+    pen.ellipse((58, 34, 198, 222), outline=thread, width=26)
+    pen.line((44, 236, 212, 20), fill=thread, width=24)
+    halo = line.filter(ImageFilter.GaussianBlur(14))
+    halo.putalpha(halo.getchannel("A").point(lambda a: a * 0.55))
+    return Image.alpha_composite(halo, line)
 
 
 def boot_html(logo: str) -> str:
@@ -179,6 +257,8 @@ class Shell:
         self.showing = "boot"  # boot | game
         self.browser_opened_for = ""
         self.quitting = False
+        # The game window's frame colours; new pop-outs open in them before their page loads.
+        self.frame_colors = dict(FRAME_DEFAULT)
         self._lock = threading.Lock()
         self.sup = Supervisor(on_change=self._on_change, overrides=opts["overrides"])
         self.api = ShellApi(self)
@@ -243,6 +323,17 @@ class Shell:
                     pass
 
         win.events.closed += closed
+        win.events.shown += lambda: paint_frame(win, self.frame_colors)
+        return True
+
+    def set_frame_colors(self, frame_id: str, colors: dict[str, str]) -> bool:
+        key = str(frame_id or "main")
+        win = self.main if key == "main" else self.popouts.get(key)
+        if win is None or not isinstance(colors, dict):
+            return False
+        if key == "main":
+            self.frame_colors = {**FRAME_DEFAULT, **{k: v for k, v in colors.items() if _colorref(v) is not None}}
+        paint_frame(win, colors)
         return True
 
     def _close_popouts(self) -> None:
@@ -282,6 +373,7 @@ class Shell:
             self.sup.stop()
 
         self.main.events.closed += on_closed
+        self.main.events.shown += lambda: paint_frame(self.main, self.frame_colors)
 
         def started() -> None:
             if self.window_mode == "app":
@@ -315,6 +407,9 @@ class ShellApi:
 
     def open_popout(self, tab: str, title: str = "", width: int = 1100, height: int = 900) -> bool:
         return self._shell.open_popout(tab, title, width, height)
+
+    def set_frame_colors(self, frame_id: str, colors: dict[str, str]) -> bool:
+        return self._shell.set_frame_colors(frame_id, colors)
 
     def popouts(self) -> list[str]:
         return list(self._shell.popouts)
@@ -422,6 +517,7 @@ def main(argv: list[str]) -> int:
             print("  Running in this terminal and opening your browser instead.\n")
         return run_console(opts, open_browser=window_mode != "none")
     _keep_paste_working(webview)
+    _keep_frame_painted()
     webview.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
     debug_port = os.getenv("MORKYN_REMOTE_DEBUG_PORT", "").strip()
     if debug_port.isdigit():
