@@ -200,6 +200,10 @@ class SpecialAbilitySetup(BaseModel):
     prerequisites: str = Field(default="", max_length=500)
     cost: str = Field(default="", max_length=300)
     growth_math: str = Field(default="", max_length=800)
+    # The growth template and its seed (app/ability_growth.py). Without these fields
+    # pydantic dropped the card's power_type and every game started it as linear.
+    power_type: str = Field(default="linear", max_length=40)
+    growth: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="before")
     @classmethod
@@ -212,6 +216,10 @@ class SpecialAbilitySetup(BaseModel):
             normalized[key] = "" if value is None else str(value)
         if normalized.get("locked") is None:
             normalized["locked"] = False
+        if "power_type" in normalized and not normalized.get("power_type"):
+            normalized.pop("power_type")  # let the field default apply (linear, or item_bound on gear)
+        if not isinstance(normalized.get("growth"), dict):
+            normalized["growth"] = {}
         return normalized
 
 
@@ -4228,6 +4236,38 @@ def api_setup_gear_defaults(request: GearDefaultsRequest):
     from app.gear import gear_context_from_setup, normalize_gear_list
 
     return {"starter_gear": normalize_gear_list([], context=gear_context_from_setup(request.current), fill_required=True)}
+
+
+class AbilityGrowthPreviewRequest(BaseModel):
+    abilities: list[dict[str, Any]] = Field(default_factory=list, max_length=16)
+    rank_scale: str = Field(default="", max_length=100)
+    difficulty: str = Field(default="normal", max_length=40)
+    skill_growth_speed: str = Field(default="", max_length=60)
+
+
+@app.post("/api/ability-growth/preview")
+def api_ability_growth_preview(request: AbilityGrowthPreviewRequest):
+    """The growth math a setup card will start with: the same engine call Start makes."""
+    from app import ability_growth
+
+    speed = request.skill_growth_speed.lower()
+    out = []
+    for ability in request.abilities:
+        built = ability_growth.build(
+            ability if isinstance(ability, dict) else {},
+            rank_scale=request.rank_scale,
+            difficulty=request.difficulty or "normal",
+            default_pace="slow" if "slow" in speed else "fast" if "fast" in speed else "",
+        )
+        spec = built["growth_spec"]
+        out.append({
+            "power_type": built["power_type"],
+            "growth": built["growth"],
+            "growth_math": built["growth_math"],
+            "ladder": [{"rank": label, "xp": xp} for label, xp in zip(spec.get("labels") or [], spec.get("thresholds") or [])],
+            "start_rank": (spec.get("labels") or [""])[int(spec.get("start_index") or 0)] if spec.get("thresholds") else "",
+        })
+    return {"abilities": out}
 
 
 @app.post("/api/randomize-setup")

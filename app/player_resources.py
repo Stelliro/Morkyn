@@ -1551,6 +1551,48 @@ def match_ability_from_input(
     return candidates[0][1]
 
 
+def _advance_ability_growth(conn, ability: dict[str, Any], *, turn: int = 0, risk: int = 1) -> dict[str, Any]:
+    """One use of an ability: XP, rank-ups and the storyteller's line, all from the engine.
+
+    Reads the stored growth spec and state from the abilities row (not the passed dict,
+    which may be a stale context copy) and writes the new state back. Abilities from
+    before engine growth have no spec and are left alone.
+    """
+    from app import ability_growth
+    from app.rng import rng_for
+
+    try:
+        if ability.get("id") is not None:
+            row = conn.execute("SELECT id, name, growth, growth_state FROM abilities WHERE id = ?", (ability["id"],)).fetchone()
+        else:
+            row = conn.execute("SELECT id, name, growth, growth_state FROM abilities WHERE name = ?", (ability.get("name"),)).fetchone()
+    except Exception:
+        return {}
+    if not row:
+        return {}
+    try:
+        growth = json.loads(row["growth"] or "{}")
+        state = json.loads(row["growth_state"] or "{}")
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(growth, dict) or not growth.get("template"):
+        return {}
+    if not isinstance(state, dict) or "index" not in state:
+        state = ability_growth.new_state(growth)
+    rng = rng_for("ability_growth", turn=turn, salt=f"{row['id']}:{state.get('uses', 0)}")
+    new_state, events = ability_growth.award(growth, state, uses=1, risk=risk, rng=rng)
+    conn.execute("UPDATE abilities SET growth_state = ? WHERE id = ?", (json.dumps(new_state, ensure_ascii=True), row["id"]))
+    labels = growth.get("labels") or ability_growth.DEFAULT_LADDER
+    return {
+        "risk": risk,
+        "xp_gained": round(float(new_state.get("xp") or 0) - float(state.get("xp") or 0), 1),
+        "events": events,
+        "rank": labels[new_state["index"]] if new_state["index"] < len(labels) else str(new_state["index"]),
+        "state": new_state,
+        "line": ability_growth.describe_state(growth, new_state, name=str(row["name"])),
+    }
+
+
 def apply_ability_use(
     conn,
     ability: dict[str, Any] | None,
@@ -1561,9 +1603,11 @@ def apply_ability_use(
     hard_block: bool = True,
     settings_get=None,
     settings_set=None,
+    risk: int = 1,
 ) -> dict[str, Any]:
     """
-    Gate + spend resources for an ability use.
+    Gate + spend resources for an ability use, then advance its growth (app/ability_growth.py).
+    risk: 1 safe practice, 2 contested, 3 dangerous, 4 life-risk.
     settings_get/settings_set optional callables for cooldown persistence:
       settings_get() -> dict, settings_set(key, value)
     If omitted, cooldowns are read/written via settings table on conn.
@@ -1696,9 +1740,11 @@ def apply_ability_use(
         settings_set("player_conditions", existing[-40:])
 
     after = get_player_resources(conn, options)
+    growth_pack = _advance_ability_growth(conn, stamped, turn=turn, risk=risk)
     return {
         "ok": True,
         "blocked": False,
+        "growth": growth_pack,
         "soft_blocked": bool(reasons) and not hard_block,
         "reasons": reasons,
         "ability": stamped.get("name"),
@@ -1741,5 +1787,18 @@ def ability_use_prompt_block(use: dict[str, Any] | None) -> str:
     if use.get("debuffs"):
         names = [str(x.get("name") if isinstance(x, dict) else x) for x in use["debuffs"]]
         lines.append(f"- Debuffs applied: {', '.join(names)}")
-    lines.append("Do not refund this cost. Do not ignore the cooldown.")
+    growth = use.get("growth") if isinstance(use.get("growth"), dict) else {}
+    if growth.get("line"):
+        # The engine already did the growth math; the story only shows it.
+        lines.append(f"- Growth (engine): {growth['line']}")
+        for event in growth.get("events") or []:
+            if event.get("type") == "rank_up":
+                jump = " It broke through a wall to get there." if event.get("breakthrough") else ""
+                lines.append(
+                    f"- RANK UP: {use.get('ability')} reached {event.get('to')} "
+                    f"(x{event.get('effect_multiplier')} the described effect).{jump} Show the change in the scene."
+                )
+            elif event.get("type") == "plateau":
+                lines.append(f"- {use.get('ability')} is at a wall at {event.get('at')}: practice no longer moves it; only a dangerous use will.")
+    lines.append("Do not refund this cost. Do not ignore the cooldown. Do not invent XP, ranks or growth numbers.")
     return "\n".join(lines)

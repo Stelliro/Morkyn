@@ -363,8 +363,8 @@ ACTION_SEGMENT_RULES = {
         ("damage_and_consequence", "Use deterministic damage/health resolution from mechanics_context when present, then scale stamina, karma visibility, noise, witnesses, loot, and escape routes from the focused facts only.", ["mechanics_context", "damage", "health", "stamina", "karma", "witness", "noise", "escape"]),
     ],
     "ability": [
-        ("ability_constraints", "Read the named/relevant ability, lock state, base_description, prerequisites, cost, growth_math, player health/effective_stats, race/magic rules, and target resistance; equipment-granted abilities are already in abilities while equipped. Apply growth_math numbers when awarding progress.", ["ability", "cost", "prerequisite", "growth_math", "locked", "magic", "target"]),
-        ("effect_scope", "Keep the effect inside stored limits and update ability details only when play reveals a justified cost, limit, unlock path, or clearer growth_math.", ["scope", "cooldown", "resource", "unlock", "limitation", "growth_math"]),
+        ("ability_constraints", "Read the named/relevant ability, lock state, base_description, prerequisites, cost, rank and growth_now, player health/effective_stats, race/magic rules, and target resistance; equipment-granted abilities are already in abilities while equipped. The engine tracks rank and XP: never award or compute growth; show a rank-up only when __ability_use__ reports one, at the strength growth_now gives.", ["ability", "cost", "prerequisite", "rank", "locked", "magic", "target"]),
+        ("effect_scope", "Keep the effect inside stored limits (scaled by growth_now's strength) and update ability details only when play reveals a justified cost, limit or unlock path.", ["scope", "cooldown", "resource", "unlock", "limitation"]),
     ],
     "inventory": [
         ("item_handling", "Use focused inventory, equipped slots, containers, carry capacity, item metadata, and whether the action adds, removes, equips, crafts, or stores an item.", ["item", "equip", "container", "weight", "slots", "craft"]),
@@ -2053,6 +2053,37 @@ def _play_system_enabled(conn, key: str, default: bool = True) -> bool:
     except Exception:
         return default
     return _setup_flag_enabled(options, key, default)
+
+
+def _abilities_with_growth_now(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Ability rows for the game state: the stored growth spec becomes one line the story can use.
+
+    `growth_now` is the engine's sentence (rank, progress, strength); `rank` is the label.
+    The full spec stays in the database (the use path reads it there): as a JSON string it
+    was too long for the turn prompt, which trims every field to a few hundred characters.
+    """
+    from app import ability_growth
+
+    out = []
+    for row in rows or []:
+        ab = dict(row)
+        try:
+            growth = json.loads(ab.pop("growth", "") or "{}")
+            state = json.loads(ab.get("growth_state") or "{}")
+        except (TypeError, ValueError):
+            growth, state = {}, {}
+        if isinstance(growth, dict) and growth.get("template"):
+            if not isinstance(state, dict) or "index" not in state:
+                state = ability_growth.new_state(growth)
+            labels = growth.get("labels") or ability_growth.DEFAULT_LADDER
+            index = int(state.get("index") or 0)
+            ab["growth_state"] = state
+            ab["rank"] = "" if growth.get("flat") else labels[min(index, len(labels) - 1)]
+            ab["growth_now"] = ability_growth.describe_state(growth, state, name=str(ab.get("name") or ""))
+        else:
+            ab.pop("growth_state", None)
+        out.append(ab)
+    return out
 
 
 def _rank_labels(options: dict[str, Any]) -> list[str]:
@@ -4136,9 +4167,9 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         skills = rows_to_dicts(
             conn.execute("SELECT * FROM player_skills ORDER BY name COLLATE NOCASE").fetchall()
         )
-        abilities = rows_to_dicts(
+        abilities = _abilities_with_growth_now(rows_to_dicts(
             conn.execute("SELECT * FROM abilities ORDER BY id").fetchall()
-        )
+        ))
         events = rows_to_dicts(
             conn.execute(
                 """
@@ -5032,6 +5063,9 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 "cost": str(cleaned.get("cost") or ability.get("cost") or "")[:300],
                 "growth_math": str(cleaned.get("growth_math") or ability.get("growth_math") or "")[:800],
                 "power_type": str(cleaned.get("power_type") or ability.get("power_type") or "")[:40],
+                # The growth seed (pace / start / grows); the insert below expands it with the engine.
+                "growth": cleaned.get("growth") if isinstance(cleaned.get("growth"), dict)
+                else ability.get("growth") if isinstance(ability.get("growth"), dict) else {},
             }
             if isinstance(cleaned.get("resource_cost"), dict):
                 entry["resource_cost"] = cleaned["resource_cost"]
@@ -5132,38 +5166,38 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 force=True,
                 origin=special_ability_origin,
             )
-            from app.llm import assign_ability_locks_after_creation
-
-            stamped_batch = assign_ability_locks_after_creation(
-                stamped_batch,
-                origin=special_ability_origin,
-            )
+            # Locks are NOT rolled again here. The randomizer rolled them when the powers
+            # were made, and the player may have changed a card since; re-rolling at Start
+            # overwrote that choice and locked the OP seed power on turn one (ability run
+            # 2026-10-12: 11-13 of ~26 locked per theme, the apocalypse seed among them).
         except Exception:
             stamped_batch = list(special_abilities)
 
+        from app import ability_growth
+
+        growth_speed = str(options.get("skill_growth_speed") or "").lower()
         for ab_index, ability in enumerate(stamped_batch):
             cost_text = str(ability.get("cost") or "")[:300]
             rc = ability.get("resource_cost") if isinstance(ability.get("resource_cost"), dict) else {}
             rc_json = json.dumps(rc, ensure_ascii=True) if rc else "{}"
-            power_type = str(ability.get("power_type") or "linear").strip().lower().replace("-", "_")
-            if power_type not in {
-                "compounding",
-                "passive",
-                "linear",
-                "soft_cap",
-                "breakthrough",
-                "flat",
-                "item_bound",
-            }:
-                power_type = "linear"
+            # Engine growth from the card's seed (power_type + growth words): the spec, the
+            # starting rank, and growth_math rendered from them, never the card's own text.
+            built = ability_growth.build(
+                ability,
+                rank_scale=options.get("rank_scale"),
+                difficulty=str(options.get("difficulty") or "normal"),
+                default_pace="slow" if "slow" in growth_speed else "fast" if "fast" in growth_speed else "",
+            )
+            spec = built["growth_spec"]
+            power_type = spec["template"]
             ab_code = str(ability.get("code") or "").strip().upper() or f"AB{ab_index + 1}"
             conn.execute(
                 """
                 INSERT INTO abilities (
                     code, name, description, locked, power_type, base_description,
-                    cost, prerequisites, growth_math, resource_cost, source
+                    cost, prerequisites, growth_math, resource_cost, source, growth, growth_state
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     ab_code[:20],
@@ -5174,9 +5208,11 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                     ability.get("description") or "",
                     cost_text,
                     ability.get("prerequisites") or "",
-                    ability.get("growth_math") or "",
+                    built["growth_math"],
                     rc_json,
                     special_ability_origin,
+                    json.dumps(spec, ensure_ascii=True),
+                    json.dumps(ability_growth.new_state(spec), ensure_ascii=True),
                 ),
             )
 
@@ -14314,18 +14350,10 @@ def _apply_ability_updates(conn, updates: list[dict[str, Any]]) -> None:
         additions = _merge_text(ability["additions"] or "", str(update.get("addition") or update.get("additions") or ""), 1200)
         cost = str(update.get("cost") or "")[:300]
         prerequisites = str(update.get("prerequisites") or "")[:500]
-        growth_math = str(update.get("growth_math") or "")[:800]
-        power_type = str(update.get("power_type") or "").strip().lower().replace("-", "_")
-        if power_type and power_type not in {
-            "compounding",
-            "passive",
-            "linear",
-            "soft_cap",
-            "breakthrough",
-            "flat",
-            "item_bound",
-        }:
-            power_type = ""
+        # Growth belongs to the engine (app/ability_growth.py): a turn can add notes, cost or an
+        # unlock path, never rewrite the template or its math. The empty strings keep the stored values.
+        growth_math = ""
+        power_type = ""
         rc_json = ""
         if "resource_cost" in update and update.get("resource_cost") is not None:
             try:
@@ -17251,6 +17279,34 @@ def _ooc_only_reply(note: str) -> dict[str, Any]:
     }
 
 
+_CONTEST_WORDS = re.compile(
+    r"\b(fight|attack|strike|duel|spar|chase|race|flee|escape|dodge|parry|block|persuade|convince|haggle|"
+    r"argue|threaten|intimidate|sneak past|steal|against)\b",
+    re.I,
+)
+
+
+def _ability_risk_tier(context: dict[str, Any], player_line: str) -> int:
+    """How much an ability use risks, for its growth XP: 1 safe practice, 2 contested, 3 dangerous, 4 life-risk.
+
+    From the engine's own state, not the model: an active fight is dangerous, a fight at
+    low health is life-risk, and the player's own words decide contested vs practice.
+    """
+    encounter: dict[str, Any] = {}
+    try:
+        from app.encounter_board import load_encounter
+
+        with connect() as c_enc:
+            encounter = load_encounter(c_enc) or {}
+    except Exception:
+        encounter = {}
+    if encounter.get("active") and encounter.get("foes"):
+        player = context.get("player") if isinstance(context.get("player"), dict) else {}
+        health, max_health = _float(player.get("health"), 0), _float(player.get("max_health"), 0)
+        return 4 if max_health > 0 and health / max_health <= 0.3 else 3
+    return 2 if _CONTEST_WORDS.search(player_line or "") else 1
+
+
 def play_turn(
     player_input: str,
     input_kind: str = "player",
@@ -17464,9 +17520,11 @@ def play_turn(
                         hard_block=True,
                         settings_get=lambda: _settings(c_ab),
                         settings_set=lambda k, v: _set_setting(c_ab, k, v),
+                        risk=_ability_risk_tier(context, player_line),
                     )
                 if ability_use_pack:
                     mechanics_context["ability_use"] = {
+                        "growth": ability_use_pack.get("growth") or {},
                         "ok": ability_use_pack.get("ok"),
                         "blocked": ability_use_pack.get("blocked"),
                         "ability": ability_use_pack.get("ability"),

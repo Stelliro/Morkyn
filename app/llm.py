@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Iterator
 
+from app import ability_growth
 from app.db import connect
 from app.example_pools import (
     EXAMPLES_RULE,
@@ -1546,7 +1547,17 @@ def _compact_turn_context(context: dict[str, Any]) -> dict[str, Any]:
     compact["verification_policy"] = _trim_strings(context.get("verification_policy"), 900)
     compact["action_context"] = _trim_strings(context.get("action_context"), 700)
     compact["skills"] = _compact_list(context.get("skills"), 12, 360)
-    compact["abilities"] = _compact_list(context.get("abilities"), 10, 420)
+    # growth_math is the engine's full table; the story only needs growth_now (rank, progress, strength).
+    compact["abilities"] = _compact_list(
+        [
+            {k: v for k, v in a.items() if k not in {"growth_math", "growth_state", "growth"}} if isinstance(a, dict) else a
+            for a in (context.get("abilities") or [])
+        ]
+        if isinstance(context.get("abilities"), list)
+        else [],
+        10,
+        420,
+    )
     compact["player_aliases"] = _compact_list(context.get("player_aliases"), 6, 360)
     compact["active_player_alias"] = _trim_strings(context.get("active_player_alias"), 360)
     compact["inventory"] = _compact_list(context.get("inventory"), 18, 360)
@@ -3876,6 +3887,42 @@ def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str,
     return assign_ability_locks_after_creation(abilities, origin=origin)
 
 
+def _engine_grown(ability: Any) -> bool:
+    """growth_math written by app/ability_growth.py from the model's seed: no model math to check or rewrite."""
+    return isinstance(ability, dict) and isinstance(ability.get("growth"), dict) and bool(ability["growth"].get("template"))
+
+
+def engine_ability_growth(abilities: list[Any], setup: dict[str, Any] | None) -> list[Any]:
+    """Seed -> engine growth on every ability card (the second half of the two-part system).
+
+    The model gives power_type + growth {pace, start, grows}; the engine writes growth_math
+    from the world's rank_scale and difficulty. Defaults come from the setup when the model
+    leaves a word out: a weak or near-useless start, the skill growth speed for pace.
+    """
+    setup = setup if isinstance(setup, dict) else {}
+    intent = setup.get("_compose_intent") if isinstance(setup.get("_compose_intent"), dict) else {}
+    pf = intent.get("power_fantasy") if isinstance(intent.get("power_fantasy"), dict) else {}
+    start_power = str(pf.get("start_power") or "").lower()
+    default_start = "weak" if start_power in {"near_useless", "weak"} else "strong" if start_power == "strong" else ""
+    speed = str(setup.get("skill_growth_speed") or "").lower()
+    default_pace = "slow" if "slow" in speed else "fast" if "fast" in speed else ""
+    out: list[Any] = []
+    for ability in abilities or []:
+        if not isinstance(ability, dict):
+            out.append(ability)
+            continue
+        built = ability_growth.build(
+            ability,
+            rank_scale=setup.get("rank_scale"),
+            difficulty=str(setup.get("difficulty") or "normal"),
+            default_pace=default_pace,
+            default_start=default_start,
+        )
+        built.pop("growth_spec", None)  # recomputed at Start from the seed; the card carries the seed
+        out.append(built)
+    return out
+
+
 def _ability_has_calculable_math(text: str) -> bool:
     raw = str(text or "").strip().lower()
     if len(raw) < 24:
@@ -5236,7 +5283,9 @@ def evaluate_ability_quality(
     # Obscure is fine; pure nonsense with no who/what/when fails above.
 
     # --- growth math ---
-    if require_strong_math or one_skillish or power_type in {"compounding", "soft_cap", "breakthrough"}:
+    if _engine_grown(ability):
+        pass  # written by app/ability_growth.py from the seed; consistent by construction
+    elif require_strong_math or one_skillish or power_type in {"compounding", "soft_cap", "breakthrough"}:
         if not _ability_has_calculable_math(math_text):
             hard.append("growth_math_not_calculable")
             score -= 35
@@ -5710,12 +5759,12 @@ def _llm_rework_or_remake_ability(
         "ability_origin": origin,
         "world_style": world_style,
         "rules": [
-            "Return JSON only: {\"ability\": {name, description, locked, prerequisites, cost, growth_math, power_type}}.",
+            "Return JSON only: {\"ability\": {name, description, locked, prerequisites, cost, power_type, growth: {pace, start, grows}}}.",
             "Change the core action and domain — not just rename synonyms of the same power.",
             "If mode is rework: keep a thin thematic link if possible, but different verb, limit, and payoff.",
             "If mode is remake: invent a wholly new power in a different effect lane than keepers.",
             "Description must be concrete playable prose (≥1 clear action), not equal to the name.",
-            "Fill growth_math with digits and XP/rank path.",
+            "power_type is a growth template id; growth is words only (pace slow|steady|fast, start weak|ordinary|strong, grows). Never write growth math.",
             "Cost must be real and not clone keeper cost structures.",
             "Never reuse forbidden_names or paraphrase keeper descriptions.",
         ],
@@ -5750,8 +5799,8 @@ def _llm_rework_or_remake_ability(
     cleaned = normalize_ability_lock_and_prerequisites(dict(ab), origin=origin)
     cleaned = repair_ability_cross_field_consistency(cleaned)
     cleaned = normalize_ability_lock_and_prerequisites(cleaned, origin=origin)
-    if not str(cleaned.get("growth_math") or "").strip():
-        cleaned["growth_math"] = random.choice(GROWTH_MATH_SAMPLES)
+    # Engine growth from the seed; the branch re-renders with the world's rank_scale at the end.
+    cleaned = engine_ability_growth([cleaned], {})[0]
     # Quality solo check (soft math for non-seed unless one_skillish)
     rep = evaluate_ability_quality(
         cleaned,
@@ -6026,12 +6075,12 @@ def _ability_quality_retry_prompt(
         "quality_bar": {
             "name": "evocative, specific, not generic Ability/Power, not overused cliché domains",
             "description": "≥1 concrete playable hook (what you do / when / limit); no vague mystery power",
-            "growth_math": "calculable XP/rank numbers a DM can apply; include soft-cap/breakthrough for seeds",
+            "growth": "power_type template + growth {pace, start, grows} in words; the game computes the numbers",
             "cost": "meaningful strain/resource for actives; passives may be always-on with a drawback",
             "prerequisites": "required when locked=true; concrete unlock path",
             "stability": "no unlimited/omnipotent/auto-win wording",
             "cross_field_consistency": (
-                "Description, cost, prerequisites, and growth_math must agree on use limits. "
+                "Description, cost and prerequisites must agree on use limits. "
                 "Never say 'once per day' in description while cost says '1 hour to recharge' — "
                 "put frequency + recharge together in cost, or use the same period in both fields."
             ),
@@ -6045,8 +6094,8 @@ def _ability_quality_retry_prompt(
                     "locked": False,
                     "prerequisites": "",
                     "cost": "concrete cost or drawback",
-                    "growth_math": "concrete XP/rank formulas with numbers",
                     "power_type": "compounding|passive|linear|soft_cap|breakthrough|flat|item_bound",
+                    "growth": {"pace": "slow|steady|fast", "start": "weak|ordinary|strong", "grows": "what gets stronger, a few words"},
                 }
             ]
         },
@@ -6056,7 +6105,7 @@ def _ability_quality_retry_prompt(
             "Do not reuse forbidden_abilities names or paraphrase their descriptions.",
             "Invent domains freely (summon, necro, heal support, weapon-bound, tool rites, weird hybrid) — original first.",
             "Seed catalog names are last-resort inspiration only, not a menu to pick from.",
-            "Always fill growth_math with digits and rank/XP path.",
+            "Never write growth math, ranks or XP numbers: give power_type and growth in words; the game computes them.",
             "If locked, prerequisites must be a real unlock sentence.",
             "FACT-CHECK TIMING: description and cost must agree on use limits. Prefer effect+duration in description; "
             "put frequency in cost when needed. Do NOT stamp every ability with the same meditation-hour recharge.",
@@ -6185,7 +6234,9 @@ def _ensure_ability_growth_math(
             continue
         next_ability = dict(ability)
         math_text = str(next_ability.get("growth_math") or "").strip()
-        if force_fill or not _ability_has_calculable_math(math_text):
+        if _engine_grown(next_ability):
+            next_ability["growth_math"] = math_text[:800]  # the engine's text; a flat gift has no digits
+        elif force_fill or not _ability_has_calculable_math(math_text):
             next_ability["growth_math"] = random.choice(GROWTH_MATH_SAMPLES)
         else:
             next_ability["growth_math"] = math_text[:800]
@@ -6211,7 +6262,8 @@ def _maybe_optimize_ability_growth_math(
 ) -> list[dict[str, Any]]:
     """Invent/balance growth_math strings; optimize on a schedule rather than every roll."""
     ensured = _ensure_ability_growth_math(abilities, force_fill=False)
-    if not ensured:
+    if not ensured or all(_engine_grown(a) for a in ensured):
+        # Engine-written growth: nothing for a model to optimize (this call used to run on every compounding roll).
         return ensured
     pf = intent_plan.get("power_fantasy") if isinstance(intent_plan.get("power_fantasy"), dict) else {}
     one_skillish = str(pf.get("growth") or "").lower() == "compounding" or str(pf.get("start_power") or "").lower() in {
@@ -6454,14 +6506,13 @@ def coherence_review_setup(
             "Never invent locked_fields keys.",
             "Do not dilute an OP MC / compounding fantasy: if intent says a weak compounding seed, "
             "custom_skills must encode seed name/domain, start rank, tracking style, XP sources, "
-            "and start-kit limits — not a permanent ban on later powers. Put concrete calculable growth_math "
-            "that can snowball toward late OP (F…S/SS/SSS, risk mult, soft caps, breakthroughs, rank→bonus). "
-            "Vague 'gets stronger over time' is not enough — invent numbers on growth_math.",
-            "You may rewrite ability growth_math solely to add missing calculable math when fiction is fine.",
+            "and start-kit limits — not a permanent ban on later powers. The seed power is power_type "
+            "compounding with growth.start weak; the game computes its ranks and numbers.",
+            "Never write ability growth math: power_type and growth {pace, start, grows} in words are the whole input.",
             "If special_abilities are present and OP MC fantasy, keep a thin opening kit (usually one compounding "
             "seed; optional locked passive); do not invent a free second combat toolkit at Start. "
             "Fiction may allow more powers later through play.",
-            "When rewriting special_abilities, preserve or fill growth_math with concrete calculable formulas.",
+            "When rewriting special_abilities, keep each power_type and growth seed unless the power itself changes.",
             "Prefer concrete nouns and limits over adjectives like 'mysterious', 'ancient destiny', 'chosen'.",
             "Keep custom_skills as one comma-separated string (no bullets). When you rewrite it, use this "
             "shape: " + CUSTOM_SKILLS_SHAPE,
@@ -6535,7 +6586,7 @@ def coherence_review_setup(
     fields = _cohere_reviewed_arrival(current_setup, fields, locked)
     changed = list(fields.keys())
     if abilities is not None:
-        abilities = _ensure_ability_growth_math(abilities if isinstance(abilities, list) else [])
+        abilities = engine_ability_growth(abilities if isinstance(abilities, list) else [], {**current_setup, **fields})
         changed.append("special_abilities")
     return {
         "fields": fields,
@@ -7119,7 +7170,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "INVENT original powers first — exhaust creative variety on your own. "
                 f"Diversity seed {diversity_seed}. "
                 "A small inspiration_only list is optional spice if you are stuck; do NOT treat it as a menu. "
-                "Outputs pass a quality gate (name, description, growth_math, cost, prerequisites)."
+                "Outputs pass a quality gate (name, description, cost, prerequisites). "
+                "Do not write growth math: pick a growth template and a seed, and the game computes every rank and number."
             ),
             "invention_first": True,
             "inspiration_only": inspiration_only,
@@ -7131,11 +7183,11 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             "quality_bar": {
                 "name": "specific evocative name; not Ability/Power; not banned cliché domains",
                 "description": "concrete playable hook (action + duration); put use-frequency in cost when a recharge also exists",
-                "growth_math": "digits + XP/rank path a DM can apply; soft-cap/breakthrough for seeds",
+                "growth": "a template from growth_seed_contract and a seed of plain words; no numbers",
                 "cost": "real strain/resource; include once/day or recharge here consistently — no mismatch with description",
                 "prerequisites": "required when locked=true",
                 "stability": "no unlimited/omnipotent/auto-win",
-                "cross_field": "description/cost/math timing facts must agree",
+                "cross_field": "description/cost timing facts must agree",
             },
             "quantity_locked": quantity_locked,
             # Server/client already rolled — model must return this exact count.
@@ -7184,21 +7236,19 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                         "locked": False,
                         "prerequisites": "unlock path when locked; else empty",
                         "cost": "concrete cost or drawback (not empty free god-mode)",
-                        "growth_math": "playable XP/rank formulas with numbers",
-                        "power_type": "compounding|passive|linear|soft_cap|breakthrough|flat|item_bound",
+                        "power_type": "one template id from growth_seed_contract.templates",
+                        "growth": {"pace": "slow|steady|fast", "start": "weak|ordinary|strong", "grows": "what gets stronger, a few words"},
                     }
                 ]
             },
-            "growth_math_contract": {
-                "purpose": "THIS is the home for calculable growth math on each power. Invent numbers the DM can apply each turn.",
-                "must_include_at_least_two": [
-                    "XP_to_next formula or rank XP thresholds",
-                    "per-use skill/ability XP with risk multipliers",
-                    "soft-cap / breakthrough rule",
-                    "rank→check or effect bonus",
-                ],
-                "examples_inspiration_only": GROWTH_MATH_SAMPLES,
-                "you_may_invent": "Any playable numbers/formulas; vary them each roll. No calculus; tabletop-clear.",
+            # Two parts: the model chooses, the engine computes (app/ability_growth.py).
+            # Model-written math copied the prompt's examples and contradicted itself.
+            "growth_seed_contract": {
+                "templates": {key: spec["summary"] for key, spec in ability_growth.TEMPLATES.items()},
+                "pace": "slow, steady or fast: how quickly ranks come",
+                "start": "weak, ordinary or strong: where on the rank ladder the power begins",
+                "grows": "a few plain words for what gets stronger as it ranks up (reach, duration, how many targets, how much it hides). No numbers.",
+                "the_game_computes": "rank ladder, XP per rank, XP per use, risk, soft caps, breakthroughs and the effect multiplier. Never write these.",
             },
             "field_intent": intent_slice_for_field(intent_plan, "special_abilities"),
             "field_contract": field_contract("special_abilities"),
@@ -7210,8 +7260,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "INVENTION FIRST: create original domains and effects. Do not default to catalog seed names.",
                 "inspiration_only is optional spice if stuck — not a required domain list.",
                 "NEVER put design meta in description: no 'advanced tier', 'arcane lane', 'compounds toward:', 'When you try,'. Write fiction the player reads in play.",
-                "Description = what the character can do now (weak/limited). Late payoff belongs in growth fiction/math, not as labeled meta tags.",
-                "FACT-CHECK across description, cost, prerequisites, and growth_math: use limits must not contradict. "
+                "Description = what the character can do now (weak/limited). Late payoff belongs in growth.grows, not as labeled meta tags.",
+                "FACT-CHECK across description, cost and prerequisites: use limits must not contradict. "
                 "Description = effect + duration; cost = that ability's own drawback or frequency — not a shared stamp.",
                 "COST VARIETY (critical when returning 2+ abilities): each ability needs a DIFFERENT cost shape. "
                 "BANNED clone spam: the same 'Once per rank/day; 1 hour of meditation to recharge after use' on every power. "
@@ -7223,18 +7273,19 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "If two powers would feel the same in play, replace the weaker one with a distinct domain.",
                 "Do not use banned overused domains (Observation, knots/ropework, fabric/thread sense, barter, lie detection, footstep tracking, weather/sandstorm defaults).",
                 "Obscure is good; unusable is not. Every ability needs a concrete turn-1 action or always-on effect with a limit.",
-                "Write effects as what happens in the story. This game has no armor class, saving throws, advantage, or damage types: never write AC, saves, advantage/disadvantage, d20, or 'resistance to bludgeoning'. Numbers are for duration, size, count, or the rank math only.",
+                "Write effects as what happens in the story. This game has no armor class, saving throws, advantage, or damage types: never write AC, saves, advantage/disadvantage, d20, or 'resistance to bludgeoning'. Numbers are for duration, size or count only; never write ranks, XP or multipliers.",
                 "One cost per ability, stated once. Do not repeat a cooldown, and do not let the description name a different frequency than the cost.",
                 "Spectrum is allowed: simple practical powers AND advanced lanes (summoning, necromancy, healing/support, weapon-bound arts, tool rites).",
                 "If a power needs a tool/weapon/focus, state that in description or cost; F-rank clumsy, high ranks make the item legendary-adjacent.",
-                "Focus on inventing distinct powers (name, description, cost, growth_math). Mix inherent and trained-feeling fiction as fits the world. The app assigns locked/prerequisites AFTER generation: stronger powers are more likely locked with unlock paths; weaker ones stay usable at Start. You may still set locked as a hint, but power level of the fiction matters more.",
+                "Focus on inventing distinct powers (name, description, cost, growth seed). Mix inherent and trained-feeling fiction as fits the world. The app assigns locked/prerequisites AFTER generation: stronger powers are more likely locked with unlock paths; weaker ones stay usable at Start. You may still set locked as a hint, but power level of the fiction matters more.",
                 "When you set locked=true, prerequisites must be a real unlock path — but prefer leaving lock decisions to strength of the power text.",
                 "Set power_type on each ability to one of: compounding, passive, linear, soft_cap, breakthrough, flat, item_bound.",
-                "Passive = always-on (may omit activate cost but should note a drawback or rank limit); can still have growth_math ranks.",
+                "Passive = always-on (may omit activate cost but should note a drawback or rank limit); it still ranks up, slowly.",
                 "Let backstory_mode and character_backstory decide ability source; do not force former-life power without support.",
                 "If field_intent.power_fantasy.start_power is near_useless or weak, abilities should start locked or extremely modest; compounding toward late OP belongs to later play, not opening god-mode.",
                 "If growth is compounding / OP MC fantasy and quantity is not locked: prefer ONE weak seed ability when count_min allows 1; if count_max≥2 you may add one locked passive domain expression. Never exceed count_max. Opening kit is thin — more powers may unlock later in play, not at Start.",
-                "ALWAYS fill growth_math with concrete calculable rules (especially OP compounding). Include a path toward high ranks (S/SS/SSS) with soft caps and breakthroughs. Empty growth_math fails the quality gate.",
+                "Give every ability power_type (a template id) and growth {pace, start, grows}. Words only: the game turns them into the rank ladder and every number. "
+                "OP / compounding fantasy: the seed power is power_type compounding with start weak. Fixed gifts are flat.",
                 "Cost and prerequisites will be quality-checked for stability — no unlimited free power.",
                 "If custom_skills_hint names a seed, you may align — still invent original fiction, do not paste slogans.",
             ],
@@ -8304,6 +8355,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             validated["special_abilities"] = ensure_an_opening_power(
                 validated.get("special_abilities"), progression=one_skillish
             )
+            # Last word on growth: every card (model, fallback, rework) gets engine math from its seed.
+            validated["special_abilities"] = engine_ability_growth(validated.get("special_abilities") or [], current_setup)
             if isinstance(validated.get("quality_gate"), dict):
                 validated["quality_gate"]["final_count"] = len(validated["special_abilities"] or [])
                 validated["quality_gate"]["target_count"] = target_count
@@ -9131,6 +9184,8 @@ def _validate_setup_randomization(
             target,
             current_setup=setup,
         )
+        # Before any quality gate: the seed becomes engine math, so no gate grades model arithmetic.
+        cleaned_abilities = engine_ability_growth(cleaned_abilities, setup)
         result["ability_count_roll"] = {
             "target": target,
             "min": _ability_count_bounds(field_context)[0],
