@@ -164,5 +164,55 @@ class TravelSceneIsNotCut(unittest.TestCase):
         self.assertEqual(out["narration"], narration)
 
 
+class ChecksReadThePlayersLine(unittest.TestCase):
+    """#89 reopened, #102: the engine's own note rolled persuasion every turn; keywords misread acts."""
+
+    NOTE = (
+        "\n\nResolved player references: Conversation (engine decided) - the player is talking to "
+        "Tam Kemp [[H]]. Only Tam Kemp [[H]] answers the player."
+    )
+
+    def _skill(self, line, context=None):
+        from app.skill_checks import infer_check_from_action
+
+        check = infer_check_from_action(line, context or {})
+        return check and check["skill_code"]
+
+    def test_engine_note_rolls_nothing(self):
+        line = "Tam and I set the iron bar against the bollard and walk the line round it a turn at a time."
+        self.assertIsNone(self._skill(line + self.NOTE))
+        self.assertIsNone(self._skill("I step back out onto the wall and head out along the deep channel." + self.NOTE))
+
+    def test_keyword_misreads(self):
+        self.assertIsNone(self._skill("I lie flat and crawl up the ramp on my belly."))
+        self.assertIsNone(self._skill("I tie the rope round Tam's waist, then round mine."))
+        self.assertIsNone(self._skill("\"No cart's worth you.\""))
+        self.assertIsNone(self._skill("I stay by the board and wait. I'm not hiding."))
+        self.assertIsNone(self._skill("I strike the flint over the wick until it catches."))
+        self.assertIsNone(self._skill("I climb into the skiff beside Hereward."))
+        self.assertIsNone(self._skill("I keep hold of the rope and watch how fast the water climbs the tiles."))
+
+    def test_real_acts_still_roll(self):
+        self.assertEqual(self._skill("I strike him with my staff"), "melee")
+        self.assertEqual(self._skill("he strikes at the guard"), "melee")
+        self.assertEqual(self._skill("I lie to the reeve about the cart"), "deception")
+        self.assertEqual(self._skill("what is the ring worth?"), "appraise")
+        self.assertEqual(self._skill("I mine for iron"), "mining")
+        self.assertEqual(self._skill("I climb the sea wall"), "athletics")
+        self.assertEqual(self._skill("I don't wait and hide behind the crates"), "stealth")
+
+    def test_opponent_is_the_addressee_not_a_listener(self):
+        from app.skill_checks import infer_check_from_action
+
+        people = [{"code": "K", "name": "Mara Tarrow"}, {"code": "H", "name": "Tam Kemp"}]
+        ctx = {"npcs": people, "conversation_turn": {"addressed": ["H"]}}
+        check = infer_check_from_action("I ask him which channel he took.", ctx)
+        self.assertEqual(check["opposition"]["name"], "Tam Kemp")
+        named = infer_check_from_action("I ask Mara which channel Tam took.", ctx)
+        self.assertEqual(named["opposition"]["name"], "Mara Tarrow")
+        nobody = infer_check_from_action("I ask which channel he took.", {"npcs": people})
+        self.assertIsNone(nobody["opposition"])
+
+
 if __name__ == "__main__":
     unittest.main()
