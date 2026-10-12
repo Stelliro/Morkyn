@@ -11249,6 +11249,12 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
         def _repl(m: re.Match[str], _code: str = code) -> str:
             if m.group(2):
                 return _hold(m.group(0))
+            # "Philippa Kemp's General Store" is the name of a place the
+            # engine does not hold; a tag inside it read "Philippa Kemp
+            # [[A]]'s General Store" (Saltmarrow #109). A known place of that
+            # name was held whole above, longest first.
+            if re.match(r"['’]s\s+[A-Z][a-z]", m.string[m.end():]):
+                return _hold(m.group(1))
             return _hold(f"{m.group(1)} [[{_code}]]")
 
         out = pattern.sub(_repl, out)
@@ -11310,6 +11316,16 @@ def _code_follows_other_label(before: str, name: str, *, is_person: bool = False
     return "" if is_person else "other"
 
 
+_UNNAMED_PERSON_BEFORE_RE = re.compile(
+    r"\b(?:a|an|some|another)\s+(?:[\w'’-]+\s+){0,3}?"
+    r"(?:woman|man|girl|boy|child|figure|shape|stranger|person|fellow|lad|lass|youth|crone|hag|elder|sailor|"
+    r"fisher\w*|someone|somebody|voice|silhouette|form|hand|thief|cutpurse|runner|porter|labourer|laborer|"
+    r"worker|traveller|traveler|beggar|guard|soldier|clerk|merchant|trader)\b"
+    r"(?:\s+(?:in|with|at|by|from|of|wearing|carrying|holding)\s+[^.!?,;:\"“”\[]{0,60})?\s*$",
+    re.IGNORECASE,
+)
+
+
 def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     """
     Fix common LLM naming holes:
@@ -11342,6 +11358,12 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         wide = REFERENCE_CODE_PATTERN.sub("", repaired[max(0, start - (len(name) + 48)) : start])
         if re.search(rf"{re.escape(name)}\s*$", re.sub(r"\s+", " ", wide), flags=re.IGNORECASE):
             return full
+        # "a woman in a fish-scaled apron [[O]] comes in": the prose describes
+        # someone it has not named, and the name the record holds was never
+        # said. Writing it in read "a woman in a fish-scaled apron Ursula comes
+        # in" (Saltmarrow #109, T77/T87). The description stays; the tag goes.
+        if re.fullmatch(r"[A-Z]{1,3}", code) and _UNNAMED_PERSON_BEFORE_RE.search(repaired[max(0, start - 90) : start]):
+            return ""
         label = _code_follows_other_label(repaired[:start], name, is_person=bool(re.fullmatch(r"[A-Z]{1,3}", code)))
         if label == "other":
             # The code sits on words naming something else -- an item code on a
@@ -12236,8 +12258,20 @@ def _clean_scene_plan_for_handoff(value: Any) -> dict[str, Any]:
 
 def _clean_narration_segments_for_handoff(value: Any) -> list[dict[str, str]]:
     segments = _coerce_segments(value)
+    limit = HANDOFF_TURN_LIST_LIMITS["narration_segments"]
+    if len(segments) > limit:
+        # The DSL draft makes one segment per paragraph, so the cap used to drop
+        # the ninth paragraph on: the closing beat of a long scene vanished with
+        # no trace (Saltmarrow #110, T68/T69). The overflow joins the last kept
+        # segment; the 5600-character ceiling below still bounds the whole.
+        tail = [
+            _segment_text(s) if isinstance(s, dict) else _narration_value_text(s) for s in segments[limit - 1 :]
+        ]
+        segments = list(segments[: limit - 1]) + [
+            {"label": "paragraph", "text": "\n\n".join(str(t or "").strip() for t in tail if str(t or "").strip())}
+        ]
     cleaned: list[dict[str, str]] = []
-    for index, segment in enumerate(segments[: HANDOFF_TURN_LIST_LIMITS["narration_segments"]]):
+    for index, segment in enumerate(segments[:limit]):
         if isinstance(segment, dict):
             label = _segment_label(segment, "paragraph")
             text = _segment_text(segment)
@@ -13416,8 +13450,68 @@ def _verb_in_input(verb: str, own: str) -> bool:
     return bool(re.search(rf"\b{re.escape(stem)}", own.lower()))
 
 
+# Physical work the player's own line declares (Saltmarrow #97). The draft
+# writes that work out in its own words: "ring it. Hard." becomes "You pull.
+# You pull harder."; "haul Wat's cart up the stairs" becomes "You take the
+# shafts."; "pin them up on the tally board" becomes "You take the nails out ...
+# and put your mother's figures up". Those are the player's acts, not new ones.
+_INPUT_WORK_RE = re.compile(
+    r"\b(?:haul|lift|carr(?:y|ie)|wheel|push|pull|drag|tow|ring|row|climb|crawl|tie|tying|knot|feed|lower|hoist|"
+    r"raise|pin|nail|hang|post|wedge|lever|dig|build|mend|fix|repair|hammer|lash|coil|untie|test|spread|swim|wade|"
+    r"heave|brace|cut|saw|lay|put|place|hold|grip|grab|take|took|lean|limp|scrambl|stretch|bail|scrub|sweep|"
+    r"chalk|write|mark|light|strike|stack|load|unload|drain|tip|turn|winch|crank|wind)\w*",
+    re.I,
+)
+# Plain effort verbs: how any physical work gets done.
+_EFFORT_VERBS = frozenset({
+    "pull", "pulls", "push", "pushes", "heave", "heaves", "haul", "hauls", "lean", "leans", "twist", "twists",
+    "strain", "strains", "brace", "braces", "grip", "grips", "crawl", "crawls", "inch", "inches", "feed", "feeds",
+    "test", "tests", "work", "works", "wrestle", "wrestles", "shove", "shoves", "lift", "lifts", "drag", "drags",
+})
+# Taking hold of a part of the work is the work ("You take the shafts", "you take the other").
+_WORK_PART_RE = re.compile(
+    r"^(?:take|takes|grab|grabs|seize|seizes)\s+(?:the\s+|one\s+|a\s+)?(?:other|shafts?|oars?|rope|line|end|"
+    r"handles?|rungs?|weight|strain|stern|bow|tiller|helm|pole|front|back|side|corner)\b",
+    re.I,
+)
+# Doing the opposite of the stated work is still an invented act.
+_CONTRARY_VERBS = frozenset({
+    "leave", "leaves", "drop", "drops", "abandon", "abandons", "refuse", "refuses", "ignore", "ignores",
+    "release", "releases", "throw", "throws", "toss", "tosses", "hide", "hides", "pocket", "pockets", "keep", "keeps",
+})
+_WORK_STOPWORDS = frozenset({
+    "with", "from", "into", "onto", "over", "under", "that", "this", "then", "they", "them", "their", "there",
+    "what", "when", "where", "your", "have", "just", "back", "down", "along", "around", "again", "before", "after",
+    "until", "while", "each", "every", "other", "another", "toward", "towards", "through", "about", "like",
+    "will", "would", "could", "should", "still", "only", "very", "hard", "yours", "mine", "here",
+})
+
+
+def _work_words(text: str) -> set[str]:
+    return {w[:4] for w in re.findall(r"[a-z]+", str(text or "").lower()) if len(w) >= 4 and w not in _WORK_STOPWORDS}
+
+
+def _carries_out_stated_work(rest: str, clause: str, own: str) -> bool:
+    """`rest` ("pull harder.", "take the shafts.") does the physical work the player's line declares."""
+    if not own or not _INPUT_WORK_RE.search(own):
+        return False
+    verb = (re.findall(r"[a-z]+", rest.lower()) or [""])[0]
+    if not verb or verb in _CONTRARY_VERBS:
+        return False
+    if verb in _EFFORT_VERBS or _WORK_PART_RE.match(rest.strip()):
+        return True
+    return bool(_work_words(rest[len(verb):]) & _work_words(own))
+
+
 def _player_clause_invented(rest: str, clause: str, own: str, player_input: str) -> str:
     """The family of an invented player act at the start of `rest`, or ""."""
+    family = _player_clause_family(rest, clause, own, player_input)
+    if family in {"manipulation", "taking", "movement"} and _carries_out_stated_work(rest, clause, own):
+        return ""
+    return family
+
+
+def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -> str:
     m = _PLAYER_COGNITION_RE.match(rest)
     if m:
         verb = m.group("v")
@@ -14394,12 +14488,30 @@ def _apply_speech_memory(
 
     recent = [row for row in memory.get("recent") or [] if isinstance(row, dict)]
     earlier = [str(row.get("line") or "") for row in recent]
+    earlier_codes = [str(row.get("code") or "") for row in recent]
     units = [str(row.get("unit") or "") for row in recent]
+    # Who speaks each line of this turn's prose, so a line is only a repeat of
+    # the same person's earlier line (Saltmarrow #78).
+    speaker_rows = [
+        {"code": str(p.get("code") or "").upper(), "name": str(p.get("name") or ""), "aliases": []}
+        for p in memory.get("people") or []
+        if isinstance(p, dict) and p.get("code") and p.get("name")
+    ]
+    try:
+        unit_codes = {
+            entry["unit"]: entry["code"]
+            for entry in spoken_lines(str(turn.get("narration") or ""), speaker_rows, player_input)
+            if entry.get("code")
+        }
+    except Exception:
+        unit_codes = {}
     dropped: list[str] = []
     segments = turn.get("narration_segments")
     if earlier or units:
         if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
-            kept, dropped = drop_speech_said_before([str(seg.get("text") or "") for seg in segments], earlier, units, player_input)
+            kept, dropped = drop_speech_said_before(
+                [str(seg.get("text") or "") for seg in segments], earlier, units, player_input, earlier_codes, unit_codes
+            )
             new_segments = [{**seg, "text": kept[i]} for i, seg in enumerate(segments) if kept[i].strip()]
             joined = "\n\n".join(seg["text"] for seg in new_segments).strip()
             if dropped and joined:
@@ -14409,7 +14521,9 @@ def _apply_speech_memory(
                 dropped = []  # never trade a repeated line for no turn at all
         else:
             text = str(turn.get("narration") or "")
-            kept, dropped = drop_speech_said_before(re.split(r"\n\s*\n", text), earlier, units, player_input)
+            kept, dropped = drop_speech_said_before(
+                re.split(r"\n\s*\n", text), earlier, units, player_input, earlier_codes, unit_codes
+            )
             joined = "\n\n".join(p for p in kept if p.strip()).strip()
             if dropped and joined:
                 turn["narration"] = joined

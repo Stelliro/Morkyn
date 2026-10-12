@@ -306,10 +306,28 @@ def introduces_self(player_input: str, names: Any) -> bool:
     if not text or not forms:
         return False
     alternatives = "|".join(re.escape(form) for form in forms)
+    if re.search(
+        r"\b(?:my\s+name(?:'s|\s+is)|name's|i\s+am|i'm|im|call\s+me|they\s+call\s+me|known\s+as)\s+"
+        r"(?:called\s+)?(?:" + alternatives + r")\b(?!['’]s)",
+        text,
+        re.IGNORECASE,
+    ):
+        return True
+    # Saltmarrow #78: '"Isk Tarrow. Thank you."' and '"It's Isk. It's me."'
+    # give the name as plainly; so does writing or signing it where the
+    # listener reads it ("I take the pen and write my name in the book").
+    if re.search(
+        r"[\"“]\s*(?:it['’]s\s+|it\s+is\s+)?(?:" + alternatives + r")\s*(?=[.,!?…—”\"]|$)",
+        text,
+        re.IGNORECASE,
+    ):
+        return True
     return bool(
         re.search(
-            r"\b(?:my\s+name(?:'s|\s+is)|name's|i\s+am|i'm|im|call\s+me|they\s+call\s+me|known\s+as)\s+"
-            r"(?:called\s+)?(?:" + alternatives + r")\b(?!['’]s)",
+            r"\b(?:writ(?:e|es|ing)|wrote|sign(?:s|ed|ing)?|print(?:s|ed)?|scrawl(?:s|ed)?|chalk(?:s|ed)?|"
+            r"put(?:s)?\s+down)\s+my\s+(?:name|mark)\b|"
+            r"\bsign(?:s|ed|ing)?\s+(?:for|the|her|his|their|your)\s+(?:[\w'’-]+\s+){0,2}"
+            r"(?:book|ledger|register|contract|paper|papers|page|roll|list|tally|board|bell|job)\b",
             text,
             re.IGNORECASE,
         )
@@ -863,13 +881,38 @@ def spoken_lines(narration: str, rows: list[dict[str, Any]], player_input: str =
     last_named = ""
     for unit in speech_units(flat):
         outside = _QUOTE_RE.sub(" ", unit)
-        named = [code for _pos, code in _names_in(outside, rows)]
-        spans = quoted_spans(unit)
+        # "He looks at Mara's hand ... 'She can't talk.'" is Tam's line: a
+        # possessive or an object is not who speaks, and is not who "he" is in
+        # the next line either (Saltmarrow #78, T48 stored it as Mara's).
+        named = [code for pos, code in _names_in(outside, rows) if not _object_mention(outside, pos)]
+        # A word in scare quotes is not speech: 'the word "aunt" stops it' was
+        # stored as Tam's line (T29). Speech ends on punctuation or runs on.
+        spans = [s for s in quoted_spans(unit) if _spoken_span(s)]
         if spans and not all(_is_player_line(s, quotes) for s in spans) and not _PLAYER_SPEECH_VERB_RE.search(outside):
-            out.append({"code": named[0] if named else last_named, "line": " ".join(spans), "unit": unit})
+            line = re.sub(r"\s*\[\[[^\]]*\]\]", "", " ".join(spans)).strip()
+            out.append({"code": named[0] if named else last_named, "line": line, "unit": unit})
         if named:
             last_named = named[-1]
     return out
+
+
+_OBJECT_LEAD_RE = re.compile(
+    r"\b(?:at|to|on|toward|towards|with|for|of|from|over|past|behind|beside|after|into|onto|about|like|than|"
+    r"watches|watch|sees|see|eyes|follows|follow|ignores|ignore)\s+$",
+    re.IGNORECASE,
+)
+
+
+def _object_mention(text: str, pos: int) -> bool:
+    """The name at ``pos`` is a possessive or an object, not a subject."""
+    if _OBJECT_LEAD_RE.search(text[:pos]):
+        return True
+    return bool(re.match(r"[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2}\s*(?:\[\[[^\]]*\]\]\s*)?['’]s\b", text[pos:]))
+
+
+def _spoken_span(span: str) -> bool:
+    text = str(span or "").strip()
+    return bool(text) and (len(text.split()) >= 4 or bool(re.search(r"[.,!?…—–-]$", text)))
 
 
 def speakers_in(narration: str, rows: list[dict[str, Any]], player_input: str = "") -> list[str]:

@@ -1025,7 +1025,12 @@ _UNIT_NOT_A_NAME = frozenset({"He", "She", "They", "It", "The", "A", "An", "His"
 
 
 def drop_speech_said_before(
-    paragraphs: list[str], earlier_speech: list[str], earlier_units: list[str] = (), player_input: str = ""
+    paragraphs: list[str],
+    earlier_speech: list[str],
+    earlier_units: list[str] = (),
+    player_input: str = "",
+    earlier_codes: list[str] | None = None,
+    unit_codes: dict[str, str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """
     Remove a spoken line that restates one from an earlier scene (playtest #78).
@@ -1038,7 +1043,17 @@ def drop_speech_said_before(
     """
     quotes = player_quotes(player_input)
     unit_keys = {key for key in (_speech_key(u) for u in earlier_units or ()) if len(key.split()) >= 3}
-    earlier = [s for s in earlier_speech or () if str(s or "").strip()]
+    # Who said each earlier line, when known (Saltmarrow #78, T7: Philippa's
+    # "The customs bell," was cut because Una had said those words). A line is
+    # a repeat of the same person's line; with either speaker unknown, of anyone's.
+    codes = list(earlier_codes or [])
+    pairs = [
+        (str(s), str(codes[i] if i < len(codes) else "") or "")
+        for i, s in enumerate(earlier_speech or ())
+        if str(s or "").strip()
+    ]
+    earlier = [s for s, _c in pairs]
+    speakers = {" ".join(k.split()): str(v or "").upper() for k, v in (unit_codes or {}).items()}
     if not earlier and not unit_keys:
         return list(paragraphs), []
     kept_paragraphs: list[str] = []
@@ -1064,7 +1079,9 @@ def drop_speech_said_before(
                 # long enough to be theirs. '"Yes," she says.' is anyone's answer.
                 named = any(w not in _UNIT_NOT_A_NAME for w in re.findall(r"\b[A-Z][a-z][\w'-]*", outside))
                 whole = _speech_key(unit) in unit_keys and (named or len(speech.split()) >= SPEECH_RUN_MIN_CONTENT)
-                if whole or (earlier and speech_repeats(earlier, speech)):
+                who = speakers.get(" ".join(unit.split()), "")
+                against = [s for s, c in pairs if not who or not c or c.upper() == who] if who else earlier
+                if whole or (against and speech_repeats(against, speech)):
                     dropped.append(unit)
                     continue
                 kept_units.append(unit)
@@ -1106,6 +1123,15 @@ def drop_untold_name(text: str, names: list[str]) -> tuple[str, list[str]]:
         return "“" + _fix_body(match.group(2)) + "”"
 
     out = re.sub(r'"([^"]+)"|“([^”]+)”', _fix, str(text or ""))
+    # A line that was only the name leaves nothing to say (Saltmarrow #108:
+    # '"Isk Tarrow," Jocosa repeats' shipped as '"" Jocosa repeats'). The empty
+    # quote goes, with the speech tag that only carried it.
+    out = re.sub(
+        r'(?:""|“”)\s*(?:[A-Z][\w\'’-]*(?:\s+[A-Z][\w\'’-]*)?\s+'
+        r"(?:repeats|says|said|echoes|murmurs|whispers|asks|replies|answers|tries)\b,?\s*(?:and\s+)?)?([a-z]?)",
+        lambda m: m.group(1).upper(),
+        out,
+    )
     return out, removed
 
 
