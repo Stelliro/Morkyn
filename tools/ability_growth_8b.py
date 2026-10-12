@@ -341,7 +341,7 @@ def isolate(model: str) -> Path:
 
 # --- part 1 + 2: generation and audit ---------------------------------------------------
 
-def generate_theme(theme_id: str, spec: dict[str, Any], per_theme: int, out: Path) -> list[dict[str, Any]]:
+def generate_theme(theme_id: str, spec: dict[str, Any], per_theme: int, out: Path, carry_existing: bool = False) -> list[dict[str, Any]]:
     from app.llm import GROWTH_MATH_SAMPLES, compose_setup_intent, generate_setup_randomization
     from app.player_resources import magic_allows_mana, stamp_resource_cost
     from app.setup_composer import intent_to_field_overrides
@@ -357,6 +357,7 @@ def generate_theme(theme_id: str, spec: dict[str, Any], per_theme: int, out: Pat
     log(f"{theme_id}: composed in {time.perf_counter() - t0:.0f}s adapter={intent.get('adapter_hint')} "
         f"growth={(intent.get('power_fantasy') or {}).get('growth')}")
     collected: list[dict[str, Any]] = []
+    previous_batch: list[dict[str, Any]] = []
     batch = 0
     while len(collected) < per_theme and batch < per_theme:
         variant = VARIANTS[batch % len(VARIANTS)]
@@ -376,6 +377,10 @@ def generate_theme(theme_id: str, spec: dict[str, Any], per_theme: int, out: Pat
             "session_theme": session_theme or {},
             "_field_context": {"count_min": variant["count"][0], "count_max": variant["count"][1], "quantity_locked": False},
         }
+        if carry_existing and previous_batch:
+            # A re-roll on the setup page sends the cards already on the form; the prompt's
+            # must_not_reuse list is built from them.
+            current["special_abilities"] = [dict(a) for a in previous_batch]
         t1 = time.perf_counter()
         error = ""
         try:
@@ -388,6 +393,7 @@ def generate_theme(theme_id: str, spec: dict[str, Any], per_theme: int, out: Pat
         fallback = bool(payload.get("fallback_used")) if isinstance(payload, dict) else False
         log(f"{theme_id}: batch {batch} {variant['start_power']}/{variant['growth']}/{variant['difficulty']} "
             f"count {variant['count']} -> {len(abilities)} in {seconds}s{' FALLBACK' if fallback else ''}{' ERROR ' + error if error else ''}")
+        previous_batch = [a for a in abilities if isinstance(a, dict)]
         magic_ok = magic_allows_mana(spec["magic_level"])
         for ab in abilities:
             if not isinstance(ab, dict):
@@ -769,6 +775,102 @@ def summarize(out: Path) -> dict[str, Any]:
     return summary
 
 
+# --- duplication ---------------------------------------------------------------------
+
+_STOP = {"the", "a", "an", "of", "and", "or", "to", "in", "on", "for", "with", "your", "you", "one", "that", "it",
+         "its", "at", "by", "from", "as", "is", "be", "can", "into", "per", "this", "when", "while", "their", "them"}
+
+
+def _norm_name(name: str) -> str:
+    return re.sub(r"[^a-z0-9 ]+", "", str(name or "").lower().replace("'s", "")).strip()
+
+
+def _words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{3,}", str(text or "").lower()) if w not in _STOP}
+
+
+def _pool_names() -> set[str]:
+    from app.llm import SETUP_RANDOMIZER_ABILITY_FALLBACKS
+    from app.setup_composer import SEED_SKILL_DOMAIN_POOL
+
+    return {_norm_name(d.get("name")) for d in list(SEED_SKILL_DOMAIN_POOL) + list(SETUP_RANDOMIZER_ABILITY_FALLBACKS)
+            if isinstance(d, dict) and d.get("name")}
+
+
+def _near(a: dict[str, Any], b: dict[str, Any]) -> str:
+    """Why two abilities count as the same power, or "" if they do not."""
+    na, nb = _norm_name(a["name"]), _norm_name(b["name"])
+    if na == nb:
+        return "same_name"
+    if difflib.SequenceMatcher(None, na, nb, autojunk=False).ratio() >= 0.85:
+        return "near_name"
+    wa, wb = _words(a.get("description")), _words(b.get("description"))
+    if wa and wb and len(wa & wb) / len(wa | wb) >= 0.5:
+        return "same_description"
+    return ""
+
+
+def duplicates(run_dirs: list[Path]) -> dict[str, Any]:
+    """Repeats within a theme (and the first ability that repeats one), across themes, and pool names."""
+    rows: list[dict[str, Any]] = []
+    for run_dir in run_dirs:
+        path = Path(run_dir) / "abilities.jsonl"
+        if path.is_file():
+            for line in path.read_text(encoding="utf-8").splitlines():
+                r = json.loads(line) if line.strip() else {}
+                if r.get("name"):
+                    r["_run"] = Path(run_dir).name
+                    rows.append(r)
+    pool = _pool_names()
+    report: dict[str, Any] = {"themes": {}, "cross_theme": [], "total": len(rows)}
+    themes = sorted({r["theme"] for r in rows})
+    for theme in themes:
+        seq = [r for r in rows if r["theme"] == theme]
+        pairs = []
+        first_repeat = None
+        for i, r in enumerate(seq):
+            for j in range(i):
+                why = _near(seq[j], r)
+                if why:
+                    same_batch = seq[j]["batch"] == r["batch"] and seq[j]["_run"] == r["_run"]
+                    pairs.append({"first": seq[j]["name"], "again": r["name"], "why": why, "at": i + 1,
+                                  "same_batch": same_batch, "pool": _norm_name(r["name"]) in pool})
+                    if first_repeat is None:
+                        first_repeat = i + 1
+                    break
+        repeated = {p["again"] for p in pairs}
+        name_words: dict[str, int] = {}
+        for r in seq:
+            for w in _words(r["name"]):
+                name_words[w] = name_words.get(w, 0) + 1
+        report["themes"][theme] = {
+            "abilities": len(seq),
+            "distinct_powers": len(seq) - len(repeated),
+            "repeats": len(repeated),
+            "repeats_by_kind": {k: sum(1 for p in pairs if p["why"] == k) for k in ("same_name", "near_name", "same_description")},
+            "repeats_inside_one_batch": sum(1 for p in pairs if p["same_batch"]),
+            "first_repeat_at_ability": first_repeat,
+            "pool_or_fallback_names": sum(1 for r in seq if _norm_name(r["name"]) in pool),
+            "marked_fallback": sum(1 for r in seq if r.get("fallback_used")),
+            "top_name_words": sorted(((w, n) for w, n in name_words.items() if n > 1), key=lambda x: -x[1])[:8],
+            "pairs": pairs[:40],
+        }
+    for i, a in enumerate(rows):
+        for b in rows[i + 1:]:
+            if a["theme"] != b["theme"]:
+                why = _near(a, b)
+                if why:
+                    report["cross_theme"].append({"a": f"{a['theme']}: {a['name']}", "b": f"{b['theme']}: {b['name']}", "why": why,
+                                                  "pool": _norm_name(a["name"]) in pool})
+    all_words: dict[str, set[str]] = {}
+    for r in rows:
+        for w in _words(r["name"]):
+            all_words.setdefault(w, set()).add(r["theme"])
+    report["name_words_in_3plus_themes"] = sorted(((w, sorted(t)) for w, t in all_words.items() if len(t) >= 3),
+                                                  key=lambda x: -len(x[1]))[:15]
+    return report
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--themes", nargs="*", default=list(THEMES))
@@ -780,8 +882,14 @@ def main() -> int:
     ap.add_argument("--out", default="")
     ap.add_argument("--skip-stages", action="store_true")
     ap.add_argument("--skip-turns", action="store_true")
+    ap.add_argument("--carry-existing", action="store_true", help="each batch gets the previous batch as the cards on the form (a re-roll)")
     ap.add_argument("--summarize", default="", help="only rebuild the summary of an existing run dir")
+    ap.add_argument("--duplicates", nargs="*", default=None, help="only report repeats across these run dirs")
     args = ap.parse_args()
+    if args.duplicates:
+        report = duplicates([Path(d) for d in args.duplicates])
+        print(json.dumps(report, indent=2, ensure_ascii=False))
+        return 0
     if args.summarize:
         print(json.dumps(summarize(Path(args.summarize)), indent=2))
         return 0
@@ -800,7 +908,7 @@ def main() -> int:
     log(f"model={args.model} out={out} temp={temp}")
     for theme_id in args.themes:
         spec = THEMES[theme_id]
-        rows = generate_theme(theme_id, spec, args.per_theme, out)
+        rows = generate_theme(theme_id, spec, args.per_theme, out, carry_existing=args.carry_existing)
         engine_use_check(theme_id, spec, rows, out)
         if not args.skip_stages:
             pick = rows if not args.stage_sample else rows[: args.stage_sample]
