@@ -1,0 +1,168 @@
+{
+  "theme": "salvage",
+  "label": "Space salvage / sci-fi",
+  "keywords": [
+    "salvage",
+    "space",
+    "starship",
+    "spaceship",
+    "station",
+    "derelict",
+    "sci-fi",
+    "scifi",
+    "spacer",
+    "zero-g",
+    "void",
+    "airlock",
+    "freighter",
+    "asteroid",
+    "orbital",
+    "far future"
+  ],
+  "abilities": [
+    {
+      "name": "Hull Knock",
+      "description": "Knock on a bulkhead and hear whether there is air, vacuum or something alive on the other side.",
+      "cost": "Anything alive hears the knock too",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how thick a wall and how much you can tell"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Zero-G Ease",
+      "description": "You can move in zero gravity as smoothly as walking, pushing off exactly where you mean to go.",
+      "cost": "Queasy for an hour after you return to gravity",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how fast and how precise"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Derelict Read",
+      "description": "Read a dead ship's damage and know what killed it and how long ago.",
+      "cost": "A quarter hour walking the wreck",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how old a wreck and how much detail"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Suit Patch",
+      "description": "You can seal a tear in a pressure suit with tape and sealant in seconds, enough to reach an airlock.",
+      "cost": "Uses a patch kit; the seal fails in an hour",
+      "power_type": "linear",
+      "growth": {
+        "pace": "fast",
+        "start": "ordinary",
+        "grows": "how big a tear and how long it holds"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Oxygen Miser",
+      "description": "You can slow your breathing so your air lasts half again as long as it should.",
+      "cost": "Sluggish thinking while you do it",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "steady",
+        "start": "weak",
+        "grows": "how much longer your air lasts"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Salvage Rights Talk",
+      "description": "Speak salvage law to a rival crew and they back off a wreck you reached first, unless they are pirates.",
+      "cost": "Pirates laugh; the law means nothing to them",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how stubborn a rival backs down"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Power Coupling Trick",
+      "description": "Bridge two dead systems with a cable so one of them runs for a few minutes.",
+      "cost": "Sparks and burns; the cable melts",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how big a system and how long"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Nav Ghost",
+      "description": "Read old navigation logs and you can recall a safe route through a debris field once you have seen it.",
+      "cost": "Logs older than a year can be wrong",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how dense a field you can cross"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Drone Buddy",
+      "description": "Send your repair drone into a space too small for you and see what it sees for a few minutes.",
+      "cost": "The drone needs a recharge after",
+      "power_type": "item_bound",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how far and how long it ranges"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Cold Sleep Wake",
+      "description": "You can wake from cryosleep fully alert, while others are groggy for an hour.",
+      "cost": "You feel every year you slept in your joints",
+      "power_type": "passive",
+      "growth": {
+        "pace": "slow",
+        "start": "ordinary",
+        "grows": "how long a sleep you shrug off"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Reactor Ear",
+      "description": "Hear a ship's reactor hum and sense whether it is about to fail.",
+      "cost": "Only reactors you have stood near for an hour",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how early the warning"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Void Nerve",
+      "description": "Stay calm on a spacewalk when your tether snaps, keeping your head long enough to catch a handhold.",
+      "cost": "Shakes for an hour once you are inside",
+      "power_type": "soft_cap",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how long you can keep your head"
+      },
+      "supernatural": false
+    }
+  ]
+}

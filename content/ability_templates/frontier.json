@@ -1,0 +1,166 @@
+{
+  "theme": "frontier",
+  "label": "Frontier",
+  "keywords": [
+    "frontier",
+    "western",
+    "wild west",
+    "homestead",
+    "settler",
+    "prairie",
+    "outlaw",
+    "sheriff",
+    "cattle",
+    "wagon",
+    "pioneer",
+    "badlands",
+    "ranch",
+    "gold rush"
+  ],
+  "abilities": [
+    {
+      "name": "Quick Draw",
+      "description": "When a fight starts, you can draw and act before anyone who was not already holding a weapon.",
+      "cost": "Only the first action of a fight",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "steady",
+        "start": "weak",
+        "grows": "how fast a rival you can beat"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Horse Sense",
+      "description": "Ride a horse you have never met and it trusts you enough to cross water or fire once.",
+      "cost": "The horse remembers if you lead it into harm",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how wild a horse and how dangerous a crossing"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Water Witching",
+      "description": "Hold a forked stick over dry ground and sense where water lies within a day's dig.",
+      "cost": "The stick must be freshly cut; you are parched afterwards",
+      "power_type": "linear",
+      "growth": {
+        "pace": "slow",
+        "start": "ordinary",
+        "grows": "how deep and how far"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Brand Reader",
+      "description": "Read a cattle brand and know which ranch owns it and whether it has been altered.",
+      "cost": "Only brands from this territory",
+      "power_type": "linear",
+      "growth": {
+        "pace": "fast",
+        "start": "ordinary",
+        "grows": "how cleverly altered a brand you spot"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Campfire Stories",
+      "description": "Tell a story by the fire and listeners trust you enough to share their own trouble before they sleep.",
+      "cost": "Needs a fire and an evening",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how guarded a listener opens up"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Wagon Mend",
+      "description": "You can fix a broken wheel or axle on the trail with whatever wood is around, well enough to reach town.",
+      "cost": "Takes an hour; the fix needs a real repair in town",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how badly broken a wagon"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Dust Reading",
+      "description": "Read the dust on the horizon and know how many riders are coming and how fast.",
+      "cost": "Useless after rain",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how far off and how exact"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Snake Calm",
+      "description": "When you meet a rattler or wild dog, you can hold still and calm it until it backs away.",
+      "cost": "Sweat through your shirt; it only works if you do not run",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how dangerous an animal"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Poker Face",
+      "description": "Hold your nerve at a card table so no one can read your hand or your intentions.",
+      "cost": "Only while you are sitting at the table",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how sharp a reader you fool"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Lone Rider",
+      "description": "Ride alone through hostile country and you can pass unseen if you keep off the trail until nightfall.",
+      "cost": "Slow going; you arrive hungry and saddle-sore",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how watched the country can be"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Gold Glint",
+      "description": "Pan a stream for an hour and you can sense whether real gold is upstream.",
+      "cost": "Freezing hands; claim jumpers watch anyone who lingers at the stream",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how far upstream and how much"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Lawman's Stare",
+      "description": "You can stare down a troublemaker in a saloon and they back off unless they are already drunk or desperate.",
+      "cost": "Fails against anyone with nothing to lose",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how dangerous a troublemaker backs down"
+      },
+      "supernatural": false
+    }
+  ]
+}

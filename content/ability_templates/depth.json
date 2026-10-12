@@ -1,0 +1,166 @@
+{
+  "theme": "depth",
+  "label": "Depths / dungeon",
+  "keywords": [
+    "depth",
+    "depths",
+    "dungeon",
+    "underground",
+    "cave",
+    "abyss",
+    "delve",
+    "labyrinth",
+    "underdark",
+    "mine",
+    "crawl",
+    "floor",
+    "descent",
+    "tomb"
+  ],
+  "abilities": [
+    {
+      "name": "Lightless Step",
+      "description": "You can walk through total darkness without stumbling, sensing walls and drops a pace ahead.",
+      "cost": "A pounding headache once you are back in the light",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how far ahead you sense"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Air Taster",
+      "description": "Taste the air in a tunnel and sense whether it is safe to breathe for the next hour.",
+      "cost": "Bad air makes you cough for a while",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how faint a danger and how far ahead"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Rockfall Ear",
+      "description": "Hear stone groan and know a few seconds early when a ceiling is about to fall.",
+      "cost": "Constant small noises keep you from sleeping deep",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how early the warning"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Chalk Mark Memory",
+      "description": "Mark a tunnel with chalk and you can always find your way back to that mark.",
+      "cost": "Only one mark at a time stays in your head",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many marks you remember"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Fungus Lore",
+      "description": "Touch a cave mushroom and know whether it heals, feeds, poisons or glows.",
+      "cost": "One touch each; some spores make you itch",
+      "power_type": "linear",
+      "growth": {
+        "pace": "fast",
+        "start": "ordinary",
+        "grows": "how rare a fungus you know"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Squeeze Through",
+      "description": "You can fold yourself through a gap half your width, as long as you breathe out first.",
+      "cost": "Bruised ribs and scraped shoulders",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how narrow a gap"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Deep Breath",
+      "description": "Hold your breath long enough to swim a flooded passage of a dozen paces.",
+      "cost": "Dizzy and weak for a minute after",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "steady",
+        "start": "weak",
+        "grows": "how long a passage"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Trap Smell",
+      "description": "Smell oil, rust or old blood near a trap before you step on it.",
+      "cost": "Useless with a cold or in smoky air",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how well hidden a trap"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Glowworm Lamp",
+      "description": "Call cave glowworms to gather on your hands and give enough light to read by for an hour.",
+      "cost": "They leave a sticky trail; only in caves that have them",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how bright and how long"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Depth Sense",
+      "description": "Know how far below the surface you are, and which way is up, even after falling.",
+      "cost": "Deep places press on your ears until you climb",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how precise and how deep it works"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Monster Lair Sign",
+      "description": "Read claw marks, bones and droppings and know what kind of creature lives ahead.",
+      "cost": "Takes a minute of crouching in the dark",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how rare a creature you recognise"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Last Torch",
+      "description": "When your light runs out, you can keep a dying torch burning for one more hour.",
+      "cost": "The torch is ash afterwards",
+      "power_type": "breakthrough",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how many extra hours"
+      },
+      "supernatural": true
+    }
+  ]
+}

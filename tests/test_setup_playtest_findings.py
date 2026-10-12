@@ -87,12 +87,17 @@ class TestSeedAbilityText(unittest.TestCase):
             self.assertNotIn("never as a free start", text, domain.get("name"))
             self.assertNotIn("answers cleanly", text, domain.get("name"))
 
-    def test_the_inspiration_list_carries_no_names(self):
+    def test_the_prompt_offers_theme_templates_not_seed_pool_names(self):
+        # The nameless inspiration_only list (the 8B pasted names it was shown) gave way to
+        # theme templates that are meant to be used or adapted (app/ability_library.py),
+        # each with an id the model returns so the game knows what was used.
         prompt = _capture_prompt("field:special_abilities", {"world_style": "frontier dark fantasy"})
-        spice = prompt.get("inspiration_only") or []
-        self.assertTrue(spice)
-        for entry in spice:
-            self.assertNotIn("name", entry)
+        self.assertNotIn("inspiration_only", prompt)
+        templates = prompt.get("theme_templates") or []
+        self.assertTrue(templates)
+        for entry in templates:
+            self.assertTrue(str(entry.get("template_id") or "").count(":"), entry)
+            self.assertNotIn("growth_math", entry, "templates carry the growth seed in words, never math")
 
 
 class TestTheOfflineFallback(unittest.TestCase):

@@ -113,6 +113,8 @@ def isolated_data_env(data_dir: str) -> dict[str, str]:
         "AI_RPG_IDEA_BANK": str(root / "idea_bank"),
         "AI_RPG_LAUNCHER_PREFS": str(root / "launcher_prefs.json"),
         "AI_RPG_SKILL_LIBRARY": str(root / "skill_library.json"),
+        # Abilities the model invents and the game verifies (app/ability_library.py).
+        "AI_RPG_ABILITY_LIBRARY": str(root / "ability_library.json"),
         "AI_RPG_PACK_DIR": str(root / "packs"),
     }
 
