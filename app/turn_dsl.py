@@ -92,13 +92,13 @@ WALK: a compass direction. May add STEPS and a number from 1 to 4.
 LOC_NEW: the new place's name in quotes, then a description of it in quotes.
 EVENT: a title in quotes. May add LOC with a place code, NPC with a person's code, SUMMARY with text in quotes.
 GM: in quotes what would trigger it, then in quotes a private note for later.
-REL: the code of the one who knows, the code of the one known, then in quotes what the first knows or thinks of the second.
+REL: the code of the one who knows, the code of the one known, then in quotes what the first knows or thinks of the second. Write PLAYER for the player: a person's tie to the player (family, debt, an old promise) is REL with that person's code and PLAYER.
 SKILL: the skill's name in quotes, then DELTA and a band. May add NOTES with the reason in quotes.
 CLAIM: the claim in quotes, then VERDICT and one of true, false, unverified. May add SKILL with a skill's name and NOTES with the reason in quotes.
 JOURNAL: one of fact, quest, rumor, event, system, then the entry in quotes.
 INDEX: one of npc, location, item, event, then that one's code, then in quotes what to add to its summary.
 NOTE: in quotes, one fact worth keeping in the journal.
-CAST: one of present, interacting, off, then a person's code; or keyword, then one word for the scene.
+CAST: one of present, interacting, off, then a person's code (or, for someone NPC_NEW makes this turn, their name in quotes); or keyword, then one word for the scene.
 QUEST: the job's title in quotes, GIVER and the giver's code or name in quotes, STEP and the first thing to do in quotes. May add AT with a place code or name in quotes, REWARD with what was promised in quotes.
 QUEST_DONE: the quest's code or title in quotes, then one of accept, step_done, complete, fail, abandon.
 LEAD: the code of the person who asks the player to come along or offers to take them somewhere. May add TO with the place they named, in quotes.
@@ -923,8 +923,8 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             raise TurnDslError(f"REL requires source target summary on line {entry['line']}")
         turn["relationships"].append(
             {
-                "source_code": args[0].upper(),
-                "target_code": args[1].upper(),
+                "source_code": _person_ref(args[0]),
+                "target_code": _person_ref(args[1]),
                 "location": flags.get("LOC", ""),
                 "summary": " ".join(args[2:])[:400],
                 "weight_delta": 1,
@@ -1024,14 +1024,37 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         value = " ".join(args[1:]).strip() if len(args) > 1 else ""
         cast = turn.setdefault("scene_cast", {"present": [], "interacting": [], "off": [], "keywords": []})
         if slot in {"present", "interacting", "off"} and value:
-            # "CAST interacting [[B]]": the prose tag is not the code (playtest #46).
-            code = re.sub(r"^\[\[|\]\]$", "", value.split()[0]).strip("[]").upper()[:20]
+            # "CAST interacting [[B]]": the prose tag is not the code (playtest
+            # #46). A quoted name stays a name, so a person made by NPC_NEW this
+            # turn can be cast before their code exists (Saltmarrow #106).
+            first = value.split()[0]
+            bare = first.strip("[]")
+            is_code = first.startswith("[[") or bool(re.fullmatch(r"[A-Z]{1,3}\d{0,3}", bare))
+            code = _person_ref(first if is_code or len(value.split()) == 1 else value)[:60]
             if code and code not in cast[slot]:
                 cast[slot].append(code)
         elif slot == "keyword" and value:
             word = re.sub(r"[^A-Za-z0-9'-]+", "", value.split()[0]).lower()[:40]
             if len(word) >= 3 and word not in cast["keywords"]:
                 cast["keywords"].append(word)
+
+
+PLAYER_REF = "PLAYER"
+_PLAYER_WORDS = frozenset({"you", "player", "the player", "me", "i", "pc", "self", "yourself", "@player", "@you"})
+
+
+def _person_ref(token: Any) -> str:
+    """A person in REL / CAST: "PLAYER" for the player, a code upper-cased, a name as written.
+
+    Saltmarrow #106: "REL K YOU ..." became the code YOU, which no row holds,
+    and "REL Mara Tarrow ..." was upper-cased so the name lookup missed.
+    """
+    text = re.sub(r"^\[\[|\]\]$", "", str(token or "").strip()).strip("[]").strip()
+    if text.lower() in _PLAYER_WORDS:
+        return PLAYER_REF
+    if re.fullmatch(r"[A-Za-z]{1,3}\d{0,3}", text) and (text.isupper() or len(text) <= 2):
+        return text.upper()
+    return text
 
 
 _NPC_ATTITUDES = frozenset({

@@ -4631,10 +4631,6 @@ def _apply_scene_cast(conn, cast: Any, narration: str = "") -> None:
     """Merge the model's present / interacting toggles. Absent cast leaves the scene alone."""
     if not isinstance(cast, dict):
         return
-    try:
-        _move_cast_here(conn, cast, narration)
-    except Exception:
-        pass  # the scene merge below must still run
     current = _settings(conn).get("active_scene")
     if not isinstance(current, dict):
         current = {}
@@ -4652,10 +4648,17 @@ def _apply_scene_cast(conn, cast: Any, narration: str = "") -> None:
         cleaned: list[str] = []
         for code in cast.get(bucket) or []:
             token = re.sub(r"^\[+|\]+$", "", str(code).strip()).upper()
+            if token and known and token not in known:
+                # A name: the person NPC_NEW made this turn (Saltmarrow #106).
+                token = _npc_code_for_name(conn, str(code).strip().strip("[]")) or token
             if token and (not known or token in known) and token not in cleaned:
                 cleaned.append(token)
         if bucket in cast:
             cast[bucket] = cleaned
+    try:
+        _move_cast_here(conn, cast, narration)
+    except Exception:
+        pass  # the scene merge below must still run
 
     def add(bucket: list[str], codes: Any) -> None:
         for code in codes or []:
@@ -4682,6 +4685,20 @@ def _apply_scene_cast(conn, cast: Any, narration: str = "") -> None:
         "active_scene",
         {"present": present[:24], "interacting": interacting[:8], "keywords": keywords[:24]},
     )
+
+
+def _npc_code_for_name(conn, name: str) -> str:
+    """The code of the one person with this full name, or this unique first name, or ""."""
+    text = re.sub(r"\s+", " ", str(name or "")).strip()
+    if not text:
+        return ""
+    rows = conn.execute("SELECT code FROM npcs WHERE name = ? COLLATE NOCASE", (text,)).fetchall()
+    if len(rows) != 1 and " " not in text:
+        rows = conn.execute("SELECT code FROM npcs WHERE name LIKE ? COLLATE NOCASE", (text + " %",)).fetchall()
+    if len(rows) != 1:
+        alias = _alias_target(conn, text, "npc")
+        return str(alias or "").upper()
+    return str(rows[0]["code"] or "").upper()
 
 
 def _move_cast_here(conn, cast: dict[str, Any], narration: str) -> list[str]:
@@ -13145,12 +13162,63 @@ def _refresh_arrived_location_events(conn, location_id: int, turn: int) -> None:
             conn.execute("UPDATE events SET status = 'active', last_seen_turn = ? WHERE id = ?", (turn, row["id"]))
 
 
+# What the player calls a relative (Saltmarrow #104/#105/#106): "Mam" for the
+# mother a REL op names. Each word becomes an alias of that person.
+_KIN_ALIASES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (r"\b(?:mother|mam|mum|mom|ma)\b", ("Mam", "Mum", "Mom", "Ma", "Mother", "Mama")),
+    (r"\b(?:father|dad|da|pa)\b", ("Da", "Dad", "Pa", "Father", "Papa")),
+    (r"\b(?:grandmother|gran|granny|nan)\b", ("Gran", "Granny", "Nan", "Nana", "Grandma")),
+    (r"\b(?:grandfather|grandad|granda)\b", ("Grandad", "Granda", "Grandpa")),
+    (r"\b(?:aunt|auntie)\b", ("Auntie", "Aunty")),
+    (r"\buncle\b", ("Uncle",)),
+)
+
+
+def _apply_player_bond(conn, npc_id: int, summary: str) -> None:
+    """REL between a person and the player (Saltmarrow #106).
+
+    It used to pass as the code YOU or PLAYER, which no row holds, so "Mara is
+    the player's mother" was dropped and "Mam" stayed a stranger's word. The
+    bond is kept on the person as a fact, and a kinship bond makes the
+    player's words for that relative aliases of them.
+    """
+    text = re.sub(r"\s+", " ", summary).strip()[:300]
+    row = conn.execute("SELECT code, known_facts FROM npcs WHERE id = ?", (int(npc_id),)).fetchone()
+    if row is None or not text:
+        return
+    facts = _json(row["known_facts"] or "[]", [])
+    if not isinstance(facts, list):
+        facts = []
+    fact = f"To the player: {text}"
+    if fact not in facts:
+        facts.append(fact)
+        conn.execute("UPDATE npcs SET known_facts = ? WHERE id = ?", (json.dumps(facts[-24:]), int(npc_id)))
+    code = str(row["code"] or "").upper()
+    if not code:
+        return
+    for pattern, words in _KIN_ALIASES:
+        if re.search(pattern, text, re.IGNORECASE):
+            for word in words:
+                conn.execute(
+                    "INSERT OR IGNORE INTO aliases (alias, entity_type, entity_code) VALUES (?, 'npc', ?)",
+                    (word, code),
+                )
+            break
+
+
 def _apply_relationships(conn, relationships: list[dict[str, Any]]) -> None:
     if not _play_system_enabled(conn, "relationships_enabled", True):
         return
     for rel in relationships:
         source_ref = rel.get("source_code") or rel.get("source")
         target_ref = rel.get("target_code") or rel.get("target")
+        refs = [str(source_ref or "").upper(), str(target_ref or "").upper()]
+        if "PLAYER" in refs:
+            other = target_ref if refs[0] == "PLAYER" else source_ref
+            npc_id = _npc_id_by_ref(conn, other, rel.get("location"))
+            if npc_id is not None and refs != ["PLAYER", "PLAYER"]:
+                _apply_player_bond(conn, npc_id, str(rel.get("summary") or ""))
+            continue
         source_id = _npc_id_by_ref(conn, source_ref, rel.get("location"))
         target_id = _npc_id_by_ref(conn, target_ref, rel.get("location"))
         if source_id is None or target_id is None or source_id == target_id:
@@ -17626,7 +17694,14 @@ def play_turn(
                         risk=_ability_risk_tier(context, player_line),
                     )
                 if ability_use_pack:
+                    # What the ability does (Saltmarrow #101): the packet named
+                    # it and said "strength as described" with nothing described.
+                    if isinstance(matched, dict) and not ability_use_pack.get("description"):
+                        ability_use_pack["description"] = str(
+                            matched.get("description") or matched.get("base_description") or ""
+                        )[:400]
                     mechanics_context["ability_use"] = {
+                        "description": ability_use_pack.get("description") or "",
                         "growth": ability_use_pack.get("growth") or {},
                         "ok": ability_use_pack.get("ok"),
                         "blocked": ability_use_pack.get("blocked"),

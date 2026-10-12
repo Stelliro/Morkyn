@@ -835,6 +835,80 @@ def _appearance(context: dict[str, Any]) -> str:
     return str(player.get("appearance") or "").strip()
 
 
+def _clip_sentences(value: Any, limit: int) -> str:
+    """Whole sentences up to ``limit`` characters."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    return cut[: end + 1] if end > limit // 3 else cut.rstrip() + "..."
+
+
+def _add_character_sheet(view: dict[str, Any], context: dict[str, Any], *, opening: bool) -> None:
+    """What the player carries and can do, and on the opening who they are (Saltmarrow #100).
+
+    The opening call had a name, a title and worn clothes only: no backstory,
+    no "mother's brass tide-reckoner" in the pack, no ability, no trained
+    skills, no premise, while its instructions asked it to name inventory by
+    code. The opening now carries all of it. Later turns keep the standing
+    view (an ability only when the scene names it), so this adds nothing there.
+    """
+    if not opening:
+        return
+    carried = []
+    for item in context.get("inventory") or []:
+        if not isinstance(item, dict) or str(item.get("equipped_slot") or "").strip():
+            continue
+        name = str(item.get("name") or "").strip()
+        try:
+            qty = int(item.get("quantity") if item.get("quantity") is not None else 1)
+        except (TypeError, ValueError):
+            qty = 1
+        if name and qty > 0:
+            carried.append({"name": name, "code": item.get("code") or "", **({"qty": qty} if qty > 1 else {})})
+    if carried:
+        view["carried"] = carried[:10]
+    abilities = []
+    for row in context.get("abilities") or []:
+        if not isinstance(row, dict) or not str(row.get("name") or "").strip():
+            continue
+        entry = {"name": str(row["name"]).strip(), "code": row.get("code") or ""}
+        does = _one_line(row.get("description") or row.get("base_description"), 220)
+        if does:
+            entry["does"] = does
+        if row.get("cost"):
+            entry["cost"] = str(row.get("cost"))[:40]
+        abilities.append(entry)
+    if abilities:
+        view["abilities"] = abilities[:4]
+    trained = []
+    for row in context.get("skills") or []:
+        if not isinstance(row, dict) or not str(row.get("name") or "").strip():
+            continue
+        try:
+            value = int(row.get("value") or 0)
+        except (TypeError, ValueError):
+            value = 0
+        if value <= 0:
+            continue
+        rank = re.search(r"\b(?:start\s+)?rank\s+([A-Z]{1,3})\b", str(row.get("notes") or ""), re.I)
+        trained.append(f"{row['name']} ({rank.group(1).upper()})" if rank else str(row["name"]))
+    if trained:
+        view["trained_in"] = trained[:8]
+    options = ((context.get("settings") or {}).get("playthrough_options") or {})
+    options = options if isinstance(options, dict) else {}
+    backstory = _clip_sentences(options.get("character_backstory"), 900)
+    if backstory:
+        view["backstory"] = backstory
+        mode = str(options.get("backstory_mode") or "").strip()
+        if mode:
+            view["backstory_mode"] = mode
+    premise = _clip_sentences(options.get("custom_style"), 700)
+    if premise:
+        view["premise"] = premise
+
+
 def _player_view(context: dict[str, Any]) -> dict[str, Any] | None:
     player = context.get("player") if isinstance(context.get("player"), dict) else {}
     view: dict[str, Any] = {}
@@ -1089,14 +1163,20 @@ def _mechanics_view(context: dict[str, Any]) -> dict[str, Any] | None:
         view["combat"] = combat
     ability = mechanics.get("ability_use") if isinstance(mechanics.get("ability_use"), dict) else None
     if ability:
-        record = ability.get("ability") if isinstance(ability.get("ability"), dict) else {}
+        # "ability" is the name string, not a record (Saltmarrow #101: every
+        # use shipped name ""), and what the ability does was never carried.
+        raw = ability.get("ability")
+        record = raw if isinstance(raw, dict) else {}
         view["ability_use"] = {
             "ok": ability.get("ok"),
             "blocked": ability.get("blocked"),
-            "name": record.get("name") or ability.get("name") or "",
+            "name": record.get("name") or (raw if isinstance(raw, str) else "") or ability.get("name") or "",
             "code": record.get("code") or "",
             "reasons": list(ability.get("reasons") or [])[:3],
         }
+        does = _clip_sentences(ability.get("description") or record.get("description"), 300)
+        if does:
+            view["ability_use"]["does"] = does
     forced = []
     for event in mechanics.get("forced_events") or []:
         if not isinstance(event, dict):
@@ -1290,6 +1370,7 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                     if line:
                         worn["line"] = line
                     break
+        _add_character_sheet(player, context, opening=str(player_input or "").startswith("__opening_scene_request__"))
         world["player"] = player
 
     place = _place_view(context)
