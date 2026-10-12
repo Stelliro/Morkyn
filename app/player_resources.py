@@ -1236,14 +1236,99 @@ def collapse_state(resources: dict[str, Any] | None) -> dict[str, Any]:
 LIGHT_ACTION_KINDS = frozenset({"none", "talk", "rest", "wait", "sleep", "meditate"})
 
 
+# Saltmarrow #119: "the deep channel" and "power" as nouns made every line on
+# the flats an ability turn; only the verb forms are casting.
+_ABILITY_WORD_RE = re.compile(
+    r"\b(?:cast(?:s|ing)?(?!\s+(?:a|an|the|my|his|her|their|our)\s+(?:net|line|eye|glance|look|shadow|vote|lot|stone))|"
+    r"spell|invoke|ability|"
+    r"channel(?:s|ed|ing|led|ling)?\s+(?:my|the|his|her|their|your|our)\s+(?:power|magic|mana|energy|will|gift)|"
+    r"use\s+(?:my|the|her|his)\s+(?:power|gift|magic))\b"
+)
+_PHYSICAL_EXERTION_RE = re.compile(
+    r"\b(fix|fixing|mend|mending|repair|repairing|forging|smithing|hammering|dig|digging|chop|chopping|haul|hauling|"
+    r"lift|lifting|sneak|hide|climb|swim|force|break|lockpick|steal|crawl|crawling)\b"
+)
+# Recovery the player types (#119): a breather, a wait, a sleep. "Rest" was
+# checked last, after talk and climbing, so "I rest ... and get some strength
+# back" was physical and blocked, and "wait it out" was investigation.
+_SLEEP_RE = re.compile(r"\b(?:sleep|sleeping|nap|napping|doze|dozing|turn\s+in\s+for\s+the\s+night|bed\s+down)\b")
+_REST_RE = re.compile(
+    r"\b(?:rest|resting|catch\s+(?:my|our|a)\s+breath|get\s+(?:my|our)\s+breath(?:\s+back)?|"
+    r"get\s+(?:some\s+)?(?:my\s+)?strength\s+back|breather|take\s+a\s+break|lie\s+down|sit\s+and\s+rest)\b"
+)
+_WAIT_RE = re.compile(r"\b(?:wait|waits|waiting|wait\s+it\s+out|sit\s+tight|bide)\b")
+
+
+def _unquoted(text: str) -> str:
+    return re.sub(r'"[^"]*"|“[^”]*”', " ", str(text or ""))
+
+
+def recovery_kind(player_input: str) -> str:
+    """"sleep", "rest", "wait" or "" for the player's own line, outside quotes,
+    with denied clauses removed, and only when the line is not also exertion."""
+    text = _unquoted(player_input).lower()
+    try:
+        from app.prose_state import strip_negated_clauses
+
+        text = strip_negated_clauses(text)
+    except Exception:
+        pass
+    if not text.strip() or _PHYSICAL_EXERTION_RE.search(text):
+        return ""
+    if re.search(r"\b(attack|fight|combat|chase|flee|strike|slash|punch|kick)\b", text):
+        return ""
+    if _SLEEP_RE.search(text):
+        return "sleep"
+    if _REST_RE.search(text):
+        return "rest"
+    if _WAIT_RE.search(text):
+        return "wait"
+    return ""
+
+
+_NUMBER_WORDS = {
+    "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8,
+    "nine": 9, "ten": 10, "eleven": 11, "twelve": 12, "half": 0.5, "few": 2, "couple": 2,
+}
+
+
+def typed_recovery_minutes(player_input: str, kind: str = "") -> int:
+    """How long a typed wait, rest or sleep lasts (#119): "I wait an hour here"
+    was a 6-minute action, so typed waiting never waited."""
+    kind = kind or recovery_kind(player_input)
+    if not kind:
+        return 0
+    text = _unquoted(player_input).lower()
+    match = re.search(
+        r"\b(\d+(?:\.\d+)?|a|an|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|half|few|couple)"
+        r"(?:\s+of)?(?:\s+an?)?\s+(hours?|hrs?|minutes?|mins?)\b",
+        text,
+    )
+    if match:
+        raw = match.group(1)
+        amount = float(raw) if raw[0].isdigit() else float(_NUMBER_WORDS.get(raw, 1))
+        minutes = amount * (60 if match.group(2).startswith("h") else 1)
+        return int(max(1, min(720, round(minutes))))
+    if re.search(r"\b(?:until|till|til)\s+(?:dawn|morning|first\s+light|sunrise|daybreak)\b|\bthe\s+night\b", text):
+        return 480
+    if re.search(r"\ba\s+(?:moment|minute|second|breath)\b|\bbriefly\b", text):
+        return 5
+    if re.search(r"\bwait\s+it\s+out\b|\buntil\s+(?:it|the\s+\w+)\s+(?:passes|stops|ends|clears|drops)\b", text):
+        return 60
+    return {"sleep": 480, "rest": 20, "wait": 15}.get(kind, 0)
+
+
 def action_kind_from_text(player_input: str) -> str:
     text = (player_input or "").lower().strip()
     if not text or text.startswith("__"):
         return "none"
     if re.search(r"\b(attack|fight|combat|chase|flee|strike|slash|punch|kick)\b", text):
         return "combat"
-    if re.search(r"\b(cast|spell|invoke|channel|ability|power)\b", text):
+    if _ABILITY_WORD_RE.search(text):
         return "ability"
+    recovery = recovery_kind(player_input)
+    if recovery:
+        return recovery
     # A declared act is costed by the same reading that rolls its check
     # (playtest #85a: "i polish the blades" was "general", 0.4 energy, like a
     # glance, because polish was in the act table and not in this one).
@@ -1262,9 +1347,10 @@ def action_kind_from_text(player_input: str) -> str:
         return "physical"
     if re.search(r"\b(search|investigate|examine|study|read|craft|forage)\b", text):
         return "investigate"
-    if re.search(r"\b(talk|ask|speak|persuade|negotiate|lie|intimidate|greet|chat)\b", text):
+    # "lie flat" is lying down, not a lie (#119).
+    if re.search(r"\b(talk|ask|speak|persuade|negotiate|lie\s+to|intimidate|greet|chat)\b", text):
         return "talk"
-    if re.search(r"\b(sneak|hide|climb|swim|force|break|lockpick|steal)\b", text):
+    if re.search(r"\b(sneak|hide|climb|swim|force|break|lockpick|steal|crawl|crawling)\b", text):
         return "physical"
     if re.search(r"\b(train|practice|drill|exercise)\b", text):
         return "train"
