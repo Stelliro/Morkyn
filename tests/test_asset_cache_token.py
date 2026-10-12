@@ -105,5 +105,29 @@ class ServedPageTests(unittest.TestCase):
         self.assertEqual(restored, before)
 
 
+class PopoutPageTests(unittest.TestCase):
+    """The pop-out named a fixed ?v=popout-skin-1, so it kept a stale stylesheet across releases."""
+
+    def test_popout_source_ships_the_placeholder(self):
+        refs = ASSET_REF_RE.findall((STATIC / "popout.html").read_text(encoding="utf-8"))
+        self.assertTrue(refs, "no versioned assets in popout.html; the guard would pass vacuously")
+        for name, token in refs:
+            with self.subTest(asset=name):
+                self.assertEqual(token, BUNDLE_PLACEHOLDER)
+
+    def test_served_popout_uses_the_games_token(self):
+        from app.main import popout
+
+        html = popout().body.decode("utf-8")
+        _, token = index_html()
+        self.assertNotIn(BUNDLE_PLACEHOLDER, html)
+        self.assertIn(f"styles.css?v={token}", html)
+
+    def test_pop_out_openers_use_the_served_route(self):
+        root = STATIC.parent
+        self.assertNotIn("/static/popout.html", (STATIC / "app.js").read_text(encoding="utf-8"))
+        self.assertNotIn("/static/popout.html", (root / "morkyn_app.py").read_text(encoding="utf-8"))
+
+
 if __name__ == "__main__":
     unittest.main()

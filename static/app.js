@@ -14999,7 +14999,7 @@ function openTabWindow(tab) {
     markPoppedTabs();
     return popoutWindows[key];
   }
-  const url = `/static/popout.html?tab=${encodeURIComponent(key)}`;
+  const url = `/popout?tab=${encodeURIComponent(key)}`;
   const { width, height } = popoutWindowSize();
   const win = window.open(url, `morkyn-popout-${key}`, `width=${width},height=${height},menubar=no,toolbar=no,location=no,status=no`);
   if (!win) {

@@ -300,7 +300,7 @@ class Shell:
             except Exception:
                 self.popouts.pop(key, None)
         label = title or POPOUT_TITLES.get(key, key)
-        url = f"{self.sup.url}/static/popout.html?tab={key}&native=1"
+        url = f"{self.sup.url}/popout?tab={key}&native=1"
         win = self.webview.create_window(
             f"Mørkyn — {label}",
             url,

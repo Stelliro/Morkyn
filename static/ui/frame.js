@@ -10,7 +10,7 @@
 (function () {
   "use strict";
 
-  var isPopout = /popout\.html$/.test(location.pathname);
+  var isPopout = /\/popout(\.html)?$/.test(location.pathname);
   var frameId = isPopout ? (new URLSearchParams(location.search).get("tab") || "player").toLowerCase() : "main";
   var lastSent = "";
 

@@ -400,7 +400,7 @@ next to `Media/morkyn-key-art.png`. Then check, in order:
 - [ ] `python -m unittest tests.test_asset_cache_token` passes, so the page
       links what the bundle hashes.
 
-If you changed `styles.css`, also open the pop-out (`/static/popout.html`)
+If you changed `styles.css`, also open the pop-out (`/popout?tab=player`, served with the same cache token as the game)
 and the save browser, which share it.
 
 ---

@@ -5215,14 +5215,18 @@ body.play-menu-split .playMenuNav::after {
 .characterSheetDrawer .playerPortraitCard .artKindActions button,
 .characterSheetDrawer .sheetInnerNav .sheetInnerTab,
 .characterSheetDrawer .playerArtClear .artClearBtn,
-.characterSheetDrawer .playerAliasRow .miniActions button {
+.characterSheetDrawer .playerAliasRow .miniActions button,
+.popoutTabInner .playerPortraitCard .artKindActions button,
+.popoutTabInner .playerArtClear .artClearBtn,
+.popoutTabInner .playerAliasRow .miniActions button {
   min-height: 34px !important;
   padding: 0 13px !important;
   font-size: inherit !important;
   line-height: normal !important;
 }
 
-.characterSheetDrawer .invLinkBtn {
+.characterSheetDrawer .invLinkBtn,
+.popoutTabInner .invLinkBtn {
   min-height: 34px !important;
   padding: 0 13px !important;
   font-size: 1rem !important;
@@ -9103,6 +9107,19 @@ button.npcRosterCard {
   flex: 0 1 220px;
 }
 
+/* The kind select and Generate stay on one line (nowrap above), so in a narrow
+   card (pop-outs, float panels, phones) the select must give up width instead
+   of pushing Generate off the edge. justify-items: start on the grid sized the
+   row to its content, so it also needs the column's width to shrink into. */
+.playerArtActions > .artKindActions {
+  width: 100%;
+  min-width: 0;
+}
+
+.playerArtActions > .artKindActions:not(.artKindOptional) .artGenSelect {
+  min-width: 0;
+}
+
 .artGenSelect {
   min-width: 150px;
   max-width: 220px;
@@ -9817,14 +9834,6 @@ body.popoutBody .iibEmbedFrame {
   flex: 1 1 auto;
 }
 
-.popoutTabInner .playerPortraitCard {
-  grid-template-columns: 160px minmax(0, 1fr);
-}
-
-.popoutTabInner .playerPortraitFrame {
-  width: 160px;
-  height: 160px;
-}
 
 @media (max-width: 980px) {
   .sceneStage {
