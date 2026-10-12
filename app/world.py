@@ -691,7 +691,10 @@ def is_plausible_place_name(name: str) -> bool:
         n,
         re.I,
     ):
-        return False
+        # A named landmark keeps its name: "the Lantern Wives' lamp" is where
+        # the rows begin (Saltmarrow #76/#33). Refusing it renamed the LOC_NEW
+        # "Nearby street", so the MOVE to the lamp matched nothing, three times.
+        return bool(re.search(r"\b[A-Z][\w-]*(?:['’]s|s['’])\s+[\w\s-]*$", n))
     return True
 
 
@@ -1857,6 +1860,20 @@ def _local_crowd_danger(context: dict[str, Any] | None = None) -> dict[str, floa
         pass
 
     return out
+
+
+# Wait events that need people around, and ones that need no face at all.
+_CROWD_WAIT_KINDS = frozenset({"rumor", "patrol_pass", "crowd_noise", "pickpocket_attempt", "stranger_passes", "fight_nearby"})
+_FACELESS_WAIT_KINDS = frozenset({"ambient", "crowd_noise", "weather_shift"})
+
+
+def _in_settlement(conn, location_id: int) -> bool:
+    """The place, or the place it stands in, is a settlement (see _is_settlement)."""
+    row = _location_row(conn, int(location_id or 0))
+    if row is None:
+        return True
+    parent = int(venues._field(row, "parent_id", 0) or 0)
+    return _is_settlement(conn, _location_row(conn, parent) if parent else row)
 
 
 def roll_wait_events(
@@ -4666,6 +4683,10 @@ def _apply_scene_cast(conn, cast: Any, narration: str = "") -> None:
         _move_cast_here(conn, cast, narration)
     except Exception:
         pass  # the scene merge below must still run
+    try:
+        _cast_off_minor_faces(conn, cast)
+    except Exception:
+        pass
 
     def add(bucket: list[str], codes: Any) -> None:
         for code in codes or []:
@@ -4706,6 +4727,49 @@ def _npc_code_for_name(conn, name: str) -> str:
         alias = _alias_target(conn, text, "npc")
         return str(alias or "").upper()
     return str(rows[0]["code"] or "").upper()
+
+
+def _cast_off_minor_faces(conn, cast: dict[str, Any]) -> list[str]:
+    """CAST off takes a minor face out of the place (Saltmarrow #73, T26-T28).
+
+    The GM cast Reinald, a stranger the engine had seeded at the fish market,
+    off the scene; he stayed in the place's people list for the next turns.
+    Someone the story built (presence full), the keeper here, or a party
+    member only leaves the scene. A minor face goes to the place this one
+    stands in, or, with nowhere to go, becomes a nameless shell that the
+    people list leaves out.
+    """
+    off = [re.sub(r"^\[+|\]+$", "", str(c).strip()).upper() for c in cast.get("off") or []]
+    if not off:
+        return []
+    here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    here_id = int((here["current_location_id"] if here else 0) or 0)
+    place = _location_row(conn, here_id) if here_id else None
+    if place is None:
+        return []
+    parent = int(venues._field(place, "parent_id", 0) or 0)
+    keeper = int(venues._field(place, "keeper_npc_id", 0) or 0)
+    try:
+        party = {int(r[0]) for r in conn.execute("SELECT npc_id FROM party_members").fetchall() if r[0]}
+    except Exception:
+        party = set()
+    gone: list[str] = []
+    for code in off:
+        row = conn.execute(
+            "SELECT id, name, presence, workplace_id, location_id FROM npcs WHERE UPPER(code) = ?", (code,)
+        ).fetchone()
+        if row is None or int(row["location_id"] or 0) != here_id:
+            continue
+        if str(row["presence"] or "full") == "full" or int(row["id"]) in party or int(row["id"]) == keeper:
+            continue
+        if int(row["workplace_id"] or 0) == here_id:
+            continue
+        if parent:
+            conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (parent, int(row["id"])))
+        else:
+            conn.execute("UPDATE npcs SET presence = 'nameless', shell = 1 WHERE id = ?", (int(row["id"]),))
+        gone.append(str(row["name"]))
+    return gone
 
 
 def _move_cast_here(conn, cast: dict[str, Any], narration: str) -> list[str]:
@@ -6355,6 +6419,9 @@ _QUESTION_LEAD_RE = re.compile(r"^(?:who|what|where|when|why|how|which|whose|who
 _VOCATIVE_RE = re.compile(r"^(?:[A-Z][\w'\u2019-]*\s+){0,3}?[A-Z][\w'\u2019-]*\s*,\s*")
 # Apostrophes required: "were" and "well" are not "we're" and "we'll".
 _FIRST_PERSON_RE = re.compile(r"\b(?:i|we|us|let\s+us|(?:i|we|let)['\u2019](?:ll|m|re|s))\b", re.I)
+_QUOTED_RE = re.compile(r"\"[^\"]*\"|\u201c[^\u201d]*\u201d")
+# The speaker is in the quoted words: "want to come with me?", "let's go".
+_SPEAKER_IN_IT_RE = re.compile(r"\b(?:i|we|us|me|my|our|let['\u2019]s|let\s+us|i['\u2019](?:ll|m|d))\b", re.I)
 
 
 def _travel_scoring_text(player_input: str) -> str:
@@ -6367,8 +6434,16 @@ def _travel_scoring_text(player_input: str) -> str:
     when the player is the one going ("Can I go in?", "Shall we head out?").
     """
     kept: list[str] = []
-    for part in re.split(r"(?<=[.!?])\s+|\n+", str(player_input or "")):
-        body = _VOCATIVE_RE.sub("", part.strip(), count=1)
+    # Speech about someone else's comings and goings is not the player going
+    # (Saltmarrow #112): '"Which channel did Tam take, and when did he
+    # leave?"' and '"Fetch the reeve"' made talk turns travel turns. Quoted
+    # words keep their movement only with the player in them ("want to come
+    # with me?"), and a question is still a question behind its closing quote.
+    unquoted = _QUOTED_RE.sub(
+        lambda m: m.group(0) if _SPEAKER_IN_IT_RE.search(m.group(0)) else " ", str(player_input or "")
+    )
+    for part in re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"”])\s+|\n+", unquoted):
+        body = _VOCATIVE_RE.sub("", part.strip().strip("\"“”").strip(), count=1)
         if not body:
             continue
         asking = body.rstrip().endswith("?") or _QUESTION_LEAD_RE.match(body) is not None
@@ -6384,7 +6459,17 @@ def _travel_scoring_text(player_input: str) -> str:
     # A movement word inside an idiom is not a move (TODO n21, T11: "it may
     # prove useful in the long run" made a talk turn a travel turn, and the
     # draft was told the walk ends somewhere it never planned).
-    return _MOVE_IDIOM_RE.sub(" ", strip_negated_clauses(" ".join(kept)))
+    return _MOVE_NOUN_RE.sub(" ", _MOVE_IDIOM_RE.sub(" ", strip_negated_clauses(" ".join(kept))))
+
+
+# A movement word used as a noun is not a move (Saltmarrow #112): "the tally
+# board", "my head", "walk the line round it", "a long climb".
+_MOVE_NOUN_RE = re.compile(
+    r"\b(?:the|a|an|my|his|her|their|our|your|its|this|that|each|every|tally|notice|job|guild)\s+"
+    r"(?:[\w'’-]+\s+)?(?:board|head|run|return|climb|cross|exit|journey|trek|hike|approach|march)s?\b|"
+    r"\bwalk(?:s|ed|ing)?\s+the\s+(?:line|rope|plank)\b",
+    re.IGNORECASE,
+)
 
 
 _MOVE_IDIOM_RE = re.compile(
@@ -6610,6 +6695,34 @@ def _companion_npc_ids(conn, prompt_context: dict[str, Any] | None) -> set[int]:
     return ids
 
 
+_UNWELCOME_ATTITUDES = frozenset({"hostile", "antagonistic", "angry", "dismissive", "condescending"})
+
+
+def _known_face_after_hours(conn, venue_row) -> bool:
+    """Shop hours keep out custom, not the household (Saltmarrow #113).
+
+    At 06:48 Philippa's chandlery refused the player as 'closed now
+    (07:00-19:00)' though Philippa lives there, the player had been inside
+    before, and the prose had them in her kitchen all morning. A keeper at
+    home who is not set against the player lets a face they know in.
+    """
+    keeper_id = int(venues._field(venue_row, "keeper_npc_id", 0) or 0)
+    venue_id = int(venues._field(venue_row, "id", 0) or 0)
+    if not keeper_id or not venue_id or int(venues._field(venue_row, "visit_count", 0) or 0) < 1:
+        return False
+    keeper = conn.execute("SELECT location_id, attitude FROM npcs WHERE id = ?", (keeper_id,)).fetchone()
+    if keeper is None or int(keeper["location_id"] or 0) != venue_id:
+        return False
+    return str(keeper["attitude"] or "").strip().lower() not in _UNWELCOME_ATTITUDES
+
+
+def _stands_beside(conn, player_location_id: Any, parent_id: int) -> bool:
+    """The player stands in another place inside the same parent: next door,
+    not across the map (Saltmarrow #76: the tally house to the chandlery)."""
+    here = _location_row(conn, int(player_location_id or 0)) if player_location_id else None
+    return here is not None and int(venues._field(here, "parent_id", 0) or 0) == int(parent_id or 0)
+
+
 def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute: int | None = None) -> dict[str, Any]:
     """Can the player enter this venue right now, and if not, where should they go?
 
@@ -6644,7 +6757,7 @@ def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute:
                 "redirect_to": parent_id,
                 "detail": "a building in town is entered from its door",
             }
-    elif parent_id and int(player_location_id or 0) != parent_id:
+    elif parent_id and int(player_location_id or 0) != parent_id and not _stands_beside(conn, player_location_id, parent_id):
         return {
             "ok": False,
             "reason": "unreachable",
@@ -6655,6 +6768,12 @@ def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute:
     if not venues.is_open(
         venues._field(venue_row, "open_minute", -1), venues._field(venue_row, "close_minute", -1), now
     ):
+        if _known_face_after_hours(conn, venue_row):
+            return {
+                "ok": True,
+                "reason": "after_hours",
+                "detail": f"closed to custom ({venues.hours_note(venue_row, now)}); the keeper lets a known face in",
+            }
         return {
             "ok": False,
             "reason": "closed",
@@ -7275,6 +7394,28 @@ def npc_workplace_plan(conn, npc_id: int) -> dict[str, Any]:
     return plan
 
 
+def _is_settlement(conn, row) -> bool:
+    """A place people live and trade in: a stored size, venues of its own, the
+    starting place, or a settlement word in its name (not its summary, which
+    says "four doors past the old fish market" about a roof)."""
+    if row is None:
+        return False
+    if str(venues._field(row, "settlement_size", "") or "").strip():
+        return True
+    place_id = int(venues._field(row, "id", 0) or 0)
+    try:
+        if conn.execute(
+            "SELECT 1 FROM locations WHERE parent_id = ? AND COALESCE(kind, '') != '' LIMIT 1", (place_id,)
+        ).fetchone():
+            return True
+        first = conn.execute("SELECT MIN(id) FROM locations").fetchone()[0]
+    except Exception:
+        first = None
+    if first is not None and int(first) == place_id:
+        return True
+    return bool(venues.normalize_settlement_size(str(venues._field(row, "name", "") or "")))
+
+
 def plan_npc_workplace(conn, npc_id: int) -> int:
     """Settle where this NPC works without making a place; the venue id if one exists, else 0.
 
@@ -7350,13 +7491,20 @@ def plan_npc_workplace(conn, npc_id: int) -> int:
         if free:
             venue_id = int(free[0]["id"])
             conn.execute("UPDATE locations SET keeper_npc_id = ? WHERE id = ?", (int(npc_id), venue_id))
-        elif venue_capacity_left(conn, settlement_id, kind) > 0:
+        elif (
+            venue_capacity_left(conn, settlement_id, kind) > 0
+            # Only the trade's own premises are planned, never the era's stand-in
+            # (Saltmarrow #27: a salvager's salvage yard became "Jocosa
+            # Kettle's General Store"), and only in a settlement, not on a roof.
+            and kind == venues.workplace_kind_for_role(str(npc["role"] or ""))
+            and _is_settlement(conn, settlement)
+        ):
             plan = {
                 "kind": kind,
                 "name": f"{str(npc['name'] or '').strip()}'s {_workplace_label(kind)}",
                 "parent_id": settlement_id,
             }
-        elif rows:
+        elif rows and kind == venues.workplace_kind_for_role(str(npc["role"] or "")):
             venue_id = int(rows[0]["id"])
     if venue_id:
         conn.execute("UPDATE npcs SET workplace_id = ?, workplace_plan = '' WHERE id = ?", (venue_id, int(npc_id)))
@@ -8978,6 +9126,8 @@ def _unasked_unshown_move(
         return ""
     if _player_departs(text):
         return ""
+    if dest and _destination_shown_loosely(dest, low, player_input):
+        return ""
     # "Elara gestures for you to come in. Inside, the shop..." shows the move
     # without naming the shop the MOVE named (playtest #16). Only when the
     # MOVE is a building: an entry into the med-bay does not show a move to
@@ -8985,6 +9135,95 @@ def _unasked_unshown_move(
     if venues.entry_in_prose(text) and _is_building(dest, dest_row):
         return ""
     return dest or "map walk"
+
+
+_PLACE_FILLER_WORDS = frozenset({
+    "the", "a", "an", "of", "and", "old", "new", "great", "little", "big", "upper", "lower", "far", "near",
+    "north", "south", "east", "west", "first", "last",
+})
+# The player carried somewhere: a boat poled or rowed, a raft that drifts,
+# "the rows go by". The player is not the subject, so _player_departs misses it.
+_CARRIED_RE = re.compile(
+    r"\b(?:pol(?:e|es|ed|ing)\b|row(?:s|ed|ing)?\s+(?:you|us|the\s+(?:skiff|boat))|rowed\b|paddl\w+|"
+    r"sail(?:s|ed|ing)?\b|drift(?:s|ed|ing)?\b|slides?\s+out|push(?:es|ed)?\s+off|"
+    r"carr(?:y|ies|ied)\s+(?:you|us)|go(?:es)?\s+by|goes\s+past|ships?\s+(?:his|her|their)\s+oars)",
+    re.IGNORECASE,
+)
+
+
+def _place_words(name: str) -> list[str]:
+    words = re.findall(r"[a-z]+", re.sub(r"['’]s\b", " ", humanize_place_name(name).lower()))
+    return [w for w in words if w not in _PLACE_FILLER_WORDS and len(w) > 2]
+
+
+def _line_names_place(line: str, words: list[str]) -> bool:
+    """The player's line names the place: its last two words side by side
+    ("tally house", "fish market's"), not "tally board ... customs-house"."""
+    if not words:
+        return False
+    if len(words) == 1:
+        return bool(re.search(rf"\b{re.escape(words[0])}", line))
+    pair = rf"\b{re.escape(words[-2])}(?:['’]s)?[\s-]+{re.escape(words[-1])}"
+    return bool(re.search(pair, line))
+
+
+def _destination_shown_loosely(dest: str, prose_low: str, player_input: str) -> bool:
+    """A move the player asked for, or prose that shows it by a shorter name (Saltmarrow #76).
+
+    "Row me out to the old fish market" asked for The Old Fish Market; prose
+    that has Jocosa pole the door "through the rows" to "the tower" shows the
+    move to the customs tower. The exact-name test dropped all three, so the
+    prose travelled and the save stayed behind. Still needs the place's head
+    noun in the prose, or every word of its name in the player's own line.
+    """
+    words = _place_words(dest)
+    if not words:
+        return False
+    line = _player_line(player_input).lower()
+
+    def has(text: str, word: str) -> bool:
+        return bool(re.search(rf"\b{re.escape(word)}", text))
+
+    if _line_names_place(line, words):
+        return True
+    head = words[-1]
+    if not has(prose_low, head):
+        return False
+    if any(has(prose_low, w) for w in words[:-1]) or has(line, head):
+        return True
+    return bool(_CARRIED_RE.search(prose_low))
+
+
+_REACH_WORDS_RE = re.compile(r"\b(?:into|inside|in\s+through|up\s+to|out\s+to|reach\w*|arriv\w*)\b", re.IGNORECASE)
+
+
+def _new_place_reached(name: str, narration: str, player_input: str) -> bool:
+    """Did this turn take the player to a place it just named?
+
+    Every word of the name in the player's own line, or a sentence of the
+    prose (not speech) with "you", the place's head noun and an arrival.
+    """
+    words = _place_words(name)
+    if not words:
+        return True
+    line = _player_line(player_input).lower()
+    if _line_names_place(line, words):
+        return True
+    head = words[-1]
+    named = False
+    for sentence in re.split(r"(?<=[.!?])\s+", _unspoken(narration)):
+        low = sentence.lower()
+        if not re.search(rf"\b{re.escape(head)}", low):
+            continue
+        named = True
+        if not re.search(r"\byou\b", low):
+            continue
+        if _TRAVEL_ARRIVAL_RE.search(sentence) or _PLAYER_DEPARTS_RE.search(sentence) or _REACH_WORDS_RE.search(sentence):
+            return True
+    # Named in the prose with no arrival is named in passing; a place the
+    # prose never names keeps the old reading (the turn travelled, and this
+    # is the only new place it made).
+    return not named
 
 
 def _is_building(name: str, row: Any = None) -> bool:
@@ -9246,6 +9485,11 @@ def resolve_movement(
         if not name or name == current_name or _is_place_or_item_code(name):
             continue
         if not is_plausible_place_name(name):
+            continue
+        # A place named in passing is not where the player went (Saltmarrow
+        # #76, T4): "I go to the tally board" minted "the tally house" beside
+        # it, and this rule walked the player inside.
+        if not _new_place_reached(name, narration, player_input):
             continue
         player_patch["move_to_location"] = name[:120]
         return {"status": "repaired", "rule": "new_location", "from": current_code, "destination": name}
@@ -11070,6 +11314,60 @@ def _upsert_location(
     if resolved_kind and resolved_parent and resolved_parent != new_id:
         stamp_venue_fields(conn, new_id, parent_id=resolved_parent, kind=resolved_kind)
     return new_id
+
+
+_HERE_SUMMARY_RE = re.compile(
+    r"\b(?:beside|next\s+to|behind|above|below|beneath|under|opposite|across\s+from|off\s+the|by\s+the|"
+    r"at\s+the\s+(?:end|foot|top|back|corner|edge)\s+of|on\s+the\s+(?:\w+\s+){0,2}"
+    r"(?:wall|street|square|quay|wharf|harbou?r|corner|lane|road|green|waterfront|front)|"
+    r"along\s+the\s+(?:\w+\s+)?(?:wall|street|quay|wharf|harbou?r|lane))\b",
+    re.IGNORECASE,
+)
+_FAR_SUMMARY_RE = re.compile(
+    r"\b(?:beyond|distant|far\s+(?:off|out|away)|miles?|leagues?|horizon|out\s+at\s+sea|in\s+the\s+(?:open\s+)?sea|"
+    r"across\s+the\s+(?:water|bay|sea|river|flats)|days?['’]?\s+(?:walk|ride|journey))\b",
+    re.IGNORECASE,
+)
+
+
+def _settle_place_named_in_passing(
+    conn, place_id: int, name: str, summary: str, result: dict[str, Any], movement_report: dict[str, Any] | None
+) -> None:
+    """A new place this turn did not travel to, described as right here,
+    stands in the place the player is in (Saltmarrow #33).
+
+    "The salvage guild's office on the harbour wall beside the tally board"
+    was minted with no parent while the player stood in Saltmarrow, so every
+    walk from it into Philippa's chandlery (whose parent is Saltmarrow) was
+    redirected out onto the street (T7, T73, T88). A place the turn moves the
+    player to is a journey and keeps its own standing; so does one described
+    as far off.
+    """
+    row = _location_row(conn, place_id)
+    if row is None or int(venues._field(row, "parent_id", 0) or 0) or str(venues._field(row, "kind", "") or ""):
+        return
+    patch = result.get("player") if isinstance(result.get("player"), dict) else {}
+    target = humanize_place_name(str(patch.get("move_to_location") or "")).lower()
+    if target and target == humanize_place_name(name).lower():
+        return
+    report = movement_report if isinstance(movement_report, dict) else {}
+    if str(report.get("destination") or "").strip().lower() == humanize_place_name(name).lower():
+        return
+    text = f"{name}. {summary}"
+    if not _HERE_SUMMARY_RE.search(text) or _FAR_SUMMARY_RE.search(text):
+        return
+    origin = None
+    origin_code = str(report.get("from") or "").strip()
+    if origin_code:
+        origin = conn.execute("SELECT * FROM locations WHERE UPPER(code) = ?", (origin_code.upper(),)).fetchone()
+    if origin is None:
+        here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        origin = _location_row(conn, int((here["current_location_id"] if here else 0) or 0))
+    if origin is None or int(origin["id"]) == place_id:
+        return
+    parent = int(venues._field(origin, "parent_id", 0) or 0) or int(origin["id"])
+    if parent and parent != place_id:
+        conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (parent, place_id))
 
 
 def _find_location_id(conn, name_or_code: str | None, *, refusal: dict[str, Any] | None = None) -> int:
@@ -13846,8 +14144,8 @@ _APPEARANCE_WORDS = (
 )
 
 
-def _seed_role_pool(conn, location_id: int) -> tuple[str, ...]:
-    """Pick an occupation pool that fits where the scene is happening."""
+def _seed_pool_place(conn, location_id: int) -> tuple[str, bool]:
+    """The pool kind for this place, and whether any word of it scored."""
     try:
         row = conn.execute(
             "SELECT name, summary FROM locations WHERE id = ?", (int(location_id),)
@@ -13860,12 +14158,48 @@ def _seed_role_pool(conn, location_id: int) -> tuple[str, ...]:
         for pool, keywords in _SEED_POOL_HINTS
     }
     best = max(scores, key=lambda pool: (scores[pool], pool == "settlement"))
-    place = best if scores[best] else "settlement"
+    return (best if scores[best] else "settlement"), bool(scores[best])
+
+
+def _seed_role_pool(conn, location_id: int) -> tuple[str, ...]:
+    """Pick an occupation pool that fits where the scene is happening."""
+    place, _scored = _seed_pool_place(conn, location_id)
     era = _campaign_era(conn)
     return _SEED_ROLE_POOLS.get(era, _SEED_ROLE_POOLS["preindustrial"])[place]
 
 
-def _seed_role_for(conn, location_id: int, hint: str, index: int, salt: Any = "") -> str:
+_SENTENCE_ROLE_WORDS = (
+    "runner", "porter", "carter", "fisher", "fisherman", "fisherwoman", "fishwife", "sailor", "boatman",
+    "ferryman", "dockhand", "docker", "labourer", "laborer", "salvager", "clerk", "watchman", "beggar",
+    "priest", "weaver", "smith", "blacksmith", "baker", "butcher", "cooper", "chandler", "tanner", "miller",
+    "farmer", "shepherd", "herder", "hunter", "trapper", "fishmonger", "vendor", "hawker", "peddler",
+    "pedlar", "midwife", "healer", "scribe", "mason", "carpenter", "rope-maker", "netmaker", "gull-boy",
+    "urchin", "apprentice", "messenger", "courier", "drover", "stablehand", "tide-reader",
+)
+
+
+def _in_town_words(conn, location_id: int) -> bool:
+    """The place calls itself part of a settlement: "a narrow street in the town quarter"."""
+    row = _location_row(conn, location_id)
+    if row is None:
+        return False
+    text = f"{venues._field(row, 'name', '') or ''} {venues._field(row, 'summary', '') or ''}".lower()
+    return bool(re.search(r"\b(?:town|village|city|hamlet|quarter|borough|district\s+of)\b", text))
+
+
+def _role_from_sentence(sentence: str, hint: str) -> str:
+    """An occupation the prose gives the seeded face in its own sentence."""
+    low = str(sentence or "").lower()
+    if not low:
+        return ""
+    best = ""
+    for word in _SENTENCE_ROLE_WORDS:
+        if re.search(rf"\b{re.escape(word)}s?\b", low) and len(word) > len(best):
+            best = word
+    return best
+
+
+def _seed_role_for(conn, location_id: int, hint: str, index: int, salt: Any = "", salt_sentence: str = "") -> str:
     """
     An occupation for a prose-seeded face, avoiding roles already standing here.
 
@@ -13873,6 +14207,11 @@ def _seed_role_for(conn, location_id: int, hint: str, index: int, salt: Any = ""
     deterministically from a campaign-stable seed so reruns and rewinds agree.
     """
     low = str(hint or "").lower()
+    # The prose's own word for what they do (Saltmarrow #73): "the next
+    # runner, a broad man" was seeded as Wulfstan the weaver.
+    told = _role_from_sentence(str(salt_sentence or ""), hint)
+    if told:
+        return told
     for word, role in (
         ("merchant", "merchant"), ("guard", "guard"), ("innkeeper", "innkeeper"),
         ("barkeep", "innkeeper"), ("bartender", "innkeeper"), ("soldier", "soldier"),
@@ -13883,6 +14222,16 @@ def _seed_role_for(conn, location_id: int, hint: str, index: int, salt: Any = ""
     ):
         if word in low:
             return role
+    # A roof or a sea tower is no market: the town's trades, the pool's default
+    # when nothing about the place scores, put weavers on both (Saltmarrow
+    # #73, T35, T45). A place the pool reads (water, wilds, indoors) keeps it.
+    place, _scored = _seed_pool_place(conn, int(location_id or 0))
+    if (
+        place == "settlement"
+        and not _in_settlement(conn, int(location_id or 0))
+        and not _in_town_words(conn, int(location_id or 0))
+    ):
+        return "local"
     pool = _seed_role_pool(conn, location_id)
     try:
         taken = {
@@ -14177,6 +14526,24 @@ def _unattributed_dialogue(conn, text: str, result: dict[str, Any] | None = None
     return " ".join(units)
 
 
+_NAMED_LINE_RE = re.compile(
+    r"[”\"]\s*,?\s*[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)?\s+(?:says|said|asks|asked|replies|replied|answers|answered|"
+    r"mutters|whispers|calls|snaps|adds|tells)\b|"
+    r"\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]+)?\s+(?:says|said|asks|asked|replies|replied|answers|answered|mutters|"
+    r"whispers|calls|snaps|adds|tells)\b[^.!?]{0,20}[“\"]"
+)
+
+
+def _prose_names_known_person(text: str, known_names: Any) -> bool:
+    for name in known_names or ():
+        for form in {str(name or "").strip(), *str(name or "").split()[:1]}:
+            if len(form) >= 3 and form.lower() not in _NOT_A_NAME and re.search(
+                r"(?<!\w)" + re.escape(form) + r"(?!\w)", str(text or "")
+            ):
+                return True
+    return False
+
+
 def _seed_summary(sentence: str, known_names: Any = ()) -> str:
     """What a seeded person's record says about them, from the prose's sentence:
     "" when the sentence is speech or names someone already known (playtest #78:
@@ -14282,6 +14649,15 @@ def _ensure_npcs_from_narration(
     # only dialogue nobody known speaks (playtest #73: '"Understood," Juliana
     # says' minted Bertram at the street the player had just walked out to).
     has_dialogue = bool(re.search(r'[“"][^”"]{8,}[”"]', _unattributed_dialogue(conn, text, result)))
+    # Lines with a speaker the engine cannot place are not a stranger's when
+    # the prose names someone known, wherever their record sits, or gives the
+    # line to a name (Saltmarrow #73): Tam's lines on the roof seeded
+    # "Jasper, weaver" (T35), and a person the GM made that turn under her own
+    # name got a second, drawn one (T24).
+    if has_dialogue and not hints and (
+        _prose_names_known_person(text, known_names) or _NAMED_LINE_RE.search(_unspoken(text) + " " + text)
+    ):
+        has_dialogue = False
     existing = [n for n in (result.get("npcs") or []) if isinstance(n, dict)]
     # Also count DB faces at this location (already upserted this turn)
     skip = {int(x) for x in companions or () if x}
@@ -14310,8 +14686,12 @@ def _ensure_npcs_from_narration(
         if recalled:
             existing.append({"code": recalled["code"], "name": recalled["name"], "role": recalled["role"]})
             continue
-        role = keeper_role if keeper_role and not created else _seed_role_for(conn, int(location_id), hint, i, salt=text[:40])
         sentence = _hint_sentence(text, hint)
+        role = (
+            keeper_role
+            if keeper_role and not created
+            else _seed_role_for(conn, int(location_id), hint, i, salt=text[:40], salt_sentence=sentence if hint else "")
+        )
         # The stored summary is shipped back as this person's line every turn
         # (playtest #78): never a quoted line, never someone else's sentence.
         summary = _seed_summary(sentence, known_names) if hint else ""
@@ -16312,6 +16692,10 @@ def apply_turn(
         except Exception:
             pass
 
+        try:
+            max_place_before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
+        except Exception:
+            max_place_before = 0
         for location in result.get("locations") or []:
             if not isinstance(location, dict):
                 continue
@@ -16321,7 +16705,14 @@ def apply_turn(
                 continue
             if location.get("_venue_consumed"):
                 continue  # already opened as the venue the player went into (playtest #50)
-            _upsert_location(conn, loc_name, str(location.get("summary") or ""))
+            new_place_id = _upsert_location(conn, loc_name, str(location.get("summary") or ""))
+            try:
+                if int(new_place_id or 0) > max_place_before:
+                    _settle_place_named_in_passing(
+                        conn, int(new_place_id), loc_name, str(location.get("summary") or ""), result, movement_report
+                    )
+            except Exception:
+                pass
 
         # Flatten nested locations[].npcs + conversation speakers; drop place-as-person junk
         collected_npcs = _collect_npcs_from_turn_result(result)
@@ -16658,6 +17049,17 @@ def apply_turn(
                     "system",
                     "Travel action with no MOVE op; server moved the player to "
                     f"{movement_report.get('destination') or '?'} ({movement_report.get('rule')})."[:1400],
+                ),
+            )
+        elif movement_report.get("status") == "dropped_unshown" and movement_report.get("destination"):
+            # Say so (Saltmarrow #76, T21): a dropped MOVE used to leave no trace.
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (
+                    turn,
+                    "system",
+                    f"MOVE to {movement_report.get('destination')} dropped: the player did not ask to go there "
+                    "and the prose does not show the player going."[:1400],
                 ),
             )
         elif movement_report.get("status") == "unresolved":
@@ -20053,12 +20455,27 @@ def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True
         time_delta = advance_world_time(conn, minutes)
         after = time_delta["after"]
 
-        # Spawn shell NPCs for events that need a face
-        shells: list[dict[str, Any]] = []
         loc_id = (context.get("current_location") or {}).get("id")
+        # Saltmarrow #73: a pickpocket and crowd noise rolled for a lone tower
+        # in the open sea (T97). Crowd events need a settlement.
+        if loc_id and not _in_settlement(conn, int(loc_id)):
+            rng_pack["events"] = [ev for ev in rng_pack.get("events") or [] if ev.get("kind") not in _CROWD_WAIT_KINDS]
+            rng_pack["event_count"] = len(rng_pack["events"])
+            rng_pack["lone_place"] = True
+
+        # Spawn shell NPCs for events that need a face. Only a fight keeps a
+        # record (its opponent is a combat target); crowd noise, a weather
+        # shift or a passer-by used to become standing people in the place,
+        # three of them at the tally house after one sleep (Saltmarrow #73, T87).
+        shells: list[dict[str, Any]] = []
         if loc_id:
             for ev in rng_pack.get("events") or []:
                 tier = str(ev.get("participant_tier") or "nameless")
+                if ev.get("kind") in _FACELESS_WAIT_KINDS:
+                    continue
+                if ev.get("kind") != "fight_nearby":
+                    ev["participant"] = "a passer-by" if tier == "nameless" else "a bystander"
+                    continue
                 if tier in {"nameless", "background", "event_worthy"}:
                     shell = create_shell_npc(
                         conn,
@@ -20131,6 +20548,8 @@ def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True
         bit = f"{ev.get('kind')}:{ev.get('participant_tier')}"
         if ev.get("npc_code"):
             bit += f"@{ev.get('npc_code')}"
+        elif ev.get("participant"):
+            bit += f" ({ev.get('participant')}, unnamed, passing through)"
         event_lines.append(bit)
     res_after = (regen_pack or {}).get("after") or {}
     res_delta = (regen_pack or {}).get("deltas") or {}

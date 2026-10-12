@@ -808,6 +808,9 @@ def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
         person = str(npc.get("name") or "").strip()
         if not person:
             continue
+        # A nameless shell is a passing face, not someone here (Saltmarrow #73).
+        if str(npc.get("presence") or "") == "nameless" and int(npc.get("shell") or 0):
+            continue
         entry = {"name": person, "code": npc.get("code") or "", "role": npc.get("role") or ""}
         # Whose place this is (playtest #16): someone whose workplace is
         # elsewhere is a visitor here, not the one behind the counter.
