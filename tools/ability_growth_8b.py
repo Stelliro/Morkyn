@@ -456,7 +456,7 @@ def engine_use_check(theme_id: str, spec: dict[str, Any], rows: list[dict[str, A
         stored = [dict(r) for r in conn.execute("SELECT * FROM abilities").fetchall()]
         sent_types = {a["name"].lower(): a.get("power_type") for a in abilities}
         for ab in stored:
-            uses, reasons, minute = 0, [], 0
+            uses, reasons, minute, rank_ups = 0, [], 0, 0
             for _ in range(12):
                 res = apply_ability_use(conn, ab, options={"magic_level": spec["magic_level"]},
                                         world_time={"day": 1, "minute": minute}, turn=uses + 1)
@@ -465,12 +465,19 @@ def engine_use_check(theme_id: str, spec: dict[str, Any], rows: list[dict[str, A
                     break
                 uses += 1
                 minute += 5
+                rank_ups += sum(1 for e in (res.get("growth") or {}).get("events") or [] if e.get("type") == "rank_up")
             conn.commit()
+            after = conn.execute("SELECT growth, growth_state FROM abilities WHERE id = ?", (ab["id"],)).fetchone()
+            growth = json.loads(after["growth"] or "{}") if after else {}
             jsonl(out / "engine.jsonl", {
                 "theme": theme_id, "name": ab["name"],
                 "power_type_sent": sent_types.get(str(ab["name"]).lower()), "power_type_stored": ab.get("power_type"),
                 "locked_after_start": ab.get("locked"), "resource_cost": ab.get("resource_cost"),
                 "uses_before_block": uses, "blocked_by": reasons,
+                # Engine growth (two-part system): template, the state after these uses, rank-ups seen.
+                "growth_template": growth.get("template"), "growth_seed": {k: growth.get(k) for k in ("pace", "start", "grows")},
+                "growth_state_after": json.loads(after["growth_state"] or "{}") if after else {},
+                "rank_ups": rank_ups,
             })
     finally:
         conn.close()
@@ -743,6 +750,10 @@ def summarize(out: Path) -> dict[str, Any]:
             "engine_power_type_lost": sum(1 for e in en if e.get("power_type_sent") and e.get("power_type_sent") != e.get("power_type_stored")),
             "engine_never_blocked_in_12_uses": sum(1 for e in en if e.get("uses_before_block") == 12),
             "engine_locked_after_start": f"{sum(1 for e in en if e.get('locked_after_start'))}/{len(en)}",
+            "engine_growth_templates": {t: sum(1 for e in en if e.get("growth_template") == t)
+                                        for t in sorted({e.get("growth_template") for e in en if e.get("growth_template")})},
+            "engine_seeds_with_grows": sum(1 for e in en if (e.get("growth_seed") or {}).get("grows")),
+            "engine_rank_ups_in_12_uses": sum(int(e.get("rank_ups") or 0) for e in en),
             "seed_locked_at_start": any(t.get("locked_at_start") for t in turns if t.get("theme") == theme and "locked_at_start" in t),
             "real_turns": len(tu),
             "real_turns_ability_changed": sum(1 for t in tu if t.get("ability_changed")),

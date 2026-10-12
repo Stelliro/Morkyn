@@ -371,11 +371,6 @@ const RANDOM_SETUP = {
   system_style: ["subtle blue-window system", "cold quest-log interface", "cultivation status pane", "diegetic omen prompts"],
 };
 
-const GROWTH_MATH_SAMPLES = [
-  "OP seed: F→E@60 E→D@140 D→C@320 C→B@700 B→A@1500 A→S@3200 S→SS@7000 SS→SSS@15000; use 6-14 XP × risk (1/2/3/5 life-or-domain); XP_to_next = 40 * rank_index^1.55; after each letter-band soft cap ×0.55 until contested breakthrough; effect mult ≈ 1.22^ranks_above_F (stacks); rank check +1 per rank; late S+ unlocks domain passives",
-  "levels 1-10; XP_to_next = 30 + 12*level; successful use grants 3-8 XP; crit success ×2; soft cap at L6 (XP ×0.6 until setback recovery); effect magnitude +8% per level",
-  "thresholds F0 E100 D250 C500 B1000 A2000 S4000 SS9000 SSS20000; practice 5 XP, contested 12, mentor 18, life-risk 25; rank +1 check / +12–20% effect compound; breakthrough after B and again after A before S-tier; passive auras unlock at C/A/S",
-];
 
 const POWER_GROWTH_TYPES = [
   {
@@ -422,7 +417,8 @@ const ABILITY_PRESETS = [
     locked: false,
     prerequisites: "",
     cost: "",
-    growth_math: GROWTH_MATH_SAMPLES[0],
+    power_type: "compounding",
+    growth: { pace: "steady", start: "weak", grows: "" },
   },
   {
     name: "Ashen Oath",
@@ -430,7 +426,8 @@ const ABILITY_PRESETS = [
     locked: true,
     prerequisites: "Awakens after witnessing a broken oath with real consequences.",
     cost: "",
-    growth_math: GROWTH_MATH_SAMPLES[1],
+    power_type: "linear",
+    growth: { pace: "steady", start: "ordinary", grows: "" },
   },
   {
     name: "Thread Sense",
@@ -438,7 +435,8 @@ const ABILITY_PRESETS = [
     locked: false,
     prerequisites: "",
     cost: "Brief fatigue or sensory overload after repeated use.",
-    growth_math: GROWTH_MATH_SAMPLES[2],
+    power_type: "passive",
+    growth: { pace: "slow", start: "ordinary", grows: "" },
   },
   {
     name: "Last Light",
@@ -446,7 +444,8 @@ const ABILITY_PRESETS = [
     locked: true,
     prerequisites: "Only unlocks after the player accepts a serious personal risk.",
     cost: "One permanent scar, debt, or consequence chosen by context.",
-    growth_math: "single-use breakthrough ability; no rank ladder until unlocked; after unlock, recovery XP only via narrative milestones (DM awards 1 breakthrough charge per major life risk survived, max 1 held)",
+    power_type: "breakthrough",
+    growth: { pace: "slow", start: "weak", grows: "" },
   },
   {
     name: "Quiet Ledger",
@@ -454,7 +453,8 @@ const ABILITY_PRESETS = [
     locked: false,
     prerequisites: "",
     cost: "Distraction in crowded social noise.",
-    growth_math: GROWTH_MATH_SAMPLES[0],
+    power_type: "compounding",
+    growth: { pace: "steady", start: "weak", grows: "" },
   },
   {
     name: "Rust Touch",
@@ -462,7 +462,8 @@ const ABILITY_PRESETS = [
     locked: true,
     prerequisites: "Needs a full night handling scrap metal without rest.",
     cost: "Numb fingers for hours.",
-    growth_math: GROWTH_MATH_SAMPLES[1],
+    power_type: "linear",
+    growth: { pace: "steady", start: "ordinary", grows: "" },
   },
   {
     name: "Ink Memory",
@@ -470,7 +471,8 @@ const ABILITY_PRESETS = [
     locked: false,
     prerequisites: "",
     cost: "Mild headache if forced twice in a row.",
-    growth_math: GROWTH_MATH_SAMPLES[2],
+    power_type: "passive",
+    growth: { pace: "slow", start: "ordinary", grows: "" },
   },
   {
     name: "Second Breath",
@@ -478,7 +480,8 @@ const ABILITY_PRESETS = [
     locked: false,
     prerequisites: "",
     cost: "Deep hunger afterward.",
-    growth_math: GROWTH_MATH_SAMPLES[0],
+    power_type: "compounding",
+    growth: { pace: "steady", start: "weak", grows: "" },
   },
 ];
 
@@ -1413,7 +1416,7 @@ const ABILITY_FIELD_HELP = {
     "Optional unlock condition. Leave blank for powers usable at Start. Use a real sentence for strong locked powers — never [] or empty JSON. Mild utilities should stay unlocked.",
   cost: "Optional drawback, cooldown, resource, injury, fatigue, debt, risk, or other limit on using the ability.",
   growth_math:
-    "Playable growth calculation for this power: XP curves, rank thresholds, per-use XP × risk, soft caps, rank→bonus formulas. Randomize invents numbers; the DM applies them in play.",
+    "Computed by the game from the type, pace and start: the rank ladder, XP per use × risk, soft caps or breakthrough walls, and the strength at each rank. Using the power in play earns the XP.",
 };
 
 function escapeHtml(value) {
@@ -3874,7 +3877,7 @@ function fieldContext(name) {
     const rolledCount = existing.length ? free : rollAbilityCountForRandomize();
     const keptNames = existing.filter((ability) => ability.keep).map((ability) => ability.name).filter(Boolean);
     const originRule =
-      "Invent distinct powers (name, description, cost, growth_math). Mix inherent and trained-feeling fiction as fits the world. The app rolls quantity first, then after creation locks the stronger powers and sets prerequisites only on those. Focus on fiction quality, not forcing locked=true on every card.";
+      "Invent distinct powers (name, description, cost, power_type, growth seed: pace/start/grows in words; the game computes all growth numbers). Mix inherent and trained-feeling fiction as fits the world. The app rolls quantity first, then after creation locks the stronger powers and sets prerequisites only on those. Focus on fiction quality, not forcing locked=true on every card.";
     const countRule = existing.length
       ? `The page already has ${existing.length} abilities and that number must stay. Return exactly ${free} new abilities to replace the unlocked ones. Do not add or remove slots. Leave these locked abilities out of the result: ${keptNames.join(", ") || "(none)"}.`
       : `Return exactly requested_count (${rolledCount}) ability slots (rolled from ${min}–${max}${quantityLocked ? ", quantity locked" : ", pure RNG"}). Do not pick a different count.`;
@@ -3889,7 +3892,7 @@ function fieldContext(name) {
       count_min: min,
       count_max: max,
       kept_names: keptNames,
-      roll_rule: `${countRule} Each ability needs name, description, locked, prerequisites, cost, growth_math, and power_type (compounding|passive|linear|soft_cap|breakthrough|flat|item_bound). ${originRule}`,
+      roll_rule: `${countRule} Each ability needs name, description, locked, prerequisites, cost, power_type (compounding|passive|linear|soft_cap|breakthrough|flat|item_bound) and growth {pace, start, grows} in words; never growth math. ${originRule}`,
     };
   }
   return { type: "field", value: setupForm.elements[name]?.value || "" };
@@ -4592,6 +4595,8 @@ function textAiLabel(control) {
 
 function isTextAiControl(control) {
   if (!control || !control.matches("input, textarea")) return false;
+  // A read-only box is computed (the ability growth preview): there is nothing to fill.
+  if (control.readOnly) return false;
   // Simple-mode free text fields (id-based, no form name)
   if (control.dataset.setupField && control.dataset.simpleAi === "true") {
     if (control.tagName === "TEXTAREA") return true;
@@ -4603,6 +4608,16 @@ function isTextAiControl(control) {
   if (control.matches('input[data-ability-field="name"]')) return true;
   if (!control.name || control.tagName !== "INPUT") return false;
   return !["button", "checkbox", "color", "file", "hidden", "number", "radio", "range", "reset", "submit"].includes(control.type);
+}
+
+/** The growth seed on an ability card: words only; the server computes every number from it. */
+function abilityGrowthSeedFromCard(card) {
+  const field = (name) => card?.querySelector(`[data-ability-field="${name}"]`);
+  return {
+    pace: field("growth_pace")?.value || "steady",
+    start: field("growth_start")?.value || "ordinary",
+    grows: field("growth_grows")?.value.trim() || "",
+  };
 }
 
 function abilityCardSnapshot(card) {
@@ -4619,6 +4634,7 @@ function abilityCardSnapshot(card) {
     cost: costMode === "custom" ? field("cost")?.value.trim() || "" : costMode,
     growth_math: field("growth_math")?.value.trim() || "",
     power_type: field("power_type")?.value || "linear",
+    growth: abilityGrowthSeedFromCard(card),
   };
 }
 
@@ -6425,9 +6441,18 @@ function abilityTemplate(ability = {}, options = {}) {
   const powerType =
     ability.power_type ||
     (ability.compounding || ability.one_skill || ability.op_mc ? "compounding" : "linear");
-  const growthMath =
-    ability.growth_math ||
-    (powerType === "compounding" || powerType === "passive" || ability.one_skill || ability.op_mc ? "" : "");
+  const growthMath = ability.growth_math || "";
+  // The model's (or player's) growth seed; the server turns it into growth_math (app/ability_growth.py).
+  const seedIn = ability.growth && typeof ability.growth === "object" ? ability.growth : {};
+  const growthSeed = {
+    pace: ["slow", "steady", "fast"].includes(seedIn.pace) ? seedIn.pace : "steady",
+    start: ["weak", "ordinary", "strong"].includes(seedIn.start)
+      ? seedIn.start
+      : powerType === "compounding"
+        ? "weak"
+        : "ordinary",
+    grows: String(seedIn.grows || ""),
+  };
   const typeOptions = POWER_GROWTH_TYPES.map(
     (t) =>
       `<option value="${escapeHtml(t.id)}" ${powerType === t.id ? "selected" : ""} title="${escapeHtml(t.tip)}">${escapeHtml(t.label)}</option>`,
@@ -6504,12 +6529,30 @@ function abilityTemplate(ability = {}, options = {}) {
             <textarea data-ability-field="cost" rows="2" maxlength="300" placeholder="Optional custom cost, limit, cooldown, resource, injury, debt, etc.">${escapeHtml(ability.cost && !["no cost", "model decides"].includes(ability.cost) ? ability.cost : "")}</textarea>
           </label>
         </div>
+        <div class="abilityCardGrid abilityGrowthSeed">
+          <label>
+            <span>Pace</span>
+            <select data-ability-field="growth_pace" title="How quickly ranks come">
+              ${["slow", "steady", "fast"].map((p) => `<option value="${p}" ${growthSeed.pace === p ? "selected" : ""}>${p[0].toUpperCase() + p.slice(1)}</option>`).join("")}
+            </select>
+          </label>
+          <label>
+            <span>Starts</span>
+            <select data-ability-field="growth_start" title="Where on the rank ladder the power begins">
+              ${["weak", "ordinary", "strong"].map((s) => `<option value="${s}" ${growthSeed.start === s ? "selected" : ""}>${s[0].toUpperCase() + s.slice(1)}</option>`).join("")}
+            </select>
+          </label>
+          <label class="wide">
+            <span>Grows</span>
+            <input data-ability-field="growth_grows" maxlength="80" value="${escapeHtml(growthSeed.grows || "")}" placeholder="What gets stronger: reach, duration, how many targets…" />
+          </label>
+        </div>
         <label class="wide">
-          <span>Growth Math</span>
-          <textarea data-ability-field="growth_math" rows="3" maxlength="800" placeholder="How this power grows in numbers: XP_to_next, rank thresholds, per-use XP × risk, soft caps, rank→bonus.">${escapeHtml(growthMath)}</textarea>
+          <span>Growth (the game computes this)</span>
+          <textarea data-ability-field="growth_math" rows="3" readonly placeholder="Ranks, XP per use and strength per rank appear here from the type, pace and start.">${escapeHtml(growthMath)}</textarea>
         </label>
         <div class="abilityCardActions">
-          <button class="secondaryButton calcGrowthMathBtn" type="button" title="Fill growth math from type + current setup">Calculate level-up math</button>
+          <button class="secondaryButton calcGrowthMathBtn" type="button" title="Recompute the growth from type, pace and start">Refresh growth</button>
           ${extraActions}
           <button class="secondaryButton removeAbility" type="button">Remove</button>
         </div>
@@ -6641,7 +6684,7 @@ async function randomizeOneAbilityWithModel(card) {
     roll_rule:
       `Rewrite one ability card. Return exactly 1 new ability that replaces "${replaced?.name || "this card"}" ` +
       `and differs in name, action, and effect from every other card: ${keptNames.join(", ") || "(none)"}. ` +
-      "Each ability needs name, description, locked, prerequisites, cost, growth_math, and power_type.",
+      "Each ability needs name, description, locked, prerequisites, cost, power_type and growth {pace, start, grows}; never growth math.",
   };
   const response = await fetch("/api/randomize-setup", {
     method: "POST",
@@ -6680,8 +6723,9 @@ function collectAbilities() {
       const cost = costMode === "custom" ? field("cost")?.value.trim() || "model decides" : costMode;
       const growth_math = field("growth_math")?.value.trim() || "";
       const power_type = field("power_type")?.value || "linear";
+      const growth = abilityGrowthSeedFromCard(card);
       return normalizeAbilityLockAndPrerequisites(
-        { name, description, locked, keep, prerequisites, cost, growth_math, power_type },
+        { name, description, locked, keep, prerequisites, cost, growth_math, power_type, growth },
         "both",
       );
     })
@@ -6700,70 +6744,66 @@ function setupContextForGrowthMath() {
   return { difficulty, world, origin, name };
 }
 
-function growthMathForPowerType(powerType, ability = {}, ctx = {}) {
-  const difficulty = String(ctx.difficulty || "normal").toLowerCase();
-  const hard = difficulty === "hard" || difficulty === "brutal";
-  const easy = difficulty === "easy";
-  const name = String(ability.name || "this power").trim() || "this power";
-  const worldNote = ctx.world ? ` World lean: ${String(ctx.world).slice(0, 80)}.` : "";
-  const type = String(powerType || "linear");
-
-  if (type === "flat") {
-    return `flat; no rank ladder for ${name}; effect stays as written in base description; uses do not grant rank XP (optional narrative mastery only).${worldNote}`;
-  }
-  if (type === "breakthrough") {
-    const xp = easy ? "practice 3-6, contested 8-12" : hard ? "practice 2-4, contested 10-16" : "practice 4-8, contested 10-14";
-    return `breakthrough ladder; ranks F→E@120 E→D@280 D→C@600 (plateau after C until story breakthrough); ${xp} XP × risk (1/2/3); soft cap after C practice ×0.4 until mentor/life-risk breakthrough; each rank above F: +1 domain check; post-breakthrough unlocks next band (B/A).${worldNote}`;
-  }
-  if (type === "soft_cap") {
-    return (
-      (easy ? GROWTH_MATH_SAMPLES[1] : hard ? GROWTH_MATH_SAMPLES[2] : GROWTH_MATH_SAMPLES[0]) +
-      ` soft-cap profile for ${name}; after rank C practice XP ×0.55 until setback recovery or mentor drill.${worldNote}`
-    );
-  }
-  if (type === "item_bound") {
-    return `item-bound growth for ${name}; XP only while linked gear is equipped/used; F→E@90 E→D@220 D→C@480; use grants 4-10 XP × risk (1/2/3); unequip freezes rank; each rank: +1 domain check while worn; soft cap after C ×0.6.${worldNote}`;
-  }
-  if (type === "passive") {
-    return `passive always-on for ${name}; ranks F→E@70 E→D@160 D→C@360 C→B@750 B→A@1600 A→S@3400; ambient XP 3-8/day in domain + 4-10 on relevant scenes × risk; no activate cost; each rank: +1 domain check / +8–14% passive effect; soft cap after C until story beat; stronger auras at A/S.${worldNote}`;
-  }
-  if (type === "compounding") {
-    const curve = hard
-      ? "XP_to_next = 42 * rank_index^1.65 (F=1); use grants 5-10 XP × risk (1/2/3/5); soft caps after C and B (practice ×0.5) until contested/story breakthrough; ladder through S/SS/SSS"
-      : easy
-        ? "XP_to_next = 30 * rank_index^1.5 (F=1); use grants 6-12 XP × risk (1/2/3); soft cap after B practice ×0.6 until breakthrough; path open to S+"
-        : "XP_to_next = 36 * rank_index^1.58 (F=1); use grants 5-11 XP × risk (1/2/3/4); soft cap after C practice ×0.55 until breakthrough; full ladder F…S/SS/SSS";
-    return `OP compounding for ${name}; ranks F,E,D,C,B,A,S,SS,SSS; ${curve}; each rank above F: +1 domain check and ~+14–22% effect magnitude (stack); late S+ may unlock domain passives / secondary expressions — opening kit stays one seed.${worldNote}`;
-  }
-  // linear default
-  return `linear ranks for ${name}; F0 E70 D160 C320 B600 A1100; use grants 5-10 XP × risk (1/2/3); XP_to_next ≈ 40 + 25*rank_index; each rank: +1 domain check / +8% effect; no hard compound mult.${worldNote}`;
-}
-
-function fillGrowthMathOnCard(card, { force = false } = {}) {
-  if (!card) return;
-  const field = (name) => card.querySelector(`[data-ability-field="${name}"]`);
-  const ta = field("growth_math");
-  if (!ta) return;
-  if (!force && String(ta.value || "").trim()) return;
-  const powerType = field("power_type")?.value || "linear";
-  const ability = {
-    name: field("name")?.value || "",
-    description: field("description")?.value || "",
+// Ability growth: the card holds the seed (type, pace, start, grows); the server computes
+// the math with the same engine Start uses (app/ability_growth.py), so the preview is
+// exactly what the game will play. There is no second copy of the formulas here.
+function abilityGrowthRequest(cards) {
+  const ctx = setupContextForGrowthMath();
+  return {
+    rank_scale: getFormFieldValue("rank_scale") || "",
+    difficulty: ctx.difficulty || "normal",
+    skill_growth_speed: getFormFieldValue("skill_growth_speed") || "",
+    abilities: cards.map((card) => {
+      const field = (name) => card.querySelector(`[data-ability-field="${name}"]`);
+      return {
+        name: field("name")?.value || "",
+        power_type: field("power_type")?.value || "linear",
+        growth: abilityGrowthSeedFromCard(card),
+      };
+    }),
   };
-  ta.value = growthMathForPowerType(powerType, ability, setupContextForGrowthMath()).slice(0, 800);
 }
 
-function calculateAllAbilityGrowthMath({ force = false } = {}) {
-  if (!abilityList) return 0;
-  let n = 0;
-  abilityList.querySelectorAll(".abilitySetupCard").forEach((card) => {
-    const before = card.querySelector('[data-ability-field="growth_math"]')?.value || "";
-    fillGrowthMathOnCard(card, { force });
-    const after = card.querySelector('[data-ability-field="growth_math"]')?.value || "";
-    if (after && after !== before) n += 1;
-    else if (force && after) n += 1;
+async function previewAbilityGrowth(cards) {
+  const list = (cards || []).filter(Boolean);
+  if (!list.length) return 0;
+  let data;
+  try {
+    const res = await fetch("/api/ability-growth/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(abilityGrowthRequest(list)),
+    });
+    if (!res.ok) return 0;
+    data = await res.json();
+  } catch (_) {
+    return 0;
+  }
+  let changed = 0;
+  (data.abilities || []).forEach((row, i) => {
+    const ta = list[i]?.querySelector('[data-ability-field="growth_math"]');
+    if (ta && row && typeof row.growth_math === "string" && ta.value !== row.growth_math) {
+      ta.value = row.growth_math;
+      changed += 1;
+    }
   });
-  return n;
+  return changed;
+}
+
+function fillGrowthMathOnCard(card) {
+  return previewAbilityGrowth([card]);
+}
+
+function calculateAllAbilityGrowthMath() {
+  if (!abilityList) return Promise.resolve(0);
+  return previewAbilityGrowth(Array.from(abilityList.querySelectorAll(".abilitySetupCard")));
+}
+
+const growthPreviewTimers = new WeakMap();
+function scheduleGrowthPreview(card, delay = 350) {
+  if (!card) return;
+  window.clearTimeout(growthPreviewTimers.get(card));
+  growthPreviewTimers.set(card, window.setTimeout(() => fillGrowthMathOnCard(card), delay));
 }
 
 function updatePowerTypeTip(card) {
@@ -6939,6 +6979,7 @@ function abilityFromCard(card) {
     cost: costMode === "custom" ? field("cost")?.value.trim() || "model decides" : costMode,
     growth_math: field("growth_math")?.value.trim() || "",
     power_type: field("power_type")?.value || "item_bound",
+    growth: abilityGrowthSeedFromCard(card),
   };
 }
 
@@ -11980,7 +12021,8 @@ function renderPlayer() {
             ability.base_description || ability.description,
             rcBits.length ? `Resources: ${rcBits.join(", ")}` : ability.cost ? `Cost: ${ability.cost}` : "",
             ability.prerequisites ? `Prerequisites: ${ability.prerequisites}` : "",
-            ability.growth_math ? `Growth math: ${ability.growth_math}` : "",
+            // The engine's live rank and progress; the full growth table only for older saves without it.
+            ability.growth_now ? `Growth: ${ability.growth_now}` : ability.growth_math ? `Growth math: ${ability.growth_math}` : "",
             ability.additions ? `Added notes: ${ability.additions}` : "",
           ]
             .filter(Boolean)
@@ -21410,27 +21452,50 @@ setupForm?.elements?.starter_equipment?.addEventListener("input", () => {
   parseStarterEquipmentToGear(getFormFieldValue("starter_equipment")).forEach((item) => addGearItem(item));
   ensureRequiredGearCards().catch(() => {});
 });
-document.querySelector("#calcAllGrowthMathBtn")?.addEventListener("click", () => {
-  const n = calculateAllAbilityGrowthMath({ force: true });
+document.querySelector("#calcAllGrowthMathBtn")?.addEventListener("click", async () => {
+  const cards = abilityList ? abilityList.querySelectorAll(".abilitySetupCard").length : 0;
+  await calculateAllAbilityGrowthMath();
   window.alert(
-    n
-      ? `Filled level-up math on ${n} power(s) from growth type + difficulty/world context.`
+    cards
+      ? `Growth recomputed on ${cards} power(s) from type, pace, start and difficulty.`
       : "No ability cards to update. Add a power first.",
   );
 });
-// Ability card: growth type tip + per-card calc; gear remove
+// Ability card: growth type tip + growth preview from the seed; gear remove
 document.addEventListener("change", (event) => {
   const typeSel = event.target?.closest?.('[data-ability-field="power_type"]');
   if (typeSel) {
     const card = typeSel.closest(".abilitySetupCard");
     updatePowerTypeTip(card);
   }
+  const seedField = event.target?.closest?.(
+    '[data-ability-field="power_type"], [data-ability-field="growth_pace"], [data-ability-field="growth_start"], [data-ability-field="growth_grows"]',
+  );
+  if (seedField) scheduleGrowthPreview(seedField.closest(".abilitySetupCard"), 0);
+  // Difficulty, rank scale and growth speed change every card's numbers.
+  if (event.target?.matches?.('[name="difficulty"], #simpleDifficulty, [name="rank_scale"], [name="skill_growth_speed"]')) {
+    calculateAllAbilityGrowthMath();
+  }
 });
+document.addEventListener("input", (event) => {
+  const grows = event.target?.closest?.('[data-ability-field="growth_grows"]');
+  if (grows) scheduleGrowthPreview(grows.closest(".abilitySetupCard"));
+});
+// Any card that appears (preset, randomize, gear ability) gets the engine's growth.
+new MutationObserver((records) => {
+  records.forEach((record) =>
+    record.addedNodes.forEach((node) => {
+      if (!(node instanceof Element)) return;
+      const cards = node.matches(".abilitySetupCard") ? [node] : Array.from(node.querySelectorAll(".abilitySetupCard"));
+      cards.forEach((card) => scheduleGrowthPreview(card, 50));
+    }),
+  );
+}).observe(document.body, { childList: true, subtree: true });
 document.addEventListener("click", (event) => {
   if (event.target.closest(".calcGrowthMathBtn")) {
     event.preventDefault();
     const card = event.target.closest(".abilitySetupCard");
-    fillGrowthMathOnCard(card, { force: true });
+    fillGrowthMathOnCard(card);
     return;
   }
   if (event.target.closest(".removeGearItem")) {

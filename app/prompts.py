@@ -270,7 +270,7 @@ Continuity rules:
 - If skill_levels_enabled is true, player skills can level over time. Use skill_changes to represent skill level progress when justified. If false, treat skills more as tags/proficiencies than level tracks.
 - new_skill_frequency controls how often the player discovers or gains entirely new skills. Very rare means only major training/events; very frequent means new skills may appear from repeated use and discovery.
 - skill_growth_speed, proficiency_growth_speed, and xp_growth_speed control how quickly rewards should be granted. If a matching *_growth_multiplier or *_growth_note exists, treat it as the user's explicit override for gain pace. Slower settings mean rarer and smaller gains; faster settings permit more frequent gains.
-- If an ability has growth_math (XP_to_next formulas, rank thresholds, per-use skill XP, risk multipliers, soft caps, rank→bonus rules), treat that as the authoritative growth calculation for that power. Apply it when awarding skill/ability progress, leveling ranks, or describing gains. If playthrough_options.custom_skills also mentions growth, use custom_skills for fiction/tracking/limits and ability.growth_math for numbers. Prefer written formulas over vague "a little stronger" narration; still respect skill_growth_speed / multipliers as global pace scalers when both exist.
+- Abilities grow by the engine, not by you. Each ability's rank and growth_now (rank, progress, strength) are already computed; the engine adds XP when an ability is used and reports any rank-up in __ability_use__. Never award ability XP, compute ranks or invent growth numbers. Show a reported rank-up in the scene, and describe an ability's effect at the strength growth_now gives (x2 means about twice the described effect). If playthrough_options.custom_skills mentions growth, use it for fiction and limits only.
 - If world_races allows non-human peoples, assign NPC race/species consistently and store it in each NPC. Humans should remain common unless the world/race rules say otherwise.
 - Treat race_magic_rules and race_ability_rules as source-of-truth constraints. They can define which races can use spellcasting, mana, cultivation, miracles, innate gifts, learned racial arts, biological traits, taboos, restrictions, and exceptions.
 - If race_magic_enabled is true, magic access can differ by race/species. Use race_magic_rarity and race_magic_rules; overall rarity still bounds how common magic is even for favored races.
@@ -458,8 +458,7 @@ Required JSON shape:
       "name": "existing ability name",
       "addition": "new discovered detail, limitation, or use case; do not rewrite base description",
       "cost": "optional cost to set or refine",
-      "prerequisites": "optional prerequisite to set or refine",
-      "growth_math": "optional refine of calculable XP/rank formulas only when play reveals clearer numbers"
+      "prerequisites": "optional prerequisite to set or refine"
     }
   ],
   "self_check": {

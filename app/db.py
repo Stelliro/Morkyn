@@ -210,7 +210,9 @@ def init_db() -> None:
                 growth_math TEXT NOT NULL DEFAULT '',
                 additions TEXT NOT NULL DEFAULT '',
                 resource_cost TEXT NOT NULL DEFAULT '{}',
-                source TEXT NOT NULL DEFAULT 'setup'
+                source TEXT NOT NULL DEFAULT 'setup',
+                growth TEXT NOT NULL DEFAULT '{}',
+                growth_state TEXT NOT NULL DEFAULT '{}'
             );
 
             CREATE TABLE IF NOT EXISTS events (
@@ -854,6 +856,10 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
         ("magnitude_kind", "TEXT NOT NULL DEFAULT ''"),
         ("activation", "TEXT NOT NULL DEFAULT 'active'"),
         ("pack_id", "TEXT NOT NULL DEFAULT ''"),
+        # Engine growth (app/ability_growth.py): the expanded spec from the model's
+        # seed, and the ability's own rank / XP / uses, advanced on every use.
+        ("growth", "TEXT NOT NULL DEFAULT '{}'"),
+        ("growth_state", "TEXT NOT NULL DEFAULT '{}'"),
     ):
         if column not in ability_columns:
             conn.execute(f"ALTER TABLE abilities ADD COLUMN {column} {definition}")
