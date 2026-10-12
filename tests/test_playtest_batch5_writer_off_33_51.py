@@ -206,7 +206,10 @@ class CompanionIsNotTheShopkeeper(_WriterOff):
 
     def test_open_ground_is_not_a_venue(self):
         r = cv.resolve(self.CTX, "I go into the forest.", dict(self.STATE))
-        self.assertEqual(r["rule"], "partner")
+        # Not a venue. A walk with no word said is said to nobody (Saltmarrow
+        # #104), so the partner is no longer told to answer it.
+        self.assertNotEqual(r["rule"], "venue")
+        self.assertEqual(r["addressed"], [])
 
 
 class NpcNewMustBeShown(_WriterOff):

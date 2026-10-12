@@ -23,6 +23,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Fixed
+
+- [CLAUDE] Who the player is talking to follows the line (playtest #104, Saltmarrow run). A role only one person here holds names them ('the tide clerk' went to the weaver who spoke last); a surname nobody else here shares names them ('Reeve Thorne' went to Hereward); a line with no speech, question, order or word of dealing with anyone is said to nobody ('Tam and I set the iron bar', 'I look for Philippa in the crowd' no longer make someone answer, and 'the crowd' is no longer the whole room); a kinship word nobody answers to ('Six years, Mam') no longer falls to the last partner. - `app/conversation.py`
+
+
 ## [0.10.0-dev.12] - 2026-10-13
 
 > Pre-release on the way to `0.10.0`. First fixes from the Saltmarrow run: levels rise with XP, sleep heals, a sum the prose names is the sum that moves, checks read only the player's own line (no more persuasion on every turn) with the addressee as the opponent, fewer keyword misreads, and no more names written into sentences or travel scenes cut back to a seat.
