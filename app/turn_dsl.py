@@ -1506,10 +1506,12 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     offers = context.get("open_offers") if isinstance(context, dict) else None
     if isinstance(offers, list) and offers:
         instructions.append(
-            "open_offers were already offered. An offer still waiting for an answer: do not offer it again or "
-            "write the player taking it. An offer marked accepted_now: the player's line takes it and the app has "
+            "open_offers were already offered. waiting_for_answer: do not offer it again or "
+            "write the player taking it. player_takes_it_now: the player's line takes it and the app has "
             "accepted it; write the giver's answer, and do not offer it again. "
-            "An offer the player turned down (declined): do not offer it again. "
+            "turned_down: the player refused it; do not offer it again. "
+            "not_raised_yet: work the giver has or a notice posted on its board; the player has not heard of it, "
+            "so nobody treats it as already asked. "
             "The story may offer other work that fits this scene and quest_style, but not a pile of offers at once."
         )
     leads = context.get("open_leads") if isinstance(context, dict) else None
