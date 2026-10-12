@@ -23,6 +23,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+## [0.10.0-dev.12] - 2026-10-13
+
+> Pre-release on the way to `0.10.0`. First fixes from the Saltmarrow run: levels rise with XP, sleep heals, a sum the prose names is the sum that moves, checks read only the player's own line (no more persuasion on every turn) with the addressee as the opponent, fewer keyword misreads, and no more names written into sentences or travel scenes cut back to a seat.
+
 ### Fixed
 
 - [CLAUDE] Levels rise with XP (playtest #121, Saltmarrow run): the run ended at 293 XP and level 1, because only a model-proposed level_delta could raise a level and the DSL never sends one. Level now follows XP on a fixed curve (100 XP for level 2, 300 for 3, 600 for 4, ...), only ever rises, and journals 'Level N reached'. It is checked after every turn and every quest payout, and it respects the leveling_system playthrough option. - `app/progression.py`, `app/world.py`, `app/quests.py`
