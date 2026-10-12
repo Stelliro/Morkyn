@@ -3326,7 +3326,8 @@ body.image-mode-simple .imageSimpleOnly,
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
-  padding: 18px;
+  /* --shard-band: skin.css draws the frame in a border this wide; padding gives it back. */
+  padding: calc(18px - var(--shard-band, 0px));
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
 }
 
@@ -4428,6 +4429,22 @@ a.mainMenuGhost:hover {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+/* On/Off groups in Settings. The setup page's .toggleSet grid reserves a
+   44 px control row and rows for a description that Settings never has, so
+   each group was a tall empty box; and `.appSettingsForm label` (a caption
+   above its input) stacked each radio over its word. Here: legend, then the
+   choices on one line, radio beside its word. */
+.appSettingsForm .toggleSet {
+  grid-template-rows: auto auto;
+  padding-bottom: 9px;
+}
+
+.appSettingsForm .toggleSet label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 /* Launcher settings: group headings, the restart notice, and the main-menu
@@ -5617,7 +5634,7 @@ body.play-menu-split .playMenuNav::after {
   max-width: calc(100vw - 24px);
   max-height: calc(100vh - 24px);
   margin: auto;
-  padding: 14px 16px 16px;
+  padding: calc(14px - var(--shard-band, 0px)) calc(16px - var(--shard-band, 0px)) calc(16px - var(--shard-band, 0px));
   box-sizing: border-box;
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
@@ -13123,7 +13140,10 @@ button.miniItemMore {
     max-height: 100svh;
     height: 100svh;
     border-radius: 0;
-    padding: 14px 12px calc(14px + env(safe-area-inset-bottom, 0px));
+    padding:
+      calc(14px - var(--shard-band, 0px))
+      calc(12px - var(--shard-band, 0px))
+      calc(14px - var(--shard-band, 0px) + env(safe-area-inset-bottom, 0px));
   }
 
   .modalBackdrop {
@@ -14235,7 +14255,7 @@ body.compact-mode .indexContent {
 .deathPanel {
   width: min(680px, 100%);
   text-align: center;
-  padding: 36px 28px 28px;
+  padding: calc(36px - var(--shard-band, 0px)) calc(28px - var(--shard-band, 0px)) calc(28px - var(--shard-band, 0px));
 }
 
 .deathEyebrow {

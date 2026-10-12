@@ -177,6 +177,22 @@ button.chipBtn,
     linear-gradient(var(--shard-fill), var(--shard-fill)) 0 var(--shard-cut-tl) / 100% calc(100% - var(--shard-cut-tl) - var(--shard-cut-br)) no-repeat;
 }
 
+/* A shard that scrolls its own content keeps its frame in a transparent
+   border band. The frame is painted as background, and a scroller clips its
+   content at the padding edge, so rows scrolling past the top and bottom used
+   to paint over the edge lines and cut corners. With the band as wide as the
+   corners and the background painted from the border edge, the whole frame
+   sits outside the clip: scrolled content (and the scrollbar) stay inside it.
+   styles.css takes the band back out of the padding, so nothing moves.
+   Any shard given overflow: auto/scroll belongs in this list. */
+.modalPanel,
+.encounterDialog[open] {
+  --shard-band: max(var(--shard-cut-tl), var(--shard-cut-br));
+  border: var(--shard-band) solid transparent;
+  background-origin: border-box;
+  background-clip: border-box;
+}
+
 /* Floating shards cast a shadow; the blur is wide enough that the cut
    corners do not show a square silhouette. */
 .mainMenuPanel,
