@@ -23,6 +23,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+## [0.10.0-dev.10] - 2026-10-13
+
+> Pre-release on the way to `0.10.0`. Fixes #96-#99 from the README example turn on the 8B (a purchase the prose shows is granted and paid, the coin the player offered stays in the scene, one act advances one quest, an item named once is one), theme abilities follow the world's magic level, and the README says MLE runs in place of a llama.cpp server.
+
 ### Fixed
 
 - [CLAUDE] Buying from someone is asking for the item (playtest #96, the README example turn on the 8B): 'ask Finnian if he'd sell me a whetstone. I'll pay 2 gold for it' was not read as wanting anything, so the whetstone the prose hands over was refused and the 2 gold voided. 'sell me' and 'pay ... for' join the one take vocabulary that the grant gate and the overreach trim share. - `app/llm.py`
