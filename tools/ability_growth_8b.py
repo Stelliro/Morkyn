@@ -412,6 +412,7 @@ def generate_theme(theme_id: str, spec: dict[str, Any], per_theme: int, out: Pat
                 "fallback_reason": payload.get("fallback_reason") if isinstance(payload, dict) else "",
                 "name": ab.get("name"),
                 "power_type": power_type,
+                "growth": ab.get("growth"),
                 "locked": ab.get("locked"),
                 "description": ab.get("description"),
                 "prerequisites": ab.get("prerequisites"),
@@ -441,7 +442,7 @@ def engine_use_check(theme_id: str, spec: dict[str, Any], rows: list[dict[str, A
         name = str(r.get("name") or "").strip()
         if name and name.lower() not in seen:
             seen.add(name.lower())
-            abilities.append({k: r.get(k) for k in ("name", "description", "prerequisites", "cost", "growth_math", "power_type")}
+            abilities.append({k: r.get(k) for k in ("name", "description", "prerequisites", "cost", "growth_math", "power_type", "growth")}
                              | {"locked": False})
     try:
         world.start_playthrough({
@@ -638,7 +639,7 @@ def real_turns(theme_id: str, spec: dict[str, Any], rows: list[dict[str, Any]], 
         world.start_playthrough_with_opening({
             "player_name": "Probe", "start_location": "Low Gate", "special_ability_origin": "both",
             "magic_level": spec["magic_level"], "difficulty": first["variant"]["difficulty"],
-            "special_abilities": [{k: first.get(k) for k in ("name", "description", "prerequisites", "cost", "growth_math", "power_type")} | {"locked": False}],
+            "special_abilities": [{k: first.get(k) for k in ("name", "description", "prerequisites", "cost", "growth_math", "power_type", "growth")} | {"locked": False}],
         })
     except Exception as exc:
         jsonl(out / "turns.jsonl", {"theme": theme_id, "error": f"opening: {exc}"})
