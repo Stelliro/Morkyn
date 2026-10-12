@@ -1298,6 +1298,13 @@ def estimate_action_minutes(player_input: str) -> int:
         return 0
     if re.search(r"\b(attack|fight|combat|chase|flee|run)\b", text):
         return 8
+    # A typed wait, rest or sleep lasts as long as the line says (Saltmarrow
+    # #119: "I wait an hour here" passed six minutes and recovered nothing).
+    from app.player_resources import typed_recovery_minutes
+
+    waited = typed_recovery_minutes(player_input)
+    if waited:
+        return waited
     # Work takes the time of the work, from the same reading that rolls its
     # check and costs its energy (playtest #85a: polishing swords was 6 minutes).
     try:
@@ -17301,6 +17308,12 @@ def _action_cost_kind(player_line: str, context: dict[str, Any], ability: dict[s
         return "ability" if ability else "none"
     intent, _secondary = _turn_intent(line)
     words = action_kind_from_text(line)
+    # A breather, a wait or a sleep the player types is recovery whatever else
+    # the intent table scored (Saltmarrow #119: "sit down ... get my breath, and
+    # use Tidecount" was general, "we wait it out" was investigation, so
+    # neither recovered anything).
+    if words in {"rest", "wait", "sleep"} and intent != "combat":
+        return words
     kind = _INTENT_COST_KIND.get(intent, "general")
     conv = context.get("conversation_turn") if isinstance(context.get("conversation_turn"), dict) else {}
     # Said in this line, by the same gate _planned_intent uses: a listener
@@ -17325,9 +17338,20 @@ def _action_cost_kind(player_line: str, context: dict[str, Any], ability: dict[s
     if intent == "general":
         if words != "general":
             return words
-        if spoken:
+        # Speech and a hands-on act in one line is the act (#119, T31: tying
+        # a rope round Tam's waist after one quoted line was costed as talk).
+        if spoken and not _OWN_ACT_OUTSIDE_QUOTES_RE.search(re.sub(r'"[^"]*"|“[^”]*”', " ", line)):
             return "talk"
     return kind
+
+
+_OWN_ACT_OUTSIDE_QUOTES_RE = re.compile(
+    r"\b(?:i|we)\s+(?!(?:say|says|said|ask|asked|tell|told|call|called|shout|shouted|whisper|reply|replied|answer|"
+    r"answered|mutter|add|added|nod|nodded|smile|smiled|laugh|grin|sigh|agree|think|wonder|hope|want|need|know|mean|"
+    r"guess|suppose|am|will|can|can't|cannot|do|don't|did|didn't|have|would|could|should|must|may|might|turn|look|"
+    r"glance|keep\s+my\s+voice)\b)[a-z]{2,}",
+    re.IGNORECASE,
+)
 
 
 def _sync_turn_resources(context: dict[str, Any], mechanics_context: dict[str, Any], after: dict[str, Any] | None) -> None:
@@ -17812,11 +17836,32 @@ def play_turn(
                     if isinstance(item, dict) and item.get("act") and not item.get("difficulty"):
                         # The mark is the job's: an easy job is an easy roll.
                         item["difficulty"] = QUEST_CHECK_DIFFICULTY.get(str(quest_match.get("difficulty") or ""), None)
+            # An act the body cannot do this turn is not attempted, so it rolls
+            # nothing (Saltmarrow #119, T34: blocked at zero energy, the climb
+            # still rolled a natural 1 and left a lasting injury). What the
+            # player says still rolls.
+            if (action_spend_pack or {}).get("blocked"):
+                pending = [
+                    item for item in pending
+                    if isinstance(item, dict) and item.get("social") and not item.get("act")
+                ]
             # The d20 is seeded like every other server roll: an unseeded
             # Random() made a rewind + regenerate of the same input roll a
             # different check (and apply a different injury) while every band
             # roll on the same turn reproduced exactly.
             check_turn, check_seed = _skill_check_seed()
+            # The character's own trade or home ground (Saltmarrow #103).
+            try:
+                from app.skill_checks import home_ground
+
+                home = home_ground(
+                    context.get("player") if isinstance(context.get("player"), dict) else {},
+                    skills if isinstance(skills, list) else [],
+                    _player_line(player_input),
+                    context.get("current_location") if isinstance(context.get("current_location"), dict) else {},
+                )
+            except Exception:
+                home = None
             for index, item in enumerate(pending[:4]):
                 if not isinstance(item, dict):
                     continue
@@ -17835,6 +17880,7 @@ def play_turn(
                     weapon_or_tool=str(item.get("weapon_or_tool") or item.get("weapon") or ""),
                     rng=_skill_check_rng(check_turn, check_seed, index, pending_code),
                     routine=bool(item.get("routine")),
+                    home=home,
                 )
                 # The declared act this roll decides (playtest #85a): the draft
                 # is told its outcome, the next turn reads it back, and practice
