@@ -345,6 +345,28 @@ _SUBORDINATORS = {"where", "when", "which", "that", "who", "whom", "whose", "whi
 _LEAD_PARTICIPLE = re.compile(r"^[a-z]+ing\s+that\s+", re.I)
 
 
+def _adjectival(word: str) -> bool:
+    low = word.lower()
+    return (
+        low in _COMMON_ADJECTIVES
+        or low.endswith(_ADJECTIVE_ENDINGS)
+        or (low.endswith("ed") and len(low) > 4)
+        or (low.endswith("ing") and len(low) > 5)
+    )
+
+
+def _noun_slot(words: list[str], index: int) -> bool:
+    """A verb-list word that sits where a noun goes: "a harbour", "a drowned
+    harbour town" (Saltmarrow #23: titled "Drowned and town")."""
+    prev = words[index - 1].lower() if index >= 1 else ""
+    if prev in _NOUN_ARTICLES:
+        return True
+    return index >= 2 and words[index - 2].lower() in _NOUN_ARTICLES and _adjectival(words[index - 1])
+
+
+_NOUN_ARTICLES = {"a", "an", "the", "its", "their", "his", "her", "our", "my", "your", "every", "each"}
+
+
 def _cut_at_subordinator(words: list[str]) -> list[str]:
     cut = next((i for i, w in enumerate(words) if i and w.lower() in _SUBORDINATORS), None)
     return words[:cut] if cut is not None else words
@@ -401,7 +423,10 @@ def _clause_words(text: str) -> tuple[list[str], int | None]:
     # "Magic, when it exists, is a secret": the aside is not the subject.
     trimmed = _PARENTHETICAL.sub(" ", trimmed or body)
     words = re.findall(r"[A-Za-z][A-Za-z'/-]*", trimmed or body)
-    verb = next((index for index, word in enumerate(words) if index and word.lower() in _VERB_WORDS), None)
+    verb = next(
+        (index for index, word in enumerate(words) if index and word.lower() in _VERB_WORDS and not _noun_slot(words, index)),
+        None,
+    )
     if verb is None or verb > 7:
         # "Snow closes the passes", "The river floods each spring": a
         # third-person verb right after a one-noun subject.
@@ -454,17 +479,35 @@ def _title_for(text: str) -> str:
         return _clean(text)[:TITLE_MAX]
     if verb is None or verb > 7:
         subject = words[: min(5, len(words))]
+        lead: list[str] = []
         while subject and subject[0].lower() in _DETERMINERS:
+            lead.append(subject[0])
             subject = subject[1:]
         subject = _cut_at_subordinator(subject)
-        # The noun phrase stops at the first verb-like word.
-        cut = next((i for i, w in enumerate(subject) if i and _is_verbish(w)), None)
+        # The noun phrase stops at the first verb-like word, unless that word
+        # sits in a noun's place ("a drowned harbour town").
+        cut = next(
+            (i for i, w in enumerate(subject) if i and _is_verbish(w) and not _noun_slot([*lead, *subject], i + len(lead))),
+            None,
+        )
         if cut is not None:
             subject = subject[:cut]
         return _cap(subject or words[:4])
     if words[0].lower() in _PRONOUN_SUBJECTS:
         # "Nobody is born strong" says itself; "Born nobody" did not.
         return _cap(words[:5])
+    relative = next((i for i in range(1, verb) if words[i].lower() in _SUBORDINATORS), None)
+    if relative is not None and relative <= 6:
+        # "Salvage, debt and a tide that keeps the wrong hours": the verb is
+        # the tide's, inside the relative clause, and the fact is the list
+        # before it (Saltmarrow #23: titled "Wrong hours of Salvage debt and a tide").
+        head = _clean(text).rstrip(".!?")
+        head = _LEAD_IN.sub("", head, count=1) or head
+        cut = re.search(r"\s+\b" + re.escape(words[relative]) + r"\b", head)
+        if cut:
+            phrase = head[: cut.start()].strip(" ,;:-")
+            if 1 <= len(phrase.split()) <= 6:
+                return _cap(phrase.split())
     subject = words[:verb]
     while len(subject) > 1 and subject[0].lower() in _DETERMINERS:
         subject = subject[1:]
