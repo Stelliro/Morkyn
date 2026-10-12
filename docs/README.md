@@ -31,6 +31,7 @@ Project-level docs at repo root:
 | --- | --- |
 | [README.md](../README.md) | Quick start and product overview |
 | [CHANGELOG.md](../CHANGELOG.md) | Version history |
+| [CHANGELOGS.md](../CHANGELOGS.md) | Per-version notes and devlogs |
 | [LICENSE.md](../LICENSE.md) | PolyForm Noncommercial 1.0.0 |
 | [PRIVACY_POLICY.md](../PRIVACY_POLICY.md) | Local-first privacy (also `/privacy` in-app) |
 | [CODEBASE_INDEX.md](../CODEBASE_INDEX.md) | Architecture and contributor map |

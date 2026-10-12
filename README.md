@@ -127,7 +127,10 @@ Morkyn/
 ├── morkyn_app.py             # Mørkyn's own window; starts and restarts the server (app/launcher.py)
 ├── Morkyn.ps1                # the old terminal Gatehouse menu, still usable
 ├── start_ai_rpg.*            # compatibility shims
-├── README.md / CHANGELOG.md / LICENSE.md / PRIVACY_POLICY.md
+├── README.md / LICENSE.md / PRIVACY_POLICY.md
+├── CHANGELOGS.md             # index: per-version notes, devlogs, full log
+├── CHANGELOG.md              # the full line-by-line change log
+├── changelogs/               # notes per version; devlogs/ holds GitHub and itch.io devlogs
 ├── CODEBASE_INDEX.md         # architecture map for contributors / agents
 ├── requirements.txt
 ├── .env.example
@@ -144,55 +147,161 @@ Morkyn/
 
 ## MLE — the Mørkyn Large Language Model Engine
 
-MLE is the layer between the language model and the game: what the model is told, what it may answer with, and what the engine does with that answer. It also covers the game engine behind it. `app/mle.py` is the part that runs a local model, but the contract below is the same for MLE, llama.cpp and cloud APIs.
+MLE is the layer between the language model and the game. It covers what the model is told, what it may answer with, and what the game engine does with the answer. `app/mle.py` is the part that runs a local model. The contract below is the same whether the model is MLE, llama.cpp or a cloud API.
 
-The rule it enforces: **the model writes words, and the engine owns every fact and every number.**
+The rule: **the LLM writes words. The engine owns every fact and every number.**
 
-### The model never writes code
+### What the LLM does, and what it does not
 
-The model's output is only ever prose and data:
+| | **The LLM** | **The game engine** |
+| --- | --- | --- |
+| **The scene** | **Writes the prose**: what you see, what people say and do | Trims what breaks the rules: acting or speaking for you, repeating a line, using a name nobody told it |
+| **People** | **Gives NPCs their voice** | Decides who you are talking to and who answers, before the model is asked |
+| **Changes to the world** | **Proposes them** as short op lines (`GRANT`, `MOVE`, `GOLD`, `TALK` ...) | Applies them or refuses them, against the save and the prose |
+| **Amounts** | **Names a size**: `small`, `moderate`, `large` | Rolls the number on the server, seeded, logged in `dice_rolls` |
+| **Skill checks** | **Narrates the result** it is handed | Rolls the d20 before the draft and writes the outcome |
+| **Quests** | **Offers work** in the story; a second call reads that offer back as data | Decides whether it becomes a quest, tracks the steps, pays the reward |
+| **Abilities** | **Names and describes** a power; picks a growth template and a seed in words | Computes every number: ranks, XP per use, caps, cost |
+| **Memory** | Sees only the packet it is sent | Keeps the whole world in SQLite and picks what each call needs |
 
-- **Ops from a closed set.** A turn's changes come back as lines of a small op language: `GRANT`, `MOVE`, `TALK`, `XP`, `QUEST` and about thirty more ([docs/TurnDsl.md](docs/TurnDsl.md)). A fixed transcoder (`app/turn_dsl.py`) maps them to a turn record, and an unknown op is refused.
-- **No path to execution.** Nothing the model writes is run as code: there is no `eval`, no `exec`, and no SQL built from model text (values are bound as parameters).
-- **Escaped on screen.** Narration is HTML-escaped before the browser shows it.
-- **Fallbacks are data too.** If the ops fail to parse, the fallback is a JSON draft: plain data, checked the same way.
+In one turn the LLM is called for at most four jobs:
+
+1. **Draft**: always. It writes the scene and its op lines.
+2. **Verify**: only when a fixed certainty score says the draft is risky. The answer is *pass* or *revise* plus a small patch.
+3. **Repair**: only when a check fails, such as thin prose, a dodged answer or the wrong voice. It asks for prose only.
+4. **Quest parse**: only when the finished scene looks like it offers work.
+
+### The LLM never writes code
+
+Its output is only ever prose and data:
+
+- **Closed ops.** Changes come back as lines from a closed set of about thirty ops ([docs/TurnDsl.md](docs/TurnDsl.md)). A fixed transcoder (`app/turn_dsl.py`) turns them into a turn record, and an unknown op is refused.
+- **Nothing is executed.** There is no `eval` and no `exec`. No SQL is built from model text; values are bound as parameters.
+- **Escaped on screen.** The narration is HTML-escaped before the browser shows it.
+- **Fallbacks are data too.** If the ops cannot be parsed, the fallback is a JSON draft: plain data, checked the same way.
 
 ### One turn, step by step
 
-1. **The engine reads your line first.** It does all of this before the model is asked anything:
-   - It takes out out-of-character notes and decides who you are talking to (`app/conversation.py`).
+1. **The engine reads your line first.** It does all of this before the model sees anything:
+   - It removes out-of-character notes and decides who you are talking to (`app/conversation.py`).
    - It records what you are in the middle of (`app/scene_thread.py`).
-   - It matches a power you used and charges its cost.
-   - It advances the clock and spends energy.
-   - It **rolls your skill checks** on the server with seeded dice (`app/skill_checks.py`), so the model is told the result instead of choosing it.
-2. **It builds the context.** `build_prompt_context` picks what this turn needs, scored by relevance: the people here, the place, open quests, items, skills, world facts and the last scene. It adds contracts the prose must keep: where you are, who you are, names already given, and who speaks. The model gets a focused packet, not the whole save.
-3. **The model drafts.** It writes the scene as prose plus a short list of ops. Every later call in the turn reuses the same system prompt, so a local model keeps its cache.
-4. **The draft is checked.** A deterministic score decides whether a verifier pass is needed. The verifier answers *pass* or *revise*, with a patch of only the parts it changes. Repairs then fix voice, a dodged answer or thin prose, and they ask the model for prose only. Fixed trims remove the narrator acting, deciding or speaking for you.
+   - It matches a power you used and charges its cost, advances the clock and spends energy.
+   - It rolls your skill checks with seeded dice (`app/skill_checks.py`).
+2. **The engine builds the context.** `build_prompt_context` scores what this turn needs: the people here, the place, open quests, items, skills, world facts and the last scene. It adds the decisions from step 1 and the contracts the prose must keep. The model gets a focused packet, not the save.
+3. **The LLM drafts** the scene as prose plus op lines. Every later call in the turn reuses the same system prompt, so a local model keeps its cache.
+4. **The draft is checked.** The verifier and repairs run if needed, then fixed trims remove anything the narrator did for you.
 5. **The engine applies what holds up** (`apply_turn`):
-   - Gains are refused unless the prose shows them arriving and you took or were given them.
-   - Moves are checked against the map and the town's roads. A refused move cuts the prose where it began.
-   - Every "how much" is a band such as `small` or `large`, and the server rolls the number, seeded and logged in `dice_rolls` ([docs/DiceAuthority.md](docs/DiceAuthority.md)). A price the prose names is the price paid.
-   - A quest parser reads the finished scene for offered work, and the engine decides whether it becomes a quest.
-6. **The engine keeps the record.** Rewind snapshots, memory consolidation and relationships are all engine code, and none of them makes a model call.
+   - Gains need the prose to show them arriving. Moves are checked against the map and the roads.
+   - Every amount is rolled ([docs/DiceAuthority.md](docs/DiceAuthority.md)). A price the prose names is the price paid.
+   - Quest offers are judged, and rewards are paid by the engine.
+6. **The engine keeps the record**: rewind snapshots, relationships and memory consolidation, with no model call.
 
-If the model fails, the turn stops with a dialog that says why, or falls back to a plain engine turn. The world is never left half-written.
+If the model fails, the turn stops with a dialog that says why, or it falls back to a plain engine turn. The world is never left half-written.
+
+### Example: one real turn
+
+This is a turn from a copy of a live save, played on Qwen3 8B (Q4) on a 12 GB card on 2026-10-12. It is cut for length: some packet fields and op lines are left out and quotes are straightened, but the words are the model's own. It also shows four open bugs, which are explained at the end.
+
+**1. The player types**
+
+```text
+I set the last polished blade on the rack and ask Finnian if he'd sell me a whetstone. I'll pay 2 gold for it.
+```
+
+**2. The engine decides, before the LLM is called**
+
+```text
+talking to    Finnian [C], named in the player's line. Only Finnian answers.
+doing         quest Q1 "Polish swords", still under way; this action happens inside it
+skill check   Persuasion  d20 = 10  vs DC 7  ->  success   (server roll, seeded, dice_rolls #81)
+energy        talk, costs 0
+trade offer   the player offers 2 gold
+```
+
+**3. What the LLM is sent** (an excerpt of a 13 KB packet, plus a 19 KB system prompt with the op list and prose rules)
+
+```json
+{
+  "player_line": "I set the last polished blade on the rack and ask Finnian if he'd sell me a whetstone. I'll pay 2 gold for it.",
+  "trade_offer": {"gold": 2},
+  "world_state": {
+    "current_location": {"name": "Lucky Heron Armory", "code": "L3", "keeper": "Finnian",
+      "people": [{"name": "Finnian", "code": "C", "role": "armorer",
+        "already_said": ["Not bad, not bad at all. We could use someone like you around here.",
+                         "If you're interested, I might have a little job for you. Something to help you get started."]}]},
+    "conversation_turn": {"talking_to": [{"name": "Finnian", "code": "C"}], "answers": "talking_to only"},
+    "mechanics_context": {"resolved_checks": [{"skill": "persuasion", "outcome": "success"}]},
+    "active_quests": [{"code": "Q1", "title": "Polish swords", "now": "Start by helping Finnian polish these swords"}]
+  },
+  "output_contract": {"format": "nar_ops_v0", "required_sections": ["===NAR===", "===OPS==="]},
+  "instructions": [
+    "player_line is the player's whole turn. ... the player's further actions, words, thoughts, feelings and decisions are theirs to write, not yours.",
+    "trade_offer: the player offers 2 gold. If the other side accepts, ===OPS=== has GOLD -2 and ===NAR=== shows the coin handed over ..."
+  ]
+}
+```
+
+**4. What the LLM writes back** (the draft call, 15.1 s, raw)
+
+```text
+===NAR===
+You set the last polished blade on the rack and ask Finnian if he'd sell you a whetstone. He looks up from his bench, wiping his hands on a cloth, and gives you a slow nod. "A whetstone, you say? I've got one just the right size for your blade," he says, reaching into a drawer behind him. "It's a little pricey, though. Two gold for it."
+
+You pull out two gold coins from your pouch and hand them over. Finnian takes the coins with a grunt, then pulls out a rough-hewn stone the size of your palm. "This'll keep your blade sharp for a while," he says, handing it to you. "You'll need it if you're planning on doing any real fighting."
+
+You nod, tucking the whetstone into your satchel. Finnian's eyes flicker to the rack of polished blades, and a faint smile plays on his lips. "You're doing good, Alaric," he says. "I've got a little job for you if you're interested. Something to help you get started."
+
+===OPS===
+GRANT "whetstone" QTY moderate TYPE stone DESC "a rough-hewn stone the size of your palm" RARITY uncommon
+GOLD -2
+TALK C "a little job to help you get started"
+SUMMARY "Finnian offers a job to help Alaric get started"
+QUEST "Learn more about sword polishing" GIVER C STEP "Learn more about sword polishing" AT L3
+```
+
+The LLM made two more calls. The verifier answered `{"verdict": "pass", "issues": [], "patch": {}}` in 4.1 s. The quest parser read the scene back as JSON, a new offer plus two "step done" marks, in 15.8 s.
+
+**5. What the engine did with it**
+
+```text
+prose     cut  "You pull out two gold coins from your pouch and hand them over."   (acting for the player)
+          cut  "You nod, tucking the whetstone into your satchel."                  (acting for the player)
+          cut  "I've got a little job for you if you're interested. ..."            (Finnian already said it)
+          cut  ", Alaric" from "You're doing good, Alaric"                          (Finnian was never told the name)
+          link Finnian -> [[C]]
+dice      whetstone count: band "moderate" -> rolled 2                              (dice_rolls #80)
+items     whetstone x2 REFUSED: the final prose does not show it arriving
+gold      GOLD -2 voided: nothing changed hands
+quests    new "Learn more about sword polishing" REFUSED: duplicate of Q2
+          Q1 "Polish swords" complete: +11 gold, +27 XP, paid by the engine
+          Q2 "Learn metalworking" complete: +11 gold, +27 XP, paid by the engine
+result    gold 12 -> 34, inventory unchanged, 35.7 s for the whole turn
+```
+
+**Where this turn went wrong.** Every decision above was made by the engine. Four of them were wrong, and they are logged as open issues:
+
+- **#96.** The whetstone was refused although the prose hands it over ("handing it to you").
+- **#97.** The trim cut the coins the player offered, so "Finnian takes the coins" is left with no coins given. The draft had followed its own instruction (`trade_offer`), and the trim rule disagrees with it.
+- **#98.** One action finished two quests.
+- **#99.** "A whetstone" rolled a count of 2.
+
+See [docs/PLAYTEST_ISSUES.md](docs/PLAYTEST_ISSUES.md).
 
 ### Setup works the same way
 
-The model proposes and the engine settles. Abilities are the clearest case:
+The LLM proposes and the engine settles. For abilities:
 
-- The model picks a growth template (compounding, steady, soft cap, breakthrough, passive, item-bound, flat) and a seed in words, such as *slow / ordinary / range grows*.
-- `app/ability_growth.py` computes the rank ladder, the XP for each use (scaled by risk), soft caps and walls.
-- The model starts from a theme library (`app/ability_library.py`, 204 templates over 17 themes). A new power it invents is checked, stored, and offered in later games.
+- The LLM picks a growth template and a seed in words, such as *slow / ordinary / range grows*.
+- `app/ability_growth.py` computes the rank ladder, XP per use (scaled by risk), soft caps and walls.
+- The LLM starts from a theme library (`app/ability_library.py`, 204 templates over 17 themes). A new power it invents is checked, stored, and offered in later games.
 
 Gear stats, eye colour, map placement and town layout are rolled by the engine in the same way.
 
 ### The local runtime (`app/mle.py`)
 
-- **In-process model.** It loads one GGUF inside the game through llama-cpp-python, so no separate server is needed. The context size fits your free VRAM.
-- **Fails loudly.** A missing model file says so instead of answering.
-- **Word masking.** While drafting, it can hide an overused word at the moment the next token is chosen. Names, titles and op keys always stay choosable. Stray CJK script tokens are masked too.
-- **Untouched output.** The weights file is never changed, and the text the model returns is not edited after the fact.
+- **In-process model.** One GGUF loads inside the game through llama-cpp-python, so no separate server is needed. The context size fits your free VRAM, and a missing file says so instead of answering.
+- **Word masking.** While drafting, it can hide an overused word at the moment the next token is chosen. Names, titles and op keys always stay choosable, and stray CJK script tokens are masked.
+- **Nothing rewritten.** The weights file is never changed, and the model's text is not edited by the runtime. All cuts happen afterwards, in the engine, and are logged.
 
 Further reading: [docs/NarrationPipeline.md](docs/NarrationPipeline.md) · [docs/TurnDsl.md](docs/TurnDsl.md) · [docs/DiceAuthority.md](docs/DiceAuthority.md) · [docs/SkillChecks.md](docs/SkillChecks.md) · [CODEBASE_INDEX.md](CODEBASE_INDEX.md)
 
@@ -209,70 +318,12 @@ Further reading: [docs/NarrationPipeline.md](docs/NarrationPipeline.md) · [docs
 - Optional **local character art** via Forge / A1111 (primary) — ComfyUI hooks exist but are **not fully verified yet**.
 - Optional **read aloud**: the narration spoken paragraph by paragraph by a local CPU engine (Piper) or a speech API (OpenAI-compatible, ElevenLabs). Off by default — [docs/TextToSpeech.md](docs/TextToSpeech.md).
 
-### New in 0.10.0 (dev builds)
+### Latest
 
-- **Mørkyn's own window.** `Morkyn.bat` opens the game in a native window with no browser tab and no terminal. The launcher's settings live in the game's Settings, pop-outs are real windows, and Windows 11 title bars wear the theme — `morkyn_app.py`, `app/launcher.py`.
-- **Abilities grow by the engine.** The model picks a growth template and a seed in words. The engine computes the rank ladder, XP per use (scaled by risk), soft caps and walls. A turn cannot rewrite growth — `app/ability_growth.py`.
-- **A theme ability library that learns.** There are 204 hand-written templates over 17 themes, and custom settings mix their best themes. New powers the model invents are verified, stored, and offered in later games — `app/ability_library.py`, `content/ability_templates/`.
-- **Death and Ironman.** Health 0 ends the run on a "You died" screen. Ironman makes it permanent.
-- **Read the story aloud.** A Play bar under the narration and a right-click menu (Play selected text, Play this paragraph) speak the prose paragraph by paragraph, through a local engine (Piper, runs on the CPU, installed from a button) or a speech API (OpenAI-compatible, ElevenLabs), with known-good voices and presets for each. Off by default; it stops when you send a turn and never competes with the model for the GPU — `app/tts.py`.
-- **Token limits follow the model.** Context window and response caps come from the GGUF header and your GPU, or a tokens-per-billion scale when only the name is known. Edit them and they are remembered for that model; the launcher defaults to `auto` — `app/model_limits.py`.
-- **Failsafes.** A model failure stops the turn and opens a dialog that names the problem, what to try, and a "Continue anyway". A context too small for the full story contract is announced at boot instead of on the server console — `app/failsafe.py`.
-- **Cheaper turns.** The verifier returns a verdict and a patch, not a rewritten turn; local models reuse one system prefix across the turn's calls; prose repairs carry a prose contract; a reply cut by its token cap is closed locally; a dead model costs one call instead of three — `app/llm.py`.
-- **The interface is drawn from the key art.** Three CSS layers (values, layout, look), folding sections, hover peeks on names, right-click menus on people, items, and tiles — `static/ui/`, `docs/UI_RULEBOOK.md`.
-- **Rewind covers everything a turn wrote**: quests and their clocks, the name ledger, social writes, pronoun pins, and the dice audit. Skill checks are seeded like every other roll. Hidden NPC psychology, server-rolled checks, and the per-action skill search now reach the narrator.
-- **MLE (Morkyn LLM Engine).** The local story model loads a GGUF in-process. A missing file says so instead of answering. Narration drafts can hide an overused word while the next token is chosen. Names, job titles, and the draft's JSON keys stay choosable. The weights file and the finished sentence stay as they are — `app/mle.py`.
-- **Wilderness map.** The land is a seeded 16,383-cell grid. Cities are clumps inside a 9 by 9 neighborhood, not a one-cell line. The model does not place them — `app/world_scale.py`.
-- **Local intel.** Directions, heard-about cells, notice boards, and quest clocks belong to the engine — `app/local_intel.py`.
-- **Encounter board.** A fight tracks the named people in it, and a move is stored as what the player saw — `app/encounter_board.py`.
-- **Who you are talking to is decided by the engine.** An @tag, a name in your line, "everyone", whoever was just revealed or spoke last; a **Talking to** chip above the input shows it and lets you change it. Your quoted words stay yours in every stage — `app/conversation.py`.
-- **The scene remembers what you are doing.** A pursuit, the accepted quest step and who came along survive a side action; following someone moves you with them; the narration never decides for you — `app/scene_thread.py`.
-- **Shops are places.** Walking into a shop, inn or forge makes it a venue inside the town with its keeper; tradespeople have a workplace, so a baker in someone else's shop is a visitor — `app/venues.py`.
-- **Quests are instated by a parser.** The narrator offers work; a second pass validates the offer and the engine logs it — `app/quest_parser.py`.
-- **Structured starting gear.** One card per item with slot, description, rolled item stats and stat bonuses; feet, torso and legs are always filled and named for the world, sex and race — `app/gear.py`.
-- **World facts as small rows.** Races, lore, factions and customs become short linked rows filled at start and fetched by relevance each turn; custom proficiencies are settled into named skills with start rank, tracking and limit before turn 1 — `app/world_facts.py`, `app/proficiencies.py`.
-- **Fresh examples per call.** Prompts get 3-5 examples drawn from large world-filtered pools (names, jobs, shop names, appearance), never a fixed list; used names are not drawn again; hard values like eye colour are rolled by the engine — `app/example_pools.py`.
-- **A character that agrees with itself.** Name, sex and pronouns, the backstory's arrival and the start place, appearance and worn gear, and items the backstory carries are reconciled at setup and Start — `app/setup_coherence.py`.
-- **Play screen.** Scene history with *View more*, a side-panel toggle, the in-game day and time in the Scene header, and a World / Settlement switch on the map that draws a town's wards, streets and known shops.
-- **One map per save.** A new game prunes old world maps and a save carries only its campaign's pinned map.
-- **Towns have streets and shops you walk to.** Inside a town you stand on a real road. "Go to the bakery", a shop's name, a street, or "out the north gate" walks the road network for in-game minutes, and the scene is told which buildings are beside you. Shops come from the town's own plots, so the story cannot invent one and the engine does not make one you never saw. On the map, Settlement → **Streets** zooms in to the roads and buildings you have seen: click a shop to walk there, or right-click it to write "go to" or "go in" — `app/town_moves.py`, `app/town_grid.py`, `static/app.js`.
-- **Setup rules.** The short choice stays short. The save stores a written rule for it before the first scene. A typed list such as common, uncommon, rare, epic, legendary, unique, and unknown becomes one rung per label — `app/setting_templates.py`.
-- **World themes.** Deep Caverns grows cavern, mushroom, crystal, lava, water, and cliff, and leans toward dark-dwelling creatures and dwarves. Other themes have their own ground and usual people. A new game rolls its own map seed. The older small board stays as the legacy map — `app/world_scale.py`.
-- **Fight / combat state.** NPCs can be initiated into combat from the UI or via `initiate_fight`. Ambient `fight_nearby` events fire as full combat turns during Wait and Rest — `app/world.py`.
-- **Quest / Objectives system.** Active quests appear in the Quests tab with step-by-step objectives, a progress bar, difficulty-scaled rewards, optional timers, and hidden sub-tasks. Up to 6 steps per quest. The backend manages creation, step advancement, timer auto-fail, and reward payment — `app/quests.py`, `/api/quests`.
-- **In-browser quest creation form.** Author new quests entirely in the UI — no API calls needed.
-- **NPC relationship tracking.** Every NPC tracks three axes toward the player: affinity (−100 to +100), fear (0–100), and respect (0–100). Preset deltas for 12 common events (combat, quests, intimidation, betrayal, etc.). Bands are injected into the LLM context each turn — `app/relationships.py`, `/api/relationships`.
-- **Relationship badges.** NPC cards in the People tab show affinity, fear, and respect band chips inline.
-- **LLM context enrichment.** Each turn includes a cultural naming guide, a named loot reference, and an ability registry so the model produces consistent, world-appropriate names and items — `app/world_context.py`.
-- **Autonomous player agent.** `player_agent.py` runs a full session with the same local 8B model playing both narrator and player. The player sees only narrative + character sheet. Includes a Lore Bible (entity tracker built from narrative), a goal directive, and a debug command blocker.
-- **Save editor.** World save files can be viewed and edited cell-by-cell in the browser. Any table except `world_maps` and `settings` is editable; changes are all-or-nothing with a backup written first — `app/save_editor.py`.
-- **Titles system** *(in progress)* — earnable titles with stat bonuses; award logic and UI pending.
-- **Party system** *(in progress)* — invite/remove NPCs, morale, combat bonuses; morale propagation pending.
-- **Hidden NPC psychology** — narrator-only private feelings, agendas, family ties. Context injection landed in October.
+- **0.10.0 dev builds:** Mørkyn's own window, abilities whose growth the engine computes, a theme ability library that learns new powers, death and Ironman, towns with streets, read-aloud narration. Full notes: [changelogs/0.10.0-dev.md](changelogs/0.10.0-dev.md).
+- **Newest devlog:** [Its own window, and powers that grow](changelogs/devlogs/itch-0.10.0-dev.9.md).
 
-### New in 0.9.12
-
-- **A turn stops repeating itself.** Scenes were re-using whole sentences a paragraph or two later, sometimes reworded just enough to slip past the old check. Anything already said this turn is now cut.
-- **The narrator stops dressing you in gear you do not own.** A character with nothing on their hands was described feeling cold metal "through your gloves". Your recorded outfit is now stated as the whole outfit.
-- **Names copy with the text around them.** Selecting a scene and copying it used to drop every place and character name, leaving holes in the paste.
-- **A shortened list is no longer described as everything you have.** With a large pack the game could tell you an item you owned did not exist.
-- **Updates actually reach your browser.** The page used to ask for a cached copy of the game's code by name, so a fix could ship and change nothing on your screen.
-
-### Also in 0.9.1-wip
-
-- **Venues show in the play UI.** Shops on this square render as chips with open/closed state and a way out.
-- **Inspect no longer duplicates the thing you looked at.** Looking at the seed in your hand does not mint two more.
-- **Inventory quantity is on the row.** Name + count; the rest of the item lives in a hover overlay.
-- **World staffing follows the setting.** A docking bay no longer hires bargemen; an unset tech dropdown no longer tells a starship it is iron age; an open-magic world is no longer told magic is rare.
-- **Naming, recall, and answer-acts** are server contracts: if you ask who the letter is for, the world has to say the name.
-
-### Also in 0.9.0
-
-- **Server-rolled dice.** The model writes a band (`small`, `large`, …); the app rolls the amount and scales it by level, difficulty, and growth settings. Every roll is audited in `dice_rolls`. Deterministic seeding means a rewind reproduces the same dice.
-- **Content packs.** JSON files that add, retune, or remove skills, powers, items, and tables with no code changes. Drop one in `data/packs/`.
-- **Venues.** Shops, inns, forges and temples are real places you walk into and back out of, with opening hours against the world clock, a keeper who stays the same person, and a settlement-size rule so a hamlet has no apothecary. See [docs/Venues.md](docs/Venues.md).
-- **Continuity fixes.** Movement, narrative person, and NPC identity are now server contracts with deterministic repair rather than things the model is asked to remember.
-- **Danger model.** Travel, wait, and rest risk accounts for stats, skills, wounds, fatigue, load, terrain, weather, and time of day.
+Every version, every devlog and the full change log: **[CHANGELOGS.md](CHANGELOGS.md)**.
 
 ## Local images (ForgeSD / ComfyUI)
 
@@ -407,7 +458,8 @@ Playtest findings and their status are tracked in [`docs/PLAYTEST_ISSUES.md`](do
 | --- | --- |
 | Architecture | [CODEBASE_INDEX.md](CODEBASE_INDEX.md) |
 | Docs index | [docs/README.md](docs/README.md) |
-| Changelog | [CHANGELOG.md](CHANGELOG.md) |
+| Changelogs and devlogs | [CHANGELOGS.md](CHANGELOGS.md) |
+| Full change log | [CHANGELOG.md](CHANGELOG.md) |
 | Privacy | [PRIVACY_POLICY.md](PRIVACY_POLICY.md) |
 | License | [LICENSE.md](LICENSE.md) (PolyForm Noncommercial 1.0.0) |
 
