@@ -1,0 +1,167 @@
+{
+  "theme": "wasteland",
+  "label": "Wasteland",
+  "keywords": [
+    "wasteland",
+    "post-apocalyptic",
+    "post apocalyptic",
+    "fallout",
+    "raider",
+    "radiation",
+    "scavenger",
+    "ruins",
+    "mutant",
+    "irradiated",
+    "survivor",
+    "vault",
+    "bunker",
+    "dust",
+    "convoy"
+  ],
+  "abilities": [
+    {
+      "name": "Rad Tongue",
+      "description": "Taste water or food and sense whether it is too irradiated to eat.",
+      "cost": "A metallic taste for an hour; you still take a little poison",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how faint a contamination you catch"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Junk Gun Fix",
+      "description": "Rebuild a broken firearm from scrap so it can fire a handful of shots.",
+      "cost": "It jams for good after those shots",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many shots and how good the gun"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Raider Read",
+      "description": "Read a raider's gear and paint and know which gang they ride with and how close the rest are.",
+      "cost": "Only gangs whose sign you have seen before",
+      "power_type": "linear",
+      "growth": {
+        "pace": "fast",
+        "start": "ordinary",
+        "grows": "how many gangs you know"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Fuel Sniff",
+      "description": "Smell fuel in a ruined vehicle and know whether there is enough left to drain.",
+      "cost": "Fumes make you dizzy",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how little fuel you can sense"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Mutant Hide",
+      "description": "When you are hit, you can let a patch of toughened skin take the blow like leather.",
+      "cost": "The patch itches and spreads a little each time",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how hard a blow and how large the patch"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Dust Squall Walker",
+      "description": "When a dust storm hits, you can keep your bearings and walk straight toward any place you have seen.",
+      "cost": "Eyes and lungs burn for a day",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how long and how far"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Bunker Code Hunch",
+      "description": "Hold a sealed bunker keypad and sense which numbers have been pressed most often.",
+      "cost": "Wrong guesses can lock the door for good",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how old a lock"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Caravan Talk",
+      "description": "Speak caravan cant and traders treat you as one of their own, giving you fair prices for one deal.",
+      "cost": "Cheat them once and every caravan hears",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many caravans know your name"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Geiger Gut",
+      "description": "You can sense hot zones in the ruins as a sick feeling in your stomach a block before you reach them.",
+      "cost": "Nausea every time you are near one",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how early the warning"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Scrap Armor",
+      "description": "Strap scrap metal to yourself in ten minutes so one gunshot glances off before it falls apart.",
+      "cost": "Heavy and loud; it falls apart after one hit",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many hits it takes"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Long Thirst",
+      "description": "You can go a full day in the heat on a single cup of water without collapsing.",
+      "cost": "The next day you must drink twice as much",
+      "power_type": "soft_cap",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many days"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Dog Pack Call",
+      "description": "You can whistle and wild dogs that have eaten from your hand will come and guard you for a night.",
+      "cost": "You must feed them every time",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how many dogs and how fierce"
+      },
+      "supernatural": false
+    }
+  ]
+}

@@ -181,10 +181,22 @@ class TestMagicLevelReachesTheSeedPool(unittest.TestCase):
         from app.llm import _fallback_special_abilities
         from app.setup_composer import SUPERNATURAL_LANES
 
+        from app import ability_library
+
+        # A theme template (app/ability_library.py) carries its own supernatural flag;
+        # a seed-pool card is judged by its lane.
+        templates = {e["id"]: e for e in ability_library.all_entries()}
+
+        def supernatural(card):
+            entry = templates.get(str(card.get("template_id") or ""))
+            if entry is not None:
+                return bool(entry.get("supernatural"))
+            return self._lane_of(card.get("name")) in SUPERNATURAL_LANES
+
         hits = 0
         for _ in range(self.RUNS):
             out = _fallback_special_abilities(dict(setup))
-            if any(self._lane_of(a.get("name")) in SUPERNATURAL_LANES for a in out):
+            if any(supernatural(a) for a in out):
                 hits += 1
         return hits / self.RUNS
 

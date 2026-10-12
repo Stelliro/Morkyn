@@ -1,0 +1,163 @@
+{
+  "theme": "isekai",
+  "label": "Isekai / transported",
+  "keywords": [
+    "isekai",
+    "transported",
+    "reincarnated",
+    "another world",
+    "summoned hero",
+    "otherworld",
+    "transmigrated",
+    "previous life",
+    "truck-kun",
+    "modern knowledge",
+    "goddess"
+  ],
+  "abilities": [
+    {
+      "name": "Modern Recall",
+      "description": "You can recall one fact from your old world's schooling, like a recipe, formula or map, clearly enough to use it here.",
+      "cost": "The memory pushes out one memory of this world",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how detailed and how specialised the knowledge"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Translation Gift",
+      "description": "You can read and speak any language you hear spoken for a full minute, but only plainly.",
+      "cost": "Idioms and poetry come through as nonsense",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how fluent and how quickly you pick it up"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Inventory Pocket",
+      "description": "Store one small object in a space only you can reach, and draw it out again with a thought.",
+      "cost": "Living things cannot go in; the pocket holds only one thing",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "steady",
+        "start": "weak",
+        "grows": "how many objects and how large"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Appraisal Glance",
+      "description": "Look at an item for a few seconds to see its name and one property in a small window.",
+      "cost": "Eyes ache after a dozen appraisals",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "fast",
+        "start": "weak",
+        "grows": "how many properties and how rare an item"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Outsider's Eye",
+      "description": "Spot a custom or rule of this world that would get a stranger hurt, before you break it.",
+      "cost": "Only after you have spent a day among the people",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how subtle a custom you notice"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Kitchen Revolution",
+      "description": "You can cook a simple dish from your old world with local ingredients and anyone who tastes it wants more.",
+      "cost": "Needs a kitchen and an afternoon; locals get suspicious of the new food",
+      "power_type": "linear",
+      "growth": {
+        "pace": "fast",
+        "start": "ordinary",
+        "grows": "how complex a dish and how eager the eaters"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Goddess's Small Favor",
+      "description": "Pray for help when lost and a faint light points you to the nearest safe shelter.",
+      "cost": "The goddess asks a small task in return",
+      "power_type": "breakthrough",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how big a favor and how specific the guidance"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Skill Copy",
+      "description": "Watch someone use a skill three times and you can copy it at a clumsy, beginner level.",
+      "cost": "The copy fades in a week unless you practice it",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how well you copy and how long it lasts"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Hero's Resolve",
+      "description": "When you are protecting someone weaker, you can keep standing through pain that would drop you otherwise.",
+      "cost": "You collapse once they are safe",
+      "power_type": "soft_cap",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how much pain you can stand through"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Number Sense",
+      "description": "You can count coins, crowds or supplies at a glance and know the exact number.",
+      "cost": "Only what you can see all of at once",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how large a number at a glance"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Map Overlay",
+      "description": "Close your eyes and see a rough map of every place you have walked in this world.",
+      "cost": "Dizzy for a minute after",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "steady",
+        "start": "weak",
+        "grows": "how detailed the map and whether it shows places you heard of"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Status Hide",
+      "description": "When someone appraises you, you can show them a weaker, plainer version of your abilities.",
+      "cost": "Hiding takes focus; you cannot fight while doing it",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how strong an appraiser it fools"
+      },
+      "supernatural": true
+    }
+  ]
+}

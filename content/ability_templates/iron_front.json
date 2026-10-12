@@ -1,0 +1,167 @@
+{
+  "theme": "iron_front",
+  "label": "Iron front / war",
+  "keywords": [
+    "war",
+    "trench",
+    "front",
+    "soldier",
+    "army",
+    "military",
+    "regiment",
+    "artillery",
+    "battlefield",
+    "officer",
+    "rifle",
+    "conscript",
+    "siege",
+    "frontline",
+    "platoon"
+  ],
+  "abilities": [
+    {
+      "name": "Shell Ear",
+      "description": "Hear an incoming shell's whistle and you can sense where it will land a second before it does.",
+      "cost": "Every shell after leaves your ears ringing",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how early and how precisely"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Dig In",
+      "description": "With a shovel and ten minutes you can make a hole that shields you from rifle fire.",
+      "cost": "Hands blistered; the next dig is slower",
+      "power_type": "linear",
+      "growth": {
+        "pace": "fast",
+        "start": "ordinary",
+        "grows": "how fast and how deep"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Field Dressing",
+      "description": "Bind a wound under fire so the soldier can keep moving until the medics arrive.",
+      "cost": "Uses a bandage; leaves you exposed while you work",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how bad a wound you can bind"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Steady Aim",
+      "description": "Hold your breath and your rifle stays still for one shot, even with your hands shaking.",
+      "cost": "Only one shot per held breath",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "steady",
+        "start": "weak",
+        "grows": "how far and how steady the shot"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Officer's Voice",
+      "description": "Shout an order and frightened soldiers around you obey it before thinking, for one command.",
+      "cost": "Hoarse; officers do not like privates who do this",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many soldiers and how panicked"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Ration Fixer",
+      "description": "Swap your rations or cigarettes with other units for what you need, if they have it to spare.",
+      "cost": "You go without what you gave away",
+      "power_type": "linear",
+      "growth": {
+        "pace": "fast",
+        "start": "ordinary",
+        "grows": "how rare a thing you can find"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Gas Nose",
+      "description": "Smell gas a few seconds before others, in time to get your mask on.",
+      "cost": "Headaches every time the wind turns",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how faint a trace and how early"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Mud Crawl",
+      "description": "When you crawl through mud and wire at night, you stay unseen by sentries until a flare goes up.",
+      "cost": "Cold and soaked; the cuts from the wire can fester",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how close to the enemy you can crawl"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Lucky Charm",
+      "description": "Hold a charm from home before an attack and you can ignore one wound until the fight ends.",
+      "cost": "Lose the charm and the luck turns against you",
+      "power_type": "breakthrough",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how many wounds it holds off"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Map Reading Under Fire",
+      "description": "Read a field map by match light and know the way back to your own lines.",
+      "cost": "The match light can give you away",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how bad a map you can still use"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Second Breath March",
+      "description": "After a full day's march you can push on for one more hour at full pace.",
+      "cost": "You sleep through the next watch and cannot be woken easily",
+      "power_type": "soft_cap",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many extra hours"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Bayonet Drill",
+      "description": "When an enemy closes to blade range, you can parry their first thrust without thinking.",
+      "cost": "Only the first thrust; the drill leaves you open after",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "steady",
+        "start": "weak",
+        "grows": "how many thrusts and how skilled a foe"
+      },
+      "supernatural": false
+    }
+  ]
+}

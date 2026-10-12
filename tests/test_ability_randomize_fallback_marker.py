@@ -7,10 +7,23 @@ error swapped in the seed pool while the quality gate re-labelled it "llm".
 
 from __future__ import annotations
 
+import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from app import llm
+# The generator now learns verified abilities into a library file (app/ability_library.py);
+# keep it, and the database it sits beside, out of the player's data/.
+_TMP = Path(tempfile.mkdtemp(prefix="morkyn-fallback-marker-"))
+_ENV = {"AI_RPG_DB": str(_TMP / "world.db"), "AI_RPG_ABILITY_LIBRARY": str(_TMP / "ability_library.json")}
+os.environ.update(_ENV)
+
+from app import llm  # noqa: E402
+
+
+def setUpModule() -> None:
+    os.environ.update(_ENV)
 
 
 def _current(**extra):

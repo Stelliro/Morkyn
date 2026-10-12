@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Iterator
 
-from app import ability_growth
+from app import ability_growth, ability_library
 from app.db import connect
 from app.example_pools import (
     EXAMPLES_RULE,
@@ -3863,6 +3863,23 @@ def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str,
                 "_fallback_source": "seed_domain_pool",
             },
         )
+    # Theme templates ahead of the generic domain seeds: a fallback should still fit the world.
+    try:
+        taken = [str(a.get("name") or "") for a in existing if isinstance(a, dict)]
+        for t in reversed(ability_library.sample(current_setup, max(4, count + 1), exclude_names=taken)):
+            ordered.insert(0, {
+                "name": t["name"],
+                "description": t.get("description") or "",
+                "locked": False,
+                "prerequisites": "",
+                "cost": t.get("cost") or "",
+                "power_type": t.get("power_type") or "linear",
+                "growth": dict(t.get("growth") or {}),
+                "template_id": t["id"],
+                "_fallback_source": "theme_library",
+            })
+    except Exception:
+        pass
     power_types = ["compounding", "passive", "linear", "soft_cap", "breakthrough", "flat", "item_bound"]
     abilities: list[dict[str, Any]] = []
     for index in range(count):
@@ -3882,6 +3899,8 @@ def _fallback_special_abilities(current_setup: dict[str, Any]) -> list[dict[str,
         elif one_skillish:
             # Always ensure OP-MC fallbacks carry concrete late-game math
             ability["growth_math"] = str(ability.get("growth_math") or random.choice(GROWTH_MATH_SAMPLES))[:800]
+        # Not the model's invention: never learned, always counted as pool cards.
+        ability["_seed_pool"] = True
         abilities.append(ability)
     # Create → score power → roll how many locked → lock strongest + fair prereqs
     return assign_ability_locks_after_creation(abilities, origin=origin)
@@ -5712,6 +5731,7 @@ def _local_remake_ability(
         ),
         "growth_math": random.choice(GROWTH_MATH_SAMPLES),
         "power_type": "compounding" if origin == "acquired" else "linear",
+        "_seed_pool": True,  # from the domain pool, not the model: never learned
         "_dedupe_source": "local_remake",
     }
     return normalize_ability_lock_and_prerequisites(ab, origin=origin)
@@ -5764,7 +5784,7 @@ def _llm_rework_or_remake_ability(
             "If mode is rework: keep a thin thematic link if possible, but different verb, limit, and payoff.",
             "If mode is remake: invent a wholly new power in a different effect lane than keepers.",
             "Description must be concrete playable prose (≥1 clear action), not equal to the name.",
-            "power_type is a growth template id; growth is words only (pace slow|steady|fast, start weak|ordinary|strong, grows). Never write growth math.",
+            "power_type is a growth type; growth is words only (pace slow|steady|fast, start weak|ordinary|strong, grows). Never write growth math.",
             "Cost must be real and not clone keeper cost structures.",
             "Never reuse forbidden_names or paraphrase keeper descriptions.",
         ],
@@ -6075,7 +6095,7 @@ def _ability_quality_retry_prompt(
         "quality_bar": {
             "name": "evocative, specific, not generic Ability/Power, not overused cliché domains",
             "description": "≥1 concrete playable hook (what you do / when / limit); no vague mystery power",
-            "growth": "power_type template + growth {pace, start, grows} in words; the game computes the numbers",
+            "growth": "power_type growth type + growth {pace, start, grows} in words; the game computes the numbers",
             "cost": "meaningful strain/resource for actives; passives may be always-on with a drawback",
             "prerequisites": "required when locked=true; concrete unlock path",
             "stability": "no unlimited/omnipotent/auto-win wording",
@@ -7074,41 +7094,32 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             pf.get("start_power") or ""
         ).lower() in {"near_useless", "weak"}
         diversity_seed = random.randint(1000, 999999)
-        # Catalog seeds are FALLBACK / spice only — model must invent first.
-        sample_n = min(6, len(SEED_SKILL_DOMAIN_POOL))
-        inspiration_only = [
-            {
-                # No "name": a 7B/8B pastes names it is shown (Weapon Name,
-                # Guest Right, Bone Broth came back verbatim on Qwen3 8B).
-                # Clean player-facing effect only — never paste tier/lane tags into ability text.
-                "effect_hint": d.get("hint"),
-                "requires": d.get("requires") or "",
-                "late_payoff_fiction": d.get("compounds_to") or "",
-                "lane": d.get("lane"),
-                "tier": d.get("tier"),
-            }
-            for d in random.sample(list(SEED_SKILL_DOMAIN_POOL), k=sample_n)
-        ]
+        # Theme templates (app/ability_library.py): a fresh handful per call from the setup's
+        # theme mix, least-used first, built-in plus what this player's games have taught it.
+        # The model adapts one (template_id) or invents a new power (template_id "new");
+        # new ones that verify are stored for later calls.
+        offered_templates = ability_library.sample(current_setup, 8, exclude_names=forbid_names)
+        current_setup["_offered_template_ids"] = [t["id"] for t in offered_templates]
         prompt = {
             "task": (
-                "Generate NEW setup special abilities. "
-                "INVENT original powers first — exhaust creative variety on your own. "
+                "Generate setup special abilities for this world. "
+                "Base each ability on one of theme_templates (use it, or adapt its name and details to this world) "
+                "or invent a new one in the same spirit. "
                 f"Diversity seed {diversity_seed}. "
-                "A small inspiration_only list is optional spice if you are stuck; do NOT treat it as a menu. "
                 "Outputs pass a quality gate (name, description, cost, prerequisites). "
-                "Do not write growth math: pick a growth template and a seed, and the game computes every rank and number."
+                "Do not write growth math: pick a growth type and a seed, and the game computes every rank and number."
             ),
-            "invention_first": True,
-            "inspiration_only": inspiration_only,
-            "inspiration_policy": (
-                "Optional. Use at most as loose thematic spice. Prefer wholly original names/effects. "
-                "Copying an inspiration name is a last resort when truly out of ideas."
+            "theme_templates": ability_library.prompt_view(offered_templates),
+            "template_policy": (
+                "Set template_id on every ability: the template's template_id when you used or adapted one, "
+                "or \"new\" when you invented it. When you return two or more abilities, make at least one new. "
+                "A new ability must fit this world as well as the templates do."
             ),
             "ban_overused_domains": sorted(OVERUSED_SEED_DOMAINS),
             "quality_bar": {
                 "name": "specific evocative name; not Ability/Power; not banned cliché domains",
                 "description": "concrete playable hook (action + duration); put use-frequency in cost when a recharge also exists",
-                "growth": "a template from growth_seed_contract and a seed of plain words; no numbers",
+                "growth": "a growth type from growth_seed_contract.growth_types and a seed of plain words; no numbers",
                 "cost": "real strain/resource; include once/day or recharge here consistently — no mismatch with description",
                 "prerequisites": "required when locked=true",
                 "stability": "no unlimited/omnipotent/auto-win",
@@ -7161,15 +7172,16 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                         "locked": False,
                         "prerequisites": "unlock path when locked; else empty",
                         "cost": "concrete cost or drawback (not empty free god-mode)",
-                        "power_type": "one template id from growth_seed_contract.templates",
+                        "power_type": "one growth type from growth_seed_contract.growth_types",
                         "growth": {"pace": "slow|steady|fast", "start": "weak|ordinary|strong", "grows": "what gets stronger, a few words"},
+                        "template_id": "a template_id from theme_templates, or new",
                     }
                 ]
             },
             # Two parts: the model chooses, the engine computes (app/ability_growth.py).
             # Model-written math copied the prompt's examples and contradicted itself.
             "growth_seed_contract": {
-                "templates": {key: spec["summary"] for key, spec in ability_growth.TEMPLATES.items()},
+                "growth_types": {key: spec["summary"] for key, spec in ability_growth.TEMPLATES.items()},
                 "pace": "slow, steady or fast: how quickly ranks come",
                 "start": "weak, ordinary or strong: where on the rank ladder the power begins",
                 "grows": "a few plain words for what gets stronger as it ranks up (reach, duration, how many targets, how much it hides). No numbers.",
@@ -7182,8 +7194,8 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             + [
                 "Do not return the current abilities unchanged. Invent new names and descriptions.",
                 "Never reuse must_not_reuse.names or paraphrase must_not_reuse.description_prefixes.",
-                "INVENTION FIRST: create original domains and effects. Do not default to catalog seed names.",
-                "inspiration_only is optional spice if stuck — not a required domain list.",
+                "Templates fit this world: adapt them freely (rename, re-flavor, change the limit) but keep each power playable.",
+                "A new ability needs its own core action, not a template with a new name.",
                 "NEVER put design meta in description: no 'advanced tier', 'arcane lane', 'compounds toward:', 'When you try,'. Write fiction the player reads in play.",
                 "Description = what the character can do now (weak/limited). Late payoff belongs in growth.grows, not as labeled meta tags.",
                 "FACT-CHECK across description, cost and prerequisites: use limits must not contradict. "
@@ -7209,7 +7221,7 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                 "Let backstory_mode and character_backstory decide ability source; do not force former-life power without support.",
                 "If field_intent.power_fantasy.start_power is near_useless or weak, abilities should start locked or extremely modest; compounding toward late OP belongs to later play, not opening god-mode.",
                 "If growth is compounding / OP MC fantasy and quantity is not locked: prefer ONE weak seed ability when count_min allows 1; if count_max≥2 you may add one locked passive domain expression. Never exceed count_max. Opening kit is thin — more powers may unlock later in play, not at Start.",
-                "Give every ability power_type (a template id) and growth {pace, start, grows}. Words only: the game turns them into the rank ladder and every number. "
+                "Give every ability power_type (a growth type) and growth {pace, start, grows}. Words only: the game turns them into the rank ladder and every number. "
                 "OP / compounding fantasy: the seed power is power_type compounding with start weak. Fixed gifts are flat.",
                 "Cost and prerequisites will be quality-checked for stability — no unlimited free power.",
                 "If custom_skills_hint names a seed, you may align — still invent original fiction, do not paste slogans.",
@@ -8294,6 +8306,26 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
             )
             # Last word on growth: every card (model, fallback, rework) gets engine math from its seed.
             validated["special_abilities"] = engine_ability_growth(validated.get("special_abilities") or [], current_setup)
+            # Theme library: what was offered and used, and new model-made powers that verify
+            # join the library for later calls. Never from a fallback; never fatal.
+            try:
+                offered_ids = list(current_setup.get("_offered_template_ids") or [])
+                final = [a for a in validated.get("special_abilities") or [] if isinstance(a, dict)]
+                used_ids = [str(a.get("template_id")) for a in final if str(a.get("template_id") or "new") not in {"", "new"}]
+                ability_library.record_offered([{"id": i} for i in offered_ids])
+                ability_library.record_used(used_ids)
+                learned = []
+                if not validated.get("fallback_used") and str(quality_source).startswith("llm"):
+                    learned = ability_library.learn(final, current_setup)
+                validated["ability_library"] = {
+                    "themes": ability_library.theme_mix(current_setup),
+                    "offered": len(offered_ids),
+                    "from_templates": len(used_ids),
+                    "learned": [e["name"] for e in learned],
+                    "pool_cards": sum(1 for a in final if a.get("_seed_pool")),
+                }
+            except Exception as library_exc:
+                validated["ability_library"] = {"error": str(library_exc)[:200]}
             if isinstance(validated.get("quality_gate"), dict):
                 validated["quality_gate"]["final_count"] = len(validated["special_abilities"] or [])
                 validated["quality_gate"]["target_count"] = target_count
@@ -9107,6 +9139,10 @@ def _validate_setup_randomization(
             if power_type not in allowed_power_types:
                 power_type = "linear"
             ability["power_type"] = power_type
+            # Theme template the model built on (app/ability_library.py); only an id it was offered counts.
+            offered_ids = set((current_setup or {}).get("_offered_template_ids") or [])
+            template_id = str(ability.get("template_id") or "").strip()
+            ability["template_id"] = template_id if template_id in offered_ids else "new"
             clean_name = sanitize_ability_name(ability.get("name"))
             if clean_name:
                 ability["name"] = clean_name

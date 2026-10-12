@@ -1,0 +1,164 @@
+{
+  "theme": "adventurers",
+  "label": "Adventurers' guild",
+  "keywords": [
+    "adventurer",
+    "adventurers",
+    "guild",
+    "party",
+    "quest board",
+    "rank card",
+    "bounty",
+    "dungeon crawl",
+    "mercenary",
+    "explorer",
+    "hunter",
+    "monster hunting"
+  ],
+  "abilities": [
+    {
+      "name": "Quest Board Instinct",
+      "description": "Read the guild board and you can sense which posted job is worse than it looks.",
+      "cost": "Only works on jobs posted that morning",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how well hidden the danger can be"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Camp Craft",
+      "description": "When you make camp, you can set it so that anyone approaching wakes you before they reach the fire.",
+      "cost": "Takes an hour of setup; useless in towns",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how quiet an approach still wakes you"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Party Rhythm",
+      "description": "After one fight beside the same allies, you can call one move they will follow without words.",
+      "cost": "Needs a full fight together first",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "steady",
+        "start": "weak",
+        "grows": "how many moves and how many allies"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Monster Butcher",
+      "description": "Cut a monster carcass and you can take its most valuable part without spoiling it.",
+      "cost": "A messy hour; the smell draws scavengers",
+      "power_type": "linear",
+      "growth": {
+        "pace": "fast",
+        "start": "ordinary",
+        "grows": "how rare a monster and how many parts"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Trap Feel",
+      "description": "Touch a floor tile or chest and sense whether it is trapped, though not how.",
+      "cost": "Slow: a minute per tile",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how well hidden a trap and whether you sense the kind"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Rank Bluff",
+      "description": "Speak like a higher-rank adventurer and townsfolk believe your guild rank is one step higher than it is.",
+      "cost": "A real higher-rank adventurer sees through it",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many ranks you can claim"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Potion Stretcher",
+      "description": "You can split one healing potion between two people and each gets most of its effect.",
+      "cost": "Both drinkers feel sick for an hour",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how many people can share one potion"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Bounty Nose",
+      "description": "Hold a wanted poster and you can sense the direction of the person on it, if they are within a day's walk.",
+      "cost": "The poster must be the real one, not a copy",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how far and how precisely"
+      },
+      "supernatural": true
+    },
+    {
+      "name": "Sure Grip Climb",
+      "description": "Climb a cliff or wall with poor holds as if every hold were good, until you rest.",
+      "cost": "Forearms burn; you must rest before the next climb",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how sheer a face and how long you can climb"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Guild Discount",
+      "description": "When you show your guild card at a supplier, you can get adventuring supplies cheaper than the posted price.",
+      "cost": "Only at guild-friendly shops; they expect loyalty",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how big the discount and how many shops"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Taunt",
+      "description": "Shout at a monster and it fixes on you instead of your weaker allies until it is hurt.",
+      "cost": "It fixes on you with all its strength",
+      "power_type": "soft_cap",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how smart a monster it works on"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Retreat Path",
+      "description": "Before entering a dungeon you can mark a way out, and always find it again when you need to run.",
+      "cost": "Only one path marked at a time",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how deep a dungeon the path still works in"
+      },
+      "supernatural": true
+    }
+  ]
+}

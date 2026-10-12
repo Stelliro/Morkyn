@@ -5066,6 +5066,7 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                 # The growth seed (pace / start / grows); the insert below expands it with the engine.
                 "growth": cleaned.get("growth") if isinstance(cleaned.get("growth"), dict)
                 else ability.get("growth") if isinstance(ability.get("growth"), dict) else {},
+                "template_id": str(ability.get("template_id") or ""),
             }
             if isinstance(cleaned.get("resource_cost"), dict):
                 entry["resource_cost"] = cleaned["resource_cost"]
@@ -5215,6 +5216,14 @@ def start_playthrough(options: dict[str, Any]) -> dict[str, Any]:
                     json.dumps(ability_growth.new_state(spec), ensure_ascii=True),
                 ),
             )
+
+        # The game starts with these: library templates among them gain weight for later rolls.
+        try:
+            from app import ability_library
+
+            ability_library.record_chosen(stamped_batch)
+        except Exception:
+            pass
 
         # Seed starter gear only after arrival fact-check (isekai ≠ free shield).
         # The structured list from setup wins; the comma string is the legacy road in.

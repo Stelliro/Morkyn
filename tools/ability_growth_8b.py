@@ -97,6 +97,14 @@ THEMES: dict[str, dict[str, Any]] = {
         ),
         "magic_level": "forbidden",
     },
+    "cyber_wuxia": {
+        "label": "Custom mix: cyber-wuxia",
+        "idea": (
+            "A neon megacity where rival corporate sects teach qi cultivation through implants; disciples duel for "
+            "contracts on rooftops. Hard difficulty; cultivation through chrome; loot earned and uncommon."
+        ),
+        "magic_level": "cultivation",
+    },
     "hearth": {
         "label": "Hearth (cozy)",
         "idea": (
@@ -419,6 +427,9 @@ def generate_theme(theme_id: str, spec: dict[str, Any], per_theme: int, out: Pat
                 "name": ab.get("name"),
                 "power_type": power_type,
                 "growth": ab.get("growth"),
+                "template_id": ab.get("template_id"),
+                "seed_pool": bool(ab.get("_seed_pool")),
+                "library": payload.get("ability_library") if isinstance(payload, dict) else None,
                 "locked": ab.get("locked"),
                 "description": ab.get("description"),
                 "prerequisites": ab.get("prerequisites"),

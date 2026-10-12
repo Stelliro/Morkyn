@@ -4635,6 +4635,7 @@ function abilityCardSnapshot(card) {
     growth_math: field("growth_math")?.value.trim() || "",
     power_type: field("power_type")?.value || "linear",
     growth: abilityGrowthSeedFromCard(card),
+    template_id: card.dataset.templateId || "",
   };
 }
 
@@ -6478,7 +6479,7 @@ function abilityTemplate(ability = {}, options = {}) {
     : `<button class="secondaryButton randomizeOneAbility" type="button">Randomize This</button>
           <button class="secondaryButton addAbilityAfter" type="button">Add Ability Below</button>`;
   return `
-    <article class="abilitySetupCard ${collapseClass}${kept ? " is-kept" : ""}${nested ? " is-nested" : ""}" data-ability-id="${escapeHtml(id)}"${nested ? ' data-ability-nested="true"' : ""}>
+    <article class="abilitySetupCard ${collapseClass}${kept ? " is-kept" : ""}${nested ? " is-nested" : ""}" data-ability-id="${escapeHtml(id)}" data-template-id="${escapeHtml(ability.template_id || "")}"${nested ? ' data-ability-nested="true"' : ""}>
       <header class="abilityCardSummary">
         <button type="button" class="abilityCollapseToggle" aria-expanded="${expanded ? "true" : "false"}" title="${expanded ? "Collapse power details" : "Expand power details"}">
           <span class="abilityCollapseChevron" aria-hidden="true"></span>
@@ -6725,7 +6726,7 @@ function collectAbilities() {
       const power_type = field("power_type")?.value || "linear";
       const growth = abilityGrowthSeedFromCard(card);
       return normalizeAbilityLockAndPrerequisites(
-        { name, description, locked, keep, prerequisites, cost, growth_math, power_type, growth },
+        { name, description, locked, keep, prerequisites, cost, growth_math, power_type, growth, template_id: card.dataset.templateId || "" },
         "both",
       );
     })

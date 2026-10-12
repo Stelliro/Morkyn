@@ -204,6 +204,8 @@ class SpecialAbilitySetup(BaseModel):
     # pydantic dropped the card's power_type and every game started it as linear.
     power_type: str = Field(default="linear", max_length=40)
     growth: dict[str, Any] = Field(default_factory=dict)
+    # The theme template it came from (app/ability_library.py), so Start can count the pick.
+    template_id: str = Field(default="", max_length=120)
 
     @model_validator(mode="before")
     @classmethod
@@ -220,6 +222,7 @@ class SpecialAbilitySetup(BaseModel):
             normalized.pop("power_type")  # let the field default apply (linear, or item_bound on gear)
         if not isinstance(normalized.get("growth"), dict):
             normalized["growth"] = {}
+        normalized["template_id"] = str(normalized.get("template_id") or "")
         return normalized
 
 

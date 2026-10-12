@@ -1,0 +1,167 @@
+{
+  "theme": "court",
+  "label": "Court intrigue",
+  "keywords": [
+    "court",
+    "intrigue",
+    "noble",
+    "nobility",
+    "royal",
+    "palace",
+    "courtier",
+    "succession",
+    "duke",
+    "throne",
+    "etiquette",
+    "political",
+    "scheme",
+    "ballroom",
+    "heir"
+  ],
+  "abilities": [
+    {
+      "name": "Seating Chart Read",
+      "description": "Read where people sit at a feast and know who is rising in favor and who is falling.",
+      "cost": "Only at a formal table; needs a full course to read",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how subtle a shift you notice"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Perfect Curtsy",
+      "description": "You can greet anyone of higher rank so flawlessly that they cannot take offense at what you say next.",
+      "cost": "Only one sentence is protected",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how bold a sentence you can get away with"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Fan Language",
+      "description": "Signal a message across a ballroom with a fan or glove that only your allies can read.",
+      "cost": "Needs an ally who knows the code",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how complex the message"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Poisoner's Palate",
+      "description": "Taste a dish and sense whether anything in it should not be there.",
+      "cost": "You still swallow a little of what is in it",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how subtle a poison you catch"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Favor Ledger",
+      "description": "Recall exactly who owes whom a favor at court, if you have heard it spoken of once.",
+      "cost": "Remembering everyone's favors makes you trust no one",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how many favors and how far back"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Servant's Invisibility",
+      "description": "When you carry a tray or basket, guards and nobles look through you for as long as you keep moving.",
+      "cost": "Stop moving and you are seen at once",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how guarded a room you can walk through"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Letter Seal Lift",
+      "description": "With a warm knife you can lift a wax seal and press it back so the reader never knows it was opened.",
+      "cost": "Takes a quiet quarter hour; old seals may crack",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how complex a seal"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Heir's Bearing",
+      "description": "Stand and speak like royalty so commoners obey you without asking who you are, until a real noble arrives.",
+      "cost": "Lying about your blood is treason if caught",
+      "power_type": "soft_cap",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how important the people who obey"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Rumor Seeding",
+      "description": "Tell one courtier a rumor and you can hear it reach the person you aimed it at within a day.",
+      "cost": "Rumors always come back twisted",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how far and how fast it spreads"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Portrait Smile",
+      "description": "Hold a pleasant expression through any insult, so no one can read what you really feel.",
+      "cost": "Jaw aches; the anger has to go somewhere later",
+      "power_type": "passive",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how cruel an insult you can stand"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Bloodline Memory",
+      "description": "Name any noble house and you can recall its arms, its feuds and its marriages.",
+      "cost": "Upstart houses slip your memory",
+      "power_type": "linear",
+      "growth": {
+        "pace": "steady",
+        "start": "ordinary",
+        "grows": "how minor a house you know"
+      },
+      "supernatural": false
+    },
+    {
+      "name": "Hidden Passage Sense",
+      "description": "Walk the corridors of an old palace and sense where a servants' passage or hidden door runs.",
+      "cost": "Only palaces older than a century",
+      "power_type": "compounding",
+      "growth": {
+        "pace": "slow",
+        "start": "weak",
+        "grows": "how well hidden a passage you find"
+      },
+      "supernatural": false
+    }
+  ]
+}
