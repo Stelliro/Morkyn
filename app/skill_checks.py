@@ -1482,16 +1482,19 @@ def social_attitude_from_check(
 
 
 SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
-    (r"\b(attack|strike|slash|stab|swing|fight|melee)\b", "melee"),
+    # Striking a flint, a match or a bargain is not a blow (playtest #102).
+    (r"\b(attack|strike(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance)\b)|slash|stab|swing|fight|melee)\b", "melee"),
     (r"\b(shoot|fire|bow|gun|throw)\b", "ranged"),
     (r"\b(sneak|hide|stealth|creep)\b", "stealth"),
     (r"\b(persuade|convince|negotiate)\b", "persuasion"),
-    (r"\b(bargain|haggle|price|appraise|value of|worth)\b", "appraise"),
+    # "worth" alone is feeling ("no cart's worth you", playtest #102); a
+    # price question still asks what something is worth.
+    (r"\b(bargain|haggle|price|appraise|value of|what'?s? (?:is )?\w+(?: \w+)? worth|worth (?:anything|much|it\?))(?:\b|(?<=\?))", "appraise"),
     # Opening speech / ask / talk → charisma-backed persuasion
     (r"\b(talk|speak|ask|greet|address|approach .+ (and )?(talk|ask|speak)|say (hello|hi)|introduce)\b", "persuasion"),
     # Reclining "lie down/back/low/still/awake/asleep" is rest, not a bluff.
     # The lookahead also sees stemmed variants ("lies down" -> "lie down").
-    (r"\b(lie\b(?!\s+(?:down|back|low|still|awake|asleep)\b)|bluff|deceive|con)\b", "deception"),
+    (r"\b(lie\b(?!\s+(?:down|back|low|still|awake|asleep|flat|prone|face|on|in|there|here|quiet|beside|next|under|across|along|against|curled|huddled)\b)|bluff|deceive|con)\b", "deception"),
     (r"\b(intimidate|threaten|scare)\b", "intimidation"),
     (r"\b(disguise|costume|impersonat[a-z]*|pretend to be)\b", "disguise"),
     (r"\b(gambl[a-z]*|bet|wager|cards|dice game)\b", "gambling"),
@@ -1500,7 +1503,8 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(insight|read (him|her|them|the room)|sense motive)\b", "insight"),
     (r"\b(read|inspect|examine|study|analyze)\b", "investigation"),
     (r"\b(search|look for|scan|look around)\b", "perception"),
-    (r"\b(climb|jump|swim|lift|force|break|bash)\b", "athletics"),
+    # Getting into a boat, a cart or a bed is not a feat (playtest #102).
+    (r"\b(climb(?!\s+(?:in|into|onto|aboard|out of|down from|back into)\s+(?:the\s+|a\s+|my\s+|his\s+|her\s+)?(?:\w+\s+)?(?:skiff|boat|cart|wagon|bed|saddle|bunk|hammock|carriage|barge|punt|coracle))|jump|swim|lift|force|break|bash)\b", "athletics"),
     (r"\b(lock|pick the|unlock)\b", "lockpicking"),
     (r"\b(heal|bandage|medicine|first aid|triage|splint)\b", "healing"),
     (r"\b(rally|cover (me|them|him|her)|support (ally|friend)|buff)\b", "support"),
@@ -1517,7 +1521,9 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(smith|forge|anvil|temper)\b", "smithing"),
     (r"\b(animal|mount|horse|herd|tame|calm the)\b", "animal_handling"),
     (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
-    (r"\b(mine|ore|tunnel|dig (for|out|a))\b", "mining"),
+    # "mine" is usually the possessive ("round Tam's waist, then round mine",
+    # playtest #102): only the verb with an object, or the word alone, is mining.
+    (r"(^mine$|\bmine (?:for|the|a|an|out|ore|coal|iron|copper|silver|gold|salt)\b|\b(mining|ore|tunnel|dig (for|out|a))\b)", "mining"),
     (r"\b(map|chart|survey|cartograph[a-z]*)\b", "cartography"),
     (r"\b(navigat[a-z]*|stars|compass|bearing|dead reckon)\b", "navigation"),
     (r"\b(tinker|gadget|mechanism|jury[- ]?rig)\b", "tinkering"),
@@ -1627,9 +1633,16 @@ def _trigger_text_variants(text: str) -> list[str]:
     return variants
 
 
+_NEGATED_VERB_RE = re.compile(
+    r"\b(?:not|never|no longer|cannot|\w+n['’]t)\s+(?:\w+ly\s+)?(?:going to\s+|try(?:ing)? to\s+)?\w+"
+)
+_WATCHED_CLAUSE_RE = re.compile(r"\b(?:watch|see|notice|count)(?:es|s|ing)?\s+(?:how|whether|if|as)\b[^.,;!?\"“”]*")
+
 # Verb forms only: "stab" must not catch "the stable" a player is mucking out.
 _COMBAT_LINE_RE = re.compile(
-    r"\b(?:attack|fight|strike|slash|stab|punch|kick|shoot)(?:s|es|ed|ing|bed|bing)?\b", re.I
+    r"\b(?:(?:attack|fight|slash|stab|punch|kick|shoot)(?:s|es|ed|ing|bed|bing)?"
+    r"|(?:strikes?|striking|struck)\b(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance)\b))\b",
+    re.I,
 )
 
 
@@ -1645,6 +1658,14 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # engine notes after it (#43), and in its own case so "the Forge" stays
     # a name.
     own = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0].strip()
+    # The trigger table reads the same line (playtest #89, Saltmarrow run):
+    # the engine's own note after it ("the player is talking to Tam Kemp")
+    # rolled a contested persuasion on every turn with anyone present, a
+    # silent rope-haul included. A verb the player denies is not an act:
+    # "I'm not hiding" rolled stealth and a mishap (#102).
+    # What the player watches happen is not the player's act: "watch how fast
+    # the water climbs the tiles" rolled athletics (#102).
+    text = _WATCHED_CLAUSE_RE.sub(" ", _NEGATED_VERB_RE.sub(" ", own.lower()))
     act = None
     if not _COMBAT_LINE_RE.search(own):
         try:
@@ -1741,6 +1762,20 @@ _BLUNDER_LINES = (
 )
 
 
+def _line_names_npc(text: str, npc: dict[str, Any]) -> bool:
+    """The full name, the first name as a word, or the [[code]] tag."""
+    name = str(npc.get("name") or "").lower().strip()
+    code = str(npc.get("code") or "").lower().strip()
+    if not name and not code:
+        return False
+    if name and name in text:
+        return True
+    first = name.split()[0] if name else ""
+    if len(first) >= 3 and re.search(rf"\b{re.escape(first)}\b", text):
+        return True
+    return bool(code) and f"[[{code}]]" in text
+
+
 def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None) -> dict[str, Any]:
     """One inferred check for ``skill``: the opposing NPC or foe the line names, and the tool."""
     opposition: dict[str, Any] = {}
@@ -1761,10 +1796,9 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
             "power": target.get("attack_max") or target.get("power"),
         }
     else:
-        for npc in _npc_pool_from_context(ctx)[:12]:
-            name = str(npc.get("name") or "").lower()
-            code = str(npc.get("code") or "").lower()
-            if name and (name in text or (code and code in text)):
+        pool = _npc_pool_from_context(ctx)
+        for npc in pool[:12]:
+            if _line_names_npc(text, npc):
                 matched_npc = npc
                 opposition = {
                     "name": npc.get("name"),
@@ -1776,11 +1810,18 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
                     "power_rank": npc.get("power_rank"),
                 }
                 break
-        # Talk with no named target: use nearest local as soft opposition for DC color
+        # Talk with no named target: the one the engine decided the player is
+        # talking to, or the only person here. The first local in the list was
+        # a stale pick, often a listener or someone who had left (playtest #89).
         if not matched_npc and skill in {"persuasion", "deception", "intimidation", "insight", "etiquette"}:
-            locals_ = _npc_pool_from_context(ctx)
-            if locals_:
-                matched_npc = locals_[0]
+            conv = ctx.get("conversation_turn") if isinstance(ctx.get("conversation_turn"), dict) else {}
+            addressed = [str(c).upper() for c in conv.get("addressed") or []]
+            by_code = {str(n.get("code") or "").upper(): n for n in pool if n.get("code")}
+            if addressed and addressed[0] in by_code:
+                matched_npc = by_code[addressed[0]]
+            elif not addressed and len(pool) == 1:
+                matched_npc = pool[0]
+            if matched_npc:
                 opposition = {
                     "name": matched_npc.get("name"),
                     "rank": matched_npc.get("rank"),
