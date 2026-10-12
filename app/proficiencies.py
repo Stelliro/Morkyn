@@ -1107,6 +1107,15 @@ def settle_from_model(options: dict[str, Any]) -> dict[str, Any]:
         ensure_proficiency_table(conn)
         existing = [str(row["name"]) for row in conn.execute("SELECT name FROM player_skills ORDER BY id").fetchall()]
         idea = idea_text(options, conn)
+        if not _clean(options.get("player_name")):
+            # The name lives on the player row, not in the stored options, so
+            # this pass was told character.name "" (Saltmarrow #100).
+            try:
+                row = conn.execute("SELECT name FROM player WHERE id = 1").fetchone()
+            except Exception:
+                row = None
+            if row and row["name"]:
+                options = {**options, "player_name": str(row["name"])}
     content = _chat_content(
         _SETTLE_SYSTEM,
         settle_prompt(options, existing, idea),

@@ -1810,6 +1810,7 @@ def ability_use_prompt_block(use: dict[str, Any] | None) -> str:
     d = use.get("spend") or {}
     lines = [
         f"Ability used (server resolved): {use.get('ability')}",
+        *([f"- What it does: {str(use.get('description')).strip()}"] if str(use.get("description") or "").strip() else []),
         f"- Cost applied: {cost}",
         f"- Spend deltas: energy {d.get('energy', 0)}, mana {d.get('mana', 0)}, "
         f"fatigue +{abs(d.get('fatigue', 0)) if d.get('fatigue') else 0}, health {d.get('health', 0)}",

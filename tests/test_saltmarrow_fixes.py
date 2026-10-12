@@ -310,5 +310,91 @@ class PeopleMoveWithThePlayer(unittest.TestCase):
             self.assertEqual(where, {"H": 2, "K": 7})
 
 
+class OpsNameThePlayerAndNewPeople(unittest.TestCase):
+    """#106: REL to YOU became the code YOU; CAST could not name someone made this turn."""
+
+    def test_transcoder(self):
+        from app import turn_dsl
+
+        ops = turn_dsl.parse_ops(
+            'REL K YOU "her daughter, gone six years"\n'
+            'REL "Mara Tarrow" [[H]] "the boy who signed first"\n'
+            'CAST present "Mara Tarrow"\n'
+            "CAST interacting [[H]] Tam\n"
+        )
+        turn = turn_dsl.ops_to_turn("Mara Tarrow [[K]] looks at you.", ops)
+        rels = [(r["source_code"], r["target_code"]) for r in turn["relationships"]]
+        self.assertEqual(rels, [("K", "PLAYER"), ("Mara Tarrow", "H")])
+        self.assertEqual(turn["scene_cast"]["present"], ["Mara Tarrow"])
+        self.assertEqual(turn["scene_cast"]["interacting"], ["H"])
+
+    def test_bond_and_kin_alias_and_cast_by_name(self):
+        from app.db import connect, init_db
+
+        init_db()
+        with connect() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("DELETE FROM player")
+            conn.execute("DELETE FROM npcs WHERE code IN ('K', 'H')")
+            conn.execute("DELETE FROM aliases WHERE entity_code = 'K'")
+            conn.execute(
+                "INSERT INTO player (id, name, health, max_health, level, xp, gold, karma, current_location_id) "
+                "VALUES (1, 'Isk', 20, 20, 1, 0, 0, 0, 2)"
+            )
+            conn.execute("INSERT INTO npcs (code, name, location_id, known_facts) VALUES ('K', 'Mara Tarrow', 2, '[]')")
+            conn.execute("INSERT INTO npcs (code, name, location_id, known_facts) VALUES ('H', 'Tam Kemp', 2, '[]')")
+            world._apply_relationships(conn, [{"source_code": "K", "target_code": "PLAYER", "summary": "her daughter Isk; Mara is the player's mother"}])
+            facts = conn.execute("SELECT known_facts FROM npcs WHERE code = 'K'").fetchone()[0]
+            self.assertIn("To the player: her daughter Isk", facts)
+            aliases = {r[0] for r in conn.execute("SELECT alias FROM aliases WHERE entity_code = 'K'")}
+            self.assertIn("Mam", aliases)
+            cast = {"present": ["Mara Tarrow"], "interacting": []}
+            world._apply_scene_cast(conn, cast, "Mara Tarrow [[K]] nods.")
+            self.assertEqual(cast["present"], ["K"])
+
+
+class PacketsCarryTheCharacter(unittest.TestCase):
+    """#100: the opening packet had no character; #101: ability use said nothing of what it does."""
+
+    CTX = {
+        "player": {"name": "Isk Tarrow", "title": "Flat-runner", "health": 20, "max_health": 20},
+        "inventory": [
+            {"name": "patched tunic", "code": "I2", "equipped_slot": "TORSO", "quantity": 1},
+            {"name": "mother's brass tide-reckoner", "code": "I4", "equipped_slot": "", "quantity": 1},
+            {"name": "spent rope", "code": "I5", "equipped_slot": "", "quantity": 0},
+        ],
+        "abilities": [{"code": "AB1", "name": "Tidecount", "description": "Feels the water's return. Knows which channels fill first.", "cost": "1 energy"}],
+        "skills": [{"name": "Salvage", "value": 3, "notes": "Start rank E; grows with each haul"}, {"name": "Deception", "value": 0}],
+        "settings": {"playthrough_options": {"character_backstory": "Isk runs the flats. Her mother never came back.", "custom_style": "A harbour the sea left."}},
+    }
+
+    def test_opening_has_the_sheet(self):
+        from app import prompts
+
+        player = prompts._visible_world(self.CTX, "__opening_scene_request__: begin")["player"]
+        self.assertEqual([i["name"] for i in player["carried"]], ["mother's brass tide-reckoner"])
+        self.assertEqual(player["abilities"][0]["does"], "Feels the water's return.")
+        self.assertEqual(player["trained_in"], ["Salvage (E)"])
+        self.assertIn("Her mother never came back.", player["backstory"])
+        self.assertEqual(player["premise"], "A harbour the sea left.")
+
+    def test_later_turns_skip_the_backstory(self):
+        from app import prompts
+
+        player = prompts._visible_world(self.CTX, "I look at the tide.")["player"]
+        self.assertNotIn("backstory", player)
+        self.assertNotIn("abilities", player)
+
+    def test_ability_use_names_it_and_says_what_it_does(self):
+        from app import prompts
+        from app.player_resources import ability_use_prompt_block
+
+        mech = {"ability_use": {"ok": True, "ability": "Tidecount", "description": "Feels the water's return."}}
+        view = prompts._mechanics_view({"mechanics_context": mech})["ability_use"]
+        self.assertEqual((view["name"], view["does"]), ("Tidecount", "Feels the water's return."))
+        block = ability_use_prompt_block({"ability": "Tidecount", "description": "Feels the water's return.", "cost": {}})
+        self.assertIn("What it does: Feels the water's return.", block)
+
+
 if __name__ == "__main__":
     unittest.main()
