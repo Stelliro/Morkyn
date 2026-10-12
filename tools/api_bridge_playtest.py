@@ -165,6 +165,12 @@ def main() -> int:
     ap.add_argument("--model", default="claude-opus-5-5")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--resume", action="store_true", help="continue an existing run dir: no new game, numbering continues")
+    ap.add_argument(
+        "--local-model",
+        default="",
+        help="a GGUF path or MLE model name: that model is the GM through MLE and no bridge runs; "
+        "player lines still come from the inbox",
+    )
     args = ap.parse_args()
     run_dir = args.dir.resolve()
     run = Run(run_dir, args.model)
@@ -177,25 +183,39 @@ def main() -> int:
     (run_dir / "data" / "source_index").mkdir(parents=True, exist_ok=True)
     (run_dir / "data" / "model_traces").mkdir(parents=True, exist_ok=True)
     os.environ.update(env)
+    # Keep every turn's trace, not only the newest 50.
+    os.environ["AI_RPG_MODEL_TRACE_KEEP"] = "400"
     base = f"http://127.0.0.1:{args.port}/v1"
-    os.environ.update(
-        {
-            "AI_RPG_MODEL_PROVIDER": "openai",
-            "AI_RPG_API_BASE_URL": base,
-            "AI_RPG_API_MODEL": args.model,
-            "AI_RPG_API_KEY": "bridge",
-            # The model is a person at a keyboard: wait for it.
-            **{
-                name: "7200"
-                for name in (
-                    "AI_RPG_TURN_DRAFT_TIMEOUT", "AI_RPG_TURN_VERIFY_TIMEOUT", "AI_RPG_QUEST_PARSER_TIMEOUT",
-                    "AI_RPG_JSON_REPAIR_TIMEOUT", "AI_RPG_SETUP_COHERENCE_TIMEOUT", "AI_RPG_SETUP_RANDOMIZER_TIMEOUT",
-                    "AI_RPG_SUGGESTION_TIMEOUT", "AI_RPG_AMBIENT_TIMEOUT", "AI_RPG_LLAMA_CPP_TIMEOUT", "AI_RPG_MLE_TIMEOUT",
-                )
-            },
-        }
-    )
-    serve(run, args.port)
+    local = str(args.local_model or "").strip()
+    if local:
+        os.environ.update(
+            {
+                "AI_RPG_MODEL_PROVIDER": "mle",
+                "MLE_MODEL": local,
+                "AI_RPG_MLE_TIMEOUT": "900",
+                "AI_RPG_TURN_DRAFT_TIMEOUT": "900",
+                "AI_RPG_TURN_VERIFY_TIMEOUT": "600",
+            }
+        )
+    else:
+        os.environ.update(
+            {
+                "AI_RPG_MODEL_PROVIDER": "openai",
+                "AI_RPG_API_BASE_URL": base,
+                "AI_RPG_API_MODEL": args.model,
+                "AI_RPG_API_KEY": "bridge",
+                # The model is a person at a keyboard: wait for it.
+                **{
+                    name: "7200"
+                    for name in (
+                        "AI_RPG_TURN_DRAFT_TIMEOUT", "AI_RPG_TURN_VERIFY_TIMEOUT", "AI_RPG_QUEST_PARSER_TIMEOUT",
+                        "AI_RPG_JSON_REPAIR_TIMEOUT", "AI_RPG_SETUP_COHERENCE_TIMEOUT", "AI_RPG_SETUP_RANDOMIZER_TIMEOUT",
+                        "AI_RPG_SUGGESTION_TIMEOUT", "AI_RPG_AMBIENT_TIMEOUT", "AI_RPG_LLAMA_CPP_TIMEOUT", "AI_RPG_MLE_TIMEOUT",
+                    )
+                },
+            }
+        )
+        serve(run, args.port)
 
     from app.db import connect, init_db
     from app.llm import update_model_config
@@ -243,7 +263,10 @@ def main() -> int:
     try:
         run.status("running setup")
         init_db()
-        update_model_config({"provider": "openai", "api_base_url": base, "api_model": args.model, "api_key": "bridge"})
+        if local:
+            update_model_config({"provider": "mle", "mle_model": local})
+        else:
+            update_model_config({"provider": "openai", "api_base_url": base, "api_model": args.model, "api_key": "bridge"})
         n = 0
         if args.resume:
             n = max([int(p.stem) for p in run.turns.glob("[0-9][0-9][0-9].json")] or [0])
