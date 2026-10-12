@@ -125,7 +125,9 @@ _OFFER_RE = re.compile(
 _NEGATION_RE = re.compile(
     r"\b(?:can" + _AP + r"?t|cannot|can\s+not|couldn" + _AP + r"?t|could\s+not|won" + _AP + r"?t|will\s+not|"
     r"wouldn" + _AP + r"?t|would\s+not|don" + _AP + r"?t|do\s+not|didn" + _AP + r"?t|did\s+not|never|"
-    r"not\s+going\s+to|unable\s+to|shouldn" + _AP + r"?t|should\s+not|refuse\s+to)\b"
+    # "I'm not going anywhere" (Saltmarrow #112) is staying put, not a move.
+    r"not\s+going\s+to|not\s+(?:going|leaving|moving|coming)\s+anywhere|unable\s+to|shouldn" + _AP + r"?t|"
+    r"should\s+not|refuse\s+to)\b"
     # "I can't wait to go" and "can't help but" are not refusals.
     r"(?!\s+(?:wait|help|resist|stop\s+(?:myself|thinking))\b)",
     re.I,

@@ -11919,21 +11919,16 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
         cleaned_npcs.append(npc)
     result["npcs"] = cleaned_npcs
 
-    # Locations: drop sentence-like toponyms (often copied from event titles)
-    for loc in result.get("locations") or []:
-        if not isinstance(loc, dict):
-            continue
-        lname = str(loc.get("name") or "").strip()
-        if lname and not is_plausible_place_name(lname):
-            # Prefer existing current location name from context
-            cur = ""
-            if isinstance(context, dict):
-                cl = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
-                cur = str(cl.get("name") or "").strip()
-            new_name = cur if cur and is_plausible_place_name(cur) else "Nearby street"
-            if lname != new_name:
-                rename_pairs.append((lname, new_name))
-            loc["name"] = new_name
+    # Locations: drop sentence-like toponyms (often copied from event titles).
+    # Dropped, not renamed: renaming to "Nearby street" minted a place nobody
+    # asked for and rewrote the prose's own name for it (Saltmarrow #33/#76).
+    if isinstance(result.get("locations"), list):
+        result["locations"] = [
+            loc
+            for loc in result["locations"]
+            if not (isinstance(loc, dict) and str(loc.get("name") or "").strip()
+                    and not is_plausible_place_name(str(loc.get("name") or "").strip()))
+        ]
 
     # Inventory rows: never keep outfit-prompt garbage as if it were a person (names stay as items)
     for ch in result.get("inventory_changes") or []:
