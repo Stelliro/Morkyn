@@ -142,6 +142,60 @@ Morkyn/
 └── data/                     # local runtime only (gitignored)
 ```
 
+## MLE — the Mørkyn Large Language Model Engine
+
+MLE is the layer between the language model and the game: what the model is told, what it may answer with, and what the engine does with that answer. It also covers the game engine behind it. `app/mle.py` is the part that runs a local model, but the contract below is the same for MLE, llama.cpp and cloud APIs.
+
+The rule it enforces: **the model writes words, and the engine owns every fact and every number.**
+
+### The model never writes code
+
+The model's output is only ever prose and data:
+
+- **Ops from a closed set.** A turn's changes come back as lines of a small op language: `GRANT`, `MOVE`, `TALK`, `XP`, `QUEST` and about thirty more ([docs/TurnDsl.md](docs/TurnDsl.md)). A fixed transcoder (`app/turn_dsl.py`) maps them to a turn record, and an unknown op is refused.
+- **No path to execution.** Nothing the model writes is run as code: there is no `eval`, no `exec`, and no SQL built from model text (values are bound as parameters).
+- **Escaped on screen.** Narration is HTML-escaped before the browser shows it.
+- **Fallbacks are data too.** If the ops fail to parse, the fallback is a JSON draft: plain data, checked the same way.
+
+### One turn, step by step
+
+1. **The engine reads your line first.** It does all of this before the model is asked anything:
+   - It takes out out-of-character notes and decides who you are talking to (`app/conversation.py`).
+   - It records what you are in the middle of (`app/scene_thread.py`).
+   - It matches a power you used and charges its cost.
+   - It advances the clock and spends energy.
+   - It **rolls your skill checks** on the server with seeded dice (`app/skill_checks.py`), so the model is told the result instead of choosing it.
+2. **It builds the context.** `build_prompt_context` picks what this turn needs, scored by relevance: the people here, the place, open quests, items, skills, world facts and the last scene. It adds contracts the prose must keep: where you are, who you are, names already given, and who speaks. The model gets a focused packet, not the whole save.
+3. **The model drafts.** It writes the scene as prose plus a short list of ops. Every later call in the turn reuses the same system prompt, so a local model keeps its cache.
+4. **The draft is checked.** A deterministic score decides whether a verifier pass is needed. The verifier answers *pass* or *revise*, with a patch of only the parts it changes. Repairs then fix voice, a dodged answer or thin prose, and they ask the model for prose only. Fixed trims remove the narrator acting, deciding or speaking for you.
+5. **The engine applies what holds up** (`apply_turn`):
+   - Gains are refused unless the prose shows them arriving and you took or were given them.
+   - Moves are checked against the map and the town's roads. A refused move cuts the prose where it began.
+   - Every "how much" is a band such as `small` or `large`, and the server rolls the number, seeded and logged in `dice_rolls` ([docs/DiceAuthority.md](docs/DiceAuthority.md)). A price the prose names is the price paid.
+   - A quest parser reads the finished scene for offered work, and the engine decides whether it becomes a quest.
+6. **The engine keeps the record.** Rewind snapshots, memory consolidation and relationships are all engine code, and none of them makes a model call.
+
+If the model fails, the turn stops with a dialog that says why, or falls back to a plain engine turn. The world is never left half-written.
+
+### Setup works the same way
+
+The model proposes and the engine settles. Abilities are the clearest case:
+
+- The model picks a growth template (compounding, steady, soft cap, breakthrough, passive, item-bound, flat) and a seed in words, such as *slow / ordinary / range grows*.
+- `app/ability_growth.py` computes the rank ladder, the XP for each use (scaled by risk), soft caps and walls.
+- The model starts from a theme library (`app/ability_library.py`, 204 templates over 17 themes). A new power it invents is checked, stored, and offered in later games.
+
+Gear stats, eye colour, map placement and town layout are rolled by the engine in the same way.
+
+### The local runtime (`app/mle.py`)
+
+- **In-process model.** It loads one GGUF inside the game through llama-cpp-python, so no separate server is needed. The context size fits your free VRAM.
+- **Fails loudly.** A missing model file says so instead of answering.
+- **Word masking.** While drafting, it can hide an overused word at the moment the next token is chosen. Names, titles and op keys always stay choosable. Stray CJK script tokens are masked too.
+- **Untouched output.** The weights file is never changed, and the text the model returns is not edited after the fact.
+
+Further reading: [docs/NarrationPipeline.md](docs/NarrationPipeline.md) · [docs/TurnDsl.md](docs/TurnDsl.md) · [docs/DiceAuthority.md](docs/DiceAuthority.md) · [docs/SkillChecks.md](docs/SkillChecks.md) · [CODEBASE_INDEX.md](CODEBASE_INDEX.md)
+
 ## Highlights
 
 - FastAPI backend with a plain browser UI (no frontend build step).
@@ -157,6 +211,10 @@ Morkyn/
 
 ### New in 0.10.0 (dev builds)
 
+- **Mørkyn's own window.** `Morkyn.bat` opens the game in a native window with no browser tab and no terminal. The launcher's settings live in the game's Settings, pop-outs are real windows, and Windows 11 title bars wear the theme — `morkyn_app.py`, `app/launcher.py`.
+- **Abilities grow by the engine.** The model picks a growth template and a seed in words. The engine computes the rank ladder, XP per use (scaled by risk), soft caps and walls. A turn cannot rewrite growth — `app/ability_growth.py`.
+- **A theme ability library that learns.** There are 204 hand-written templates over 17 themes, and custom settings mix their best themes. New powers the model invents are verified, stored, and offered in later games — `app/ability_library.py`, `content/ability_templates/`.
+- **Death and Ironman.** Health 0 ends the run on a "You died" screen. Ironman makes it permanent.
 - **Read the story aloud.** A Play bar under the narration and a right-click menu (Play selected text, Play this paragraph) speak the prose paragraph by paragraph, through a local engine (Piper, runs on the CPU, installed from a button) or a speech API (OpenAI-compatible, ElevenLabs), with known-good voices and presets for each. Off by default; it stops when you send a turn and never competes with the model for the GPU — `app/tts.py`.
 - **Token limits follow the model.** Context window and response caps come from the GGUF header and your GPU, or a tokens-per-billion scale when only the name is known. Edit them and they are remembered for that model; the launcher defaults to `auto` — `app/model_limits.py`.
 - **Failsafes.** A model failure stops the turn and opens a dialog that names the problem, what to try, and a "Continue anyway". A context too small for the full story contract is announced at boot instead of on the server console — `app/failsafe.py`.
