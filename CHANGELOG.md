@@ -80,6 +80,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Changed
 
+- [DOCS] README gains an "MLE — the Mørkyn Large Language Model Engine" section: what the model writes (prose and closed ops, never code), the order of one turn (engine reads the line, rolls checks, builds context; model drafts; verifier and repairs; engine applies, rolls bands, gates gains), setup split the same way, and the local runtime. Highlights and RELEASE_NOTES.md cover the app window, engine ability growth, the theme library and Ironman; new itch devlog `Itch.io/Devlog-0.10.0-dev.9.txt`. - `README.md`, `RELEASE_NOTES.md`, `Itch.io/`
 - [BE] The speech API key never leaves the server in clear: `get_state()` blanks `settings.tts_config.api_key` for every payload that embeds the state, `GET /api/tts-config` returns `api_key_set` and a four-character hint instead, `GET /api/export` scrubs it from the settings table (`scrub_tts_export`), and a blank key on `POST /api/tts-config` keeps the stored one. - `app/world.py`, `app/main.py`, `app/tts.py`
 
 ## [0.10.0-dev.8] - 2026-10-08

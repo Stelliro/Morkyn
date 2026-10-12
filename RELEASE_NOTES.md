@@ -1,12 +1,24 @@
 # Mørkyn 0.10.0-wip — Release Notes
 
-Notes extended 2026-10-08. Still untagged.
+Notes extended 2026-10-12. Still untagged.
 
 **Status:** WIP release — systems under active development, not stable. Not yet tagged; it ships as `0.10.0`. Builds on the [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12) stable release.
 
 ---
 
 ## What's new (October 2026)
+
+### Since 2026-10-08 (after `0.10.0-dev.8`)
+
+- **Mørkyn's own window.** `Morkyn.bat` starts `morkyn_app.py` (pywebview + WebView2, no terminal). A boot page shows the startup log, and closing the window stops the server and any managed llama.cpp. The launcher's settings (where, engine, pipeline, ports, models, context and response tokens, GPU layers) moved into the game's Settings. Pop-outs open as native windows synced over a BroadcastChannel. On Windows 11 the title bars wear the theme. Console tools no longer flash a terminal window — `app/launcher.py`, `app/quiet_children.py`, `static/boot.html`, `static/ui/frame.js`.
+- **Abilities grow by the engine, in two parts.** The model picks a growth template (compounding, steady, soft cap, breakthrough, passive, item-bound, flat) and a seed in words (pace, start, what grows). The engine computes the rank ladder, XP per use scaled by risk, soft caps, walls and the effect at each rank, and writes the growth text. Use in play earns XP; a turn cannot rewrite growth. Setup cards show the ladder, and `POST /api/ability-growth/preview` re-renders it when you change the seed — `app/ability_growth.py`.
+- **Theme ability library.** There are 204 hand-written templates, 12 for each of 17 themes, in `content/ability_templates/`. A custom setting draws from its two or three best-matching themes. The model adapts a template or invents a new power. A new one that passes the quality gate and is not a near-copy is stored in `data/ability_library.json` and offered in later games. Fallbacks use theme templates before the generic pool, and pool cards are never learned — `app/ability_library.py`.
+- **Death and Ironman.** Health 0 is a state the draft and verifier are told about. A "You died" screen ends the run, and an optional Ironman mode makes it permanent.
+- **Playtest fixes #85–#94.** Asking a question is routine instead of a contested roll that can wound you. Work and craft roll against your proficiencies. A quest task done in play finishes and pays the quest. Verification memory keys on the scene. The idea buttons remember what you already tried.
+- **Read aloud** (Piper, OpenAI-compatible, ElevenLabs; off by default) — `app/tts.py`.
+- **Built, not wired.** Thirteen tested modules wait behind a turn-on checklist: markets, prices and trade, agreements, currency by theme, hunger and thirst, body-location wounds, restraint, scene cast slots, settlement visits, wild places, a real-time clock, display sequencing, and the destination flag — see the TODO list's "Built but not tied in" section.
+
+How the model and the engine split each turn is now written up in the README: [MLE — the Mørkyn Large Language Model Engine](README.md#mle--the-mørkyn-large-language-model-engine).
 
 ### Since 2026-10-04
 
