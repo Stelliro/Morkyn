@@ -9120,13 +9120,30 @@ def _unasked_unshown_move(
     # A place named only inside someone's speech is not where the prose went
     # (playtest #33: "I was heading to the old well," he says).
     low = _unspoken(text).lower()
-    if dest and (dest.lower() in low or f"[[{dest.lower()}]]" in low):
+    # Named is not reached (7B Saltmarrow T5): a question to the clerk came
+    # back with MOVE "Salt-choked Channels" and prose ending "the salt-choked
+    # channels stretching out before you", and the save went to the channels.
+    # When the prose names the destination, a sentence has to take the player
+    # there; when it never names it, the player leaving is enough (as before).
+    named = bool(
+        dest and (dest.lower() in low or f"[[{dest.lower()}]]" in low)
+        or (code and f"[[{code.lower()}]]" in low)
+        or (dest and _place_words(dest) and re.search(rf"\b{re.escape(_place_words(dest)[-1])}", low))
+    )
+    line_low = _player_line(player_input).lower()
+    dest_words = _place_words(dest) if dest else []
+    if dest_words and _line_names_place(line_low, dest_words):
         return ""
-    if code and f"[[{code.lower()}]]" in low:
+    # "As Jocosa poles us out toward the tower": the player's own line heads there.
+    if dest_words and (
+        re.search(rf"\b(?:to|toward|towards|for|into|onto)\s+(?:the\s+)?(?:[\w'’-]+\s+)?{re.escape(dest_words[-1])}", line_low)
+        or (_CARRIED_RE.search(line_low) and re.search(rf"\b{re.escape(dest_words[-1])}", line_low))
+    ):
         return ""
-    if _player_departs(text):
-        return ""
-    if dest and _destination_shown_loosely(dest, low, player_input):
+    if named:
+        if dest and _prose_reaches(dest, code, text):
+            return ""
+    elif _player_departs(text):
         return ""
     # "Elara gestures for you to come in. Inside, the shop..." shows the move
     # without naming the shop the MOVE named (playtest #16). Only when the
@@ -9151,6 +9168,27 @@ _CARRIED_RE = re.compile(
 )
 
 
+def _prose_reaches(dest: str, code: str, narration: str) -> bool:
+    """A sentence (not speech) that names the place and takes the player there:
+    "you" with an arrival, a departure or a reach, or a carried trip."""
+    words = _place_words(dest)
+    head = words[-1] if words else ""
+    for sentence in re.split(r"(?<=[.!?])\s+", _unspoken(narration)):
+        low = sentence.lower()
+        mentions = (dest and dest.lower() in low) or (code and f"[[{code.lower()}]]" in low) or (
+            head and re.search(rf"\b{re.escape(head)}", low)
+        )
+        if not mentions:
+            continue
+        if _CARRIED_RE.search(sentence):
+            return True
+        if re.search(r"\b(?:you|your|yourself|we|us)\b", low) and (
+            _TRAVEL_ARRIVAL_RE.search(sentence) or _PLAYER_DEPARTS_RE.search(sentence) or _REACH_WORDS_RE.search(sentence)
+        ):
+            return True
+    return False
+
+
 def _place_words(name: str) -> list[str]:
     words = re.findall(r"[a-z]+", re.sub(r"['’]s\b", " ", humanize_place_name(name).lower()))
     return [w for w in words if w not in _PLACE_FILLER_WORDS and len(w) > 2]
@@ -9165,33 +9203,6 @@ def _line_names_place(line: str, words: list[str]) -> bool:
         return bool(re.search(rf"\b{re.escape(words[0])}", line))
     pair = rf"\b{re.escape(words[-2])}(?:['’]s)?[\s-]+{re.escape(words[-1])}"
     return bool(re.search(pair, line))
-
-
-def _destination_shown_loosely(dest: str, prose_low: str, player_input: str) -> bool:
-    """A move the player asked for, or prose that shows it by a shorter name (Saltmarrow #76).
-
-    "Row me out to the old fish market" asked for The Old Fish Market; prose
-    that has Jocosa pole the door "through the rows" to "the tower" shows the
-    move to the customs tower. The exact-name test dropped all three, so the
-    prose travelled and the save stayed behind. Still needs the place's head
-    noun in the prose, or every word of its name in the player's own line.
-    """
-    words = _place_words(dest)
-    if not words:
-        return False
-    line = _player_line(player_input).lower()
-
-    def has(text: str, word: str) -> bool:
-        return bool(re.search(rf"\b{re.escape(word)}", text))
-
-    if _line_names_place(line, words):
-        return True
-    head = words[-1]
-    if not has(prose_low, head):
-        return False
-    if any(has(prose_low, w) for w in words[:-1]) or has(line, head):
-        return True
-    return bool(_CARRIED_RE.search(prose_low))
 
 
 _REACH_WORDS_RE = re.compile(r"\b(?:into|inside|in\s+through|up\s+to|out\s+to|reach\w*|arriv\w*)\b", re.IGNORECASE)
@@ -12290,6 +12301,48 @@ def _item_name_tokens(name_l: str) -> list[str]:
     if len(head) >= 3:
         tokens.append(head)
     return tokens
+
+
+_COIN_ITEM_RE = re.compile(
+    r"^(?:a\s+)?(?:(?:small\s+|handful\s+of\s+|few\s+|pile\s+of\s+|stack\s+of\s+|pouch\s+of\s+|purse\s+of\s+)*)"
+    r"(?:(?:copper|silver|gold|brass|bronze|iron)\s+)?(?:coins?|pieces?|crowns?|pennies|pence|marks|bits|money|cash)$"
+    r"|^(?:copper|silver|gold)$",
+    re.I,
+)
+
+
+def _coins_to_gold(conn, changes: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
+    """Coins handed over are money, not an item (7B Saltmarrow T5).
+
+    The GM wrote GRANT "copper" TYPE coin for a handful of copper coins, and
+    the pack held "copper x1" while the purse stayed at 12. A granted item
+    that is only coin goes to the purse: the sum the prose names when it names
+    exactly one, else the granted count.
+    """
+    kept: list[dict[str, Any]] = []
+    for change in changes or []:
+        name = str((change or {}).get("name") or "").strip()
+        kind = str((change or {}).get("item_type") or (change or {}).get("type") or "").lower()
+        try:
+            delta = int((change or {}).get("quantity_delta") or 0)
+        except (TypeError, ValueError):
+            delta = 0
+        if delta <= 0 or not (_COIN_ITEM_RE.match(name) or (kind in {"coin", "coins", "currency", "money"})):
+            kept.append(change)
+            continue
+        try:
+            from app.prose_state import coin_mentions
+
+            mentions = [m for m in coin_mentions(str(narration or "")) if 0 < m <= 500]
+        except Exception:
+            mentions = []
+        amount = mentions[0] if len(set(mentions)) == 1 else delta
+        conn.execute("UPDATE player SET gold = gold + ? WHERE id = 1", (int(amount),))
+        conn.execute(
+            "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+            (_turn_value(conn), "gold", f"Coins counted into the purse: +{int(amount)} ({name})."),
+        )
+    return kept
 
 
 def _filter_inventory_changes(
@@ -16769,6 +16822,10 @@ def apply_turn(
                     "voided" if voided else "refused_purchase" if (purse_note or {}).get("refused_purchase")
                     else "clamped_to_purse" if (purse_note or {}).get("clamped") else "later_gate"
                 )
+        try:
+            inv_changes = _coins_to_gold(conn, inv_changes, narration)
+        except Exception:
+            pass
         # A map that changes hands reveals ground instead of taking a slot.
         inv_changes, chart_items = _split_chart_items(inv_changes)
         result["inventory_changes"] = inv_changes
