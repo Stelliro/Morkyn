@@ -11341,6 +11341,15 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     code_to_name = {str(k).upper(): str(v).strip() for k, v in (code_to_name or {}).items() if str(v or "").strip()}
 
     repaired = _strip_leaked_entity_html(text)
+    # A name written as a link, "[[Bertram Yates]]", is a name (7B Saltmarrow
+    # T0): left bracketed it shipped as markup, and the person was seeded under
+    # another name. A race or fact code ("a [[R1]] human") is not prose.
+    repaired = re.sub(r"\s*\[\[(?:R|F)\d+\]\]", "", repaired)
+    repaired = re.sub(
+        r"\[\[([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)+|[A-Z][a-z][\w'’-]{2,})\]\]",
+        lambda m: m.group(1) if not REFERENCE_CODE_PATTERN.fullmatch(m.group(0)) else m.group(0),
+        repaired,
+    )
     # Names known to the world but written without codes (opening often does this)
     repaired = _inject_entity_codes_for_known_names(repaired, code_to_name)
 

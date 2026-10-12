@@ -1733,6 +1733,11 @@ def _trigger_text_variants(text: str) -> list[str]:
 _NEGATED_VERB_RE = re.compile(
     r"\b(?:not|never|no longer|cannot|\w+n['’]t)\s+(?:\w+ly\s+)?(?:going to\s+|try(?:ing)? to\s+)?\w+"
 )
+_JOB_PAY_RE = re.compile(
+    r"\b(?:job|work|contract|reward|bounty|task|notice|posted|pays?|paid|bring\s+(?:it|them)\s+in|deliver\w*|"
+    r"when\s+I\s+(?:bring|find|finish|return))\b",
+    re.I,
+)
 _WATCHED_CLAUSE_RE = re.compile(r"\b(?:watch|see|notice|count)(?:es|s|ing)?\s+(?:how|whether|if|as)\b[^.,;!?\"“”]*")
 
 # Verb forms only: "stab" must not catch "the stable" a player is mucking out.
@@ -1826,6 +1831,11 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
             if also.get("social"):
                 check["also_check"] = also
         return check
+    # "What's it worth when I bring it in?" asks about a job's pay, not the
+    # value of a thing in hand (7B Saltmarrow T6: a failed appraise and a
+    # speech blunder on a question about the reward).
+    if skill == "appraise" and _JOB_PAY_RE.search(text) and not re.search(r"\b(?:apprais\w*|value\s+of|haggl\w*|bargain\w*)\b", text):
+        skill = None
     if not skill:
         return None
     check = _check_with_opposition(skill, text, context)

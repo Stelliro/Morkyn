@@ -156,8 +156,13 @@ class TestOwnedItemsAreNotExempt(unittest.TestCase):
 
 
 class TestLossesAndMetadataAreUntouched(unittest.TestCase):
-    def test_a_loss_needs_no_grounding(self):
+    def test_a_loss_needs_the_prose(self):
+        # An unshown loss emptied the pack in the 7B Saltmarrow run (T7): the GM
+        # wrote TAKE for the player's clothes on a walk. A loss now needs the
+        # item and a loss in one sentence.
         kept = _run("seed in hand", -1, owned=3, narration="Nothing in particular.", player_input="I wait")
+        self.assertEqual(len(kept), 0)
+        kept = _run("seed in hand", -1, owned=3, narration="You drop the seed in the mud.", player_input="I wait")
         self.assertEqual(len(kept), 1)
 
     def test_a_zero_delta_needs_no_grounding(self):
