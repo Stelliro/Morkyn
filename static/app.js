@@ -13727,6 +13727,10 @@ const TAB_LABELS = {
 
 const poppedOutTabs = new Set();
 const popoutWindows = {};
+// Pop-outs that Mørkyn's own app opened as real windows. They have no
+// window.opener, so they talk to this page over a BroadcastChannel instead.
+const nativePopouts = new Set();
+const popoutChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("morkyn-popout") : null;
 const floatPanels = {};
 /** Stacking order for in-page float windows (above play panels, ordered among themselves). */
 let floatZ = 50;
@@ -14949,7 +14953,7 @@ function markPoppedTabs() {
   indexTabs.querySelectorAll("button[data-tab]").forEach((btn) => {
     const tab = btn.dataset.tab;
     const floated = Boolean(floatPanels[tab]);
-    const windowed = popoutWindows[tab] && !popoutWindows[tab].closed;
+    const windowed = (popoutWindows[tab] && !popoutWindows[tab].closed) || nativePopouts.has(tab);
     const popped = floated || windowed || poppedOutTabs.has(tab);
     btn.classList.toggle("isPopped", popped);
     const hint = btn.querySelector("[data-popout]");
@@ -14958,13 +14962,37 @@ function markPoppedTabs() {
     }
     const winHint = btn.querySelector("[data-popout-window]");
     if (winHint) {
-      winHint.title = windowed ? "Focus external window" : "Open in a separate browser window";
+      winHint.title = windowed ? "Focus external window" : "Open in a separate window";
     }
   });
 }
 
+function popoutWindowSize() {
+  const availW = window.screen?.availWidth || 1280;
+  const availH = window.screen?.availHeight || 900;
+  return {
+    width: Math.max(720, Math.min(availW - 48, 1280)),
+    height: Math.max(640, Math.min(availH - 80, 1000)),
+  };
+}
+
 function openTabWindow(tab) {
   const key = String(tab || "player");
+  const shell = morkynShellApi();
+  if (shell?.open_popout) {
+    // Inside Mørkyn's own window: a separate native window, not a browser popup.
+    const { width, height } = popoutWindowSize();
+    nativePopouts.add(key);
+    poppedOutTabs.add(key);
+    markPoppedTabs();
+    shell.open_popout(key, "", width, height).catch(() => {
+      nativePopouts.delete(key);
+      if (!floatPanels[key]) poppedOutTabs.delete(key);
+      markPoppedTabs();
+      openTabFloat(key);
+    });
+    return null;
+  }
   if (popoutWindows[key] && !popoutWindows[key].closed) {
     popoutWindows[key].focus();
     poppedOutTabs.add(key);
@@ -14972,10 +15000,7 @@ function openTabWindow(tab) {
     return popoutWindows[key];
   }
   const url = `/static/popout.html?tab=${encodeURIComponent(key)}`;
-  const availW = window.screen?.availWidth || 1280;
-  const availH = window.screen?.availHeight || 900;
-  const width = Math.max(720, Math.min(availW - 48, 1280));
-  const height = Math.max(640, Math.min(availH - 80, 1000));
+  const { width, height } = popoutWindowSize();
   const win = window.open(url, `morkyn-popout-${key}`, `width=${width},height=${height},menubar=no,toolbar=no,location=no,status=no`);
   if (!win) {
     window.alert("External window blocked. Use ⧉ to float on this page instead.");
@@ -15408,6 +15433,9 @@ function pushPopoutUpdate(tab) {
       /* ignore */
     }
   }
+  if (nativePopouts.has(tab) && popoutChannel) {
+    popoutChannel.postMessage({ type: "morkyn-popout", tab, html, theme: getUiTheme() });
+  }
   const panel = floatPanels[tab];
   if (panel) {
     const body = panel.querySelector("[data-float-body]");
@@ -15419,7 +15447,7 @@ function pushPopoutUpdate(tab) {
 }
 
 function pushAllPopouts() {
-  const keys = new Set([...Object.keys(popoutWindows), ...Object.keys(floatPanels)]);
+  const keys = new Set([...Object.keys(popoutWindows), ...Object.keys(floatPanels), ...nativePopouts]);
   keys.forEach((tab) => pushPopoutUpdate(tab));
 }
 
@@ -18820,6 +18848,9 @@ async function openImageBrowser(mode = "float") {
         /* ignore */
       }
     }
+    if (nativePopouts.has(key) && popoutChannel) {
+      popoutChannel.postMessage({ type: "morkyn-popout", tab: key, html: renderImageBrowserShellHtml(), theme: getUiTheme() });
+    }
     try {
       await fetchImageBrowserState({ launch: false });
       paintImageBrowserPanel();
@@ -18881,6 +18912,9 @@ async function openImageStudio(mode = "float") {
       } catch (_) {
         /* ignore */
       }
+    }
+    if (nativePopouts.has(key) && popoutChannel) {
+      popoutChannel.postMessage({ type: "morkyn-popout", tab: key, html: renderImageStudioHtml(), theme: getUiTheme() });
     }
     refreshSetupArtCatalog();
     renderImageStudioCandidates();
@@ -22387,6 +22421,38 @@ window.addEventListener("message", (event) => {
   if (!data || data.type !== "morkyn-popout-action") return;
   const known = Object.values(popoutWindows).some((win) => win === event.source);
   if (!known) return;
+  applyPopoutAction(data);
+});
+
+function forgetNativePopout(tab) {
+  if (!nativePopouts.delete(tab)) return;
+  if (!floatPanels[tab]) poppedOutTabs.delete(tab);
+  markPoppedTabs();
+}
+
+// morkyn_app.py calls this when the user closes a native pop-out window.
+window.__morkynNativePopoutClosed = forgetNativePopout;
+
+popoutChannel?.addEventListener("message", (event) => {
+  const data = event.data;
+  if (!data || typeof data !== "object") return;
+  const tab = String(data.tab || "");
+  if (data.type === "morkyn-popout-hello" && tab) {
+    // A native pop-out (re)loaded: claim it and send its content now.
+    nativePopouts.add(tab);
+    poppedOutTabs.add(tab);
+    markPoppedTabs();
+    pushPopoutUpdate(tab);
+    return;
+  }
+  if (data.type === "morkyn-popout-bye" && tab) {
+    forgetNativePopout(tab);
+    return;
+  }
+  if (data.type === "morkyn-popout-action" && nativePopouts.has(tab)) applyPopoutAction(data);
+});
+
+function applyPopoutAction(data) {
   if (data.action === "history-page") {
     applyHistoryPager(data.dir);
     return;
@@ -22399,7 +22465,7 @@ window.addEventListener("message", (event) => {
     if (data.linkToken) insertRawToken(data.linkToken);
     else if (data.linkType && data.linkCode) insertRef(data.linkType, data.linkCode);
   }
-});
+}
 
 listenPlaySurface("submit", (event) => {
   const playerAliasForm = event.target.closest("#playerAliasForm");
@@ -29056,23 +29122,174 @@ if (_displayTurnPayloadOrig) {
 
 
 // ---- Main menu + app settings --------------------------------------------
+// Launcher prefs: the Settings dialog and the main-menu Gatehouse strip share
+// one copy of what the server reports (prefs, the launcher's plan, and which
+// saved changes still wait for a restart).
+const LAUNCHER_RESTART_LABELS = {
+  launch_mode: "Where",
+  app_port: "Port",
+  model_provider: "Engine",
+  gguf_model_path: "GGUF path",
+  llama_cpp_context: "Context tokens",
+  llama_cpp_gpu_layers: "GPU layers",
+  llama_cpp_flash_attn: "Flash attention",
+  llm_log_mode: "llama.cpp log",
+  llm_startup_timeout: "Startup wait",
+};
+const LAUNCHER_REACH_LABELS = { local: "This PC only", lan: "LAN / phone", vpn: "VPN / tunnel" };
+let launcherState = { prefs: {}, defaults: {}, supervised: false, plan: {}, restart_pending: [] };
+
+// Mørkyn's own window (morkyn_app.py) exposes this; a plain browser does not.
+function morkynShellApi() {
+  return window.pywebview?.api || null;
+}
+
+function applyLauncherState(data) {
+  if (!data || typeof data !== "object") return;
+  launcherState = {
+    prefs: data.prefs || launcherState.prefs,
+    defaults: data.defaults || launcherState.defaults,
+    supervised: Boolean(data.supervised),
+    plan: data.plan || {},
+    restart_pending: Array.isArray(data.restart_pending) ? data.restart_pending : [],
+  };
+  document.querySelectorAll("[data-gate-pref]").forEach((select) => {
+    const value = launcherState.prefs[select.dataset.gatePref];
+    if (value != null && document.activeElement !== select) select.value = String(value);
+  });
+  renderLauncherAddress();
+  renderLauncherRestart();
+}
+
+async function fetchLauncherPrefs() {
+  const res = await fetch("/api/launcher-prefs", { cache: "no-store" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `HTTP ${res.status}`);
+  applyLauncherState(data);
+  return data;
+}
+
+async function saveLauncherPrefs(prefs) {
+  const res = await fetch("/api/launcher-prefs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prefs, apply_env: true }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Save failed");
+  applyLauncherState(data);
+  return data;
+}
+
+function launcherAddressText() {
+  const plan = launcherState.plan || {};
+  if (plan.reach === "lan") return plan.lan_url ? `Phones and tablets: ${plan.lan_url}` : "LAN: no network adapter found.";
+  if (plan.reach === "vpn") return plan.vpn_url ? `VPN: ${plan.vpn_url}` : "VPN: no overlay adapter found.";
+  if (plan.local_url) return `This PC only: ${plan.local_url}`;
+  return "";
+}
+
+function renderLauncherAddress() {
+  const text = launcherAddressText();
+  ["#mainMenuGateAddress", "#appSettingsAddress"].forEach((selector) => {
+    const el = document.querySelector(selector);
+    if (el) el.textContent = text;
+  });
+}
+
+function renderLauncherRestart() {
+  const pending = launcherState.restart_pending || [];
+  const names = pending.map((key) => LAUNCHER_RESTART_LABELS[key] || key).join(", ");
+  const text = !pending.length
+    ? ""
+    : launcherState.supervised
+      ? `${names} changed. Restart the server to apply.`
+      : `${names} changed. This server was started by hand; stop it and start Morkyn.bat to apply.`;
+  [
+    ["#mainMenuGateRestart", "#mainMenuGateRestartText"],
+    ["#appSettingsRestart", "#appSettingsRestartText"],
+  ].forEach(([boxSelector, textSelector]) => {
+    const box = document.querySelector(boxSelector);
+    if (!box) return;
+    box.hidden = !pending.length;
+    const label = document.querySelector(textSelector);
+    if (label) label.textContent = text;
+    box.querySelectorAll("[data-launcher-restart]").forEach((button) => {
+      button.hidden = !launcherState.supervised;
+    });
+  });
+}
+
+async function waitForServerRestart() {
+  const started = Date.now();
+  let wentDown = false;
+  while (Date.now() - started < 240000) {
+    await new Promise((resolve) => window.setTimeout(resolve, 700));
+    let up = false;
+    try {
+      up = (await fetch("/api/launcher/status", { cache: "no-store" })).ok;
+    } catch (_) {
+      up = false;
+    }
+    if (!up) wentDown = true;
+    // A restart faster than one poll looks like no restart at all.
+    else if (wentDown || Date.now() - started > 12000) return true;
+  }
+  return false;
+}
+
+async function restartLauncher(statusEl = null) {
+  const say = (text) => {
+    if (statusEl) statusEl.textContent = text;
+  };
+  say("Restarting…");
+  const shell = morkynShellApi();
+  if (shell?.restart) {
+    // The window swaps to its boot screen and comes back on its own.
+    await shell.restart();
+    return;
+  }
+  const nextPort = String(launcherState.prefs.app_port || "");
+  const res = await fetch("/api/launcher/restart", { method: "POST" });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || "Restart failed");
+  const currentPort = window.location.port || (window.location.protocol === "https:" ? "443" : "80");
+  if (nextPort && nextPort !== currentPort) {
+    const url = `${window.location.protocol}//${window.location.hostname}:${nextPort}/`;
+    if (statusEl) {
+      statusEl.innerHTML = `Restarting on port ${escapeHtml(nextPort)}. Open <a href="${escapeHtml(url)}">${escapeHtml(url)}</a> when it is up.`;
+    }
+    return;
+  }
+  if (await waitForServerRestart()) window.location.reload();
+  else say("The server has not come back. Check the Mørkyn window or data/logs/server.log.");
+}
+
+function fillAppSettingsForm(form, prefs) {
+  Object.entries(prefs || {}).forEach(([key, value]) => {
+    const field = form.elements[key];
+    // RadioNodeList.value checks the matching radio, so one assignment covers every control.
+    if (field) field.value = value == null ? "" : String(value);
+  });
+  syncAppSettingsEngineFields(form);
+}
+
+function syncAppSettingsEngineFields(form) {
+  const provider = form.elements.model_provider?.value || "mle";
+  form.querySelectorAll(".appSettingsLlamaOnly").forEach((el) => {
+    el.hidden = provider !== "llama_cpp";
+  });
+  // interact.js shows only the active engine's fields; it listens for change.
+  form.elements.model_provider?.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 async function loadAppSettingsForm() {
   const form = document.querySelector("#appSettingsForm");
   if (!form) return;
   try {
-    const res = await fetch("/api/launcher-prefs", { cache: "no-store" });
-    const data = await res.json();
+    const data = await fetchLauncherPrefs();
     const prefs = data.prefs || {};
-    Object.entries(prefs).forEach(([key, value]) => {
-      if (key === "narration_pipeline" || key === "narration_consolidate" || key === "fast_verification") {
-        const on = Boolean(value);
-        const radio = form.querySelector(`input[name="${key}"][value="${on}"]`);
-        if (radio) radio.checked = true;
-        return;
-      }
-      const el = form.elements[key];
-      if (el && el.type !== "radio") el.value = value == null ? "" : String(value);
-    });
+    fillAppSettingsForm(form, prefs);
     if (prefs.ui_theme) {
       document.documentElement.setAttribute("data-theme", prefs.ui_theme);
       const themeSel = document.querySelector("#themeSelect");
@@ -29194,39 +29411,68 @@ document.querySelector("#setupBackMenu")?.addEventListener("click", () => showMa
 document.querySelector("#appSettingsForm")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
-  const fd = new FormData(form);
-  const prefs = {
-    launch_mode: fd.get("launch_mode"),
-    app_port: Number(fd.get("app_port") || 8000),
-    model_provider: fd.get("model_provider"),
-    mle_model: fd.get("mle_model"),
-    gguf_model_path: fd.get("gguf_model_path"),
-    api_base_url: fd.get("api_base_url"),
-    api_model: fd.get("api_model"),
-    ui_theme: fd.get("ui_theme"),
-    narration_pipeline: fd.get("narration_pipeline") === "true",
-    narration_consolidate: fd.get("narration_consolidate") === "true",
-    fast_verification: fd.get("fast_verification") === "true",
-  };
+  // Every named control, as text; the server coerces types and ranges.
+  const prefs = Object.fromEntries(new FormData(form).entries());
   const st = document.querySelector("#appSettingsStatus");
   try {
-    const res = await fetch("/api/launcher-prefs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prefs, apply_env: true }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.detail || "Save failed");
-    if (prefs.ui_theme) {
-      document.documentElement.setAttribute("data-theme", prefs.ui_theme);
-      localStorage.setItem("morkyn-ui-theme", prefs.ui_theme);
+    const data = await saveLauncherPrefs(prefs);
+    fillAppSettingsForm(form, data.prefs || {});
+    const theme = data.prefs?.ui_theme || prefs.ui_theme;
+    if (theme) {
+      document.documentElement.setAttribute("data-theme", theme);
+      try {
+        localStorage.setItem("morkyn-ui-theme", theme);
+      } catch (_) {
+        /* private window */
+      }
       const themeSel = document.querySelector("#themeSelect");
-      if (themeSel) themeSel.value = prefs.ui_theme;
+      if (themeSel) themeSel.value = theme;
     }
-    if (st) st.textContent = "Saved & applied. Port/reach need a full app restart from Morkyn.bat if changed.";
+    if (st) st.textContent = (data.restart_pending || []).length ? "Saved. The rest applies on restart." : "Saved & applied.";
   } catch (error) {
     if (st) st.textContent = error.message || String(error);
   }
+});
+document.querySelector("#appSettingsForm")?.addEventListener("change", (event) => {
+  if (event.target?.name === "model_provider" && event.isTrusted) syncAppSettingsEngineFields(event.currentTarget);
+});
+document.querySelector("#settingsRestoreDefaults")?.addEventListener("click", () => {
+  const form = document.querySelector("#appSettingsForm");
+  if (!form || !launcherState.defaults || !Object.keys(launcherState.defaults).length) return;
+  fillAppSettingsForm(form, launcherState.defaults);
+  const st = document.querySelector("#appSettingsStatus");
+  if (st) st.textContent = "Defaults filled in. Save & apply to keep them.";
+});
+// Main-menu Gatehouse: each pick saves at once, like the terminal menu did.
+document.querySelectorAll("[data-gate-pref]").forEach((select) => {
+  select.addEventListener("change", async () => {
+    const key = select.dataset.gatePref;
+    const status = document.querySelector("#mainMenuStatus");
+    try {
+      await saveLauncherPrefs({ [key]: select.value });
+      const label = select.closest("label")?.querySelector("span")?.textContent || key;
+      const shown = select.selectedOptions?.[0]?.textContent || select.value;
+      if (status) status.textContent = `${label}: ${shown}`;
+    } catch (error) {
+      if (status) status.textContent = error.message || String(error);
+    }
+  });
+});
+document.addEventListener("click", (event) => {
+  const button = event.target.closest?.("[data-launcher-restart]");
+  if (!button) return;
+  event.preventDefault();
+  const status = button.closest("#appSettingsForm")
+    ? document.querySelector("#appSettingsStatus")
+    : document.querySelector("#mainMenuStatus");
+  button.disabled = true;
+  restartLauncher(status)
+    .catch((error) => {
+      if (status) status.textContent = error.message || String(error);
+    })
+    .finally(() => {
+      button.disabled = false;
+    });
 });
 
 decorateSetupFields();
@@ -29275,6 +29521,9 @@ showMainMenu();
 // One runtime poll at boot: a context too small for the full contract was
 // only ever reported on the server console, so nothing told the player.
 pollLlmRuntimeOnce();
+// The main-menu Gatehouse strip (where / engine / pipeline / address) and any
+// change still waiting for a restart.
+fetchLauncherPrefs().catch(() => {});
 loadState()
   .then(() => {
     // Stay on menu unless user continues; only reveal Continue if a game exists.

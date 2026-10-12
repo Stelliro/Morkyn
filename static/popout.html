@@ -92,6 +92,12 @@
       (function () {
         const params = new URLSearchParams(location.search);
         const tab = (params.get("tab") || "player").toLowerCase();
+        // native=1: opened by Mørkyn's own app as a separate window. There is
+        // no window.opener, so content and clicks travel over this channel.
+        const native = params.get("native") === "1";
+        const channel = native && typeof BroadcastChannel === "function" ? new BroadcastChannel("morkyn-popout") : null;
+        const openedAt = Date.now();
+        let lastPush = 0;
         const titles = {
           player: "Player",
           inventory: "Inventory",
@@ -212,6 +218,10 @@
         }
 
         function forwardToOpener(payload) {
+          if (channel) {
+            channel.postMessage(Object.assign({ type: "morkyn-popout-action", tab: tab }, payload));
+            return;
+          }
           const opener = window.opener;
           if (!opener || opener.closed) return;
           opener.postMessage(Object.assign({ type: "morkyn-popout-action" }, payload), location.origin);
@@ -247,21 +257,46 @@
         }, true);
 
         function tick() {
+          if (channel) {
+            // The main window pushes on every change; ask again when it has
+            // been quiet, and fall back to a snapshot only if nobody answers.
+            const quiet = Date.now() - Math.max(lastPush, openedAt);
+            if (quiet > 6000) channel.postMessage({ type: "morkyn-popout-hello", tab: tab });
+            if (quiet > 12000 && !lastHtml) renderFromApi();
+            return;
+          }
           if (!renderFromParent()) renderFromApi();
+        }
+        function applyPush(data) {
+          if (!data || data.type !== "morkyn-popout") return;
+          if (data.tab !== tab) return;
+          if (data.theme) applyTheme(data.theme);
+          if (data.html) {
+            lastPush = Date.now();
+            if (data.html !== lastHtml) content.innerHTML = data.html;
+            lastHtml = data.html;
+            setLive("Live · linked to main window", true);
+          }
+        }
+        if (channel) {
+          channel.onmessage = (ev) => applyPush(ev.data);
+          channel.postMessage({ type: "morkyn-popout-hello", tab: tab });
+          window.addEventListener("pagehide", () => channel.postMessage({ type: "morkyn-popout-bye", tab: tab }));
         }
         tick();
         setInterval(tick, 1500);
-        document.getElementById("popoutRefresh").onclick = tick;
-        document.getElementById("popoutClose").onclick = () => window.close();
-        window.addEventListener("message", (ev) => {
-          if (!ev.data || ev.data.type !== "morkyn-popout") return;
-          if (ev.data.theme) applyTheme(ev.data.theme);
-          if (ev.data.tab === tab && ev.data.html) {
-            content.innerHTML = ev.data.html;
-            lastHtml = ev.data.html;
-            setLive("Live · push", true);
-          }
-        });
+        document.getElementById("popoutRefresh").onclick = () => {
+          if (channel) {
+            lastPush = 0;
+            channel.postMessage({ type: "morkyn-popout-hello", tab: tab });
+          } else tick();
+        };
+        document.getElementById("popoutClose").onclick = () => {
+          const api = window.pywebview && window.pywebview.api;
+          if (native && api && api.close_popout) api.close_popout(tab);
+          else window.close();
+        };
+        window.addEventListener("message", (ev) => applyPush(ev.data));
       })();
     </script>
   </body>

@@ -91,25 +91,30 @@ Double-click (or run from the repo root):
 Morkyn.bat
 ```
 
-That opens a **simple** pre-play menu. Click a row (or press its number), then **Play**. Prefs save under `data/launcher_prefs.json`.
+Mørkyn opens in **its own window**: no tabs, no address bar, no terminal left open behind it. The window shows the startup log while the server starts, then the main menu. Closing the window stops the server and any managed llama.cpp server.
 
-| Click / key | Action |
+The terminal launcher's settings now live in the game:
+
+| Where | What |
 | --- | --- |
-| **Play** / `1` | Start |
-| **Where** / `2` | Cycle local / LAN / VPN |
-| **Engine** / `3` | Cycle mle / llama_cpp / cloud API |
-| **Pipeline** / `4` | Toggle the paragraph writer (off by default: the draft's own prose ships, see *Local turn times*) |
-| **Advanced** / `9` | Full Gatehouse board |
-| **Quit** / `0` | Exit |
+| **Main menu → Gatehouse** | **Where** (this PC / LAN / VPN), **Engine** (MLE / llama.cpp / cloud API), **Pipeline** (the paragraph writer, off by default: the draft's own prose ships, see *Local turn times*). Saves as you pick. The line under it is the address phones and other PCs use. |
+| **Settings** | Everything else the old Advanced board had: port, model and GGUF path, API base and model, context and response tokens, llama.cpp GPU layers / flash attention / log / startup wait, draft format, consolidator, fast verification, skip the DSL verifier, theme, and where the game opens (Mørkyn window, system browser, or server only). **Restore defaults** fills the form with the defaults. |
 
-Skip the menu:
+Most settings apply at once. Where, port, and the llama.cpp server settings need the server to start again; Settings and the main menu say so and offer **Restart now**, and the window comes back by itself (on the new port, if that changed). If the server cannot start (a port in use, a missing GGUF file), the window says why and lets you fix Where, port, engine, or GGUF path and retry. Logs are in `data/logs/` (`launcher.log`, `server.log`). Prefs save under `data/launcher_prefs.json`.
+
+It is still a website. While Mørkyn runs, any browser on this PC can open `http://127.0.0.1:8000/`, and phones or other PCs can use the address on the main menu when Where is LAN or VPN. Pop-out (↗) on a tab opens a separate window: a real window of its own inside Mørkyn's app, a browser popup in a normal browser.
+
+Start options (the same words the old launcher took):
 
 ```text
 Morkyn.bat local
 Morkyn.bat lan
 Morkyn.bat vpn 8088
-Morkyn.bat play
+Morkyn.bat --browser     open the game in the system browser
+Morkyn.bat --console     no window: run in the terminal, Ctrl+C stops (also works on Linux: python morkyn_app.py --console)
 ```
+
+The window uses [pywebview](https://pywebview.flowheater.net/) with the system WebView2; `Morkyn.bat` installs it the first time. Without it, Mørkyn runs in the terminal and opens your browser. The old terminal menu is still there: `powershell -File Morkyn.ps1`.
 
 Compatibility shims: `start_ai_rpg.bat` / `start_ai_rpg.ps1` still call `Morkyn.*`.
 
@@ -118,7 +123,9 @@ Compatibility shims: `start_ai_rpg.bat` / `start_ai_rpg.ps1` still call `Morkyn.
 ```text
 Morkyn/
 ├── start.bat / start.sh      # one-file launchers (Windows / Linux+macOS) — also GitHub release assets
-├── Morkyn.bat / Morkyn.ps1   # in-repo launcher (keep in root)
+├── Morkyn.bat                # in-repo launcher (keep in root): opens morkyn_app.py
+├── morkyn_app.py             # Mørkyn's own window; starts and restarts the server (app/launcher.py)
+├── Morkyn.ps1                # the old terminal Gatehouse menu, still usable
 ├── start_ai_rpg.*            # compatibility shims
 ├── README.md / CHANGELOG.md / LICENSE.md / PRIVACY_POLICY.md
 ├── CODEBASE_INDEX.md         # architecture map for contributors / agents

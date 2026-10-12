@@ -4430,6 +4430,80 @@ a.mainMenuGhost:hover {
   gap: 8px;
 }
 
+/* Launcher settings: group headings, the restart notice, and the main-menu
+   Gatehouse strip (static/index.html; app.js fetchLauncherPrefs). */
+.appSettingsForm .appSettingsGroup,
+.appSettingsForm .appSettingsRestart,
+.appSettingsForm .appSettingsAddress {
+  grid-column: 1 / -1;
+}
+
+.appSettingsGroup {
+  margin: 8px 0 0;
+  padding-top: 10px;
+}
+
+.appSettingsGroup[hidden],
+.appSettingsRestart[hidden],
+.mainMenuGateRestart[hidden],
+.mainMenuGate [data-launcher-restart][hidden],
+.appSettingsRestart [data-launcher-restart][hidden] {
+  display: none !important;
+}
+
+.appSettingsRestart,
+.mainMenuGateRestart {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 8px 12px;
+}
+
+.appSettingsRestart p {
+  margin: 0;
+  flex: 1 1 200px;
+}
+
+.mainMenuGate {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+}
+
+.mainMenuGateRows {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.mainMenuGateRow {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.mainMenuGateRow select {
+  width: 100%;
+  min-width: 0;
+}
+
+.mainMenuGateAddress {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.mainMenuGateAddress:empty {
+  display: none;
+}
+
+@media (max-width: 420px) {
+  .mainMenuGateRows {
+    grid-template-columns: 1fr;
+  }
+}
+
 .setupView.hidden {
   display: none !important;
 }

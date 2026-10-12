@@ -175,7 +175,7 @@
       form: "#appSettingsModal form, #appSettingsForm",
       select: '[name="model_provider"]',
       fields: {
-        llama_cpp: ["gguf_model_path"],
+        llama_cpp: ["gguf_model_path", "llama_cpp_gpu_layers", "llama_cpp_flash_attn", "llm_log_mode", "llm_startup_timeout"],
         mle: ["mle_model"],
         openai: ["api_base_url", "api_model"],
       },

@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Mørkyn</title>
+    <!--
+      The launcher window shows this before the game server exists, so nothing
+      here may load from /static. Colours mirror static/ui/tokens.css (dusk).
+      morkyn_app.py fills __LOGO__ with a data URI.
+    -->
+    <style>
+      :root {
+        --h: 264;
+        --bg: hsl(var(--h) 28% 3.5%);
+        --surface: hsl(var(--h) 20% 6.5%);
+        --line: hsl(var(--h) 16% 18%);
+        --text: hsl(var(--h) 12% 88%);
+        --muted: hsl(var(--h) 10% 60%);
+        --thread: hsl(var(--h) 70% 78%);
+        --thread-dim: hsl(var(--h) 70% 70% / 0.38);
+        --thread-soft: hsl(var(--h) 70% 70% / 0.12);
+        --bad: hsl(352 70% 72%);
+        --font: "Segoe UI", Inter, system-ui, sans-serif;
+        --font-display: "Bodoni MT", "Bodoni 72", Didot, "Playfair Display", "Times New Roman", serif;
+        --font-mono: Consolas, "SFMono-Regular", Menlo, monospace;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.45 var(--font);
+        display: grid;
+        place-items: center;
+        padding: 24px 16px;
+        overflow: auto;
+      }
+      .boot {
+        width: min(640px, 100%);
+        display: grid;
+        gap: 18px;
+      }
+      .brand { display: grid; justify-items: center; gap: 10px; text-align: center; }
+      .brand img { width: 96px; height: auto; opacity: 0.95; }
+      .brand h1 {
+        margin: 0;
+        font: 400 2.2rem/1 var(--font-display);
+        letter-spacing: 0.08em;
+      }
+      .state { margin: 0; color: var(--muted); letter-spacing: 0.18em; text-transform: uppercase; font-size: 0.72rem; }
+      .state.bad { color: var(--bad); }
+      /* The thread: one line of light that runs while the gate opens. */
+      .thread { position: relative; height: 1px; background: var(--line); overflow: hidden; }
+      .thread::after {
+        content: ""; position: absolute; inset: 0 auto 0 0; width: 30%;
+        background: linear-gradient(90deg, transparent, var(--thread), transparent);
+        animation: run 1.6s ease-in-out infinite;
+      }
+      .done .thread::after, .failed .thread::after { animation: none; width: 100%; background: var(--thread-dim); }
+      .failed .thread::after { background: var(--bad); opacity: 0.5; }
+      @keyframes run { from { transform: translateX(-100%); } to { transform: translateX(340%); } }
+      @media (prefers-reduced-motion: reduce) { .thread::after { animation: none; width: 100%; background: var(--thread-dim); } }
+      .log {
+        margin: 0;
+        max-height: 34vh;
+        overflow: auto;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        background: var(--surface);
+        font: 12px/1.5 var(--font-mono);
+        color: var(--muted);
+        white-space: pre-wrap;
+        clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+      }
+      .panel {
+        display: grid; gap: 12px; padding: 14px;
+        border: 1px solid var(--line);
+        clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+      }
+      .panel[hidden] { display: none; }
+      .panel h2 { margin: 0; font-size: 0.72rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--thread); font-weight: 600; }
+      .error { margin: 0; color: var(--bad); white-space: pre-wrap; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+      label { display: grid; gap: 4px; font-size: 0.78rem; color: var(--muted); }
+      label.wide { grid-column: 1 / -1; }
+      input, select {
+        font: inherit; color: var(--text); background: var(--bg);
+        border: 1px solid var(--line); padding: 6px 8px; min-width: 0;
+      }
+      input:focus, select:focus { outline: none; border-color: var(--thread-dim); }
+      .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+      button {
+        font: inherit; color: var(--text); background: transparent; cursor: pointer;
+        border: 1px solid var(--line); padding: 7px 14px;
+      }
+      button:hover { border-color: var(--thread-dim); background: var(--thread-soft); }
+      button.primary { border-color: var(--thread-dim); color: var(--thread); }
+      .urls { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+      .urls code { font-family: var(--font-mono); color: var(--thread); user-select: all; }
+      details summary { cursor: pointer; color: var(--muted); font-size: 0.78rem; }
+    </style>
+  </head>
+  <body>
+    <main class="boot" id="boot">
+      <header class="brand">
+        <img src="__LOGO__" alt="" onerror="this.remove()" />
+        <h1>Mørkyn</h1>
+        <p class="state" id="state">Opening the gate…</p>
+      </header>
+      <div class="thread" aria-hidden="true"></div>
+
+      <section class="panel" id="running" hidden>
+        <h2>Running</h2>
+        <ul class="urls" id="urls"></ul>
+        <div class="actions">
+          <button type="button" class="primary" id="openBrowser">Open in browser</button>
+          <button type="button" id="openWindow">Open here</button>
+          <button type="button" id="restartBtn">Restart server</button>
+          <button type="button" id="quitRunning">Stop &amp; quit</button>
+        </div>
+      </section>
+
+      <section class="panel" id="failed" hidden>
+        <h2>Fix and retry</h2>
+        <p class="error" id="error"></p>
+        <form id="recover" class="grid">
+          <label>Where
+            <select name="launch_mode">
+              <option value="local">This PC only</option>
+              <option value="lan">LAN / phone</option>
+              <option value="vpn">VPN / tunnel</option>
+            </select>
+          </label>
+          <label>Port
+            <input name="app_port" type="number" min="1" max="65535" />
+          </label>
+          <label>Engine
+            <select name="model_provider">
+              <option value="mle">MLE</option>
+              <option value="llama_cpp">llama.cpp / GGUF</option>
+              <option value="openai">Cloud / agent API</option>
+            </select>
+          </label>
+          <label class="wide">GGUF path (llama.cpp only)
+            <input name="gguf_model_path" maxlength="1000" />
+          </label>
+        </form>
+        <div class="actions">
+          <button type="button" class="primary" id="retry">Save &amp; retry</button>
+          <button type="button" id="openLogs">Open logs folder</button>
+          <button type="button" id="quitFailed">Quit</button>
+        </div>
+        <details id="serverLogBox">
+          <summary>Server log</summary>
+          <pre class="log" id="serverLog"></pre>
+        </details>
+      </section>
+
+      <pre class="log" id="log" aria-live="polite"></pre>
+    </main>
+    <script>
+      (function () {
+        var boot = document.getElementById("boot");
+        var stateEl = document.getElementById("state");
+        var logEl = document.getElementById("log");
+        var failed = document.getElementById("failed");
+        var running = document.getElementById("running");
+        var form = document.getElementById("recover");
+        var filledFor = "";
+        var lastLines = "";
+
+        function api() { return window.pywebview && window.pywebview.api; }
+
+        var LABELS = {
+          idle: "Opening the gate…",
+          starting: "Opening the gate…",
+          restarting: "Restarting with the new settings…",
+          ready: "Open",
+          failed: "Could not start",
+          stopped: "Stopped",
+        };
+
+        function fillForm(prefs) {
+          ["launch_mode", "app_port", "model_provider", "gguf_model_path"].forEach(function (key) {
+            if (form.elements[key] && prefs[key] != null) form.elements[key].value = String(prefs[key]);
+          });
+        }
+
+        function render(s) {
+          stateEl.textContent = LABELS[s.state] || s.state;
+          stateEl.classList.toggle("bad", s.state === "failed");
+          boot.classList.toggle("failed", s.state === "failed");
+          boot.classList.toggle("done", s.state === "ready");
+          var lines = (s.lines || []).join("\n");
+          if (lines !== lastLines) {
+            lastLines = lines;
+            logEl.textContent = lines;
+            logEl.scrollTop = logEl.scrollHeight;
+          }
+          failed.hidden = s.state !== "failed";
+          if (s.state === "failed") {
+            document.getElementById("error").textContent = s.error || "";
+            document.getElementById("serverLog").textContent = (s.server_log_tail || []).join("\n");
+            document.getElementById("serverLogBox").hidden = !(s.server_log_tail || []).length;
+            var key = s.error + "|" + JSON.stringify(s.prefs || {});
+            if (filledFor !== key) { filledFor = key; fillForm(s.prefs || {}); }
+          }
+          // The status panel only stays up when the game opens somewhere else.
+          running.hidden = !(s.state === "ready" && s.show_running);
+          if (!running.hidden) {
+            var plan = s.plan || {};
+            var rows = [["This PC", plan.local_url], ["Phone / tablet", plan.lan_url], ["VPN", plan.vpn_url], ["Public", plan.public_url]];
+            document.getElementById("urls").innerHTML = rows
+              .filter(function (r) { return r[1]; })
+              .map(function (r) { return "<li>" + r[0] + ": <code>" + r[1] + "</code></li>"; })
+              .join("");
+            document.getElementById("restartBtn").hidden = !!s.attached;
+          }
+        }
+
+        function poll() {
+          var a = api();
+          if (!a) return;
+          a.status().then(render).catch(function () {});
+        }
+
+        function call(name, arg) {
+          var a = api();
+          if (a && a[name]) return arg === undefined ? a[name]() : a[name](arg);
+          return Promise.resolve();
+        }
+
+        document.getElementById("retry").onclick = function () {
+          var prefs = {};
+          ["launch_mode", "model_provider", "gguf_model_path"].forEach(function (k) { prefs[k] = form.elements[k].value; });
+          prefs.app_port = Number(form.elements.app_port.value || 8000);
+          filledFor = "";
+          call("retry", prefs);
+        };
+        document.getElementById("openLogs").onclick = function () { call("open_logs"); };
+        document.getElementById("quitFailed").onclick = function () { call("quit"); };
+        document.getElementById("quitRunning").onclick = function () { call("quit"); };
+        document.getElementById("openBrowser").onclick = function () { call("open_in_browser"); };
+        document.getElementById("openWindow").onclick = function () { call("open_game_here"); };
+        document.getElementById("restartBtn").onclick = function () { call("restart"); };
+
+        window.addEventListener("pywebviewready", poll);
+        setInterval(poll, 400);
+      })();
+    </script>
+  </body>
+</html>
