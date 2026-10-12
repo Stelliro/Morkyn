@@ -101,6 +101,49 @@ class GenerationTests(unittest.TestCase):
                                             "grows": "how many hands back the coin remembers"})
         self.assertNotIn("setup_ability_growth_math_optimize", phases, "no model call is spent rewriting math")
 
+    def test_clone_costs_are_repaired_not_retried(self):
+        """The 8B trace: three good cards, one shared meditation-hour cost, a batch denial, a retry
+        the model answered by echoing the prompt, and seed-pool cards labelled as the model's."""
+        same_cost = "Once per day; 1 hour of meditation to recharge after use"
+        answer = {"special_abilities": [
+            {"name": "Veil of Silent Debt", "description": "Touch a creditor's ledger to make them forget one debt you owe for an hour.",
+             "cost": same_cost, "power_type": "compounding", "growth": {"pace": "steady", "start": "weak"}},
+            {"name": "Frost's Whisper", "description": "Chill a cup of water to ice with a breath; one cup at a time.",
+             "cost": same_cost, "power_type": "linear", "growth": {"pace": "fast"}},
+            {"name": "Lens of Unwilling Eyes", "description": "See through one closed eyelid for a few seconds.",
+             "cost": same_cost, "power_type": "passive", "growth": {"pace": "slow"}},
+        ]}
+        phases: list[str] = []
+
+        def fake_chat(*args, **kwargs):
+            phases.append(str(kwargs.get("phase") or ""))
+            return answer
+
+        current = {**_current(), "_field_context": {"count_min": 3, "count_max": 3, "requested_count": 3,
+                                                    "target_count": 3, "count_rolled": True}}
+        with mock.patch.object(llm, "_chat_json", side_effect=fake_chat):
+            result = llm.generate_setup_randomization("field:special_abilities", current)
+        names = [a["name"] for a in result["special_abilities"]]
+        self.assertEqual(sorted(names), sorted(a["name"] for a in answer["special_abilities"]))
+        self.assertNotIn("setup_randomize_abilities_quality_retry", phases)
+        self.assertFalse(result.get("fallback_used"))
+        self.assertGreater(len({a["cost"] for a in result["special_abilities"]}), 1, "the clone costs were broken up")
+
+    def test_an_echoed_retry_keeps_the_models_cards(self):
+        bad_then_echo = [
+            {"special_abilities": [{"name": "A", "description": "x"}, {"name": "A", "description": "x"}]},
+        ]
+
+        def fake_chat(*args, **kwargs):
+            if kwargs.get("phase") == "setup_randomize_abilities_quality_retry":
+                return {"task": "echo", "denial_summary": [], "failed_reports": []}
+            return MODEL_ANSWER
+
+        with mock.patch.object(llm, "_chat_json", side_effect=fake_chat):
+            result = llm.generate_setup_randomization("field:special_abilities", _current())
+        names = {a["name"] for a in result["special_abilities"]}
+        self.assertTrue(names & {"Ledger of Small Debts", "Salt Lantern"}, names)
+
     def test_the_prompt_no_longer_shows_stock_math(self):
         prompts: list[str] = []
 

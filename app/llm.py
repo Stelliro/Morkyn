@@ -6260,87 +6260,12 @@ def _maybe_optimize_ability_growth_math(
     intent_plan: dict[str, Any],
     current_setup: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Invent/balance growth_math strings; optimize on a schedule rather than every roll."""
+    """Kept for its callers; growth math is the engine's (app/ability_growth.py), never a model rewrite."""
     ensured = _ensure_ability_growth_math(abilities, force_fill=False)
-    if not ensured or all(_engine_grown(a) for a in ensured):
-        # Engine-written growth: nothing for a model to optimize (this call used to run on every compounding roll).
-        return ensured
-    pf = intent_plan.get("power_fantasy") if isinstance(intent_plan.get("power_fantasy"), dict) else {}
-    one_skillish = str(pf.get("growth") or "").lower() == "compounding" or str(pf.get("start_power") or "").lower() in {
-        "near_useless",
-        "weak",
-    }
-    # Discretion: always optimize one-skill; otherwise ~40% of rolls, or any missing math.
-    needs_math = any(not _ability_has_calculable_math(str(a.get("growth_math") or "")) for a in ensured)
-    should_optimize = one_skillish or needs_math or random.random() < 0.4
-    if not should_optimize:
-        return ensured
-
-    optimize_prompt = {
-        "task": "Optimize growth_math for each ability: invent random but balanced playable calculation settings, then tighten them.",
-        "intent": {
-            "power_fantasy": pf,
-            "difficulty": intent_plan.get("difficulty") or current_setup.get("difficulty"),
-            "genre": intent_plan.get("genre") or current_setup.get("world_style"),
-        },
-        "abilities": [
-            {
-                "name": a.get("name"),
-                "description": str(a.get("description") or "")[:200],
-                "growth_math": a.get("growth_math") or "",
-            }
-            for a in ensured
-        ],
-        "return_shape": {
-            "special_abilities": [
-                {
-                    "name": "same name as input",
-                    "growth_math": "optimized compact formulas only",
-                }
-            ]
-        },
-        "rules": [
-            "Return JSON only with special_abilities list matching input order/names.",
-            "Rewrite growth_math only; do not change ability names.",
-            "Each growth_math must include concrete numbers: thresholds or XP_to_next, per-use XP with risk mult, and at least one rank→bonus or soft-cap rule.",
-            "Vary numbers across rolls; do not copy inspiration templates verbatim.",
-            "Keep each growth_math under 800 characters, compact, DM-usable.",
-            "Weaker starts should ramp slower early and snowball later if compounding; ordinary abilities stay modest.",
-        ],
-        "inspiration_only": GROWTH_MATH_SAMPLES,
-    }
-    try:
-        raw = _chat_json(
-            "Return JSON only. Optimize ability growth_math formulas for fair RPG play.",
-            json.dumps(optimize_prompt, ensure_ascii=True),
-            timeout=_model_timeout(25, 120, "AI_RPG_SETUP_RANDOMIZER_TIMEOUT"),
-            phase="setup_ability_growth_math_optimize",
-            max_tokens=500,
-        )
-    except Exception:
-        return ensured
-
-    optimized = raw.get("special_abilities") if isinstance(raw, dict) else None
-    if not isinstance(optimized, list):
-        return ensured
-    by_name: dict[str, str] = {}
-    for entry in optimized:
-        if not isinstance(entry, dict):
-            continue
-        name = str(entry.get("name") or "").strip().lower()
-        math_text = str(entry.get("growth_math") or "").strip()
-        if name and _ability_has_calculable_math(math_text):
-            by_name[name] = math_text[:800]
-    if not by_name:
-        return ensured
-    out: list[dict[str, Any]] = []
-    for ability in ensured:
-        next_ability = dict(ability)
-        key = str(next_ability.get("name") or "").strip().lower()
-        if key in by_name:
-            next_ability["growth_math"] = by_name[key]
-        out.append(next_ability)
-    return _ensure_ability_growth_math(out, force_fill=False)
+    # Growth is engine output now: the end of the ability branch re-derives every card's
+    # growth_math from its seed (engine_ability_growth), so a model rewrite here would be
+    # thrown away. This call used to run on every compounding roll; it no longer runs at all.
+    return ensured
 
 
 def fallback_setup_randomization(group: str, current: dict[str, Any] | None = None, reason: str = "") -> dict[str, Any] | None:
@@ -8113,11 +8038,18 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
         current_setup["_field_context"] = fc
         denials: list[dict[str, Any]] = []
         quality_source = "llm"
+        from app.player_resources import magic_allows_mana as _gate_magic_allows_mana
+
+        _gate_magic_ok = _gate_magic_allows_mana(str(current_setup.get("magic_level") or ""), current_setup)
         # Quality gate: invent → verify → retry on deny → seed-pool fallback after 2–3 denials.
         for attempt in range(1, ABILITY_QUALITY_MAX_ATTEMPTS + 1):
             generated = validated.get("special_abilities")
             gen_list = generated if isinstance(generated, list) else []
             gen_list = _enforce_ability_count(gen_list, target_count, current_setup=current_setup)
+            # Clone costs (the same meditation-hour recharge on every card) have a deterministic
+            # repair. Run it before the gate: a batch denial for it cost a model retry that the 8B
+            # answered by echoing the prompt, and the empty reply was padded from the seed pool.
+            gen_list = diversify_ability_costs(gen_list, force=False, magic_ok=_gate_magic_ok)
             validated["special_abilities"] = gen_list
             # Duplicate of current form is an automatic quality deny.
             if _abilities_match_existing(gen_list, existing):
@@ -8249,8 +8181,13 @@ def generate_setup_randomization(group: str, current: dict[str, Any] | None = No
                     current_setup,
                 )
             except Exception:
-                # Model failed mid-retry — count as denial and continue toward fallback.
+                # Model failed mid-retry (an 8B often echoes the retry prompt back).
                 validated = {"special_abilities": []}
+            if not validated.get("special_abilities"):
+                # Keep the model's own last batch rather than an empty list the next pass pads from
+                # the seed pool and scores as "llm_retry". If it still fails, the last attempt's
+                # salvage keeps whichever cards pass alone; the pool is only the final fallback.
+                validated = {"special_abilities": [dict(a) for a in gen_list if isinstance(a, dict)]}
         if ability_fallback_reason or quality_source == "fallback_seed_pool":
             # The gate above re-scores whatever list it was handed, so a seed-pool
             # list passes as source "llm". Say where the cards really came from.
