@@ -48,20 +48,23 @@ Later runs check GitHub and **ask before updating** — answer no and it starts 
 
 Both scripts also work from inside an existing checkout — they detect it and skip the clone. Requires Git and Python 3.11+.
 
-## Lore teaser — 100 turns on Mosswake Road
+## Lore teaser — 100 turns in Saltmarrow
 
-Dual-role stress run (**Player** + **GM** over real `apply_turn` / SQLite, no LLM hang):
+**Backend: a high-end AI model.** Claude (Anthropic, `claude-opus-5-5`) played both the player and the GM: every model call the game made, the opening, each draft, the verifier, the quest parser and the setup passes, went through Mørkyn's cloud-API path to Claude, exactly as it would to Grok or OpenAI. The engine ran unchanged; its dice, checks, moves, ledger and trims are all Mørkyn's own.
 
-| Turns | Errors | Wall time | Mean apply | Final XP | Places |
-| ---: | ---: | ---: | ---: | ---: | ---: |
-| **100** | **0** | **~4.9 s** | **~45 ms** | 135 | Gate · Alley · Yard · Toll · Clearing |
+| Turns | Model calls | In-game time | Engine rolls | Places · people | Quests | Bugs found |
+| ---: | ---: | --- | ---: | ---: | --- | ---: |
+| **100** | **228** (101 drafts, 85 verifier passes, 39 quest reads) | Day 1 08:00 → Day 3 18:26 | **108** (82 skill checks) | 10 · 19 | 2 done · 1 surrendered | **23 new + 10 reopened** |
 
-Story spine and excerpts: **[docs/showcase/100-turn-lore-teaser.md](docs/showcase/100-turn-lore-teaser.md)**  
-Metrics JSON: [docs/showcase/100-turn-metrics.json](docs/showcase/100-turn-metrics.json)
+> The sea left Saltmarrow forty years ago. This morning the tide clerk has chalked the water two hours early, a boy has gone missing on the flats with a hand cart, and the guild wants the customs-house bell brought in whole.
 
-```powershell
-python benchmarks/run_dual_role_playtest.py
-```
+Story and excerpts: **[docs/showcase/saltmarrow-100-turns.md](docs/showcase/saltmarrow-100-turns.md)** · every turn as shipped: [transcript](docs/showcase/saltmarrow-transcript.md) · [metrics](docs/showcase/saltmarrow-metrics.json) · the world database at the end: [readable](docs/showcase/saltmarrow-db/final.md) / [every table](docs/showcase/saltmarrow-db/final.json)
+
+It doubled as a bug hunt: the GM answered strictly from each call's packet, so engine mistakes show in the story instead of being smoothed over. They are logged as #100–#122 in the [issue log](docs/PLAYTEST_ISSUES.md).
+
+To play the same way yourself, with any agent answering the calls: `python tools/api_bridge_playtest.py --dir <run dir> --setup docs/showcase/saltmarrow-setup.json`. To export any save's database: `python tools/export_world_db.py <world.db> --out <dir>`.
+
+The earlier engine-only stress run (templated player and GM, no model) is still at [docs/showcase/100-turn-lore-teaser.md](docs/showcase/100-turn-lore-teaser.md).
 
 ## Interface
 

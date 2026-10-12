@@ -1,0 +1,160 @@
+{
+ "turns": 100,
+ "model_calls": 228,
+ "calls_by_kind": {
+  "setup": 3,
+  "draft": 101,
+  "verify": 85,
+  "quest_parser": 39
+ },
+ "verifier_revisions": 14,
+ "fallback_turns": 0,
+ "turns_with_trims": 17,
+ "dice_rolls": 108,
+ "dice_by_source": {
+  "skill_check": 82,
+  "turn_bands": 26
+ },
+ "skill_checks": 82,
+ "checks_by_skill": {
+  "persuasion": 67,
+  "athletics": 7,
+  "investigation": 2,
+  "survival": 1,
+  "deception": 1,
+  "appraise": 1,
+  "mining": 1,
+  "stealth": 1,
+  "melee": 1
+ },
+ "check_outcomes": {
+  "success": 38,
+  "failure": 26,
+  "partial": 9,
+  "critical_failure": 5,
+  "critical_success": 4
+ },
+ "journal_by_kind": {
+  "narration": 101,
+  "self_check": 101,
+  "player": 95,
+  "skill_check": 82,
+  "system": 35,
+  "dice": 22,
+  "fact": 18,
+  "quest": 16,
+  "weather": 13,
+  "injury": 5,
+  "wait": 5,
+  "venue_redirect": 3,
+  "blunder": 3,
+  "rumor": 2,
+  "event": 2,
+  "setup": 1,
+  "backstory": 1,
+  "opening": 1,
+  "inventory_reject": 1,
+  "mechanics": 1,
+  "venue_closed": 1
+ },
+ "places": 10,
+ "npcs": 19,
+ "quests": [
+  [
+   "Q1",
+   "Raise the customs-house bell",
+   "abandoned"
+  ],
+  [
+   "Q2",
+   "Bring up Wat's cart",
+   "completed"
+  ],
+  [
+   "Q3",
+   "A debt of bread",
+   "offered"
+  ],
+  [
+   "Q4",
+   "Keep the tide tower",
+   "completed"
+  ]
+ ],
+ "final": {
+  "player": {
+   "name": "Isk Tarrow",
+   "level": 1,
+   "xp": 293,
+   "gold": 19,
+   "health": 8,
+   "max_health": 20,
+   "energy": 15,
+   "current_location_id": 10
+  },
+  "location": "The Customs Tower",
+  "inventory": [
+   "soft-soled boots x1",
+   "patched tunic x1",
+   "wool trousers x1",
+   "mother's brass tide-reckoner x1",
+   "tarred rope x1",
+   "new hemp line x0",
+   "iron cart-hooks x0"
+  ]
+ },
+ "table_rows": {
+  "abilities": 1,
+  "aliases": 0,
+  "content_pack_entries": 0,
+  "content_packs": 0,
+  "conversations": 18,
+  "dice_rolls": 108,
+  "entity_titles": 1,
+  "equipment_slots": 13,
+  "events": 13,
+  "gm_events": 12,
+  "gm_notes": 1,
+  "inventory": 7,
+  "inventory_capacity_modifiers": 0,
+  "journal": 509,
+  "karma_history": 1,
+  "locations": 10,
+  "model_logs": 241,
+  "name_ledger": 19,
+  "npc_agendas": 0,
+  "npc_family_ties": 0,
+  "npc_player_relationships": 3,
+  "npc_private_feelings": 0,
+  "npcs": 19,
+  "pacing": 5,
+  "party_members": 0,
+  "player": 1,
+  "player_aliases": 0,
+  "player_name_history": 1,
+  "player_proficiencies": 2,
+  "player_skills": 3,
+  "quest_clocks": 19,
+  "quest_steps": 9,
+  "quests": 4,
+  "relationships": 6,
+  "response_drafts": 0,
+  "setting_templates": 26,
+  "settings": 19,
+  "sqlite_sequence": 26,
+  "tile_image_run_disable": 0,
+  "tile_images": 0,
+  "tile_states": 38,
+  "titles": 15,
+  "town_cells": 0,
+  "town_seen": 0,
+  "turn_snapshots": 12,
+  "turn_summaries": 101,
+  "verification_memory": 436,
+  "watched_npcs": 0,
+  "world_facts": 5,
+  "world_maps": 0,
+  "world_presets": 8,
+  "world_races": 1
+ }
+}
