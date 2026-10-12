@@ -132,6 +132,43 @@ def pending_lead(conn) -> dict[str, Any] | None:
     return leads[-1] if leads else None
 
 
+_GO_VERBS = (
+    r"(?:go|goes|going|went|come|comes|coming|walk|walks|walking|head|heads|heading|set\s+off|sets\s+off|"
+    r"keep\s+up|tag\s+along|fall\s+in|step|steps|stepping|wade|wades|wading|climb|climbs|climbing)"
+)
+_LEAD_ON_RE = re.compile(r"\b(?:lead\s+(?:on|the\s+way)|after\s+you|show\s+me\s+the\s+way|i['’]ll\s+come|i['’]m\s+coming)\b", re.I)
+
+
+def typed_go_with(conn, player_input: str) -> dict[str, Any] | None:
+    """The open walk-with prompt the player's own line answers by going, or None (Saltmarrow #115).
+
+    "I go with Jocosa, behind her, ... out toward the lamp" -- the Go with
+    button's own words -- left the lead waiting_for_answer: only a typed answer
+    that the town planner could walk to a plot counted. Any line that goes with,
+    after, behind or beside the leader (by name, first name or pronoun), follows
+    them, or says "lead on" to the one lead open, answers it.
+    """
+    own = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0]
+    if not own.strip() or own.startswith("__"):
+        return None
+    leads = [item for item in load(conn)["items"] if item.get("kind") == "walk_with"]
+    for lead in reversed(leads):
+        name = str(lead.get("npc_name") or "").strip()
+        first = name.split()[0] if name else ""
+        forms = [re.escape(f) for f in (name, first) if f and len(f) >= 3] + ["him", "her", "them"]
+        who = "(?:" + "|".join(forms) + r")\b"
+        pattern = re.compile(
+            rf"\b{_GO_VERBS}\s+(?:\w+\s+)?(?:along\s+)?(?:with|after|behind|beside)\s+{who}|\bfollow(?:s|ed|ing)?\s+{who}",
+            re.I,
+        )
+        match = pattern.search(own)
+        if match and not re.search(r"(?:\bnot|\bnever|n['’]t)\s+(?:\w+\s+)?$", own[: match.start()], re.I):
+            return lead
+    if len(leads) == 1 and _LEAD_ON_RE.search(own):
+        return leads[0]
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Places the engine knows
 # ---------------------------------------------------------------------------
@@ -374,7 +411,7 @@ def _leads(conn, movement_report: dict[str, Any], dsl: dict[str, Any], rows: lis
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def add(person: dict[str, Any], found: tuple[dict[str, Any], str] | None, source: str) -> None:
+    def add(person: dict[str, Any], found: tuple[dict[str, Any], str] | None, source: str, said: str = "") -> None:
         code = str(person.get("code") or "")
         if code in seen:
             return
@@ -387,7 +424,9 @@ def _leads(conn, movement_report: dict[str, Any], dsl: dict[str, Any], rows: lis
             "npc_code": code,
             "npc_name": str(person.get("name") or ""),
             "to": found[0] if found else None,
-            "to_label": found[1] if found else "",
+            # A place the engine cannot find still keeps the words the lead
+            # gave (Saltmarrow #115: "the Lantern Wives' lamp" became "").
+            "to_label": found[1] if found else re.sub(r"^\[\[|\]\]$", "", str(said or "").strip())[:80],
             "source": source,
         })
 
@@ -418,7 +457,7 @@ def _leads(conn, movement_report: dict[str, Any], dsl: dict[str, Any], rows: lis
             if row is not None and int(row["workplace_id"] or 0):
                 found = location_target(conn, conn.execute(
                     "SELECT * FROM locations WHERE id = ?", (int(row["workplace_id"]),)).fetchone())
-        add(person, found, "lead_op")
+        add(person, found, "lead_op", str(lead.get("to") or ""))
     return out
 
 
@@ -536,6 +575,8 @@ def gate_after_turn(
     """This turn's Go with / Travel there prompts, from engine facts. Replaces the last turn's. Returns a trace."""
     report = movement_report if isinstance(movement_report, dict) else {}
     notes: list[str] = []
+    # Read before this turn's prompts replace the record.
+    answered = typed_go_with(conn, player_input)
     record = load(conn)
     stayed = [row for row in record["stayed"] if int(turn) - int(row.get("turn") or 0) <= STAYED_TURNS]
     here = _here(conn)
@@ -546,6 +587,19 @@ def gate_after_turn(
         # led comes too. Whatever the walk's rule: a typed "I go into Blind Owl
         # Forge" that answers the lead keeps the planner's town_enter (n21 review).
         moved_leader = _move_npc_here(conn, name=str(report["led_by"]), origin_code=str(report.get("from") or ""))
+    elif answered is not None:
+        # A typed go-with the town planner could not walk (no plot: the lamp
+        # out on the flats, Saltmarrow #115) answers the lead as the Go with
+        # button does for a lead with no place: they come along, and when the
+        # player moved this turn they stand where the player now is.
+        person = {"code": str(answered.get("npc_code") or ""), "name": str(answered.get("npc_name") or "")}
+        join_companion(conn, person, turn)
+        if str(report.get("status") or "") in {"model", "repaired"}:
+            moved_leader = _move_npc_here(conn, code=person["code"], name=person["name"],
+                                          origin_code=str(report.get("from") or ""))
+        conn.execute("INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                     (int(turn), "system", f"Going along with {person['name']}."[:900]))
+        notes.append(f"typed_go_with:{person['code']}")
     items: list[dict[str, Any]] = []
     stayed_codes = {str(row.get("npc_code") or "") for row in stayed}
     for lead in _leads(conn, report, dsl or {}, rows, here, notes):

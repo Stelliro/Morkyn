@@ -1157,31 +1157,85 @@ def tick_quest_clocks(conn, *, from_day: int, to_day: int) -> list[int]:
     return posted
 
 
+# Taking a job without the word "job" (Saltmarrow #114): signing for it,
+# writing a name in the book, "we'll take it". A bare "take it" / "deal" is
+# also how a purchase is agreed, so those count only when the line names the
+# offer (see typed_offer_choice).
+SIGN_ON_RE = re.compile(
+    r"\b(?:sign(?:s|ed|ing)?\s+(?:for|up|on)|sign(?:s|ed|ing)?\s+(?:the|my|our|your)\s+(?:name|book|ledger|contract|papers?|register|roll)|"
+    r"(?:write|writes|wrote|put|puts|set|sets)\s+(?:my|our|both\s+our)\s+names?\b|make\s+(?:my|our)\s+mark|take\s+the\s+pen|"
+    r"(?:my|our)\s+names?\s+(?:in|into|on|down\s+in)\s+the\s+(?:book|ledger|register|roll))",
+    re.IGNORECASE,
+)
+_PLAIN_ACCEPT_RE = re.compile(
+    r"\b(?:(?:i|we)(?:['’]ll|\s+will)\s+(?:take|do)\s+it\b|(?:i|we)\s+accept|(?:i|we)\s+agree\b|count\s+(?:me|us)\s+in|"
+    r"you\s+have\s+a\s+deal|(?:it['’]s|that['’]s)\s+a\s+deal|deal\s*[.!]|(?:i['’]m|we['’]re)\s+in\s*[.!])",
+    re.IGNORECASE,
+)
+_OFFER_STOP = frozenset({"the", "a", "an", "of", "to", "for", "and", "in", "on", "at", "from", "with", "word", "some", "this", "that"})
+
+
+def typed_accept(text: str) -> bool:
+    """The player's line takes a job: the job words, signing for it, or a plain "we'll take it"."""
+    line = str(text or "")
+    return bool(_ACCEPT_RE.search(line) or SIGN_ON_RE.search(line) or _PLAIN_ACCEPT_RE.search(line))
+
+
+def _offer_words(row: Any) -> set[str]:
+    return {w for w in re.findall(r"[a-z]{4,}", str(row["title"] or "").lower()) if w not in _OFFER_STOP}
+
+
 def typed_offer_choice(rows: list[Any], text: str) -> Any | None:
     """The one offered row a typed acceptance takes, or None.
 
     A typed "I'll take the job" stands for the Accept button only when it can
-    mean one offer (TODO n20): the line names its title, or it is the only
-    offer open. It used to take the newest of several. ``rows`` hold "title"
-    (sqlite rows or dicts). One rule for the engine's accept and for the
-    prompt, which is told the player takes it this turn.
+    mean one offer (TODO n20): the line names its title or a word of it, or it
+    is the only offer open. It used to take the newest of several. ``rows``
+    hold "title" and optionally "giver" (sqlite rows or dicts). One rule for
+    the engine's accept and for the prompt, which is told the player takes it
+    this turn. Saltmarrow #114: "I take the pen and write my name in the
+    book", "wait at the window to sign for the bell" and, with two offers open,
+    "We'll take it, Una. The tower and the bell." were not read at all.
     """
-    if not rows or not re.search(r"\b(quest|job|notice|errand|contract|work|take|accept)\b", text or "", re.I):
+    line = str(text or "")
+    if not rows or not typed_accept(line):
         return None
-    low = str(text or "").lower()
+    low = line.lower()
     for row in rows:
         title = str(row["title"] or "")
         if title and title.lower() in low:
             return row
-    if len(rows) == 1 and _ACCEPT_RE.search(text or ""):
-        return rows[0]
+    words = set(re.findall(r"[a-z]{4,}", low))
+    scored = []
+    for row in rows:
+        score = len(_offer_words(row) & words)
+        try:
+            giver = str(row["giver"] or "")
+        except (KeyError, IndexError):
+            giver = ""
+        first = giver.split()[0].lower() if giver.split() else ""
+        if score and first and re.search(rf"\b{re.escape(first)}\b", low):
+            score += 1
+        scored.append((score, row))
+    top = max(score for score, _ in scored)
+    if top > 0:
+        best = [row for score, row in scored if score == top]
+        return best[0] if len(best) == 1 else None
+    if len(rows) == 1:
+        # A bare "I'll take it" / "deal" is how a purchase is agreed too: it
+        # takes the one offer only when the line is not buying something.
+        if _ACCEPT_RE.search(line) or SIGN_ON_RE.search(line):
+            return rows[0]
+        if not re.search(r"\b(?:coin|coins|gold|silver|copper|pay|buy|price|cost)\b", low):
+            return rows[0]
     return None
 
 
 def accept_offered_quest(conn, text: str, turn: int | None = None) -> dict[str, Any] | None:
     try:
         rows = conn.execute(
-            "SELECT id, title FROM quests WHERE status = 'offered' ORDER BY id DESC"
+            "SELECT q.id, q.title, COALESCE(n.name, '') AS giver FROM quests q "
+            "LEFT JOIN npcs n ON n.id = q.giver_npc_id WHERE q.status = 'offered' ORDER BY q.id DESC"
         ).fetchall()
     except Exception:
         return None
@@ -1196,7 +1250,7 @@ def accept_offered_quest(conn, text: str, turn: int | None = None) -> dict[str, 
             turn = int(row["value"]) if row else 0
         except Exception:
             turn = 0
-    if accept_offered(conn, int(chosen["id"]), turn=turn) is None:
+    if accept_offered(conn, int(chosen["id"]), turn=turn, player_line=text) is None:
         return None
     return {"id": int(chosen["id"]), "title": str(chosen["title"] or "the offer")}
 
@@ -1235,15 +1289,18 @@ def list_open_offers(limit: int = 8) -> list[dict[str, Any]]:
             source = "person"
         else:
             source = ""
-        found.append(
-            {
-                "id": int(row["id"]),
-                "title": str(row["title"] or ""),
-                "source": source,
-                "giver": str(row["giver_name"] or ""),
-                "status": str(row["status"] or "offered"),
-            }
-        )
+        entry = {
+            "id": int(row["id"]),
+            "title": str(row["title"] or ""),
+            "source": source,
+            "giver": str(row["giver_name"] or ""),
+            "status": str(row["status"] or "offered"),
+        }
+        if source:
+            # A clock offer the story has said aloud (the parser filed it again
+            # and was told it is this one) is marked "voiced".
+            entry["voiced"] = "voiced" in notes
+        found.append(entry)
     return found
 
 

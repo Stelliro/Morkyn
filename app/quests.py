@@ -216,7 +216,7 @@ def _giver_suffix(conn, quest: dict[str, Any]) -> str:
     return f" (from {name})" if name else ""
 
 
-def accept_offered(conn, quest_id: int, *, turn: int = 0) -> dict[str, Any] | None:
+def accept_offered(conn, quest_id: int, *, turn: int = 0, player_line: str = "") -> dict[str, Any] | None:
     """
     The one place an offer becomes the player's quest (TODO n20).
 
@@ -224,6 +224,12 @@ def accept_offered(conn, quest_id: int, *, turn: int = 0) -> dict[str, Any] | No
     the job" all come here, so an offer cannot be taken twice or by a path that
     skips the journal. A timer starts now, not when the job was offered.
     Returns the quest, or None when it was not an open offer.
+
+    ``player_line``: the typed line that took it. When the first step is
+    signing on and that line signs ("I take the pen and write my name in the
+    book"), the step is done too (Saltmarrow #116: it stayed current for the
+    whole quest, so every later step_done advanced the step before the one
+    the story was on).
     """
     quest = get_quest(conn, int(quest_id))
     if not quest or str(quest.get("status") or "") != "offered":
@@ -234,7 +240,41 @@ def accept_offered(conn, quest_id: int, *, turn: int = 0) -> dict[str, Any] | No
     )
     _offer_journal(conn, turn, f"Quest accepted: {quest['title']}{_giver_suffix(conn, quest)}")
     quest["status"] = "active"
+    if player_line and int(quest.get("total_steps") or 1) > 1 and signs_on_now(quest, player_line):
+        done = complete_quest_step(conn, int(quest_id), turn=turn, source="accept")
+        if done.get("ok"):
+            quest = get_quest(conn, int(quest_id)) or quest
     return quest
+
+
+# A first step that is the signing itself: "Sign for the contract", "have
+# your name put in the book", "report to the clerk and enlist".
+_SIGN_STEP_RE = re.compile(
+    r"\b(?:sign\w*|contract|register\w*|enlist\w*|enrol\w*|(?:your|a|the)\s+name\s+(?:put\s+)?(?:in|into|on|down)|"
+    r"name\s+(?:put\s+)?in\s+the\s+(?:book|ledger|register|roll)|take\s+(?:on\s+)?the\s+(?:job|work|contract))\b",
+    re.IGNORECASE,
+)
+
+
+def signs_on_now(quest: dict[str, Any], player_line: str) -> bool:
+    """The quest's current step is signing on, and the player's own line signs now (not "wait to sign")."""
+    from app.local_intel import SIGN_ON_RE
+
+    own = re.split(r"\n\s*\n", str(player_line or ""), maxsplit=1)[0]
+    current = int(quest.get("current_step") or 1)
+    step = next((s for s in quest.get("steps") or [] if int(s.get("step_number") or 0) == current), None)
+    if not step:
+        return False
+    step_text = f"{step.get('title') or ''} {step.get('description') or ''}"
+    if not _SIGN_STEP_RE.search(step_text):
+        return False
+    for match in SIGN_ON_RE.finditer(own):
+        before = own[max(0, match.start() - 24) : match.start()].lower()
+        # "wait at the window to sign", "I'll sign tomorrow": signing later.
+        if re.search(r"\b(?:to|will|['’]ll|going\s+to|ready\s+to|wait(?:s|ing)?\s+to)\s*$", before):
+            continue
+        return True
+    return False
 
 
 def decline_offered(conn, quest_id: int, *, turn: int = 0) -> dict[str, Any] | None:
