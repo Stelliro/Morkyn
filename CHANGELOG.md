@@ -23,6 +23,13 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Added
+
+- [TOOL] `tools/api_bridge_playtest.py`: play Mørkyn through its cloud-API path with an agent answering every model call. A local OpenAI-compatible server writes each request to `<dir>/calls/NNNN.request.json` (with a readable view) and waits for `NNNN.reply.txt`; player lines arrive as `<dir>/inbox/NNN.txt`, `!wait <minutes> <kind>` presses the Wait/Meditate/Sleep button, `STOP` ends the run, and `--resume` continues a run dir. Each turn is recorded in `<dir>/turns/NNN.json` and the world database is exported every 10 turns. All data paths are isolated inside the run dir.
+- [TOOL] `tools/export_world_db.py`: export a world database read-only (`mode=ro`) to `<label>.json` (every table, columns, row counts and rows; long cells cut to 4,000 characters unless `--full`) and a readable `<label>.md` (player, places, people, items, abilities, skills, quests, dice, engine journal, row counts).
+- [DOCS] New 100-turn lore teaser, Saltmarrow: Claude played player and GM through the cloud-API path (228 model calls) while the engine ran unchanged. `docs/showcase/saltmarrow-100-turns.md` with the full transcript, metrics, setup, findings and start/midpoint/final database exports; the README's teaser section now points to it, and the old engine-only run stays linked.
+- [DOCS] Issue log: 23 new issues from the run (#100-#122) and reopen notes on #23, #27, #33, #69, #73, #76, #78, #89, #96, #97, one entry per root cause with every turn it was seen.
+
 ## [0.10.0-dev.10] - 2026-10-13
 
 > Pre-release on the way to `0.10.0`. Fixes #96-#99 from the README example turn on the 8B (a purchase the prose shows is granted and paid, the coin the player offered stays in the scene, one act advances one quest, an item named once is one), theme abilities follow the world's magic level, and the README says MLE runs in place of a llama.cpp server.
