@@ -25,6 +25,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Fixed
 
+- [CLAUDE] People move with the player (#105, Saltmarrow run). A move now takes along anyone the player's own line takes: 'Tam and I go', 'with Tam', 'I carry Tam up the ladder', 'Tam's arm over my shoulder', or a name in a 'we ... together' sentence; someone the prose shows staying behind still stays. And a person the GM casts present, whose record sits elsewhere and whom this turn's prose names, is moved here; they used to be dropped from the scene, so the skiff's passengers stayed recorded at the tower. - `app/scene_thread.py`, `app/world.py`
 - [CLAUDE] Who the player is talking to follows the line (playtest #104, Saltmarrow run). A role only one person here holds names them ('the tide clerk' went to the weaver who spoke last); a surname nobody else here shares names them ('Reeve Thorne' went to Hereward); a line with no speech, question, order or word of dealing with anyone is said to nobody ('Tam and I set the iron bar', 'I look for Philippa in the crowd' no longer make someone answer, and 'the crowd' is no longer the whole room); a kinship word nobody answers to ('Six years, Mam') no longer falls to the last partner. - `app/conversation.py`
 
 

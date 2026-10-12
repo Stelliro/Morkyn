@@ -265,5 +265,50 @@ class AddresseeFromTheLine(unittest.TestCase):
         self.assertEqual(self._resolve([self.TAM, self.MARA], "Which channel did he take?", "K")[0], ["K"])
 
 
+class PeopleMoveWithThePlayer(unittest.TestCase):
+    """#105: Tam carried to the roof stayed at the market; the skiff's passengers stayed at the tower."""
+
+    PEOPLE = [
+        {"code": "H", "name": "Tam Kemp"},
+        {"code": "B", "name": "Hereward Jessop"},
+        {"code": "A", "name": "Philippa Kemp"},
+    ]
+
+    def _with(self, line):
+        from app import scene_thread as st
+
+        return [p["code"] for p in st.going_with(line, self.PEOPLE)]
+
+    def test_the_line_takes_them_along(self):
+        self.assertEqual(self._with("I get Tam's arm over my shoulder and we go up the stairs together."), ["H"])
+        self.assertEqual(self._with("I carry Tam up the ladder onto the roof."), ["H"])
+        self.assertEqual(self._with("Philippa and I walk to the market."), ["A"])
+        self.assertEqual(self._with("I go down to Hereward's skiff, and he rows us out to the tower."), ["B"])
+
+    def test_not_along(self):
+        self.assertEqual(self._with("I leave Tam at the stall and walk to the tower."), [])
+        self.assertEqual(self._with("At the top I look for Philippa in the crowd."), [])
+        self.assertEqual(self._with('I walk to the tower. "Tam, we go together," I said.'), [])
+
+    def test_cast_present_and_shown_moves_the_record(self):
+        from app.db import connect, init_db
+
+        init_db()
+        with connect() as conn:
+            conn.execute("PRAGMA foreign_keys = OFF")
+            conn.execute("DELETE FROM player")
+            conn.execute("DELETE FROM npcs WHERE code IN ('H', 'K')")
+            conn.execute(
+                "INSERT INTO player (id, name, health, max_health, level, xp, gold, karma, current_location_id) "
+                "VALUES (1, 'Isk', 20, 20, 1, 0, 0, 0, 2)"
+            )
+            conn.execute("INSERT INTO npcs (code, name, location_id) VALUES ('H', 'Tam Kemp', 7)")
+            conn.execute("INSERT INTO npcs (code, name, location_id) VALUES ('K', 'Mara Tarrow', 7)")
+            moved = world._move_cast_here(conn, {"present": ["H", "K"]}, "Tam [[H]] climbs out of the skiff behind you.")
+            self.assertEqual(moved, ["Tam Kemp"])
+            where = dict(conn.execute("SELECT code, location_id FROM npcs WHERE code IN ('H', 'K')").fetchall())
+            self.assertEqual(where, {"H": 2, "K": 7})
+
+
 if __name__ == "__main__":
     unittest.main()

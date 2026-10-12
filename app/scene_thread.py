@@ -496,6 +496,49 @@ def person_named(target: str, people: list[dict[str, str]]) -> dict[str, str] | 
     return _person_named(target, people)
 
 
+_WE_RE = re.compile(r"\b(?:we|us|together|both\s+of\s+us|the\s+two\s+of\s+us)\b", re.IGNORECASE)
+_WITH_BEFORE_RE = re.compile(
+    r"\b(?:with|carr(?:y|ies|ying)|help(?:s|ing)?|lead(?:s|ing)?|bring(?:s|ing)?|tak(?:e|es|ing)|drag(?:s|ging)?|"
+    r"guid(?:e|es|ing)|support(?:s|ing)?|pull(?:s|ing)?|haul(?:s|ing)?|walk(?:s|ing)?|steer(?:s|ing)?)\s+$",
+    re.IGNORECASE,
+)
+
+
+def going_with(player_input: str, people: list[dict[str, str]]) -> list[dict[str, str]]:
+    """People the player's own line takes along on a move (Saltmarrow #105).
+
+    "Mam and I go down to the skiff", "I get Tam's arm over my shoulder and we
+    go up the stairs together", "I carry Tam up to the roof": nobody was asked
+    along or followed, so only the player row moved. A name in a sentence with
+    "we" or "together", or right next to "and I", "with", or a carrying verb,
+    goes too. Quoted speech is not read.
+    """
+    text = re.sub(r'"[^"]*"|“[^”]*”', " ", own_text(player_input))
+    out: list[dict[str, str]] = []
+    for sentence in re.split(r"(?<=[.!?;])\s+", text):
+        plural = bool(_WE_RE.search(sentence))
+        for person in people:
+            name = str(person.get("name") or "")
+            if not name or any(row.get("code") == person.get("code") for row in out):
+                continue
+            forms = [name] + ([name.split()[0]] if len(name.split()[0]) >= 3 else [])
+            for form in forms:
+                hit = re.search(rf"\b{re.escape(form)}\b", sentence)
+                if not hit:
+                    continue
+                before, after = sentence[: hit.start()], sentence[hit.end():]
+                if (
+                    plural
+                    or re.match(r"\s+and\s+(?:I|me)\b", after)
+                    or re.search(r"\b(?:I|me)\s+and\s+$", before)
+                    or _WITH_BEFORE_RE.search(before)
+                    or re.match(r"['’]s\s+(?:arm|hand|shoulder|elbow|weight)", after)
+                ):
+                    out.append({"code": str(person.get("code") or ""), "name": name})
+                break
+    return out
+
+
 def _quest_row(conn, code: str) -> dict[str, Any] | None:
     try:
         row = conn.execute(
