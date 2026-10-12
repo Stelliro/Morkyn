@@ -214,5 +214,56 @@ class ChecksReadThePlayersLine(unittest.TestCase):
         self.assertIsNone(nobody["opposition"])
 
 
+class AddresseeFromTheLine(unittest.TestCase):
+    """#104: roles, surnames, kinship words and no-talk lines."""
+
+    TAM = {"id": 1, "code": "H", "name": "Tam Kemp", "role": "carter"}
+    MARA = {"id": 2, "code": "K", "name": "Mara Tarrow", "role": "tide-reader"}
+    CLERK = {"id": 3, "code": "B", "name": "Hereward Jessop", "role": "clerk"}
+    WEAVER = {"id": 4, "code": "C", "name": "Wulfstan", "role": "weaver"}
+    REEVE = {"id": 5, "code": "N", "name": "Baldwin Thorne", "role": "reeve"}
+
+    def _resolve(self, npcs, line, target):
+        import json
+
+        from app import conversation as cv
+
+        codes = [n["code"] for n in npcs]
+        state = {"target": [target], "why": "last_speaker", "present": codes, "here": codes}
+        ctx = {
+            "current_location": {"id": 1, "code": "L1"},
+            "locations": [{"id": 1, "code": "L1", "npcs": npcs}],
+            "settings": {"conversation": json.dumps(state)},
+        }
+        r = cv.resolve(ctx, line)
+        return r["addressed"], r["rule"]
+
+    def test_role_names_the_one_who_holds_it(self):
+        line = 'I cross to the tide clerk at the wall. "Why\'d you move the dry tide?"'
+        self.assertEqual(self._resolve([self.WEAVER, self.CLERK], line, "C"), (["B"], "name"))
+
+    def test_shared_role_names_nobody(self):
+        other = {"id": 6, "code": "D", "name": "Una Rendle", "role": "tally clerk"}
+        line = "I ask the clerk what the bell pays."
+        self.assertNotEqual(self._resolve([self.CLERK, other, self.WEAVER], line, "C")[1], "name")
+
+    def test_title_and_surname(self):
+        line = "I hold the page out to Reeve Thorne. \"Read it to them.\""
+        self.assertEqual(self._resolve([self.CLERK, self.REEVE], line, "B"), (["N"], "name"))
+
+    def test_kinship_word_is_not_the_last_partner(self):
+        self.assertEqual(self._resolve([self.TAM, self.MARA], '"Six years, Mam. Why didn\'t you come home?"', "H"), ([], "none"))
+
+    def test_no_talk_no_addressee(self):
+        line = "Tam and I set the iron bar against the bollard and walk the line round it."
+        self.assertEqual(self._resolve([self.TAM, self.MARA], line, "H"), ([], "none"))
+        line = "I get Tam's arm over my shoulder. At the top I look for Philippa in the crowd."
+        self.assertEqual(self._resolve([self.TAM, self.MARA], line, "H"), ([], "none"))
+
+    def test_vocative_and_question_still_talk(self):
+        self.assertEqual(self._resolve([self.TAM, self.MARA], "Tam, come with me.", "K"), (["H"], "name"))
+        self.assertEqual(self._resolve([self.TAM, self.MARA], "Which channel did he take?", "K")[0], ["K"])
+
+
 if __name__ == "__main__":
     unittest.main()

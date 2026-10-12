@@ -113,6 +113,37 @@ _SECOND_PERSON_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Words of dealing with someone. Without one of these, quoted speech or a
+# "you", a line is the player's own act and has no addressee.
+_TALK_VERB_RE = re.compile(
+    r"\b(?:ask|tell|told|say|said|reply|replie|answer|greet|thank|call|shout|yell|whisper|mutter|speak|spoke|"
+    r"talk|explain|introduc|nod|wave|bow|smile|grin|wink|shrug|beckon|hail|offer|hand|give|gave|show|pay|paid|"
+    r"buy|bought|sell|sold|trade|order|request|beg|plead|promise|warn|agree|insist|apologi[sz]|bargain|haggle|"
+    r"persuad|convinc|threaten|demand|question|confront|insult|comfort|reassur|interrupt|introduc|hug|embrace|"
+    r"kiss|salute|signal|gesture|point|motion)\w*\b",
+    re.IGNORECASE,
+)
+# Said aloud without a speech verb: a question, a leading vocative ("Rolf,
+# come with me"), an opening order or greeting, or an invitation along.
+_SPOKEN_FORM_RE = re.compile(
+    r"\?|"
+    r"^\s*(?:come|stay|wait|follow|help|listen|look|hold|stop|keep|bring|leave|run|hurry|watch|careful|quiet|hush|"
+    r"please|thanks|sorry|yes|no|hey|oi|hello|hi|well|right|okay|ok|let['’]s|let\s+us)\b|"
+    r"\b(?:let['’]s|let\s+us|with\s+me|beside\s+me|after\s+me|follow\s+me|join\s+me)\b",
+    re.IGNORECASE,
+)
+_VOCATIVE_START_RE = re.compile(
+    r"^\s*(?!(?:Then|Now|So|Still|Finally|Quickly|Slowly|Later|Meanwhile|Afterwards|Instead|Carefully|Here|There|"
+    r"Once|First|Next|Again|Together|Outside|Inside|Above|Below|Behind|Soon|Suddenly|Silently|Quietly|Gently)\b)"
+    r"[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?\s*[,!]"
+)
+# Kinship words used as names: "Mam", "Da", "Gran". Capitalised only, so "my
+# mother's reckoner" in a line is not someone the line is said to.
+_KIN_RE = re.compile(
+    r"(?<![\w'’])(Mam|Mum|Ma|Mama|Mamma|Mammy|Mommy|Mom|Mother|Da|Dad|Daddy|Pa|Papa|Father|Gran|Granny|Grandma|"
+    r"Grandpa|Grandad|Granda|Nan|Nana|Auntie|Aunty|Uncle|Sis|Brother|Sister)(?![\w'’])"
+)
+
 
 # ---------------------------------------------------------------------------
 # Roster: who could be spoken to right now
@@ -154,7 +185,7 @@ def roster(context: dict[str, Any]) -> list[dict[str, Any]]:
             if not here and int(npc.get("id") or 0) not in party_ids:
                 continue
             seen.add(code)
-            row = {"code": code, "name": name, "aliases": []}
+            row = {"code": code, "name": name, "aliases": [], "role": str(npc.get("role") or "").strip()}
             # The keeper of the venue the player stands in (playtest #73 review).
             if here and cid is not None and int(npc.get("workplace_id") or 0) == int(cid or 0) and int(cid or 0):
                 row["keeper"] = True
@@ -464,6 +495,42 @@ def _mentions(text: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 found.append({"code": row["code"], "start": match.start(), "end": match.end(), "tag": False})
                 taken.append((match.start(), match.end()))
 
+    # A surname nobody else here shares ("Reeve Thorne", Saltmarrow T68) and a
+    # role only one person here holds ("the tide clerk" for the clerk, T2/T4)
+    # name that person. A shared surname or role names nobody.
+    def _count(words: list[str]) -> dict[str, int]:
+        counts: dict[str, int] = {}
+        for word in words:
+            if word:
+                counts[word] = counts.get(word, 0) + 1
+        return counts
+
+    def _last(text_: str) -> str:
+        parts = [p for p in re.split(r"[\s\-]+", text_.lower()) if p]
+        return parts[-1] if parts else ""
+
+    multi = [row for row in rows if len(row["name"].split()) >= 2]
+    surnames = _count([_last(row["name"]) for row in multi])
+    firsts = {row["name"].split()[0].lower() for row in rows if row["name"].split()}
+    roles = _count([_last(str(row.get("role") or "")) for row in rows])
+    extra: list[tuple[str, re.Pattern[str]]] = []
+    for row in multi:
+        last = _last(row["name"])
+        if len(last) >= 4 and surnames.get(last) == 1 and last not in firsts and last not in _COMMON_WORD_NAMES:
+            extra.append((row["code"], re.compile(r"(?<![\w@])" + re.escape(last) + r"(?![\w])", re.IGNORECASE)))
+    for row in rows:
+        word = _last(str(row.get("role") or ""))
+        if len(word) >= 4 and roles.get(word) == 1:
+            extra.append(
+                (row["code"], re.compile(r"\bthe\s+(?:[\w'’-]+\s+){0,2}?" + re.escape(word) + r"s?\b", re.IGNORECASE))
+            )
+    for code, pattern in extra:
+        for match in pattern.finditer(text):
+            if any(s < match.end() and match.start() < e for s, e in taken):
+                continue
+            found.append({"code": code, "start": match.start(), "end": match.end(), "tag": False})
+            taken.append((match.start(), match.end()))
+
     found.sort(key=lambda item: item["start"])
     previous: dict[str, Any] | None = None
     for item in found:
@@ -602,11 +669,23 @@ def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | 
         out["listening"] = [c for c in out["present"] if c not in addressed]
         return out
 
+    # A line with no speech and no word of dealing with anyone is the player's
+    # own act (Saltmarrow T3, T52, T62): "Tam and I set the iron bar" or "I
+    # look for Philippa in the crowd" is said to nobody, so neither a name in
+    # it nor the last partner makes someone the one who must answer.
+    talky = bool(
+        out["speech"]
+        or out["second_person"]
+        or (
+            text
+            and (_TALK_VERB_RE.search(text) or _SPOKEN_FORM_RE.search(text) or _VOCATIVE_START_RE.search(text))
+        )
+    )
     mentions = _mentions(text, rows) if text else []
     tagged = _pick([m for m in mentions if m["tag"]])
     if tagged:
         return done(tagged, "tag")
-    named = _pick([m for m in mentions if not m["tag"]])
+    named = _pick([m for m in mentions if not m["tag"] and (talky or m["use"] == "address")])
     if named:
         return done(named, "name")
     # Playtest #31 (live): "Marisol, I woke up in the snow ..." named a known
@@ -626,7 +705,7 @@ def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | 
         done([], "none")
         out["rule"] = "unseen"
         return out
-    if text and _GROUP_RE.search(text):
+    if text and talky and _GROUP_RE.search(text):
         group = present or [row["code"] for row in rows]
         if group:
             return done(group, "group", group=len(group) > 1)
@@ -647,6 +726,14 @@ def resolve(context: dict[str, Any], player_input: str, state: dict[str, Any] | 
         out["rule"] = "venue"
         out["venue_kind"] = venue_kind
         return out
+    if text and not talky:
+        return done([], "none")
+    # "Six years, Mam." (T47, T60): a kinship word nobody here answers to by
+    # alias is someone the engine cannot place, so the last partner is not
+    # told to answer for them; the writer picks from who is present.
+    alias_words = {a.lower() for row in rows for a in row.get("aliases") or []}
+    if text and any(word.lower() not in alias_words for word in _KIN_RE.findall(text)):
+        return done([], "none")
     target = [c for c in state.get("target") or [] if c in here]
     if target:
         if state.get("chosen"):
