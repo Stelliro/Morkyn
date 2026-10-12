@@ -5,6 +5,7 @@ import hashlib
 import json
 import math
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -119,7 +120,7 @@ from app.skill_checks import (
     set_skill_enabled,
     settings_from_setup,
 )
-from app.launcher_prefs import apply_prefs_to_env, load_prefs, save_prefs
+from app.launcher_prefs import apply_prefs_to_env, default_prefs, load_prefs, restart_keys_changed, save_prefs
 from app.updates import apply_update, check_for_updates, current_status as update_status, rollback
 from app.world import (
     AUTOSAVE_SLOT,
@@ -3516,9 +3517,69 @@ def api_agent_opening(token: str = ""):
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
+# The prefs this server process started with. Reach, port and the llama.cpp
+# flags only change when the launcher starts the server again, so Settings
+# compare against this snapshot to say what is still waiting for a restart.
+_BOOT_LAUNCHER_PREFS = load_prefs()
+
+
+def _launcher_status() -> dict[str, Any]:
+    supervised = os.getenv("AI_RPG_SUPERVISED") == "1"
+    try:
+        plan = json.loads(os.getenv("AI_RPG_LAUNCHER_PLAN") or "{}")
+    except ValueError:
+        plan = {}
+    return {
+        "supervised": supervised,
+        "plan": plan if isinstance(plan, dict) else {},
+        "restart_pending": restart_keys_changed(_BOOT_LAUNCHER_PREFS, load_prefs()),
+    }
+
+
+@app.get("/api/launcher/status")
+def api_launcher_status():
+    return _launcher_status()
+
+
+@app.post("/api/launcher/restart")
+def api_launcher_restart():
+    """Restart under the launcher: write its flag, then shut down cleanly so it starts us again."""
+    if os.getenv("AI_RPG_SUPERVISED") != "1":
+        raise HTTPException(
+            status_code=409,
+            detail="This server was not started by the Mørkyn launcher. Stop it and start Morkyn.bat again.",
+        )
+    flag = os.getenv("AI_RPG_RESTART_FLAG")
+    if flag:
+        try:
+            Path(flag).write_text("settings", encoding="utf-8")
+        except OSError:
+            pass
+
+    def _shutdown() -> None:
+        import signal as _signal
+
+        # uvicorn treats SIGINT as "finish requests and exit"; the launcher's
+        # watch thread sees the flag and starts the servers again.
+        try:
+            _signal.raise_signal(_signal.SIGINT)
+        except Exception:
+            pass
+        time.sleep(8)
+        os._exit(75)
+
+    threading.Thread(target=_shutdown, name="launcher-restart", daemon=True).start()
+    return {"ok": True, "restarting": True}
+
+
 @app.get("/api/launcher-prefs")
 def api_launcher_prefs_get():
-    return {"prefs": load_prefs(), "path": "data/launcher_prefs.json"}
+    return {
+        "prefs": load_prefs(),
+        "defaults": default_prefs(),
+        "path": "data/launcher_prefs.json",
+        **_launcher_status(),
+    }
 
 
 class LauncherPrefsRequest(BaseModel):
@@ -3551,7 +3612,7 @@ def api_launcher_prefs_set(request: LauncherPrefsRequest):
             update_model_config(cfg)
         except Exception:
             pass
-    return {"ok": True, "prefs": saved, "applied_env": bool(request.apply_env)}
+    return {"ok": True, "prefs": saved, "applied_env": bool(request.apply_env), **_launcher_status()}
 
 
 @app.get("/api/model-status")

@@ -179,6 +179,40 @@
               <a class="mainMenuGhost mainMenuLink" id="menuGithub" href="https://github.com/Stelliro/Morkyn" target="_blank" rel="noopener noreferrer">GitHub</a>
             </div>
           </nav>
+          <!-- The terminal launcher's simple menu, here. Changes save at once; Settings has the rest. -->
+          <section class="mainMenuGate" id="mainMenuGate" aria-labelledby="mainMenuGateLabel">
+            <p class="mainMenuGroupLabel" id="mainMenuGateLabel">Gatehouse</p>
+            <div class="mainMenuGateRows">
+              <label class="mainMenuGateRow">
+                <span>Where</span>
+                <select data-gate-pref="launch_mode">
+                  <option value="local">This PC only</option>
+                  <option value="lan">LAN / phone</option>
+                  <option value="vpn">VPN / tunnel</option>
+                </select>
+              </label>
+              <label class="mainMenuGateRow">
+                <span>Engine</span>
+                <select data-gate-pref="model_provider">
+                  <option value="mle">MLE</option>
+                  <option value="llama_cpp">llama.cpp / GGUF</option>
+                  <option value="openai">Cloud / agent API</option>
+                </select>
+              </label>
+              <label class="mainMenuGateRow">
+                <span>Pipeline</span>
+                <select data-gate-pref="narration_pipeline">
+                  <option value="false">Off</option>
+                  <option value="true">On</option>
+                </select>
+              </label>
+            </div>
+            <p class="mainMenuGateAddress" id="mainMenuGateAddress"></p>
+            <div class="mainMenuGateRestart" id="mainMenuGateRestart" hidden role="status">
+              <span id="mainMenuGateRestartText">Restart to apply.</span>
+              <button type="button" class="secondaryButton chipBtn" data-launcher-restart>Restart now</button>
+            </div>
+          </section>
           <p class="mainMenuFoot" id="mainMenuStatus">Ready.</p>
         </div>
       </section>
@@ -189,16 +223,22 @@
           <header class="modalHeader">
             <div>
               <h2 id="appSettingsTitle">Settings</h2>
-              <p>Engine, reach, pipeline, and UI. Saved to <code>data/launcher_prefs.json</code>.</p>
+              <p>Everything the old terminal launcher asked, plus the UI. Saved to <code>data/launcher_prefs.json</code>.</p>
             </div>
             <button type="button" class="secondaryButton chipBtn" id="closeAppSettings">Close</button>
           </header>
           <form id="appSettingsForm" class="appSettingsForm">
+            <div class="appSettingsRestart" id="appSettingsRestart" hidden role="status">
+              <p id="appSettingsRestartText">Some changes wait for a restart.</p>
+              <button type="button" class="secondaryButton" data-launcher-restart>Restart now</button>
+            </div>
+
+            <h3 class="appSettingsGroup">Where &amp; window</h3>
             <label>
               <span>Where (reach)</span>
               <select name="launch_mode">
-                <option value="local">Local (this PC)</option>
-                <option value="lan">LAN</option>
+                <option value="local">This PC only</option>
+                <option value="lan">LAN / phone</option>
                 <option value="vpn">VPN / tunnel</option>
               </select>
             </label>
@@ -206,6 +246,27 @@
               <span>Port</span>
               <input name="app_port" type="number" min="1" max="65535" value="8000" />
             </label>
+            <label>
+              <span>Open the game in</span>
+              <select name="window_mode">
+                <option value="app">Mørkyn window</option>
+                <option value="browser">System browser</option>
+                <option value="none">Nowhere (server only)</option>
+              </select>
+            </label>
+            <label>
+              <span>Theme</span>
+              <select name="ui_theme" id="settingsThemeSelect">
+                <option value="dusk">Dusk</option>
+                <option value="ember">Ember</option>
+                <option value="tide">Tide</option>
+                <option value="bloom">Bloom</option>
+                <option value="ash">Ash</option>
+              </select>
+            </label>
+            <p class="empty appSettingsAddress" id="appSettingsAddress"></p>
+
+            <h3 class="appSettingsGroup">Engine</h3>
             <label>
               <span>Engine</span>
               <select name="model_provider">
@@ -231,19 +292,54 @@
               <input name="api_model" value="grok-4.5" maxlength="200" />
             </label>
             <label>
-              <span>Theme</span>
-              <select name="ui_theme" id="settingsThemeSelect">
-                <option value="dusk">Dusk</option>
-                <option value="ember">Ember</option>
-                <option value="tide">Tide</option>
-                <option value="bloom">Bloom</option>
-                <option value="ash">Ash</option>
+              <span>Context tokens</span>
+              <input name="llama_cpp_context" value="auto" maxlength="12" placeholder="auto" title="auto = sized from the model's header and your GPU. Below 12288 the full story contract does not fit." />
+            </label>
+            <label>
+              <span>Soft response tokens</span>
+              <input name="soft_response_tokens" type="number" min="0" step="1" value="0" title="0 = auto, sized from the model's parameter count." />
+            </label>
+            <label>
+              <span>Hard response tokens</span>
+              <input name="hard_response_tokens" type="number" min="0" step="1" value="0" title="0 = auto, sized from the model's parameter count." />
+            </label>
+
+            <h3 class="appSettingsGroup appSettingsLlamaOnly">llama.cpp server</h3>
+            <label>
+              <span>GPU layers</span>
+              <input name="llama_cpp_gpu_layers" type="number" min="-1" step="1" value="-1" title="-1 = every layer on the GPU." />
+            </label>
+            <label>
+              <span>Flash attention</span>
+              <select name="llama_cpp_flash_attn">
+                <option value="true">On</option>
+                <option value="false">Off</option>
+              </select>
+            </label>
+            <label>
+              <span>llama.cpp log</span>
+              <select name="llm_log_mode">
+                <option value="quiet">Quiet (temp file)</option>
+                <option value="console">Beside the server log</option>
+              </select>
+            </label>
+            <label>
+              <span>Startup wait (seconds)</span>
+              <input name="llm_startup_timeout" type="number" min="10" max="3600" step="1" value="180" />
+            </label>
+
+            <h3 class="appSettingsGroup">Turn pipeline</h3>
+            <label>
+              <span>Draft format</span>
+              <select name="draft_mode">
+                <option value="dsl">DSL</option>
+                <option value="json">JSON</option>
               </select>
             </label>
             <fieldset class="toggleSet">
               <legend>Narration pipeline</legend>
-              <label><input type="radio" name="narration_pipeline" value="true" checked /> On</label>
-              <label><input type="radio" name="narration_pipeline" value="false" /> Off</label>
+              <label><input type="radio" name="narration_pipeline" value="true" /> On</label>
+              <label><input type="radio" name="narration_pipeline" value="false" checked /> Off</label>
             </fieldset>
             <fieldset class="toggleSet">
               <legend>Pipeline consolidator</legend>
@@ -255,6 +351,12 @@
               <label><input type="radio" name="fast_verification" value="true" checked /> On</label>
               <label><input type="radio" name="fast_verification" value="false" /> Off</label>
             </fieldset>
+            <fieldset class="toggleSet">
+              <legend>Skip the DSL verifier</legend>
+              <label><input type="radio" name="dsl_skip_verify" value="true" /> On</label>
+              <label><input type="radio" name="dsl_skip_verify" value="false" checked /> Off</label>
+            </fieldset>
+
             <fieldset class="toggleSet appSettingsTutorialBox">
               <legend>Setup tutorial</legend>
               <p class="empty" style="margin:0 0 8px">
@@ -266,8 +368,9 @@
               <button type="submit">Save &amp; apply</button>
               <button type="button" class="secondaryButton" id="settingsOpenLlm">LLM details…</button>
               <button type="button" class="secondaryButton" id="settingsReloadUi">Reload UI</button>
+              <button type="button" class="secondaryButton" id="settingsRestoreDefaults">Restore defaults</button>
             </div>
-            <p class="empty" id="appSettingsStatus">Changes apply to this running app where possible. Port/reach need a launcher restart.</p>
+            <p class="empty" id="appSettingsStatus">Most changes apply at once. Where, port, and the llama.cpp server restart the server.</p>
           </form>
           <!-- Speech settings post to /api/tts-config; app.js renders the form here, outside the launcher form. -->
           <div id="speechSettingsMount" class="speechSettingsMount"></div>

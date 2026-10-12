@@ -773,6 +773,54 @@ a.mainMenuGhost:hover {
   color: var(--muted-2);
 }
 
+/* The Gatehouse strip: the terminal launcher's three switches, under a thread. */
+.mainMenuGate {
+  border-top: 1px solid var(--line);
+}
+
+.mainMenuGateRow > span {
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--label-dim);
+}
+
+.mainMenuGateRow select {
+  border-radius: 0;
+  font-size: 0.82rem;
+}
+
+.mainMenuGateAddress {
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--thread);
+  user-select: all;
+}
+
+.mainMenuGateRestart,
+.appSettingsRestart {
+  border: 1px solid var(--thread-dim);
+  background: var(--thread-ghost);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.appSettingsGroup {
+  border-top: 1px solid var(--line);
+  font-family: var(--font);
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+  color: var(--thread);
+}
+
+.appSettingsAddress {
+  font-family: var(--font-mono);
+  color: var(--thread);
+}
+
 
 /* ==========================================================================
    07 Setup

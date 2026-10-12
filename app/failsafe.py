@@ -82,7 +82,7 @@ _COPY: dict[str, dict[str, Any]] = {
         "summary": "Loading or running the model ran out of RAM or video memory.",
         "tips": [
             "Close apps using a lot of RAM or video memory: browsers with many tabs, games, image tools, other model servers.",
-            "Lower Context tokens in the Gatehouse menu (or AI_RPG_CONTEXT_TOKENS). 8192 is enough for most scenes.",
+            "Lower Context tokens in Settings (or AI_RPG_CONTEXT_TOKENS). 8192 is enough for most scenes.",
             "Pick a smaller quantization of the same model, for example Q4 instead of Q8, or a smaller model.",
             "If the model runs on the GPU, set fewer GPU layers so part of it stays in system RAM.",
         ],
@@ -210,7 +210,7 @@ def context_problem(requested: int, fallback: int, error: str = "") -> dict[str,
         ),
         "tips": [
             "Close apps using a lot of RAM or video memory, then Retry at the full size.",
-            "Lower Context tokens in the Gatehouse menu so the smaller size is the normal one.",
+            "Lower Context tokens in Settings so the smaller size is the normal one.",
             "A smaller quantization of the same model (Q4 instead of Q8) frees room for context.",
             "If the model runs on the GPU, set fewer GPU layers so the context cache fits.",
         ],
@@ -222,7 +222,7 @@ def context_problem(requested: int, fallback: int, error: str = "") -> dict[str,
             "label": f"Continue with {fallback:,} tokens",
             "note": (
                 f"The {fallback:,}-token context stays until Mørkyn restarts. To make it permanent, set Context "
-                "tokens in the Gatehouse, or AI_RPG_CONTEXT_FALLBACK=auto to always accept it."
+                "tokens in Settings, or AI_RPG_CONTEXT_FALLBACK=auto to always accept it."
             ),
         },
     }
@@ -246,7 +246,7 @@ def context_notice(window: int, needed: int, provider: str = "mle") -> dict[str,
             "of the world in view."
         ),
         "tips": [
-            "Raise Context tokens in the Gatehouse menu (option C) to 32768, or set AI_RPG_CONTEXT_TOKENS, then restart Mørkyn.",
+            "Raise Context tokens in Settings to 32768 (or set AI_RPG_CONTEXT_TOKENS) and restart the server when Settings asks.",
             "If the larger context does not fit in memory, a smaller quantization of the same model (Q4 instead of Q8) frees room for it.",
             "If you chose the smaller size on purpose, nothing is wrong; this notice shows once for each context size.",
         ],

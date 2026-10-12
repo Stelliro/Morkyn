@@ -57,7 +57,8 @@ class TestTheNoticeDecision(unittest.TestCase):
         self.assertEqual(notice["stage"], "runtime")
         self.assertIsNone(notice["fallback"], "nothing failed, so there is nothing to accept")
         self.assertIn("8,192", notice["summary"])
-        self.assertTrue(any("Gatehouse" in tip for tip in notice["tips"]))
+        # The tip names where to fix it: Settings, since the launcher moved into the game.
+        self.assertTrue(any("Settings" in tip for tip in notice["tips"]))
 
     def test_the_default_window_yields_none(self):
         env, cfg = _with_window(32768)

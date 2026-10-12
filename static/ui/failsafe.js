@@ -51,7 +51,7 @@
       summary: "Loading or running the model ran out of RAM or video memory.",
       tips: [
         "Close apps using a lot of RAM or video memory: browsers with many tabs, games, image tools, other model servers.",
-        "Lower Context tokens in the Gatehouse menu (or AI_RPG_CONTEXT_TOKENS). 8192 is enough for most scenes.",
+        "Lower Context tokens in Settings (or AI_RPG_CONTEXT_TOKENS). 8192 is enough for most scenes.",
         "Pick a smaller quantization of the same model, for example Q4 instead of Q8, or a smaller model.",
         "If the model runs on the GPU, set fewer GPU layers so part of it stays in system RAM.",
       ],
