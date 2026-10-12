@@ -911,6 +911,18 @@ def index() -> HTMLResponse:
     )
 
 
+@app.get("/popout")
+def popout() -> HTMLResponse:
+    """The pop-out page with the same cache-busting token as the game.
+
+    Served raw from /static it named fixed `?v=popout-skin-1` URLs, so a player
+    who had opened a pop-out once kept that stylesheet through every release.
+    """
+    _, token = index_html()
+    html = (STATIC_DIR / "popout.html").read_text(encoding="utf-8").replace(BUNDLE_PLACEHOLDER, token)
+    return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/api/updates/status")
 def api_updates_status():
     """Local git status only — does not contact the network."""

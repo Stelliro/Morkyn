@@ -4,9 +4,9 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Mørkyn — Popout</title>
-    <link rel="stylesheet" href="/static/ui/tokens.css?v=popout-skin-1" />
-    <link rel="stylesheet" href="/static/styles.css?v=popout-skin-1" />
-    <link rel="stylesheet" href="/static/ui/skin.css?v=popout-skin-1" />
+    <link rel="stylesheet" href="/static/ui/tokens.css?v=__BUNDLE__" />
+    <link rel="stylesheet" href="/static/styles.css?v=__BUNDLE__" />
+    <link rel="stylesheet" href="/static/ui/skin.css?v=__BUNDLE__" />
     <style>
       html, body { height: 100%; min-height: 100%; }
       body.popoutBody {
@@ -57,7 +57,9 @@
         gap: 12px;
       }
       .popoutBodyContent .statGrid {
-        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        /* auto-fit, not auto-fill: the tiles stretch across like the in-game sheet
+           instead of leaving empty tracks on the right. */
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       }
       .popoutBodyContent .card,
       .popoutBodyContent article {
@@ -299,6 +301,6 @@
         window.addEventListener("message", (ev) => applyPush(ev.data));
       })();
     </script>
-    <script src="/static/ui/frame.js?v=popout-frame-1"></script>
+    <script src="/static/ui/frame.js?v=__BUNDLE__"></script>
   </body>
 </html>
