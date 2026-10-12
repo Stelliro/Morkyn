@@ -12904,11 +12904,9 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
     health = clamp(int(player["health"]) + health_delta, 0, max_health)
     if _settings(conn).get("debug_godmode") in (True, "true", "1", 1):
         health = max_health
-    level_delta = (
-        clamp(int(player_patch.get("level_delta") or 0), 0, 1)
-        if settings.get("leveling_system", True)
-        else 0
-    )
+    # Levels are the engine's, from XP (app/progression.py, playtest #121): a
+    # model level_delta is not applied. sync_level runs after the write below.
+    level_delta = 0
     raw_xp = clamp(int(player_patch.get("xp_delta") or 0), 0, 500)
     xp_delta = (
         (
@@ -12985,6 +12983,9 @@ def _apply_player(conn, player_patch: dict[str, Any]) -> None:
         """,
         (health, max_health, level, xp, gold, karma, location_id),
     )
+    from app.progression import sync_level
+
+    sync_level(conn, turn)
     if karma_delta:
         conn.execute(
             """
@@ -15637,6 +15638,11 @@ def _drop_model_rewards(result: dict[str, Any]) -> list[str]:
     return dropped
 
 
+# A gold gain the op and the prose both name passes unrolled up to this sum;
+# bigger named rewards still roll their band (the 8B inflates what it names).
+STATED_GAIN_CAP = 50
+
+
 def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, Any] | None:
     """
     Make the gold the prose names the gold that moves (playtest #69).
@@ -15671,13 +15677,19 @@ def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, 
     said = prose_state.stated_coin_amounts(narration)
     offer = prose_state.player_trade_offer(own)
     paid_once = said["paid"][0] if len(said["paid"]) == 1 and not said["received"] else None
+    mentioned = prose_state.coin_mentions(narration)
     value: int | None = None
     source = ""
     if (band or raw) and not losing:
         # Rewards keep the band roll: the 8B inflates the sums it names
-        # ("mints 250, then 400"). Only prices and payments pass through.
-        return None
-    if band or raw:
+        # ("mints 250, then 400"). A modest number the op and the prose agree
+        # on is the scene's, though: a purse of "Nine coins" handed back with
+        # GOLD 9 paid +14 when rolled (Saltmarrow run, T94).
+        if raw > 0 and raw <= STATED_GAIN_CAP and raw in mentioned:
+            value, source = raw, "stated_gain"
+        else:
+            return None
+    elif band or raw:
         pool = said["paid"] + [a for a in said["priced"] if a not in said["paid"]]
         answer = prose_state.offer_answer(narration, own) if offer else ""
         if paid_once is not None:
@@ -15685,6 +15697,9 @@ def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, 
             value, source = -paid_once, "prose_paid"
         elif raw and abs(raw) in pool:
             value, source = raw, "stated"
+        elif raw and abs(raw) in mentioned:
+            # "Nine coins. All you had." names the sum without a paying verb.
+            value, source = raw, "stated_mention"
         elif len(pool) == 1:
             value, source = -pool[0], "prose"
         elif offer and answer == "refused":
@@ -19955,7 +19970,7 @@ def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True
         f"rng_events: {', '.join(event_lines) if event_lines else 'none'}\n"
         f"crowd: {risk['crowd']} danger: {risk['danger']}\n"
         f"resource_regen: energy{int(res_delta.get('energy') or 0):+d} mana{int(res_delta.get('mana') or 0):+d} "
-        f"fatigue{int(res_delta.get('fatigue') or 0):+d}\n"
+        f"fatigue{int(res_delta.get('fatigue') or 0):+d} health{int(res_delta.get('health') or 0):+d}\n"
         f"{res_block}\n"
         f"constraints: narrate this {kind_label} only; do not invent extra major events; "
         "nameless/background codes are shells (no portrait, no deep inventory/stats); "

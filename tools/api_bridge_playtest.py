@@ -214,7 +214,7 @@ def main() -> int:
             return {
                 "player": dict(p) if p else {},
                 "location": loc["name"] if loc else "",
-                "inventory": [f"{r['name']} x{r['quantity']}" for r in conn.execute("SELECT name, quantity FROM inventory")],
+                "inventory": [f"{r['name']} x{r['quantity']}" for r in conn.execute("SELECT name, quantity FROM inventory WHERE quantity > 0")],
                 "max_journal": conn.execute("SELECT COALESCE(MAX(id), 0) FROM journal").fetchone()[0],
                 "max_dice": conn.execute("SELECT COALESCE(MAX(id), 0) FROM dice_rolls").fetchone()[0],
             }

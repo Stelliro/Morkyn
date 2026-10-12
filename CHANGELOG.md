@@ -23,6 +23,16 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Fixed
+
+- [CLAUDE] Levels rise with XP (playtest #121, Saltmarrow run): the run ended at 293 XP and level 1, because only a model-proposed level_delta could raise a level and the DSL never sends one. Level now follows XP on a fixed curve (100 XP for level 2, 300 for 3, 600 for 4, ...), only ever rises, and journals 'Level N reached'. It is checked after every turn and every quest payout, and it respects the leveling_system playthrough option. - `app/progression.py`, `app/world.py`, `app/quests.py`
+- [CLAUDE] Sleep heals (#120): 13 and 17 hours of sleep restored energy but no health. A sleep now heals 1 per 2 hours, and at least a fifth of max health after 6 hours or more; meditation heals 1 per 4 hours; a plain wait heals nothing. Healing never exceeds missing health and never revives someone at 0. - `app/player_resources.py`, `app/world.py`
+- [CLAUDE] A sum the prose names is the sum that moves (reopened #69/#96): GOLD -9 with 'Nine coins. All you had.' was rolled as a band, and a returned purse of nine coins paid 14. A loss the prose names is taken exactly; a gain of up to 50 that the prose names is paid exactly; anything larger or unnamed still rolls. 'count out', 'put', 'set', 'lay' and 'place' now count as offering coin. - `app/prose_state.py`, `app/world.py`
+- [CLAUDE] Name repair stops writing names into sentences (#107): 'Turn and wedge.' became 'Tam Kemp [[H]] Turn and wedge', and 'H. says' got another person's name. Only a lowercase verb with no subject is filled now, never inside quotes and never after an initial. - `app/llm.py`
+- [CLAUDE] A travel scene is no longer cut back to a seat (#111): 'You take the stern.' was read as the player taking an item, and the whole trip to the customs tower was cut to that line. Taking a position in a boat or on a watch (stern, bow, helm, oars, tiller, ...) is not acquiring, and a turn whose line is travel is never cut at an invented request. - `app/llm.py`
+- [CLAUDE] The API-bridge playtest harness lists only items you hold (#118 was a harness artefact: the game already hides zero-quantity rows). - `tools/api_bridge_playtest.py`
+
+
 ## [0.10.0-dev.11] - 2026-10-13
 
 > Pre-release on the way to `0.10.0`. A new 100-turn lore teaser, Saltmarrow, played with Claude as player and GM through the cloud-API path; the API bridge harness and a read-only world database exporter; the run's findings logged as #100-#122 with ten older issues reopened.

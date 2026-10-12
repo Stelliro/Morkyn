@@ -35,7 +35,7 @@ _AP = r"['\u2019]"
 # pays") is someone else paying.
 _PAID_RE = re.compile(
     r"\byou\s+(?:(?!(?:he|she|they|we)\b)[\w']+,?\s+){0,4}?"
-    r"(?:pay|paid|hand(?:ed)?(?:\s+over)?|give|gave|count(?:ed)?\s+out|slide|slid|place[sd]?|drop(?:ped)?|"
+    r"(?:pay|paid|hand(?:ed)?(?:\s+over)?|give|gave|count(?:ed|s)?(?:\s+out)?|slide|slid|place[sd]?|drop(?:ped)?|"
     r"spend|spent|part(?:ed)?\s+with|fish(?:ed)?\s+out|dig\s+out|dug\s+out|press(?:ed)?)\b"
     r"[^.!?\n\"\u201c\u201d]{0,40}?\b" + _AMOUNT + r"\s+" + _COIN,
     re.I,
@@ -73,6 +73,23 @@ def _match_number(match: re.Match) -> int | None:
     return _number(groups.get("n") or groups.get("n2"))
 
 
+_MENTION_RE = re.compile(r"\b" + _AMOUNT + r"\s+" + _COIN, re.I)
+
+
+def coin_mentions(text: str) -> list[int]:
+    """Every gold amount the prose names anywhere, in order: "Nine coins." counts.
+
+    A GOLD op whose number the prose names this way is the scene's number, not
+    a band hint (Saltmarrow run: "Nine coins" and GOLD -9 were re-rolled).
+    """
+    out: list[int] = []
+    for match in _MENTION_RE.finditer(str(text or "")):
+        value = _match_number(match)
+        if value and value not in out:
+            out.append(value)
+    return out
+
+
 def stated_coin_amounts(text: str) -> dict[str, list[int]]:
     """The gold amounts the prose names: paid by the player, priced, and received.
 
@@ -96,7 +113,9 @@ def stated_coin_amounts(text: str) -> dict[str, list[int]]:
 # The player's own offer: "I'll give you my last 3 gold for that", "I pay
 # him five coins", "I'll buy it for 4 gold" (playtest #75, T7).
 _OFFER_RE = re.compile(
-    r"\b(?:give|pay|offer|hand(?:\s+over)?|trade|slide|toss)\s+(?:(?:you|him|her|them|[A-Z][\w'\u2019-]*)\s+)?"
+    # "I put three coin on the counter for the rope" (Saltmarrow run, T8) puts
+    # the money down: put/set/lay/place/count out are offers too.
+    r"\b(?:give|pay|offer|hand(?:\s+over)?|trade|slide|toss|put|set|lay|place|count(?:\s+out)?)\s+(?:(?:you|him|her|them|[A-Z][\w'\u2019-]*)\s+)?"
     r"(?:(?:my|the|all\s+my)\s+)?(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _COIN
     # "I'll take the job for 10 gold" asks to be paid: only taking the thing
     # on sale ("I'll take it for 4 gold") is an offer to pay.

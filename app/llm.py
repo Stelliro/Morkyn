@@ -11378,9 +11378,21 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         name_i += 1
         return n
 
+    # A hole is a sentence the name fell out of: "— leans against", ". nods at
+    # you", always a lowercase verb. A capital is a real sentence: an order
+    # ("Turn and wedge."), a quoted line ("Ask her."), or "H. says" after an
+    # initial; filling those wrote "Tam Kemp [[H]] Turn and wedge" and turned
+    # "H. says" into another person's name (Saltmarrow run, playtest #107).
+    spoken = [s.span() for s in re.finditer(r'"[^"]*"|“[^”]*”', repaired)]
+
     def fill_subject(match: re.Match[str]) -> str:
         prefix = match.group(1) or ""
         verb = match.group(2)
+        if any(start <= match.start(2) < end for start, end in spoken):
+            return match.group(0)
+        # "H. says": the full stop ends an initial, not a sentence.
+        if re.search(r"(?:^|[\s(])[A-Z]\.\s*$", repaired[: match.start(2)]):
+            return match.group(0)
         n = next_name()
         if not n:
             return match.group(0)
@@ -11395,7 +11407,7 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         r"crosses|parts?|twitches?|darts?)\b",
         fill_subject,
         repaired,
-        flags=re.IGNORECASE | re.MULTILINE,
+        flags=re.MULTILINE,
     )
 
     def fill_possessive(match: re.Match[str]) -> str:
@@ -13264,7 +13276,11 @@ _TAKE_NOT_ACQUIRE_TAIL = (
     r"(?:it|them|this|that|everything)\s+in(?!\s+(?:your|my|his|her|both|one|hand))|"
     r"your\s+(?:leave|place|seat|turn)|a\s+seat|hold|heart|refuge|shelter|cover|"
     r"heed|aside|(?:him|her|them|me|us)\s+aside|(?:the|this|that|an?)\s+(?:opportunity|chance|moment)|"
-    r"the\s+(?:lead|stairs|path|road|trail|street|turn|left|right|seat|chance)|over|part|charge|place|shape|root)"
+    r"the\s+(?:lead|stairs|path|road|trail|street|turn|left|right|seat|chance)|over|part|charge|place|shape|root|"
+    # A place in a boat or a post: "You take the stern" (Saltmarrow run, T95)
+    # cut a whole crossing as an invented take (playtest #111).
+    r"(?:the|an?|your|one)\s+(?:stern|bow|bows|helm|tiller|oars?|watch|rear|front|back|middle|wheel|ladder|rope\s+end|other\s+end|"
+    r"other\s+oar|bow\s+oar|stern\s+oar|first\s+watch|second\s+watch|lookout|post|position|corner|bench|thwart|step|steps|stair)\b)"
 )
 # One take vocabulary with the grant gate (playtest #75): "You take the tools
 # and leather" was kept here while the gate read it as a take the player never
@@ -14724,6 +14740,16 @@ def _cut_scene_at_invented_request(turn: dict[str, Any], player_input: str, *, f
     point = _scene_cut_point(text, player_input)
     if not point:
         return turn
+    # The player's own line asked to go somewhere: the prose has to show the
+    # going. Cutting back to an earlier line kept the MOVE and lost the journey
+    # (Saltmarrow run, T95: a whole crossing cut to Una's farewell, #111).
+    try:
+        from app.world import travel_intent
+
+        if travel_intent(player_line_of(player_input)):
+            return turn
+    except Exception:
+        pass
     head = text[: point["cut"]].rstrip()
     tail = text[point["cut"]:].strip()
     if not tail:

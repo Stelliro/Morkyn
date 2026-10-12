@@ -696,6 +696,7 @@ def apply_regen(
         fatigue=max(0, before["fatigue"] - ease_f),
         max_fatigue=before["max_fatigue"],
     )
+    healed = heal_from_rest(conn, minutes=minutes, kind=str(d.get("kind") or kind))
     full = get_player_resources(conn, options)
     return {
         "ok": True,
@@ -707,8 +708,40 @@ def apply_regen(
             "energy": full["energy"] - before["energy"],
             "mana": full["mana"] - before["mana"],
             "fatigue": full["fatigue"] - before["fatigue"],
+            "health": healed,
         },
     }
+
+
+def rest_healing(*, minutes: int, kind: str, health: int, max_health: int) -> int:
+    """Health a rest gives back (playtest #120: two nights of sleep healed nothing).
+
+    Sleep heals 1 per 2 hours, and a full night (6 hours or more) at least a
+    fifth of max health. Meditation heals 1 per 4 hours. Waiting heals nothing.
+    Lasting injuries stay on the body as conditions; only the points return.
+    """
+    minutes = max(0, _int(minutes, 0))
+    kind_l = str(kind or "wait").strip().lower()
+    if kind_l == "sleep":
+        amount = minutes // 120
+        if minutes >= 360:
+            amount = max(amount, int(round(max_health * 0.2)))
+    elif kind_l == "meditate":
+        amount = minutes // 240
+    else:
+        amount = 0
+    return max(0, min(amount, max(0, int(max_health) - int(health))))
+
+
+def heal_from_rest(conn, *, minutes: int, kind: str) -> int:
+    row = conn.execute("SELECT health, max_health FROM player WHERE id = 1").fetchone()
+    if not row or int(row["health"] or 0) <= 0:
+        # Health 0 is downed or dead (playtest #88): a rest does not revive.
+        return 0
+    amount = rest_healing(minutes=minutes, kind=kind, health=int(row["health"]), max_health=int(row["max_health"] or 1))
+    if amount:
+        conn.execute("UPDATE player SET health = MIN(max_health, health + ?) WHERE id = 1", (amount,))
+    return amount
 
 
 def preview_travel_spend(
