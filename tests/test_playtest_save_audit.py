@@ -200,7 +200,9 @@ class WorkplacesArePlanned(unittest.TestCase):
             }
         self.assertEqual(self._names(), ["Eldoria's Edge"])
         self.assertEqual(plans["Aria"], {"kind": "bakery", "name": "Aria's Bakery", "parent_id": 1})
-        self.assertEqual(plans["Jethand"]["name"], "Jethand's Tailor")
+        # A weaver has no shop of their own (Saltmarrow #27): no plan, no
+        # "Jethand's Tailor" for the prompts to send the player to.
+        self.assertEqual(plans["Jethand"], {})
         self.assertEqual(plans["Hearthbin"], {})
 
     def test_the_plan_still_tells_the_prompts_whose_place_it_is(self):

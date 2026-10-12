@@ -279,10 +279,14 @@ _ROLE_KINDS: dict[str, tuple[str, ...]] = {
     "tavern":        ("tavern keeper", "tavernkeeper", "barkeep", "bartender", "brewer", "alewife"),
     "apothecary":    ("apothecary", "herbalist", "physician"),
     "butcher":       ("butcher",),
-    "tailor":        ("tailor", "seamstress", "weaver", "dressmaker"),
+    # A weaver works a loom at home and a clerk works for an office that is
+    # someone else's; neither has a shop of their own (Saltmarrow #27: two
+    # weavers on a roof and in a sea tower got "<Name>'s Tailor", and the
+    # guild's tally clerk got "Una Rendle's Scribe's Office").
+    "tailor":        ("tailor", "seamstress", "dressmaker"),
     "tanner":        ("tanner", "leatherworker"),
     "carpenter":     ("carpenter", "joiner", "cooper", "woodworker"),
-    "scribe":        ("scribe", "scrivener", "clerk", "notary"),
+    "scribe":        ("scribe", "scrivener", "notary"),
     "temple":        ("priest", "priestess", "acolyte", "cleric"),
     "mill":          ("miller",),
     "stable":        ("stablehand", "stable hand", "groom", "ostler", "stablemaster"),
