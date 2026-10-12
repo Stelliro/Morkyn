@@ -870,6 +870,85 @@ def best_proficiency(
     return {"rank": 0, "source": "", "match": "untrained"}
 
 
+# Words too common to say anything about a trade or a place.
+_HOME_STOPWORDS = frozenset(
+    """
+    about above after again against along also always among another around away back been before behind being
+    below beside between both came come comes could does down during each even ever every from front gave give
+    goes going gone have having here into just keep kept know last left like little long made make many more most
+    much must near never next night none once only other over own part past people place said same should since
+    some still such take than that their them then there these they thing this those through time today together
+    toward towards under until upon very want water went were what when where which while whole will with within
+    without would year years your yours away hour hours day days first second each because still even home town
+    house street side open close small large great good well where right long half under over
+    """.split()
+)
+
+
+def _home_stems(text: str, skip: set[str] | None = None) -> set[str]:
+    out: set[str] = set()
+    for word in re.findall(r"[a-z]+", str(text or "").lower()):
+        stem = word[:-1] if word.endswith("s") and not word.endswith("ss") else word
+        stem = stem[:7]
+        if len(stem) >= 4 and word not in _HOME_STOPWORDS and stem not in _HOME_STOPWORDS and stem not in (skip or set()):
+            out.add(stem)
+    return out
+
+
+# Skill categories a background can stand in for: the body, the hands and the
+# eye. Talking someone round or fighting is never "home ground".
+HOME_GROUND_CATEGORIES = frozenset({"physical", "craft", "mental"})
+
+
+def home_ground(
+    player: dict[str, Any] | None,
+    skills: list[dict[str, Any]] | None,
+    act_text: str,
+    place: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    """The character's own trade or home ground, when this act is part of it (Saltmarrow #103).
+
+    A "Flat-runner" whose backstory is running the flats failed 3 of 3 mud-bank
+    climbs untrained, with injuries: the title, the backstory and the setup
+    proficiencies never reached the check. When the act or the place shares a
+    distinctive word with the character's title, backstory or proficiency
+    names and notes, the check is routine and the best matching proficiency is
+    footing: {"source", "rank", "words"}, or None.
+    """
+    p = player if isinstance(player, dict) else {}
+    name_words = _home_stems(str(p.get("name") or "") + " " + str(p.get("public_name") or ""))
+    rows = [s for s in skills or [] if isinstance(s, dict)]
+    trade_text = " ".join(
+        [str(p.get("title") or ""), str(p.get("backstory") or "")]
+        + [f"{s.get('name') or ''} {s.get('notes') or ''}" for s in rows]
+    )
+    trade = _home_stems(trade_text, name_words)
+    if not trade:
+        return None
+    loc = place if isinstance(place, dict) else {}
+    act = re.sub(r'"[^"]*"|“[^”]*”', " ", str(act_text or ""))
+    act_hits = _home_stems(act, name_words) & trade
+    place_hits = _home_stems(f"{loc.get('name') or ''} {loc.get('summary') or ''}", name_words) & trade
+    hits = sorted(act_hits | place_hits)
+    if not hits:
+        return None
+    best: tuple[int, str] | None = None
+    for s in rows:
+        words = _home_stems(f"{s.get('name') or ''} {s.get('notes') or ''}", name_words)
+        if words & set(hits):
+            value = _skill_value(s)
+            if best is None or value > best[0]:
+                best = (value, str(s.get("name") or ""))
+    # The ground alone is footing for the body (climbing, running, keeping
+    # your feet); a craft or a reading of something needs the act itself to
+    # be part of the trade.
+    out = {"words": hits[:6], "act": bool(act_hits)}
+    if best is None:
+        source = str(p.get("title") or "").strip() or "background"
+        return {**out, "source": source, "rank": 1}
+    return {**out, "source": best[1], "rank": max(1, best[0] // 2)}
+
+
 def _skill_rank(skills: list[dict[str, Any]] | None, code_or_name: str) -> int:
     if not skills:
         return 0
@@ -1112,8 +1191,13 @@ def resolve_check(
     abilities: list[dict[str, Any]] | None = None,
     roll_modifiers: dict[str, Any] | None = None,
     routine: bool = False,
+    home: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
+    ``home`` is ``home_ground(...)``: on the character's own ground or trade a
+    physical, craft or mental check is routine, and an untrained one stands
+    on that trade as a related skill (Saltmarrow #103).
+
     ``routine`` marks everyday work (polishing, sweeping, hauling): the mark is
     two easier and only a natural 1 can hurt (playtest #85a).
 
@@ -1162,6 +1246,18 @@ def resolve_check(
     # The player's own proficiencies, read through their tracking notes and
     # neighbouring trades (playtest #85a), not an exact-name match only.
     footing = best_proficiency(player_skills, str(skill.get("code") or skill.get("name") or ""), lib_rows)
+    home_source = ""
+    category = str(skill.get("category") or "")
+    if (
+        isinstance(home, dict)
+        and home.get("source")
+        and category in HOME_GROUND_CATEGORIES
+        and (category == "physical" or home.get("act"))
+    ):
+        home_source = str(home["source"])
+        routine = True
+        if footing["match"] == "untrained":
+            footing = {"rank": max(1, int(home.get("rank") or 1)), "source": f"{home_source} (home ground)", "match": "related"}
     skill_rank = int(footing["rank"])
     skill_match = str(footing["match"])
     untrained_penalty = 0
@@ -1367,6 +1463,7 @@ def resolve_check(
         "skill_match": skill_match,
         "untrained_penalty": untrained_penalty,
         "routine": bool(routine),
+        "home_ground": home_source,
         "gear_mod": gear_mod,
         "gear_sources": gear_sources,
         "situational_mod": situational_mod,

@@ -27,13 +27,16 @@ STARTER_TITLES: list[dict[str, str]] = [
     {
         "name": "Wanderer",
         "description": "One who has walked many roads and seen many lands.",
-        "requirements_json": json.dumps({"type": "visit_locations", "count": 5}),
+        # Saltmarrow #122: five rows inside one harbour town on day one earned
+        # "many roads ... many lands". Places inside another place never
+        # count, and the roads take days.
+        "requirements_json": json.dumps({"type": "visit_locations", "count": 5, "min_days": 5}),
         "stat_bonuses_json": json.dumps({"dodge": 1}),
     },
     {
         "name": "Seeker",
         "description": "Ever pressing onward for what lies beyond the next horizon.",
-        "requirements_json": json.dumps({"type": "visit_locations", "count": 10}),
+        "requirements_json": json.dumps({"type": "visit_locations", "count": 10, "min_days": 10}),
         "stat_bonuses_json": json.dumps({"dodge": 2}),
     },
     {
@@ -155,6 +158,18 @@ def init_titles(conn) -> None:
             """,
             (title["name"], title["description"], title["requirements_json"], title["stat_bonuses_json"]),
         )
+    # Saves seeded before #122 keep the old place-count-only rule; move them to
+    # the new one unless someone edited the requirement by hand.
+    for name, old in (("Wanderer", {"type": "visit_locations", "count": 5}), ("Seeker", {"type": "visit_locations", "count": 10})):
+        new = next((t["requirements_json"] for t in STARTER_TITLES if t["name"] == name), None)
+        row = conn.execute("SELECT requirements_json FROM titles WHERE name = ?", (name,)).fetchone()
+        if new and row is not None:
+            try:
+                stored = json.loads(row[0] or "{}")
+            except Exception:
+                continue
+            if stored == old:
+                conn.execute("UPDATE titles SET requirements_json = ? WHERE name = ?", (new, name))
 
 
 # ---------------------------------------------------------------------------
@@ -167,10 +182,22 @@ def _check_requirement(req: dict[str, Any], conn) -> bool:
     try:
         if req_type == "visit_locations":
             count = int(req.get("count", 5))
+            # A shop or a room inside a place is not another land.
             row = conn.execute(
-                "SELECT COUNT(*) AS c FROM locations WHERE visit_count > 0"
+                "SELECT COUNT(*) AS c FROM locations WHERE visit_count > 0 AND COALESCE(parent_id, 0) = 0"
             ).fetchone()
-            return int(row["c"] or 0) >= count
+            if int(row["c"] or 0) < count:
+                return False
+            min_days = int(req.get("min_days", 0) or 0)
+            if min_days:
+                day = conn.execute("SELECT value FROM pacing WHERE key = 'world_day'").fetchone()
+                try:
+                    # The clock starts on day 1, so day N means N days on the road.
+                    if int(float(day["value"] if day else 1)) < min_days:
+                        return False
+                except (TypeError, ValueError):
+                    return False
+            return True
 
         if req_type == "affinity_devoted_min":
             # Devoted band: affinity >= 91
