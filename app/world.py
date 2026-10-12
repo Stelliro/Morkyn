@@ -15238,12 +15238,37 @@ def _resolve_amount(
     return roll["value"], roll
 
 
+_ITEM_COUNT_WORD_RE = (
+    r"(?:two|three|four|five|six|seven|eight|nine|ten|dozen|several|some|few|couple|pair|handful|"
+    r"bunch|stack|bundle|lot|lots|many|\d+)"
+)
+
+
+def _item_named_as_one(name: str, text: str) -> bool:
+    """True when the line or prose names this item once, with no count (playtest #99).
+
+    "a whetstone", "the stone", "one loaf" -> one. Any plural or count of the
+    head noun ("two whetstones", "a handful of berries") leaves the band to size it.
+    """
+    words = re.findall(r"[a-z][a-z'-]+", str(name or "").lower())
+    if not words or len(words[-1]) < 3:
+        return False
+    head = re.escape(words[-1])
+    low = str(text or "").lower()
+    if re.search(rf"\b{head}(?:s|es)\b", low):
+        return False
+    if re.search(rf"\b{_ITEM_COUNT_WORD_RE}\s+(?:of\s+)?(?:[\w'-]+\s+){{0,2}}{head}\b", low):
+        return False
+    return bool(re.search(rf"\b(?:a|an|one|the|this|that|single)\s+(?:[\w'-]+\s+){{0,3}}{head}\b", low))
+
+
 def resolve_turn_bands(
     conn,
     result: dict[str, Any],
     *,
     turn: int,
     options: dict[str, Any] | None = None,
+    player_input: str = "",
 ) -> dict[str, Any]:
     """
     Replace every "how much" the model proposed with a server-rolled amount.
@@ -15272,6 +15297,8 @@ def resolve_turn_bands(
     # against this transaction (1.9s benchmark -> 117s).
     seed = rng_mod.campaign_seed(conn)
     rolls: list[dict[str, Any]] = []
+    # The player's own line (its first paragraph) and the prose, for item counts.
+    named_text = f"{str(player_input or '').split(chr(10) + chr(10))[0]}\n{result.get('narration') or ''}"
 
     # Amounts the server itself computed this turn (skill-check injuries,
     # resolved combat damage). They are already dice results; re-rolling them
@@ -15315,6 +15342,10 @@ def resolve_turn_bands(
         if band is None and raw in (None, ""):
             continue
         losing = str(band or "").strip().lower().startswith(("-", "lose")) or _float(raw, 0) < 0
+        if band is not None and raw in (None, "") and _item_named_as_one(str(change.get("name") or ""), named_text):
+            # Playtest #99: "sell me a whetstone" drafted as QTY moderate rolled
+            # two. One thing named once is one; the band only sizes a vaguer gain.
+            band = "-small" if losing else "small"
         value, roll = _resolve_amount(
             kind="item_count",
             band=band,
@@ -16095,6 +16126,7 @@ def apply_turn(
                 result,
                 turn=turn,
                 options=_settings(conn).get("playthrough_options") or {},
+                player_input=player_input,
             )
         except Exception as exc:
             # Falling back here means the model's raw numbers pass through

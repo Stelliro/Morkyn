@@ -169,14 +169,25 @@ def theme_mix(setup: dict[str, Any] | None, *, top: int = 3) -> list[tuple[str, 
     return [(t, round(s / total, 3)) for t, s in best]
 
 
-def _magic_off(setup: dict[str, Any] | None) -> bool:
+def _magic_stance(setup: dict[str, Any] | None) -> str:
+    """"off" | "rare" | "common", as the setup composer reads the magic level."""
     try:
         from app.setup_composer import magic_lane_stance
 
         s = setup or {}
-        return magic_lane_stance(str(s.get("magic_level") or ""), s.get("race_magic_enabled")) == "off"
+        return magic_lane_stance(str(s.get("magic_level") or ""), s.get("race_magic_enabled"))
     except Exception:
-        return False
+        return "rare"
+
+
+def _magic_off(setup: dict[str, Any] | None) -> bool:
+    return _magic_stance(setup) == "off"
+
+
+# How much a template's draw weight follows the world's magic. Rare magic still
+# draws supernatural powers, less often; a cultivation world leans the other way.
+# Without this a rare world and a high one drew the same mix (test_magic_coherence).
+_MAGIC_WEIGHT = {"rare": {True: 0.4, False: 1.0}, "common": {True: 1.0, False: 0.5}}
 
 
 # --- sampling -------------------------------------------------------------------
@@ -188,7 +199,9 @@ def sample(setup: dict[str, Any] | None, k: int = 8, *, exclude_names: list[str]
     mix = dict(theme_mix(setup))
     usage = load_user().get("usage") or {}
     skip = {norm_name(n) for n in exclude_names or []}
-    no_magic = _magic_off(setup)
+    stance = _magic_stance(setup)
+    no_magic = stance == "off"
+    lean = _MAGIC_WEIGHT.get(stance, {})
     pool: list[tuple[float, dict[str, Any]]] = []
     for entry in all_entries():
         share = max((mix.get(t, 0.0) for t in entry.get("themes") or []), default=0.0)
@@ -198,6 +211,7 @@ def sample(setup: dict[str, Any] | None, k: int = 8, *, exclude_names: list[str]
             continue
         used = usage.get(entry["id"]) or {}
         weight = share / (1.0 + float(used.get("used", 0)) + 0.25 * float(used.get("offered", 0)))
+        weight *= lean.get(bool(entry.get("supernatural", True)), 1.0)
         weight *= 1.0 + 0.3 * min(5, float(used.get("chosen", 0)))
         if entry.get("source") == "learned":
             weight *= 1.15  # what this player's games produced comes up a little more often

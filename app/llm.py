@@ -13282,6 +13282,12 @@ _PLAYER_ACQUIRE_ACT_RE = re.compile(
 )
 _PAY_VERB_RE = re.compile(r"^(?:pay|pays|paid|hand|count)", re.I)
 _INPUT_PAY_RE = re.compile(r"\b(?:pay\w*|paid|give|gives|giving|gave|offer\w*|hand\w*|buy\w*|bought|purchas\w*|trad\w*)\b", re.I)
+# Money in a sentence, and a player line that spends it: "pay", "buy", or a
+# give/offer/hand of coin ("I'll pay 2 gold", "I offer him three silver").
+_COIN_CLAUSE_RE = re.compile(
+    r"\b(?:coins?|gold|silver|copper|money|payment|purse|credits?|crowns?|scrip|cash)\b", re.I
+)
+_INPUT_SPEND_RE = re.compile(r"\b(?:pay\w*|paid|buy\w*|bought|purchas\w*)\b", re.I)
 # Movement the player did not state (playtest #76, T4: "as you make your way
 # to the general store" after "Use your lantern to peer into the shadows").
 _PLAYER_FOLLOW_RE = re.compile(
@@ -13329,7 +13335,10 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"take|takes|taking|taken|took|steal|steals|stealing|stole|stolen|"
     r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
     r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|salvag\w*|snatch\w*|"
-    r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b)",
+    r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b|"
+    # Asking to buy (playtest #96): "ask Finnian if he'd sell me a whetstone.
+    # I'll pay 2 gold for it" asked for the whetstone, and the gain was refused.
+    r"sell(?:s|ing)?\s+(?:me|us)\b|pay(?:s|ing)?\s+(?:[\w']+\s+){0,4}for\b)",
     re.I,
 )
 
@@ -13417,6 +13426,14 @@ def _player_clause_invented(rest: str, clause: str, own: str, player_input: str)
     m = _PLAYER_FOLLOW_RE.match(rest)
     if m:
         return "" if _INPUT_MOVE_RE.search(own) else "movement"
+    # Playtest #97: "I'll pay 2 gold for it", then "You pull out two gold coins
+    # and hand them over" is the payment the player offered, and the draft was
+    # told to show it (trade_offer). Cutting it left "he takes the coins" with
+    # no coins given.
+    if _COIN_CLAUSE_RE.search(clause) and (
+        _INPUT_SPEND_RE.search(own) or (_INPUT_PAY_RE.search(own) and _COIN_CLAUSE_RE.search(own))
+    ):
+        return ""
     m = _PLAYER_MANIPULATE_RE.match(rest)
     if m:
         if _verb_in_input(m.group("v"), own) or _INPUT_MANIPULATE_RE.search(own):
