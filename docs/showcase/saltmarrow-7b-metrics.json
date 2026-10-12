@@ -1,0 +1,79 @@
+{
+ "model": "qwen2.5-7b-instruct-q4_k_m.gguf (MLE, in-process)",
+ "gpu": "RTX 4070 Ti 12 GB",
+ "turns": 100,
+ "seconds_mean": 15.5,
+ "seconds_median": 12.0,
+ "seconds_max": 56.25,
+ "fallbacks": 0,
+ "checks": 39,
+ "checks_by_skill": {
+  "perception": 11,
+  "persuasion": 10,
+  "ranged": 4,
+  "athletics": 3,
+  "investigation": 3,
+  "cartography": 2,
+  "tinkering": 1,
+  "lockpicking": 1,
+  "appraise": 1,
+  "survival": 1,
+  "insight": 1,
+  "symbol_lore": 1
+ },
+ "check_outcomes": {
+  "critical_failure": 3,
+  "partial": 7,
+  "success": 14,
+  "failure": 12,
+  "critical_success": 3
+ },
+ "journal_kinds": {
+  "setup": 1,
+  "system": 57,
+  "backstory": 1,
+  "opening": 1,
+  "self_check": 101,
+  "quest": 23,
+  "fact": 7,
+  "skill_check": 39,
+  "injury": 3,
+  "inventory_reject": 19,
+  "gold": 2,
+  "dice": 17,
+  "weather": 13,
+  "blunder": 1,
+  "wait": 3,
+  "level_up": 1,
+  "venue_redirect": 2
+ },
+ "final": {
+  "player": {
+   "name": "Isk Tarrow",
+   "level": 2,
+   "xp": 188,
+   "gold": 100,
+   "health": 20,
+   "max_health": 20,
+   "energy": 17,
+   "current_location_id": 6
+  },
+  "location": "Plough and Hare",
+  "inventory": [
+   "soft-soled boots x1",
+   "wool tunic x1",
+   "patched trousers x1",
+   "mother's brass tide-reckoner x1",
+   "old fishing nets x2",
+   "rusted tool x1",
+   "tarnished coin x1",
+   "rusty tools x2",
+   "ten coin x1",
+   "lantern and oil x1"
+  ]
+ },
+ "aborted_runs": [
+  "run 1 stopped at T5 (fixes b474397)",
+  "run 2 stopped at T7 (fixes bded3c6)"
+ ]
+}
