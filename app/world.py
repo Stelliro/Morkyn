@@ -4627,10 +4627,14 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
     return state
 
 
-def _apply_scene_cast(conn, cast: Any) -> None:
+def _apply_scene_cast(conn, cast: Any, narration: str = "") -> None:
     """Merge the model's present / interacting toggles. Absent cast leaves the scene alone."""
     if not isinstance(cast, dict):
         return
+    try:
+        _move_cast_here(conn, cast, narration)
+    except Exception:
+        pass  # the scene merge below must still run
     current = _settings(conn).get("active_scene")
     if not isinstance(current, dict):
         current = {}
@@ -4678,6 +4682,44 @@ def _apply_scene_cast(conn, cast: Any) -> None:
         "active_scene",
         {"present": present[:24], "interacting": interacting[:8], "keywords": keywords[:24]},
     )
+
+
+def _move_cast_here(conn, cast: dict[str, Any], narration: str) -> list[str]:
+    """CAST present / interacting is the GM saying who is in the scene
+    (Saltmarrow #105): a person cast present whose record sits elsewhere, and
+    whom this turn's prose names, is here now. They used to be dropped from
+    the scene because the roster only reads the player's location, so the
+    four people the skiff brought home stayed recorded at the tower."""
+    text = re.sub(r"\s+", " ", str(narration or ""))
+    if not text:
+        return []
+    here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    here_id = int(here["current_location_id"] or 0) if here else 0
+    if not here_id:
+        return []
+    off = {re.sub(r"^\[+|\]+$", "", str(c).strip()).upper() for c in cast.get("off") or []}
+    moved: list[str] = []
+    for bucket in ("present", "interacting"):
+        for code in cast.get(bucket) or []:
+            token = re.sub(r"^\[+|\]+$", "", str(code).strip()).upper()
+            if not token or token in off:
+                continue
+            row = conn.execute("SELECT id, name, location_id FROM npcs WHERE UPPER(code) = ?", (token,)).fetchone()
+            if row is None or int(row["location_id"] or 0) == here_id or str(row["name"]) in moved:
+                continue
+            name = str(row["name"] or "")
+            first = name.split()[0] if name.split() else ""
+            shown = f"[[{token}]]" in text or (
+                name and re.search(rf"\b(?:{re.escape(name)}|{re.escape(first)})\b", text, re.IGNORECASE)
+            )
+            if not shown:
+                continue
+            try:
+                conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (here_id, int(row["id"])))
+            except Exception:
+                continue
+            moved.append(name)
+    return moved
 
 
 def _set_setting(conn, key: str, value: Any) -> None:
@@ -7153,12 +7195,17 @@ def _move_companions_with_player(
                 wanted.append({"code": str(row["code"] or ""), "name": str(row["name"])})
     except Exception:
         pass
+    people = [
+        {"code": str(r["code"]), "name": str(r["name"])}
+        for r in conn.execute("SELECT code, name FROM npcs WHERE location_id = ?", (origin_id,)).fetchall()
+    ]
+    # Saltmarrow #105: "Mam and I go down to the skiff", "we go up the stairs
+    # together" -- the line itself takes them along.
+    for person in st.going_with(player_input, people):
+        if not left_behind(person["name"]):
+            wanted.append(person)
     followed = st.follow_target(player_input)
     if followed:
-        people = [
-            {"code": str(r["code"]), "name": str(r["name"])}
-            for r in conn.execute("SELECT code, name FROM npcs WHERE location_id = ?", (origin_id,)).fetchall()
-        ]
         person = None
         if thread.get("target_code") and st.same_target(followed, str(thread.get("target") or "")):
             person = {"code": str(thread["target_code"]), "name": str(thread.get("target") or "")}
@@ -16466,7 +16513,7 @@ def apply_turn(
         _write_verification_memory(conn, turn, result, prompt_context, used_fallback)
         _maybe_spawn_offscreen_gm_event(conn, turn)
         scene_before = _settings(conn).get("active_scene")
-        _apply_scene_cast(conn, result.get("scene_cast"))
+        _apply_scene_cast(conn, result.get("scene_cast"), _narration_text(result))
         try:
             from app.conversation import bring_called_here
 
