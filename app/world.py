@@ -12345,6 +12345,33 @@ def _coins_to_gold(conn, changes: list[dict[str, Any]], narration: str) -> list[
     return kept
 
 
+_LOSS_VERB_RE = re.compile(
+    r"\b(?:drop\w*|giv(?:e|es|ing)|gave|given|hand(?:s|ed|ing)?\s+(?:over|it|them|him|her|the)\b|sell\w*|sold|"
+    r"pay\w*|paid|trad(?:e|es|ed|ing)|swap\w*|leav(?:e|es|ing)\s+(?:it|them|the|your|behind)|left\s+(?:it|them|behind)|"
+    r"los(?:e|es|ing)|lost\s+(?:it|them|your|my|hold|grip|track)|break(?:s|ing)?|broke(?:n)?|snap(?:s|ped)?|"
+    r"shatter\w*|eat(?:s|en|ing)?|ate|drink(?:s|ing)?|drank|devour\w*|us(?:e|es|ed)\s+up|burn(?:s|ed|t)|spen[dt]\w*|"
+    r"throw\w*|threw|toss\w*|discard\w*|return\w*|lend\w*|lent|surrender\w*|confiscat\w*|steal\w*|stole\w*|"
+    r"snatch\w*|pawn\w*|(?:takes?|took|taken)\s+(?:it|them|the|your)|sink(?:s|ing)?|sank|sunk|swept\s+away|"
+    r"washes?\s+away|tear(?:s)?\s+(?:it|the|your)|tore|torn|pull(?:s|ed)?\s+off|take\s+off|took\s+off|strip\w*|"
+    r"remov\w*|count(?:s|ed)?\s+out|set\s+down|put\s+(?:it|them|the\s+\w+)\s+down|deliver\w*|bur(?:y|ies|ied))\b",
+    re.I,
+)
+
+
+def _loss_shown(name: str, text: str) -> bool:
+    """The item and a loss in the same sentence, quoted speech left out."""
+    tokens = _item_name_tokens(str(name or "").lower()) or [str(name or "").lower()]
+    tokens = [t for t in tokens if t and t not in {"hand", "hands", "pack", "pocket", "bag", "belt"}] or tokens
+    if not any(tokens):
+        return False
+    plain = venues.strip_speech(str(text or ""))
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", plain):
+        low = sentence.lower()
+        if any(re.search(rf"\b{re.escape(t)}", low) for t in tokens if t) and _LOSS_VERB_RE.search(low):
+            return True
+    return False
+
+
 def _filter_inventory_changes(
     conn,
     changes: list[dict[str, Any]],
@@ -12421,9 +12448,27 @@ def _filter_inventory_changes(
             entry["dimensional_space"] = False
             return entry
 
-        # Removals and metadata-only edits are always allowed.
-        if delta <= 0:
+        # Metadata-only edits are always allowed. A removal has to be shown
+        # (7B Saltmarrow T7): the GM wrote TAKE for the player's boots, tunic,
+        # breeches and mother's reckoner on a walk onto the flats, and the pack
+        # emptied. A loss needs the item and a loss in the same sentence, in the
+        # prose or the player's own line; the engine's own paths do not come here.
+        if delta == 0:
             kept.append(_strip_unearned_dimensional(change))
+            continue
+        if delta < 0:
+            if not existing or _loss_shown(name, f"{narration}\n{player_input}"):
+                kept.append(_strip_unearned_dimensional(change))
+            else:
+                if rejected is not None:
+                    rejected.append({"name": name, "tokens": _item_name_tokens(name.lower()), "outcome": "unshown_loss"})
+                try:
+                    conn.execute(
+                        "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                        (_turn_value(conn), "inventory_reject", f"Refused unshown loss: {name} x{-delta}"[:300]),
+                    )
+                except Exception:
+                    pass
             continue
 
         # Everything below is a GAIN -- including a gain on something already

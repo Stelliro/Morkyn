@@ -995,6 +995,11 @@ def validate_quest_changes(
                 reasons.append("evidence_not_in_text")
         if quest is not None and action in _LEGAL and str(quest.get("status") or "") not in _LEGAL[action]:
             reasons.append(f"illegal_transition:{quest.get('status')}->{action}")
+        # Setting out is not done (7B Saltmarrow T7): "you head down the
+        # slipway onto the northern mudflats to look for the lost cargo"
+        # completed and paid the cargo job while the search roll failed.
+        if action in {"step_done", "complete"} and _intent_only(evidence):
+            reasons.append("evidence_is_intent")
         if reasons:
             rejected.append({"kind": "update", "item": raw, "reasons": reasons, "checked": evidence[:240]})
             continue
@@ -1005,6 +1010,26 @@ def validate_quest_changes(
             break
     _one_act_one_quest(accepted, rejected, existing)
     return accepted, rejected
+
+
+_INTENT_ONLY_RE = re.compile(
+    r"\b(?:to\s+(?:look|search|find|hunt|seek|see\s+(?:if|whether)|ask|check|try)|in\s+search\s+of|looking\s+for|"
+    r"search(?:es|ing)\s+for|trying\s+to|hoping\s+to|intending\s+to|ready\s+to|about\s+to|on\s+(?:your|the|her|his)\s+way|"
+    r"set(?:s|ting)?\s+(?:out|off)|head(?:s|ing)?\s+(?:out|off|down|toward|towards|for))\b",
+    re.I,
+)
+_DONE_WORDS_RE = re.compile(
+    r"\b(?:found|find\s+(?:it|them|the)|finds|done|finish\w*|complet\w*|deliver\w*|hand(?:s|ed)?\s+(?:over|it|them)|"
+    r"return(?:s|ed)|brought|bring(?:s)?\s+(?:it|them)|sign(?:s|ed)|paid|pays|recover\w*|retriev\w*|haul(?:s|ed)?\s+(?:it|them)\s+(?:up|out|in)|"
+    r"rescu\w*|fix\w*|mend\w*|repair\w*|rang|ring(?:s)?\s+(?:it|the))\b",
+    re.I,
+)
+
+
+def _intent_only(evidence: str) -> bool:
+    """The quote only sets out to do the work: a purpose or a start, no result."""
+    text = str(evidence or "")
+    return bool(_INTENT_ONLY_RE.search(text)) and not _DONE_WORDS_RE.search(text)
 
 
 def _stems(text: Any) -> set[str]:
