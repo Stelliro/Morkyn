@@ -345,6 +345,10 @@ def pay_quest_reward(conn, quest_id: int, *, turn: int = 0, units: int = 1, sour
                 xp = max(0, min(1_000_000, int(row["xp"] or 0) + int(paid["xp"])))
                 karma = max(-1000, min(1000, int(row["karma"] or 0) + int(paid["karma"])))
                 conn.execute("UPDATE player SET gold = ?, xp = ?, karma = ? WHERE id = 1", (gold, xp, karma))
+                if paid["xp"]:
+                    from app.progression import sync_level
+
+                    sync_level(conn, int(turn))
                 if paid["karma"]:
                     conn.execute(
                         "INSERT INTO karma_history (turn, delta, total, reason, visibility) VALUES (?, ?, ?, ?, ?)",
