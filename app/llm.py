@@ -15739,17 +15739,16 @@ def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None
     body = str(text or "")
     if not acts.strip() or not body.strip():
         return None
+    spans = sentence_spans(body)
     try:
         from app.world import travel_intent
 
-        if not travel_intent(acts):
-            return None
+        travelling = travel_intent(acts)
     except Exception:
-        return None
-    dest = _asked_destination_words(acts)
-    if not dest:
-        return None
-    spans = sentence_spans(body)
+        travelling = False
+    dest = _asked_destination_words(acts) if travelling else set()
+    if not travelling or not dest:
+        return _after_act_cut_point(spans, own, acts, player_input, travelling=travelling)
     arrived_at = -1
     for index, (_start, _end, sentence) in enumerate(spans):
         if re.search(r'["“”]', sentence):
@@ -15759,8 +15758,14 @@ def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None
         )):
             arrived_at = index
             break
+    after_act = _after_act_cut_point(spans, own, acts, player_input, travelling=travelling)
     if arrived_at < 0:
-        return None
+        return after_act
+    # The sought thing found before the "arrival" is the earlier end (7B run
+    # 24, T5: "You see a ship moored at the dock" came before "You step onto
+    # the Black Raven", which read as the arrival).
+    if after_act and after_act["cut"] < spans[arrived_at][0]:
+        return after_act
     for start, _end, sentence in spans[arrived_at + 1:]:
         if re.search(r'["“”]', sentence):
             return None  # someone speaks first: the cut at a line put to the player decides
@@ -15776,6 +15781,100 @@ def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None
                 family = "after_arrival"
         if family:
             return {"cut": start, "trigger": sentence, "family": family, "arrival": spans[arrived_at][2]}
+    return None
+
+
+# --- The scene ends when the player's act is done and the prose moves them on (7B runs 24-25) ---
+# Run 25, T4: "I pick up the rope and coil it over my shoulder"; after
+# Katerine's "Thank you" the prose went on "You step back onto the edge of the
+# flat ... ready to face whatever comes next". Run 24, T5: "walk along the dock
+# looking for a ship called the Black Raven"; the prose found it, then "You
+# climb aboard and step into the hold ... You take the crate and walk back".
+# The act is done when the prose shows it (the line's own verb) or shows the
+# sought thing found; a movement the line never asked for after that ends it.
+_SEEKING_RE = re.compile(r"\b(?:look\w*|search\w*|hunt\w*|seek\w*)\s+(?:\w+\s+){0,3}?for\b", re.I)
+_FOUND_SENTENCE_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:see|saw|spot|spots|spotted|find|found|notice|noticed|catch\s+sight\s+of|"
+    r"caught\s+sight\s+of|make\s+out|made\s+out|come\s+upon|came\s+upon)\b"
+    r"|\b(?:looms?|loomed)\s+(?:ahead|before\s+you|into\s+view)\b|\bcomes?\s+into\s+view\b",
+    re.I,
+)
+_PLAYER_ACT_VERB_RE = re.compile(r"\bi\s+(?:\w+ly\s+)?([a-z]+)", re.I)
+_YOU_LEAD_RE = re.compile(r"^\W*(?:then\s+|now\s+)?you\s+(?:\w+ly\s+)?(?P<v>[a-z]+)", re.I)
+_AFTER_ACT_MOVE_RE = re.compile(
+    r"^\W*(?:then\s+|now\s+)?you\s+(?:\w+ly\s+)?(?P<v>step|steps|stepped|walk|walks|walked|head|heads|headed|climb|climbs|"
+    r"climbed|board|boards|boarded|return|returns|returned|leave|leaves|left|go|goes|went|wander|wandered|stroll|"
+    r"strolled|hurry|hurried|move|moves|moved|set\s+off|make\s+your\s+way|made\s+your\s+way)\b(?P<dest>[^,.;!?]*)",
+    re.I,
+)
+# Moving in place is no new act: "You step back, feeling the weight of the
+# coins" (run 5 T8), "You step back to observe" (run 6 T8).
+_MOVE_IN_PLACE_RE = re.compile(
+    r"^\s*(?:closer|nearer|forward|aside|back\s+from|away\s+from\s+the\s+counter|"
+    r"(?:back|away|aside)(?!\s+(?:onto|into|out|to\s+(?:the|a|your)|toward|towards|across|through|inside|outside|"
+    r"home|down|up|along|over|aboard)\b))",
+    re.I,
+)
+# A move that goes into or onto something is a new act even with the line's
+# own verb: "You climb aboard" after "I climb out of the hold" (run 24 T5).
+_ENTERING_PARTICLE_RE = re.compile(r"^\s*(?:aboard|into|inside|onto|in|on\s+board|up\s+onto|down\s+into)\b", re.I)
+
+
+def _after_act_cut_point(
+    spans: list[tuple[int, int, str]], own: str, acts: str, player_input: str, *, travelling: bool = False
+) -> dict[str, Any] | None:
+    """Where the scene ends after the player's act is shown done and the prose walks them on, or None."""
+    if not acts.strip() or len(spans) < 2:
+        return None
+    sought = _asked_destination_words(acts) if _SEEKING_RE.search(acts) else set()
+    # A trip is done at its arrival (the rule above); here only a sought thing
+    # found ends one (run 5 T100: "start walking back toward Saltmarrow" was
+    # cut at "You walk eastward", her own walk).
+    if travelling and not sought:
+        return None
+    verbs = [v.lower() for v in _PLAYER_ACT_VERB_RE.findall(acts)]
+    done_at = -1
+    for index, (_start, _end, sentence) in enumerate(spans):
+        if re.search(r'["“”]', sentence):
+            continue
+        low = sentence.lower()
+        if sought and _FOUND_SENTENCE_RE.search(sentence) and any(
+            w[:6] in sought for w in re.findall(r"[a-z][a-z'’-]+", low) if len(w) >= 4
+        ):
+            done_at = index
+            break
+        if not sought:
+            lead = _YOU_LEAD_RE.match(sentence)
+            if lead and verbs and _verb_in_input(lead.group("v"), acts) and not _AFTER_ACT_MOVE_RE.match(sentence):
+                done_at = index
+                break
+    if done_at < 0:
+        return None
+    own_words = _cut_words(acts)
+    for start, _end, sentence in spans[done_at + 1:]:
+        if re.search(r'["“”]', sentence):
+            if "?" in sentence:
+                return None  # something is put to the player: the cut at that line decides
+            continue
+        move = _AFTER_ACT_MOVE_RE.match(sentence)
+        if not move:
+            continue
+        verb, dest = move.group("v"), move.group("dest")
+        if _MOVE_IN_PLACE_RE.match(dest) or re.match(r"^\s*(?:your\s+)?search\b", dest, re.I):
+            continue
+        # "You return to the task at hand" goes back to work, not anywhere (run 5 T55).
+        after_you = re.sub(r"^\W*(?:then\s+|now\s+)?you\s+", "", sentence, flags=re.I)
+        if _RETURN_TO_WORK_RE.match(after_you):
+            continue
+        clause = re.split(r"\s+and\s+", dest, maxsplit=1)[0]
+        dest_words = _cut_words(clause)
+        # The line's own walk, still going ("You walk on along the dock"),
+        # unless it now goes into or onto something ("climb aboard" after "I
+        # climb out of the hold") or to a place the line never named.
+        if _verb_in_input(verb, acts) and not _ENTERING_PARTICLE_RE.match(clause):
+            if dest_words & own_words or not _WALK_PLACE_DEST_RE.search(clause):
+                continue
+        return {"cut": start, "trigger": sentence, "family": "after_act", "arrival": spans[done_at][2]}
     return None
 
 
