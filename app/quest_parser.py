@@ -845,6 +845,49 @@ def _offer_speaker(narration: str, quote: str, npcs: list[dict[str, Any]] | None
     return None
 
 
+def _named_in(narration: str, npc: dict[str, Any]) -> bool:
+    """The person is in the prose: by code, full name or first name."""
+    text = str(narration or "")
+    name = str(npc.get("name") or "").strip()
+    code = str(npc.get("code") or "").strip()
+    first = name.split()[0] if name else ""
+    return bool(
+        (code and f"[[{code}]]" in text)
+        or (name and re.search(rf"\b{re.escape(name)}\b", text))
+        or (len(first) >= 3 and re.search(rf"\b{re.escape(first)}\b", text))
+    )
+
+
+_NOT_A_SPEAKER = frozenset({
+    "You", "Your", "He", "She", "They", "It", "His", "Her", "Their", "The", "A", "An", "I", "Is", "Was", "This",
+    "That", "There", "Then", "But", "And", "As", "When", "With", "Over", "In", "On", "At",
+})
+
+
+def _unknown_offer_speaker(
+    narration: str, quote: str, npcs: list[dict[str, Any]] | None, place_names: Any = ()
+) -> str:
+    """The one capitalised name, not in the roster or the places, in the paragraph holding the offer; or ""."""
+    core = _ws(re.sub(r'^[\s"“”\']+|[\s"“”\']+$', "", str(quote or ""))).lower()
+    probe = core[:40]
+    known = set()
+    for npc in npcs or []:
+        known.update(str(npc.get("name") or "").split())
+    places = set()
+    for place in place_names or ():
+        places.update(str(place or "").title().split())
+    for paragraph in re.split(r"\n\s*\n", str(narration or "")):
+        if probe and probe not in _ws(paragraph).lower():
+            continue
+        outside = re.sub(r"\[\[[^\]]*\]\]", " ", _SPEECH_RE.sub(" ", paragraph))
+        names = {
+            w for w in re.findall(r"\b[A-Z][a-z]{2,}\b", outside)
+            if w not in _NOT_A_SPEAKER and w not in known and w not in places
+        }
+        return next(iter(names)) if len(names) == 1 else ""
+    return ""
+
+
 _BOARD_RE = re.compile(r"\b(?:notice|board|posting|poster|sign|guild|bounty)\b", re.I)
 # The offer is something read: "You read the details aloud", "the notice reads".
 _READ_POSTING_RE = re.compile(
@@ -983,6 +1026,20 @@ def validate_quest_changes(
             )
             giver = speaker
             giver_ref = str(speaker.get("code") or speaker.get("name") or "")
+        # A known person the scene never mentions did not offer it (7B run 20,
+        # T4: "Salvage contracts" was filed under Wat Sallow, who was not there;
+        # Thaddeus, met that turn and not yet stored, made the offer).
+        if giver is not None and speaker is None and not _named_in(narration, giver):
+            from app import turn_ledger
+
+            stranger = (
+                _unknown_offer_speaker(narration, offer_line, npcs, place_names)
+                or _unknown_offer_speaker(narration, evidence, npcs, place_names)
+            )
+            turn_ledger.note(
+                "quest", "giver_not_in_scene", title=title, parser_giver=giver_ref, speaker=stranger,
+            )
+            giver, giver_ref = None, stranger
         # A job read off a board is the board's, or its poster's (7B run 11,
         # T2: "You read the details aloud: 'Lifting supplies to the upper
         # levels of the market hall'" was filed under Iseult, who only said

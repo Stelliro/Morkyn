@@ -13499,7 +13499,11 @@ _PLAYER_FOLLOW_RE = re.compile(
     r"walk(?:s|ed)?\s+(?:to|toward|towards|into|out|over|back|away|off|inside|through)|"
     r"step(?:s|ped)?\s+(?:into|out|inside|outside|back\s+into|through)|"
     r"leave|leaves|left\s+(?:the|for)|set(?:s)?\s+off|push(?:es|ed)?\s+(?:on|forward|onward|ahead)|"
-    r"go\s+(?:to|into|back|out|inside)|return(?:s|ed)?\s+to|cross(?:es|ed)?\s+(?:to|over|the))\b",
+    r"go\s+(?:to|into|back|out|inside)|return(?:s|ed)?\s+to|cross(?:es|ed)?\s+(?:to|over|the)|"
+    # 7B run 20, T4: "You thank her and move toward the Harbour Office".
+    r"mov(?:e|es|ed)\s+(?:to|toward|towards|into|over|across|through|off)|"
+    r"(?:stroll|wander|hurr(?:y|ies|ied)|amble|trudge|stride|strode)(?:s|ed)?\s+(?:to|toward|towards|into|over|across|off|down|up|back)|"
+    r"make\s+for|made\s+for|go\s+over\s+to)\b",
     re.I,
 )
 # Live gate N1 (g2 t3): "You press your palm against it, and the ground beneath
@@ -13844,7 +13848,9 @@ def _walk_asked(rest: str, own: str) -> bool:
     dest = re.split(r"[.,;:!?]", rest[m.end():] if m else rest, maxsplit=1)[0]
     if not _WALK_PLACE_DEST_RE.search(dest):
         return True
-    return bool(_cut_words(dest) & _cut_words(own))
+    # A place named only in the player's own speech is not a walk request (7B
+    # run 20, T4: "Where do I find this Thaddeus, then - the harbour office?").
+    return bool(_cut_words(dest) & _cut_words(narrated))
 
 
 def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -> str:
@@ -15432,7 +15438,12 @@ def _cut_point_before(
     if last is None:
         return None
     span = (last.group(1) or last.group(2) or "").strip()
-    if _words_from_player(span, own, quotes):
+    # With typed quotes, only their words make it the player's line: an answer
+    # repeating the question's words ("He's the harbour reeve, Thaddeus. You
+    # can find him in the office." to "Where do I find this Thaddeus, then -
+    # the harbour office?") is the other person's (7B run 20, T4).
+    players = _is_player_line(span, quotes) if quotes else _words_from_player(span, own, quotes)
+    if players:
         return None  # the player's own line came last; the invented part is not an answer to anyone
     if not (_ADDRESSED_RE.search(span) or _replies_to_player(body, last.start(), own, quotes)):
         return None
