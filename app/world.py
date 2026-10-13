@@ -18056,6 +18056,28 @@ def _reconcile_prose_with_state(
     except Exception:
         pass
 
+    # A part-of-day word that contradicts the clock (#132, 7B run 8 T1: "as the
+    # night progresses" at 08:20). Only that word changes, and only outside speech.
+    try:
+        row = conn.execute("SELECT value FROM pacing WHERE key = 'world_minute'").fetchone()
+        if row is not None:
+            hour = (int(_float(row["value"], 0)) // 60) % 24
+            text, clock_fixes = prose_state.repair_clock_words(text, hour)
+            for entry in clock_fixes:
+                report["trimmed"].append(entry)
+                turn_ledger.note("prose", "clock_word_repaired", **entry)
+    except Exception:
+        pass
+    # A closing sentence with no verb ("The pressure of the day settling in.",
+    # 7B run 8 T0) gets its "is"; nothing else about it changes.
+    try:
+        text, fragment = prose_state.repair_trailing_fragment(text)
+        if fragment:
+            report["trimmed"].append(fragment)
+            turn_ledger.note("prose", "trailing_fragment_repaired", **fragment)
+    except Exception:
+        pass
+
     if text != original:
         _set_narration_text(result, text)
     try:

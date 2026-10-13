@@ -13016,6 +13016,19 @@ def _retry_narration_prose(
             f"previous_act (decided by the dice, keep it): {previous_note.get('act', '')} -> {previous_note['outcome']}"
             + (" (this turn's act_outcome is the new attempt and stands)" if outcome_note else "")
         )
+    # The hour and what is open (#132, 7B run 8 T1): this pass adds "the light
+    # and sound" and had no clock, so it wrote "as the night progresses" into a
+    # scene at 08:20. Draft and verify already carry the same facts.
+    try:
+        from app.turn_dsl import facts_to_keep
+
+        kept_facts = facts_to_keep(context)
+    except Exception:
+        kept_facts = []
+    if kept_facts:
+        outcome_lines.append(
+            "facts (true now; the light, sound and time words you add match them): " + " ".join(kept_facts)
+        )
     instruction = "\n".join(
         [
             "Rewrite this scene as fuller prose. Return ONLY the prose.",
