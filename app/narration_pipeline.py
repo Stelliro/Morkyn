@@ -1855,7 +1855,9 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                 not addressed and other_spoke and prev_spoke and not prev_by_player
                 and not voiced and len(units) == 1 and bare[0]
                 and _asks_the_player(prev_last_quote)
-                and _FIRST_PERSON_RE.search(_first_sentence(" ".join(quoted_spans(units[0]))))
+                # Anywhere in the line: '"Not since the storm. I've been
+                # tracking the tides"' answers in its second sentence (run 23, T1).
+                and _FIRST_PERSON_RE.search(" ".join(quoted_spans(units[0])))
             )
             prev_outside = " ".join(_outside_quotes(u) for u in units)
             prev_spoke = any(quoted_spans(u) for u in units)
