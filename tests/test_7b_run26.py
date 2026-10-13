@@ -176,6 +176,51 @@ class FairWeatherInAStorm(unittest.TestCase):
                     self.assertLessEqual(out["weather"]["strength"], 0.37, out["weather"])
 
 
+class ABoatsBowIsNotAWeapon(unittest.TestCase):
+    """Run 29 T10: 'I check the knot on the bow line' rolled ranged, crit-failed, and hurt Isk 'unskilled with bow'."""
+
+    def test_no_ranged_roll(self):
+        from app.skill_checks import infer_check_from_action
+
+        line = ('"Keep the pay, then. I did not come for coin from you." I check the knot on the bow line once more '
+                'and look toward the guildhall through the rain.')
+        check = infer_check_from_action(line, {}) or {}
+        self.assertNotEqual(check.get("skill_code"), "ranged")
+        self.assertNotEqual(check.get("weapon_or_tool"), "bow")
+        self.assertEqual((infer_check_from_action("I draw my bow and aim at the gull.", {}) or {}).get("skill_code"), "ranged")
+        self.assertNotEqual((infer_check_from_action("I walk to the bow of the ship.", {}) or {}).get("skill_code"), "ranged")
+
+
+class PastedLineAndWalkIn(unittest.TestCase):
+    """Run 29 T10: Osric's T9 reply came back unquoted as narration, and the prose walked Isk into the guildhall."""
+
+    LINE = ('"Keep the pay, then. I did not come for coin from you." I check the knot on the bow line once more '
+            'and look toward the guildhall through the rain.')
+
+    def test_pasted_line_dropped(self):
+        from app.narration_pipeline import drop_speech_said_before
+
+        earlier = ["The work is always a gamble, flat-runner,",
+                   "But the weather is on our side for once. If the tide holds, we might as well take the chance and keep the pay for ourselves."]
+        para = ("You check the knot on the bow line once more. The work is always a gamble, flat-runner, but the "
+                "weather is on our side for once. If the tide holds, we might as well take the chance and keep the "
+                "pay for ourselves. You see a ship moored at the dock.")
+        kept, dropped = drop_speech_said_before([para], earlier, [], self.LINE)
+        self.assertEqual(len(dropped), 2)
+        self.assertIn("You see a ship moored at the dock.", kept[0])
+
+    def test_walk_in_cut(self):
+        from app import llm
+
+        text = ("“Keep the pay, then. I did not come for coin from you,” you say. You check the knot on the bow "
+                "line once more and peer through the rain toward The Guildhall [[L2]]. The rain runs off the planks "
+                "and the rope creaks against the post. You push the door of The Guildhall [[L2]] open and step inside.\n\n"
+                "The hall is dimly lit by a few oil lamps.")
+        turn = {"narration": text, "narration_segments": [{"label": "paragraph", "text": x} for x in text.split("\n\n")]}
+        out = llm._cut_scene_after_completed_act(turn, self.LINE)
+        self.assertNotIn("step inside", out["narration"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

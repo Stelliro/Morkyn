@@ -1001,6 +1001,23 @@ def speech_repeats(earlier_speech: list[str], speech: str) -> bool:
     return False
 
 
+def _pasted_line(unit: str, earlier_speech: list[str]) -> bool:
+    """An unquoted sentence that is mostly an earlier spoken line, word for word."""
+    words = _speech_key(unit).split()
+    if len(words) < 6:
+        return False
+    # The narrator speaks to "you"; a sentence in the first person outside
+    # quotes is someone's speech ("You see a ship moored at the dock" is not).
+    if not re.search(r"\b(?:I|I'm|I'll|me|my|we|we're|we'll|us|our|ours|ourselves)\b", unit):
+        return False
+    runs = _speech_runs(unit)
+    if not any(runs & _speech_runs(prev) for prev in earlier_speech):
+        return False
+    # A reply stored as two lines can come back as one sentence.
+    said = {w for prev in earlier_speech for w in _speech_key(prev).split()}
+    return sum(1 for w in words if w in said) >= 0.7 * len(words)
+
+
 def drop_repeated_speech(paragraphs: list[str]) -> tuple[list[str], list[str]]:
     """
     Remove a spoken line that restates a line from an earlier paragraph.
@@ -1080,6 +1097,12 @@ def drop_speech_said_before(
             for unit in speech_units(block):
                 spans = quoted_spans(unit)
                 outside = _QUOTE_SPAN_RE.sub(" ", unit)
+                # Someone's earlier line pasted in as narration, quotes and all
+                # gone: "The work is always a gamble, flat-runner, but the
+                # weather is on our side for once." (7B run 29, T10, Osric's T9 line).
+                if not spans and not _quote_marks(unit) and earlier and _pasted_line(unit, earlier):
+                    dropped.append(unit)
+                    continue
                 if (
                     not spans
                     or _quote_marks(unit) % 2

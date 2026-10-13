@@ -1584,7 +1584,10 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     # The verbs only: "I eat the soup by the fire" rolled ranged (7B run 5, T30),
     # and "bow to her" is a greeting.
     (r"\b(shoot|(?<!the )(?<!by )(?<!a )(?<!of )fire (?:at|on|upon|into|a|an|the|my|arrows?|bolts?|shots?|again)|"
-     r"bow(?!\s+(?:to|before|my|your|his|her|their|deeply|low|out|politely|slightly|in))|gun|throw)\b", "ranged"),
+     r"(?<!the )(?<!ship's )(?<!boat's )(?<!her )bow(?!\s+(?:to|before|my|your|his|her|their|deeply|low|out|politely|slightly|in|"
+     r"line|lines|rope|ropes|cleat|rail|oar|deck|post|of))|"
+     r"(?:draws?|nocks?|aims?|raises?|strings?|readies|ready|lifts?|grabs?|takes?|fires?|loose[sd]?|bends?|unslings?)\s+"
+     r"(?:the|my|a|his|her|their)\s+bow\b|(?:the|her)\s+bow\s+(?:and\s+(?:aim|draw|loose|fire)|at|string|drawn|ready)\b|gun|throw)\b", "ranged"),
     (r"\b(sneak|hide|stealth|creep)\b", "stealth"),
     (r"\b(persuade|convince|negotiate)\b", "persuasion"),
     # "worth" alone is feeling ("no cart's worth you", playtest #102); a
@@ -2005,8 +2008,13 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
                     "attitude": matched_npc.get("attitude"),
                 }
     weapon = ""
+    # Whole words only, and a boat's bow is not a weapon: "check the knot on the
+    # bow line" rolled ranged and hurt the player "unskilled with bow" (7B run 29, T10);
+    # "elbow" and "rainbow" held a bow too.
     for w in ("sword", "axe", "spear", "dagger", "bow", "rifle", "hammer", "staff", "blade"):
-        if w in text:
+        if w == "bow" and not re.search(SKILL_TRIGGER_PATTERNS[1][0], text):
+            continue
+        if re.search(rf"\b{w}\b", text):
             weapon = w
             break
     return {
