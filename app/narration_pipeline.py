@@ -2227,6 +2227,26 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             changes.append({"action": "unquoted_line_quoted", "quote": quote})
             break
 
+    # 3c. Pieces of the player's line echoed as narration (7B run 21, T1: '...
+    # you say. Morning, Cressida. I check the reckoner. "Seen anyone...?"'): an
+    # unquoted sentence that repeats the start of a typed quote goes, and the
+    # player's own narrated words copied in the first person become "You ...".
+    narrated = [s.strip() for s in re.split(r"(?<=[.!?])\s+", _QUOTE_SPAN_RE.sub(" ", player_own_line(player_input))) if s.strip()]
+    def _echo_fix(match: re.Match[str]) -> str:
+        sentence = match.group(0)
+        bare = sentence.strip()
+        if len(bare.split()) >= 2 and any(q.strip().startswith(bare) for q in quotes):
+            changes.append({"action": "echoed_quote_piece_dropped", "text": bare})
+            return ""
+        if bare in narrated and re.match(r"I\s", bare):
+            changes.append({"action": "echoed_act_to_second_person", "text": bare})
+            return sentence.replace(bare, "You" + bare[1:], 1)
+        return sentence
+    pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", body)
+    for index in range(0, len(pieces), 2):
+        pieces[index] = re.sub(r"(?:(?<=^)|(?<=[.!?]\s)|(?<=[.!?][\"”]\s))[^.!?\"“”\n]+[.!?]", _echo_fix, pieces[index])
+    body = "".join(pieces)
+
     # 4. Still missing: the player says it as the scene opens, or right after
     # the line they typed before it, so their lines keep their order (7B run
     # 11, T1: "Heading out, yes ..." was put before "Morning. Not a traveller").

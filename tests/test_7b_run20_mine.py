@@ -38,5 +38,20 @@ class InquireAndStateAreSpeech(unittest.TestCase):
         self.assertTrue(any("You state" in d for d in dropped), dropped)
 
 
+class EchoedPiecesOfTheLine(unittest.TestCase):
+    """Run 21 T1: '... you say. Morning, Cressida. I check the reckoner. Seen anyone else ...?'"""
+
+    def test_cleaned(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = ('"Morning, Cressida. Same as always - whatever the lower district gives up." I check the reckoner. '
+                '"Seen anyone else out there today?"')
+        text = ("“Morning, Cressida. Same as always - whatever the lower district gives up,” you say. "
+                "Morning, Cressida. I check the reckoner. Seen anyone else out there today?\n\nCressida looks over the flat.")
+        fixed, _changes = keep_player_words(text, line)
+        self.assertIn("you say. You check the reckoner. “Seen anyone else out there today?”", fixed)
+        self.assertEqual(fixed.count("Morning, Cressida"), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
