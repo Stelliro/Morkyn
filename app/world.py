@@ -685,6 +685,18 @@ def is_plausible_place_name(name: str) -> bool:
         return False
     if re.fullmatch(r"(the\s+)?(window|door|sill|railing|lantern|lamp|pane|frame)", n, re.I):
         return False
+    # Someone's things are not a place (7B run 5, #127): "your bed" became the
+    # place "Your Bed" and the save moved the player into it twice (T34, T50).
+    if re.match(r"(?:my|your|his|her|their|our|its)\s", n, re.I):
+        return False
+    # A bare piece of furniture too; a name built on one ("The Long Table") is kept.
+    if re.fullmatch(
+        r"(?:the\s+|a\s+)?(?:bed|beds|cot|bunk|mattress|hammock|pallet|bedroll|chair|stool|table|bench|"
+        r"counter|hearth|fireplace|corner|floor|blanket|blankets)",
+        n,
+        re.I,
+    ):
+        return False
     # "... window/door/sill" as the head noun (Sky-crack first window) is scenery, not a locale label
     if re.search(
         r"\b(window|windowsill|sill|doorway|railing|fire\s*escape|lantern|lamp|pane|frame)\s*$",
@@ -6886,15 +6898,15 @@ def _venue_named_anywhere(conn, player_input: str, *, exclude_parent: int = 0):
     except Exception:
         return None
     for row in rows:
-        name = str(row["name"] or "").lower()
-        if name and name in text:
+        if _venue_name_in_text(str(row["name"] or ""), text):
             return row
     for row in rows:
         kind = str(row["kind"] or "")
         if not kind:
             continue
-        label = venues.kind_label(kind).lower()
-        if (label and label in text) or kind.replace("_", " ") in text:
+        if any(re.search(rf"\b{re.escape(label)}\b", text) for label in venues.kind_family_labels(kind)):
+            return row
+        if kind.replace("_", " ") in text:
             return row
     return None
 
@@ -7069,19 +7081,29 @@ def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
         return None
     text = f"{player_input or ''} {str(narration or '')[-600:]}".lower()
     for row in rows:
-        name = str(row["name"] or "").lower()
-        if name and name in text:
+        if _venue_name_in_text(str(row["name"] or ""), text):
             return row
     for row in rows:
         kind = str(row["kind"] or "")
         if not kind:
             continue
-        label = venues.kind_label(kind).lower()
-        if label and label in text:
+        # An inn is the tavern the player asks for (7B run 5 #136).
+        if any(re.search(rf"\b{re.escape(label)}\b", text) for label in venues.kind_family_labels(kind)):
             return row
         if kind.replace("_", " ") in text:
             return row
     return None
+
+
+def _venue_name_in_text(name: str, text: str) -> bool:
+    """A venue's name in lower-case text, with or without its "The" ("walk over to Blind Pike")."""
+    low = str(name or "").lower().strip()
+    if not low:
+        return False
+    if low in text:
+        return True
+    bare = re.sub(r"^(?:the|a|an)\s+", "", low)
+    return bare != low and len(bare) >= 4 and bool(re.search(rf"(?<![a-z]){re.escape(bare)}(?![a-z])", text))
 
 
 def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=None) -> dict[str, Any] | None:
@@ -7125,7 +7147,10 @@ def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=Non
     if keeper_id:
         target = next((row for row in rows if int(row["keeper_npc_id"] or 0) == keeper_id), None)
     if target is None:
-        same = [row for row in rows if str(row["kind"] or "") == kind]
+        same = [
+            row for row in rows
+            if str(row["kind"] or "") == kind or venues.same_kind_family(str(row["kind"] or ""), kind)
+        ]
         free = [row for row in same if not int(row["keeper_npc_id"] or 0)]
         target = (free or same or [None])[0] if not keeper else (free[0] if free else None)
     minted = False
@@ -9010,9 +9035,84 @@ def _movement_destination_from_narration(
     return ""
 
 
+# A question that asks to go somewhere ("can we go to the mill?", "will you
+# take me to Riverford?") is a request; any other question names a place
+# without going there.
+_ASKS_TO_GO_RE = re.compile(
+    r"\b(?:i|we)\b[^?]{0,30}?\b(?:go|head|walk|ride|travel|get|make|move|row|sail|come)\b"
+    r"|\b(?:take|lead|bring|show|guide|row|sail|carry)\s+(?:me|us)\b",
+    re.I,
+)
+# "not the yard", "never to the inn again", "I'm not going to the docks": the
+# player saying where they are NOT going, up to the end of the clause.
+_DENIED_PLACE_RE = re.compile(
+    r"\b(?:not|never|\w+n['’]t)\b\s+(?:[\w'’-]+\s+){0,3}?(?:the\s+)?[^,.;:!?\"“”]{1,50}",
+    re.I,
+)
+
+
+def _destination_text(player_input: str) -> str:
+    """
+    The part of the player's line that can say where they are going.
+
+    7B run 5 #127: '"Warin, why are you out here? Shouldn't you be at the
+    Blind Pike?" I search the upstairs rooms' moved the player to the Blind
+    Pike (T60), and "I'm in the town square, not the yard" ended in the yard
+    (T86). A question about someone else, and a place the player denies, are
+    not destinations.
+    """
+    line = _player_line(player_input)
+    pieces = re.split(r"(?<=[.!?])[\"”']?\s+|(?<=[.!?][\"”])", line)
+    kept = []
+    for piece in pieces:
+        if "?" in piece:
+            # "Why don't we go to the mill?" asks to go; its "n't" is no denial.
+            if _ASKS_TO_GO_RE.search(piece):
+                kept.append(piece)
+            continue
+        kept.append(_DENIED_PLACE_RE.sub(" ", piece))
+    return " ".join(kept)
+
+
+def _places_denied_in(rows: list[Any], player_input: str) -> set[int]:
+    """Known places the player's line says they are not at or not going to."""
+    line = _player_line(player_input).lower()
+    denied: set[int] = set()
+    statements = " ".join(p for p in re.split(r"(?<=[.!?])\s+", line) if "?" not in p)
+    for match in _DENIED_PLACE_RE.finditer(statements):
+        span = match.group(0)
+        for row in rows:
+            words = _place_words(str(row["name"] or ""))
+            if words and re.search(rf"\b{re.escape(words[-1])}\b", span):
+                denied.add(int(row["id"]))
+    return denied
+
+
+_ORIGIN_WORD_RE = re.compile(r"\b(?:from|leav\w*|left|out\s+of|exit\w*|behind)\b", re.I)
+_GOING_WORD_RE = re.compile(r"\b(?:to|into|toward|towards|onto|reach\w*|enter\w*|arriv\w*|inside)\b", re.I)
+_ORIGIN_AFTER_RE = re.compile(
+    r"^\s*(?:,\s*)?(?:fades?|falls?\s+away|recedes?|shrinks?|disappears?|vanishes?|drops?\s+away)\b"
+    r"|^[^.!?]{0,30}\bbehind\s+you\b",
+    re.I,
+)
+
+
+def _code_is_origin(text: str, start: int, end: int) -> bool:
+    """Is the place code at text[start:end] where the player comes from, not where they go?
+
+    "You walk from the yard [[L2]] to the square", "The yard [[L2]] fades
+    behind you"; not "you leave the inn and walk into the Blind Pike [[L7]]".
+    """
+    before = re.split(r"[.!?]", text[max(0, start - 80): start])[-1]
+    origins = list(_ORIGIN_WORD_RE.finditer(before))
+    if origins and not _GOING_WORD_RE.search(before[origins[-1].end():]):
+        return True
+    return bool(_ORIGIN_AFTER_RE.search(text[end: end + 60]))
+
+
 def _movement_destination_from_input(rows: list[Any], player_input: str, current_name: str) -> Any:
     """Match a known place named in the player's own words. Exact word-boundary only — no fuzzy guessing."""
-    lowered = f" {str(player_input or '').lower()} "
+    lowered = f" {_destination_text(player_input).lower()} "
     best = None
     for row in rows:
         name = str(row["name"] or "").strip()
@@ -9372,6 +9472,64 @@ def resolve_movement(
     note = ""
     explicit_code = str(player_patch.get("move_to_location_code") or "").strip().upper()
     explicit_name = str(player_patch.get("move_to_location") or "").strip()
+    # The player's own words come first (7B run 5 #127): a known place their
+    # line goes to, and the places it says they are not going.
+    asked = _movement_destination_from_input(rows, player_input, current_name)
+    denied = _places_denied_in(rows, player_input)
+    explicit_row = None
+    if explicit_code:
+        explicit_row = next((r for r in rows if str(r["code"] or "").upper() == explicit_code), None)
+    elif explicit_name:
+        explicit_row = _match_location_by_name(conn, humanize_place_name(explicit_name))
+        if explicit_row is not None:
+            explicit_row = next((r for r in rows if int(r["id"]) == int(explicit_row["id"])), None)
+    explicit_label = str(explicit_row["name"] or "") if explicit_row is not None else explicit_name
+    if (explicit_code or explicit_name) and explicit_label and (
+        not is_plausible_place_name(explicit_label) or (explicit_row is not None and int(explicit_row["id"]) in denied)
+    ):
+        # "MOVE L8" to the row "Your Bed", or to the yard the player just said
+        # they are not in: no move; the rules below look for the real one.
+        turn_ledger.note(
+            "movement", "model_move_dropped",
+            destination=explicit_label,
+            why="denied_by_player" if explicit_row is not None and int(explicit_row["id"]) in denied else "not_a_place",
+        )
+        player_patch["move_to_location_code"] = None
+        player_patch["move_to_location"] = None
+        explicit_code, explicit_name, explicit_row = "", "", None
+        note = "not_a_place"
+    if (explicit_code or explicit_name) and asked is not None and (
+        explicit_row is None or int(explicit_row["id"]) != int(asked["id"])
+    ):
+        # The player named where they are going and the MOVE went somewhere
+        # the prose never names (T15: "back across the flats to Saltmarrow"
+        # came back as MOVE "The Candle at Wrecked"). Not when the MOVE is a
+        # place inside the one they named, or the prose walks into a building.
+        prose_low = _unspoken(narration).lower()
+        target = explicit_label.lower()
+        asked_words = _place_words(str(asked["name"] or ""))
+        inside_asked = explicit_row is not None and int(venues._field(explicit_row, "parent_id", 0) or 0) == int(asked["id"])
+        if (
+            target
+            and target not in prose_low
+            and (not explicit_code or f"[[{explicit_code.lower()}]]" not in prose_low)
+            and not inside_asked
+            and not (asked_words and all(w in _place_words(explicit_label) for w in asked_words))
+            and not venues.entry_in_prose(narration)
+        ):
+            turn_ledger.note(
+                "movement", "model_move_replaced_by_player_destination",
+                model_destination=explicit_label, player_destination=str(asked["name"] or ""),
+            )
+            player_patch["move_to_location"] = None
+            player_patch["move_to_location_code"] = str(asked["code"])
+            return {
+                "status": "repaired",
+                "rule": "player_named",
+                "from": current_code,
+                "destination": str(asked["name"] or ""),
+                "replaced": explicit_label,
+            }
     if explicit_code:
         if explicit_code == current_code.upper():
             # "Move to where you already are" is not a move; do not burn a visit.
@@ -9559,7 +9717,9 @@ def resolve_movement(
     # the travel path. Aim at the venue and let the entry gate redirect the move
     # to its parent: the journey home happens this turn, going inside costs the
     # next one. Without this the player simply stood still.
-    remote_venue = _venue_named_anywhere(conn, player_input)
+    remote_venue = _venue_named_anywhere(conn, _destination_text(player_input))
+    if remote_venue is not None and int(remote_venue["id"]) in denied:
+        remote_venue = None
     if remote_venue is not None and int(remote_venue["id"]) != _find_location_id(conn, current_code or ""):
         player_patch["move_to_location"] = str(remote_venue["name"] or "")[:120]
         return {
@@ -9573,8 +9733,15 @@ def resolve_movement(
     arrived = bool(_TRAVEL_ARRIVAL_RE.search(tail))
     if arrived:
         by_code = {str(r["code"] or "").upper(): r for r in rows}
-        for code in reversed(re.findall(r"\[\[\s*(L\d+)\s*\]\]", tail, re.I)):
-            code = code.upper()
+        for found in reversed(list(re.finditer(r"\[\[\s*(L\d+)\s*\]\]", tail, re.I))):
+            code = found.group(1).upper()
+            if code in by_code and (
+                int(by_code[code]["id"]) in denied or _code_is_origin(tail, found.start(), found.end())
+            ):
+                # T86: "You walk from the Saltmarrow Salvage Yard [[L2]] to the
+                # town square", after "I'm in the town square, not the yard".
+                turn_ledger.note("movement", "narration_code_skipped", code=code, why="origin_or_denied")
+                continue
             if code != current_code.upper() and code in by_code:
                 player_patch["move_to_location_code"] = code
                 return {
@@ -11274,6 +11441,132 @@ def _place_possessive_target(conn, name: str):
     return best
 
 
+def _name_tokens(name: str) -> list[str]:
+    """A place name's words, lower case, without a leading article."""
+    tokens = [t for t in re.split(r"\s+", humanize_place_name(name).lower().replace("’", "'")) if t]
+    while tokens and tokens[0] in {"the", "a", "an"}:
+        tokens = tokens[1:]
+    return tokens
+
+
+def _place_kind_suffix_target(conn, name: str):
+    """
+    A known place with its kind bolted on (7B run 5, #136).
+
+    "The Blind Pike Tavern" is the Blind Pike when the Blind Pike is an inn
+    (a tavern is an inn to the story), and "Saltmarrow Tavern" is the one inn
+    or tavern standing in Saltmarrow. Two such venues in the town, or none,
+    and the name stays new.
+    """
+    tokens = _name_tokens(name)
+    if len(tokens) < 2:
+        return None
+    try:
+        rows = conn.execute("SELECT * FROM locations ORDER BY id").fetchall()
+    except Exception:
+        return None
+    best = None
+    best_len = 0
+    for row in rows:
+        known = _name_tokens(str(row["name"] or ""))
+        if not known or len(known) >= len(tokens) or tokens[: len(known)] != known:
+            continue
+        rest = " ".join(tokens[len(known):])
+        if len(tokens) - len(known) > 2:
+            continue
+        kind = venues.venue_kind_from_name(rest)
+        if not kind or venues.normalize_kind(rest) != kind:
+            continue
+        own = str(venues._field(row, "kind", "") or "")
+        if own:
+            hit = row if venues.same_kind_family(own, kind) else None
+        else:
+            inside = [
+                child for child in rows
+                if int(venues._field(child, "parent_id", 0) or 0) == int(row["id"])
+                and venues.same_kind_family(str(venues._field(child, "kind", "") or ""), kind)
+            ]
+            hit = inside[0] if len(inside) == 1 else None
+        if hit is not None and len(known) > best_len:
+            best, best_len = hit, len(known)
+    return best
+
+
+def _place_glued_target(conn, name: str):
+    """
+    Two known places glued into one name (7B run 5, #128).
+
+    "The Blind Pike Salvage Yard" is the Blind Pike's name followed by the
+    tail of the Saltmarrow Salvage Yard: the salvage yard the player walked
+    to, not a second yard inside the inn. Only when both stand in the same
+    settlement and exactly one place carries that tail; a distinct name
+    ("Saltmarrow Fish Market" beside another town's fish market) is new.
+    """
+    tokens = _name_tokens(name)
+    if len(tokens) < 3:
+        return None
+    try:
+        rows = conn.execute("SELECT * FROM locations ORDER BY id").fetchall()
+    except Exception:
+        return None
+
+    def settlement(row) -> int:
+        return int(venues._field(row, "parent_id", 0) or 0) or int(row["id"])
+
+    hits = {}
+    for head in rows:
+        known = _name_tokens(str(head["name"] or ""))
+        if not known or len(known) >= len(tokens) or tokens[: len(known)] != known:
+            continue
+        rest = tokens[len(known):]
+        for row in rows:
+            if int(row["id"]) == int(head["id"]):
+                continue
+            other = _name_tokens(str(row["name"] or ""))
+            if len(other) <= len(rest) or other[-len(rest):] != rest:
+                continue
+            kind = str(venues._field(row, "kind", "") or "")
+            if len(rest) < 2 and not (kind and venues.normalize_kind(" ".join(rest)) == kind):
+                continue
+            if settlement(row) != settlement(head):
+                continue
+            hits[int(row["id"])] = row
+    return next(iter(hits.values())) if len(hits) == 1 else None
+
+
+def _known_place_misspelt(conn, name: str, player_input: str):
+    """
+    A known place the player named this turn that the model has misspelt (7B run 5, #136).
+
+    T15: the player walked "back across the flats to Saltmarrow" and the draft
+    minted "Salammar". Spelling distance alone cannot tell a typo from a
+    neighbouring town (Redmill and Redhill), so it only counts beside the
+    player's own word: the line names the known place and not the new one.
+    """
+    from difflib import SequenceMatcher
+
+    new = " ".join(_name_tokens(name))
+    line = _player_line(player_input).lower()
+    if len(new) < 5 or not line or re.search(rf"(?<![a-z]){re.escape(new)}(?![a-z])", line):
+        return None
+    try:
+        rows = conn.execute("SELECT id, code, name, summary, parent_id, kind FROM locations ORDER BY id").fetchall()
+    except Exception:
+        return None
+    hits = []
+    for row in rows:
+        known = " ".join(_name_tokens(str(row["name"] or "")))
+        if len(known) < 5 or known == new or len(known.split()) != len(new.split()):
+            continue
+        if not re.search(rf"(?<![a-z]){re.escape(known)}(?![a-z])", line):
+            continue
+        if known[:3] != new[:3]:
+            continue
+        if SequenceMatcher(None, known, new).ratio() >= 0.6:
+            hits.append(row)
+    return hits[0] if len(hits) == 1 else None
+
+
 def _venue_parent_for_new_place(conn, kind: str) -> int:
     """Which place a newly named venue belongs to: where the player is standing.
 
@@ -11325,6 +11618,12 @@ def _upsert_location(
             or _place_stem_target(conn, name)
             or _place_possessive_target(conn, name)
         )
+        if existing is None:
+            for rule, finder in (("kind_suffix", _place_kind_suffix_target), ("glued", _place_glued_target)):
+                existing = finder(conn, name)
+                if existing is not None:
+                    turn_ledger.note("place", "resolved_to_known", rule=rule, name=name, known=str(existing["name"]))
+                    break
     if existing:
         if summary and summary not in existing["summary"]:
             # Don't merge wall-of-setup-text into a place summary
@@ -11338,6 +11637,18 @@ def _upsert_location(
     # A place whose name says "apothecary" is an interior, not a second town.
     resolved_kind = venues.venue_kind_from_name(name) if kind is None else (kind or "")
     resolved_parent = 0
+    # So is one whose own description says it is an inn (7B run 5, #136): "The
+    # Blind Pike", "A modest inn with a smoke-filled common area", was minted
+    # as a second town beside Saltmarrow, and the prose then walked "the
+    # streets of The Blind Pike". Only when the place it would stand in can
+    # hold one; otherwise it stays an ordinary place, as before.
+    if kind is None and not resolved_kind and parent_id is None and not _FAR_SUMMARY_RE.search(summary or ""):
+        described = venues.kind_from_summary(summary)
+        if described:
+            parent_guess = _venue_parent_for_new_place(conn, described)
+            if parent_guess and venue_plausibility(conn, parent_guess, described)["ok"]:
+                resolved_kind = described
+                turn_ledger.note("place", "venue_from_summary", name=name, kind=described, parent=parent_guess)
     if resolved_kind:
         resolved_parent = (
             _venue_parent_for_new_place(conn, resolved_kind) if parent_id is None else int(parent_id or 0)
@@ -17117,6 +17428,21 @@ def apply_turn(
                 continue
             if location.get("_venue_consumed"):
                 continue  # already opened as the venue the player went into (playtest #50)
+            # The player named a known place and the draft misspelt it (7B run 5
+            # T15: "Saltmarrow" minted as "Salammar"): it is that place, and the
+            # prose is spelt the way the player and the map spell it.
+            if _match_location_by_name(conn, loc_name) is None:
+                misspelt = _known_place_misspelt(conn, loc_name, player_input)
+                if misspelt is not None:
+                    known_name = str(misspelt["name"] or "")
+                    fixed = re.sub(
+                        rf"(?<![\w']){re.escape(norm_name(loc_name))}(?![\w'])", known_name, narration, flags=re.I
+                    )
+                    if fixed != narration:
+                        _set_narration_text(result, fixed)
+                        narration = _narration_text(result)
+                    turn_ledger.note("place", "misspelling_resolved", name=loc_name, known=known_name)
+                    continue
             new_place_id = _upsert_location(conn, loc_name, str(location.get("summary") or ""))
             try:
                 if int(new_place_id or 0) > max_place_before:
