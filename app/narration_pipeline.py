@@ -1819,7 +1819,26 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                         dropped.append(unit)
                     player_turn = True
                     continue
-                if tagged or (bare[index] and (player_turn or (players_block and not voiced))):
+                # After the player's own action, a line that calls someone by
+                # name with only a gesture after it is the player's (7B run 17,
+                # T5: 'You take the chisel ... "Thanks. I'll use it well. What
+                # about you, Madoc? Any leads?" he shrugs'): Madoc does not ask
+                # himself about Madoc.
+                gesture_player = False
+                close = max(unit.rfind('"'), unit.rfind("”"))
+                gesture_tail = bool(re.match(r"\s*,?\s*(?:he|she|they)\s+[a-z]+", unit[close + 1:])) if close >= 0 else False
+                if (
+                    gesture_tail and not tagged and other_spoke and 0 < lead <= index
+                    and not _OTHER_SAID_RE.search(outside)
+                ):
+                    called = re.search(r",\s*([A-Z][\w'’-]+)\s*[?.!]", " ".join(spans))
+                    name = called.group(1) if called else ""
+                    gesture_player = bool(
+                        name
+                        and name.lower() not in _GREETING_WORDS
+                        and re.search(rf"\b{re.escape(name)}\b", _outside_quotes(" ".join(str(p) for p in paragraphs)))
+                    )
+                if tagged or gesture_player or (bare[index] and (player_turn or (players_block and not voiced))):
                     player_turn = True
                     if all(_words_from_player(span, own, quotes) for span in spans):
                         kept_units.append(unit)
