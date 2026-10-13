@@ -830,7 +830,9 @@ _SETTLE_SYSTEM = (
     "discipline it describes in plain words, as a noun that never starts with a verb; name_shapes shows the "
     "form (drawn fresh for this call; they are not this character's skills). Every start rank is at or below "
     "highest_start_rank (the seed's at or below seed_highest_start_rank when given). Tracking says what earns this proficiency "
-    "progress in this character's life and world. The limit says what this proficiency cannot do yet or what caps it.\n"
+    "progress in this character's life and world. The limit says what this proficiency cannot do yet or what caps it. "
+    "Each SKILL line's tracking and limit belong to that proficiency alone: never give two lines the same ones. "
+    "When the text names a proficiency with no tracking or limit of its own, write ones that fit it.\n"
     "A RULE line states how new proficiencies are found or trained, how progress is tracked, or a hard limit "
     "on growth, as a rule a game master can check in play. RULE lines come only from "
     "custom_proficiency_text; the world fields are context, not rules to copy.\n"
@@ -944,6 +946,63 @@ def _settle_records(content: str) -> list[tuple[str, list[str]]]:
     return records
 
 
+_UNSTATED_TRACKING = "use and practice in play"
+_UNSTATED_LIMIT = "no hard limit stated yet"
+
+
+def _stems(text: str) -> set[str]:
+    return {word[:4] for word in re.findall(r"[a-z]{4,}", str(text or "").lower()) if word not in _STEM_SKIP}
+
+
+_STEM_SKIP = frozenset({"lore", "craft", "skill", "with", "from"})
+
+
+def _share_out_notes(
+    skill_records: list[tuple[str, list[str]]], options: dict[str, Any]
+) -> tuple[list[tuple[str, list[str]]], list[str]]:
+    """One tracking and limit per proficiency (#87).
+
+    Qwen3 8B gave the seed skill, which the setup text named with no notes of
+    its own, the tracking and limit the text wrote for the next phrase
+    ("how to identify common field herbs, often the wrong species, ..."), so
+    Whispering Fates and Herbalism carried the same notes. A pair shared by
+    several lines stays with the line whose name the setup text writes nearest
+    before those words; the others get the plain unstated notes, which play
+    and later passes can fill.
+    """
+    adjusted: list[str] = []
+    groups: dict[tuple[str, str], list[int]] = {}
+    for index, (_, fields) in enumerate(skill_records):
+        padded = (list(fields) + [""] * 4)[:4]
+        key = (_clean(padded[2]).lower(), _clean(padded[3]).lower())
+        if len(key[0]) >= 4 or len(key[1]) >= 4:
+            groups.setdefault(key, []).append(index)
+    source = " ".join(
+        str(options.get(key) or "") for key in ("custom_skills_setup", "custom_skills")
+    ).lower()
+    out = [(head, list(fields)) for head, fields in skill_records]
+    for (tracking, limit), indexes in groups.items():
+        if len(indexes) < 2:
+            continue
+        probe = (tracking or limit)[:24]
+        at = source.find(probe) if probe else -1
+        window = source[max(0, at - 160):at] if at >= 0 else ""
+        owner, nearest = indexes[0], -1
+        for index in indexes:
+            for stem in _stems(out[index][1][0]):
+                place = window.rfind(stem)
+                if place > nearest:
+                    owner, nearest = index, place
+        for index in indexes:
+            if index == owner:
+                continue
+            fields = (out[index][1] + [""] * 4)[:4]
+            fields[2], fields[3] = _UNSTATED_TRACKING, _UNSTATED_LIMIT
+            out[index] = (out[index][0], fields)
+            adjusted.append(f"SKILL {_clean(fields[0])[:30]}: notes shared with {_clean(out[owner][1][0])[:30]}, left unstated")
+    return out, adjusted
+
+
 def apply_settlement(conn, content: str, options: dict[str, Any], *, rename=None) -> dict[str, Any]:
     """Validate and store the model's SKILL and RULE lines, then rewrite custom_skills as their summary.
 
@@ -975,6 +1034,8 @@ def apply_settlement(conn, content: str, options: dict[str, Any], *, rename=None
     records = sorted(_settle_records(content), key=lambda record: record[0] != "SKILL")
     skill_records = [record for record in records if record[0] == "SKILL"]
     rule_records = [record for record in records if record[0] != "SKILL"]
+    skill_records, shared = _share_out_notes(skill_records, options)
+    adjusted.extend(shared)
     unnamed: list[list[str]] = []
 
     def settle_skill(fields: list[str], original: str) -> None:

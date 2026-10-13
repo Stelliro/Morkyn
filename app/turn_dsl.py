@@ -140,6 +140,8 @@ the player still where they are, and the player answers with their own words or 
 - world_state.current_location.people: works_here marks someone who works in this place;
   works_at is that person's own workplace somewhere else, so here they are a visitor and do not
   sell, keep or own what is here. current_location.keeper keeps the place the player is inside.
+  duty says whether that person is at their job right now (from their shift and the clock);
+  off duty they are themselves, not their job, and the story may still call them in.
 - NPC_NEW ROLE is the person's occupation, a job word or two that fits this place and this
   world; cast_options.jobs were drawn for this place. It is not an appearance: what they wear
   or how they look belongs in ===NAR===.
