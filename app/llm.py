@@ -14788,7 +14788,7 @@ def _engine_prose_cleanups(
     turn = _drop_question_recap(turn, player_input, phase, trace)
     turn = _soften_stock_lines(turn)
     trimmed = _drop_decided_choice(_apply_menu_trim(turn), player_input)
-    final = _drop_player_overreach(trimmed, player_input, phase, trace)
+    final = _drop_player_overreach(trimmed, player_input, phase, trace, context)
     # The speech-memory drops come last; the player's words are checked once more after them.
     return _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
 
@@ -14836,7 +14836,7 @@ def _ensure_narration_quality(
     trimmed = _drop_decided_choice(_apply_menu_trim(_soften_stock_lines(recalled)), player_input)
     chars_before = _narration_char_count(trimmed)
     cut_before = trimmed.get("_scene_cut") if isinstance(trimmed, dict) else None
-    final = _drop_player_overreach(trimmed, player_input, phase, trace)
+    final = _drop_player_overreach(trimmed, player_input, phase, trace, context)
     chars_after = _narration_char_count(final)
     # A scene cut at an NPC's question is meant to be short: the answer is the
     # player's. Lengthening it re-adds what the cut took out (#75, #77).
@@ -14848,7 +14848,7 @@ def _ensure_narration_quality(
         deeper = _ensure_narration_depth(
             final, context, player_input, system_prompt, timeout, usage, phase, trace, prose_system_prompt=prose_prompt
         )
-        final = _drop_player_overreach(deeper, player_input, phase, trace)
+        final = _drop_player_overreach(deeper, player_input, phase, trace, context)
     return _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
 
 
@@ -14956,17 +14956,22 @@ def _apply_speech_memory(
 
 
 def _drop_player_overreach(
-    turn: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
+    turn: dict[str, Any],
+    player_input: str,
+    phase: str,
+    trace: list[dict[str, Any]] | None,
+    context: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Invented player speech, then invented player acts, thoughts and decisions (#30).
 
     First the scene is cut at an invented request (playtests #75, #77): when
     the prose answers someone's line with words or a take the player did not
     give, it ends on that line, and the ops that only the cut part supported
-    go with it.
+    go with it. An opening ends before the first line it gives the player.
     """
+    turn = _end_silent_scene_before_player(turn, player_input, trace)
     cut_before = turn.get("_scene_cut") if isinstance(turn, dict) else None
-    turn = _cut_scene_at_invented_request(turn, player_input)
+    turn = _cut_scene_at_invented_request(turn, player_input, earlier=_earlier_lines(context))
     cut = turn.get("_scene_cut") if isinstance(turn, dict) else None
     if cut and cut is not cut_before:
         _append_trace(
@@ -15013,6 +15018,79 @@ def _drop_player_overreach(
     else:
         acted.pop("_act_handed_off", None)
     return _keep_player_words(acted, player_input, phase, trace)
+
+
+def _earlier_lines(context: dict[str, Any] | None) -> list[str]:
+    """Lines spoken in the last scenes (world._speech_memory), for the scene cut."""
+    memory = context.get("speech_memory") if isinstance(context, dict) else None
+    if not isinstance(memory, dict):
+        return []
+    return [str(row.get("line") or "") for row in memory.get("recent") or [] if isinstance(row, dict) and row.get("line")]
+
+
+def _end_silent_scene_before_player(
+    turn: dict[str, Any], player_input: str, trace: list[dict[str, Any]] | None = None, *, floor: int = 200
+) -> dict[str, Any]:
+    """
+    End an opening (or a Continue) before the first line it gives the player.
+
+    The player has not acted yet, so any line the prose puts in their mouth is
+    invented, and what follows answers it (7B run 10, T0: '"Good morn," you
+    say ... "Is there work to be done today?"', then an offer of her mother's
+    reckoner and the job it bought). The ask already says to stop before the
+    player acts; this keeps the part before their first line when it holds
+    ``floor`` characters, and drops the ops only the cut part supported.
+    Shorter, only the lines go (the ordinary speech drop).
+    """
+    from app.narration_pipeline import SILENT_TURN_PREFIXES, drop_invented_player_speech
+
+    if not isinstance(turn, dict) or not str(player_input or "").startswith(SILENT_TURN_PREFIXES):
+        return turn
+    text = str(turn.get("narration") or "")
+    segments = turn.get("narration_segments")
+    if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
+        text = "\n\n".join(str(seg.get("text") or "") for seg in segments).strip() or text
+    if not text.strip():
+        return turn
+    _kept, spoken = drop_invented_player_speech(re.split(r"\n\s*\n", text), player_input)
+    starts = []
+    for unit in spoken:
+        at = text.find(unit)
+        if at < 0:
+            at = text.find(unit[:40])
+        if at >= 0:
+            starts.append(at)
+    if not starts:
+        return turn
+    at = min(starts)
+    head, tail = text[:at].rstrip(), text[at:].strip()
+    if len(head) < floor or not tail:
+        return turn
+    turn["narration"] = head
+    if isinstance(segments, list):
+        turn["narration_segments"] = [
+            {"label": "paragraph", "text": p.strip()} for p in re.split(r"\n\s*\n", head) if p.strip()
+        ] or [{"label": "paragraph", "text": head}]
+    cut_ops = _drop_ops_of_cut_tail(turn, head, tail, "")
+    turn["_scene_cut"] = {
+        "family": "speech",
+        "trigger": spoken[0][:300],
+        "npc_line": "",
+        "tail": tail[:1200],
+        "tail_chars": len(tail),
+        "cut_ops": cut_ops,
+    }
+    _append_trace(trace, {"event": "silent_scene_ended_before_player_spoke", "trigger": spoken[0][:160],
+                          "tail_chars": len(tail), "cut_ops": cut_ops[:8]})
+    from app import turn_ledger
+
+    turn_ledger.note("player_words", "opening_ended_before_player_spoke", trigger=spoken[0][:200],
+                     tail_chars=len(tail), cut_ops=cut_ops)
+    check = turn.get("self_check")
+    if isinstance(check, dict):
+        made = check.get("corrections_made") if isinstance(check.get("corrections_made"), list) else []
+        check["corrections_made"] = [*made, "Ended the opening before the first line it gave the player."]
+    return turn
 
 
 def _keep_player_words(
@@ -15107,7 +15185,7 @@ def _invented_unit_family(sentence: str, own: str, player_input: str) -> str:
     return ""
 
 
-def _scene_cut_point(text: str, player_input: str) -> dict[str, Any] | None:
+def _scene_cut_point(text: str, player_input: str, earlier: list[str] | None = None) -> dict[str, Any] | None:
     """
     Where the scene should end: right after the line someone spoke to the
     player, when the next thing the prose does is answer it for them.
@@ -15153,7 +15231,7 @@ def _scene_cut_point(text: str, player_input: str) -> dict[str, Any] | None:
     # there; the acceptance ("A half then," you say, stepping towards the
     # deck) after her offer was never cut.
     for at, unit, family in sorted(triggers):
-        point = _cut_point_before(body, at, unit, family, own, quotes, spoken)
+        point = _cut_point_before(body, at, unit, family, own, quotes, spoken, earlier)
         if point:
             return point
     return None
@@ -15180,21 +15258,34 @@ _PLAYER_TAG_BEFORE_RE = re.compile(
 
 
 def _cut_point_before(
-    body: str, at: int, unit: str, family: str, own: str, quotes: list[str], spoken: list[str] | None = None
+    body: str,
+    at: int,
+    unit: str,
+    family: str,
+    own: str,
+    quotes: list[str],
+    spoken: list[str] | None = None,
+    earlier: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """The cut for one trigger: right after the line put to the player just before it, or None.
 
     Lines the prose itself gave the player in between are stepped over (7B run
     7, T3: '"A half then," you say, stepping towards the deck. "Let's get
-    started."' sat between Oriel's offer and the start of the work).
+    started."' sat between Oriel's offer and the start of the work), and so is
+    a line that only repeats one from an earlier scene, which the speech memory
+    then drops (7B run 10, T1: the scene ended on the opening's "Depends,
+    flat-runner. What have you got to offer?" and lost it, leaving no reply).
     """
-    from app.narration_pipeline import _is_player_line, _words_from_player
+    from app.narration_pipeline import _is_player_line, _words_from_player, speech_repeats
 
+    stale = [line for line in (earlier or []) if str(line or "").strip()]
     before = list(_SCENE_QUOTE_RE.finditer(body, 0, at))
     last = None
     while before:
         candidate = before.pop()
         span = (candidate.group(1) or candidate.group(2) or "").strip()
+        if stale and span and not (quotes and _is_player_line(span, quotes)) and speech_repeats(stale, span):
+            continue
         tagged = _PLAYER_TAG_AFTER_RE.match(body[candidate.end():candidate.end() + 40]) or _PLAYER_TAG_BEFORE_RE.search(
             body[max(0, candidate.start() - 60):candidate.start()]
         )
@@ -15368,7 +15459,9 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
     return dropped
 
 
-def _cut_scene_at_invented_request(turn: dict[str, Any], player_input: str, *, floor: int = 200) -> dict[str, Any]:
+def _cut_scene_at_invented_request(
+    turn: dict[str, Any], player_input: str, *, floor: int = 200, earlier: list[str] | None = None
+) -> dict[str, Any]:
     """
     End the narration on the line someone spoke to the player when the prose
     went on to answer it for them (playtests #75, #77).
@@ -15387,7 +15480,7 @@ def _cut_scene_at_invented_request(turn: dict[str, Any], player_input: str, *, f
     if not isinstance(turn, dict):
         return turn
     text = str(turn.get("narration") or "")
-    point = _scene_cut_point(text, player_input)
+    point = _scene_cut_point(text, player_input, earlier=earlier)
     if not point:
         return turn
     # The player's own line asked to go somewhere: the prose has to show the
