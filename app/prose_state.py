@@ -264,7 +264,9 @@ def shows_unpriced_payment(text: str) -> bool:
 # right after "you" is the player paying.
 _COIN_HANDED_RE = re.compile(
     r"\b(?P<verb>hands?|handed|handing|gives|gave|giving|pays|paid|paying|tosses|tossed|tossing|passes|passed|passing|"
-    r"slides|slid|sliding|presses|pressed|pressing|counts\s+out|counted\s+out|counting\s+out|drops|dropped|dropping)\s+"
+    r"slides|slid|sliding|presses|pressed|pressing|counts\s+out|counted\s+out|counting\s+out|drops|dropped|dropping|"
+    # 7B run 10, T7: "She places a handful of polished coins in your palm".
+    r"places|placed|placing|puts|putting|sets|setting|lays|laid|laying|tips|tipped|tipping)\s+"
     r"(?P<rest>(?:you\s+|over\s+(?:to\s+you\s+)?)?[^.!?\n]{0,50})",
     re.I,
 )
@@ -280,7 +282,8 @@ _COIN_STUFF_RE = re.compile(
 )
 _FOR_YOU_RE = re.compile(
     r"^you\b|\bto\s+you\b|\bfor\s+your\s+(?:efforts?|work|trouble|help|labou?r|time|services?|pains)\b|"
-    r"\byour\s+(?:wages?|pay|payment|share|cut|due|earnings|reward)\b",
+    r"\byour\s+(?:wages?|pay|payment|share|cut|due|earnings|reward)\b|"
+    r"\b(?:in|into|onto)\s+your\s+(?:open\s+|outstretched\s+|waiting\s+)?(?:palm|palms|hand|hands|purse|pouch)\b",
     re.I,
 )
 _BAND_WORDS: tuple[tuple[str, re.Pattern[str]], ...] = (
