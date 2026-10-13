@@ -40,6 +40,14 @@ _PAID_RE = re.compile(
     r"[^.!?\n\"\u201c\u201d]{0,40}?\b" + _AMOUNT + r"\s+" + _COIN,
     re.I,
 )
+# Money put down: "You put two gold coins on the bar" (7B run 5, T94). The
+# amount has to follow the verb at once: "you set out with ten gold" is not it.
+_PAID_PUT_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:put|puts|set|sets|lay|lays|laid|push|pushes|pushed|toss|tosses|tossed)\s+"
+    r"(?:down\s+)?(?:(?:the|your|my)\s+)?(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT.replace("?P<n>", "?P<n2>")
+    + r"\s+" + _COIN + r"(?![^.!?\n]{0,30}\b(?:into|in)\s+your\b)",
+    re.I,
+)
 # A price named: "That'll be 7 gold", "it costs seven coins", "seven gold for the lot".
 _PRICED_RE = re.compile(
     r"(?:\b(?:costs?|cost\s+you|price\s+(?:is|of)|priced\s+at|that" + _AP + r"?ll\s+be|it" + _AP + r"?s|comes\s+to|"
@@ -51,7 +59,7 @@ _PRICED_RE = re.compile(
 # Coins that reach the player: "hands you 20 gold", "you receive 5 coins".
 # "I'll pay you 20 gold" is a promise, so only the -s and past forms count.
 _RECEIVED_RE = re.compile(
-    r"\b(?:hands|handed|gives|gave|pays|paid|tosses|tossed|passes|passed|slides|slid|presses|pressed|"
+    r"\b(?:hands|handed|handing|gives|gave|giving|pays|paid|paying|tosses|tossed|passes|passed|slides|slid|presses|pressed|"
     r"counts\s+out|counted\s+out|drops|dropped)\s+you\b[^.!?\n\"\u201c\u201d]{0,30}?\b" + _AMOUNT + r"\s+" + _COIN
     + r"|\byou\s+(?:receive|received|earn|earned|are\s+paid|were\s+paid|get|got|pocket|pocketed|collect|collected)\s+"
     r"[^.!?\n\"\u201c\u201d]{0,20}?\b" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN,
@@ -102,7 +110,7 @@ def stated_coin_amounts(text: str) -> dict[str, list[int]]:
     out: dict[str, list[int]] = {"paid": [], "priced": [], "received": []}
     body = str(text or "")
     unquoted = _QUOTE_RE.sub(" ", body)
-    for key, pattern in (("paid", _PAID_RE), ("priced", _PRICED_RE), ("received", _RECEIVED_RE)):
+    for key, pattern in (("paid", _PAID_RE), ("paid", _PAID_PUT_RE), ("priced", _PRICED_RE), ("received", _RECEIVED_RE)):
         source = body if key == "priced" else unquoted
         for match in pattern.finditer(source):
             value = _match_number(match)
@@ -226,7 +234,136 @@ def offer_answer(narration: str, own_line: str = "") -> str:
 
 def shows_payment(sentence: str) -> bool:
     """Whether a sentence shows the player paying coin (outside quotes)."""
-    return bool(_PAID_RE.search(_QUOTE_RE.sub(" ", str(sentence or ""))))
+    plain = _QUOTE_RE.sub(" ", str(sentence or ""))
+    return bool(_PAID_RE.search(plain) or _PAID_PUT_RE.search(plain))
+
+
+# A payment with no number (7B run 5): "You pay her the agreed price" (T47),
+# "counting out the gold pieces he asks for" (T48), "you pay for the lantern".
+_UNPRICED_PAYMENT_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:pay|paid)\s+(?:(?:him|her|them|the\s+\w+|(?-i:[A-Z][\w'’-]*))\s+)?"
+    r"(?:the\s+|what\s+)?(?:(?:agreed|asking|full|fair|requested|quoted|stated|usual)\s+)?"
+    r"(?:price|sum|fee|amount|cost|toll|rate|coin|coins|gold|money|due)\b"
+    r"|\byou\s+(?:\w+ly\s+)?(?:pay|paid)\s+(?:him|her|them|(?-i:[A-Z][\w'’-]*))\s*(?=[,.;!?]|\s+(?:and|for|then)\b)"
+    r"|\byou\s+(?:\w+ly\s+)?(?:pay|paid)\s+for\s+(?:it|them|the\s+\w+|your\s+\w+)"
+    r"|\b(?:you\s+(?:\w+ly\s+)?count(?:ed)?|counting)\s+out\s+(?:the|what|his|her|their)\b[^.!?\n]{0,40}?"
+    r"\b(?:asks?|asked|owed?|price|gold|coins?|pieces|fee|due)\b",
+    re.I,
+)
+
+
+def shows_unpriced_payment(text: str) -> bool:
+    """The player pays in the narration (outside quotes) and the clause names no sum."""
+    plain = _QUOTE_RE.sub(" ", str(text or ""))
+    return bool(_UNPRICED_PAYMENT_RE.search(plain))
+
+
+# Coin reaching the player with no number: "Abel hands over a moderate bag of
+# coin for your efforts" (T72), "reaching into his pouch and handing you the
+# coins" (T55), "You take the coins" (T41). The giver is someone else: a give
+# right after "you" is the player paying.
+_COIN_HANDED_RE = re.compile(
+    r"\b(?P<verb>hands?|handed|handing|gives|gave|giving|pays|paid|paying|tosses|tossed|tossing|passes|passed|passing|"
+    r"slides|slid|sliding|presses|pressed|pressing|counts\s+out|counted\s+out|counting\s+out|drops|dropped|dropping)\s+"
+    r"(?P<rest>(?:you\s+|over\s+(?:to\s+you\s+)?)?[^.!?\n]{0,50})",
+    re.I,
+)
+_COIN_TAKEN_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:take|took|pocket|pocketed|accept|accepted|collect|collected|receive|received|"
+    r"sweep\s+up|swept\s+up)\s+(?:the|your|his|her|their)\s+(?:\w+\s+)?(?:coins?|gold|money|wages?|pay|payment|purse|pouch)\b",
+    re.I,
+)
+_COIN_STUFF_RE = re.compile(
+    # Silver and copper are other units, not the gold purse (see _COIN above).
+    r"(?<!silver\s)(?<!copper\s)\b(?:coins?|gold|money|wages?|(?:purse|pouch|bag|sack|handful|stack|pile)\s+of\s+(?:coins?|gold|money))\b",
+    re.I,
+)
+_FOR_YOU_RE = re.compile(
+    r"^you\b|\bto\s+you\b|\bfor\s+your\s+(?:efforts?|work|trouble|help|labou?r|time|services?|pains)\b|"
+    r"\byour\s+(?:wages?|pay|payment|share|cut|due|earnings|reward)\b",
+    re.I,
+)
+_BAND_WORDS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("trivial", re.compile(r"\b(?:a\s+few|few|couple|meagre|meager|trivial|paltry)\b", re.I)),
+    ("small", re.compile(r"\b(?:small|modest|little|light|thin)\b", re.I)),
+    ("moderate", re.compile(r"\b(?:moderate|fair|decent|tidy|reasonable)\b", re.I)),
+    ("large", re.compile(r"\b(?:large|hefty|heavy|fat|generous|fine|good|sizeable|sizable|full)\b", re.I)),
+    ("huge", re.compile(r"\b(?:huge|fortune|enormous|vast)\b", re.I)),
+)
+
+
+def coin_handed_to_player(text: str) -> dict[str, Any] | None:
+    """Coin the narration shows reaching the player, outside quotes: {"span", "band"} or None.
+
+    ``band`` is the size word the prose used ("a moderate bag of coin" ->
+    "moderate"), or "" when it used none.
+    """
+    plain = _QUOTE_RE.sub(" ", str(text or ""))
+    for match in _COIN_HANDED_RE.finditer(plain):
+        before = plain[max(0, match.start() - 24):match.start()]
+        if re.search(r"\byou\s+(?:\w+ly\s+)?$", before, re.I):
+            continue  # "you hand over three coins": the player pays
+        if match.group("verb").lower().endswith("ing") and _nearest_doer(plain[:match.start()]) == "you":
+            continue  # "You comment, counting out the gold": still the player
+        rest = match.group("rest")
+        stuff = _COIN_STUFF_RE.search(rest)
+        if not stuff:
+            continue
+        if not _FOR_YOU_RE.search(rest):
+            continue
+        span = (match.group("verb") + " " + rest)[:120]
+        return {"span": span, "band": _band_word(rest[: stuff.end() + 1])}
+    taken = _COIN_TAKEN_RE.search(plain)
+    if taken:
+        return {"span": taken.group(0)[:120], "band": _band_word(taken.group(0))}
+    return None
+
+
+def _nearest_doer(before: str) -> str:
+    """"you", "other" or "" for the last subject in the sentence before a participle."""
+    sentence = re.split(r"[.!?\n]", before)[-1]
+    best = ""
+    best_at = -1
+    for m in re.finditer(r"\b(you|he|she|they)\b", sentence, re.I):
+        best, best_at = ("you" if m.group(1).lower() == "you" else "other"), m.start()
+    for m in re.finditer(r"(?<!^)(?<![.!?]\s)\b(?-i:[A-Z][a-z][\w'’-]*)\b", sentence):
+        if m.start() > best_at and m.group(0) not in {"You", "I"}:
+            best, best_at = "other", m.start()
+    return best
+
+
+def _band_word(text: str) -> str:
+    for band, pattern in _BAND_WORDS:
+        if pattern.search(text):
+            return band
+    return ""
+
+
+# The player's own line puts the money down, as a deed: "I put two gold on the
+# bar for the room" (T94), "I pay him three coins". Not an offer to haggle over:
+# "I'll give you 3 gold for that", "would you take 4 gold?".
+_PAYS_OUTRIGHT_RE = re.compile(
+    r"(?:^|[.;!]\s*|\band\s+|\bthen\s+)i\s+(?:\w+ly\s+)?(?:put|set|lay|place|slide|toss|pay|hand(?:\s+over)?|"
+    r"count\s+out|leave|drop)\s+(?:(?:him|her|them|(?-i:[A-Z][\w'’-]*))\s+)?(?:(?:my|the)\s+)?"
+    r"(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _COIN,
+    re.I,
+)
+
+
+def player_pays_outright(own_line: str) -> int | None:
+    """Gold the player's line hands over as a deed (not an offer), outside the player's quoted speech."""
+    text = _QUOTE_RE.sub(" ", str(own_line or ""))
+    for match in _PAYS_OUTRIGHT_RE.finditer(text):
+        clause_start = max(text.rfind(mark, 0, match.start()) for mark in (",", ".", ";", "!", "?", "\n"))
+        if _NEGATION_RE.search(text[clause_start + 1: match.start() + 4]):
+            continue
+        tail = text[match.end():match.end() + 60]
+        if "?" in tail.split(".")[0]:
+            continue  # "I put two gold down, is that enough?" asks
+        value = _match_number(match)
+        if value:
+            return value
+    return None
 
 
 # A denied clause ends at a comma or stop, or where a conjunction starts a new
