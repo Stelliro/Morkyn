@@ -103,11 +103,37 @@ def stated_coin_amounts(text: str) -> dict[str, list[int]]:
     body = str(text or "")
     unquoted = _QUOTE_RE.sub(" ", body)
     for key, pattern in (("paid", _PAID_RE), ("priced", _PRICED_RE), ("received", _RECEIVED_RE)):
-        for match in pattern.finditer(body if key == "priced" else unquoted):
+        source = body if key == "priced" else unquoted
+        for match in pattern.finditer(source):
             value = _match_number(match)
-            if value and value not in out[key]:
+            if not value:
+                continue
+            if key == "paid":
+                # "You count the sixteen gold Warin handed you and slip them into
+                # your purse" counts coin coming in (7B run 5, T56: read as -16).
+                ends = [i for i in (source.find(mark, match.end()) for mark in (".", "!", "?", "\n")) if i >= 0]
+                after = source[match.end():min(ends) if ends else len(source)]
+                if _COIN_COMING_IN_RE.match(after) or (
+                    _INTO_YOUR_PURSE_RE.search(after) and not _TO_SOMEONE_RE.search(after)
+                ):
+                    if value not in out["received"]:
+                        out["received"].append(value)
+                    continue
+            if value not in out[key]:
                 out[key].append(value)
     return out
+
+
+# Right after the amount: "sixteen gold Warin Croft [[F]] handed you".
+_COIN_COMING_IN_RE = re.compile(
+    r"\s*(?:that\s+|which\s+)?(?:[\w'’\[\]-]+\s+){0,4}?"
+    r"(?:handed|gave|paid|passed|tossed|slid|pressed|counted\s+out\s+for)\s+you\b",
+    re.I,
+)
+_INTO_YOUR_PURSE_RE = re.compile(
+    r"\b(?:into|in)\s+your\s+(?:own\s+)?(?:purse|pocket|pouch|coin\s*purse|belt\s*pouch|money\s*pouch)\b", re.I
+)
+_TO_SOMEONE_RE = re.compile(r"\b(?:to|for)\s+(?:him|her|them|the|a|an|[A-Z][\w'’-]*)\b|\bhand\s+over\b|\bpay\b")
 
 
 # The player's own offer: "I'll give you my last 3 gold for that", "I pay

@@ -40,6 +40,12 @@ belong to, with the date).
   note on the existing row (2026-10-13).
 - **Report my own mistakes plainly**, with the facts and what I did instead. Say when something
   is unverified or a test fails.
+- **Test runs are watchable live** (2026-10-14). Stell wants to open the game and see each new
+  turn as it happens. Start agent-played runs with `tools/api_bridge_playtest.py --viewer-port 8790`
+  and give Stell the address (http://127.0.0.1:8790/); the page is read-only and repaints per turn.
+  After a run, scratchpad-style `viewer.py <run dir> 8790` can keep serving the finished save.
+- **Baseline runs:** a 100-turn 7B run "with no issues" becomes the baseline. Run 5 (2026-10-14,
+  docs/showcase/saltmarrow-7b-run5-findings.md) was not one.
 - **Roadmap:** stable 0.10 first, then 1.0 as an exe or package. Test saves can pile up until
   then; the cleanup and template saves happen at 1.0.
 

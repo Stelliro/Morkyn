@@ -84,5 +84,21 @@ class AnAsideIsNotATake(unittest.TestCase):
         self.assertEqual([c["name"] for c in added], ["silver coin"])
 
 
+class CoinComingInIsNotPaid(unittest.TestCase):
+    """Run 5 T56: counting coin someone handed you took 16 gold from the purse."""
+
+    def test_direction(self):
+        from app.prose_state import stated_coin_amounts as read
+
+        self.assertEqual(
+            read("You count the sixteen gold Warin Croft [[F]] handed you and slip them into your purse."),
+            {"paid": [], "priced": [], "received": [16]},
+        )
+        self.assertEqual(read("You count the nine coins back into your purse.")["paid"], [])
+        self.assertEqual(read("You count out seven gold and hand it to the clerk.")["paid"], [7])
+        self.assertEqual(read("You hand over three coins and he hands you the key.")["paid"], [3])
+        self.assertEqual(read("You count out five coins into your palm and hand them to him.")["paid"], [5])
+
+
 if __name__ == "__main__":
     unittest.main()
