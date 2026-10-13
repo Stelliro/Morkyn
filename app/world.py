@@ -18666,7 +18666,7 @@ def _settle_story_terms_and_pay(
     gold_note: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """An agreed price becomes the job's reward; pay handed over for an active job finishes it (7B run 6, T6, T9)."""
-    from app.quest_parser import job_paid_in_prose, settle_agreed_price
+    from app.quest_parser import job_paid_in_advance, job_paid_in_prose, record_advance_pay, settle_agreed_price
     from app.quests import complete_quest_step
 
     touched = {
@@ -18688,6 +18688,18 @@ def _settle_story_terms_and_pay(
     coin_in = int(_float((result.get("player") or {}).get("gold_delta"), 0))
     if coin_in <= 0 or finished or not source.startswith(("prose_received", "stated_gain")):
         return quest_report
+    # Coin handed over for a job before the work (7B run 29, T3: the ship job's
+    # 11 gold, "There's the payment", while it was only offered) is that job's
+    # pay: recorded against it, so finishing it later pays no gold again.
+    ahead = job_paid_in_advance(conn, narration=narration, coin_in=coin_in, skip_ids=set(skip_ids))
+    if ahead:
+        row = record_advance_pay(conn, ahead, coin_in=coin_in, turn=turn)
+        turn_ledger.note("quest", "paid_in_advance", quest=ahead.get("code"), gold=coin_in,
+                         status=ahead.get("status"), reward_gold=row["reward_gold"])
+        report = {**quest_report, "updated": [*(quest_report.get("updated") or []), row]}
+        if report.get("status") in {"skipped", "empty", "rejected"}:
+            report["status"] = "applied"
+        return report
     # A job offered or taken this turn is not also paid off by this turn's coin.
     skip = set(skip_ids)
     if touched:
