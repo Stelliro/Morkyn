@@ -11306,6 +11306,15 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
             # town's; a town code there read as the inn's (7B run 6, T0).
             if re.fullmatch(r"L\d+", _code) and _PLACE_NAME_TAIL_RE.search(m.string[: m.start()]):
                 return _hold(m.group(1))
+            # "The Saltmarrow Stables" starts with the town's name; a town code
+            # there read "The Saltmarrow [[L1]] Stables" (7B run 11, T0). A
+            # known longer name was held whole above, longest first.
+            if re.fullmatch(r"L\d+", _code) and re.match(
+                r"\s+(?:Stables?|Inn|Tavern|Forge|Smithy|Market|Square|Harbou?r|Docks?|Yard|Hall|House|Gate|Road|"
+                r"Street|Lane|Mill|Bakery|Chandlery|Store|Shop|Wharf|Quay|Church|Chapel|Temple|Keep|Tower|Bridge)\b",
+                m.string[m.end():],
+            ):
+                return _hold(m.group(1))
             return _hold(f"{m.group(1)} [[{_code}]]")
 
         out = pattern.sub(_repl, out)
@@ -11395,6 +11404,21 @@ def _join_split_names(text: str, code_to_name: dict[str, str]) -> str:
     return text
 
 
+_APPOSITIVE_CODE_RE = re.compile(r",\s*\[\[([A-Z]{1,3}\d{0,3})\]\]\s*(,|(?=[.;:!?]))")
+
+
+def _attach_appositive_codes(text: str, code_to_name: dict[str, str]) -> str:
+    def fix(match: re.Match[str]) -> str:
+        code = match.group(1).upper()
+        name = code_to_name.get(code, "")
+        before = text[max(0, match.start() - len(name) - 2): match.start()] if name else ""
+        if name and re.search(rf"\b{re.escape(name)}\s*$", before, re.I):
+            return f" [[{code}]]"
+        return ""
+
+    return _APPOSITIVE_CODE_RE.sub(fix, text)
+
+
 def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     """
     Fix common LLM naming holes:
@@ -11419,6 +11443,11 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         lambda m: m.group(1) if not REFERENCE_CODE_PATTERN.fullmatch(m.group(0)) else m.group(0),
         repaired,
     )
+    # A code set off by commas after a name, "Saltmarrow, [[L1]], is a ghost
+    # town", is that name's tag; expanded on its own it read "Saltmarrow [[L1]],
+    # Saltmarrow [[L1]], is" (7B runs 10-11, T0). After words naming something
+    # else ("The Saltmarrow Stables, [[L1]], stands") the stray tag goes.
+    repaired = _attach_appositive_codes(repaired, code_to_name)
     # Names known to the world but written without codes (opening often does this)
     repaired = _inject_entity_codes_for_known_names(repaired, code_to_name)
 
