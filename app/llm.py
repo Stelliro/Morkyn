@@ -15851,12 +15851,27 @@ def _after_act_cut_point(
     if done_at < 0:
         return None
     own_words = _cut_words(acts)
+    from app.narration_pipeline import player_quotes
+
+    typed = [re.sub(r"\W+", " ", q).strip().lower() for q in player_quotes(player_input)]
     for start, _end, sentence in spans[done_at + 1:]:
         if re.search(r'["“”]', sentence):
+            # The player's own question is not one put to them (7B run 28, T2).
+            plain = re.sub(r"\W+", " ", sentence).strip().lower()
+            plain = re.sub(r"^you say\s+", "", plain)
+            if plain and any(plain in q or q in plain for q in typed if q):
+                continue
             if "?" in sentence:
                 return None  # something is put to the player: the cut at that line decides
             continue
         move = _AFTER_ACT_MOVE_RE.match(sentence)
+        if not move:
+            # "You thank her and turn to head towards the clock tower" (7B run
+            # 28, T2): the move comes after "and".
+            joined = re.match(r"^\W*(?:then\s+)?you\s+[a-z]+(?:\s+[\w'’]+){0,4}?\s+and\s+(?:then\s+)?(.+)$", sentence, re.I | re.S)
+            if joined:
+                rest = re.sub(r"^(?:turn|turns)\s+to\s+", "", joined.group(1), flags=re.I)
+                move = _AFTER_ACT_MOVE_RE.match("You " + rest)
         if not move:
             continue
         verb, dest = move.group("v"), move.group("dest")

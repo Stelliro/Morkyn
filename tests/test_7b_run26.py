@@ -97,6 +97,26 @@ class MiddaySun(unittest.TestCase):
         self.assertTrue(repair_sun_words("The sun begins to sink.", 11)[1])
 
 
+class ThankAndWalkAfterHerOwnQuestion(unittest.TestCase):
+    """Run 28 T2: after Isk's own question, "You thank her and turn to head towards the clock tower" ran on."""
+
+    def test_cut(self):
+        from app import llm
+
+        line = ('"No boats, no salvage." I look out at the water. "Then I\'ll try my luck on the flats myself. '
+                'Where\'s the reeve keep the tide tables these days?"')
+        text = (
+            "You look out at the water, the tide still high and the boats not yet in. \"No boats, no salvage.\" "
+            "You say, \"Then I'll try my luck on the flats myself. Where's the reeve keep the tide tables these days?\" "
+            "Lettice looks up from her notes, her pen still in her hand and her lips pressed thin.\n\n"
+            "You thank her and turn to head towards the clock tower. You climb the steps and take the tide tables."
+        )
+        turn = {"narration": text, "narration_segments": [{"label": "paragraph", "text": x} for x in text.split("\n\n")]}
+        out = llm._cut_scene_after_completed_act(turn, line)
+        self.assertEqual(out["_scene_cut"]["trigger"], "You thank her and turn to head towards the clock tower.")
+        self.assertNotIn("clock tower", out["narration"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
