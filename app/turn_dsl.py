@@ -189,6 +189,9 @@ the player still where they are, and the player answers with their own words or 
 - Resolve the player's action. They already chose; show what happens. Never end ===NAR=== with the
   choice restated ("Do you approach X, or continue to Y?", "The choice is yours.") — that hands the
   turn back unplayed. End on a consequence, a new pressure, or a concrete detail, then stop.
+- The scene ends when the player's action is done or someone puts something to them. After that the
+  player does nothing more: no walking on, boarding, entering, taking, searching, resting, thanking or
+  turning back, and no further words. The world may still move; the player's next step is theirs.
 - When act_outcome is present, the engine's dice already decided how player_act turns out: write
   exactly that outcome, success or failure, and never a different one. A quest task is finished only
   when act_outcome.quest.result says done.
