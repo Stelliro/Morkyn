@@ -11941,6 +11941,23 @@ def _role_mismatches(text: str, code_to_role: dict[str, str]) -> list[dict[str, 
     return out[:6]
 
 
+def _coded_names_in_stored_case(text: str, code_map: dict[str, str]) -> str:
+    """A known name written just before its own code takes the stored casing.
+
+    7B run 9, T3: "The wind whips through the old tideside [[L3]]" for the
+    place stored as "Old Tideside". Only the words right before the code, and
+    only when they are that name in another case.
+    """
+    out = text or ""
+    for code, name in (code_map or {}).items():
+        name = str(name or "").strip()
+        if not name or not re.fullmatch(r"[A-Z]{1,2}\d{0,3}", str(code or "")):
+            continue
+        pattern = re.compile(rf"(?<![\w]){re.escape(name)}(?=\s*\[\[{re.escape(str(code))}\]\])", re.IGNORECASE)
+        out = pattern.sub(lambda m, _n=name: _n if m.group(0) != _n else m.group(0), out)
+    return out
+
+
 def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any] | None = None) -> dict[str, Any]:
     """Deterministic name/code repair on narration after model output."""
     if not isinstance(result, dict):
@@ -12143,6 +12160,7 @@ def _repair_entity_names_in_turn(result: dict[str, Any], context: dict[str, Any]
             place_codes=place_codes,
         )
         out = _repair_bare_entity_codes(out, code_map=code_map, referenced_codes=referenced_codes)
+        out = _coded_names_in_stored_case(out, code_map)
         return out
 
     segments = result.get("narration_segments")
