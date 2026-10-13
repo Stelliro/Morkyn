@@ -6493,7 +6493,19 @@ def _travel_scoring_text(player_input: str) -> str:
     # A movement word inside an idiom is not a move (TODO n21, T11: "it may
     # prove useful in the long run" made a talk turn a travel turn, and the
     # draft was told the walk ends somewhere it never planned).
-    return _MOVE_NOUN_RE.sub(" ", _MOVE_IDIOM_RE.sub(" ", strip_negated_clauses(" ".join(kept))))
+    text = _THING_GOES_INTO_RE.sub(" ", " ".join(kept))
+    return _MOVE_NOUN_RE.sub(" ", _MOVE_IDIOM_RE.sub(" ", strip_negated_clauses(text)))
+
+
+# A thing going into a pocket or pack is not the player going anywhere (7B run
+# 9, T3: "If it's worth anything, it goes in my pocket" journaled a travel turn
+# with no destination).
+_THING_GOES_INTO_RE = re.compile(
+    r"\b(?:it|that|this|they|them|these|those|the\s+\w+(?:\s+\w+)?)\s+(?:goes|go|went|gets\s+put|will\s+go|can\s+go)\s+"
+    r"(?:in|into|inside)\s+(?:my|the|your|her|his)\s+"
+    r"(?:pocket|pockets|pack|bag|satchel|purse|pouch|sack|coat|belt|kit|chest|box|basket|bundle)\b",
+    re.I,
+)
 
 
 # A movement word used as a noun is not a move (Saltmarrow #112): "the tally
@@ -8697,6 +8709,55 @@ def acquisition_claims(narration: str) -> list[str]:
     return found[:3]
 
 
+# A taken thing named only vaguely ("the glinting thing you found") and then
+# described by the prose: "The piece is a small, worn coin with a rough edge
+# and a faded symbol that looks like a seagull" (7B run 9, T3 stored "glinting
+# thing you found"). The described noun phrase is the thing's name.
+_VAGUE_THING_HEADS = {"thing", "things", "object", "objects", "item", "items", "piece", "find", "something", "it", "one"}
+_FOUND_TAIL_RE = re.compile(r"\s+(?:that\s+|which\s+)?(?:you|i|we|she|he|they)\s+(?:just\s+)?(?:found|find|dug\s+up|spotted|saw)\b.*$", re.I)
+_DESCRIBED_AS_RE = re.compile(
+    r"\b(?:it|the\s+(?:piece|thing|object|item|find|glint)|this)\s+(?:is|was|turns\s+out\s+to\s+be|proves\s+to\s+be)\s+"
+    r"(?:a|an)\s+(?P<np>[^.;!?]{3,140})",
+    re.I,
+)
+_LOOKS_LIKE_RE = re.compile(
+    r"\b(?:looks?\s+like|in\s+the\s+shape\s+of|shaped\s+like|stamped\s+with|bearing|of)\s+(?:a|an)\s+(?P<mark>[a-z]+)\b",
+    re.I,
+)
+_SIZE_WORDS = {"small", "little", "tiny", "large", "big", "old"}
+
+
+def _strip_found_tail(name: str) -> str:
+    """'glinting thing you found' -> 'glinting thing': who found it is not part of its name."""
+    return _FOUND_TAIL_RE.sub("", str(name or "")).strip()
+
+
+def _prose_named_thing(name: str, narration: str) -> str:
+    """The prose's own name for a vaguely named take, or the name with any 'you found' tail dropped."""
+    base = _strip_found_tail(name)
+    words = base.lower().split()
+    if not words or words[-1] not in _VAGUE_THING_HEADS:
+        return base or str(name or "")
+    match = _DESCRIBED_AS_RE.search(str(narration or ""))
+    if not match:
+        return base or str(name or "")
+    np = match.group("np")
+    core = re.split(r"\s+(?:with|that|which|who|from|on|in|under|lying)\b|,(?=\s*(?:with|its|the)\b)", np, maxsplit=1, flags=re.I)[0]
+    core_words = [w for w in re.findall(r"[a-z][a-z'-]*", core.lower())]
+    if not core_words:
+        return base or str(name or "")
+    head = core_words[-1]
+    if head in _VAGUE_THING_HEADS:
+        return base or str(name or "")
+    mods = [w for w in core_words[:-1] if w not in _SIZE_WORDS and w not in {"a", "an", "the", "and"}]
+    mark = _LOOKS_LIKE_RE.search(np[len(core):])
+    if mark and mark.group("mark").lower() not in _VAGUE_THING_HEADS:
+        mods = mods[-1:] + [mark.group("mark").lower()]
+    named = " ".join(mods[-2:] + [head])
+    turn_ledger.note("inventory", "take_named_from_prose", was=name, named=named)
+    return named
+
+
 def _names_in_inventory_changes(turn: dict[str, Any]) -> set[str]:
     out: set[str] = set()
     for row in turn.get("inventory_changes") or []:
@@ -8762,7 +8823,8 @@ def ground_acquisitions(
     names_held = bool(held_heads & own_words) and bool(_STOW_RE.search(own)) and len(claimed) == 1
 
     granted: list[str] = []
-    for name in claimed:
+    for claim in claimed:
+        name = _prose_named_thing(claim, narration).lower()
         if any(name in existing or existing in name for existing in have):
             continue
         head = _held_head(name)
@@ -11903,15 +11965,15 @@ _OUTBUILDING_WORDS = frozenset({
 
 
 _NAMED_BUILDING_RE = re.compile(
-    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){0,3})\s+([a-z]+(?:\s+[a-z]+)?)\b"
+    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of|at|in|by|on|upon)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){0,3})\s+([a-z]+(?:\s+[a-z]+)?)\b"
 )
 # "the Wandering Ox Chandlery stands open": the trade is the name's own last word (7B run 8, T0).
 _NAMED_BUILDING_TITLED_RE = re.compile(
-    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){1,3})\b"
+    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of|at|in|by|on|upon)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){1,3})\b"
 )
 # "the Wren's Rest, a modest inn": the trade in an apposition after the name (7B run 8, T0).
 _NAMED_BUILDING_APPOSITION_RE = re.compile(
-    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){0,3}),\s+"
+    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of|at|in|by|on|upon)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){0,3}),\s+"
     r"(?:a|an|the)\s+(?:[a-z'’-]+\s+){0,2}?([a-z]+(?:\s+[a-z]+)?)\b"
 )
 
@@ -11957,6 +12019,18 @@ def _named_buildings_in(sentence: str) -> list[tuple[str, str]]:
     return found
 
 
+# "stands just beyond the warehouse" is next door, not far off (7B run 9, T0:
+# "The Badger at Saltmarrow, a small inn, stands just beyond the warehouse").
+# Only "beyond" is excused, and only when it is "just beyond" or beyond a
+# building or street of the scene; "distant", "miles" and the rest still count.
+_NEAR_BEYOND_RE = re.compile(
+    r"^(?!.*\b(?:distant|far\s+(?:off|out|away)|miles?|leagues?|horizon|across\s+the\s+(?:water|bay|sea|river|flats))\b)"
+    r".*(?:\bjust\s+beyond\b|\bbeyond\s+the\s+(?:\w+\s+)?(?:warehouse|shed|yard|inn|tavern|wall|walls|gate|square|"
+    r"street|corner|house|building|shop|door|well|market|stall|bakery|dock|docks|pier)\b)",
+    re.I | re.S,
+)
+
+
 def _record_named_buildings(conn, narration: str, skip: set[str] | None = None) -> list[str]:
     """Store "the <Name> inn" / "the <Name> dairy" buildings the prose names, as children of this settlement.
 
@@ -11972,7 +12046,7 @@ def _record_named_buildings(conn, narration: str, skip: set[str] | None = None) 
         return made
     people = {str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
     for sentence in re.split(r"(?<=[.!?])\s+", _unspoken(narration)):
-        if _FAR_SUMMARY_RE.search(sentence):
+        if _FAR_SUMMARY_RE.search(sentence) and not _NEAR_BEYOND_RE.search(sentence):
             continue
         for proper, word in _named_buildings_in(sentence):
             if not proper or proper.lower() in people or not _proper_names_a_building(conn, proper, word):
@@ -13376,7 +13450,7 @@ def _grant_shown_takes(
                 if gone:
                     continue
                 added.append({
-                    "name": phrase,
+                    "name": _prose_named_thing(phrase, narration),
                     "quantity_delta": qty,
                     "reason": "taken in the prose, as the player asked",
                     "source": "shown_take",
