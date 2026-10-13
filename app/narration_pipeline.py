@@ -910,6 +910,9 @@ def content_stems(text: str) -> set[str]:
     out: set[str] = set()
     for match in _CONTENT_WORD_RE.finditer(str(text or "")):
         word = match.group(0).lower()
+        # "what's", "it's", "you're": the glue word under the contraction
+        # (7B run 24, T2: "what'" counted as a shared content word).
+        word = re.sub(r"['’](?:s|re|m|ll|ve|d|t)$", "", word)
         if len(word) < 3 or word in _STRUCTURE_WORDS:
             continue
         out.add(_stem(word))

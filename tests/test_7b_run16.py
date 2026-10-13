@@ -76,6 +76,22 @@ class AnswerInTheSecondSentence(unittest.TestCase):
         self.assertEqual(len(drop_invented_player_speech(paras, line)[1]), 1)
 
 
+class ContractionsAreGlueWords(unittest.TestCase):
+    """Run 24 T2: '"Marlow, what's on this board?" you ask' kept: "what'" counted as a shared content word."""
+
+    def test_stems_and_drop(self):
+        from app.narration_pipeline import content_stems, drop_invented_player_speech
+
+        self.assertEqual(content_stems("what's on this board? It's late."), {"board", "late"})
+        line = '"Whatever it is, double nothing is still nothing." I read the posting. "Who posted this, Bertram, and what\'s the item?"'
+        paras = [
+            '"Whatever it is, double nothing is still nothing," you say. "Who posted this, Bertram, and what\'s the item?"',
+            "Bertram is busy.",
+            '"Marlow, what\'s on this board?" you ask.',
+        ]
+        self.assertEqual(drop_invented_player_speech(paras, line)[1], ['"Marlow, what\'s on this board?" you ask.'])
+
+
 class NamesAndCodes(unittest.TestCase):
     """T0: 'Dunstan Upcott [[A]] [[D1]]', 'Quarrel and Sons [[Quarrel and Sons]]', role 'grocer Quarrel and Sons'."""
 
