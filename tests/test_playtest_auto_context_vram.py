@@ -45,7 +45,8 @@ class AutoContextFitsWhatIsFree(unittest.TestCase):
         roomy, tight, cramped = self.ctx(10895), self.ctx(7000), self.ctx(6000)
         self.assertGreater(roomy, tight)
         self.assertGreater(tight, cramped)
-        self.assertEqual(self.ctx(1), ml.MIN_CONTEXT_TOKENS)
+        # The floor is what a turn needs (8B #62: 4096 broke every turn on a shared card).
+        self.assertEqual(self.ctx(1), ml.turn_minimum_context())
 
     def test_memory_this_process_already_holds_counts_as_free(self):
         # Re-resolving while our own model is loaded must not shrink the window.

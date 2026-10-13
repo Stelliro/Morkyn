@@ -1082,6 +1082,18 @@ def context_contract_notice(config: dict[str, Any] | None = None) -> dict[str, A
     model_config = config or get_model_config()
     if _normalize_provider(str(model_config.get("provider") or "")) != "mle":
         return None
+    # The automatic size had to open above what free GPU memory fits (8B #62).
+    try:
+        from app.model_limits import resolve_limits
+
+        limits = resolve_limits(with_facts=False)
+        short = (limits.get("auto") or {}).get("short_of_memory")
+        if short and (limits.get("source") or {}).get("context_tokens") == "auto":
+            from app.failsafe import context_memory_notice
+
+            return context_memory_notice(int(short["fits"]), int(short["opened"]), provider="mle")
+    except Exception:
+        pass
     window = int(context_window_tokens(model_config) or 0)
     needed = estimated_tokens(SYSTEM_PROMPT) + MIN_TURN_HEADROOM_TOKENS
     if window <= 0 or window >= needed:

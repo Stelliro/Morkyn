@@ -256,6 +256,35 @@ def context_notice(window: int, needed: int, provider: str = "mle") -> dict[str,
     }
 
 
+def context_memory_notice(fits: int, opened: int, provider: str = "mle") -> dict[str, Any]:
+    """Free GPU memory fits less context than a turn needs (8B #62).
+
+    The automatic size follows free video memory. With another program holding
+    most of the card it once fell to 4,096 tokens, below even the compact
+    contract, and every turn broke with nothing on screen saying why. The
+    window now opens at the least a turn needs, and this says so.
+    """
+    return {
+        "code": "context_low_memory",
+        "stage": "runtime",
+        "provider": provider,
+        "title": "Another program is using most of the video memory",
+        "summary": (
+            f"Free GPU memory only fits about {fits:,} tokens of context, less than a turn needs. Mørkyn opened "
+            f"the model at {opened:,} tokens, the smallest that runs a turn: scenes play, but turns may be slower "
+            "and keep less of the world in view."
+        ),
+        "tips": [
+            "Close games or other programs using the GPU, then restart Mørkyn so the context is sized again.",
+            "A smaller quantization of the same model (Q4 instead of Q8) leaves more room for context.",
+            "Or set Context tokens in Settings to a size you know fits.",
+        ],
+        "detail": f"fits={fits} opened={opened}",
+        "actions": [SETTINGS_ACTION],
+        "fallback": None,
+    }
+
+
 def stale_server_notice(changed: list[str]) -> dict[str, Any]:
     """The Python on disk changed after this server started.
 
