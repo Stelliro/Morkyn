@@ -94,7 +94,7 @@ class TestFixedMagnitude(unittest.TestCase):
 class TestOffModeTranslatesBands(unittest.TestCase):
     def test_resolve_turn_bands_off_maps_every_band(self):
         _fresh_world()
-        turn = parse_dsl_turn(_DSL, player_input="I collect my pay")
+        turn = parse_dsl_turn(_DSL, player_input="I climb down from the wall and collect my pay")
         self.assertEqual(turn["player"].get("gold_band"), "small")
         self.assertFalse(turn["player"].get("gold_delta"), "the DSL emits the band only")
         with db.connect() as conn:
@@ -125,11 +125,11 @@ class TestOffModeTranslatesBands(unittest.TestCase):
         # delta from an applied one; an existing rank can.
         with db.connect() as conn:
             conn.execute("INSERT INTO player_skills (name, value, notes) VALUES ('Climbing', 3, '')")
-        turn = parse_dsl_turn(_DSL, player_input="I collect my pay")
+        turn = parse_dsl_turn(_DSL, player_input="I climb down from the wall and collect my pay")
         turn["self_check"] = {"passed": True, "issues_found": [], "corrections_made": []}
         turn["turn_summary"] = "paid"
         with mock.patch.dict(os.environ, {"AI_RPG_BAND_AUTHORITY": "off"}):
-            state = world.apply_turn(turn, "I collect my pay")
+            state = world.apply_turn(turn, "I climb down from the wall and collect my pay")
         after = _player()
         self.assertGreater(int(after["gold"]), int(before["gold"]), "GOLD small must pay something")
         self.assertIsNotNone(_rope_qty(), "GRANT rope must create the row")
