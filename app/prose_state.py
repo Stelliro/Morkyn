@@ -924,7 +924,12 @@ _LABEL_LINE_RE = re.compile(
 )
 # Stage directions about the scene itself, not about what happens in it.
 _STAGE_SENTENCE_RE = re.compile(
-    r"^\s*The\s+(?:focus|scene)\s+(?:now\s+)?(?:shifts|changes|is\s+about\s+to\s+(?:change|shift))\b"
+    # A shift to somewhere, or a shift and nothing else, is about the scene as
+    # a construct. "The scene shifts slightly, the light from the oil lamps
+    # shifting with ..." describes the room and stays (7B run 10, T3).
+    r"^\s*The\s+(?:focus|scene)\s+(?:now\s+)?(?:shifts|changes)(?:\s+\w+ly)?"
+    r"(?=\s*[.!]|\s+(?:to|towards?|back|again|away|from|elsewhere)\b)"
+    r"|^\s*The\s+(?:focus|scene)\s+(?:now\s+)?is\s+about\s+to\s+(?:change|shift)\b"
     # 7B run 6, T6: "The scene ends with you standing in the town square, the
     # deal made and the clock ticking."
     r"|^\s*The\s+scene\s+(?:now\s+)?(?:ends|closes|draws\s+to\s+a\s+close|comes\s+to\s+an?\s+(?:end|close))\b"
@@ -1098,6 +1103,74 @@ def repair_clock_words(text: str, hour: int) -> tuple[str, list[dict[str, Any]]]
         out = out[: clash["start"]] + new + out[clash["end"]:]
         fixes.append({"why": "clock_word", "from": clash["phrase"], "to": new, "hour": int(hour) % 24})
     fixes.reverse()
+    out, sun_fixes = repair_sun_words(out, hour)
+    return out, fixes + sun_fixes
+
+
+# Where the sun is, said of the present (7B run 10, T9: "The sun begins to dip
+# lower in the sky" at 10:57). A setting sun before 14:00 or a rising one after
+# noon contradicts the clock; at night there is no sun to move and nothing is
+# swapped. Only the verb (and a "lower"/"higher" right after it) changes.
+_SUN_MOTION_RE = re.compile(
+    r"\bthe\s+sun\s+(?:(?:begins|began|starts|started|continues|continued)\s+to\s+|is\s+|has\s+begun\s+to\s+)?"
+    r"(?P<verb>dip|dips|dipped|dipping|sink|sinks|sank|sinking|set|sets|setting|descend|descends|descended|descending|"
+    r"rise|rises|rose|rising|climb|climbs|climbed|climbing)\b(?P<rest>[^.!?\n]{0,40})"
+    r"|\bthe\s+(?P<adj>setting|sinking|rising)\s+sun\b",
+    re.I,
+)
+_SUN_DOWN = {"dip", "dips", "dipped", "dipping", "sink", "sinks", "sank", "sinking", "set", "sets", "setting",
+             "descend", "descends", "descended", "descending"}
+_SUN_TO_UP = {
+    "dip": "climb", "dips": "climbs", "dipped": "climbed", "dipping": "climbing",
+    "sink": "climb", "sinks": "climbs", "sank": "climbed", "sinking": "climbing",
+    "set": "rise", "sets": "rises", "setting": "rising",
+    "descend": "climb", "descends": "climbs", "descended": "climbed", "descending": "climbing",
+}
+_SUN_TO_DOWN = {
+    "rise": "sink", "rises": "sinks", "rose": "sank", "rising": "sinking",
+    "climb": "sink", "climbs": "sinks", "climbed": "sank", "climbing": "sinking",
+}
+
+
+def _match_case(old: str, new: str) -> str:
+    return new.capitalize() if old[:1].isupper() else new
+
+
+def repair_sun_words(text: str, hour: int) -> tuple[str, list[dict[str, Any]]]:
+    """Swap the motion of a sun that contradicts the clock: setting before 14:00, rising after noon."""
+    source = str(text or "")
+    hour = int(hour) % 24
+    if hour < 5 or hour >= 20:
+        return source, []
+    masked = _mask_speech(source)
+    edits: list[tuple[int, int, str]] = []
+    fixes: list[dict[str, Any]] = []
+    for match in _SUN_MOTION_RE.finditer(masked):
+        group = "verb" if match.group("verb") else "adj"
+        word = match.group(group)
+        low = word.lower()
+        going_down = low in _SUN_DOWN
+        if going_down and hour < 14:
+            new = _SUN_TO_UP.get(low)
+        elif not going_down and hour >= 12:
+            new = _SUN_TO_DOWN.get(low)
+        else:
+            continue
+        if not new:
+            continue
+        edits.append((match.start(group), match.end(group), _match_case(word, new)))
+        rest = match.group("rest") if group == "verb" else ""
+        if rest:
+            comp = re.match(r"\s+(lower|higher)\b", rest, re.I)
+            if comp and ((comp.group(1).lower() == "lower") == going_down):
+                swap = "higher" if going_down else "lower"
+                at = match.start("rest") + comp.start(1)
+                edits.append((at, at + len(comp.group(1)), _match_case(comp.group(1), swap)))
+        fixes.append({"why": "sun_position", "from": source[match.start():match.end()].strip()[:120],
+                      "to": new, "hour": hour})
+    out = source
+    for a, b, new in sorted(edits, reverse=True):
+        out = out[:a] + new + out[b:]
     return out, fixes
 
 
