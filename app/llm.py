@@ -15101,6 +15101,8 @@ def _drop_player_overreach(
     turn = _end_silent_scene_before_player(turn, player_input, trace)
     cut_before = turn.get("_scene_cut") if isinstance(turn, dict) else None
     turn = _cut_scene_at_invented_request(turn, player_input, earlier=_earlier_lines(context))
+    if isinstance(turn, dict) and turn.get("_scene_cut") is cut_before:
+        turn = _cut_scene_after_completed_act(turn, player_input)
     cut = turn.get("_scene_cut") if isinstance(turn, dict) else None
     if cut and cut is not cut_before:
         _append_trace(
@@ -15683,6 +15685,155 @@ def _cut_scene_at_invented_request(
             *made,
             "Ended the scene on the line spoken to the player; the prose had answered it for them"
             + (f" and {len(cut_ops)} op(s) that rested on that answer were dropped." if cut_ops else "."),
+        ]
+    return turn
+
+
+# --- The scene ends when the player's requested trip is done (7B run 21, T2) ---
+# "I head out onto the flats toward the drowned lower district": the prose
+# reached "the edge of the lower district", then had her rest in a cabin,
+# "decide to head back to Saltmarrow", walk back, enter the alehouse and take a
+# seat at the bar. Nobody had put anything to her, so the cut at a line put to
+# the player never fired, and the save went nowhere. The trip she asked for is
+# the scene; the first new decision or move after its arrival is where it ends.
+_ASKED_DEST_RE = re.compile(
+    r"\b(?:to|toward|towards|into|onto|for|across|over)\s+(?:the\s+)?(?P<d>[^,.;!?\"“”]{2,60})",
+    re.I,
+)
+_DEST_STOPWORDS = frozenset({
+    "edge", "water", "while", "still", "keeping", "with", "hand", "back", "there", "here", "where", "side",
+    "out", "away", "along", "around", "down", "through", "before", "after", "tide", "my", "the", "and",
+})
+_ARRIVAL_SENTENCE_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:reach|reaches|reached|arrive|arrived|find\s+yourself|found\s+yourself|"
+    r"come\s+to|came\s+to|stand\s+(?:at|on|in)|stood\s+(?:at|on|in)|step\s+(?:onto|into|out\s+onto)|"
+    r"stepped\s+(?:onto|into|out\s+onto)|make\s+it\s+to|made\s+it\s+to|get\s+to|got\s+to)\b",
+    re.I,
+)
+_AFTER_ARRIVAL_ACT_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?P<v>decide|decided|resolve|resolved|rest|rested|sit|sat|settle|settled|lie|lay|"
+    r"take\s+a\s+seat|took\s+a\s+seat|head\s+back|headed\s+back|turn\s+back|turned\s+back|return|returned|"
+    r"walk\s+back|walked\s+back|start\s+back|started\s+back|retrace|retraced|enter|entered|step\s+inside|"
+    r"stepped\s+inside|go\s+inside|went\s+inside|push\s+open|pushed\s+open|set\s+off|make\s+your\s+way\s+back|"
+    r"made\s+your\s+way\s+back)\b"
+    r"|\byou\s+(?:\w+ly\s+)?(?:find|found|spot|spotted)\s+[^.!?]{0,60}?\b(?:and|to)\s+(?P<v2>rest|sit|settle|sleep|lie)\b",
+    re.I,
+)
+
+
+def _asked_destination_words(acts: str) -> set[str]:
+    words: set[str] = set()
+    for m in _ASKED_DEST_RE.finditer(acts):
+        for w in re.findall(r"[a-z][a-z'’-]+", m.group("d").lower()):
+            if len(w) >= 4 and w not in _DEST_STOPWORDS:
+                words.add(w[:6])
+    return words
+
+
+def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None:
+    """Where a scene that ran on past the player's requested trip ends, or None."""
+    from app.prose_state import sentence_spans
+
+    own = player_line_of(player_input)
+    acts = _SCENE_QUOTE_RE.sub(" ", own)
+    body = str(text or "")
+    if not acts.strip() or not body.strip():
+        return None
+    try:
+        from app.world import travel_intent
+
+        if not travel_intent(acts):
+            return None
+    except Exception:
+        return None
+    dest = _asked_destination_words(acts)
+    if not dest:
+        return None
+    spans = sentence_spans(body)
+    arrived_at = -1
+    for index, (_start, _end, sentence) in enumerate(spans):
+        if re.search(r'["“”]', sentence):
+            continue
+        if _ARRIVAL_SENTENCE_RE.search(sentence) and (_cut_words(sentence) & dest or any(
+            w[:6] in dest for w in re.findall(r"[a-z][a-z'’-]+", sentence.lower()) if len(w) >= 4
+        )):
+            arrived_at = index
+            break
+    if arrived_at < 0:
+        return None
+    for start, _end, sentence in spans[arrived_at + 1:]:
+        if re.search(r'["“”]', sentence):
+            return None  # someone speaks first: the cut at a line put to the player decides
+        m = _AFTER_ARRIVAL_ACT_RE.search(sentence)
+        family = ""
+        if m:
+            verb = m.group("v") or m.group("v2") or ""
+            if not _verb_in_input(verb, acts):
+                family = "after_arrival"
+        if not family:
+            unit = _invented_unit_family(sentence, own, player_input)
+            if unit in ("decision", "movement", "labor", "taking"):
+                family = "after_arrival"
+        if family:
+            return {"cut": start, "trigger": sentence, "family": family, "arrival": spans[arrived_at][2]}
+    return None
+
+
+def _cut_scene_after_completed_act(turn: dict[str, Any], player_input: str, *, floor: int = 200) -> dict[str, Any]:
+    """End the narration after the requested trip arrives, when it runs on into new choices made for the player."""
+    if not isinstance(turn, dict) or str(player_input or "").startswith("__"):
+        return turn
+    text = str(turn.get("narration") or "")
+    point = _completion_cut_point(text, player_input)
+    if not point:
+        return turn
+    head = text[: point["cut"]].rstrip()
+    tail = text[point["cut"]:].strip()
+    if not tail or len(head) < floor:
+        return turn
+    turn["narration"] = head
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", head) if p.strip()]
+    if isinstance(turn.get("narration_segments"), list):
+        turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in paragraphs] or [{"label": "paragraph", "text": head}]
+    cut_ops = _drop_ops_of_cut_tail(turn, head, tail, player_input)
+    # The line asked to go somewhere, so the ordinary rule keeps any MOVE; a
+    # move to a place only the cut part reaches, which the line never named,
+    # is the run-on's (the alehouse).
+    player = turn.get("player")
+    if isinstance(player, dict):
+        dest = str(player.get("move_to_location") or "").strip()
+        own_words = _cut_words(_SCENE_QUOTE_RE.sub(" ", player_line_of(player_input)))
+        only_tail = (_cut_words(dest) - _cut_words(head)) & _cut_words(tail)
+        if dest and only_tail and not (_cut_words(dest) & own_words):
+            player["move_to_location"] = None
+            player["move_to_location_code"] = None
+            turn["map_walk"] = None
+            cut_ops.append(f"MOVE {dest[:60]}")
+    dsl = turn.get("_dsl")
+    if isinstance(dsl, dict):
+        dsl["cut_ops"] = list(dsl.get("cut_ops") or []) + cut_ops
+    turn["_scene_cut"] = {
+        "family": point["family"],
+        "trigger": str(point["trigger"])[:300],
+        "npc_line": "",
+        "arrival": str(point["arrival"])[:300],
+        "tail": tail[:1200],
+        "tail_chars": len(tail),
+        "cut_ops": cut_ops,
+    }
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("player_words", "scene_ended_after_requested_act", arrival=str(point["arrival"])[:200],
+                         trigger=str(point["trigger"])[:200], tail_chars=len(tail), cut_ops=cut_ops)
+    except Exception:
+        pass
+    check = turn.get("self_check")
+    if isinstance(check, dict):
+        made = check.get("corrections_made") if isinstance(check.get("corrections_made"), list) else []
+        check["corrections_made"] = [
+            *made,
+            "Ended the scene where the player's requested trip arrived; the prose had gone on to choose and move for them.",
         ]
     return turn
 
