@@ -9315,6 +9315,26 @@ def _unspoken(text: str) -> str:
     return venues.strip_speech(text)
 
 
+_QUOTED_QUESTION_RE = re.compile(r"[\"“][^\"“”]*\?\s*[\"”]")
+
+
+_ASKS_TO_BE_TAKEN_RE = re.compile(
+    r"\b(?:take|bring|row|lead|show|walk|carry|ferry|guide|get)\s+(?:me|us)\b|\b(?:can|could|will|would)\s+(?:we|i)\s+go\b",
+    re.I,
+)
+
+
+def _without_quoted_questions(text: str) -> str:
+    """The player's line without the questions they asked aloud for information ("Where is the harbour office?").
+
+    A question asking to be taken somewhere ("Row me out to the old fish
+    market?") is a travel request and stays.
+    """
+    return _QUOTED_QUESTION_RE.sub(
+        lambda m: m.group(0) if _ASKS_TO_BE_TAKEN_RE.search(m.group(0)) else " ", str(text or "")
+    )
+
+
 def _player_departs(text: str) -> bool:
     """Does the narration (not a speaker) take the player somewhere?
 
@@ -9359,6 +9379,10 @@ def _unasked_unshown_move(
     walk = result.get("map_walk")
     if not (code or name or walk):
         return ""
+    # A place named only inside the player's own quoted question is not a
+    # walk request (7B run 20, T4: "Where do I find this Thaddeus, then - the
+    # harbour office?" kept a MOVE to a new Harbour Office the prose walked to).
+    player_input = _without_quoted_questions(player_input)
     if intent == "travel" or travel_intent(player_input) or venue_move_intent(player_input):
         # A walk asks to go somewhere, not anywhere: "I walk over to where the
         # mole catcher is digging" came back with MOVE "Seventh Pike Stables",
