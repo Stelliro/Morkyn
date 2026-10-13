@@ -11191,6 +11191,14 @@ def _collapse_repeated_entity_names(text: str, names: list[str]) -> str:
     return out
 
 
+# A capitalised name joined to a known place by "at/of/on/upon": "the Badger
+# at", "Anchor and Ox of". Needs "the" or a second capitalised word before it,
+# so a sentence opening ("Back in Saltmarrow") still links the town.
+_PLACE_NAME_TAIL_RE = re.compile(
+    r"(?:\b(?:the|The)\s+|\b[A-Z][\w'’-]+\s+(?:and\s+)?)[A-Z][\w'’-]+\s+(?:at|of|on|upon)\s+$"
+)
+
+
 def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]) -> str:
     """
     When prose names a known place/NPC/item without [[code]], append the code once
@@ -11290,6 +11298,10 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
             # [[A]]'s General Store" (Saltmarrow #109). A known place of that
             # name was held whole above, longest first.
             if re.match(r"['’]s\s+[A-Z][a-z]", m.string[m.end():]):
+                return _hold(m.group(1))
+            # "the Badger at Saltmarrow" is an inn's name that ends in the
+            # town's; a town code there read as the inn's (7B run 6, T0).
+            if re.fullmatch(r"L\d+", _code) and _PLACE_NAME_TAIL_RE.search(m.string[: m.start()]):
                 return _hold(m.group(1))
             return _hold(f"{m.group(1)} [[{_code}]]")
 

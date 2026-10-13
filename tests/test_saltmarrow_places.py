@@ -154,11 +154,16 @@ class PlaceNamedInPassing(unittest.TestCase):
             far = world._upsert_location(conn, "The Drowned Bell", "A bell buoy beyond the last rows, out at sea, beside a wreck.")
             world._settle_place_named_in_passing(conn, far, "The Drowned Bell", "A bell buoy beyond the last rows, out at sea, beside a wreck.", {"player": {}}, {"from": "L1"})
             self.assertEqual(int(world._location_row(conn, far)["parent_id"] or 0), 0)
-            went = world._upsert_location(conn, "The Net Loft", "A loft beside the harbour stairs.")
+            went = world._upsert_location(conn, "Gull Point", "A headland beside the harbour stairs.")
             world._settle_place_named_in_passing(
-                conn, went, "The Net Loft", "A loft beside the harbour stairs.", {"player": {"move_to_location": "The Net Loft"}}, {"from": "L1"}
+                conn, went, "Gull Point", "A headland beside the harbour stairs.", {"player": {"move_to_location": "Gull Point"}}, {"from": "L1"}
             )
             self.assertEqual(int(world._location_row(conn, went)["parent_id"] or 0), 0)
+            # A loft is a building in the town even when the turn walks there
+            # (7B run 6: a shed minted top-level made stepping out of it a
+            # journey back to the town).
+            loft = world._upsert_location(conn, "The Net Loft", "A loft beside the harbour stairs.")
+            self.assertNotEqual(int(world._location_row(conn, loft)["parent_id"] or 0), 0)
 
 
 class HouseholdAfterHours(unittest.TestCase):
