@@ -16902,9 +16902,12 @@ def _introduced_person_first(
             continue  # "You are Isk Tarrow, the flat-runner": the player
         role = match.group("role").strip()
         if role.split()[-1] in {"man", "woman", "figure", "person", "stranger", "voice", "child", "boy", "girl"}:
-            if match.re is not _NAMED_JOB_PERSON_RE:
+            # "a grizzled man named Rusk", "Gisela Hatcher, a stout woman with a
+            # stern face" (7B run 27, T1): the name is sure, the job unknown.
+            if role.split()[-1] in {"figure", "voice", "stranger"} or is_fragment_place_name(name):
                 continue
-            # "a grizzled man named Rusk": the name is sure, the job unknown.
+            if name.lower() in blocked:
+                continue
             return {"name": name, "role": ""}
         if is_fragment_place_name(name) or role.split()[-1] in _NOT_A_JOB_NOUNS or name.lower() in blocked:
             continue
