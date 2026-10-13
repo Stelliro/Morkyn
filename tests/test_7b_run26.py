@@ -53,5 +53,29 @@ class OfferPaysReachesThePacket(unittest.TestCase):
         self.assertIn('slim["pays"]', source)
 
 
+class TakeThePatrol(unittest.TestCase):
+    """Run 27 T3: "I'll take the patrol" did not take "Help with mudflats patrol"."""
+
+    def test_accept_by_title_word(self):
+        from app.quest_parser import player_takes_job
+
+        quest = {"id": 1, "code": "Q1", "title": "Help with mudflats patrol", "status": "offered"}
+        self.assertTrue(player_takes_job(quest, '"Fifteen gold. I\'ll take the patrol, Avice."', [quest]))
+        self.assertFalse(player_takes_job(quest, '"I\'ll take the road home."', [quest]))
+        self.assertFalse(player_takes_job(quest, '"Not yet. I\'ll take the patrol later maybe."', [quest]))
+
+
+class NamedWithNoJob(unittest.TestCase):
+    """Run 27 T1: "Gisela Hatcher, a stout woman with a stern face" stored nobody."""
+
+    def test_stored_without_a_job(self):
+        from app.world import _introduced_people
+
+        self.assertEqual(
+            _introduced_people("Gisela Hatcher, a stout woman with a stern face, is standing on the quayside.", []),
+            [{"name": "Gisela Hatcher", "role": ""}],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

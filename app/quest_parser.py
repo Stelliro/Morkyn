@@ -240,6 +240,12 @@ def player_takes_job(
         return False
     if player_accepts(own) and _means_this_offer(quest, existing, own):
         return True
+    # "I'll take the patrol" for "Help with mudflats patrol" (7B run 27, T3):
+    # taking the job by a word of its own title.
+    title_words = _title_words(str(quest.get("title") or ""))
+    for match in re.finditer(r"\bi(?:['’]ll|\s+will)\s+(?:take|do|handle|run|walk)\s+(?:the|this|that|your)\s+([a-z]+)", own, re.I):
+        if match.group(1).lower() in title_words:
+            return True
     if _STARTS_WORK_RE.search(own):
         return True
     # The player names the price and the giver agrees (7B run 6, T6: "Two gold
