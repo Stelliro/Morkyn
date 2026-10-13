@@ -133,6 +133,49 @@ class CapitalYouTagAndOneSharedWord(unittest.TestCase):
         self.assertEqual(drop_invented_player_speech(['"Where is it?" You ask.'], '"Where is it?"')[1], [])
 
 
+class StrayUnderscore(unittest.TestCase):
+    """Run 29 T7: the model wrote 'Is the _hull worth patching' into the player's own line."""
+
+    def test_repaired(self):
+        from app.prose_state import repair_meta_leaks
+
+        out, fixes = repair_meta_leaks('"Is the _hull worth patching?" The _hull groans. A [[C]] code and _italic_ stay.')
+        self.assertIn('"Is the hull worth patching?" The hull groans.', out)
+        self.assertIn("[[C]]", out)
+        self.assertEqual([f["why"] for f in fixes if f["why"] == "stray_underscore"], ["stray_underscore"])
+
+
+class FairWeatherInAStorm(unittest.TestCase):
+    """Run 29 T9: 'The sea outside is calm, the waves barely lapping' under a heavy storm."""
+
+    def test_dropped_in_rough_weather_only(self):
+        from app.prose_state import repair_fair_weather
+
+        text = ("Osric looks at you. \"The sea is calm enough today,\" he says. The sea outside is calm, the waves "
+                "barely lapping at the hull. Gulls call in the distance over the long grey quay, their cries thin. "
+                "Rope creaks against the bollards and the planks are slick under your boots.")
+        out, fixes = repair_fair_weather(text, "storm")
+        self.assertNotIn("barely lapping", out)
+        self.assertIn('"The sea is calm enough today,"', out)
+        self.assertEqual(len(fixes), 1)
+        self.assertEqual(repair_fair_weather(text, "clear")[1], [])
+        self.assertEqual(repair_fair_weather("Despite the storm, you remember the clear sky of yesterday and "
+                                             "the gulls over the long grey quay, their cries thin.", "storm")[1], [])
+
+    def test_a_fresh_storm_builds(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            for minute in range(0, 1440, 7):
+                world.set_weather(conn, {"kind": "clear"})
+                out = world.tick_weather(conn, minutes_advanced=20, time_after={"day": 1, "minute": minute, "hour": minute // 60})
+                if out["weather"]["kind"] != "clear":
+                    self.assertLessEqual(out["weather"]["strength"], 0.37, out["weather"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

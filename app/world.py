@@ -1184,7 +1184,11 @@ def tick_weather(
                 weights=[22, 22, 14, 14, 10, 8, 10],
                 k=1,
             )[0]
+            # Weather builds: a clear sky does not turn to a heavy storm between
+            # two lines of talk (7B run 29, T6: Clear -> Heavy storm in minutes).
+            # A fresh start is light within the hour and can reach heavy over hours.
             strength = round(rng.uniform(0.25, 0.85), 3)
+            strength = min(strength, round(0.3 + 0.2 * hours, 3))
             w = {
                 "kind": kind,
                 "strength": strength,
@@ -19520,6 +19524,15 @@ def _reconcile_prose_with_state(
             for entry in clock_fixes:
                 report["trimmed"].append(entry)
                 turn_ledger.note("prose", "clock_word_repaired", **entry)
+    except Exception:
+        pass
+    # A calm sea or clear sky in the narration while the engine has a storm,
+    # rain or snow (7B run 29, T9): that sentence goes, speech stays.
+    try:
+        text, fair = prose_state.repair_fair_weather(text, get_weather(conn).get("kind"))
+        for entry in fair:
+            report["trimmed"].append(entry)
+            turn_ledger.note("prose", "fair_weather_dropped", **entry)
     except Exception:
         pass
     # A closing sentence with no verb ("The pressure of the day settling in.",

@@ -1000,6 +1000,8 @@ _SNAKE_RE = re.compile(r"\b[a-z]+(?:_[a-z]+)+\b")
 _MD_BOLD_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
 _MD_STAR_RE = re.compile(r"(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])")
 _MD_UNDER_RE = re.compile(r"(?<![\w])_([^_\s][^_\n]*?)_(?![\w])")
+# One underscore glued to the front of a plain word: "Is the _hull worth patching" (7B run 29).
+_STRAY_UNDERSCORE_RE = re.compile(r"(?<![\w\[_])_([A-Za-z][a-z]+)\b(?!_)")
 # An attitude label pasted as an adjective: "gives you a Dismissive look".
 _ATTITUDE_WORDS = (
     "Antagonistic", "Apprehensive", "Condescending", "Cordial", "Dismissive", "Neutral", "Warm", "Hostile",
@@ -1059,6 +1061,10 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
         if found:
             out = pattern.sub(r"\1", out)
             fixes.append({"why": why, "text": ", ".join(found[:4])[:160]})
+    stray = [m.group(0) for m in _STRAY_UNDERSCORE_RE.finditer(out)]
+    if stray:
+        out = _STRAY_UNDERSCORE_RE.sub(r"\1", out)
+        fixes.append({"why": "stray_underscore", "text": ", ".join(stray[:4])[:160]})
     keys = [m.group(0) for m in _SNAKE_RE.finditer(out)]
     if keys:
         out = _SNAKE_RE.sub(lambda m: m.group(0).replace("_", " "), out)
@@ -1185,6 +1191,38 @@ _SUN_TO_DOWN = {
     "rise": "sink", "rises": "sinks", "rose": "sank", "rising": "sinking",
     "climb": "sink", "climbs": "sinks", "climbed": "sank", "climbing": "sinking",
 }
+
+
+# Fair-weather claims about the present sky or sea (7B run 29, T9: "The sea
+# outside is calm, the waves barely lapping" under a heavy storm). Read only in
+# the narrator's sentences, and only while the engine has storm, rain or snow.
+_FAIR_WEATHER_RE = re.compile(
+    r"\b(?:clear(?:\s+blue)?\s+skys?|cloudless|blue\s+sky|"
+    r"(?:sea|water|waters|harbou?r|bay|air)\s+(?:outside\s+)?(?:is|lies|sits|remains)\s+(?:calm|still|glassy|quiet)|"
+    r"calm\s+(?:sea|water|waters)|waves\s+(?:barely|gently|softly)|gentle\s+breeze|still\s+air|"
+    r"sun\s+(?:shines|is\s+shining|beats|blazes|warms))\b",
+    re.I,
+)
+_FAIR_WEATHER_ASIDE_RE = re.compile(
+    r"\b(?:despite|unlike|no\s+longer|once|used\s+to|would|if|until|remember|before\s+the|hope|wish|tomorrow|yesterday)\b",
+    re.I,
+)
+_ROUGH_WEATHER = {"storm", "rain", "snow"}
+
+
+def repair_fair_weather(text: str, kind: str) -> tuple[str, list[dict[str, Any]]]:
+    """Drop narrator sentences that put fair weather into a storm, rain or snow scene."""
+    source = str(text or "")
+    if str(kind or "").lower() not in _ROUGH_WEATHER:
+        return source, []
+
+    def _clash(sentence: str) -> bool:
+        if re.search(r"[\"“”]", sentence):
+            return False
+        return bool(_FAIR_WEATHER_RE.search(sentence)) and not _FAIR_WEATHER_ASIDE_RE.search(sentence)
+
+    out, dropped = drop_sentences(source, _clash)
+    return out, [{"why": "fair_weather", "kind": str(kind).lower(), "text": s[:160]} for s in dropped]
 
 
 def _match_case(old: str, new: str) -> str:
