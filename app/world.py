@@ -16760,6 +16760,11 @@ _NAMED_JOB_PERSON_RE = re.compile(
     r"\b(?:[Aa]n?|[Tt]he)\s+(?P<role>[a-z][a-z-]{2,24}(?:\s+[a-z][a-z-]{2,24})?)\s+(?:named|called)\s+"
     r"(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b"
 )
+# "The mill's bell ringer, Esme Larkin, stands at the edge of the pond" (7B run 23, T1).
+_JOB_THEN_NAME_RE = re.compile(
+    r"\b(?:[Tt]he|[Aa]n?)\s+(?:[A-Za-z]+['’]s\s+)?(?P<role>[a-z][a-z-]{2,24}(?:\s+[a-z][a-z-]{2,24})?),\s+"
+    r"(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\s*[,.]"
+)
 # Words that open a sentence before a comma and are never a name: "Inside, the
 # scent of bread ..." stored a person called Inside (7B run 22, T0).
 _NOT_A_NAME_START = frozenset({
@@ -16799,7 +16804,8 @@ def _introduced_person_first(
     blocked = {str(n).strip().lower() for n in not_people}
     known = {str(n or "").strip().lower() for n in known_names if str(n or "").strip()}
     matches = sorted(
-        list(_INTRODUCED_PERSON_RE.finditer(plain)) + list(_NAMED_JOB_PERSON_RE.finditer(plain)),
+        list(_INTRODUCED_PERSON_RE.finditer(plain)) + list(_NAMED_JOB_PERSON_RE.finditer(plain))
+        + list(_JOB_THEN_NAME_RE.finditer(plain)),
         key=lambda m: m.start(),
     )
     for match in matches:

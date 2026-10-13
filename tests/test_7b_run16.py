@@ -49,6 +49,33 @@ class AJobNamedSomeone(unittest.TestCase):
         self.assertEqual(_introduced_people("A grizzled man named Rusk greets you.", []), [{"name": "Rusk", "role": ""}])
 
 
+class JobThenName(unittest.TestCase):
+    """Run 23 T1: "The mill's bell ringer, Esme Larkin, stands ..." stored a drawn Yolande instead."""
+
+    def test_read(self):
+        from app.world import _introduced_people
+
+        self.assertEqual(
+            _introduced_people("The mill's bell ringer, Esme Larkin, stands at the edge of the mill pond.", []),
+            [{"name": "Esme Larkin", "role": "bell ringer"}],
+        )
+
+
+class AnswerInTheSecondSentence(unittest.TestCase):
+    """Run 23 T1: '"Not since the storm. I've been tracking the tides ..."' answered the bell ringer for Isk."""
+
+    def test_dropped(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        line = 'I walk over to the bell ringer. "Morning. Any word on when the water turns today?"'
+        paras = [
+            'Esme looks up. "The tide should turn around noon. Have you been out on the flats recently?"',
+            '"Not since the storm. I\'ve been tracking the tides."',
+            "Esme nods thoughtfully.",
+        ]
+        self.assertEqual(len(drop_invented_player_speech(paras, line)[1]), 1)
+
+
 class NamesAndCodes(unittest.TestCase):
     """T0: 'Dunstan Upcott [[A]] [[D1]]', 'Quarrel and Sons [[Quarrel and Sons]]', role 'grocer Quarrel and Sons'."""
 
