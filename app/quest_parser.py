@@ -762,7 +762,7 @@ def _is_duplicate(item: dict[str, Any], existing: list[dict[str, Any]] | None, g
     title = _norm(item.get("title"))
     for quest in existing or []:
         status = str(quest.get("status") or "active")
-        if status not in {"active", "offered", "declined"}:
+        if status not in {"active", "offered", "declined", "completed"}:
             continue
         ratio = SequenceMatcher(None, title, _norm(quest.get("title"))).ratio()
         # Another giver asking for another thing is another job (Saltmarrow
@@ -807,6 +807,7 @@ def validate_quest_changes(
     locations: list[dict[str, Any]] | None = None,
     existing: list[dict[str, Any]] | None = None,
     settled_ids: set[int] | None = None,
+    passive: bool = False,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Pure check. Returns (accepted_changes, rejected) where each rejected row is {"kind", "item", "reasons"}.
 
@@ -814,6 +815,10 @@ def validate_quest_changes(
     from the player's act and its roll (playtest #85b). No step_done or
     complete may touch them, so a failed roll is not completed by the parser
     reading the prose.
+
+    ``passive``: the player did no work this turn (Wait, a plain question,
+    looking around); a step is done only on a quote that shows a result and
+    is about that job (``done_check``, #130).
     """
     accepted: dict[str, Any] = {"source": (changes or {}).get("source") or "parser", "new": [], "updates": []}
     rejected: list[dict[str, Any]] = []
@@ -907,8 +912,14 @@ def validate_quest_changes(
         dup = _is_duplicate({"title": title}, list(existing or []) + taken_this_turn, giver.get("id") if giver else None, first_place)
         if dup is not None and same_offer is None:
             ref = dup.get("code") or dup.get("id")
-            # A job the player turned down is not offered again (TODO n20).
-            reasons.append(f"declined_before:{ref}" if str(dup.get("status") or "") == "declined" else f"duplicate_of:{ref}")
+            # A job the player turned down is not offered again (TODO n20), nor
+            # one just finished and paid (#130: a finished job offered and taken again).
+            dup_status = str(dup.get("status") or "")
+            reasons.append(
+                f"declined_before:{ref}" if dup_status == "declined"
+                else f"completed_before:{ref}" if dup_status == "completed"
+                else f"duplicate_of:{ref}"
+            )
         if reasons:
             rejected.append({"kind": "new", "item": raw, "reasons": reasons, "checked": checked})
             continue
@@ -971,8 +982,10 @@ def validate_quest_changes(
             action = "step_done"
         elif action in {"refuse", "reject", "turn_down"}:
             action = "decline"
-        # Turned-down rows are kept only for the re-offer check; no update may touch them.
-        quest = _resolve_quest(raw.get("quest"), [q for q in existing or [] if str(q.get("status") or "") != "declined"])
+        # Turned-down and finished rows are kept only for the re-offer check; no update may touch them.
+        quest = _resolve_quest(
+            raw.get("quest"), [q for q in existing or [] if str(q.get("status") or "") not in {"declined", "completed"}]
+        )
         if action == "accept" and quest is not None and str(quest.get("status") or "") == "active":
             continue  # already taken this turn (a typed accept or the Accept button)
         if action not in QUEST_ACTIONS:
@@ -1000,6 +1013,8 @@ def validate_quest_changes(
         # completed and paid the cargo job while the search roll failed.
         if action in {"step_done", "complete"} and _intent_only(evidence):
             reasons.append("evidence_is_intent")
+        if action in {"step_done", "complete"} and quest is not None and not reasons:
+            reasons.extend(done_check(evidence, quest, passive=passive))
         if reasons:
             rejected.append({"kind": "update", "item": raw, "reasons": reasons, "checked": evidence[:240]})
             continue
@@ -1030,6 +1045,61 @@ def _intent_only(evidence: str) -> bool:
     """The quote only sets out to do the work: a purpose or a start, no result."""
     text = str(evidence or "")
     return bool(_INTENT_ONLY_RE.search(text)) and not _DONE_WORDS_RE.search(text)
+
+
+# Work still owed is not work done (7B run 5 #130, T5: "You will have to clear
+# out this hold, piece by piece." completed and paid the hold job).
+_STILL_OWED_RE = re.compile(
+    r"\b(?:will|shall|going\s+to|have\s+to|has\s+to|need(?:s)?\s+to|must|should|could|would|might|"
+    r"(?:you|i|we)'ll)\b",
+    re.I,
+)
+# Words that say nothing about which job a quote is about.
+_QUEST_STOP_STEMS = {
+    "the", "you", "your", "and", "for", "with", "that", "this", "from", "her", "his", "him", "she", "they",
+    "them", "are", "was", "were", "has", "have", "had", "not", "but", "into", "out", "its", "one", "who",
+    "what", "there", "their", "then", "than", "some", "just", "back", "still", "about", "over", "will",
+}
+
+
+def _quote_is_question(evidence: str) -> bool:
+    text = re.sub(r"[\"'“”‘’\s]+$", "", str(evidence or "")).strip()
+    return text.endswith("?")
+
+
+def _quote_names_the_job(evidence: str, quest: dict[str, Any] | None) -> bool:
+    """The quote shares a content word with the job's title or its current step."""
+    if not quest:
+        return False
+    job = _stems(f"{quest.get('title') or ''} {quest.get('current_step_text') or ''}") - _QUEST_STOP_STEMS
+    return bool(job & (_stems(evidence) - _QUEST_STOP_STEMS))
+
+
+def done_check(evidence: str, quest: dict[str, Any] | None, *, passive: bool = False) -> list[str]:
+    """Why a quote does not show a step done; empty when it does (7B run 5 #130).
+
+    The parser may cite any sentence, so the engine reads the quote it cites.
+    A question, or work still owed with no result word, finishes nothing. On a
+    turn where the player acted, the quote must show a result or be about this
+    job; on a passive turn (Wait, a plain question, looking around) the player
+    did no work, so the quote must show a result *and* be about this job. T58
+    paid two jobs on "The rain continues to pour, obscuring the view"; T89 paid
+    "A debt of bread" on a Wait because someone handed over a sack.
+    """
+    text = str(evidence or "")
+    result = bool(_DONE_WORDS_RE.search(text))
+    if _quote_is_question(text) and not result:
+        return ["evidence_is_question"]
+    if _STILL_OWED_RE.search(text) and not result:
+        return ["evidence_is_owed_work"]
+    about = _quote_names_the_job(text, quest)
+    if passive:
+        if not (result and about):
+            return ["passive_turn_not_done"]
+        return []
+    if not (result or about):
+        return ["evidence_not_about_this_job"]
+    return []
 
 
 def _stems(text: Any) -> set[str]:
@@ -1100,7 +1170,9 @@ def load_quest_context(conn, turn: int = 0) -> dict[str, list[dict[str, Any]]]:
     """NPCs, places and open quests from the live DB, in the shapes validation reads.
 
     Offers turned down in the last DECLINE_MEMORY_TURNS turns come along too, so
-    the same job is not filed again every time the giver mentions it (TODO n20).
+    the same job is not filed again every time the giver mentions it (TODO n20),
+    and jobs finished in that window, so a paid job is not offered and paid
+    again (#130). Neither kind can be updated.
     """
     from app.quests import DECLINE_MEMORY_TURNS
 
@@ -1116,9 +1188,10 @@ def load_quest_context(conn, turn: int = 0) -> dict[str, list[dict[str, Any]]]:
         FROM quests q
         WHERE q.status IN ('active', 'offered')
            OR (q.status = 'declined' AND COALESCE(q.failed_turn, 0) >= ?)
+           OR (q.status = 'completed' AND COALESCE(q.completed_turn, 0) >= ?)
         ORDER BY q.id DESC LIMIT 40
         """,
-        (int(turn) - DECLINE_MEMORY_TURNS,),
+        (int(turn) - DECLINE_MEMORY_TURNS, int(turn) - DECLINE_MEMORY_TURNS),
     )
     return {"npcs": npcs, "locations": locations, "existing": existing}
 
@@ -1131,11 +1204,15 @@ def apply_quest_changes(
     player_input: str = "",
     turn: int = 0,
     settled_ids: set[int] | None = None,
+    passive: bool = False,
 ) -> dict[str, Any]:
     """Validate against the live DB, create/advance quests, journal + event-log each one. Returns a report for the trace.
 
     ``settled_ids``: quests the engine already advanced or refused this turn (playtest #85b).
+    ``passive``: the player did no work this turn (see validate_quest_changes).
     """
+    from app import turn_ledger
+
     report: dict[str, Any] = {
         "status": "skipped",
         "source": str((changes or {}).get("source") or "parser"),
@@ -1157,7 +1234,14 @@ def apply_quest_changes(
             locations=ctx["locations"],
             existing=ctx["existing"],
             settled_ids=settled_ids,
+            passive=passive,
         )
+        for r in rejected:
+            if r["kind"] == "update" and str(r["item"].get("action") or "") in {"step_done", "complete", "done"}:
+                turn_ledger.note(
+                    "quest", "payout_refused", quest=str(r["item"].get("quest") or ""), reasons=r["reasons"],
+                    quote=str(r.get("checked") or r["item"].get("evidence") or "")[:240], passive=passive,
+                )
         report["rejected"] = [
             # "quote": the sentence the offer check judged, so a review can see
             # which words were read (playtest #81).
@@ -1230,6 +1314,10 @@ def apply_quest_changes(
                 row = {"code": upd["code"], "action": done["action"]}
                 if done.get("paid"):
                     row["paid"] = done["paid"]
+                    turn_ledger.note(
+                        "quest", "paid", quest=upd["code"], action=action, paid=done["paid"],
+                        quote=upd["evidence"][:240], passive=passive,
+                    )
                 report["updated"].append(row)
                 continue
             elif action == "fail":
@@ -1245,3 +1333,48 @@ def apply_quest_changes(
         report["status"] = "error"
         report["error"] = str(exc)[:300]
         return report
+
+
+def finishing_quest_ids(
+    conn,
+    changes: dict[str, Any] | None,
+    *,
+    narration: str,
+    player_input: str = "",
+    turn: int = 0,
+    settled_ids: set[int] | None = None,
+    passive: bool = False,
+) -> list[int]:
+    """Quests the parser's changes will finish (and pay) this turn; a dry run, nothing is written.
+
+    apply_turn reads this before any gold moves: a job the engine pays this
+    turn is the payout, so the model's own gold and XP for the same work go
+    (7B run 5 #130, T45: the quest paid +15 gold, +25 XP and the model's GOLD
+    and XP ops added +35 and +11 on top). Same rule as playtest #85b's engine
+    path.
+    """
+    if not isinstance(changes, dict) or not changes.get("updates"):
+        return []
+    try:
+        ctx = load_quest_context(conn, int(turn))
+        accepted, _rejected = validate_quest_changes(
+            changes,
+            narration=narration,
+            player_input=player_input,
+            npcs=ctx["npcs"],
+            locations=ctx["locations"],
+            existing=ctx["existing"],
+            settled_ids=settled_ids,
+            passive=passive,
+        )
+    except Exception:
+        return []
+    by_id = {int(q.get("id") or 0): q for q in ctx["existing"]}
+    out: list[int] = []
+    for upd in accepted["updates"]:
+        quest = by_id.get(int(upd.get("quest_id") or 0)) or {}
+        if upd["action"] == "complete" or (
+            upd["action"] == "step_done" and _int(quest.get("current_step"), 1) >= _int(quest.get("total_steps"), 1)
+        ):
+            out.append(int(upd["quest_id"]))
+    return out

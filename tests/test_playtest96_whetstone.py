@@ -133,13 +133,27 @@ class OneActOneQuest(unittest.TestCase):
         self.assertEqual([u["code"] for u in accepted["updates"]], ["Q1"])
 
     def test_two_acts_advance_two_quests(self):
-        accepted, _ = self._validate(
-            [
+        # The second act is about its own job. "Finnian takes the coins with a
+        # grunt" used to stand in here; a quote that says nothing about
+        # metalworking no longer finishes it (7B run 5 #130).
+        lesson = "Finnian shows you how he tempers a blade, and you finish your first lesson in metalworking."
+        accepted, _ = quest_parser.validate_quest_changes(
+            {"new": [], "updates": [
                 {"quest": "Q1", "action": "step_done", "evidence": self.EVIDENCE},
-                {"quest": "Q2", "action": "step_done", "evidence": "Finnian takes the coins with a grunt"},
-            ]
+                {"quest": "Q2", "action": "step_done", "evidence": lesson},
+            ]},
+            narration=FINAL + " " + lesson,
+            player_input=LINE,
+            existing=self.EXISTING,
         )
         self.assertEqual(sorted(u["code"] for u in accepted["updates"]), ["Q1", "Q2"])
+
+    def test_an_unrelated_sentence_does_not_finish_a_job(self):
+        accepted, rejected = self._validate(
+            [{"quest": "Q2", "action": "step_done", "evidence": "Finnian takes the coins with a grunt"}]
+        )
+        self.assertEqual(accepted["updates"], [])
+        self.assertEqual(rejected[0]["reasons"], ["evidence_not_about_this_job"])
 
 
 class OneThingNamedIsOne(unittest.TestCase):
