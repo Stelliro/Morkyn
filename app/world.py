@@ -10127,6 +10127,14 @@ _OUTDOOR_AREA_RE = re.compile(
 )
 
 
+_OUTDOOR_AREA_ONWARD_RE = re.compile(
+    r"\b(?:toward|towards|to|onto|into)\s+(?:the\s+)?"
+    r"(?P<lead>(?:edge|end|foot|top|middle|centre|center|far\s+side|near\s+side)\s+of\s+the\s+)?"
+    r"(?P<area>(?:[a-z'’-]+\s+){0,2}?(?:" + "|".join(re.escape(w) for w in _OUTDOOR_AREA_WORDS) + r"))\b",
+    re.IGNORECASE,
+)
+
+
 def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -> str:
     """An open part of this settlement the player walks to (the flats, the harbour, the square), or "".
 
@@ -10136,9 +10144,25 @@ def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -
     as the settlement's child with no trade, when the prose names it outside
     speech and does not stop the walk.
     """
-    match = _OUTDOOR_AREA_RE.search(wanted or "")
-    if not match:
+    matches = list(_OUTDOOR_AREA_RE.finditer(wanted or ""))
+    if not matches:
         return ""
+    match = matches[0]
+    # Further places the same walk heads for: "... onto the flats toward the
+    # drowned lower district".
+    matches += [m for m in _OUTDOOR_AREA_ONWARD_RE.finditer(wanted or "", match.end())]
+    if len(matches) > 1:
+        # "head out onto the flats toward the drowned lower district" (7B run
+        # 21, T2): the place the prose arrives at is where the walk ends.
+        arrived = " ".join(
+            s.lower() for s in re.split(r"(?<=[.!?])\s+", _unspoken(narration))
+            if re.search(r"\byou\s+(?:\w+ly\s+)?(?:reach|arrive|find\s+yourself|come\s+to|stand\s+(?:at|on|in))", s, re.I)
+        )
+        for candidate in matches:
+            last = candidate.group("area").split()[-1].lower()
+            if last and re.search(rf"\b{re.escape(last)}", arrived):
+                match = candidate
+                break
     area = " ".join(match.group("area").split())
     head = area.split()[-1].lower()
     rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
