@@ -404,6 +404,13 @@ _PASS_THROUGH_RE = re.compile(
 )
 _PROPER_NAME_RE = re.compile(r"(?:[Tt]he\s+)?[A-Z][\w'\u2019-]*(?:\s+(?:of|at|and|the|on|[A-Z][\w'\u2019-]*))*")
 _INSIDE_LEAD_RE = re.compile(r"^\s*inside\b[,\s]+(?:(?:the|a|an)\s+)?(?P<rest>.*)$", re.I | re.S)
+# A choice put to the player is not an entry (7B run 9, T0: "You have a choice
+# to make: do you enter the warehouse and gather supplies, or approach Hal?"
+# opened a general store and moved the player and Hal into it).
+_OFFERED_ENTRY_RE = re.compile(
+    r"\b(?:do|will|would|could|should|might|may|can)\s+you\b|\binvit\w*\s+you\b|\bchoice\b|\bwhether\b",
+    re.I,
+)
 _DOOR_CUE_RE = re.compile(r"\b(?:doors?|doorway|entrance|threshold)\b", re.I)
 # "in" that is not going inside: "step in front of the bakery", "head in the
 # direction of the inn", "lets you in on a secret about the tavern".
@@ -621,6 +628,8 @@ def entry_in_prose(text: str, people: list[str] | tuple[str, ...] = ()) -> dict[
     sentences = _sentences(strip_speech(text))
     found: tuple[int, str, str, str] | None = None
     for index, sentence in enumerate(sentences):
+        if sentence.rstrip().endswith("?") or _OFFERED_ENTRY_RE.search(sentence):
+            continue
         for match in list(_SELF_ENTER_RE.finditer(sentence)) + list(_LED_ENTER_RE.finditer(sentence)):
             tail = match.group("tail") or ""
             verb = (match.groupdict().get("verb") or "").lower()
