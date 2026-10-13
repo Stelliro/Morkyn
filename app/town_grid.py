@@ -93,6 +93,10 @@ WARD_SPECS: dict[str, dict[str, Any]] = {
 }
 _DEFAULT_WARD = WARD_SPECS["residential"]
 LANDMARK_METRES = 60
+# Two doors of one trade on one street stand at least this far apart, so a
+# street does not read as the same shop twice (playtest #60: 4 general stores
+# and 2 tailors on one market street, two of them "a few steps south").
+SAME_KIND_STREET_METRES = 200
 SIDE_STREET_PASSES = 4
 GATE_METRES = 12
 
@@ -215,6 +219,11 @@ def tile_minutes(side: int) -> float:
 
 def metres_to_tiles(metres: float, side: int) -> int:
     return max(1, int(round(float(metres) / tile_metres(side))))
+
+
+def same_kind_gap_tiles(side: int) -> int:
+    """Frontage tiles between two doors of one trade on one street segment (#60)."""
+    return metres_to_tiles(SAME_KIND_STREET_METRES, side)
 
 
 def settlement_size_for_band(band: str) -> str:
@@ -1767,6 +1776,8 @@ def _assign_kinds(world: dict[str, Any], city: dict[str, Any], cell: dict[str, A
     counts: dict[tuple[int, str], int] = {}
     caps: dict[tuple[int, str], int] = {}
     report = {"stalls": 0, "stalls_placed": 0, "stalls_unplaced": 0, "notices": 0}
+    gap = same_kind_gap_tiles(side)
+    street_doors: dict[tuple[int, str], list[tuple[int, int]]] = {}
 
     def cap_left(d: int, kind: str) -> bool:
         cap = caps.get((d, kind))
@@ -1775,10 +1786,19 @@ def _assign_kinds(world: dict[str, Any], city: dict[str, Any], cell: dict[str, A
             cap = caps[(d, kind)] = kind_cap(kind, ward_frontage.get(d, 0), density)
         return counts.get((d, kind), 0) < cap
 
+    def street_clear(plot: dict[str, Any], kind: str) -> bool:
+        """No door of this trade close along the plot's own street (#60)."""
+        seg, f = plot.get("seg"), plot.get("f")
+        if seg is None or f is None:
+            return True
+        return all(abs(x - f[0]) + abs(y - f[1]) >= gap for x, y in street_doors.get((int(seg), kind), ()))
+
     def take(plot: dict[str, Any], kind: str) -> None:
         plot["vk"] = kind
         plot["k"] = "service" if kind in SERVICE_KINDS else "shop"
         counts[(int(plot["d"]), kind)] = counts.get((int(plot["d"]), kind), 0) + 1
+        if plot.get("seg") is not None and plot.get("f") is not None:
+            street_doors.setdefault((int(plot["seg"]), kind), []).append((int(plot["f"][0]), int(plot["f"][1])))
 
     frontage = [p for p in plots if p.get("f") is not None and p.get("k") not in _NOT_STALL_TARGETS]
     ward_frontage: dict[int, int] = {}
@@ -1893,7 +1913,7 @@ def _assign_kinds(world: dict[str, Any], city: dict[str, Any], cell: dict[str, A
             fringe = rural_ok and c < FRINGE_CORE
         if rng.random() < p_shop:
             table = [(k, w.get(ward_type, 0)) for k, w in KIND_WEIGHTS.items() if k in possible and w.get(ward_type, 0) > 0]
-            table = [(k, w) for k, w in table if cap_left(d, k)]
+            table = [(k, w) for k, w in table if cap_left(d, k) and street_clear(plot, k)]
             if table:
                 total = sum(w for _k, w in table)
                 pick = rng.random() * total

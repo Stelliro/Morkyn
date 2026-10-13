@@ -24,6 +24,7 @@ removed by an ordinary rewind and ``town_position`` is restored by key.
 """
 from __future__ import annotations
 
+import difflib
 import json
 import math
 import re
@@ -716,6 +717,13 @@ def snapshot_town_rows(conn, town_turn: dict[str, Any] | None, rows: dict[str, l
     plot_ref = str(((town_turn.get("plan") or {}).get("target") or {}).get("plot") or "")
     if plot_ref:
         W._snapshot_row(conn, "npcs", "workplace_plot = ?", (plot_ref,), rows)
+        # realize_plot may adopt an unplotted row of the plot's name (#56).
+        found = locate_plot(conn, chart, plot_ref)
+        if found is not None and not conn.execute("SELECT 1 FROM locations WHERE plot_id = ?", (plot_ref,)).fetchone():
+            settle = settlement_row(conn, found[0], create=False)
+            adopt = _adoptable_row(conn, found[0], found[3], settle)
+            if adopt:
+                W._snapshot_row(conn, "locations", "id = ?", (adopt,), rows)
 
 
 def locate_plot(conn, chart: dict[str, Any], plot_ref: str) -> tuple[dict, dict, dict, dict] | None:
@@ -736,12 +744,34 @@ def locate_plot(conn, chart: dict[str, Any], plot_ref: str) -> tuple[dict, dict,
     return city, cell, town, town["plots"][n]
 
 
+def _adoptable_row(conn, city: dict[str, Any], plot: dict[str, Any], settle_id: int) -> int:
+    """An unplotted row that already is this plot: same name, same town, no other trade; its id or 0.
+
+    Playtest #56: the opening made 'Thirsty Wren Seamstress' (a tailor under
+    the town's row, no plot) before the grid named that plot, and entering
+    the plot then made a twin 'Thirsty Wren Seamstress on Blind Boar Court'.
+    A same-named row elsewhere in the world is still a clash.
+    """
+    name = str(plot.get("name") or "").strip()
+    if not name:
+        return 0
+    vk = str(plot.get("vk") or "")
+    row = conn.execute(
+        "SELECT id FROM locations WHERE COALESCE(plot_id, '') = '' AND name = ? COLLATE NOCASE "
+        "AND COALESCE(settlement_size, '') = '' AND (COALESCE(kind, '') = '' OR kind = ?) "
+        "AND (city_id = ? OR (? != 0 AND parent_id = ?)) ORDER BY id LIMIT 1",
+        (name, vk, str(city.get("id") or ""), int(settle_id or 0), int(settle_id or 0)),
+    ).fetchone()
+    return int(row["id"]) if row is not None else 0
+
+
 def realize_plot(conn, chart: dict[str, Any], plot_ref: str) -> int:
     """The plot's locations row, made now if it is not one yet; 0 when the plot is unknown.
 
     Idempotent. The row is a child of the city's settlement row, stamped with
-    the plot's kind and hours. On a name clash with an unrelated row it is
-    stored as "<name> on <street>" and the plain name becomes an alias.
+    the plot's kind and hours. A row this town already holds under the plot's
+    name is adopted (#56). On a name clash with an unrelated row it is stored
+    as "<name> on <street>" and the plain name becomes an alias.
     """
     from app import world as W
 
@@ -758,24 +788,33 @@ def realize_plot(conn, chart: dict[str, Any], plot_ref: str) -> int:
     ward = _district(cell, plot.get("d"))
     label = plot_label(plot)
     name = str(plot.get("name") or "").strip()
-    if not name:
-        name = f"{street} {label.title()}".strip() if street else f"{str(ward.get('name') or city.get('name') or '')} {label.title()}".strip()
-    stored = name
-    clash = conn.execute("SELECT 1 FROM locations WHERE name = ? COLLATE NOCASE", (stored,)).fetchone() is not None
-    if clash:
-        stored = f"{name} on {street}" if street else f"{name} in {ward.get('name') or city.get('name')}"
-        n = 2
-        while conn.execute("SELECT 1 FROM locations WHERE name = ? COLLATE NOCASE", (stored,)).fetchone():
-            stored = f"{name} on {street} {n}" if street else f"{name} {n}"
-            n += 1
-    summary = f"{label[:1].upper() + label[1:]} on {street or 'a lane'}, {ward.get('name') or city.get('name') or ''}".strip(", ")
-    code = W._next_code(conn, "locations", "L")
-    cursor = conn.execute(
-        "INSERT INTO locations (code, name, summary, visit_count, plot_id, city_id) VALUES (?, ?, ?, 0, ?, ?)",
-        (code, stored, summary[:400], str(plot_ref), str(city.get("id") or "")),
-    )
-    venue_id = int(cursor.lastrowid)
-    W.stamp_venue_fields(conn, venue_id, parent_id=parent_id, kind=vk)
+    adopted = _adoptable_row(conn, city, plot, parent_id)
+    clash = False
+    if adopted:
+        venue_id = adopted
+        conn.execute(
+            "UPDATE locations SET plot_id = ?, city_id = ? WHERE id = ?", (str(plot_ref), str(city.get("id") or ""), venue_id)
+        )
+        W.stamp_venue_fields(conn, venue_id, parent_id=parent_id, kind=vk)
+    else:
+        if not name:
+            name = f"{street} {label.title()}".strip() if street else f"{str(ward.get('name') or city.get('name') or '')} {label.title()}".strip()
+        stored = name
+        clash = conn.execute("SELECT 1 FROM locations WHERE name = ? COLLATE NOCASE", (stored,)).fetchone() is not None
+        if clash:
+            stored = f"{name} on {street}" if street else f"{name} in {ward.get('name') or city.get('name')}"
+            n = 2
+            while conn.execute("SELECT 1 FROM locations WHERE name = ? COLLATE NOCASE", (stored,)).fetchone():
+                stored = f"{name} on {street} {n}" if street else f"{name} {n}"
+                n += 1
+        summary = f"{label[:1].upper() + label[1:]} on {street or 'a lane'}, {ward.get('name') or city.get('name') or ''}".strip(", ")
+        code = W._next_code(conn, "locations", "L")
+        cursor = conn.execute(
+            "INSERT INTO locations (code, name, summary, visit_count, plot_id, city_id) VALUES (?, ?, ?, 0, ?, ?)",
+            (code, stored, summary[:400], str(plot_ref), str(city.get("id") or "")),
+        )
+        venue_id = int(cursor.lastrowid)
+        W.stamp_venue_fields(conn, venue_id, parent_id=parent_id, kind=vk)
     if not vk:
         conn.execute("UPDATE locations SET kind = ? WHERE id = ?", (str(plot.get("k") or ""), venue_id))
     if clash:
@@ -1150,6 +1189,96 @@ def _plot_named(view: _CityView, text_norm: str, *, known: bool = True) -> tuple
             if found is not None:
                 best, best_len = (int(found[1]["x"]), int(found[1]["y"]), found[3]), n
     return best
+
+
+# How close a model's building name must be to a plotted one to be that plot
+# ("Lucky Oxford Outfitters" for "Lucky Ox Outfitters" scores 0.90).
+_LIKE_RATIO = 0.84
+
+
+def _plot_like(view: _CityView, name: str) -> tuple[int, int, dict[str, Any]] | None:
+    """The plot a building name means when the model spelled it a little off (#57), else None.
+
+    Exact names are _plot_named's. This is for a name on its own (a MOVE, a
+    new place, a sign in the prose), never a whole sentence: the names must
+    be close overall, and a trade the name states must be the plot's trade.
+    """
+    want = _bare(name)
+    if len(want) < 6:
+        return None
+    kind = venues.venue_kind_from_name(name)
+    best, best_ratio = None, _LIKE_RATIO
+    seen: set[str] = set()
+    candidates = [(cx, cy, plot) for cx, cy, plot in view.plots(known=False) if plot.get("name")]
+    for pid, row in view.realized.items():
+        found = locate_plot(view.conn, view.chart, pid)
+        if found is not None:
+            candidates.append((int(found[1]["x"]), int(found[1]["y"]), dict(found[3], name=str(row.get("name") or ""))))
+    for cx, cy, plot in candidates:
+        key = f"{plot['id']}|{plot['name']}"
+        if key in seen:
+            continue
+        seen.add(key)
+        if kind and plot.get("vk") and str(plot["vk"]) != kind and kind != "general_store":
+            continue
+        ratio = difflib.SequenceMatcher(None, want, _bare(str(plot["name"]))).ratio()
+        if ratio > best_ratio:
+            best, best_ratio = (cx, cy, plot), ratio
+    return best
+
+
+def _plot_called(view: _CityView, name: str) -> tuple[int, int, dict[str, Any]] | None:
+    """The plot whose own name (or realized row's name) this name is, give or take a "The"; else None."""
+    want = _bare(name)
+    if not want:
+        return None
+    for cx, cy, plot in view.plots(known=False):
+        if plot.get("name") and _bare(str(plot["name"])) == want:
+            return cx, cy, plot
+    for pid, row in view.realized.items():
+        if _bare(str(row.get("name") or "")) == want:
+            found = locate_plot(view.conn, view.chart, pid)
+            if found is not None:
+                return int(found[1]["x"]), int(found[1]["y"]), found[3]
+    return None
+
+
+def _known_row_plot(conn, view: _CityView, city: dict[str, Any], text_norm: str) -> tuple[int, int, dict[str, Any]] | None:
+    """A plot the player knows by a place row this town already had (the opening's, #56), named in the text."""
+    settle = settlement_row(conn, city, create=False)
+    try:
+        rows = conn.execute(
+            "SELECT id, name FROM locations WHERE COALESCE(plot_id, '') = '' AND COALESCE(settlement_size, '') = '' "
+            "AND (city_id = ? OR (? != 0 AND parent_id = ?))",
+            (str(city.get("id") or ""), int(settle or 0), int(settle or 0)),
+        ).fetchall()
+    except Exception:
+        return None
+    best, best_len = None, 0
+    for row in rows:
+        n = _named_in(text_norm, str(row["name"] or ""))
+        if n <= best_len:
+            continue
+        plot = _plot_called(view, str(row["name"] or ""))
+        if plot is not None and _adoptable_row(conn, city, plot[2], settle) == int(row["id"]):
+            best, best_len = plot, n
+    return best
+
+
+_GATE_NAME_RE = re.compile(r"^(?:the\s+)?(north|south|east|west)(?:ern)?\s+(?:city\s+|town\s+)?gate(?:s|house)?$", re.I)
+
+
+def _gate_named(view: _CityView, name: str) -> str:
+    """The compass word of a town gate the name means ('West Gate'), when the town has that gate; else ""."""
+    m = _GATE_NAME_RE.match(" ".join(str(name or "").split()))
+    if not m:
+        return ""
+    word = m.group(1).lower()
+    for items in tg.city_ports(view.chart, view.city).values():
+        for port in items:
+            if str(port.get("gate") or "").lower() == word:
+                return word
+    return ""
 
 
 def _street_named(view: _CityView, text_norm: str) -> tuple[int, int, set[int], str] | None:
@@ -1599,7 +1728,7 @@ def plan_town_move(conn, chart: dict[str, Any], city: dict[str, Any], text: str,
                               context=context)
 
     enter = doorway == "enter"
-    named = _plot_named(view, low)
+    named = _plot_named(view, low) or _known_row_plot(conn, view, city, low)
     if named is not None:
         cx, cy, plot = named
         target = _target_entry(cx, cy, plot, side)
@@ -2013,27 +2142,55 @@ _BUILDING_MOVE_KEYS = ("move_to_location", "move_to_location_code")
 
 
 def _strip_unplotted_buildings(conn, chart: dict[str, Any], view: _CityView, result: dict[str, Any]) -> list[str]:
-    """LOC_NEW rows that name a building the grid does not have are not stored (#55)."""
+    """LOC_NEW rows for the town's buildings are not stored as new places (#55, #57).
+
+    A building the grid does not have is dropped. One it does have (by its
+    name, a near spelling of it, or a gate the town has) is already a plot:
+    no row is made, since a plot becomes a place when the player goes in, and
+    a near spelling in the prose takes the plot's real name. The prose keeps
+    the building either way. Returns the names of buildings the grid lacks.
+    """
+    from app import world as W
+
     dropped = []
     kept = []
+    renames: dict[str, str] = {}
     for location in result.get("locations") or []:
         if not isinstance(location, dict):
             kept.append(location)
             continue
         name = str(location.get("name") or "").strip()
-        if name and venues.venue_kind_from_name(name) and _plot_named(view, _norm(name), known=False) is None:
+        if not name:
+            kept.append(location)
+            continue
+        if _gate_named(view, name) or _plot_called(view, name) is not None:
+            continue  # the town's own building or gate: no new row
+        like = _plot_like(view, name)
+        if like is not None:
+            real = str(like[2].get("name") or "")
+            if real and real != name:
+                renames[name] = real
+            continue
+        if venues.venue_kind_from_name(name) and _plot_named(view, _norm(name), known=False) is None:
             dropped.append(name)
             continue
         kept.append(location)
-    if dropped:
+    if len(kept) != len(result.get("locations") or []):
         result["locations"] = kept
+    if renames:
+        text = W._narration_text(result)
+        new = text
+        for wrong, real in renames.items():
+            new = new.replace(wrong, real)
+        if new != text:
+            W._set_narration_text(result, new)
     return dropped
 
 
 def _shown_entry_plot(view: _CityView, here_town: dict[str, Any], here_i: int, shown: dict[str, Any]) -> tuple[int, int, dict] | None:
     name = str(shown.get("name") or "")
     if name:
-        found = _plot_named(view, _norm(name), known=False)
+        found = _plot_named(view, _norm(name), known=False) or _plot_like(view, name)
         if found is not None:
             return found
     kind = str(shown.get("kind") or "")
@@ -2045,17 +2202,57 @@ def _shown_entry_plot(view: _CityView, here_town: dict[str, Any], here_i: int, s
         for plot in _ix(here_town)["front"].get(j) or ():
             if plot.get("k") not in _DOOR_KINDS:
                 continue
-            if kind and kind != "general_store" and str(plot.get("vk") or "") != kind:
+            same = str(plot.get("vk") or "") == kind
+            if kind and kind != "general_store" and not same:
                 continue
-            hits.append((d, int(plot["n"]), plot))
+            # "The store" may be any shop at hand, but a general store there is
+            # the one meant (#57), before a nearer tavern.
+            hits.append((0 if same or not kind else 1, d, int(plot["n"]), plot))
     if not hits:
         return None
-    hits.sort(key=lambda h: h[:2])
-    return int(view.pos["cx"]), int(view.pos["cy"]), hits[0][2]
+    hits.sort(key=lambda h: h[:3])
+    return int(view.pos["cx"]), int(view.pos["cy"]), hits[0][3]
 
 
 # A door the prose walks through unasked is at most this many minutes away.
 _NEAR_MINUTES = 2
+
+# "You push the door open and step inside": going in with no building named.
+_BARE_GO_IN_RE = re.compile(
+    r"\byou\b[^.!?]{0,80}?\b(?:step|walk|go|head|slip|duck|push|move|wander|come|pass|enter)\w*\s+"
+    r"(?:back\s+)?(?:inside|in(?=\s*[.,;!]|\s+and\b)|indoors|within|through\s+the\s+(?:door|doorway|entrance))",
+    re.I,
+)
+
+
+def _prose_goes_in_at_the_door(view: _CityView, plan: dict[str, Any], narration: str) -> bool:
+    """A walk that ended outside an open shop, and prose that takes the player in there (#58)."""
+    if plan.get("kind") != "walk" or plan.get("enter") or plan.get("blocked") or plan.get("partial"):
+        return False
+    if not plan.get("reached") or not plan.get("open", True):
+        return False
+    target = plan.get("target") or {}
+    plot_ref = str(target.get("plot") or "")
+    if not plot_ref or str(target.get("k") or "") not in _DOOR_KINDS:
+        return False
+    text = str(narration or "")
+    if not text.strip():
+        return False
+    shown = venues.entry_in_prose(text)
+    if shown:
+        name = str(shown.get("name") or "")
+        if name:
+            hit = _plot_named(view, _norm(name), known=False) or _plot_like(view, name)
+            return hit is not None and str(hit[2].get("id") or "") == plot_ref
+        kind = str(shown.get("kind") or "")
+        return not kind or kind == str(target.get("vk") or "") or str(shown.get("noun") or "") in ("shop", "store")
+    plain = venues.strip_speech(text)
+    last_in = None
+    for m in _BARE_GO_IN_RE.finditer(plain):
+        last_in = m
+    if last_in is None:
+        return False
+    return not re.search(r"\b(?:step|walk|head|go)\w*\s+(?:back\s+)?out\b", plain[last_in.end():], re.I)
 
 
 def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, intent: str,
@@ -2122,9 +2319,17 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
 
     if plan and plan.get("kind") in ("walk", "enter", "exit", "leave"):
         clear_moves()
+        went_in = _prose_goes_in_at_the_door(view, plan, narration)
+        if went_in:
+            # #58: the walk ended at the door and the prose went in; the state follows the prose.
+            plan["enter"] = True
+            plan["kind"] = "enter"
+            plan["went_in"] = True
         if plan.get("enter"):
             player_patch["move_to_location"] = str((plan.get("target") or {}).get("name") or "")[:120] or None
         rep = report_for(plan, "repaired")
+        if went_in:
+            rep["went_in"] = True
         if plan.get("led_by"):
             rep["led_by"] = str(plan["led_by"])  # a lead the player took (TODO n21); the gate brings them along
         if dropped:
@@ -2192,8 +2397,19 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
             elif not str(row.get("kind") or "") and not int(row.get("parent_id") or 0):
                 return None  # a known place outside the grid: world travel, the legacy rules
             else:
-                return None  # a venue from before this town had a grid
+                # The opening's row of a plotted building is that plot (#56);
+                # any other venue from before this town had a grid keeps the
+                # legacy rules.
+                same = _plot_called(view, str(row.get("name") or ""))
+                settle = settlement_row(conn, city, create=False)
+                if same is None or _adoptable_row(conn, city, same[2], settle) != int(row.get("id") or 0):
+                    return None
         found = _plot_named(view, _norm(name), known=False) if name else None
+        renamed = None
+        if found is None and name:
+            found = _plot_like(view, name)
+            if found is not None:
+                renamed = (name, str(found[2].get("name") or ""))
         if found is not None:
             new_plan = plan_to_plot(conn, chart, pos, str(found[2]["id"]), enter=True, rule="town_enter")
             if new_plan is not None:
@@ -2201,7 +2417,15 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
                 clear_moves()
                 if new_plan.get("enter"):
                     player_patch["move_to_location"] = str(found[2].get("name") or "")[:120]
-                return report_for(new_plan, "model")
+                rep = report_for(new_plan, "model" if renamed is None else "repaired")
+                if renamed and renamed[1] and renamed[0] != renamed[1]:
+                    # A near spelling of the plot's name (#57): the prose takes the real one.
+                    rep["renamed"] = {"from": renamed[0], "to": renamed[1]}
+                    text = W._narration_text(result)
+                    if renamed[0] in text:
+                        W._set_narration_text(result, text.replace(renamed[0], renamed[1]))
+                        rep["prose_renamed"] = True
+                return rep
         kind = venues.venue_kind_from_name(name) if name else ""
         if kind:
             kind = venues.kind_for_era(kind, _era(conn)) or kind
@@ -2607,6 +2831,10 @@ def plan_plotted_workplace(conn, npc: Any, home: Any, kinds: list[str]) -> int |
     try:
         current = json.loads(str(venues._field(npc, "workplace_plan", "") or "") or "{}")
     except (TypeError, ValueError):
+        current = {}
+    # A plan claimed for another trade (the role changed: Bennet the stable hand
+    # became a tailor, playtest #60) is not this NPC's workplace any more.
+    if isinstance(current, dict) and current.get("kind") and str(current["kind"]) not in kinds:
         current = {}
     if isinstance(current, dict) and current.get("plot_id") and str(current.get("city_id") or "") == city_id:
         realized = conn.execute("SELECT id FROM locations WHERE plot_id = ?", (str(current["plot_id"]),)).fetchone()
