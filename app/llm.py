@@ -11439,8 +11439,10 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     # another name. A race or fact code ("a [[R1]] human") is not prose.
     repaired = re.sub(r"\s*\[\[(?:R|F)\d+\]\]", "", repaired)
     repaired = re.sub(
-        r"\[\[([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)+|[A-Z][a-z][\w'’-]{2,})\]\]",
-        lambda m: m.group(1) if not REFERENCE_CODE_PATTERN.fullmatch(m.group(0)) else m.group(0),
+        # "[[Quarrel and Sons]]" too: joined by and/of/the (7B run 16, T0).
+        r"\[\[([A-Z][\w'’-]*(?:\s+(?:(?:and|of|the|at|in|on|by|&)\s+)?[A-Z][\w'’-]*)+|[A-Z][a-z][\w'’-]{2,})\]\]",
+        lambda m: m.group(0) if REFERENCE_CODE_PATTERN.fullmatch(m.group(0))
+        else ("" if re.search(rf"{re.escape(m.group(1))}\s*$", m.string[: m.start()]) else m.group(1)),
         repaired,
     )
     # A code set off by commas after a name, "Saltmarrow, [[L1]], is a ghost
@@ -11482,6 +11484,13 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         return f"{name} [[{code}]]"
 
     repaired = REFERENCE_CODE_PATTERN.sub(expand_code, repaired)
+    # A code nothing holds, right after a known name's own tag, is noise:
+    # "Dunstan Upcott [[A]] [[D1]]" (7B run 16, T0).
+    repaired = re.sub(
+        r"(\[\[[A-Z]{1,3}\d{0,3}\]\])\s*\[\[([A-Z]{1,3}\d{0,3})\]\]",
+        lambda m: m.group(0) if m.group(2).upper() in code_to_name else m.group(1),
+        repaired,
+    )
     repaired = _join_split_names(repaired, code_to_name)
 
     npc_names = [

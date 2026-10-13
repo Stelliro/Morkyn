@@ -16696,6 +16696,8 @@ def _introduced_person_first(
             continue
         if name.split()[0] in {"You", "The", "This", "That", "Morning", "Evening"}:
             continue
+        if re.search(r"\byou\s+are\s*$", plain[: match.start()], re.I):
+            continue  # "You are Isk Tarrow, the flat-runner": the player
         role = match.group("role").strip()
         if role.split()[-1] in {"man", "woman", "figure", "person", "stranger", "voice", "child", "boy", "girl"}:
             continue
@@ -16744,7 +16746,18 @@ def _ensure_npcs_from_narration(
         places = {str(r[0] or "") for r in conn.execute("SELECT name FROM locations").fetchall()}
     except Exception:
         places = set()
-    introduced_all = _introduced_people(text, known_names, places)
+    # The player is never a person to store: "You are Isk Tarrow, the
+    # flat-runner" minted Isk as an NPC (7B run 16, T0).
+    try:
+        player_names = [
+            str(v or "")
+            for row in conn.execute("SELECT name, public_name FROM player").fetchall()
+            for v in (row[0], row[1])
+            if str(v or "").strip()
+        ]
+    except Exception:
+        player_names = []
+    introduced_all = _introduced_people(text, known_names + player_names, places)
     if introduced_all and hints:
         # "As you approach, a figure catches your eye. Stephen Lambard, a tide
         # watcher, is standing on a slight rise" (7B run 13, T4): the figure is

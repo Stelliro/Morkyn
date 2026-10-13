@@ -761,6 +761,17 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             if flags.get("ROLE"):
                 flags["ROLE"] = ""
             positional["role"] = ""
+        else:
+            # "grocer Quarrel and Sons": the job, then the shop's name glued on
+            # (7B run 16, T0). The job stays; the shop is what is known.
+            glued = re.match(r"^(?P<job>[a-z][a-z' -]*?)\s+(?P<place>[A-Z][\w'’-]*(?:\s+(?:and|of|the|&)?\s*[A-Z][\w'’-]*)*)$",
+                             str(role_arg or "").strip())
+            if glued:
+                note = f"works at {glued.group('place')}"
+                if flags.get("ROLE"):
+                    flags["ROLE"] = glued.group("job")
+                else:
+                    positional["role"] = glued.group("job")
         npc = {
             "code": None,
             "name": name[:120],
