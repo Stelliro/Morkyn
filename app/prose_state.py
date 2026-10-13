@@ -886,8 +886,14 @@ _LABEL_LINE_RE = re.compile(
 )
 # Stage directions about the scene itself, not about what happens in it.
 _STAGE_SENTENCE_RE = re.compile(
-    r"^\s*The\s+(?:focus|scene)\s+(?:now\s+)?(?:shifts|changes|is\s+about\s+to\s+(?:change|shift))\b", re.I
+    r"^\s*The\s+(?:focus|scene)\s+(?:now\s+)?(?:shifts|changes|is\s+about\s+to\s+(?:change|shift))\b"
+    # 7B run 6, T6: "The scene ends with you standing in the town square, the
+    # deal made and the clock ticking."
+    r"|^\s*The\s+scene\s+(?:now\s+)?(?:ends|closes|draws\s+to\s+a\s+close|comes\s+to\s+an?\s+(?:end|close))\b",
+    re.I,
 )
+# A quotation closed twice: '"Thanks, Oldfield.""' (7B run 6, T9).
+_DOUBLE_CLOSE_RE = re.compile(r"([.!?,…—-])([\"”])[\"”](?=\s|$)")
 # The engine's status line: "You are fine, with 19/20 health."
 _STATUS_SENTENCE_RE = re.compile(r"\bwith\s+\d+\s*/\s*\d+\s+health\b", re.I)
 # Packet keys and item ids: open_offers, brass_key.
@@ -959,6 +965,10 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
     if keys:
         out = _SNAKE_RE.sub(lambda m: m.group(0).replace("_", " "), out)
         fixes.append({"why": "packet_key", "text": ", ".join(keys[:4])[:160]})
+    doubled = [m.group(0) for m in _DOUBLE_CLOSE_RE.finditer(out)]
+    if doubled:
+        out = _DOUBLE_CLOSE_RE.sub(r"\1\2", out)
+        fixes.append({"why": "doubled_quote", "text": ", ".join(doubled[:4])})
     labels = [m.group(2) for m in _ATTITUDE_LABEL_RE.finditer(out)]
     if labels:
         out = _ATTITUDE_LABEL_RE.sub(lambda m: m.group(1) + m.group(2).lower() + m.group(3), out)

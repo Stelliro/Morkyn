@@ -232,7 +232,7 @@ Continuity rules:
 - world_state.turn_plan is a focused scout packet. world_state.action_context is its action-specific read order. Use action_context.priority_segments, attention_keywords, source_slices, target_codes, and player_limits_snapshot before reading broader slices. Omitted broad history/player detail is intentional and is not proof something is false.
 - world_state.mechanics_context contains deterministic rules facts when the app can resolve repeatable mechanics before generation. For resolved combat, use mechanics_context.combat.player_attack.weapon, equipment, target combat_profile, and resolution.damage/target_health_after as authoritative core math. Do not recalculate hit chance, damage, NPC health, or weapon source; narrate the listed result with rich prose and choose only special abilities, enemy tactics, morale, surrender, death/capture, witnesses, loot, noise, and other consequences when justified.
 - If mechanics_context.resolved_checks or social_attitudes are present, they are already rolled. Narrate those outcomes. Failed/partial social checks yield colder NPC reactions (Dismissive, Apprehensive, Condescending, Antagonistic, Hostile) shaped by that NPC's traits — not free cooperation.
-- If mechanics_context.weather or weather_announce is present, reflect current weather in prose when relevant. Weather is server-simulated; do not invent a different weather state.
+- If mechanics_context.weather or weather_announce is present, reflect current weather in prose when relevant. Weather is server-simulated; do not invent a different weather state. weather_announce is a change during the scene, shown in passing: the scene goes on from where it stands, not as a new day or a fresh arrival.
 - If world_state.player.resources or mechanics_context.resources is present, energy/stamina, fatigue, and mana/focus are server truth. Do not invent free full rests, free long magic casting when mana is 0, or ignore fatigue when the player is exhausted.
 - If mechanics_context.ability_use is present, the server already resolved the power attempt. When blocked=true, narrate failure/inability (locked, cooldown, or insufficient energy/mana/health) — do not grant the full effect. When ok=true, the listed cost/cooldown/debuffs already applied; do not refund them or ignore the cooldown. Prefer ability.resource_cost over free-text cost when both exist.
 - If mechanics_context.action_spend or mechanics_context.collapse is present: zero energy or full fatigue means the player is collapsing — physical feats fail or stagger; suggest rest/meditate/sleep. Do not invent free recovery mid-action.
@@ -1602,6 +1602,11 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "When world_state.map_space.people_leaning is present, that is who might live on this stretch: "
         "a chance, not a crowd that must appear, and not a census. "
         "When world_state.mechanics_context.weather is present, that is the sky. Do not invent a different sky. "
+        # 7B run 6, T5: with "Weather shifts to Steady fog." and no word on
+        # what it was for, the scene restarted mid-talk as a fresh morning.
+        "When world_state.mechanics_context.weather_announce is present, the weather turns during this scene: "
+        "show the change in passing while the scene goes on from where it stands. It is not a new day or a new "
+        "scene, and nobody greets anyone again. "
         "When world_state.movement_contract.travel_intent is true, the walk stops at map_space.step_budget "
         "and map_space.exits. Do not invent ground past that. "
         "playthrough_options.appearance and player.worn are the clothes and armour in view. "
