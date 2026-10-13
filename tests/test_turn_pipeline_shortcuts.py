@@ -406,7 +406,9 @@ class TestMechanicsReachThePacket(unittest.TestCase):
         shipped = set(prompts._mechanics_view(_mechanics_context()).keys())
         # `resources` is nested under player state and the blocked/collapse
         # signals already carry its consequence; `combat` ships when combat is on.
-        excused = {"resources", "combat"}
+        # `weather_announce` ships only on the turn the weather changes
+        # (_mechanics_view lifts it from the weather view; 7B run 6 T5).
+        excused = {"resources", "combat", "weather_announce"}
         self.assertEqual(sorted(cited - shipped - excused), [], "cited by a rule, never shipped")
 
 
