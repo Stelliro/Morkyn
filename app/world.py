@@ -6972,6 +6972,12 @@ def _mint_venue_from_request(conn, parent_id: int, player_input: str, narration:
     base = re.sub(r"\s+(square|market|green|commons|gate|row|street|lane)$", "", parent_name, flags=re.I).strip()
     name = f"{base or parent_name} {venues.kind_label(kind).title()}".strip()
     told = str((venues.entry_in_prose(narration) or {}).get("name") or "").strip() if narration else ""
+    # The name the player gave it: "I push open the door of Pollard's
+    # Cookshop" opened "Saltmarrow Diner" (7B run 18, T3).
+    for phrase in re.findall(r"\b((?:[A-Z][\w'’]*\s+){1,3}[A-Z][\w'’]*)", str(player_input or "")):
+        if venues.venue_kind_from_name(phrase) == kind:
+            told = phrase.strip()
+            break
     if (
         told
         and venues.venue_kind_from_name(told) in {"", kind}
