@@ -4416,6 +4416,13 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
             None,
         )
     if current_location:
+        # On or off duty right now, from the job and the clock (playtest #83).
+        try:
+            from app.shifts import stamp_duty
+
+            stamp_duty(conn, [npc for npc in npcs if npc.get("location_id") == current_location["id"]])
+        except Exception:
+            pass
         # What can be walked into from right here, and whether it is open at this
         # hour. Without this the model has no way to know a shop exists, so it
         # invents one -- which is how an apothecary appeared in a hamlet.
@@ -14115,7 +14122,7 @@ _SEED_ROLE_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
         "settlement": (
             "carter", "baker", "tanner", "porter", "stablehand", "roofer",
             "herbalist", "scribe", "cooper", "weaver", "drover", "toll keeper",
-            "off-duty guard", "apprentice", "message runner", "rag picker",
+            "guard", "apprentice", "message runner", "rag picker",
             "well keeper", "chandler",
         ),
     },
@@ -14135,13 +14142,13 @@ _SEED_ROLE_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
         "settlement": (
             "rail hand", "telegraph clerk", "teamster", "farrier", "storekeeper",
             "deputy", "freight agent", "printer", "assayer", "stable hand",
-            "millwright", "seamstress", "undertaker", "off-duty brakeman",
+            "millwright", "seamstress", "undertaker", "brakeman",
         ),
     },
     "modern": {
         "indoor": (
             "customer", "server", "line cook", "cleaner", "night clerk",
-            "regular", "delivery driver", "barista", "off-shift nurse",
+            "regular", "delivery driver", "barista", "nurse",
         ),
         "water": (
             "dock worker", "boat mechanic", "harbour clerk", "crane operator",
@@ -14154,12 +14161,12 @@ _SEED_ROLE_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
         "settlement": (
             "courier", "shop clerk", "mechanic", "paramedic", "security guard",
             "street vendor", "dispatcher", "technician", "cab driver",
-            "building super", "scrap dealer", "off-duty officer",
+            "building super", "scrap dealer", "police officer",
         ),
     },
     "future": {
         "indoor": (
-            "off-shift crew", "mess server", "bunkmate", "galley hand",
+            "deck crew", "mess server", "bunkmate", "galley hand",
             "card player", "medtech", "systems intern", "night-cycle clerk",
         ),
         # Docks, bays, gantries: wherever things arrive.
@@ -14175,7 +14182,7 @@ _SEED_ROLE_POOLS: dict[str, dict[str, tuple[str, ...]]] = {
         "settlement": (
             "comms clerk", "hab technician", "quartermaster", "dock inspector",
             "systems tech", "stall vendor", "courier", "medtech", "fabricator",
-            "recycler", "off-duty marshal", "data broker",
+            "recycler", "marshal", "data broker",
         ),
     },
 }
@@ -14612,6 +14619,15 @@ _APPOSITIVE_NAME_RE = re.compile(
 )
 
 
+_VAGUE_FIGURES = frozenset({"figure", "shape", "silhouette", "form", "person", "someone", "stranger"})
+# Between the vague shape and the description: the prose naming what it is.
+_SAME_FIGURE_RE = re.compile(
+    r"(?:\b(?:it|this|that|the\s+(?:figure|shape|silhouette|form|stranger))\s*(?:'s|’s|\s+is|\s+was|\s+turns\s+out\s+to\s+be)"
+    r"|\b(?:resolves|becomes)\s+into|^\s*[,:—–-]\s*$)",
+    re.I,
+)
+
+
 def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     """People the prose shows who might be new: described strangers and named
     speakers. A later "the <...> <noun>" with the noun of an earlier hint is the
@@ -14640,6 +14656,20 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
             continue  # "Guard says" is already a titled speaker
         found.append((match.start(), match.group(0).strip(), ""))
     found.sort()
+    # A vague shape the prose then says what it is ("a figure approaching ...
+    # It's a young woman") is one person, not two (Saltmarrow 7B #73, T38:
+    # 'a figure' and 'a young woman' seeded Matilda and Nesta).
+    found = [
+        (pos, hint, noun)
+        for index, (pos, hint, noun) in enumerate(found)
+        if not (
+            noun in _VAGUE_FIGURES
+            and index + 1 < len(found)
+            and found[index + 1][2] not in _VAGUE_FIGURES
+            and found[index + 1][0] - pos <= 240
+            and _SAME_FIGURE_RE.search(str(text)[pos + len(hint): found[index + 1][0]])
+        )
+    ]
     hints: list[str] = []
     nouns: set[str] = set()
     for _pos, hint, noun in found:

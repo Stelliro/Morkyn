@@ -14273,7 +14273,7 @@ def _make_pipeline_paragraph_writer(
         "When scene_facts.player_goes_inside is present, the draft takes the player into that building: keep them going in. "
         "scene_facts.keeper keeps the place the player is inside. In scene_facts.cast, works_here marks someone who "
         "works in this place; works_at is that person's own workplace somewhere else, so here they are a visitor "
-        "and do not sell, keep or own what is here. "
+        "and do not sell, keep or own what is here. duty says whether that person is at their job right now. "
         "The player makes their own choices: never write that they decide, choose or put something off; "
         "end on the situation, not on a decision made for them. "
         "Do not repeat facts or spoken lines listed under forbidden_repeat or already_said. "
