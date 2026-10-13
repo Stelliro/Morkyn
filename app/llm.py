@@ -13569,6 +13569,20 @@ _PLAYER_LABOR_RE = re.compile(
     r"gut(?:s|ted)?|row(?:s|ed)?\s+(?:the|out|across|toward|towards))",
     re.I,
 )
+# Setting to a job (7B run 7, T3: "You begin to gather debris and sweep the
+# floor" after the player only asked what it paid). The player's own line
+# starting work, or naming the work's verb, covers it.
+_PLAYER_BEGIN_WORK_RE = re.compile(
+    rf"^{_ACT_ADVERBS}(?:begin|begins|began|start|starts|started|set\s+about|sets\s+about)\s+"
+    r"(?:to\s+(?P<v>[a-z]+)|(?P<g>[a-z]+ing))\b"
+    r"|^(?:set|sets|get|gets|got|go|goes|went)\s+to\s+work\b",
+    re.I,
+)
+_INPUT_START_WORK_RE = re.compile(
+    r"\b(?:start|starting|begin|beginning|get\s+to\s+work|set\s+to\s+work|work(?:ing)?\s+on|i'll\s+do\s+it|"
+    r"i'll\s+take\s+(?:it|the\s+job|the\s+work))\b",
+    re.I,
+)
 # Opening, lifting or unlocking a thing works it (T81: "You push the door open
 # ... you lift the lid ... You open the journal" after squeezing through a passage).
 _PLAYER_OPEN_RE = re.compile(
@@ -13661,6 +13675,13 @@ def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -
     m = _PLAYER_LABOR_RE.match(rest)
     if m:
         return "" if _verb_in_input(m.group("v"), own) else "labor"
+    m = _PLAYER_BEGIN_WORK_RE.match(rest)
+    if m:
+        gerund = m.group("g") or ""
+        verb = m.group("v") or (gerund[:-3] if len(gerund) > 5 else "")
+        if (verb and _verb_in_input(verb, own)) or _INPUT_START_WORK_RE.search(own):
+            return ""
+        return "labor"
     m = _PLAYER_OPEN_RE.match(rest)
     if m:
         verb = m.group("v")
@@ -14954,7 +14975,9 @@ def _keep_player_words(
 
 # Families of invented player units the world answers: a line, a take, a
 # choice or a step somewhere. A nod or a thought sets nothing off.
-_SCENE_CUT_FAMILIES = frozenset({"speech", "taking", "decision", "movement"})
+# Work on a job the player never took is one too (7B run 7, T3: "You begin
+# to gather debris and sweep the floor" after she only asked what it paid).
+_SCENE_CUT_FAMILIES = frozenset({"speech", "taking", "decision", "movement", "labor"})
 _SCENE_QUOTE_RE = re.compile(r'"([^"\n]{2,600})"|\u201c([^\u201d]{2,600})\u201d')
 _ADDRESSED_RE = re.compile(r"\byou(?:r|rs|rself)?\b|\?\s*$", re.I)
 _SPEECH_TAG_TAIL_RE = re.compile(r'[^\S\n]*(?=[a-z,])[^.!?\n"\u201c]*[.!?]')
@@ -15011,7 +15034,7 @@ def _scene_cut_point(text: str, player_input: str) -> dict[str, Any] | None:
     be someone else's, addressed to the player, and close: nothing else is
     said between them. Returns {"cut", "trigger", "family", "npc_line"} or None.
     """
-    from app.narration_pipeline import _words_from_player, drop_invented_player_speech, player_quotes
+    from app.narration_pipeline import drop_invented_player_speech, player_quotes
     from app.prose_state import sentence_spans
 
     own = player_line_of(player_input)
@@ -15030,28 +15053,96 @@ def _scene_cut_point(text: str, player_input: str) -> dict[str, Any] | None:
         family = _invented_unit_family(sentence, own, player_input)
         if family in _SCENE_CUT_FAMILIES:
             triggers.append((start, sentence, family))
-            break
-    if not triggers:
-        return None
-    at, unit, family = min(triggers)
+    quotes = player_quotes(player_input)
+    # The earliest trigger that answers a line put to the player (7B run 7,
+    # T3): the first invented line came right after the player's own words,
+    # which the 7B had put in Oriel's mouth, and the search used to stop
+    # there; the acceptance ("A half then," you say, stepping towards the
+    # deck) after her offer was never cut.
+    for at, unit, family in sorted(triggers):
+        point = _cut_point_before(body, at, unit, family, own, quotes, spoken)
+        if point:
+            return point
+    return None
+
+
+# The prose takes the player into another place: "You walk into the yard".
+_ARRIVED_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:walk|walked|step|stepped|stride|strode|head|headed|go|went|hurry|hurried|"
+    r"make\s+your\s+way|made\s+your\s+way|push|pushed|duck|ducked)\s+(?:back\s+)?(?:into|inside|through\s+the\s+door)\b"
+    r"|\byou\s+(?:\w+ly\s+)?(?:arrive|arrived|reach|reached|enter|entered)\b",
+    re.I,
+)
+# A quotation tagged as the player's: '"A half then," you say'.
+_PLAYER_TAG_AFTER_RE = re.compile(r'^[\s,.!?]*(?:you|You)\s+(?:\w+ly\s+)?(?:say|said|ask|asked|reply|replied|answer|answered|'
+                                  r'add|added|call|called|tell|told|murmur|murmured|mutter|muttered|offer|offered)\b')
+
+
+def _cut_point_before(
+    body: str, at: int, unit: str, family: str, own: str, quotes: list[str], spoken: list[str] | None = None
+) -> dict[str, Any] | None:
+    """The cut for one trigger: right after the line put to the player just before it, or None.
+
+    Lines the prose itself gave the player in between are stepped over (7B run
+    7, T3: '"A half then," you say, stepping towards the deck. "Let's get
+    started."' sat between Oriel's offer and the start of the work).
+    """
+    from app.narration_pipeline import _is_player_line, _words_from_player
+
+    before = list(_SCENE_QUOTE_RE.finditer(body, 0, at))
     last = None
-    for match in _SCENE_QUOTE_RE.finditer(body, 0, at):
-        last = match
+    while before:
+        candidate = before.pop()
+        span = (candidate.group(1) or candidate.group(2) or "").strip()
+        tagged = _PLAYER_TAG_AFTER_RE.match(body[candidate.end():candidate.end() + 40])
+        invented = any(span and span in str(u) for u in (spoken or []))
+        # A line tagged as the player's that is not what they typed ("A half
+        # then," shares one word with "Half the usual of what?") is the
+        # prose's, not theirs.
+        if (tagged or invented) and not (quotes and _is_player_line(span, quotes)):
+            continue
+        last = candidate
+        break
     if last is None:
         return None
     span = (last.group(1) or last.group(2) or "").strip()
-    if _words_from_player(span, own, player_quotes(player_input)):
+    if _words_from_player(span, own, quotes):
         return None  # the player's own line came last; the invented part is not an answer to anyone
-    if not _ADDRESSED_RE.search(span):
+    if not (_ADDRESSED_RE.search(span) or _replies_to_player(body, last.start(), own, quotes)):
         return None
     between = body[last.end():at]
     if between.count("\n\n") > 2 or len(between) > 700:
+        return None
+    # The player arrived somewhere else after that line (Saltmarrow 7B run 5,
+    # T29: "What about it?" was said before "You walk into the salvager's
+    # yard"); the invented part answers someone in the new place, not that
+    # line. Walking on through the same scene ("As you walk, you take in the
+    # sights", T16) is no arrival.
+    if _ARRIVED_RE.search(between):
         return None
     tag = _SPEECH_TAG_TAIL_RE.match(between)
     cut = last.end() + (tag.end() if tag else 0)
     if cut > at:
         cut = last.end()
     return {"cut": cut, "trigger": unit, "family": family, "npc_line": span}
+
+
+def _replies_to_player(body: str, start: int, own: str, quotes: list[str]) -> bool:
+    """
+    The line starting at ``start`` answers the player: the quotation before it
+    is the player's own words, or it is the first line of the scene after the
+    player asked something (7B run 7, T7: Bertram's "Ah. I'm just checking the
+    old well ..." answered "What are you digging for?" without a "you").
+    """
+    from app.narration_pipeline import _words_from_player
+
+    prev = None
+    for match in _SCENE_QUOTE_RE.finditer(body, 0, start):
+        prev = match
+    if prev is not None:
+        span = (prev.group(1) or prev.group(2) or "").strip()
+        return bool(_words_from_player(span, own, quotes))
+    return any("?" in q for q in quotes)
 
 
 def _cut_words(text: str) -> set[str]:
