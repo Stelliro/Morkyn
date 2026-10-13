@@ -16376,6 +16376,45 @@ def _recall_described(conn, hint: str, location_id: int) -> dict[str, Any] | Non
     return dict(rows[0])
 
 
+_INTRODUCED_PERSON_RE = re.compile(
+    r"(?<![\w'’])(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?),\s+(?:a|an|the)\s+"
+    r"(?P<role>[a-z][a-z-]{2,24}(?:\s+[a-z][a-z-]{2,24})?)(?=\s+(?:with|who|in|from|of)\b|,|\.|\s+is\b|\s+stands\b|\s+leans\b)"
+)
+
+
+_NOT_A_JOB_NOUNS = frozenset({
+    "inn", "tavern", "pub", "forge", "smithy", "shop", "store", "yard", "market", "house", "hall", "stable",
+    "stables", "mill", "bakery", "chandlery", "dairy", "warehouse", "shed", "cluster", "town", "village", "city",
+    "place", "building", "ruin", "ruins", "harbour", "harbor", "street", "road", "square", "keep", "tower",
+})
+
+
+def _introduced_person(
+    text: str, known_names: list[str], not_people: set[str] | frozenset[str] = frozenset()
+) -> dict[str, str] | None:
+    """The one new person the prose introduces as "Name Surname, a <job>", outside speech, or None."""
+    plain = re.sub(r"\s*\[\[[^\]]*\]\]", "", venues.strip_speech(str(text or "")))
+    not_people = {str(n).strip().lower() for n in not_people}
+    known = {str(n or "").strip().lower() for n in known_names if str(n or "").strip()}
+    found: list[dict[str, str]] = []
+    for match in _INTRODUCED_PERSON_RE.finditer(plain):
+        name = match.group("name").strip()
+        if name.lower() in known or any(name.lower().split()[0] == k.split()[0] for k in known if k):
+            continue
+        if name.split()[0] in {"You", "The", "This", "That", "Morning", "Evening"}:
+            continue
+        role = match.group("role").strip()
+        if role.split()[-1] in {"man", "woman", "figure", "person", "stranger", "voice", "child", "boy", "girl"}:
+            role = ""
+        # A place or a building is not a person ("Saltmarrow, a cluster of buildings").
+        if not role or is_fragment_place_name(name):
+            continue
+        if role.split()[-1] in _NOT_A_JOB_NOUNS or name.lower() in not_people:
+            continue
+        found.append({"name": name, "role": role})
+    return found[0] if len(found) == 1 else None
+
+
 def _ensure_npcs_from_narration(
     conn,
     result: dict[str, Any],
@@ -16407,6 +16446,40 @@ def _ensure_npcs_from_narration(
     known_names += [str(n.get("name") or "") for n in (result.get("npcs") or []) if isinstance(n, dict)]
     taken = _figure_aliases_here(conn)
     hints = [h for h in _figure_hints(text, known_names) if not _figure_alias(h) or _figure_alias(h) not in taken]
+    # "Mattias Slade, a herbalist with a greying beard, is leaning against the
+    # wall ... he says" (7B run 12, T0): the speaker is the person the prose
+    # names. With no hint, the dialogue seeded a drawn "Dafydd, toll keeper"
+    # and Mattias was never stored.
+    introduced = None
+    if not hints:
+        try:
+            places = {str(r[0] or "") for r in conn.execute("SELECT name FROM locations").fetchall()}
+        except Exception:
+            places = set()
+        introduced = _introduced_person(text, known_names, places)
+    if introduced:
+        try:
+            shell = create_shell_npc(
+                conn,
+                int(location_id),
+                presence="event_worthy",
+                power_rank=8,
+                role=introduced["role"],
+                seed=name_seed("shell_npc", location_id, introduced["name"], 0, text[:40]),
+                summary="",
+                name=introduced["name"],
+            )
+        except Exception:
+            shell = None
+        if shell:
+            turn_ledger.note("npc", "introduced_in_prose", name=introduced["name"], role=introduced["role"])
+            entry = {
+                "code": shell.get("code"), "name": shell.get("name"), "role": shell.get("role") or introduced["role"],
+                "summary": "", "attitude": "neutral", "location": "", "presence": "event_worthy",
+                "shell": False, "power_rank": shell.get("power_rank") or 8, "_seeded_from_narration": True,
+            }
+            result["npcs"] = [n for n in (result.get("npcs") or []) if isinstance(n, dict)] + [entry]
+            return [entry]
     # Dialogue without a listed speaker still implies at least one face, but
     # only dialogue nobody known speaks (playtest #73: '"Understood," Juliana
     # says' minted Bertram at the street the player had just walked out to).

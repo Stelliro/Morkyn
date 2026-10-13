@@ -2045,6 +2045,23 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             changes.append({"action": "invented_line_replaced", "quote": missing[0], "was": inner[:200]})
             missing = []
 
+    # 3b. The line is there, written without quotation marks (7B run 12, T1:
+    # "Morning, Mattias. Tide-reading and salvage, same as always. You glance
+    # at the forge ..."): it is quoted where it stands instead of said again
+    # at the opening, which shipped the player's words twice.
+    for quote in list(missing):
+        words = quote.strip()
+        if len(words.split()) < 3:
+            continue
+        for found_at in re.finditer(re.escape(words), body):
+            before = body[: found_at.start()]
+            if sum(before.count(mark) for mark in ('"', "“", "”")) % 2:
+                continue  # inside someone's quotation
+            body = body[: found_at.start()] + "“" + words + "”" + body[found_at.end():]
+            missing.remove(quote)
+            changes.append({"action": "unquoted_line_quoted", "quote": quote})
+            break
+
     # 4. Still missing: the player says it as the scene opens, or right after
     # the line they typed before it, so their lines keep their order (7B run
     # 11, T1: "Heading out, yes ..." was put before "Morning. Not a traveller").

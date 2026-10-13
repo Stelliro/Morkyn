@@ -1618,7 +1618,11 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(hack|console|terminal|decrypt)\b", "hacking"),
     (r"\b(track|forage|camp|survive)\b", "survival"),
     (r"\b(cook|meal|food|stew|roast)\b", "cooking"),
-    (r"\b(smith|forge|anvil|temper)\b", "smithing"),
+    # The work, not the building: "I glance at the forge behind him" rolled
+    # smithing at DC 16 (7B run 12, T1).
+    (r"\b(smithing|forge (?:a|an|the|my|it|them|some|new|nails?|blades?|horseshoes?)|"
+     r"hammer (?:out|it|the|a)\b|temper (?:the|a|it|my)|work (?:the|at the) (?:forge|anvil|bellows)|at the anvil)\b",
+     "smithing"),
     (r"\b(animal|mount|horse|herd|tame|calm the)\b", "animal_handling"),
     (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
     # "mine" is usually the possessive ("round Tam's waist, then round mine",
