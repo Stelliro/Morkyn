@@ -8738,6 +8738,12 @@ def acquisition_claims(narration: str) -> list[str]:
 # thing you found"). The described noun phrase is the thing's name.
 _VAGUE_THING_HEADS = {"thing", "things", "object", "objects", "item", "items", "piece", "find", "something", "it", "one"}
 _FOUND_TAIL_RE = re.compile(r"\s+(?:that\s+|which\s+)?(?:you|i|we|she|he|they)\s+(?:just\s+)?(?:found|find|dug\s+up|spotted|saw)\b.*$", re.I)
+# "the note he holds out" -> "note" (7B run 24, T3): a clause about who holds,
+# gives or shows it is not part of its name.
+_HOLDER_TAIL_RE = re.compile(
+    r"\s+(?:that\s+|which\s+)?(?:you|i|we|she|he|they|[A-Z][a-z]+)\s+(?:holds?|held|gives?|gave|hands?|handed|"
+    r"offers?|offered|shows?|showed|passes|passed|left|leaves|brought|brings|mentioned)\b.*$"
+)
 _DESCRIBED_AS_RE = re.compile(
     r"\b(?:it|the\s+(?:piece|thing|object|item|find|glint)|this)\s+(?:is|was|turns\s+out\s+to\s+be|proves\s+to\s+be)\s+"
     r"(?:a|an)\s+(?P<np>[^.;!?]{3,140})",
@@ -8752,7 +8758,7 @@ _SIZE_WORDS = {"small", "little", "tiny", "large", "big", "old"}
 
 def _strip_found_tail(name: str) -> str:
     """'glinting thing you found' -> 'glinting thing': who found it is not part of its name."""
-    return _FOUND_TAIL_RE.sub("", str(name or "")).strip()
+    return _HOLDER_TAIL_RE.sub("", _FOUND_TAIL_RE.sub("", str(name or ""))).strip()
 
 
 def _prose_named_thing(name: str, narration: str) -> str:

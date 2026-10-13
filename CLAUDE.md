@@ -92,7 +92,9 @@ belong to, with the date).
 - **The full test suite** (`python -m unittest` in .venv) has 15 known failures as of
   2026-10-14 (batch5 x2, live_smoke_places, prompt_context_reachability cited keys, quest_live,
   quest_parser x2, quest_pipeline, skill_roster, town_ui x4, and the test_bare_assert_files and
-  test_tts loader errors). Anything beyond those is new.
+  test_tts loader errors). Anything beyond those is new, except the known flake
+  `test_dice_rolls_mirror_applied_turns.test_the_check_is_in_the_dice_audit_for_its_turn`, which
+  sometimes fails in the full run and passes alone (seen 2026-10-14 twice).
 - **Evidence lives in model traces** (`data/model_traces/turn-*.json`): read them before the code.
   The model side is in `model_trace`; what the engine did is in `engine.ledger` (`delta` first,
   then `writes[i].at` for the code, `swallowed` for hidden failures).
