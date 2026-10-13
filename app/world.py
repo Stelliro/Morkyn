@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from app import venues
+from app import turn_ledger, venues
 from app.db import connect, row_to_dict, rows_to_dicts
 from app.llm import (
     LlmError,
@@ -11003,6 +11003,7 @@ def _read_pending_regeneration(conn) -> dict[str, Any] | None:
     return pending if isinstance(pending, dict) else None
 
 
+@turn_ledger.recorded("regenerate")
 def regenerate_last_turn(allow_fallback: bool = True) -> dict[str, Any]:
     from app.failsafe import FailsafeBlocked
 
@@ -15556,6 +15557,7 @@ def _write_model_trace_file(
     result: dict[str, Any],
     used_fallback: bool,
     fallback_reason: str,
+    engine_telemetry: dict[str, Any] | None = None,
 ) -> str:
     # Always write: the play UI offers a per-turn Debug toggle to view/copy the file.
     model_trace_dir().mkdir(parents=True, exist_ok=True)
@@ -15589,10 +15591,15 @@ def _write_model_trace_file(
         "final_turn": _turn_without_private_trace(result),
         "model_usage": result.get("_model_usage") or [],
         "model_trace": result.get("_model_trace") or [],
+        # What the engine then did to the save: apply-side reports, every
+        # write with the code that made it, and the before/after delta. The
+        # ledger is completed in this file when the turn closes.
+        "engine": turn_ledger.engine_section(engine_telemetry),
     }
     suffix = "-fallback" if used_fallback else ""
     path = model_trace_dir() / model_trace_file_name(turn, input_kind, suffix)
     path.write_text(json.dumps(payload, ensure_ascii=True, indent=2, default=str), encoding="utf-8")
+    turn_ledger.remember_trace(str(path))
     _prune_model_trace_files()
     return _public_path(path)
 
@@ -17167,6 +17174,17 @@ def apply_turn(
                     "voided" if voided else "refused_purchase" if (purse_note or {}).get("refused_purchase")
                     else "clamped_to_purse" if (purse_note or {}).get("clamped") else "later_gate"
                 )
+        # Decisions that write nothing go in the turn's engine ledger.
+        for item in inv_rejected:
+            turn_ledger.note("inventory", "refused", item=item)
+        if voided:
+            turn_ledger.note("gold", "spend_voided", detail=voided)
+        if purse_note:
+            turn_ledger.note("gold", "purse", detail=purse_note)
+        if isinstance(gold_note, dict):
+            turn_ledger.note("gold", "settled", detail=gold_note)
+        if result.get("_quest_reward_dropped"):
+            turn_ledger.note("gold", "model_reward_dropped_for_quest_payout", fields=result["_quest_reward_dropped"])
         try:
             inv_changes = _coins_to_gold(conn, inv_changes, narration)
         except Exception:
@@ -18306,6 +18324,7 @@ def _ability_risk_tier(context: dict[str, Any], player_line: str) -> int:
     return 2 if _CONTEST_WORDS.search(player_line or "") else 1
 
 
+@turn_ledger.recorded("turn")
 def play_turn(
     player_input: str,
     input_kind: str = "player",
@@ -19435,6 +19454,19 @@ def play_turn(
         result,
         used_fallback,
         fallback_reason,
+        engine_telemetry={
+            **turn_telemetry,
+            "naming": naming_repair or None,
+            "recall": recall_check,
+            "acquisitions": acquisitions or [],
+            "ability_use": result.get("ability_use"),
+            "action_spend": result.get("action_spend"),
+            "forced_events": [
+                {"id": ev.get("id"), "kind": ev.get("kind"), "summary": str(ev.get("summary") or "")[:200]}
+                for ev in forced_events
+                if isinstance(ev, dict)
+            ],
+        },
     )
     model_usage = list(result.get("_model_usage") or [])
     model_trace_steps = result.get("_model_trace") or []
@@ -19568,6 +19600,7 @@ def play_turn(
     return payload
 
 
+@turn_ledger.recorded("opening")
 def play_opening_turn(allow_fallback: bool = True) -> dict[str, Any]:
     return play_turn(
         OPENING_SCENE_INPUT,
@@ -19801,6 +19834,7 @@ def _current_turn_number() -> int:
     return int(row["value"]) if row else 0
 
 
+@turn_ledger.recorded("continue")
 def play_continue_turn(allow_fallback: bool = True) -> dict[str, Any]:
     # Every branch carries the flag: the browser asked to be told about a
     # dead model before any turn is written, the opening and a forced beat
@@ -20079,6 +20113,7 @@ def resolve_world_event(event_id: int, *, status: str = "resolved") -> None:
         )
 
 
+@turn_ledger.recorded("event")
 def play_world_event_turn(
     event_pack: dict[str, Any], *, input_kind: str = "event", allow_fallback: bool = True
 ) -> dict[str, Any]:
@@ -20160,6 +20195,7 @@ def play_world_event_turn(
     return result
 
 
+@turn_ledger.recorded("fight")
 def initiate_fight(npc_code: str) -> dict[str, Any]:
     """
     Player-initiated combat with a specific NPC by code (e.g. "A", "B").
@@ -20763,6 +20799,7 @@ def apply_map_travel_step(travel: dict[str, Any] | None, context: dict[str, Any]
     return out
 
 
+@turn_ledger.recorded("wait")
 def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True) -> dict[str, Any]:
     """
     Spend in-world time at current location. RNG decides events before the LLM narrates.
@@ -21016,8 +21053,11 @@ def play_wait_turn(minutes: int, kind: str = "wait", allow_fallback: bool = True
     return payload
 
 
+@turn_ledger.recorded("start")
 def start_playthrough_with_opening(options: dict[str, Any]) -> dict[str, Any]:
-    state = start_playthrough(options)
+    # Each step is timed into timings.jsonl (label "start"): the setup-to-first-turn time.
+    with turn_ledger.phase("start_playthrough"):
+        state = start_playthrough(options)
     # Every model call of this setup samples with a seed drawn from the
     # campaign seed, one block per phase (playtest #53): the same form and
     # campaign seed give the same templates, facts and opening.
@@ -21032,7 +21072,7 @@ def start_playthrough_with_opening(options: dict[str, Any]) -> dict[str, Any]:
     try:
         from app.setting_templates import refresh_setting_templates_from_model
 
-        with seeded_model_calls(setup_seed, "setting_templates"):
+        with turn_ledger.phase("setting_templates"), seeded_model_calls(setup_seed, "setting_templates"):
             refresh_setting_templates_from_model()
     except Exception:
         pass
@@ -21043,10 +21083,11 @@ def start_playthrough_with_opening(options: dict[str, Any]) -> dict[str, Any]:
     try:
         from app.world_facts import run_post_start_passes
 
-        run_post_start_passes()
+        with turn_ledger.phase("post_start_passes"):
+            run_post_start_passes()
     except Exception:
         pass
-    with seeded_model_calls(setup_seed, "opening"):
+    with turn_ledger.phase("opening"), seeded_model_calls(setup_seed, "opening"):
         opening = play_opening_turn()
     # Surface gear fact-check to the UI (popup when items were stripped/deferred)
     try:

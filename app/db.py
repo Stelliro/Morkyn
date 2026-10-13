@@ -27,6 +27,10 @@ def connect() -> sqlite3.Connection:
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    # Every write during an open turn is recorded in that turn's trace.
+    from app.turn_ledger import attach
+
+    attach(conn)
     return conn
 
 

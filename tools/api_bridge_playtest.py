@@ -236,6 +236,7 @@ def main() -> int:
         threading.Thread(target=viewer.run, daemon=True).start()
         print(f"Watch live: http://127.0.0.1:{args.viewer_port}/", flush=True)
 
+    from app import turn_ledger
     from app.db import connect, init_db
     from app.llm import update_model_config
     from app.world import get_state, play_turn, play_wait_turn, start_playthrough_with_opening
@@ -265,7 +266,16 @@ def main() -> int:
             dice = [dict(r) for r in conn.execute(
                 "SELECT tag, kind, band, notation, value, source FROM dice_rolls WHERE id > ?", (before["max_dice"],))]
         res = result if isinstance(result, dict) else {}
+        # The engine ledger of this turn (app/turn_ledger.py): what changed and which code changed it.
+        ledger = turn_ledger.last_finished() or {}
+        engine = {
+            "delta": ledger.get("delta"),
+            "notes": ledger.get("notes") or [],
+            "write_count": len(ledger.get("writes") or []),
+            "trace": ((res.get("debug") or {}).get("trace_name") if isinstance(res.get("debug"), dict) else "") or "",
+        }
         return {
+            "engine": engine,
             "turn": n,
             "player_line": line,
             "seconds": round(seconds, 2),
@@ -311,6 +321,7 @@ def main() -> int:
             run.status("running")
             run.calls_this_turn = []
             before = snapshot()
+            turn_ledger.clear_last()
             t0 = time.time()
             try:
                 if line.startswith("!wait"):

@@ -44,6 +44,14 @@ belong to, with the date).
   turn as it happens. Start agent-played runs with `tools/api_bridge_playtest.py --viewer-port 8790`
   and give Stell the address (http://127.0.0.1:8790/); the page is read-only and repaints per turn.
   After a run, scratchpad-style `viewer.py <run dir> 8790` can keep serving the finished save.
+- **Log everything a bug needs** (2026-10-14): "ensure logging to ensure we can debug all of it",
+  and time between turns and setup to first turn must be captured for time estimates. Each turn's
+  trace (`data/model_traces/turn-*.json`) has an `engine` block (app/turn_ledger.py): every save
+  write with the code that made it, every exception the engine swallowed, refusals as notes, the
+  before/after delta, and the timing. `timings.jsonl` (per turn and setup: seconds, model, GPU
+  wait, engine, gap since the last turn) and `requests.jsonl` (every POST, setup page included)
+  sit beside the traces and are never pruned; `tools/timing_report.py <trace dir>` summarises
+  them. New engine code that refuses or drops something calls `turn_ledger.note(...)`.
 - **Baseline runs:** a 100-turn 7B run "with no issues" becomes the baseline. Run 5 (2026-10-14,
   docs/showcase/saltmarrow-7b-run5-findings.md) was not one.
 - **Roadmap:** stable 0.10 first, then 1.0 as an exe or package. Test saves can pile up until
@@ -79,6 +87,10 @@ belong to, with the date).
   quest_parser x3, quest_pipeline, skill_roster, town_ui x4, and the test_bare_assert_files and
   test_tts loader errors). Anything beyond those is new.
 - **Evidence lives in model traces** (`data/model_traces/turn-*.json`): read them before the code.
+  The model side is in `model_trace`; what the engine did is in `engine.ledger` (`delta` first,
+  then `writes[i].at` for the code, `swallowed` for hidden failures).
+- **Running the suite:** `.venv\Scripts\python.exe -m unittest discover -s tests` (tests/ has no
+  `__init__.py`, so a bare `-m unittest` from the root finds 0 tests).
 
 ## Environment rules that have bitten before
 

@@ -196,7 +196,20 @@ async def _spectator_guard(request, call_next):
         return JSONResponse(
             {"detail": "Watching a live run: this window is read-only."}, status_code=423
         )
-    return await call_next(request)
+    if request.method in {"GET", "HEAD", "OPTIONS"} or not request.url.path.startswith("/api/") or _spectating():
+        return await call_next(request)
+    # Every state-changing call is timed into requests.jsonl (app/turn_ledger.py),
+    # so setup-to-first-turn and turn-to-turn times can be measured from play.
+    from app.turn_ledger import log_request
+
+    started = time.time()
+    status = 500
+    try:
+        response = await call_next(request)
+        status = response.status_code
+        return response
+    finally:
+        log_request(request.method, request.url.path, status, started, time.time())
 
 
 @app.get("/api/live-tick")
