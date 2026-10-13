@@ -33,5 +33,17 @@ class QuotedPlayerNarratedActsAreNotSpeech(unittest.TestCase):
         self.assertEqual(drop_invented_player_speech(paras, LINE)[1], [])
 
 
+class ConversationEndsHere(unittest.TestCase):
+    """Run 18 T1: "The conversation with Wymarc ends here." shipped as narration."""
+
+    def test_repaired(self):
+        from app.prose_state import repair_meta_leaks
+
+        text, leaks = repair_meta_leaks("Wymarc smiles.\n\nThe conversation with Wymarc ends here. You are still thinking.")
+        self.assertNotIn("ends here", text)
+        self.assertEqual(leaks[0]["why"], "stage_direction")
+        self.assertEqual(repair_meta_leaks("The conversation ends when the bell rings.")[1], [])
+
+
 if __name__ == "__main__":
     unittest.main()
