@@ -60,9 +60,13 @@ class TheOpeningGivesThePlayerNoLines(unittest.TestCase):
 
         _kept, dropped = drop_invented_player_speech(re.split(r"\n\s*\n", OPENING), OPENING_INPUT)
         self.assertTrue(any("Good morn" in d for d in dropped), dropped)
-        # Wait turns and other engine requests are left as before.
-        _kept, none = drop_invented_player_speech(re.split(r"\n\s*\n", OPENING), "__wait_request__: kind=wait")
+        # World-event turns and other engine requests are left as before. A Wait
+        # or Sleep is silent like the opening (7B run 18, T9: a night's sleep
+        # became a working day with lines the player never said).
+        _kept, none = drop_invented_player_speech(re.split(r"\n\s*\n", OPENING), "__event_request__: kind=storm")
         self.assertEqual(none, [])
+        _kept, waited = drop_invented_player_speech(re.split(r"\n\s*\n", OPENING), "__wait_request__: kind=wait")
+        self.assertTrue(any("Good morn" in d for d in waited), waited)
 
     def test_opening_ends_before_her_first_line(self):
         from app import llm

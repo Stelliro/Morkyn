@@ -16394,6 +16394,11 @@ def _roles_stated_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> 
             match = re.search(pattern, text)
             if match:
                 stated = _stated_job(match.group(1))
+                # "the captain of the ship, a grizzled man named Rusk": the job
+                # is the captain, not the ship (7B run 18, T9).
+                head_of = re.search(r"\b([a-z][a-z'-]+)\s+of\s*$", text[: match.start()])
+                if head_of and _stated_job(head_of.group(1)):
+                    stated = _stated_job(head_of.group(1))
                 if stated:
                     start = max(text.rfind(".", 0, match.start()), text.rfind("\n", 0, match.start())) + 1
                     end_dot = text.find(".", match.end())

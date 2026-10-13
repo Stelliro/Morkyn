@@ -75,5 +75,38 @@ class EatingIsNotCooking(unittest.TestCase):
         self.assertEqual(skill("I roast the gull over the fire."), "cooking")
 
 
+class SleepIsSilent(unittest.TestCase):
+    """T9: a night's sleep became a working day with lines the player never said."""
+
+    def test_sleep_ends_before_her_first_line(self):
+        from app import llm
+
+        text = (
+            "You sleep in the diner, the fog outside a quiet blanket over the harbour. You wake as the light comes. "
+            "Wymarc is at his counter, filling jugs with water from the well, humming to himself.\n\n"
+            '"Feeling better, lass?" he asks.\n\n"Thanks for your care," you reply.\n\n'
+            'Rusk hands you a rope. "Of course, Captain."'
+        )
+        turn = {"narration": text, "narration_segments": [{"label": "paragraph", "text": p} for p in text.split("\n\n")]}
+        out = llm._end_silent_scene_before_player(turn, "__wait_request__: kind=sleep minutes=600")
+        self.assertTrue(out["narration"].endswith('"Feeling better, lass?" he asks.'), out["narration"])
+
+
+class CaptainOfTheShip(unittest.TestCase):
+    """T9: "the captain of the ship, a grizzled man named Rusk" stored his job as "ship"."""
+
+    def test_job(self):
+        from app.db import connect, init_db
+        from app.world import _roles_stated_in_prose
+
+        init_db()
+        with connect() as conn:
+            out = _roles_stated_in_prose(
+                conn, [{"name": "Rusk", "role": "local"}],
+                "As you approach, you see the captain of the ship, a grizzled man named Rusk, who greets you.",
+            )
+        self.assertEqual(out[0]["role"], "captain")
+
+
 if __name__ == "__main__":
     unittest.main()
