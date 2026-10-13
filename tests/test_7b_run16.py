@@ -36,6 +36,19 @@ class CommonWordsAreNotNames(unittest.TestCase):
         )
 
 
+class AJobNamedSomeone(unittest.TestCase):
+    """Run 23 T0: "A bell ringer named Clemence Skinner stands near the mill" stored nobody."""
+
+    def test_read(self):
+        from app.world import _introduced_people
+
+        self.assertEqual(
+            _introduced_people("A bell ringer named Clemence Skinner stands near the mill.", []),
+            [{"name": "Clemence Skinner", "role": "bell ringer"}],
+        )
+        self.assertEqual(_introduced_people("A grizzled man named Rusk greets you.", []), [{"name": "Rusk", "role": ""}])
+
+
 class NamesAndCodes(unittest.TestCase):
     """T0: 'Dunstan Upcott [[A]] [[D1]]', 'Quarrel and Sons [[Quarrel and Sons]]', role 'grocer Quarrel and Sons'."""
 
