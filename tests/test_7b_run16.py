@@ -49,5 +49,22 @@ class NamesAndCodes(unittest.TestCase):
         self.assertEqual(npcs[0]["role"], "rag picker")
 
 
+class WordsEchoInYourMind(unittest.TestCase):
+    """Run 17 T2: the player's line came back as "Hereward Treloar's words echo in your mind: ..."."""
+
+    def test_line_is_the_players_again(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = '"Keep your splints handy, then. The flats ate three hauling carts last month." I walk out onto the flats.'
+        text, _changes = keep_player_words(
+            "You step out onto the flats. Hereward Treloar [[A]]'s words echo in your mind: "
+            '"Keep your splints handy, then. The flats ate three hauling carts last month."\n\n'
+            'Hereward calls out, "Salvage again, I see."',
+            line,
+        )
+        self.assertNotIn("echo in your mind", text)
+        self.assertIn("last month,” you say.", text)
+
+
 if __name__ == "__main__":
     unittest.main()
