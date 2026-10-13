@@ -9863,7 +9863,13 @@ def resolve_movement(
     # "you reach Riverford and step into the inn" is Riverford's inn, and
     # opening it inside the place the player left put them in the wrong town.
     shown = None
-    if not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name):
+    # A Wait, Sleep or other turn the player did not act in moves nobody (7B
+    # run 27, T4: "Inside, the pub is empty" seen through an open door during a
+    # Wait put the player in the inn).
+    silent_turn = str(player_input or "").lstrip().startswith(
+        ("__wait_request__", "__opening_scene_request__", "__continue_scene_request__", "__event_request__")
+    )
+    if not silent_turn and not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name):
         shown = _venue_shown_in_prose(conn, result, narration)
     if shown:
         player_patch["move_to_location"] = shown["name"][:120]
