@@ -1478,6 +1478,19 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
             "player_line is the player's whole turn. Narrate only that action and how the world and its people respond; "
             "the player's further actions, words, thoughts, feelings and decisions are theirs to write, not yours."
         )
+        # The player's words, as their own field (7B run 5, #123: the quote was
+        # dropped, reworded or given to the clerk in a third of the speaking
+        # turns while player_line held it). They are the player's own text.
+        from app.narration_pipeline import player_quotes
+
+        says = player_quotes(player_input)
+        if says:
+            packet["player_says"] = says
+            instructions.append(
+                "player_says is what the player (you) says aloud this turn. ===NAR=== has you say each line in "
+                "quotation marks, word for word as written, then shows how the others answer. Nobody else says these "
+                "words, and you say nothing beyond them."
+            )
         from app.prose_state import declared_act, player_trade_offer
 
         # Who does the act (playtest #77, T13: "fix a rusty sword" was done by
