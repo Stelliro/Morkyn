@@ -13440,14 +13440,30 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b|"
     # Asking to buy (playtest #96): "ask Finnian if he'd sell me a whetstone.
     # I'll pay 2 gold for it" asked for the whetstone, and the gain was refused.
-    r"sell(?:s|ing)?\s+(?:me|us)\b|pay(?:s|ing)?\s+(?:[\w']+\s+){0,4}for\b)",
+    r"sell(?:s|ing)?\s+(?:me|us)\b|pay(?:s|ing)?\s+(?:[\w']+\s+){0,4}for\b|"
+    # Searching for something to carry off asks for what turns up (7B run 7,
+    # T6): "dig at the mud ... looking for anything metal worth hauling back"
+    # refused the rusty tool handle the dig found (also run 5, T57).
+    r"worth\s+(?:haul|tak|keep|sell|salvag|carr|pocket|bring)\w*\b"
+    r"(?!\s+(?:a\s+|the\s+)?(?:risk|chance|time|trouble|look|trip|walk|wait)s?\b)|"
+    r"haul(?:s|ed|ing)?\s+(?:[\w']+\s+){0,3}(?:back|home|off|away)\b|"
+    r"(?:dig|digs|digging|dug|search\w*|rummag\w*|root(?:s|ing)?\s+(?:around|about|through)|sift\w*|"
+    r"forag\w*|comb(?:s|ing)?\s+through)\b[^.!?\n]{0,60}?\bfor\s+(?:anything|something|whatever|any)\b)",
+    re.I,
+)
+# Not asking to buy: "a sunken cargo needs a crew I can't pay for" (7B run 7,
+# T2) let a GRANT of "deck work" through as a purchase.
+_NEGATED_PAY_RE = re.compile(
+    r"\b(?:can['’]?t|cannot|won['’]?t|couldn['’]?t|don['’]?t|not|never)\s+(?:afford\s+to\s+)?"
+    r"pay(?:s|ing)?\s+(?:[\w']+\s+){0,4}for\b",
     re.I,
 )
 
 
 def player_take_intent(player_text: str) -> bool:
     """True when the player's own words ask to take, buy, make or receive something."""
-    return bool(_PLAYER_TAKE_INTENT_RE.search(_TAKE_PERCEPTION_RE.sub(" ", str(player_text or ""))))
+    text = _NEGATED_PAY_RE.sub(" ", _TAKE_PERCEPTION_RE.sub(" ", str(player_text or "")))
+    return bool(_PLAYER_TAKE_INTENT_RE.search(text))
 
 
 _INPUT_MOVE_RE = re.compile(
