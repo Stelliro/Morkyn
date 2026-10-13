@@ -8301,20 +8301,34 @@ def infer_npc_pronouns(name: str, narration: str, others: Sequence[str] = ()) ->
         if str(o).strip() and str(o).strip().lower() != low_person
     }
 
+    # The person's own name parts ("Oriel" of "Oriel Rendle") are the person,
+    # unless someone else in the cast shares that part (7B run 7, T1: '"Good
+    # morn," Oriel says, his voice rough' counted as naming someone else, so a
+    # new person's first scene pinned nothing).
+    other_parts = {part for other in low_others for part in other.split()}
+    own_parts = {part for part in low_person.split() if len(part) >= 3 and part not in other_parts}
+
+    def _mentions(sentence: str) -> bool:
+        low = sentence.lower()
+        if low_person in low:
+            return True
+        return any(re.search(rf"\b{re.escape(part)}\b", low) for part in own_parts)
+
     def _names_someone_else(sentence: str) -> bool:
         """True when another character is named here, so its pronouns are not ours."""
         low = sentence.lower()
         if any(other in low for other in low_others):
             return True
-        for match in re.finditer(r"(?<![.!?]\s)(?<!^)\b([A-Z][a-z]{2,})\b", sentence):
+        # A capital that opens a quotation ('"Good morn," Oriel says') is not a name.
+        for match in re.finditer(r"(?<![.!?]\s)(?<![\"“‘])(?<!^)\b([A-Z][a-z]{2,})\b", sentence):
             token = match.group(1)
-            if token.lower() != low_person and token not in {"You", "Your"}:
+            if token.lower() != low_person and token.lower() not in own_parts and token not in {"You", "Your"}:
                 return True
         return False
 
     masc = fem = 0
     for index, sentence in enumerate(sentences):
-        if low_person not in sentence.lower():
+        if not _mentions(sentence):
             continue
         # The sentence has to be about this NPC alone. Sharing it with another
         # named character is how a weaver introduced beside "a young boy, Liora"
@@ -8327,7 +8341,7 @@ def infer_npc_pronouns(name: str, narration: str, others: Sequence[str] = ()) ->
         # a one-sentence window pins virtually nothing.
         window = [sentence]
         nxt = sentences[index + 1] if index + 1 < len(sentences) else ""
-        if nxt and low_person not in nxt.lower() and not _names_someone_else(nxt):
+        if nxt and not _mentions(nxt) and not _names_someone_else(nxt):
             window.append(nxt)
         for part in window:
             words = set(re.findall(r"[a-z]+", part.lower()))
@@ -11711,7 +11725,15 @@ def _upsert_location(
     # T9's step out of it became a journey back to Saltmarrow). No kind: it is
     # a part of the place, not a shop with hours and a keeper.
     building_parent = 0
-    if kind is None and not resolved_kind and parent_id is None and _is_outbuilding_name(name) and not _FAR_SUMMARY_RE.search(summary or ""):
+    # A place described as part of the one the player is in stands in it
+    # (7B run 7, T2: "Saltmarrow Salvage Deck", "A small part of the yard",
+    # was minted as a second salvage yard in the town).
+    part_parent = 0
+    if kind is None and not resolved_kind and parent_id is None:
+        part_parent = _part_of_here(conn, summary)
+    if part_parent:
+        building_parent = part_parent
+    elif kind is None and not resolved_kind and parent_id is None and _is_outbuilding_name(name) and not _FAR_SUMMARY_RE.search(summary or ""):
         building_parent = _venue_parent_for_new_place(conn, "building")
     if resolved_kind:
         resolved_parent = (
@@ -11752,7 +11774,7 @@ _OUTBUILDING_WORDS = frozenset({
     "shed", "sheds", "shack", "hut", "barn", "loft", "cellar", "storeroom", "workshop", "warehouse",
     "office", "dairy", "stall", "booth", "kitchen", "attic", "cabin", "boathouse", "shipyard", "yard",
     "smokehouse", "cooperage", "ropewalk", "outhouse", "courtyard", "backroom", "storehouse", "granary",
-    "coop", "pen", "sty", "kennel", "forecourt", "wharfhouse", "lockup", "gatehouse", "bunkroom",
+    "coop", "pen", "sty", "kennel", "forecourt", "wharfhouse", "lockup", "gatehouse", "bunkroom", "deck", "decks",
 })
 
 
@@ -11808,6 +11830,37 @@ def _record_named_buildings(conn, narration: str) -> list[str]:
                 turn_ledger.note("place", "named_in_passing_recorded", name=name, kind=kind, parent=here_parent)
                 made.append(name)
     return made
+
+
+_PART_OF_RE = re.compile(
+    r"\b(?:part|corner|section|end|side|area|portion|wing|room|back|edge)\s+of\s+(?:the|this|that)\s+"
+    r"((?:[A-Za-z'’-]+\s+){0,2}[A-Za-z'’-]+)",
+    re.IGNORECASE,
+)
+
+
+def _part_of_here(conn, summary: str) -> int:
+    """The player's place id when ``summary`` calls the new place a part of it ("A small part of the yard"), else 0."""
+    match = _PART_OF_RE.search(summary or "")
+    if not match:
+        return 0
+    head = re.findall(r"[a-z]+", match.group(1).lower())
+    if not head:
+        return 0
+    try:
+        here_row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        here = _location_row(conn, int((here_row["current_location_id"] if here_row else 0) or 0))
+    except Exception:
+        return 0
+    if here is None:
+        return 0
+    words = set(re.findall(r"[a-z]+", str(here["name"] or "").lower()))
+    kind = str(venues._field(here, "kind", "") or "")
+    if kind:
+        words |= set(re.findall(r"[a-z]+", venues.VENUE_KINDS.get(kind, {}).get("label", kind.replace("_", " "))))
+    if head[-1] in words or head[-1].rstrip("s") in words:
+        return int(here["id"])
+    return 0
 
 
 def _is_outbuilding_name(name: str) -> bool:
@@ -15545,11 +15598,15 @@ def _roles_stated_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> 
                     end_dot = text.find(".", match.end())
                     sentence = text[start:end_dot if end_dot >= 0 else len(text)].lower()
                     break
-        role = str(npc.get("role") or "").strip()
-        role_words = {w for w in re.findall(r"[a-z]+", role.lower()) if len(w) >= 3}
-        # The op's role is also in that sentence ("a young apprentice named
-        # Isolde, the tallow chandler"): the op chose one the prose states.
-        if stated and role_words and role_words <= set(re.findall(r"[a-z]+", sentence)):
+        role = _clean_op_role(str(npc.get("role") or ""))
+        if role != str(npc.get("role") or "").strip():
+            npc = dict(npc)
+            npc["role"] = role
+        role_words = [w for w in re.findall(r"[a-z]+", role.lower()) if len(w) >= 3]
+        # The op's job word is also in that sentence ("a young apprentice named
+        # Isolde, the tallow chandler"; "the overseer, Oriel Rendle, the rag
+        # picker" with the op's "overseer"): the op chose one the prose states.
+        if stated and role_words and role_words[-1] in set(re.findall(r"[a-z]+", sentence)):
             stated = ""
         if stated and not (set(stated.split()) & set(role.lower().split())):
             npc = dict(npc)
@@ -15557,6 +15614,17 @@ def _roles_stated_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> 
             turn_ledger.note("npc", "role_from_prose", name=name, op_role=role, prose_role=stated)
         out.append(npc)
     return out
+
+
+def _clean_op_role(role: str) -> str:
+    """Drop a garbled token from an op's role ("overseer Ssalvage" -> "overseer", 7B run 7, T1).
+
+    Garbled: a doubled capital at the start ("Ssalvage"), the 7B's stutter. A
+    role that would be left empty is kept as written.
+    """
+    words = str(role or "").split()
+    kept = [w for w in words if not (len(w) > 3 and w[0].isupper() and w[1].islower() and w[1] == w[0].lower())]
+    return " ".join(kept) if kept else str(role or "").strip()
 
 
 def _store_figure_aliases(conn, npc: dict[str, Any], npc_id: int | None) -> None:
@@ -19829,7 +19897,23 @@ def play_turn(
             spent = estimate_action_minutes(player_line)
             if spent > 0:
                 with connect() as c_time:
-                    advance_world_time(c_time, spent)
+                    ticked = advance_world_time(c_time, spent)
+                    # The weather can turn in these minutes; the packet was
+                    # built before them and showed the old sky, so the prose
+                    # had sunlight under a storm the journal announced (7B run
+                    # 7, T6). The scene that spends the minutes shows the turn.
+                    if isinstance(ticked, dict) and ticked.get("weather_announce"):
+                        wx_now = get_weather(c_time)
+                        mechanics_context["weather"] = {
+                            "kind": wx_now.get("kind"),
+                            "strength": wx_now.get("strength"),
+                            "label": wx_now.get("label"),
+                        }
+                        mechanics_context["weather_announce"] = ticked.get("weather_announce")
+                        consume_weather_announce(c_time)
+                        context["mechanics_context"] = mechanics_context
+                        context["weather"] = mechanics_context.get("weather")
+                        turn_ledger.note("weather", "turned_this_scene", announce=ticked.get("weather_announce"))
                 mechanics_context = dict(context.get("mechanics_context") or {})
                 mechanics_context["action_minutes"] = spent
                 context["mechanics_context"] = mechanics_context
@@ -20589,6 +20673,11 @@ def play_turn(
     if isinstance(direction_resolved, dict) and isinstance(result, dict):
         result["_direction_hint"] = direction_resolved
     actual_player_input = journal_input if journal_input is not None else player_input
+    try:
+        with connect() as _conn_max:
+            npc_max_before = int(_conn_max.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
+    except Exception:
+        npc_max_before = None
     state = apply_turn(
         result,
         actual_player_input,
@@ -20597,6 +20686,35 @@ def play_turn(
         input_kind=input_kind,
         prompt_context=prompt_context,
     )
+    # People this turn created did not exist when the pin above ran, so their
+    # first scene never pinned them (7B run 7: Oriel was "his voice" on T1 and
+    # "she" from T2). Pin them from the prose that shipped.
+    if npc_max_before is not None:
+        try:
+            with connect() as _conn_pron2:
+                new_rows = [
+                    dict(r)
+                    for r in _conn_pron2.execute("SELECT id, name, pronouns FROM npcs WHERE id > ?", (npc_max_before,))
+                ]
+                if new_rows:
+                    roster = [dict(r) for r in _conn_pron2.execute("SELECT id, name, pronouns FROM npcs")]
+                    others = {str(r.get("name") or "") for r in roster}
+                    pinned = []
+                    for row in new_rows:
+                        if str(row.get("pronouns") or "").strip():
+                            continue
+                        guess = infer_npc_pronouns(
+                            str(row.get("name") or ""),
+                            _narration_text_of(result),
+                            [n for n in others if n.lower() != str(row.get("name") or "").lower()],
+                        )
+                        if guess:
+                            _conn_pron2.execute("UPDATE npcs SET pronouns = ? WHERE id = ?", (guess, int(row["id"])))
+                            pinned.append({"name": row.get("name"), "pronouns": guess})
+                    if pinned:
+                        turn_ledger.note("npc", "pronouns_pinned_on_first_scene", pinned=pinned)
+        except Exception:
+            pass
     if ooc_note:
         _journal_ooc(ooc_note)
         if isinstance(result, dict):
