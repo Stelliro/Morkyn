@@ -634,6 +634,9 @@ def _amount(value: Any) -> tuple[str | None, int | None]:
     return None, (-number if negative else number)
 
 
+_KARMA_VISIBILITY = frozenset({"private", "local", "faction", "public"})
+
+
 def _apply_amount(
     target: dict[str, Any],
     *,
@@ -904,8 +907,18 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     elif op == "HP":
         _apply_amount(turn["player"], band_key="health_band", number_key="health_delta", token=args[0] if args else None)
     elif op == "KARMA":
+        # The visibility written where the band goes (7B runs 5-9: KARMA "public"
+        # "large", KARMA "moderate" "private") is the VIS flag; the band is the
+        # other argument.
+        args = list(args)
+        visibility = flags.get("VIS")
+        for index, arg in enumerate(args[:2]):
+            if str(arg).strip().lower() in _KARMA_VISIBILITY:
+                visibility = visibility or str(arg).strip().lower()
+                args.pop(index)
+                break
         _apply_amount(turn["player"], band_key="karma_band", number_key="karma_delta", token=args[0] if args else None)
-        turn["player"]["karma_visibility"] = (flags.get("VIS") or "private")[:40]
+        turn["player"]["karma_visibility"] = (visibility or "private")[:40]
         turn["player"]["karma_reason"] = flags.get("REASON") or (" ".join(args[1:]) if len(args) > 1 else "")
     elif op == "MOVE":
         dest = " ".join(args).strip()
