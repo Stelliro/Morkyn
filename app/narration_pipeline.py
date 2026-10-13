@@ -63,6 +63,8 @@ REPEAT_STEM_MIN = 5
 # any two people say -- never costs a line.
 SPEECH_SHARED_RUN_WORDS = 5
 SPEECH_RUN_MIN_CONTENT = 3
+# A whole line this long said again word for word is a repeat however few content words it has.
+SPEECH_WHOLE_LINE_MIN_WORDS = 5
 
 # --- env helpers -------------------------------------------------------------
 
@@ -982,8 +984,14 @@ def speech_units(block: str) -> list[str]:
 def speech_repeats(earlier_speech: list[str], speech: str) -> bool:
     """True when a spoken line restates one already spoken (shared run or re-worded)."""
     runs = _speech_runs(speech)
+    # A short line said again word for word (7B run 10, T2-T3: "Very well,
+    # then. What do you have to offer?") has too few content words for a run.
+    whole = _speech_key(speech)
+    whole_ok = len(whole.split()) >= SPEECH_WHOLE_LINE_MIN_WORDS
     for prev in earlier_speech:
         if runs & _speech_runs(prev):
+            return True
+        if whole_ok and _speech_key(prev) == whole:
             return True
         if is_near_restatement(prev, speech):
             return True
@@ -1693,6 +1701,10 @@ def _drop_invented_spans(unit: str, keep) -> tuple[str, list[str]]:
     return out, list(reversed(gone))
 
 
+# Engine turns in which the player has done and said nothing yet.
+SILENT_TURN_PREFIXES = ("__opening_scene_request__", "__continue_scene_request__")
+
+
 def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tuple[list[str], list[str]]:
     """
     Remove quotations the narration gives the player when the player did not
@@ -1714,10 +1726,14 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     Returns (paragraphs, dropped) with the input's length.
     """
     raw = str(player_input or "")
-    if not raw.strip() or raw.startswith("__"):
+    # The opening and a Continue are turns the player has not acted in: every
+    # line the prose gives them is invented (7B run 10, T0: '"Good morn," you
+    # say ... "Is there work to be done today?"' and an offer of her reckoner).
+    silent = raw.startswith(SILENT_TURN_PREFIXES)
+    if not raw.strip() or (raw.startswith("__") and not silent):
         return list(paragraphs), []
-    own = re.split(r"\n\s*\n", raw, maxsplit=1)[0]
-    quotes = player_quotes(raw)
+    own = "" if silent else re.split(r"\n\s*\n", raw, maxsplit=1)[0]
+    quotes = [] if silent else player_quotes(raw)
     voiced = not quotes and asks_to_speak(own)
     own_stems = content_stems(own) if voiced else set()
     asked = voiced and bool(re.search(r"\b(?:ask|asks|asked|inquire|enquire|question)\w*\b", own, re.I))

@@ -1584,6 +1584,16 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
                 "quotation marks, word for word as written, then shows how the others answer. Nobody else says these "
                 "words, and you say nothing beyond them."
             )
+            # A question the scene never answered (7B run 10, T1-T3: "what does
+            # it pay?" three times, met with "What do you have to offer?").
+            asks = [line for line in says if "?" in line]
+            if asks:
+                packet["player_asks"] = asks
+                instructions.append(
+                    "player_asks holds the questions the player puts to someone this turn. The one asked answers "
+                    "each in ===NAR=== plainly and concretely (a number, a name, a place, a yes or a no), or says "
+                    "outright why they will not; they do not answer a question with the same question."
+                )
         from app.prose_state import declared_act, player_trade_offer
 
         # Who does the act (playtest #77, T13: "fix a rusty sword" was done by
