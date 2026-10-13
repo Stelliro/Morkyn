@@ -1045,11 +1045,29 @@ def validate_quest_changes(
                 else f"completed_before:{ref}" if dup_status == "completed"
                 else f"duplicate_of:{ref}"
             )
+        # A deal struck in the scene is the offer (7B run 10, T4): Isk said "Ten
+        # knives for one gold", Jehane answered "Very well. Ten for one gold.",
+        # and the parser proposed the job but quoted "Jehane Tully takes a deep
+        # breath" as its evidence, so it was refused as no offer. When the giver
+        # is in the scene and the two sides agree a sum, the agreement grounds it.
+        deal_gold = None
+        quote_reasons = {"evidence_is_not_an_offer", "evidence_not_in_text"}
+        if reasons and set(reasons) <= quote_reasons and giver is not None and _named_in(narration, giver):
+            deal_gold, how = agreed_job_price(narration, player_input)
+            if deal_gold is not None:
+                from app import turn_ledger
+
+                turn_ledger.note("quest", "deal_is_the_offer", title=title, gold=deal_gold, how=how,
+                                 dropped_reasons=list(reasons), parser_quote=evidence[:200])
+                reasons = []
+                evidence = _player_line_text(player_input) or evidence
         if reasons:
             rejected.append({"kind": "new", "item": raw, "reasons": reasons, "checked": checked})
             continue
         reward = raw.get("reward") if isinstance(raw.get("reward"), dict) else {}
         gold = max(0, min(REWARD_GOLD_CAP, _int(reward.get("gold"), 0)))
+        if deal_gold is not None:
+            gold = max(0, min(REWARD_GOLD_CAP, int(deal_gold)))
         xp = max(0, min(REWARD_XP_CAP, _int(reward.get("xp"), 0)))
         items = [re.sub(r"\s+", " ", str(i)).strip()[:80] for i in (reward.get("items") or []) if str(i or "").strip()]
         # Karma only as the story states it, like gold (playtest #85b).
@@ -1657,6 +1675,21 @@ def _pay_you_re() -> re.Pattern[str]:
     return _PAY_YOU_RE
 
 
+def _player_line_text(player_input: str) -> str:
+    """The player's own words, without any engine notes appended after them."""
+    return re.split(r"\n\s*__\w+__", str(player_input or ""), maxsplit=1)[0].strip()[:300]
+
+
+def _agrees(answer: str) -> bool:
+    """An agreeing reply that does not go on to ask something.
+
+    7B run 10, T3: "Very well, then. What do you have to offer?" is a question
+    put back to the player, not agreement to her terms.
+    """
+    match = _JOB_AGREE_RE.search(answer)
+    return bool(match) and "?" not in answer[match.end():]
+
+
 def _echoes(span: str, own: str) -> bool:
     words = set(re.findall(r"[a-z']+", span.lower()))
     own_words = set(re.findall(r"[a-z']+", own.lower()))
@@ -1681,7 +1714,7 @@ def agreed_job_price(narration: str, player_input: str = "") -> tuple[int | None
         answers = [m.group(1) or m.group(2) or "" for m in _SPEECH_RE.finditer(text)]
         answers = [a for a in answers if not _echoes(a, own)]
         outside = _SPEECH_RE.sub(" ", text)
-        if any(_JOB_AGREE_RE.search(a) for a in answers) or re.search(
+        if any(_agrees(a) for a in answers) or re.search(
             r"\b(?:deal\s+is\s+(?:struck|made|done)|you\s+(?:shake|shook)\s+(?:on\s+it|hands))\b", outside, re.I
         ):
             return asked[0], "player_terms_agreed"

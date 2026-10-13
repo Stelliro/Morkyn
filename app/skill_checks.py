@@ -1581,7 +1581,10 @@ def social_attitude_from_check(
 SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     # Striking a flint, a match or a bargain is not a blow (playtest #102).
     (r"\b(attack|strike(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance)\b)|slash|stab|swing|fight|melee)\b", "melee"),
-    (r"\b(shoot|fire|bow|gun|throw)\b", "ranged"),
+    # The verbs only: "I eat the soup by the fire" rolled ranged (7B run 5, T30),
+    # and "bow to her" is a greeting.
+    (r"\b(shoot|(?<!the )(?<!by )(?<!a )(?<!of )fire (?:at|on|upon|into|a|an|the|my|arrows?|bolts?|shots?|again)|"
+     r"bow(?!\s+(?:to|before|my|your|his|her|their|deeply|low|out|politely|slightly|in))|gun|throw)\b", "ranged"),
     (r"\b(sneak|hide|stealth|creep)\b", "stealth"),
     (r"\b(persuade|convince|negotiate)\b", "persuasion"),
     # "worth" alone is feeling ("no cart's worth you", playtest #102); a
@@ -1633,7 +1636,9 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(etiquette|court manners|protocol|formal address)\b", "etiquette"),
     (r"\b(streetwise|fence|underworld|gang rumor)\b", "streetwise"),
     (r"\b(acrobatics|balance|tumble|tightrope)\b", "acrobatics"),
-    (r"\b(sleight|pickpocket|palm|switch the)\b", "sleight_of_hand"),
+    # "palm" the verb, not the hand: "I count the coins in my palm" rolled
+    # sleight of hand (7B run 10, T8).
+    (r"\b(sleight|pickpocket|palm (?:it|them|the|a|an|one|his|her|their)|switch the)\b", "sleight_of_hand"),
     (r"\b(tactics|ambush plan|formation)\b", "tactics"),
     (r"\b(defense|parry|block|guard up)\b", "defense"),
 ]
@@ -1849,6 +1854,14 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # speech blunder on a question about the reward).
     if skill == "appraise" and _JOB_PAY_RE.search(text) and not re.search(r"\b(?:apprais\w*|value\s+of|haggl\w*|bargain\w*)\b", text):
         skill = None
+    # Reading a plain notice, letter or posting is routine (#102; 7B run 8, T3:
+    # investigation DC15 to read a job posting; run 5 T44, T67, T80). A text
+    # that is hard to read (faded, in cipher, old marks) still takes a check.
+    if skill == "investigation" and _PLAIN_READ_RE.search(acted) and not _HARD_TEXT_RE.search(acted):
+        from app import turn_ledger
+
+        turn_ledger.note("check", "routine_read_no_check", line=own_acts[:200])
+        skill = None
     if not skill:
         return None
     check = _check_with_opposition(skill, text, context)
@@ -1861,6 +1874,16 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         check["routine"] = True
         check["plain_talk"] = True
     return check
+
+
+_PLAIN_READ_RE = re.compile(
+    r"\bread\w*\b[^.?!]{0,50}\b(?:notice|posting|post|sign|letter|note|parchment|board|poster|list|menu|tally|"
+    r"ledger|message|label|bill|placard|price)s?\b"
+)
+_HARD_TEXT_RE = re.compile(
+    r"\b(?:decipher\w*|cipher|code|coded|symbols?|runes?|glyphs?|marks|faded|smudged|torn|water-?stained|"
+    r"hidden|secret|old\s+tongue|foreign|scrawl\w*)\b"
+)
 
 
 # Speech that leans on someone: the full roll. Anything else that the talk
