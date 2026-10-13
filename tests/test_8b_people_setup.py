@@ -150,7 +150,9 @@ class DutyFollowsTheClock(unittest.TestCase):
         }
         person = prompts._place_view(context)["people"][0]
         self.assertEqual(person["role"], "guard")
-        self.assertIn("off duty", person["duty"])
+        # A flag, not a sentence to paste (7B run 5, #83 reopened).
+        self.assertIs(person["working"], False)
+        self.assertNotIn("duty", person)
 
 
 TEXT_T38 = (
