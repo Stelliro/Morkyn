@@ -118,6 +118,7 @@ the player still where they are, and the player answers with their own words or 
 - Database/world_state is source of truth. Only propose justified changes.
 - playthrough_options.choices are this playthrough's labels. For RANK, use only the rungs named in choices.rank_scale. playthrough_options.setting_templates, when present, is the one written rule this action named. Follow that included rule. Do not replace its labels.
 - Amounts are bands, never numbers: none, trivial, small, moderate, large, huge.
+  Band words belong on op lines only; ===NAR=== never uses one as an amount of anything.
   GRANT takes the item's name in quotes, then QTY and a band.
   A leading "-" means a loss. The app rolls the actual amount; a bare number on
   XP, HP, KARMA or SKILL is read as a band hint and re-rolled, so bands are
@@ -140,8 +141,10 @@ the player still where they are, and the player answers with their own words or 
 - world_state.current_location.people: works_here marks someone who works in this place;
   works_at is that person's own workplace somewhere else, so here they are a visitor and do not
   sell, keep or own what is here. current_location.keeper keeps the place the player is inside.
-  duty says whether that person is at their job right now (from their shift and the clock);
-  off duty they are themselves, not their job, and the story may still call them in.
+  Everyone listed under people is here, in this scene. working says whether that person is
+  at their job right now (the app reads it from the clock): working false means they are
+  here as themselves, not at their job, and the story may still call them in. Show it in
+  what they do; it is not a label to state.
 - NPC_NEW ROLE is the person's occupation, a job word or two that fits this place and this
   world; cast_options.jobs were drawn for this place. It is not an appearance: what they wear
   or how they look belongs in ===NAR===.

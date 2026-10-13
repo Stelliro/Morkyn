@@ -728,3 +728,120 @@ def repair_pinned_pronouns(
     for a, b, new in sorted(edits, reverse=True):
         out = out[:a] + new + out[b:]
     return out, fixes
+
+
+# ---------------------------------------------------------------------------
+# Op, packet and meta text in the prose (7B run 5, #131 and #83)
+# ---------------------------------------------------------------------------
+
+# A DSL op written out as prose: "The GOAL is to finish the task." The op
+# keywords are capitals in the ask; prose never capitalises them.
+_OP_KEYWORD_LINE_RE = re.compile(r"^\s*The (?:GOAL|FOCUS|NPC|SCENE|PLACE|ROLE|MOOD) is\b")
+# A roster label left on its own line: "Roger [[A]]", "The Blind Pike [[L7]]",
+# "Abel Hollis [[D]] (D) - woodcutter (on duty (shift 08:00-18:00))". A name
+# (a few capitalised words) and a code, then at most a parenthetical and a
+# dash tail, with no sentence end and no speech. A list line ("- Name [[D]]:
+# three barrels") starts with its marker and is not touched.
+_LABEL_LINE_RE = re.compile(
+    r"^\s*(?:The\s+)?[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,4}\s*\[\[[A-Z][A-Z0-9]{0,4}\]\]"
+    r"(?:\s*\((?:[^()]|\([^()]*\))*\))*"
+    r"(?:\s*[-–—]\s*[^.!?\"“\n]*)?\s*$"
+)
+# Stage directions about the scene itself, not about what happens in it.
+_STAGE_SENTENCE_RE = re.compile(
+    r"^\s*The\s+(?:focus|scene)\s+(?:now\s+)?(?:shifts|changes|is\s+about\s+to\s+(?:change|shift))\b", re.I
+)
+# The engine's status line: "You are fine, with 19/20 health."
+_STATUS_SENTENCE_RE = re.compile(r"\bwith\s+\d+\s*/\s*\d+\s+health\b", re.I)
+# Packet keys and item ids: open_offers, brass_key.
+_SNAKE_RE = re.compile(r"\b[a-z]+(?:_[a-z]+)+\b")
+# Markdown emphasis, which the page shows as raw marks: _Sea Sprite_, *Saltsort*.
+_MD_BOLD_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
+_MD_STAR_RE = re.compile(r"(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])")
+_MD_UNDER_RE = re.compile(r"(?<![\w])_([^_\s][^_\n]*?)_(?![\w])")
+# An attitude label pasted as an adjective: "gives you a Dismissive look".
+_ATTITUDE_WORDS = (
+    "Antagonistic", "Apprehensive", "Condescending", "Cordial", "Dismissive", "Neutral", "Warm", "Hostile",
+)
+_ATTITUDE_LABEL_RE = re.compile(
+    r"\b((?:a|an|the|his|her|their)\s+)(" + "|".join(_ATTITUDE_WORDS) + r")(\s+(?:\w+\s+)?"
+    r"(?:look|glance|stare|smile|nod|tone|expression|air|frown|scowl|shrug|silence|manner|voice)s?)\b"
+)
+# A band word used as an amount of coin: "a moderate bag of coin".
+_BAND_COIN_RE = re.compile(
+    r"\b(?:a|an)\s+(?:trivial|small|moderate|large|huge)\s+(?:bag|purse|pouch|sum|amount|handful|pile|stack)"
+    r"\s+of\s+(?:coins?|gold)\b",
+    re.I,
+)
+
+
+def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """
+    Narrow repairs of exact engine shapes in the prose; the rest is left as written.
+
+    Lines that are an op or a roster label go; stage-direction and status-line
+    sentences go; packet keys lose their underscores; markdown marks go and
+    keep their words; a pasted attitude label is lowercased. Returns the text
+    and one entry per repair. Nothing is cut when the cut would leave no prose.
+    """
+    source = str(text or "")
+    if not source.strip():
+        return source, []
+    fixes: list[dict[str, Any]] = []
+    lines = source.split("\n")
+    kept_lines: list[str] = []
+    for line in lines:
+        if _OP_KEYWORD_LINE_RE.match(line):
+            fixes.append({"why": "op_line", "text": line.strip()[:160]})
+            continue
+        if line.strip() and "[[" in line and _LABEL_LINE_RE.match(line):
+            fixes.append({"why": "label_line", "text": line.strip()[:160]})
+            continue
+        kept_lines.append(line)
+    out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
+    if not out:
+        return source, []
+
+    def _meta_sentence(sentence: str) -> bool:
+        return bool(_STAGE_SENTENCE_RE.match(sentence) or _STATUS_SENTENCE_RE.search(sentence))
+
+    if any(_meta_sentence(s) for _a, _b, s in sentence_spans(out)):
+        trimmed, dropped = drop_sentences(out, _meta_sentence, floor=1)
+        if dropped:
+            out = trimmed
+            for sentence in dropped:
+                why = "status_line" if _STATUS_SENTENCE_RE.search(sentence) else "stage_direction"
+                fixes.append({"why": why, "text": sentence[:160]})
+
+    for pattern, why in ((_MD_BOLD_RE, "markdown"), (_MD_STAR_RE, "markdown"), (_MD_UNDER_RE, "markdown")):
+        found = [m.group(0) for m in pattern.finditer(out)]
+        if found:
+            out = pattern.sub(r"\1", out)
+            fixes.append({"why": why, "text": ", ".join(found[:4])[:160]})
+    keys = [m.group(0) for m in _SNAKE_RE.finditer(out)]
+    if keys:
+        out = _SNAKE_RE.sub(lambda m: m.group(0).replace("_", " "), out)
+        fixes.append({"why": "packet_key", "text": ", ".join(keys[:4])[:160]})
+    labels = [m.group(2) for m in _ATTITUDE_LABEL_RE.finditer(out)]
+    if labels:
+        out = _ATTITUDE_LABEL_RE.sub(lambda m: m.group(1) + m.group(2).lower() + m.group(3), out)
+        fixes.append({"why": "attitude_label", "text": ", ".join(labels[:4])})
+    return out, fixes
+
+
+def settle_band_coin(text: str, amount: int) -> tuple[str, dict[str, Any] | None]:
+    """
+    "Hands over a moderate bag of coin" when the engine moved ``amount`` gold.
+
+    A band word is the op's size, not the scene's: when exactly one such phrase
+    stands for coin that changed hands this turn, it becomes the amount that
+    moved (the state and the prose then say the same thing). Otherwise the
+    prose is left as written.
+    """
+    source = str(text or "")
+    found = list(_BAND_COIN_RE.finditer(source))
+    if len(found) != 1 or int(amount or 0) <= 0:
+        return source, None
+    match = found[0]
+    new = f"{int(amount)} gold"
+    return source[: match.start()] + new + source[match.end():], {"why": "band_coin", "from": match.group(0), "to": new}

@@ -137,8 +137,29 @@ def duty_for(
     return out
 
 
+def working_fields(duty: dict[str, Any] | None) -> dict[str, Any]:
+    """What a prompt says about someone in the scene: {"working": bool} and an override's reason.
+
+    The prompt used to carry duty_note's sentence, and the 7B pasted it as
+    written ("Abel Hollis (D) - woodcutter (on duty (shift 08:00-18:00))") or
+    staged both halves of "off duty; likely asleep at home" for a woman behind
+    her own counter (7B run 5, #83). Everyone a prompt lists is in the scene, so
+    where they would be off duty is not said, and the shift hours are the
+    engine's: a flag leaves nothing to paste.
+    """
+    if not duty:
+        return {}
+    out: dict[str, Any] = {"working": bool(duty.get("on_duty"))}
+    if duty.get("reason"):
+        out["working_because"] = str(duty["reason"])[:80]
+    return out
+
+
 def duty_note(duty: dict[str, Any] | None) -> str:
-    """One line for prompts: "on duty (shift 06:00-14:00)" / "off duty (shift ...); likely at home"."""
+    """One line for logs and tools: "on duty (shift 06:00-14:00)" / "off duty (shift ...); likely at home".
+
+    Not for prompts: see working_fields.
+    """
     if not duty:
         return ""
     if duty.get("on_duty"):
