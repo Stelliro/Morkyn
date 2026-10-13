@@ -290,10 +290,9 @@ def _context_request() -> tuple[int, bool]:
     """(window, automatic): the window to open with, and whether it is the
     automatic size rather than an explicit env or the player's custom value."""
     raw = os.getenv("AI_RPG_CONTEXT_TOKENS", "").strip()
-    try:
-        value = int(raw)
-    except ValueError:
-        value = 0
+    # Unset is the common case; parsing "" raised on every call (3 per turn
+    # in the engine ledger's swallowed list, 7B run 6).
+    value = int(raw) if raw.isdigit() else 0
     if value > 0:
         return value, False
     auto = False

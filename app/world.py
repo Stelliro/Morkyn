@@ -15248,6 +15248,90 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
     return out
 
 
+# Words that say what someone looks like, not what they do.
+_NOT_A_JOB = frozenset({
+    "man", "woman", "men", "women", "person", "people", "figure", "girl", "boy", "lad", "lass", "child", "kid",
+    "fellow", "stranger", "soul", "one", "folk", "youth", "elder", "gentleman", "lady", "sort", "type", "face",
+})
+_JOB_ADJECTIVES = frozenset({
+    "old", "young", "tall", "short", "stout", "thin", "gruff", "wiry", "burly", "elderly", "local", "new", "grim",
+    "big", "small", "lean", "broad", "quiet", "stern", "weary", "bald", "scarred", "hard", "sharp", "kind",
+})
+_JOB_PHRASE = r"((?:[a-z][a-z'-]+\s){0,2}[a-z][a-z'-]+)"
+
+
+def _stated_job(phrase: str) -> str:
+    """The job in a role phrase from the prose ("grizzled overseer" -> "overseer"), or ""."""
+    words = [w for w in str(phrase or "").lower().split() if w]
+    while words and (words[0] in _JOB_ADJECTIVES or words[0].endswith(("ed", "ly"))):
+        words = words[1:]
+    if not words or words[-1] in _NOT_A_JOB or words[-1] in _NOT_A_NAME:
+        return ""
+    return " ".join(words[-2:])
+
+
+def _roles_stated_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
+    """A new person's job is the one the prose introduces them with (7B run 6, T3).
+
+    NPC_NEW "Oldfield" "village reeve" came with "The overseer, a grizzled man
+    named Oldfield" in the prose, and the reeve was someone else. The sentence
+    that introduces a new person is the fact; the op's role only fills in when
+    the prose states none. People already in the world keep theirs.
+    """
+    text = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(narration or ""))
+    if not text.strip():
+        return npcs
+    out: list[dict[str, Any]] = []
+    for npc in npcs:
+        name = norm_name(str(npc.get("name") or "")) if isinstance(npc, dict) else ""
+        if not name:
+            out.append(npc)
+            continue
+        try:
+            if conn.execute("SELECT 1 FROM npcs WHERE name = ? COLLATE NOCASE", (name,)).fetchone():
+                out.append(npc)
+                continue
+        except Exception:
+            pass
+        forms = [re.escape(name)]
+        first = name.split()[0]
+        if first != name and len(first) >= 3:
+            forms.append(re.escape(first))
+        n = "(?:" + "|".join(forms) + r")(?![A-Za-z])"
+        patterns = (
+            # The overseer, a grizzled man named Oldfield / a wheelwright named Simon
+            rf"\b(?:[Tt]he|[Aa]n?)\s+{_JOB_PHRASE},\s+(?:a|an)\s+[^,.;]{{0,60}}?\b(?:named|called)\s+{n}",
+            rf"\b(?:[Tt]he|[Aa]n?)\s+{_JOB_PHRASE}\s+(?:named|called)\s+{n}",
+            # Simon Pennick, the wheelwright, / Simon, a wheelwright.
+            rf"{n},\s+(?:the|a|an)\s+{_JOB_PHRASE}\s*[,.;]",
+            # the overseer, Oldfield,
+            rf"\b(?:[Tt]he)\s+{_JOB_PHRASE},\s+{n}\s*[,.;]",
+        )
+        stated = ""
+        sentence = ""
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                stated = _stated_job(match.group(1))
+                if stated:
+                    start = max(text.rfind(".", 0, match.start()), text.rfind("\n", 0, match.start())) + 1
+                    end_dot = text.find(".", match.end())
+                    sentence = text[start:end_dot if end_dot >= 0 else len(text)].lower()
+                    break
+        role = str(npc.get("role") or "").strip()
+        role_words = {w for w in re.findall(r"[a-z]+", role.lower()) if len(w) >= 3}
+        # The op's role is also in that sentence ("a young apprentice named
+        # Isolde, the tallow chandler"): the op chose one the prose states.
+        if stated and role_words and role_words <= set(re.findall(r"[a-z]+", sentence)):
+            stated = ""
+        if stated and not (set(stated.split()) & set(role.lower().split())):
+            npc = dict(npc)
+            npc["role"] = stated
+            turn_ledger.note("npc", "role_from_prose", name=name, op_role=role, prose_role=stated)
+        out.append(npc)
+    return out
+
+
 def _store_figure_aliases(conn, npc: dict[str, Any], npc_id: int | None) -> None:
     """Record the figure phrase a new name was bound to (_npcs_shown_in_prose).
 
@@ -15613,6 +15697,13 @@ def _apply_index_updates(conn, updates: list[dict[str, Any]]) -> None:
 
         if entity_type == "npc":
             npc = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone()
+            if not npc and update.get("name"):
+                # NPC_NOTE "Oldfield B, ..." whose code missed: the name it gave.
+                npc = conn.execute(
+                    "SELECT * FROM npcs WHERE name = ? COLLATE NOCASE", (norm_name(str(update["name"])),)
+                ).fetchone()
+                if npc:
+                    code = str(npc["code"] or code)
             if not npc:
                 continue
             facts = _json(npc["known_facts"] or "[]", [])
@@ -17843,6 +17934,10 @@ def apply_turn(
         # A new person the prose never shows is not stored (playtest #34).
         try:
             collected_npcs = _npcs_shown_in_prose(conn, collected_npcs, narration)
+        except Exception:
+            pass
+        try:
+            collected_npcs = _roles_stated_in_prose(conn, collected_npcs, narration)
         except Exception:
             pass
         result["npcs"] = collected_npcs

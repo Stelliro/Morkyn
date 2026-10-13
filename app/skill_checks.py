@@ -1730,6 +1730,11 @@ def _trigger_text_variants(text: str) -> list[str]:
     return variants
 
 
+# A quoted span in the player's line ("..." or “...”).
+_SPOKEN_RE = re.compile(r"\"[^\"]*\"|“[^”]*”")
+# Skills a line of speech can call for by itself.
+_SPEECH_SKILLS = frozenset({"persuasion", "deception", "intimidation", "insight", "etiquette", "performance", "streetwise"})
+
 _NEGATED_VERB_RE = re.compile(
     r"\b(?:not|never|no longer|cannot|\w+n['’]t)\s+(?:\w+ly\s+)?(?:going to\s+|try(?:ing)? to\s+)?\w+"
 )
@@ -1768,12 +1773,18 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # What the player watches happen is not the player's act: "watch how fast
     # the water climbs the tiles" rolled athletics (#102).
     text = _WATCHED_CLAUSE_RE.sub(" ", _NEGATED_VERB_RE.sub(" ", own.lower()))
+    # Words inside the player's quotes are speech, not acts (7B run 6, T3):
+    # "...before they pick the lower district clean" rolled lockpicking on a
+    # walk to the yard. Speech can still carry a social check (a plea, a
+    # threat); hands-on skills are read from the narrated part only.
+    own_acts = _SPOKEN_RE.sub(" ", own)
+    acted = _SPOKEN_RE.sub(" ", text)
     act = None
-    if not _COMBAT_LINE_RE.search(own):
+    if not _COMBAT_LINE_RE.search(own_acts):
         try:
             from app.prose_state import act_rules
 
-            act = act_rules(own)
+            act = act_rules(own_acts) if own_acts.strip() else None
         except Exception:
             act = None
     pairs = list(SKILL_TRIGGER_PATTERNS)
@@ -1793,12 +1804,14 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # wins, so a de-inflected match can never outrank an earlier pattern that
     # matched the sentence as typed.
     variants = _trigger_text_variants(text)
+    acted_variants = _trigger_text_variants(acted) if acted != text else variants
     pack_list = list(pack_pairs)
     for index, (pattern, code) in enumerate(pack_list + pairs):
         if code in disabled:
             continue
         try:
-            if any(re.search(pattern, variant) for variant in variants):
+            reads = variants if code in _SPEECH_SKILLS else acted_variants
+            if any(re.search(pattern, variant) for variant in reads):
                 skill = code
                 from_pack = index < len(pack_list)
                 break

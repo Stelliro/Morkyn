@@ -557,7 +557,9 @@ def match_quest_step(
     "steps" and optionally "giver_npc_id", "giver_name", "giver_location_code",
     "difficulty".
     """
-    own = str(own_line or "").strip()
+    # The narrated part only: words inside quotes are speech, not the act
+    # (7B run 6, T3), and a question asked aloud does not cancel one.
+    own = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", str(own_line or "")).strip()
     if not own or own.startswith("__") or _QUESTION_RE.search(own):
         return None
     try:
