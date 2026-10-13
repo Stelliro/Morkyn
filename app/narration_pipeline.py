@@ -1599,7 +1599,9 @@ _YOU_SAID_RE = re.compile(
     # 7B run 9: '"I'll check with the old man first," you decide' (T4) and
     # '"Thanks, Hal," you call back, "I'll be careful."' (T2).
     r"decide|decided|resolve|resolved|agree|agreed|promise|promised|announce|announced|vow|vowed|"
-    r"call\s+back|called\s+back)\b",
+    r"call\s+back|called\s+back|"
+    # 7B run 11, T2: 'You read the details aloud: "Lifting supplies ..."' chose a job for the player.
+    r"read\s+(?:[\w'’]+\s+){0,3}?(?:aloud|out\s+loud)|read\s+out)\b",
     re.IGNORECASE,
 )
 # Someone else's speech tag in the same unit: the line is theirs.
@@ -2022,11 +2024,16 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         # A line that voices the unquoted part of the player's turn stays
         # ("ask Warin for a bed" -> "Could you give me a bed?", run 5 T50).
         asked = content_stems(_QUOTE_SPAN_RE.sub(" ", player_own_line(player_input)))
+        # A piece of a line the player does say is not an invented one (7B run
+        # 11, T1: '"Morning," you reply, ... "Not a traveller - I was born
+        # here."' had its "Morning," swapped for the missing line).
+        typed_keys = [f" {_speech_key(q)} " for q in quotes]
         invented = [
             s for s in spans_of(body)
             if s["speaker"] == "player"
             and not any(_quote_matches(s["inner"], q) for q in quotes)
             and not (content_stems(s["inner"]) & asked)
+            and not (_speech_key(s["inner"]) and any(f" {_speech_key(s['inner'])} " in k for k in typed_keys))
         ]
         if len(invented) == 1:
             span = invented[0]
@@ -2038,9 +2045,19 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             changes.append({"action": "invented_line_replaced", "quote": missing[0], "was": inner[:200]})
             missing = []
 
-    # 4. Still missing: the player says it as the scene opens.
+    # 4. Still missing: the player says it as the scene opens, or right after
+    # the line they typed before it, so their lines keep their order (7B run
+    # 11, T1: "Heading out, yes ..." was put before "Morning. Not a traveller").
     if missing:
-        body = _said_line(missing) + " " + body.lstrip()
+        opening: list[str] = []
+        for quote in missing:
+            at = _after_earlier_line(body, quote, quotes, spans_of)
+            if at is None:
+                opening.append(quote)
+                continue
+            body = body[:at].rstrip(" ") + " " + _said_line([quote]) + " " + body[at:].lstrip(" ")
+        if opening:
+            body = _said_line(opening) + " " + body.lstrip()
         changes.append({"action": "missing_line_said", "quotes": missing})
 
     # 5. The player's line carries no entity code: they said a name, not a tag
@@ -2058,6 +2075,31 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         body = re.sub(r"[ \t]*\n[ \t]*", "\n", body)
         body = re.sub(r"\n{3,}", "\n\n", body).strip()
     return body, changes
+
+
+def _after_earlier_line(body: str, quote: str, quotes: list[str], spans_of) -> int | None:
+    """Where a missing line goes: the end of the sentence holding the player's line typed just before it, or None."""
+    try:
+        index = quotes.index(quote)
+    except ValueError:
+        return None
+    for earlier in reversed(quotes[:index]):
+        key = _speech_key(earlier)
+        run: list[str] = []
+        for span in spans_of(body):
+            if span["speaker"] == "other":
+                run = []
+                continue
+            # The earlier line may be split by its tag: '"Morning," you reply, "Not a traveller ..."'.
+            run = (run if span["chained"] else []) + [span["inner"]]
+            if _quote_matches(span["inner"], earlier) != "exact" and not (key and key in _speech_key(" ".join(run))):
+                continue
+            tail = body[span["end"]:]
+            if re.match(r"[ \t]*(?:[A-Z“\"]|\n|$)", tail):
+                return span["end"]  # the quotation ends its sentence
+            stop = re.search(r'[.!?][\'"”’]?(?=\s|$)', tail)
+            return span["end"] + (stop.end() if stop else 0)
+    return None
 
 
 def player_own_line(player_input: str) -> str:

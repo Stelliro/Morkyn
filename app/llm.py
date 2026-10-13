@@ -13761,9 +13761,66 @@ def _works_what_player_named(rest: str, verb: str, own: str) -> bool:
 def _player_clause_invented(rest: str, clause: str, own: str, player_input: str) -> str:
     """The family of an invented player act at the start of `rest`, or ""."""
     family = _player_clause_family(rest, clause, own, player_input)
-    if family in {"manipulation", "taking", "movement", "labor"} and _carries_out_stated_work(rest, clause, own):
+    # A walk is not "the stated work" because it shares a word with the line
+    # (7B run 11, T2: "The notice board by the inn" excused "You make your way
+    # to the board" after the player said "I stay where I am"); _walk_asked
+    # decides walks.
+    if family in {"manipulation", "taking", "labor"} and _carries_out_stated_work(rest, clause, own):
         return ""
     return family
+
+
+_RETURN_TO_WORK_RE = re.compile(
+    r"^(?:\w+ly\s+){0,2}return(?:s|ed)?\s+to\s+(?:the|your|what)\s+(?:task|tasks|work|job|chore|sorting|count|"
+    r"counting|ledger|business|matter|conversation|thoughts?|you\s+were)\b",
+    re.I,
+)
+# The player's line says they stay put (7B run 11, T2: "I stay where I am by
+# the stable"): any walk the prose gives them is its own.
+_STAY_PUT_RE = re.compile(
+    r"\b(?:i\s+)?(?:stay|stays|remain|remains|wait|waits)\s+(?:where\s+i\s+am|right\s+here|here|put|by|at|in|beside|on)\b"
+    r"|\bi\s+(?:don'?t|do\s+not)\s+(?:move|go|leave)\b",
+    re.I,
+)
+_WALK_FOLLOWS_SOMEONE_RE = re.compile(
+    r"\b(?:follow\w*|after\s+(?:him|her|them)|with\s+(?:him|her|them)|alongside)\b", re.I
+)
+_WALK_LEAVES_RE = re.compile(r"^(?:\w+ly\s+){0,2}(?:leave|leaves|left|exit|exits|exited|step\s+out|head\s+out)\b", re.I)
+# A destination naming a building or a proper name is a place someone chose.
+# A board, a counter or an office inside the place the player went is not
+# (run 7, T1: "head for the salvage yard to see what the overseer has posted",
+# then "You head towards the notice board").
+_WALK_PLACE_DEST_RE = re.compile(
+    r"\b(?:inn|tavern|alehouse|pub|yard|hall|market|shop|store|forge|smithy|stable|stables|house|"
+    r"temple|chapel|church|mill|bakery|chandlery|warehouse|dock|docks|harbou?r|quay|wharf|gate|square|keep|tower)s?\b"
+    r"|(?<![.!?]\s)\b[A-Z][a-z]{2,}",
+)
+
+
+def _walk_asked(rest: str, own: str) -> bool:
+    """The player's line asks for the walk in ``rest`` ("head towards the Leaning Spindle ...")."""
+    narrated = _SCENE_QUOTE_RE.sub(" ", str(own or ""))
+    if _STAY_PUT_RE.search(narrated):
+        return False
+    verb = (re.findall(r"[a-z]+", rest.lower()) or [""])[0]
+    # The player's own walking verb ("I step outside", 7B run 5 T56).
+    if verb and _verb_in_input(verb, narrated):
+        return True
+    if not _INPUT_MOVE_RE.search(narrated):
+        return False
+    if _WALK_FOLLOWS_SOMEONE_RE.search(narrated):
+        return True
+    # Leaving names where the player was, not where they go (run 5, T45:
+    # "You leave the Salvage Yard and head north ... to the cottage").
+    if _WALK_LEAVES_RE.match(rest):
+        return True
+    # Going somewhere is not going anywhere (7B run 11, T1): a walk to a place
+    # the player never named, which someone else suggested, is the prose's.
+    m = _PLAYER_FOLLOW_RE.match(rest)
+    dest = re.split(r"[.,;:!?]", rest[m.end():] if m else rest, maxsplit=1)[0]
+    if not _WALK_PLACE_DEST_RE.search(dest):
+        return True
+    return bool(_cut_words(dest) & _cut_words(own))
 
 
 def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -> str:
@@ -13790,11 +13847,13 @@ def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -
         return "" if player_take_intent(own) else "taking"
     # Going back from where the line went is a second journey (7B Saltmarrow
     # #97, T72: "set off there" also walked the player back to town).
-    if _RETURN_MOVE_RE.match(rest):
+    # "You return to the task at hand" goes back to work, not anywhere (7B run
+    # 5, T55: cut there, the scene lost Warin handing over the agreed coin).
+    if _RETURN_MOVE_RE.match(rest) and not _RETURN_TO_WORK_RE.match(rest):
         return "" if _INPUT_RETURN_RE.search(own) else "movement"
     m = _PLAYER_FOLLOW_RE.match(rest)
-    if m:
-        return "" if _INPUT_MOVE_RE.search(own) else "movement"
+    if m and not _RETURN_TO_WORK_RE.match(rest):
+        return "" if _walk_asked(rest, own) else "movement"
     m = _PLAYER_LABOR_RE.match(rest)
     if m:
         return "" if _verb_in_input(m.group("v"), own) else "labor"
@@ -15179,6 +15238,7 @@ def _keep_player_words(
 # Work on a job the player never took is one too (7B run 7, T3: "You begin
 # to gather debris and sweep the floor" after she only asked what it paid).
 _SCENE_CUT_FAMILIES = frozenset({"speech", "taking", "decision", "movement", "labor"})
+_SHARED_SUBJECT_JOINT_RE = re.compile(r"\s+(?:and|then|and\s+then)\s+(?!you\b)(?=[a-z])", re.I)
 _SCENE_QUOTE_RE = re.compile(r'"([^"\n]{2,600})"|\u201c([^\u201d]{2,600})\u201d')
 _ADDRESSED_RE = re.compile(r"\byou(?:r|rs|rself)?\b|\?\s*$", re.I)
 _SPEECH_TAG_TAIL_RE = re.compile(r'[^\S\n]*(?=[a-z,])[^.!?\n"\u201c]*[.!?]')
@@ -15217,6 +15277,13 @@ def _invented_unit_family(sentence: str, own: str, player_input: str) -> str:
         family = _player_clause_invented(sentence[start.end():], sentence, own, player_input)
         if family:
             return family
+        # "You thank her and head towards the Leaning Spindle" (7B run 11, T2):
+        # the second verb shares the "you" and is the act the world answers.
+        head = re.split(r"[,;:]", sentence[start.end():], maxsplit=1)[0]
+        for joint in _SHARED_SUBJECT_JOINT_RE.finditer(head):
+            family = _player_clause_invented(sentence[start.end() + joint.end():], sentence, own, player_input)
+            if family in _SCENE_CUT_FAMILIES:
+                return family
     for coord in _PLAYER_CLAUSE_COORD_RE.finditer(sentence):
         clause = sentence[coord.start():].lstrip(",;\u2014\u2013- ")
         family = _player_clause_invented(sentence[coord.end():], clause, own, player_input)
@@ -15292,7 +15359,8 @@ _PLAYER_TAG_AFTER_RE = re.compile(r'^[\s,.!?]*(?:you|You)\s+(?:\w+ly\s+)?(?:say|
 # back, "I'll be careful."' (7B run 9, T2: the cut ended the scene on it).
 _PLAYER_TAG_BEFORE_RE = re.compile(
     r'\b(?:you|You)\s+(?:\w+ly\s+)?(?:say|said|ask|asked|reply|replied|answer|answered|add|added|call|called|'
-    r'tell|told|murmur|murmured|mutter|muttered|decide|decided|agree|agreed|promise|promised|announce|announced)'
+    r'tell|told|murmur|murmured|mutter|muttered|decide|decided|agree|agreed|promise|promised|announce|announced|'
+    r'read(?=[^"“”.!?]{0,25}\b(?:aloud|out\s+loud)\b))'
     r'\b[^"“”.!?]{0,25}[,:]?\s*$'
 )
 
