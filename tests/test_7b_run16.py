@@ -35,6 +35,10 @@ class NamesAndCodes(unittest.TestCase):
             "A grocer, Dunstan Upcott [[A]], stands outside his shop, Quarrel and Sons, sorting.",
         )
         self.assertEqual(repair("You meet [[Bertram Yates]] at the gate.", {}), "You meet Bertram Yates at the gate.")
+        # Run 17 T0: a known name with a code nothing holds takes its own code.
+        self.assertEqual(
+            repair("Hereward Treloar [[H1]] pauses.", {"A": "Hereward Treloar"}), "Hereward Treloar [[A]] pauses."
+        )
 
     def test_role(self):
         from app.turn_dsl import parse_dsl_turn
