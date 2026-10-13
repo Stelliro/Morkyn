@@ -13520,7 +13520,17 @@ _NEGATED_PAY_RE = re.compile(
 def player_take_intent(player_text: str) -> bool:
     """True when the player's own words ask to take, buy, make or receive something."""
     text = _NEGATED_PAY_RE.sub(" ", _TAKE_PERCEPTION_RE.sub(" ", str(player_text or "")))
+    text = _SOMEONE_ELSE_TAKES_RE.sub(" ", text)
     return bool(_PLAYER_TAKE_INTENT_RE.search(text))
+
+
+# Asking who else buys is not buying (7B run 9, T4: "Hal, who in Saltmarrow
+# buys old coins - and who pays fair for them?" read as the player taking).
+_SOMEONE_ELSE_TAKES_RE = re.compile(
+    r"\b(?:who|whoever|anyone|anybody|someone|somebody|nobody|which\s+\w+)\s+(?:[\w'’]+\s+){0,3}?"
+    r"(?:buys|takes|trades|collects|pays|deals\s+in|wants|would\s+(?:buy|take|pay))\b",
+    re.I,
+)
 
 
 _INPUT_MOVE_RE = re.compile(
