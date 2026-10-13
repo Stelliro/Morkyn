@@ -733,6 +733,40 @@ def _resolve_place(ref: Any, locations: list[dict[str, Any]] | None) -> dict[str
     return None
 
 
+_SPEECH_RE = re.compile(r'"([^"]+)"|“([^”]+)”')
+
+
+def _offer_speaker(narration: str, quote: str, npcs: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    """The one known person named in the paragraph where the offer is spoken (7B run 6, T3).
+
+    The parser filed Oldfield's spoken offer under Simon, who was only standing
+    by. When the offer is a quoted line and its paragraph names exactly one
+    known person outside the quotes, that person said it. Anything less certain
+    (no quote found, two people named) returns None and the parser's giver stands.
+    """
+    core = _ws(re.sub(r'^[\s"“”\']+|[\s"“”\']+$', "", str(quote or ""))).lower()
+    if len(core) < 12 or not npcs:
+        return None
+    probe = core[:40]
+    for paragraph in re.split(r"\n\s*\n", str(narration or "")):
+        spoken = [_ws(m.group(1) or m.group(2) or "").lower() for m in _SPEECH_RE.finditer(paragraph)]
+        if not any(probe in s or s in core for s in spoken if len(s) >= 12):
+            continue
+        outside = _SPEECH_RE.sub(" ", paragraph)
+        named = []
+        for npc in npcs:
+            name = str(npc.get("name") or "").strip()
+            code = str(npc.get("code") or "").strip()
+            first = name.split()[0] if name else ""
+            hit = (code and f"[[{code}]]" in outside) or (
+                name and re.search(rf"\b{re.escape(name)}\b", outside)
+            ) or (len(first) >= 3 and re.search(rf"\b{re.escape(first)}\b", outside))
+            if hit:
+                named.append(npc)
+        return named[0] if len(named) == 1 else None
+    return None
+
+
 _BOARD_RE = re.compile(r"\b(?:notice|board|posting|poster|sign|guild|bounty)\b", re.I)
 
 
@@ -851,6 +885,19 @@ def validate_quest_changes(
             evidence = offer_line
         giver_ref = str(raw.get("giver") or "").strip()
         giver = _resolve_npc(giver_ref, npcs)
+        # The giver is whoever speaks the offer, when the prose says so plainly
+        # and the parser named another known person or no one. A giver it made
+        # up, or a notice board, is left to the checks below.
+        speaker = _offer_speaker(narration, offer_line or evidence, npcs) if (giver is not None or not giver_ref) else None
+        if speaker is not None and (giver is None or int(giver.get("id") or 0) != int(speaker.get("id") or 0)):
+            from app import turn_ledger
+
+            turn_ledger.note(
+                "quest", "giver_is_the_speaker", title=title, parser_giver=giver_ref,
+                speaker=str(speaker.get("name") or ""),
+            )
+            giver = speaker
+            giver_ref = str(speaker.get("code") or speaker.get("name") or "")
         checked = ""
         if not evidence_found(evidence, narration, player_input):
             reasons.append("evidence_not_in_text")
@@ -1054,6 +1101,12 @@ _STILL_OWED_RE = re.compile(
     r"(?:you|i|we)'ll)\b",
     re.I,
 )
+_IN_PROGRESS_RE = re.compile(
+    r"\b(?:continu\w*|keep(?:s|ing)?\s+(?:on\s+)?\w+ing|begin\w*|began|begun|start(?:s|ed|ing)?|"
+    r"set(?:s|ting)?\s+(?:to\s+work|about)|get(?:s|ting)?\s+to\s+work|got\s+to\s+work|"
+    r"work(?:s|ing)?\s+(?:on|through|away\s+at)|halfway|progress\w*|under\s*way|so\s+far)\b",
+    re.I,
+)
 # Words that say nothing about which job a quote is about.
 _QUEST_STOP_STEMS = {
     "the", "you", "your", "and", "for", "with", "that", "this", "from", "her", "his", "him", "she", "they",
@@ -1099,11 +1152,30 @@ def done_check(evidence: str, quest: dict[str, Any] | None, *, passive: bool = F
         return []
     if not (result or about):
         return ["evidence_not_about_this_job"]
+    if _IN_PROGRESS_RE.search(text) and not result:
+        # Work under way is not work done (7B run 6, T5 and T7: "You start
+        # sorting the goods", "You continue sorting").
+        return ["evidence_is_work_in_progress"]
     return []
 
 
+def _stem(word: str) -> str:
+    """A rough stem: "sorting", "sorted" and "sorts" all read "sort" (7B run 6, T7)."""
+    w = word.strip("'").lower()
+    if w.endswith("'s"):
+        w = w[:-2]
+    for suffix in ("ings", "ing", "ed", "es", "s", "er"):
+        if w.endswith(suffix) and len(w) - len(suffix) >= 3:
+            w = w[: -len(suffix)]
+            if suffix in {"ing", "ings", "ed"} and len(w) >= 4 and w[-1] == w[-2] and w[-1] not in "aeiouls":
+                w = w[:-1]  # "running" -> "run", "shipped" -> "ship"
+            break
+    return w[:5]
+
+
 def _stems(text: Any) -> set[str]:
-    return {w[:5] for w in re.findall(r"[a-z][a-z']+", str(text or "").lower()) if len(w) > 2}
+    words = re.findall(r"[a-z][a-z']+", str(text or "").lower())
+    return {_stem(w) for w in words if len(w) > 2 and w not in _QUEST_STOP_STEMS}
 
 
 def _one_act_one_quest(accepted: dict[str, Any], rejected: list[dict[str, Any]], existing: list[dict[str, Any]] | None) -> None:
@@ -1378,3 +1450,168 @@ def finishing_quest_ids(
         ):
             out.append(int(upd["quest_id"]))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Terms and pay the story settles itself (7B run 6)
+# ---------------------------------------------------------------------------
+# T6: "Two gold for the whole pile, sorted by noon. Yes or no?" was agreed in
+# the prose ("I suppose we can agree to that ... the gold is yours") while the
+# job kept the engine's rolled 11 gold. T9: the giver handed over the two gold
+# for the finished pile, the coin reached the purse, and the job stayed open
+# with its 11 gold still to pay.
+
+_JOB_AGREE_RE = re.compile(
+    r"\b(?:agree\w*|deal|aye|yes|very\s+well|fair\s+enough|done|struck|settled|"
+    r"you['’]ve\s+got\s+(?:it|a\s+deal|yourself\s+a\s+deal)|"
+    r"(?:the\s+)?(?:gold|coin|coins|money|pay)\s+(?:is|are|will\s+be)\s+yours)\b",
+    re.I,
+)
+_PAY_YOU_RE = None  # built lazily from prose_state's amount pattern
+
+
+def _pay_you_re() -> re.Pattern[str]:
+    global _PAY_YOU_RE
+    if _PAY_YOU_RE is None:
+        from app.prose_state import _AMOUNT, _COIN
+
+        _PAY_YOU_RE = re.compile(
+            r"\b(?:pay|give)\s+you\s+(?:(?:a|an)\s+)?" + _AMOUNT + r"\s+" + _COIN
+            + r"|\b" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN + r"\s+(?:for\s+(?:the|this|that|it|your)|a\s+day|when)",
+            re.I,
+        )
+    return _PAY_YOU_RE
+
+
+def _echoes(span: str, own: str) -> bool:
+    words = set(re.findall(r"[a-z']+", span.lower()))
+    own_words = set(re.findall(r"[a-z']+", own.lower()))
+    return bool(words) and len(words & own_words) * 2 >= len(words)
+
+
+def agreed_job_price(narration: str, player_input: str = "") -> tuple[int | None, str]:
+    """The pay the scene settles for a job: (gold, how) or (None, "").
+
+    The player's own terms ("Two gold for the whole pile") count when the prose
+    answers with agreement and nowhere refuses. Else the one sum the other
+    side's speech offers ("I'll pay you five gold", "three gold for the haul").
+    """
+    from app import prose_state
+
+    text = str(narration or "")
+    own = str(player_input or "")
+    asked = [a for a in prose_state.stated_coin_amounts(own)["priced"] if a > 0]
+    if len(set(asked)) == 1:
+        if prose_state._REFUSE_RE.search(text):
+            return None, ""
+        answers = [m.group(1) or m.group(2) or "" for m in _SPEECH_RE.finditer(text)]
+        answers = [a for a in answers if not _echoes(a, own)]
+        outside = _SPEECH_RE.sub(" ", text)
+        if any(_JOB_AGREE_RE.search(a) for a in answers) or re.search(
+            r"\b(?:deal\s+is\s+(?:struck|made|done)|you\s+(?:shake|shook)\s+(?:on\s+it|hands))\b", outside, re.I
+        ):
+            return asked[0], "player_terms_agreed"
+        return None, ""
+    offered: list[int] = []
+    for match in _SPEECH_RE.finditer(text):
+        span = match.group(1) or match.group(2) or ""
+        if _echoes(span, own):
+            continue
+        for found in _pay_you_re().finditer(span):
+            from app.prose_state import _match_number
+
+            value = _match_number(found)
+            if value and value not in offered:
+                offered.append(value)
+    if len(offered) == 1:
+        return offered[0], "giver_terms"
+    return None, ""
+
+
+def _named_in(text: str, npc: dict[str, Any] | None) -> bool:
+    if not npc:
+        return False
+    name = str(npc.get("name") or "").strip()
+    code = str(npc.get("code") or "").strip()
+    first = name.split()[0] if name else ""
+    return bool(
+        (code and f"[[{code}]]" in text)
+        or (name and re.search(rf"\b{re.escape(name)}\b", text))
+        or (len(first) >= 3 and re.search(rf"\b{re.escape(first)}\b", text))
+    )
+
+
+def _open_jobs(conn) -> list[dict[str, Any]]:
+    return _rows(
+        conn,
+        """
+        SELECT q.id, q.code, q.title, q.status, q.description, q.reward_gold, q.giver_npc_id,
+               n.name AS giver_name, n.code AS giver_code
+        FROM quests q LEFT JOIN npcs n ON n.id = q.giver_npc_id
+        WHERE q.status IN ('offered', 'active')
+        ORDER BY q.id
+        """,
+    )
+
+
+def settle_agreed_price(conn, *, narration: str, player_input: str = "", turn: int = 0,
+                        touched_codes: set[str] | None = None) -> dict[str, Any] | None:
+    """Make the pay the scene agreed the job's reward; returns what changed, or None.
+
+    The job is the one this turn offered or took, else the one open job whose
+    giver the prose names. Two candidates, or none, change nothing.
+    """
+    from app import turn_ledger
+
+    amount, how = agreed_job_price(narration, player_input)
+    if not amount or amount > REWARD_GOLD_CAP:
+        return None
+    jobs = _open_jobs(conn)
+    touched = [q for q in jobs if str(q.get("code") or "") in (touched_codes or set())]
+    pool = touched or [
+        q for q in jobs if _named_in(narration, {"name": q.get("giver_name"), "code": q.get("giver_code")})
+    ]
+    if len(pool) != 1:
+        if pool:
+            turn_ledger.note("quest", "agreed_price_unplaced", amount=amount, how=how, candidates=[q["code"] for q in pool])
+        return None
+    job = pool[0]
+    if int(job.get("reward_gold") or 0) == amount:
+        return None
+    description = re.sub(r"\s*Promised:.*$", "", str(job.get("description") or "")).strip()
+    description = f"{description} Promised: {amount} gold".strip()
+    conn.execute("UPDATE quests SET reward_gold = ?, description = ? WHERE id = ?", (amount, description[:800], int(job["id"])))
+    _journal(conn, turn, f"Terms agreed: {job['title']} for {amount} gold")
+    change = {"code": job.get("code"), "from": job.get("reward_gold"), "to": amount, "how": how}
+    turn_ledger.note("quest", "agreed_price_set", **change)
+    return change
+
+
+_FOR_THE_WORK_RE = re.compile(
+    r"\b(?:earned|for\s+(?:the|your|this|that|all\s+the)\s+(?:work|job|help|trouble|efforts?|labou?r|sorting|haul\w*)|"
+    r"your\s+(?:pay|wages?|due|cut)|as\s+promised|as\s+agreed|well\s+done)\b",
+    re.I,
+)
+
+
+def job_paid_in_prose(conn, *, narration: str, coin_in: int, skip_ids: set[int] | None = None) -> dict[str, Any] | None:
+    """The active job the coin handed over this turn pays for, or None.
+
+    The giver has to be in the scene. A job whose agreed pay is exactly the
+    sum wins; else, with one such job, the prose has to say the coin is for
+    the work ("you've earned this", "for the sorting").
+    """
+    if coin_in <= 0:
+        return None
+    skip = {int(i) for i in skip_ids or set()}
+    jobs = [
+        q for q in _open_jobs(conn)
+        if str(q.get("status") or "") == "active" and int(q["id"]) not in skip
+        and _named_in(narration, {"name": q.get("giver_name"), "code": q.get("giver_code")})
+    ]
+    exact = [q for q in jobs if int(q.get("reward_gold") or 0) == int(coin_in)]
+    if len(exact) == 1:
+        return exact[0]
+    if len(jobs) == 1 and (_FOR_THE_WORK_RE.search(narration) or _quote_names_the_job(narration, jobs[0])):
+        return jobs[0]
+    return None
