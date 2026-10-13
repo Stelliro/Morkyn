@@ -9733,6 +9733,9 @@ def resolve_movement(
             tail = str(narration or "")[-900:].lower()
             if dest_name and dest_name.lower() not in tail and explicit_code.lower() not in tail:
                 report["prose_mismatch"] = dest_name
+                mine = _player_place_over_unshown_move(conn, player_patch, player_input, narration, current_code, dest_name)
+                if mine:
+                    return mine
             return report
     if explicit_name:
         # Same-place guard for names, not just codes. A live run answered "head
@@ -9763,6 +9766,10 @@ def resolve_movement(
             dest_name = str(report.get("destination") or explicit_name)
             if prose.strip() and dest_name.lower() not in prose and not venues.entry_in_prose(narration):
                 report["prose_mismatch"] = dest_name
+            if prose.strip() and dest_name.lower() not in prose:
+                mine = _player_place_over_unshown_move(conn, player_patch, player_input, narration, current_code, dest_name)
+                if mine:
+                    return mine
             return report
 
     # A doorway is a move the model reliably narrates and reliably fails to record.
@@ -10122,7 +10129,11 @@ def _venue_requested_and_reached(conn, player_input: str, narration: str, curren
         if named:
             return named
         # An open part of the town ("walk down to the edge of the mudflats", 7B run 10 T8).
-        return _outdoor_area_requested(conn, parent_id, wanted, narration)
+        area = _outdoor_area_requested(conn, parent_id, wanted, narration)
+        if area:
+            return area
+        # A common town building ("I walk to the town hall", 7B run 28 T4).
+        return _civic_building_requested(conn, parent_id, wanted, narration)
     labels = venues.kind_family_labels(kind) or [venues.kind_label(kind)]
     # The player's choice stands unless the prose stops it (7B run 8, T2: "as you
     # near, you see a few salvagers already there ... You approach and begin to
@@ -10335,6 +10346,85 @@ def _named_building_requested(conn, parent_id: int, wanted: str, narration: str)
     if row is None:
         return ""
     turn_ledger.note("movement", "named_building_requested", place=str(row["name"] or ""), kind=kind, made=int(new_id) > top)
+    return str(row["name"] or "")
+
+
+def _player_place_over_unshown_move(
+    conn, player_patch: dict[str, Any], player_input: str, narration: str, current_code: str, model_dest: str
+) -> dict[str, Any] | None:
+    """The player's requested place instead of a model MOVE the prose never shows, or None.
+
+    7B run 28, T4: "I walk to the town hall" came back with MOVE "town square";
+    the prose walked her into the town hall and never named a square, and the
+    save put her in a new Town Square. The model's destination stands when the
+    player's own line names it too, or when the line asks for no place.
+    """
+    own = _without_quoted_questions(_player_line(player_input))
+    if model_dest and _line_names_place(own.lower(), _place_words(model_dest)):
+        return None
+    try:
+        mine = _venue_requested_and_reached(conn, own, narration, current_code)
+    except Exception:
+        mine = ""
+    if not mine or mine.lower() == str(model_dest or "").lower():
+        return None
+    turn_ledger.note("movement", "unshown_move_replaced_by_requested_place", model_destination=model_dest, player_destination=mine)
+    player_patch["move_to_location"] = mine[:120]
+    player_patch["move_to_location_code"] = None
+    return {"status": "repaired", "rule": "venue_requested", "from": current_code, "destination": mine, "replaced": model_dest}
+
+
+# Buildings every town has, walked to by their common name (7B run 28, T4: "I
+# walk to the town hall"). Made as the settlement's child with no trade, like
+# an open part of town.
+_CIVIC_BUILDING_WORDS = (
+    "town hall", "guildhall", "guild hall", "hall", "harbour office", "harbor office", "reeve's office", "office",
+    "customs house", "counting house", "chapel", "church", "temple", "shrine", "tower", "clock tower", "lighthouse",
+    "library", "schoolhouse", "school", "gaol", "jail", "barracks", "watchhouse", "granary", "bathhouse", "mill",
+)
+
+
+def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str) -> str:
+    """A common town building the player walks to ("the town hall"), known or made in the settlement, or ""."""
+    pattern = re.compile(
+        r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|come|get|cross\w*|"
+        r"wander\w*|march\w*|step\w*|climb\w*)\s+(?:(?:back|over|down|up|across|out|along|straight)\s+){0,2}"
+        r"(?:to|toward|towards|into|in\s+to|up\s+to)\s+(?:the\s+)?"
+        r"(?P<place>(?:[a-z'’-]+\s+){0,1}?(?:" + "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True)) + r"))\b",
+        re.IGNORECASE,
+    )
+    match = pattern.search(wanted or "")
+    if not match:
+        return ""
+    place = " ".join(match.group("place").split())
+    head = place.split()[-1].lower()
+    rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
+    for row in rows:
+        stored = humanize_place_name(str(row["name"] or "")).lower()
+        if stored.endswith(place.lower()) or stored == f"the {place.lower()}":
+            return str(row["name"] or "")
+    unspoken = _unspoken(narration).lower()
+    if head not in unspoken or _prose_stops_walk(head, narration):
+        return ""
+    if not (_player_departs(narration) or _prose_goes_toward(place, narration) or _prose_reaches(place, "", narration)
+            or re.search(r"\byou\s+(?:\w+ly\s+)?(?:step|walk|go|push)\w*\s+(?:open\s+the\s+door\s+and\s+step\s+)?(?:inside|in)\b", unspoken)):
+        return ""
+    name = "The " + " ".join(w[:1].upper() + w[1:] for w in place.split())
+    if not is_plausible_place_name(name):
+        return ""
+    existing = _match_location_by_name(conn, name)
+    if existing is not None:
+        return str(existing["name"] or "") if int(venues._field(existing, "parent_id", 0) or 0) == int(parent_id) else ""
+    top = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
+    new_id = _upsert_location(conn, name, "", parent_id=parent_id, kind="")
+    if not new_id:
+        return ""
+    if int(new_id) > top:
+        conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (int(parent_id), int(new_id)))
+    row = _location_row(conn, int(new_id))
+    if row is None:
+        return ""
+    turn_ledger.note("movement", "civic_building_requested", place=str(row["name"] or ""), made=int(new_id) > top)
     return str(row["name"] or "")
 
 
@@ -12725,7 +12815,33 @@ def _role_phrase(name: str) -> str:
     # "Harbour reeve" are jobs.
     if article or (len(words) >= 2 and all(w[0].islower() for w in words[1:])):
         return " ".join(w.lower() for w in words)
+    # A lone lower-case job word is a job too (7B run 28, T4: NPC_NEW "A"
+    # "reeve" stored a person called "reeve").
+    if len(words) == 1 and words[0].islower() and words[0] in _single_job_words():
+        return words[0]
     return ""
+
+
+_JOB_WORDS: frozenset[str] | None = None
+
+
+def _single_job_words() -> frozenset[str]:
+    """Every one-word job and the last word of every job in the role pools ("reeve", "smith", "carter")."""
+    global _JOB_WORDS
+    if _JOB_WORDS is None:
+        roles: list[str] = [*_NAME_GENERIC_ROLES, *_SENTENCE_ROLE_WORDS, *_RULER_ROLE_BY_CLASS.values()]
+        for pools in _SEED_ROLE_POOLS.values():
+            for pool in pools.values():
+                roles.extend(pool)
+        try:
+            from app.example_pools import _ROLE_EXTRAS
+
+            roles.extend(entry[0] for entry in _ROLE_EXTRAS)
+        except Exception:
+            pass
+        words = {str(role).lower().split()[-1] for role in roles if str(role).strip()}
+        _JOB_WORDS = frozenset(w for w in words if re.fullmatch(r"[a-z][a-z'-]+", w) and len(w) > 2)
+    return _JOB_WORDS
 
 
 def _role_matches(role: str, phrase: str) -> bool:
