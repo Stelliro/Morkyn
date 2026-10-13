@@ -266,7 +266,12 @@ def player_takes_job(
 
 def _title_words(title: str) -> set[str]:
     stop = {"the", "a", "an", "of", "to", "for", "and", "in", "on", "at", "from", "with", "word"}
-    return {w for w in re.findall(r"[a-z]{4,}", str(title or "").lower()) if w not in stop}
+    # "work", "job", "task" name every job, so they tell none apart (7B run 29, T4).
+    try:
+        from app.local_intel import JOB_WORDS
+    except Exception:  # pragma: no cover - local_intel always importable in the app
+        JOB_WORDS = frozenset()
+    return {w for w in re.findall(r"[a-z]{4,}", str(title or "").lower()) if w not in stop and w not in JOB_WORDS}
 
 
 # A typed refusal of the job itself: a bare "pass on" ("I pass on the message")
@@ -966,6 +971,33 @@ _LEGAL = {
 }
 
 
+# A pointer to where work might be is not a job (7B run 29, T1): "You might want
+# to head over to the guild and see if they have any tasks for you" was filed
+# as "Visit the guild for work" under the furrier who said it. The speaker has
+# no task and names no pay; the job, if any, is the guild's, offered there.
+_POINTER_LINE_RE = re.compile(
+    r"\b(?:(?:might|may|could|should|better|ought\s+to)\s+(?:want\s+to\s+)?(?:head|go|try|ask|check|look|see|stop\s+by|pop\s+in)|"
+    r"(?:head|go|try|ask|check|look)\s+(?:over\s+)?(?:at|in|to|with|around|down|up|by)\b)"
+    r"[^.?!]{0,80}?\b(?:see|ask|find\s+out)\s+(?:if|whether)\s+(?:they|he|she|someone|anyone|there)\b"
+    r"[^.?!]{0,40}?\b(?:work|tasks?|jobs?|errands?|hands?|help|hiring|need)\b",
+    re.I,
+)
+_SEEK_WORK_TITLE_RE = re.compile(
+    r"^(?:visit|go\s+to|head\s+to|check|ask\s+(?:at|around)|seek|look\s+for|find|search\s+for)\b.{0,40}\b(?:for\s+)?"
+    r"(?:work|jobs?|tasks?|employment)\s*$",
+    re.I,
+)
+_NAMED_PAY_RE = re.compile(r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|a)\s+(?:gold|silver|copper|coins?|crowns?)\b", re.I)
+
+
+def points_elsewhere_for_work(title: str, offer_line: str = "", evidence: str = "") -> bool:
+    """The "offer" only sends the player elsewhere to ask about work; no task, no pay of its own."""
+    said = f"{offer_line or ''} {evidence or ''}"
+    if _NAMED_PAY_RE.search(said):
+        return False
+    return bool(_POINTER_LINE_RE.search(said) or _SEEK_WORK_TITLE_RE.search(str(title or "").strip()))
+
+
 def validate_quest_changes(
     changes: dict[str, Any],
     *,
@@ -1071,6 +1103,11 @@ def validate_quest_changes(
             checked = verdict["checked"]
             if not verdict["ok"]:
                 reasons.append("evidence_is_not_an_offer")
+        if not reasons and points_elsewhere_for_work(title, offer_line, evidence):
+            from app import turn_ledger
+
+            turn_ledger.note("quest", "pointer_not_a_job", title=title, quote=(offer_line or evidence)[:200])
+            reasons.append("pointer_not_a_job")
         giver_named_in_story = bool(giver_ref) and _norm(giver_ref).replace("the ", "", 1) in _norm(f"{narration} {player_input}")
         if giver_ref and giver is None and not _BOARD_RE.search(giver_ref) and not giver_named_in_story:
             reasons.append("unknown_giver")
@@ -1251,6 +1288,16 @@ def validate_quest_changes(
         # completed and paid the cargo job while the search roll failed.
         if action in {"step_done", "complete"} and _intent_only(evidence):
             reasons.append("evidence_is_intent")
+        elif (
+            action in {"step_done", "complete"}
+            and quest is not None
+            and (action == "complete" or _int(quest.get("current_step"), 1) >= _int(quest.get("total_steps"), 1))
+            and not _TRAVEL_JOB_RE.search(str(quest.get("title") or "").strip())
+            and _travel_only(evidence)
+        ):
+            # Arriving finishes a trip, not a salvage job: the last step of
+            # work that is not itself a journey needs the work shown done.
+            reasons.append("evidence_is_travel")
         if action in {"step_done", "complete"} and quest is not None and not reasons:
             reasons.extend(done_check(evidence, quest, passive=passive))
         if reasons:
@@ -1279,10 +1326,39 @@ _DONE_WORDS_RE = re.compile(
 )
 
 
+_NOT_YET_BEFORE_RE = re.compile(r"\b(?:to|will|shall|can|could|would|must|might|(?:i|you|we|he|she|they)['’]ll)\s+$", re.I)
+
+
+def _shows_result(text: str) -> bool:
+    """A result word that is not a purpose or a promise: "to find the damaged ship" finds nothing (7B run 29, T5)."""
+    text = str(text or "")
+    return any(not _NOT_YET_BEFORE_RE.search(text[: m.start()]) for m in _DONE_WORDS_RE.finditer(text))
+
+
 def _intent_only(evidence: str) -> bool:
     """The quote only sets out to do the work: a purpose or a start, no result."""
     text = str(evidence or "")
-    return bool(_INTENT_ONLY_RE.search(text)) and not _DONE_WORDS_RE.search(text)
+    return bool(_INTENT_ONLY_RE.search(text)) and not _shows_result(text)
+
+
+# Getting there is not the work (7B run 29, T5): "You head down to the docks by
+# the old warehouse to find the damaged ship" finished and paid "Salvage a
+# damaged ship", whose one step the parser had written as "Go to the harbor".
+_TRAVEL_RE = re.compile(
+    r"\b(?:head(?:s|ed|ing)?|walk(?:s|ed|ing)?|go(?:es|ing)?|went|make\s+(?:your|my)\s+way|made\s+(?:your|my)\s+way|"
+    r"arriv\w*|reach(?:es|ed|ing)?|step(?:s|ped)?\s+(?:in|into|out|onto|inside)|enter(?:s|ed|ing)?|"
+    r"climb\w*|descend\w*|cross(?:es|ed|ing)?|set(?:s|ting)?\s+(?:off|out)|travel\w*|approach\w*|stride\w*|strode)\b",
+    re.I,
+)
+# Jobs that are done by getting somewhere: go, visit, meet, deliver, bring.
+_TRAVEL_JOB_RE = re.compile(
+    r"^(?:go|visit|travel|reach|meet|deliver|bring|take|carry|escort|return|report|head|walk|find|see|speak|talk|ask)\b", re.I
+)
+
+
+def _travel_only(evidence: str) -> bool:
+    text = str(evidence or "")
+    return bool(_TRAVEL_RE.search(text)) and not _shows_result(text)
 
 
 # Work still owed is not work done (7B run 5 #130, T5: "You will have to clear
@@ -1331,7 +1407,7 @@ def done_check(evidence: str, quest: dict[str, Any] | None, *, passive: bool = F
     "A debt of bread" on a Wait because someone handed over a sack.
     """
     text = str(evidence or "")
-    result = bool(_DONE_WORDS_RE.search(text))
+    result = _shows_result(text)
     if _quote_is_question(text) and not result:
         return ["evidence_is_question"]
     if _STILL_OWED_RE.search(text) and not result:
@@ -1860,7 +1936,7 @@ def _open_jobs(conn) -> list[dict[str, Any]]:
     return _rows(
         conn,
         """
-        SELECT q.id, q.code, q.title, q.status, q.description, q.reward_gold, q.giver_npc_id,
+        SELECT q.id, q.code, q.title, q.status, q.description, q.reward_gold, q.giver_npc_id, q.notes,
                n.name AS giver_name, n.code AS giver_code
         FROM quests q LEFT JOIN npcs n ON n.id = q.giver_npc_id
         WHERE q.status IN ('offered', 'active')
@@ -1891,6 +1967,9 @@ def settle_agreed_price(conn, *, narration: str, player_input: str = "", turn: i
             turn_ledger.note("quest", "agreed_price_unplaced", amount=amount, how=how, candidates=[q["code"] for q in pool])
         return None
     job = pool[0]
+    if advance_paid(job):
+        # The pay was handed over up front; the terms do not owe it twice.
+        return None
     if int(job.get("reward_gold") or 0) == amount:
         return None
     # A day rate is recorded as the day's pay and said so: the job pays it
@@ -1911,6 +1990,74 @@ _FOR_THE_WORK_RE = re.compile(
     r"your\s+(?:pay|wages?|due|cut)|as\s+promised|as\s+agreed|well\s+done)\b",
     re.I,
 )
+
+
+_PAID_AHEAD_NOTE_RE = re.compile(r"paid_in_advance:(\d+)")
+# Pay for work not yet done (7B run 29, T3: the reeve handed over the ship
+# job's 11 gold - "There's the payment" - before Isk had said yes).
+_ADVANCE_RE = re.compile(
+    r"\b(?:in\s+advance|up\s*front|upfront|ahead\s+of\s+time|before\s+(?:the\s+work|you\s+(?:start|begin)|it['’]?s\s+done)|"
+    r"(?:half|part)\s+now|(?:an|as\s+an|the)\s+advance)\b",
+    re.I,
+)
+_PAYMENT_WORD_RE = re.compile(
+    r"\b(?:payment|pay|wages?|fee|your\s+(?:pay|cut|share)|for\s+the\s+(?:job|work|task|errand)|in\s+advance|up\s*front|an\s+advance)\b",
+    re.I,
+)
+
+
+def advance_paid(job: dict[str, Any] | None) -> int:
+    """Gold already handed over for this job before it was done (its notes say so)."""
+    found = _PAID_AHEAD_NOTE_RE.findall(str((job or {}).get("notes") or ""))
+    return sum(int(x) for x in found)
+
+
+def job_paid_in_advance(conn, *, narration: str, coin_in: int, skip_ids: set[int] | None = None) -> dict[str, Any] | None:
+    """The open job the coin handed over this turn pays for ahead of the work, or None.
+
+    An offered job: its giver is in the scene (or it is a board's job the
+    prose talks about), and the coin is its whole pay or is called its
+    payment. A taken job counts only when the prose says the pay comes up
+    front; otherwise coin for a taken job finishes it (``job_paid_in_prose``).
+    Among several, the one whose title the scene names most wins; a tie is
+    nobody's.
+    """
+    if coin_in <= 0:
+        return None
+    skip = {int(i) for i in skip_ids or set()}
+    advance_words = bool(_ADVANCE_RE.search(narration))
+    payment_words = bool(_PAYMENT_WORD_RE.search(narration))
+    narr_stems = _stems(narration) - _QUEST_STOP_STEMS
+    scored: list[tuple[int, int, dict[str, Any]]] = []
+    for q in _open_jobs(conn):
+        if int(q["id"]) in skip or advance_paid(q):
+            continue
+        status = str(q.get("status") or "")
+        if status == "active" and not advance_words:
+            continue
+        named = len((_stems(q.get("title")) - _QUEST_STOP_STEMS) & narr_stems)
+        giver_here = _named_in(narration, {"name": q.get("giver_name"), "code": q.get("giver_code")})
+        if not (giver_here or (not q.get("giver_npc_id") and named)):
+            continue
+        exact = int(q.get("reward_gold") or 0) == int(coin_in)
+        if not (exact or payment_words or advance_words):
+            continue
+        scored.append((int(exact), named, q))
+    if not scored:
+        return None
+    best = max((e, n) for e, n, _ in scored)
+    top = [q for e, n, q in scored if (e, n) == best]
+    return top[0] if len(top) == 1 else None
+
+
+def record_advance_pay(conn, job: dict[str, Any], *, coin_in: int, turn: int = 0) -> dict[str, Any]:
+    """Count coin handed over ahead of the work as the job's pay: what is left to pay drops by it."""
+    before = int(job.get("reward_gold") or 0)
+    left = max(0, before - int(coin_in))
+    notes = f"{str(job.get('notes') or '')}; paid_in_advance:{int(coin_in)}".strip("; ")
+    conn.execute("UPDATE quests SET reward_gold = ?, notes = ? WHERE id = ?", (left, notes[:900], int(job["id"])))
+    _journal(conn, turn, f"Paid ahead: {job.get('title')} ({int(coin_in)} gold before the work)")
+    return {"code": job.get("code"), "action": "paid_in_advance", "gold_in_story": int(coin_in), "reward_gold": {"from": before, "to": left}}
 
 
 def job_paid_in_prose(conn, *, narration: str, coin_in: int, skip_ids: set[int] | None = None) -> dict[str, Any] | None:
