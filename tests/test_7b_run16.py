@@ -49,6 +49,17 @@ class NamesAndCodes(unittest.TestCase):
         self.assertEqual(npcs[0]["role"], "rag picker")
 
 
+class FreeingIsTaking(unittest.TestCase):
+    """Run 17 T4: "working the rusted iron loose with both hands" refused the iron as taken unasked."""
+
+    def test_take_intent(self):
+        from app.llm import player_take_intent
+
+        self.assertTrue(player_take_intent("I try again, working the rusted iron loose with both hands."))
+        self.assertTrue(player_take_intent("I pry the board free."))
+        self.assertFalse(player_take_intent("I pull myself free of the mud."))
+
+
 class WordsEchoInYourMind(unittest.TestCase):
     """Run 17 T2: the player's line came back as "Hereward Treloar's words echo in your mind: ..."."""
 

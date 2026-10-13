@@ -13551,6 +13551,11 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     # digging out" was read as no take, and the finds were cut as decisions.
     r"worth\s+dig\w*\s+(?:out|up)\b|"
     r"haul(?:s|ed|ing)?\s+(?:[\w']+\s+){0,3}(?:back|home|off|away)\b|"
+    # 7B run 17, T4: "working the rusted iron loose with both hands" refused the
+    # iron as taken unasked; freeing a thing is taking it.
+    r"(?:work|works|working|worked|pry|pries|prying|pried|prise|prising|prised|lever\w*|wrench\w*|"
+    r"tug|tugs|tugging|tugged|yank\w*|pull|pulls|pulling|pulled)\s+"
+    r"(?!(?:myself|yourself|himself|herself|themselves|ourselves)\b)(?:[\w']+\s+){1,5}?(?:loose|free)\b|"
     r"(?:dig|digs|digging|dug|search\w*|rummag\w*|root(?:s|ing)?\s+(?:around|about|through)|sift\w*|"
     r"prob(?:e|es|ed|ing)|pok(?:e|es|ed|ing)|scour\w*|"
     r"forag\w*|comb(?:s|ing)?\s+through)\b[^.!?\n]{0,60}?\bfor\s+(?:anything|something|whatever|any)\b)",
