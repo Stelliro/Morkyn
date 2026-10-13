@@ -1579,7 +1579,11 @@ def player_words_misattributed(text: str, quotes: list[str]) -> bool:
 _YOU_SAID_RE = re.compile(
     r"\byou(?:\s+\w+ly)?\s+(?:say|said|ask|asked|reply|replied|answer|answered|mutter|muttered|"
     r"whisper|whispered|shout|shouted|murmur|murmured|retort|retorted|snap|snapped|growl|growled|"
-    r"hiss|hissed|speak|spoke|insist|insisted|declare|declared)\b",
+    r"hiss|hissed|speak|spoke|insist|insisted|declare|declared|"
+    # 7B run 5 (#86): '"Warin Croft," you repeat' (T88), 'You explain, "..."'
+    # (T82) and 'you call out, "..."' (T38) went unread as the player's lines.
+    r"repeat|repeated|explain|explained|call\s+out|called\s+out|tell|told|respond|responded|"
+    r"remark|remarked|admit|admitted|comment|commented)\b",
     re.IGNORECASE,
 )
 # Someone else's speech tag in the same unit: the line is theirs.
@@ -1644,7 +1648,11 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     is the other person opening ("You step up to the counter. 'What can I get
     you?'"), so it stays. It is invented when its words are not in
     what the player typed. When the player asked to speak without giving the
-    words, nothing is checked. Whole units go, so no half quote is left.
+    words, the prose may voice that request: a line on the player's subject
+    stays, and for an asked question the first question; the other lines the
+    prose gave the player go (7B run 5, #86, T41: "ask him what he'll pay"
+    became five invented lines of haggling). For any other indirect speech
+    the first voiced line stays too. Whole units go, so no half quote is left.
     Returns (paragraphs, dropped) with the input's length.
     """
     raw = str(player_input or "")
@@ -1652,8 +1660,10 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
         return list(paragraphs), []
     own = re.split(r"\n\s*\n", raw, maxsplit=1)[0]
     quotes = player_quotes(raw)
-    if not quotes and asks_to_speak(own):
-        return list(paragraphs), []
+    voiced = not quotes and asks_to_speak(own)
+    own_stems = content_stems(own) if voiced else set()
+    asked = voiced and bool(re.search(r"\b(?:ask|asks|asked|inquire|enquire|question)\w*\b", own, re.I))
+    voicing_kept = False  # the one line that voices an indirect request
     out: list[str] = []
     dropped: list[str] = []
     other_spoke = False  # someone else has a line earlier in this narration
@@ -1681,9 +1691,17 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                 tagged = bool(_YOU_SAID_RE.search(outside)) and not _OTHER_SAID_RE.search(
                     _YOU_SAID_RE.sub(" ", outside)
                 )
-                if tagged or (bare[index] and (player_turn or players_block)):
+                # For a voiced request only tagged lines count: the dialogue-paragraph
+                # guess read Roger's appraisal as the player's (run 5, T20).
+                if tagged or (bare[index] and (player_turn or (players_block and not voiced))):
                     player_turn = True
                     if all(_words_from_player(span, own, quotes) for span in spans):
+                        kept_units.append(unit)
+                    elif voiced and content_stems(" ".join(spans)) & own_stems:
+                        voicing_kept = True
+                        kept_units.append(unit)
+                    elif voiced and not voicing_kept and (not asked or "?" in " ".join(spans)):
+                        voicing_kept = True
                         kept_units.append(unit)
                     else:
                         dropped.append(unit)
@@ -1698,6 +1716,213 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     if dropped and not any(p.strip() for p in out):
         return list(paragraphs), []
     return out, dropped
+
+
+# Someone other than the player is the speaker of a quotation: "she says",
+# "Verity [[H]] asks", "the clerk replies". Read in the text right around it.
+_OTHER_SPEAKER_TAG_RE = re.compile(
+    r"\b(?:he|she|they|it|[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)*(?:\s*\[\[[A-Za-z0-9]+\]\])?|"
+    r"the\s+\w+(?:\s+\w+)?)\s+(?:\w+ly\s+)?"
+    r"(?:says|said|asks|asked|replies|replied|answers|answered|mutters|muttered|whispers|whispered|"
+    r"shouts|shouted|calls|called|snaps|snapped|adds|added|continues|continued|repeats|repeated|"
+    r"tells|told|warns|warned|explains|explained|murmurs|murmured|counters|countered|insists|insisted)\b"
+)
+# '," says Yolande Dunmore' -- the verb first.
+_INVERTED_TAG_RE = re.compile(
+    r"\s*,?\s*(?:says|said|asks|asked|replies|replied|calls|called|mutters|muttered|adds|added)\s+"
+    r"(?:the\s+\w+|[A-Z][\w'’-]*)"
+)
+_SAID_SOFT_END_RE = re.compile(r"[.\s]+$")
+
+
+def _quote_matches(span: str, quote: str) -> str:
+    """'exact' when the player's words are all in the quotation, 'near' when reworded, else ''."""
+    from difflib import SequenceMatcher
+
+    q, s = _speech_key(quote), _speech_key(span)
+    if not q or not s:
+        return ""
+    if q in s:
+        return "exact"
+    if SequenceMatcher(None, q, s).ratio() >= 0.6 or _is_player_line(span, [quote]):
+        return "near"
+    return ""
+
+
+def _speaker_of(text: str, start: int, end: int, prev_end: int) -> str:
+    """'player', 'other' or '' for the quotation text[start:end], from the words around it."""
+    # The tag after the quotation, up to the end of its clause: '," she says, glancing at you.'
+    tail = text[end:end + 120]
+    stop = re.search(r'[.!?\n"“]', tail)
+    tail = tail[: stop.start()] if stop else tail
+    first: list[tuple[int, str]] = []
+    mine = _YOU_SAID_RE.search(tail)
+    theirs = _OTHER_SPEAKER_TAG_RE.search(tail) or _INVERTED_TAG_RE.match(tail)
+    if mine:
+        first.append((mine.start(), "player"))
+    if theirs:
+        first.append((theirs.start(), "other"))
+    if first:
+        return min(first)[1]  # the nearest tag is the speaker's
+    # The lead-in before it, from the start of its sentence: 'You walk up to Roger and ask, "...'
+    head_from = max(prev_end, text.rfind("\n", 0, start) + 1)
+    head = text[head_from:start]
+    cuts = list(re.finditer(r"[.!?][\"”]?\s+", head))
+    if cuts:
+        head = head[cuts[-1].end():]
+    if not re.search(r"[,:]?\s*$", head) or not head.strip():
+        return ""
+    lead = re.search(
+        r"\b(?:say|says|said|ask|asks|asked|reply|replies|replied|answer|answers|answered|call\s+out|calls\s+out|"
+        r"called\s+out|explain|explains|explained|add|adds|added|shout|shouts|shouted|tell|tells|told\s+\w+|"
+        r"whisper|whispers|whispered|mutter|mutters|muttered|continue|continues|continued)\b[^,:]*[,:]?\s*$",
+        head,
+        re.I,
+    )
+    if not lead:
+        return ""
+    subject = head[: lead.start()]
+    if re.match(r"\s*you\b", head, re.I) and not re.search(r"\b(?:he|she|they)\b", subject, re.I):
+        return "player"
+    if _OTHER_SPEAKER_TAG_RE.search(head[: lead.end()]) or re.match(r"\s*(?:he|she|they)\b", head, re.I):
+        return "other"
+    return ""
+
+
+def _said_line(quotes: list[str]) -> str:
+    """'"Words," you say.' for the player's quotes, in order."""
+    parts: list[str] = []
+    for index, quote in enumerate(quotes):
+        q = quote.strip()
+        if index == 0:
+            verb = "ask" if "?" in "".join(quotes) else "say"
+            body = q if q[-1:] in "?!," else _SAID_SOFT_END_RE.sub("", q) + ","
+            parts.append(f"“{body}” you {verb}.")
+        else:
+            parts.append(f"“{q}”")
+    return " ".join(parts)
+
+
+def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str, Any]]]:
+    """
+    The player's quoted words are said by the player, as typed (7B run 5, #123).
+
+    The 7B dropped the quote (T21 "The reckoner is not for sale."), reworded
+    it ("guild" -> "salvage's", T38), swapped it for a line of its own (T71)
+    or gave it to the clerk (T64, T77) in a third of the speaking turns. The
+    scene around it is kept; only the player's line is put right:
+
+    - a quotation the prose gives the player that rewords their line becomes
+      their line, word for word;
+    - one invented line given to the player, when one of theirs is missing,
+      becomes the missing one;
+    - the player's words in someone else's mouth go, when the player never
+      says them;
+    - a line still missing is said at the start of the scene.
+
+    Returns (text, changes); each change is {"action", "quote", ...}.
+    """
+    quotes = player_quotes(player_input)
+    body = str(text or "")
+    if not quotes or not body.strip():
+        return body, []
+    changes: list[dict[str, Any]] = []
+
+    def spans_of(value: str) -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = []
+        prev_end = 0
+        last_speaker = ""
+        for m in _QUOTE_SPAN_RE.finditer(value):
+            inner = (m.group(1) or m.group(2) or "")
+            speaker = _speaker_of(value, m.start(), m.end(), prev_end)
+            between = value[prev_end:m.start()]
+            # '"Four's steep," she says, glancing at you. "Do you have a room?"' -- one
+            # speaker: only the first line's tag clause stands between the two.
+            chained = bool(found) and "\n" not in between and bool(
+                re.fullmatch(r"[^.!?\n\"“”]*[.!?]?\s*", between)
+            )
+            if not speaker and chained:
+                speaker = last_speaker
+            found.append({"start": m.start(), "end": m.end(), "inner": inner,
+                          "inner_start": m.start(1) if m.group(1) is not None else m.start(2),
+                          "speaker": speaker, "chained": chained})
+            prev_end, last_speaker = m.end(), speaker
+        return found
+
+    def said_by_player(value: str, quote: str) -> bool:
+        """Said by the player (or by no one named) in one quotation or a chain of them."""
+        key = _speech_key(quote)
+        run: list[str] = []
+        for s in spans_of(value):
+            if s["speaker"] == "other":
+                run = []
+                continue
+            if _quote_matches(s["inner"], quote) == "exact":
+                return True
+            run = (run if s["chained"] else []) + [s["inner"]]
+            if key and key in _speech_key(" ".join(run)):
+                return True  # '"I'll take the hold," you say, "How much does it pay?"'
+        return False
+
+    # 1. A reworded line of the player's becomes their line.
+    for quote in quotes:
+        if said_by_player(body, quote):
+            continue
+        for span in spans_of(body):
+            if span["speaker"] in ("player", "") and _quote_matches(span["inner"], quote) == "near":
+                inner = span["inner"]
+                fixed = quote.strip()
+                if inner.rstrip().endswith(",") and fixed[-1:] == ".":
+                    fixed = fixed[:-1] + ","
+                body = body[: span["inner_start"]] + fixed + body[span["inner_start"] + len(inner):]
+                changes.append({"action": "reworded_line_restored", "quote": quote, "was": inner[:200]})
+                break
+
+    # 2. The player's words in someone else's mouth go, when the player never says them.
+    for quote in quotes:
+        if said_by_player(body, quote):
+            continue
+        for span in reversed(spans_of(body)):
+            if span["speaker"] == "other" and _quote_matches(span["inner"], quote):
+                start, end = span["start"], span["end"]
+                # The speech tag after it goes with it: '"...," she says, glancing at you.'
+                tail = body[end:]
+                tag = re.match(r"[^.!?\n\"“]*[.!?]?", tail)
+                end += tag.end() if tag and _OTHER_SPEAKER_TAG_RE.search(tag.group(0)) else 0
+                body = (body[:start].rstrip(" ") + " " + body[end:].lstrip(" ")).strip(" ")
+                changes.append({"action": "line_taken_from_other_speaker", "quote": quote})
+
+    # 3. One invented line given to the player, while one of theirs is missing.
+    missing = [q for q in quotes if not said_by_player(body, q)]
+    if len(missing) == 1:
+        # A line that voices the unquoted part of the player's turn stays
+        # ("ask Warin for a bed" -> "Could you give me a bed?", run 5 T50).
+        asked = content_stems(_QUOTE_SPAN_RE.sub(" ", player_own_line(player_input)))
+        invented = [
+            s for s in spans_of(body)
+            if s["speaker"] == "player"
+            and not any(_quote_matches(s["inner"], q) for q in quotes)
+            and not (content_stems(s["inner"]) & asked)
+        ]
+        if len(invented) == 1:
+            span = invented[0]
+            inner = span["inner"]
+            fixed = missing[0].strip()
+            if inner.rstrip().endswith(",") and fixed[-1:] == ".":
+                fixed = fixed[:-1] + ","
+            body = body[: span["inner_start"]] + fixed + body[span["inner_start"] + len(inner):]
+            changes.append({"action": "invented_line_replaced", "quote": missing[0], "was": inner[:200]})
+            missing = []
+
+    # 4. Still missing: the player says it as the scene opens.
+    if missing:
+        body = _said_line(missing) + " " + body.lstrip()
+        changes.append({"action": "missing_line_said", "quotes": missing})
+    if changes:
+        body = re.sub(r"[ \t]{2,}", " ", body)
+        body = re.sub(r"[ \t]*\n[ \t]*", "\n", body)
+        body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    return body, changes
 
 
 def player_own_line(player_input: str) -> str:

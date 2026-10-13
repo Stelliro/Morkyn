@@ -14669,7 +14669,8 @@ def _engine_prose_cleanups(
     turn = _soften_stock_lines(turn)
     trimmed = _drop_decided_choice(_apply_menu_trim(turn), player_input)
     final = _drop_player_overreach(trimmed, player_input, phase, trace)
-    return _apply_speech_memory(final, context, player_input, phase, trace)
+    # The speech-memory drops come last; the player's words are checked once more after them.
+    return _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
 
 
 def _ensure_narration_quality(
@@ -14728,7 +14729,7 @@ def _ensure_narration_quality(
             final, context, player_input, system_prompt, timeout, usage, phase, trace, prose_system_prompt=prose_prompt
         )
         final = _drop_player_overreach(deeper, player_input, phase, trace)
-    return _apply_speech_memory(final, context, player_input, phase, trace)
+    return _keep_player_words(_apply_speech_memory(final, context, player_input, phase, trace), player_input, phase, trace)
 
 
 def _apply_speech_memory(
@@ -14860,7 +14861,18 @@ def _drop_player_overreach(
                 "cut_ops": list(cut.get("cut_ops") or [])[:8],
             },
         )
+    said_before = list(turn.get("_invented_player_speech") or []) if isinstance(turn, dict) else []
     spoken = _drop_invented_player_speech(turn, player_input)
+    said_after = list(spoken.get("_invented_player_speech") or []) if isinstance(spoken, dict) else []
+    if said_after and said_after != said_before:
+        _append_trace(
+            trace,
+            {"phase": phase, "event": "invented_player_speech_dropped", "count": len(said_after),
+             "dropped": [s[:160] for s in said_after[:6]]},
+        )
+        from app import turn_ledger
+
+        turn_ledger.note("player_words", "invented_speech_dropped", phase=phase, lines=[s[:160] for s in said_after[:6]])
     before = list(spoken.get("_invented_player_acts") or []) if isinstance(spoken, dict) else []
     acted = _drop_invented_player_acts(spoken, player_input)
     after = list(acted.get("_invented_player_acts") or [])
@@ -14880,7 +14892,48 @@ def _drop_player_overreach(
         _append_trace(trace, {"phase": phase, "event": "act_handed_off", **handed})
     else:
         acted.pop("_act_handed_off", None)
-    return acted
+    return _keep_player_words(acted, player_input, phase, trace)
+
+
+def _keep_player_words(
+    turn: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """The player's quoted words end up said by the player, as typed (7B run 5, #123).
+
+    Runs after the drops, on the prose that ships: a reworded line is put back
+    word for word, the player's words leave another speaker's mouth, and a
+    line the prose left out is said as the scene opens. The scene stays.
+    """
+    from app.narration_pipeline import keep_player_words
+
+    if not isinstance(turn, dict):
+        return turn
+    text = str(turn.get("narration") or "")
+    segments = turn.get("narration_segments")
+    if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
+        joined = "\n\n".join(str(seg.get("text") or "") for seg in segments).strip()
+        text = joined or text
+    if not text.strip():
+        return turn
+    fixed, changes = keep_player_words(text, player_input)
+    if not changes:
+        return turn
+    turn["narration"] = fixed
+    if isinstance(segments, list) and segments:
+        turn["narration_segments"] = [
+            {"label": "paragraph", "text": p.strip()} for p in re.split(r"\n\s*\n", fixed) if p.strip()
+        ]
+    turn["_player_words_kept"] = list(turn.get("_player_words_kept") or []) + changes
+    _append_trace(trace, {"phase": phase, "event": "player_words_kept", "changes": changes[:6]})
+    from app import turn_ledger
+
+    for change in changes:
+        turn_ledger.note("player_words", str(change.get("action") or "kept"), phase=phase, detail=change)
+    check = turn.get("self_check")
+    if isinstance(check, dict):
+        made = check.get("corrections_made") if isinstance(check.get("corrections_made"), list) else []
+        check["corrections_made"] = [*made, "Kept the player's own words as typed and said by the player."]
+    return turn
 
 
 # Families of invented player units the world answers: a line, a take, a
