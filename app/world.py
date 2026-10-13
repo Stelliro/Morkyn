@@ -16970,8 +16970,72 @@ def _quest_passive_turn(input_kind: str, player_input: str) -> bool:
             return True
     except Exception:
         pass
-    primary, secondary = _turn_intent(line)
+    # What the player does, not what they say: "have a look before they go in
+    # the metal heap" inside a quote is not a look-only turn (7B run 6, T8: the
+    # finished pile went unpaid). A line that is only speech is not passive.
+    acts = _QUOTED_SPEECH_RE.sub(" ", line).strip()
+    if not re.search(r"[A-Za-z]{2,}", acts):
+        return False
+    primary, secondary = _turn_intent(acts)
     return primary in {"investigation", "rest"} and not (set(secondary) & _DOING_INTENTS)
+
+
+_QUOTED_SPEECH_RE = re.compile(r'"[^"]*"|“[^”]*”')
+
+
+def _settle_story_terms_and_pay(
+    conn,
+    result: dict[str, Any],
+    quest_report: dict[str, Any],
+    *,
+    narration: str,
+    player_input: str,
+    turn: int,
+    skip_ids: set[int],
+    gold_note: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """An agreed price becomes the job's reward; pay handed over for an active job finishes it (7B run 6, T6, T9)."""
+    from app.quest_parser import job_paid_in_prose, settle_agreed_price
+    from app.quests import complete_quest_step
+
+    touched = {
+        str(row.get("code") or "")
+        for row in [*(quest_report.get("created") or []), *(quest_report.get("updated") or [])]
+        if isinstance(row, dict)
+    }
+    agreed = settle_agreed_price(conn, narration=narration, player_input=player_input, turn=turn, touched_codes=touched)
+    if agreed:
+        quest_report = {**quest_report, "terms": [agreed]}
+    finished = {
+        str(row.get("code") or "")
+        for row in quest_report.get("updated") or []
+        if isinstance(row, dict) and row.get("action") == "complete"
+    }
+    # Only coin the prose shows handed over: a model GOLD op alone is not the
+    # giver paying (7B run 5, T45 paid a fetch job on a walk).
+    source = str((gold_note or {}).get("source") or "")
+    coin_in = int(_float((result.get("player") or {}).get("gold_delta"), 0))
+    if coin_in <= 0 or finished or not source.startswith(("prose_received", "stated_gain")):
+        return quest_report
+    # A job offered or taken this turn is not also paid off by this turn's coin.
+    skip = set(skip_ids)
+    if touched:
+        marks = ",".join("?" * len(touched))
+        skip |= {int(r[0]) for r in conn.execute(f"SELECT id FROM quests WHERE code IN ({marks})", tuple(touched))}
+    job =job_paid_in_prose(conn, narration=narration, coin_in=coin_in, skip_ids=skip)
+    if not job:
+        return quest_report
+    done = complete_quest_step(conn, int(job["id"]), turn=turn, to_end=True, source="story_pay", gold_paid_in_story=coin_in)
+    if not done.get("ok"):
+        return quest_report
+    row: dict[str, Any] = {"code": job.get("code"), "action": done.get("action"), "source": "story_pay", "gold_in_story": coin_in}
+    if done.get("paid"):
+        row["paid"] = done["paid"]
+    turn_ledger.note("quest", "paid_in_story", quest=job.get("code"), gold=coin_in, reward_gold=job.get("reward_gold"))
+    report = {**quest_report, "updated": [*(quest_report.get("updated") or []), row]}
+    if report.get("status") in {"skipped", "empty", "rejected"}:
+        report["status"] = "applied"
+    return report
 
 
 def _drop_model_rewards(result: dict[str, Any]) -> list[str]:
@@ -18308,6 +18372,17 @@ def apply_turn(
             quest_report = {**quest_report, "updated": [*engine_quest_rows, *(quest_report.get("updated") or [])]}
             if quest_report.get("status") in {"skipped", "empty", "rejected"}:
                 quest_report["status"] = "applied"
+        # Terms and pay the story settled itself (7B run 6): an agreed price
+        # becomes the job's reward, and pay the giver hands over for an active
+        # job finishes it, with no second payout of the same gold.
+        if _play_system_enabled(conn, "quests_enabled", True):
+            try:
+                quest_report = _settle_story_terms_and_pay(
+                    conn, result, quest_report, narration=narration, player_input=player_input, turn=turn,
+                    skip_ids=settled_quest_ids, gold_note=gold_note if isinstance(gold_note, dict) else None,
+                )
+            except Exception as exc:
+                turn_ledger.note("quest", "story_terms_error", error=f"{type(exc).__name__}: {exc}"[:200])
         if offered_before:
             try:
                 taken = [
