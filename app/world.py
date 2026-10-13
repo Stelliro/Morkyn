@@ -14207,6 +14207,55 @@ def _abstract_grant(tokens: list[str]) -> bool:
     return head in _ABSTRACT_GRANT_HEADS or head.rstrip("s") in _ABSTRACT_GRANT_HEADS
 
 
+# The player's own line browses goods: "look over what she has for sale".
+_FOR_SALE_RE = re.compile(
+    r"\b(?:for\s+sale|on\s+sale|wares|stall|goods\s+(?:on\s+offer|for\s+sale)|what\s+(?:she|he|they)\s+(?:has|have|sells?|is\s+selling)|"
+    r"browse\w*|look\s+(?:over|at)\s+(?:the|her|his|their)\s+(?:wares|goods|stock)|prices?)\b",
+    re.I,
+)
+_GIFT_WORDS_RE = re.compile(
+    r"\b(?:it'?s\s+yours|yours\s+to\s+keep|keep\s+it|keep\s+them|on\s+the\s+house|free\s+of\s+charge|no\s+charge|"
+    r"for\s+free|a\s+gift|as\s+a\s+gift|as\s+thanks|in\s+thanks|for\s+your\s+(?:help|trouble|efforts?)|"
+    r"(?:your|a)\s+reward|take\s+it|take\s+them|no\s+cost|won'?t\s+charge)\b",
+    re.I,
+)
+
+
+_COIN_SET_DOWN_RE = re.compile(
+    r"\b(?:put|puts|set|sets|lay|lays|laid|place[sd]?|slide|slides|slid|pay|pays|paid|count(?:s|ed)?\s+out|"
+    r"hand(?:s|ed)?\s+over)\s+(?:down\s+)?(?:the|your|my|some|a\s+few|her|his)?\s*(?:[\w-]+\s+){0,2}"
+    r"(?:gold|coins?|silver|coppers?|money)\b",
+    re.I,
+)
+
+
+def _for_sale_context(narration: str, player_input: str) -> bool:
+    """The player's own line (outside speech) browses goods for sale: a stall, wares, what someone sells, prices."""
+    return bool(_FOR_SALE_RE.search(venues.strip_speech(_player_line(player_input))))
+
+
+def _payment_shown(narration: str, player_input: str) -> bool:
+    """Coin changed hands for goods this turn, by the prose or the player's own line."""
+    from app import prose_state
+
+    # "you ask what a cot costs and put the four gold coins on the counter"
+    # (run 5, T24): coin set down, paid or counted out in a sale is payment.
+    for text in (str(narration or ""), venues.strip_speech(_player_line(player_input))):
+        if _COIN_SET_DOWN_RE.search(text):
+            return True
+    try:
+        amounts = prose_state.stated_coin_amounts(narration)
+        if amounts.get("paid"):
+            return True
+        if prose_state.shows_unpriced_payment(narration):
+            return True
+        if prose_state.player_pays_outright(_player_line(player_input)):
+            return True
+    except Exception:
+        return False
+    return False
+
+
 def _filter_inventory_changes(
     conn,
     changes: list[dict[str, Any]],
@@ -14384,6 +14433,20 @@ def _filter_inventory_changes(
             grounded = False
             turn_ledger.note("inventory", "giver_stock_not_given", item=name,
                              why="the player worked on these for someone; handing them back is not a gift")
+        # Goods a seller shows or hands over while the player only browses are
+        # not theirs until bought (7B run 25, T1: "I ... look over what she has
+        # for sale" and the chandler "hands you a bundle of rope" put rope in
+        # the pack, unpaid). A gift said as one, or coin paid, still stands.
+        shown_for_sale = bool(
+            grounded and not existing and handed and not acts_take
+            and _for_sale_context(final_text, player_input)
+            and not _GIFT_WORDS_RE.search(final_text)
+            and not _payment_shown(final_text, player_input)
+        )
+        if shown_for_sale:
+            grounded = False
+            turn_ledger.note("inventory", "shown_for_sale_not_bought", item=name,
+                             why="a seller handed it over to look at; nothing was paid or given")
         # Never honor bare justified/true from the model
         # Opening: no free combat kit. This used to refuse every new item, so a
         # baker handing the player a loaf in the first scene was dropped
@@ -14396,9 +14459,9 @@ def _filter_inventory_changes(
         # Items cannot become dimensional storage without explicit prose
         if grounded:
             kept.append(_strip_unearned_dimensional(change))
-        elif same_as_owned:
-            # Nothing refused: the prose shows the player's own thing, and it
-            # stays in the prose (no trim), already in the pack.
+        elif same_as_owned or shown_for_sale:
+            # Nothing refused: the prose shows the player's own thing, or goods
+            # held out for sale, and stays as written (no trim).
             continue
         else:
             if rejected is not None:
