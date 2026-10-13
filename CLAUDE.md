@@ -58,6 +58,9 @@ belong to, with the date).
   fixing and re-running without waiting to be asked, until the run is clean enough to call a
   baseline; only then hand over for Stell's own playtest. Issues Stell finds after that are
   learning material for the next patch, not failures; log them and fix them the usual way.
+  Stell (same day, going to sleep): "go on for as long as it takes for no issues to occur ...
+  go past 100 turns": runs may go longer than 100 turns, and the fix/re-run loop continues
+  unattended. Still no push, tag or release without an explicit ask.
 - **Roadmap:** stable 0.10 first, then 1.0 as an exe or package. Test saves can pile up until
   then; the cleanup and template saves happen at 1.0.
 
