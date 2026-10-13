@@ -2087,6 +2087,24 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             start = span["inner_start"]
             body = body[:start] + clean + body[start + len(span["inner"]):]
             changes.append({"action": "code_taken_out_of_player_line", "quote": clean[:200]})
+
+    # 6. The player's line with no tag right after someone else's action reads
+    # as theirs (7B run 13, T1: 'She turns to you, her face stern. "Reeve
+    # Colley. You're out early..."' gave Isk's words to the reeve). It is the
+    # player's: "you say" goes in front.
+    for span in reversed(spans_of(body)):
+        if span["speaker"] or not any(_quote_matches(span["inner"], q) == "exact" for q in quotes):
+            continue
+        lead = body[: span["start"]]
+        para = lead.rsplit("\n", 1)[-1]
+        sentences = [s for s in re.split(r"(?:(?<=[.!?])|(?<=[.!?][\"”]))\s+", para.strip()) if s.strip()]
+        if not sentences or para.rstrip()[-1:] not in ".!?":
+            continue
+        last = sentences[-1].lstrip("\"“” ")
+        if re.match(r"(?:you|your)\b", last, re.I) or not re.match(r"(?:he|she|they|[A-Z][a-z]+)\b", last):
+            continue
+        body = body[: span["start"]] + "You say, " + body[span["start"]:]
+        changes.append({"action": "untagged_player_line_tagged", "quote": span["inner"][:200]})
     if changes:
         body = re.sub(r"[ \t]{2,}", " ", body)
         body = re.sub(r"[ \t]*\n[ \t]*", "\n", body)
