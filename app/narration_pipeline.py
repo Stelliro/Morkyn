@@ -1659,6 +1659,9 @@ def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
     # '"Thank you, Reeve," you say' shared only "Reeve" with the typed line
     # and was kept as theirs).
     core = _VOCATIVE_START_RE.sub("", _VOCATIVE_END_RE.sub("", str(span or "").rstrip(" ,;:—-")))
+    # A name alone is not the player's words: '"Is this Thaddeus?" you inquire'
+    # shared only "Thaddeus" with the typed question (7B run 20, T4).
+    core = re.sub(r"(?<!^)(?<![.!?]\s)\b[A-Z][a-z][\w'’-]*", " ", core)
     stems = content_stems(core) if core.strip() else content_stems(span)
     if stems:
         return len(stems & content_stems(own)) * 2 >= len(stems)
