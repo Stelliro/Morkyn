@@ -117,6 +117,22 @@ class ThankAndWalkAfterHerOwnQuestion(unittest.TestCase):
         self.assertNotIn("clock tower", out["narration"])
 
 
+class CapitalYouTagAndOneSharedWord(unittest.TestCase):
+    """Run 28 T6: '"Flat-runner. My name is Isk. But what's in it for me?" You ask, eyeing the tanner' kept."""
+
+    def test_dropped(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        line = '"What task, and what\'s your name? I don\'t follow strangers around Saltmarrow without one."'
+        paras = [
+            '"What task, and what\'s your name? I don\'t follow strangers around Saltmarrow without one."',
+            'Stephen\'s eyes narrow. "It\'s Stephen. You?"',
+            '"Flat-runner. My name is Isk. But what\'s in it for me?" You ask, eyeing the tanner with interest.',
+        ]
+        self.assertEqual(len(drop_invented_player_speech(paras, line)[1]), 1)
+        self.assertEqual(drop_invented_player_speech(['"Where is it?" You ask.'], '"Where is it?"')[1], [])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

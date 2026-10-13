@@ -1674,7 +1674,13 @@ def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
     core = re.sub(r"(?<!^)(?<![.!?]\s)\b[A-Z][a-z][\w'’-]*", " ", core)
     stems = content_stems(core) if core.strip() else content_stems(span)
     if stems:
-        return len(stems & content_stems(own)) * 2 >= len(stems)
+        shared = len(stems & content_stems(own))
+        # With typed quotes one shared word is not enough: '"Flat-runner. My
+        # name is Isk. But what's in it for me?"' shared only "name" with
+        # "...what's your name?" (7B run 28, T6).
+        if quotes and shared < 2 and len(str(span or "").split()) > 3:
+            return False
+        return shared * 2 >= len(stems)
     words = set(_speech_key(span).split())
     return bool(words) and words <= set(_speech_key(own).split())
 
@@ -1706,6 +1712,10 @@ def _asks_the_player(quote: str) -> bool:
     return text.endswith("?") and bool(_TO_PLAYER_RE.search(text))
 
 
+_CAPITAL_YOU_TAG_RE = re.compile(
+    r"([?!,][\"”])\s+You\s+(ask|asks|asked|say|says|said|reply|replied|answer|answered|add|added|"
+    r"inquire|inquired|state|stated|offer|offered|counter|countered|press|pressed|demand|demanded)\b"
+)
 _GREETING_WORDS = frozenset({
     "morning", "evening", "afternoon", "good", "well", "yes", "no", "aye", "nay", "hello", "welcome", "ah", "oh",
     "sir", "madam", "friend", "traveler", "traveller", "stranger", "lad", "lass", "listen", "look", "now", "so",
@@ -1813,6 +1823,10 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     prev_by_player = False  # and whether that speech was the player's
     for para in paragraphs:
         kept_blocks: list[str] = []
+        # '"...for me?" You ask, eyeing him' (7B run 28, T6): a capital "You"
+        # after the closing quote starts a new sentence, so the line read as
+        # untagged. The tag belongs to the quote (and is lower case there).
+        para = _CAPITAL_YOU_TAG_RE.sub(lambda m: m.group(1) + " you " + m.group(2), str(para or ""))
         for block in _BLOCK_SPLIT_RE.split(str(para or "")):
             units = speech_units(block.strip())
             if not units:
