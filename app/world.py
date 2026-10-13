@@ -16474,6 +16474,32 @@ def _void_unbought_spend(
     return True
 
 
+_DOING_INTENTS = {"inventory", "trade", "combat", "travel", "training"}
+# Journal kinds only the engine writes; a model journal entry under one is stored as a fact.
+ENGINE_JOURNAL_KINDS = frozenset({"quest"})
+
+
+def _quest_passive_turn(input_kind: str, player_input: str) -> bool:
+    """The player did no work this turn: a Wait or other engine turn, a plain question, or only looking.
+
+    On such a turn a job is finished only by a quote that shows the result and
+    is about that job (quest_parser.done_check, 7B run 5 #130: jobs paid on a
+    Wait, on asking the time, and on a look around).
+    """
+    if str(input_kind or "player") != "player":
+        return True
+    line = _player_line(player_input)
+    try:
+        from app.llm import _is_light_question
+
+        if _is_light_question(line):
+            return True
+    except Exception:
+        pass
+    primary, secondary = _turn_intent(line)
+    return primary in {"investigation", "rest"} and not (set(secondary) & _DOING_INTENTS)
+
+
 def _drop_model_rewards(result: dict[str, Any]) -> list[str]:
     """Take out the model's own XP and gold gains for a turn the engine pays a quest (playtest #85b).
 
@@ -17021,11 +17047,40 @@ def apply_turn(
             _cut_prose_at_refused_move(result, movement_report, player_input)
         except Exception:
             pass
+        quest_passive = _quest_passive_turn(input_kind, player_input)
         if quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest"):
             # The quest's reward is the engine's payout (playtest #85b); a
             # reward the model adds for the same work would pay it twice.
             # Costs and payments (negative gold) still go through.
-            _drop_model_rewards(result)
+            dropped_rewards = _drop_model_rewards(result)
+            if dropped_rewards:
+                turn_ledger.note("quest", "model_reward_dropped", quest=quest_attempt.get("code"), fields=dropped_rewards,
+                                 why="the engine pays this quest")
+        elif isinstance(result.get("quest_changes"), dict) and _play_system_enabled(conn, "quests_enabled", True):
+            # Same rule when the quest parser will finish a job this turn
+            # (7B run 5 #130, T45: +15 gold from the quest and +35 from the
+            # model's own GOLD op for the same fetch). A dry run of the same
+            # checks the parser's apply below uses; nothing is written here.
+            try:
+                from app.quest_parser import finishing_quest_ids
+
+                settled_early = {int(quest_attempt["quest_id"])} if quest_attempt else set()
+                finishing = finishing_quest_ids(
+                    conn,
+                    result.get("quest_changes"),
+                    narration=_narration_text(result),
+                    player_input=player_input,
+                    turn=turn,
+                    settled_ids=settled_early,
+                    passive=quest_passive,
+                )
+            except Exception:
+                finishing = []
+            if finishing:
+                dropped_rewards = _drop_model_rewards(result)
+                if dropped_rewards:
+                    turn_ledger.note("quest", "model_reward_dropped", quests=finishing, fields=dropped_rewards,
+                                     why="the quest parser finishes and pays this job")
         # A price or payment the prose names is the gold that moves; it is
         # marked server-authored so the band roller below leaves it (#69).
         try:
@@ -17569,7 +17624,8 @@ def apply_turn(
                     source_before = changes.get("source")
                     changes = merge_marks({**changes, "_parser_ran": bool(quest_changes), "source": source_before or "parser"}, quest_marks)
                 quest_report = apply_quest_changes(
-                    conn, changes, narration=narration, player_input=player_input, turn=turn, settled_ids=settled_quest_ids
+                    conn, changes, narration=narration, player_input=player_input, turn=turn, settled_ids=settled_quest_ids,
+                    passive=quest_passive,
                 )
             except Exception as exc:
                 quest_report = {"status": "error", "error": str(exc)[:300], "created": [], "updated": [], "rejected": []}
@@ -17657,9 +17713,16 @@ def apply_turn(
                 (turn, "system", f"Used deterministic fallback. LLM error: {reason}"[:1400]),
             )
         for entry in result.get("journal") or []:
+            # "quest" lines are the engine's record of jobs offered, taken and
+            # paid; a model note filed under it read as the finished
+            # tide-reckoner job starting again (7B run 5 #130, T46). The note
+            # is kept, as a fact.
+            kind = str(entry.get("kind") or "fact")[:40]
+            if kind.strip().lower() in ENGINE_JOURNAL_KINDS:
+                kind = "fact"
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
-                (turn, str(entry.get("kind") or "fact")[:40], str(entry.get("content") or "")[:1400]),
+                (turn, kind, str(entry.get("content") or "")[:1400]),
             )
 
     # Hierarchical memory: roll older summaries into durable facts after enough history accumulates.
