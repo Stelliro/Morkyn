@@ -23,6 +23,19 @@ class ThePlayerIsNotAPerson(unittest.TestCase):
         self.assertEqual(_introduced_people("Isk Tarrow, the flat-runner, looks out.", ["Isk Tarrow"]), [])
 
 
+class CommonWordsAreNotNames(unittest.TestCase):
+    """Run 22 T0: "Inside, the scent of bread ..." stored a person called Inside, job "scent"."""
+
+    def test_skipped(self):
+        from app.world import _introduced_people
+
+        self.assertEqual(_introduced_people("Inside, the scent of bread hangs thick.", []), [])
+        self.assertEqual(
+            [p["name"] for p in _introduced_people("Inside, the scent hangs. Elias Fairweather, the miller, waits.", [])],
+            ["Elias Fairweather"],
+        )
+
+
 class NamesAndCodes(unittest.TestCase):
     """T0: 'Dunstan Upcott [[A]] [[D1]]', 'Quarrel and Sons [[Quarrel and Sons]]', role 'grocer Quarrel and Sons'."""
 
