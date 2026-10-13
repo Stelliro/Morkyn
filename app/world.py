@@ -12980,6 +12980,43 @@ def _recent_thing_name(conn, narration_plain: str, phrase: str) -> str:
     return ""
 
 
+_REFUSED_STASH_RE = re.compile(
+    r"\b(?:into|in|to)\s+(?:your|the)\s+(?:pack|inventory|bag|satchel|pocket|pouch|belt|sack|kit)\b|"
+    r"\b(?:stow|stows|stowed|pocket|pockets|pocketed|tuck(?:s|ed)?\s+(?:it|them|the\s+\w+)\s+away)\b",
+    re.I,
+)
+_REFUSED_GAIN_RE = re.compile(r"^Rejected unearned gain:\s*(?P<name>.+?)\s+x\d+\s*\(")
+
+
+def _recently_refused_find(conn, phrase: str) -> str:
+    """A find the engine refused on the last turns, by the player's name for it.
+
+    "I keep the rusty tool handle I pulled out of the mud" (7B run 7, T7): the
+    dig that found it was refused and its sentence trimmed, so no scene names
+    it any more; the refusal line still does.
+    """
+    tokens = _item_name_tokens(str(phrase or "").lower())
+    head = tokens[-1] if tokens else ""
+    if not head:
+        return ""
+    try:
+        turn = _turn_value(conn)
+        rows = conn.execute(
+            "SELECT content FROM journal WHERE kind = 'inventory_reject' AND turn >= ? ORDER BY id DESC LIMIT 20",
+            (turn - 1,),
+        ).fetchall()
+    except Exception:
+        return ""
+    for row in rows:
+        match = _REFUSED_GAIN_RE.match(str(row["content"] or ""))
+        if not match:
+            continue
+        name = match.group("name").strip()
+        if _sentence_mentions_item(name.lower(), str(phrase).lower(), tokens):
+            return name
+    return ""
+
+
 def _grant_shown_takes(
     conn,
     changes: list[dict[str, Any]],
@@ -13055,14 +13092,23 @@ def _grant_shown_takes(
                     continue
                 if any(_sentence_mentions_item(o, phrase, tokens) for o in owned) and "another" not in obj.lower():
                     continue
-                # Put back, handed on, or eaten after the take: not kept.
+                # Put back, handed on, or eaten after the take: not kept. A
+                # pronoun only stands for the thing while the clauses before it
+                # were about the thing: "... lift it ... hand them over" about a
+                # chest three sentences on is not the tool handle (7B run 7, T7).
                 gone = False
+                carry = True
                 for later in re.split(r"(?<=[.!?])\s+|,\s+(?:and\s+)?|\s+and\s+", after):
                     later_l = later.lower()
                     if not later_l.strip():
                         continue
-                    if not (_sentence_mentions_item(later_l, phrase, tokens) or _PRONOUN_CARRY_RE.search(later_l)):
+                    if not (
+                        _sentence_mentions_item(later_l, phrase, tokens)
+                        or (carry and _PRONOUN_CARRY_RE.search(later_l))
+                    ):
+                        carry = False
                         continue
+                    carry = True
                     if any(pattern.search(later) for pattern, _player in _ITEM_LOSS_RES):
                         gone = True
                         break
@@ -13094,7 +13140,7 @@ def _grant_shown_takes(
                 continue
             if any(_sentence_mentions_item(o, phrase, tokens) for o in owned):
                 continue
-            name = _recent_thing_name(conn, plain, phrase)
+            name = _recent_thing_name(conn, plain, phrase) or _recently_refused_find(conn, phrase)
             if not name:
                 continue
             added.append({
@@ -13220,6 +13266,20 @@ def _loss_shown(name: str, text: str) -> bool:
         if any(re.search(rf"\b{re.escape(t)}", low) for t in tokens if t) and _LOSS_VERB_RE.search(low):
             return True
     return False
+
+
+_ABSTRACT_GRANT_HEADS = frozenset({
+    "work", "job", "task", "chore", "labour", "labor", "contract", "pay", "payment", "wage", "wages", "share",
+    "deal", "terms", "help", "news", "word", "rumour", "rumor", "gossip", "advice", "information", "info", "offer",
+    "service", "favour", "favor", "permission", "debt", "lesson", "training", "knowledge", "idea", "plan",
+    "opportunity", "chance", "agreement", "bargain", "promise", "trust", "respect", "time", "rest",
+})
+
+
+def _abstract_grant(tokens: list[str]) -> bool:
+    """The granted thing's head noun is a job, a wage, a deal or news, not an object."""
+    head = str(tokens[-1] if tokens else "").lower()
+    return head in _ABSTRACT_GRANT_HEADS or head.rstrip("s") in _ABSTRACT_GRANT_HEADS
 
 
 def _filter_inventory_changes(
@@ -13369,6 +13429,15 @@ def _filter_inventory_changes(
         )
         arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and acquire_intent)
         grounded = named and arrived
+        # A job, a wage or a deal is not a thing to carry (7B run 7, T2: GRANT
+        # "deck work" put "deck work x1" in the pack). Only the head noun is
+        # read, and a thing the prose shows handed over still stands ("a work
+        # order", "a share of the haul" passed across the table).
+        if grounded and _abstract_grant(tokens) and not _prose_item_handed_over(
+            final_text, name_l, tokens, owned=bool(existing)
+        ):
+            grounded = False
+            turn_ledger.note("inventory", "not_a_thing", item=name, why="the grant names a job, wage or deal")
         # Never honor bare justified/true from the model
         # Opening: no free combat kit. This used to refuse every new item, so a
         # baker handing the player a loaf in the first scene was dropped
@@ -17805,22 +17874,40 @@ def _reconcile_prose_with_state(
             continue
         name_l = name.lower()
         tokens = list(item.get("tokens") or _item_name_tokens(name_l))
-        carry = {"on": False}
+        carry = {"on": False, "dropped": False, "any_dropped": False}
         shared: list[str] = []
 
         def shows_arrival(sentence: str, name_l: str = name_l, tokens: list[str] = tokens, carry: dict = carry,
                           shared: list[str] = shared) -> bool:
             lower = sentence.lower()
             about = _sentence_mentions_item(lower, name_l, tokens)
-            if not about and not (carry["on"] and _PRONOUN_CARRY_RE.search(lower)):
-                carry["on"] = False
+            if not about and carry["any_dropped"] and _REFUSED_STASH_RE.search(lower):
+                # Short name for the refused thing going into the pack: "the tool".
+                about = any(len(t) > 3 and re.search(rf"\b{re.escape(t)}", lower) for t in tokens)
+            pronoun = carry["on"] and bool(_PRONOUN_CARRY_RE.search(lower))
+            if not about and not pronoun:
+                carry["on"] = carry["dropped"] = False
                 return False
+            if not about and carry["dropped"]:
+                # The next beat of a dropped arrival: "... your hands soon find a
+                # rusty tool handle. You pull it free and wipe the grime off" kept
+                # "You pull it free" with nothing to pull (7B run 7, T6).
+                turn_ledger.note("prose", "refused_gain_follow_on_trimmed", item=name_l, sentence=sentence[:160])
+                return True
             carry["on"] = about
             arrives = any(kind == "gain" for _pos, kind, _player in _sentence_item_events_detail(sentence, name_l, tokens, owned=False))
-            if arrives and any(_sentence_mentions_item(lower, k_l, k_t) for k_l, k_t in kept_items):
+            # Later in the scene the refused thing goes into the pack ("You
+            # return the tool to your inventory"): it is not in the pack.
+            stashed = about and carry["any_dropped"] and bool(_REFUSED_STASH_RE.search(lower))
+            if (arrives or stashed) and any(_sentence_mentions_item(lower, k_l, k_t) for k_l, k_t in kept_items):
                 shared.append(sentence[:160])
+                carry["dropped"] = False
                 return False
-            return arrives
+            carry["dropped"] = bool(arrives)
+            carry["any_dropped"] = carry["any_dropped"] or carry["dropped"]
+            if stashed and not arrives:
+                carry["on"] = False  # the stash ends the beat; "it's too late" after it is not the thing
+            return bool(arrives or stashed)
 
         new_text, dropped = prose_state.drop_sentences(text, shows_arrival)
         if dropped:
