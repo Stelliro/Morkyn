@@ -6941,6 +6941,12 @@ def _venue_named_anywhere(conn, player_input: str, *, exclude_parent: int = 0):
     return None
 
 
+_IN_ROOM_PLACE_RE = re.compile(
+    r"\b(?:behind|at|across|over|along|beside|by|near|from|on)\s+the\s+"
+    r"(?:bar|counter|table|tables|hearth|fire|window|door|stall|bench)\b"
+)
+
+
 def _mint_venue_from_request(conn, parent_id: int, player_input: str, narration: str = "") -> str:
     """Open the kind of venue the player just asked to walk into, if it fits here.
 
@@ -6955,7 +6961,9 @@ def _mint_venue_from_request(conn, parent_id: int, player_input: str, narration:
     parent = _location_row(conn, parent_id)
     if parent is None:
         return ""
-    text = str(player_input or "").lower()
+    # A place in the room is not a building: "ask whoever is behind the bar"
+    # inside the Twice-Blessed Hound opened a closed "Saltmarrow Bar" (7B run 27, T5).
+    text = _IN_ROOM_PLACE_RE.sub(" ", str(player_input or "").lower())
     kind = ""
     for candidate, spec in venues.VENUE_KINDS.items():
         label = venues.kind_label(candidate).lower()
