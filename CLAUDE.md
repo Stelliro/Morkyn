@@ -54,6 +54,10 @@ belong to, with the date).
   them. New engine code that refuses or drops something calls `turn_ledger.note(...)`.
 - **Baseline runs:** a 100-turn 7B run "with no issues" becomes the baseline. Run 5 (2026-10-14,
   docs/showcase/saltmarrow-7b-run5-findings.md) was not one.
+- **Iterate until the playtest is complete** (2026-10-14): when a test run turns up issues, keep
+  fixing and re-running without waiting to be asked, until the run is clean enough to call a
+  baseline; only then hand over for Stell's own playtest. Issues Stell finds after that are
+  learning material for the next patch, not failures; log them and fix them the usual way.
 - **Roadmap:** stable 0.10 first, then 1.0 as an exe or package. Test saves can pile up until
   then; the cleanup and template saves happen at 1.0.
 
