@@ -1422,6 +1422,9 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                     slim["giver"] = row.get("giver")
                 if int(row.get("pays_gold") or 0) > 0:
                     slim["pays"] = f"{int(row['pays_gold'])} gold"
+                if int(row.get("paid_ahead_gold") or 0) > 0:
+                    # Already handed over (7B run 29, T3): the giver does not pay it twice.
+                    slim["paid_already"] = f"{int(row['paid_ahead_gold'])} gold, before the work"
                 slim["status"] = {"declined": "turned_down", "accepted_now": "player_takes_it_now"}.get(
                     str(row.get("status") or ""), "waiting_for_answer"
                 )
