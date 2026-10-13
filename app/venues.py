@@ -782,6 +782,61 @@ def hours_note(row: Any, world_minute: int) -> str:
     return f"{state} now ({window})"
 
 
+# Kinds the story uses for the same building (7B run 5, #136): the Blind Pike
+# was an inn to the prose and "the Blind Pike Tavern" to the player, and each
+# word opened another row.
+_KIND_FAMILIES: tuple[frozenset[str], ...] = (frozenset({"inn", "tavern"}),)
+
+
+def same_kind_family(a: str, b: str) -> bool:
+    """Do two venue kinds name the same sort of building (an inn is a tavern)?"""
+    a, b = str(a or ""), str(b or "")
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return any(a in family and b in family for family in _KIND_FAMILIES)
+
+
+def kind_family_labels(kind: str) -> list[str]:
+    """The labels a player or the prose may use for a venue of this kind."""
+    kinds = {str(kind or "")}
+    for family in _KIND_FAMILIES:
+        if kind in family:
+            kinds |= set(family)
+    return [kind_label(k).lower() for k in sorted(kinds) if k and kind_label(k)]
+
+
+def kind_from_summary(summary: str) -> str:
+    """The venue kind a place's own description gives it ("A modest inn with ..."), or "".
+
+    Only the description's head noun counts: "A modest inn with a common room",
+    not "a yard beside the inn". Weak kind words never count here.
+    """
+    first = re.split(r"(?<=[.!?])\s+", str(summary or "").strip(), maxsplit=1)[0]
+    text = re.sub(r"[^a-z' ]+", " ", _fold(first))
+    head_words = [w for w in text.split() if w not in {"a", "an", "the", "this", "that"}]
+    # The head is the noun before the first preposition or clause word.
+    stop = {"with", "on", "in", "at", "by", "near", "beside", "behind", "off", "of", "where", "that", "which",
+            "for", "under", "above", "across", "along", "overlooking", "facing", "and", "run", "kept", "known"}
+    head: list[str] = []
+    for word in head_words:
+        if word in stop:
+            break
+        head.append(word)
+    phrase = " ".join(head[:6])
+    if not phrase:
+        return ""
+    best, best_len = "", 0
+    for kind, words in _KIND_WORDS.items():
+        for word in words:
+            if word in _WEAK_KIND_WORDS or len(word) <= best_len:
+                continue
+            if re.search(rf"(?:^|\s){re.escape(word)}$", phrase):
+                best, best_len = kind, len(word)
+    return best
+
+
 def row_kind(row: Any) -> str:
     """A location row's venue kind: the stamped ``kind``, else what its name says.
 
