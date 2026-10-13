@@ -778,11 +778,25 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
         # Join every token after the code. A quoted fact is one arg; an unquoted
         # fact is many. Taking only args[1] stored "the" and dropped the rest.
         fact = " ".join(args[1:]).strip()
-        if not code or not fact:
+        name = ""
+        if len(args) == 1 and "," in args[0]:
+            # One quoted arg holding the person and the fact (7B run 6, T9):
+            # NPC_NOTE "Oldfield B, village reeve, stern but fair".
+            head, _, fact = args[0].partition(",")
+            fact = fact.strip()
+            words = head.replace("[", " ").replace("]", " ").split()
+            if words and re.fullmatch(r"[A-Z][A-Z0-9]{0,2}", words[-1]):
+                code = words[-1]
+                name = " ".join(words[:-1])
+            else:
+                code = ""
+                name = " ".join(words)
+        if not (code or name) or not fact:
             raise TurnDslError(f"NPC_NOTE requires code and fact on line {entry['line']}")
-        turn["index_updates"].append(
-            {"entity_type": "npc", "code": code, "summary_append": fact[:400], "known_fact": fact[:400]}
-        )
+        update = {"entity_type": "npc", "code": code or name, "summary_append": fact[:400], "known_fact": fact[:400]}
+        if name:
+            update["name"] = name
+        turn["index_updates"].append(update)
     elif op == "TALK":
         code = (args[0] if args else "").upper()
         topic = " ".join(args[1:]).strip() if len(args) > 1 else "conversation"
