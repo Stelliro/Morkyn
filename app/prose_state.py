@@ -1014,6 +1014,146 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
     return out, fixes
 
 
+# Part-of-day words that say what time it is *now* in the narration (#132).
+# Only these shapes are read: the present moment ("as the night progresses",
+# "the night is still young", "the evening light", "it is morning"). Speech is
+# masked first; people may talk about other times.
+_PART_WORDS = r"night|evening|morning|afternoon|dawn|dusk|midday|noon|midnight"
+_CLOCK_PHRASE_RE = re.compile(
+    r"\b(?:"
+    r"as\s+the\s+(?P<a>night|evening|morning|afternoon)\s+(?:progresses|wears\s+on|deepens|draws\s+on|goes\s+on|grows\s+late|settles\s+in)"
+    r"|the\s+(?P<b>night|evening|morning|afternoon)\s+is\s+(?:still\s+|now\s+)?(?:young|calm|quiet|still|cool|warm|cold|dark|bright|clear|late|early)\b"
+    r"|(?:it\s+is|it['’]s)\s+(?:now\s+|already\s+|still\s+)?(?:early\s+|late\s+)?(?P<c>" + _PART_WORDS + r")\b(?!\s+(?:when|before|after))"
+    r"|the\s+(?:early\s+|late\s+)?(?P<d>" + _PART_WORDS + r")\s+(?P<noun>light|sun|sunlight|air|chill|breeze|mist|fog|shadows|glow|stillness|quiet|hush|bustle|crowd|rush|darkness|gloom|sky)"
+    r")",
+    re.I,
+)
+# Hours (0-23) at which each word can describe the present; generous edges.
+_PART_HOURS = {
+    "morning": set(range(4, 13)),
+    "dawn": set(range(4, 9)),
+    "noon": set(range(11, 15)),
+    "midday": set(range(11, 15)),
+    "afternoon": set(range(11, 19)),
+    "evening": set(range(16, 23)),
+    "dusk": set(range(16, 22)),
+    "night": set(range(19, 24)) | set(range(0, 6)),
+    "midnight": {23, 0, 1},
+}
+_DAYLIGHT_NOUNS = {"sun", "sunlight"}
+
+
+def _clock_part(hour: int) -> str:
+    hour = int(hour) % 24
+    if 5 <= hour < 12:
+        return "morning"
+    if 12 <= hour < 17:
+        return "afternoon"
+    if 17 <= hour < 21:
+        return "evening"
+    return "night"
+
+
+def clock_clashes(text: str, hour: int) -> list[dict[str, Any]]:
+    """Present-moment part-of-day phrases outside quotes that the clock's hour rules out."""
+    source = str(text or "")
+    masked = _mask_speech(source)
+    out: list[dict[str, Any]] = []
+    for match in _CLOCK_PHRASE_RE.finditer(masked):
+        group = next(g for g in ("a", "b", "c", "d") if match.group(g))
+        word = match.group(group).lower()
+        if int(hour) % 24 in _PART_HOURS.get(word, set(range(24))):
+            continue
+        out.append({
+            "phrase": source[match.start():match.end()],
+            "word": word,
+            "start": match.start(group),
+            "end": match.end(group),
+            "noun": (match.group("noun") or "").lower(),
+        })
+    return out
+
+
+def repair_clock_words(text: str, hour: int) -> tuple[str, list[dict[str, Any]]]:
+    """
+    Swap a part-of-day word that contradicts the clock for the clock's own (#132).
+
+    "As the night progresses" at 08:20 becomes "As the morning progresses";
+    "the evening light" at noon becomes "the afternoon light". Only the one word
+    changes. A daylight noun at night ("the morning sun" at 23:00) has no safe
+    swap and is left, as is anything in speech.
+    """
+    source = str(text or "")
+    target = _clock_part(hour)
+    fixes: list[dict[str, Any]] = []
+    out = source
+    for clash in sorted(clock_clashes(source, hour), key=lambda c: c["start"], reverse=True):
+        if target == "night" and clash["noun"] in _DAYLIGHT_NOUNS:
+            continue
+        old = out[clash["start"]:clash["end"]]
+        new = target.capitalize() if old[:1].isupper() else target
+        out = out[: clash["start"]] + new + out[clash["end"]:]
+        fixes.append({"why": "clock_word", "from": clash["phrase"], "to": new, "hour": int(hour) % 24})
+    fixes.reverse()
+    return out, fixes
+
+
+# A closing sentence with no finite verb: "The pressure of the day settling in."
+# (7B run 8 T0). Determiner, a short noun phrase (an "of the X" tail allowed),
+# then a present participle. Anything with a finite verb is not matched.
+_FRAGMENT_RE = re.compile(
+    r"^(?P<np>(?:The|A|An|Your|His|Her|Their|Its)\s+(?P<head>[A-Za-z'-]+(?:\s+[a-z'-]+){0,2}?)"
+    r"(?:\s+of\s+(?:the|a|an|your|his|her|their)\s+[a-z'-]+(?:\s+[a-z'-]+)?)?)"
+    r"\s+(?P<ing>[a-z]+ing)\b(?P<rest>[^.!?\"]*)[.!?]$"
+)
+_FRAGMENT_TAIL_RE = re.compile(
+    r"^(?:in|on|out|over|down|up|away|across|through|around|into|onto|off|behind|along|back|low|"
+    r"still|slowly|quietly|softly|steadily|heavily|again|overhead|nearby|above|below|past|by|beyond)\b",
+    re.I,
+)
+_FINITE_RE = re.compile(
+    r"\b(?:is|are|was|were|has|have|had|does|do|did|can|could|will|would|shall|should|may|might|must|"
+    r"seems?|remains?|hangs?|lingers?|stays?|feels?|looks?|sounds?|grows?|becomes?)\b",
+    re.I,
+)
+
+
+def trailing_fragment(text: str) -> dict[str, Any] | None:
+    """The last sentence when it is a noun phrase plus a participle with no finite verb."""
+    source = str(text or "").rstrip()
+    tail = re.split(r"(?:(?<=[.!?])|(?<=[.!?][\"”]))\s+", source)[-1].strip() if source else ""
+    if not tail or len(tail.split()) > 12 or _FINITE_RE.search(tail):
+        return None
+    match = _FRAGMENT_RE.match(tail)
+    if not match:
+        return None
+    # "The ship's gentle rocking lulls you ..." has its verb after the -ing
+    # word; a fragment's tail is only a particle or adverb phrase, or nothing.
+    rest = match.group("rest").strip()
+    if rest and (not _FRAGMENT_TAIL_RE.match(rest) or "," in rest or ";" in rest):
+        # "Your boots squelching in the mud, you head for the yard": the main
+        # clause comes after the comma.
+        return None
+    head = match.group("head").split()[-1].lower()
+    verb = "are" if head.endswith("s") and not head.endswith("ss") else "is"
+    fixed = f"{match.group('np')} {verb} {match.group('ing')}{match.group('rest')}{tail[-1]}"
+    return {"sentence": tail, "to": fixed}
+
+
+def repair_trailing_fragment(text: str) -> tuple[str, dict[str, Any] | None]:
+    """Give a closing verbless fragment its 'is'/'are' ("The pressure of the day is settling in.")."""
+    source = str(text or "")
+    found = trailing_fragment(source)
+    if not found:
+        return source, None
+    stripped = source.rstrip()
+    index = stripped.rfind(found["sentence"])
+    if index < 0:
+        return source, None
+    out = stripped[:index] + found["to"] + source[len(stripped):]
+    return out, {"why": "trailing_fragment", "from": found["sentence"], "to": found["to"]}
+
+
 def settle_band_coin(text: str, amount: int) -> tuple[str, dict[str, Any] | None]:
     """
     "Hands over a moderate bag of coin" when the engine moved ``amount`` gold.
