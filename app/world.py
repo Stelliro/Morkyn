@@ -16806,7 +16806,9 @@ def _recall_described(conn, hint: str, location_id: int) -> dict[str, Any] | Non
 
 
 _INTRODUCED_PERSON_RE = re.compile(
-    r"(?<![\w'’])(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?),\s+(?:a|an|the)\s+"
+    # Not the tail of a hyphenated or longer name: "The Twice-Blessed Hound, the
+    # steady heat of the day" stored a person "Blessed Hound" (7B run 27, T5).
+    r"(?<![\w'’-])(?<!The\s)(?<!the\s)(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?),\s+(?:a|an|the)\s+"
     r"(?P<role>[a-z][a-z-]{2,24}(?:\s+[a-z][a-z-]{2,24})?)(?=\s+(?:with|who|in|from|of)\b|,|\.|\s+is\b|\s+stands\b|\s+leans\b)"
 )
 
@@ -16906,6 +16908,8 @@ def _introduced_person_first(
             continue
         if re.search(r"\byou\s+are\s*$", plain[: match.start()], re.I):
             continue  # "You are Isk Tarrow, the flat-runner": the player
+        if match.re is _INTRODUCED_PERSON_RE and re.search(r"[A-Z][\w'’]*[\s-]$", plain[: match.start("name")]):
+            continue  # the end of a longer name: "The Twice-Blessed Hound, the steady heat"
         role = match.group("role").strip()
         if role.split()[-1] in {"man", "woman", "figure", "person", "stranger", "voice", "child", "boy", "girl"}:
             # "a grizzled man named Rusk", "Gisela Hatcher, a stout woman with a

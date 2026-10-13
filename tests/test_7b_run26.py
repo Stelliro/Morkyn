@@ -77,6 +77,26 @@ class NamedWithNoJob(unittest.TestCase):
         )
 
 
+class NotPartOfAnInnsName(unittest.TestCase):
+    """Run 27 T5: "The Twice-Blessed Hound, the steady heat of the day" stored a person called Blessed Hound."""
+
+    def test_skipped(self):
+        from app.world import _introduced_people
+
+        self.assertEqual(_introduced_people("You step into The Twice-Blessed Hound, the steady heat of the day breaking.", []), [])
+
+
+class MiddaySun(unittest.TestCase):
+    """Run 27 T5: "the sun climbs higher" at 12:18 was turned to "sinks"."""
+
+    def test_band(self):
+        from app.prose_state import repair_sun_words
+
+        self.assertEqual(repair_sun_words("The sun climbs higher.", 12)[1], [])
+        self.assertTrue(repair_sun_words("The sun climbs higher.", 15)[1])
+        self.assertTrue(repair_sun_words("The sun begins to sink.", 11)[1])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
