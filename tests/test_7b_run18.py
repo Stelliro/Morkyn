@@ -60,5 +60,20 @@ class PutGoldDownAfterAnd(unittest.TestCase):
         self.assertIsNone(player_pays_outright("I sit and count my coins."))
 
 
+class EatingIsNotCooking(unittest.TestCase):
+    """T6: "I eat a few spoonfuls of the stew" rolled cooking, failed, and hurt the player's arm."""
+
+    def test_triggers(self):
+        from app.skill_checks import infer_check_from_action as infer
+
+        def skill(line):
+            return (infer(line, {}) or {}).get("skill_code")
+
+        self.assertIsNone(skill('I eat a few spoonfuls of the stew before I answer. "Help how?"'))
+        self.assertIsNone(skill("I buy some food."))
+        self.assertEqual(skill("I cook a stew for the crew."), "cooking")
+        self.assertEqual(skill("I roast the gull over the fire."), "cooking")
+
+
 if __name__ == "__main__":
     unittest.main()

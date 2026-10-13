@@ -1617,7 +1617,11 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(medicine|first aid kit)\b", "medicine"),
     (r"\b(hack|console|terminal|decrypt)\b", "hacking"),
     (r"\b(track|forage|camp|survive)\b", "survival"),
-    (r"\b(cook|meal|food|stew|roast)\b", "cooking"),
+    # Cooking, not eating: "I eat a few spoonfuls of the stew" rolled cooking,
+    # failed it and hurt the player's arm (7B run 18, T6).
+    (r"\b(cook (?:a|an|the|some|up|it|them|my|our|dinner|supper|breakfast)|cooking|"
+     r"roast (?:a|the|some|it)|stew (?:the|some|it)|prepare (?:a |the |some )?(?:meal|food|stew|supper|breakfast)|"
+     r"make (?:a |the |some )?(?:meal|stew|supper|breakfast))\b", "cooking"),
     # The work, not the building: "I glance at the forge behind him" rolled
     # smithing at DC 16 (7B run 12, T1).
     (r"\b(smithing|forge (?:a|an|the|my|it|them|some|new|nails?|blades?|horseshoes?)|"
