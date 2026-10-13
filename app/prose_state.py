@@ -1252,6 +1252,28 @@ def trailing_fragment(text: str) -> dict[str, Any] | None:
     return {"sentence": tail, "to": fixed}
 
 
+_BRACKETED_WORD_RE = re.compile(r"(\w?)\((?P<words>[a-z][\w'’-]*(?:\s[a-z][\w'’-]*)?)\)")
+
+
+def repair_bracketed_words(text: str) -> tuple[str, dict[str, Any] | None]:
+    """Unwrap one- and two-word lowercase brackets when the scene has two or more (7B run 13, T3).
+
+    "I know you've been in the (docks) for some time ... the (tally) stands at
+    125 coins" is broken text, not asides. A lone "(barely)" stays.
+    """
+    source = str(text or "")
+    hits = list(_BRACKETED_WORD_RE.finditer(source))
+    if len(hits) < 2:
+        return source, None
+
+    def fix(match: re.Match[str]) -> str:
+        glued = match.group(1)
+        return f"{glued} {match.group('words')}" if glued else match.group("words")
+
+    fixed = _BRACKETED_WORD_RE.sub(fix, source)
+    return fixed, {"why": "bracketed_words", "count": len(hits), "words": [h.group("words") for h in hits][:12]}
+
+
 def repair_trailing_fragment(text: str) -> tuple[str, dict[str, Any] | None]:
     """Give a closing verbless fragment its 'is'/'are' ("The pressure of the day is settling in.")."""
     source = str(text or "")

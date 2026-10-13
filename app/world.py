@@ -18877,6 +18877,15 @@ def _reconcile_prose_with_state(
             turn_ledger.note("prose", "trailing_fragment_repaired", **fragment)
     except Exception:
         pass
+    # Words wrapped in brackets one by one ("in the (docks)", "the (tally)
+    # stands", 7B run 13 T3) are unwrapped; a single bracketed aside stays.
+    try:
+        text, unwrapped = prose_state.repair_bracketed_words(text)
+        if unwrapped:
+            report["trimmed"].append(unwrapped)
+            turn_ledger.note("prose", "bracketed_words_unwrapped", **unwrapped)
+    except Exception:
+        pass
 
     if text != original:
         _set_narration_text(result, text)
