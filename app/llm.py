@@ -15593,9 +15593,18 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
             player.pop("gold_delta", None)
             dropped.append("GOLD (paid only in the cut part)")
         dest = str(player.get("move_to_location") or player.get("move_to_location_code") or "").strip()
-        if dest and not asked_move:
-            dest_l = dest.lower()
-            named_tail = dest_l in tail_l and dest_l not in head_l
+        dest_l = dest.lower()
+        named_tail = bool(dest) and dest_l in tail_l and dest_l not in head_l
+        # The player asked to go somewhere else: a place named only in the cut
+        # part is the model's, not theirs (7B run 28, T4: "I walk to the town
+        # hall" kept MOVE "town square", named only after the cut).
+        own_names_dest = dest_l in re.sub(r"\s+", " ", own.lower())
+        if dest and asked_move and named_tail and not own_names_dest:
+            player["move_to_location"] = None
+            player["move_to_location_code"] = None
+            turn["map_walk"] = None
+            dropped.append(f"MOVE {dest[:60]} (named only in the cut part, not the player's place)")
+        elif dest and not asked_move:
             left_in_tail = _TAIL_EXIT_RE.search(tail) and not _TAIL_EXIT_RE.search(head)
             if named_tail or left_in_tail:
                 player["move_to_location"] = None
