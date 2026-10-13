@@ -211,6 +211,12 @@ _PLACE_TAIL_WORDS = frozenset({
     "avenue", "ave", "ward", "gate", "bridge", "hill", "heights", "end", "corner", "junction", "depot",
     "boulevard", "drive", "court", "place", "park", "flats", "fields", "field", "town", "village", "city",
 })
+# A part of a place or an outbuilding named after a trade word: "Salvage Deck",
+# "Smithy Shed", "Salvage Office". The place is that part, not the trade.
+_PART_TAIL_WORDS = frozenset({
+    "deck", "decks", "shed", "sheds", "loft", "cellar", "storeroom", "office", "room", "backroom", "attic",
+    "hold", "annex", "annexe", "outhouse", "floor",
+})
 
 
 def _fold(text: str) -> str:
@@ -266,6 +272,10 @@ def venue_kind_from_name(name: str) -> str:
         rest = text[best_end:].split()
         if rest and rest[-1] in _PLACE_TAIL_WORDS:
             return ""  # "Clinic Road", "The Forge Quarter": a street or district
+        if rest and rest[-1] in _PART_TAIL_WORDS:
+            # "Saltmarrow Salvage Deck", "Smithy Shed": the trade word describes
+            # a part or outbuilding, not a second premises of that trade (7B run 7, T2).
+            return ""
     return best_kind
 
 

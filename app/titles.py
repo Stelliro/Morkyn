@@ -48,7 +48,9 @@ STARTER_TITLES: list[dict[str, str]] = [
     {
         "name": "Peacekeeper",
         "description": "Resolved conflicts rather than inflaming them. Disputes end around them.",
-        "requirements_json": json.dumps({"type": "quests_completed_min", "count": 3}),
+        # 7B run 5: three paid jobs earned it with no conflict anywhere. Nothing
+        # tracks a dispute settled, so it is the GM's to give (#122).
+        "requirements_json": json.dumps({"type": "custom", "note": "settled disputes instead of inflaming them"}),
         "stat_bonuses_json": json.dumps({"defense": 1}),
     },
     {
@@ -102,7 +104,10 @@ STARTER_TITLES: list[dict[str, str]] = [
     {
         "name": "Learned",
         "description": "Accumulated broad knowledge and skill across many disciplines.",
-        "requirements_json": json.dumps({"type": "skills_count_min", "count": 5}),
+        # 7B run 7, T6: four skills from the setup plus one dig made five, so a
+        # level-1 character with 0 XP was "Learned" on turn 6 (#122). Only skills
+        # learned in play count.
+        "requirements_json": json.dumps({"type": "skills_learned_min", "count": 5}),
         "stat_bonuses_json": json.dumps({}),
     },
     {
@@ -160,7 +165,12 @@ def init_titles(conn) -> None:
         )
     # Saves seeded before #122 keep the old place-count-only rule; move them to
     # the new one unless someone edited the requirement by hand.
-    for name, old in (("Wanderer", {"type": "visit_locations", "count": 5}), ("Seeker", {"type": "visit_locations", "count": 10})):
+    for name, old in (
+        ("Wanderer", {"type": "visit_locations", "count": 5}),
+        ("Seeker", {"type": "visit_locations", "count": 10}),
+        ("Learned", {"type": "skills_count_min", "count": 5}),
+        ("Peacekeeper", {"type": "quests_completed_min", "count": 3}),
+    ):
         new = next((t["requirements_json"] for t in STARTER_TITLES if t["name"] == name), None)
         row = conn.execute("SELECT requirements_json FROM titles WHERE name = ?", (name,)).fetchone()
         if new and row is not None:
@@ -260,6 +270,14 @@ def _check_requirement(req: dict[str, Any], conn) -> bool:
             count = int(req.get("count", 5))
             row = conn.execute(
                 "SELECT COUNT(*) AS c FROM player_skills WHERE value > 0"
+            ).fetchone()
+            return int(row["c"] or 0) >= count
+
+        if req_type == "skills_learned_min":
+            # Skills the setup seeded carry "Start rank ..." notes (app.proficiencies).
+            count = int(req.get("count", 5))
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM player_skills WHERE value > 0 AND COALESCE(notes, '') NOT LIKE 'Start rank%'"
             ).fetchone()
             return int(row["c"] or 0) >= count
 
