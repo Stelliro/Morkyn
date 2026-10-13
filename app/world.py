@@ -16658,8 +16658,51 @@ def _introduced_person(
             continue
         if role.split()[-1] in _NOT_A_JOB_NOUNS or name.lower() in not_people:
             continue
-        found.append({"name": name, "role": role})
+        if all(f["name"] != name for f in found):
+            found.append({"name": name, "role": role})
     return found[0] if len(found) == 1 else None
+
+
+def _introduced_people(
+    text: str, known_names: list[str], not_people: set[str] | frozenset[str] = frozenset()
+) -> list[dict[str, str]]:
+    """Every new person the prose introduces as "Name Surname, the <job>" (at most three).
+
+    7B run 14, T0: "Millicent Redfern, the fuller ... Iseult Gilchrist, the
+    chandler ... Osric Northcott, the pie seller" stored a drawn "Cuthbert,
+    carter" and none of the three, because only a lone introduction counted.
+    """
+    found: list[dict[str, str]] = []
+    rest = str(text or "")
+    known = list(known_names)
+    for _ in range(3):
+        one = _introduced_person_first(rest, known, not_people)
+        if not one:
+            break
+        found.append(one)
+        known.append(one["name"])
+    return found
+
+
+def _introduced_person_first(
+    text: str, known_names: list[str], not_people: set[str] | frozenset[str] = frozenset()
+) -> dict[str, str] | None:
+    plain = re.sub(r"\s*\[\[[^\]]*\]\]", "", venues.strip_speech(str(text or "")))
+    blocked = {str(n).strip().lower() for n in not_people}
+    known = {str(n or "").strip().lower() for n in known_names if str(n or "").strip()}
+    for match in _INTRODUCED_PERSON_RE.finditer(plain):
+        name = match.group("name").strip()
+        if name.lower() in known or any(name.lower().split()[0] == k.split()[0] for k in known if k):
+            continue
+        if name.split()[0] in {"You", "The", "This", "That", "Morning", "Evening"}:
+            continue
+        role = match.group("role").strip()
+        if role.split()[-1] in {"man", "woman", "figure", "person", "stranger", "voice", "child", "boy", "girl"}:
+            continue
+        if is_fragment_place_name(name) or role.split()[-1] in _NOT_A_JOB_NOUNS or name.lower() in blocked:
+            continue
+        return {"name": name, "role": role}
+    return None
 
 
 def _ensure_npcs_from_narration(
@@ -16701,25 +16744,26 @@ def _ensure_npcs_from_narration(
         places = {str(r[0] or "") for r in conn.execute("SELECT name FROM locations").fetchall()}
     except Exception:
         places = set()
-    introduced = _introduced_person(text, known_names, places)
-    if introduced and hints:
+    introduced_all = _introduced_people(text, known_names, places)
+    if introduced_all and hints:
         # "As you approach, a figure catches your eye. Stephen Lambard, a tide
         # watcher, is standing on a slight rise" (7B run 13, T4): the figure is
         # the man the next sentence names. A hint whose sentence comes just
-        # before the introduction is that person; any other hint is someone else.
-        intro_at = _sentence_index(text, introduced["name"])
-        hints = [h for h in hints if not (0 <= intro_at - _sentence_index(text, h) <= 1)]
+        # before an introduction is that person; any other hint is someone else.
+        intro_ats = [_sentence_index(text, p["name"]) for p in introduced_all]
+        hints = [h for h in hints if not any(0 <= at - _sentence_index(text, h) <= 1 for at in intro_ats)]
         if hints:
-            introduced = None
-    if introduced:
+            introduced_all = []
+    created_intro: list[dict[str, Any]] = []
+    for index, introduced in enumerate(introduced_all):
         try:
             shell = create_shell_npc(
                 conn,
                 int(location_id),
                 presence="event_worthy",
-                power_rank=8,
+                power_rank=8 + index * 2,
                 role=introduced["role"],
-                seed=name_seed("shell_npc", location_id, introduced["name"], 0, text[:40]),
+                seed=name_seed("shell_npc", location_id, introduced["name"], index, text[:40]),
                 summary="",
                 name=introduced["name"],
             )
@@ -16727,13 +16771,14 @@ def _ensure_npcs_from_narration(
             shell = None
         if shell:
             turn_ledger.note("npc", "introduced_in_prose", name=introduced["name"], role=introduced["role"])
-            entry = {
+            created_intro.append({
                 "code": shell.get("code"), "name": shell.get("name"), "role": shell.get("role") or introduced["role"],
                 "summary": "", "attitude": "neutral", "location": "", "presence": "event_worthy",
                 "shell": False, "power_rank": shell.get("power_rank") or 8, "_seeded_from_narration": True,
-            }
-            result["npcs"] = [n for n in (result.get("npcs") or []) if isinstance(n, dict)] + [entry]
-            return [entry]
+            })
+    if created_intro:
+        result["npcs"] = [n for n in (result.get("npcs") or []) if isinstance(n, dict)] + created_intro
+        return created_intro
     # Dialogue without a listed speaker still implies at least one face, but
     # only dialogue nobody known speaks (playtest #73: '"Understood," Juliana
     # says' minted Bertram at the street the player had just walked out to).
