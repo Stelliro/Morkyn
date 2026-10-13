@@ -1085,6 +1085,9 @@ _CLOCK_PHRASE_RE = re.compile(
     r"|the\s+(?P<b>night|evening|morning|afternoon)\s+is\s+(?:still\s+|now\s+)?(?:young|calm|quiet|still|cool|warm|cold|dark|bright|clear|late|early)\b"
     r"|(?:it\s+is|it['’]s)\s+(?:now\s+|already\s+|still\s+)?(?:early\s+|late\s+)?(?P<c>" + _PART_WORDS + r")\b(?!\s+(?:when|before|after))"
     r"|the\s+(?:early\s+|late\s+)?(?P<d>" + _PART_WORDS + r")\s+(?P<noun>light|sun|sunlight|air|chill|breeze|mist|fog|shadows|glow|stillness|quiet|hush|bustle|crowd|rush|darkness|gloom|sky)"
+    # "a comforting presence in the cool evening" at 13:31 (7B run 27, T7).
+    r"|(?:in|into|through)\s+the\s+(?:cool|warm|cold|quiet|still|dark|crisp|soft|grey|gray|mild|bright)\s+"
+    r"(?P<e>evening|night|morning|afternoon)\b(?!\s+(?:before|after|when|of|to\s+come))"
     r")",
     re.I,
 )
@@ -1120,7 +1123,7 @@ def clock_clashes(text: str, hour: int) -> list[dict[str, Any]]:
     masked = _mask_speech(source)
     out: list[dict[str, Any]] = []
     for match in _CLOCK_PHRASE_RE.finditer(masked):
-        group = next(g for g in ("a", "b", "c", "d") if match.group(g))
+        group = next(g for g in ("a", "b", "c", "d", "e") if match.group(g))
         word = match.group(group).lower()
         if int(hour) % 24 in _PART_HOURS.get(word, set(range(24))):
             continue
