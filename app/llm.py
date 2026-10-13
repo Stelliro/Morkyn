@@ -13537,7 +13537,7 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"pick(?:s|ed|ing)?\s+up|pick(?:s|ed|ing)?\s+(?:\w+\s+){1,3}up|"
     r"take|takes|taking|taken|took|steal|steals|stealing|stole|stolen|"
     r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
-    r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)(?<![“\x22])salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
+    r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)(?<![“\x22])(?<!of\s)(?<!some\s)(?<!any\s)(?<!no\s)salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
     r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b|"
     # Asking to buy (playtest #96): "ask Finnian if he'd sell me a whetstone.
     # I'll pay 2 gold for it" asked for the whetstone, and the gain was refused.

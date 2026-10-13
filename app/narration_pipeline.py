@@ -1598,6 +1598,8 @@ _YOU_SAID_RE = re.compile(
     r"remark|remarked|admit|admitted|comment|commented|"
     # 7B run 13, T3: '"I need to know, Reeve," you press, your voice firm'.
     r"press|pressed|demand|demanded|urge|urged|counter|countered|add|added|continue|continued|"
+    # 7B run 20, T4: '"Is this Thaddeus?" you inquire' and 'You state, "..."'.
+    r"inquire|inquired|enquire|enquired|state|stated|offer|offered|suggest|suggested|venture|ventured|"
     # 7B run 9: '"I'll check with the old man first," you decide' (T4) and
     # '"Thanks, Hal," you call back, "I'll be careful."' (T2).
     r"decide|decided|resolve|resolved|agree|agreed|promise|promised|announce|announced|vow|vowed|"
