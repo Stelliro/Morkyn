@@ -10677,21 +10677,41 @@ def _chat_content(
     keep_words: list[str] | None = None,
     seed: int | None = None,
 ) -> str:
+    from app import turn_ledger
     from app.gpu_gate import gpu_session
 
     # Wait for image jobs to finish unless VRAM headroom allows parallel use.
     wait_s = float(os.getenv("AI_RPG_GPU_WAIT_TIMEOUT", "900"))
-    with gpu_session("llm", wait=True, timeout=wait_s):
-        return _chat_content_unlocked(
-            system_prompt,
-            user_prompt,
-            timeout=timeout,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            response_format=response_format,
-            hide_words=hide_words,
-            keep_words=keep_words,
-            seed=seed,
+    asked = time.time()
+    started = asked
+    reply = ""
+    error = ""
+    try:
+        with gpu_session("llm", wait=True, timeout=wait_s):
+            started = time.time()
+            reply = _chat_content_unlocked(
+                system_prompt,
+                user_prompt,
+                timeout=timeout,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                response_format=response_format,
+                hide_words=hide_words,
+                keep_words=keep_words,
+                seed=seed,
+            )
+            return reply
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"
+        raise
+    finally:
+        # Each call's seconds and GPU wait go into the turn's timing (app/turn_ledger.py).
+        turn_ledger.model_call(
+            time.time() - started,
+            started - asked,
+            len(system_prompt or "") + len(user_prompt or ""),
+            len(reply or ""),
+            error,
         )
 
 
