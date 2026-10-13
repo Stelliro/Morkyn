@@ -1648,6 +1648,11 @@ def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
     """The quoted words come from what the player typed (quoted, or plainly)."""
     if quotes and _is_player_line(span, quotes):
         return True
+    if quotes:
+        # The player said their words in quotes; the narrated part of their
+        # line is acts, not speech (7B run 17, T5: '"That looks useful," you
+        # say' shared "look" with "I look around the passage" and was kept).
+        own = " ".join(quotes)
     # The name a line is said to is not the player's words (7B run 13, T3:
     # '"Thank you, Reeve," you say' shared only "Reeve" with the typed line
     # and was kept as theirs).
