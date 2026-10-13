@@ -31,5 +31,17 @@ class AChoiceIsNotAnEntry(unittest.TestCase):
         self.assertEqual(hit["kind"], "smithy")
 
 
+class AskingWhoBuysIsNotBuying(unittest.TestCase):
+    """T4: "Hal, who in Saltmarrow buys old coins?" read as the player asking to take something."""
+
+    def test_someone_else_buying(self):
+        from app.llm import player_take_intent
+
+        self.assertFalse(player_take_intent("Hal, who in Saltmarrow buys old coins - and who pays fair for them?"))
+        self.assertFalse(player_take_intent("I ask Hal who buys coins."))
+        self.assertTrue(player_take_intent("I buy the lantern."))
+        self.assertTrue(player_take_intent("I keep the coin and ask who buys them."))
+
+
 if __name__ == "__main__":
     unittest.main()
