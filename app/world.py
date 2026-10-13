@@ -123,7 +123,10 @@ _REPLACE_ONLY_WHEN_EXPORTED = frozenset({
 })
 OPENING_SCENE_INPUT = (
     "__opening_scene_request__: Begin the playthrough before the player acts. "
-    "Establish the immediate situation and its concrete hooks, then stop; the player acts first."
+    "Establish the immediate situation and its concrete hooks, then stop; the player acts first. "
+    # 7B run 10, T0: the opening gave the player two spoken lines and an offer.
+    "The player has said and decided nothing yet: give them no words, no offer, no answer and no choice; "
+    "others may speak to them, and the scene ends there."
 )
 OPENING_SCENE_JOURNAL = "Opening scene: the model introduced the initial situation before the player acted."
 CONTINUE_SCENE_INPUT = (
