@@ -18873,6 +18873,18 @@ def apply_turn(
                 )
             except Exception as exc:
                 turn_ledger.note("quest", "story_terms_error", error=f"{type(exc).__name__}: {exc}"[:200])
+            # The player's own "No deal" or "not yet" (7B run 7, T4-T5): a job is
+            # the player's to take or turn down, whatever the prose answered.
+            try:
+                from app.quest_parser import settle_player_answer
+
+                answered = settle_player_answer(conn, _player_line(player_input), turn) if input_kind == "player" else []
+                if answered:
+                    quest_report = {**quest_report, "updated": [*(quest_report.get("updated") or []), *answered]}
+                    if quest_report.get("status") in {"skipped", "empty", "rejected"}:
+                        quest_report["status"] = "applied"
+            except Exception as exc:
+                turn_ledger.note("quest", "player_answer_error", error=f"{type(exc).__name__}: {exc}"[:200])
         if offered_before:
             try:
                 taken = [
