@@ -12603,6 +12603,137 @@ def _different_people(stored: str, given: str) -> bool:
     return not (words(stored) & words(given))
 
 
+def _role_phrase(name: str) -> str:
+    """The job a "name" really is ("Harbour reeve", "the miller"), lowercased; "" for a person's name."""
+    raw = str(name or "").strip()
+    article = bool(re.match(r"(?:the|a|an)\s+", raw, re.I))
+    words = re.sub(r"^(?:the|a|an)\s+", "", raw, flags=re.I).split()
+    if not words or any(not re.fullmatch(r"[A-Za-z][a-z'-]*", w) for w in words):
+        return ""
+    # "wrenna" alone is a name typed in lower case; "the miller" and
+    # "Harbour reeve" are jobs.
+    if article or (len(words) >= 2 and all(w[0].islower() for w in words[1:])):
+        return " ".join(w.lower() for w in words)
+    return ""
+
+
+def _role_matches(role: str, phrase: str) -> bool:
+    role = re.sub(r"\s+", " ", str(role or "").strip().lower())
+    if not role or not phrase:
+        return False
+    return role == phrase or role.endswith(" " + phrase) or phrase.endswith(" " + role)
+
+
+def _settlement_place_ids(conn, location_id: Any) -> set[int]:
+    """Every place under the same top-level place as ``location_id`` (the town and its buildings)."""
+    try:
+        rows = {int(r["id"]): int(r["parent_id"] or 0) for r in conn.execute("SELECT id, parent_id FROM locations")}
+    except Exception:
+        return set()
+
+    def root(place: int) -> int:
+        seen: set[int] = set()
+        while rows.get(place) and place not in seen:
+            seen.add(place)
+            place = rows[place]
+        return place
+
+    try:
+        start = int(location_id or 0)
+    except (TypeError, ValueError):
+        start = 0
+    if not start:
+        row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        start = int((row["current_location_id"] if row else 0) or 0)
+    if not start:
+        return set()
+    top = root(start)
+    return {place for place in rows if root(place) == top}
+
+
+def _role_holders(conn, phrase: str, location_id: Any) -> list[Any]:
+    """Known people in this settlement whose job is ``phrase``."""
+    places = _settlement_place_ids(conn, location_id)
+    if not places or not phrase:
+        return []
+    rows = conn.execute(
+        f"SELECT * FROM npcs WHERE location_id IN ({','.join('?' * len(places))})", tuple(places)
+    ).fetchall()
+    return [r for r in rows if _role_matches(str(r["role"] or ""), phrase)]
+
+
+_DRIFT_NAME = r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
+_ROLE_THEN_NAME_RE = re.compile(rf"\bthe\s+(?P<role>[A-Za-z][a-z]+(?:\s+[a-z]+)?),\s+(?P<name>{_DRIFT_NAME})\b")
+_NAME_THEN_ROLE_RE = re.compile(rf"\b(?P<name>{_DRIFT_NAME}),\s+the\s+(?P<role>[a-z]+(?:\s+[a-z]+)?)\b")
+_TITLE_NAME_RE = re.compile(rf"\b(?P<title>[A-Z][a-z]+)\s+(?P<name>{_DRIFT_NAME})\b")
+
+
+def _repair_role_name_drift(conn, text: str) -> tuple[str, list[dict[str, Any]]]:
+    """
+    Keep a job's known holder under their own name (7B run 13, #135).
+
+    T2: "the Reeve, Gwenllian Tolley" for Rosamund Colley, the town's one
+    harbour reeve: the unknown name (and its bare surname later on) becomes
+    the holder's. T3: "Reeve Percival Oakes" for the miller, while the reeve
+    is Rosamund: the wrong title goes and the person stays, since swapping
+    who acts would rewrite the scene. Only a job held by exactly one known
+    person in the player's settlement, and only names the world does not
+    hold, are touched.
+    """
+    source = str(text or "")
+    try:
+        places = _settlement_place_ids(conn, None)
+        if not places:
+            return source, []
+        people = conn.execute(
+            f"SELECT name, role FROM npcs WHERE location_id IN ({','.join('?' * len(places))})", tuple(places)
+        ).fetchall()
+        everyone = {str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM npcs")}
+    except Exception:
+        return source, []
+    roster = [(str(r["name"] or ""), str(r["role"] or "")) for r in people if r["name"]]
+    firsts = {n.split()[0].lower() for n in everyone if n}
+    surnames = {}
+    for person, _role in roster:
+        parts = person.split()
+        if len(parts) > 1:
+            surnames.setdefault(parts[-1].lower(), []).append(person)
+    changes: list[dict[str, Any]] = []
+    out = source
+
+    for rx in (_ROLE_THEN_NAME_RE, _NAME_THEN_ROLE_RE):
+        for match in list(rx.finditer(out)):
+            given, role = match.group("name"), match.group("role")
+            if given.lower() in everyone or given.split()[0].lower() in firsts:
+                continue
+            holders = [person for person, job in roster if _role_matches(job, role.lower())]
+            if len(holders) != 1:
+                continue
+            holder = holders[0]
+            out = re.sub(rf"\b{re.escape(given)}\b", holder, out)
+            parts = given.split()
+            if len(parts) > 1:
+                out = re.sub(rf"\b{re.escape(parts[-1])}\b", holder.split()[-1], out)
+            changes.append({"why": "role_name_drift", "from": given, "to": holder, "role": role})
+
+    for match in list(_TITLE_NAME_RE.finditer(out)):
+        title, given = match.group("title"), match.group("name")
+        person = next((p for p, _j in roster if p.lower() == given.lower()), "")
+        if not person and given.lower() in surnames and len(surnames[given.lower()]) == 1:
+            person = surnames[given.lower()][0]
+        if not person:
+            continue
+        own = next((j for p, j in roster if p == person), "")
+        if _role_matches(own, title.lower()):
+            continue
+        holders = [p for p, j in roster if p != person and _role_matches(j, title.lower())]
+        if not holders:
+            continue
+        out = re.sub(rf"\b{re.escape(title)}\s+(?={re.escape(given)}\b)", "", out)
+        changes.append({"why": "wrong_title", "title": title, "person": person, "held_by": holders[0]})
+    return out, changes
+
+
 def _known_person_place(conn, code: str, name: str, loc_ref: Any) -> int:
     """Where a person the world already has stays when their LOC names no known place; 0 otherwise.
 
@@ -12666,6 +12797,29 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         # Keep L1 as a place ref (good) — _find_location_id handles L#
         pass
     location_id = _known_person_place(conn, code, name, loc_ref) or _find_location_id(conn, loc_ref)
+    # A job written as the name (7B run 13, T5: NPC_NEW "E" "Harbour reeve"
+    # with E Rosamund Colley, the town's harbour reeve) is the one person who
+    # holds that job here; with nobody holding it, a person is drawn for the
+    # job. A role is never stored as somebody's name.
+    phrase = _role_phrase(name)
+    if phrase:
+        holders = _role_holders(conn, phrase, location_id)
+        by_code = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone() if code else None
+        if by_code is not None and _role_matches(str(by_code["role"] or ""), phrase):
+            holders = [by_code]
+        if len(holders) == 1:
+            holder = holders[0]
+            turn_ledger.note("npc", "role_name_is_the_holder", role=phrase, name=str(holder["name"] or ""))
+            code, name = str(holder["code"] or ""), str(holder["name"] or "")
+            npc["name"], npc["code"] = name, code
+            npc["role"] = str(holder["role"] or phrase)
+            location_id = location_id or int(holder["location_id"] or 0) or None
+        elif not holders:
+            drawn = unique_person_name(conn, name_seed(code, name, phrase))
+            turn_ledger.note("npc", "role_name_drawn", role=phrase, name=drawn)
+            npc["role"] = npc.get("role") if _role_matches(str(npc.get("role") or ""), phrase) else phrase
+            name = drawn
+            npc["name"] = drawn
     race = str(npc.get("race") or npc.get("species") or "human")[:80]
     role = _sanitize_npc_role(npc.get("role") or "local")
     summary = str(npc.get("summary") or "")[:1400]
@@ -16341,6 +16495,15 @@ def _hint_sentence(text: str, hint: str) -> str:
     return ""
 
 
+def _sentence_index(text: str, phrase: str) -> int:
+    """Index of the first sentence holding ``phrase`` (codes stripped), or -9 when none does."""
+    flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))).strip()
+    for index, sentence in enumerate(re.split(r"(?<=[.!?])\s+", flat)):
+        if phrase and phrase.lower() in sentence.lower():
+            return index
+    return -9
+
+
 def _unattributed_dialogue(conn, text: str, result: dict[str, Any] | None = None) -> str:
     """The prose's spoken lines that no known person says: each speech unit the
     prose gives to a stored NPC (by name, alias or [[code]], or by a pronoun
@@ -16534,13 +16697,20 @@ def _ensure_npcs_from_narration(
     # wall ... he says" (7B run 12, T0): the speaker is the person the prose
     # names. With no hint, the dialogue seeded a drawn "Dafydd, toll keeper"
     # and Mattias was never stored.
-    introduced = None
-    if not hints:
-        try:
-            places = {str(r[0] or "") for r in conn.execute("SELECT name FROM locations").fetchall()}
-        except Exception:
-            places = set()
-        introduced = _introduced_person(text, known_names, places)
+    try:
+        places = {str(r[0] or "") for r in conn.execute("SELECT name FROM locations").fetchall()}
+    except Exception:
+        places = set()
+    introduced = _introduced_person(text, known_names, places)
+    if introduced and hints:
+        # "As you approach, a figure catches your eye. Stephen Lambard, a tide
+        # watcher, is standing on a slight rise" (7B run 13, T4): the figure is
+        # the man the next sentence names. A hint whose sentence comes just
+        # before the introduction is that person; any other hint is someone else.
+        intro_at = _sentence_index(text, introduced["name"])
+        hints = [h for h in hints if not (0 <= intro_at - _sentence_index(text, h) <= 1)]
+        if hints:
+            introduced = None
     if introduced:
         try:
             shell = create_shell_npc(
@@ -18968,6 +19138,15 @@ def _reconcile_prose_with_state(
         if unwrapped:
             report["trimmed"].append(unwrapped)
             turn_ledger.note("prose", "bracketed_words_unwrapped", **unwrapped)
+    except Exception:
+        pass
+    # A job's one known holder keeps their name; a title on the wrong person
+    # goes (7B run 13, T2-T3, #135).
+    try:
+        text, drift = _repair_role_name_drift(conn, text)
+        for entry in drift:
+            report["trimmed"].append(entry)
+            turn_ledger.note("npc", entry["why"], **{k: v for k, v in entry.items() if k != "why"})
     except Exception:
         pass
 
