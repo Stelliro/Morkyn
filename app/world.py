@@ -17694,6 +17694,7 @@ def apply_turn(
         except Exception:
             pass
         quest_passive = _quest_passive_turn(input_kind, player_input)
+        finishing: list[Any] = []
         if quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest"):
             # The quest's reward is the engine's payout (playtest #85b); a
             # reward the model adds for the same work would pay it twice.
@@ -17734,7 +17735,11 @@ def apply_turn(
                 result,
                 player_input,
                 conn=conn,
-                quest_pays=bool(quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest")),
+                # Either path paying a job this turn: coin the prose hands over
+                # for it is that payout, not a second one.
+                quest_pays=bool(
+                    (quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest")) or finishing
+                ),
             )
         except Exception as exc:
             gold_note = {"error": f"{type(exc).__name__}: {exc}"[:200]}
