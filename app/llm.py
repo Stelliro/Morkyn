@@ -11272,6 +11272,10 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
         held.append(piece)
         return f"\x00{len(held) - 1}\x00"
 
+    # Speech is what someone says aloud: no code is added inside a quotation
+    # (7B run 6, T4/T9/T10: the player's own "..., Oldfield." came back as
+    # "..., Oldfield [[B]]." after their words had been restored as typed).
+    out = re.sub(r'"[^"\n]+"|“[^”\n]+”', lambda m: _hold(m.group(0)), out)
     for name_l, code in ordered_names:
         pattern = re.compile(
             rf"(?<!\[\[)\b({re.escape(name_l)})\b(\s*\[\[{re.escape(code)}\]\])?",
@@ -14950,6 +14954,13 @@ _CUT_STOPWORDS = frozenset({
 _TAIL_PAY_RE = re.compile(
     r"\byou\b[^.!?\"\u201c\u201d]{0,30}\b(?:pay|paid|hand\s+over|handed\s+over|count\s+out|counted\s+out)\b", re.I
 )
+# The prose shows the player going somewhere: "You walk over to the shed".
+_SHOWN_GOING_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:walk|walked|head|headed|go|went|make\s+your\s+way|made\s+your\s+way|step|stepped|"
+    r"cross|crossed|set\s+off|arrive|arrived|enter|entered|return|returned|follow|followed|climb|climbed|"
+    r"wander|wandered|stride|strode|hurry|hurried)\b",
+    re.I,
+)
 _TAIL_EXIT_RE = re.compile(
     r"\byou\b[^.!?\"\u201c\u201d]{0,30}\b(?:leave|leaves|left\s+(?:the|for)|exit|step\s+out|steps\s+out|stepped\s+out|"
     r"head\s+out|walk\s+out|make\s+your\s+way|made\s+your\s+way|set\s+off)\b",
@@ -15171,15 +15182,19 @@ def _cut_scene_at_invented_request(turn: dict[str, Any], player_input: str, *, f
     # The player's own line asked to go somewhere: the prose has to show the
     # going. Cutting back to an earlier line kept the MOVE and lost the journey
     # (Saltmarrow run, T95: a whole crossing cut to Una's farewell, #111).
+    head = text[: point["cut"]].rstrip()
+    tail = text[point["cut"]:].strip()
     try:
         from app.world import travel_intent
 
-        if travel_intent(player_line_of(player_input)):
+        # When the kept part already shows the going, the cut keeps the journey
+        # (7B run 6, T7: "I go to the pile and start sorting" walked over in
+        # the first sentence, and the scene then answered Oldfield's "How are
+        # you finding the job?" for the player and left his "Good," hanging).
+        if travel_intent(player_line_of(player_input)) and not _SHOWN_GOING_RE.search(head):
             return turn
     except Exception:
         pass
-    head = text[: point["cut"]].rstrip()
-    tail = text[point["cut"]:].strip()
     if not tail:
         return turn
     probe_kept, _ = drop_invented_player_speech(re.split(r"\n\s*\n", head), player_input)
@@ -15202,6 +15217,13 @@ def _cut_scene_at_invented_request(turn: dict[str, Any], player_input: str, *, f
         "tail_chars": len(tail),
         "cut_ops": cut_ops,
     }
+    try:
+        from app import turn_ledger
+
+        turn_ledger.note("player_words", "scene_ended_on_line_to_player", npc_line=str(point["npc_line"])[:200],
+                         trigger=str(point["trigger"])[:200], tail_chars=len(tail), cut_ops=cut_ops)
+    except Exception:
+        pass
     check = turn.get("self_check")
     if isinstance(check, dict):
         made = check.get("corrections_made") if isinstance(check.get("corrections_made"), list) else []

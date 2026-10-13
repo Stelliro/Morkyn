@@ -939,8 +939,12 @@ def quoted_spans(text: str) -> list[str]:
 
 
 def _speech_key(text: str) -> str:
-    """Like _sentence_key, but "isn't" stays one word so contractions do not pad runs."""
-    folded = re.sub(r"['\u2019]", "", str(text or "").lower())
+    """Like _sentence_key, but "isn't" stays one word so contractions do not pad runs.
+
+    An entity code is not a word said (7B run 6, T4: '"..., Oldfield [[B]]. ..."'
+    read as a reworded player line only because of the code)."""
+    folded = re.sub(r"\[\[[A-Za-z0-9]{1,4}\]\]", " ", str(text or ""))
+    folded = re.sub(r"['\u2019]", "", folded.lower())
     return " ".join(_SENTENCE_NORM_RE.sub(" ", folded).split())
 
 
@@ -1635,6 +1639,37 @@ def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
     return bool(words) and words <= set(_speech_key(own).split())
 
 
+_CODE_TAG = r"(?:\s*\[\[[A-Za-z0-9]{1,4}\]\])?"
+_VOCATIVE_END_RE = re.compile(r",\s*([A-Z][\w'’-]+)" + _CODE_TAG + r"\s*[.!?]*\s*$")
+_VOCATIVE_START_RE = re.compile(r"^\s*([A-Z][\w'’-]+)" + _CODE_TAG + r"\s*,")
+
+
+def _addressed_name(span: str, before: str) -> str:
+    """
+    The name a quotation is said to ('Thanks, Oldfield.'), when that person is
+    the one who spoke in the block before it (named first there, as its
+    subject). Someone only spoken about there ('Oldfield turns to Isolde.')
+    is not: the reply to them may be anyone's.
+    """
+    subject = next(
+        (w for w in re.findall(r"\b[A-Z][\w'’-]+", before or "") if w not in {"The", "A", "An", "You", "Your", "He", "She", "They", "It", "His", "Her"}),
+        "",
+    )
+    if not subject:
+        return ""
+    for pattern in (_VOCATIVE_END_RE, _VOCATIVE_START_RE):
+        match = pattern.search(span)
+        if match and match.group(1) == subject:
+            return subject
+    return ""
+
+
+def _drop_vocative(span: str, name: str) -> str:
+    """The quotation without the name it is said to."""
+    text = re.sub(rf",\s*{re.escape(name)}{_CODE_TAG}(?=\s*[.!?]*\s*$)", "", span)
+    return re.sub(rf"^\s*{re.escape(name)}{_CODE_TAG}\s*,\s*", "", text)
+
+
 def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tuple[list[str], list[str]]:
     """
     Remove quotations the narration gives the player when the player did not
@@ -1667,6 +1702,8 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     out: list[str] = []
     dropped: list[str] = []
     other_spoke = False  # someone else has a line earlier in this narration
+    prev_outside = ""  # the words outside speech in the block before this one
+    prev_spoke = False  # and whether it held speech
     for para in paragraphs:
         kept_blocks: list[str] = []
         for block in _BLOCK_SPLIT_RE.split(str(para or "")):
@@ -1679,6 +1716,15 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             while lead < len(units) and not quoted_spans(units[lead]) and re.match(r"^you\b", units[lead], re.I):
                 lead += 1
             players_block = other_spoke and 0 < lead < len(units) and all(bare[lead:])
+            # A line alone in its block, untagged, said to the person who spoke
+            # just before by name, is the player answering them (7B run 6, T9:
+            # 'Oldfield gives you a nod. "Well, you've earned this."' then
+            # '"Thanks, Oldfield."'). Their name is not the player's words.
+            addressed = ""
+            if other_spoke and prev_spoke and not voiced and len(units) == 1 and bare[0]:
+                addressed = _addressed_name(" ".join(quoted_spans(units[0])), prev_outside)
+            prev_outside = " ".join(_outside_quotes(u) for u in units)
+            prev_spoke = any(quoted_spans(u) for u in units)
             kept_units: list[str] = []
             player_turn = False
             for index, unit in enumerate(units):
@@ -1693,6 +1739,18 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                 )
                 # For a voiced request only tagged lines count: the dialogue-paragraph
                 # guess read Roger's appraisal as the player's (run 5, T20).
+                if addressed and not tagged and not _OTHER_SAID_RE.search(outside):
+                    if all(
+                        (quotes and _is_player_line(span, quotes))
+                        or (_drop_vocative(span, addressed).strip(" ,.!?")
+                            and _words_from_player(_drop_vocative(span, addressed), own, quotes))
+                        for span in spans
+                    ):
+                        kept_units.append(unit)
+                    else:
+                        dropped.append(unit)
+                    player_turn = True
+                    continue
                 if tagged or (bare[index] and (player_turn or (players_block and not voiced))):
                     player_turn = True
                     if all(_words_from_player(span, own, quotes) for span in spans):
@@ -1747,6 +1805,15 @@ def _quote_matches(span: str, quote: str) -> str:
     if SequenceMatcher(None, q, s).ratio() >= 0.6 or _is_player_line(span, [quote]):
         return "near"
     return ""
+
+
+def _quote_part(span: str, quote: str) -> bool:
+    """The quotation is a piece of the player's line: its words are the line's, but for one (a name said to them)."""
+    words = _speech_key(span).split()
+    line = set(_speech_key(quote).split())
+    if not words or not (content_stems(span) & content_stems(quote)):
+        return False
+    return sum(1 for w in words if w not in line) <= 1 and len(words) >= 1
 
 
 def _speaker_of(text: str, start: int, end: int, prev_end: int) -> str:
@@ -1882,13 +1949,24 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
     for quote in quotes:
         if said_by_player(body, quote):
             continue
-        for span in reversed(spans_of(body)):
+        found = spans_of(body)
+        index = len(found)
+        while index > 0:
+            index -= 1
+            span = found[index]
             if span["speaker"] == "other" and _quote_matches(span["inner"], quote):
                 start, end = span["start"], span["end"]
                 # The speech tag after it goes with it: '"...," she says, glancing at you.'
                 tail = body[end:]
                 tag = re.match(r"[^.!?\n\"“]*[.!?]?", tail)
                 end += tag.end() if tag and _OTHER_SPEAKER_TAG_RE.search(tag.group(0)) else 0
+                # The player's line split over two quotations by the other
+                # speaker's tag goes whole (7B run 6, T2: '"Salvagers, Isk," he
+                # says, his voice a low tone. "From where? Not ours, then."'
+                # left the stub '"Salvagers," he says').
+                if span["chained"] and index > 0 and _quote_part(found[index - 1]["inner"], quote):
+                    index -= 1  # spans before it keep their offsets
+                    start = found[index]["start"]
                 body = (body[:start].rstrip(" ") + " " + body[end:].lstrip(" ")).strip(" ")
                 changes.append({"action": "line_taken_from_other_speaker", "quote": quote})
 
@@ -1918,6 +1996,17 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
     if missing:
         body = _said_line(missing) + " " + body.lstrip()
         changes.append({"action": "missing_line_said", "quotes": missing})
+
+    # 5. The player's line carries no entity code: they said a name, not a tag
+    # (7B run 6, T4: '"..., Oldfield [[B]]. What's it pay?"').
+    for span in reversed(spans_of(body)):
+        if "[[" not in span["inner"] or span["speaker"] == "other":
+            continue
+        if any(_quote_matches(span["inner"], q) == "exact" for q in quotes):
+            clean = re.sub(r"\s*\[\[[A-Za-z0-9]{1,4}\]\]", "", span["inner"])
+            start = span["inner_start"]
+            body = body[:start] + clean + body[start + len(span["inner"]):]
+            changes.append({"action": "code_taken_out_of_player_line", "quote": clean[:200]})
     if changes:
         body = re.sub(r"[ \t]{2,}", " ", body)
         body = re.sub(r"[ \t]*\n[ \t]*", "\n", body)
