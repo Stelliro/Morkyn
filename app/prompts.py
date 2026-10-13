@@ -4,7 +4,7 @@ import json
 import re
 from typing import Any
 
-from app.shifts import duty_note, job_of
+from app.shifts import job_of, working_fields
 
 
 # Shared voice for all turn paths (JSON, compact, DSL, narration pipeline).
@@ -816,7 +816,7 @@ def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
         # The role is the job; on or off duty is the clock's (playtest #83).
         entry = {"name": person, "code": npc.get("code") or "", "role": job_of(npc.get("role"))}
         if isinstance(npc.get("duty"), dict):
-            entry["duty"] = duty_note(npc["duty"])
+            entry.update(working_fields(npc["duty"]))
         # Whose place this is (playtest #16): someone whose workplace is
         # elsewhere is a visitor here, not the one behind the counter.
         workplace_id = int(npc.get("workplace_id") or 0)
@@ -1207,10 +1207,16 @@ def _mechanics_view(context: dict[str, Any]) -> dict[str, Any] | None:
         }
         if check.get("degree"):
             row["degree"] = check.get("degree")
-        if check.get("social_attitude"):
-            row["attitude"] = check.get("social_attitude")
+        # The attitude is a plain word, lowercase: the capitalised label was
+        # pasted into the prose as "gives you a Dismissive look" (7B run 5, #131).
+        attitude = str(check.get("social_attitude") or "").strip()
+        if attitude:
+            row["attitude"] = attitude.lower()
         if check.get("social_direction"):
-            row["direction"] = _one_line(check.get("social_direction"), 240)
+            direction = _one_line(check.get("social_direction"), 240)
+            if attitude:
+                direction = direction.replace(attitude, attitude.lower())
+            row["direction"] = direction
         if check.get("mishap"):
             row["mishap"] = _one_line(check.get("mishap"), 160)
         injury = check.get("injury") if isinstance(check.get("injury"), dict) else None

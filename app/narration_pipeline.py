@@ -1885,10 +1885,10 @@ def scene_facts(
             record = workplaces.get(str(row["code"]).upper()) or {}
             # On or off duty right now (playtest #83): the role is the job.
             if isinstance(record.get("duty"), dict):
-                from app.shifts import duty_note, job_of
+                from app.shifts import job_of, working_fields
 
                 entry["role"] = job_of(entry.get("role") or record.get("role"))
-                entry["duty"] = duty_note(record["duty"])
+                entry.update(working_fields(record["duty"]))
             workplace_id = int(record.get("workplace_id") or 0)
             if workplace_id and workplace_id == here_id:
                 entry["works_here"] = True
