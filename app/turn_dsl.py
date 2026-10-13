@@ -748,6 +748,16 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             positional["role"] = positional["name"]
         if not name:
             raise TurnDslError(f"NPC_NEW requires NAME on line {entry['line']}")
+        name = _strip_name_codes(name)
+        note = ""
+        role_arg = flags.get("ROLE") or positional["role"]
+        if _role_is_note(role_arg):
+            # Kept as what is known about them; the job comes from the prose
+            # that introduces them (world._roles_stated_in_prose) or stays open.
+            note = re.sub(r"^\s*works?_at\b", "works at", str(role_arg).strip(), flags=re.I)
+            if flags.get("ROLE"):
+                flags["ROLE"] = ""
+            positional["role"] = ""
         npc = {
             "code": None,
             "name": name[:120],
@@ -757,7 +767,7 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             # Nothing known yet stays empty (playtest #24). A placeholder here
             # was stored as the summary and the first NPC_NOTE glued onto it:
             # "Introduced this turn: Aria Aria is a baker ...".
-            "summary": (flags.get("DESC") or "")[:400],
+            "summary": (flags.get("DESC") or note or "")[:400],
             "attitude": (flags.get("ATTITUDE") or positional["attitude"] or "neutral")[:40],
             "personality": "",
             "likes": "",
@@ -767,13 +777,19 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             "stat_profile": {},
             "skill_profile": {},
             "trust_delta": 0,
-            "known_fact": "",
+            "known_fact": note[:400],
             "mentioned_by": None,
         }
+        if note:
+            from app import turn_ledger
+
+            turn_ledger.note("npc", "role_was_a_note", name=name, note=note)
         if positional.get("places") and not flags.get("ROLE"):
             npc["_place_candidates"] = list(positional["places"])
         turn["npcs"].append(npc)
     elif op == "NPC_NOTE":
+        if args:
+            args[0] = _strip_name_codes(args[0])
         code = (args[0] if args else "").upper()
         # Join every token after the code. A quoted fact is one arg; an unquoted
         # fact is many. Taking only args[1] stored "the" and dropped the rest.
@@ -791,6 +807,9 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             else:
                 code = ""
                 name = " ".join(words)
+        elif args and " " in args[0].strip():
+            # A full name in the code slot ("Linnet Eastlake"): matched by name.
+            name = args[0].strip()
         if not (code or name) or not fact:
             raise TurnDslError(f"NPC_NOTE requires code and fact on line {entry['line']}")
         update = {"entity_type": "npc", "code": code or name, "summary_append": fact[:400], "known_fact": fact[:400]}
@@ -798,7 +817,11 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
             update["name"] = name
         turn["index_updates"].append(update)
     elif op == "TALK":
-        code = (args[0] if args else "").upper()
+        # A code is upper-cased; a name stays as written. Upper-cased, "Linnet
+        # Eastlake" became the code "LINNET EASTLAKE" and the prose was tagged
+        # "Linnet Eastlake [[LINNET EASTLAKE]]" (7B run 8, T0).
+        ref = _strip_name_codes(args[0] if args else "")
+        code = ref.upper() if " " not in ref else ref
         topic = " ".join(args[1:]).strip() if len(args) > 1 else "conversation"
         if not code:
             raise TurnDslError(f"TALK requires npc code on line {entry['line']}")
@@ -1041,6 +1064,12 @@ def _apply_op(turn: dict[str, Any], entry: dict[str, Any]) -> None:
     elif op == "CAST":
         slot = str(args[0] if args else "").strip().lower()
         value = " ".join(args[1:]).strip() if len(args) > 1 else ""
+        # "CAST interacting [[H]] Tam" leads with the person's code on purpose;
+        # a place or item code before a name ("L1 Linnet Eastlake") is not a
+        # person (7B run 8, T0: the place L1 was cast).
+        words = value.split()
+        if len(words) > 1 and re.fullmatch(r"\[?\[?[LIE]\d+\]?\]?", words[0]):
+            value = " ".join(words[1:])
         cast = turn.setdefault("scene_cast", {"present": [], "interacting": [], "off": [], "keywords": []})
         if slot in {"present", "interacting", "off"} and value:
             # "CAST interacting [[B]]": the prose tag is not the code (playtest
@@ -1082,6 +1111,40 @@ _NPC_ATTITUDES = frozenset({
 })
 _LOCATION_CODE_RE = re.compile(r"^\[?\[?L\d+\]?\]?$", re.I)
 _SHORT_CODE_RE = re.compile(r"^\[?\[?[A-Z]{1,2}\d{0,3}\]?\]?$")
+# An entity code at the edge of a name slot (7B run 8, T0): NPC_NEW / TALK /
+# NPC_NOTE / CAST "L1 Linnet Eastlake" made a person called "L1 Linnet
+# Eastlake", cast the place L1, and the prose later read "Saltmarrow [[L1]]
+# Linnet Eastlake". A bracketed tag or a letter-and-number code is never part
+# of a name; a bare single trailing capital ("Oldfield B") is a person code,
+# except the roman numerals a name can end with.
+_EDGE_CODE_RE = re.compile(r"\[\[[A-Z0-9]{1,4}\]\]|[A-Z]{1,2}\d{1,3}")
+_TRAILING_LETTER_CODE_RE = re.compile(r"[A-HJ-UWYZ]")
+
+
+def _strip_name_codes(text: Any) -> str:
+    """Take entity codes off the ends of a multi-word name; a lone code is left alone."""
+    raw = str(text or "").strip()
+    words = raw.split()
+    if len(words) < 2:
+        return raw
+    while len(words) > 1 and _EDGE_CODE_RE.fullmatch(words[0]) and words[1][:1].isupper():
+        words.pop(0)
+    while len(words) > 1 and (
+        _EDGE_CODE_RE.fullmatch(words[-1]) or _TRAILING_LETTER_CODE_RE.fullmatch(words[-1])
+    ) and words[-2][:1].isupper():
+        words.pop()
+    return " ".join(words)
+
+
+# A role argument that is a note, not a job (7B run 8, T0): NPC_NEW "Linnet"
+# "works_at the Wren's Rest, reliable and concerned for your safety" stored all
+# of that as her job. Shape only: a comma, a works_at slot word, or a sentence.
+_NOTE_ROLE_RE = re.compile(r"^\s*works?[_ ]at\b|,", re.I)
+
+
+def _role_is_note(role: str) -> bool:
+    text = str(role or "").strip()
+    return bool(text) and (bool(_NOTE_ROLE_RE.search(text)) or len(text.split()) > 6)
 
 
 def _classify_npc_args(args: list[str]) -> dict[str, str]:
@@ -1096,7 +1159,7 @@ def _classify_npc_args(args: list[str]) -> dict[str, str]:
     out: dict[str, Any] = {"name": "", "location": "", "role": "", "attitude": ""}
     words: list[str] = []
     for raw in args:
-        token = str(raw or "").strip()
+        token = _strip_name_codes(raw)
         if not token:
             continue
         if _LOCATION_CODE_RE.match(token):

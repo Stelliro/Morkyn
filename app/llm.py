@@ -11103,7 +11103,10 @@ def _entity_code_name_map(context: dict[str, Any] | None, turn: dict[str, Any] |
 
     def add(code: Any, name: Any, title: Any = None) -> None:
         c = str(code or "").strip().upper()
-        if not c:
+        # A name standing in a code slot (an NPC_NOTE by name) is not a code:
+        # mapped, it tagged the prose "Linnet Eastlake [[LINNET EASTLAKE]]"
+        # (7B run 8, T0).
+        if not c or re.search(r"\s", c):
             return
         label = str(name or title or "").strip()
         if not label:
@@ -11374,6 +11377,24 @@ _UNNAMED_PERSON_BEFORE_RE = re.compile(
 )
 
 
+def _join_split_names(text: str, code_to_name: dict[str, str]) -> str:
+    """
+    "Linnet [[B]] Eastlake" is Linnet Eastlake (7B run 8, T0): a person tag
+    inside a known full name split it. The tag goes after the whole name, as
+    the code whose name it is.
+    """
+    for code, name in code_to_name.items():
+        parts = str(name or "").split()
+        if len(parts) < 2 or not re.fullmatch(r"[A-Z]{1,3}", str(code)):
+            continue
+        for cut in range(1, len(parts)):
+            head = r"\s+".join(re.escape(p) for p in parts[:cut])
+            tail = r"\s+".join(re.escape(p) for p in parts[cut:])
+            pattern = rf"\b{head}\s*\[\[[A-Z]{{1,3}}\]\]\s+{tail}\b(?:\s*\[\[{re.escape(str(code))}\]\])?"
+            text = re.sub(pattern, lambda _m, n=name, c=code: f"{n} [[{c}]]", text)
+    return text
+
+
 def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
     """
     Fix common LLM naming holes:
@@ -11432,6 +11453,7 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         return f"{name} [[{code}]]"
 
     repaired = REFERENCE_CODE_PATTERN.sub(expand_code, repaired)
+    repaired = _join_split_names(repaired, code_to_name)
 
     npc_names = [
         code_to_name[c]
