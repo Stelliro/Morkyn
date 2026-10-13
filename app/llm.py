@@ -13521,7 +13521,18 @@ def player_take_intent(player_text: str) -> bool:
     """True when the player's own words ask to take, buy, make or receive something."""
     text = _NEGATED_PAY_RE.sub(" ", _TAKE_PERCEPTION_RE.sub(" ", str(player_text or "")))
     text = _SOMEONE_ELSE_TAKES_RE.sub(" ", text)
+    text = _IT_TAKES_RE.sub(" ", text)
     return bool(_PLAYER_TAKE_INTENT_RE.search(text))
+
+
+# A thing or another person doing the verb is not the player taking (7B run 10,
+# T5: "working each edge until it takes a hair off my arm" counted as asking to
+# take, and the knives the player sharpened for Jehane went into the pack).
+_IT_TAKES_RE = re.compile(
+    r"\b(?i:it|he|she|they|that|this|which|each|one)\s+(?:\w+ly\s+)?"
+    r"(?i:takes|took|buys|bought|steals|stole|grabs|grabbed|pockets|pocketed|collects|collected|gathers|gathered|"
+    r"receives|received|accepts|accepted|trades|traded|claims|claimed)\b"
+)
 
 
 # Asking who else buys is not buying (7B run 9, T4: "Hal, who in Saltmarrow

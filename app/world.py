@@ -12753,7 +12753,7 @@ def _prose_says_it_arrived(text: str, name_l: str, tokens: list[str]) -> bool:
         return True
     for match in _DISCOVER_GAIN_RE.finditer(text):
         window = text[match.end() : match.end() + _DISCOVER_NAME_WINDOW]
-        if (name_l and name_l in window) or any(tok in window for tok in tokens):
+        if (name_l and name_l in window) or any(_tok_in(tok, window) for tok in tokens):
             return True
     return False
 
@@ -12816,7 +12816,10 @@ _ITEM_LOSS_RES: tuple[tuple[re.Pattern[str], bool], ...] = (
 def _sentence_mentions_item(sentence_l: str, name_l: str, tokens: list[str]) -> bool:
     if name_l and name_l in sentence_l:
         return True
-    hits = sum(1 for tok in tokens if re.search(rf"\b{re.escape(tok)}", sentence_l))
+    hits = sum(
+        1 for tok in tokens
+        if re.search(r"\b(?:" + "|".join(re.escape(form) for form in _token_forms(tok)) + ")", sentence_l)
+    )
     return bool(tokens) and hits >= max(1, (len(tokens) + 1) // 2)
 
 
@@ -12896,7 +12899,7 @@ def _sentence_item_events_detail(
             events.append((m.start(), "gain", not text_l.startswith("receiv")))
     for m in _DISCOVER_GAIN_RE.finditer(lower):
         window = lower[m.end(): m.end() + _DISCOVER_NAME_WINDOW]
-        if ((name_l and name_l in window) or any(tok in window for tok in tokens)) and _subject_is_player(sentence, m.start(), m.group(0)):
+        if ((name_l and name_l in window) or any(_tok_in(tok, window) for tok in tokens)) and _subject_is_player(sentence, m.start(), m.group(0)):
             events.append((m.start(), "gain", True))
     if not owned:
         for m in _POSSESSION_RE.finditer(sentence):
@@ -13118,12 +13121,91 @@ def _item_name_tokens(name_l: str) -> list[str]:
     if (not head or head in _ITEM_MEASURE_WORDS) and len(parts) > 1:
         back = [w for w in parts[1].split() if w not in {"a", "an", "the", "some"}]
         head = back[-1] if back else head
-    if head.endswith("s") and not head.endswith("ss") and len(head) > 4:
-        head = head[:-1]
-    tokens = [tok for tok in re.findall(r"[a-z0-9']{4,}", str(name_l or "").lower()) if tok.rstrip("s") != head]
+    head = _singular_item_noun(head)
+    tokens = [
+        tok for tok in re.findall(r"[a-z0-9']{4,}", str(name_l or "").lower())
+        if tok.rstrip("s") != head and _singular_item_noun(tok) != head
+    ]
     if len(head) >= 3:
         tokens.append(head)
     return tokens
+
+
+# Plurals the trailing-s cut gets wrong (7B run 10, T6: "knives" never matched
+# an item named "knife", so the knives set back on the bench stayed in the pack).
+_IRREGULAR_ITEM_PLURALS = {
+    "knives": "knife", "leaves": "leaf", "loaves": "loaf", "shelves": "shelf", "staves": "staff",
+    "halves": "half", "wolves": "wolf", "teeth": "tooth", "geese": "goose", "mice": "mouse",
+}
+# A small table of the commonest item nouns the prose swaps for each other (7B
+# run 10: the player's "knives" were the pack's "Sharpened blade"). Kept short on
+# purpose: every pair here also widens what a refused-gain trim may cut.
+_ITEM_NOUN_SYNONYMS: dict[str, tuple[str, ...]] = {
+    "knife": ("knives", "blade", "blades"),
+    "blade": ("knife", "knives"),
+    "lamp": ("lantern",),
+    "lantern": ("lamp",),
+    "rope": ("cord",),
+    "cord": ("rope",),
+    "sack": ("bag",),
+    "bag": ("sack",),
+}
+
+
+def _singular_item_noun(word: str) -> str:
+    word = str(word or "").lower()
+    if word in _IRREGULAR_ITEM_PLURALS:
+        return _IRREGULAR_ITEM_PLURALS[word]
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 4:
+        return word[:-1]
+    return word
+
+
+def _token_forms(tok: str) -> tuple[str, ...]:
+    """The token and the words the prose may use for it (irregular plural, a near synonym)."""
+    forms = [tok, *_ITEM_NOUN_SYNONYMS.get(tok, ())]
+    forms += [plural for plural, single in _IRREGULAR_ITEM_PLURALS.items() if single == tok]
+    return tuple(dict.fromkeys(forms))
+
+
+def _tok_in(tok: str, text: str) -> bool:
+    """Substring test for an item token, any of its forms."""
+    return any(form in text for form in _token_forms(tok))
+
+
+def _owned_item_named(conn, tokens: list[str]) -> str:
+    """The one owned item whose name holds every word of this one (head noun included), else ""."""
+    if not tokens:
+        return ""
+    hits: list[str] = []
+    for row in conn.execute("SELECT name FROM inventory WHERE quantity > 0").fetchall():
+        name = str(row["name"] or "")
+        owned = set(_item_name_tokens(name.lower()))
+        owned_forms = {form for tok in owned for form in _token_forms(tok)}
+        if all(tok in owned or tok in owned_forms for tok in tokens):
+            hits.append(name)
+    return hits[0] if len(hits) == 1 else ""
+
+
+# Work done for someone on their goods: "start on the knives", "mend the nets".
+_WORK_ON_RE = re.compile(
+    r"\b(?:sharpen\w*|hon(?:e|es|ed|ing)|whet\w*|mend\w*|repair\w*|fix(?:es|ed|ing)?|clean\w*|polish\w*|scrub\w*|"
+    r"sort\w*|stitch\w*|patch\w*|oil(?:s|ed|ing)?|wash\w*|tend\w*|(?:start|starts|started|starting|work|works|"
+    r"worked|working|get|gets|got)\s+(?:on|to\s+work\s+on))\s+(?P<obj>[^.;!?\n]{0,60})",
+    re.I,
+)
+
+
+def _worked_on_in_line(player_input: str, name_l: str, tokens: list[str]) -> bool:
+    """The player's own line works on this item for someone (not their own: "my")."""
+    line = venues.strip_speech(_player_line(player_input) if player_input else "").lower()
+    for match in _WORK_ON_RE.finditer(line):
+        obj = match.group("obj").strip()
+        if re.match(r"(?:my|mine|our)\b", obj):
+            continue
+        if _sentence_mentions_item(obj, name_l, tokens):
+            return True
+    return False
 
 
 _COIN_ITEM_RE = re.compile(
@@ -13723,7 +13805,7 @@ def _filter_inventory_changes(
         # owned, which used to be waved through without any check at all.
         name_l = name.lower()
         tokens = _item_name_tokens(name_l)
-        token_hits = sum(1 for tok in tokens if tok in text)
+        token_hits = sum(1 for tok in tokens if _tok_in(tok, text))
         token_ok = bool(tokens) and token_hits >= max(1, (len(tokens) + 1) // 2)
         name_in_text = name_l in text
         # Source tags only count when the player clearly tried to acquire something
@@ -13739,11 +13821,11 @@ def _filter_inventory_changes(
         # if a later rewrite of the narration describes it.
         if draft_narration and named:
             draft_text = f"{draft_narration}\n{player_input}".lower()
-            draft_hits = sum(1 for tok in tokens if tok in draft_text)
+            draft_hits = sum(1 for tok in tokens if _tok_in(tok, draft_text))
             # The head noun has to be there too: a draft about "prayer" does not
             # name "prayer beads" (the Miriam save), and half the tokens of a
             # two-word name is only the adjective.
-            head_ok = not tokens or tokens[-1] in draft_text
+            head_ok = not tokens or _tok_in(tokens[-1], draft_text)
             if not (name_l in draft_text or (tokens and head_ok and draft_hits >= max(1, (len(tokens) + 1) // 2))):
                 named = False
         # The second half: the prose has to say this item arrived. An item being
@@ -13776,6 +13858,27 @@ def _filter_inventory_changes(
         ):
             grounded = False
             turn_ledger.note("inventory", "not_a_thing", item=name, why="the grant names a job, wage or deal")
+        handed = _prose_item_handed_over(final_text, name_l, tokens, owned=bool(existing))
+        # The player's own thing under a shorter name is that thing (7B run 10,
+        # T1: "You reach into your shirt, pulling out the small, worn reckoner"
+        # with GRANT "reckoner" while she owns "mother's brass tide-reckoner").
+        # Someone handing one over, or the player asking to take one, is a new one.
+        same_as_owned = ""
+        # The act, not the talk: "The reckoner isn't for trade" is no request to take one.
+        acts_take = player_take_intent(venues.strip_speech(str(player_input or "")))
+        if grounded and not existing and not acts_take and not handed:
+            same_as_owned = _owned_item_named(conn, tokens)
+            if same_as_owned:
+                grounded = False
+                turn_ledger.note("inventory", "owned_item_not_new", item=name, owned=same_as_owned)
+        # The giver's own goods, handed back after the player worked on them
+        # for the giver, are not the player's (7B run 10, T5: "I sit down at her
+        # spare whetstone and start on the knives" ended with Jehane handing the
+        # sharpened blades over and five blades in the pack).
+        if grounded and not existing and not acquire_intent and handed and _worked_on_in_line(player_input, name_l, tokens):
+            grounded = False
+            turn_ledger.note("inventory", "giver_stock_not_given", item=name,
+                             why="the player worked on these for someone; handing them back is not a gift")
         # Never honor bare justified/true from the model
         # Opening: no free combat kit. This used to refuse every new item, so a
         # baker handing the player a loaf in the first scene was dropped
@@ -13788,6 +13891,10 @@ def _filter_inventory_changes(
         # Items cannot become dimensional storage without explicit prose
         if grounded:
             kept.append(_strip_unearned_dimensional(change))
+        elif same_as_owned:
+            # Nothing refused: the prose shows the player's own thing, and it
+            # stays in the prose (no trim), already in the pack.
+            continue
         else:
             if rejected is not None:
                 # The prose may still show this item arriving; the caller trims
@@ -17825,8 +17932,55 @@ def _gate_model_rewards(
             turn_ledger.note("reward", "karma_dropped_no_moral_act", karma=karma,
                              reason=str(player.get("karma_reason") or "")[:200])
     if report:
-        result["_reward_gate"] = report
+        result.setdefault("_reward_gate", {}).update(report)
     return report
+
+
+_TRAINING_RE = re.compile(r"\b(?:train\w*|practi[cs]\w*|stud(?:y|ies|ied|ying)|learn\w*|drill\w*|rehears\w*|lesson\w*)\b", re.I)
+_GENERIC_SKILL_WORDS = frozenset({"hand", "hands", "skill", "lore", "work", "craft", "general"})
+
+
+def _gate_model_skill_gains(result: dict[str, Any], player_input: str) -> list[dict[str, Any]]:
+    """A model's skill gain stands when the player's own line used that skill (7B run 10, T7).
+
+    "I hold out my open hand" paid sleight of hand +2. A check rolled this turn
+    already pays practice through the engine (#85a) and removes the model's op
+    for that skill; what reaches here is the model's guess. It stands when the
+    player's line, outside speech, names the skill's activity ("I salvage",
+    "read the tide") or is training; otherwise it is dropped and noted.
+    """
+    changes = result.get("skill_changes")
+    if not isinstance(changes, list) or not changes:
+        return []
+    line = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input)).lower()
+    training = bool(_TRAINING_RE.search(line))
+    kept: list[Any] = []
+    dropped: list[dict[str, Any]] = []
+    for change in changes:
+        if (
+            not isinstance(change, dict)
+            or change.get("_engine_practice")
+            or int(_float(change.get("delta"), 0)) <= 0
+            or training
+        ):
+            kept.append(change)
+            continue
+        words = [
+            w for w in re.findall(r"[a-z]{4,}", str(change.get("name") or "").lower().replace("_", " "))
+            if w not in _GENERIC_SKILL_WORDS
+        ]
+        used = any(re.search(rf"\b{re.escape(w[:5])}", line) for w in words)
+        if used:
+            kept.append(change)
+        else:
+            dropped.append(change)
+            turn_ledger.note("reward", "skill_gain_dropped_not_used", skill=change.get("name"), delta=change.get("delta"))
+    if dropped:
+        result["skill_changes"] = kept
+        result.setdefault("_reward_gate", {})["skill_dropped"] = [
+            {"name": c.get("name"), "delta": c.get("delta")} for c in dropped
+        ]
+    return dropped
 
 
 def _drop_model_rewards(result: dict[str, Any]) -> list[str]:
@@ -18949,6 +19103,11 @@ def apply_turn(
         _apply_equipment_slots(conn, result.get("equipment_slots") or [])
         _apply_equipment_changes(conn, result.get("equipment_changes") or [])
         _apply_inventory_capacity_modifiers(conn, result.get("inventory_capacity_modifiers") or [])
+        if input_kind == "player":
+            try:
+                _gate_model_skill_gains(result, player_input)
+            except Exception:
+                pass
         _apply_skills(conn, result.get("skill_changes") or [])
         # The model's own XP and karma stand on something that happened (7B
         # run 9: +7 XP for one question, +6 karma for probing mud).
