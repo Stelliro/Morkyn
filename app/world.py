@@ -12668,13 +12668,30 @@ _COIN_ITEM_RE = re.compile(
 )
 
 
-def _coins_to_gold(conn, changes: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
+def _coin_name_head(name: str) -> str:
+    """The item name before a comma, semicolon or bracket: GRANT "two gold coins, none" (7B run 6, T9)
+    carried a stray second argument that hid the coin from every coin check."""
+    return re.split(r"\s*[,;(\[]", str(name or ""), maxsplit=1)[0].strip()
+
+
+def _coin_name_match(name: str) -> bool:
+    return bool(_COIN_ITEM_RE.match(str(name or "").strip()) or _COIN_ITEM_RE.match(_coin_name_head(name)))
+
+
+def _coins_to_gold(
+    conn, changes: list[dict[str, Any]], narration: str, *, gold_moving: bool = False
+) -> list[dict[str, Any]]:
     """Coins handed over are money, not an item (7B Saltmarrow T5).
 
     The GM wrote GRANT "copper" TYPE coin for a handful of copper coins, and
     the pack held "copper x1" while the purse stayed at 12. A granted item
     that is only coin goes to the purse: the sum the prose names when it names
     exactly one, else the granted count.
+
+    ``gold_moving``: the turn already moves gold in (the settled prose coin,
+    the GOLD op, a quest payout). A coin item then is that same money, not a
+    second payment (7B run 6, T10: "You pocket the two gold" paid +2 through
+    the settle and +2 again here).
     """
     kept: list[dict[str, Any]] = []
     for change in changes or []:
@@ -12684,8 +12701,12 @@ def _coins_to_gold(conn, changes: list[dict[str, Any]], narration: str) -> list[
             delta = int((change or {}).get("quantity_delta") or 0)
         except (TypeError, ValueError):
             delta = 0
-        if delta <= 0 or not (_COIN_ITEM_RE.match(name) or (kind in {"coin", "coins", "currency", "money"})):
+        if delta <= 0 or not (_coin_name_match(name) or (kind in {"coin", "coins", "currency", "money"})):
             kept.append(change)
+            continue
+        if gold_moving:
+            turn_ledger.note("gold", "coin_item_is_the_turns_gold", item=name,
+                             why="gold already moves in this turn; one coin event pays once")
             continue
         try:
             from app.prose_state import coin_mentions
@@ -13006,7 +13027,7 @@ def _remove_shown_gives(
     for row in rows:
         name = str(row["name"] or "")
         name_l = name.lower()
-        if not name_l or name_l in losing or _COIN_ITEM_RE.match(name):
+        if not name_l or name_l in losing or _coin_name_match(name):
             continue
         tokens = _item_name_tokens(name_l)
         in_line = next((p for p in line_parts if _sentence_mentions_item(p, name_l, tokens)), None)
@@ -17032,15 +17053,44 @@ def _take_coin_grants(result: dict[str, Any]) -> list[dict[str, Any]]:
 def _is_coin_item(change: dict[str, Any]) -> bool:
     name = str(change.get("name") or "").strip()
     kind = str(change.get("item_type") or change.get("type") or "").lower()
-    return bool(_COIN_ITEM_RE.match(name)) or kind in {"coin", "coins", "currency", "money"}
+    return _coin_name_match(name) or kind in {"coin", "coins", "currency", "money"}
 
 
 def _coin_grant_count(coin_grants: list[dict[str, Any]]) -> int | None:
     """The sum a coin GRANT's own name gives ("Five gold coins" -> 5), when exactly one names one."""
     from app.prose_state import coin_mentions
 
-    sums = {m for c in coin_grants for m in coin_mentions(str(c.get("name") or ""))}
+    sums = {m for c in coin_grants for m in coin_mentions(_coin_name_head(str(c.get("name") or "")))}
     return sums.pop() if len(sums) == 1 else None
+
+
+# How many earlier scenes coin the player now puts away may have arrived in.
+RESTATED_COIN_SCENES = 2
+
+
+def _coin_restated(conn, own_line: str) -> int | None:
+    """The player puts away coin an earlier scene already handed them: its amount (0 if unnamed), else None.
+
+    7B run 6, T10: Oldfield paid two gold at T9; "I pocket the two gold" at
+    T10 paid it again. Only when a recent scene shows that coin reaching the
+    player; otherwise "I pocket the coins" is left to the usual reading.
+    """
+    from app import prose_state
+
+    amount = prose_state.player_puts_away_coin(own_line)
+    if amount is None or conn is None:
+        return None
+    try:
+        rows = conn.execute(
+            "SELECT content FROM journal WHERE kind = 'narration' ORDER BY id DESC LIMIT ?",
+            (RESTATED_COIN_SCENES,),
+        ).fetchall()
+    except Exception:
+        return None
+    for row in rows:
+        if prose_state.coin_reached_player(str(row["content"] or ""), amount):
+            return amount
+    return None
 
 
 def _unpriced_payment_amount(conn, result: dict[str, Any], narration: str) -> tuple[int | None, str]:
@@ -17077,8 +17127,13 @@ def _settle_unopped_coin(
     said: dict[str, list[int]],
     coin_grants: list[dict[str, Any]],
     quest_pays: bool,
+    restated: int | None = None,
 ) -> dict[str, Any] | None:
-    """No GOLD op, no offer, no numbered payment: a payment with no sum, or coin handed to the player."""
+    """No GOLD op, no offer, no numbered payment: a payment with no sum, or coin handed to the player.
+
+    ``restated``: the player's line only puts away coin already received (see
+    _coin_restated); the prose showing them pocket it is not coin arriving.
+    """
     from app import prose_state
 
     if prose_state.shows_unpriced_payment(narration):
@@ -17098,6 +17153,8 @@ def _settle_unopped_coin(
             turn_ledger.note("gold", "received_left_to_quest_payout", grants=[c.get("name") for c in coin_grants])
         return None
     handed = prose_state.coin_handed_to_player(narration)
+    if restated is not None and handed and str(handed.get("span") or "").lower().startswith("you"):
+        handed = None  # "You pocket the two gold": the player's own putting away
     received = [m for m in said["received"] if m > 0]
     if len(received) == 1 and received[0] <= STATED_GAIN_CAP:
         turn_ledger.note("gold", "received_named", amount=received[0])
@@ -17178,13 +17235,34 @@ def _settle_stated_gold(
     losing = raw < 0 or band.lower().startswith(("-", "lose", "spend"))
     coin_grants = _take_coin_grants(result)
     said = prose_state.stated_coin_amounts(narration)
+    # "I pocket the two gold" the turn after it was handed over (7B run 6,
+    # T10) puts away coin already counted: the prose echo, a coin GRANT and a
+    # GOLD op for it are not new income.
+    restated = _coin_restated(conn, own) if conn is not None else None
+    if restated is not None:
+        result["_coin_restated"] = True
+        said = {**said, "received": [m for m in said["received"] if restated and m != restated]}
+        dropped: list[str] = [str(c.get("name") or "") for c in coin_grants]
+        coin_grants = []
+        if not losing and (raw > 0 or band):
+            if raw > 0 and restated and raw != restated:
+                pass  # a different sum: new coin, the op stands
+            else:
+                player.pop("gold_delta", None)
+                player.pop("gold_band", None)
+                result["player"] = player
+                dropped.append(f"GOLD {raw or band}")
+                raw, band = 0, ""
+        turn_ledger.note("gold", "coin_already_received", amount=restated or None, line=own[:200], dropped=dropped,
+                         why="the player puts away coin an earlier scene already handed over")
     offer = prose_state.player_trade_offer(own)
     paid_once = said["paid"][0] if len(said["paid"]) == 1 and not said["received"] else None
     mentioned = prose_state.coin_mentions(narration)
     value: int | None = None
     source = ""
     if not (band or raw) and offer is None and paid_once is None:
-        note = _settle_unopped_coin(conn, result, player, narration, own, said, coin_grants, quest_pays)
+        note = _settle_unopped_coin(conn, result, player, narration, own, said, coin_grants, quest_pays,
+                                    restated=restated)
         if note is not None:
             return note
         if coin_grants:
@@ -17423,10 +17501,16 @@ def _reconcile_prose_with_state(
             kept_l = str(change.get("name") or "").lower()
             if kept_l:
                 kept_items.append((kept_l, _item_name_tokens(kept_l)))
+    gold_in = int(_float((gold_note or {}).get("gold_delta"), 0)) > 0 if isinstance(gold_note, dict) else False
     for item in rejected or []:
         if not isinstance(item, dict) or item.get("outcome") != "gain":
             continue
         name = str(item.get("name") or "")
+        if gold_in and _coin_name_match(name):
+            # The coin reached the purse as gold this turn: the sentence that
+            # shows it handed over is the state, not a refused gain (7B run 6, T9).
+            report["unreconciled"].append({"why": "coin_item_settled_as_gold", "item": name})
+            continue
         name_l = name.lower()
         tokens = list(item.get("tokens") or _item_name_tokens(name_l))
         carry = {"on": False}
@@ -17916,7 +18000,16 @@ def apply_turn(
         if result.get("_quest_reward_dropped"):
             turn_ledger.note("gold", "model_reward_dropped_for_quest_payout", fields=result["_quest_reward_dropped"])
         try:
-            inv_changes = _coins_to_gold(conn, inv_changes, narration)
+            # Gold already moving in this turn (the settled prose coin or the
+            # GOLD op after its roll, a quest payout, coin the player restates)
+            # is the coin a coin item shows: it pays once (7B run 6, T10).
+            gold_moving = (
+                int(_float((result.get("player") or {}).get("gold_delta"), 0)) > 0
+                or bool(result.get("_coin_restated"))
+                or bool(finishing)
+                or bool(quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest"))
+            )
+            inv_changes = _coins_to_gold(conn, inv_changes, narration, gold_moving=gold_moving)
         except Exception:
             pass
         # A map that changes hands reveals ground instead of taking a slot.
