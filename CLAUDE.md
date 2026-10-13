@@ -89,9 +89,9 @@ belong to, with the date).
 - **Typical model faults** (handle them with the guiding rule above): acting or speaking for the
   player, prose and ops disagreeing (moves, places, people, items, gold), stock phrases, codes
   or op text in the prose, voice slipping to first or third person, retry prompts echoed back.
-- **The full test suite** (`python -m unittest` in .venv) has 16 known failures as of
-  2026-10-13 (batch5 x2, live_smoke_places, prompt_context_reachability cited keys, quest_live,
-  quest_parser x3, quest_pipeline, skill_roster, town_ui x4, and the test_bare_assert_files and
+- **The full test suite** (`python -m unittest` in .venv) has 15 known failures as of
+  2026-10-14 (batch5 x2, live_smoke_places, prompt_context_reachability cited keys, quest_live,
+  quest_parser x2, quest_pipeline, skill_roster, town_ui x4, and the test_bare_assert_files and
   test_tts loader errors). Anything beyond those is new.
 - **Evidence lives in model traces** (`data/model_traces/turn-*.json`): read them before the code.
   The model side is in `model_trace`; what the engine did is in `engine.ledger` (`delta` first,
