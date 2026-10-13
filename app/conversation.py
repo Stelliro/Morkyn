@@ -929,6 +929,33 @@ def writer_view(resolution: dict[str, Any] | None) -> dict[str, Any] | None:
 # ---------------------------------------------------------------------------
 
 
+_WROTE_YOUR_NAME_RE = re.compile(
+    r"\b(?:writes?|wrote|written|scribbl\w*|jots?|jotted|notes?|noted|records?|recorded|pens?|penned|"
+    r"enters?|entered|adds?|added|puts?|chalks?|chalked|inks?|inked|signs?\s+in)\s+(?:down\s+)?your\s+name\b",
+    re.IGNORECASE,
+)
+
+
+def wrote_player_name(narration: str, rows: list[dict[str, Any]]) -> list[str]:
+    """
+    Codes of the people the prose shows writing the player's name down
+    (7B Saltmarrow #78: Ellen "scribbles your name in her notebook" at T18,
+    and at T86 the name gate cut "Of course, Isk" from her as never told).
+    The writer is the first person named in that sentence.
+    """
+    from app.narration_pipeline import split_sentences
+
+    out: list[str] = []
+    for sentence in split_sentences(str(narration or "")):
+        outside = re.sub(r'"[^"]*"|“[^”]*”', " ", sentence)
+        if not _WROTE_YOUR_NAME_RE.search(outside):
+            continue
+        hits = _names_in(outside, rows)
+        if hits and hits[0][1] not in out:
+            out.append(hits[0][1])
+    return out
+
+
 def _names_in(text: str, rows: list[dict[str, Any]]) -> list[tuple[int, str]]:
     hits: list[tuple[int, str]] = []
     taken: list[tuple[int, int]] = []

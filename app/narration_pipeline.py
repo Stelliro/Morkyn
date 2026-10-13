@@ -1598,6 +1598,22 @@ _INDIRECT_SPEECH_RE = re.compile(
     r"threaten|respond|mention|admit|confess|suggest|reassure|comfort|accuse|discuss|inform)\w*\b",
     re.IGNORECASE,
 )
+# The same word as a noun is not the player speaking (7B Saltmarrow #97, T81:
+# "toward where the whisper came from" let the prose give the player '"What's
+# in there?" you ask', since no line was checked).
+_SPEECH_NOUN_LEAD_RE = re.compile(
+    r"\b(?:the|a|an|this|that|his|her|their|its|my|your|our|some|any|no|whose)\s+(?:\w+\s+)?$",
+    re.IGNORECASE,
+)
+
+
+def asks_to_speak(own: str) -> bool:
+    """The player's line asks to speak without giving the words ("I ask him about the docks")."""
+    text = str(own or "")
+    for match in _INDIRECT_SPEECH_RE.finditer(text):
+        if not _SPEECH_NOUN_LEAD_RE.search(text[: match.start()][-40:]):
+            return True
+    return False
 
 
 def _outside_quotes(unit: str) -> str:
@@ -1636,7 +1652,7 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
         return list(paragraphs), []
     own = re.split(r"\n\s*\n", raw, maxsplit=1)[0]
     quotes = player_quotes(raw)
-    if not quotes and _INDIRECT_SPEECH_RE.search(own):
+    if not quotes and asks_to_speak(own):
         return list(paragraphs), []
     out: list[str] = []
     dropped: list[str] = []

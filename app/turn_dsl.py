@@ -1389,6 +1389,44 @@ def narration_length_target(player_input: str) -> str:
     return f"about {low}-{high} characters"
 
 
+def facts_to_keep(context: Any, limit: int = 6) -> list[str]:
+    """The hour and which nearby places are open, as sentences the prose must keep (playtest #59)."""
+    if not isinstance(context, dict):
+        return []
+    facts: list[str] = []
+    clock = context.get("world_time")
+    if isinstance(clock, dict) and clock.get("hour") is not None:
+        try:
+            hour = int(clock.get("hour") or 0)
+            minute = int(clock.get("minute_of_hour") or 0)
+        except (TypeError, ValueError):
+            hour = minute = -1
+        if hour >= 0:
+            part = str(clock.get("part_of_day") or "").strip()
+            if not part:
+                from app.world import part_of_day
+
+                part = part_of_day(hour)
+            facts.append(f"It is {part}, {hour:02d}:{minute:02d}.")
+    contract = context.get("movement_contract")
+    town = contract.get("town") if isinstance(contract, dict) else None
+    places = town.get("places_here") if isinstance(town, dict) else None
+    for place in places or []:
+        if len(facts) >= limit:
+            break
+        if not isinstance(place, dict) or "open" not in place:
+            continue
+        name = str(place.get("name") or "").strip() or f"the {str(place.get('kind') or 'place').strip()}"
+        where = str(place.get("where") or "").strip()
+        label = f"{name} ({where})" if where else name
+        if place.get("open"):
+            facts.append(f"{label[0].upper()}{label[1:]} is open.")
+        else:
+            hours = str(place.get("hours") or "").strip()
+            facts.append(f"{label[0].upper()}{label[1:]} is closed" + (f"; its hours are {hours}." if hours else "."))
+    return facts
+
+
 def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     """Slim prompt: reuse world packet but demand NAR+OPS output."""
     from app.prompts import build_user_prompt
@@ -1458,6 +1496,16 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
         packet["previous_act"] = previous
         instructions.append(PREVIOUS_ACT_RULE)
     packet["narration_length"] = narration_length_target(player_input)
+    # The clock and the shops' hours, as plain sentences (playtest #59: open
+    # shops written as shuttered and 'afternoon' at 08:35, with both in the
+    # packet as fields the prose did not read as facts).
+    facts = facts_to_keep(context)
+    if facts:
+        packet["facts_to_keep"] = facts
+        instructions.append(
+            "facts_to_keep are true at this moment. ===NAR=== may add anything else to the scene, "
+            "but does not contradict them: the time of day is that time, an open place is open, a closed one is closed."
+        )
     # Fresh per turn (app/example_pools.py): options, not people who exist.
     cast = context.get("cast_options") if isinstance(context, dict) else None
     if isinstance(cast, dict) and (cast.get("names") or cast.get("jobs")):
