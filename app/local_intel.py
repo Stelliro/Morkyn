@@ -1173,6 +1173,10 @@ _PLAIN_ACCEPT_RE = re.compile(
     re.IGNORECASE,
 )
 _OFFER_STOP = frozenset({"the", "a", "an", "of", "to", "for", "and", "in", "on", "at", "from", "with", "word", "some", "this", "that"})
+# Words every job shares say nothing about which one is meant (7B run 29, T4:
+# "Paying before the work's done? ... I'll take the job. Where's the ship"
+# took "Visit the guild for work" over "Salvage a damaged ship" on "work").
+JOB_WORDS = frozenset({"work", "works", "job", "jobs", "task", "tasks", "errand", "errands", "help", "quest", "contract", "some"})
 
 
 def typed_accept(text: str) -> bool:
@@ -1182,7 +1186,7 @@ def typed_accept(text: str) -> bool:
 
 
 def _offer_words(row: Any) -> set[str]:
-    return {w for w in re.findall(r"[a-z]{4,}", str(row["title"] or "").lower()) if w not in _OFFER_STOP}
+    return {w for w in re.findall(r"[a-z]{4,}", str(row["title"] or "").lower()) if w not in _OFFER_STOP and w not in JOB_WORDS}
 
 
 def typed_offer_choice(rows: list[Any], text: str) -> Any | None:
@@ -1208,13 +1212,15 @@ def typed_offer_choice(rows: list[Any], text: str) -> Any | None:
     words = set(re.findall(r"[a-z]{4,}", low))
     scored = []
     for row in rows:
-        score = len(_offer_words(row) & words)
+        # A word of the title outweighs the giver's name: "Oswin, I'll take
+        # the job. Where's the ship" means the ship job, whoever is addressed.
+        score = 2 * len(_offer_words(row) & words)
         try:
             giver = str(row["giver"] or "")
         except (KeyError, IndexError):
             giver = ""
         first = giver.split()[0].lower() if giver.split() else ""
-        if score and first and re.search(rf"\b{re.escape(first)}\b", low):
+        if first and re.search(rf"\b{re.escape(first)}\b", low):
             score += 1
         scored.append((score, row))
     top = max(score for score, _ in scored)
@@ -1299,6 +1305,10 @@ def list_open_offers(limit: int = 8) -> list[dict[str, Any]]:
             # T2: "What does it pay?" got "I see" - the packet had no sum).
             "pays_gold": int(row["reward_gold"] or 0),
         }
+        ahead = sum(int(x) for x in re.findall(r"paid_in_advance:(\d+)", notes))
+        if ahead:
+            # Handed over before the work (7B run 29, T3); the giver should not pay it again.
+            entry["paid_ahead_gold"] = ahead
         if source:
             # A clock offer the story has said aloud (the parser filed it again
             # and was told it is this one) is marked "voiced".
