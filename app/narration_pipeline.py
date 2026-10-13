@@ -1587,7 +1587,11 @@ _YOU_SAID_RE = re.compile(
     # 7B run 5 (#86): '"Warin Croft," you repeat' (T88), 'You explain, "..."'
     # (T82) and 'you call out, "..."' (T38) went unread as the player's lines.
     r"repeat|repeated|explain|explained|call\s+out|called\s+out|tell|told|respond|responded|"
-    r"remark|remarked|admit|admitted|comment|commented)\b",
+    r"remark|remarked|admit|admitted|comment|commented|"
+    # 7B run 9: '"I'll check with the old man first," you decide' (T4) and
+    # '"Thanks, Hal," you call back, "I'll be careful."' (T2).
+    r"decide|decided|resolve|resolved|agree|agreed|promise|promised|announce|announced|vow|vowed|"
+    r"call\s+back|called\s+back)\b",
     re.IGNORECASE,
 )
 # Someone else's speech tag in the same unit: the line is theirs.
@@ -1668,6 +1672,25 @@ def _drop_vocative(span: str, name: str) -> str:
     """The quotation without the name it is said to."""
     text = re.sub(rf",\s*{re.escape(name)}{_CODE_TAG}(?=\s*[.!?]*\s*$)", "", span)
     return re.sub(rf"^\s*{re.escape(name)}{_CODE_TAG}\s*,\s*", "", text)
+
+
+def _drop_invented_spans(unit: str, keep) -> tuple[str, list[str]]:
+    """The unit without the quotations ``keep`` refuses, and those quotations as dropped text."""
+    gone: list[str] = []
+    out = str(unit or "")
+    for match in reversed(list(_QUOTE_SPAN_RE.finditer(out))):
+        span = (match.group(1) or match.group(2) or "").strip()
+        if keep(span):
+            continue
+        gone.append(match.group(0))
+        start = match.start()
+        lead = re.search(r"[\s,;:—-]*$", out[:start])
+        start = lead.start() if lead else start
+        out = out[:start] + out[match.end():]
+    out = out.rstrip(" ,;:—-")
+    if out and out[-1] not in ".!?\"”":
+        out += "."
+    return out, list(reversed(gone))
 
 
 def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tuple[list[str], list[str]]:
@@ -1755,6 +1778,13 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                     player_turn = True
                     if all(_words_from_player(span, own, quotes) for span in spans):
                         kept_units.append(unit)
+                    elif tagged and quotes and len(spans) > 1 and any(_is_player_line(s, quotes) for s in spans):
+                        # The player's own line with an invented half after the tag
+                        # (7B run 9, T2: '"Thanks, Hal," you call back, "I'll be
+                        # careful."'): the invented half goes, the typed half stays.
+                        trimmed, gone = _drop_invented_spans(unit, lambda s: _is_player_line(s, quotes))
+                        kept_units.append(trimmed)
+                        dropped.extend(gone)
                     elif voiced and content_stems(" ".join(spans)) & own_stems:
                         voicing_kept = True
                         kept_units.append(unit)

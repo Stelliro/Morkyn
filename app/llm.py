@@ -13481,8 +13481,12 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     # refused the rusty tool handle the dig found (also run 5, T57).
     r"worth\s+(?:haul|tak|keep|sell|salvag|carr|pocket|bring)\w*\b"
     r"(?!\s+(?:a\s+|the\s+)?(?:risk|chance|time|trouble|look|trip|walk|wait)s?\b)|"
+    # 7B run 9, T2: "probing the mud ... looking for anything solid worth
+    # digging out" was read as no take, and the finds were cut as decisions.
+    r"worth\s+dig\w*\s+(?:out|up)\b|"
     r"haul(?:s|ed|ing)?\s+(?:[\w']+\s+){0,3}(?:back|home|off|away)\b|"
     r"(?:dig|digs|digging|dug|search\w*|rummag\w*|root(?:s|ing)?\s+(?:around|about|through)|sift\w*|"
+    r"prob(?:e|es|ed|ing)|pok(?:e|es|ed|ing)|scour\w*|"
     r"forag\w*|comb(?:s|ing)?\s+through)\b[^.!?\n]{0,60}?\bfor\s+(?:anything|something|whatever|any)\b)",
     re.I,
 )
@@ -15100,8 +15104,18 @@ def _scene_cut_point(text: str, player_input: str) -> dict[str, Any] | None:
             at = body.find(unit[:40])  # units are re-joined with single spaces
         if at >= 0:
             triggers.append((at, unit, "speech"))
+    # Keeping what the player's own line went looking for is theirs, not a
+    # decision made for them (7B run 9, T2: "probing the mud ... looking for
+    # anything solid worth digging out" cut at "You pocket these as well" and
+    # lost the key, the coin and the shard).
+    asked_take = player_take_intent(own)
     for start, _end, sentence in sentence_spans(body):
         family = _invented_unit_family(sentence, own, player_input)
+        if family == "taking" and asked_take:
+            from app import turn_ledger
+
+            turn_ledger.note("player_words", "asked_take_not_cut", sentence=sentence[:160])
+            continue
         if family in _SCENE_CUT_FAMILIES:
             triggers.append((start, sentence, family))
     quotes = player_quotes(player_input)
@@ -15126,7 +15140,15 @@ _ARRIVED_RE = re.compile(
 )
 # A quotation tagged as the player's: '"A half then," you say'.
 _PLAYER_TAG_AFTER_RE = re.compile(r'^[\s,.!?]*(?:you|You)\s+(?:\w+ly\s+)?(?:say|said|ask|asked|reply|replied|answer|answered|'
-                                  r'add|added|call|called|tell|told|murmur|murmured|mutter|muttered|offer|offered)\b')
+                                  r'add|added|call|called|tell|told|murmur|murmured|mutter|muttered|offer|offered|'
+                                  r'decide|decided|agree|agreed|promise|promised|announce|announced)\b')
+# The second half of a line the player was given: '"Thanks, Hal," you call
+# back, "I'll be careful."' (7B run 9, T2: the cut ended the scene on it).
+_PLAYER_TAG_BEFORE_RE = re.compile(
+    r'\b(?:you|You)\s+(?:\w+ly\s+)?(?:say|said|ask|asked|reply|replied|answer|answered|add|added|call|called|'
+    r'tell|told|murmur|murmured|mutter|muttered|decide|decided|agree|agreed|promise|promised|announce|announced)'
+    r'\b[^"“”.!?]{0,25}[,:]?\s*$'
+)
 
 
 def _cut_point_before(
@@ -15145,7 +15167,9 @@ def _cut_point_before(
     while before:
         candidate = before.pop()
         span = (candidate.group(1) or candidate.group(2) or "").strip()
-        tagged = _PLAYER_TAG_AFTER_RE.match(body[candidate.end():candidate.end() + 40])
+        tagged = _PLAYER_TAG_AFTER_RE.match(body[candidate.end():candidate.end() + 40]) or _PLAYER_TAG_BEFORE_RE.search(
+            body[max(0, candidate.start() - 60):candidate.start()]
+        )
         invented = any(span and span in str(u) for u in (spoken or []))
         # A line tagged as the player's that is not what they typed ("A half
         # then," shares one word with "Half the usual of what?") is the
@@ -15187,12 +15211,17 @@ def _replies_to_player(body: str, start: int, own: str, quotes: list[str]) -> bo
     """
     from app.narration_pipeline import _words_from_player
 
-    prev = None
-    for match in _SCENE_QUOTE_RE.finditer(body, 0, start):
-        prev = match
-    if prev is not None:
+    # A reply split over two quotations ('"That's an odd piece," he says, "but
+    # old harbour money could fetch something."', 7B run 9, T4) is one answer:
+    # look past the earlier half in the same paragraph.
+    para_start = body.rfind("\n\n", 0, start)
+    for prev in reversed(list(_SCENE_QUOTE_RE.finditer(body, 0, start))):
         span = (prev.group(1) or prev.group(2) or "").strip()
-        return bool(_words_from_player(span, own, quotes))
+        if _words_from_player(span, own, quotes):
+            return True
+        if prev.start() > para_start:
+            continue
+        return False
     return any("?" in q for q in quotes)
 
 
