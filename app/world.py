@@ -9360,6 +9360,30 @@ def _unasked_unshown_move(
     if not (code or name or walk):
         return ""
     if intent == "travel" or travel_intent(player_input) or venue_move_intent(player_input):
+        # A walk asks to go somewhere, not anywhere: "I walk over to where the
+        # mole catcher is digging" came back with MOVE "Seventh Pike Stables",
+        # a place neither the line nor the prose names (7B run 19, T1).
+        named_dest = name or ""
+        if code and not named_dest:
+            row = next((r for r in rows if str(r["code"] or "").upper() == code.upper()), None)
+            named_dest = str(row["name"] or "") if row is not None else ""
+        words = _place_words(named_dest) if named_dest else []
+        prose_low = _unspoken(str(narration or "")).lower()
+        line_low = _player_line(player_input).lower()
+        line_names_known = any(
+            _line_names_place(line_low, _place_words(str(r["name"] or ""))) for r in rows if str(r["name"] or "").strip()
+        )
+        if (
+            words
+            and not walk
+            and not line_names_known
+            and str(narration or "").strip()
+            and not _line_names_place(line_low, words)
+            and not re.search(rf"\b{re.escape(words[-1])}", prose_low)
+            and not (code and f"[[{code.lower()}]]" in prose_low)
+        ):
+            turn_ledger.note("movement", "walk_elsewhere_move_dropped", destination=named_dest)
+            return named_dest
         return ""
     text = str(narration or "")
     if not text.strip():
