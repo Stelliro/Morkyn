@@ -1420,6 +1420,8 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
                 slim = {"title": row.get("title") or "", "source": row.get("source") or ""}
                 if row.get("giver"):
                     slim["giver"] = row.get("giver")
+                if int(row.get("pays_gold") or 0) > 0:
+                    slim["pays"] = f"{int(row['pays_gold'])} gold"
                 slim["status"] = {"declined": "turned_down", "accepted_now": "player_takes_it_now"}.get(
                     str(row.get("status") or ""), "waiting_for_answer"
                 )

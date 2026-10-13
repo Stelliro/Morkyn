@@ -1268,7 +1268,7 @@ def list_open_offers(limit: int = 8) -> list[dict[str, Any]]:
         # narrator and the quest parser are told not to offer them again (TODO n20).
         rows = conn.execute(
             """
-            SELECT q.id, q.title, q.notes, q.giver_npc_id, q.status, n.name AS giver_name
+            SELECT q.id, q.title, q.notes, q.giver_npc_id, q.status, q.reward_gold, n.name AS giver_name
             FROM quests q LEFT JOIN npcs n ON n.id = q.giver_npc_id
             WHERE q.status = 'offered'
                OR (q.status = 'declined' AND COALESCE(q.failed_turn, 0) >= ?)
@@ -1295,6 +1295,9 @@ def list_open_offers(limit: int = 8) -> list[dict[str, Any]]:
             "source": source,
             "giver": str(row["giver_name"] or ""),
             "status": str(row["status"] or "offered"),
+            # What the job pays, so the giver can name it when asked (7B run 26,
+            # T2: "What does it pay?" got "I see" - the packet had no sum).
+            "pays_gold": int(row["reward_gold"] or 0),
         }
         if source:
             # A clock offer the story has said aloud (the parser filed it again
