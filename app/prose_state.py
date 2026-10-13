@@ -924,7 +924,10 @@ _STAGE_SENTENCE_RE = re.compile(
     r"^\s*The\s+(?:focus|scene)\s+(?:now\s+)?(?:shifts|changes|is\s+about\s+to\s+(?:change|shift))\b"
     # 7B run 6, T6: "The scene ends with you standing in the town square, the
     # deal made and the clock ticking."
-    r"|^\s*The\s+scene\s+(?:now\s+)?(?:ends|closes|draws\s+to\s+a\s+close|comes\s+to\s+an?\s+(?:end|close))\b",
+    r"|^\s*The\s+scene\s+(?:now\s+)?(?:ends|closes|draws\s+to\s+a\s+close|comes\s+to\s+an?\s+(?:end|close))\b"
+    # 7B run 7, T3: "The scene is focused on the job of cleaning the decks,
+    # with Oriel Rendle [[A]] as the central figure."
+    r"|^\s*The\s+(?:scene|focus)\s+(?:is|remains|stays)\s+(?:now\s+)?(?:focused|centred|centered|fixed)\s+on\b",
     re.I,
 )
 # A quotation closed twice: '"Thanks, Oldfield.""' (7B run 6, T9).
