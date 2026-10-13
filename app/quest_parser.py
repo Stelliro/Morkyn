@@ -180,6 +180,84 @@ def player_accepts(player_input: str) -> bool:
         return False
 
 
+_QUOTED_RE = re.compile(r'"[^"]*"|“[^”]*”')
+# The player holds off or says no (7B run 7, T4-T5): "I haven't said yes yet",
+# "No deal, Oriel. I'll take my chances on the flats."
+_HOLDS_OFF_RE = re.compile(
+    r"\b(?:(?:haven['’]?t|have\s+not|didn['’]?t|did\s+not|never)\s+(?:said|say|agreed?|accepted?|taken|took)\b|"
+    r"not\s+(?:yet|so\s+fast)\b|hold\s+on\b)",
+    re.I,
+)
+_REFUSES_RE = re.compile(
+    r"\b(?:no\s+deal|no\s+thanks|not\s+interested|i(?:['’]ll|\s+will)?\s+pass\b|forget\s+it|"
+    r"find\s+someone\s+else|(?:i['’]m|i\s+am)\s+not\s+(?:taking|doing)|"
+    r"(?:won['’]?t|will\s+not)\s+(?:take|do)\s+(?:it|that|this|the\s+(?:job|work|offer))|"
+    r"i(?:['’]ll|\s+will)?\s+decline|turn\s+(?:it|that|this|the\s+(?:job|offer|work|task|errand))\s+down|"
+    r"(?:refuse|say\s+no\s+to)\s+(?:it|that|this|the\s+(?:job|offer|work|task|errand)))",
+    re.I,
+)
+# Starting the work in the player's own words: "I'll start", "let's get to it",
+# "I grab a broom and start on the deck". Not "I start back toward the door".
+_STARTS_WORK_RE = re.compile(
+    r"\b(?:(?:i|we)\s+(?:\w+\s+){0,4}?(?:start|begin|set\s+to|make\s+a\s+start)"
+    r"(?!\s+(?:to\s+)?(?:walk|leav|back|toward|away|off|out|for\s+the))|"
+    r"(?:i['’]ll|we['’]ll|let['’]s)\s+(?:get\s+)?(?:start(?:ed)?|begin|get\s+to\s+(?:it|work))|"
+    r"get\s+to\s+work|you['’]re\s+on)\b",
+    re.I,
+)
+
+
+def _player_own_line(player_input: str) -> str:
+    """The typed line, without engine notes appended below a blank line."""
+    return re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0]
+
+
+def player_refuses(player_input: str) -> bool:
+    """The player's line says no to a job (7B run 7, T5: "No deal, Oriel")."""
+    return bool(_REFUSES_RE.search(_player_own_line(player_input)))
+
+
+def player_takes_job(
+    quest: dict[str, Any] | None,
+    player_input: str,
+    existing: list[dict[str, Any]] | None = None,
+    narration: str = "",
+) -> bool:
+    """
+    The player's own line takes this job (7B run 7, T3).
+
+    The parser cited Oriel's "Good choice. Let's see what the deck has in
+    store for us." as the accept while the player had only said "Give me a
+    number, Oriel, or I'm off to the flats on my own." The story may answer
+    for the giver, never for the player: a job is taken by the player's words
+    (agreeing, signing, "I'll take the job"), or by the player starting the
+    work in their own words.
+    """
+    own = _player_own_line(player_input)
+    if not own.strip() or quest is None:
+        return False
+    if _HOLDS_OFF_RE.search(own) or _REFUSES_RE.search(own):
+        return False
+    if player_accepts(own) and _means_this_offer(quest, existing, own):
+        return True
+    if _STARTS_WORK_RE.search(own):
+        return True
+    # The player names the price and the giver agrees (7B run 6, T6: "Two gold
+    # for the whole pile, sorted by noon. Yes or no?" - "the gold is yours"):
+    # the player's terms are the player's yes.
+    if narration and agreed_job_price(narration, own)[1] == "player_terms_agreed":
+        return True
+    # "I sort the pile" for "Sort salvaged goods": the job's own verb, done by the player.
+    acts = _QUOTED_RE.sub(" ", own)
+    first = re.findall(r"[a-z][a-z']+", str(quest.get("title") or "").lower())
+    verb = _stem(first[0]) if first else ""
+    if verb and verb not in _QUEST_STOP_STEMS:
+        for match in re.finditer(r"\b(?:i|we)\s+(?:\w+\s+){0,2}?([a-z][a-z']+)", acts, re.I):
+            if _stem(match.group(1)) == verb:
+                return True
+    return False
+
+
 def _title_words(title: str) -> set[str]:
     stop = {"the", "a", "an", "of", "to", "for", "and", "in", "on", "at", "from", "with", "word"}
     return {w for w in re.findall(r"[a-z]{4,}", str(title or "").lower()) if w not in stop}
@@ -1020,6 +1098,16 @@ def validate_quest_changes(
         if len(accepted["new"]) >= MAX_NEW_PER_TURN:
             break
 
+    # An offer made and taken in the same turn: the player's own line takes the
+    # one new job ("I'll take the job.") and it starts active (TODO n20 keeps
+    # every other new job an offer).
+    if len(accepted["new"]) == 1:
+        item = accepted["new"][0]
+        pseudo = {"id": -1, "title": item["title"], "status": "offered"}
+        open_offers = [q for q in existing or [] if str(q.get("status") or "") == "offered"] + [pseudo]
+        if player_takes_job(pseudo, player_input, open_offers, narration):
+            item["status"] = "active"
+
     for raw in list((changes or {}).get("updates") or [])[: MAX_UPDATES_PER_TURN * 2]:
         if not isinstance(raw, dict):
             continue
@@ -1055,6 +1143,9 @@ def validate_quest_changes(
                 reasons.append("evidence_not_in_text")
         if quest is not None and action in _LEGAL and str(quest.get("status") or "") not in _LEGAL[action]:
             reasons.append(f"illegal_transition:{quest.get('status')}->{action}")
+        if action == "accept" and quest is not None and not reasons and not player_takes_job(quest, player_input, existing, narration):
+            # The prose may agree for the giver, never for the player (7B run 7, T3).
+            reasons.append("player_did_not_accept")
         # Setting out is not done (7B Saltmarrow T7): "you head down the
         # slipway onto the northern mudflats to look for the lost cargo"
         # completed and paid the cargo job while the search roll failed.
@@ -1359,12 +1450,18 @@ def apply_quest_changes(
                 target_location_id=target_id,
                 created_turn=int(turn),
                 notes=f"parser:{accepted['source']}; evidence: {item['evidence']}"[:900],
-                status=item["status"],
+                status="offered",
                 reward_karma=int(item["reward"].get("karma") or 0),
             )
             code = f"Q{quest_id}"
             giver = f" (from {item['giver_name']})" if item["giver_name"] else ""
             _journal(conn, turn, f"New job offered: {item['title']}{giver}")
+            if item["status"] == "active":
+                # Taken in the player's own words this turn: the one accept path journals it.
+                if accept_offered(conn, int(quest_id), turn=int(turn), player_line=player_input) is None:
+                    item["status"] = "offered"
+                else:
+                    turn_ledger.note("quest", "taken_on_offer", quest=code, title=item["title"])
             report["created"].append({"code": code, "title": item["title"], "status": item["status"]})
         for upd in accepted["updates"]:
             qid = int(upd["quest_id"])
@@ -1405,6 +1502,83 @@ def apply_quest_changes(
         report["status"] = "error"
         report["error"] = str(exc)[:300]
         return report
+
+
+def settle_player_answer(conn, player_input: str, turn: int) -> list[dict[str, Any]]:
+    """
+    The player's own no, or "not yet", to a job (7B run 7, T4-T5).
+
+    "I haven't said yes yet" and "No deal, Oriel. I'll take my chances on the
+    flats." left a job the engine had made active on the prose's say-so. Read
+    from the player's line, so it needs no parser proposal:
+
+    - a refusal turns down the one open offer (or the one the line names);
+    - a job taken in the last turn or this one, with no step done yet, goes
+      back to an offer on "not yet", and is turned down on a refusal.
+
+    Only one job can be meant: the one the line names, or the only candidate.
+    Returns report rows ({"code", "action"}).
+    """
+    own = _player_own_line(player_input)
+    refuses = bool(_REFUSES_RE.search(own))
+    holds_off = bool(_HOLDS_OFF_RE.search(own))
+    if not (refuses or holds_off):
+        return []
+    from app import turn_ledger
+
+    rows = [dict(r) for r in conn.execute(
+        "SELECT q.id, q.code, q.title, q.status, q.current_step, n.name AS giver, n.location_id AS giver_at "
+        "FROM quests q LEFT JOIN npcs n ON n.id = q.giver_npc_id "
+        "WHERE q.status IN ('offered', 'active') ORDER BY q.id"
+    ).fetchall()]
+    here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    here_id = int(here[0] or 0) if here else 0
+    low = own.lower()
+    candidates: list[dict[str, Any]] = []
+    for row in rows:
+        # The answer is to someone in the scene: a "No deal" over a price
+        # elsewhere does not turn down a job from a giver who is not here.
+        giver_first = str(row.get("giver") or "").split()[:1]
+        giver_here = (row.get("giver_at") and int(row["giver_at"]) == here_id) or (
+            giver_first and re.search(rf"\b{re.escape(giver_first[0].lower())}\b", low)
+        )
+        if row.get("giver") and not giver_here:
+            continue
+        if row["status"] == "offered":
+            if refuses:
+                candidates.append(row)
+            continue
+        if int(row.get("current_step") or 1) != 1:
+            continue
+        taken = conn.execute(
+            "SELECT 1 FROM journal WHERE turn >= ? AND content LIKE ? LIMIT 1",
+            (int(turn) - 1, f"Quest accepted: {row['title']}%"),
+        ).fetchone()
+        if taken:
+            candidates.append(row)
+    if not candidates:
+        return []
+    words = set(re.findall(r"[a-z]{4,}", own.lower()))
+    named = [r for r in candidates if _title_words(str(r.get("title") or "")) & words]
+    pool = named or candidates
+    if len(pool) != 1:
+        turn_ledger.note("quest", "answer_unplaced", refuses=refuses, holds_off=holds_off,
+                         candidates=[r["code"] or f"Q{r['id']}" for r in pool])
+        return []
+    row = pool[0]
+    code = str(row.get("code") or f"Q{row['id']}")
+    if row["status"] == "active" and not refuses:
+        conn.execute("UPDATE quests SET status = 'offered' WHERE id = ? AND status = 'active'", (int(row["id"]),))
+        _journal(conn, turn, f"Not taken yet: {row['title']}")
+        turn_ledger.note("quest", "accept_undone", quest=code, why="the player has not said yes")
+        return [{"code": code, "action": "unaccept"}]
+    conn.execute(
+        "UPDATE quests SET status = 'declined', failed_turn = ? WHERE id = ? AND status IN ('offered', 'active')",
+        (int(turn), int(row["id"])),
+    )
+    _journal(conn, turn, f"Turned down: {row['title']}")
+    turn_ledger.note("quest", "declined_by_player", quest=code, was=row["status"])
+    return [{"code": code, "action": "decline"}]
 
 
 def finishing_quest_ids(
