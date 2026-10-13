@@ -366,6 +366,41 @@ def player_pays_outright(own_line: str) -> int | None:
     return None
 
 
+# The player's own line only puts coin away: "I pocket the two gold" (7B run
+# 6, T10, the line after Oldfield paid). "The", "my", "those" name coin
+# already in hand; "I pocket two gold from the till" is a take, not this.
+_PUTS_AWAY_COIN_RE = re.compile(
+    r"(?:^|[.;!]\s*|\band\s+|\bthen\s+)i\s+(?:\w+ly\s+)?(?:pocket|stow|tuck(?:\s+away)?|put\s+away|slip|count|"
+    r"stash|bag|keep)\s+(?:the|my|those|these|that|this|his|her|their)\s+(?:" + _AMOUNT + r"\s+)?"
+    r"(?:(?:small\s+|heavy\s+|few\s+)?(?:pouch|purse|bag)\s+of\s+)?" + _COIN
+    + r"(?![^.!?\n]{0,40}\b(?:from|off|out\s+of)\s+(?:the|a|his|her|their)\s+(?:till|table|counter|chest|box|floor|ground|body|corpse)\b)",
+    re.I,
+)
+
+
+def player_puts_away_coin(own_line: str) -> int | None:
+    """The player's line (outside their quoted speech) only puts coin already in hand away.
+
+    Returns the amount it names, 0 when it names none ("I pocket the coins"),
+    or None when the line does not do that.
+    """
+    text = _QUOTE_RE.sub(" ", str(own_line or ""))
+    match = _PUTS_AWAY_COIN_RE.search(text)
+    if not match:
+        return None
+    return _match_number(match) or 0
+
+
+def coin_reached_player(text: str, amount: int = 0) -> bool:
+    """Whether a scene shows coin reaching the player (the named amount, when given)."""
+    said = stated_coin_amounts(text)
+    if amount and amount in said["received"]:
+        return True
+    if coin_handed_to_player(text) is None and not said["received"]:
+        return False
+    return not amount or amount in coin_mentions(text)
+
+
 # A denied clause ends at a comma or stop, or where a conjunction starts a new
 # subject: "i dont have the coin so i head to the bakery" still heads there.
 _NEGATED_CLAUSE_RE = re.compile(
