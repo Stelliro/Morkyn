@@ -7586,6 +7586,22 @@ def _settlement_for_building(conn, building_id: int, kind: str, current_id: int)
     return 0
 
 
+def _prose_enters_row(shown: dict[str, Any], row, narration: str) -> bool:
+    """The entry the prose shows is this place: its name, or its building word in its name."""
+    if not shown:
+        return False
+    row_name = str(venues._field(row, "name", "") or "").lower()
+    told = str(shown.get("name") or "").lower()
+    if told and (told in row_name or row_name in told):
+        return True
+    noun = str(shown.get("noun") or "").lower()
+    if noun and re.search(rf"\b{re.escape(noun)}", row_name):
+        return True
+    # "...through the low door of Philippa Kemp's General Store. Inside, ..."
+    words = _place_words(row_name)
+    return bool(words) and _line_names_place(_unspoken(narration).lower(), words)
+
+
 def _venue_for_named_move(
     conn,
     result: dict[str, Any],
@@ -7618,7 +7634,23 @@ def _venue_for_named_move(
         return {}
     current_id = int(venues._field(current, "id", 0) or 0) if current is not None else 0
     if resolved is not None:
-        if int(venues._field(resolved, "parent_id", 0) or 0) or str(venues._field(resolved, "kind", "") or ""):
+        venue_parent = int(venues._field(resolved, "parent_id", 0) or 0)
+        if venue_parent or str(venues._field(resolved, "kind", "") or ""):
+            # The prose walks into this very shop (8B #76, Saltmarrow T7/T73/T88):
+            # from a place with no parent (an old save's tally house) the gate
+            # ended the walk outside while the scene played inside. The state
+            # follows the prose: one turn, through the shop's own parent.
+            if (
+                venue_parent
+                and venue_parent != current_id
+                and current is not None
+                and not int(venues._field(current, "parent_id", 0) or 0)
+                and not str(venues._field(current, "settlement_size", "") or "")
+                and _prose_enters_row(shown, resolved, narration)
+            ):
+                player_patch["_enter_via"] = venue_parent
+                parent = _location_row(conn, venue_parent)
+                return {"via": str(venues._field(parent, "name", "") or "") if parent is not None else ""}
             return {}
         resolved_id = int(resolved["id"])
         row_name = str(resolved["name"] or "")
@@ -12345,6 +12377,176 @@ def _coins_to_gold(conn, changes: list[dict[str, Any]], narration: str) -> list[
     return kept
 
 
+# --- A take the player asked for and the prose shows is kept (8B #55) -------
+# "You lift it ... a silver coin" with no GRANT: the draft forgot the op, the
+# prose and the player agree, so the state follows them. Both halves are
+# required: the player's own line asks to take, and the prose shows the
+# player taking it (not someone else, not put back afterwards).
+_SHOWN_TAKE_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?P<verb>pick\s+(?P<pro>it|them|both|one)\s+up|take|pick\s+up|pocket|grab|collect|"
+    r"gather\s+up|scoop\s+up|snatch\s+up|stow|help\s+yourself\s+to)\b(?P<obj>[^.;!?\n]*)",
+    re.I,
+)
+_TAKE_DETERMINER_RE = re.compile(
+    r"^(?P<det>the|a|an|some|both|two|three|four|five|six|several|\d+)\s+(?P<rest>.*)$", re.I
+)
+_TAKE_NUMBERS = {"two": 2, "three": 3, "four": 4, "five": 5, "six": 6}
+_TAKE_STOP_WORDS = frozenset({
+    "from", "off", "out", "into", "in", "inside", "on", "onto", "under", "with", "to", "toward", "towards", "before",
+    "while", "then", "but", "so", "as", "which", "that", "because", "and", "or", "of", "at", "by", "up", "down",
+    "back", "away", "over", "for", "lies", "lie", "lay", "sits", "sat", "rests", "gleams", "glints", "glitters",
+    "winks", "waits", "is", "was", "are", "were", "hangs", "shines", "catches", "it", "them", "you", "your",
+    "carefully", "gently", "quickly", "slowly",
+})
+_NOT_A_TAKEN_THING = frozenset({
+    "look", "glance", "breath", "breaths", "step", "steps", "seat", "moment", "chance", "turn", "care", "aim",
+    "note", "lead", "rest", "place", "stock", "heart", "courage", "offer", "deal", "job", "work", "path", "road",
+    "way", "time", "hand", "hands", "arm", "arms", "oar", "oars", "helm", "reins", "wheel", "risk", "measure",
+    "position", "cover", "shelter", "point", "advice", "side", "word", "words", "opportunity", "liberty", "stairs",
+    "ladder", "door", "sip", "bite", "drink", "swig", "mouthful", "hold", "grip", "lot", "rim", "edge", "floor",
+    "ground", "wall", "water", "air", "view", "scene", "sight", "silence", "dark", "light",
+})
+_LINE_TAKES_ANY_RE = re.compile(
+    r"\b(?:whatever|anything|everything|something|it|them|what(?:'s|\s+is)|the\s+lot|all\s+of\s+it)\b", re.I
+)
+
+
+def _taken_phrase(chunk: str) -> tuple[str, int]:
+    """("rusty key", 1) from "the rusty key from the drawer"; ("", 0) when it is not a thing."""
+    words = re.findall(r"[A-Za-z][\w'’-]*", chunk)
+    if not words:
+        return "", 0
+    qty = 1
+    det = words[0].lower()
+    if det in {"the", "a", "an", "some", "both", "several"} or det in _TAKE_NUMBERS or det.isdigit():
+        qty = _TAKE_NUMBERS.get(det, int(det) if det.isdigit() else (2 if det == "both" else 1))
+        words = words[1:]
+    elif det in {"your", "my", "his", "her", "their"}:
+        return "", 0  # the player's own, or someone else's: not new
+    kept: list[str] = []
+    for word in words[:4]:
+        low = word.lower()
+        if low in _TAKE_STOP_WORDS or low.endswith("ly") or word[:1].isupper():
+            break
+        kept.append(low)
+    if not kept or kept[-1] in _NOT_A_TAKEN_THING or re.search(r"['’]s$", kept[-1] or ""):
+        return "", 0
+    from app.prose_state import _PERSON_NOUN_RE
+
+    if _PERSON_NOUN_RE.fullmatch(kept[-1]):
+        return "", 0
+    return " ".join(kept), qty
+
+
+def _last_new_thing(before: str) -> tuple[str, int]:
+    """The last thing the prose brought in before a pronoun: "a silver coin" in "Beneath it lies a silver coin, ..."."""
+    found: list[tuple[str, int, bool]] = []
+    for match in re.finditer(r"\b(?:the|a|an|some|two|three|four|five|six|\d+)\s+[a-z][\w'’-]*(?:\s+[a-z][\w'’-]*){0,3}", before):
+        phrase, qty = _taken_phrase(match.group(0))
+        if phrase:
+            found.append((phrase, qty, not match.group(0).lower().startswith("the ")))
+    fresh = [f for f in found if f[2]]
+    pick = (fresh or found or [("", 0, False)])[-1]
+    return pick[0], pick[1]
+
+
+def _grant_shown_takes(
+    conn,
+    changes: list[dict[str, Any]],
+    narration: str,
+    player_input: str,
+    *,
+    rejected: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Add the gains the player asked for and the prose shows taken, when the draft wrote none (8B #55)."""
+    changes = list(changes or [])
+    line = _player_line(player_input) if player_input else ""
+    if not line or not player_take_intent(line):
+        return changes
+    line_l = line.lower()
+    takes_any = bool(_LINE_TAKES_ANY_RE.search(line_l))
+    plain = venues.strip_speech(str(narration or ""))
+    sentences = [s for s in re.split(r"(?<=[.!?])\s+|\n+", plain) if s.strip()]
+    owned = [str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM inventory").fetchall()]
+
+    def covered(name_l: str, tokens: list[str], entries) -> bool:
+        for entry in entries:
+            other = str((entry or {}).get("name") or "").lower()
+            if not other:
+                continue
+            if _sentence_mentions_item(other, name_l, tokens) or _sentence_mentions_item(
+                name_l, other, _item_name_tokens(other)
+            ):
+                return True
+        return False
+
+    added: list[dict[str, Any]] = []
+    for index, sentence in enumerate(sentences):
+        for match in _SHOWN_TAKE_RE.finditer(sentence):
+            obj = match.group("obj") or ""
+            if match.group("verb").lower().startswith("take") and re.match(rf"\s+{_TAKE_NOT_ACQUIRE_TAIL}\b", obj, re.I):
+                continue
+            items: list[tuple[str, int]] = []
+            first = obj.strip()
+            if match.group("pro") or re.match(r"(?:it|them|both|one|the\s+lot)\b", first, re.I):
+                before = " ".join(sentences[max(0, index - 1):index]) + " " + sentence[: match.start()]
+                phrase, qty = _last_new_thing(before.lower())
+                if phrase:
+                    items.append((phrase, qty))
+            else:
+                # "the rusty key and the faded map from the drawer": items joined by
+                # "and" or a comma, each with its own article; "and slip them ..." ends it.
+                for part in re.split(r"\s*,\s*|\s+and\s+", first):
+                    if items and not _TAKE_DETERMINER_RE.match(part.strip()):
+                        break
+                    phrase, qty = _taken_phrase(part)
+                    if not phrase:
+                        break
+                    items.append((phrase, qty))
+                    if re.search(r"\b(?:from|off|out|into|in|on|onto|under|with|to)\b", part, re.I):
+                        break
+            after = " ".join([sentence[match.start("obj"):]] + sentences[index + 1:])
+            for phrase, qty in items:
+                tokens = _item_name_tokens(phrase)
+                if not (takes_any or _sentence_mentions_item(line_l, phrase, tokens)):
+                    continue
+                if covered(phrase, tokens, [c for c in changes + added if int(_float((c or {}).get("quantity_delta"), 0)) > 0]):
+                    continue
+                if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "gain"]):
+                    continue
+                if any(_sentence_mentions_item(o, phrase, tokens) for o in owned) and "another" not in obj.lower():
+                    continue
+                # Put back, handed on, or eaten after the take: not kept.
+                gone = False
+                for later in re.split(r"(?<=[.!?])\s+|,\s+(?:and\s+)?|\s+and\s+", after):
+                    later_l = later.lower()
+                    if not later_l.strip():
+                        continue
+                    if not (_sentence_mentions_item(later_l, phrase, tokens) or _PRONOUN_CARRY_RE.search(later_l)):
+                        continue
+                    if any(pattern.search(later) for pattern, _player in _ITEM_LOSS_RES):
+                        gone = True
+                        break
+                if gone:
+                    continue
+                added.append({
+                    "name": phrase,
+                    "quantity_delta": qty,
+                    "reason": "taken in the prose, as the player asked",
+                    "source": "shown_take",
+                })
+    if added:
+        try:
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (_turn_value(conn), "system", "Prose matched to state: kept "
+                 + ", ".join(f"{a['name']} x{a['quantity_delta']}" for a in added) + " (taken as asked; no GRANT)"),
+            )
+        except Exception:
+            pass
+    return changes + added
+
+
 _LOSS_VERB_RE = re.compile(
     r"\b(?:drop\w*|giv(?:e|es|ing)|gave|given|hand(?:s|ed|ing)?\s+(?:over|it|them|him|her|the)\b|sell\w*|sold|"
     r"pay\w*|paid|trad(?:e|es|ed|ing)|swap\w*|leav(?:e|es|ing)\s+(?:it|them|the|your|behind)|left\s+(?:it|them|behind)|"
@@ -16440,6 +16642,32 @@ def _cut_prose_at_refused_move(result: dict[str, Any], movement_report: Any, pla
     }
 
 
+def _pinned_cast(conn) -> tuple[list[dict[str, Any]], list[str]]:
+    """(people with a he/she pin and their names, capitalised names that are not people) for the pronoun mend."""
+    rows = conn.execute("SELECT name, pronouns FROM npcs").fetchall()
+    firsts: dict[str, int] = {}
+    for row in rows:
+        first = str(row["name"] or "").split(" ")[0].strip()
+        if first:
+            firsts[first] = firsts.get(first, 0) + 1
+    cast = []
+    for row in rows:
+        name = str(row["name"] or "").strip()
+        key = str(row["pronouns"] or "").strip().lower()
+        if not name or key not in {"he", "she"}:
+            continue
+        names = [name]
+        first = name.split(" ")[0]
+        if first != name and len(first) > 2 and firsts.get(first) == 1:
+            names.append(first)
+        cast.append({"names": names, "key": key})
+    things = [str(r["name"] or "") for r in conn.execute("SELECT name FROM locations").fetchall()]
+    things += [str(r["name"] or "") for r in conn.execute("SELECT name FROM inventory").fetchall()]
+    # Unpinned people are left out of both lists, so their names read as a
+    # second person and the sentence is not mended.
+    return cast, [t for t in things if t]
+
+
 def _reconcile_prose_with_state(
     conn,
     result: dict[str, Any],
@@ -16552,6 +16780,17 @@ def _reconcile_prose_with_state(
             report["trimmed"].append({"why": "price_clamped_to_purse", "from": cost, "to": purse})
     if isinstance(gold_note, dict):
         report["gold"] = gold_note
+
+    # A pinned person keeps the pronouns the story set (8B #55: Min, a woman
+    # since T1, had "his weathered face" in T4). Only sentences about that one
+    # person are mended; anything shared with someone else stays as written.
+    try:
+        cast, not_people = _pinned_cast(conn)
+        text, mended = prose_state.repair_pinned_pronouns(text, cast, not_people=not_people)
+        for entry in mended:
+            report["trimmed"].append({"why": "pronouns_kept", **entry})
+    except Exception:
+        pass
 
     if text != original:
         _set_narration_text(result, text)
@@ -16849,6 +17088,13 @@ def apply_turn(
             else "",
             rejected=inv_rejected,
         )
+        # The player asked to take it and the prose shows it taken, but the
+        # draft wrote no GRANT: the state follows them (8B #55).
+        if input_kind == "player":
+            try:
+                inv_changes = _grant_shown_takes(conn, inv_changes, narration, player_input, rejected=inv_rejected)
+            except Exception:
+                pass
         voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report)
         purse_note = None
         try:

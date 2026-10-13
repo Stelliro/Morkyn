@@ -45,6 +45,9 @@ CONTEXT_STEP = 2048
 # keeps it when the memory allows, and the notice in app/failsafe.py speaks
 # when it cannot.
 PREFERRED_MIN_CONTEXT = 12288
+# Room a turn needs beyond the contract (the world packet plus the reply);
+# the same number as app.llm.MIN_TURN_HEADROOM_TOKENS, which a test pins.
+TURN_HEADROOM_TOKENS = 2048
 
 # Tokens-per-billion scale for the context when only the parameter count is
 # known: a 7B gets the full default, a 14B about half, a 70B the floor. The
@@ -349,8 +352,50 @@ def _gpu_budget_bytes(gpu: dict[str, int]) -> int:
     return min(cap, int(free) + max(0, int(gpu.get("held_bytes") or 0)))
 
 
+def turn_minimum_context() -> int:
+    """The smallest window a turn runs in: the compact contract plus the turn's headroom, rounded up a step.
+
+    Below this even the compact contract leaves no room for the world packet
+    and the reply, and every turn breaks (8B #62: a shared GPU sized the
+    window to 4096).
+    """
+    try:
+        from app.prompts import COMPACT_SYSTEM_PROMPT
+
+        contract = (len(COMPACT_SYSTEM_PROMPT) + 3) // 4
+    except Exception:
+        return NO_FACTS_CONTEXT_FLOOR
+    needed = contract + TURN_HEADROOM_TOKENS
+    return max(MIN_CONTEXT_TOKENS, -(-needed // CONTEXT_STEP) * CONTEXT_STEP)
+
+
 def auto_context_tokens(facts: dict[str, Any], gpu: dict[str, int] | None) -> tuple[int, str]:
     """The context window to open the model with, and one line saying why."""
+    chosen, why, _fits = _auto_context(facts, gpu)
+    return chosen, why
+
+
+def _auto_context(facts: dict[str, Any], gpu: dict[str, int] | None) -> tuple[int, str, int]:
+    """(window, why, what free memory fits when that is less than the window, else 0)."""
+    chosen, why = _auto_context_by_memory(facts, gpu)
+    floor = turn_minimum_context()
+    if chosen >= floor:
+        return chosen, why, 0
+    # Free memory fits less than a turn needs. Open at the turn minimum and say
+    # so: a window that breaks every turn is worse than a slower load, and if
+    # it does not load at all the player sees why instead of canned prose.
+    trained = _int_or_none(facts.get("n_ctx_train"))
+    opened = min(floor, trained) if trained else floor
+    if opened <= chosen:
+        return chosen, why, 0
+    return opened, (
+        f"opened at {opened:,}, the least a turn needs; free GPU memory fits only {chosen:,} "
+        f"({why}). Close other programs using the GPU and restart for a larger window"
+    ), chosen
+
+
+def _auto_context_by_memory(facts: dict[str, Any], gpu: dict[str, int] | None) -> tuple[int, str]:
+    """What the memory and the model allow, before the turn minimum."""
     trained = _int_or_none(facts.get("n_ctx_train"))
     ceiling = min(trained or DEFAULT_CONTEXT_TOKENS, MAX_CONTEXT_TOKENS)
     params = facts.get("params_b")
@@ -400,14 +445,17 @@ def auto_response_caps(facts: dict[str, Any]) -> tuple[int, int, str]:
 
 
 def auto_limits(facts: dict[str, Any], gpu: dict[str, int] | None = None) -> dict[str, Any]:
-    context, context_why = auto_context_tokens(facts, gpu)
+    context, context_why, fits = _auto_context(facts, gpu)
     soft, hard, caps_why = auto_response_caps(facts)
-    return {
+    out = {
         "context_tokens": int(context),
         "response_token_cap": int(soft),
         "response_token_hard_cap": int(hard),
         "basis": {"context": context_why, "response": caps_why},
     }
+    if fits:
+        out["short_of_memory"] = {"fits": int(fits), "opened": int(context)}
+    return out
 
 
 # ---------------------------------------------------------------------------

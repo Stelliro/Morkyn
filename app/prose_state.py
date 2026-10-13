@@ -535,3 +535,170 @@ def act_handed_off(narration: str, own_line: str) -> dict[str, Any] | None:
     if other is None:
         return None
     return {"verb": act["verb"], "family": act["family"], "by": other[0], "sentence": other[1]}
+
+
+# --- Pronouns keep the sex the story set (8B #55) ---------------------------
+# "Min is a woman in T1/T2 and 'his weathered face' in T4." The pin is in the
+# contract, and the 8B still drifts. Only the sure case is mended: a sentence
+# about one pinned person and nobody else (or the sentence right after it),
+# outside speech, that uses only the other set. Anything with a second person
+# in it, a "the man"/"the boy", or both sets is left as written.
+_PERSON_NOUN_RE = re.compile(
+    r"\b(?:man|men|woman|women|boy|boys|girl|girls|lad|lass|child|children|kid|baby|father|mother|son|daughter|"
+    r"brother|sister|husband|wife|uncle|aunt|king|queen|prince|princess|lord|lady|sir|madam|gentleman|fellow|"
+    r"stranger|figure|guard|guards|soldier|sailor|merchant|priest|priestess|widow|keeper|clerk|captain|youth|"
+    r"elder|innkeeper|smith|fisherman|fishwife|someone|somebody|anyone|everyone|nobody|people|crowd|others?)\b",
+    re.I,
+)
+_SETS = {
+    "he": {"subject": "he", "object": "him", "possessive": "his", "reflexive": "himself"},
+    "she": {"subject": "she", "object": "her", "possessive": "her", "reflexive": "herself"},
+}
+_WORDS_OF = {
+    "he": re.compile(r"\b(?:he|him|his|himself)\b", re.I),
+    "she": re.compile(r"\b(?:she|her|hers|herself)\b", re.I),
+}
+_OBJECT_FOLLOWERS = frozenset({
+    "the", "a", "an", "some", "this", "that", "these", "those", "your", "my", "his", "their", "our", "its", "one",
+    "two", "three", "no", "every", "each", "any", "all", "more", "what", "something", "anything", "nothing",
+    "everything", "and", "or", "but", "to", "for", "with", "in", "into", "on", "onto", "at", "by", "from", "of",
+    "off", "out", "up", "down", "over", "away", "back", "aside", "close", "closer", "again", "now", "too", "as",
+    "then", "a", "go", "be", "is", "was", "you", "if", "so", "until", "while", "before", "after", "about",
+})
+_NOT_A_NOUN_AFTER_HIS = frozenset({
+    "and", "or", "but", "to", "for", "with", "in", "on", "at", "by", "from", "of", "is", "was", "too", "now",
+    "alone", "again", "as", "then",
+})
+
+
+def _mask_speech(text: str) -> str:
+    """The text with quoted speech blanked to spaces, same length (a quote ends at a line break)."""
+    out: list[str] = []
+    inside = False
+    for ch in text:
+        if ch == "\n":
+            inside = False
+            out.append(ch)
+            continue
+        if ch == '"':
+            inside = not inside
+            out.append(" ")
+            continue
+        if ch == "“":
+            inside = True
+            out.append(" ")
+            continue
+        if ch == "”":
+            inside = False
+            out.append(" ")
+            continue
+        out.append(" " if inside else ch)
+    return "".join(out)
+
+
+def _next_word(text: str, end: int) -> str:
+    match = re.match(r"\s*([A-Za-z']+)", text[end:])
+    if not match or re.match(r"\s*[.,;:!?—-]", text[end:]):
+        return ""
+    return match.group(1).lower()
+
+
+def _swap(word: str, target: str, text: str, end: int) -> str:
+    low = word.lower()
+    to = _SETS[target]
+    if target == "she":
+        if low == "his":
+            nxt = _next_word(text, end)
+            new = to["possessive"] if nxt and nxt not in _NOT_A_NOUN_AFTER_HIS else "hers"
+        else:
+            new = {"he": to["subject"], "him": to["object"], "himself": to["reflexive"]}.get(low, low)
+    else:
+        if low == "her":
+            nxt = _next_word(text, end)
+            new = to["object"] if (not nxt or nxt in _OBJECT_FOLLOWERS) else to["possessive"]
+        else:
+            new = {"she": to["subject"], "hers": to["possessive"], "herself": to["reflexive"]}.get(low, low)
+    return new[:1].upper() + new[1:] if word[:1].isupper() else new
+
+
+def repair_pinned_pronouns(
+    text: str, cast: list[dict[str, Any]], *, not_people: tuple[str, ...] | list[str] = ()
+) -> tuple[str, list[dict[str, Any]]]:
+    """Mend a pinned he/she that flipped, in sentences only about that one person.
+
+    ``cast``: [{"names": ["Min Yardley", "Min"], "key": "she"}, ...]. ``not_people``:
+    capitalised names that are places or things, so they do not count as a
+    second person. Returns the text and one entry per mended sentence.
+    """
+    source = str(text or "")
+    people = []
+    for entry in cast or []:
+        key = str((entry or {}).get("key") or "").strip().lower()
+        names = [str(n).strip() for n in (entry or {}).get("names") or [] if str(n or "").strip()]
+        if key in _SETS and names:
+            pattern = re.compile(r"\b(?:" + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True)) + r")\b")
+            people.append({"name": names[0], "key": key, "re": pattern})
+    if not source or not people:
+        return source, []
+    known_caps = set()
+    for entry in cast or []:
+        for name in (entry or {}).get("names") or []:
+            known_caps.update(w for w in re.findall(r"[A-Z][\w'’-]*", str(name)))
+    for name in not_people or ():
+        known_caps.update(w for w in re.findall(r"[A-Z][\w'’-]*", str(name)))
+    known_caps.update({"You", "Your", "Yours", "I", "God", "Gods"})
+    masked = _mask_speech(source)
+    pieces: list[tuple[int, int]] = []
+    start = 0
+    for match in re.finditer(r"(?<=[.!?])[\"”’)]*[ \t]+|\n+", masked):
+        pieces.append((start, match.start()))
+        start = match.end()
+    pieces.append((start, len(masked)))
+    edits: list[tuple[int, int, str]] = []
+    fixes: list[dict[str, Any]] = []
+    focus: dict[str, Any] | None = None
+    carried = 0
+    previous_end = 0
+    for begin, end in pieces:
+        if "\n" in masked[previous_end:begin]:
+            focus = None
+        previous_end = end
+        plain = masked[begin:end]
+        if not plain.strip():
+            continue
+        named = [p for p in people if p["re"].search(plain)]
+        stripped = plain.lstrip()
+        lead = len(plain) - len(stripped)
+        stranger = bool(_PERSON_NOUN_RE.search(plain))
+        if not stranger:
+            for cap in re.finditer(r"\b[A-Z][\w'’-]*", plain):
+                if cap.start() == lead or cap.group(0) in known_caps:
+                    continue
+                if cap.group(0).lower() in {"he", "she", "his", "her", "him", "it", "they", "the", "a", "an"}:
+                    continue
+                stranger = True
+                break
+        if len(named) == 1 and not stranger:
+            focus, carried, person = named[0], 0, named[0]
+        elif not named and not stranger and focus is not None and carried < 1:
+            carried += 1
+            person = focus
+        else:
+            focus = None
+            continue
+        target = person["key"]
+        wrong = "she" if target == "he" else "he"
+        if _WORDS_OF[target].search(plain) or not _WORDS_OF[wrong].search(plain):
+            continue
+        changed = []
+        for word in _WORDS_OF[wrong].finditer(plain):
+            new = _swap(word.group(0), target, plain, word.end())
+            edits.append((begin + word.start(), begin + word.end(), new))
+            changed.append(f"{word.group(0)}->{new}")
+        fixes.append({"name": person["name"], "pronouns": target, "changed": changed, "sentence": source[begin:end].strip()[:160]})
+    if not edits:
+        return source, []
+    out = source
+    for a, b, new in sorted(edits, reverse=True):
+        out = out[:a] + new + out[b:]
+    return out, fixes
