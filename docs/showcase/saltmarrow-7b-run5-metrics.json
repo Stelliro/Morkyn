@@ -1,0 +1,49 @@
+{
+ "turns": 100,
+ "fallbacks": 0,
+ "seconds_mean": 13.69,
+ "seconds_median": 11.9,
+ "seconds_max": 50.28,
+ "opening_seconds": 111.36,
+ "checks": {
+  "persuasion": 26,
+  "athletics": 8,
+  "investigation": 4,
+  "perception": 4,
+  "ranged": 1
+ },
+ "check_results": {
+  "success": 27,
+  "failure": 7,
+  "partial": 5,
+  "critical_success": 2,
+  "critical_failure": 2
+ },
+ "final": {
+  "player": {
+   "name": "Isk Tarrow",
+   "level": 2,
+   "xp": 140,
+   "gold": 87,
+   "health": 20,
+   "max_health": 20,
+   "energy": 17,
+   "current_location_id": 1
+  },
+  "location": "Saltmarrow",
+  "inventory": [
+   "worn boots x1",
+   "linen shirt x1",
+   "patched trousers x1",
+   "mother's brass tide-reckoner x1",
+   "Five gold coins x4",
+   "cot x1",
+   "bowl x1",
+   "brass fittings x1",
+   "notes x1",
+   "iron lantern x1",
+   "iron lamp x1",
+   "bag x1"
+  ]
+ }
+}
