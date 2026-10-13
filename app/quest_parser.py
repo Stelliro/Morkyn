@@ -846,6 +846,13 @@ def _offer_speaker(narration: str, quote: str, npcs: list[dict[str, Any]] | None
 
 
 _BOARD_RE = re.compile(r"\b(?:notice|board|posting|poster|sign|guild|bounty)\b", re.I)
+# The offer is something read: "You read the details aloud", "the notice reads".
+_READ_POSTING_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:read|reads|scan|scans|study|studies)\b|"
+    r"\b(?:notice|posting|poster|sign|board|parchment|bill|handbill)\s+(?:reads|says|lists|announces)\b|"
+    r"\bposted\s+(?:on|at|by)\b",
+    re.I,
+)
 
 
 def _resolve_quest(ref: Any, existing: list[dict[str, Any]] | None) -> dict[str, Any] | None:
@@ -976,6 +983,18 @@ def validate_quest_changes(
             )
             giver = speaker
             giver_ref = str(speaker.get("code") or speaker.get("name") or "")
+        # A job read off a board is the board's, or its poster's (7B run 11,
+        # T2: "You read the details aloud: 'Lifting supplies to the upper
+        # levels of the market hall'" was filed under Iseult, who only said
+        # where the board was).
+        if giver is not None and _READ_POSTING_RE.search(evidence):
+            posted = " ".join(a or b for a, b in re.findall(r"\"([^\"]*)\"|“([^”]*)”", evidence))
+            names = [str(giver.get("name") or "")] + str(giver.get("name") or "").split()[:1]
+            if not any(n and re.search(rf"\b{re.escape(n)}\b", posted, re.I) for n in names):
+                from app import turn_ledger
+
+                turn_ledger.note("quest", "giver_is_the_board", title=title, parser_giver=giver_ref)
+                giver, giver_ref = None, "the notice board"
         checked = ""
         if not evidence_found(evidence, narration, player_input):
             reasons.append("evidence_not_in_text")
