@@ -9855,23 +9855,147 @@ def _venue_requested_and_reached(conn, player_input: str, narration: str, curren
     wanted = _destination_text(player_input)
     kind = ""
     low = wanted.lower()
+    destination = wanted
     for candidate in venues.VENUE_KINDS:
         label = venues.kind_label(candidate).lower()
-        if label and re.search(rf"\b(?:to|toward|towards|for|at)\s+(?:the\s+)?(?:[\w'’-]+\s+)?{re.escape(label)}\b", low):
+        found = re.search(rf"\b(?:to|toward|towards|for|at)\s+(?:the\s+)?(?:[\w'’-]+\s+)?{re.escape(label)}\b", low) if label else None
+        if found:
             kind = candidate
+            # Only the clause it walks to: "head out of the inn toward the salvage
+            # yard" is a yard, not the inn the line leaves (7B run 8, T2).
+            destination = wanted[found.start():]
             break
-    if not kind:
-        return ""
-    if not any(_prose_reaches(label, "", narration) for label in venues.kind_family_labels(kind) or [venues.kind_label(kind)]):
-        return ""
     here = conn.execute("SELECT * FROM locations WHERE UPPER(code) = ?", (str(current_code or "").upper(),)).fetchone()
     if here is None:
         return ""
     parent_id = int(venues._field(here, "parent_id", 0) or 0) or int(here["id"])
-    existing = _venue_named_in(conn, parent_id, wanted, "")
+    if not kind:
+        # A building by its own name ("I walk back to the Wren's Rest", 7B run 8 T4).
+        return _named_building_requested(conn, parent_id, wanted, narration)
+    labels = venues.kind_family_labels(kind) or [venues.kind_label(kind)]
+    # The player's choice stands unless the prose stops it (7B run 8, T2: "as you
+    # near, you see a few salvagers already there ... You approach and begin to
+    # read" never said "you reach" and left her in the square).
+    if not any(_prose_reaches(label, "", narration) or _prose_goes_toward(label, narration) for label in labels):
+        return ""
+    if any(_prose_stops_walk(label, narration) for label in labels):
+        turn_ledger.note("movement", "requested_walk_stopped_in_prose", kind=kind)
+        return ""
+    existing = _venue_named_in(conn, parent_id, destination, "")
     if existing is not None:
         return str(existing["name"] or "")
-    return _mint_venue_from_request(conn, parent_id, wanted, narration)
+    return _mint_venue_from_request(conn, parent_id, destination, narration)
+
+
+_APPROACH_RE = re.compile(
+    r"\b(?:near(?:s|ed|ing)?|approach\w*|draw(?:s|ing)?\s+(?:near|close)|close\s+in|walk\s+to|way\s+to|"
+    r"head(?:s|ed|ing)?\s+(?:for|to|toward|towards|down|over|back)|toward|towards|outside|entrance|gate|doorway|threshold)\b",
+    re.IGNORECASE,
+)
+_WALK_STOPPED_RE = re.compile(
+    r"\b(?:closed|locked|barred|shut\s+(?:tight|up|for)|no\s+one\s+(?:is\s+)?(?:there|about)\s+to\s+let|"
+    r"can(?:no|['’])t\s+(?:get|go|reach|enter|find)|blocks?\s+(?:your|the)\s+(?:way|path)|stops?\s+you|"
+    r"turns?\s+you\s+(?:back|away)|you\s+(?:stop|stay|remain|turn\s+back)|never\s+(?:reach|make\s+it))\b",
+    re.IGNORECASE,
+)
+
+
+def _prose_goes_toward(label: str, narration: str) -> bool:
+    """The prose (not speech) shows the player making for the place: its word with an approach word near "you"."""
+    words = _place_words(label)
+    head = words[-1] if words else ""
+    if not head:
+        return False
+    text = _unspoken(narration)
+    sentences = re.split(r"(?<=[.!?])\s+", text)
+    for i, sentence in enumerate(sentences):
+        low = sentence.lower()
+        if not re.search(rf"\b{re.escape(head)}", low):
+            continue
+        window = " ".join(sentences[i: i + 2]).lower()
+        if re.search(r"\b(?:you|your)\b", window) and _APPROACH_RE.search(window):
+            return True
+    return False
+
+
+def _prose_stops_walk(label: str, narration: str) -> bool:
+    """A sentence about the place (or "you") that shuts it or turns the player back."""
+    words = _place_words(label)
+    head = words[-1] if words else ""
+    for sentence in re.split(r"(?<=[.!?])\s+", _unspoken(narration)):
+        low = sentence.lower()
+        if head and re.search(rf"\b{re.escape(head)}", low) and _WALK_STOPPED_RE.search(sentence):
+            return True
+    return False
+
+
+_NAMED_DESTINATION_RE = re.compile(
+    r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|come|get\s+back|"
+    r"cross\w*|wander\w*|march\w*)\s+(?:(?:back|over|down|up|across|out|along|straight)\s+){0,2}"
+    r"(?:to|toward|towards|into|in\s+to)\s+(?:the\s+)?"
+    r"((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){0,3})"
+)
+
+
+def _named_building_requested(conn, parent_id: int, wanted: str, narration: str) -> str:
+    """A building in this settlement the player's line walks to by its proper name, when the prose goes along.
+
+    Known (in the settlement, by name with or without its "The") is that place;
+    unknown is made as the settlement's child when the prose names it outside
+    speech and does not stop the walk. Its trade comes from its own name or an
+    apposition in the prose ("the Wren's Rest, a modest inn"), else none.
+    """
+    match = _NAMED_DESTINATION_RE.search(wanted)
+    if not match:
+        return ""
+    proper = match.group(1).strip()
+    people = {str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
+    first_names = {p.split()[0] for p in people if p}
+    if proper.lower() in people or proper.lower() in first_names:
+        return ""
+    rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
+    for row in rows:
+        if _venue_name_in_text(str(row["name"] or ""), f"the {proper}".lower()) or str(row["name"] or "").lower() in {
+            proper.lower(), f"the {proper}".lower()
+        }:
+            return str(row["name"] or "")
+    parent = _location_row(conn, parent_id)
+    if parent is not None and str(parent["name"] or "").lower() in {proper.lower(), f"the {proper}".lower()}:
+        return ""
+    unspoken = _unspoken(narration)
+    if proper.lower() not in unspoken.lower():
+        return ""
+    if _prose_stops_walk(proper, narration):
+        turn_ledger.note("movement", "requested_walk_stopped_in_prose", place=proper)
+        return ""
+    if not (_player_departs(narration) or _prose_goes_toward(proper, narration) or _prose_reaches(proper, "", narration)):
+        return ""
+    kind = venues.venue_kind_from_name(proper)
+    if not kind:
+        for found, word in _named_buildings_in(unspoken):
+            if found.lower() == proper.lower():
+                for head in dict.fromkeys([word, word.split()[0], word.split()[-1]]):
+                    kind = venues.normalize_kind(head)
+                    if kind:
+                        break
+                if kind:
+                    break
+    if kind and not venue_plausibility(conn, parent_id, kind)["ok"]:
+        return ""
+    name = proper if proper.lower().startswith("the ") else f"The {proper}"
+    if not is_plausible_place_name(name) or is_fragment_place_name(name):
+        return ""
+    if _match_location_by_name(conn, name) is not None:
+        return str(_match_location_by_name(conn, name)["name"] or "")
+    top = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
+    new_id = _upsert_location(conn, name, "", parent_id=parent_id, kind=kind or "")
+    if new_id and int(new_id) > top and not kind:
+        conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (int(parent_id), int(new_id)))
+    row = _location_row(conn, int(new_id)) if new_id else None
+    if row is None:
+        return ""
+    turn_ledger.note("movement", "named_building_requested", place=str(row["name"] or ""), kind=kind, made=int(new_id) > top)
+    return str(row["name"] or "")
 
 
 def _entry_belongs_elsewhere(
@@ -11781,9 +11905,59 @@ _OUTBUILDING_WORDS = frozenset({
 _NAMED_BUILDING_RE = re.compile(
     r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){0,3})\s+([a-z]+(?:\s+[a-z]+)?)\b"
 )
+# "the Wandering Ox Chandlery stands open": the trade is the name's own last word (7B run 8, T0).
+_NAMED_BUILDING_TITLED_RE = re.compile(
+    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){1,3})\b"
+)
+# "the Wren's Rest, a modest inn": the trade in an apposition after the name (7B run 8, T0).
+_NAMED_BUILDING_APPOSITION_RE = re.compile(
+    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){0,3}),\s+"
+    r"(?:a|an|the)\s+(?:[a-z'’-]+\s+){0,2}?([a-z]+(?:\s+[a-z]+)?)\b"
+)
 
 
-def _record_named_buildings(conn, narration: str) -> list[str]:
+_TITLE_OF_RE = re.compile(
+    r"^(?:overseer|master|mistress|keeper|owner|lord|lady|captain|reeve|head|foreman|steward|warden|clerk)\s+of\b",
+    re.IGNORECASE,
+)
+
+
+def _proper_names_a_building(conn, proper: str, word: str) -> bool:
+    """False for the shapes the replay of runs 5-8 caught that are not a new building.
+
+    "the Overseer of Saltmarrow Salvage Yard" is a person's title; "the Salvage
+    Yard" is only the trade; "the Saltmarrow tavern" is the town's one tavern,
+    which the roster resolves (7B run 5 #136), not a place called "The Saltmarrow".
+    """
+    if _TITLE_OF_RE.search(proper):
+        return False
+    words = re.findall(r"[a-z]+", proper.lower())
+    kind = venues.venue_kind_from_name(f"{proper} {word}")
+    if kind:
+        label_words = set(re.findall(r"[a-z]+", venues.kind_label(kind).lower()))
+        if words and all(w in label_words for w in words):
+            return False
+    if _match_location_by_name(conn, proper) is not None:
+        return False
+    return True
+
+
+def _named_buildings_in(sentence: str) -> list[tuple[str, str]]:
+    """(proper name, building word) pairs a sentence names, in the three shapes the 7B writes."""
+    found: list[tuple[str, str]] = []
+    for match in _NAMED_BUILDING_APPOSITION_RE.finditer(sentence):
+        found.append((match.group(1).strip(), match.group(2).strip()))
+    for match in _NAMED_BUILDING_RE.finditer(sentence):
+        found.append((match.group(1).strip(), match.group(2).strip()))
+    for match in _NAMED_BUILDING_TITLED_RE.finditer(sentence):
+        words = match.group(1).split()
+        last = words[-1].lower()
+        if venues.normalize_kind(last) or last in _OUTBUILDING_WORDS:
+            found.append((" ".join(words[:-1]), last))
+    return found
+
+
+def _record_named_buildings(conn, narration: str, skip: set[str] | None = None) -> list[str]:
     """Store "the <Name> inn" / "the <Name> dairy" buildings the prose names, as children of this settlement.
 
     Lowercase trade or building word after a capitalised name, outside speech,
@@ -11800,24 +11974,29 @@ def _record_named_buildings(conn, narration: str) -> list[str]:
     for sentence in re.split(r"(?<=[.!?])\s+", _unspoken(narration)):
         if _FAR_SUMMARY_RE.search(sentence):
             continue
-        for match in _NAMED_BUILDING_RE.finditer(sentence):
-            proper, word = match.group(1).strip(), match.group(2).strip()
-            if proper.lower() in people:
+        for proper, word in _named_buildings_in(sentence):
+            if not proper or proper.lower() in people or not _proper_names_a_building(conn, proper, word):
                 continue
             kind = ""
-            for size in (2, 1):
-                head = " ".join(word.split()[:size])
+            parts = word.split()
+            # The two words, the first, then the last ("a modest inn": "inn").
+            for head in dict.fromkeys([" ".join(parts[:2]), parts[0], parts[-1]]):
                 kind = venues.normalize_kind(head)
                 if kind or head in _OUTBUILDING_WORDS:
                     word = head
                     break
             if not kind and word not in _OUTBUILDING_WORDS:
                 continue
-            if kind in {"inn", "tavern"}:
-                name = f"The {proper}"
+            # An inn keeps its own name ("The Wren's Rest"), not "The Wren's Rest Inn".
+            if kind in {"inn", "tavern"} or venues.venue_kind_from_name(proper) == kind and kind:
+                name = f"The {proper}" if not proper.lower().startswith("the ") else proper
             else:
                 name = f"{proper} {word.title()}"
             if not is_plausible_place_name(name) or _match_location_by_name(conn, name) is not None:
+                continue
+            bare = re.sub(r"^the\s+", "", name.lower())
+            if skip and any(re.sub(r"^the\s+", "", s) in {bare, f"{proper.lower()}"} for s in skip):
+                turn_ledger.note("place", "named_in_passing_skipped", name=name, why="this turn's move refused it")
                 continue
             if kind and not venue_plausibility(conn, here_parent, kind)["ok"]:
                 continue
@@ -11830,6 +12009,35 @@ def _record_named_buildings(conn, narration: str) -> list[str]:
                 turn_ledger.note("place", "named_in_passing_recorded", name=name, kind=kind, parent=here_parent)
                 made.append(name)
     return made
+
+
+_ENTERS_RE = re.compile(
+    r"\b(?:you|you're)\b[^.!?]{0,80}?\b(?:enter\w*|step(?:s|ped|ping)?\s+(?:in|inside|into|through)|"
+    r"walk(?:s|ed|ing)?\s+(?:in|into|inside)|push(?:es|ed|ing)?\s+(?:open|through)|go(?:es)?\s+(?:in|inside)|"
+    r"duck(?:s|ed|ing)?\s+(?:in|inside|into)|come\s+inside|head(?:s|ed|ing)?\s+inside)\b"
+    r"|\bas\s+you\s+(?:enter|step\s+in|go\s+in|walk\s+in)\b",
+    re.IGNORECASE,
+)
+
+
+def _opening_entry(conn, narration: str) -> str:
+    """The building of this settlement the opening prose puts the player inside, or ""."""
+    here_row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    here_id = int((here_row["current_location_id"] if here_row else 0) or 0)
+    if not here_id:
+        return ""
+    rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (here_id,)).fetchall()
+    if not rows:
+        return ""
+    chosen = ""
+    for sentence in re.split(r"(?<=[.!?])\s+", _unspoken(narration)):
+        if not _ENTERS_RE.search(sentence):
+            continue
+        low = sentence.lower()
+        for row in rows:
+            if _venue_name_in_text(str(row["name"] or ""), low):
+                chosen = str(row["name"] or "")
+    return chosen
 
 
 _PART_OF_RE = re.compile(
@@ -18397,9 +18605,28 @@ def apply_turn(
         # buildings of a town the turn travels to are not filed under this one.
         if str((movement_report or {}).get("status") or "") not in {"model", "repaired"}:
             try:
-                _record_named_buildings(conn, narration)
+                # A place this turn's move refused (too far, closed, unshown) is
+                # not recorded as here just because the prose walked into it.
+                refused = {
+                    str((movement_report or {}).get(key) or "").strip().lower()
+                    for key in ("prose_mismatch", "destination")
+                }
+                _record_named_buildings(conn, narration, skip={name for name in refused if name})
             except Exception:
                 pass
+            # The opening is the model's to stage (7B run 8, T0: "You step towards
+            # the Wren's Rest, the door creaking softly as you enter" left the save
+            # in the square). The building it puts the player inside is the start.
+            if input_kind == "opening":
+                try:
+                    inside = _opening_entry(conn, narration)
+                    if inside:
+                        player_patch_open = result.setdefault("player", {})
+                        if isinstance(player_patch_open, dict) and not player_patch_open.get("move_to_location"):
+                            player_patch_open["move_to_location"] = inside
+                            turn_ledger.note("movement", "opening_starts_inside", place=inside)
+                except Exception:
+                    pass
 
         # Flatten nested locations[].npcs + conversation speakers; drop place-as-person junk
         collected_npcs = _collect_npcs_from_turn_result(result)
