@@ -9877,6 +9877,21 @@ def resolve_movement(
             status["rejected"] = note
         return status
 
+    # The place the player asked for comes before one the model minted that
+    # the line never names (7B run 24, T1: "I head down to the salvage yard"
+    # went into a new "Ship's Hold" the prose mentioned).
+    minted_names = [
+        norm_name(str(loc.get("name") or ""))
+        for loc in result.get("locations") or []
+        if isinstance(loc, dict) and str(loc.get("name") or "").strip()
+    ]
+    own_low = _player_line(player_input).lower()
+    if minted_names and not any(_line_names_place(own_low, _place_words(n)) for n in minted_names if n):
+        requested = _venue_requested_and_reached(conn, player_input, narration, current_code)
+        if requested:
+            player_patch["move_to_location"] = requested[:120]
+            turn_ledger.note("movement", "requested_place_before_minted", destination=requested)
+            return {"status": "repaired", "rule": "venue_requested", "from": current_code, "destination": requested}
     for location in result.get("locations") or []:
         if not isinstance(location, dict):
             continue

@@ -52,6 +52,27 @@ class WalkToSomeoneIsNotAMoveElsewhere(unittest.TestCase):
         self.assertFalse(result["player"].get("move_to_location"))
 
 
+class RequestedPlaceBeforeMinted(unittest.TestCase):
+    """Run 24 T1: "I head down to the salvage yard" went into a new "Ship's Hold" the prose mentioned."""
+
+    def test_yard_wins(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You head down to the bustling Salvage Yard, workers unloading crates from a ship. You push your way "
+                 "through the crowd and step into the ship's hold to look.")
+        with connect() as conn:
+            result = {"narration": prose, "player": {}, "locations": [{"name": "ship's hold", "summary": "a hold"}]}
+            report = world.resolve_movement(
+                conn, result, "I head down to the salvage yard to see what the guild has posted.", intent="travel",
+                narration=prose,
+            )
+        self.assertEqual(report["rule"], "venue_requested")
+        self.assertIn("Salvage Yard", report["destination"])
+
+
 class AnothersActIsNotTheCheck(unittest.TestCase):
     """T1: "where the mole catcher is digging" rolled athletics."""
 
