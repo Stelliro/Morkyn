@@ -1659,6 +1659,10 @@ def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
     return bool(words) and words <= set(_speech_key(own).split())
 
 
+_GREETING_WORDS = frozenset({
+    "morning", "evening", "afternoon", "good", "well", "yes", "no", "aye", "nay", "hello", "welcome", "ah", "oh",
+    "sir", "madam", "friend", "traveler", "traveller", "stranger", "lad", "lass", "listen", "look", "now", "so",
+})
 _CODE_TAG = r"(?:\s*\[\[[A-Za-z0-9]{1,4}\]\])?"
 _VOCATIVE_END_RE = re.compile(r",\s*([A-Z][\w'’-]+)" + _CODE_TAG + r"\s*[.!?]*\s*$")
 _VOCATIVE_START_RE = re.compile(r"^\s*([A-Z][\w'’-]+)" + _CODE_TAG + r"\s*,")
@@ -1763,6 +1767,18 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             while lead < len(units) and not quoted_spans(units[lead]) and re.match(r"^you\b", units[lead], re.I):
                 lead += 1
             players_block = other_spoke and 0 < lead < len(units) and all(bare[lead:])
+            # On a turn the player has not acted in, "You approach Millicent,
+            # your purpose clear. 'Millicent, I need to know when the tide will
+            # turn.'" is the player speaking: a line after their own action that
+            # opens by calling someone by name (7B run 14, T0).
+            if silent and not players_block and 0 < lead < len(units) and all(bare[lead:]):
+                called = _VOCATIVE_START_RE.match(" ".join(quoted_spans(units[lead])))
+                name = called.group(1) if called else ""
+                players_block = bool(
+                    name
+                    and name.lower() not in _GREETING_WORDS
+                    and re.search(rf"\b{re.escape(name)}\b", _outside_quotes(" ".join(str(p) for p in paragraphs)))
+                )
             # A line alone in its block, untagged, said to the person who spoke
             # just before by name, is the player answering them (7B run 6, T9:
             # 'Oldfield gives you a nod. "Well, you've earned this."' then
