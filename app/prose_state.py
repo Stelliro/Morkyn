@@ -918,7 +918,10 @@ def repair_pinned_pronouns(
         lead = len(plain) - len(stripped)
         stranger = bool(_PERSON_NOUN_RE.search(plain))
         if not stranger:
-            for cap in re.finditer(r"\b[A-Z][\w'’-]*", plain):
+            # A code tag is not a second person: "She gestures towards the inn,
+            # The Gilded Heron [[L2]]" (7B run 20, T1) kept the wrong "She".
+            capped = re.sub(r"\[\[[^\]]*\]\]", lambda m: " " * len(m.group(0)), plain)
+            for cap in re.finditer(r"\b[A-Z][\w'’-]*", capped):
                 if cap.start() == lead or cap.group(0) in known_caps:
                     continue
                 if cap.group(0).lower() in {"he", "she", "his", "her", "him", "it", "they", "the", "a", "an"}:

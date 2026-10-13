@@ -1766,7 +1766,11 @@ _JOB_PAY_RE = re.compile(
 _WATCHED_CLAUSE_RE = re.compile(r"\b(?:watch|see|notice|count)(?:es|s|ing)?\s+(?:how|whether|if|as)\b[^.,;!?\"“”]*")
 # "the mole catcher is digging", "where Tam was hammering": another's act.
 _OTHERS_DOING_RE = re.compile(
-    r"\b(?:the|a|an|his|her|their|[A-Z][a-z]+)\s+(?:[\w'’-]+\s+){0,3}?(?:is|are|was|were)\s+(?:still\s+|busy\s+)?\w+ing\b",
+    r"\b(?:the|a|an|his|her|their|[A-Z][a-z]+)\s+(?:[\w'’-]+\s+){0,3}?(?:is|are|was|were)\s+(?:still\s+|busy\s+)?\w+ing\b"
+    # What the player looks at doing something: "I look at the water creeping
+    # over the lower district" rolled stealth (7B run 20, T1).
+    r"|\b(?:look|looks|looking|watch|watches|watching|see|sees|eye|eyes|study|studies)\s+(?:at\s+)?"
+    r"(?:the|a|an|his|her|their)\s+(?:[\w'’-]+\s+){0,3}?\w+ing\b",
 )
 
 # Verb forms only: "stab" must not catch "the stable" a player is mucking out.
