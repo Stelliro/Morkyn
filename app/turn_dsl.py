@@ -1106,6 +1106,24 @@ def _classify_npc_args(args: list[str]) -> dict[str, str]:
         ):
             out["name"] += " " + words[rest_start]
             rest_start += 1
+    # 7B run 4 (T1): NPC_NEW A "tinker" "Helewise Eastlake" "off" made a person named
+    # "tinker" whose job was "Helewise Eastlake off", and every later mention of
+    # Helewise was relabelled through it. A lower-case job word in the name slot
+    # with a capitalised name after it is the job; the name is the name.
+    if words and not any(ch.isupper() for ch in words[0]):
+        for index in range(1, min(len(words), 4)):
+            candidate = words[index]
+            parts = candidate.split()
+            if (
+                1 <= len(parts) <= 3
+                and all(p[:1].isupper() and re.fullmatch(r"[A-Za-z'\-]+", p) for p in parts)
+                and parts[0].lower() not in {"the", "a", "an", "old", "north", "south", "east", "west"}
+            ):
+                words = [candidate, words[0]] + [w for i, w in enumerate(words[1:], 1) if i != index]
+                out["name"] = candidate
+                break
+    # A scene-cast keyword is not part of anyone's job.
+    words = [w for i, w in enumerate(words) if i == 0 or w.lower() not in {"off", "present", "interacting"}]
     if len(words) > rest_start:
         # "Dockwick" "Dockwick": a repeated name is not a role.
         rest = [w for w in words[rest_start:] if w.lower() != out["name"].lower() and w.lower() != words[0].lower()]
