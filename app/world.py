@@ -16853,6 +16853,20 @@ def _reconcile_prose_with_state(
     except Exception:
         pass
 
+    # Op, packet and status text in the prose (7B run 5, #131, #83): only the
+    # exact engine shapes are repaired; the rest of the scene stays as written.
+    try:
+        text, leaks = prose_state.repair_meta_leaks(text)
+        moved = abs(int(_float((result.get("player") or {}).get("gold_delta"), 0)))
+        text, coin = prose_state.settle_band_coin(text, moved)
+        if coin:
+            leaks.append(coin)
+        for entry in leaks:
+            report["trimmed"].append(entry)
+            turn_ledger.note("prose", "meta_leak_repaired", **entry)
+    except Exception:
+        pass
+
     if text != original:
         _set_narration_text(result, text)
     try:

@@ -376,7 +376,8 @@ class TestMechanicsReachThePacket(unittest.TestCase):
             checks = world_state["mechanics_context"]["resolved_checks"]
             self.assertEqual(checks[0]["skill"], "persuasion")
             self.assertEqual(checks[0]["outcome"], "failure")
-            self.assertEqual(checks[0]["attitude"], "Dismissive")
+            # Lowercase in the packet: the label was pasted as "a Dismissive look" (7B run 5, #131).
+            self.assertEqual(checks[0]["attitude"], "dismissive")
             self.assertNotIn("natural", checks[0], "the roll math stays server-side")
             self.assertIn("those dice already fell", json.loads(packet)["instruction"])
 
