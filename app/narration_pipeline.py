@@ -1909,6 +1909,14 @@ def _speaker_of(text: str, start: int, end: int, prev_end: int) -> str:
         head = head[cuts[-1].end():]
     if not re.search(r"[,:]?\s*$", head) or not head.strip():
         return ""
+    # "Hereward Treloar [[A]]'s words echo in your mind:" (7B run 17, T2): the
+    # line is given to Hereward.
+    if re.search(
+        r"\b[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?(?:\s*\[\[[A-Za-z0-9]{1,4}\]\])?['’]s\s+"
+        r"(?:words|voice|reply|answer|warning|advice|question)\b[^.!?]{0,40}[:,]\s*$",
+        head,
+    ):
+        return "other"
     lead = re.search(
         r"\b(?:say|says|said|ask|asks|asked|reply|replies|replied|answer|answers|answered|call\s+out|calls\s+out|"
         r"called\s+out|explain|explains|explained|add|adds|added|shout|shouts|shouted|tell|tells|told\s+\w+|"
@@ -2037,6 +2045,14 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 if span["chained"] and index > 0 and _quote_part(found[index - 1]["inner"], quote):
                     index -= 1  # spans before it keep their offsets
                     start = found[index]["start"]
+                # Its lead-in goes with it: "Hereward's words echo in your mind:" (run 17, T2).
+                lead_in = re.search(
+                    r"(?:^|(?<=[.!?]\s)|(?<=[.!?][\"”]\s))[^.!?\n\"“”]*['’]s\s+"
+                    r"(?:words|voice|reply|answer|warning|advice|question)\b[^.!?\n]{0,40}[:,]\s*$",
+                    body[:start],
+                )
+                if lead_in:
+                    start = lead_in.start()
                 body = (body[:start].rstrip(" ") + " " + body[end:].lstrip(" ")).strip(" ")
                 changes.append({"action": "line_taken_from_other_speaker", "quote": quote})
 
