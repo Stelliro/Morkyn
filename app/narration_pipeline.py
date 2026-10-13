@@ -1715,10 +1715,14 @@ def _addressed_name(span: str, before: str) -> str:
     )
     if not subject:
         return ""
-    for pattern in (_VOCATIVE_END_RE, _VOCATIVE_START_RE):
-        match = pattern.search(span)
-        if match and match.group(1) == subject:
-            return subject
+    # The name may close the first sentence of a longer line: "Thanks, Idony.
+    # I'll head there right away." (7B run 20, T1).
+    first = re.split(r"(?<=[.!?])\s+", str(span or "").strip(), maxsplit=1)[0]
+    for text in (span, first):
+        for pattern in (_VOCATIVE_END_RE, _VOCATIVE_START_RE):
+            match = pattern.search(text)
+            if match and match.group(1) == subject:
+                return subject
     return ""
 
 
@@ -1825,6 +1829,21 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             addressed = ""
             if other_spoke and prev_spoke and not voiced and len(units) == 1 and bare[0]:
                 addressed = _addressed_name(" ".join(quoted_spans(units[0])), prev_outside)
+            # The same line with the player's own acts around it (7B run 20,
+            # T1: 'You nod. "Thanks, Idony. I'll head there right away." You
+            # start walking towards the inn'): one untagged quotation, nothing
+            # but "You ..." acts before and after it.
+            elif other_spoke and prev_spoke and not voiced and len(units) > 1:
+                quoted_at = [i for i, u in enumerate(units) if quoted_spans(u)]
+                if len(quoted_at) == 1:
+                    q = quoted_at[0]
+                    if (
+                        bare[q]
+                        and q == lead
+                        and q + 1 < len(units)
+                        and re.match(r"^you\b", units[q + 1], re.I)
+                    ):
+                        addressed = _addressed_name(" ".join(quoted_spans(units[q])), prev_outside)
             # A line alone in its block, untagged, answering in the first person
             # a question someone just put to the player is the player answering
             # (7B run 18, T7: '"You're a bit hurt there. What happened?"' then
