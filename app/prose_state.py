@@ -387,12 +387,20 @@ _PAYS_OUTRIGHT_RE = re.compile(
     r"(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _COIN,
     re.I,
 )
+# The same deed after "and" in an "I ..." sentence: "I set a copper-worth of
+# thought aside and put one gold on the counter" (7B run 18, T5).
+_PAYS_OUTRIGHT_AND_RE = re.compile(
+    r"\bi\s+[^.!?\n]{0,80}?\band\s+(?:\w+ly\s+)?(?:put|set|lay|place|slide|toss|pay|hand(?:\s+over)?|"
+    r"count\s+out|leave|drop)\s+(?:(?:him|her|them)\s+)?(?:(?:my|the)\s+)?"
+    r"(?:(?:last|remaining|only|spare)\s+)?" + _AMOUNT + r"\s+" + _COIN,
+    re.I,
+)
 
 
 def player_pays_outright(own_line: str) -> int | None:
     """Gold the player's line hands over as a deed (not an offer), outside the player's quoted speech."""
     text = _QUOTE_RE.sub(" ", str(own_line or ""))
-    for match in _PAYS_OUTRIGHT_RE.finditer(text):
+    for match in list(_PAYS_OUTRIGHT_RE.finditer(text)) + list(_PAYS_OUTRIGHT_AND_RE.finditer(text)):
         clause_start = max(text.rfind(mark, 0, match.start()) for mark in (",", ".", ";", "!", "?", "\n"))
         if _NEGATION_RE.search(text[clause_start + 1: match.start() + 4]):
             continue

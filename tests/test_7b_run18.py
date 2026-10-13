@@ -47,5 +47,18 @@ class NamedVenue(unittest.TestCase):
         self.assertEqual(made, "Pollard's Cookshop")
 
 
+class PutGoldDownAfterAnd(unittest.TestCase):
+    """T5: "I set a copper-worth of thought aside and put one gold on the counter" moved no gold."""
+
+    def test_pays(self):
+        from app.prose_state import player_pays_outright
+
+        self.assertEqual(
+            player_pays_outright('"Lovely." I set a copper-worth of thought aside and put one gold on the counter.'), 1
+        )
+        self.assertIsNone(player_pays_outright("He nods and puts two gold on the bar."))
+        self.assertIsNone(player_pays_outright("I sit and count my coins."))
+
+
 if __name__ == "__main__":
     unittest.main()
