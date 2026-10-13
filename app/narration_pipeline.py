@@ -1095,6 +1095,13 @@ def drop_speech_said_before(
                 named = any(w not in _UNIT_NOT_A_NAME for w in re.findall(r"\b[A-Z][a-z][\w'-]*", outside))
                 whole = _speech_key(unit) in unit_keys and (named or len(speech.split()) >= SPEECH_RUN_MIN_CONTENT)
                 who = speakers.get(" ".join(unit.split()), "")
+                # A line with no tag of its own has no speaker but a guess (the
+                # last person named): Avice's T6 lines came back untagged in a
+                # Wait, were credited to the last name in the prose, and were
+                # never compared with hers (7B run 27, T7). Untagged, it is a
+                # repeat of anyone's recent line.
+                if who and not named and not _OTHER_SPEAKER_TAG_RE.search(outside):
+                    who = ""
                 against = [s for s, c in pairs if not who or not c or c.upper() == who] if who else earlier
                 if whole or (against and speech_repeats(against, speech)):
                     dropped.append(unit)
