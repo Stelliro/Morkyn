@@ -1719,7 +1719,10 @@ def _drop_invented_spans(unit: str, keep) -> tuple[str, list[str]]:
 
 
 # Engine turns in which the player has done and said nothing yet.
-SILENT_TURN_PREFIXES = ("__opening_scene_request__", "__continue_scene_request__")
+# A Wait or Sleep is silent too (7B run 18, T9: a night's sleep became a
+# working day - she woke, walked to the pier, said "Of course, Captain" and
+# loaded a ship she never chose to).
+SILENT_TURN_PREFIXES = ("__opening_scene_request__", "__continue_scene_request__", "__wait_request__")
 
 
 def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tuple[list[str], list[str]]:
