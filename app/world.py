@@ -6410,6 +6410,18 @@ def _intent_tokens(player_input: str) -> set[str]:
     return stems
 
 
+# Following, walking or stepping someone over to a spot in the same room or
+# yard: the door, the counter, the table. Not a journey.
+_FOLLOW_TO_SPOT_RE = re.compile(
+    r"\b(?:i\s+)?(?:follow\w*|trail\w*|walk\w*|step\w*|go(?:es)?|head\w*|move\w*|cross\w*)\s+"
+    r"(?:after\s+)?(?:(?:[\w'’-]+|\[\[[A-Z0-9]+\]\])\s+){0,4}?(?:over\s+|across\s+|back\s+)?(?:to|toward|towards|up\s+to)\s+"
+    r"(?:the|his|her|their|its|my|your)\s+(?:[\w'’-]+\s+)?"
+    r"(?:door|doorway|threshold|counter|table|desk|bench|window|hearth|fire|fireplace|corner|stall|"
+    r"workbench|pile|heap|shelf|shelves|rack|crate|crates|barrel|cart|board|ledger)s?\b",
+    re.IGNORECASE,
+)
+
+
 def travel_intent(player_input: str) -> bool:
     """
     True when the turn reads as movement, primary or secondary.
@@ -6423,6 +6435,9 @@ def travel_intent(player_input: str) -> bool:
     the move rules and the #6c unshown-move drop treat it the same way
     (playtest #20).
     """
+    # "I follow Oldfield to the shed door" crosses the room, not the map (7B
+    # run 6, T9: a MOVE back out to Saltmarrow stood as asked-for).
+    player_input = _FOLLOW_TO_SPOT_RE.sub(" ", str(player_input or ""))
     primary, secondary = _turn_intent(player_input)
     if primary == "travel" or "travel" in secondary:
         return True
@@ -9209,7 +9224,8 @@ def _player_departs(text: str) -> bool:
     to a place the prose never named was kept. So did "everything you've left
     behind": a perfect tense is what already happened, not a move this turn.
     """
-    for match in _PLAYER_DEPARTS_RE.finditer(_unspoken(text)):
+    # "You follow Oldfield to the shed door" crosses the room (7B run 6, T9).
+    for match in _PLAYER_DEPARTS_RE.finditer(_FOLLOW_TO_SPOT_RE.sub(" ", _unspoken(text))):
         if _PERFECT_TENSE_RE.search(match.group(0)):
             continue
         return True
@@ -9795,6 +9811,18 @@ def resolve_movement(
                     "follow": followed,
                 }
 
+    # The player asked to go to a kind of building here that the world has no
+    # row for yet, and the prose takes them there (7B run 6, T3: "I head down
+    # to the salvage yard" in a world of one place; the prose stood her at the
+    # yard and the save kept her in the square). Same bootstrap as the doorway
+    # rule above, for a walk with no "into" in it.
+    if not followed:
+        requested = _venue_requested_and_reached(conn, player_input, narration, current_code)
+        if requested:
+            player_patch["move_to_location"] = requested[:120]
+            turn_ledger.note("movement", "venue_requested_made", destination=requested)
+            return {"status": "repaired", "rule": "venue_requested", "from": current_code, "destination": requested}
+
     report = {"status": "unresolved", "from": current_code}
     if followed:
         report["follow"] = followed
@@ -9802,6 +9830,34 @@ def resolve_movement(
     if note:
         report["rejected"] = note
     return report
+
+
+def _venue_requested_and_reached(conn, player_input: str, narration: str, current_code: str) -> str:
+    """Make the venue the player's line walks to, when the prose shows them reaching it; its name or "".
+
+    Only the player's words choose the trade (as _mint_venue_from_request);
+    the prose has to take "you" there in a sentence of its own, not in speech.
+    """
+    wanted = _destination_text(player_input)
+    kind = ""
+    low = wanted.lower()
+    for candidate in venues.VENUE_KINDS:
+        label = venues.kind_label(candidate).lower()
+        if label and re.search(rf"\b(?:to|toward|towards|for|at)\s+(?:the\s+)?(?:[\w'’-]+\s+)?{re.escape(label)}\b", low):
+            kind = candidate
+            break
+    if not kind:
+        return ""
+    if not any(_prose_reaches(label, "", narration) for label in venues.kind_family_labels(kind) or [venues.kind_label(kind)]):
+        return ""
+    here = conn.execute("SELECT * FROM locations WHERE UPPER(code) = ?", (str(current_code or "").upper(),)).fetchone()
+    if here is None:
+        return ""
+    parent_id = int(venues._field(here, "parent_id", 0) or 0) or int(here["id"])
+    existing = _venue_named_in(conn, parent_id, wanted, "")
+    if existing is not None:
+        return str(existing["name"] or "")
+    return _mint_venue_from_request(conn, parent_id, wanted, narration)
 
 
 def _entry_belongs_elsewhere(
@@ -11649,6 +11705,14 @@ def _upsert_location(
             if parent_guess and venue_plausibility(conn, parent_guess, described)["ok"]:
                 resolved_kind = described
                 turn_ledger.note("place", "venue_from_summary", name=name, kind=described, parent=parent_guess)
+    # A shed, yard or workshop named in a scene stands in the place the player
+    # is in, as a venue does, unless its description puts it far off (7B run
+    # 6, T4: "Sorting shed" was minted as a second town beside Saltmarrow, and
+    # T9's step out of it became a journey back to Saltmarrow). No kind: it is
+    # a part of the place, not a shop with hours and a keeper.
+    building_parent = 0
+    if kind is None and not resolved_kind and parent_id is None and _is_outbuilding_name(name) and not _FAR_SUMMARY_RE.search(summary or ""):
+        building_parent = _venue_parent_for_new_place(conn, "building")
     if resolved_kind:
         resolved_parent = (
             _venue_parent_for_new_place(conn, resolved_kind) if parent_id is None else int(parent_id or 0)
@@ -11675,7 +11739,80 @@ def _upsert_location(
     new_id = int(cursor.lastrowid)
     if resolved_kind and resolved_parent and resolved_parent != new_id:
         stamp_venue_fields(conn, new_id, parent_id=resolved_parent, kind=resolved_kind)
+    elif building_parent and building_parent != new_id:
+        conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (building_parent, new_id))
+        turn_ledger.note("place", "building_in_place", name=name, parent=building_parent)
     return new_id
+
+
+# Buildings and parts of a place that are not trades with a keeper and hours
+# (those are venues.VENUE_KINDS). The name's last word decides: "Sorting
+# shed", "Net loft", "the boathouse"; not "Shed Lane" or "Loft Hill".
+_OUTBUILDING_WORDS = frozenset({
+    "shed", "sheds", "shack", "hut", "barn", "loft", "cellar", "storeroom", "workshop", "warehouse",
+    "office", "dairy", "stall", "booth", "kitchen", "attic", "cabin", "boathouse", "shipyard", "yard",
+    "smokehouse", "cooperage", "ropewalk", "outhouse", "courtyard", "backroom", "storehouse", "granary",
+    "coop", "pen", "sty", "kennel", "forecourt", "wharfhouse", "lockup", "gatehouse", "bunkroom",
+})
+
+
+_NAMED_BUILDING_RE = re.compile(
+    r"\b[Tt]he\s+((?:[A-Z][\w'’-]+)(?:\s+(?:and|&|of)\s+[A-Z][\w'’-]+|\s+[A-Z][\w'’-]+){0,3})\s+([a-z]+(?:\s+[a-z]+)?)\b"
+)
+
+
+def _record_named_buildings(conn, narration: str) -> list[str]:
+    """Store "the <Name> inn" / "the <Name> dairy" buildings the prose names, as children of this settlement.
+
+    Lowercase trade or building word after a capitalised name, outside speech,
+    in a sentence that does not put it far off. Inns and taverns keep the name
+    alone ("The Anchor and Ox"); other kinds keep the word ("Elwood and
+    Daughters Dairy"). Nothing is minted where the settlement cannot hold the
+    trade, and a name already known is left alone.
+    """
+    made: list[str] = []
+    here_parent = _venue_parent_for_new_place(conn, "building")
+    if not here_parent:
+        return made
+    people = {str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
+    for sentence in re.split(r"(?<=[.!?])\s+", _unspoken(narration)):
+        if _FAR_SUMMARY_RE.search(sentence):
+            continue
+        for match in _NAMED_BUILDING_RE.finditer(sentence):
+            proper, word = match.group(1).strip(), match.group(2).strip()
+            if proper.lower() in people:
+                continue
+            kind = ""
+            for size in (2, 1):
+                head = " ".join(word.split()[:size])
+                kind = venues.normalize_kind(head)
+                if kind or head in _OUTBUILDING_WORDS:
+                    word = head
+                    break
+            if not kind and word not in _OUTBUILDING_WORDS:
+                continue
+            if kind in {"inn", "tavern"}:
+                name = f"The {proper}"
+            else:
+                name = f"{proper} {word.title()}"
+            if not is_plausible_place_name(name) or _match_location_by_name(conn, name) is not None:
+                continue
+            if kind and not venue_plausibility(conn, here_parent, kind)["ok"]:
+                continue
+            top = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
+            new_id = _upsert_location(conn, name, "", parent_id=here_parent, kind=kind or "")
+            # A name the roster rules resolved to a known place is that place; only a new row is placed here.
+            if new_id and new_id > top:
+                if not kind:
+                    conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (here_parent, new_id))
+                turn_ledger.note("place", "named_in_passing_recorded", name=name, kind=kind, parent=here_parent)
+                made.append(name)
+    return made
+
+
+def _is_outbuilding_name(name: str) -> bool:
+    words = re.findall(r"[a-z]+", humanize_place_name(name).lower())
+    return bool(words) and words[-1] in _OUTBUILDING_WORDS
 
 
 _HERE_SUMMARY_RE = re.compile(
@@ -18074,6 +18211,16 @@ def apply_turn(
                     _settle_place_named_in_passing(
                         conn, int(new_place_id), loc_name, str(location.get("summary") or ""), result, movement_report
                     )
+            except Exception:
+                pass
+        # Named buildings the prose shows here and the draft never recorded
+        # (7B run 6, T0: "the Anchor and Ox inn", "the Elwood and Daughters
+        # dairy"): kept as places in this settlement so a later "I go to the
+        # Anchor and Ox" finds them. Only on a turn that stays put, so the
+        # buildings of a town the turn travels to are not filed under this one.
+        if str((movement_report or {}).get("status") or "") not in {"model", "repaired"}:
+            try:
+                _record_named_buildings(conn, narration)
             except Exception:
                 pass
 
