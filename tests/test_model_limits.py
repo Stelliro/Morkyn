@@ -161,9 +161,19 @@ class TestAutomaticLimits(unittest.TestCase):
         self.assertIn("fit beside", why)
 
     def test_weights_larger_than_the_card_floor_at_the_minimum(self):
+        # The floor is what a turn needs, not 4096 (8B #62: 4096 broke every turn).
         facts = self._facts(file_bytes=40 * GIB)
-        context, _ = model_limits.auto_context_tokens(facts, {"total_bytes": 12 * GIB, "free_bytes": 1 * GIB})
-        self.assertEqual(context, model_limits.MIN_CONTEXT_TOKENS)
+        context, why = model_limits.auto_context_tokens(facts, {"total_bytes": 12 * GIB, "free_bytes": 1 * GIB})
+        self.assertEqual(context, model_limits.turn_minimum_context())
+        self.assertIn("least a turn needs", why)
+
+    def test_the_turn_minimum_matches_the_compact_switch(self):
+        from app import llm
+
+        self.assertEqual(model_limits.TURN_HEADROOM_TOKENS, llm.MIN_TURN_HEADROOM_TOKENS)
+        needed = llm.estimated_tokens(llm.COMPACT_SYSTEM_PROMPT) + llm.MIN_TURN_HEADROOM_TOKENS
+        self.assertGreaterEqual(model_limits.turn_minimum_context(), needed)
+        self.assertLess(model_limits.turn_minimum_context() - needed, model_limits.CONTEXT_STEP)
 
     def test_without_a_gpu_the_tokens_per_billion_scale_decides(self):
         seven, _ = model_limits.auto_context_tokens({"params_b": 7.0}, None)
