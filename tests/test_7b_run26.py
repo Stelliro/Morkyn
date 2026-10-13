@@ -77,5 +77,25 @@ class NamedWithNoJob(unittest.TestCase):
         )
 
 
+class AWaitMovesNobody(unittest.TestCase):
+    """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
+
+    def test_no_venue_shown_on_a_wait(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You wait out the afternoon. The inn's door stands open; you step inside the inn. Inside, the pub is "
+                 "empty, save for the smell of ale.")
+        with connect() as conn:
+            result = {"narration": prose, "player": {}}
+            report = world.resolve_movement(
+                conn, result, "__wait_request__: kind=wait minutes=240", intent="wait", narration=prose
+            )
+        self.assertNotEqual(report.get("rule"), "venue_shown")
+        self.assertFalse(result["player"].get("move_to_location"))
+
+
 if __name__ == "__main__":
     unittest.main()
