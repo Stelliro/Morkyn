@@ -9373,8 +9373,14 @@ def _unasked_unshown_move(
         line_names_known = any(
             _line_names_place(line_low, _place_words(str(r["name"] or ""))) for r in rows if str(r["name"] or "").strip()
         )
+        # Only a short walk over to someone; setting off on a journey ("I walk
+        # on", "I leave and take the track") keeps the model's destination.
+        local_walk = bool(
+            re.search(r"\b(?:over|up|across)\s+to\b|\bto\s+where\b|\bbeside\b|\bnext\s+to\b", line_low)
+        ) and not re.search(r"\b(?:leave|leaves|left|depart\w*|set\s+off|walk\s+on|journey\w*|travel\w*|head\s+out)\b", line_low)
         if (
             words
+            and local_walk
             and not walk
             and not line_names_known
             and str(narration or "").strip()
