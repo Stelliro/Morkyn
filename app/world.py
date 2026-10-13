@@ -12413,8 +12413,12 @@ _NOT_A_TAKEN_THING = frozenset({
     "ladder", "door", "sip", "bite", "drink", "swig", "mouthful", "hold", "grip", "lot", "rim", "edge", "floor",
     "ground", "wall", "water", "air", "view", "scene", "sight", "silence", "dark", "light",
 })
+# The any-word must be what the take verb takes: "I pocket whatever is under it",
+# not "Anything on there that'll keep the time?" (7B run 4, T1).
 _LINE_TAKES_ANY_RE = re.compile(
-    r"\b(?:whatever|anything|everything|something|it|them|what(?:'s|\s+is)|the\s+lot|all\s+of\s+it)\b", re.I
+    r"\b(?:take|takes|grab|pocket|pick\s+up|collect|keep|gather|scoop\s+up|stow|help\s+myself\s+to)\s+"
+    r"(?:up\s+)?(?:whatever|anything|everything|something|it|them|what(?:'s|\s+is)|the\s+lot|all\s+of\s+it)\b",
+    re.I,
 )
 
 
@@ -12503,6 +12507,10 @@ def _grant_shown_takes(
             else:
                 # "the rusty key and the faded map from the drawer": items joined by
                 # "and" or a comma, each with its own article; "and slip them ..." ends it.
+                # A comma with no "and" after it is not a list: "the pocket watch, the
+                # weight of the coins in your hand ..." is an aside (7B run 4, T1).
+                if "," in first and not re.search(r"\band\b", first.split(",", 1)[1], re.I):
+                    first = first.split(",", 1)[0]
                 for part in re.split(r"\s*,\s*|\s+and\s+", first):
                     if items and not _TAKE_DETERMINER_RE.match(part.strip()):
                         break
