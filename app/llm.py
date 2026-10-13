@@ -13537,7 +13537,7 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"pick(?:s|ed|ing)?\s+up|pick(?:s|ed|ing)?\s+(?:\w+\s+){1,3}up|"
     r"take|takes|taking|taken|took|steal|steals|stealing|stole|stolen|"
     r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
-    r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)salvag(?:e|es|ed|ing)\b(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
+    r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)(?<![“\x22])salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
     r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b|"
     # Asking to buy (playtest #96): "ask Finnian if he'd sell me a whetstone.
     # I'll pay 2 gold for it" asked for the whetstone, and the gain was refused.
@@ -15506,7 +15506,8 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
             from app.world import _player_line, travel_intent
 
             own = _player_line(own)
-            asked_move = bool(travel_intent(own))
+            # Speech never asks to go ('"I run the flats."', 7B run 17, T5).
+            asked_move = bool(travel_intent(re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", own)))
         except Exception:
             asked_move = False
         asked_take = player_take_intent(own)
@@ -15627,7 +15628,11 @@ def _cut_scene_at_invented_request(
         # (7B run 6, T7: "I go to the pile and start sorting" walked over in
         # the first sentence, and the scene then answered Oldfield's "How are
         # you finding the job?" for the player and left his "Good," hanging).
-        if travel_intent(player_line_of(player_input)) and not _SHOWN_GOING_RE.search(head):
+        # Only the narrated part asks to go: '"Salvage. I run the flats."'
+        # is speech (7B run 17, T5: the cut was skipped and "You thank him and
+        # start walking towards the salt marsh" moved the player).
+        acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", player_line_of(player_input))
+        if travel_intent(acts) and not _SHOWN_GOING_RE.search(head):
             return turn
     except Exception:
         pass

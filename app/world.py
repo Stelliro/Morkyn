@@ -16163,6 +16163,9 @@ _NOT_A_NAME = frozenset({
     "she", "he", "they", "you", "we", "it", "someone", "somebody", "nobody", "everyone", "everybody",
     "anyone", "one", "another", "each", "then", "and", "but", "perhaps", "who", "this", "that", "the",
     "there", "here", "now", "still", "voice", "wind", "nothing", "something", "none", "both", "all",
+    # "Some say it was a fine home" minted a person called Some (7B run 17, T5).
+    "some", "many", "most", "few", "others", "other", "people", "folk", "folks", "men", "women", "they'd",
+    "several", "plenty", "half", "everyone's", "nobody's",
 })
 _HINT_FEMALE_RE = re.compile(r"\b(?:woman|girl|widow|crone|lady|barmaid|she|her|hers|herself)\b", re.I)
 _HINT_MALE_RE = re.compile(r"\b(?:man|boy|barman|fellow|he|him|his|himself)\b", re.I)
