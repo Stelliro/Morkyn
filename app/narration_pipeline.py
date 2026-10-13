@@ -1664,6 +1664,33 @@ def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
     return bool(words) and words <= set(_speech_key(own).split())
 
 
+_FIRST_PERSON_RE = re.compile(r"\b(?:I|I'm|I’m|I've|I’ve|I'll|I’ll|I'd|I’d|my|me|mine)\b")
+_TO_PLAYER_RE = re.compile(r"\b(?:you|your|you're|you’re|you've|you’ve|lass|lad)\b", re.I)
+
+
+def _reworded_sentence(sentence: str, quote: str) -> bool:
+    """One sentence that says the typed line in other words: most of its content words are the line's."""
+    from difflib import SequenceMatcher
+
+    said, typed = content_stems(sentence), content_stems(quote)
+    if len(said) < 3 or len(typed) < 3:
+        return False
+    shared = said & typed
+    if len(shared) * 2 >= max(len(said), len(typed)):
+        return True
+    return SequenceMatcher(None, _speech_key(sentence), _speech_key(quote)).ratio() >= 0.7
+
+
+def _first_sentence(text: str) -> str:
+    return re.split(r"(?<=[.!?])\s+", str(text or "").strip(), maxsplit=1)[0]
+
+
+def _asks_the_player(quote: str) -> bool:
+    """The quotation ends on a question put to the player ('You're a bit hurt there. What happened?')."""
+    text = str(quote or "").strip().rstrip("\"'”’ ")
+    return text.endswith("?") and bool(_TO_PLAYER_RE.search(text))
+
+
 _GREETING_WORDS = frozenset({
     "morning", "evening", "afternoon", "good", "well", "yes", "no", "aye", "nay", "hello", "welcome", "ah", "oh",
     "sir", "madam", "friend", "traveler", "traveller", "stranger", "lad", "lass", "listen", "look", "now", "so",
@@ -1763,6 +1790,8 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     other_spoke = False  # someone else has a line earlier in this narration
     prev_outside = ""  # the words outside speech in the block before this one
     prev_spoke = False  # and whether it held speech
+    prev_last_quote = ""  # and the last quotation in it
+    prev_by_player = False  # and whether that speech was the player's
     for para in paragraphs:
         kept_blocks: list[str] = []
         for block in _BLOCK_SPLIT_RE.split(str(para or "")):
@@ -1794,8 +1823,19 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             addressed = ""
             if other_spoke and prev_spoke and not voiced and len(units) == 1 and bare[0]:
                 addressed = _addressed_name(" ".join(quoted_spans(units[0])), prev_outside)
+            # A line alone in its block, untagged, answering in the first person
+            # a question someone just put to the player is the player answering
+            # (7B run 18, T7: '"You're a bit hurt there. What happened?"' then
+            # '"I fell into a crate of broken pots. ... Can I start tomorrow?"').
+            answering = bool(
+                not addressed and other_spoke and prev_spoke and not prev_by_player
+                and not voiced and len(units) == 1 and bare[0]
+                and _asks_the_player(prev_last_quote)
+                and _FIRST_PERSON_RE.search(_first_sentence(" ".join(quoted_spans(units[0]))))
+            )
             prev_outside = " ".join(_outside_quotes(u) for u in units)
             prev_spoke = any(quoted_spans(u) for u in units)
+            prev_last_quote = (quoted_spans(units[-1]) or [""])[-1] if prev_spoke else ""
             kept_units: list[str] = []
             player_turn = False
             for index, unit in enumerate(units):
@@ -1810,6 +1850,13 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                 )
                 # For a voiced request only tagged lines count: the dialogue-paragraph
                 # guess read Roger's appraisal as the player's (run 5, T20).
+                if answering and not tagged and not _OTHER_SAID_RE.search(outside):
+                    if all(_words_from_player(span, own, quotes) for span in spans):
+                        kept_units.append(unit)
+                    else:
+                        dropped.append(unit)
+                    player_turn = True
+                    continue
                 if addressed and not tagged and not _OTHER_SAID_RE.search(outside):
                     if all(
                         (quotes and _is_player_line(span, quotes))
@@ -1864,6 +1911,10 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                 player_turn = False
                 other_spoke = True
                 kept_units.append(unit)
+            # Whose words closed this block: a question the player asked is not
+            # one put to them (7B run 17, T5: Madoc's "I've got a few" answered
+            # the player's own "Any leads on a job around here?").
+            prev_by_player = player_turn
             block_text = " ".join(kept_units).strip()
             if block_text:
                 kept_blocks.append(block_text)
@@ -2049,6 +2100,31 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 body = body[: span["inner_start"]] + fixed + body[span["inner_start"] + len(inner):]
                 changes.append({"action": "reworded_line_restored", "quote": quote, "was": inner[:200]})
                 break
+
+    # 1b. Inside a quotation that holds one typed line word for word, a
+    # sentence rewording another typed line is that line (7B run 18, T7: '"A
+    # share of the salvaged goods sounds better than nothing yet. Loading and
+    # unloading, I can do. ..."' kept the rewording and the typed line was
+    # said again at the opening).
+    for quote in quotes:
+        if said_by_player(body, quote):
+            continue
+        fixed_here = False
+        for span in spans_of(body):
+            if span["speaker"] not in ("player", "") or fixed_here:
+                continue
+            inner = span["inner"]
+            if not any(q != quote and _quote_matches(inner, q) == "exact" for q in quotes):
+                continue
+            for sentence in re.split(r"(?<=[.!?])\s+", inner):
+                if not sentence.strip() or any(_quote_matches(sentence, q) == "exact" for q in quotes):
+                    continue
+                if _reworded_sentence(sentence, quote):
+                    at = span["inner_start"] + inner.find(sentence)
+                    body = body[:at] + quote.strip() + body[at + len(sentence):]
+                    changes.append({"action": "reworded_line_restored", "quote": quote, "was": sentence[:200]})
+                    fixed_here = True
+                    break
 
     # 2. The player's words in someone else's mouth go, when the player never says them.
     for quote in quotes:

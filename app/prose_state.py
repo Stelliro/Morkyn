@@ -53,7 +53,9 @@ _PRICED_RE = re.compile(
     r"(?:\b(?:costs?|cost\s+you|price\s+(?:is|of)|priced\s+at|that" + _AP + r"?ll\s+be|it" + _AP + r"?s|comes\s+to|"
     r"charges?(?:\s+you)?|fee\s+(?:is|of)|toll\s+(?:is|of)|owe\s+(?:me|us|him|her)?|for)\s+"
     r"(?:just\s+|only\s+|a\s+mere\s+)?" + _AMOUNT + r"\s+" + _COIN + r")"
-    r"|(?:\b" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN + r"\s+(?:for|each|apiece|a\s+piece)\b)",
+    # A day rate is a price too: "Three gold a day, paid at dusk" (7B run 18, T7).
+    r"|(?:\b" + _AMOUNT.replace("?P<n>", "?P<n2>") + r"\s+" + _COIN
+    + r"\s+(?:for|each|apiece|a\s+piece|a\s+day|per\s+day|each\s+day|a\s+shift|per\s+shift|daily)\b)",
     re.I,
 )
 # Coins that reach the player: "hands you 20 gold", "you receive 5 coins".

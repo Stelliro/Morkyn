@@ -1699,14 +1699,40 @@ def _player_line_text(player_input: str) -> str:
     return re.split(r"\n\s*__\w+__", str(player_input or ""), maxsplit=1)[0].strip()[:300]
 
 
+_DEAL_QUESTION_RE = re.compile(
+    r"\b(?:offer|price|pay|paid|cost|how\s+(?:many|much)|gold|coins?|terms|deal|sum|number|worth|"
+    r"what\s+(?:do|have)\s+you\s+(?:got|have)|what\s+can\s+you\s+give)\b",
+    re.I,
+)
+
+
 def _agrees(answer: str) -> bool:
-    """An agreeing reply that does not go on to ask something.
+    """An agreeing reply that does not go on to question the deal.
 
     7B run 10, T3: "Very well, then. What do you have to offer?" is a question
-    put back to the player, not agreement to her terms.
+    put back to the player, not agreement to her terms. 7B run 18, T7: "Fair
+    enough, lass. You're a bit hurt there. What happened?" agrees and then asks
+    about something else; that question does not undo the agreement.
     """
     match = _JOB_AGREE_RE.search(answer)
-    return bool(match) and "?" not in answer[match.end():]
+    if not match:
+        return False
+    rest = answer[match.end():]
+    questions = [q for q in re.findall(r"[^.!?]*\?", rest)]
+    return not any(_DEAL_QUESTION_RE.search(q) for q in questions)
+
+
+_PER_DAY_RE = re.compile(r"\s+(?:a|per|each|every)\s+(?:day|shift|tide)\b|\s+daily\b", re.I)
+
+
+def _per_day(text: str, amount: int) -> bool:
+    """The agreed sum is a day's pay: "Three gold a day" (7B run 18, T7)."""
+    from app.prose_state import _AMOUNT, _COIN, _match_number
+
+    for found in re.finditer(_AMOUNT + r"\s+" + _COIN, str(text or ""), re.I):
+        if _match_number(found) == amount and _PER_DAY_RE.match(str(text)[found.end():found.end() + 16]):
+            return True
+    return False
 
 
 def _echoes(span: str, own: str) -> bool:
@@ -1804,11 +1830,15 @@ def settle_agreed_price(conn, *, narration: str, player_input: str = "", turn: i
     job = pool[0]
     if int(job.get("reward_gold") or 0) == amount:
         return None
+    # A day rate is recorded as the day's pay and said so: the job pays it
+    # once the work is done; the rate stays readable for the next day's deal.
+    daily = _per_day(player_input, amount) or _per_day(narration, amount)
+    promised = f"{amount} gold a day" if daily else f"{amount} gold"
     description = re.sub(r"\s*Promised:.*$", "", str(job.get("description") or "")).strip()
-    description = f"{description} Promised: {amount} gold".strip()
+    description = f"{description} Promised: {promised}".strip()
     conn.execute("UPDATE quests SET reward_gold = ?, description = ? WHERE id = ?", (amount, description[:800], int(job["id"])))
-    _journal(conn, turn, f"Terms agreed: {job['title']} for {amount} gold")
-    change = {"code": job.get("code"), "from": job.get("reward_gold"), "to": amount, "how": how}
+    _journal(conn, turn, f"Terms agreed: {job['title']} for {promised}")
+    change = {"code": job.get("code"), "from": job.get("reward_gold"), "to": amount, "how": how, "per_day": daily}
     turn_ledger.note("quest", "agreed_price_set", **change)
     return change
 
