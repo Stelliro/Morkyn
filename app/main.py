@@ -183,6 +183,32 @@ if MEDIA_DIR.is_dir():
     app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 
 
+def _spectating() -> bool:
+    """MORKYN_SPECTATE=1: this server only watches a game another process is playing
+    (tools/api_bridge_playtest.py --viewer-port). The page follows new turns and
+    nothing it sends can change the save."""
+    return os.getenv("MORKYN_SPECTATE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+@app.middleware("http")
+async def _spectator_guard(request, call_next):
+    if _spectating() and request.method not in {"GET", "HEAD", "OPTIONS"} and request.url.path.startswith("/api/"):
+        return JSONResponse(
+            {"detail": "Watching a live run: this window is read-only."}, status_code=423
+        )
+    return await call_next(request)
+
+
+@app.get("/api/live-tick")
+def api_live_tick():
+    """The newest turn in the save, cheaply, so a watching page knows when to reload."""
+    from app.db import connect
+
+    with connect() as conn:
+        row = conn.execute("SELECT COALESCE(MAX(turn), 0) AS turn, COALESCE(MAX(id), 0) AS id FROM journal").fetchone()
+    return {"spectate": _spectating(), "turn": int(row["turn"]), "journal_id": int(row["id"])}
+
+
 class TurnRequest(BaseModel):
     text: str = Field(default="", max_length=2000)
     # False: a model failure comes back as a 503 problem instead of an offline-narrator turn.

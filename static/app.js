@@ -29606,6 +29606,42 @@ loadState()
     loadTtsConfig()
       .then(() => renderTtsPlayBar())
       .catch(() => {});
+    startLiveFollow();
   });
+
+// Watching a live run (MORKYN_SPECTATE on the server, tools/api_bridge_playtest.py
+// --viewer-port): open straight into the game and repaint whenever a new turn lands.
+// A normal server answers spectate:false and the poll stops after one call.
+let liveFollowSeen = -1;
+async function liveFollowTick() {
+  const tick = await (await fetch("/api/live-tick")).json();
+  if (!tick?.spectate) return false;
+  document.body.classList.add("spectating");
+  let badge = document.querySelector("#liveFollowBadge");
+  if (!badge) {
+    badge = document.createElement("div");
+    badge.id = "liveFollowBadge";
+    badge.setAttribute("role", "status");
+    badge.style.cssText =
+      "position:fixed;right:12px;bottom:12px;z-index:9999;padding:4px 10px;font:12px/1.4 inherit;" +
+      "color:var(--text,#ddd);background:transparent;border:1px solid var(--accent,#8a7cff);pointer-events:none";
+    document.body.appendChild(badge);
+  }
+  badge.textContent = `Watching live · turn ${tick.turn}`;
+  if (tick.journal_id !== liveFollowSeen) {
+    liveFollowSeen = tick.journal_id;
+    const next = await (await fetch("/api/state")).json();
+    if (next?.player) await enterPlayFromSave(next);
+  }
+  return true;
+}
+function startLiveFollow() {
+  liveFollowTick()
+    .then((on) => {
+      if (!on) return;
+      window.setInterval(() => liveFollowTick().catch(() => {}), 3000);
+    })
+    .catch(() => {});
+}
 
 

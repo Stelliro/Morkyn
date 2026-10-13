@@ -171,6 +171,13 @@ def main() -> int:
         help="a GGUF path or MLE model name: that model is the GM through MLE and no bridge runs; "
         "player lines still come from the inbox",
     )
+    ap.add_argument(
+        "--viewer-port",
+        type=int,
+        default=0,
+        help="also serve the game page on this port, read-only, following each new turn live "
+        "(open http://127.0.0.1:<port>/ in a browser)",
+    )
     args = ap.parse_args()
     run_dir = args.dir.resolve()
     run = Run(run_dir, args.model)
@@ -216,6 +223,18 @@ def main() -> int:
             }
         )
         serve(run, args.port)
+
+    if args.viewer_port:
+        # Same process, same isolated save: the page only reads (MORKYN_SPECTATE).
+        os.environ["MORKYN_SPECTATE"] = "1"
+        import uvicorn
+
+        viewer = uvicorn.Server(
+            uvicorn.Config("app.main:app", host="127.0.0.1", port=args.viewer_port, log_level="warning")
+        )
+        viewer.install_signal_handlers = lambda: None
+        threading.Thread(target=viewer.run, daemon=True).start()
+        print(f"Watch live: http://127.0.0.1:{args.viewer_port}/", flush=True)
 
     from app.db import connect, init_db
     from app.llm import update_model_config
