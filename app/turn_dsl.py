@@ -1727,7 +1727,8 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
     offers = context.get("open_offers") if isinstance(context, dict) else None
     if isinstance(offers, list) and offers:
         instructions.append(
-            "open_offers were already offered. waiting_for_answer: do not offer it again or "
+            "open_offers were already offered; pays is what the job pays, and the giver says that sum "
+            "when the player asks. waiting_for_answer: do not offer it again or "
             "write the player taking it. player_takes_it_now: the player's line takes it and the app has "
             "accepted it; write the giver's answer, and do not offer it again. "
             "turned_down: the player refused it; do not offer it again. "
