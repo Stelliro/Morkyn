@@ -8282,6 +8282,15 @@ _MASC_WORDS = {"he", "him", "his", "man", "men", "boy", "father", "brother", "so
 _FEM_WORDS = {"she", "her", "hers", "woman", "women", "girl", "mother", "sister", "daughter", "lady"}
 
 
+_QUOTED_SPAN_RE = re.compile(r"\"[^\"]*\"|“[^”]*”")
+_KIN_OF_SOMEONE_RE = re.compile(
+    # Not "his"/"her": "she strokes her mother's hair" still tells who she is.
+    r"\b(?:my|your|our|their|the)\s+(?:\w+['’]s\s+)?"
+    r"(?:mother|father|brother|sister|son|daughter|lady|lord|wife|husband)\w*",
+    re.I,
+)
+
+
 def pronoun_set_for(key: str) -> dict[str, str]:
     return dict(PRONOUN_SETS.get(str(key or "").strip().lower() or "they", PRONOUN_SETS["they"]))
 
@@ -8356,6 +8365,11 @@ def infer_npc_pronouns(name: str, narration: str, others: Sequence[str] = ()) ->
         if nxt and not _mentions(nxt) and not _names_someone_else(nxt):
             window.append(nxt)
         for part in window:
+            # Speech and someone's kin are not this person (7B run 10, T0: the
+            # line after Jehane's was '"My mother worked the flats ..."', and the
+            # "mother" cancelled his three "his", so the opening pinned nothing).
+            part = _QUOTED_SPAN_RE.sub(" ", part)
+            part = _KIN_OF_SOMEONE_RE.sub(" ", part)
             words = set(re.findall(r"[a-z]+", part.lower()))
             masc += len(words & _MASC_WORDS)
             fem += len(words & _FEM_WORDS)
@@ -9886,6 +9900,17 @@ def resolve_movement(
                     "destination": str(place["name"] or ""),
                     "follow": followed,
                 }
+        inside = _followed_inside(conn, player_input, narration, current_code)
+        if inside:
+            player_patch["move_to_location"] = inside[:120]
+            turn_ledger.note("movement", "followed_inside", destination=inside, follow=followed)
+            return {
+                "status": "repaired",
+                "rule": "follow_inside",
+                "from": current_code,
+                "destination": inside,
+                "follow": followed,
+            }
 
     # The player asked to go to a kind of building here that the world has no
     # row for yet, and the prose takes them there (7B run 6, T3: "I head down
@@ -9906,6 +9931,54 @@ def resolve_movement(
     if note:
         report["rejected"] = note
     return report
+
+
+_FOLLOW_IN_RE = re.compile(
+    r"\bfollow\w*\s+(?:[\w'’]+\s+){0,3}?(?:in|inside|into|indoors|through\s+the\s+door)\b",
+    re.IGNORECASE,
+)
+
+
+def _followed_inside(conn, player_input: str, narration: str, current_code: str) -> str:
+    """The building of this place the player follows someone into, or "".
+
+    7B run 10, T3: "I follow her in to the table" at the door of Cropper and
+    Sons Forge (known, in the town) left the player in the square. The building
+    is the one of this place that this scene, or the one before, names; or the
+    one whose trade word the scene uses when only one building here has it.
+    """
+    line = venues.strip_speech(_player_line(player_input) or "")
+    if not _FOLLOW_IN_RE.search(line):
+        return ""
+    here = conn.execute("SELECT * FROM locations WHERE UPPER(code) = ?", (str(current_code or "").upper(),)).fetchone()
+    if here is None or str(venues._field(here, "kind", "") or ""):
+        return ""
+    rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(here["id"]),)).fetchall()
+    if not rows:
+        return ""
+    texts = [_unspoken(narration)]
+    try:
+        last = conn.execute(
+            "SELECT content FROM journal WHERE kind = 'narration' ORDER BY id DESC LIMIT 2"
+        ).fetchall()
+        texts += [str(r["content"] or "") for r in last]
+    except Exception:
+        pass
+    for text in texts:
+        low = re.sub(r"\s*\[\[[^\]]*\]\]", "", text).lower().replace("'", "").replace("’", "")
+        named = [r for r in rows if _venue_name_in_text(str(r["name"] or "").replace("'", ""), low)]
+        if len(named) == 1:
+            return str(named[0]["name"] or "")
+        by_trade = []
+        for row in rows:
+            kind = str(venues._field(row, "kind", "") or "")
+            words = [w for w in (venues.kind_family_labels(kind) or [venues.kind_label(kind)]) if w] if kind else []
+            words += [humanize_place_name(str(row["name"] or "")).split()[-1].lower()] if row["name"] else []
+            if any(re.search(rf"\b{re.escape(w.lower())}s?\b", low) for w in words):
+                by_trade.append(row)
+        if len(by_trade) == 1:
+            return str(by_trade[0]["name"] or "")
+    return ""
 
 
 def _venue_requested_and_reached(conn, player_input: str, narration: str, current_code: str) -> str:
@@ -9933,7 +10006,11 @@ def _venue_requested_and_reached(conn, player_input: str, narration: str, curren
     parent_id = int(venues._field(here, "parent_id", 0) or 0) or int(here["id"])
     if not kind:
         # A building by its own name ("I walk back to the Wren's Rest", 7B run 8 T4).
-        return _named_building_requested(conn, parent_id, wanted, narration)
+        named = _named_building_requested(conn, parent_id, wanted, narration)
+        if named:
+            return named
+        # An open part of the town ("walk down to the edge of the mudflats", 7B run 10 T8).
+        return _outdoor_area_requested(conn, parent_id, wanted, narration)
     labels = venues.kind_family_labels(kind) or [venues.kind_label(kind)]
     # The player's choice stands unless the prose stops it (7B run 8, T2: "as you
     # near, you see a few salvagers already there ... You approach and begin to
@@ -9947,6 +10024,70 @@ def _venue_requested_and_reached(conn, player_input: str, narration: str, curren
     if existing is not None:
         return str(existing["name"] or "")
     return _mint_venue_from_request(conn, parent_id, destination, narration)
+
+
+_OUTDOOR_AREA_WORDS = (
+    "mudflats", "flats", "harbour", "harbor", "docks", "dock", "quay", "quayside", "wharf", "waterfront",
+    "square", "market", "marketplace", "green", "beach", "shore", "shoreline", "strand", "pier", "jetty",
+    "causeway", "marsh", "marshes", "saltmarsh", "breakwater", "seawall", "sea wall", "mole", "slipway",
+)
+_OUTDOOR_AREA_RE = re.compile(
+    r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|come|get|"
+    r"cross\w*|wander\w*|march\w*|step\w*|climb\w*)\s+(?:(?:back|over|down|up|across|out|along|straight|onto|on)\s+){0,2}"
+    r"(?:to|toward|towards|onto|on\s+to|into|along|across)\s+(?:the\s+)?"
+    r"(?P<lead>(?:edge|end|foot|top|middle|centre|center|far\s+side|near\s+side)\s+of\s+the\s+)?"
+    r"(?P<area>(?:[a-z'’-]+\s+){0,2}?(?:" + "|".join(re.escape(w) for w in _OUTDOOR_AREA_WORDS) + r"))\b",
+    re.IGNORECASE,
+)
+
+
+def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -> str:
+    """An open part of this settlement the player walks to (the flats, the harbour, the square), or "".
+
+    7B run 10, T8: "walk down to the edge of the mudflats" left the player in
+    the town while the prose stood her at the water. Known (a place of this
+    settlement whose name ends in the same word) is that place; unknown is made
+    as the settlement's child with no trade, when the prose names it outside
+    speech and does not stop the walk.
+    """
+    match = _OUTDOOR_AREA_RE.search(wanted or "")
+    if not match:
+        return ""
+    area = " ".join(match.group("area").split())
+    head = area.split()[-1].lower()
+    rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
+    for row in rows:
+        words = re.findall(r"[a-z]+", humanize_place_name(str(row["name"] or "")).lower())
+        if words and (words[-1] == head or words[-1].rstrip("s") == head.rstrip("s")) and not str(row["kind"] or ""):
+            turn_ledger.note("movement", "outdoor_area_requested", place=str(row["name"] or ""), made=False)
+            return str(row["name"] or "")
+    if head not in _unspoken(narration).lower():
+        return ""
+    if _prose_stops_walk(head, narration):
+        turn_ledger.note("movement", "requested_walk_stopped_in_prose", place=area)
+        return ""
+    parent = _location_row(conn, parent_id)
+    if parent is None:
+        return ""
+    name = " ".join(w[:1].upper() + w[1:] for w in area.split())
+    if not name.lower().startswith("the "):
+        name = f"The {name}"
+    if not is_plausible_place_name(name):
+        return ""
+    existing = _match_location_by_name(conn, name)
+    if existing is not None:
+        return str(existing["name"] or "") if int(venues._field(existing, "parent_id", 0) or 0) == int(parent_id) else ""
+    top = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM locations").fetchone()[0] or 0)
+    new_id = _upsert_location(conn, name, "", parent_id=parent_id, kind="")
+    if not new_id:
+        return ""
+    if int(new_id) > top:
+        conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (int(parent_id), int(new_id)))
+    row = _location_row(conn, int(new_id))
+    if row is None:
+        return ""
+    turn_ledger.note("movement", "outdoor_area_requested", place=str(row["name"] or ""), made=int(new_id) > top)
+    return str(row["name"] or "")
 
 
 _APPROACH_RE = re.compile(
@@ -12104,14 +12245,32 @@ def _opening_entry(conn, narration: str) -> str:
     if not rows:
         return ""
     chosen = ""
-    for sentence in re.split(r"(?<=[.!?])\s+", _unspoken(narration)):
-        if not _ENTERS_RE.search(sentence):
-            continue
+    sentences = re.split(r"(?<=[.!?])\s+", _unspoken(narration))
+    for index, sentence in enumerate(sentences):
         low = sentence.lower()
-        for row in rows:
-            if _venue_name_in_text(str(row["name"] or ""), low):
-                chosen = str(row["name"] or "")
+        if _ENTERS_RE.search(sentence):
+            for row in rows:
+                if _venue_name_in_text(str(row["name"] or ""), low):
+                    chosen = str(row["name"] or "")
+            continue
+        # "You stand before the Cropper and Sons forge ... Inside, the air is hot"
+        # (7B run 10, T0): the scene goes in with the player, so the building
+        # named at the door just before is where the opening starts.
+        if _INSIDE_LEAD_RE.match(sentence) and index:
+            before = " ".join(sentences[max(0, index - 2): index]).lower()
+            if _AT_THE_DOOR_RE.search(before):
+                for row in rows:
+                    if _venue_name_in_text(str(row["name"] or ""), before):
+                        chosen = str(row["name"] or "")
     return chosen
+
+
+_INSIDE_LEAD_RE = re.compile(r"^\s*inside\b(?:\s+the\s+[\w' ]{1,40})?[,\s]", re.IGNORECASE)
+_AT_THE_DOOR_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:stand|stop|wait|pause|linger|arrive)\w*\s+(?:\w+\s+){0,2}?"
+    r"(?:before|at|outside|by|in\s+front\s+of|at\s+the\s+door\s+of)\b",
+    re.IGNORECASE,
+)
 
 
 _PART_OF_RE = re.compile(
