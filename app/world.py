@@ -17632,6 +17632,126 @@ def _settle_story_terms_and_pay(
     return report
 
 
+# A moral act by the player, for karma (7B run 9: karma rose for probing mud and
+# for "Hal's helpfulness"). Help and harm done by the player, not to them.
+_MORAL_ACT_RE = re.compile(
+    r"\b(?:help(?:s|ed|ing)?|aid(?:s|ed|ing)?|give|gives|gave|giving|share[sd]?|sharing|donat(?:e|es|ed|ing)|"
+    r"sav(?:e|es|ed|ing)|rescu(?:e|es|ed|ing)|protect(?:s|ed|ing)?|defend(?:s|ed|ing)?|spar(?:e|es|ed|ing)|"
+    r"forgiv(?:e|es|ing)|forgave|heal(?:s|ed|ing)?|tend(?:s|ed|ing)?\s+(?:to\s+)?(?:his|her|their|the)\s+wounds?|"
+    r"feed(?:s|ing)?|fed|comfort(?:s|ed|ing)?|apologi[sz](?:e|es|ed|ing)|confess(?:es|ed|ing)?|"
+    r"return(?:s|ed|ing)?\s+(?:it|them|the|his|her|their)|pay(?:s|ing)?\s+(?:back|off|what\s+\w+\s+owe)|"
+    r"steal(?:s|ing)?|stole|stolen|rob(?:s|bed|bing)?|pickpocket\w*|lie|lies|lied|lying|cheat(?:s|ed|ing)?|"
+    r"swindl\w+|threaten(?:s|ed|ing)?|bull(?:y|ies|ied|ying)|extort\w*|blackmail\w*|brib(?:e|es|ed|ing)|"
+    r"hurt(?:s|ing)?|harm(?:s|ed|ing)?|strike|strikes|struck|hit(?:s|ting)?|attack(?:s|ed|ing)?|kill(?:s|ed|ing)?|"
+    r"murder\w*|betray\w*|deceiv(?:e|es|ed|ing)|trick(?:s|ed|ing)?|abandon(?:s|ed|ing)?|tortur\w+|insult\w*)\b",
+    re.I,
+)
+# The player as the one acting: "I <verb>" in their own line, "you <verb>" in the
+# prose, one adverb allowed between ("you quietly hand", "I gently help").
+_I_ACT_RE = re.compile(r"\bI\s+(?:\w+ly\s+)?(?P<verb>\w+)")
+_YOU_ACT_RE = re.compile(r"\byou\s+(?:\w+ly\s+)?(?P<verb>\w+)", re.I)
+
+
+def _player_moral_act(player_input: str, narration: str) -> str:
+    """The moral act the player did this turn, by their own line or by the prose's "you <verb>"; else ""."""
+    acts = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input))
+    for match in _I_ACT_RE.finditer(acts):
+        hit = _MORAL_ACT_RE.match(acts, match.start("verb"))
+        if hit:
+            return hit.group(0)
+    prose = _QUOTED_SPEECH_RE.sub(" ", str(narration or ""))
+    for match in _YOU_ACT_RE.finditer(prose):
+        hit = _MORAL_ACT_RE.match(prose, match.start("verb"))
+        if hit:
+            return hit.group(0)
+    return ""
+
+
+_EXPLORE_RE = re.compile(r"\b(?:explor\w*|scout\w*|wander\w*|search\w*|venture\w*|find\s+(?:a|the|some)\s+way)\b", re.I)
+
+
+def _turn_outcomes(
+    conn,
+    result: dict[str, Any],
+    *,
+    player_input: str = "",
+    inv_changes: list[dict[str, Any]] | None = None,
+    movement_report: Any = None,
+    quest_attempt: dict[str, Any] | None = None,
+    finishing: list[Any] | None = None,
+    max_npc_before: int = 0,
+) -> list[str]:
+    """What happened this turn that a reward can stand on: checks, quest steps, finds, fights, a new place or person."""
+    outcomes: list[str] = []
+    if any(isinstance(c, dict) and c.get("natural") is not None for c in result.get("skill_checks") or []):
+        outcomes.append("check")
+    if (quest_attempt and (quest_attempt.get("done") or quest_attempt.get("completes_quest"))) or finishing:
+        outcomes.append("quest")
+    if isinstance(result.get("quest_changes"), dict) and (result["quest_changes"].get("updates") or result["quest_changes"].get("new")):
+        outcomes.append("quest_change")
+    if any(isinstance(c, dict) and int(_float(c.get("quantity_delta"), 0)) > 0 for c in inv_changes or []):
+        outcomes.append("find")
+    combat = result.get("_deterministic_combat")
+    if isinstance(combat, dict) and combat and str(combat.get("status") or "").lower() not in {"", "none", "idle"}:
+        outcomes.append("fight")
+    # A new place counts when the player went looking for it: their line names
+    # it or explores. Walking over to someone (run 9 T1, "I walk over to the rag
+    # picker on the flats") is not a discovery because the model minted a place.
+    dest = str((result.get("player") or {}).get("move_to_location") or "").strip()
+    if dest:
+        row = _match_location_by_name(conn, dest)
+        if row is None or not int(venues._field(row, "visit_count", 0) or 0):
+            line = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input)).lower()
+            words = [w for w in re.findall(r"[a-z']{4,}", dest.lower()) if w not in {"the", "saltmarrow"}]
+            if any(re.search(rf"\b{re.escape(w)}", line) for w in words) or _EXPLORE_RE.search(line):
+                outcomes.append("new_place")
+    try:
+        if int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0) > int(max_npc_before or 0):
+            outcomes.append("new_person")
+    except Exception:
+        pass
+    return outcomes
+
+
+def _gate_model_rewards(
+    conn, result: dict[str, Any], *, player_input: str, narration: str, outcomes: list[str]
+) -> dict[str, Any]:
+    """The model's own XP stands on an outcome, its karma on a moral act by the player (7B run 9).
+
+    The engine owns the math (CLAUDE.md): XP the model adds on a turn where
+    nothing was checked, found, fought, finished, reached or met, and karma for
+    anything but help or harm the player did, are dropped and noted. Engine
+    amounts (quests, combat) are untouched.
+    """
+    player = result.get("player") if isinstance(result.get("player"), dict) else None
+    if not player:
+        return {}
+    authored = {str(p) for p in (result.get("_server_authored") or [])}
+    report: dict[str, Any] = {}
+    xp = int(_float(player.get("xp_delta"), 0))
+    if xp > 0 and "player.xp_delta" not in authored:
+        if outcomes:
+            report["xp_kept"] = {"xp": xp, "outcomes": outcomes}
+        else:
+            player.pop("xp_delta", None)
+            player.pop("_xp_delta_growth_applied", None)
+            report["xp_dropped"] = xp
+            turn_ledger.note("reward", "xp_dropped_nothing_earned", xp=xp)
+    karma = int(_float(player.get("karma_delta"), 0))
+    if karma and "player.karma_delta" not in authored:
+        act = _player_moral_act(player_input, narration)
+        if act:
+            report["karma_kept"] = {"karma": karma, "act": act}
+        else:
+            player.pop("karma_delta", None)
+            report["karma_dropped"] = karma
+            turn_ledger.note("reward", "karma_dropped_no_moral_act", karma=karma,
+                             reason=str(player.get("karma_reason") or "")[:200])
+    if report:
+        result["_reward_gate"] = report
+    return report
+
+
 def _drop_model_rewards(result: dict[str, Any]) -> list[str]:
     """Take out the model's own XP and gold gains for a turn the engine pays a quest (playtest #85b).
 
@@ -18354,6 +18474,12 @@ def apply_turn(
     with connect() as conn:
         row = conn.execute("SELECT value FROM pacing WHERE key = 'turn'").fetchone()
         next_turn = int(row["value"]) + 1 if row else 1
+        # People who exist before this turn: someone above this id was met now
+        # (an outcome the model's XP may stand on, 7B run 9 rewards).
+        try:
+            max_npc_before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0)
+        except Exception:
+            max_npc_before = 0
 
         # A planned workplace the player or the story names becomes a place
         # before movement resolves, so a MOVE there finds it (playtest #27).
@@ -18747,6 +18873,27 @@ def apply_turn(
         _apply_equipment_changes(conn, result.get("equipment_changes") or [])
         _apply_inventory_capacity_modifiers(conn, result.get("inventory_capacity_modifiers") or [])
         _apply_skills(conn, result.get("skill_changes") or [])
+        # The model's own XP and karma stand on something that happened (7B
+        # run 9: +7 XP for one question, +6 karma for probing mud).
+        try:
+            _gate_model_rewards(
+                conn,
+                result,
+                player_input=player_input,
+                narration=narration,
+                outcomes=_turn_outcomes(
+                    conn,
+                    result,
+                    player_input=player_input,
+                    inv_changes=inv_changes,
+                    movement_report=movement_report,
+                    quest_attempt=quest_attempt,
+                    finishing=finishing,
+                    max_npc_before=max_npc_before,
+                ),
+            )
+        except Exception:
+            pass
         _apply_player(conn, result.get("player") or {})
         movement_report = _reconcile_movement_report(movement_report, result.get("player"))
         # The gates above refused what they refused; the prose now matches
