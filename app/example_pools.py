@@ -1980,7 +1980,8 @@ CAST_OPTIONS_RULE = (
     "a new person, give them one of cast_options.names or a name in the same style, and a job from "
     "cast_options.jobs or another that fits this place. A new building may take one of "
     "cast_options.venue_names. Use them only if the scene needs them; never give anyone a name "
-    "already used in world_state."
+    "already used in world_state. They are a menu for you, not text: never list them or weigh them "
+    "in the prose; a person has one job."
 )
 
 
@@ -1990,7 +1991,8 @@ CAST_OPTIONS_RULE_TOWN = (
     "cast_options were drawn fresh for this turn and are not people yet. When the story needs "
     "a new person, give them one of cast_options.names or a name in the same style, and a job from "
     "cast_options.jobs or another that fits this place. Use them only if the scene needs them; never "
-    "give anyone a name already used in world_state."
+    "give anyone a name already used in world_state. They are a menu for you, not text: never list "
+    "them or weigh them in the prose; a person has one job."
 )
 
 
