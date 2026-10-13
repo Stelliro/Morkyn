@@ -15877,7 +15877,9 @@ def _after_act_cut_point(
         if not move:
             # "You thank her and turn to head towards the clock tower" (7B run
             # 28, T2): the move comes after "and".
-            joined = re.match(r"^\W*(?:then\s+)?you\s+[a-z]+(?:\s+[\w'’]+){0,4}?\s+and\s+(?:then\s+)?(.+)$", sentence, re.I | re.S)
+            # "You push the door of The Guildhall [[L2]] open and step inside"
+            # (7B run 29, T10): a longer object, and the place's code, before "and".
+            joined = re.match(r"^\W*(?:then\s+)?you\s+[a-z]+(?:\s+[\w'’\[\]]+){0,8}?\s+and\s+(?:then\s+)?(.+)$", sentence, re.I | re.S)
             if joined:
                 rest = re.sub(r"^(?:turn|turns)\s+to\s+", "", joined.group(1), flags=re.I)
                 move = _AFTER_ACT_MOVE_RE.match("You " + rest)
