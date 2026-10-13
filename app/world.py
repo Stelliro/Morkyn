@@ -16755,6 +16755,11 @@ def _introduced_person(
     return found[0] if len(found) == 1 else None
 
 
+# "A bell ringer named Clemence Skinner stands near the mill" (7B run 23, T0).
+_NAMED_JOB_PERSON_RE = re.compile(
+    r"\b(?:[Aa]n?|[Tt]he)\s+(?P<role>[a-z][a-z-]{2,24}(?:\s+[a-z][a-z-]{2,24})?)\s+(?:named|called)\s+"
+    r"(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b"
+)
 # Words that open a sentence before a comma and are never a name: "Inside, the
 # scent of bread ..." stored a person called Inside (7B run 22, T0).
 _NOT_A_NAME_START = frozenset({
@@ -16793,7 +16798,11 @@ def _introduced_person_first(
     plain = re.sub(r"\s*\[\[[^\]]*\]\]", "", venues.strip_speech(str(text or "")))
     blocked = {str(n).strip().lower() for n in not_people}
     known = {str(n or "").strip().lower() for n in known_names if str(n or "").strip()}
-    for match in _INTRODUCED_PERSON_RE.finditer(plain):
+    matches = sorted(
+        list(_INTRODUCED_PERSON_RE.finditer(plain)) + list(_NAMED_JOB_PERSON_RE.finditer(plain)),
+        key=lambda m: m.start(),
+    )
+    for match in matches:
         name = match.group("name").strip()
         if name.lower() in known or any(name.lower().split()[0] == k.split()[0] for k in known if k):
             continue
@@ -16803,7 +16812,10 @@ def _introduced_person_first(
             continue  # "You are Isk Tarrow, the flat-runner": the player
         role = match.group("role").strip()
         if role.split()[-1] in {"man", "woman", "figure", "person", "stranger", "voice", "child", "boy", "girl"}:
-            continue
+            if match.re is not _NAMED_JOB_PERSON_RE:
+                continue
+            # "a grizzled man named Rusk": the name is sure, the job unknown.
+            return {"name": name, "role": ""}
         if is_fragment_place_name(name) or role.split()[-1] in _NOT_A_JOB_NOUNS or name.lower() in blocked:
             continue
         return {"name": name, "role": role}
