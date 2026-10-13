@@ -16755,6 +16755,17 @@ def _introduced_person(
     return found[0] if len(found) == 1 else None
 
 
+# Words that open a sentence before a comma and are never a name: "Inside, the
+# scent of bread ..." stored a person called Inside (7B run 22, T0).
+_NOT_A_NAME_START = frozenset({
+    "You", "The", "This", "That", "These", "Those", "Morning", "Evening", "Inside", "Outside", "Above", "Below",
+    "Beyond", "Behind", "Ahead", "Nearby", "Here", "There", "Today", "Tonight", "Somewhere", "Everywhere",
+    "Overhead", "Underfoot", "Later", "Soon", "Now", "Then", "Still", "Yet", "Already", "Meanwhile", "Instead",
+    "Again", "Elsewhere", "Beside", "Around", "Across", "Along", "Down", "Up", "Out", "In", "Once", "Finally",
+    "Suddenly", "Slowly", "Quietly", "Eventually", "Meantime", "Afterwards", "Beneath", "Within", "Without",
+})
+
+
 def _introduced_people(
     text: str, known_names: list[str], not_people: set[str] | frozenset[str] = frozenset()
 ) -> list[dict[str, str]]:
@@ -16786,7 +16797,7 @@ def _introduced_person_first(
         name = match.group("name").strip()
         if name.lower() in known or any(name.lower().split()[0] == k.split()[0] for k in known if k):
             continue
-        if name.split()[0] in {"You", "The", "This", "That", "Morning", "Evening"}:
+        if name.split()[0] in _NOT_A_NAME_START:
             continue
         if re.search(r"\byou\s+are\s*$", plain[: match.start()], re.I):
             continue  # "You are Isk Tarrow, the flat-runner": the player
