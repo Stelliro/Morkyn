@@ -9716,6 +9716,28 @@ def resolve_movement(
                 doorway = "enter"
             if doorway == "exit" and inside_of:
                 parent = _location_row(conn, inside_of)
+                # Leaving for a place the line names: that place, not the
+                # settlement (7B run 13, T4: "I leave the docks and walk out onto
+                # the flats toward the drowned lower district" stood her in the
+                # town square).
+                onward = ""
+                if parent is not None:
+                    try:
+                        onward = _venue_requested_and_reached(
+                            conn, player_input, narration, str(parent["code"] or "")
+                        )
+                    except Exception:
+                        onward = ""
+                if onward and onward.lower() != str(here_row["name"] or "").lower():
+                    player_patch["move_to_location"] = onward[:120]
+                    turn_ledger.note("movement", "left_for_named_place", left=str(here_row["name"] or ""),
+                                     destination=onward)
+                    return {
+                        "status": "repaired",
+                        "rule": "venue_exit_to",
+                        "from": current_code,
+                        "destination": onward,
+                    }
                 if parent is not None:
                     player_patch["move_to_location"] = str(parent["name"] or "")[:120]
                     return {
@@ -10031,6 +10053,7 @@ def _venue_requested_and_reached(conn, player_input: str, narration: str, curren
 
 _OUTDOOR_AREA_WORDS = (
     "mudflats", "flats", "harbour", "harbor", "docks", "dock", "quay", "quayside", "wharf", "waterfront",
+    "district", "quarter",
     "square", "market", "marketplace", "green", "beach", "shore", "shoreline", "strand", "pier", "jetty",
     "causeway", "marsh", "marshes", "saltmarsh", "breakwater", "seawall", "sea wall", "mole", "slipway",
 )
@@ -13452,6 +13475,32 @@ _SHOWN_TAKE_RE = re.compile(
     r"(?P<obj>[^.;!?\n]*)",
     re.I,
 )
+# Working a thing free (7B run 13, T5): "You tug at a rusted piece of iron,
+# pulling it free", "you prise a brass hinge loose", "you dig out an old lamp".
+_FREE_VERBS = (
+    r"pull(?:s|ed)?|tug(?:s|ged)?|prise[sd]?|pr(?:y|ies|ied)|work(?:s|ed)?|wrench(?:es|ed)?|wrestle[sd]?|"
+    r"dig(?:s)?|dug|lever(?:s|ed)?|ease[sd]?|drag(?:s|ged)?|haul(?:s|ed)?|yank(?:s|ed)?|wiggle[sd]?|jiggle[sd]?"
+)
+_FREED_TAKE_RE = re.compile(
+    rf"\byou\s+(?:\w+ly\s+)?(?:{_FREE_VERBS})\s+(?:at\s+|on\s+)?"
+    r"(?P<obj>(?:the|a|an|some|two|three|\d+)\s+[a-z][\w'’-]*(?:\s+[a-z][\w'’-]*){0,4}?)"
+    r"(?:\s*,?\s*(?:pulling|working|prising|prying|levering|wrenching|easing|dragging|tugging|yanking|freeing)\s+(?:it|them))?"
+    r"\s+(?:free|loose|out|up|clear)\b"
+    rf"|\byou\s+(?:\w+ly\s+)?(?:{_FREE_VERBS})\s+(?:out|up|loose|free)\s+"
+    r"(?P<obj2>(?:the|a|an|some|two|three|\d+)\s+[a-z][\w'’-]*(?:\s+[a-z][\w'’-]*){0,4})",
+    re.I,
+)
+_SEARCH_FOR_ANY_RE = re.compile(
+    r"\b(?:look\w*|search\w*|dig\w*|hunt\w*|rummag\w*|scour\w*|feel\w*|prob\w*|sift\w*|root\w*)\s+"
+    r"(?:[\w'’-]+\s+){0,6}?for\s+(?:anything|something|whatever)\b",
+    re.I,
+)
+_FREED_LOST_RE = re.compile(
+    r"\b(?:toss|throw|threw|cast|fling|flung|drop|discard|let)\w*\s+(?:it|them)\s+(?:aside|away|back|down|go|fall)\b|"
+    r"\b(?:crumbles?|crumbled|breaks?\s+apart|falls?\s+apart|fell\s+apart|disintegrat\w*|snaps?\s+in\s+two)\b",
+    re.I,
+)
+_VAGUE_PIECE_NOUNS = frozenset({"piece", "scrap", "bit", "chunk", "lump", "length", "shard", "sliver", "strip", "coil"})
 _TAKE_DETERMINER_RE = re.compile(
     r"^(?P<det>the|a|an|some|both|two|three|four|five|six|several|\d+)\s+(?P<rest>.*)$", re.I
 )
@@ -13699,6 +13748,41 @@ def _grant_shown_takes(
                     "reason": "taken in the prose, as the player asked",
                     "source": "shown_take",
                 })
+    # A search for something to haul, answered by working a thing free: "You tug
+    # at a rusted piece of iron, pulling it free" (7B run 13, T5) is the find,
+    # though no take verb follows.
+    if _SEARCH_FOR_ANY_RE.search(line_l) or takes_any:
+        for sentence in sentences:
+            for match in _FREED_TAKE_RE.finditer(sentence):
+                obj = (match.group("obj") or match.group("obj2") or "").strip()
+                phrase, qty = _taken_phrase(obj)
+                if not phrase:
+                    continue
+                of_tail = re.match(
+                    rf"(?:the|a|an|some|two|three|\d+)?\s*{re.escape(phrase)}\s+of\s+([a-z][\w'’-]*)\b", obj, re.I
+                )
+                if of_tail and phrase.split()[-1] in _VAGUE_PIECE_NOUNS:
+                    phrase = f"{phrase} of {of_tail.group(1).lower()}"
+                tokens = _item_name_tokens(phrase)
+                if covered(phrase, tokens, [c for c in changes + added if int(_float((c or {}).get("quantity_delta"), 0)) > 0]):
+                    continue
+                if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "gain"]):
+                    continue
+                if any(_sentence_mentions_item(o, phrase, tokens) for o in owned):
+                    continue
+                after = plain[plain.find(sentence) + len(sentence):] if sentence in plain else ""
+                if _FREED_LOST_RE.search(after[:300]) or any(
+                    pattern.search(after[:300]) for pattern, _player in _ITEM_LOSS_RES
+                ):
+                    turn_ledger.note("inventory", "freed_find_let_go", item=phrase)
+                    continue
+                added.append({
+                    "name": phrase,
+                    "quantity_delta": qty,
+                    "reason": "worked free in the prose, as the player's search asked",
+                    "source": "shown_freed",
+                })
+                turn_ledger.note("inventory", "freed_find_granted", item=phrase)
     # "I keep the fitting I just pulled out of the mud" answered "You keep the
     # shiny bronze-finished piece ..." (7B run 5, T58): the prose takes, under
     # another name, the thing the player named. Its name comes from this scene
