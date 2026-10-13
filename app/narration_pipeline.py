@@ -1596,6 +1596,8 @@ _YOU_SAID_RE = re.compile(
     # (T82) and 'you call out, "..."' (T38) went unread as the player's lines.
     r"repeat|repeated|explain|explained|call\s+out|called\s+out|tell|told|respond|responded|"
     r"remark|remarked|admit|admitted|comment|commented|"
+    # 7B run 13, T3: '"I need to know, Reeve," you press, your voice firm'.
+    r"press|pressed|demand|demanded|urge|urged|counter|countered|add|added|continue|continued|"
     # 7B run 9: '"I'll check with the old man first," you decide' (T4) and
     # '"Thanks, Hal," you call back, "I'll be careful."' (T2).
     r"decide|decided|resolve|resolved|agree|agreed|promise|promised|announce|announced|vow|vowed|"
@@ -1646,7 +1648,11 @@ def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
     """The quoted words come from what the player typed (quoted, or plainly)."""
     if quotes and _is_player_line(span, quotes):
         return True
-    stems = content_stems(span)
+    # The name a line is said to is not the player's words (7B run 13, T3:
+    # '"Thank you, Reeve," you say' shared only "Reeve" with the typed line
+    # and was kept as theirs).
+    core = _VOCATIVE_START_RE.sub("", _VOCATIVE_END_RE.sub("", str(span or "").rstrip(" ,;:—-")))
+    stems = content_stems(core) if core.strip() else content_stems(span)
     if stems:
         return len(stems & content_stems(own)) * 2 >= len(stems)
     words = set(_speech_key(span).split())
