@@ -13502,15 +13502,81 @@ def _carries_out_stated_work(rest: str, clause: str, own: str) -> bool:
     verb = (re.findall(r"[a-z]+", rest.lower()) or [""])[0]
     if not verb or verb in _CONTRARY_VERBS:
         return False
-    if verb in _EFFORT_VERBS or _WORK_PART_RE.match(rest.strip()):
+    if _WORK_PART_RE.match(rest.strip()):
         return True
+    # "You pull harder" is the stated work; "you push the door open" after
+    # "push the lantern into the passage" works another thing (7B #97, T81).
+    if verb in _EFFORT_VERBS:
+        return _works_what_player_named(rest, verb, own)
     return bool(_work_words(rest[len(verb):]) & _work_words(own))
+
+
+# Work done for someone or on something the player never chose (7B Saltmarrow
+# #97, T26: "You assist Hargrave in mending his net" after "I go down to the
+# dock to find old Hargrave"). The world may ask for help; the player decides.
+_PLAYER_LABOR_RE = re.compile(
+    rf"^{_ACT_ADVERBS}(?P<v>assist(?:s|ed)?|help(?:s|ed)?\s+(?!yourself\b)|aid(?:s|ed)?|lend(?:s)?\s+a\s+hand|lent\s+a\s+hand|"
+    r"mend(?:s|ed)?|repair(?:s|ed)?|patch(?:es|ed)?|scrub(?:s|bed)?|polish(?:es|ed)?|clean(?:s|ed)?\s+(?:the|his|her|their|a)\b|"
+    r"haul(?:s|ed)?|load(?:s|ed)?|unload(?:s|ed)?|cook(?:s|ed)?|tend(?:s|ed)?\s+(?:to\s+)?(?:the|his|her|their)\b|"
+    r"gut(?:s|ted)?|row(?:s|ed)?\s+(?:the|out|across|toward|towards))",
+    re.I,
+)
+# Opening, lifting or unlocking a thing works it (T81: "You push the door open
+# ... you lift the lid ... You open the journal" after squeezing through a passage).
+_PLAYER_OPEN_RE = re.compile(
+    rf"^{_ACT_ADVERBS}(?P<v>open(?:s|ed)?|lift(?:s|ed)?|unlock(?:s|ed)?|unlatch(?:es|ed)?|unwrap(?:s|ped)?|"
+    r"unroll(?:s|ed)?|unfold(?:s|ed)?|untie[sd]?|unseal(?:s|ed)?|unbolt(?:s|ed)?)\s+(?=the|a|an|his|her|their|its|it|one|that|this)\b",
+    re.I,
+)
+_RETURN_MOVE_RE = re.compile(
+    r"^(?:\w+ly\s+){0,2}(?:return(?:s|ed)?|head(?:s|ed)?\s+back|walk(?:s|ed)?\s+back|go\s+back|went\s+back|turn(?:s|ed)?\s+back|"
+    r"retrace[sd]?|make\s+your\s+exit|made\s+your\s+exit|take\s+your\s+leave|took\s+your\s+leave)\b",
+    re.I,
+)
+_INPUT_RETURN_RE = re.compile(r"\b(?:back|return\w*|leave|leaving|exit\w*|home|retrac\w*|out\s+of)\b", re.I)
+_OBJECT_GLUE = frozenset({"the", "a", "an", "his", "her", "their", "its", "it", "them", "one", "that", "this", "your", "my"})
+_OBJECT_PREPOSITIONS = frozenset({
+    "against", "across", "beside", "behind", "beneath", "below", "above", "upon", "inside", "outside", "off", "out",
+    "for", "get", "got", "gets", "set", "make", "makes", "made", "keep", "free", "loose", "open", "shut", "up", "down",
+})
+_BODY_WORDS = frozenset({
+    "hand", "hands", "palm", "palms", "fingers", "finger", "arm", "arms", "leg", "legs", "foot", "feet", "knee", "knees",
+    "shoulder", "shoulders", "back", "side", "weight", "body", "head", "elbow", "elbows", "hip", "hips", "grip",
+    "breath", "way", "footing", "balance", "good", "bad", "free", "left", "right", "whole",
+})
+
+
+def _object_words(rest: str, verb: str) -> set[str]:
+    """Content words of the thing an act works, up to the clause end."""
+    after = rest.strip()[len(verb):] if rest.strip().lower().startswith(verb.lower()) else rest
+    after = re.split(r"[,.;:!?—]|\b(?:and|but|then|as|while|until|with)\b", after, maxsplit=1)[0]
+    # Only a noun phrase is an object ("pull harder" works nothing new), and
+    # the player's own body is not one ("press your palm against the
+    # indentation" works the indentation; "get the other leg up" is the climb).
+    low = after.lower()
+    if not re.search(r"\b(?:the|a|an|his|her|their|its|one|that|this|your)\b", low):
+        return set()
+    return {
+        w[:5]
+        for w in re.findall(r"[a-z]+", low)
+        if len(w) >= 3 and w not in _OBJECT_GLUE and w not in _WORK_STOPWORDS and w not in _BODY_WORDS
+        and w not in _OBJECT_PREPOSITIONS
+    }
+
+
+def _works_what_player_named(rest: str, verb: str, own: str) -> bool:
+    """The act's object is one the player's line names (or no object is named)."""
+    words = _object_words(rest, verb)
+    if not words:
+        return True
+    own_words = {w[:5] for w in re.findall(r"[a-z]+", own.lower()) if len(w) >= 3}
+    return bool(words & own_words)
 
 
 def _player_clause_invented(rest: str, clause: str, own: str, player_input: str) -> str:
     """The family of an invented player act at the start of `rest`, or ""."""
     family = _player_clause_family(rest, clause, own, player_input)
-    if family in {"manipulation", "taking", "movement"} and _carries_out_stated_work(rest, clause, own):
+    if family in {"manipulation", "taking", "movement", "labor"} and _carries_out_stated_work(rest, clause, own):
         return ""
     return family
 
@@ -13537,9 +13603,22 @@ def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -
         if _PAY_VERB_RE.match(m.group("v")):
             return "" if (_INPUT_PAY_RE.search(own) or player_take_intent(own)) else "taking"
         return "" if player_take_intent(own) else "taking"
+    # Going back from where the line went is a second journey (7B Saltmarrow
+    # #97, T72: "set off there" also walked the player back to town).
+    if _RETURN_MOVE_RE.match(rest):
+        return "" if _INPUT_RETURN_RE.search(own) else "movement"
     m = _PLAYER_FOLLOW_RE.match(rest)
     if m:
         return "" if _INPUT_MOVE_RE.search(own) else "movement"
+    m = _PLAYER_LABOR_RE.match(rest)
+    if m:
+        return "" if _verb_in_input(m.group("v"), own) else "labor"
+    m = _PLAYER_OPEN_RE.match(rest)
+    if m:
+        verb = m.group("v")
+        if (_verb_in_input(verb, own) or _INPUT_MANIPULATE_RE.search(own)) and _works_what_player_named(rest, verb, own):
+            return ""
+        return "manipulation"
     # Playtest #97: "I'll pay 2 gold for it", then "You pull out two gold coins
     # and hand them over" is the payment the player offered, and the draft was
     # told to show it (trade_offer). Cutting it left "he takes the coins" with
@@ -13550,7 +13629,12 @@ def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -
         return ""
     m = _PLAYER_MANIPULATE_RE.match(rest)
     if m:
-        if _verb_in_input(m.group("v"), own) or _INPUT_MANIPULATE_RE.search(own):
+        # The line works something, so pressing or pulling that thing is its
+        # act; working another thing is a new one (T81: "push the lantern into
+        # the passage" did not cover "You push the door open").
+        if (_verb_in_input(m.group("v"), own) or _INPUT_MANIPULATE_RE.search(own)) and _works_what_player_named(
+            rest, m.group("v"), own
+        ):
             return ""
         # "You press your palm against the archway, feeling the cold" while
         # examining it is the examining (review of #30). Only a press that
@@ -14415,6 +14499,146 @@ def _apply_narration_pipeline(
     return result
 
 
+# A wall of prose: one paragraph this long reads as a block (#47: 905 chars).
+_WALL_CHARS = 600
+_WALL_PARA_CHARS = 380
+_RECAP_VERB_RE = re.compile(
+    r"^you(?:\s+\w+ly)?\s+(?:ask|asked|inquire|inquired|enquire|enquired|wonder|wondered|want\s+to\s+know|"
+    r"wanted\s+to\s+know|question|questioned|put\s+(?:the|your)\s+question)\b",
+    re.I,
+)
+
+
+def _split_wall_of_text(turn: dict[str, Any]) -> dict[str, Any]:
+    """
+    Break one long paragraph into paragraphs at speech and sentence breaks (#47).
+
+    The words stay as written; only blank lines are added. A new paragraph
+    starts before a spoken line when the paragraph so far already holds one,
+    and when the paragraph has grown past _WALL_PARA_CHARS.
+    """
+    from app.narration_pipeline import quoted_spans, speech_units
+
+    text = str(turn.get("narration") or "").strip()
+    if len(text) < _WALL_CHARS or "\n\n" in text:
+        return turn
+    paragraphs: list[str] = []
+    current: list[str] = []
+    for unit in speech_units(text.replace("\n", " ")):
+        size = sum(len(u) + 1 for u in current)
+        has_speech = any(quoted_spans(u) for u in current)
+        if current and ((quoted_spans(unit) and has_speech) or size >= _WALL_PARA_CHARS):
+            paragraphs.append(" ".join(current))
+            current = []
+        current.append(unit)
+    if current:
+        paragraphs.append(" ".join(current))
+    if len(paragraphs) < 2:
+        return turn
+    turn["narration"] = "\n\n".join(paragraphs)
+    turn["narration_segments"] = [{"label": "paragraph", "text": p} for p in paragraphs]
+    return turn
+
+
+def _drop_question_recap(
+    turn: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """
+    Drop an opening sentence that only retells the player's question (#47).
+
+    "You ask the innkeeper where the old mill lies and whether anyone still
+    works it" in front of the answer says again what the player just typed.
+    Only the first sentence, only when it is unquoted, opens on "you ask" (or
+    a like verb) and its content words are mostly the player's; the answer
+    after it has to stay substantial.
+    """
+    from app.narration_pipeline import content_stems, split_sentences
+
+    own = player_line_of(player_input)
+    text = str(turn.get("narration") or "")
+    if not own or not text.strip():
+        return turn
+    first_para, sep, rest_paras = text.partition("\n\n")
+    sentences = split_sentences(first_para)
+    if not sentences:
+        return turn
+    first = sentences[0].strip()
+    if re.search(r'["“”]', first) or not _RECAP_VERB_RE.match(first):
+        return turn
+    stems = content_stems(_RECAP_VERB_RE.sub("", first))
+    if len(stems) < 3 or len(stems & content_stems(own)) * 2 < len(stems):
+        return turn
+    rest_first = first_para[first_para.find(first) + len(first):].strip()
+    remaining = (rest_first + ("\n\n" + rest_paras if sep else "")).strip()
+    if len(remaining) < 200:
+        return turn
+    turn["narration"] = remaining
+    segments = turn.get("narration_segments")
+    if isinstance(segments, list) and segments and isinstance(segments[0], dict):
+        head = str(segments[0].get("text") or "")
+        if first in head:
+            new_head = head.replace(first, "", 1).strip()
+            turn["narration_segments"] = ([{**segments[0], "text": new_head}] if new_head else []) + list(segments[1:])
+    _append_trace(trace, {"phase": phase, "event": "question_recap_dropped", "sentence": first[:200]})
+    return turn
+
+
+# Playtest #44: the 8B's stock line, in two games of one batch: "You're not the
+# first to follow that path, but you may be the last." The first half is the
+# speaker's real point and stays; only the stock flourish after it goes.
+_FIRST_BUT_LAST_RE = re.compile(
+    r"(?P<head>\b(?:you(?:'|’)re|you\s+are|you\s+aren(?:'|’)t)\s+(?:not\s+)?the\s+first\b[^.!?\"”]{0,100}?)"
+    r"\s*(?:[,;.]|\s[—–-])\s*(?:but|and|yet)\s+(?:you(?:'|’)ll\s+|you\s+)(?:may\s+|might\s+|could\s+|will\s+|would\s+)?"
+    r"(?:well\s+|just\s+)?be\s+the\s+last(?:\s+one)?\b",
+    re.I,
+)
+
+
+def _soften_stock_lines(turn: dict[str, Any]) -> dict[str, Any]:
+    """Cut the "...but you may be the last" flourish off its stock line (#44)."""
+    if not isinstance(turn, dict):
+        return turn
+    text = str(turn.get("narration") or "")
+    if not _FIRST_BUT_LAST_RE.search(text):
+        return turn
+    turn["narration"] = _FIRST_BUT_LAST_RE.sub(lambda m: m.group("head").rstrip(), text)
+    segments = turn.get("narration_segments")
+    if isinstance(segments, list):
+        turn["narration_segments"] = [
+            {**seg, "text": _FIRST_BUT_LAST_RE.sub(lambda m: m.group("head").rstrip(), str(seg.get("text") or ""))}
+            if isinstance(seg, dict)
+            else seg
+            for seg in segments
+        ]
+    return turn
+
+
+def _engine_prose_cleanups(
+    turn: dict[str, Any],
+    context: dict[str, Any],
+    player_input: str,
+    phase: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """
+    The engine-only passes of _ensure_narration_quality, with no model call.
+
+    A light question skips the quality passes so it does not pay for a second
+    call (#47). That skip also skipped every engine gate behind them: the
+    invented player lines of #86 ('"Exactly," you reply ...' after "who is the
+    blacksmith here?") and a same-speaker repeat (7B Saltmarrow T22) shipped
+    on question turns. These passes only cut or re-break what the draft wrote.
+    """
+    if not isinstance(turn, dict):
+        return turn
+    turn = _split_wall_of_text(turn)
+    turn = _drop_question_recap(turn, player_input, phase, trace)
+    turn = _soften_stock_lines(turn)
+    trimmed = _drop_decided_choice(_apply_menu_trim(turn), player_input)
+    final = _drop_player_overreach(trimmed, player_input, phase, trace)
+    return _apply_speech_memory(final, context, player_input, phase, trace)
+
+
 def _ensure_narration_quality(
     turn: dict[str, Any],
     context: dict[str, Any],
@@ -14455,7 +14679,7 @@ def _ensure_narration_quality(
     voiced = _ensure_narration_voice(deep, context, player_input, prose_prompt, timeout, usage, phase, trace)
     answered = _ensure_answer_act(voiced, context, player_input, prose_prompt, timeout, usage, phase, trace)
     recalled = _ensure_recall_specifics(answered, context, player_input, prose_prompt, timeout, usage, phase, trace)
-    trimmed = _drop_decided_choice(_apply_menu_trim(recalled), player_input)
+    trimmed = _drop_decided_choice(_apply_menu_trim(_soften_stock_lines(recalled)), player_input)
     chars_before = _narration_char_count(trimmed)
     cut_before = trimmed.get("_scene_cut") if isinstance(trimmed, dict) else None
     final = _drop_player_overreach(trimmed, player_input, phase, trace)
@@ -15757,6 +15981,9 @@ def _generate_turn_body(
                 result = ensure_quality(
                     result, active_context, player_input, depth_system_prompt, timeout, usage, "narration_depth_dsl_retry", trace
                 )
+            else:
+                # No second call, but the engine gates still run (#47, #86).
+                result = _engine_prose_cleanups(result, active_context, player_input, "light_question_cleanups", trace)
             result = _clean_turn_for_handoff(result, "dsl_to_world", trace)
             result["_verification_policy"] = verification_policy
             result["_draft_mode"] = "dsl"

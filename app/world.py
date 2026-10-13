@@ -13786,8 +13786,24 @@ def _note_player_name_told(conn, player_input: str, resolution: Any, narration: 
             player = conn.execute("SELECT name, '' AS public_name FROM player WHERE id = 1").fetchone()
         except Exception:
             return []
-    if not player or not introduces_self(player_input, [player["name"], player["public_name"]]):
+    if not player:
         return []
+    if not introduces_self(player_input, [player["name"], player["public_name"]]):
+        # Someone the prose shows writing the player's name down has it now
+        # (7B Saltmarrow #78, T18 -> T86).
+        try:
+            from app.conversation import wrote_player_name
+
+            prow = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+            loc_id = int(prow["current_location_id"]) if prow and prow["current_location_id"] else 0
+            here = rows_to_dicts(conn.execute("SELECT code, name FROM npcs WHERE location_id = ?", (loc_id,)).fetchall())
+            rows = [{"code": str(r["code"]).upper(), "name": str(r["name"]), "aliases": []} for r in here if r.get("code") and r.get("name")]
+            marked = sorted(set(wrote_player_name(str(narration or ""), rows)))
+            for code in marked:
+                conn.execute("UPDATE npcs SET knows_player_name = 1 WHERE code = ?", (code,))
+            return marked
+        except Exception:
+            return []
     res = resolution if isinstance(resolution, dict) else {}
     codes = [str(c).upper() for c in list(res.get("addressed") or []) + list(res.get("listening") or []) if c]
     try:
