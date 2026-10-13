@@ -1910,6 +1910,8 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
 _PLAIN_READ_RE = re.compile(
     r"\bread\w*\b[^.?!]{0,50}\b(?:notice|posting|post|sign|letter|note|parchment|board|poster|list|menu|tally|"
     r"ledger|message|label|bill|placard|price)s?\b"
+    # The thing first: "I take the note he holds out and read it" (7B run 24, T3).
+    r"|\b(?:notice|posting|sign|letter|note|parchment|poster|message|label|bill|placard)s?\b[^.?!]{0,50}\bread\s+(?:it|them)\b"
 )
 _HARD_TEXT_RE = re.compile(
     r"\b(?:decipher\w*|cipher|code|coded|symbols?|runes?|glyphs?|marks|faded|smudged|torn|water-?stained|"

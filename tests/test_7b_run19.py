@@ -73,6 +73,23 @@ class RequestedPlaceBeforeMinted(unittest.TestCase):
         self.assertIn("Salvage Yard", report["destination"])
 
 
+class TheNoteHeHoldsOut(unittest.TestCase):
+    """Run 24 T3: "I take the note he holds out and read it" stored "note he holds" and rolled investigation."""
+
+    def test_name_and_no_check(self):
+        from app import world
+        from app.db import connect, init_db
+        from app.skill_checks import infer_check_from_action
+
+        init_db()
+        line = 'I take the note he holds out and read it. "Where was it last seen?"'
+        with connect() as conn:
+            conn.execute("DELETE FROM inventory")
+            added = world._grant_shown_takes(conn, [], "You take the note he holds out and read it.", line)
+        self.assertEqual([a["name"] for a in added], ["note"])
+        self.assertIsNone((infer_check_from_action(line, {}) or {}).get("skill_code"))
+
+
 class AnothersActIsNotTheCheck(unittest.TestCase):
     """T1: "where the mole catcher is digging" rolled athletics."""
 
