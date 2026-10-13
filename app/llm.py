@@ -11287,6 +11287,16 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
     # (7B run 6, T4/T9/T10: the player's own "..., Oldfield." came back as
     # "..., Oldfield [[B]]." after their words had been restored as typed).
     out = re.sub(r'"[^"\n]+"|“[^”\n]+”', lambda m: _hold(m.group(0)), out)
+    # A known name followed by a code nothing holds carries the wrong tag:
+    # "Hereward Treloar [[H1]]" for the man coded A (7B run 17, T0).
+    known_codes = {str(c).upper() for c in code_to_name}
+    for name_l, code in ordered_names:
+        out = re.sub(
+            rf"(?<!\[\[)\b({re.escape(name_l)})\s*\[\[([A-Z]{{1,3}}\d{{0,3}})\]\]",
+            lambda m, _code=code: m.group(0) if m.group(2).upper() in known_codes else f"{m.group(1)} [[{_code}]]",
+            out,
+            flags=re.IGNORECASE,
+        )
     for name_l, code in ordered_names:
         pattern = re.compile(
             rf"(?<!\[\[)\b({re.escape(name_l)})\b(\s*\[\[{re.escape(code)}\]\])?",
