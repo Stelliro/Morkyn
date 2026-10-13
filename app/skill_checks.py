@@ -1739,6 +1739,13 @@ def _trigger_text_variants(text: str) -> list[str]:
 _SPOKEN_RE = re.compile(r"\"[^\"]*\"|“[^”]*”")
 # Skills a line of speech can call for by itself.
 _SPEECH_SKILLS = frozenset({"persuasion", "deception", "intimidation", "insight", "etiquette", "performance", "streetwise"})
+# A social verb whose subject is someone else: "they all lie", "the merchants
+# cheat", "he threatened me". Only the player's own lie or threat is a check.
+_OTHERS_DO_SOCIAL_RE = re.compile(
+    r"\b(?:they|he|she|you|it|people|folk|folks|everyone|everybody|nobody|all|both|most|some|others|"
+    r"(?!this\b|was\b|is\b|has\b|does\b|as\b)[a-z]{3,}s)\s+(?:all\s+|always\s+|just\s+|only\s+|often\s+|will\s+|would\s+|"
+    r"do\s+|did\s+|can\s+|could\s+)?(?:lie|lies|lied|lying|bluff\w*|deceiv\w*|cheat\w*|threaten\w*|cons?)\b"
+)
 
 _NEGATED_VERB_RE = re.compile(
     r"\b(?:not|never|no longer|cannot|\w+n['’]t)\s+(?:\w+ly\s+)?(?:going to\s+|try(?:ing)? to\s+)?\w+"
@@ -1810,12 +1817,16 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # matched the sentence as typed.
     variants = _trigger_text_variants(text)
     acted_variants = _trigger_text_variants(acted) if acted != text else variants
+    # Others lying is not the player deceiving (7B run 11, T2: "there are three
+    # in this town and they all lie" rolled deception, a critical failure).
+    social = _OTHERS_DO_SOCIAL_RE.sub(" ", text)
+    social_variants = _trigger_text_variants(social) if social != text else variants
     pack_list = list(pack_pairs)
     for index, (pattern, code) in enumerate(pack_list + pairs):
         if code in disabled:
             continue
         try:
-            reads = variants if code in _SPEECH_SKILLS else acted_variants
+            reads = social_variants if code in _SPEECH_SKILLS else acted_variants
             if any(re.search(pattern, variant) for variant in reads):
                 skill = code
                 from_pack = index < len(pack_list)

@@ -335,6 +335,42 @@ def _nearest_doer(before: str) -> str:
     return best
 
 
+_COUNTED_COIN_RE = re.compile(
+    r"\b(?P<count>a\s+single|a\s+pair\s+of|an?|single|\d{1,5}|"
+    + "|".join(sorted((w.replace(" ", r"\s+") for w in _NUMBER_WORDS), key=len, reverse=True))
+    + r")\s+(?P<mods>(?:[\w'’-]+\s+){0,2}?)(?:gold\s+)?(?:coins?|gold\s+pieces?|pieces?\s+of\s+gold|crowns?)\b",
+    re.I,
+)
+# Words that make a count vague: "a handful of coins" is not one coin.
+_VAGUE_COUNT_WORDS = frozenset({
+    "handful", "fistful", "bag", "purse", "pouch", "sack", "stack", "pile", "heap", "few", "couple",
+    "some", "number", "lot", "more", "of", "silver", "copper", "rolls", "roll",
+})
+
+
+def counted_coins(text: str) -> int | None:
+    """The number of coins a handed-over span states: "hands you a coin" -> 1, "two coins" -> 2.
+
+    7B run 11, T2: "Iseult nods and hands you a coin" rolled a small band
+    (+7). A count the prose states is the amount, one gold a coin; a vague
+    amount ("a handful of coins", "a few coins", "a bag of coin") is None and
+    takes a band. Silver and copper are other units (None).
+    """
+    for match in _COUNTED_COIN_RE.finditer(str(text or "")):
+        mods = {w.lower() for w in re.findall(r"[\w'’-]+", match.group("mods") or "")}
+        if mods & _VAGUE_COUNT_WORDS:
+            continue
+        count = " ".join(match.group("count").lower().split())
+        if count in {"a", "an", "one", "a single", "single"}:
+            return 1
+        if count == "a pair of":
+            return 2
+        value = _number(count)
+        if value:
+            return value
+    return None
+
+
 def _band_word(text: str) -> str:
     for band, pattern in _BAND_WORDS:
         if pattern.search(text):

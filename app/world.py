@@ -18317,6 +18317,12 @@ def _settle_unopped_coin(
     plain = prose_state._QUOTE_RE.sub(" ", narration)
     sums = [m for m in prose_state.coin_mentions(plain) if m > 0] or [m for m in prose_state.coin_mentions(own) if m > 0]
     amount = sums[0] if len(set(sums)) == 1 else None
+    if amount is None and handed:
+        # "hands you a coin" is one coin, not a rolled band (7B run 11, T2: +7).
+        counted = prose_state.counted_coins(str(handed.get("span") or ""))
+        if counted:
+            turn_ledger.note("gold", "received_coin_counted", amount=counted, span=handed.get("span"))
+            amount = counted
     if amount is None and not (handed or {}).get("band"):
         amount = _coin_grant_count(coin_grants)
     if amount and amount <= STATED_GAIN_CAP:
