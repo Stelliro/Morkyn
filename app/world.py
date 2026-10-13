@@ -13505,12 +13505,15 @@ def _grant_shown_takes(
 # price is not giving it (T41).
 _LINE_GIVE_RE = re.compile(
     r"\bi\s+(?:\w+ly\s+)?(?:give|hand(?:\s+over)?|pass|sell|trade|swap|drop|leave|toss|throw(?:\s+away)?|discard|"
-    r"dump|ditch|push|slide|shove)\b(?P<rest>[^.;!?\n]{0,80})",
+    r"dump|ditch|push|slide|shove|"
+    # Handing back what was never the player's (7B run 10, T6: "I set the knives back on her bench").
+    r"(?:set|put|place|lay|laid)(?=[^.;!?\n]{0,40}\bback\b)|return)\b(?P<rest>[^.;!?\n]{0,80})",
     re.I,
 )
 _PROSE_GIVE_RE = re.compile(
     r"\byou\s+(?:\w+ly\s+)?(?:give|hand(?:\s+over)?|pass|sell|sold|trade|swap|drop|leave|left|toss|throw(?:\s+away)?|"
-    r"discard|dump|ditch|push|slide|shove)\b(?P<rest>[^.;!?\n]{0,80})",
+    r"discard|dump|ditch|push|slide|shove|(?:set|put|place|lay|laid)(?=[^.;!?\n]{0,40}\bback\b)|return(?:ed)?)\b"
+    r"(?P<rest>[^.;!?\n]{0,80})",
     re.I,
 )
 _GIVE_UNDONE_RE = re.compile(
