@@ -355,7 +355,9 @@ def reward_text(paid: dict[str, Any] | None) -> str:
     return ", ".join(bits)
 
 
-def pay_quest_reward(conn, quest_id: int, *, turn: int = 0, units: int = 1, source: str = "") -> dict[str, Any]:
+def pay_quest_reward(
+    conn, quest_id: int, *, turn: int = 0, units: int = 1, source: str = "", gold_paid_in_story: int = 0
+) -> dict[str, Any]:
     """
     The one quest payout (playtest #85b). Every completion path comes here:
     the engine's step matcher, the quest parser and the Advance step button.
@@ -377,6 +379,12 @@ def pay_quest_reward(conn, quest_id: int, *, turn: int = 0, units: int = 1, sour
         paid.update(quest_reward_amounts(conn, quest, units=units))
     except Exception as exc:
         errors.append(f"amounts: {type(exc).__name__}: {exc}"[:200])
+    if gold_paid_in_story:
+        # The giver already handed the pay over in the story and it reached the
+        # purse this turn (7B run 6, T9): that coin is the job's gold, so none
+        # is paid again. XP, karma and items still come from the job.
+        paid["gold"] = 0
+        paid["gold_paid_in_story"] = int(gold_paid_in_story)
     try:
         if paid["gold"] or paid["xp"] or paid["karma"]:
             row = conn.execute("SELECT gold, xp, karma FROM player WHERE id = 1").fetchone()
@@ -441,7 +449,9 @@ def pay_quest_completion(conn, quest_id: int, result: dict[str, Any], *, turn: i
     return pay_quest_reward(conn, int(quest_id), turn=int(turn), source=source)
 
 
-def complete_quest_step(conn, quest_id: int, *, turn: int = 0, to_end: bool = False, source: str = "") -> dict[str, Any]:
+def complete_quest_step(
+    conn, quest_id: int, *, turn: int = 0, to_end: bool = False, source: str = "", gold_paid_in_story: int = 0
+) -> dict[str, Any]:
     """
     Finish the quest's current step (or every step, ``to_end``) and pay on
     completion (playtest #85b). The one state change for a step done, so the
@@ -469,7 +479,9 @@ def complete_quest_step(conn, quest_id: int, *, turn: int = 0, to_end: bool = Fa
     out["completed"] = bool(res.get("completed"))
     out["action"] = "complete" if out["completed"] else "step_done"
     if out["completed"]:
-        out["paid"] = pay_quest_reward(conn, int(quest_id), turn=int(turn), source=source)
+        out["paid"] = pay_quest_reward(
+            conn, int(quest_id), turn=int(turn), source=source, gold_paid_in_story=gold_paid_in_story
+        )
     else:
         out["next_step"] = res.get("next_step")
         _offer_journal(conn, turn, f"Step done: {quest['title']}" + (f" ({step_title})" if step_title and step_title != quest["title"] else ""))
