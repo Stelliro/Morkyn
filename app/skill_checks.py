@@ -1764,6 +1764,10 @@ _JOB_PAY_RE = re.compile(
     re.I,
 )
 _WATCHED_CLAUSE_RE = re.compile(r"\b(?:watch|see|notice|count)(?:es|s|ing)?\s+(?:how|whether|if|as)\b[^.,;!?\"“”]*")
+# "the mole catcher is digging", "where Tam was hammering": another's act.
+_OTHERS_DOING_RE = re.compile(
+    r"\b(?:the|a|an|his|her|their|[A-Z][a-z]+)\s+(?:[\w'’-]+\s+){0,3}?(?:is|are|was|were)\s+(?:still\s+|busy\s+)?\w+ing\b",
+)
 
 # Verb forms only: "stab" must not catch "the stable" a player is mucking out.
 _COMBAT_LINE_RE = re.compile(
@@ -1799,6 +1803,10 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # threat); hands-on skills are read from the narrated part only.
     own_acts = _SPOKEN_RE.sub(" ", own)
     acted = _SPOKEN_RE.sub(" ", text)
+    # What someone else is doing is not the player's act: "I walk over to where
+    # the mole catcher is digging" rolled athletics (7B run 19, T1).
+    own_acts = _OTHERS_DOING_RE.sub(" ", own_acts)
+    acted = _OTHERS_DOING_RE.sub(" ", acted)
     act = None
     if not _COMBAT_LINE_RE.search(own_acts):
         try:
