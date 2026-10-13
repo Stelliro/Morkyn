@@ -1202,9 +1202,11 @@ def repair_sun_words(text: str, hour: int) -> tuple[str, list[dict[str, Any]]]:
         word = match.group(group)
         low = word.lower()
         going_down = low in _SUN_DOWN
-        if going_down and hour < 14:
+        # Midday is either way: "the sun climbs higher" at 12:18 was turned to
+        # "sinks" (7B run 27, T5). Down before 13:00, up from 14:00, are wrong.
+        if going_down and hour < 13:
             new = _SUN_TO_UP.get(low)
-        elif not going_down and hour >= 12:
+        elif not going_down and hour >= 14:
             new = _SUN_TO_DOWN.get(low)
         else:
             continue
