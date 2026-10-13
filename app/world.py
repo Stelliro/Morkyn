@@ -12655,9 +12655,15 @@ def _item_name_tokens(name_l: str) -> list[str]:
 
 
 _COIN_ITEM_RE = re.compile(
-    r"^(?:a\s+)?(?:(?:small\s+|handful\s+of\s+|few\s+|pile\s+of\s+|stack\s+of\s+|pouch\s+of\s+|purse\s+of\s+)*)"
+    # "Five gold coins", "12 coins", "a bag of coin" (7B run 5: "Five gold coins x4" stayed in the pack).
+    r"^(?:a\s+|an\s+|some\s+|\d{1,5}\s+|(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|"
+    r"fifteen|sixteen|twenty|thirty|forty|fifty|a\s+hundred)\s+)?"
+    r"(?:(?:small\s+|moderate\s+|large\s+|heavy\s+|handful\s+of\s+|few\s+|pile\s+of\s+|stack\s+of\s+|pouch\s+of\s+|"
+    r"purse\s+of\s+|bag\s+of\s+|sack\s+of\s+)*)"
     r"(?:(?:copper|silver|gold|brass|bronze|iron)\s+)?(?:coins?|pieces?|crowns?|pennies|pence|marks|bits|money|cash)$"
-    r"|^(?:copper|silver|gold)$",
+    r"|^(?:copper|silver|gold)$"
+    r"|^(?:\d{1,5}|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|sixteen|twenty|thirty|"
+    r"forty|fifty)\s+gold$",
     re.I,
 )
 
@@ -12702,8 +12708,11 @@ def _coins_to_gold(conn, changes: list[dict[str, Any]], narration: str) -> list[
 # required: the player's own line asks to take, and the prose shows the
 # player taking it (not someone else, not put back afterwards).
 _SHOWN_TAKE_RE = re.compile(
+    # "You find yourself with a leather-bound book and some scrolls" and "You
+    # keep the piece you pulled out of the mud" are takes too (7B run 5, T12, T58).
     r"\byou\s+(?:\w+ly\s+)?(?P<verb>pick\s+(?P<pro>it|them|both|one)\s+up|take|pick\s+up|pocket|grab|collect|"
-    r"gather\s+up|scoop\s+up|snatch\s+up|stow|help\s+yourself\s+to)\b(?P<obj>[^.;!?\n]*)",
+    r"gather\s+up|scoop\s+up|snatch\s+up|stow|help\s+yourself\s+to|find\s+yourself\s+(?:with|holding)|keep)\b"
+    r"(?P<obj>[^.;!?\n]*)",
     re.I,
 )
 _TAKE_DETERMINER_RE = re.compile(
@@ -12773,6 +12782,46 @@ def _last_new_thing(before: str) -> tuple[str, int]:
     return pick[0], pick[1]
 
 
+_LINE_TAKE_OBJECT_RE = re.compile(
+    r"\bi\s+(?:\w+ly\s+)?(?:take|keep|pocket|grab|pick\s+up|collect|stow)\s+"
+    r"(?P<obj>(?:the|a|an|some|both|two|three|four|five|six|\d+)\s+[a-z][\w'’-]*(?:\s+[a-z][\w'’-]*){0,3})",
+    re.I,
+)
+
+
+def _line_take_objects(line: str) -> list[tuple[str, int]]:
+    """The things the player's own line takes or keeps: [("fitting", 1)] for "I keep the fitting I just ..."."""
+    out: list[tuple[str, int]] = []
+    for match in _LINE_TAKE_OBJECT_RE.finditer(venues.strip_speech(str(line or ""))):
+        phrase, qty = _taken_phrase(match.group("obj"))
+        if phrase and (phrase, qty) not in out:
+            out.append((phrase, qty))
+    return out
+
+
+def _recent_thing_name(conn, narration_plain: str, phrase: str) -> str:
+    """The fullest name this scene or the last one gave the player's thing: "old brass fitting" for "fitting"."""
+    head = (_item_name_tokens(phrase) or [phrase])[-1]
+    if not head:
+        return ""
+    texts = [narration_plain]
+    try:
+        row = conn.execute("SELECT content FROM journal WHERE kind = 'narration' ORDER BY id DESC LIMIT 1").fetchone()
+        if row:
+            texts.append(venues.strip_speech(str(row["content"] or "")))
+    except Exception:
+        pass
+    pattern = re.compile(
+        rf"\b(?:a|an|the|some|one)\s+((?:[a-z][\w'’-]*\s+){{0,2}}{re.escape(head)}s?)\b", re.I
+    )
+    for text in texts:
+        names = [m.group(1).lower() for m in pattern.finditer(re.sub(r"\s*\[\[[^\]]*\]\]", "", text))]
+        names = [n for n in names if not any(w in _TAKE_STOP_WORDS for w in n.split()[:-1])]
+        if names:
+            return max(names, key=lambda n: len(n.split()))
+    return ""
+
+
 def _grant_shown_takes(
     conn,
     changes: list[dict[str, Any]],
@@ -12808,6 +12857,11 @@ def _grant_shown_takes(
         for match in _SHOWN_TAKE_RE.finditer(sentence):
             obj = match.group("obj") or ""
             if match.group("verb").lower().startswith("take") and re.match(rf"\s+{_TAKE_NOT_ACQUIRE_TAIL}\b", obj, re.I):
+                continue
+            # "you keep walking", "keep watch": a kept thing has a determiner or is a pronoun.
+            if match.group("verb").lower() == "keep" and not re.match(
+                r"\s+(?:the|a|an|some|both|two|three|four|five|six|\d+|it|them)\b", obj, re.I
+            ):
                 continue
             items: list[tuple[str, int]] = []
             first = obj.strip()
@@ -12862,12 +12916,121 @@ def _grant_shown_takes(
                     "reason": "taken in the prose, as the player asked",
                     "source": "shown_take",
                 })
+    # "I keep the fitting I just pulled out of the mud" answered "You keep the
+    # shiny bronze-finished piece ..." (7B run 5, T58): the prose takes, under
+    # another name, the thing the player named. Its name comes from this scene
+    # or the last one ("an old brass fitting").
+    # Compounds out first: "bronze-finished" is not eating it.
+    unhyphened = re.sub(r"\b[\w']+(?:-[\w']+)+\b", " ", plain)
+    if _SHOWN_TAKE_RE.search(plain) and not any(pattern.search(unhyphened) for pattern, _player in _ITEM_LOSS_RES):
+        for phrase, qty in _line_take_objects(line):
+            tokens = _item_name_tokens(phrase)
+            if any(word in _NOT_A_TAKEN_THING for word in phrase.split()):
+                continue
+            # Named in this prose: the pass above already decided (kept, put back or refused).
+            if _sentence_mentions_item(plain.lower(), phrase, tokens):
+                continue
+            if covered(phrase, tokens, [c for c in changes + added if int(_float((c or {}).get("quantity_delta"), 0)) > 0]):
+                continue
+            if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "gain"]):
+                continue
+            if any(_sentence_mentions_item(o, phrase, tokens) for o in owned):
+                continue
+            name = _recent_thing_name(conn, plain, phrase)
+            if not name:
+                continue
+            added.append({
+                "name": name,
+                "quantity_delta": qty,
+                "reason": "kept in the prose, as the player asked",
+                "source": "shown_take_named_by_player",
+            })
+            turn_ledger.note("inventory", "kept_as_asked", item=name, line_named=phrase)
     if added:
         try:
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                 (_turn_value(conn), "system", "Prose matched to state: kept "
                  + ", ".join(f"{a['name']} x{a['quantity_delta']}" for a in added) + " (taken as asked; no GRANT)"),
+            )
+        except Exception:
+            pass
+    return changes + added
+
+
+# --- A give, sale or drop the player asked for and the prose shows (7B run 5, #125) ---
+# "I give Abel the old bowl ... Then I drop the junk cot" was narrated as asked
+# and both stayed in the pack (T75); fittings pushed across the desk for ten
+# gold stayed too (T55). The draft wrote no op; the state follows the player
+# and the prose, as for takes. Putting a thing on a scale or a counter to ask a
+# price is not giving it (T41).
+_LINE_GIVE_RE = re.compile(
+    r"\bi\s+(?:\w+ly\s+)?(?:give|hand(?:\s+over)?|pass|sell|trade|swap|drop|leave|toss|throw(?:\s+away)?|discard|"
+    r"dump|ditch|push|slide|shove)\b(?P<rest>[^.;!?\n]{0,80})",
+    re.I,
+)
+_PROSE_GIVE_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:give|hand(?:\s+over)?|pass|sell|sold|trade|swap|drop|leave|left|toss|throw(?:\s+away)?|"
+    r"discard|dump|ditch|push|slide|shove)\b(?P<rest>[^.;!?\n]{0,80})",
+    re.I,
+)
+_GIVE_UNDONE_RE = re.compile(
+    r"\b(?:hands?|handed|gives?|gave|pushes|pushed|slides|slid)\s+(?:it|them|the\s+\w+(?:\s+\w+)?)\s+back\b|"
+    r"\b(?:refuses|refused|declines|declined|won['’]?t\s+take|will\s+not\s+take|shakes\s+(?:his|her|their)\s+head)\b|"
+    r"\byou\s+(?:pick|take|scoop|snatch)\s+(?:it|them|the\s+\w+(?:\s+\w+)?)\s+(?:up\s+)?(?:again|back)\b",
+    re.I,
+)
+_WHOLE_STACK_RE = re.compile(r"\b(?:the\s+lot|all\s+(?:of\s+)?(?:them|the|my|your)|every|both|the\s+\w+s)\b", re.I)
+
+
+def _remove_shown_gives(
+    conn,
+    changes: list[dict[str, Any]],
+    narration: str,
+    player_input: str,
+) -> list[dict[str, Any]]:
+    """Add the losses the player asked for and the prose shows, when the draft wrote none."""
+    changes = list(changes or [])
+    line = venues.strip_speech(_player_line(player_input) if player_input else "")
+    if not line or not _LINE_GIVE_RE.search(line):
+        return changes
+    plain = re.sub(r"\s*\[\[[^\]]*\]\]", "", venues.strip_speech(str(narration or "")))
+    if _GIVE_UNDONE_RE.search(plain):
+        turn_ledger.note("inventory", "give_not_applied", why="the prose hands it back or refuses it")
+        return changes
+    rows = conn.execute("SELECT name, quantity FROM inventory WHERE quantity > 0").fetchall()
+    losing = {str((c or {}).get("name") or "").lower() for c in changes if int(_float((c or {}).get("quantity_delta"), 0)) < 0}
+    line_parts = [m.group("rest").lower() for m in _LINE_GIVE_RE.finditer(line)]
+    prose_parts = [m.group("rest").lower() for m in _PROSE_GIVE_RE.finditer(plain)]
+    added: list[dict[str, Any]] = []
+    for row in rows:
+        name = str(row["name"] or "")
+        name_l = name.lower()
+        if not name_l or name_l in losing or _COIN_ITEM_RE.match(name):
+            continue
+        tokens = _item_name_tokens(name_l)
+        in_line = next((p for p in line_parts if _sentence_mentions_item(p, name_l, tokens)), None)
+        if in_line is None:
+            continue
+        in_prose = next((p for p in prose_parts if _sentence_mentions_item(p, name_l, tokens)), None)
+        if in_prose is None:
+            turn_ledger.note("inventory", "give_not_shown", item=name)
+            continue
+        have = int(row["quantity"] or 0)
+        qty = have if (_WHOLE_STACK_RE.search(in_line) or _WHOLE_STACK_RE.search(in_prose)) else 1
+        added.append({
+            "name": name,
+            "quantity_delta": -max(1, min(have, qty)),
+            "reason": "given, sold or dropped in the prose, as the player asked",
+            "source": "shown_give",
+        })
+        turn_ledger.note("inventory", "given_as_asked", item=name, quantity=qty)
+    if added:
+        try:
+            conn.execute(
+                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                (_turn_value(conn), "system", "Prose matched to state: let go of "
+                 + ", ".join(f"{a['name']} x{-a['quantity_delta']}" for a in added) + " (as asked; no REMOVE)"),
             )
         except Exception:
             pass
@@ -16841,9 +17004,139 @@ def _drop_model_rewards(result: dict[str, Any]) -> list[str]:
 # A gold gain the op and the prose both name passes unrolled up to this sum;
 # bigger named rewards still roll their band (the 8B inflates what it names).
 STATED_GAIN_CAP = 50
+# How many earlier scenes a price named for "the agreed price" may come from.
+AGREED_PRICE_SCENES = 3
 
 
-def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, Any] | None:
+def _take_coin_grants(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Take coin-shaped gains out of the turn's inventory changes and return them.
+
+    "Five gold coins x4" sat in the pack from 7B run 5 T4 to the end: coin is
+    the purse, never an item. _settle_stated_gold decides what they pay.
+    """
+    changes = result.get("inventory_changes")
+    if not isinstance(changes, list):
+        return []
+    coins: list[dict[str, Any]] = []
+    kept: list[dict[str, Any]] = []
+    for change in changes:
+        if isinstance(change, dict) and int(_float(change.get("quantity_delta"), 0)) > 0 and _is_coin_item(change):
+            coins.append(change)
+        else:
+            kept.append(change)
+    if coins:
+        result["inventory_changes"] = kept
+    return coins
+
+
+def _is_coin_item(change: dict[str, Any]) -> bool:
+    name = str(change.get("name") or "").strip()
+    kind = str(change.get("item_type") or change.get("type") or "").lower()
+    return bool(_COIN_ITEM_RE.match(name)) or kind in {"coin", "coins", "currency", "money"}
+
+
+def _coin_grant_count(coin_grants: list[dict[str, Any]]) -> int | None:
+    """The sum a coin GRANT's own name gives ("Five gold coins" -> 5), when exactly one names one."""
+    from app.prose_state import coin_mentions
+
+    sums = {m for c in coin_grants for m in coin_mentions(str(c.get("name") or ""))}
+    return sums.pop() if len(sums) == 1 else None
+
+
+def _unpriced_payment_amount(conn, result: dict[str, Any], narration: str) -> tuple[int | None, str]:
+    """What a payment shown with no sum costs: the scene's one sum, else a price quoted in the last scenes."""
+    from app import prose_state
+
+    named = [m for m in prose_state.coin_mentions(narration) if m > 0]
+    if len(named) == 1:
+        return named[0], "price_named_in_scene"
+    if conn is not None:
+        try:
+            rows = conn.execute(
+                "SELECT content FROM journal WHERE kind = 'narration' ORDER BY id DESC LIMIT ?",
+                (AGREED_PRICE_SCENES,),
+            ).fetchall()
+        except Exception:
+            rows = []
+        quoted: list[int] = []
+        for row in rows:
+            for amount in prose_state.stated_coin_amounts(str(row["content"] or ""))["priced"]:
+                if amount not in quoted:
+                    quoted.append(amount)
+        if len(quoted) == 1:
+            return quoted[0], "price_agreed_earlier"
+    return None, ""
+
+
+def _settle_unopped_coin(
+    conn,
+    result: dict[str, Any],
+    player: dict[str, Any],
+    narration: str,
+    own: str,
+    said: dict[str, list[int]],
+    coin_grants: list[dict[str, Any]],
+    quest_pays: bool,
+) -> dict[str, Any] | None:
+    """No GOLD op, no offer, no numbered payment: a payment with no sum, or coin handed to the player."""
+    from app import prose_state
+
+    if prose_state.shows_unpriced_payment(narration):
+        amount, how = _unpriced_payment_amount(conn, result, narration)
+        if not amount:
+            # Nothing names the price: the engine rolls a small spend, as for
+            # any cost the model sizes by band (the price ledger is not wired yet).
+            player.pop("gold_delta", None)
+            player["gold_band"] = "-small"
+            result["player"] = player
+            turn_ledger.note("gold", "payment_unpriced_banded", band="-small")
+            return {"source": "payment_unpriced_band", "band": "-small", "offer": None}
+        turn_ledger.note("gold", "payment_without_sum", amount=amount, priced_by=how)
+        return _set_settled_gold(result, player, -amount, how)
+    if quest_pays:
+        if coin_grants or said["received"]:
+            turn_ledger.note("gold", "received_left_to_quest_payout", grants=[c.get("name") for c in coin_grants])
+        return None
+    handed = prose_state.coin_handed_to_player(narration)
+    received = [m for m in said["received"] if m > 0]
+    if len(received) == 1 and received[0] <= STATED_GAIN_CAP:
+        turn_ledger.note("gold", "received_named", amount=received[0])
+        return _set_settled_gold(result, player, received[0], "prose_received")
+    if not handed and not received:
+        return None
+    # A sum the scene names outside quotes, or the player's own terms ("Ten
+    # gold for the lot"); else the prose's size word ("a moderate bag of
+    # coin"); else the coin GRANT's own count; else a small band.
+    plain = prose_state._QUOTE_RE.sub(" ", narration)
+    sums = [m for m in prose_state.coin_mentions(plain) if m > 0] or [m for m in prose_state.coin_mentions(own) if m > 0]
+    amount = sums[0] if len(set(sums)) == 1 else None
+    if amount is None and not (handed or {}).get("band"):
+        amount = _coin_grant_count(coin_grants)
+    if amount and amount <= STATED_GAIN_CAP:
+        turn_ledger.note("gold", "received_coin_named", amount=amount, span=(handed or {}).get("span"))
+        return _set_settled_gold(result, player, amount, "prose_received_named")
+    size = (handed or {}).get("band") or ("large" if amount else "small")
+    player.pop("gold_delta", None)
+    player["gold_band"] = size
+    result["player"] = player
+    turn_ledger.note("gold", "received_coin_banded", band=size, span=(handed or {}).get("span"))
+    return {"source": "prose_received_band", "band": size, "offer": None}
+
+
+def _set_settled_gold(result: dict[str, Any], player: dict[str, Any], value: int, source: str) -> dict[str, Any]:
+    player["gold_delta"] = value
+    player.pop("gold_band", None)
+    result["player"] = player
+    authored = [str(p) for p in (result.get("_server_authored") or [])]
+    if "player.gold_delta" not in authored:
+        authored.append("player.gold_delta")
+    result["_server_authored"] = authored
+    return {"source": source, "gold_delta": value, "offer": None, "model": None}
+
+
+def _settle_stated_gold(
+    result: dict[str, Any], player_input: str, *, conn=None, quest_pays: bool = False
+) -> dict[str, Any] | None:
     """
     Make the gold the prose names the gold that moves (playtest #69).
 
@@ -16860,6 +17153,15 @@ def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, 
     narration shows, or the player's offer when the prose accepts it (#75,
     T7: "I'll give you my last 3 gold for that", answered "Certainly", and
     the gold was never taken). Returns a note for the trace, or None.
+
+    7B run 5 (#125, #126): coin GRANTs are gold, settled here once and never
+    stored as pack items; a payment the prose shows with no sum ("You pay her
+    the agreed price") takes the one sum the scene names, else a price quoted
+    in the last scenes, else a rolled small spend; the
+    player's own line putting money down ("I put two gold on the bar") pays
+    unless the prose refuses it; and coin the prose shows handed to the player
+    with no GOLD op reaches the purse (the number the scene names, else the
+    band its size word gives). A quest payout turn mints nothing extra.
     """
     from app import prose_state
 
@@ -16874,12 +17176,24 @@ def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, 
     except (TypeError, ValueError):
         raw = 0
     losing = raw < 0 or band.lower().startswith(("-", "lose", "spend"))
+    coin_grants = _take_coin_grants(result)
     said = prose_state.stated_coin_amounts(narration)
     offer = prose_state.player_trade_offer(own)
     paid_once = said["paid"][0] if len(said["paid"]) == 1 and not said["received"] else None
     mentioned = prose_state.coin_mentions(narration)
     value: int | None = None
     source = ""
+    if not (band or raw) and offer is None and paid_once is None:
+        note = _settle_unopped_coin(conn, result, player, narration, own, said, coin_grants, quest_pays)
+        if note is not None:
+            return note
+        if coin_grants:
+            turn_ledger.note("gold", "coin_grant_dropped", why="the prose shows no coin reaching the player",
+                             grants=[c.get("name") for c in coin_grants])
+        return None
+    if coin_grants:
+        turn_ledger.note("gold", "coin_grant_dropped", why="the turn already moves gold by its GOLD op or a payment",
+                         grants=[c.get("name") for c in coin_grants])
     if (band or raw) and not losing:
         # Rewards keep the band roll: the 8B inflates the sums it names
         # ("mints 250, then 400"). A modest number the op and the prose agree
@@ -16911,10 +17225,17 @@ def _settle_stated_gold(result: dict[str, Any], player_input: str) -> dict[str, 
             value, source = -paid_once, "prose_paid"
         else:
             answer = prose_state.offer_answer(narration, own)
-            if answer != "accepted":
+            outright = prose_state.player_pays_outright(own)
+            if answer != "accepted" and outright and answer != "refused":
+                # "I put two gold on the bar for the room" (7B run 5, T94) is the
+                # player's deed, not an offer waiting for a yes.
+                value, source = -outright, "player_paid"
+                turn_ledger.note("gold", "player_paid_outright", amount=outright, line=own[:200])
+            elif answer != "accepted":
                 # Refused or left unanswered: nothing is paid, and the trace says why.
                 return {"source": f"offer_{answer or 'unanswered'}", "offer": offer, "gold_delta": 0}
-            value, source = -offer, "offer_accepted"
+            else:
+                value, source = -offer, "offer_accepted"
     elif paid_once is not None:
         # No GOLD op, and the narration (outside quotes) shows the player pay.
         # Received coin with no op mints nothing: rewards are banded.
@@ -17409,7 +17730,12 @@ def apply_turn(
         # A price or payment the prose names is the gold that moves; it is
         # marked server-authored so the band roller below leaves it (#69).
         try:
-            gold_note = _settle_stated_gold(result, player_input)
+            gold_note = _settle_stated_gold(
+                result,
+                player_input,
+                conn=conn,
+                quest_pays=bool(quest_attempt and quest_attempt.get("done") and quest_attempt.get("completes_quest")),
+            )
         except Exception as exc:
             gold_note = {"error": f"{type(exc).__name__}: {exc}"[:200]}
         # Every "how much" the model proposed becomes a server-rolled amount
@@ -17549,6 +17875,10 @@ def apply_turn(
         if input_kind == "player":
             try:
                 inv_changes = _grant_shown_takes(conn, inv_changes, narration, player_input, rejected=inv_rejected)
+            except Exception:
+                pass
+            try:
+                inv_changes = _remove_shown_gives(conn, inv_changes, narration, player_input)
             except Exception:
                 pass
         voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report)
