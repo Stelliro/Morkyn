@@ -4,6 +4,8 @@ import json
 import re
 from typing import Any
 
+from app.shifts import duty_note, job_of
+
 
 # Shared voice for all turn paths (JSON, compact, DSL, narration pipeline).
 # Keeps local 8B models readable after theme/welding experiments that made prose
@@ -811,7 +813,10 @@ def _place_view(context: dict[str, Any]) -> dict[str, Any] | None:
         # A nameless shell is a passing face, not someone here (Saltmarrow #73).
         if str(npc.get("presence") or "") == "nameless" and int(npc.get("shell") or 0):
             continue
-        entry = {"name": person, "code": npc.get("code") or "", "role": npc.get("role") or ""}
+        # The role is the job; on or off duty is the clock's (playtest #83).
+        entry = {"name": person, "code": npc.get("code") or "", "role": job_of(npc.get("role"))}
+        if isinstance(npc.get("duty"), dict):
+            entry["duty"] = duty_note(npc["duty"])
         # Whose place this is (playtest #16): someone whose workplace is
         # elsewhere is a visitor here, not the one behind the counter.
         workplace_id = int(npc.get("workplace_id") or 0)
