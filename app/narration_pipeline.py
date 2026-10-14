@@ -1999,7 +1999,11 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                         trimmed, gone = _drop_invented_spans(unit, lambda s: _is_player_line(s, quotes))
                         kept_units.append(trimmed)
                         dropped.extend(gone)
-                    elif voiced and content_stems(" ".join(spans)) & own_stems:
+                    elif voiced and not voicing_kept and content_stems(" ".join(spans)) & own_stems:
+                        # One line voices the request: "I need to speak with you
+                        # about my debt" and then "I can work ... I'll do whatever
+                        # it takes" both stood for "ask the tallyman what work
+                        # he'll take" (8B run 48, T1).
                         voicing_kept = True
                         kept_units.append(unit)
                     elif voiced and not voicing_kept and (not asked or "?" in " ".join(spans)):
