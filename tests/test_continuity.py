@@ -211,6 +211,17 @@ class TestMovementRepair(unittest.TestCase):
         self.assertEqual(report["rule"], "narration_code")
         self.assertEqual(result["player"]["move_to_location_code"], "L2")
 
+    def test_a_coded_place_seen_on_arrival_is_not_the_destination(self):
+        # 7B run 38, T3: the tavern's lantern, seen from the drowned chapel, put the player in the tavern.
+        result = {"player": {}}
+        report = _move(
+            result,
+            "keep walking east",
+            narration="You walk for hours and reach the old chapel. The lantern of Redmill Ford [[L2]] flickers far off.",
+        )
+        self.assertNotEqual(report.get("rule"), "narration_code")
+        self.assertIsNone(result["player"].get("move_to_location_code"))
+
     def test_travel_with_no_evidence_stays_put_and_says_so(self):
         result = {"player": {}}
         report = _move(result, "walk around a bit", narration="You pace the yard, thinking.")

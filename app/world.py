@@ -10036,6 +10036,16 @@ def resolve_movement(
                 # town square", after "I'm in the town square, not the yard".
                 turn_ledger.note("movement", "narration_code_skipped", code=code, why="origin_or_denied")
                 continue
+            # The place has to be where the arriving happens, in its own
+            # sentence: "The lantern of the nearby tavern, The Lantern and
+            # Fiddle [[L2]], casts a flickering light" after reaching the
+            # drowned chapel put Isk in the tavern (7B run 38, T3).
+            s_start = max(tail.rfind(". ", 0, found.start()), tail.rfind("\n", 0, found.start())) + 1
+            s_end_dot = tail.find(". ", found.end())
+            s_end = len(tail) if s_end_dot < 0 else s_end_dot + 1
+            if not _TRAVEL_ARRIVAL_RE.search(tail[s_start:s_end]):
+                turn_ledger.note("movement", "narration_code_skipped", code=code, why="not_in_the_arrival_sentence")
+                continue
             if code != current_code.upper() and code in by_code:
                 player_patch["move_to_location_code"] = code
                 return {
