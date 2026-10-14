@@ -9488,7 +9488,18 @@ def _same_place_name(a: str, b: str) -> bool:
     def key(text: str) -> str:
         text = str(text or "").strip().lower().replace("’", "'").replace("‘", "'")
         return re.sub(r"^the\s+", "", re.sub(r"\s+", " ", text))
-    return bool(key(a)) and key(a) == key(b)
+    if not key(a):
+        return False
+    if key(a) == key(b):
+        return True
+    # A shorter spelling: "The Salvage Tally House" for "The Salvage Guild's
+    # Tally House" (8B run 37, T2).
+    la, lb = _place_words(a), _place_words(b)
+    if not la or not lb or la[-1] != lb[-1]:
+        return False  # the Drowned District Chapel is not the district
+    wa, wb = set(la), set(lb)
+    small, big = (wa, wb) if len(wa) <= len(wb) else (wb, wa)
+    return len(small) >= 2 and small <= big
 
 
 def _unasked_unshown_move(
@@ -9527,6 +9538,10 @@ def _unasked_unshown_move(
         if here_row is not None and _same_place_name(str(here_row["name"] or ""), current_name):
             name, code = str(here_row["name"] or ""), ""
     if current_name and not code and _same_place_name(name, current_name):
+        if name.strip().lower() != current_name.strip().lower() and player_patch.get("move_to_location"):
+            # Another spelling of here would mint a second "Salvage Tally House";
+            # it is here, so the MOVE goes (8B run 37, T2).
+            player_patch["move_to_location"] = None
         if not walk:
             return ""  # the legacy rules reject it as same_place_name and repair from the line
         # With a WALK beside it only the walk is left to judge (8B run 24, T2:

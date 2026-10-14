@@ -148,7 +148,8 @@ class AMoveToWhereYouStandIsNoTrip(unittest.TestCase):
         from app import world
 
         rows = [{"id": 2, "code": "L2", "name": "The Salvage Guild's Tally House", "parent_id": 1, "kind": ""}]
-        for patch in ({"move_to_location_code": "L2"}, {"move_to_location": "the Salvage Guild’s Tally House"}):
+        for patch in ({"move_to_location_code": "L2"}, {"move_to_location": "the Salvage Guild’s Tally House"},
+                      {"move_to_location": "The Salvage Tally House"}):  # 8B run 37, T2: a shorter spelling
             got = world._unasked_unshown_move({"player": patch}, patch, rows, "", intent="conversation",
                                               narration="Gregory leans back.", current_name="The Salvage Guild's Tally House")
             self.assertEqual(got, "", patch)
