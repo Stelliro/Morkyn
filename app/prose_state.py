@@ -1405,6 +1405,26 @@ _SPEECH_LEAD_RE = re.compile(
 )
 
 
+def drop_bare_name_paragraph(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Drop a paragraph that is nothing but a name: "The Pear's Rest." closing the scene (7B run 43, T0)."""
+    paragraphs = re.split(r"(\n\s*\n)", str(text or ""))
+    fixes: list[dict[str, Any]] = []
+    for index in range(0, len(paragraphs), 2):
+        para = paragraphs[index].strip()
+        bare = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", para)
+        nxt = paragraphs[index + 2].lstrip() if index + 2 < len(paragraphs) else ""
+        if nxt and nxt[0] in "\"“":
+            continue  # a speaker label over the line it brings in
+        if bare and re.fullmatch(r"(?:The\s+)?[A-Z][\w'’-]*(?:\s+(?:of|at|the|and|on)?\s*[A-Z][\w'’-]*){0,4}\s*[.!]?", bare) \
+                and len(bare.split()) <= 6 and len([p for p in paragraphs[0::2] if p.strip()]) > 1:
+            fixes.append({"why": "bare_name_paragraph", "text": para[:80]})
+            paragraphs[index] = ""
+    if not fixes:
+        return str(text or ""), []
+    out = re.sub(r"\n{3,}", "\n\n", "".join(paragraphs)).strip()
+    return out, fixes
+
+
 def drop_orphan_speech_lead(text: str) -> tuple[str, list[dict[str, Any]]]:
     """Drop a sentence that only brings in a line when no line follows it."""
     source = str(text or "")

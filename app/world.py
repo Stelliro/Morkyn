@@ -19963,7 +19963,8 @@ def _reconcile_prose_with_state(
         text, body = prose_state.repair_player_body(text, str(row[0] or "") if row else "")
         text, cut = prose_state.repair_cut_word_in_quote(text)
         text, lead = prose_state.drop_orphan_speech_lead(text)
-        for entry in body + cut + lead:
+        text, bare_name = prose_state.drop_bare_name_paragraph(text)
+        for entry in body + cut + lead + bare_name:
             report["trimmed"].append(entry)
             turn_ledger.note("prose", str(entry["why"]) + "_repaired", **entry)
     except Exception:
