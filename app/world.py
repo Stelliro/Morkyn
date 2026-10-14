@@ -9571,6 +9571,25 @@ def _unasked_unshown_move(
     return dest or "map walk"
 
 
+def _line_was_about_going(player_input: str) -> bool:
+    """The player's own line was about going to a place, so an unresolved trip is worth a Note in their history."""
+    # Speech never asks to go ('"If the water drops by noon I am going out
+    # to the drowned chapel roof"', 7B run 38, T2).
+    # Nor does a walk over to someone ("I go over to Odo and the horse", run 39 T1).
+    unspoken = _FOLLOW_TO_SPOT_RE.sub(" ", re.sub(r"[\"“][^\"”]*[\"”]", " ", _player_line(player_input)))
+    # The place crossed is not where the walk goes: "I cross the square to the
+    # hedger" wrote the Note (8B run 16, T1).
+    unspoken = re.sub(r"\bcross(?:es|ed|ing)?\s+(?:the\s+)?(?:[\w'’-]+\s+){1,2}?(?=to\b)", "cross ", unspoken, flags=re.I)
+    # And a walk to people names no place ("I go down to the workers hauling
+    # crates", 8B run 3, T1): only a line that names a place gets the Note.
+    from app.llm import _WALK_PLACE_DEST_RE
+
+    names_place = bool(_WALK_PLACE_DEST_RE.search(unspoken)) or bool(
+        re.search(r"\b(?:district|flats|shore|harbou?r|road|quarter|town|village|wharf|beach|cove|marsh|ruins?)\b", unspoken, re.I)
+    )
+    return _turn_intent(unspoken)[0] == "travel" and names_place
+
+
 _PLACE_FILLER_WORDS = frozenset({
     "the", "a", "an", "of", "and", "old", "new", "great", "little", "big", "upper", "lower", "far", "near",
     "north", "south", "east", "west", "first", "last",
@@ -21091,19 +21110,7 @@ def apply_turn(
             # player's history every turn; it goes there only when going
             # somewhere was the line's point. The ledger keeps it either way.
             turn_ledger.note("movement", "travel_unresolved", note=unresolved_note)
-            # Speech never asks to go ('"If the water drops by noon I am going out
-            # to the drowned chapel roof"', 7B run 38, T2).
-            # Nor does a walk over to someone ("I go over to Odo and the horse", run 39 T1).
-            unspoken = _FOLLOW_TO_SPOT_RE.sub(" ", re.sub(r"[\"“][^\"”]*[\"”]", " ", _player_line(player_input)))
-            # And a walk to people names no place ("I go down to the workers
-            # hauling crates", 8B run 3, T1): only a line that names a place
-            # gets the Note.
-            from app.llm import _WALK_PLACE_DEST_RE
-
-            names_place = bool(_WALK_PLACE_DEST_RE.search(unspoken)) or bool(
-                re.search(r"\b(?:district|flats|shore|harbou?r|road|quarter|town|village|wharf|beach|cove|marsh|ruins?)\b", unspoken, re.I)
-            )
-            if (_turn_intent(unspoken)[0] == "travel" and names_place) or int(map_report.get("steps_taken") or 0) or movement_report.get("follow"):
+            if _line_was_about_going(player_input) or int(map_report.get("steps_taken") or 0) or movement_report.get("follow"):
                 conn.execute(
                     "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                     (turn, "system", unresolved_note),

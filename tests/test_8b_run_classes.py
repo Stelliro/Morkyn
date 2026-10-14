@@ -431,6 +431,17 @@ class TheOneLeftBehindThroughTheShippedPath(unittest.TestCase):
         self.assertIn("harbour reeve's office", world._destination_text(self.LINE))
 
 
+class ThePlaceCrossedIsNoDestination(unittest.TestCase):
+    """8B run 16, T1: "I cross the square to the hedger" wrote the stayed-put Note in the player's history."""
+
+    def test_no_note_for_a_walk_to_someone(self):
+        from app import world
+
+        self.assertFalse(world._line_was_about_going(
+            "I cross the square to the hedger leaning on the wall. \"Watching the flats too?\""))
+        self.assertTrue(world._line_was_about_going("I head down to the drowned district before the tide turns."))
+
+
 class _ConnStub:
     """No one known yet."""
 
