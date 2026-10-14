@@ -231,6 +231,23 @@ class SpeechNeverAsksToGo(unittest.TestCase):
         self.assertEqual(report.get("status"), "dropped_unshown")
 
 
+class TheLineNamesTheDrownedLowerDistrict(unittest.TestCase):
+    """8B run 17, T1: "pick my way down into the drowned lower district" dropped the MOVE there as unasked."""
+
+    def test_named_with_a_filler_word_between(self):
+        from app import world
+
+        line = ("I tap the frozen face of the reckoner, then pick my way down into the drowned lower district along "
+                "the line of old fence posts, looking for anything the last tide uncovered.")
+        prose = "The lower district lies ahead. You move carefully, your boots crunching on the damp earth."
+        patch = {"move_to_location": "Drowned Lower District"}
+        rows = [{"id": 1, "code": "L1", "name": "Saltmarrow", "parent_id": 0, "kind": ""}]
+        got = world._unasked_unshown_move({"player": patch}, patch, rows, line, intent="investigation", narration=prose)
+        self.assertEqual(got, "")
+        self.assertTrue(world._line_names_place("down into the drowned lower district", world._place_words("Drowned Lower District")))
+        self.assertFalse(world._line_names_place("the drowned cellar by the district wall", world._place_words("Drowned Lower District")))
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
