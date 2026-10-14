@@ -11314,6 +11314,11 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
             # name was held whole above, longest first.
             if re.match(r"['’]s\s+[A-Z][a-z]", m.string[m.end():]):
                 return _hold(m.group(1))
+            # A plural possessive: "back to the Flats' surface" read "The Flats
+            # [[L2]]' surface" (7B run 34, T2). "Aria [[A]]'s story" keeps its
+            # code (#15); a lone apostrophe after a code reads broken.
+            if re.match(r"['’](?!s\b)\s*[a-z]", m.string[m.end():]):
+                return _hold(m.group(1))
             # "the Badger at Saltmarrow" is an inn's name that ends in the
             # town's; a town code there read as the inn's (7B run 6, T0).
             if re.fullmatch(r"L\d+", _code) and _PLACE_NAME_TAIL_RE.search(m.string[: m.start()]):
@@ -15664,6 +15669,14 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
             asked_move = False
         asked_take = player_take_intent(own)
         asked_pay = player_trade_offer(own) is not None
+
+    # The cut part, kept for the engine: who a figure in the kept part was is
+    # sometimes said only there (7B run 34, T2: 'A voice from the shore calls
+    # out ...' kept, 'It is Ivo Garner, a chamber servant' cut, and a drawn
+    # "Bryony" was made for the voice).
+    dsl = turn.get("_dsl")
+    if isinstance(dsl, dict) and str(tail or "").strip():
+        dsl["cut_tail"] = (str(dsl.get("cut_tail") or "") + "\n\n" + str(tail)).strip()[-4000:]
 
     head_words = _cut_words(head)
     tail_only = _cut_words(tail) - head_words

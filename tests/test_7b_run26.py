@@ -601,6 +601,51 @@ class WalkingOverToAPerson(unittest.TestCase):
         self.assertTrue(point and point["trigger"].startswith("You thank Kit"))
 
 
+class Run34SunkenRoof(unittest.TestCase):
+    """Run 34 T2: the coin pulled from the debris, the voice named only after the cut, and 'The Flats [[L2]]' surface'."""
+
+    LINE = ("I wade out to the first sunken roof I can reach before the water turns, and pry at the loose slates and "
+            "gutter metal with my hands, looking for anything worth hauling back.")
+    KEPT = ("The water is still at your ankles when you reach the first sunken roof. You pry at the loose slates. "
+            "You pull a small, tarnished coin from the debris, your fingers closing around it.\n\n"
+            'A voice from the shore calls out, "What are you doing out there?"')
+
+    def _world(self):
+        from app import world
+        from app.db import init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        return world
+
+    def test_coin_pulled_from_the_debris(self):
+        from app.db import connect
+
+        world = self._world()
+        with connect() as conn:
+            added = world._grant_shown_takes(conn, [], self.KEPT, self.LINE)
+        self.assertEqual([a["name"] for a in added], ["small tarnished coin"])
+
+    def test_voice_takes_the_name_from_the_cut_part(self):
+        from app.db import connect
+
+        world = self._world()
+        tail = 'It is Ivo Garner, a chamber servant who tends to the keeper. He steps closer.\n\n"I found this," you say.'
+        with connect() as conn:
+            loc = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            conn.execute("DELETE FROM npcs")
+            made = world._ensure_npcs_from_narration(conn, {"npcs": [], "_dsl": {"cut_tail": tail}}, self.KEPT, loc)
+        self.assertEqual([(n["name"], n["role"]) for n in made], [("Ivo Garner", "chamber servant")])
+
+    def test_no_code_before_a_possessive(self):
+        from app.llm import _inject_entity_codes_for_known_names
+
+        out = _inject_entity_codes_for_known_names("worth hauling back to the Flats' surface. The Flats are wide.",
+                                                   {"L2": "The Flats"})
+        self.assertIn("the Flats' surface", out)
+        self.assertIn("The Flats [[L2]] are wide", out)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
