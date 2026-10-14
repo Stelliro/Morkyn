@@ -20939,9 +20939,13 @@ def apply_turn(
                 if quest_marks:
                     source_before = changes.get("source")
                     changes = merge_marks({**changes, "_parser_ran": bool(quest_changes), "source": source_before or "parser"}, quest_marks)
+                # Judged against the text the player reads: a job whose giver and
+                # quote were cut from the scene was still offered (8B run 4, T6:
+                # "Clear the Rat Infestation in the East" from a Nesta the shipped
+                # prose never shows).
                 quest_report = apply_quest_changes(
-                    conn, changes, narration=narration, player_input=player_input, turn=turn, settled_ids=settled_quest_ids,
-                    passive=quest_passive,
+                    conn, changes, narration=_narration_text(result) or narration, player_input=player_input, turn=turn,
+                    settled_ids=settled_quest_ids, passive=quest_passive,
                 )
             except Exception as exc:
                 quest_report = {"status": "error", "error": str(exc)[:300], "created": [], "updated": [], "rejected": []}
