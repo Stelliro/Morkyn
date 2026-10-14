@@ -13291,6 +13291,10 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
         for c in result.get("conversations") or []
         if isinstance(c, dict)
     } - {""}
+    # Shown in the scene counts too: the man leaning on a post, bound to
+    # Roger Treloar, came with LOC "Saltmarrow Stables" (8B run 22, T2).
+    talked |= {re.sub(r"[^a-z]", "", str(n.get("name") or "").lower()) for n in npcs
+               if isinstance(n, dict) and n.get("_bound_hint")} - {""}
     if not talked or not npcs:
         return
     player = result.get("player") if isinstance(result.get("player"), dict) else {}
@@ -13637,6 +13641,8 @@ _ACQUIRE_PROSE_RE = re.compile(
     rf"(?:take[sn]?|took|taking)(?!\s+{_TAKE_NOT_ACQUIRE_TAIL}\b)|"
     r"receiv\w+|accept\w*|claim\w*|"
     r"hand(?:s|ed|ing)\s+(?:you|over|him|her|them)|"
+    # The thing first: "picked up a pie wrapped in cloth, and handed it to you" (8B run 22, T2).
+    r"hand(?:s|ed|ing)\s+(?:it|them|one|(?:the|a|an)\s+[\w'’-]+)\s+(?:over\s+)?to\s+you|"
     r"give[sn]?\s+you|gave\s+you|giving\s+you|(?:is|are|was|were)\s+given|"
     r"press(?:es|ed|ing)?\s+[\w\s]{0,40}?into\s+your|offer(?:s|ed|ing)?\s+you|"
     r"buy|buys|bought|buying|purchas\w+|barter\w*|trade[sd]?\s+for|"
@@ -13708,7 +13714,9 @@ _ITEM_LOSS_RES: tuple[tuple[re.Pattern[str], bool], ...] = (
     ), True),
     (re.compile(
         r"\b(?:eat|eats|ate|eaten|eating|devour\w*|swallow\w*|gobble\w*|finish(?:es|ed|ing)?|"
-        r"wolf(?:s|ed)?\s+down|polish(?:es|ed)?\s+off|drink|drinks|drank|drain(?:s|ed)?|quaff\w*)\b",
+        r"wolf(?:s|ed)?\s+down|polish(?:es|ed)?\s+off|drink|drinks|drank|drain(?:s|ed)?|quaff\w*|"
+        # "As you bit into it" (8B run 22, T2): a bite eaten on the spot.
+        r"bite\s+into|bites\s+into|bit\s+into|biting\s+into)\b",
         re.I,
     ), True),
     (re.compile(

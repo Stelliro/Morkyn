@@ -187,6 +187,17 @@ class SomeoneTalkedToIsInTheScene(unittest.TestCase):
     def test_an_unknown_place_is_the_scene(self):
         self.assertEqual(self._place("Saltmarrow Stables"), ("L1", 1))
 
+    def test_someone_shown_in_the_scene_is_in_it(self):
+        # 8B run 22, T2: the man at the post, bound to Roger Treloar, came with LOC "Saltmarrow Stables".
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            npcs = [{"name": "Roger Treloar", "location": "Saltmarrow Stables", "_bound_hint": "a man"}]
+            world._place_talked_to_in_scene(conn, npcs, {"player": {}, "conversations": []})
+        self.assertEqual(npcs[0]["location"], "L1")
+
     def test_a_known_place_or_no_talk_is_kept(self):
         self.assertEqual(self._place("Saltmarrow")[0], "Saltmarrow")
         self.assertEqual(self._place("Saltmarrow Stables", talked=False)[0], "Saltmarrow Stables")
