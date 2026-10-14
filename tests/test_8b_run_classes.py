@@ -887,6 +887,13 @@ class WhereAShipLiesIsNoLie(unittest.TestCase):
         for line in ("I lie to the guard about where I was.", "\"I was at the tavern,\" I lie.", "I tell a lie."):
             self.assertEqual(infer(line, {})["skill_code"], "deception", line)
 
+    def test_the_partner_left_behind(self):
+        from app.skill_checks import infer_check_from_action as infer
+
+        ctx = {"npcs": [{"code": "B", "name": "Wulfstan Glover", "role": "tallyman"}], "conversation_turn": {"addressed": ["B"]}}
+        check = infer("I leave the tally house and ask a fisherman on the wall where the Stormcaller is.", ctx) or {}
+        self.assertNotEqual((check.get("opposition") or {}).get("name"), "Wulfstan Glover")
+
 
 class _OutcomeConn:
     def execute(self, *_a, **_k):
