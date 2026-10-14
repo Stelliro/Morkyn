@@ -13718,6 +13718,8 @@ _PLAYER_FOLLOW_RE = re.compile(
     r"walk(?:s|ed)?\s+(?:to|toward|towards|into|out|over|back|away|off|inside|through)|"
     r"step(?:s|ped)?\s+(?:into|out|inside|outside|back\s+into|through)|"
     r"leave|leaves|left\s+(?:the|for)|set(?:s)?\s+off|push(?:es|ed)?\s+(?:on|forward|onward|ahead)|"
+    # "As you turn to leave, Hubert adds ..." (8B run 13, T2).
+    r"(?:turn(?:s|ed)?|start(?:s|ed)?|begin|began)\s+to\s+(?:leave|go)|make\s+to\s+(?:leave|go)|made\s+to\s+(?:leave|go)|"
     r"go\s+(?:to|into|back|out|inside)|return(?:s|ed)?\s+to|cross(?:es|ed)?\s+(?:to|over|the)|"
     # 7B run 20, T4: "You thank her and move toward the Harbour Office".
     r"mov(?:e|es|ed)\s+(?:to|toward|towards|into|over|across|through|off)|"
@@ -14186,6 +14188,13 @@ def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -
     return ""
 
 
+_AS_YOU_LEAD_RE = re.compile(
+    r"^\s*(?:as|when|while|just\s+as|once)\s+you\s+(?P<rest>[^,\"“”.!?]{3,80}),\s*"
+    r"(?P<world>(?!you\b|your\b)[A-Za-z\"“].*)$",
+    re.I | re.S,
+)
+
+
 def _tail_is_clause(tail: str) -> bool:
     """The world's half has its own subject and verb, not one more object of the
     player's cut verb: "You feel the pull of the water ..., and the knowledge
@@ -14207,7 +14216,14 @@ def _tail_is_clause(tail: str) -> bool:
 
 
 def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str) -> tuple[str, str]:
-    """(kept text, dropped text) for one sentence. Quoted sentences are never touched."""
+    """(kept text, dropped text) for one sentence. Quoted sentences are never touched,
+    except for an invented "As you ..." lead in front of the world's half."""
+    # "As you turn to leave, Hubert adds, '...'" (8B run 13, T2): the player's
+    # act rides in a lead clause; the world's half after it stays.
+    lead = _AS_YOU_LEAD_RE.match(sentence)
+    if lead and _player_clause_invented(lead.group("rest"), sentence, own, player_input):
+        world = lead.group("world")
+        return world[0].upper() + world[1:], sentence[: lead.start("world")].strip()
     if re.search(r'["\u201c\u201d]', sentence):
         return sentence, ""
     if _PLAYER_INNER_SUBJECT_RE.match(sentence):
