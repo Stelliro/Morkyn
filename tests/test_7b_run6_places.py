@@ -209,6 +209,18 @@ class SomeoneTalkedToIsInTheScene(unittest.TestCase):
             world._place_talked_to_in_scene(conn, npcs, {"player": {}, "conversations": []})
         self.assertEqual(npcs[0]["location"], "L1")
 
+    def test_someone_where_the_walk_goes_stays_there(self):
+        # 8B run 38, T5: the figure on "The Northern Coast Road" was put in the tally house left behind.
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            npcs = [{"name": "Eldrin", "location": "The Northern Coast Road", "_bound_hint": "a figure"}]
+            world._place_talked_to_in_scene(conn, npcs, {"player": {"move_to_location": "The Northern Coast Road"},
+                                                         "conversations": []})
+        self.assertEqual(npcs[0]["location"], "The Northern Coast Road")
+
     def test_a_known_place_or_no_talk_is_kept(self):
         self.assertEqual(self._place("Saltmarrow")[0], "Saltmarrow")
         self.assertEqual(self._place("Saltmarrow Stables", talked=False)[0], "Saltmarrow Stables")

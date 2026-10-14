@@ -13424,7 +13424,11 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
         "SELECT l.code, l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
     ).fetchone()
     scene = str(player.get("move_to_location_code") or "").strip() or (str(here["code"] or "") if here else "")
-    if not scene:
+    # A walk to a place by name: someone met there is there, even before the
+    # place is made (8B run 38, T5: the figure on "The Northern Coast Road"
+    # was put back in the tally house the player had left).
+    moving_to = str(player.get("move_to_location") or "").strip()
+    if not scene and not moving_to:
         return
     known = {str(r[0] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
     for npc in npcs:
@@ -13439,9 +13443,15 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
         loc = str(npc.get("location") or "").strip()
         if not loc:
             continue
+        if moving_to and _same_place_name(loc, moving_to):
+            continue  # where the walk goes; the move makes it
         if conn.execute("SELECT 1 FROM locations WHERE code = ? COLLATE NOCASE", (loc,)).fetchone():
             continue
         if _match_location_by_name(conn, loc) is not None:
+            continue
+        if moving_to:
+            npc["location"] = moving_to
+            turn_ledger.note("npc", "placed_in_scene", name=name, unknown_place=loc, place=moving_to)
             continue
         npc["location"] = scene
         turn_ledger.note("npc", "placed_in_scene", name=name, unknown_place=loc, place=scene)
