@@ -67,6 +67,43 @@ passed the full suite with only the 15 known failures. Nothing is pushed.
 - Run notes per turn: session scratchpad `findings-saltmarrow-7b-r31.txt` / `-r32.txt`; the
   saves and traces are there too (`saltmarrow-7b-r30` .. `r32`).
 
+## Run 32 open items, fixed (2026-10-14)
+
+- T3 tally sticks handed over: fixed f4f3f01 (holding out a hand for something reads "hands you" as the answer).
+- T1 "Northernmost Flats" from the cut tail: fixed f35b455 (a LOC_NEW named only in the cut part is not stored).
+
+## Runs 33-37 (each stopped once its save was wrong; fixes committed before the next run)
+
+- Run 33 (f35b455), stopped T2: a trip with work at its end ran on back to the trading post and the
+  MOVE stood. Fixed 4f050bc.
+- Run 34 (4f050bc), stopped T2:
+  - T1: "I walk over to Kit at the edge of the flats" minted "The Flats" and moved Isk; "You thank
+    Kit and make your way towards the flats" ran on. Fixed 2a93f18.
+  - T2: a coin pulled "from the debris" not granted; a drawn "Bryony" for the voice the cut part
+    named Ivo Garner; "The Flats [[L2]]' surface". Fixed 92f8254.
+- Run 35 (92f8254), stopped T1 (MAJOR): the verifier's JSON put the dialogue in single quotes, so
+  invented player lines passed every speech pass; a question ran on into a trip, a repair and a
+  move into the cookshop. Fixed 2ea3c4a.
+- Run 36 (2ea3c4a), stopped T7:
+  - T2: Isk's untagged question read as Emrys's (035daeb); "You thank Emrys" never said (8def2cf).
+  - T3: a lead-in left without its repeated line (8f1301a).
+  - T6: persuasion vs Emrys for a question put to Tobin, "not Emrys" (771216b).
+  - T7 (MAJOR): purse 12 -> 16 from a coin handed over only in the cut part (812e867).
+  - Not fixed (model, noted): the harbour "bustling with ships" in a town the sea left; Tobin's
+    boat became "a fisherman"; Emrys answering for Tobin; an invented thought quoting a line never
+    said; the Copper Plough described open while the engine has it closed.
+- Run 37 (812e867), stopped T3:
+  - T1: a one-word echo after the line's tag (d9093b6).
+  - T2: a pay question created the job "Move old planks to the shed" (the run 32 fix working).
+  - T3: the job taken and done in one line, then paid, was left open as "paid ahead"; a new
+    "Saltmarrow Shop" beside the named carpenter's shop. Fixed fc19b26.
+
+Every fix has a test, a replay over all saved runs and a full-suite pass with only the 15 known
+failures (the dice-audit flake tripped once and passed alone).
+
+- Process: a probe cleanup was refused by the safety check; `D:\morkyn-probe` (a few MB of my
+  probe data dirs) is left for Stell to delete. Probes now use a scratchpad folder.
+
 ## Next
 
-Start run 33 on the current main (b70aaf5 or later), and fix the two open run 32 items.
+Run 38 on fc19b26 or later.
