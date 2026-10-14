@@ -871,6 +871,27 @@ class EngineClockInTheProse(unittest.TestCase):
         self.assertEqual(repair_meta_leaks(said)[0], said)
 
 
+class TheOneYouWentToIsTalking(unittest.TestCase):
+    """Run 40 T1: Rohese answered Isk's invented 'I can help'; the trip guard skipped the cut."""
+
+    def test_cut_at_her_offer(self):
+        from app.llm import _cut_scene_at_invented_request
+
+        line = ('I cross the street to the tannery yard, where Rohese is sharpening her knife. "Morning, Rohese. Rats '
+                'bad in the tannery again?"')
+        nar = ('"Morning, Rohese. Rats bad in the tannery again?" you ask. Rohese glances up from her knife. "Worse '
+               'than usual. A pack of them in the cellar." She sheaths her knife and steps back.\n\n'
+               "The air is sharp, carrying the scent of salt and leather, and carts and baskets stand around the yard "
+               "as if the workers have been busy since dawn.\n\n"
+               'Rohese continues, "If you want, you can help me tonight. I\'m short a hand."\n\n'
+               'You consider for a moment. "I can help. What time do you need me?"\n\n'
+               '"Meet me at the tannery gate at dusk." She nods.')
+        turn = {"narration": nar, "narration_segments": [{"label": "paragraph", "text": p} for p in nar.split("\n\n")]}
+        out = _cut_scene_at_invented_request(turn, line, floor=50)
+        self.assertNotIn("Meet me at the tannery gate", out["narration"])
+        self.assertIn("you can help me tonight", out["narration"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

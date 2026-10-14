@@ -15457,7 +15457,9 @@ _TAIL_PAY_RE = re.compile(
 _SHOWN_GOING_RE = re.compile(
     r"\byou\s+(?:\w+ly\s+)?(?:walk|walked|head|headed|go|went|make\s+your\s+way|made\s+your\s+way|step|stepped|"
     r"cross|crossed|set\s+off|arrive|arrived|enter|entered|return|returned|follow|followed|climb|climbed|"
-    r"wander|wandered|stride|strode|hurry|hurried|approach|approached)\b"
+    r"wander|wandered|stride|strode|hurry|hurried|approach|approached|reach|reached|"
+    # "You push your way into the tannery yard" (7B run 40, T1).
+    r"(?:push|pushed|press|pressed|thread|threaded|pick|picked|weave|wove)\s+your\s+way)\b"
     # "You give it a while longer, then make your way to the first of the
     # traps" (7B run 30, T14): the going after "then".
     r"|\bthen\s+(?:\w+ly\s+)?(?:walk|head|go|make\s+your\s+way|step|cross|set\s+off|climb|wander|stride|hurry)\b",
@@ -15876,7 +15878,14 @@ def _cut_scene_at_invented_request(
         # is speech (7B run 17, T5: the cut was skipped and "You thank him and
         # start walking towards the salt marsh" moved the player).
         acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", player_line_of(player_input))
-        if travel_intent(acts) and not _SHOWN_GOING_RE.search(head):
+        # The one the line goes to, already talking to the player in the kept
+        # part, means the player is there: "I cross the street to the tannery
+        # yard, where Rohese is ..." and Rohese answering (7B run 40, T1).
+        met = [
+            n for n in re.findall(r"\b([A-Z][a-z]{2,})\b", acts)
+            if n not in {"I", "The"} and re.search(rf"\b{re.escape(n)}\b[^.!?\n]{{0,80}}[\"“]", head)
+        ]
+        if travel_intent(acts) and not _SHOWN_GOING_RE.search(head) and not met:
             return turn
     except Exception:
         pass
