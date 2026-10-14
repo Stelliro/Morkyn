@@ -14489,8 +14489,21 @@ _COIN_SET_DOWN_RE = re.compile(
 
 
 def _for_sale_context(narration: str, player_input: str) -> bool:
-    """The player's own line (outside speech) browses goods for sale: a stall, wares, what someone sells, prices."""
-    return bool(_FOR_SALE_RE.search(venues.strip_speech(_player_line(player_input))))
+    """The player's own line browses goods for sale: a stall, wares, what someone sells, prices.
+
+    Outside speech, or a price asked aloud: '"The stable mare will do. What do
+    you want for her for the afternoon?"' and "You can have her" put the mare
+    in the pack, unpaid (7B run 39, T2).
+    """
+    line = _player_line(player_input)
+    return bool(_FOR_SALE_RE.search(venues.strip_speech(line)) or _PRICE_ASKED_RE.search(line))
+
+
+_PRICE_ASKED_RE = re.compile(
+    r"\bwhat\s+(?:do|would|will)\s+you\s+(?:want|take|ask|charge)\s+for\b|\bhow\s+much\s+(?:for|is|are|do\s+you\s+want|would)\b"
+    r"|\bwhat(?:['’]s|\s+is)\s+(?:the|your)\s+price\b|\bwhat\s+(?:would|does|will)\s+(?:it|she|he|they|that)\s+cost\b",
+    re.I,
+)
 
 
 def _payment_shown(narration: str, player_input: str) -> bool:
