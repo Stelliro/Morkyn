@@ -182,6 +182,26 @@ class SomeoneTalkedToIsInTheScene(unittest.TestCase):
         self.assertEqual(self._place("Saltmarrow Stables", talked=False)[0], "Saltmarrow Stables")
 
 
+class AWalkDownTheSlopeToTheDocks(unittest.TestCase):
+    """8B run 13, T3: "I head down the slope toward the old docks" left the player in the square."""
+
+    LINE = "I nod once. \"By dusk, then.\" I head down the slope toward the old docks, keeping to the firm mud near the pilings."
+    PROSE = ("\"By dusk, then,\" you say. The mud clings to your boots as you descend the slope. The distant creak of "
+             "pulleys and the occasional shout from the dockworkers echo through the morning haze. You keep to the edge "
+             "of the pilings, where the ground is less treacherous.")
+
+    def test_the_old_docks_are_reached(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            result = {"player": {}, "narration": self.PROSE}
+            report = world.resolve_movement(conn, result, self.LINE, intent="travel", narration=self.PROSE)
+        self.assertEqual(report.get("status"), "repaired")
+        self.assertEqual(report.get("destination"), "The Old Docks")
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
