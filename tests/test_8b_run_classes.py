@@ -255,6 +255,17 @@ class TheWomanIsTheOneShownAsAWoman(unittest.TestCase):
         self.assertEqual(npcs[0].get("_figure_pronouns"), "she")
 
 
+class AskingTheOtherSideIsNoTaking(unittest.TestCase):
+    """8B run 12, T1: "Do you ever buy old clay pots ...?" put a clay pot in the pack."""
+
+    def test_the_asked_one_buying(self):
+        from app.llm import player_take_intent
+
+        self.assertFalse(player_take_intent("\"Morning. Do you ever buy old clay pots or jars out of the flats?\""))
+        self.assertTrue(player_take_intent("\"I'll buy the rope.\" I count out the coins."))
+        self.assertTrue(player_take_intent("\"Would you sell me the lantern?\""))
+
+
 class _ConnStub:
     """No one known yet."""
 

@@ -13217,6 +13217,49 @@ def _place_new_people_at_arrival(
             turn_ledger.note("npc", "placed_at_arrival", name=str(npc.get("name") or ""), place=str(dest["name"] or ""))
 
 
+def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str, Any]) -> None:
+    """A new person the player talks with this turn stands in the scene.
+
+    8B run 12, T1: the potter at her wheel came with LOC "Saltmarrow Stables",
+    a place no one had seen, and the stables were minted for her while she
+    stood talking to the player in the street. When that LOC is no known place,
+    she is where the scene is (the destination on a move turn).
+    """
+    talked = {
+        re.sub(r"[^a-z]", "", str(c.get("npc_code") or c.get("npc") or "").lower())
+        for c in result.get("conversations") or []
+        if isinstance(c, dict)
+    } - {""}
+    if not talked or not npcs:
+        return
+    player = result.get("player") if isinstance(result.get("player"), dict) else {}
+    here = conn.execute(
+        "SELECT l.code, l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+    ).fetchone()
+    scene = str(player.get("move_to_location_code") or "").strip() or (str(here["code"] or "") if here else "")
+    if not scene:
+        return
+    known = {str(r[0] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
+    for npc in npcs:
+        if not isinstance(npc, dict):
+            continue
+        name = str(npc.get("name") or "").strip()
+        if not name or name.lower() in known:
+            continue
+        keys = {re.sub(r"[^a-z]", "", name.lower()), re.sub(r"[^a-z]", "", str(npc.get("code") or "").lower())} - {""}
+        if not keys & talked:
+            continue
+        loc = str(npc.get("location") or "").strip()
+        if not loc:
+            continue
+        if conn.execute("SELECT 1 FROM locations WHERE code = ? COLLATE NOCASE", (loc,)).fetchone():
+            continue
+        if _match_location_by_name(conn, loc) is not None:
+            continue
+        npc["location"] = scene
+        turn_ledger.note("npc", "placed_in_scene", name=name, unknown_place=loc, place=scene)
+
+
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     if not isinstance(npc, dict):
         return None
@@ -20589,6 +20632,10 @@ def apply_turn(
         result["npcs"] = collected_npcs
         try:
             _place_new_people_at_arrival(conn, collected_npcs, result, player_input)
+        except Exception:
+            pass
+        try:
+            _place_talked_to_in_scene(conn, collected_npcs, result)
         except Exception:
             pass
         for npc in collected_npcs:

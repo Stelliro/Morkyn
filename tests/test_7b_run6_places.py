@@ -159,6 +159,29 @@ class SomeoneMetAtTheEndOfAWalk(unittest.TestCase):
         self.assertEqual(self._place("I ask the fisherman about the jar, then head back up to the docks."), "L2")
 
 
+class SomeoneTalkedToIsInTheScene(unittest.TestCase):
+    """8B run 12, T1: the potter's LOC "Saltmarrow Stables" minted stables while she talked in the street."""
+
+    def _place(self, loc, talked=True):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            npcs = [{"name": "Mira", "location": loc, "role": "potter"}]
+            convo = [{"npc_code": "MIRA", "topic": "old pots"}] if talked else []
+            world._place_talked_to_in_scene(conn, npcs, {"player": {}, "conversations": convo})
+            minted = conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0]
+        return npcs[0]["location"], minted
+
+    def test_an_unknown_place_is_the_scene(self):
+        self.assertEqual(self._place("Saltmarrow Stables"), ("L1", 1))
+
+    def test_a_known_place_or_no_talk_is_kept(self):
+        self.assertEqual(self._place("Saltmarrow")[0], "Saltmarrow")
+        self.assertEqual(self._place("Saltmarrow Stables", talked=False)[0], "Saltmarrow Stables")
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
