@@ -1358,6 +1358,40 @@ def repair_player_body(text: str, race: str) -> tuple[str, list[dict[str, Any]]]
 _CUT_WORD_IN_QUOTE_RE = re.compile(r"(?:\s+(?:the|a|an))?\s+(?<![\w'’])[b-hj-z](?=\s*[.!?…]+[\"”])")
 
 
+# A sentence whose whole job is to bring in a spoken line: "Emrys Slade [[A]]'s
+# voice cuts through the silence." (7B run 36, T3: the line itself, a repeat of
+# his T1 line, was dropped and the lead stayed).
+_SPEECH_LEAD_RE = re.compile(
+    r"^\W*(?:[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2}(?:\s*\[\[[A-Z0-9]+\]\])?(?:['’]s)?|(?:his|her|their|a)\s*)\s+"
+    r"(?:voice\s+(?:cuts|breaks|rings|carries|comes|calls)\s*(?:through|out|across|over)?(?:\s+the\s+\w+)?"
+    r"|(?:speaks|calls)\s+(?:up|out)|clears\s+(?:his|her|their)\s+throat)\s*[.!]?\s*$",
+)
+
+
+def drop_orphan_speech_lead(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Drop a sentence that only brings in a line when no line follows it."""
+    source = str(text or "")
+    fixes: list[dict[str, Any]] = []
+    out = source
+    spans = sentence_spans(source)
+    for index in range(len(spans) - 1, -1, -1):
+        start, end, sentence = spans[index]
+        if re.search(r"[\"“”]", sentence) or not _SPEECH_LEAD_RE.match(sentence.strip()):
+            continue
+        after = source[end:]
+        # Its line follows in the same paragraph, or opens the next one.
+        nxt = re.match(r"\s*(\n\s*\n)?\s*(.)", after)
+        if nxt and nxt.group(2) in "\"“":
+            continue
+        out = out[:start] + out[end:]
+        fixes.append({"why": "orphan_speech_lead", "text": sentence[:160]})
+    if fixes:
+        out = re.sub(r"[ \t]{2,}", " ", out)
+        out = re.sub(r"[ \t]*\n[ \t]*", "\n", out)
+        out = re.sub(r"\n{3,}", "\n\n", out).strip()
+    return out, fixes
+
+
 def repair_cut_word_in_quote(text: str) -> tuple[str, list[dict[str, Any]]]:
     """Take a one-letter fragment off the end of a spoken line."""
     source = str(text or "")

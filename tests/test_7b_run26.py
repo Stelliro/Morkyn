@@ -711,6 +711,21 @@ class ThanksNeverGiven(unittest.TestCase):
         self.assertEqual(strip(sentence, line, line)[0], sentence)
 
 
+class OrphanSpeechLead(unittest.TestCase):
+    """Run 36 T3: "Emrys Slade [[A]]'s voice cuts through the silence." with his repeated line dropped."""
+
+    def test_dropped_only_when_no_line_follows(self):
+        from app.prose_state import drop_orphan_speech_lead
+
+        text = ("You pace back and forth on the dock.\n\nEmrys Slade [[A]]'s voice cuts through the silence.\n\n"
+                "You nod, keeping your eyes on the harbour.")
+        out, fixes = drop_orphan_speech_lead(text)
+        self.assertNotIn("voice cuts", out)
+        self.assertEqual(len(fixes), 1)
+        kept = "Emrys Slade [[A]]'s voice cuts through the silence. \"Aye, the tide is turning.\""
+        self.assertEqual(drop_orphan_speech_lead(kept)[0], kept)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
