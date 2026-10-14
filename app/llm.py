@@ -16017,8 +16017,17 @@ def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None
                 family = "after_arrival"
         if not family:
             unit = _invented_unit_family(sentence, own, player_input)
-            if unit in ("decision", "movement", "labor", "taking"):
+            if unit in ("decision", "movement", "labor", "taking", "manipulation"):
                 family = "after_arrival"
+        # Going into a building the line never named: "The door is ajar, and you
+        # push it open, stepping inside" after reaching the lower district (7B
+        # run 41, T3).
+        if not family and re.search(
+            r"\byou\s+(?:\w+\s+){0,3}?(?:push|pushes|pushed|pull|pulled|ease|eased|swing|swung)\s+(?:it|the\s+(?:door|gate))\s+open"
+            r"|\b(?:step|steps|stepped|stepping|duck|ducked|ducking|slip|slipped|slipping)\s+(?:inside|in|into|through\s+the\s+door)\b",
+            sentence, re.I,
+        ) and not re.search(r"\b(?:inside|into|enter)\b", acts, re.I):
+            family = "after_arrival"
         if family:
             return {"cut": start, "trigger": sentence, "family": family, "arrival": spans[arrived_at][2]}
     return None

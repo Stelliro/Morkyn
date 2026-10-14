@@ -913,6 +913,20 @@ class AFreeHandover(unittest.TestCase):
         self.assertFalse(_FREE_HANDOVER_RE.search('Margery hands you a heel of bread. "That will be two coppers."'))
 
 
+class NoBuildingAfterTheArrival(unittest.TestCase):
+    """Run 41 T3: after reaching the lower district the prose pushed open a door and stepped inside."""
+
+    def test_cut_at_the_entry(self):
+        from app.llm import _completion_cut_point
+
+        line = "I pull my hood up and head across the mud toward the drowned lower district."
+        text = ("You pull your hood up and head across the mud. You reach the edge of the lower district, where the "
+                "ground is firmer. The buildings here are older. You reach a small, abandoned building. The door is "
+                "ajar, and you push it open, stepping inside. The interior is dim.")
+        point = _completion_cut_point(text, line)
+        self.assertTrue(point and point["trigger"].startswith("The door is ajar"))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
