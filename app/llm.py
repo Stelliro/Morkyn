@@ -13366,6 +13366,12 @@ _MENU_TWO_WAY_RE = re.compile(
     r"(?!hear|see|smell|feel|taste|sense|tell|make\s+out|swear|imagine|almost|just|well|barely|still|only|no\s+longer)"
     r"[^.?!\"“”]{2,200}?,?\s+or\s+[^.?!\"“”]{2,200}[.?!]$"
     r"|^you\s+have\s+a\s+choice\b[^.?!\"“”]{0,200}[.?!]$"
+    # The menu written as an act: "You approach the Gilded Key Bakehouse, where
+    # Elsabet and Jory work, or continue towards the Spindle's Rest to see if
+    # it is open." (7B run 42, T0). A "you <verb>" with ", or <verb>" after it.
+    r"|^you\s+(?:approach|head|go|walk|continue|make\s+your\s+way|step|turn|visit|enter|return|stay|wait|ask|seek)\b"
+    r"[^.?!\"“”]{2,200}?,\s+or\s+(?:you\s+)?(?:approach|head|go|walk|continue|make|step|turn|visit|enter|return|stay|"
+    r"wait|ask|seek|try|look|check|see|perhaps)\b[^.?!\"“”]{2,200}[.?!]$"
     # A closer that tells the player to act: "It's time to make a move." (7B
     # run 30, T7). The whole sentence only; "time to make a move on the
     # tide tables" says what, and stays.

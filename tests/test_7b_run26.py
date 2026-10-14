@@ -946,6 +946,18 @@ class Run41DrownedHouse(unittest.TestCase):
             self.assertEqual(int(world._match_location_by_name(conn, "The Wren")["id"]), int(wren))
 
 
+class AMenuWrittenAsAnAct(unittest.TestCase):
+    """Run 42 T0: 'You approach the Gilded Key Bakehouse, ..., or continue towards the Spindle's Rest ...'."""
+
+    def test_matched(self):
+        from app.llm import _MENU_TWO_WAY_RE
+
+        self.assertTrue(_MENU_TWO_WAY_RE.match(
+            "You approach the Gilded Key Bakehouse, where Elsabet and Jory work, or continue towards the Spindle's "
+            "Rest to see if it is open."))
+        self.assertFalse(_MENU_TWO_WAY_RE.match("You approach the bakehouse, its red door bright in the light."))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
