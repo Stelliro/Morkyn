@@ -16800,10 +16800,24 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         except Exception:
             return True
 
+    # Shown means named by the narration, not only said in someone's line: "The
+    # guild, and the Harbour Reeve. They've been looking for you" made a person
+    # who is not in the scene (8B run 2, T6). A part of the name counts only as
+    # a name, capitalised: "Harbour" is not the "harbour town" of the narration.
+    unspoken = venues.strip_speech(text)
+
     def shown(name: str) -> bool:
+        if name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", unspoken, re.I):
+            return True
+        # Spoken to is here: '"Not yet, Hargrave,"' addresses him (7B run 3).
+        first = (name.split() or [""])[0]
+        if first and len(first) >= 3 and re.search(
+            r"(?:[\"“]\s*|,\s*)" + re.escape(name if " " in name else first) + r"\s*[,.!?]|(?:[\"“]\s*|,\s*)" + re.escape(first) + r"\s*[,.!?]",
+            text,
+        ):
+            return True
         parts = [p for p in re.findall(r"[A-Za-z][A-Za-z'-]+", name) if len(p) >= 3 and p.lower() not in _NOT_A_NAME]
-        forms = [name, *parts]
-        return any(re.search(r"(?<!\w)" + re.escape(form) + r"(?!\w)", text, re.I) for form in forms if form)
+        return any(p[:1].isupper() and re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", unspoken) for p in parts)
 
     unshown = [npc for npc in npcs if not known(npc) and not shown(norm_name(str(npc.get("name") or "")))]
     if not unshown:
