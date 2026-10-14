@@ -462,6 +462,38 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AFigureBoundThisTurnIsInTheScene(unittest.TestCase):
+    """8B run 19, T0: the masked figure bound to Bertha Radley offered the job; it was filed with no giver."""
+
+    NARRATION = ("A figure steps from the shadows of a collapsed warehouse, their face obscured by a cloth mask. "
+                 "\"You're Isk, aren't you?\" they say. \"The guild sent me. They want you to come with them. "
+                 "There's something you need to see.\"")
+    REPLY = {"new": [{  # the run's own parser proposal
+        "title": "Salvage Contract", "giver": "Bertha Radley", "difficulty": "normal",
+        "summary": "Follow Bertha to the guild's hall to collect a share of the salvage",
+        "steps": [{"title": "Follow Bertha to the guild's hall", "description": "Go to Saltmarrow with Bertha",
+                   "location": "Saltmarrow"}],
+        "reward": {"gold": 0, "xp": 0, "items": ["A share of the salvage"], "text": "A share of the salvage"},
+        "offer_line": "They want you to come with them. There's something you need to see.",
+        "evidence": "You're Isk, aren't you? They want you to come with them. There's something you need to see.",
+        "_from_mark": True,
+    }]}
+    NPCS = [{"id": 1, "code": "A", "name": "Bertha Radley", "role": "guild messenger"}]
+
+    def test_the_giver_is_kept(self):
+        from app import quest_parser
+
+        accepted, _ = quest_parser.validate_quest_changes(self.REPLY, narration=self.NARRATION, npcs=self.NPCS,
+                                                          shown_unnamed=["Bertha Radley"])
+        self.assertEqual((accepted.get("new") or [{}])[0].get("giver_npc_id"), 1)
+
+    def test_without_the_binding_it_stays_unplaced(self):
+        from app import quest_parser
+
+        accepted, _ = quest_parser.validate_quest_changes(self.REPLY, narration=self.NARRATION, npcs=self.NPCS)
+        self.assertNotEqual((accepted.get("new") or [{}])[0].get("giver_npc_id"), 1)
+
+
 class _ConnStub:
     """No one known yet."""
 

@@ -17050,6 +17050,7 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         hint = bound.get(id(npc))
         if hint:
             npc = dict(npc)
+            npc["_bound_hint"] = hint  # in this scene, unnamed: the quest giver check reads it
             sentence = _seed_summary(_hint_sentence(text, hint), known_names)
             if sentence and not str(npc.get("summary") or "").strip():
                 npc["summary"] = sentence
@@ -21212,9 +21213,16 @@ def apply_turn(
                 # quote were cut from the scene was still offered (8B run 4, T6:
                 # "Clear the Rat Infestation in the East" from a Nesta the shipped
                 # prose never shows).
+                # People the prose shows only as a figure this turn are in the
+                # scene: the masked figure bound to Bertha Radley made the offer
+                # and the job was filed with no giver (8B run 19, T0).
+                shown_unnamed = [
+                    str(n.get("name") or "") for n in (result.get("npcs") or [])
+                    if isinstance(n, dict) and n.get("_bound_hint")
+                ]
                 quest_report = apply_quest_changes(
                     conn, changes, narration=_narration_text(result) or narration, player_input=player_input, turn=turn,
-                    settled_ids=settled_quest_ids, passive=quest_passive,
+                    settled_ids=settled_quest_ids, passive=quest_passive, shown_unnamed=shown_unnamed,
                 )
             except Exception as exc:
                 quest_report = {"status": "error", "error": str(exc)[:300], "created": [], "updated": [], "rejected": []}
