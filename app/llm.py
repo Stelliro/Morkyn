@@ -11332,6 +11332,16 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
                 m.string[m.end():],
             ):
                 return _hold(m.group(1))
+            # An item code is the player's thing: "She wears a patched tunic
+            # [[I2]], the same as yours" linked her tunic to the player's (8B
+            # run 4, T0). Another's (his/her/their/a/an X) gets no code.
+            if re.fullmatch(r"I\d+", _code) and re.search(
+                r"(?:\b(?:(?i:his|her|their|its|another|someone's)|[A-Z][a-z]+['’]s)\s+(?:[\w'’-]+\s+){0,2}"
+                r"|\b(?:he|she|they|[A-Z][a-z]+)\s+(?:\w+ly\s+)?(?:wears|wore|holds|held|carries|carried|has|clutches|grips|"
+                r"sells|offers)\s+(?:a|an|the)\s+(?:[\w'’-]+\s+){0,2})$",
+                m.string[: m.start()],
+            ):
+                return _hold(m.group(1))
             return _hold(f"{m.group(1)} [[{_code}]]")
 
         out = pattern.sub(_repl, out)
@@ -13579,7 +13589,11 @@ _PLAYER_COGNITION_RE = re.compile(
 # true" (8B run 2, T7).
 _PLAYER_INNER_SUBJECT_RE = re.compile(
     r"^\W*(?:but\s+|and\s+)?(?:a\s+part\s+of\s+you|something\s+(?:in|inside|deep\s+in)\s+you|your\s+(?:mind|heart|gut|instinct|"
-    r"instincts|thoughts?)\s+(?:tells?|says?|knows?|races?|is\s+already|already|whispers?|screams?|insists?))\b",
+    r"instincts|thoughts?)\s+(?:tells?|says?|knows?|races?|is\s+already|already|whispers?|screams?|insists?))\b"
+    # A thought as the subject: "The thought of leaving this place feels like
+    # leaving a part of yourself behind" (8B run 4, T0).
+    r"|^\W*(?:but\s+|and\s+)?the\s+(?:thought|idea|memory|knowledge|realization|realisation|prospect)\s+(?:of|that)\b"
+    r"(?=[^.!?]*\b(?:you|your|yourself)\b)",
     re.I,
 )
 _PLAYER_GESTURE_RE = re.compile(
