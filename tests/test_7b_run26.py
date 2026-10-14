@@ -579,6 +579,28 @@ class ATripWithWorkAtItsEnd(unittest.TestCase):
             "I walk to the lower district.", "I walk to the lower district.", travelling=True))
 
 
+class WalkingOverToAPerson(unittest.TestCase):
+    """Run 34 T1: 'I walk over to Kit at the edge of the flats' minted 'The Flats', and the prose walked Isk off."""
+
+    LINE = 'I walk over to Kit at the edge of the flats. "Morning. Find anything worth keeping in that pile?"'
+
+    def test_not_travel(self):
+        from app.world import travel_intent
+
+        self.assertFalse(travel_intent(self.LINE))
+        self.assertTrue(travel_intent("I walk over to Kit, then head out to the flats."))
+        self.assertTrue(travel_intent("I head to the docks."))
+
+    def test_cut_after_the_talk(self):
+        from app.llm import _completion_cut_point
+
+        text = ('You walk over to Kit at the edge of the flats. "Morning. Find anything worth keeping in that pile?"\n\n'
+                'Kit glances down at the pile. "A few odds and ends, but nothing worth keeping."\n\n'
+                "You thank Kit and make your way towards the flats. The mud squelches under your boots.")
+        point = _completion_cut_point(text, self.LINE)
+        self.assertTrue(point and point["trigger"].startswith("You thank Kit"))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
