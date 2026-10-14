@@ -516,6 +516,16 @@ class TheyAreTheFigure(unittest.TestCase):
         self.assertEqual(world._figure_hints(text), ["a lean man"])
 
 
+class TheStepsAreOutside(unittest.TestCase):
+    """8B run 22, T1: "I walk over to the steps of The Heron" wrote the stayed-put Note."""
+
+    def test_a_walk_to_the_steps_is_no_trip(self):
+        from app import world
+
+        self.assertFalse(world.travel_intent('I walk over to the steps of The Heron. "Morning, Esme."'))
+        self.assertTrue(world.travel_intent("I walk up the steps into The Heron."))
+
+
 class _ConnStub:
     """No one known yet."""
 
