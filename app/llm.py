@@ -13580,6 +13580,11 @@ _PLAYER_COGNITION_RE = re.compile(
     # Being watched is in the world: "You feel the weight of unseen eyes" (#302).
     r"(?:unseen\s+|his\s+|her\s+|their\s+|watching\s+)?(?:eyes|gaze|stares?|glances?))\b)|"
     r"(?:have|had)\s+(?:been\s+careful|always\s+known)|"
+    # The narrator planning the player's next steps: "you'll need to tread
+    # carefully", "you have to focus on the immediate task", "you might be able
+    # to get ahead of the game" (8B run 4, T3).
+    r"(?:will\s+|would\s+)?(?:need|have)\s+to\s+(?!be\s+(?:quick|careful)\s+(?:here|now)\b)|should\s+|must\s+|ought\s+to\s+|"
+    r"might\s+be\s+able\s+to\b|"
     r"(?:are|were)\s+(?:not\s+|no\s+longer\s+)?(?:ready|here\s+to|determined|resolved|sure|certain|afraid|careful|"
     r"tired\s+of|done\s+with|no\s+stranger|unwilling|willing|going\s+to)"
     r")\b",
