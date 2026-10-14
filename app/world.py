@@ -9492,7 +9492,12 @@ def _unasked_unshown_move(
     # walk request (7B run 20, T4: "Where do I find this Thaddeus, then - the
     # harbour office?" kept a MOVE to a new Harbour Office the prose walked to).
     player_input = _without_quoted_questions(player_input)
-    if intent == "travel" or travel_intent(player_input) or venue_move_intent(player_input):
+    # Speech never asks to go: '"Show me one, Alaric. I'll walk the first
+    # stretch with you"' kept a MOVE into a new "East Passage" after the scene
+    # was cut at his "Start there" (8B run 16, T3). Only the narrated part of
+    # the line asks.
+    acts = re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", _player_line(player_input))
+    if travel_intent(acts) or venue_move_intent(acts) or (intent == "travel" and _turn_intent(acts)[0] == "travel"):
         # A walk asks to go somewhere, not anywhere: "I walk over to where the
         # mole catcher is digging" came back with MOVE "Seventh Pike Stables",
         # a place neither the line nor the prose names (7B run 19, T1).
