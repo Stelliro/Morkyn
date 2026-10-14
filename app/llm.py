@@ -15752,6 +15752,17 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
         # part is the model's, not theirs (7B run 28, T4: "I walk to the town
         # hall" kept MOVE "town square", named only after the cut).
         own_names_dest = dest_l in re.sub(r"\s+", " ", own.lower())
+        # The going there is only in the cut part, though the kept part names
+        # the place (7B run 33, T2: "make your way back to the trading post" was
+        # cut, while "the keeper of the Salt Edge Trading Post" stayed).
+        dest_head = " ".join(re.findall(r"[a-z]+", re.sub(r"\[\[[^\]]*\]\]", "", dest_l))[-2:])
+        going = (
+            rf"\b(?:way|back|head\w*|walk\w*|return\w*|go|goes|went|set\s+off|step\w*)\s+"
+            rf"(?:[\w'’-]+\s+){{0,5}}?(?:to|towards?|into|for)\s+(?:the\s+)?(?:[\w'’-]+\s+){{0,3}}?{re.escape(dest_head)}\b"
+        ) if dest_head else ""
+        went_in_tail = bool(going) and bool(re.search(going, tail_l)) and not re.search(going, head_l)
+        if dest and asked_move and went_in_tail and not own_names_dest and not named_tail:
+            named_tail = True
         if dest and asked_move and named_tail and not own_names_dest:
             player["move_to_location"] = None
             player["move_to_location_code"] = None
@@ -15992,7 +16003,16 @@ def _after_act_cut_point(
     # A trip is done at its arrival (the rule above); here only a sought thing
     # found ends one (run 5 T100: "start walking back toward Saltmarrow" was
     # cut at "You walk eastward", her own walk).
-    if travelling and not sought:
+    # A trip with work at its end is done when the work is (7B run 33, T2: "I
+    # head down into the lower district ... and start working through the
+    # wreckage of the first drowned house"; the prose worked it, then walked
+    # Isk back to the trading post and moved her there).
+    work_act = re.search(
+        r"\band\s+(?:then\s+)?(?:start\s+|begin\s+|set\s+about\s+)?(?P<w>[a-z]{3,})", acts, re.I
+    ) if travelling and not sought else None
+    if work_act and _AFTER_ACT_MOVE_RE.match("You " + work_act.group("w")):
+        work_act = None
+    if travelling and not sought and not work_act:
         return None
     verbs = [v.lower() for v in _PLAYER_ACT_VERB_RE.findall(acts)]
     done_at = -1
@@ -16007,6 +16027,12 @@ def _after_act_cut_point(
             break
         if not sought:
             lead = _YOU_LEAD_RE.match(sentence)
+            if work_act:
+                # Only the work counts, not the walk there.
+                if lead and _verb_in_input(lead.group("v"), work_act.group(0)) and not _AFTER_ACT_MOVE_RE.match(sentence):
+                    done_at = index
+                    break
+                continue
             if lead and verbs and _verb_in_input(lead.group("v"), acts) and not _AFTER_ACT_MOVE_RE.match(sentence):
                 done_at = index
                 break
@@ -16059,6 +16085,14 @@ def _after_act_cut_point(
             if mid:
                 rest = re.sub(r"^(?:turn|turns)\s+(?:and\s+|to\s+)", "", mid.group(1), flags=re.I)
                 move = _AFTER_ACT_MOVE_RE.match("You " + rest)
+        if not move:
+            # After a lead-in clause: "With a final piece in hand, you step back
+            # out onto the sea wall and make your way back to the trading post"
+            # (7B run 33, T2).
+            lead_in = re.match(r"^\W*(?:with|after|once|when|having|finally|at\s+last)\b[^,.;!?\"“”]{0,60},\s*you\s+(.+)$",
+                               sentence, re.I | re.S)
+            if lead_in:
+                move = _AFTER_ACT_MOVE_RE.match("You " + lead_in.group(1))
         if not move:
             continue
         verb, dest = move.group("v"), move.group("dest")
