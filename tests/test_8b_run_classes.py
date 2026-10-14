@@ -1028,6 +1028,37 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class OneLineVoicesTheRequest(unittest.TestCase):
+    """8B run 48, T1: two invented player lines stood for "ask the tallyman what work he'll take"."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+
+    def test_the_second_subject_line_goes(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        paras = ["\"I need to speak with you about my debt,\" you say.",
+                 "He looks up. \"You're late,\" he says.",
+                 "\"I can work,\" you say, your voice firm. \"I'll do whatever it takes to pay off my debt.\""]
+        kept, dropped = drop_invented_player_speech(paras, self.LINE)
+        self.assertTrue(dropped)
+        self.assertNotIn("whatever it takes", " ".join(kept))
+
+
+class ANameToldIsAPerson(unittest.TestCase):
+    """8B run 48, T1: "His name is Reinald Strand, a sedan bearer by trade" stored no one."""
+
+    def test_the_told_name_is_found(self):
+        from app import world
+
+        text = ("Inside, the tallyman sits behind a desk. He is a wiry man with a scar. His name is Reinald Strand, "
+                "a sedan bearer by trade, but his true skill lies in keeping track of salvaged goods.")
+        self.assertEqual(world._introduced_people(text, ["Isk"], set()),
+                         [{"name": "Reinald Strand", "role": "sedan bearer"}])
+        self.assertEqual(world._introduced_people("He nods. His name is Odo Kettle.", [], set()),
+                         [{"name": "Odo Kettle", "role": ""}])
+
+
 class TheSoundIsNotThePlayerGoing(unittest.TestCase):
     """8B run 43, T1: "the sound of waves ... echoes through the hollow alleys" moved Isk into "Hollow"."""
 

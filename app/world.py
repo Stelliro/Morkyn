@@ -17722,7 +17722,12 @@ _INTRODUCED_PERSON_RE = re.compile(
     # Not the tail of a hyphenated or longer name: "The Twice-Blessed Hound, the
     # steady heat of the day" stored a person "Blessed Hound" (7B run 27, T5).
     r"(?<![\w'’-])(?<!The\s)(?<!the\s)(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?),\s+(?:a|an|the)\s+"
-    r"(?P<role>[a-z][a-z-]{2,24}(?:\s+[a-z][a-z-]{2,24})?)(?=\s+(?:with|who|in|from|of)\b|,|\.|\s+is\b|\s+stands\b|\s+leans\b)"
+    r"(?P<role>[a-z][a-z-]{2,24}(?:\s+[a-z][a-z-]{2,24})?)(?=\s+(?:with|who|in|from|of|by)\b|,|\.|\s+is\b|\s+stands\b|\s+leans\b)"
+)
+# "His name is Reinald Strand" (8B run 48, T1): the tallyman the prose named
+# was never stored, as no pattern read a name told this way.
+_NAME_TOLD_RE = re.compile(
+    r"\b(?:[Hh]is|[Hh]er|[Tt]heir)\s+name\s+(?:is|was)\s+(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b"
 )
 
 
@@ -17810,11 +17815,20 @@ def _introduced_person_first(
     known = {str(n or "").strip().lower() for n in known_names if str(n or "").strip()}
     matches = sorted(
         list(_INTRODUCED_PERSON_RE.finditer(plain)) + list(_NAMED_JOB_PERSON_RE.finditer(plain))
-        + list(_JOB_THEN_NAME_RE.finditer(plain)),
+        + list(_JOB_THEN_NAME_RE.finditer(plain)) + list(_NAME_TOLD_RE.finditer(plain)),
         key=lambda m: m.start(),
     )
     for match in matches:
         name = match.group("name").strip()
+        if match.re is _NAME_TOLD_RE:
+            if name.lower() in known or any(name.lower().split()[0] == k.split()[0] for k in known if k):
+                continue
+            if name.split()[0] in _NOT_A_NAME_START or is_fragment_place_name(name) or name.lower() in blocked:
+                continue
+            # The job, when the same sentence goes on to give one: ", a sedan bearer".
+            job = re.match(r",\s+(?:a|an|the)\s+([a-z][a-z-]{2,24}(?:\s+[a-z][a-z-]{2,24})?)\b", plain[match.end():])
+            role = job.group(1) if job and job.group(1).split()[-1] not in _NOT_A_JOB_NOUNS else ""
+            return {"name": name, "role": role}
         if name.lower() in known or any(name.lower().split()[0] == k.split()[0] for k in known if k):
             continue
         if name.split()[0] in _NOT_A_NAME_START:
