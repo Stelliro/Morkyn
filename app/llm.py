@@ -16228,6 +16228,24 @@ _AFTER_ARRIVAL_ACT_RE = re.compile(
 )
 
 
+# The walk is for something done there: "to the salvage guild's tally house to
+# ask the tallyman ..." asks to go in and ask (8B run 31, T1: the scene was cut
+# at "You step inside" and the ask never happened).
+_WALK_PURPOSE_RE = re.compile(
+    r"\bto\s+(?:ask|see|find|speak|talk|meet|sell|buy|trade|check|get|collect|deliver|report|tell|settle|pay|sign|"
+    r"look\s+for|pick\s+up|hand\s+in)\b",
+    re.I,
+)
+
+
+_ENTRY_SENTENCE_RE = re.compile(
+    r"\byou\s+(?:\w+\s+){0,3}?(?:step|steps|stepped|go|goes|went|walk|walks|walked|duck|ducks|ducked|slip|slips|slipped|"
+    r"push|pushes|pushed|enter|enters|entered)\b[^.!?]{0,40}?\b(?:inside|in|into|through\s+the\s+door|open)\b"
+    r"|\byou\s+(?:\w+\s+){0,2}?(?:enter|enters|entered)\b",
+    re.I,
+)
+
+
 def _asked_destination_words(acts: str) -> set[str]:
     words: set[str] = set()
     for m in _ASKED_DEST_RE.finditer(acts):
@@ -16296,9 +16314,12 @@ def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None
     # the Black Raven", which read as the arrival).
     if after_act and after_act["cut"] < spans[arrived_at][0]:
         return after_act
+    purpose = bool(_WALK_PURPOSE_RE.search(acts))
     for start, _end, sentence in spans[arrived_at + 1:]:
         if re.search(r'["“”]', sentence):
             return None  # someone speaks first: the cut at a line put to the player decides
+        if purpose and _ENTRY_SENTENCE_RE.search(sentence):
+            continue  # going in is part of the walk "to ask the tallyman" (8B run 31, T1)
         m = _AFTER_ARRIVAL_ACT_RE.search(sentence)
         family = ""
         if m:
@@ -16316,7 +16337,7 @@ def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None
             r"\byou\s+(?:\w+\s+){0,3}?(?:push|pushes|pushed|pull|pulled|ease|eased|swing|swung)\s+(?:it|the\s+(?:door|gate))\s+open"
             r"|\b(?:step|steps|stepped|stepping|duck|ducked|ducking|slip|slipped|slipping)\s+(?:inside|in|into|through\s+the\s+door)\b",
             sentence, re.I,
-        ) and not re.search(r"\b(?:inside|into|enter)\b", acts, re.I):
+        ) and not re.search(r"\b(?:inside|into|enter)\b", acts, re.I) and not _WALK_PURPOSE_RE.search(acts):
             family = "after_arrival"
         if family:
             return {"cut": start, "trigger": sentence, "family": family, "arrival": spans[arrived_at][2]}

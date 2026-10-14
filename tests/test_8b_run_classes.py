@@ -728,6 +728,28 @@ class ASumSpokenIsNoPay(unittest.TestCase):
         self.assertEqual(result["player"].get("gold_delta"), 9)
 
 
+class GoingInIsPartOfTheErrand(unittest.TestCase):
+    """8B run 31, T1: "... to the tally house to ask the tallyman" was cut at "You step inside"."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+
+    def test_no_cut_at_the_door(self):
+        from app import llm
+
+        prose = ("You make your way past the rope makers until you reach the salvage guild's tally house. It stands at "
+                 "the edge of the town. You step inside, the door creaking, and the dim light falls across the room.")
+        self.assertIsNone(llm._completion_cut_point(prose, self.LINE))
+
+    def test_a_walk_with_no_errand_still_stops_at_the_door(self):
+        from app import llm
+
+        prose = ("You make your way past the rope makers until you reach the salvage guild's tally house. It stands at "
+                 "the edge of the town. You step inside, the door creaking, and the dim light falls across the room.")
+        point = llm._completion_cut_point(prose, "I walk up into town to the salvage guild's tally house.")
+        self.assertIsNotNone(point)
+
+
 class _ConnStub:
     """No one known yet."""
 
