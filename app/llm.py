@@ -13560,7 +13560,8 @@ _PLAYER_COGNITION_RE = re.compile(
     # A weight held is a touch, not a feeling: "You feel the weight of the
     # coins in your palm", "of the crates as you lift them" stay. "You've
     # heard that the captain ... frequents the yard" is world news and stays.
-    r"(?:could\s+|can\s+)?(?:feel|felt|sense|sensed)\s+(?:the\s+|a\s+)?(?:weight|burden|pull|pressure|gravity|urgency|"
+    # "you feel a strange pull to examine it further" (8B run 3, T8): up to two words before the feeling.
+    r"(?:could\s+|can\s+)?(?:feel|felt|sense|sensed)\s+(?:the\s+|a\s+|an\s+)?(?:[a-z]+\s+){0,2}?(?:weight|burden|pull|pressure|gravity|urgency|"
     r"sting|knot|chill\s+of\s+(?:fear|dread)|truth|fear|dread|resolve|anger|guilt|shame|hope|doubt)\b"
     r"(?![^.;!?]*\b(?:in\s+your\s+(?:hand|hands|palm|palms|arms|grip|pocket|pack|tunic|satchel|lap|muscles)|"
     r"as\s+you\s+(?:lift|carry|haul|heft|pick|hold|set)|"
