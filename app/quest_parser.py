@@ -1151,6 +1151,13 @@ def validate_quest_changes(
         checked = ""
         if not evidence_found(evidence, narration, player_input):
             reasons.append("evidence_not_in_text")
+        elif raw.get("_from_mark") and re.search(r"\?\s*[\"”]?\s*$", str(offer_line or evidence)) and not judge_offer(
+            evidence, narration, player_input, offer_line=offer_line, giver=giver, giver_ref=giver_ref, npcs=npcs
+        )["ok"]:
+            # The draft's own mark on a question: "What work do you want?" became
+            # the job "Salvage Contract" (8B run 35, T1). A question back to the
+            # player offers nothing yet.
+            reasons.append("mark_on_a_question")
         elif not raw.get("_from_mark"):
             # Grounded is not enough: the exchange has to offer or ask for
             # work. Qwen3 8B turned "the shipment is in the cellar" (said right
