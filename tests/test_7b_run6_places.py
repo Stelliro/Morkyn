@@ -201,6 +201,42 @@ class SomeoneMetAtTheEndOfAWalk(unittest.TestCase):
         self.assertEqual(self._place_known("At the docks a fisherman looks up from his nets."), "L2")
 
 
+class AnErrandInTownIsNoDiscovery(unittest.TestCase):
+    """8B run 42, T1: walking to the guild's tally house by name paid 6 XP as a new place."""
+
+    def _outcomes(self, name, line):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            world._upsert_location(conn, name, "", parent_id=1)
+            return world._turn_outcomes(conn, {"player": {"move_to_location": name}}, player_input=line)
+
+    def test_the_tally_house_is_an_errand(self):
+        self.assertNotIn("new_place", self._outcomes(
+            "The Salvage Guild's Tally House", "I walk up into town to the salvage guild's tally house."))
+
+    def test_exploring_still_counts(self):
+        self.assertIn("new_place", self._outcomes(
+            "The Salvage Guild's Tally House", "I explore the town and find the salvage guild's tally house."))
+
+    def test_a_named_place_that_is_no_building_counts(self):
+        self.assertIn("new_place", self._outcomes("The Sunken Causeway", "I wade out to the sunken causeway."))
+
+    def test_a_place_visited_before_is_no_find(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            place = world._upsert_location(conn, "The Sunken Causeway", "", parent_id=1)
+            conn.execute("UPDATE locations SET visit_count = 2 WHERE id = ?", (place,))
+            outcomes = world._turn_outcomes(conn, {"player": {"move_to_location": "The Sunken Causeway"}},
+                                            player_input="I wade out to the sunken causeway.")
+        self.assertNotIn("new_place", outcomes)
+
+
 class SomeoneTalkedToIsInTheScene(unittest.TestCase):
     """8B run 12, T1: the potter's LOC "Saltmarrow Stables" minted stables while she talked in the street."""
 

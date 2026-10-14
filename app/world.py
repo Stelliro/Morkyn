@@ -19648,6 +19648,13 @@ def _player_moral_act(player_input: str, narration: str) -> str:
 _EXPLORE_RE = re.compile(r"\b(?:explor\w*|scout\w*|wander\w*|search\w*|venture\w*|find\s+(?:a|the|some)\s+way)\b", re.I)
 
 
+_BUILDING_HEAD_RE = re.compile(
+    r"\b(?:house|hall|office|guild|shop|store|storehouse|warehouse|inn|tavern|workshop|lodge|chapel|temple|"
+    r"shed|barn|mill|forge|smithy|stall|counting\s*house|tally\s*house)\b",
+    re.I,
+)
+
+
 def _turn_outcomes(
     conn,
     result: dict[str, Any],
@@ -19690,10 +19697,20 @@ def _turn_outcomes(
     dest = str((result.get("player") or {}).get("move_to_location") or "").strip()
     if dest:
         row = _match_location_by_name(conn, dest)
-        if row is None or not int(venues._field(row, "visit_count", 0) or 0):
+        # The match holds only id and name: its visit_count read 0 for every
+        # place, so each walk back to one was a first visit (8B run 42).
+        full = _location_row(conn, int(row["id"])) if row is not None else None
+        if full is None or not int(venues._field(full, "visit_count", 0) or 0):
             line = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input)).lower()
             words = [w for w in re.findall(r"[a-z']{4,}", dest.lower()) if w not in {"the", "saltmarrow"}]
-            if any(re.search(rf"\b{re.escape(w)}", line) for w in words) or _EXPLORE_RE.search(line):
+            # A building in town walked to by name is an errand, not a find: the
+            # guild's tally house paid 6 XP on the way to ask for work (8B run
+            # 42, T1). Exploring still counts.
+            building = full is not None and int(venues._field(full, "parent_id", 0) or 0) and bool(
+                str(venues._field(full, "kind", "") or "") or _BUILDING_HEAD_RE.search(dest)
+            )
+            named = any(re.search(rf"\b{re.escape(w)}", line) for w in words) and not building
+            if named or _EXPLORE_RE.search(line):
                 outcomes.append("new_place")
     try:
         if int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0) > int(max_npc_before or 0):
