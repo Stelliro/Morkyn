@@ -246,6 +246,8 @@ class TheLineNamesTheDrownedLowerDistrict(unittest.TestCase):
         self.assertEqual(got, "")
         self.assertTrue(world._line_names_place("down into the drowned lower district", world._place_words("Drowned Lower District")))
         self.assertFalse(world._line_names_place("the drowned cellar by the district wall", world._place_words("Drowned Lower District")))
+        self.assertTrue(world.travel_intent(line))
+        self.assertFalse(world.travel_intent("I make my way through the ledger page by page, looking for her name."))
 
 
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
