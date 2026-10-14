@@ -17302,6 +17302,44 @@ def _merge_text(existing: str, addition: str, limit: int) -> str:
     return f"{head}{sep}{addition}"[:limit]
 
 
+def drop_unshown_check_injuries(checks: list[Any], narration: str) -> list[Any]:
+    """Each check with its self-injury removed when the prose shows no hurt at all (7B run 30, T10).
+
+    The roll and its outcome stand; only the hurt nobody saw goes, noted in the
+    ledger. With no prose there is nothing to compare, and nothing changes.
+    """
+    from app.skill_checks import prose_shows_hurt
+
+    text = str(narration or "")
+    out: list[Any] = []
+    for resolved in checks or []:
+        injury = resolved.get("injury") if isinstance(resolved, dict) else None
+        if (
+            not isinstance(injury, dict)
+            or injury.get("kind") != "self_injury"
+            or not text.strip()
+            or prose_shows_hurt(text, injury)
+        ):
+            out.append(resolved)
+            continue
+        skill = resolved.get("skill") if isinstance(resolved.get("skill"), dict) else {}
+        turn_ledger.note(
+            "check", "unshown_injury_not_applied",
+            skill=str(skill.get("code") or ""),
+            summary=str(injury.get("summary") or "")[:160],
+            health_delta=int(injury.get("health_delta") or 0),
+            lasting=bool(injury.get("lasting", True)),
+        )
+        said = str(injury.get("summary") or "")
+        kept = {**resolved, "injury": None, "injury_unshown": injury}
+        if said:
+            for key in ("display_block", "display", "guidance", "flavor"):
+                if isinstance(kept.get(key), str):
+                    kept[key] = kept[key].replace(said, "").rstrip()
+        out.append(kept)
+    return out
+
+
 _PACKET_KEY_ONLY_RE = re.compile(r"[a-z]+(?:_[a-z]+)+")
 
 
@@ -21796,6 +21834,17 @@ def play_turn(
                 if item.get("act") and resolved.get("enabled"):
                     resolved["act"] = str(item.get("act"))[:100]
                     resolved["act_family"] = str(item.get("act_family") or "")
+                elif resolved.get("enabled") and not item.get("social"):
+                    # What a trigger-word roll was for, in the player's words
+                    # (7B run 30, T10: the narrator saw only "mining, failure").
+                    try:
+                        from app.skill_checks import check_for_clause
+
+                        clause = check_for_clause(_player_line(player_input), pending_code)
+                    except Exception:
+                        clause = ""
+                    if clause:
+                        resolved["for"] = clause
                 # LEGACY, deliberate: `resolve_check` returns `skill` as a dict
                 # and has never returned a `skill_code` key, so the right-hand
                 # side of this `or` is always False. Kept as-is by decision --
@@ -22203,6 +22252,19 @@ def play_turn(
             opts.get("skill_check_settings") if isinstance(opts.get("skill_check_settings"), dict) else opts
         )
         if skills_on:
+            # A check's self-injury the final prose never shows is not applied
+            # (7B run 30, T10: "Botched Mining: you hurt your leg" -1 HP while
+            # the prose set both traps without trouble; runs 5-30 had 5 check
+            # injuries, 4 unshown, all from misread checks). The roll and its
+            # outcome stand; only the hurt nobody saw goes. Not when the hurt
+            # downs the player: the narrator was told that one outright.
+            downed_now = bool((mechanics_context.get("health_state") or {}).get("downed")) or bool(
+                mechanics_context.get("death")
+            )
+            if not downed_now and not used_fallback:
+                skill_check_results[:] = drop_unshown_check_injuries(
+                    skill_check_results, str(result.get("narration") or "")
+                )
             for resolved in skill_check_results:
                 result = apply_check_to_turn(result, resolved)
         # The coming round after a collapse (playtest #88): health back to a

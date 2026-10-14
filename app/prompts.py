@@ -1243,6 +1243,21 @@ def _mechanics_view(context: dict[str, Any]) -> dict[str, Any] | None:
             "skill": skill.get("code") or check.get("skill_code") or "",
             "outcome": check.get("outcome") or "",
         }
+        # What the roll decided, in the player's words, and what that outcome
+        # means for it (7B run 30, T10: told only "mining, failure", the prose
+        # set both traps without trouble and never showed the hurt leg).
+        decided = str(check.get("act") or check.get("for") or "").strip()
+        if decided:
+            row["for"] = _one_line(decided, 160)
+        if not check.get("social_attitude") and check.get("outcome"):
+            try:
+                from app.skill_checks import _ACT_OUTCOME_WORDS
+
+                means = _ACT_OUTCOME_WORDS.get(str(check.get("outcome")))
+            except Exception:
+                means = None
+            if means:
+                row["means"] = means
         if check.get("degree"):
             row["degree"] = check.get("degree")
         # The attitude is a plain word, lowercase: the capitalised label was
@@ -1256,7 +1271,8 @@ def _mechanics_view(context: dict[str, Any]) -> dict[str, Any] | None:
                 direction = direction.replace(attitude, attitude.lower())
             row["direction"] = direction
         if check.get("mishap"):
-            row["mishap"] = _one_line(check.get("mishap"), 160)
+            mishap = check.get("mishap")
+            row["mishap"] = True if mishap is True else _one_line(mishap, 160)
         injury = check.get("injury") if isinstance(check.get("injury"), dict) else None
         if injury and injury.get("summary"):
             row["injury"] = _one_line(injury.get("summary"), 160)
@@ -1682,7 +1698,9 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "text. Restating the question ('you answer honestly who you owe, how much') is not an answer. "
         "When world_state.mechanics_context.resolved_checks is present, those dice already fell: "
         "narrate each listed outcome and attitude as it stands. Do not re-roll, soften a failure, "
-        "or grant the cooperation a failed social check denied. "
+        "or grant the cooperation a failed social check denied. A row's for is the player's own act that "
+        "roll decided and its means is how that act turns out: show the act turning out that way. When a row "
+        "has injury, that hurt happens to the player during the act, in this scene: show it. "
         "When world_state.npc_psychology_context is present, it is private narrator knowledge about "
         "people in the scene: let it steer what they do and withhold. Never read it out as fact "
         "unless the scene itself reveals it. "

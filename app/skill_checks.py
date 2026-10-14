@@ -1620,6 +1620,10 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(medicine|first aid kit)\b", "medicine"),
     (r"\b(hack|console|terminal|decrypt)\b", "hacking"),
     (r"\b(track|forage|camp|survive)\b", "survival"),
+    # Setting or baiting a trap is trapping, survival work: "set it at the
+    # mouth of the fresh tunnel, packing earth around the jaws" rolled mining
+    # on the word "tunnel" (7B run 30, T6, T10).
+    (r"(?=.*\btraps?\b)(?=.*\b(?:set|sets|setting|lay|lays|laying|place|places|placing|bait|baits|baiting)\b)", "survival"),
     # Cooking, not eating: "I eat a few spoonfuls of the stew" rolled cooking,
     # failed it and hurt the player's arm (7B run 18, T6).
     (r"\b(cook (?:a|an|the|some|up|it|them|my|our|dinner|supper|breakfast)|cooking|"
@@ -1634,7 +1638,12 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
     # "mine" is usually the possessive ("round Tam's waist, then round mine",
     # playtest #102): only the verb with an object, or the word alone, is mining.
-    (r"(^mine$|\bmine (?:for|the|a|an|out|ore|coal|iron|copper|silver|gold|salt)\b|\b(mining|ore|tunnel|dig (for|out|a))\b)", "mining"),
+    # A tunnel named is not one dug: "feel which way the tunnel runs" rolled
+    # mining (7B run 30, T3). Digging, shoring or cutting one still is.
+    (r"(^mine$|\bmine (?:for|the|a|an|out|ore|coal|iron|copper|silver|gold|salt)\b|\b(mining|ore|dig (for|out|a))\b|"
+     r"\btunnel(?:s|ing|led|ling)?\s+(?:through|into|under|out)\b|"
+     r"\b(?:dig|digs|digging|shore|shores|shoring|brace|braces|bracing|cut|cuts|cutting|widen|widens|widening)\s+"
+     r"(?:up\s+)?(?:the|a|an|this|that|our|my)\s+(?:\w+\s+)?tunnels?\b)", "mining"),
     (r"\b(map|chart|survey|cartograph[a-z]*)\b", "cartography"),
     (r"\b(navigat[a-z]*|stars|compass|bearing|dead reckon)\b", "navigation"),
     (r"\b(tinker|gadget|mechanism|jury[- ]?rig)\b", "tinkering"),
@@ -2054,6 +2063,25 @@ _ACT_OUTCOME_WORDS = {
 }
 
 
+def check_for_clause(player_line: str, skill_code: str) -> str:
+    """The player's own words a roll decides, outside quotes, for the narrator (7B run 30, T10).
+
+    A check from a trigger word carries no declared act, so the narrator was
+    told only "mining, failure" and wrote both traps set without trouble. The
+    clause holding that skill's trigger is the act; otherwise the first clause.
+    """
+    own = _SPOKEN_RE.sub(" ", str(player_line or ""))
+    clauses = [c.strip(" ,") for c in re.split(r"(?<=[.!?;])\s+", own) if c.strip(" ,.")]
+    if not clauses:
+        return ""
+    patterns = [p for p, code in SKILL_TRIGGER_PATTERNS if code == skill_code]
+    for clause in clauses:
+        low = clause.lower()
+        if any(re.search(p, low) for p in patterns):
+            return clause[:160]
+    return clauses[0][:160]
+
+
 def act_outcome(checks: Any) -> dict[str, Any] | None:
     """What the dice decided for the player's declared act, for the prose (playtest #85a).
 
@@ -2084,6 +2112,25 @@ def act_outcome(checks: Any) -> dict[str, Any] | None:
             out["blunder"] = str(blunder["summary"])[:160]
         return out
     return None
+
+
+# Any sign of a hurt in the prose: pain, a slip, blood, or the limb itself.
+_PROSE_HURT_RE = re.compile(
+    r"\b(?:hurt\w*|pain\w*|winc\w+|cut|cuts|bruis\w*|twist\w*|scrap\w*|blood\w*|bleed\w*|ach\w*|stumbl\w*|"
+    r"slip\w*|graz\w*|sting\w*|throb\w*|gash\w*|wrench\w*|sprain\w*|jar\w*|bang\w*|smash\w*|crack\w*|sear\w*|"
+    r"burn\w*|limp\w*|gasp\w*|yelp\w*|hiss\w*|injur\w*|wound\w*|nick\w*|swell\w*|numb\w*|fall\w*|fell|tumbl\w*|"
+    r"botch\w*|fumbl\w*|clumsy|awkward\w*|pinch\w*|snag\w*|tear\w*|tore|torn|strain\w*|jolt\w*|sharp)\b",
+    re.I,
+)
+
+
+def prose_shows_hurt(narration: str, injury: dict[str, Any] | None) -> bool:
+    """True when the prose shows any hurt at all, or names the hurt limb (7B run 30, T10)."""
+    text = str(narration or "")
+    if _PROSE_HURT_RE.search(text):
+        return True
+    limb = str((injury or {}).get("limb") or "").strip()
+    return bool(limb) and bool(re.search(rf"\b{re.escape(limb)}\b", text, re.I))
 
 
 def apply_check_to_turn(turn: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
