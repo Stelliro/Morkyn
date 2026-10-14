@@ -807,6 +807,21 @@ class Run37Planks(unittest.TestCase):
         self.assertFalse(shown["minted"])
 
 
+class OptionListAfterAQuote(unittest.TestCase):
+    """Run 38 T0: the list's lead-in took the question before it, and the line was left unclosed."""
+
+    def test_question_kept(self):
+        from app.llm import _trim_option_list
+
+        text = ("You stand on the salt-swept flats of Saltmarrow, the harbour town the sea left behind, and the morning "
+                "sun casts long shadows over the mud. Nearby, a mole catcher looks up. \"Good morning, flat-runner,\" "
+                "she says. \"Have you picked up anything interesting today?\"\n\nYou could:\n- Enter the inn.\n"
+                "- Approach her.\n- Walk to the water's edge.")
+        out, removed = _trim_option_list(text, floor=50)
+        self.assertTrue(out.endswith('anything interesting today?"'), out[-80:])
+        self.assertGreater(removed, 0)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
