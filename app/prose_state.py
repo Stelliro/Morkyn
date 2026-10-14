@@ -1322,6 +1322,35 @@ _WEAPON_STEMS = {"knives": "knife", "daggers": "dagger", "swords": "sword", "bla
 _LIGHT_WORDS = ("lantern", "lamp", "torch")
 
 
+_KIN_WORDS = ("mother", "father", "mam", "mum", "ma", "da", "dad", "grandmother", "grandfather", "sister", "brother",
+              "aunt", "uncle", "wife", "husband")
+
+
+def repair_kin_item_article(text: str, owned: list[str]) -> tuple[str, list[dict[str, Any]]]:
+    """'the mother's brass tide-reckoner' is your mother's, when the player owns an item named that way.
+
+    8B run 18, T0: the item is stored as "mother's brass tide-reckoner" and
+    the model pasted the name after "the". Outside speech only.
+    """
+    kin = {
+        m.group(1).lower()
+        for name in owned
+        for m in [re.match(rf"\s*({'|'.join(_KIN_WORDS)})['’]s\s", str(name or ""), re.I)]
+        if m
+    }
+    if not kin or not str(text or "").strip():
+        return str(text or ""), []
+    changes: list[dict[str, Any]] = []
+    pattern = re.compile(rf"\b([Tt])he\s+({'|'.join(sorted(kin))})(['’]s)\b")
+    parts = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", str(text))
+    for i in range(0, len(parts), 2):
+        def fix(m: re.Match[str]) -> str:
+            changes.append({"why": "kin_item_article", "text": m.group(0)})
+            return ("Your " if m.group(1) == "T" else "your ") + m.group(2) + m.group(3)
+        parts[i] = pattern.sub(fix, parts[i])
+    return "".join(parts), changes
+
+
 def repair_unowned_weapon(text: str, owned: list[str], player_input: str = "") -> tuple[str, list[dict[str, Any]]]:
     """Drop the clause that gives the player a weapon their inventory does not hold.
 

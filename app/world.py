@@ -20280,6 +20280,9 @@ def _reconcile_prose_with_state(
         for entry in unowned:
             report["trimmed"].append(entry)
             turn_ledger.note("prose", "unowned_weapon_dropped", **entry)
+        text, kin_fixes = prose_state.repair_kin_item_article(text, owned)
+        for entry in kin_fixes:
+            turn_ledger.note("prose", "kin_item_article_repaired", **entry)
     except Exception:
         pass
     # A calm sea or clear sky in the narration while the engine has a storm,
