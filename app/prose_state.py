@@ -1311,10 +1311,15 @@ def repair_fair_weather(text: str, kind: str) -> tuple[str, list[dict[str, Any]]
 # T12; run 5 T35, T79). Only that clause goes; speech is left alone.
 _YOUR_WEAPON_RE = re.compile(
     r"\byour\s+(?:[\w'’-]+\s+){0,2}?(?P<w>knife|knives|dagger|daggers|sword|swords|blade|blades|axe|hatchet|spear|"
-    r"club|cudgel|mace|crossbow|pistol|bow)\b",
+    r"club|cudgel|mace|crossbow|pistol|bow|"
+    # Carried tools too: "your lantern's glow cutting through the gloom" with no
+    # lantern (8B run 3, T8).
+    # Not "your pack": that is the inventory itself.
+    r"lantern|lanterns|torch|lamp|crowbar|pry\s+bar|shovel|spade|pickaxe|grapnel|hook|rope)\b",
     re.I,
 )
-_WEAPON_STEMS = {"knives": "knife", "daggers": "dagger", "swords": "sword", "blades": "blade"}
+_WEAPON_STEMS = {"knives": "knife", "daggers": "dagger", "swords": "sword", "blades": "blade", "lanterns": "lantern"}
+_LIGHT_WORDS = ("lantern", "lamp", "torch")
 
 
 def repair_unowned_weapon(text: str, owned: list[str], player_input: str = "") -> tuple[str, list[dict[str, Any]]]:
@@ -1336,6 +1341,9 @@ def repair_unowned_weapon(text: str, owned: list[str], player_input: str = "") -
         word = m.group("w").lower()
         stem = _WEAPON_STEMS.get(word, word)
         if re.search(rf"\b{stem}", have):
+            continue
+        # One light by any name: "your lamp" for the lantern the player carries.
+        if word in _LIGHT_WORDS and any(re.search(rf"\b{w}", have) for w in _LIGHT_WORDS):
             continue
         parts = re.split(r"(,\s+)", sentence)
         clauses = parts[0::2]

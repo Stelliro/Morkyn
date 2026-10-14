@@ -1093,6 +1093,37 @@ class TakeOfAnUnownedItem(unittest.TestCase):
         self.assertEqual([(k["name"], k["quantity_delta"]) for k in kept], [("fragments of lock mechanism", 1)])
 
 
+class Run3DrownedHouse(unittest.TestCase):
+    """8B run 3 T8: 'Rusted lock' granted on 'I pocket the key'; 'a strange pull'; 'your lantern's glow' with no lantern."""
+
+    LINE = "I pocket the key and step through the doorway into the drowned house to see what the creak was."
+    PROSE = ("You step inside, your lantern's glow cutting through the gloom. Your fingers brush against the cold, "
+             "corroded metal of a rusted lock on the far wall, and you feel a strange pull to examine it further.")
+
+    def test_lock_not_granted(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            kept = world._filter_inventory_changes(conn, [{"name": "Rusted lock", "quantity_delta": 1}],
+                                                   narration=self.PROSE, player_input=self.LINE)
+        self.assertEqual(kept, [])
+
+    def test_pull_and_lantern(self):
+        from app.llm import _strip_player_acts_from_sentence as strip
+        from app.prose_state import repair_unowned_weapon
+
+        self.assertEqual(strip("You feel a strange pull to examine it further.", self.LINE, self.LINE)[0], "")
+        out, fixes = repair_unowned_weapon(
+            "The door creaks open on a narrow passage that smells of mildew and old rope. You step inside, your "
+            "lantern's glow cutting through the gloom, and the floor groans.", ["worn boots", "corroded key"], self.LINE)
+        self.assertNotIn("lantern", out)
+        kept, _ = repair_unowned_weapon("The dim glow of your lamp shows the cave.", ["lantern"], self.LINE)
+        self.assertIn("lamp", kept)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

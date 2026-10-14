@@ -14743,7 +14743,17 @@ def _filter_inventory_changes(
             outcome == "gain" and by_player and not acquire_intent
             and not _prose_item_handed_over(final_text, name_l, tokens, owned=bool(existing))
         )
-        arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and acquire_intent)
+        # With nothing said about the item, the player's own take has to be of
+        # this item: "I pocket the key" let GRANT "Rusted lock" in, a lock the
+        # prose only had her fingers brush (8B run 3, T8). "I buy the rope"
+        # with the hand-over left unsaid still stands.
+        own_l = str(_player_line(player_input) or player_input).lower()
+        # A search for whatever turns up ("anything worth hauling back") asks for each find.
+        line_names_it = _sentence_mentions_item(own_l, name_l, tokens) or bool(
+            _LINE_TAKES_ANY_RE.search(own_l) or _SEARCH_FOR_ANY_RE.search(own_l)
+            or re.search(r"\b(?:anything|something|whatever)\b[^.!?]{0,40}\bworth\b", own_l)
+        )
+        arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and acquire_intent and line_names_it)
         grounded = named and arrived
         # A job, a wage or a deal is not a thing to carry (7B run 7, T2: GRANT
         # "deck work" put "deck work x1" in the pack). Only the head noun is
