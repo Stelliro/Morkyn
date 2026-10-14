@@ -774,6 +774,39 @@ class OneWordEchoAfterTheTag(unittest.TestCase):
         self.assertIn("you ask. Delphine looks up", out)
 
 
+class Run37Planks(unittest.TestCase):
+    """Run 37 T3: the planks moved and paid, the job logged as paid ahead; a new 'Saltmarrow Shop' beside the named one."""
+
+    LINE = ('"A few coins will do. I will take the job." I go through to the back and start carrying the old planks '
+            "out to the shed, two at a time, stacking them flat against the wall.")
+
+    def test_work_done_in_the_line(self):
+        from app.quest_parser import work_done_in_line
+
+        prose = "You go through to the back. You stack the old planks flat against the wall, two at a time."
+        quest = {"title": "Move old planks to the shed"}
+        self.assertTrue(work_done_in_line(quest, prose, self.LINE))
+        self.assertFalse(work_done_in_line(quest, prose, '"I will take the job." I head to the back.'))
+        self.assertFalse(work_done_in_line(quest, prose, self.LINE + " Not done yet, though."))
+
+    def test_existing_shop_named_in_the_entry(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            here = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            shop = world._upsert_location(conn, "Delphine Cotteray's Carpenter's Shop", "", parent_id=here, kind="workshop")
+            code = conn.execute("SELECT code FROM locations WHERE id = ?", (shop,)).fetchone()[0]
+            world._upsert_location(conn, "The Mermaid's Rest", "", parent_id=here, kind="inn")
+            prose = (f"You go through to the back of Delphine Cotteray's Carpenter's Shop [[{code}]]. The Mermaid's Rest "
+                     "is quiet across the way. The shop is filled with sawdust and tools.")
+            shown = world._venue_shown_in_prose(conn, {"npcs": []}, prose, player_input="I go through to the back.")
+        self.assertEqual(shown["name"], "Delphine Cotteray's Carpenter's Shop")
+        self.assertFalse(shown["minted"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

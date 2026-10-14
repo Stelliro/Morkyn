@@ -7222,7 +7222,23 @@ def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=Non
     keeper_id = int(keeper_row["id"]) if keeper_row else 0
     rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (here_id,)).fetchall()
     target = None
-    if keeper_id:
+    # A place here the prose names, by its code or its name: "You go through to
+    # the back of Delphine Cotteray's Carpenter's Shop [[L4]]" opened a new
+    # "Saltmarrow Shop" beside it (7B run 37, T3).
+    entry_sentences = [
+        s for s in re.split(r"(?<=[.!?])\s+", str(narration or ""))
+        if re.search(r"\b(?:into|inside|enter\w*|through\s+to|(?:to|into)\s+the\s+back\s+of|step\w*\s+in)\b", s, re.I)
+        and re.search(r"\byou\b", s, re.I)
+    ]
+    entry_text = " ".join(entry_sentences)
+    named_here = [
+        row for row in rows
+        if (row["code"] and f"[[{str(row['code']).upper()}]]" in entry_text)
+        or (str(row["name"] or "").strip() and str(row["name"]).strip().lower() in entry_text.lower())
+    ]
+    if len(named_here) == 1:
+        target = named_here[0]
+    if target is None and keeper_id:
         target = next((row for row in rows if int(row["keeper_npc_id"] or 0) == keeper_id), None)
     if target is None:
         same = [
@@ -18903,7 +18919,13 @@ def _settle_story_terms_and_pay(
     gold_note: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """An agreed price becomes the job's reward; pay handed over for an active job finishes it (7B run 6, T6, T9)."""
-    from app.quest_parser import job_paid_in_advance, job_paid_in_prose, record_advance_pay, settle_agreed_price
+    from app.quest_parser import (
+        job_paid_in_advance,
+        job_paid_in_prose,
+        record_advance_pay,
+        settle_agreed_price,
+        work_done_in_line,
+    )
     from app.quests import complete_quest_step
 
     touched = {
@@ -18943,6 +18965,18 @@ def _settle_story_terms_and_pay(
         accepted_now = set()
     ahead = job_paid_in_advance(conn, narration=narration, coin_in=coin_in, skip_ids=set(skip_ids),
                                 accepted_now=accepted_now)
+    # Taken and done in one line, then paid: the job is finished, not paid
+    # ahead (7B run 37, T3: the planks were stacked and Delphine paid 5 gold).
+    if ahead and work_done_in_line(ahead, narration, player_input):
+        done = complete_quest_step(conn, int(ahead["id"]), turn=turn, to_end=True, source="story_pay",
+                                   gold_paid_in_story=coin_in)
+        if done.get("ok"):
+            turn_ledger.note("quest", "done_and_paid_in_one_turn", quest=ahead.get("code"), gold=coin_in)
+            row = {"code": ahead.get("code"), "action": done.get("action"), "source": "story_pay", "gold_in_story": coin_in}
+            report = {**quest_report, "updated": [*(quest_report.get("updated") or []), row]}
+            if report.get("status") in {"skipped", "empty", "rejected"}:
+                report["status"] = "applied"
+            return report
     if ahead:
         row = record_advance_pay(conn, ahead, coin_in=coin_in, turn=turn)
         turn_ledger.note("quest", "paid_in_advance", quest=ahead.get("code"), gold=coin_in,

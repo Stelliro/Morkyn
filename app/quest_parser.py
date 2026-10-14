@@ -1421,6 +1421,32 @@ _OUTCOME_RE = re.compile(
 _YOU_ACT_RE = re.compile(r"^\W*(?:then\s+)?you\s+(?:\w+ly\s+)?([a-z]+)", re.I)
 
 
+def work_done_in_line(quest: dict[str, Any] | None, narration: str, player_input: str) -> bool:
+    """The player's own line does this job's work and the prose shows that act done.
+
+    7B run 37, T3: '"I will take the job." I go through to the back and start
+    carrying the old planks out to the shed, two at a time, stacking them flat'
+    for "Move old planks to the shed"; the prose "You stack the old planks flat
+    against the wall" and Delphine paid 5 gold, and the job was logged as paid
+    ahead and left open. The line has to share two of the title's words, the
+    prose has to show a "You <verb>" the player typed, and the player must not
+    say the work is unfinished.
+    """
+    if not quest:
+        return False
+    own = _QUOTED_RE.sub(" ", _player_own_line(player_input))
+    if not own.strip() or _PLAYER_NOT_DONE_RE.search(own):
+        return False
+    words = _title_words(str(quest.get("title") or ""))
+    own_stems = {_stem(w) for w in re.findall(r"[a-z]{4,}", own.lower())}
+    if len({_stem(w) for w in words} & own_stems) < 2:
+        return False
+    for sentence in re.split(r"(?<=[.!?])\s+", re.sub(r"[\"“][^\"”]*[\"”]", " ", str(narration or ""))):
+        if _players_own_act(sentence.strip(), player_input):
+            return True
+    return False
+
+
 def _players_own_act(evidence: str, player_input: str) -> bool:
     """The quote is the player's own act this turn: "You set the last polished blade" for "I set ..."."""
     lead = _YOU_ACT_RE.match(str(evidence or ""))
