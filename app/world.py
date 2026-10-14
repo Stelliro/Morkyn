@@ -17063,6 +17063,8 @@ def _introduced_person_first(
             continue  # "You are Isk Tarrow, the flat-runner": the player
         if match.re is _INTRODUCED_PERSON_RE and re.search(r"[A-Z][\w'’]*[\s-]$", plain[: match.start("name")]):
             continue  # the end of a longer name: "The Twice-Blessed Hound, the steady heat"
+        if match.re is _INTRODUCED_PERSON_RE and re.search(r"[A-Z][\w'’]*\s+(?:and|&)\s+$", plain[: match.start("name")]):
+            continue  # a business's "and Sons": "Coldwell and Sons, a woman with a warm smile" (7B run 32, T0)
         role = match.group("role").strip()
         if role.split()[-1] in {"man", "woman", "figure", "person", "stranger", "voice", "child", "boy", "girl"}:
             # "a grizzled man named Rusk", "Gisela Hatcher, a stout woman with a
@@ -17128,6 +17130,31 @@ def _ensure_npcs_from_narration(
         ]
     except Exception:
         player_names = []
+    # Two hints in one sentence are one figure ("A figure steps out from behind
+    # Coldwell and Sons, a woman with a warm smile"), and a hint whose sentence
+    # or the next one names a person this turn already lists is that person
+    # ("She is Maud Venn [[A]], the town's tallyman."): run 32 T0 minted a
+    # drawn "Tamsin" for the second hint while Maud came in through the op.
+    if hints:
+        listed = [str(n.get("name") or "") for n in (result.get("npcs") or []) if isinstance(n, dict) and n.get("name")]
+        seen_at: set[int] = set()
+        kept_hints: list[str] = []
+        flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", text)).strip()
+        flat_sentences = re.split(r"(?<=[.!?])\s+", flat)
+        for h in hints:
+            at = _sentence_index(text, h)
+            if at >= 0 and at in seen_at:
+                continue
+            near = " ".join(flat_sentences[at:at + 2]) if at >= 0 else ""
+            if listed and any(
+                re.search(rf"\b{re.escape(name.split()[0])}\b", near) for name in listed if name.split()
+            ):
+                turn_ledger.note("npc", "figure_is_listed_person", hint=h)
+                seen_at.add(at)
+                continue
+            seen_at.add(at)
+            kept_hints.append(h)
+        hints = kept_hints
     introduced_all = _introduced_people(text, known_names + player_names, places)
     if introduced_all and hints:
         # "As you approach, a figure catches your eye. Stephen Lambard, a tide

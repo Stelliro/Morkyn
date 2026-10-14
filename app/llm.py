@@ -13387,13 +13387,29 @@ def _drop_menu_sentences(text: str, *, floor: int = MENU_TRIM_FLOOR_CHARS) -> tu
         before = out[:at]
         return bool(before.count('"') % 2) or before.count("“") > before.count("”")
 
+    spans_all = sentence_spans(out)
     cuts = [
         (start, end, sentence)
-        for start, end, sentence in sentence_spans(out)
+        for start, end, sentence in spans_all
         if not re.search(r"[\"“”]", sentence)
         and not _inside_quote(start)
         and _MENU_TWO_WAY_RE.match(sentence.strip())
     ]
+    # The menu split in two: "You could head to the flats now ..., but the risk
+    # is not worth the reward. Or you might visit the inn for a cup of tea."
+    # (7B run 32, T0).
+    for i in range(len(spans_all) - 1):
+        first, second = spans_all[i], spans_all[i + 1]
+        if (
+            re.match(r"^\W*You\s+(?:could|can|might|may)\b", first[2].strip())
+            and re.match(r"^\W*Or\s+(?:you\s+)?(?:could|can|might|may)\b", second[2].strip())
+            and not re.search(r"[\"“”]", first[2] + second[2])
+            and not _inside_quote(first[0])
+        ):
+            for span in (first, second):
+                if span not in cuts:
+                    cuts.append(span)
+    cuts.sort()
     dropped: list[str] = []
     if cuts:
         kept = out
