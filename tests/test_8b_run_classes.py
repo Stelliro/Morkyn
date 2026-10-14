@@ -895,6 +895,34 @@ class WhereAShipLiesIsNoLie(unittest.TestCase):
         self.assertNotEqual((check.get("opposition") or {}).get("name"), "Wulfstan Glover")
 
 
+class TheWalkEndsAtTheLastPlace(unittest.TestCase):
+    """8B run 37, T6: "I climb the seawall steps and carry the shells back to the tally house" stopped at the seawall,
+    and "With the water starting to creep back" rolled stealth (a crit)."""
+
+    LINE = ("With the water starting to creep back, I climb the seawall steps and carry the shells back to the tally "
+            "house for Verity to count against my ledger.")
+
+    def test_destination(self):
+        from app import world
+
+        rows = [{"name": "The Seawall", "code": "L4"}, {"name": "The Salvage Guild's Tally House", "code": "L2"},
+                {"name": "The Flats", "code": "L3"}]
+        self.assertEqual(world._movement_destination_from_input(rows, self.LINE, "The Flats")["code"], "L2")
+
+    def test_two_yards_name_neither_by_tail(self):
+        from app import world
+
+        rows = [{"name": "Saltmarrow Salvage Yard", "code": "L2"}, {"name": "The Blind Pike Salvage Yard", "code": "L5"}]
+        got = world._movement_destination_from_input(rows, "I go find Roger at the Saltmarrow Salvage Yard.", "Saltmarrow")
+        self.assertEqual(got["code"], "L2")
+
+    def test_no_roll_for_the_water_or_the_stairs(self):
+        from app.skill_checks import infer_check_from_action as infer
+
+        self.assertIsNone(infer(self.LINE, {}))
+        self.assertEqual(infer("I creep along the wall toward the guard.", {})["skill_code"], "stealth")
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
