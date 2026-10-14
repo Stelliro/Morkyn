@@ -927,6 +927,25 @@ class NoBuildingAfterTheArrival(unittest.TestCase):
         self.assertTrue(point and point["trigger"].startswith("The door is ajar"))
 
 
+class Run41DrownedHouse(unittest.TestCase):
+    """Run 41 T4: 'small x1' for 'you pull out a small, rusted iron key'; 'The Wren' beside 'The Wren at Saltmarrow'."""
+
+    def test_key_and_inn(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        line = "I stop at the first drowned house and search the mud around its doorstep for anything metal worth hauling back."
+        prose = "You crouch and search the mud. After a moment, you pull out a small, rusted iron key."
+        with connect() as conn:
+            added = world._grant_shown_takes(conn, [], prose, line)
+            self.assertEqual([a["name"] for a in added], ["small rusted iron key"])
+            here = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            wren = world._upsert_location(conn, "The Wren at Saltmarrow", "", parent_id=here, kind="inn")
+            self.assertEqual(int(world._match_location_by_name(conn, "The Wren")["id"]), int(wren))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

@@ -11999,10 +11999,19 @@ def _match_location_by_name(conn, name: str):
         ).fetchone()
         if row:
             return row
-    return conn.execute(
+    row = conn.execute(
         "SELECT id, summary FROM locations WHERE name = ? COLLATE NOCASE OR name = ? COLLATE NOCASE",
         (f"The {value}", f"The {bare}" if bare else value),
     ).fetchone()
+    if row:
+        return row
+    # The short form of "<name> at <town>": "The Wren" for "The Wren at
+    # Saltmarrow" made a second inn (7B run 41, T4). Only the one such place.
+    rows = conn.execute(
+        "SELECT id, summary FROM locations WHERE name LIKE ? COLLATE NOCASE OR name LIKE ? COLLATE NOCASE",
+        (f"{value} at %", f"{value} of %"),
+    ).fetchall()
+    return rows[0] if len(rows) == 1 else None
 
 
 # Generic tail nouns a model bolts onto a name it already used. A live run
@@ -13984,7 +13993,8 @@ _FREED_TAKE_RE = re.compile(
     r"(?:\s*,?\s*(?:pulling|working|prising|prying|levering|wrenching|easing|dragging|tugging|yanking|freeing)\s+(?:it|them))?"
     r"\s+(?:free|loose|out|up|clear)\b"
     rf"|\byou\s+(?:\w+ly\s+)?(?:{_FREE_VERBS})\s+(?:out|up|loose|free)\s+"
-    r"(?P<obj2>(?:the|a|an|some|two|three|\d+)\s+[a-z][\w'’-]*(?:\s+[a-z][\w'’-]*){0,4})"
+    # "you pull out a small, rusted iron key" is the key, not "a small" (7B run 41, T4).
+    r"(?P<obj2>(?:the|a|an|some|two|three|\d+)\s+[a-z][\w'’-]*(?:,?\s+[a-z][\w'’-]*){0,4})"
     # "You pull a small, tarnished coin from the debris" (7B run 34, T2).
     rf"|\byou\s+(?:\w+ly\s+)?(?:{_FREE_VERBS})\s+"
     r"(?P<obj3>(?:the|a|an|some|two|three|\d+)\s+[a-z][\w'’-]*(?:,?\s+[a-z][\w'’-]*){0,4}?)"
