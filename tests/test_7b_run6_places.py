@@ -237,6 +237,25 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class AnotherSpellingIsNoNewPlace(unittest.TestCase):
+    """8B run 50, T4: LOC_NEW "The Salvage Tally House" in "The Salvage Guild's Tally House" minted a second place."""
+
+    def test_no_second_tally_house(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+        world.apply_turn({"narration": "Jory taps the ledger. \"The job is to recover what was lost.\"",
+                          "locations": [{"name": "The Salvage Tally House", "summary": "a dim room"}]},
+                         player_input="\"Name the job, Jory.\"")
+        with connect() as conn:
+            names = [r[0] for r in conn.execute("SELECT name FROM locations").fetchall()]
+        self.assertNotIn("The Salvage Tally House", names)
+
+
 class AskingWhereIsNoTaking(unittest.TestCase):
     """8B run 47, T3: "I'll take it" (the job) and "Where do the guild's carts wait?" put two carts in the pack."""
 
