@@ -16237,7 +16237,7 @@ def _asked_destination_words(acts: str) -> set[str]:
     return words
 
 
-def _asked_destination_heads(acts: str) -> set[str]:
+def _asked_destination_heads(acts: str, whole: bool = False) -> set[str]:
     """The head word of each place the line walks to: "house" of "the salvage guild's tally house".
 
     8B run 25, T1: "You reach the salvage yard" matched "salvage" and read as
@@ -16248,10 +16248,14 @@ def _asked_destination_heads(acts: str) -> set[str]:
         # "town to the salvage guild's tally house to ask the tallyman": the
         # purpose ("to ask ...") is not a place, and the last place is where it ends.
         place = re.split(r"\s+to\s+(?!(?:the|a|an|my|his|her|their|its)\b)", m.group("d").lower())[0]
+        # "into the apothecary for a salve": what it is for is no part of the place.
+        place = re.split(r"\s+(?:for|with|about|before|after|and|while|because|so|then)\s+", place)[0]
+        # "the salvage yard in Saltmarrow": where it stands is not the place.
+        place = re.split(r"\s+(?:in|at|near|by|beside|behind|outside)\s+", place)[0]
         place = re.split(r"\s+(?:to|into|toward|towards)\s+", place)[-1]
         words = [w for w in re.findall(r"[a-z][a-z'’-]+", place) if w not in _DEST_STOPWORDS]
         if words and len(words[-1]) >= 4:
-            heads.add(words[-1][:6])
+            heads.add(words[-1][:6] if not whole else words[-1])
     return heads
 
 

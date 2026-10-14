@@ -288,6 +288,32 @@ class StowingItIsTakingIt(unittest.TestCase):
         self.assertEqual(changes, [])
 
 
+class TheGuildsTallyHouseIsNoSalvageYard(unittest.TestCase):
+    """8B run 26, T1: "to the salvage guild's tally house" opened a "Saltmarrow Salvage Yard"."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+    PROSE = ("You head toward the salvage guild's tally house, a squat building with a rusted door. Inside, the scent "
+             "of oil and rusted metal fills the room. The tallyman is a man with a scar.")
+
+    def test_the_tally_house_is_entered(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            report = world.resolve_movement(conn, {"player": {}, "narration": self.PROSE}, self.LINE, intent="travel",
+                                            narration=self.PROSE)
+        self.assertEqual(report.get("destination"), "The Salvage Guild's Tally House")
+
+    def test_the_heads(self):
+        from app import llm
+
+        self.assertEqual(llm._asked_destination_heads("I go into the apothecary for a salve.", whole=True), {"apothecary"})
+        self.assertEqual(llm._asked_destination_heads("I head back across the flats to the salvage yard in Saltmarrow "
+                                                      "to sell the brass.", whole=True), {"yard"})
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
