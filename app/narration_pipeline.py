@@ -2442,7 +2442,13 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 )
                 if lead_in:
                     start = lead_in.start()
-                body = (body[:start].rstrip(" ") + " " + body[end:].lstrip(" ")).strip(" ")
+                head_part = body[:start].rstrip(" ")
+                rest = body[end:].lstrip(" ")
+                # The other half of a split line stays a sentence: '"A silver and a
+                # promise," he says, "that's the price ..."' lost its first half and
+                # left '"that's the price ...' (8B run 33, T2).
+                rest = re.sub(r'^([“"])([a-z])', lambda m: m.group(1) + m.group(2).upper(), rest)
+                body = (head_part + " " + rest).strip(" ")
                 changes.append({"action": "line_taken_from_other_speaker", "quote": quote})
 
     # 3. One invented line given to the player, while one of theirs is missing.

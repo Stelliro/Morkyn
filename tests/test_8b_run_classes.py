@@ -765,6 +765,21 @@ class WhatWorkAsksForWork(unittest.TestCase):
         self.assertFalse(qp.player_asks_for_work("I ask her what the weather will do."))
 
 
+class TheOtherHalfStaysASentence(unittest.TestCase):
+    """8B run 33, T2: '"A silver and a promise," he says, "that's the price ..."' left '"that's the price ...'."""
+
+    def test_capital_back(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = ("\"A silver and a promise. That's the one.\" I stop at the table. \"I'd rather work it off than wait "
+                "for you to come looking. What have you got?\"")
+        body = ("Gregory eyes you. \"A silver and a promise,\" he says, \"that's the price of a man's word in these "
+                "parts.\" He pushes a stack of parchment toward you.")
+        fixed, _ = keep_player_words(body, line)
+        self.assertIn("\"That's the price of a man's word", fixed)
+        self.assertNotIn("\"that's the price", fixed)
+
+
 class _ConnStub:
     """No one known yet."""
 
