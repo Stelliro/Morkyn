@@ -13344,7 +13344,7 @@ _TALK_WORD_RE = re.compile(r"\b(?:ask|asks|talk|talks|speak|speaks|greet|greets|
 
 
 def _place_new_people_at_arrival(
-    conn, npcs: list[dict[str, Any]], result: dict[str, Any], player_input: str
+    conn, npcs: list[dict[str, Any]], result: dict[str, Any], player_input: str, narration: str = ""
 ) -> None:
     """A new person the player walks to and then talks to stands where the walk ends.
 
@@ -13374,8 +13374,18 @@ def _place_new_people_at_arrival(
         return
     left = {str(here["code"] or "").lower(), str(here["name"] or "").lower(), ""}
     known = {str(r[0] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
+    # Someone already met counts when the narration shows them there: the
+    # tallyman from the opening, "behind a desk" in the tally house, was kept
+    # at the town the player had left, and the next turn was told he was not
+    # there (8B run 40, T1-T2).
+    unspoken = venues.strip_speech(str(narration or ""))
     for npc in npcs:
-        if not isinstance(npc, dict) or str(npc.get("name") or "").strip().lower() in known:
+        if not isinstance(npc, dict):
+            continue
+        name = str(npc.get("name") or "").strip()
+        if name.lower() in known and not (
+            name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", unspoken, re.I)
+        ):
             continue
         if str(npc.get("location") or "").strip().lower() in left:
             npc["location"] = str(dest["code"] or dest["name"])
@@ -20947,7 +20957,7 @@ def apply_turn(
             pass
         result["npcs"] = collected_npcs
         try:
-            _place_new_people_at_arrival(conn, collected_npcs, result, player_input)
+            _place_new_people_at_arrival(conn, collected_npcs, result, player_input, narration)
         except Exception:
             pass
         try:
