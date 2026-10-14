@@ -476,6 +476,18 @@ class Run32Opening(unittest.TestCase):
         self.assertEqual(names, ["Maud Venn"])
 
 
+class GluedThe(unittest.TestCase):
+    """Run 32 T1-T2: 'theflats' became a place 'Theflats' and a fact about it."""
+
+    def test_split_only_a_word_that_stands_alone(self):
+        from app.turn_dsl import parse_dsl_turn, unglue_the
+
+        self.assertEqual(unglue_the("Run out to theflats today.", "the tallies for the flats"), "Run out to the flats today.")
+        self.assertEqual(unglue_the("Theobald waits. There, then, theme.", "the flats"), "Theobald waits. There, then, theme.")
+        turn = parse_dsl_turn('===NAR===\nYou look out over theflats.\n===OPS===\nMOVE "Theflats"\n', "I look at the flats.")
+        self.assertIn("the flats", turn["narration"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
