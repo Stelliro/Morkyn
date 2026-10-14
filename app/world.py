@@ -20409,6 +20409,10 @@ def _reconcile_prose_with_state(
         text, kin_fixes = prose_state.repair_kin_item_article(text, owned)
         for entry in kin_fixes:
             turn_ledger.note("prose", "kin_item_article_repaired", **entry)
+        text, held_off = prose_state.repair_restraint_undone(text, player_input)
+        for entry in held_off:
+            report["trimmed"].append(entry)
+            turn_ledger.note("prose", "restraint_undone_dropped", **entry)
         me = conn.execute("SELECT name, backstory FROM player WHERE id = 1").fetchone()
         if me is not None:
             text, debt_fixes = prose_state.repair_inverted_debt(text, str(me["backstory"] or ""), str(me["name"] or ""))

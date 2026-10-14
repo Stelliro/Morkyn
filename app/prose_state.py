@@ -1356,6 +1356,57 @@ def repair_kin_item_article(text: str, owned: list[str]) -> tuple[str, list[dict
     return "".join(parts), changes
 
 
+_RESTRAINT_RE = re.compile(
+    r"\b(?:without\s+touching|keep(?:ing)?\s+my\s+hands\s+off|(?:do\s+not|don['’]t|won['’]t|never)\s+(?:touch|take|pick\s+up))"
+    r"\s+(?P<obj>it|them|the\s+[\w'’-]+(?:\s+[\w'’-]+)?)"
+    r"|\bleav(?:e|ing)\s+(?P<obj2>it|them|the\s+[\w'’-]+(?:\s+[\w'’-]+)?)\s+(?:be|alone|where)\b",
+    re.I,
+)
+_IN_HAND_RE = re.compile(
+    r"\b(?:in|into|on|across)\s+your\s+(?:palm|palms|hand|hands|fingers|grip|grasp)\b"
+    r"|\byour\s+(?:fingers|hand|hands|palm)\s+(?:close|closes|closing|brush|brushes|brushing|curl|curls|tighten|tightens)\b"
+    r"|\byou\s+(?:\w+ly\s+)?(?:touch|touches|touched|pick|picks|picked|grab|grabs|grabbed|take|takes|took|hold|holds|held|"
+    r"pocket|pockets|pocketed)\b",
+    re.I,
+)
+
+
+def repair_restraint_undone(text: str, player_input: str) -> tuple[str, list[dict[str, Any]]]:
+    """The thing the player's line keeps their hands off is not put in their hand by the narrator.
+
+    8B run 33, T3: "I keep my hands off the coin" came back with "His eyes flick
+    to the coin in your palm" (and run 15, T4: "without touching it"). The
+    player's choice is theirs; the narrator sentence that undoes it goes.
+    """
+    line = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0]
+    acts = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", line)
+    heads: set[str] = set()
+    for m in _RESTRAINT_RE.finditer(acts):
+        obj = (m.group("obj") or m.group("obj2") or "").lower()
+        if obj in {"it", "them"}:
+            before = re.findall(r"\bthe\s+(?:[\w'’-]+\s+)?([\w'’-]+)", acts[: m.start()].lower())
+            if before:
+                heads.add(before[-1])
+        else:
+            heads.add(obj.split()[-1])
+    heads = {h for h in heads if len(h) >= 3}
+    if not heads or not str(text or "").strip():
+        return str(text or ""), []
+    changes: list[dict[str, Any]] = []
+
+    def undoes(sentence: str) -> bool:
+        if re.search(r"[\"“”]", sentence):
+            return False
+        low = sentence.lower()
+        if any(re.search(rf"\b{re.escape(h)}", low) for h in heads) and _IN_HAND_RE.search(sentence):
+            changes.append({"why": "restraint_undone", "text": sentence.strip()[:160]})
+            return True
+        return False
+
+    fixed, dropped = drop_sentences(str(text), undoes)
+    return (fixed, changes) if dropped else (str(text), [])
+
+
 def repair_inverted_debt(text: str, backstory: str, player_name: str) -> tuple[str, list[dict[str, Any]]]:
     """'The tallyman owes you' when the backstory says the player owes the tallyman: turned back around.
 
