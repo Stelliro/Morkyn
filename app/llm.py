@@ -16003,6 +16003,14 @@ def _after_act_cut_point(
                 rest = re.sub(r"^(?:turn|turns)\s+to\s+", "", joined.group(1), flags=re.I)
                 move = _AFTER_ACT_MOVE_RE.match("You " + rest)
         if not move:
+            # Mid-sentence: "You watch for a moment, ..., then you turn and walk
+            # back towards the town." (7B run 31, T5: the walk led to a new
+            # encounter and a reply invented for the player).
+            mid = re.search(r",\s*(?:and\s+)?then\s+you\s+(.+)$", sentence, re.I | re.S)
+            if mid:
+                rest = re.sub(r"^(?:turn|turns)\s+(?:and\s+|to\s+)", "", mid.group(1), flags=re.I)
+                move = _AFTER_ACT_MOVE_RE.match("You " + rest)
+        if not move:
             continue
         verb, dest = move.group("v"), move.group("dest")
         if _MOVE_IN_PLACE_RE.match(dest) or re.match(r"^\s*(?:your\s+)?search\b", dest, re.I):
