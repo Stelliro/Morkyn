@@ -1161,6 +1161,27 @@ class ThePlayersDebtIsNoOffer(unittest.TestCase):
                                     giver=colm, giver_ref="A", npcs=[colm])["ok"])
 
 
+class Run4Opening(unittest.TestCase):
+    """8B run 4 T0: 'She wears a patched tunic [[I2]], the same as yours'; 'The thought of leaving ... yourself behind.'"""
+
+    def test_item_code_only_on_the_players_thing(self):
+        from app.llm import _inject_entity_codes_for_known_names as inject
+
+        out = inject("She wears a patched tunic, the same as yours. You pick up a rusty key. His rusty key glints.",
+                     {"I2": "patched tunic", "I5": "rusty key"})
+        self.assertIn("She wears a patched tunic, the same", out)
+        self.assertIn("You pick up a rusty key [[I5]]", out)
+        self.assertIn("His rusty key glints", out)
+
+    def test_thought_as_subject(self):
+        from app.llm import _strip_player_acts_from_sentence as strip
+
+        self.assertEqual(strip("The thought of leaving this place feels like leaving a part of yourself behind.", "I wait.",
+                               "I wait.")[0], "")
+        kept = "The thought of the storm keeps the fishermen ashore."
+        self.assertEqual(strip(kept, "I wait.", "I wait.")[0], kept)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
