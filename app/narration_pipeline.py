@@ -2586,6 +2586,24 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 body = body[: span["end"]] + " you" + tail[4:]
         body = body[: prev["end"]] + between.rstrip() + "\n\n" + body[span["start"]:]
         changes.append({"action": "player_line_given_own_paragraph", "quote": span["inner"][:200]})
+    # The player's typed line with no tag, right before someone else's name,
+    # reads as that person's (7B run 35/36, T2: '"Do you know who is taking a
+    # boat out ...?" Emrys Slade ponders for a moment'). It gets its tag.
+    for q in quotes:
+        inner = str(q or "").strip()
+        if len(inner.split()) < 3:
+            continue
+        pattern = re.compile(
+            rf"(?:(?<=^)|(?<=\n)|(?<=[.!?…][\"”]\s)|(?<=[.!?…]\s))([\"“]){re.escape(inner)}([\"”])(\s+)(?=(?!You\b)[A-Z][a-z]+)"
+        )
+        tag = " you ask." if inner.endswith("?") else " you say."
+
+        def _tag(m: re.Match[str]) -> str:
+            changes.append({"action": "player_line_tagged", "quote": inner[:200]})
+            said = inner[:-1] + "," if inner.endswith(".") else inner
+            return f"{m.group(1)}{said}{m.group(2)}{tag}{m.group(3)}"
+
+        body = pattern.sub(_tag, body, count=1)
     if changes:
         body = re.sub(r"[ \t]{2,}", " ", body)
         body = re.sub(r"[ \t]*\n[ \t]*", "\n", body)

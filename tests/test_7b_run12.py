@@ -44,7 +44,9 @@ class UnquotedEchoIsQuoted(unittest.TestCase):
         text, changes = keep_player_words(prose, line)
         self.assertEqual(text.count("Tide-reading and salvage"), 1)
         self.assertIn("“Morning, Mattias. Tide-reading and salvage, same as always.”", text)
-        self.assertEqual([c["action"] for c in changes], ["unquoted_line_quoted", "unquoted_line_quoted"])
+        # Since 7B run 36 (T2) the last line, untagged before "Mattias", also gets its tag.
+        self.assertEqual([c["action"] for c in changes],
+                         ["unquoted_line_quoted", "unquoted_line_quoted", "player_line_tagged"])
 
 
 class UntaggedLineAfterSomeoneElse(unittest.TestCase):
