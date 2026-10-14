@@ -15122,8 +15122,15 @@ def _filter_inventory_changes(
         # with the hand-over left unsaid still stands.
         own_l = str(_player_line(player_input) or player_input).lower()
         # A search for whatever turns up ("anything worth hauling back") asks for each find.
-        line_names_it = _sentence_mentions_item(own_l, name_l, tokens) or bool(
-            _LINE_TAKES_ANY_RE.search(own_l) or _SEARCH_FOR_ANY_RE.search(own_l)
+        # Asking where a thing is does not ask for it: "Where do the guild's
+        # carts wait?" beside "I'll take it" (the job) put two carts in the pack
+        # (8B run 47, T3). A question names the item only when it asks to take it.
+        line_names_it = any(
+            _sentence_mentions_item(s, name_l, tokens) and ("?" not in s or player_take_intent(s))
+            for s in re.split(r"(?<=[.!?])[\"”']?\s+", own_l)
+        ) or bool(
+            # Said, "I'll take it" agrees to an offer; the act takes things.
+            _LINE_TAKES_ANY_RE.search(venues.strip_speech(own_l)) or _SEARCH_FOR_ANY_RE.search(own_l)
             or re.search(r"\b(?:anything|something|whatever)\b[^.!?]{0,40}\bworth\b", own_l)
         )
         arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and acquire_intent and line_names_it)
