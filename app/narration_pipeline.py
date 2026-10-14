@@ -2153,6 +2153,65 @@ def _give_act_back(text: str, player_input: str) -> tuple[str, list[str]]:
     return out, given
 
 
+_FIRST_TO_SECOND = (
+    (r"\bmyself\b", "yourself"), (r"\bmine\b", "yours"), (r"\bmy\b", "your"), (r"\bme\b", "you"),
+)
+
+
+def to_second_person(sentence: str) -> str:
+    """'I wipe my hands on my trousers.' -> 'You wipe your hands on your trousers.'"""
+    out = re.sub(r"^(\W*)I\b", r"\1You", sentence, count=1)
+    out = re.sub(r"(?<=[,;]\s)I\b(?!['’])", "you", out)
+    out = re.sub(r"\band\s+I\b(?!['’])", "and you", out)
+    # Lowercase only: a capital "My" inside a sentence is a name ("My Lady's Rest").
+    for pattern, new in _FIRST_TO_SECOND:
+        out = re.sub(pattern, new, out)
+    out = re.sub(r"^(\W*)My\b", r"\1Your", out, count=1)
+    return out
+
+
+def narrator_voice_to_second_person(text: str, player_input: str) -> tuple[str, list[str]]:
+    """
+    A narrator sentence in the player's first person becomes second person
+    (7B run 30, T15: "I nod and turn to leave, the sense of duty guiding me."
+    and "...remind me of the work still to be done."). Only outside quotes,
+    only a sentence that opens "I <verb>" or holds me/my/myself, never one
+    that is a typed quote (step 3b quotes those) and never an "I'll / I'm"
+    opener, which reads as someone's speech.
+    """
+    quotes = [re.sub(r"\W+", " ", q).strip().lower() for q in player_quotes(player_input)]
+    changed: list[str] = []
+
+    def _fix(match: re.Match[str]) -> str:
+        sentence = match.group(0)
+        bare = sentence.strip()
+        if not re.search(r"^\W*I\s+[a-z]|\b(?:me|my|myself)\b", bare):
+            return sentence
+        if re.match(r"^\W*I['’]", bare):
+            return sentence
+        plain = re.sub(r"\W+", " ", bare).strip().lower()
+        if any(plain and (plain in q or q in plain) for q in quotes if q):
+            return sentence
+        new = to_second_person(bare)
+        if new == bare:
+            return sentence
+        changed.append(bare)
+        return sentence.replace(bare, new, 1)
+
+    paragraphs = re.split(r"(\n\s*\n)", str(text or ""))
+    for p_index in range(0, len(paragraphs), 2):
+        para = paragraphs[p_index]
+        # Unpaired quote marks hide where speech is ('"Ah," she says with a
+        # smile. I can help you with that." - run 5 T26): left as written.
+        if (para.count('"') % 2) or para.count("“") != para.count("”"):
+            continue
+        pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", para)
+        for index in range(0, len(pieces), 2):
+            pieces[index] = re.sub(r"(?:(?<=^)|(?<=[.!?]\s)|(?<=[.!?][\"”]\s)|(?<=\n))[^.!?\"“”\n]+[.!?]", _fix, pieces[index])
+        paragraphs[p_index] = "".join(pieces)
+    return "".join(paragraphs), changed
+
+
 def _paraphrased_quote(sentence: str, quotes: list[str]) -> bool:
     """An unquoted sentence ending in a typed quote's closing vocative and sharing two more of its words."""
     tail = re.search(r",\s*([A-Za-z][\w'’-]*(?:\s+[A-Za-z][\w'’-]*){0,2})\s*[.!?]$", sentence.strip())
@@ -2363,8 +2422,10 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             changes.append({"action": "echoed_quote_piece_dropped", "text": bare})
             return ""
         if bare in narrated and re.match(r"I\s", bare):
+            # "I wipe my hands on my trousers." came back "You wipe my hands
+            # ..." (7B run 30, T15): the whole sentence turns, my and me too.
             changes.append({"action": "echoed_act_to_second_person", "text": bare})
-            return sentence.replace(bare, "You" + bare[1:], 1)
+            return sentence.replace(bare, to_second_person(bare), 1)
         # A paraphrase that keeps the typed line's vocative (7B run 30, T7:
         # "You have not shared your name, mole catcher." for '"I have not
         # told you my name, mole catcher."'): the narrator never ends a
