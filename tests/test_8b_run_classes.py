@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.scene_thread import follow_target  # noqa: E402
+from app.scene_thread import follow_target, pursuit_in  # noqa: E402
 
 
 class AWayIsWalkedNotFollowed(unittest.TestCase):
@@ -24,6 +24,12 @@ class AWayIsWalkedNotFollowed(unittest.TestCase):
 
     def test_a_person_is_still_followed(self):
         self.assertIn("fisherman", follow_target("I follow the old fisherman down to the docks.").lower())
+
+    def test_no_pursuit_thread_for_a_way(self):
+        # T2 moved the player onto "Saltmarrow's narrow path" after the thread said
+        # the player was following it.
+        self.assertIsNone(pursuit_in("I follow the narrow path down into the drowned district."))
+        self.assertIsNotNone(pursuit_in("I follow Rolf down the narrow path."))
 
 
 if __name__ == "__main__":
