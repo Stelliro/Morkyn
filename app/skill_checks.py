@@ -1380,7 +1380,13 @@ def resolve_check(
         # Lasting harm is the natural 1's; a bad miss costs a scratch and no
         # lasting condition. apply_turn stores only lasting injuries.
         lasting = bool(fumble and cfg.get("severe_mishap_on_crit_fail"))
-        if social:
+        if social and not opposition:
+            # No one on the other side to offend: "Botched Appraise: you
+            # misjudge the moment and give offense" on a lone walk across the
+            # mud (8B run 8, T1). It stays a bad miss, with no blunder.
+            mishap = False
+            degree = "bad_nothing" if not fumble else degree
+        elif social:
             # Words do not break bones (playtest #88: "Botched Persuasion:
             # you hurt your leg" 28 times). A social fumble is a blunder the
             # other side remembers: the attitude already went cold for it.
@@ -1787,7 +1793,13 @@ _JOB_PAY_RE = re.compile(
     r"when\s+I\s+(?:bring|find|finish|return))\b",
     re.I,
 )
-_WATCHED_CLAUSE_RE = re.compile(r"\b(?:watch|see|notice|count)(?:es|s|ing)?\s+(?:how|whether|if|as)\b[^.,;!?\"“”]*")
+_WATCHED_CLAUSE_RE = re.compile(
+    r"\b(?:watch|see|notice|count)(?:es|s|ing)?\s+(?:how|whether|if|as)\b[^.,;!?\"“”]*"
+    # What a thing might be good for is the reason, not the act: "anything
+    # half-buried in the mud that might fetch a price" rolled appraise on a
+    # walk out on the flats (8B run 8, T1).
+    r"|\b(?:that|which)\s+(?:might|could|would|may|will|should)\b[^.,;!?\"“”]*"
+)
 # "the mole catcher is digging", "where Tam was hammering": another's act.
 _OTHERS_DOING_RE = re.compile(
     r"\b(?:the|a|an|his|her|their|[A-Z][a-z]+)\s+(?:[\w'’-]+\s+){0,3}?(?:is|are|was|were)\s+(?:still\s+|busy\s+)?\w+ing\b"
