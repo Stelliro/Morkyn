@@ -13958,7 +13958,11 @@ _FREED_TAKE_RE = re.compile(
     r"(?:\s*,?\s*(?:pulling|working|prising|prying|levering|wrenching|easing|dragging|tugging|yanking|freeing)\s+(?:it|them))?"
     r"\s+(?:free|loose|out|up|clear)\b"
     rf"|\byou\s+(?:\w+ly\s+)?(?:{_FREE_VERBS})\s+(?:out|up|loose|free)\s+"
-    r"(?P<obj2>(?:the|a|an|some|two|three|\d+)\s+[a-z][\w'’-]*(?:\s+[a-z][\w'’-]*){0,4})",
+    r"(?P<obj2>(?:the|a|an|some|two|three|\d+)\s+[a-z][\w'’-]*(?:\s+[a-z][\w'’-]*){0,4})"
+    # "You pull a small, tarnished coin from the debris" (7B run 34, T2).
+    rf"|\byou\s+(?:\w+ly\s+)?(?:{_FREE_VERBS})\s+"
+    r"(?P<obj3>(?:the|a|an|some|two|three|\d+)\s+[a-z][\w'’-]*(?:,?\s+[a-z][\w'’-]*){0,4}?)"
+    r"\s+(?:from|out\s+of)\s+(?:the|a|an|its|their|beneath|under)\b",
     re.I,
 )
 _SEARCH_FOR_ANY_RE = re.compile(
@@ -14242,7 +14246,7 @@ def _grant_shown_takes(
     if _SEARCH_FOR_ANY_RE.search(line_l) or takes_any:
         for sentence in sentences:
             for match in _FREED_TAKE_RE.finditer(sentence):
-                obj = (match.group("obj") or match.group("obj2") or "").strip()
+                obj = (match.group("obj") or match.group("obj2") or match.group("obj3") or "").replace(",", "").strip()
                 phrase, qty = _taken_phrase(obj)
                 if not phrase:
                     continue
@@ -16900,6 +16904,47 @@ def _hint_sentence(text: str, hint: str) -> str:
     return ""
 
 
+_CUT_TAIL_INTRO_RE = re.compile(
+    r"^\W*(?:It\s+is|It['’]s|This\s+is|That\s+is)\s+(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)"
+    r"(?:,\s+(?:a|an|the)\s+(?P<role>[a-z][a-z-]{2,20}(?:\s+[a-z][a-z-]{2,20})?)(?=\s+who\b|\s*[,.]))?"
+)
+
+
+def _figure_named_in_cut_tail(result: dict[str, Any], text: str, hint: str) -> dict[str, str] | None:
+    """The name the cut part of the scene gave a figure the kept part ends on.
+
+    7B run 34, T2: 'A voice from the shore calls out, "What are you doing out
+    there?"' was kept and 'It is Ivo Garner, a chamber servant ...' was cut
+    with the rest, so the voice became a drawn "Bryony". Only a figure in the
+    kept part's last two sentences, and only "It is <Name>" right at the start
+    of the cut part.
+    """
+    tail = str(((result or {}).get("_dsl") or {}).get("cut_tail") or "")
+    if not tail.strip():
+        return None
+    flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))).strip()
+    sentences = re.split(r"(?<=[.!?])\s+", flat)
+    if hint:
+        at = _sentence_index(text, hint)
+        if at < 0 or at < len(sentences) - 2:
+            return None
+    elif not re.search(r"[\"“”]", " ".join(sentences[-2:])):
+        # A face seeded from a line nobody known speaks: the kept part ends on it.
+        return None
+    for sentence in re.split(r"(?<=[.!?])\s+", re.sub(r"\s+", " ", tail).strip())[:3]:
+        bare = re.sub(r"[\"“][^\"”]*[\"”]", " ", sentence).strip()
+        if not bare:
+            continue
+        m = _CUT_TAIL_INTRO_RE.match(bare)
+        if m:
+            role = (m.group("role") or "").strip()
+            return {"name": m.group("name"), "role": role, "sentence": sentence}
+        if re.search(r"[\"“”]", sentence):
+            continue
+        return None
+    return None
+
+
 def _sentence_index(text: str, phrase: str) -> int:
     """Index of the first sentence holding ``phrase`` (codes stripped), or -9 when none does."""
     flat = re.sub(r"\s+", " ", re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(text or ""))).strip()
@@ -17321,6 +17366,17 @@ def _ensure_npcs_from_narration(
         # (playtest #78): never a quoted line, never someone else's sentence.
         summary = _seed_summary(sentence, known_names) if hint else ""
         speaker = _NAMED_SPEAKER_RE.fullmatch(hint) if hint else None
+        given_name = speaker.group(1) if speaker else ""
+        told = _figure_named_in_cut_tail(result, text, hint) if not given_name and (hint or i == 0) else None
+        if told:
+            given_name = told["name"]
+            if told.get("role"):
+                role = told["role"]
+            known_row = conn.execute("SELECT code, name, role FROM npcs WHERE name = ? COLLATE NOCASE", (given_name,)).fetchone()
+            if known_row:
+                existing.append({"code": known_row["code"], "name": known_row["name"], "role": known_row["role"]})
+                continue
+            turn_ledger.note("npc", "figure_named_in_cut_part", hint=hint, name=given_name, role=told.get("role") or "")
         try:
             shell = create_shell_npc(
                 conn,
@@ -17331,8 +17387,8 @@ def _ensure_npcs_from_narration(
                 seed=name_seed("shell_npc", location_id, hint, i, text[:40]),
                 appearance=_appearance_note(hint),
                 summary=summary,
-                sex=_hint_sex(hint, sentence),
-                name=speaker.group(1) if speaker else "",
+                sex=_hint_sex(hint, sentence + " " + (told or {}).get("sentence", "")),
+                name=given_name,
             )
         except Exception:
             continue
