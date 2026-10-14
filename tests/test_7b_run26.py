@@ -1027,6 +1027,9 @@ class InventedInnerLife(unittest.TestCase):
                      "A part of you knows this is true, but the weight of it is undeniable.",
                      "You've been careful not to draw their attention."):
             self.assertEqual(strip(gone, self.LINE, self.LINE)[0], "", gone)
+        # 8B writes curly apostrophes (run 3, T3: "You don’t ask why he’s carrying it" passed).
+        self.assertEqual(strip("You don’t ask why he’s carrying it; you just keep moving.", "I help him push the cart.",
+                               "I help him push the cart.")[0], "")
         for kept in ("You feel the cold wind on your face.", "You feel the weight of the coins in your palm.",
                      "You've heard that the ship's captain frequents the salvage yard.",
                      "As you climb, you can feel the weight of your injuries from the previous day.",

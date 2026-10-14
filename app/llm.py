@@ -14019,6 +14019,9 @@ def _walk_asked(rest: str, own: str) -> bool:
 
 
 def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -> str:
+    # Curly apostrophes read as straight ones: "You don’t ask why he’s carrying
+    # it" passed every "don'?t" pattern (8B run 3, T3; the 8B writes ’).
+    rest, clause = rest.replace("’", "'"), clause.replace("’", "'")
     # "You've heard", "you're not ready": the contraction read as its words.
     rest = re.sub(r"^['’](ve|re|d|ll)\b", lambda m: {"ve": "have", "re": "are", "d": "would", "ll": "will"}[m.group(1).lower()],
                   rest, flags=re.I).lstrip()
