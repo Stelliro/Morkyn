@@ -1603,7 +1603,10 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(talk|speak|ask|greet|address|approach .+ (and )?(talk|ask|speak)|say (hello|hi)|introduce)\b", "persuasion"),
     # Reclining "lie down/back/low/still/awake/asleep" is rest, not a bluff.
     # The lookahead also sees stemmed variants ("lies down" -> "lie down").
-    (r"\b(lie\b(?!\s+(?:down|back|low|still|awake|asleep|flat|prone|face|on|in|there|here|quiet|beside|next|under|across|along|against|curled|huddled)\b)|bluff|deceive|con)\b", "deception"),
+    # The player's lie, not where a thing lies: "until I can see where the
+    # Stormcaller lies" rolled deception against the tallyman (8B run 36, T5).
+    (r"(?:(?<=\bi\s)|(?<=\ba\s)|(?<=\btell\s)|(?<=\btold\s))lie\b(?!\s+(?:down|back|low|still|awake|asleep|flat|prone|face|on|in|there|here|quiet|beside|next|under|across|along|against|curled|huddled)\b)"
+     r"|\b(?:lie|lies|lied|lying)\s+(?:to|about|that|through|my\s+way)\b|\b(bluff|deceive|con)\b", "deception"),
     (r"\b(intimidate|threaten|scare)\b", "intimidation"),
     (r"\b(disguise|costume|impersonat[a-z]*|pretend to be)\b", "disguise"),
     (r"\b(gambl[a-z]*|bet|wager|cards|dice game)\b", "gambling"),
