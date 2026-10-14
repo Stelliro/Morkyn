@@ -20039,7 +20039,8 @@ def _reconcile_prose_with_state(
         text, cut = prose_state.repair_cut_word_in_quote(text)
         text, lead = prose_state.drop_orphan_speech_lead(text)
         text, bare_name = prose_state.drop_bare_name_paragraph(text)
-        for entry in body + cut + lead + bare_name:
+        text, unfinished = prose_state.drop_unfinished_tail(text)
+        for entry in body + cut + lead + bare_name + unfinished:
             report["trimmed"].append(entry)
             turn_ledger.note("prose", str(entry["why"]) + "_repaired", **entry)
     except Exception:
