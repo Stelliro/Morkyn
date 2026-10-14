@@ -2006,7 +2006,10 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         # run 36, T6). A name the line turns away from is not the other side,
         # and a line that calls on someone the engine does not hold yet has no
         # one known on the other side.
-        named_text = re.sub(r"\b(?:not|instead\s+of|rather\s+than|ignoring)\s+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+", " ", text)
+        # Left behind is turned away from too: "I leave Brida at the gate and
+        # walk to the guild hall ... ask the clerk" rolled vs Brida (8B run 5, T5).
+        named_text = re.sub(r"\b(?:not|instead\s+of|rather\s+than|ignoring|leave|leaving|left|away\s+from)\s+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+",
+                            " ", text)
         called = [
             m.group(1)
             for m in re.finditer(r"(?:^|[\"“]|[.!?]\s+)([A-Z][a-z]{2,}),\s+(?:what|who|where|why|how|is|are|do|did|can|will|tell|show|give)\b", text)
@@ -2037,6 +2040,13 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
                 matched_npc = by_code[addressed[0]]
             elif not addressed and len(pool) == 1:
                 matched_npc = pool[0]
+            # The line asks someone by their job ("ask the clerk about the
+            # boats"): a stale partner with another job is not the other side.
+            asked_role = re.search(r"\b(?:ask|asks|asking|tell|question|press|talk\s+to|speak\s+to)\s+the\s+([a-z][a-z-]{2,})\b", text, re.I)
+            if matched_npc and asked_role and asked_role.group(1).lower() not in str(matched_npc.get("role") or "").lower():
+                matched_npc = None
+            if matched_npc and re.search(rf"\b(?:leave|leaving|left|away\s+from)\s+{re.escape(str(matched_npc.get('name') or '').split()[0])}\b", text):
+                matched_npc = None
             if matched_npc:
                 opposition = {
                     "name": matched_npc.get("name"),
