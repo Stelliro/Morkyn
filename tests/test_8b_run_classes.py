@@ -191,6 +191,9 @@ class TheKeptHalfIsAClause(unittest.TestCase):
         self.assertFalse(llm._tail_is_clause("the knowledge that soon, the flats will flood again"))
         # 8B run 13, T0: "its" is no verb.
         self.assertFalse(llm._tail_is_clause("the brass tide-reckoner at your belt, its face never quite right"))
+        # 8B run 40, T1: the verb of "you made" is not the tail's, nor is "tides".
+        self.assertFalse(llm._tail_is_clause("the promise you made to the tides."))
+        self.assertTrue(llm._tail_is_clause("the salvage you need to recover is deep in the lower district"))
 
 
 class ACollectionIsNoCollecting(unittest.TestCase):
