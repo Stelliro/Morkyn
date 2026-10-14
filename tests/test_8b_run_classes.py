@@ -67,5 +67,37 @@ class NoOneToOffend(unittest.TestCase):
         self.assertEqual(check["blunder"]["kind"], "social_blunder")
 
 
+class APartialPatchKeepsWhatTheProseShows(unittest.TestCase):
+    """8B run 8, T2: the verifier patched the tide-reckoner alone and the beam GRANT went."""
+
+    PROSE = ("You pull it free, revealing a broken section of a wooden beam, its edges splintered and worn.")
+
+    def _merge(self, patch_list, draft_list):
+        from app import llm
+
+        draft = {"narration": self.PROSE, "inventory_changes": draft_list}
+        verdict = {"verdict": "revise", "issues": ["x"], "patch": {"inventory_changes": patch_list}}
+        return llm._merge_verifier_verdict(verdict, draft, {})
+
+    def test_the_prose_backed_grant_stays(self):
+        merged = self._merge(
+            [{"name": "mother's brass tide-reckoner", "quantity_band": "trivial"}],
+            [{"name": "broken wooden beam", "quantity_band": "moderate"},
+             {"name": "mother's brass tide-reckoner", "quantity_band": "-small"}],
+        )
+        names = [entry.get("name") for entry in merged.get("inventory_changes") or []]
+        self.assertIn("broken wooden beam", names)
+        self.assertEqual(names.count("mother's brass tide-reckoner"), 1)
+
+    def test_an_entry_the_prose_never_names_stays_dropped(self):
+        merged = self._merge(
+            [{"name": "mother's brass tide-reckoner", "quantity_band": "trivial"}],
+            [{"name": "silver locket", "quantity_band": "small"},
+             {"name": "mother's brass tide-reckoner", "quantity_band": "-small"}],
+        )
+        names = [entry.get("name") for entry in merged.get("inventory_changes") or []]
+        self.assertNotIn("silver locket", names)
+
+
 if __name__ == "__main__":
     unittest.main()
