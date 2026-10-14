@@ -19185,7 +19185,14 @@ def _turn_outcomes(
 ) -> list[str]:
     """What happened this turn that a reward can stand on: checks, quest steps, finds, fights, a new place or person."""
     outcomes: list[str] = []
-    if any(isinstance(c, dict) and c.get("natural") is not None for c in result.get("skill_checks") or []):
+
+    def _earns(check: dict[str, Any]) -> bool:
+        # A routine social roll on plain talk earns nothing: "A name, Brida, or
+        # I ask at the guild" rolled persuasion and paid 16 XP (8B run 5, T4).
+        skill = check.get("skill") if isinstance(check.get("skill"), dict) else {}
+        return not (check.get("routine") and str(skill.get("category") or "").lower() == "social")
+
+    if any(isinstance(c, dict) and c.get("natural") is not None and _earns(c) for c in result.get("skill_checks") or []):
         outcomes.append("check")
     if (quest_attempt and (quest_attempt.get("done") or quest_attempt.get("completes_quest"))) or finishing:
         outcomes.append("quest")

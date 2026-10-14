@@ -1248,6 +1248,22 @@ class APieceOfTheLineSaidTwice(unittest.TestCase):
         self.assertIn('"Morning. You look like you are waiting', out)
 
 
+class NoXpForARoutineSocialRoll(unittest.TestCase):
+    """8B run 5 T4: 'A name, Brida, or I ask at the guild' rolled routine persuasion and paid 16 XP."""
+
+    def test_outcomes(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        social = {"natural": 8, "routine": True, "skill": {"code": "persuasion", "category": "social"}}
+        labor = {"natural": 12, "routine": False, "skill": {"code": "athletics", "category": "physical"}}
+        with connect() as conn:
+            self.assertNotIn("check", world._turn_outcomes(conn, {"skill_checks": [social], "player": {}}))
+            self.assertIn("check", world._turn_outcomes(conn, {"skill_checks": [labor], "player": {}}))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
