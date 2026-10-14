@@ -6415,12 +6415,25 @@ def _intent_tokens(player_input: str) -> set[str]:
 
 # Following, walking or stepping someone over to a spot in the same room or
 # yard: the door, the counter, the table. Not a journey.
+# Crossing to a person in the scene, and where they stand: "I walk over to Kit
+# at the edge of the flats" made a place "The Flats" and moved Isk there (7B
+# run 34, T1). "over/up to" plus a capitalised name, or "to the <person noun>",
+# is crossing the ground, not the map.
+_WALK_TO_PERSON = (
+    r"\b(?:i\s+)?(?:walk\w*|step\w*|go(?:es)?|head\w*|move\w*|cross\w*|wander\w*|stroll\w*|amble\w*|edge\w*)\s+"
+    r"(?:over|up|across)\s+to\s+(?:(?-i:[A-Z][\w'’-]+)(?:\s+(?-i:[A-Z][\w'’-]+))?|(?:the|that|this)\s+"
+    r"(?:[\w'’-]+\s+)?(?:man|woman|girl|boy|child|stranger|figure|guard|picker|shepherd|keeper|fisher\w*|merchant|"
+    r"trader|sailor|old\s+\w+))"
+    r"(?:\s+(?:at|by|near|on|beside|in)\s+(?:the\s+)?(?:[\w'’-]+\s+){0,3}?[\w'’-]+)?"
+)
+_WALK_TO_PERSON_RE = re.compile(_WALK_TO_PERSON, re.IGNORECASE)
 _FOLLOW_TO_SPOT_RE = re.compile(
     r"\b(?:i\s+)?(?:follow\w*|trail\w*|walk\w*|step\w*|go(?:es)?|head\w*|move\w*|cross\w*)\s+"
     r"(?:after\s+)?(?:(?:[\w'’-]+|\[\[[A-Z0-9]+\]\])\s+){0,4}?(?:over\s+|across\s+|back\s+)?(?:to|toward|towards|up\s+to)\s+"
     r"(?:the|his|her|their|its|my|your)\s+(?:[\w'’-]+\s+)?"
     r"(?:door|doorway|threshold|counter|table|desk|bench|window|hearth|fire|fireplace|corner|stall|"
-    r"workbench|pile|heap|shelf|shelves|rack|crate|crates|barrel|cart|board|ledger)s?\b",
+    r"workbench|pile|heap|shelf|shelves|rack|crate|crates|barrel|cart|board|ledger)s?\b"
+    rf"|{_WALK_TO_PERSON}",
     re.IGNORECASE,
 )
 
@@ -9925,7 +9938,12 @@ def resolve_movement(
             "minted": shown["minted"],
         }
 
-    if intent != "travel" and not travel_intent(player_input) and not doorway:
+    # travel_intent reads the line with walks to a spot or a person taken out:
+    # "I walk over to Kit at the edge of the flats" reads as travel by its verb
+    # alone and minted "The Flats" (7B run 34, T1).
+    # Only the walk to a person: "I follow her in to the table" still goes on
+    # to the follow-inside rule (7B run 10, T3).
+    if (intent != "travel" or _WALK_TO_PERSON_RE.search(str(player_input or ""))) and not travel_intent(player_input) and not doorway:
         status = {"status": "not_travel", "from": current_code, "intent": intent}
         if note:
             status["rejected"] = note

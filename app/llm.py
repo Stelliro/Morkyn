@@ -16015,6 +16015,13 @@ def _after_act_cut_point(
     if travelling and not sought and not work_act:
         return None
     verbs = [v.lower() for v in _PLAYER_ACT_VERB_RE.findall(acts)]
+    try:
+        from app.world import _FOLLOW_TO_SPOT_RE as spot_walk
+
+        if not spot_walk.search(acts):
+            spot_walk = None
+    except Exception:  # pragma: no cover - world always importable in the app
+        spot_walk = None
     done_at = -1
     for index, (_start, _end, sentence) in enumerate(spans):
         if re.search(r'["“”]', sentence):
@@ -16034,6 +16041,12 @@ def _after_act_cut_point(
                     break
                 continue
             if lead and verbs and _verb_in_input(lead.group("v"), acts) and not _AFTER_ACT_MOVE_RE.match(sentence):
+                done_at = index
+                break
+            # The line's own walk to a person or spot, shown: "You walk over to
+            # Kit at the edge of the flats" (7B run 34, T1; the prose went on
+            # "You thank Kit and make your way towards the flats").
+            if lead and verbs and _verb_in_input(lead.group("v"), acts) and spot_walk and spot_walk.search(sentence):
                 done_at = index
                 break
     if done_at < 0 and sought and not travelling:
