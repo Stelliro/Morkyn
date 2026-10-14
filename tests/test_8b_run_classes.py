@@ -840,6 +840,29 @@ class TheTallymanIsAJobNotAName(unittest.TestCase):
                                                              []), "")
 
 
+class AMarkOnAQuestionIsNoJob(unittest.TestCase):
+    """8B run 35, T1: the draft's QUEST mark on "What work do you want?" became the job "Salvage Contract"."""
+
+    NARRATION = ("You find the tallyman at a desk, a man with a scar. He looks up as you approach. \"You again,\" he "
+                 "says. \"What work do you want?\"")
+
+    def _reply(self, offer):
+        return {"new": [{
+            "title": "Salvage Contract", "giver": "Veyra Morn", "difficulty": "normal",
+            "steps": [{"title": "Negotiate work terms", "location": "L2"}], "offer_line": offer,
+            "evidence": "The narrator_marks: [ { \"op\": \"QUEST\" } ]", "_from_mark": True,
+        }]}
+
+    def test_the_question_is_no_job(self):
+        from app import quest_parser
+
+        npcs = [{"id": 1, "code": "A", "name": "Veyra Morn", "role": "salvage guild captain"}]
+        accepted, rejected = quest_parser.validate_quest_changes(self._reply("What work do you want?"),
+                                                                 narration=self.NARRATION, npcs=npcs)
+        self.assertEqual(accepted.get("new") or [], [])
+        self.assertIn("mark_on_a_question", rejected[0]["reasons"])
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
