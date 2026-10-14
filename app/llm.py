@@ -13311,6 +13311,10 @@ def _trim_menu_ending(narration: str, *, floor: int = MENU_TRIM_FLOOR_CHARS) -> 
     if not text:
         return text, 0
     removed = 0
+    # A two-way menu anywhere in the narration goes (7B runs 5, 29, 30): "You
+    # can walk to the Ferret ..., or continue toward the flats."
+    text, mid = _drop_menu_sentences(text, floor=floor)
+    removed += mid
     # A summary line after a menu ("Each path leads somewhere different.") goes
     # with it; on its own it is description and stays.
     parts = re.split(r"(?<=[.!?])\s+", text.strip())
@@ -13320,11 +13324,14 @@ def _trim_menu_ending(narration: str, *, floor: int = MENU_TRIM_FLOOR_CHARS) -> 
             return candidate, 2
         return text, 0
     for _ in range(2):
-        parts = re.split(r"(?<=[.!?])\s+", text.strip())
+        # A closing quotation ends a sentence too (7B run 30, T1: '...worse than
+        # usual." You could take him up on that offer, or you could continue on
+        # your own.' never split off, so the menu stayed).
+        parts = re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"”])\s+(?=[A-Z])", text.strip())
         if len(parts) < 2:
             break
         last = parts[-1].strip()
-        if not _MENU_CLOSER_RE.match(last):
+        if not _MENU_CLOSER_RE.match(last) or re.search(r"[\"“”]", last):
             break
         candidate = " ".join(parts[:-1]).rstrip()
         if len(candidate) < floor:
@@ -13332,6 +13339,76 @@ def _trim_menu_ending(narration: str, *, floor: int = MENU_TRIM_FLOOR_CHARS) -> 
         text = candidate
         removed += 1
     return text, removed
+
+
+# The player's options laid out in the narrator's voice: "You could take him up
+# on that offer, or you could continue on your own." (7B run 30, T1), "You have
+# a choice: you could head back to the ship, or you might explore a bit more."
+# (run 5, T89). Only a sentence that opens on the offer and holds an "or";
+# "a piece of salvage you can use or sell" and "You can see the quay or the
+# flats" stay.
+_MENU_TWO_WAY_RE = re.compile(
+    r"^(?:you\s+have\s+a\s+choice\s*[:,]\s*)?(?:or,?\s+)?you\s+(?:could|can|might|may)\s+(?:either\s+)?"
+    r"(?!hear|see|smell|feel|taste|sense|tell|make\s+out|swear|imagine|almost|just|well|barely|still|only|no\s+longer)"
+    r"[^.?!\"“”]{2,200}?,?\s+or\s+[^.?!\"“”]{2,200}[.?!]$"
+    r"|^you\s+have\s+a\s+choice\b[^.?!\"“”]{0,200}[.?!]$",
+    re.I,
+)
+# Stock deliberation hung on the player's act: "You step back, pondering your
+# next move." (7B run 30, T1). Only the clause goes; the act stays.
+_PONDER_TAIL_RE = re.compile(
+    r",\s+(?:pondering|considering|weighing|contemplating|deciding|mulling\s+over)\s+"
+    r"(?:your\s+next\s+(?:move|step|steps)|your\s+options|what\s+to\s+do(?:\s+next)?|where\s+to\s+go(?:\s+next)?)"
+    r"(?=[.!?])",
+    re.I,
+)
+
+
+def _drop_menu_sentences(text: str, *, floor: int = MENU_TRIM_FLOOR_CHARS) -> tuple[str, int]:
+    """Drop two-way menu sentences and stock deliberation clauses outside quotations."""
+    from app.prose_state import sentence_spans
+
+    removed = 0
+    pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", str(text or ""))
+    for index in range(0, len(pieces), 2):
+        new, count = _PONDER_TAIL_RE.subn("", pieces[index])
+        pieces[index] = new
+        removed += count
+    out = "".join(pieces)
+
+    def _inside_quote(at: int) -> bool:
+        before = out[:at]
+        return bool(before.count('"') % 2) or before.count("“") > before.count("”")
+
+    cuts = [
+        (start, end, sentence)
+        for start, end, sentence in sentence_spans(out)
+        if not re.search(r"[\"“”]", sentence)
+        and not _inside_quote(start)
+        and _MENU_TWO_WAY_RE.match(sentence.strip())
+    ]
+    dropped: list[str] = []
+    if cuts:
+        kept = out
+        for start, end, sentence in reversed(cuts):
+            kept = kept[:start] + kept[end:]
+            dropped.append(sentence)
+        kept = re.sub(r"[ \t]{2,}", " ", kept)
+        kept = re.sub(r"[ \t]*\n[ \t]*", "\n", kept)
+        kept = re.sub(r"\n{3,}", "\n\n", kept).strip()
+        if len(kept) >= floor:
+            out = kept
+        else:
+            dropped = []
+    if removed or dropped:
+        try:
+            from app import turn_ledger
+
+            turn_ledger.note("player_words", "menu_or_deliberation_dropped", sentences=[s[:160] for s in dropped],
+                             clauses=removed)
+        except Exception:
+            pass
+    return out, removed + len(dropped)
 
 
 def _rejoin_kept_breaks(text: str, kept_parts: list[str]) -> str:
