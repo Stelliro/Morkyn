@@ -7217,7 +7217,8 @@ def _venue_name_in_text(name: str, text: str) -> bool:
 
 
 _ASKED_BUILDING_RE = re.compile(
-    r"\b(?:to|into|toward|towards|for)\s+the\s+((?:[a-z][a-z'’-]+\s+){0,2}"
+    # Three words before the head: "the salvage guild's tally house" (8B run 41, T1).
+    r"\b(?:to|into|toward|towards|for)\s+the\s+((?:(?!(?:of|the|a|an|at|by|in|on|near|behind|beside)\s)[a-z][a-z'’-]+\s+){0,3}"
     r"(?:storehouse|warehouse|store\s*house|storeroom|shed|barn|boathouse|net\s*shed|workshop|office|hall|house|"
     r"lodge|hut|shack|cottage|granary|cellar|tower|mill|smokehouse|saltworks|tannery|ropewalk|chandlery))\b",
     re.I,
@@ -17015,7 +17016,8 @@ def _seed_role_for(conn, location_id: int, hint: str, index: int, salt: Any = ""
 def _appearance_note(hint: str) -> str:
     """Keep the model'sappearance, in the summary where it belongs."""
     low = str(hint or "").lower()
-    found = [word for word in _APPEARANCE_WORDS if word in low]
+    # Whole words: "the tallyman" is not tall (8B run 41, T1).
+    found = [word for word in _APPEARANCE_WORDS if re.search(rf"\b{re.escape(word)}\b", low)]
     if not found:
         return ""
     return f" Looks {found[0]}."
@@ -17139,6 +17141,34 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     return hints
 
 
+def _role_figure(conn, unspoken: str, role_words: set[str], taken: Any) -> str | None:
+    """'the tallyman' in the narration, for an op whose role is tallyman; None
+    when no such phrase stands there, or someone here already has that job."""
+    words = sorted(w for w in role_words if len(w) >= 4 and w not in _NOT_A_JOB and w not in _NOT_A_NAME)
+    if not words:
+        return None
+    m = re.search(
+        r"\b(?:a|an|the)\s+(?:[a-z][a-z'-]*\s+){0,2}(?:" + "|".join(map(re.escape, words)) + r")\b(?!['’]s)",
+        unspoken,
+        re.I,
+    )
+    if not m:
+        return None
+    hint = m.group(0).strip()
+    if _figure_alias(hint) in taken:
+        return None
+    try:
+        here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        roles = [str(r[0] or "").lower() for r in conn.execute(
+            "SELECT role FROM npcs WHERE location_id = ?", (int(here[0]) if here else 0,)
+        ).fetchall()] if here else []
+    except Exception:
+        roles = []
+    if any(set(re.findall(r"[a-z]+", r)) & set(words) for r in roles):
+        return None
+    return hint
+
+
 def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
     """Keep a new person only if the prose shows them.
 
@@ -17231,8 +17261,15 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         if match is None and len(unshown) == 1 and len(free) == 1:
             match = free[0]
         if match is None:
-            continue
-        free.remove(match)
+            # The prose calls them by the op's own role: NPC_NEW "Tobin Yates"
+            # ROLE "tallyman" for "Inside, the tallyman sits behind a desk" was
+            # dropped, as "tallyman" is no figure noun, and the tally house was
+            # left with no one in it (8B run 41, T1).
+            match = _role_figure(conn, unspoken, role_words, taken)
+            if match is None or match in bound.values():
+                continue
+        if match in free:
+            free.remove(match)
         keep_ids.add(id(npc))
         bound[id(npc)] = match
     out: list[dict[str, Any]] = []

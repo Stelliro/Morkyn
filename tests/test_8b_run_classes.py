@@ -974,6 +974,36 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class TheRoleNamesTheFigure(unittest.TestCase):
+    """8B run 41, T1: NPC_NEW "Tobin Yates" ROLE "tallyman" was dropped beside "the tallyman sits behind a desk"."""
+
+    PROSE = ("You step inside, the scent of mildew and old iron greeting you. Inside, the tallyman sits behind a "
+             "desk cluttered with ledgers and salt-crusted coins, his eyes sharp and unyielding.")
+
+    def test_the_tallyman_is_tobin(self):
+        from app import world
+
+        npcs = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Tobin Yates", "role": "tallyman"}], self.PROSE)
+        self.assertEqual([n["name"] for n in npcs], ["Tobin Yates"])
+        self.assertEqual(npcs[0]["_bound_hint"], "the tallyman")
+        self.assertNotIn("tall", str(npcs[0].get("appearance") or ""))
+
+    def test_another_job_is_no_one_shown(self):
+        from app import world
+
+        npcs = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Tobin Yates", "role": "ropemaker"}], self.PROSE)
+        self.assertEqual(npcs, [])
+
+    def test_the_tally_house_keeps_the_players_name(self):
+        from app import world
+
+        line = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman "
+                "what work he'll take against my debt.")
+        self.assertEqual(world._asked_building_phrase(line, "The salvage guild's tally house looms ahead."),
+                         "Salvage Guild's Tally House")
+        self.assertNotIn("Edge", world._asked_building_phrase("I walk to the edge of the house.", "The house."))
+
+
 class TheBeatGoesWithTheCutLine(unittest.TestCase):
     """8B run 39, T2: "You leaned forward." stood alone once its invented line was cut."""
 
