@@ -2296,6 +2296,60 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         pieces[index] = re.sub(r"(?:(?<=^)|(?<=[.!?]\s)|(?<=[.!?][\"”]\s))[^.!?\"“”\n]+[.!?]", _echo_fix, pieces[index])
     body = "".join(pieces)
 
+    # 3d. Speech put in the player's mouth without quotation marks (7B run 30,
+    # T1: "Morning, flat-runner, you say, stepping closer to the tannery door."
+    # for '"Morning. Moles in the flats? ..." I step closer to the tannery
+    # door.'). A piece of a typed line still missing becomes that line, quoted;
+    # anything else is words the player never said and goes. A clause on the
+    # player's own act stays as "You step closer to the tannery door."
+    typed_verbs = [v.lower() for v in re.findall(r"\bI\s+(?:\w+ly\s+)?([a-z]{3,})", _QUOTE_SPAN_RE.sub(" ", player_own_line(player_input)))]
+
+    def _clause_as_act(clause: str) -> str:
+        clause = clause.strip()
+        m = re.match(r"([a-z]+ing)\b(.*)$", clause)
+        if not m:
+            return ""
+        word, rest = m.group(1), m.group(2)
+        for verb in typed_verbs:
+            if word in (verb + "ing", verb + verb[-1] + "ing") or (verb.endswith("e") and word == verb[:-1] + "ing"):
+                return f"You {verb}{rest}."
+        return ""
+
+    def _unquoted_say_fix(match: re.Match[str]) -> str:
+        speech = match.group("speech").strip()
+        clause = match.group("clause") or ""
+        lead = match.group(0)[: match.start("speech") - match.start(0)]
+        spoken = _speech_key(speech)
+        owner = next(
+            (q for q in missing if _quote_matches(speech, q) or (spoken and _speech_key(q).startswith(spoken))), None
+        )
+        if owner is not None:
+            missing.remove(owner)
+            line = _said_line([owner])
+            if clause.strip():
+                line = line[:-1] + ", " + clause.strip() + "."
+            changes.append({"action": "unquoted_line_quoted", "quote": owner, "was": speech[:200]})
+            return lead + line
+        changes.append({"action": "unquoted_player_speech_dropped", "text": speech[:200]})
+        act = _clause_as_act(clause)
+        return lead + act if act else lead.rstrip()
+
+    unquoted_say = re.compile(
+        r"(?:(?<=^)|(?<=[.!?]\s))(?P<speech>[A-Z][^.!?\"“”\n]{1,120}?),\s+you\s+"
+        r"(?:say|ask|reply|answer|add|murmur|mutter|call\s+out|greet\s+(?:him|her|them))"
+        r"(?:,\s*(?P<clause>[^.!?\"“”\n]{2,160}))?[.!?]"
+    )
+    pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", body)
+    for index in range(0, len(pieces), 2):
+        if index and not re.search(r"[.!?][\"”]$", pieces[index - 1]):
+            # A piece right after a quotation that does not end a sentence
+            # starts with that quotation's tag: never a sentence of its own.
+            head, sep, rest = pieces[index].partition(". ")
+            pieces[index] = head + sep + unquoted_say.sub(_unquoted_say_fix, rest) if sep else pieces[index]
+            continue
+        pieces[index] = unquoted_say.sub(_unquoted_say_fix, pieces[index])
+    body = "".join(pieces)
+
     # 4. Still missing: the player says it as the scene opens, or right after
     # the line they typed before it, so their lines keep their order (7B run
     # 11, T1: "Heading out, yes ..." was put before "Morning. Not a traveller").
@@ -2339,6 +2393,29 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             continue
         body = body[: span["start"]] + "You say, " + body[span["start"]:]
         changes.append({"action": "untagged_player_line_tagged", "quote": span["inner"][:200]})
+
+    # 7. The player's line glued to someone else's reply reads as theirs (7B
+    # run 30, T1: '"Morning," he replies. "Morning. Moles in the flats? ..."
+    # You ask'): it starts a paragraph of its own, and its tag reads as one.
+    found = spans_of(body)
+    for index in range(len(found) - 1, 0, -1):
+        span, prev = found[index], found[index - 1]
+        if span["speaker"] != "player" or prev["speaker"] != "other":
+            continue
+        if not any(_quote_matches(span["inner"], q) == "exact" for q in quotes):
+            continue
+        between = body[prev["end"]:span["start"]]
+        if "\n" in between or not re.fullmatch(r"[^.!?\n\"“”]*[.!?]\s+", between):
+            continue
+        tail = body[span["end"]:]
+        if re.match(r" You (?:ask|say|reply|answer|add|murmur|mutter)\b", tail):
+            inner_end = span["inner_start"] + len(span["inner"])
+            if body[inner_end - 1] == ".":
+                body = body[: inner_end - 1] + "," + body[inner_end: span["end"]] + " you" + tail[4:]
+            else:
+                body = body[: span["end"]] + " you" + tail[4:]
+        body = body[: prev["end"]] + between.rstrip() + "\n\n" + body[span["start"]:]
+        changes.append({"action": "player_line_given_own_paragraph", "quote": span["inner"][:200]})
     if changes:
         body = re.sub(r"[ \t]{2,}", " ", body)
         body = re.sub(r"[ \t]*\n[ \t]*", "\n", body)
