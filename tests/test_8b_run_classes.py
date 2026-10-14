@@ -707,6 +707,27 @@ class NoOneOfferedIt(unittest.TestCase):
                                                       'The keeper nods. "We\'ll pay you a small coin for your help tonight."'))
 
 
+class ASumSpokenIsNoPay(unittest.TestCase):
+    """8B run 30, T3: '"Fifteen gold," he says, "but that's only if you finish the job."' paid 15 at once."""
+
+    def test_spoken_sum_pays_nothing(self):
+        from app import world
+
+        prose = ("Gregory's smile is thin. \"Fifteen gold,\" he says, \"but that's only if you finish the job. If you "
+                 "fail, you'll be marked.\"")
+        result = {"narration": prose, "player": {"gold_delta": 15}}
+        world._settle_stated_gold(result, "\"How much comes off my ledger when she's up?\"")
+        self.assertIn(result["player"].get("gold_delta"), (None, 0))
+
+    def test_coins_pressed_into_your_hand_pay(self):
+        from app import world
+
+        prose = "Gregory counts out nine coins and presses them into your hand. \"Nine,\" he says."
+        result = {"narration": prose, "player": {"gold_delta": 9}}
+        world._settle_stated_gold(result, "I hold out my hand.")
+        self.assertEqual(result["player"].get("gold_delta"), 9)
+
+
 class _ConnStub:
     """No one known yet."""
 

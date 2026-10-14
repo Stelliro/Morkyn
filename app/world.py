@@ -19996,7 +19996,12 @@ def _settle_stated_gold(
             and not _PROMISED_MONEY_RE.search(sentence)
             for _, _, sentence in prose_state.sentence_spans(plain)
         )
-        if not (said["received"] or mentioned or money_words or prose_state.coin_handed_to_player(narration)):
+        # A sum said in someone's speech is an offer or a promise: '"Fifteen
+        # gold," he says, "but that's only if you finish the job"' paid GOLD
+        # 15 at once and marked the job paid ahead (8B run 30, T3). The
+        # narrator's own mention, a hand-over or a receipt backs a gain.
+        narrated = prose_state.coin_mentions(plain)
+        if not (said["received"] or narrated or money_words or prose_state.coin_handed_to_player(narration)):
             player.pop("gold_delta", None)
             player.pop("gold_band", None)
             result["player"] = player
@@ -20008,8 +20013,17 @@ def _settle_stated_gold(
         # ("mints 250, then 400"). A modest number the op and the prose agree
         # on is the scene's, though: a purse of "Nine coins" handed back with
         # GOLD 9 paid +14 when rolled (Saltmarrow run, T94).
-        if raw > 0 and raw <= STATED_GAIN_CAP and raw in mentioned:
+        narrated = prose_state.coin_mentions(venues.strip_speech(narration))
+        backed = raw in narrated or raw in said["received"] or bool(prose_state.coin_handed_to_player(narration))
+        if raw > 0 and raw <= STATED_GAIN_CAP and raw in mentioned and backed:
             value, source = raw, "stated_gain"
+        elif raw > 0 and raw in mentioned and not backed and not quest_pays:
+            # Only spoken: an offer, not pay (8B run 30, T3).
+            player.pop("gold_delta", None)
+            player.pop("gold_band", None)
+            result["player"] = player
+            turn_ledger.note("gold", "spoken_sum_not_received", stated=raw)
+            return {"source": "spoken_sum_not_received", "gold_delta": 0, "offer": None}
         else:
             return None
     elif band or raw:
