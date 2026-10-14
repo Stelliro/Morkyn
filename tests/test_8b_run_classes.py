@@ -268,6 +268,28 @@ class AskingTheOtherSideIsNoTaking(unittest.TestCase):
         self.assertTrue(player_take_intent("\"Would you sell me the lantern?\""))
 
 
+class AnAsYouLeadIsThePlayersAct(unittest.TestCase):
+    """8B run 13, T2: "As you turn to leave, Hubert adds, '...'" left the player walking off."""
+
+    LINE = "\"Fair rate's a slippery word, Hubert.\" I fold my arms. \"How much? I'll take it if the coin's real.\""
+
+    def test_the_lead_goes_and_the_line_stays(self):
+        from app import llm
+
+        kept, gone = llm._strip_player_acts_from_sentence(
+            "As you turn to leave, Hubert adds, \"Make sure you're not bringing anything back.\"",
+            llm.player_line_of(self.LINE), self.LINE)
+        self.assertEqual(kept, "Hubert adds, \"Make sure you're not bringing anything back.\"")
+        self.assertIn("turn to leave", gone)
+
+    def test_an_asked_act_keeps_its_lead(self):
+        from app import llm
+
+        line = "I turn to leave."
+        sentence = "As you turn to leave, Hubert calls after you."
+        self.assertEqual(llm._strip_player_acts_from_sentence(sentence, llm.player_line_of(line), line)[0], sentence)
+
+
 class _ConnStub:
     """No one known yet."""
 
