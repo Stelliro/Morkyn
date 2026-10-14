@@ -356,6 +356,27 @@ class AShrugAfterAQuestionIsTheAnswer(unittest.TestCase):
         self.assertIn("You glance down", kept)
 
 
+class WaterIsNoAnimal(unittest.TestCase):
+    """8B run 15, T4: "look into the water without touching it" rolled animal handling."""
+
+    LINE = ('"Changing how?" I crouch by the well and look into the water without touching it. '
+            '"Since when, and has anyone drunk from it?"')
+
+    def test_a_memory_the_line_asks_for_stays(self):
+        from app import llm
+
+        line = "I sit on the crate. What did I find down there?"
+        s = "You remember digging through the debris of the old wharf, sorting the broken timbers."
+        self.assertEqual(llm._strip_player_acts_from_sentence(s, llm.player_line_of(line), line)[0], s)
+
+    def test_water_is_no_animal(self):
+        from app.skill_checks import infer_check_from_action
+
+        self.assertNotEqual((infer_check_from_action(self.LINE, {}) or {}).get("skill_code"), "animal_handling")
+        self.assertEqual(infer_check_from_action("I water the mule at the trough.", {})["skill_code"], "animal_handling")
+        self.assertEqual(infer_check_from_action("I calm the horse and saddle it.", {})["skill_code"], "animal_handling")
+
+
 class _ConnStub:
     """No one known yet."""
 
