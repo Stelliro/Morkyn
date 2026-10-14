@@ -1030,6 +1030,8 @@ _MD_UNDER_RE = re.compile(r"(?<![\w])_([^_\s][^_\n]*?)_(?![\w])")
 # run 30, T6; run 5 T14, T47, T90). It becomes 'Dunstan [[A]] says, "..."'.
 _SCRIPT_LABEL_RE = re.compile(
     r"(?m)^(?P<lead>[ \t]*)(?P<who>(?!You\b)[A-Z][\w'’-]+(?:[ \t]+[A-Z][\w'’-]+){0,2}(?:[ \t]*\[\[[A-Z][A-Z0-9]{0,4}\]\])?)"
+    # 'Maud Venn [[A]], tallyman: "Good morning."' (run 32 T0): the role goes with the colon.
+    r"(?:,[ \t]*(?:the[ \t]+)?[a-z][a-z'’ -]{0,40}?)?"
     r"[ \t]*:[ \t]*(?P<q>[\"“])"
 )
 # A full stop closing a line that a lowercase tag follows: '...before noon."

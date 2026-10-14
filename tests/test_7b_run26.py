@@ -438,6 +438,44 @@ class ASearchShownDoneWithoutAFind(unittest.TestCase):
         self.assertNotIn("step inside", out["narration"])
 
 
+class Run32Opening(unittest.TestCase):
+    """Run 32 T0: a menu split in two sentences, 'Maud Venn [[A]], tallyman: "..."', and a drawn Tamsin."""
+
+    TEXT = ("The morning sun casts sharp shadows over Saltmarrow, a harbour town that time seems to have forgotten. "
+            "Saltshards crunch underfoot as you walk along the main street, lined with shops and workshops.\n\n"
+            "You could head to the flats now and pull salvage, but the water is still low. Or you might visit the inn "
+            "for a cup of tea and a moment's respite.\n\n"
+            "A figure steps out from behind Coldwell and Sons, a woman with a warm smile and a familiar look in her "
+            "eyes. She is Maud Venn, the town's tallyman.\n\n"
+            'Maud Venn [[A]], tallyman: "Good morning. How are you holding up?"')
+
+    def test_split_menu_and_label(self):
+        from app.llm import _drop_menu_sentences
+        from app.prose_state import repair_meta_leaks
+
+        out, count = _drop_menu_sentences(self.TEXT)
+        self.assertEqual(count, 2)
+        self.assertNotIn("Or you might", out)
+        self.assertIn('Maud Venn [[A]] says, "Good morning.', repair_meta_leaks(out)[0])
+
+    def test_figure_is_the_listed_person(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            loc = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            conn.execute("DELETE FROM npcs")
+            conn.execute("INSERT INTO npcs (code, location_id, name, role) VALUES ('A', ?, 'Maud Venn', 'tallyman')", (loc,))
+            made = world._ensure_npcs_from_narration(
+                conn, {"npcs": [{"code": "A", "name": "Maud Venn", "role": "tallyman"}]}, self.TEXT, loc
+            )
+            names = [r[0] for r in conn.execute("SELECT name FROM npcs").fetchall()]
+        self.assertEqual(made, [])
+        self.assertEqual(names, ["Maud Venn"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
