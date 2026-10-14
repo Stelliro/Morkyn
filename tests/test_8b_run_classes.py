@@ -494,6 +494,17 @@ class AFigureBoundThisTurnIsInTheScene(unittest.TestCase):
         self.assertNotEqual((accepted.get("new") or [{}])[0].get("giver_npc_id"), 1)
 
 
+class AKindOfPersonIsNoOneNew(unittest.TestCase):
+    """8B run 20, T0: "She is the kind of person who knows what to look for" seeded a second woman."""
+
+    def test_one_woman(self):
+        from app import world
+
+        text = ("A woman with a satchel of tools leans against a post, her eyes scanning the flats. She is the kind "
+                "of person who knows what to look for.")
+        self.assertEqual(world._figure_hints(text), ["A woman"])
+
+
 class _ConnStub:
     """No one known yet."""
 
