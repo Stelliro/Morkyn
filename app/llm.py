@@ -15700,6 +15700,20 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
             kept_rows.append(row)
         turn[key] = kept_rows
     head_l, tail_l = head.lower(), tail.lower()
+    # A new place named only in the cut part (7B run 32, T1: the cut walked Isk
+    # out to "the northernmost flats" and LOC_NEW "Northernmost Flats" was still
+    # stored, though the kept scene never leaves Maud).
+    places = turn.get("locations")
+    if isinstance(places, list) and places:
+        own_l = re.sub(r"\s+", " ", own.lower())
+        kept_places = []
+        for place in places:
+            pname = str((place or {}).get("name") or "").strip().lower() if isinstance(place, dict) else ""
+            if pname and pname in tail_l and pname not in head_l and pname not in own_l:
+                dropped.append(f"LOC_NEW {pname[:60]}")
+                continue
+            kept_places.append(place)
+        turn["locations"] = kept_places
     changes = turn.get("inventory_changes")
     if isinstance(changes, list) and changes:
         kept_changes = []

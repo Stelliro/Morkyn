@@ -535,6 +535,20 @@ class HandedWhatThePlayerHeldOutAHandFor(unittest.TestCase):
             self.assertEqual(world._grant_shown_takes(conn, [], "She hands you a nod and the sticks.", "I wait by the door."), [])
 
 
+class NewPlaceOnlyInTheCutPart(unittest.TestCase):
+    """Run 32 T1: LOC_NEW 'Northernmost Flats' named only after the cut was still stored."""
+
+    def test_dropped(self):
+        from app import llm
+
+        turn = {"locations": [{"name": "Northernmost Flats"}, {"name": "The Bell's Rest"}]}
+        head = 'You tuck the reckoner away. Maud smiles. "Ready?" The Bell\'s Rest stands at the corner.'
+        tail = '"Let\'s do it." Maud hands you a book. "These are for the northernmost flats." You walk north.'
+        dropped = llm._drop_ops_of_cut_tail(turn, head, tail, '"Do you have any tallies?"')
+        self.assertIn("LOC_NEW northernmost flats", dropped)
+        self.assertEqual([p["name"] for p in turn["locations"]], ["The Bell's Rest"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
