@@ -91,6 +91,11 @@ _NOT_TARGET_RE = re.compile(
     r"if|whether|clues?|signs?|my\b|our\b|your\b|orders|instructions|suit|along)\b",
     re.IGNORECASE,
 )
+_WAY_RE = re.compile(
+    r"\b(?:path|paths|road|roads|track|tracks|trail|lane|street|alley|way|stair|stairs|steps|shore|shoreline|"
+    r"stream|river|creek|channel|wall|seawall|ridge|ridges|edge|footprints|markers)\b",
+    re.IGNORECASE,
+)
 _PRONOUN_RE = re.compile(r"^(?:him|her|them|it|that\s+one|this\s+one)$", re.IGNORECASE)
 # Asking someone along. Playtest #32 (live): "Rolf, stay close." and "...with
 # Umar beside me." were never read as asking anyone, so nobody was recorded.
@@ -229,6 +234,11 @@ def pursuit_in(player_input: str, people: list[dict[str, str]] | None = None) ->
         # search for things; only a person or creature is gone after.
         if (noun_like or _SEARCH_VERB_RE.match(verb_word)) and not names_a_being(target, people):
             continue
+        # A way is walked, not a person followed: "I follow the narrow path down
+        # into the drowned district" became a pursuit of "the narrow path", and the
+        # next turn moved the player onto it (8B run 7, T1-T2).
+        if _WAY_RE.search(target) and not names_a_being(target, people):
+            continue
         verb = re.sub(r"\s+", " ", match.group("verb").strip().lower())
         return {"doing": f"{verb} {target}", "target": target}
     return None
@@ -241,12 +251,6 @@ def follow_target(player_input: str) -> str:
         return ""
     verb = found["doing"].split(" ", 1)[0]
     if verb.startswith(("look", "search", "investigat", "hunt")):
-        return ""
-    # A way is walked, not a person followed: "I follow the narrow path down
-    # into the drowned district" logged following "the narrow path" (8B run 7, T1).
-    if re.search(r"\b(?:path|paths|road|roads|track|trail|lane|street|alley|way|stair|stairs|steps|shore|shoreline|"
-                 r"stream|river|creek|channel|line|wall|seawall|ridge|ridges|edge|tracks|footprints|signs|markers)\b",
-                 str(found["target"] or ""), re.I):
         return ""
     return found["target"]
 
