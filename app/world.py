@@ -14672,8 +14672,18 @@ def _filter_inventory_changes(
         if delta == 0:
             kept.append(_strip_unearned_dimensional(change))
             continue
+        # Coin is not this: TAKE "Five gold coins" is the player paying (7B run 5).
+        if delta < 0 and not existing and not _is_coin_item(change):
+            # A loss of something the player does not have is the op word read
+            # as English: TAKE "fragments of lock mechanism" for what the
+            # player pried free (8B run 3, T7). It is a gain claim, and the
+            # gain checks below decide it like any GRANT.
+            delta = -delta
+            change = {**change, "quantity_delta": delta}
+            change.pop("quantity_band", None)
+            turn_ledger.note("inventory", "take_of_unowned_read_as_gain", item=name, quantity=delta)
         if delta < 0:
-            if not existing or _loss_shown(name, f"{narration}\n{player_input}"):
+            if _loss_shown(name, f"{narration}\n{player_input}"):
                 kept.append(_strip_unearned_dimensional(change))
             else:
                 if rejected is not None:
