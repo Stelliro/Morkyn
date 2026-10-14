@@ -381,6 +381,11 @@ def counted_coins(text: str) -> int | None:
     amount ("a handful of coins", "a few coins", "a bag of coin") is None and
     takes a band. Silver and copper are other units (None).
     """
+    # "You take the coin" after "We'll pay you a small coin" is one coin, not a
+    # rolled band (7B run 40, T2: +10).
+    if re.search(r"\bthe\s+(?:(?:small|single|lone|one|little|thin|worn|old|silver|copper|gold)\s+)?coin\b(?!s)",
+                 str(text or ""), re.I) and not re.search(r"\b(?:silver|copper)\s+coin\b", str(text or ""), re.I):
+        return 1
     for match in _COUNTED_COIN_RE.finditer(str(text or "")):
         mods = {w.lower() for w in re.findall(r"[\w'’-]+", match.group("mods") or "")}
         if mods & _VAGUE_COUNT_WORDS:
