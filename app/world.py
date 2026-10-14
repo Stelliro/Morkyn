@@ -13649,7 +13649,10 @@ _ACQUIRE_PROSE_RE = re.compile(
     # Verb forms only: "a strange collection of items" was a gain (8B run 11, T1).
     r"craft(?:s|ed)?|forag(?:e|es|ed)|harvest(?:s|ed)?|gather(?:s|ed)?|collect(?:s|ed)?|scoop(?:s|ed)?|"
     r"(?:craft|forag|harvest|gather|collect|scoop)ing(?!\s+(?:of|place|ground|basket|bag|net|pole|spot|grounds))|"
-    r"pocket(?:s|ed|ing)|you\s+pocket\s|stow(?:s|ed|ing)?|tuck(?:s|ed|ing)?\s+[\w\s]{0,40}?into|"
+    r"pocket(?:s|ed|ing)|you\s+pocket\s|(?:and|then)\s+pocket\s+(?:it|them|the)\b|"
+    # The take that follows a slip wins: "The key slips from your grip. You
+    # snatch it up again and pocket it" (8B run 23, T1 review).
+    r"snatch(?:es|ed|ing)?\s+(?:it|them)\s+(?:back\s+)?up|stow(?:s|ed|ing)?|tuck(?:s|ed|ing)?\s+[\w\s]{0,40}?into|"
     r"slip(?:s|ped)?\s+[\w\s]{0,40}?into|"
     r"loot(?:s|ed|ing)?|steal|steals|stole|"
     r"add(?:s|ed)?\s+(?:it|them|\w+)?\s*to\s+your\s+(?:pack|bag|inventory|satchel|pouch)|"
@@ -13712,6 +13715,14 @@ _ITEM_LOSS_RES: tuple[tuple[re.Pattern[str], bool], ...] = (
         r"(?:(?:him|her|them)\b|(?:it|them|the\s+\w+(?:\s+\w+)?)\s+(?:over\s+)?to\s+(?:him|her|them|the\s+\w+|(?-i:[A-Z][a-z]+))\b)",
         re.I,
     ), True),
+    # A take that fails: "You reach for it, but ... the can slips from your
+    # grip, clattering against the floor" was granted (8B run 23, T1).
+    (re.compile(
+        r"\b(?:slip(?:s|ped|ping)?|fall(?:s|ing)?|fell|tumble[sd]?|slide[sd]?|slid)\s+(?:from|out\s+of|through)\s+your\s+"
+        r"(?:grip|grasp|hands?|fingers)\b|\b(?:just\s+)?out\s+of\s+(?:your\s+)?reach\b|\byou\s+(?:can(?:no|')t|cannot|fail\s+to)\s+"
+        r"(?:reach|grasp|grab|free|pull|lift|work)\b",
+        re.I,
+    ), False),
     (re.compile(
         r"\b(?:eat|eats|ate|eaten|eating|devour\w*|swallow\w*|gobble\w*|finish(?:es|ed|ing)?|"
         r"wolf(?:s|ed)?\s+down|polish(?:es|ed)?\s+off|drink|drinks|drank|drain(?:s|ed)?|quaff\w*|"
