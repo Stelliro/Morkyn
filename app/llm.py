@@ -13819,7 +13819,11 @@ _IT_TAKES_RE = re.compile(
 # buys old coins - and who pays fair for them?" read as the player taking).
 _SOMEONE_ELSE_TAKES_RE = re.compile(
     r"\b(?:who|whoever|anyone|anybody|someone|somebody|nobody|which\s+\w+)\s+(?:[\w'’]+\s+){0,3}?"
-    r"(?:buys|takes|trades|collects|pays|deals\s+in|wants|would\s+(?:buy|take|pay))\b",
+    r"(?:buys|takes|trades|collects|pays|deals\s+in|wants|would\s+(?:buy|take|pay))\b"
+    # The one asked: "Do you ever buy old clay pots or jars out of the flats?"
+    # put a clay pot in the pack (8B run 12, T1).
+    r"|\b(?:do|does|did|would|will|can|could|might)\s+(?:you|he|she|they|your\s+\w+)\s+(?:\w+\s+)?"
+    r"(?:buy|collect|want|deal\s+in)\b",
     re.I,
 )
 
