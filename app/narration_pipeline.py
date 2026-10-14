@@ -2421,6 +2421,15 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         if len(bare.split()) >= 2 and any(q.strip().startswith(bare) for q in quotes):
             changes.append({"action": "echoed_quote_piece_dropped", "text": bare})
             return ""
+        # One word is the typed line's first sentence only when the whole line
+        # is already in the prose, quoted (7B run 31, T2: 'Morning. You stop at
+        # the edge of the path and ask, "Morning. Whose grave is that ..."').
+        if len(bare.split()) == 1 and any(
+            re.split(r"(?<=[.!?])\s+", q.strip())[0] == bare and len(q.split()) > 1 and q.strip() in body
+            for q in quotes
+        ):
+            changes.append({"action": "echoed_quote_piece_dropped", "text": bare})
+            return ""
         if bare in narrated and re.match(r"I\s", bare):
             # "I wipe my hands on my trousers." came back "You wipe my hands
             # ..." (7B run 30, T15): the whole sentence turns, my and me too.

@@ -28,11 +28,13 @@ def main() -> int:
     parser.add_argument("--tmp", default=str(Path(ROOT.anchor) / "morkyn-suite-tmp"),
                         help="temp folder for the run (outside the repo; deleted after)")
     args = parser.parse_args()
-    tmp = Path(args.tmp).resolve()
-    if ROOT in tmp.parents or tmp == ROOT:
+    base = Path(args.tmp).resolve()
+    if ROOT in base.parents or base == ROOT:
         print("--tmp must be outside the repo", file=sys.stderr)
         return 2
-    shutil.rmtree(tmp, ignore_errors=True)
+    # One subfolder per run: two suites at once shared the folder and each
+    # deleted the other's databases ("no such table: npcs", 2026-10-14).
+    tmp = base / f"run-{os.getpid()}"
     tmp.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, TEMP=str(tmp), TMP=str(tmp), TMPDIR=str(tmp))
     try:
@@ -43,6 +45,10 @@ def main() -> int:
         )
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+        try:
+            base.rmdir()  # only when no other run is using it
+        except OSError:
+            pass
     text = proc.stdout or ""
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
