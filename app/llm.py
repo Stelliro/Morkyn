@@ -14096,7 +14096,15 @@ def _walk_asked(rest: str, own: str) -> bool:
     # Leaving names where the player was, not where they go (run 5, T45:
     # "You leave the Salvage Yard and head north ... to the cottage").
     if _WALK_LEAVES_RE.match(rest):
-        return True
+        # Unless the place left is where the line goes: "walk up ... to the
+        # salvage guild's tally house to ask" then "You leave the tally house"
+        # (8B run 49, T1).
+        left = re.split(r"[.,;:!?]", rest[_WALK_LEAVES_RE.match(rest).end():], maxsplit=1)[0]
+        goes_to = " ".join(m.group(1) for m in re.finditer(
+            r"\b(?:to|into|toward|towards|for)\s+(?:the\s+)?([^.,;:!?]{3,60}?)(?=\s+(?:to|and|before|so)\b|[.,;:!?]|$)",
+            narrated, re.I))
+        heads = [w for w in _cut_words(left) if len(w) >= 4]
+        return not (heads and set(heads) <= _cut_words(goes_to))
     # Going somewhere is not going anywhere (7B run 11, T1): a walk to a place
     # the player never named, which someone else suggested, is the prose's.
     m = _PLAYER_FOLLOW_RE.match(rest)
