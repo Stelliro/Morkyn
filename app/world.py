@@ -20715,7 +20715,8 @@ def apply_turn(
             turn_ledger.note("movement", "travel_unresolved", note=unresolved_note)
             # Speech never asks to go ('"If the water drops by noon I am going out
             # to the drowned chapel roof"', 7B run 38, T2).
-            unspoken = re.sub(r"[\"“][^\"”]*[\"”]", " ", _player_line(player_input))
+            # Nor does a walk over to someone ("I go over to Odo and the horse", run 39 T1).
+            unspoken = _FOLLOW_TO_SPOT_RE.sub(" ", re.sub(r"[\"“][^\"”]*[\"”]", " ", _player_line(player_input)))
             if _turn_intent(unspoken)[0] == "travel" or int(map_report.get("steps_taken") or 0) or movement_report.get("follow"):
                 conn.execute(
                     "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",

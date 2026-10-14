@@ -1634,7 +1634,14 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(smithing|forge (?:a|an|the|my|it|them|some|new|nails?|blades?|horseshoes?)|"
      r"hammer (?:out|it|the|a)\b|temper (?:the|a|it|my)|work (?:the|at the) (?:forge|anvil|bellows)|at the anvil)\b",
      "smithing"),
-    (r"\b(animal|mount|horse|herd|tame|calm the)\b", "animal_handling"),
+    # Handling, not the animal: '"Is that horse going anywhere near the guild
+    # today?"' rolled animal handling, a critical failure and a hurt leg (7B
+    # run 39, T1). A beast named needs a handling verb on it.
+    (r"\b(?:tame|taming|calm (?:the|a|an|it|him|her|my)|soothe (?:the|a|an|it|him|her)|"
+     r"(?:ride|riding|rode|mount|mounting|lead|leading|led|saddle|saddling|bridle|harness|harnessing|groom|grooming|"
+     r"feed|feeding|water|watering|shoe|shoeing|herd|herding|drive|driving|handle|handling|break|breaking|whistle\s+for)"
+     r"\s+(?:\w+\s+){0,2}?(?:animal|animals|horse|horses|mare|mule|mules|pony|ponies|donkey|ox|oxen|goat|goats|sheep|"
+     r"cow|cows|cattle|hound|hounds|dog|dogs|flock|herd|beast|beasts|mount|mounts|her|him|it|them))\b", "animal_handling"),
     (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
     # "mine" is usually the possessive ("round Tam's waist, then round mine",
     # playtest #102): only the verb with an object, or the word alone, is mining.
