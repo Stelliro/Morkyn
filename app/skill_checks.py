@@ -1904,10 +1904,10 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         # to its own skill still rolls that skill, now as the act.
         act_keys = {"act": act["phrase"], "act_family": act["family"], "routine": bool(act["routine"])}
         if from_pack and skill:
-            return {**_check_with_opposition(skill, text, context), **act_keys}
+            return {**_check_with_opposition(skill, text, context, own), **act_keys}
         if act["family"] == "perform":
             # A performance is for someone: social, with the NPC it is for.
-            return {**_check_with_opposition(act["skill_code"], text, context), **act_keys}
+            return {**_check_with_opposition(act["skill_code"], text, context, own), **act_keys}
         # Work is against the task, not against the smith watching it.
         check = {
             "skill_code": act["skill_code"],
@@ -1921,7 +1921,7 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         # the blades and ask Finnian what he pays" also rolls the ask against
         # Finnian, as it did before the act took the turn's check.
         if skill and skill != act["skill_code"]:
-            also = _check_with_opposition(skill, text, context)
+            also = _check_with_opposition(skill, text, context, own)
             if also.get("social"):
                 check["also_check"] = also
         return check
@@ -1940,7 +1940,7 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
         skill = None
     if not skill:
         return None
-    check = _check_with_opposition(skill, text, context)
+    check = _check_with_opposition(skill, text, context, own)
     # A plain question or greeting is everyday speech, not a persuasion attempt
     # (playtest #88): "ask Vael about the seal" rolled an untrained contested
     # check against the NPC's power every turn, and the misses were read as
@@ -1997,7 +1997,7 @@ def _line_names_npc(text: str, npc: dict[str, Any]) -> bool:
     return bool(code) and f"[[{code}]]" in text
 
 
-def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None) -> dict[str, Any]:
+def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None, cased: str = "") -> dict[str, Any]:
     """One inferred check for ``skill``: the opposing NPC or foe the line names, and the tool."""
     opposition: dict[str, Any] = {}
     ctx = context or {}
@@ -2025,11 +2025,18 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         # one known on the other side.
         # Left behind is turned away from too: "I leave Brida at the gate and
         # walk to the guild hall ... ask the clerk" rolled vs Brida (8B run 5, T5).
+        # Both patterns read names by their capital, so they need the line as
+        # typed: infer_check_from_action passes it lowercased, and in play
+        # "I leave Mira at the well and walk up to the reeve's office" still
+        # rolled against Mira (8B run 15, T6; the run 5 test passed the cased line).
+        src = cased or text
         named_text = re.sub(r"\b(?:not|instead\s+of|rather\s+than|ignoring|leave|leaving|left|away\s+from)\s+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+",
-                            " ", text)
+                            " ", src)
+        if cased:
+            named_text = named_text.lower()
         called = [
             m.group(1)
-            for m in re.finditer(r"(?:^|[\"“]|[.!?]\s+)([A-Z][a-z]{2,}),\s+(?:what|who|where|why|how|is|are|do|did|can|will|tell|show|give)\b", text)
+            for m in re.finditer(r"(?:^|[\"“]|[.!?]\s+)([A-Z][a-z]{2,}),\s+(?:what|who|where|why|how|is|are|do|did|can|will|tell|show|give)\b", src)
         ]
         known_first = {str(n.get("name") or "").split()[0].lower() for n in pool if str(n.get("name") or "").strip()}
         stranger_called = bool(called) and all(c.lower() not in known_first for c in called)
@@ -2062,7 +2069,7 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
             asked_role = re.search(r"\b(?:ask|asks|asking|tell|question|press|talk\s+to|speak\s+to)\s+the\s+([a-z][a-z-]{2,})\b", text, re.I)
             if matched_npc and asked_role and asked_role.group(1).lower() not in str(matched_npc.get("role") or "").lower():
                 matched_npc = None
-            if matched_npc and re.search(rf"\b(?:leave|leaving|left|away\s+from)\s+{re.escape(str(matched_npc.get('name') or '').split()[0])}\b", text):
+            if matched_npc and re.search(rf"\b(?:leave|leaving|left|away\s+from)\s+{re.escape(str(matched_npc.get('name') or '').split()[0])}\b", text, re.I):
                 matched_npc = None
             if matched_npc:
                 opposition = {

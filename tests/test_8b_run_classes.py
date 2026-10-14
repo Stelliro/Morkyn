@@ -404,6 +404,33 @@ class ARestoredSplitLineIsSaidOnce(unittest.TestCase):
         self.assertIn("I'll show you what's owed", fixed)
 
 
+class TheOneLeftBehindThroughTheShippedPath(unittest.TestCase):
+    """8B run 15, T6: "I leave Mira at the well and walk up to the reeve's office" rolled vs Mira and moved
+    the player to the well. The run 5 fix was tested on the cased line; the real caller lowercases it."""
+
+    LINE = ("\"Then I'll tell him myself.\" I leave Mira at the well and walk up to the harbour reeve's office "
+            "to ask whoever is on duty about the water.")
+    CTX = {"npcs": [{"code": "A", "name": "Mira", "role": "well keeper"}], "conversation_turn": {"addressed": ["A"]}}
+
+    def test_no_check_against_mira(self):
+        from app.skill_checks import infer_check_from_action
+
+        check = infer_check_from_action(self.LINE, self.CTX) or {}
+        self.assertNotEqual((check.get("opposition") or {}).get("name"), "Mira")
+
+    def test_asking_mira_still_is(self):
+        from app.skill_checks import infer_check_from_action
+
+        check = infer_check_from_action("I ask Mira who keeps the well.", self.CTX) or {}
+        self.assertEqual((check.get("opposition") or {}).get("name"), "Mira")
+
+    def test_the_well_left_is_no_destination(self):
+        from app import world
+
+        self.assertNotIn("well", world._destination_text(self.LINE))
+        self.assertIn("harbour reeve's office", world._destination_text(self.LINE))
+
+
 class _ConnStub:
     """No one known yet."""
 
