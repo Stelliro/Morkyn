@@ -237,6 +237,27 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class AskingWhereIsNoTaking(unittest.TestCase):
+    """8B run 47, T3: "I'll take it" (the job) and "Where do the guild's carts wait?" put two carts in the pack."""
+
+    LINE = ("\"I'll take it. A full load, ten silver's worth, and no guild help.\" I nod once. \"Where do the "
+            "guild's carts wait when the load comes in?\"")
+    PROSE = ("“The carts wait at the wharf—near the third pile of driftwood. They’re marked with a red "
+             "stripe and a rusted iron hook.” You nod, the promise of ten silver in your pocket a quiet certainty.")
+
+    def _kept(self, line):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            return world._filter_inventory_changes(conn, [{"name": "red stripe cart", "quantity_delta": 2}],
+                                                   narration=self.PROSE, player_input=line, draft_narration=self.PROSE)
+
+    def test_the_carts_stay_at_the_wharf(self):
+        self.assertEqual(self._kept(self.LINE), [])
+
+
 class AQuestionAskedPaysNothing(unittest.TestCase):
     """8B run 45, T2: "You ask what kind of work pays against the ledger" backed GOLD 50 (+37)."""
 
