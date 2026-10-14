@@ -1205,6 +1205,20 @@ class Run4RetoldAndPlanned(unittest.TestCase):
             self.assertEqual(strip(gone, self.LINE, self.LINE)[0], "", gone)
 
 
+class ReportedQuestionTheyNeverAsked(unittest.TestCase):
+    """8B run 4 T4: 'You ask if it's dangerous, and she shrugs' after only 'Where is the guild digging?'."""
+
+    def test_new_question_goes_reported_one_stays(self):
+        from app.llm import _strip_player_acts_from_sentence as strip
+
+        line = '"You did not answer me, Avelina. Where is the guild digging?"'
+        self.assertEqual(strip("You ask if it's dangerous, and she shrugs.", line, line)[0], "")
+        self.assertEqual(strip("You ask where the guild is digging.", line, line)[0], "You ask where the guild is digging.")
+        own = 'I go into the chandlery. "Tam signed for the bell." Then I ask her for a coil of rope and what it costs.'
+        kept = "You ask about the rope, and she pulls down a coil."
+        self.assertEqual(strip(kept, own, own)[0], kept)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

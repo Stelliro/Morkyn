@@ -14060,7 +14060,23 @@ def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -
         return "" if _verb_in_input(m.group("v"), own) else "gesture"
     m = _PLAYER_SPEECH_ACT_RE.match(rest)
     if m:
-        return "" if _INPUT_SPEECH_RE.search(own) else "speech"
+        if not _INPUT_SPEECH_RE.search(own):
+            return "speech"
+        # Reporting the player's typed words is fine; a new question is not:
+        # "You ask if it's dangerous, and she shrugs" after only "Where is the
+        # guild digging?" (8B run 4, T4). With typed lines, the reported speech
+        # has to share their words.
+        typed = re.findall(r'["“]([^"”]+)["”]', str(player_input or ""))
+        reported = re.match(r"^(?:\w+ly\s+)?(?:ask|asked|tell|told|say|said|mention|mentioned|explain|explained|add|added)\s+"
+                            r"(?:\w+\s+)?(?:if|whether|about|that|why|how|what|where|when|who)\b(?P<what>.*)$", rest, re.I)
+        if typed and reported:
+            from app.narration_pipeline import content_stems
+
+            # The whole line: "Then I ask her for a coil of rope" outside the quotes counts too.
+            said = content_stems(str(player_input or ""))
+            if len(content_stems(reported.group("what")) & said) < 2:
+                return "speech"
+        return ""
     m = _PLAYER_ACQUIRE_ACT_RE.match(rest)
     if m:
         if _PAY_VERB_RE.match(m.group("v")):
