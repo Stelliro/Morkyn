@@ -2356,7 +2356,7 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
             clear_moves()
             explicit_name = explicit_code = ""
         elif explicit_name and not explicit_code and not result.get("map_walk") and \
-                explicit_name.strip().lower() == str(current.get("name") or "").strip().lower():
+                W._same_place_name(explicit_name, str(current.get("name") or "")):
             # A MOVE to where the player stands goes nowhere (8B run 17, T0).
             clear_moves()
             explicit_name = ""

@@ -9483,6 +9483,14 @@ def _player_departs(text: str) -> bool:
 _PERFECT_TENSE_RE = re.compile(r"\byou(?:['\u2019](?:ve|d)|\s+ha(?:ve|d))\s+(?:\w+\s+)?\w+$", re.I)
 
 
+def _same_place_name(a: str, b: str) -> bool:
+    """One place by two spellings: "the Salvage Guild’s Tally House" is "The Salvage Guild's Tally House" (8B run 30, T2)."""
+    def key(text: str) -> str:
+        text = str(text or "").strip().lower().replace("’", "'").replace("‘", "'")
+        return re.sub(r"^the\s+", "", re.sub(r"\s+", " ", text))
+    return bool(key(a)) and key(a) == key(b)
+
+
 def _unasked_unshown_move(
     result: dict[str, Any],
     player_patch: dict[str, Any],
@@ -9513,7 +9521,12 @@ def _unasked_unshown_move(
     walk = result.get("map_walk")
     if not (code or name or walk):
         return ""
-    if current_name and not code and name.lower() == current_name.strip().lower():
+    if current_name and code and not name:
+        # By code too: MOVE "L2" while standing in L2 (8B run 30, T2).
+        here_row = next((r for r in rows if str(r["code"] or "").upper() == code.upper()), None)
+        if here_row is not None and _same_place_name(str(here_row["name"] or ""), current_name):
+            name, code = str(here_row["name"] or ""), ""
+    if current_name and not code and _same_place_name(name, current_name):
         if not walk:
             return ""  # the legacy rules reject it as same_place_name and repair from the line
         # With a WALK beside it only the walk is left to judge (8B run 24, T2:

@@ -143,6 +143,16 @@ class AMoveToWhereYouStandIsNoTrip(unittest.TestCase):
                                           narration="You stand on the edge of the flats.", current_name="Saltmarrow")
         self.assertEqual(got, "")
 
+    def test_by_code_or_another_spelling(self):
+        # 8B run 30, T2: MOVE "L2" and "the Salvage Guild’s Tally House" while standing in it.
+        from app import world
+
+        rows = [{"id": 2, "code": "L2", "name": "The Salvage Guild's Tally House", "parent_id": 1, "kind": ""}]
+        for patch in ({"move_to_location_code": "L2"}, {"move_to_location": "the Salvage Guild’s Tally House"}):
+            got = world._unasked_unshown_move({"player": patch}, patch, rows, "", intent="conversation",
+                                              narration="Gregory leans back.", current_name="The Salvage Guild's Tally House")
+            self.assertEqual(got, "", patch)
+
 
 class SomeoneMetAtTheEndOfAWalk(unittest.TestCase):
     """8B run 11, T3: the fisherman asked at the docks was stored at the district the player left."""
