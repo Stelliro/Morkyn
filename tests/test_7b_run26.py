@@ -671,6 +671,26 @@ class Run35PlankAtTheSeawall(unittest.TestCase):
         self.assertTrue(point and point["trigger"].startswith("You step inside"))
 
 
+class PlayerLineTagged(unittest.TestCase):
+    """Run 36 T2: '"Do you know who is taking a boat out ...?" Emrys Slade ponders' read as Emrys's line."""
+
+    def test_tag_added(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = '"Not trouble. Work." I keep my eyes on the boat. "Do you know who is taking a boat out this early?"'
+        text = ('"Not trouble. Work," you say. You keep your eyes on the boat.\n\n'
+                '"Do you know who is taking a boat out this early?" Emrys Slade ponders for a moment. "Tobin."')
+        out, _ = keep_player_words(text, line)
+        self.assertIn('this early?" you ask. Emrys Slade ponders', out)
+
+    def test_statement_gets_a_comma(self):
+        from app.narration_pipeline import keep_player_words
+
+        out, _ = keep_player_words('You nod. "I will take my gold now, Jehane." Jehane looks up.',
+                                   '"I will take my gold now, Jehane."')
+        self.assertIn('"I will take my gold now, Jehane," you say. Jehane looks up.', out)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
