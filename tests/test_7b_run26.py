@@ -892,6 +892,17 @@ class TheOneYouWentToIsTalking(unittest.TestCase):
         self.assertIn("you can help me tonight", out["narration"])
 
 
+class TheCoinIsOneCoin(unittest.TestCase):
+    """Run 40 T2: 'We'll pay you a small coin' and 'You take the coin' rolled the small band, +10 gold."""
+
+    def test_counted(self):
+        from app.prose_state import counted_coins
+
+        self.assertEqual(counted_coins("You take the coin"), 1)
+        self.assertIsNone(counted_coins("You take the coins"))
+        self.assertIsNone(counted_coins("You take the silver coin"))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
