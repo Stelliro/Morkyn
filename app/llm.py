@@ -11338,7 +11338,9 @@ def _inject_entity_codes_for_known_names(text: str, code_to_name: dict[str, str]
             if re.fullmatch(r"I\d+", _code) and re.search(
                 r"(?:\b(?:(?i:his|her|their|its|another|someone's)|[A-Z][a-z]+['’]s)\s+(?:[\w'’-]+\s+){0,2}"
                 r"|\b(?:he|she|they|[A-Z][a-z]+)\s+(?:\w+ly\s+)?(?:wears|wore|holds|held|carries|carried|has|clutches|grips|"
-                r"sells|offers)\s+(?:a|an|the)\s+(?:[\w'’-]+\s+){0,2})$",
+                r"sells|offers)\s+(?:a|an|the)\s+(?:[\w'’-]+\s+){0,2}"
+                # Worn by someone else: "a woman in a patched tunic [[I2]]" (8B run 36, T0).
+                r"|\b(?:in|wearing|dressed\s+in|clad\s+in|wrapped\s+in)\s+(?:a|an)\s+(?:[\w'’-]+\s+){0,2})$",
                 m.string[: m.start()],
             ):
                 return _hold(m.group(1))
