@@ -422,6 +422,22 @@ class ThenYouWalkAndAGestureTag(unittest.TestCase):
         self.assertEqual(drop_invented_player_speech(['You nod, and she says, "Fine."'], self.LINE)[1], [])
 
 
+class ASearchShownDoneWithoutAFind(unittest.TestCase):
+    """Run 31 T7: 'I read the salvage notices ..., looking for the pay' then the prose walked into the reeve's office."""
+
+    def test_cut(self):
+        from app import llm
+
+        line = "I read the salvage notices on the board, one by one, looking for the pay and who posted them."
+        text = ("You read the notices on the board, one by one, looking for the pay and who posted them. The notices "
+                "are mostly in faded ink. You scan the list, noting a few postings but none with a high reward.\n\n"
+                "The harbour reeve's office is not far. You push open the door and step inside.\n\n"
+                "The office is cluttered with papers and charts.")
+        turn = {"narration": text, "narration_segments": [{"label": "paragraph", "text": x} for x in text.split("\n\n")]}
+        out = llm._cut_scene_after_completed_act(turn, line)
+        self.assertNotIn("step inside", out["narration"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
