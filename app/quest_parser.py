@@ -1133,6 +1133,23 @@ def validate_quest_changes(
                 steps = [{"title": summary[:120], "description": summary[:400], "location_code": "", "location_name": ""}]
             else:
                 reasons.append("no_steps")
+        # A work job written as only a walk (7B run 30, T0: "Help with moles"
+        # with the one step "Go to the tannery") finished on being there: the
+        # work itself is its last step, at the last step's place.
+        if steps and not _TRAVEL_JOB_RE.search(title) and all(_TRAVEL_STEP_RE.search(s["title"]) for s in steps):
+            if len(steps) >= MAX_STEPS:
+                steps = steps[: MAX_STEPS - 1]
+            last = steps[-1]
+            summary = re.sub(r"\s+", " ", str(raw.get("summary") or "")).strip()
+            steps.append({
+                "title": title[:120],
+                "description": (summary or title)[:400],
+                "location_code": last["location_code"],
+                "location_name": last["location_name"],
+            })
+            from app import turn_ledger
+
+            turn_ledger.note("quest", "work_step_added", title=title, travel_steps=[s["title"] for s in steps[:-1]])
         first_place = steps[0]["location_name"] if steps else ""
         same_offer = next(
             (
@@ -1300,6 +1317,23 @@ def validate_quest_changes(
             reasons.append("evidence_is_travel")
         if action in {"step_done", "complete"} and quest is not None and not reasons:
             reasons.extend(done_check(evidence, quest, passive=passive))
+        if action in {"step_done", "complete"} and quest is not None and not reasons:
+            finishing = action == "complete" or _int(quest.get("current_step"), 1) >= _int(quest.get("total_steps"), 1)
+            if _PLAYER_NOT_DONE_RE.search(_player_line_text(player_input) or str(player_input or "")):
+                # The player's own word that the work is not done stands.
+                reasons.append("player_says_not_done")
+            elif (
+                finishing
+                and not _TRAVEL_JOB_RE.search(str(quest.get("title") or "").strip())
+                and not _shows_outcome(evidence)
+                and not _players_own_act(evidence, player_input)
+            ):
+                # The last step of work is done by the player's own act or by a
+                # quote that shows what it came to, not by someone naming the
+                # job's trouble (7B run 30, T15: Dunstan's "The tannery is where
+                # the moles are causing trouble" paid "Help with moles" while the
+                # traps were still empty).
+                reasons.append("evidence_shows_no_outcome")
         if reasons:
             rejected.append({"kind": "update", "item": raw, "reasons": reasons, "checked": evidence[:240]})
             continue
@@ -1354,6 +1388,49 @@ _TRAVEL_RE = re.compile(
 _TRAVEL_JOB_RE = re.compile(
     r"^(?:go|visit|travel|reach|meet|deliver|bring|take|carry|escort|return|report|head|walk|find|see|speak|talk|ask)\b", re.I
 )
+
+
+# A step that is only getting somewhere: "Go to the tannery", "Head to the docks".
+_TRAVEL_STEP_RE = re.compile(
+    r"^(?:go|goes|head|travel|walk|visit|reach|return|arrive|journey|sail|ride|get|make\s+(?:your|one['’]s|the)\s+way)\b"
+    r"(?:\s+(?:back\s+)?(?:to|toward|towards|into|down|up|over|out|for|at)\b|\s+the\b|$)",
+    re.I,
+)
+# What the work came to, beyond the done words: a catch, a clearing, the giver's
+# thanks. Read only for the last step of a work job (7B run 30, T15).
+_OUTCOME_RE = re.compile(
+    r"\b(?:caught|catch(?:es)?\s+(?:it|them|the|one|two|three|a)|trapped|snared|killed|slain|dead|cleared|clean(?:ed)?\s+out|"
+    r"dealt\s+with|took\s+care\s+of|taken\s+care\s+of|salvaged|patched|secured|sealed|emptied|sold|"
+    r"thank(?:s|ed)?\s+you|well\s+done|good\s+work|fine\s+work|job\s+well|that['’]s\s+(?:the\s+last|all\s+of\s+them|it\s+done)|"
+    r"hands?\s+you|handed\s+you|counts?\s+out|pays?\s+you|paid\s+you|coins?\s+(?:into|in)\s+your|"
+    r"hand(?:s|ed)?\s+(?:[\w'’-]+\s+){1,4}?over\s+to)\b",
+    re.I,
+)
+_YOU_ACT_RE = re.compile(r"^\W*(?:then\s+)?you\s+(?:\w+ly\s+)?([a-z]+)", re.I)
+
+
+def _players_own_act(evidence: str, player_input: str) -> bool:
+    """The quote is the player's own act this turn: "You set the last polished blade" for "I set ..."."""
+    lead = _YOU_ACT_RE.match(str(evidence or ""))
+    if not lead:
+        return False
+    verb = _stem(lead.group(1))
+    own = re.sub(r"[\"“][^\"”]*[\"”]", " ", _player_line_text(player_input) or str(player_input or ""))
+    return verb in {_stem(w) for w in re.findall(r"[a-z]+", own.lower())}
+# The player says the work is not done: "Nothing in either trap yet", "I will
+# come back at dusk to check them" (7B run 30, T15 paid the job on that line).
+_PLAYER_NOT_DONE_RE = re.compile(
+    r"\bnot\s+(?:yet|done|finished)\b|\bnothing\s+(?:\w+\s+){0,4}?yet\b|\bno\s+\w+\s+yet\b|\bstill\s+(?:empty|nothing)\b|"
+    r"\b(?:i\s+will|i['’]ll|i\s+shall)\s+come\s+back\b|\bcome\s+back\s+(?:at|later|tomorrow|tonight|in\s+the)\b",
+    re.I,
+)
+
+
+def _shows_outcome(text: str) -> bool:
+    text = str(text or "")
+    return _shows_result(text) or any(
+        not _NOT_YET_BEFORE_RE.search(text[: m.start()]) for m in _OUTCOME_RE.finditer(text)
+    )
 
 
 def _travel_only(evidence: str) -> bool:
