@@ -13351,7 +13351,12 @@ _MENU_TWO_WAY_RE = re.compile(
     r"^(?:you\s+have\s+a\s+choice\s*[:,]\s*)?(?:or,?\s+)?you\s+(?:could|can|might|may)\s+(?:either\s+)?"
     r"(?!hear|see|smell|feel|taste|sense|tell|make\s+out|swear|imagine|almost|just|well|barely|still|only|no\s+longer)"
     r"[^.?!\"“”]{2,200}?,?\s+or\s+[^.?!\"“”]{2,200}[.?!]$"
-    r"|^you\s+have\s+a\s+choice\b[^.?!\"“”]{0,200}[.?!]$",
+    r"|^you\s+have\s+a\s+choice\b[^.?!\"“”]{0,200}[.?!]$"
+    # A closer that tells the player to act: "It's time to make a move." (7B
+    # run 30, T7). The whole sentence only; "time to make a move on the
+    # tide tables" says what, and stays.
+    r"|^(?:now\s+)?(?:it['’]?s|it\s+is|now\s+is)\s+(?:the\s+)?time\s+(?:for\s+you\s+)?to\s+"
+    r"(?:make\s+(?:a|your)\s+move|act|decide|choose)\s*[.!]$",
     re.I,
 )
 # Stock deliberation hung on the player's act: "You step back, pondering your

@@ -2099,6 +2099,81 @@ def _said_line(quotes: list[str]) -> str:
     return " ".join(parts)
 
 
+_OTHER_DOES_RE = re.compile(
+    r"(?:(?<=^)|(?<=[.!?]\s)|(?<=[.!?][\"”]\s))(?P<subj>(?:He|She|They)|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?(?:\s+\[\[[A-Z][A-Z0-9]{0,4}\]\])?)"
+    r"\s+(?P<verb>[a-z]+?)(?P<inf>es|s)\b(?P<rest>[^.!?\"“”\n]*[.!?])"
+)
+
+
+def _give_act_back(text: str, player_input: str) -> tuple[str, list[str]]:
+    """Sentences where someone else does an act the player typed, given back to "You"."""
+    acts = []
+    for clause in re.split(r"[.!?;]|\band\b|,", _QUOTE_SPAN_RE.sub(" ", player_own_line(player_input))):
+        m = re.match(r"\s*(?:(?:I|then)\s+)?(?:\w+ly\s+)?([a-z]{3,})\b(.*)$", clause.strip())
+        if m and len(content_stems(m.group(2))) >= 2:
+            acts.append((m.group(1).lower(), content_stems(m.group(2))))
+    if not acts:
+        return text, []
+    given: list[str] = []
+
+    def _fix(match: re.Match[str]) -> str:
+        subj, verb = match.group("subj"), match.group("verb")
+        if subj.split()[0] in ("The", "A", "An", "It", "You", "Your", "This", "That"):
+            return match.group(0)
+        # Working beside the player is their own act: "Dunstan sets another
+        # trap beside yours" stays.
+        if re.search(r"\b(?:another|too|also|as\s+well|beside|alongside|his\s+own|her\s+own|their\s+own|you|yours)\b",
+                     match.group("rest"), re.I):
+            return match.group(0)
+        for typed, stems in acts:
+            # "tamps" -> "tamp", "pushes" -> "push", "tames" -> "tame"
+            if typed not in (verb, verb + "e", verb + match.group("inf")[:-1]):
+                continue
+            if len(content_stems(match.group("rest")) & stems) < 2:
+                continue
+            rest = re.sub(r"\b(?:his|her|their)\b", "your", match.group("rest"))
+            rest = re.sub(r"\b(?:himself|herself|themselves)\b", "yourself", rest)
+            given.append(match.group(0).strip())
+            return f"You {typed}{rest}"
+        return match.group(0)
+
+    out = _OTHER_DOES_RE.sub(_fix, text)
+
+    # "Dunstan watches as you, setting the next trap" (same draft): the
+    # player's typed verb as a cut-off "-ing" after "as you," is "as you set".
+    def _as_you(match: re.Match[str]) -> str:
+        gerund = match.group(1).lower()
+        for typed, _stems in acts:
+            if gerund in (typed + "ing", typed + typed[-1] + "ing", typed[:-1] + "ing"):
+                given.append(match.group(0))
+                return f"as you {typed} "
+        return match.group(0)
+
+    out = re.sub(r"\bas you,\s+([a-z]+ing)\s+", _as_you, out)
+    return out, given
+
+
+def _paraphrased_quote(sentence: str, quotes: list[str]) -> bool:
+    """An unquoted sentence ending in a typed quote's closing vocative and sharing two more of its words."""
+    tail = re.search(r",\s*([A-Za-z][\w'’-]*(?:\s+[A-Za-z][\w'’-]*){0,2})\s*[.!?]$", sentence.strip())
+    if not tail:
+        return False
+    vocative = _speech_key(tail.group(1))
+    if not vocative:
+        return False
+    head = sentence.strip()[: tail.start()]
+    rest = content_stems(head)
+    rest_words = set(_speech_key(head).split())
+    for quote in quotes:
+        q_tail = re.search(r",\s*([A-Za-z][\w'’-]*(?:\s+[A-Za-z][\w'’-]*){0,2})\s*[.!?]?\s*$", quote.strip())
+        if not q_tail or _speech_key(q_tail.group(1)) != vocative:
+            continue
+        q_head = quote.strip()[: q_tail.start()]
+        if rest & content_stems(q_head) and len(rest_words & set(_speech_key(q_head).split())) >= 3:
+            return True
+    return False
+
+
 def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str, Any]]]:
     """
     The player's quoted words are said by the player, as typed (7B run 5, #123).
@@ -2290,6 +2365,13 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         if bare in narrated and re.match(r"I\s", bare):
             changes.append({"action": "echoed_act_to_second_person", "text": bare})
             return sentence.replace(bare, "You" + bare[1:], 1)
+        # A paraphrase that keeps the typed line's vocative (7B run 30, T7:
+        # "You have not shared your name, mole catcher." for '"I have not
+        # told you my name, mole catcher."'): the narrator never ends a
+        # sentence by calling someone, so it is the player's line again.
+        if _paraphrased_quote(bare, quotes):
+            changes.append({"action": "echoed_quote_paraphrase_dropped", "text": bare})
+            return ""
         return sentence
     pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", body)
     for index in range(0, len(pieces), 2):
@@ -2348,6 +2430,16 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             pieces[index] = head + sep + unquoted_say.sub(_unquoted_say_fix, rest) if sep else pieces[index]
             continue
         pieces[index] = unquoted_say.sub(_unquoted_say_fix, pieces[index])
+    body = "".join(pieces)
+
+    # 3e. The player's typed act done by someone else (7B run 30, T7: "I ...
+    # tamp the earth flat with my palm" came back as "He tamps the earth flat
+    # with his palm"). The act is the player's: that sentence gets "You" back.
+    pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", body)
+    for index in range(0, len(pieces), 2):
+        pieces[index], given = _give_act_back(pieces[index], player_input)
+        for sentence in given:
+            changes.append({"action": "player_act_given_back", "text": sentence})
     body = "".join(pieces)
 
     # 4. Still missing: the player says it as the scene opens, or right after
