@@ -21056,8 +21056,13 @@ def apply_turn(
                 (
                     turn,
                     "system",
-                    f"MOVE to {movement_report.get('destination')} dropped: the player did not ask to go there "
-                    "and the prose does not show the player going."[:1400],
+                    # A WALK with no place is "map walk" (8B run 15, T3: "MOVE to map walk dropped").
+                    (
+                        "Map walk dropped: the player did not ask to walk and the prose does not show the player going."
+                        if movement_report.get("destination") == "map walk"
+                        else f"MOVE to {movement_report.get('destination')} dropped: the player did not ask to go there "
+                        "and the prose does not show the player going."
+                    )[:1400],
                 ),
             )
         elif movement_report.get("status") == "unresolved":
