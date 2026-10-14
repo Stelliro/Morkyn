@@ -94,6 +94,29 @@ Turns stay fast (10-40 s).
 - **Records**: a fact the scene never shows is no record (e97a4e5); the debt runs the way the
   backstory says (f69e9ed, a narrow repair: the 8B inverted it in three openings).
 
+### Runs 25-37 (2026-10-15)
+
+Runs now go further (run 36 to T5, run 37 to T6) with a job taken and worked: tally house, offer,
+acceptance, a walk to the flats, digging, the shells carried back.
+
+- **Jobs**: "what work" asks for work, so the parser reads the answer (0b6b97d); the job taken by
+  its subject ("I'll take the Stormborn") is taken (06c7dff); a mark on a question, a remembered
+  promise or a figure nobody named are no offers (4920f08, ddfe9b0); the tally house is entered,
+  not a salvage yard minted from the owner's trade (65fc760, 11a6f17, 749a89b, 77bf6f3).
+- **Rewards**: talk earns no XP; "not_combat" had counted as a fight on every peaceful turn, and
+  a proposed new job as a quest step (08ba801); a sum said in speech is no pay (5abd4a2).
+- **Checks**: water is no animal, where a ship lies is no lie, the water creeping is no stealth,
+  stairs are walked (1118358, 02b766d, dc25fd5); leaving the place leaves the talk partner
+  (2fe71df).
+- **Words and names**: "Inside" is no name and no speaker (ddfe9b0, c20b7f7); a name that is a
+  word of the person's own job is the job (c20b7f7); the verifier may let others name the player
+  (d98a7c5, my own run 9 clause had been read the other way); a short NPC line is not the
+  player's, and the other half of a split line keeps its capital (06c7dff, 5240cdb).
+- **Items and places**: stowing is taking (a7298db); the plural handed over is the whole stack
+  (1ba5b53); someone else's tunic gets no item code (c45a92d); the player's stated restraint
+  stands (ab64cc8); the walk ends at the last place named (dc25fd5); other spellings of here are
+  here (88693cd, 300bdf3).
+
 ## Logged, not fixed
 
 - C9 voice: a turn in past tense (r2 T3); NPC lines without quote marks (r4 T4).
@@ -113,6 +136,10 @@ Turns stay fast (10-40 s).
   warnings from the dockworkers"); the batch 6 review keeps true memories as a look's payoff, so
   a pattern cannot cut them. The outcome reader in prompt-review-2026-10-14.md is the candidate.
 
+- Continued work that fills the pack records nothing when the draft's grant is vague ("Salvage").
+- A person left behind turns up at the destination (Verity "nods approvingly from where she
+  stands nearby" on the flats).
+
 ## Next
 
-Run 25 on 1f95eef or later; keep logging by class.
+Run 38 on 1ba5b53 or later; keep logging by class.
