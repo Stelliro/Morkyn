@@ -498,6 +498,25 @@ class AskingThePayOpensTheParser(unittest.TestCase):
         self.assertEqual(quest_parse_gate("She nods.", '"How much for the rope?"'), "")
 
 
+class TheStorehouseThePlayerNamed(unittest.TestCase):
+    """Run 32 T4: 'I walk out to the northernmost storehouse' made 'Saltmarrow Supplies' (from 'goods and supplies')."""
+
+    def test_named_from_the_line(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You walk out onto the firm ground, heading towards the northernmost storehouse. You knock on the door, "
+                 "and Maud Venn steps aside to let you in. The storehouse is a small, cozy room filled with various "
+                 "goods and supplies.")
+        line = "I walk out to the northernmost storehouse with the tally sticks, keeping to the firm ground."
+        with connect() as conn:
+            shown = world._venue_shown_in_prose(conn, {"npcs": []}, prose, player_input=line)
+        self.assertIsNotNone(shown)
+        self.assertEqual(shown["name"], "Northernmost Storehouse")
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

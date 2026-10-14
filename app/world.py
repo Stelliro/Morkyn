@@ -7150,7 +7150,28 @@ def _venue_name_in_text(name: str, text: str) -> bool:
     return bare != low and len(bare) >= 4 and bool(re.search(rf"(?<![a-z]){re.escape(bare)}(?![a-z])", text))
 
 
-def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=None) -> dict[str, Any] | None:
+_ASKED_BUILDING_RE = re.compile(
+    r"\b(?:to|into|toward|towards|for)\s+the\s+((?:[a-z][a-z'’-]+\s+){0,2}"
+    r"(?:storehouse|warehouse|store\s*house|storeroom|shed|barn|boathouse|net\s*shed|workshop|office|hall|house|"
+    r"lodge|hut|shack|cottage|granary|cellar|tower|mill|smokehouse|saltworks|tannery|ropewalk|chandlery))\b",
+    re.I,
+)
+
+
+def _asked_building_phrase(player_input: str, narration: str) -> str:
+    """The building the player's own line goes to, title-cased, when the prose uses its head word."""
+    line = _player_line(str(player_input or "")) if player_input else ""
+    m = _ASKED_BUILDING_RE.search(re.sub(r"[\"“][^\"”]*[\"”]", " ", line))
+    if not m:
+        return ""
+    phrase = re.sub(r"\s+", " ", m.group(1)).strip()
+    head = phrase.split()[-1].lower()
+    if not re.search(rf"\b{re.escape(head)}\b", str(narration or ""), re.I):
+        return ""
+    return " ".join(w[:1].upper() + w[1:] for w in phrase.split())
+
+
+def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=None, player_input: str = "") -> dict[str, Any] | None:
     """The building the prose walked the player into with no MOVE, made a real venue.
 
     Playtest #16: game 2's draft had Elara wave the player and Aria into a herb
@@ -7216,7 +7237,13 @@ def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=Non
         if not chosen:
             return None
         noun = " ".join(word[:1].upper() + word[1:] for word in str(shown.get("noun") or "shop").split())
-        if keeper:
+        asked = _asked_building_phrase(player_input, narration)
+        if asked:
+            # The player's own words for where they went: "I walk out to the
+            # northernmost storehouse" made "Saltmarrow Supplies" from "goods
+            # and supplies" inside it (7B run 32, T4).
+            name = asked
+        elif keeper:
             name = f"{keeper}'s {noun}"
         else:
             parent_name = str(here["name"] or "").strip()
@@ -9637,7 +9664,7 @@ def resolve_movement(
         # (playtest #33: "You step off the platform and into the med-bay").
         shown = None
         if not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name):
-            shown = _venue_shown_in_prose(conn, result, narration)
+            shown = _venue_shown_in_prose(conn, result, narration, player_input=player_input)
         if shown:
             player_patch["move_to_location"] = shown["name"][:120]
             return {
@@ -9885,7 +9912,7 @@ def resolve_movement(
         ("__wait_request__", "__opening_scene_request__", "__continue_scene_request__", "__event_request__")
     )
     if not silent_turn and not _entry_belongs_elsewhere(rows, result, player_input, narration, current_name):
-        shown = _venue_shown_in_prose(conn, result, narration)
+        shown = _venue_shown_in_prose(conn, result, narration, player_input=player_input)
     if shown:
         player_patch["move_to_location"] = shown["name"][:120]
         return {
