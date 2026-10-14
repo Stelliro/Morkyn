@@ -1991,8 +1991,20 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         }
     else:
         pool = _npc_pool_from_context(ctx)
-        for npc in pool[:12]:
-            if _line_names_npc(text, npc):
+        # "I keep my eyes on the man in the skiff, not Emrys. 'I asked him.
+        # Tobin, what is under the tarpaulin?'" rolled persuasion vs Emrys (7B
+        # run 36, T6). A name the line turns away from is not the other side,
+        # and a line that calls on someone the engine does not hold yet has no
+        # one known on the other side.
+        named_text = re.sub(r"\b(?:not|instead\s+of|rather\s+than|ignoring)\s+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+", " ", text)
+        called = [
+            m.group(1)
+            for m in re.finditer(r"(?:^|[\"“]|[.!?]\s+)([A-Z][a-z]{2,}),\s+(?:what|who|where|why|how|is|are|do|did|can|will|tell|show|give)\b", text)
+        ]
+        known_first = {str(n.get("name") or "").split()[0].lower() for n in pool if str(n.get("name") or "").strip()}
+        stranger_called = bool(called) and all(c.lower() not in known_first for c in called)
+        for npc in ([] if stranger_called else pool[:12]):
+            if _line_names_npc(named_text, npc):
                 matched_npc = npc
                 opposition = {
                     "name": npc.get("name"),
@@ -2007,7 +2019,7 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         # Talk with no named target: the one the engine decided the player is
         # talking to, or the only person here. The first local in the list was
         # a stale pick, often a listener or someone who had left (playtest #89).
-        if not matched_npc and skill in {"persuasion", "deception", "intimidation", "insight", "etiquette"}:
+        if not matched_npc and not stranger_called and skill in {"persuasion", "deception", "intimidation", "insight", "etiquette"}:
             conv = ctx.get("conversation_turn") if isinstance(ctx.get("conversation_turn"), dict) else {}
             addressed = [str(c).upper() for c in conv.get("addressed") or []]
             by_code = {str(n.get("code") or "").upper(): n for n in pool if n.get("code")}
