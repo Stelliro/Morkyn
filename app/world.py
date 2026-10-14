@@ -10293,6 +10293,13 @@ _OUTDOOR_AREA_ONWARD_RE = re.compile(
 )
 
 
+_OUTDOOR_WALK_VERB_RE = re.compile(
+    r"\b(?:go|goes|going|walk\w*|head\w*|make\s+my\s+way|return\w*|run|hurry|stroll\w*|cross\w*|wander\w*|"
+    r"march\w*|climb\w*|wade\w*|pick\s+my\s+way)\b",
+    re.IGNORECASE,
+)
+
+
 def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -> str:
     """An open part of this settlement the player walks to (the flats, the harbour, the square), or "".
 
@@ -10303,6 +10310,12 @@ def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -
     speech and does not stop the walk.
     """
     matches = list(_OUTDOOR_AREA_RE.finditer(wanted or ""))
+    if not matches:
+        # "I head down the slope toward the old docks" (8B run 13, T3): the walk
+        # verb is a few words before "toward".
+        walk = _OUTDOOR_WALK_VERB_RE.search(wanted or "")
+        matches = [m for m in _OUTDOOR_AREA_ONWARD_RE.finditer(wanted or "") if walk and walk.end() <= m.start()
+                   and m.start() - walk.end() <= 40][:1]
     if not matches:
         return ""
     match = matches[0]
@@ -10329,7 +10342,10 @@ def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -
         if words and (words[-1] == head or words[-1].rstrip("s") == head.rstrip("s")) and not str(row["kind"] or ""):
             turn_ledger.note("movement", "outdoor_area_requested", place=str(row["name"] or ""), made=False)
             return str(row["name"] or "")
-    if head not in _unspoken(narration).lower():
+    # "the dockworkers" among the pilings names the docks (8B run 13, T3).
+    if head not in _unspoken(narration).lower() and not re.search(
+        rf"\b{re.escape(head.rstrip('s'))}", _unspoken(narration), re.I
+    ):
         return ""
     if _prose_stops_walk(head, narration):
         turn_ledger.note("movement", "requested_walk_stopped_in_prose", place=area)
