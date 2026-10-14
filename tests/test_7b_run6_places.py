@@ -179,6 +179,27 @@ class SomeoneMetAtTheEndOfAWalk(unittest.TestCase):
     def test_someone_asked_before_the_walk_stays(self):
         self.assertEqual(self._place("I ask the fisherman about the jar, then head back up to the docks."), "L2")
 
+    def _place_known(self, narration):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            district = world._upsert_location(conn, "Drowned District", "")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (district,))
+            world._upsert_npc(conn, {"name": "Eldric Thorne", "location": "L2", "role": "fisherman"})
+            npcs = [{"name": "Eldric Thorne", "location": "L2", "role": "fisherman"}]
+            world._place_new_people_at_arrival(conn, npcs, {"player": {"move_to_location_code": "L1"}}, self.LINE,
+                                               narration)
+        return npcs[0]["location"]
+
+    def test_someone_known_shown_at_the_end_is_there(self):
+        # 8B run 40, T1: the tallyman from the opening, behind his desk, was kept in the town left behind.
+        self.assertEqual(self._place_known("At the docks Eldric Thorne looks up from his nets."), "L1")
+
+    def test_someone_known_not_shown_stays(self):
+        self.assertEqual(self._place_known("At the docks a fisherman looks up from his nets."), "L2")
+
 
 class SomeoneTalkedToIsInTheScene(unittest.TestCase):
     """8B run 12, T1: the potter's LOC "Saltmarrow Stables" minted stables while she talked in the street."""
