@@ -442,6 +442,26 @@ class ThePlaceCrossedIsNoDestination(unittest.TestCase):
         self.assertTrue(world._line_was_about_going("I head down to the drowned district before the tide turns."))
 
 
+class TheMothersReckonerIsYours(unittest.TestCase):
+    """8B run 18, T0: "You have the mother's brass tide-reckoner in your pocket"."""
+
+    def test_the_article_becomes_your(self):
+        from app import prose_state
+
+        owned = ["mother's brass tide-reckoner A brass tide-reckoner that never keeps true time.", "worn boots"]
+        text = "You have the mother's brass tide-reckoner in your pocket. \"The mother's hand was steady,\" he says."
+        fixed, changes = prose_state.repair_kin_item_article(text, owned)
+        self.assertIn("You have your mother's brass tide-reckoner", fixed)
+        self.assertIn("\"The mother's hand was steady,\"", fixed)
+        self.assertEqual(len(changes), 1)
+
+    def test_nothing_without_such_an_item(self):
+        from app import prose_state
+
+        text = "The mother's grave lies past the seawall."
+        self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
+
+
 class _ConnStub:
     """No one known yet."""
 
