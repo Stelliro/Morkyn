@@ -14312,6 +14312,8 @@ def _person_in_cut(cut: str) -> str:
     if kin:
         word = kin.group("kin").lower()
         return f"your {word}|{'she' if word in _KIN_SHE else 'he'}"
+    # "the Tally House" is a place, not a person (8B run 46, T2).
+    cut = re.sub(r"\b[Tt]he\s+(?:[A-Z][\w'’]*\s*)+", "the place ", cut)
     names = [m.group(0) for m in re.finditer(r"(?<![.!?]\s)(?<!^)\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?\b", cut)
              if m.group(0).split()[0].lower() not in {"you", "your", "the", "saltmarrow"}]
     return f"{names[0]}|" if len(set(names)) == 1 else ""
@@ -14337,6 +14339,12 @@ def _restore_stranded_referent(sentence: str, stranded: str) -> str:
     head = sentence[: m.start()]
     if re.search(r"[\"“]", head) and head.count('"') % 2 == 1:
         return sentence  # inside someone's line
+    # Someone named before the pronoun is its referent: "Kael, the tallyman,
+    # looks up from his ledger" became "from Tally House's ledger" (8B run 46, T2).
+    if any(w not in {"The", "You", "Your", "A", "An", "It", "Its", "They", "Their", "He", "She", "His", "Her", "Then",
+                     "But", "And", "As", "When", "Inside", "Outside"}
+           for w in re.findall(r"\b[A-Z][a-z]{2,}\b", head)):
+        return sentence
     after = (m.group("after") or "").strip().lower().strip(",.;:!?")
     if word == "his" or (word == "her" and after and after not in _NOT_POSSESSED):
         new = f"{who}'s"

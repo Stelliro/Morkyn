@@ -20503,9 +20503,19 @@ def _reconcile_prose_with_state(
         tokens = list(item.get("tokens") or _item_name_tokens(name_l))
         carry = {"on": False, "dropped": False, "any_dropped": False}
         shared: list[str] = []
+        # A sentence someone speaks shows nothing reaching the player: "Either
+        # way, it'll take time.\"" in the tallyman's list of jobs was cut as the
+        # refused goods arriving, and took his closing quote with it (8B run 46, T2).
+        spoken = {
+            piece for start, _end, piece in prose_state.sentence_spans(text)
+            if text[:start].count("“") > text[:start].count("”") or text[:start].count('"') % 2 == 1
+        }
 
         def shows_arrival(sentence: str, name_l: str = name_l, tokens: list[str] = tokens, carry: dict = carry,
-                          shared: list[str] = shared) -> bool:
+                          shared: list[str] = shared, spoken: set = spoken) -> bool:
+            if sentence in spoken or sentence.strip() in spoken:
+                carry["on"] = carry["dropped"] = False
+                return False
             lower = sentence.lower()
             about = _sentence_mentions_item(lower, name_l, tokens)
             if not about and carry["any_dropped"] and _REFUSED_STASH_RE.search(lower):
