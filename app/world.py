@@ -9498,8 +9498,12 @@ def _unasked_unshown_move(
     walk = result.get("map_walk")
     if not (code or name or walk):
         return ""
-    if current_name and not walk and not code and name.lower() == current_name.strip().lower():
-        return ""  # the legacy rules reject it as same_place_name and repair from the line
+    if current_name and not code and name.lower() == current_name.strip().lower():
+        if not walk:
+            return ""  # the legacy rules reject it as same_place_name and repair from the line
+        # With a WALK beside it only the walk is left to judge (8B run 24, T2:
+        # "MOVE to Drowned Lower District dropped" while standing in it).
+        name = ""
     # A place named only inside the player's own quoted question is not a
     # walk request (7B run 20, T4: "Where do I find this Thaddeus, then - the
     # harbour office?" kept a MOVE to a new Harbour Office the prose walked to).
@@ -13276,6 +13280,24 @@ def _place_new_people_at_arrival(
         if str(npc.get("location") or "").strip().lower() in left:
             npc["location"] = str(dest["code"] or dest["name"])
             turn_ledger.note("npc", "placed_at_arrival", name=str(npc.get("name") or ""), place=str(dest["name"] or ""))
+
+
+_FACT_FILLER = {"player", "players", "scene", "turn", "the", "about", "their", "there", "with", "from", "that", "this"}
+
+
+def _fact_shown(content: str, narration: str, player_input: str) -> bool:
+    """A model fact is about this scene: a name in it is in the prose, or a third of its content words are."""
+    from app.narration_pipeline import content_stems
+
+    stems = {s for s in content_stems(content) if s not in _FACT_FILLER}
+    if len(stems) < 2:
+        return True
+    shown = f"{narration}\n{_player_line(player_input) if player_input else ''}"
+    names = [w for w in re.findall(r"\b[A-Z][a-z]{2,}\b", content)
+             if w.lower() not in {"the", "you", "your", "his", "her", "she", "they", "their", "this", "that", "there", "look"}]
+    if any(re.search(rf"\b{re.escape(n)}\b", shown) for n in names):
+        return True
+    return len(stems & content_stems(shown)) * 3 >= len(stems)
 
 
 def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str, Any]) -> None:
@@ -21371,8 +21393,16 @@ def apply_turn(
             # tide-reckoner job starting again (7B run 5 #130, T46). The note
             # is kept, as a fact.
             kind = str(entry.get("kind") or "fact")[:40]
+            filed_as = kind.strip().lower()
             if kind.strip().lower() in ENGINE_JOURNAL_KINDS:
                 kind = "fact"
+            # A fact the scene never shows is no record of it: "The tallow
+            # chandler is suspicious of the player's intentions" from a turn
+            # with no chandler in it (8B run 24, T2). A note the model filed
+            # under a job stays a fact about that job (7B run 5 #130).
+            if filed_as == "fact" and not _fact_shown(str(entry.get("content") or ""), _narration_text(result) or narration, player_input):
+                turn_ledger.note("journal", "unshown_fact_dropped", content=str(entry.get("content") or "")[:200])
+                continue
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                 (turn, kind, str(entry.get("content") or "")[:1400]),
