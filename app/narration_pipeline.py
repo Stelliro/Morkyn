@@ -2487,7 +2487,11 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             # '"is a wreck that sank ..."' (8B run 27, T3).
             short = (len(_speech_key(span["inner"]).split()) * 5 < len(_speech_key(quote).split()) * 3
                      and _quote_matches(span["inner"], quote) != "exact")
-            if span["speaker"] == "other" and not short and _quote_matches(span["inner"], quote):
+            # Said back as a repeat is theirs: '"The rusted tools," he repeats'
+            # (8B run 52, T3); the player's own line is still said, at the start.
+            repeated = bool(re.match(r"[^.!?\n\"“]{0,30}\b(?:repeat|repeats|repeated|echo|echoes|echoed)\b",
+                                     body[span["end"]:]))
+            if span["speaker"] == "other" and not short and not repeated and _quote_matches(span["inner"], quote):
                 start, end = span["start"], span["end"]
                 # The speech tag after it goes with it: '"...," she says, glancing at you.'
                 tail = body[end:]
@@ -2497,7 +2501,10 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 # speaker's tag goes whole (7B run 6, T2: '"Salvagers, Isk," he
                 # says, his voice a low tone. "From where? Not ours, then."'
                 # left the stub '"Salvagers," he says').
-                if span["chained"] and index > 0 and _quote_part(found[index - 1]["inner"], quote):
+                # A speech tag stands between the halves; a word quoted in the
+                # narration ('pause at the word "tools."') is no half (8B run 52, T3).
+                if (span["chained"] and index > 0 and _quote_part(found[index - 1]["inner"], quote)
+                        and _OTHER_SPEAKER_TAG_RE.search(body[found[index - 1]["end"]:span["start"]])):
                     index -= 1  # spans before it keep their offsets
                     start = found[index]["start"]
                 # Its lead-in goes with it: "Hereward's words echo in your mind:" (run 17, T2).
