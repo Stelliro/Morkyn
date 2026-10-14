@@ -334,6 +334,28 @@ class ACutLeavesNoPronounStranded(unittest.TestCase):
                          "He gestures toward the shipyard.")
 
 
+class AShrugAfterAQuestionIsTheAnswer(unittest.TestCase):
+    """8B run 15, T2: '"What's on your hands?" she asks ... You glance down, noting ...' answered for the player."""
+
+    def test_the_look_goes_and_the_scene_stays(self):
+        from app import llm
+
+        line = "\"If the well's dry, where are you getting water? And what's on your hands?\""
+        text = ('"What\'s on your hands?" she asks, her eyes narrowing. You glance down, noting the faint trace of salt '
+                'and grit clinging to your palms. Behind her, the lantern gutters.')
+        kept, dropped = llm.drop_invented_player_acts_text(text, line)
+        self.assertNotIn("You glance down", kept)
+        self.assertIn("the lantern gutters", kept)
+
+    def test_a_look_the_player_asked_for_stays(self):
+        from app import llm
+
+        line = "I glance down at my hands."
+        text = "You glance down at your hands. Salt has dried white in the creases."
+        kept, _ = llm.drop_invented_player_acts_text(text, line)
+        self.assertIn("You glance down", kept)
+
+
 class _ConnStub:
     """No one known yet."""
 

@@ -13652,7 +13652,10 @@ _PLAYER_INNER_SUBJECT_RE = re.compile(
 )
 _PLAYER_GESTURE_RE = re.compile(
     rf"^{_ACT_ADVERBS}(?P<v>nod(?:s|ded)?|shrug(?:s|ged)?|smile[sd]?|grin(?:s|ned)?|sigh(?:s|ed)?|laugh(?:s|ed)?|"
-    r"chuckle[sd]?|frown(?:s|ed)?|wince[sd]?|shake\s+your\s+head|shook\s+your\s+head)\b",
+    r"chuckle[sd]?|frown(?:s|ed)?|wince[sd]?|shake\s+your\s+head|shook\s+your\s+head|"
+    # A look at oneself is a gesture too: '"What's on your hands?" she asks.
+    # You glance down, noting the salt and grit on your palms' (8B run 15, T2).
+    r"glance[sd]?\s+down|look(?:s|ed)?\s+down\s+at\s+your(?:self)?)\b",
     re.I,
 )
 _PLAYER_SPEECH_ACT_RE = re.compile(
