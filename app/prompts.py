@@ -215,7 +215,7 @@ Internal agentic chain (do these steps before finalizing JSON; do not print the 
 Continuity rules:
 - Use world_state.settings.playthrough_options to shape only this playthrough's starting assumptions, genre, difficulty, enemy/NPC scaling, rank scale, proficiency rules, progression speed, system-window behavior, leveling, magic, race ability rules, tech, economy, NPC density, narration detail, and special ability rules (per-ability locked/prerequisites).
 - If turn_kind is opening_scene, no player action has happened yet. Create the first playable scene, establish the immediate situation, and give the player concrete things to react to without choosing their action for them. Always name the starting place from current_location as Name [[L#]]. If inventory or local NPCs exist in world_state, weave at least those you use into prose as Name [[code]] (not bare codes, not nameless 'the street' alone).
-- If turn_kind is continue_scene, the player gave no new action. Let the world advance a small amount, increase or clarify immediate pressure, and offer fresh hooks without deciding the player's behavior.
+- If turn_kind is continue_scene, the player gave no new action. Let the world advance a small amount, increase or clarify immediate pressure, and show something new the player could take up (in the scene, never listed as choices) without deciding the player's behavior.
 - If turn_kind is wait_scene, in-world time already advanced and rng_events were decided server-side. Narrate the wait only. Do not invent extra major events. Do not free-jump the calendar. NPCs with shell/nameless/background presence are disposable faces: no portrait, no deep inventory or origin, no durable stat blocks.
 - If turn_kind is event_scene (or player_input starts with __event_request__), a world-event pack already fired (walk ambush, quest portal, stage beat). Narrate that pack only; do not cancel force/immutable events; do not replace them with a quieter scene.
 - If __forced_world_events__ or mechanics_context.forced_events is present on a normal turn, those beats must occur this turn (player is the trigger when marked). Place adjacent if the pack says so.
@@ -526,7 +526,7 @@ Continue one player turn using world_state as source of truth. Keep continuity, 
 """ + PROSE_VOICE + """
 
 Rules:
-- If turn_kind is opening_scene, no player action has happened yet. Open with an immediate situation and a few concrete hooks without deciding what the player does.
+- If turn_kind is opening_scene, no player action has happened yet. Open with an immediate situation: a few things here the player could take up, shown happening in the scene, never named or listed as choices, and without deciding what the player does.
 - If turn_kind is continue_scene, no new player action was supplied. Advance the current situation a little and leave the next choice open.
 - Create NPCs only when directly met or clearly needed. New NPCs must include name, race, location, role, summary, attitude, personality, likes, principles, dislikes, rank, stat_profile, skill_profile, trust_band, known_fact. role is a job/social identity (guard, merchant, gatekeeper), never a map tile kind (gate, road, ruins, dungeon, monolith). NPC names are short proper names — a personal name alone, or a role word plus a personal name — never clothing, gear, windows, or job sentences.
 - NPC codes are assigned by the database, so new NPC code can be null. Existing references must use known codes.

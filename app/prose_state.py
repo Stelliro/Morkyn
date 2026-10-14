@@ -976,7 +976,10 @@ _STAGE_SENTENCE_RE = re.compile(
     # A shift to somewhere, or a shift and nothing else, is about the scene as
     # a construct. "The scene shifts slightly, the light from the oil lamps
     # shifting with ..." describes the room and stays (7B run 10, T3).
-    r"^\s*The\s+(?:focus|scene)\s+(?:now\s+)?(?:shifts|changes)(?:\s+\w+ly)?"
+    # 7B run 30, T0: "The tannery and the mole catcher offer two concrete
+    # hooks: assist in mole control or ignore him." (the prompt's own word).
+    r"^.*?\b(?:concrete\s+hooks?|(?:offer|offers|present|presents|provide|provides)\s+(?:\w+\s+){0,2}hooks?\s*:)"
+    r"|^\s*The\s+(?:focus|scene)\s+(?:now\s+)?(?:shifts|changes)(?:\s+\w+ly)?"
     r"(?=\s*[.!]|\s+(?:to|towards?|back|again|away|from|elsewhere)\b)"
     r"|^\s*The\s+(?:focus|scene)\s+(?:now\s+)?is\s+about\s+to\s+(?:change|shift)\b"
     # 7B run 6, T6: "The scene ends with you standing in the town square, the

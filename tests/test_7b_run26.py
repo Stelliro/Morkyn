@@ -221,6 +221,42 @@ class PastedLineAndWalkIn(unittest.TestCase):
         self.assertNotIn("step inside", out["narration"])
 
 
+class IntroducedThenTagged(unittest.TestCase):
+    """Run 30 T0: "A mole catcher named Dunstan Wadley" then '"Morning," Dunstan calls out' stored a bare "Dunstan"."""
+
+    def test_full_name_stored(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        text = ("You stand at the edge of the market square.\n\n"
+                "A mole catcher named Dunstan Wadley, with a stubbled face and a battered hat, stands near the tannery "
+                "entrance. He glances at you with a mix of curiosity and wariness.\n\n"
+                "\"Morning, flat-runner,\" Dunstan calls out, his voice rough from sleep. \"Need any help with the moles?\"")
+        with connect() as conn:
+            loc = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            conn.execute("DELETE FROM npcs")
+            world._ensure_npcs_from_narration(conn, {"npcs": []}, text, loc)
+            names = [r[0] for r in conn.execute("SELECT name FROM npcs").fetchall()]
+        self.assertEqual(names, ["Dunstan Wadley"])
+
+
+class HooksSentence(unittest.TestCase):
+    """Run 30 T0: "The tannery and the mole catcher offer two concrete hooks: ..." shipped."""
+
+    def test_dropped_and_not_asked(self):
+        from app import world
+        from app.prose_state import repair_meta_leaks
+
+        text = ("You stand in the square. The tannery looms to your left, its barrels stacked high with hides.\n\n"
+                "The tannery and the mole catcher offer two concrete hooks: assist in mole control or ignore him.")
+        out, fixes = repair_meta_leaks(text)
+        self.assertNotIn("hooks", out)
+        self.assertIn("A variety of ropes hang from hooks.", repair_meta_leaks("A variety of ropes hang from hooks.")[0])
+        self.assertNotIn("hooks", world.OPENING_SCENE_INPUT)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

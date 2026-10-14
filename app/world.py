@@ -123,7 +123,8 @@ _REPLACE_ONLY_WHEN_EXPORTED = frozenset({
 })
 OPENING_SCENE_INPUT = (
     "__opening_scene_request__: Begin the playthrough before the player acts. "
-    "Establish the immediate situation and its concrete hooks, then stop; the player acts first. "
+    "Establish the immediate situation, with things the player could take up shown in the scene (never "
+    "named or listed as choices), then stop; the player acts first. "
     # 7B run 10, T0: the opening gave the player two spoken lines and an offer.
     "The player has said and decided nothing yet: give them no words, no offer, no answer and no choice; "
     "others may speak to them, and the scene ends there."
@@ -17111,6 +17112,16 @@ def _ensure_npcs_from_narration(
         # before an introduction is that person; any other hint is someone else.
         intro_ats = [_sentence_index(text, p["name"]) for p in introduced_all]
         hints = [h for h in hints if not any(0 <= at - _sentence_index(text, h) <= 1 for at in intro_ats)]
+        # A speaker tag with a name from an introduced person is that person:
+        # '"Morning, flat-runner," Dunstan calls out' after "A mole catcher
+        # named Dunstan Wadley" stored a second, bare "Dunstan" (7B run 30, T0).
+        intro_words = {w.lower() for p in introduced_all for w in str(p["name"]).split()}
+
+        def _names_introduced(hint: str) -> bool:
+            speaker = _NAMED_SPEAKER_RE.fullmatch(hint)
+            return bool(speaker) and all(w.lower() in intro_words for w in speaker.group(1).split())
+
+        hints = [h for h in hints if not _names_introduced(h)]
         if hints:
             introduced_all = []
     created_intro: list[dict[str, Any]] = []
