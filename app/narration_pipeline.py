@@ -1845,6 +1845,7 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
     own_stems = content_stems(own) if voiced else set()
     asked = voiced and bool(re.search(r"\b(?:ask|asks|asked|inquire|enquire|question)\w*\b", own, re.I))
     voicing_kept = False  # the one line that voices an indirect request
+    said_by_player: set[str] = set()  # content stems of the player's lines kept so far
     out: list[str] = []
     dropped: list[str] = []
     other_spoke = False  # someone else has a line earlier in this narration
@@ -1971,8 +1972,15 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                     )
                 if tagged or gesture_player or (bare[index] and (player_turn or (players_block and not voiced))):
                     player_turn = True
-                    if all(_words_from_player(span, own, quotes) for span in spans):
+                    stems = content_stems(" ".join(spans))
+                    if stems and said_by_player and len(stems & said_by_player) >= 0.8 * len(stems):
+                        # Said once is said: '"Then tell me what it is, and what
+                        # it pays," you say' after the typed line was already
+                        # given in full (8B run 10, T3) repeats the player.
+                        dropped.append(unit)
+                    elif all(_words_from_player(span, own, quotes) for span in spans):
                         kept_units.append(unit)
+                        said_by_player.update(stems)
                     elif tagged and quotes and len(spans) > 1 and any(_is_player_line(s, quotes) for s in spans):
                         # The player's own line with an invented half after the tag
                         # (7B run 9, T2: '"Thanks, Hal," you call back, "I'll be
