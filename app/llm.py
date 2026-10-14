@@ -15575,7 +15575,7 @@ def _keep_player_words(
     word for word, the player's words leave another speaker's mouth, and a
     line the prose left out is said as the scene opens. The scene stays.
     """
-    from app.narration_pipeline import keep_player_words
+    from app.narration_pipeline import drop_echoed_own_questions, keep_player_words
 
     if not isinstance(turn, dict):
         return turn
@@ -15586,7 +15586,10 @@ def _keep_player_words(
         text = joined or text
     if not text.strip():
         return turn
+    text, echoed = drop_echoed_own_questions(text, player_input)
     fixed, changes = keep_player_words(text, player_input)
+    if echoed:
+        fixed, changes = (fixed if changes else text), echoed + changes
     if not changes:
         return turn
     turn["narration"] = fixed

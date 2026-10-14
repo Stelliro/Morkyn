@@ -290,6 +290,30 @@ class AnAsYouLeadIsThePlayersAct(unittest.TestCase):
         self.assertEqual(llm._strip_player_acts_from_sentence(sentence, llm.player_line_of(line), line)[0], sentence)
 
 
+class TheOwnQuestionIsNotNarrated(unittest.TestCase):
+    """8B run 14, T1: the player's unquoted question came back as the prose's own sentence, and seeded Ivo."""
+
+    LINE = ("I wade over to the fishmonger's stall and crouch to look at the shape beneath it, without touching "
+            "anything yet. Is it a person, and how long has it been there?")
+
+    def test_the_question_goes_and_the_answer_stays(self):
+        from app.narration_pipeline import drop_echoed_own_questions
+
+        prose = ("You wade over to the fishmonger’s stall and crouch to look at the shape beneath it, without touching "
+                 "anything yet. Is it a person, and how long has it been there? The shape there is small, curled "
+                 "like a child’s body. It’s been there for at least a day.")
+        fixed, changes = drop_echoed_own_questions(prose, self.LINE)
+        self.assertNotIn("Is it a person", fixed)
+        self.assertIn("The shape there is small", fixed)
+        self.assertTrue(changes)
+
+    def test_a_figure_asked_about_is_no_one_shown(self):
+        from app import world
+
+        self.assertEqual(world._figure_hints("Is it a person, and how long has it been there?"), [])
+        self.assertTrue(world._figure_hints("A woman approaches and asks, \"Need help?\""))
+
+
 class _ConnStub:
     """No one known yet."""
 

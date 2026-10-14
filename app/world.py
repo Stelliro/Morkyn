@@ -16872,6 +16872,10 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     for match in _FIGURE_HINT_RE.finditer(str(text or "")):
         if re.search(r"\b(?:like|as|than|as\s+if|as\s+though)\s*$", str(text)[: match.start()], re.I):
             continue  # a simile: "like a man waiting for a trap to spring"
+        # A figure asked about is not one shown: "Is it a person, and how long
+        # has it been there?" seeded Ivo the roofer (8B run 14, T1).
+        if re.match(r"[^.!?\"“”]*\?", str(text)[match.end():]) and not re.search(r"[\"“][^\"”]*$", str(text)[: match.start()]):
+            continue
         # Live gate N1: "Mira, a wiry woman with a sharp gaze" seeded Zihan the
         # beekeeper from Mira's own description. A figure in apposition to a
         # known name is that person.
