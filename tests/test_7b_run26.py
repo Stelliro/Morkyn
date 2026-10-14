@@ -1124,6 +1124,27 @@ class Run3DrownedHouse(unittest.TestCase):
         self.assertIn("lamp", kept)
 
 
+class NamedOnlyInSomeonesLine(unittest.TestCase):
+    """8B run 2 T6: 'The guild, and the Harbour Reeve. They've been looking for you.' made a person not in the scene."""
+
+    def _kept(self, names, prose):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            conn.execute("DELETE FROM npcs")
+            return [n["name"] for n in world._npcs_shown_in_prose(conn, [{"name": n, "role": "local"} for n in names], prose)]
+
+    def test_mention_is_not_shown_but_address_is(self):
+        prose = ('Colm sits by the harbour stores. "The guild," he says, "and the Harbour Reeve. They have been looking '
+                 'for you." You turn to the boy at the door. "Not yet, Hargrave," you say.')
+        kept = self._kept(["Harbour Reeve", "Hargrave"], prose)
+        self.assertNotIn("Harbour Reeve", kept)
+        self.assertIn("Hargrave", kept)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
