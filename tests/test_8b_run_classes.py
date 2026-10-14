@@ -1051,6 +1051,33 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class ARepeatIsTheirs(unittest.TestCase):
+    """8B run 52, T3: '"The rusted tools," he repeats' was cut from 'the word "tools."' on, breaking the quote."""
+
+    def test_the_echo_and_the_quoted_word_stay(self):
+        from app import narration_pipeline as npl
+
+        line = ('"The rusted tools, then." I lean on the desk. "Where do they lie, and what does bringing them up '
+                'take off my ledger?"')
+        draft = ("The tallyman pauses at the word \"tools.\" His face tightens. \"The rusted tools,\" he repeats. "
+                 "\"They lie in the old dockyard.\" He leans back.")
+        out, _changes = npl.keep_player_words(draft, line)
+        self.assertIn("the word \"tools.\"", out)
+        self.assertIn("he repeats", out)
+
+
+class TheJobsGiverIsShownByTheJob(unittest.TestCase):
+    """8B run 52, T3: the prose called Ralph only "the tallyman", and his job was filed under no one."""
+
+    def test_the_tallyman_is_here(self):
+        from app import quest_parser
+
+        ralph = {"id": 2, "code": "B", "name": "Ralph", "role": "tallyman"}
+        self.assertTrue(quest_parser._shown_by_role("The tallyman’s fingers trace the line.", ralph, [ralph]))
+        other = {"id": 3, "code": "C", "name": "Odo", "role": "tallyman"}
+        self.assertFalse(quest_parser._shown_by_role("The tallyman’s fingers trace the line.", ralph, [ralph, other]))
+
+
 class OneLineVoicesTheRequest(unittest.TestCase):
     """8B run 48, T1: two invented player lines stood for "ask the tallyman what work he'll take"."""
 

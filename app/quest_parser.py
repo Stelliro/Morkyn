@@ -907,6 +907,22 @@ def _named_in(narration: str, npc: dict[str, Any]) -> bool:
     )
 
 
+def _shown_by_role(narration: str, npc: dict[str, Any] | None, npcs: list[dict[str, Any]] | None) -> bool:
+    """The prose calls this person by their job ("The tallyman's fingers trace the line"), and no one else
+    listed has that job: Ralph's job was filed as offered by no one (8B run 52, T3)."""
+    if not npc:
+        return False
+    words = [w for w in re.findall(r"[a-z]+", str(npc.get("role") or "").lower()) if len(w) >= 4]
+    if not words:
+        return False
+    head = words[-1]
+    if not re.search(rf"\b[Tt]he\s+(?:[a-z]+\s+)?{re.escape(head)}\b", str(narration or "")):
+        return False
+    others = [n for n in npcs or [] if n is not npc and str(n.get("name") or "") != str(npc.get("name") or "")
+              and head in str(n.get("role") or "").lower()]
+    return not others
+
+
 _NOT_A_SPEAKER = frozenset({
     "You", "Your", "He", "She", "They", "It", "His", "Her", "Their", "The", "A", "An", "I", "Is", "Was", "This",
     "That", "There", "Then", "But", "And", "As", "When", "With", "Over", "In", "On", "At",
@@ -1125,6 +1141,7 @@ def validate_quest_changes(
         # The one the prose shows only as a figure this turn is here too: the
         # masked figure bound to Bertha Radley made the offer (8B run 19, T0).
         if (giver is not None and speaker is None and not _named_in(narration, giver)
+                and not _shown_by_role(narration, giver, npcs)
                 and str(giver.get("name") or "").strip().lower() not in here_unnamed):
             from app import turn_ledger
 
