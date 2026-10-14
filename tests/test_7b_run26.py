@@ -683,6 +683,14 @@ class PlayerLineTagged(unittest.TestCase):
         out, _ = keep_player_words(text, line)
         self.assertIn('this early?" you ask. Emrys Slade ponders', out)
 
+    def test_no_second_tag(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = '"Morning. Nothing yet, the tide is still too high." I nod. "Moles out on the flats? I thought they kept to the gardens."'
+        text = ('"Morning. Nothing yet, the tide is still too high," you reply. "Moles out on the flats? I thought they '
+                'kept to the gardens."\n\nOrabel hums.')
+        self.assertNotIn("you ask", keep_player_words(text, line)[0])
+
     def test_statement_gets_a_comma(self):
         from app.narration_pipeline import keep_player_words
 
