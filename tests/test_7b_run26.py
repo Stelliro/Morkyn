@@ -973,6 +973,35 @@ class TheFieldFence(unittest.TestCase):
                          "streetwise")
 
 
+class Run42BlackWheel(unittest.TestCase):
+    """Run 42 T2: GOLD 5 rolled to +10 with no coin shown; 'Mind the tides' made a job; an invented walk into the forge."""
+
+    LINE = '"I will mind the tides. Do you know anyone in town who buys old brass or copper? The salvage guild pays badly."'
+
+    def test_gain_without_coin_dropped(self):
+        from app import world
+
+        prose = ('Elsabet looks up. "No, my dear. Not that I know of." Jory leans in the doorway. "The Black Wheel could '
+                 'use an extra hand today." Jory hands you a set of pliers and a scrap of copper.')
+        result = {"narration": prose, "player": {"gold_delta": 5}}
+        note = world._settle_stated_gold(result, self.LINE)
+        self.assertEqual(note["source"], "gain_without_coin_dropped")
+        self.assertNotIn("gold_delta", result["player"])
+
+    def test_players_words_are_no_offer(self):
+        from app.quest_parser import _players_words_only
+
+        self.assertTrue(_players_words_only("You decide to mind the tides.", "I will mind the tides.", self.LINE))
+        self.assertFalse(_players_words_only("Jory hands you a set of pliers.", "We've got a few old parts that need fixing.",
+                                             self.LINE))
+
+    def test_walk_into_the_forge_is_movement(self):
+        from app.llm import _invented_unit_family
+
+        sentence = "You step closer to The Black Wheel, the door creaking slightly as you push it open."
+        self.assertEqual(_invented_unit_family(sentence, self.LINE, self.LINE), "movement")
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

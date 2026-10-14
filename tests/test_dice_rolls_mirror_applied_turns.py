@@ -145,7 +145,9 @@ class TestRewindDropsTheRewoundTurnsDice(unittest.TestCase):
     """#2: regenerating a turn N leaves exactly one set of rows for turn N."""
 
     def _banded(self) -> dict:
-        return _turn(player={"gold_band": "moderate"})
+        # The coin has to be shown: a gain the prose shows nothing behind is
+        # dropped since 7B run 42 (T2), and then there is no roll to record.
+        return _turn(narration=_SCENE + " The keeper hands you a handful of coins.", player={"gold_band": "moderate"})
 
     def test_regenerate_leaves_a_single_pass_of_rows(self):
         _fresh_world()
