@@ -984,16 +984,26 @@ def speech_units(block: str) -> list[str]:
     return units
 
 
-def speech_repeats(earlier_speech: list[str], speech: str) -> bool:
-    """True when a spoken line restates one already spoken (shared run or re-worded)."""
+def speech_repeats(earlier_speech: list[str], speech: str, *, mostly_new_stays: bool = False) -> bool:
+    """True when a spoken line restates one already spoken (shared run or re-worded).
+
+    ``mostly_new_stays`` (lines from an earlier scene): a shared run in a line
+    that is mostly new is no repeat.
+    """
     runs = _speech_runs(speech)
     # A short line said again word for word (7B run 10, T2-T3: "Very well,
     # then. What do you have to offer?") has too few content words for a run.
     whole = _speech_key(speech)
     whole_ok = len(whole.split()) >= SPEECH_WHOLE_LINE_MIN_WORDS
+    new_stems = content_stems(speech)
     for prev in earlier_speech:
         if runs & _speech_runs(prev):
-            return True
+            # A shared phrase in a mostly new line is no repeat: "... The
+            # guild's got a contract for a shipwreck off the northern coast,
+            # something with a cargo of rare goods" shared "a cargo of rare
+            # goods" with the turn before and lost the job's offer (8B run 38, T2).
+            if not mostly_new_stays or not new_stems or len(new_stems & content_stems(prev)) * 2 >= len(new_stems):
+                return True
         if whole_ok and _speech_key(prev) == whole:
             return True
         if is_near_restatement(prev, speech):
@@ -1126,7 +1136,7 @@ def drop_speech_said_before(
                 if who and not named and not _OTHER_SPEAKER_TAG_RE.search(outside):
                     who = ""
                 against = [s for s, c in pairs if not who or not c or c.upper() == who] if who else earlier
-                if whole or (against and speech_repeats(against, speech)):
+                if whole or (against and speech_repeats(against, speech, mostly_new_stays=True)):
                     dropped.append(unit)
                     continue
                 kept_units.append(unit)

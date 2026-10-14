@@ -935,6 +935,22 @@ class APlaceholderIsNoPlace(unittest.TestCase):
         self.assertTrue(world.is_plausible_place_name("Hollow Maw Path"))
 
 
+class ASharedPhraseIsNoRepeat(unittest.TestCase):
+    """8B run 38, T2: the job offer shared "a cargo of rare goods" with the turn before and was cut as said before."""
+
+    def test_new_line_with_a_shared_phrase(self):
+        from app.narration_pipeline import speech_repeats
+
+        prev = ["You’ll need to retrieve something lost to the sea. A cargo of rare goods, last seen in the "
+                "tide-reckoner’s hands. If you bring it back, the debt is yours to settle."]
+        new = ("You’ll need to salvage what’s lost in the drowned districts. The guild’s got a contract for a shipwreck "
+               "off the northern coast, something with a cargo of rare goods. If you bring it back, you’ll get a fair "
+               "share of the salvage.")
+        self.assertFalse(speech_repeats(prev, new, mostly_new_stays=True))
+        self.assertTrue(speech_repeats(prev, "A cargo of rare goods, last seen in the tide-reckoner's hands. If you "
+                                             "bring it back, the debt is yours."))
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
