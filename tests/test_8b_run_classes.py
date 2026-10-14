@@ -526,6 +526,22 @@ class TheStepsAreOutside(unittest.TestCase):
         self.assertTrue(world.travel_intent("I walk up the steps into The Heron."))
 
 
+class HandedItToYou(unittest.TestCase):
+    """8B run 22, T2: "picked up a pie ... and handed it to you" read as nothing arriving; "As you bit into it" as no eating."""
+
+    S = "She sighed, picked up a pie wrapped in cloth, and handed it to you with a nod."
+
+    def test_a_hand_over(self):
+        from app import world
+
+        self.assertEqual(world._prose_item_outcome(self.S, "pie", ["pie"]), "gain")
+
+    def test_a_bite_on_the_spot(self):
+        from app import world
+
+        self.assertEqual(world._prose_item_outcome(self.S + " As you bit into it, the crust was flaky.", "pie", ["pie"]), "loss")
+
+
 class _ConnStub:
     """No one known yet."""
 
