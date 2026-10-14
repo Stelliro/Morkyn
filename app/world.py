@@ -7020,6 +7020,21 @@ def _mint_venue_from_request(conn, parent_id: int, player_input: str, narration:
         kind = venues.venue_kind_from_name(text)
     if not kind:
         return ""
+    # The trade word may only name the owner: "to the salvage guild's tally
+    # house" opened a "Saltmarrow Salvage Yard" while the prose walked into the
+    # tally house (8B run 26, T1). The place asked for is its head word.
+    try:
+        from app.llm import _asked_destination_heads
+
+        heads = _asked_destination_heads(_player_line(player_input), whole=True)
+    except Exception:
+        heads = set()
+    kind_words = {w[:6] for w in re.findall(r"[a-z]+", venues.kind_label(kind).lower()) if len(w) >= 4}
+    if heads and kind_words and not {h[:6] for h in heads} & kind_words and not any(
+        venues.venue_kind_from_name(h) == kind for h in heads
+    ):
+        turn_ledger.note("movement", "venue_kind_only_names_the_owner", kind=kind, head=sorted(heads))
+        return ""
     if not venue_plausibility(conn, parent_id, kind)["ok"]:
         return ""
     parent_name = str(parent["name"] or "").strip()
@@ -10564,7 +10579,7 @@ def _player_place_over_unshown_move(
 # an open part of town.
 _CIVIC_BUILDING_WORDS = (
     "town hall", "guildhall", "guild hall", "hall", "harbour office", "harbor office", "reeve's office", "office",
-    "customs house", "counting house", "chapel", "church", "temple", "shrine", "tower", "clock tower", "lighthouse",
+    "customs house", "counting house", "tally house", "tally-house", "tallyhouse", "chapel", "church", "temple", "shrine", "tower", "clock tower", "lighthouse",
     "library", "schoolhouse", "school", "gaol", "jail", "barracks", "watchhouse", "granary", "bathhouse", "mill",
 )
 
@@ -10579,6 +10594,16 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
         re.IGNORECASE,
     )
     match = pattern.search(wanted or "")
+    if not match:
+        # "I walk up into town to the salvage guild's tally house" (8B run 26,
+        # T1): the walk verb a few words before, the owner before the building.
+        walk = _OUTDOOR_WALK_VERB_RE.search(wanted or "")
+        onward = re.compile(
+            r"\b(?:to|toward|towards|into|up\s+to)\s+the\s+(?P<place>(?:[a-z'’-]+\s+){0,2}?(?:"
+            + "|".join(re.escape(w) for w in sorted(_CIVIC_BUILDING_WORDS, key=len, reverse=True)) + r"))\b",
+            re.IGNORECASE,
+        )
+        match = next((m for m in onward.finditer(wanted or "") if walk and walk.end() <= m.start() <= walk.end() + 60), None)
     if not match:
         return ""
     place = " ".join(match.group("place").split())
