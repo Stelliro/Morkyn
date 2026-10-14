@@ -11567,7 +11567,10 @@ def _repair_prose_entity_labels(text: str, code_to_name: dict[str, str]) -> str:
         return f"{prefix}{n} {verb}"
 
     repaired = re.sub(
-        r"([—–]\s*|(?<=[.!?]\s)|^\s*)"
+        # A dash only opens a hole at the start of a sentence or line: inside a
+        # sentence it is an aside, and "worth a coin—are there" became "worth a
+        # coin— Salvage Guild Hall [[L2]] are there" (8B run 6, T2).
+        r"((?:(?<=^)|(?<=\n)|(?<=[.!?:]\s)|(?<=[.!?:]))\s*[—–]\s*|(?<=[.!?]\s)|^\s*)"
         r"(is|was|are|were|leans?|stands?|flicks?|watches?|glances?|smirks?|"
         r"grunts?|nods?|shakes?|steps?|moves?|turns?|says?|asks?|whispers?|"
         r"crosses|parts?|twitches?|darts?)\b",

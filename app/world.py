@@ -19570,6 +19570,15 @@ def _set_settled_gold(result: dict[str, Any], player: dict[str, Any], value: int
     return {"source": source, "gold_delta": value, "offer": None, "model": None}
 
 
+# A sum named as what work pays or what is asked: "20 coins for a flat-runner's
+# work", "pays ten silver", "the reward is 15 gold", "offers you 5 coins".
+_OFFERED_SUM_RE = re.compile(
+    r"\b\d{1,4}\s+(?:gold|silver|copper|coins?|crowns?)\s+(?:for|to\s+whoever|to\s+anyone|a\s+(?:day|night|load|trip))\b"
+    r"|\b(?:pays?|paying|offers?|offering|reward\s+(?:is|of)|bounty\s+of|worth)\s+(?:you\s+)?\d{1,4}\s+(?:gold|silver|copper|coins?|crowns?)\b",
+    re.I,
+)
+
+
 def _settle_stated_gold(
     result: dict[str, Any], player_input: str, *, conn=None, quest_pays: bool = False
 ) -> dict[str, Any] | None:
@@ -19651,6 +19660,16 @@ def _settle_stated_gold(
     if coin_grants:
         turn_ledger.note("gold", "coin_grant_dropped", why="the turn already moves gold by its GOLD op or a payment",
                          grants=[c.get("name") for c in coin_grants])
+    if (band or raw) and not losing and not quest_pays and not said["received"] and not prose_state.coin_handed_to_player(narration) \
+            and _OFFERED_SUM_RE.search(narration):
+        # A sum posted or offered is not coin received: '"Lower District, 20
+        # coins for a flat-runner's work"' on the board paid GOLD 20 at once
+        # (8B run 6, T2). Pay for work comes with the work, through the job.
+        player.pop("gold_delta", None)
+        player.pop("gold_band", None)
+        result["player"] = player
+        turn_ledger.note("gold", "offered_sum_not_received", stated=raw or band)
+        return {"source": "offered_sum_not_received", "gold_delta": 0, "offer": None}
     if (band or raw) and not losing and not quest_pays:
         # A gain the prose shows nothing behind: no coin handed over or
         # received, no sum, no pay or sale (7B run 42, T2: GOLD 5 rolled to +10
