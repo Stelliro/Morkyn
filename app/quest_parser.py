@@ -293,6 +293,13 @@ def _means_this_offer(quest: dict[str, Any], existing: list[dict[str, Any]] | No
     return len(offered) == 1 and offered[0].get("id") == quest.get("id")
 
 
+_ASKS_PAY_RE = re.compile(
+    r"\b(?:what|how\s+much)\s+(?:does|will|would|do)\s+(?:it|that|this|they|you|the\s+[\w'’-]+(?:\s+[\w'’-]+)?)\s+pay\b"
+    r"|\bwhat(?:'s|\s+is)\s+the\s+(?:pay|wage|wages|rate|reward)\b|\bhow\s+much\s+is\s+it\s+worth\s+to\s+you\b",
+    re.I,
+)
+
+
 def player_asks_for_work(text: str) -> bool:
     """The player's line asks for work, a hand to lend, or to be taught."""
     return bool(_ASKS_WORK_RE.search(str(text or "")))
@@ -325,6 +332,11 @@ def quest_parse_gate(
             return "narration_offer"
     if player_asks_for_work(player_input):
         return "player_asks_work"
+    # Asking what something pays is job talk (7B run 32, T2: "What are the
+    # tallies, and what does the run pay?" was answered with the two runs and
+    # "a few coppers", and the parser was never asked).
+    if _ASKS_PAY_RE.search(player_input):
+        return "player_asks_pay"
     if _JOB_RE.search(player_input) and (_ADDRESS_RE.search(player_input) or _DELIVERABLE_RE.search(player_input)):
         # The player names a job ("any work for me?").
         if re.search(r"\b(?:job|work|task|errand|bounty|contract|hire|quest)\b", player_input, re.I):

@@ -488,6 +488,16 @@ class GluedThe(unittest.TestCase):
         self.assertIn("the flats", turn["narration"])
 
 
+class AskingThePayOpensTheParser(unittest.TestCase):
+    """Run 32 T2: 'what does the run pay?' answered with two runs and 'a few coppers'; the parser was never asked."""
+
+    def test_gate(self):
+        from app.quest_parser import quest_parse_gate
+
+        self.assertEqual(quest_parse_gate("She nods.", '"Ready. What are the tallies, and what does the run pay?"'), "player_asks_pay")
+        self.assertEqual(quest_parse_gate("She nods.", '"How much for the rope?"'), "")
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
