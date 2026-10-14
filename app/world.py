@@ -9356,16 +9356,39 @@ def _code_is_origin(text: str, start: int, end: int) -> bool:
 def _movement_destination_from_input(rows: list[Any], player_input: str, current_name: str) -> Any:
     """Match a known place named in the player's own words. Exact word-boundary only — no fuzzy guessing."""
     lowered = f" {_destination_text(player_input).lower()} "
-    best = None
+    found: list[tuple[int, int, Any]] = []
+    exact_spans: list[tuple[int, int]] = []
+    tails: dict[tuple[str, str], int] = {}
+    for row in rows:
+        words = _place_words(str(row["name"] or ""))
+        if len(words) >= 2:
+            tails[(words[-2], words[-1])] = tails.get((words[-2], words[-1]), 0) + 1
+    partial: list[tuple[int, int, Any]] = []
     for row in rows:
         name = str(row["name"] or "").strip()
         if len(name) < 4 or name == current_name:
             continue
-        if re.search(rf"(?<!\w){re.escape(name.lower())}(?!\w)", lowered):
-            # Longest match wins: "Mosswake Gate" beats "Mosswake"
-            if best is None or len(name) > len(str(best["name"] or "")):
-                best = row
-    return best
+        m = re.search(rf"(?<!\w){re.escape(name.lower())}(?!\w)", lowered)
+        if m is not None:
+            found.append((m.start(), len(name), row))
+            exact_spans.append(m.span())
+            continue
+        # By its last two words, when they name only this place: "back to the
+        # tally house" for "The Salvage Guild's Tally House" (8B run 37, T6).
+        words = _place_words(name)
+        if len(words) >= 3 and tails.get((words[-2], words[-1])) == 1:
+            m = re.search(rf"\b{re.escape(words[-2])}[\s-]+{re.escape(words[-1])}\b", lowered)
+            if m is not None:
+                partial.append((m.start(), len(name), row))
+    found += [p for p in partial if not any(s <= p[0] < e for s, e in exact_spans)]
+    if not found:
+        return None
+    # The walk ends at the last place the line names: "I climb the seawall steps
+    # and carry the shells back to the tally house" (8B run 37, T6); among names
+    # at one spot the longest wins ("Mosswake Gate" beats "Mosswake").
+    found.sort(key=lambda f: (f[0], f[1]))
+    last_at = max(f[0] for f in found)
+    return max((f for f in found if f[0] >= last_at - 1 or f[0] == last_at), key=lambda f: f[1])[2]
 
 
 def gate_venue_move(conn, from_location_id: int, to_location_id: int, *, via: int = 0) -> dict[str, Any]:
