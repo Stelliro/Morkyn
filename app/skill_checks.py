@@ -1643,11 +1643,16 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     # Handling, not the animal: '"Is that horse going anywhere near the guild
     # today?"' rolled animal handling, a critical failure and a hurt leg (7B
     # run 39, T1). A beast named needs a handling verb on it.
+    # Verbs that are also nouns need the beast named: "look into the water
+    # without touching it" read "water ... it" as watering an animal (8B run 15, T4).
     (r"\b(?:tame|taming|calm (?:the|a|an|it|him|her|my)|soothe (?:the|a|an|it|him|her)|"
-     r"(?:ride|riding|rode|mount|mounting|lead|leading|led|saddle|saddling|bridle|harness|harnessing|groom|grooming|"
-     r"feed|feeding|water|watering|shoe|shoeing|herd|herding|drive|driving|handle|handling|break|breaking|whistle\s+for)"
+     r"(?:(?:ride|riding|rode|saddle|saddling|bridle|harness|harnessing|groom|grooming|whistle\s+for)"
      r"\s+(?:\w+\s+){0,2}?(?:animal|animals|horse|horses|mare|mule|mules|pony|ponies|donkey|ox|oxen|goat|goats|sheep|"
-     r"cow|cows|cattle|hound|hounds|dog|dogs|flock|herd|beast|beasts|mount|mounts|her|him|it|them))\b", "animal_handling"),
+     r"cow|cows|cattle|hound|hounds|dog|dogs|flock|herd|beast|beasts|mount|mounts|her|him|it|them))|"
+     r"(?:mount|mounting|lead|leading|led|feed|feeding|water|watering|shoe|shoeing|herd|herding|drive|driving|handle|"
+     r"handling|break|breaking)"
+     r"\s+(?:\w+\s+){0,2}?(?:animal|animals|horse|horses|mare|mule|mules|pony|ponies|donkey|ox|oxen|goat|goats|sheep|"
+     r"cow|cows|cattle|hound|hounds|dog|dogs|flock|beast|beasts|mounts))\b", "animal_handling"),
     (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
     # "mine" is usually the possessive ("round Tam's waist, then round mine",
     # playtest #102): only the verb with an object, or the word alone, is mining.

@@ -13863,6 +13863,11 @@ _INPUT_PERCEIVE_RE = re.compile(
     r"spy|spies|spying|scout\w*|recall\w*|remember\w*|think\s+back)\b",
     re.I,
 )
+_ASKS_OWN_PAST_RE = re.compile(
+    r"\b(?:what|where|who|when|how|which)\s+(?:did|had|was|were)\s+I\b|\b(?:do|can)\s+I\s+(?:remember|recall)\b|"
+    r"\btry\s+to\s+(?:remember|recall)\b",
+    re.I,
+)
 _PERCEPTION_PAYOFF_RE = re.compile(r"^(?:reali[sz]e|know|knew|understand|understood|remember|recall|suspect)", re.I)
 # "As the cart rolls past, you nod" cut at the comma ships "As the cart rolls
 # past." A head that opens on a subordinator has no main clause of its own.
@@ -14107,6 +14112,11 @@ def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -
     if m:
         verb = m.group("v")
         if _verb_in_input(verb, own):
+            return ""
+        # The line asks about the player's own past: "What did I find down
+        # there?" is answered by "You remember digging through the debris"
+        # (7B run 5, T7).
+        if re.match(r"(?:remember|recall)", verb, re.I) and _ASKS_OWN_PAST_RE.search(own):
             return ""
         if _PERCEPTION_PAYOFF_RE.match(verb) and _INPUT_PERCEIVE_RE.search(own):
             return ""
