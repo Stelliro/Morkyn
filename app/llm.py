@@ -12620,6 +12620,7 @@ def _merge_verifier_verdict(
     merged = dict(draft)
     applied: list[str] = []
     ignored: list[str] = []
+    kept_from_draft: list[dict[str, str]] = []
     narration_replaced = False
     for key, value in patch.items():
         if key not in TURN_SHAPE_KEYS or key == "self_check":
@@ -12642,7 +12643,7 @@ def _merge_verifier_verdict(
             merged.pop("narration", None)
             narration_replaced = True
         else:
-            merged[key] = value
+            merged[key] = _keep_prose_backed_entries(value, draft.get(key), draft, kept_from_draft, key)
         applied.append(key)
     if verdict in VERIFY_VERDICT_PASS:
         passed = True
@@ -12679,10 +12680,48 @@ def _merge_verifier_verdict(
             "issues": issues[:8],
             "patched_keys": applied,
             "ignored_keys": ignored,
+            "kept_from_draft": kept_from_draft,
             "narration_replaced": narration_replaced,
         },
     )
     return _normalize_turn(merged, context)
+
+
+_ENTRY_NAME_STOPWORDS = {"the", "and", "with", "from", "for", "of", "a", "an", "some", "piece", "pieces", "bit", "bits"}
+
+
+def _keep_prose_backed_entries(
+    value: Any, draft_value: Any, draft: dict[str, Any], kept: list[dict[str, str]], key: str
+) -> Any:
+    """A patched list keeps the draft entries the patch leaves out when the prose names them.
+
+    The verifier is asked for a key's complete value, but the 8B sends only the
+    entry it fixed: a patch of the tide-reckoner alone wiped the draft's GRANT
+    of the "broken wooden beam" the prose shows pulled from the mud (8B run 8,
+    T2). An entry the prose does not name stays dropped, and an empty list
+    still clears the key.
+    """
+    if not (isinstance(value, list) and value and isinstance(draft_value, list) and draft_value):
+        return value
+    if not all(isinstance(entry, dict) for entry in value):
+        return value
+    prose = str(draft.get("narration") or _narration_value_text(draft.get("narration_segments")) or "").lower()
+    patched = {str(entry.get("name") or "").strip().lower() for entry in value}
+    out = list(value)
+    for entry in draft_value:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name or name.lower() in patched:
+            continue
+        words = [w for w in re.findall(r"[a-z][a-z'’-]+", name.lower()) if len(w) >= 3 and w not in _ENTRY_NAME_STOPWORDS]
+        if words and all(re.search(rf"\b{re.escape(w)}", prose) for w in words):
+            out.append(entry)
+            kept.append({"key": key, "name": name})
+            from app import turn_ledger
+
+            turn_ledger.note("verify", "patch_kept_prose_backed_entry", key=key, name=name)
+    return out
 
 
 def _resolve_verified_turn(
