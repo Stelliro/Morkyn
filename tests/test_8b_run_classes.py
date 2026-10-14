@@ -682,6 +682,31 @@ class TheJobTakenByItsSubject(unittest.TestCase):
         self.assertIn("\"The Stormborn,\" he said", fixed)
 
 
+class NoOneOfferedIt(unittest.TestCase):
+    """8B run 29, T0: "The promise you made to your mother to bring back something from the flats" became a job."""
+
+    def test_a_remembered_promise_is_no_job(self):
+        from app import quest_parser
+
+        narration = ("You have a few hours before the water returns. The promise you made to your mother to bring back "
+                     "something from the flats.")
+        reply = {"new": [{
+            "title": "Bring back something from the flats", "giver": "mother", "difficulty": "normal",
+            "steps": [{"title": "Explore the flats", "location": "L1"}],
+            "offer_line": "You promised your mother you would bring back something from the flats before the water returns.",
+            "evidence": "The promise you made to your mother to bring back something from the flats.",
+        }]}
+        accepted, rejected = quest_parser.validate_quest_changes(reply, narration=narration, npcs=[])
+        self.assertEqual(accepted.get("new") or [], [])
+        self.assertIn("no_one_offered_it", rejected[0]["reasons"])
+
+    def test_a_spoken_offer_stays_possible(self):
+        from app import quest_parser
+
+        self.assertTrue(quest_parser._offer_is_spoken("We'll pay you a small coin for your help tonight.",
+                                                      'The keeper nods. "We\'ll pay you a small coin for your help tonight."'))
+
+
 class _ConnStub:
     """No one known yet."""
 

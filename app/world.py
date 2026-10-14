@@ -13112,6 +13112,12 @@ def _role_holders(conn, phrase: str, location_id: Any) -> list[Any]:
 
 
 _DRIFT_NAME = r"[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
+_NOT_A_DRIFT_NAME = frozenset({
+    "inside", "outside", "behind", "beyond", "here", "there", "above", "below", "nearby", "later", "then", "now",
+    "still", "again", "today", "tonight", "yesterday", "meanwhile", "instead", "beside", "outdoors", "indoors",
+    "upstairs", "downstairs", "ahead", "afterward", "afterwards", "finally", "once", "soon", "yes", "no", "well",
+    "the", "a", "an", "and", "but", "so", "you", "he", "she", "they", "it", "this", "that", "his", "her", "their",
+})
 _ROLE_THEN_NAME_RE = re.compile(rf"\bthe\s+(?P<role>[A-Za-z][a-z]+(?:\s+[a-z]+)?),\s+(?P<name>{_DRIFT_NAME})\b")
 _NAME_THEN_ROLE_RE = re.compile(rf"\b(?P<name>{_DRIFT_NAME}),\s+the\s+(?P<role>[a-z]+(?:\s+[a-z]+)?)\b")
 _TITLE_NAME_RE = re.compile(rf"\b(?P<title>[A-Z][a-z]+)\s+(?P<name>{_DRIFT_NAME})\b")
@@ -13154,6 +13160,11 @@ def _repair_role_name_drift(conn, text: str) -> tuple[str, list[dict[str, Any]]]
         for match in list(rx.finditer(out)):
             given, role = match.group("name"), match.group("role")
             if given.lower() in everyone or given.split()[0].lower() in firsts:
+                continue
+            # "Inside, the tallyman's office is dimly lit" became "Tobin Garner,
+            # the tallyman's office ..." (8B run 29, T1): a possessive role is no
+            # apposition, and a sentence word is no name.
+            if re.match(r"['’]s\b", out[match.end():]) or given.split()[0].lower() in _NOT_A_DRIFT_NAME:
                 continue
             holders = [person for person, job in roster if _role_matches(job, role.lower())]
             if len(holders) != 1:
