@@ -202,6 +202,25 @@ class AWalkDownTheSlopeToTheDocks(unittest.TestCase):
         self.assertEqual(report.get("destination"), "The Old Docks")
 
 
+class SpeechNeverAsksToGo(unittest.TestCase):
+    """8B run 16, T3: '"I'll walk the first stretch with you"' kept a MOVE the cut scene never shows."""
+
+    LINE = ("\"New routes.\" I check the tide-reckoner, for all the good it does. \"Show me one, Alaric. I'll walk the "
+            "first stretch with you while the water's out.\"")
+    PROSE = ("\"New routes,\" you say. The tide-reckoner's face gleams. Alaric watches you, then gestures toward the "
+             "east. A narrow path cuts through the square, leading toward the edge of the harbor. \"Start there,\" he says.")
+
+    def test_the_move_is_dropped(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            result = {"player": {"move_to_location": "Saltmarrow's East Passage"}, "narration": self.PROSE}
+            report = world.resolve_movement(conn, result, self.LINE, intent="travel", narration=self.PROSE)
+        self.assertEqual(report.get("status"), "dropped_unshown")
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
