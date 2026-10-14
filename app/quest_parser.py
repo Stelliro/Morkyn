@@ -1041,6 +1041,7 @@ def validate_quest_changes(
     existing: list[dict[str, Any]] | None = None,
     settled_ids: set[int] | None = None,
     passive: bool = False,
+    shown_unnamed: list[str] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Pure check. Returns (accepted_changes, rejected) where each rejected row is {"kind", "item", "reasons"}.
 
@@ -1100,7 +1101,11 @@ def validate_quest_changes(
         # A known person the scene never mentions did not offer it (7B run 20,
         # T4: "Salvage contracts" was filed under Wat Sallow, who was not there;
         # Thaddeus, met that turn and not yet stored, made the offer).
-        if giver is not None and speaker is None and not _named_in(narration, giver):
+        here_unnamed = {str(n or "").strip().lower() for n in shown_unnamed or []}
+        # The one the prose shows only as a figure this turn is here too: the
+        # masked figure bound to Bertha Radley made the offer (8B run 19, T0).
+        if (giver is not None and speaker is None and not _named_in(narration, giver)
+                and str(giver.get("name") or "").strip().lower() not in here_unnamed):
             from app import turn_ledger
 
             stranger = (
@@ -1689,6 +1694,7 @@ def apply_quest_changes(
     turn: int = 0,
     settled_ids: set[int] | None = None,
     passive: bool = False,
+    shown_unnamed: list[str] | None = None,
 ) -> dict[str, Any]:
     """Validate against the live DB, create/advance quests, journal + event-log each one. Returns a report for the trace.
 
@@ -1719,6 +1725,7 @@ def apply_quest_changes(
             existing=ctx["existing"],
             settled_ids=settled_ids,
             passive=passive,
+            shown_unnamed=shown_unnamed,
         )
         for r in rejected:
             if r["kind"] == "update" and str(r["item"].get("action") or "") in {"step_done", "complete", "done"}:
