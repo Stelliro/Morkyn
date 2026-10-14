@@ -237,6 +237,38 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class AQuestionAskedPaysNothing(unittest.TestCase):
+    """8B run 45, T2: "You ask what kind of work pays against the ledger" backed GOLD 50 (+37)."""
+
+    def test_the_asked_pay_is_no_coin(self):
+        from app import world
+
+        prose = ("The tallyman looks up from his work. You ask what kind of work pays against the ledger, and he "
+                 "leans back, a smirk playing on his lips. “We’ve got a job,” he says.")
+        result = {"narration": prose, "player": {"gold_delta": 50}}
+        note = world._settle_stated_gold(result, "\"What job have you got that pays against the ledger?\"")
+        self.assertEqual(note["source"], "gain_without_coin_dropped")
+        self.assertNotIn("gold_delta", result["player"])
+
+
+class TheJobsFigureIsTheOneHere(unittest.TestCase):
+    """8B run 45, T2: "The tallyman, a man with a sharp eye" bound NPC_NEW "Ralf Wadley" to the tallyman."""
+
+    def test_the_tallyman_is_no_one_new(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "Salvage Guild Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+            world._upsert_npc(conn, {"name": "Eldrin Vane", "location": "Salvage Guild Tally House", "role": "tallyman"})
+            prose = ("You stand before the desk. The tallyman, a man with a sharp eye and a sharper tongue, looks up "
+                     "from his work. “We’ve got a job,” he says.")
+            npcs = world._npcs_shown_in_prose(conn, [{"name": "Ralf Wadley", "role": "rat catcher"}], prose)
+        self.assertEqual(npcs, [])
+
+
 class ALineNoOneSaysIsNotLogged(unittest.TestCase):
     """8B run 44, T0: TALK "You're late, Flat-runner." on a silent opening was logged as said, then echoed."""
 
