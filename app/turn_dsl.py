@@ -1427,9 +1427,36 @@ def unglue_the(text: str, also: str = "") -> str:
     return _GLUED_THE_RE.sub(_split, source)
 
 
+# A spoken line in straight single quotes: opens after a line start, a space or
+# a dash, starts with a capital, and closes on its own punctuation before the
+# quote. An apostrophe inside it is one before a letter ("I'm", "flat-runner's").
+_SINGLE_QUOTED_LINE_RE = re.compile(
+    r"(?:(?<=^)|(?<=[\s(—–-]))'(?P<body>[A-Z](?:[^'\n]|'(?=[A-Za-z]))*?[.,!?…])'(?=\s|$|[)—–-])",
+    re.M,
+)
+
+
+def double_single_quoted_speech(narration: str) -> str:
+    """Write a paragraph's single-quoted dialogue in double quotes.
+
+    7B run 35, T1 wrote every line in single quotes, and every speech pass reads
+    double ones, so "You show him the tools and explain, 'I'm going to patch up
+    this plank.'" kept a line the player never said. Only a paragraph with no
+    double quotes is touched, so a quote inside a quote stays as it is.
+    """
+    paragraphs = re.split(r"(\n\s*\n)", str(narration or ""))
+    for index in range(0, len(paragraphs), 2):
+        para = paragraphs[index]
+        if re.search(r"[\"“”]", para) or "'" not in para:
+            continue
+        paragraphs[index] = _SINGLE_QUOTED_LINE_RE.sub(lambda m: f"\"{m.group('body')}\"", para)
+    return "".join(paragraphs)
+
+
 def parse_dsl_turn(text: str, player_input: str = "") -> dict[str, Any]:
     text = unglue_the(text, player_input)
     narration, ops_block = split_nar_ops(text)
+    narration = double_single_quoted_speech(narration)
     ops, skipped = parse_ops_detailed(ops_block)
     turn = ops_to_turn(narration, ops, player_input=player_input)
     if skipped:

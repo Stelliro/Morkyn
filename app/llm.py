@@ -12344,7 +12344,11 @@ def _normalize_turn(result: dict[str, Any], context: dict[str, Any] | None = Non
             text = _narration_value_text(segment)
             label = "scene" if index == 0 else "result"
         if text:
-            normalized_segments.append({"label": label[:40], "text": text})
+            # A verifier writing its JSON put the dialogue in single quotes
+            # (7B run 35, T1), and every speech pass reads double ones.
+            from app.turn_dsl import double_single_quoted_speech
+
+            normalized_segments.append({"label": label[:40], "text": double_single_quoted_speech(text)})
     result["narration_segments"] = normalized_segments
     joined = "\n\n".join(segment["text"] for segment in normalized_segments).strip()
     if joined:
@@ -16077,17 +16081,30 @@ def _after_act_cut_point(
             ):
                 done_at = index
                 break
-    if done_at < 0:
-        return None
-    own_words = _cut_words(acts)
     from app.narration_pipeline import player_quotes
 
     typed = [re.sub(r"\W+", " ", q).strip().lower() for q in player_quotes(player_input)]
+    if done_at < 0 and typed and not travelling:
+        # A line that is mostly talk is done once its words are said (7B run 35,
+        # T1: '"Morning. That plank work for the harbour master, or your own?"
+        # you ask' was followed by "You step inside and find a few tools you
+        # need", a repair and two invented lines).
+        for index, (_start, _end, sentence) in enumerate(spans):
+            plain = re.sub(r"\W+", " ", sentence).strip().lower()
+            plain = re.sub(r"\s+you\s+(?:\w+ly\s+)?(?:say|ask|call|add|reply)\w*\b.*$", "", plain)
+            if plain and any(q and (q in plain or plain in q) for q in typed):
+                done_at = index
+                break
+    if done_at < 0:
+        return None
+    own_words = _cut_words(acts)
     for start, _end, sentence in spans[done_at + 1:]:
         if re.search(r'["“”]', sentence):
             # The player's own question is not one put to them (7B run 28, T2).
             plain = re.sub(r"\W+", " ", sentence).strip().lower()
             plain = re.sub(r"^you say\s+", "", plain)
+            # '"... or your own?" you ask' (7B run 35, T1): the tag after it too.
+            plain = re.sub(r"\s+you\s+(?:\w+ly\s+)?(?:say|ask|call|add|reply)\w*\b.*$", "", plain)
             if plain and any(plain in q or q in plain for q in typed if q):
                 continue
             if "?" in sentence:

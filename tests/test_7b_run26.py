@@ -646,6 +646,31 @@ class Run34SunkenRoof(unittest.TestCase):
         self.assertIn("The Flats [[L2]] are wide", out)
 
 
+class Run35PlankAtTheSeawall(unittest.TestCase):
+    """Run 35 T1: single-quoted dialogue from the verifier, and a talk line run on into an invented repair."""
+
+    LINE = 'I walk over to the figure at the seawall. "Morning. That plank work for the harbour master, or your own?"'
+
+    def test_single_quotes_become_double(self):
+        from app.turn_dsl import double_single_quoted_speech
+
+        out = double_single_quoted_speech("You show him the tools and explain, 'I'm going to patch up this plank.'")
+        self.assertIn('"I\'m going to patch up this plank."', out)
+        same = "The flat-runner's boots. 'Tis the tide's way. He said 'no' twice."
+        self.assertEqual(double_single_quoted_speech(same), same)
+        mixed = "He says \"go\". She said 'Fine.' then left."
+        self.assertEqual(double_single_quoted_speech(mixed), mixed)
+
+    def test_talk_line_done_when_said(self):
+        from app.llm import _completion_cut_point
+
+        text = ('"Morning. That plank work for the harbour master, or your own?" you ask. You carefully examine the '
+                "plank.\n\nThe Leaning Pear Cookshop is just a few steps away. You step inside and find a few tools you "
+                'need, then head back to the seawall.\n\nIvo is still there. "What are you doing, flat-runner?"')
+        point = _completion_cut_point(text, self.LINE)
+        self.assertTrue(point and point["trigger"].startswith("You step inside"))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
