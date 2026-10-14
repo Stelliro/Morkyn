@@ -1412,7 +1412,9 @@ def opening_feel_prompt_block(
 
     lines = [
         "Opening scene feel (turn_kind=opening_scene only):",
-        "- Establish an immediate, playable situation with 2–4 concrete hooks; do not choose for the player.",
+        # 7B run 30, T0: "offer two concrete hooks: assist ... or ignore him" came back as prose.
+        "- Establish an immediate, playable situation with a few things the player could take up, shown in the "
+        "scene and never named or listed as choices; do not choose for the player.",
         "- Keep the first scene local and personal before world-ending stakes.",
         "- Entity refs: always use the real place name from world_state.current_location, written as "
         "its name then its code in double brackets, and if inventory or local NPCs exist, name them the "
