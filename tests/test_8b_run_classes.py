@@ -363,6 +363,29 @@ class SpeechShowsNothingArriving(unittest.TestCase):
         self.assertIn("it’ll take time.\"", world._narration_text(result))
         self.assertFalse([t for t in report.get("trimmed") or [] if t.get("why") == "gain_refused"])
 
+    def test_the_players_own_question_stays(self):
+        # 8B run 51, T3.
+        from app import world
+
+        prose = ("“I'll take the runner's task,” you say. “Whose debt do I collect first, and where do I "
+                 "find them?” The Tidewatch's runner's task is yours. Captain Veyra leans against the counter.")
+        result = {"narration": prose}
+        world._reconcile_prose_with_state(
+            None, result, rejected=[{"name": "Runner's Task", "outcome": "gain"}], movement_report=None,
+            gold_note=None, purse_note=None)
+        self.assertIn("Whose debt do I collect first", world._narration_text(result))
+
+    def test_someone_elses_tagged_line_stays(self):
+        # 8B run 51, T4: '"You're here to collect the debt," he says' went as the refused debt note.
+        from app import world
+
+        prose = ("A man sits at the table, his face gaunt. He looks up as you enter. “You’re here to collect "
+                 "the debt,” he says, his voice rough, like sandpaper. The fire crackles low in the hearth.")
+        result = {"narration": prose}
+        world._reconcile_prose_with_state(None, result, rejected=[{"name": "Debt note", "outcome": "gain"}],
+                                          movement_report=None, gold_note=None, purse_note=None)
+        self.assertIn("collect the debt", world._narration_text(result))
+
 
 class AShrugAfterAQuestionIsTheAnswer(unittest.TestCase):
     """8B run 15, T2: '"What's on your hands?" she asks ... You glance down, noting ...' answered for the player."""
