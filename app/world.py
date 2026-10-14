@@ -19010,6 +19010,31 @@ def _item_named_as_one(name: str, text: str) -> bool:
     return bool(re.search(rf"\b(?:a|an|one|the|this|that|single)\s+(?:[\w'-]+\s+){{0,3}}{head}\b", low))
 
 
+def _whole_stack_handed(conn, name: str, narration: str) -> int:
+    """The owned quantity when the prose hands over, gives, sells or empties "the <plural>" of it; else 0."""
+    words = re.findall(r"[a-z]+", str(name or "").lower())
+    head = words[-1] if words else ""
+    if not head.endswith("s") or len(head) < 4:
+        return 0
+    try:
+        row = conn.execute(
+            "SELECT quantity FROM inventory WHERE LOWER(name) = ? AND quantity > 1", (str(name or "").strip().lower(),)
+        ).fetchone()
+    except Exception:
+        return 0
+    if row is None:
+        return 0
+    plain = venues.strip_speech(str(narration or ""))
+    if re.search(
+        r"\b(?:hand|hands|handed|handing|give|gives|gave|giving|pass|passes|passed|tip|tips|tipped|empty|empties|emptied|"
+        r"sell|sells|sold|set|sets|lay|lays|laid|pour|pours|poured|dump|dumps|dumped)\s+(?:over\s+|out\s+|down\s+)?"
+        rf"(?:all\s+(?:of\s+)?)?(?:the|your)\s+(?:[\w'’-]+\s+)?{re.escape(head)}\b",
+        plain, re.I,
+    ):
+        return int(row["quantity"] or 0)
+    return 0
+
+
 def resolve_turn_bands(
     conn,
     result: dict[str, Any],
@@ -19090,6 +19115,15 @@ def resolve_turn_bands(
         if band is None and raw in (None, ""):
             continue
         losing = str(band or "").strip().lower().startswith(("-", "lose")) or _float(raw, 0) < 0
+        if losing and band is not None and raw in (None, ""):
+            # "You hand over the shells": the whole stack, not a rolled one of
+            # two (8B run 37, T6, a job's shells handed in).
+            whole = _whole_stack_handed(conn, str(change.get("name") or ""), str(result.get("narration") or ""))
+            if whole:
+                change.pop("quantity_band", None)
+                change["quantity_delta"] = -whole
+                turn_ledger.note("inventory", "whole_stack_handed", item=str(change.get("name") or ""), quantity=whole)
+                continue
         if band is not None and raw in (None, "") and _item_named_as_one(str(change.get("name") or ""), named_text):
             # Playtest #99: "sell me a whetstone" drafted as QTY moderate rolled
             # two. One thing named once is one; the band only sizes a vaguer gain.

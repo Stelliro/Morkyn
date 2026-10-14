@@ -338,6 +338,22 @@ class TheGuildsTallyHouseIsNoSalvageYard(unittest.TestCase):
                                                       "to sell the brass.", whole=True), {"yard"})
 
 
+class TheShellsHandedOverAreAllOfThem(unittest.TestCase):
+    """8B run 37, T6: "You hand over the shells" took 1 of 2."""
+
+    def test_whole_stack(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            conn.execute("DELETE FROM inventory")
+            conn.execute("INSERT INTO inventory (name, quantity) VALUES ('shells', 2)")
+            self.assertEqual(world._whole_stack_handed(conn, "shells", "You hand over the shells, and she counts them."), 2)
+            self.assertEqual(world._whole_stack_handed(conn, "shells", "You hand her one of the shells."), 0)
+            self.assertEqual(world._whole_stack_handed(conn, "shells", "\"Hand over the shells,\" she says."), 0)
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
