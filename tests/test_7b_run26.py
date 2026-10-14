@@ -1052,6 +1052,24 @@ class AMisspelledNameIsTheSamePerson(unittest.TestCase):
             self.assertEqual(world._near_name_matches(conn, "Maria"), [])
 
 
+class AnyGoingCountsForTheTripGuard(unittest.TestCase):
+    """8B run 3 T1: 'You move down the dockside path' was not read as the going; the reply to a dropped line stayed."""
+
+    def test_cut_at_his_question(self):
+        from app.llm import _cut_scene_at_invented_request
+
+        line = 'I go down to the workers hauling crates and fall in beside the nearest one. "Morning. Who is paying?"'
+        nar = ("You move down the dockside path, where crates of salted fish are stacked in rows. You fall in beside a "
+               "man with a scar running from his temple to his jaw.\n\n"
+               '"You\'re early," he grunts. "Morning. Who is paying?" you ask.\n\n'
+               'He wipes sweat from his brow. "The guild. You\'re not a guild runner, are you?"\n\n'
+               'You shake your head. "Just a flat-runner, looking for work."\n\n'
+               'He snorts. "Then you\'re the one hauling it."')
+        turn = {"narration": nar, "narration_segments": [{"label": "paragraph", "text": p} for p in nar.split("\n\n")]}
+        out = _cut_scene_at_invented_request(turn, line, floor=50)
+        self.assertNotIn("He snorts", out["narration"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

@@ -20819,7 +20819,15 @@ def apply_turn(
             # to the drowned chapel roof"', 7B run 38, T2).
             # Nor does a walk over to someone ("I go over to Odo and the horse", run 39 T1).
             unspoken = _FOLLOW_TO_SPOT_RE.sub(" ", re.sub(r"[\"“][^\"”]*[\"”]", " ", _player_line(player_input)))
-            if _turn_intent(unspoken)[0] == "travel" or int(map_report.get("steps_taken") or 0) or movement_report.get("follow"):
+            # And a walk to people names no place ("I go down to the workers
+            # hauling crates", 8B run 3, T1): only a line that names a place
+            # gets the Note.
+            from app.llm import _WALK_PLACE_DEST_RE
+
+            names_place = bool(_WALK_PLACE_DEST_RE.search(unspoken)) or bool(
+                re.search(r"\b(?:district|flats|shore|harbou?r|road|quarter|town|village|wharf|beach|cove|marsh|ruins?)\b", unspoken, re.I)
+            )
+            if (_turn_intent(unspoken)[0] == "travel" and names_place) or int(map_report.get("steps_taken") or 0) or movement_report.get("follow"):
                 conn.execute(
                     "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                     (turn, "system", unresolved_note),
