@@ -701,6 +701,44 @@ def _is_travel(context: dict[str, Any], player_input: str) -> bool:
     return bool(_TRAVEL_RE.search(str(player_input or "")))
 
 
+# The player asking what a job pays (7B run 30, T5: "What does it pay?" with
+# pays "11 gold" in open_offers was answered "We pay a good coin"). The general
+# rule sat far from the question; the one fact the answer needs ships with it.
+_PAY_QUESTION_RE = re.compile(
+    r"\b(?:what(?:\s+does|\s+do|\s+will|\s+would)\s+(?:[\w'’-]+\s+){1,3}?pay\b|"
+    r"what(?:['’]s|\s+is)\s+the\s+(?:pay|reward|wage|wages|rate|fee|price)|"
+    r"how\s+much\s+(?:does|will|would|do)\s+(?:it|this|that|you|the\s+(?:job|work))\s+pay|"
+    r"what\s+(?:are|were)\s+you\s+paying|how\s+much\s+(?:coin|gold|silver)|what['’]?s\s+in\s+it\s+for\s+me)",
+    re.I,
+)
+
+
+def asked_job_pay(context: dict[str, Any], player_input: str) -> dict[str, Any] | None:
+    """{"job", "giver", "pays"} when the player's line asks what a job pays and one job with a pay fits."""
+    line = str(player_input or "")
+    if line.startswith("__") or not _PAY_QUESTION_RE.search(line):
+        return None
+    rows: list[dict[str, Any]] = []
+    for row in context.get("open_offers") or []:
+        if isinstance(row, dict) and int(row.get("pays_gold") or 0) > 0 and str(row.get("status") or "") != "declined":
+            rows.append({"job": str(row.get("title") or ""), "giver": str(row.get("giver") or ""),
+                         "pays": f"{int(row['pays_gold'])} gold"})
+    for row in context.get("active_quests") or []:
+        if not isinstance(row, dict):
+            continue
+        m = re.match(r"\s*(\d+)\s*g\b", str(row.get("reward") or ""))
+        if m and int(m.group(1)) > 0:
+            rows.append({"job": str(row.get("title") or ""), "giver": str(row.get("giver") or ""),
+                         "pays": f"{int(m.group(1))} gold"})
+    if len(rows) > 1:
+        # Several: the one whose giver or title the line names.
+        low = line.lower()
+        named = [r for r in rows if (r["giver"] and r["giver"].split()[0].lower() in low)
+                 or any(w in low for w in re.findall(r"[a-z]{4,}", r["job"].lower()))]
+        rows = named
+    return rows[0] if len(rows) == 1 and rows[0]["job"] else None
+
+
 def _weather_view(context: dict[str, Any]) -> dict[str, Any] | None:
     mechanics = context.get("mechanics_context") if isinstance(context.get("mechanics_context"), dict) else {}
     raw = mechanics.get("weather") if isinstance(mechanics.get("weather"), dict) else None
@@ -1437,6 +1475,9 @@ def _visible_world(context: dict[str, Any], player_input: str, extra_focus: str 
             else:
                 slim_offers.append(row)
         world["open_offers"] = slim_offers
+    pay = asked_job_pay(context, player_input)
+    if pay:
+        world["pay_asked"] = pay
     # Walk-with offers waiting for Go with / Stay, and people the player chose
     # not to go with (TODO n21): the narrator does not walk them or ask again.
     leads = context.get("open_leads")
@@ -1618,6 +1659,8 @@ def _scene_instruction(turn_kind: str, world: dict[str, Any], *, checking: bool)
         "When world_state.direction_hint is present and direction_hint.told is true, "
         "say direction_hint.wording and do not add another place or a coordinate. "
         "When world_state.direction_hint is present and told is false, do not name a location for that question. "
+        "When world_state.pay_asked is present, the player's line asks what that job pays: pay_asked.giver answers "
+        "with the sum in pay_asked.pays, in their own words. "
         "When world_state.open_offers is present, those jobs were already offered. "
         "status waiting_for_answer: the player has not answered yet and answers with their own words or the Accept and "
         "Decline buttons; do not offer it again and do not write the player taking or refusing it, but the giver can "
