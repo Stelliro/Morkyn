@@ -126,7 +126,9 @@ class ThePlayerNeedsNoName(unittest.TestCase):
     def test_the_naming_rule_says_it_is_for_other_people(self):
         from app import prompts
 
-        self.assertIn('the player is "you" and needs no name', prompts.VERIFY_PROMPT)
+        self.assertIn('the narration calls the player "you" and needs no name for them', prompts.VERIFY_PROMPT)
+        # 8B run 33, T1: the shorter clause read as "never name the player"; others may say it.
+        self.assertIn("though others may say it", prompts.VERIFY_PROMPT)
 
 
 class MoneyPromisedIsNotMoneyMoved(unittest.TestCase):
