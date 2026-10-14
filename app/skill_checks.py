@@ -2074,6 +2074,12 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
                 matched_npc = None
             if matched_npc and re.search(rf"\b(?:leave|leaving|left|away\s+from)\s+{re.escape(str(matched_npc.get('name') or '').split()[0])}\b", text, re.I):
                 matched_npc = None
+            # Leaving the place leaves the partner: "I leave the tally house and
+            # head down through town to the bay" rolled against the tallyman
+            # still sitting at his desk (8B run 36, T5).
+            if matched_npc and re.search(r"\b(?:leave|leaves|leaving|walk\s+out\s+of|step\s+out\s+of|head\s+out\s+of)\s+the\b",
+                                         text, re.I):
+                matched_npc = None
             if matched_npc:
                 opposition = {
                     "name": matched_npc.get("name"),
