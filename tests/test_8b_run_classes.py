@@ -876,6 +876,18 @@ class HerTunicIsNotYours(unittest.TestCase):
         self.assertIn("rusty key [[I5]]", out)
 
 
+class WhereAShipLiesIsNoLie(unittest.TestCase):
+    """8B run 36, T5: "until I can see where the Stormcaller lies" rolled deception against the tallyman."""
+
+    def test_location_and_lies(self):
+        from app.skill_checks import infer_check_from_action as infer
+
+        self.assertNotEqual((infer("I head down to the bay until I can see where the Stormcaller lies.", {}) or {})
+                            .get("skill_code"), "deception")
+        for line in ("I lie to the guard about where I was.", "\"I was at the tavern,\" I lie.", "I tell a lie."):
+            self.assertEqual(infer(line, {})["skill_code"], "deception", line)
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
