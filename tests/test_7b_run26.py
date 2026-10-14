@@ -859,6 +859,18 @@ class TheStableMare(unittest.TestCase):
         self.assertEqual(repair_pinned_pronouns(text, cast)[0], text)
 
 
+class EngineClockInTheProse(unittest.TestCase):
+    """Run 40 T0: 'It is morning, 08:00.'; run 5 T12: 'on duty from 08:00 to 18:00'."""
+
+    def test_repaired_outside_speech(self):
+        from app.prose_state import repair_meta_leaks
+
+        self.assertEqual(repair_meta_leaks("It is morning, 08:00. The sun rises.")[0], "It is morning. The sun rises.")
+        self.assertEqual(repair_meta_leaks("Abel is a woodcutter, on duty from 08:00 to 18:00.")[0], "Abel is a woodcutter.")
+        said = '"Meet me at 08:00," she says.'
+        self.assertEqual(repair_meta_leaks(said)[0], said)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
