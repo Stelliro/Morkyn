@@ -542,6 +542,23 @@ class HandedItToYou(unittest.TestCase):
         self.assertEqual(world._prose_item_outcome(self.S + " As you bit into it, the crust was flaky.", "pie", ["pie"]), "loss")
 
 
+class ATakeThatSlipsIsNoGain(unittest.TestCase):
+    """8B run 23, T1: "You reach for it, but ... the can slips from your grip" put the can in the pack."""
+
+    def test_the_slip(self):
+        from app import world
+
+        t = ("You spot a rusted tin can near the base of the door. You reach for it, but the effort strains your arms, "
+             "and the can slips from your grip, clattering against the floor.")
+        self.assertEqual(world._prose_item_outcome(t, "rusty tin can", world._item_name_tokens("rusty tin can")), "loss")
+
+    def test_caught_again_is_kept(self):
+        from app import world
+
+        t = "The key slips from your grip. You snatch it up again and pocket it."
+        self.assertEqual(world._prose_item_outcome(t, "key", ["key"]), "gain")
+
+
 class _ConnStub:
     """No one known yet."""
 
