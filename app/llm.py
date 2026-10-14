@@ -15501,6 +15501,9 @@ _SHOWN_GOING_RE = re.compile(
     r"\byou\s+(?:\w+ly\s+)?(?:walk|walked|head|headed|go|went|make\s+your\s+way|made\s+your\s+way|step|stepped|"
     r"cross|crossed|set\s+off|arrive|arrived|enter|entered|return|returned|follow|followed|climb|climbed|"
     r"wander|wandered|stride|strode|hurry|hurried|approach|approached|reach|reached|"
+    # Any going: "You move down the dockside path" (8B run 3, T1).
+    r"move|moved|come|came|descend|descended|wade|waded|trudge|trudged|stroll|strolled|amble|ambled|march|marched|"
+    r"run|ran|jog|jogged|slip|slipped|edge|edged|fall\s+in|fell\s+in|join|joined|go\s+down|went\s+down|"
     # "You push your way into the tannery yard" (7B run 40, T1).
     r"(?:push|pushed|press|pressed|thread|threaded|pick|picked|weave|wove)\s+your\s+way)\b"
     # "You give it a while longer, then make your way to the first of the
