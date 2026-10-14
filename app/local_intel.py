@@ -1202,9 +1202,21 @@ def typed_offer_choice(rows: list[Any], text: str) -> Any | None:
     "We'll take it, Una. The tower and the bell." were not read at all.
     """
     line = str(text or "")
-    if not rows or not typed_accept(line):
+    if not rows:
         return None
     low = line.lower()
+    if not typed_accept(line):
+        # The job taken by its subject: "I'll take the Stormborn." for
+        # "Salvage the Wreck of the Stormborn" (8B run 27, T3). Only a word of
+        # an open offer's title counts, so "I'll take the rope" accepts nothing.
+        named = [
+            row for row in rows
+            for m in re.finditer(r"\bi(?:['’]ll|\s+will|['’]d|\s+would)\s+(?:take|do|run|work|handle)\s+(?:on\s+)?(?:the\s+)?"
+                                 r"(?P<obj>[\w'’ -]{3,40})", low)
+            if _offer_words(row) & set(re.findall(r"[a-z]{4,}", m.group("obj")))
+        ]
+        unique = {id(r): r for r in named}
+        return next(iter(unique.values())) if len(unique) == 1 else None
     for row in rows:
         title = str(row["title"] or "")
         if title and title.lower() in low:

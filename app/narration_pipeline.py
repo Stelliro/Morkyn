@@ -2415,7 +2415,13 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         while index > 0:
             index -= 1
             span = found[index]
-            if span["speaker"] == "other" and _quote_matches(span["inner"], quote):
+            # A short span of the other speaker's is not the player's longer line
+            # in their mouth: '"The Stormborn," he said, voice low, "is a wreck
+            # ..."' read as "I'll take the Stormborn." and was cut, leaving
+            # '"is a wreck that sank ..."' (8B run 27, T3).
+            short = (len(_speech_key(span["inner"]).split()) * 5 < len(_speech_key(quote).split()) * 3
+                     and _quote_matches(span["inner"], quote) != "exact")
+            if span["speaker"] == "other" and not short and _quote_matches(span["inner"], quote):
                 start, end = span["start"], span["end"]
                 # The speech tag after it goes with it: '"...," she says, glancing at you.'
                 tail = body[end:]
