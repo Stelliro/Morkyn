@@ -83,7 +83,7 @@ NPC_NEW: the word NAME followed by the person's name in quotes, the word ROLE fo
 NPC_NOTE: a person's code, then in quotes one fact about them that will stay true.
 TALK: the code of the person the player spoke with, then in quotes what the two of them talked about.
 GRANT: the item's name in quotes, then QTY and a band. May add TYPE with a kind of item, DESC with a description in quotes, RARITY with one word.
-TAKE: the item's name in quotes, then QTY and a band.
+TAKE: an item the player loses, uses up or hands over: its name in quotes, then QTY and a band (what they get is GRANT).
 GOLD: the number of coins ===NAR=== names as paid or handed over, or a band when no number is said. A minus sign makes it a loss.
 XP, HP: a band. A minus sign written right before the band makes it a loss.
 KARMA: a band, minus for a loss. May add VIS with one of private, local, faction, public, and REASON with the reason in quotes.

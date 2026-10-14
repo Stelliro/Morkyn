@@ -1073,6 +1073,26 @@ class AnyGoingCountsForTheTripGuard(unittest.TestCase):
         self.assertNotIn("He snorts", out["narration"])
 
 
+class TakeOfAnUnownedItem(unittest.TestCase):
+    """8B run 3 T7: TAKE 'fragments of lock mechanism' for what the player pried free; the fragments vanished."""
+
+    def test_read_as_a_gain_and_judged(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        line = ("I wade toward the half-submerged doors and check the nearest one for anything worth hauling back "
+                "before the water turns: brass fittings, hinges, anything metal.")
+        prose = ("You press your palm against the nearest door. You pry it free, revealing a corroded key and a few "
+                 "fragments of what might have been a lock mechanism.")
+        with connect() as conn:
+            kept = world._filter_inventory_changes(
+                conn, [{"name": "fragments of lock mechanism", "quantity_delta": -1}], narration=prose, player_input=line,
+            )
+        self.assertEqual([(k["name"], k["quantity_delta"]) for k in kept], [("fragments of lock mechanism", 1)])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
