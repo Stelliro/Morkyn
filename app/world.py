@@ -9720,6 +9720,12 @@ def resolve_movement(
     known_codes = {str(row["code"] or "").upper() for row in rows if row["code"]}
 
     unasked = _unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration)
+    if unasked and current_name and unasked.strip().lower() == current_name.strip().lower() and not result.get("map_walk"):
+        # A MOVE to where the player already is goes nowhere; it is no refused
+        # trip ("MOVE to Saltmarrow dropped" while in Saltmarrow, 8B run 10, T0).
+        player_patch["move_to_location"] = None
+        player_patch["move_to_location_code"] = None
+        unasked = ""
     if unasked:
         player_patch["move_to_location"] = None
         player_patch["move_to_location_code"] = None
