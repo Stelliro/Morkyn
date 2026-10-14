@@ -338,6 +338,31 @@ class ACutLeavesNoPronounStranded(unittest.TestCase):
         self.assertEqual(llm._restore_stranded_referent("He gestures toward the shipyard.", ""),
                          "He gestures toward the shipyard.")
 
+    def test_a_place_is_no_person_and_a_named_one_keeps_his(self):
+        # 8B run 46, T2: "looks up from his ledger" became "from Tally House's ledger".
+        from app import llm
+
+        self.assertEqual(llm._person_in_cut("You step into the Tally House, the scent of ink thick in the air."), "")
+        self.assertEqual(llm._restore_stranded_referent("Kael, the tallyman, looks up from his ledger.", "Mira|"),
+                         "Kael, the tallyman, looks up from his ledger.")
+
+
+class SpeechShowsNothingArriving(unittest.TestCase):
+    """8B run 46, T2: the refused goods' trim cut 'Either way, it'll take time."' from the tallyman's line."""
+
+    def test_the_spoken_tail_stays(self):
+        from app import world
+
+        prose = ("Kael leans back, considering you. \"The guild has a few jobs available. You could help with the "
+                 "docks, sorting through the salvaged goods, or maybe assist in the warehouse. Either way, it’ll "
+                 "take time.\" His gaze flickers to the ledger again.")
+        result = {"narration": prose}
+        report = world._reconcile_prose_with_state(
+            None, result, rejected=[{"name": "salvaged goods", "outcome": "gain"}], movement_report=None,
+            gold_note=None, purse_note=None)
+        self.assertIn("it’ll take time.\"", world._narration_text(result))
+        self.assertFalse([t for t in report.get("trimmed") or [] if t.get("why") == "gain_refused"])
+
 
 class AShrugAfterAQuestionIsTheAnswer(unittest.TestCase):
     """8B run 15, T2: '"What's on your hands?" she asks ... You glance down, noting ...' answered for the player."""
