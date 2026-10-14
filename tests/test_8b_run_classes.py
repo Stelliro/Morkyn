@@ -189,5 +189,23 @@ class TheKeptHalfIsAClause(unittest.TestCase):
         self.assertFalse(llm._tail_is_clause("the knowledge that soon, the flats will flood again"))
 
 
+class ACollectionIsNoCollecting(unittest.TestCase):
+    """8B run 11, T1: "The last tide has left behind a strange collection of items" read as the jar's arrival."""
+
+    def test_nouns_are_no_gain(self):
+        from app import world
+
+        sentence = ("The last tide has left behind a strange collection of items: a rusted iron key, a tattered map, "
+                    "and a small, sealed jar that glimmers faintly in the sunlight")
+        self.assertEqual(world._sentence_item_events_detail(sentence, "sealed jar", ["sealed", "jar"], owned=False), [])
+
+    def test_the_verb_still_is(self):
+        from app import world
+
+        events = world._sentence_item_events_detail("You collect the sealed jar from the mud", "sealed jar",
+                                                    ["sealed", "jar"], owned=False)
+        self.assertEqual([kind for _, kind, _ in events], ["gain"])
+
+
 if __name__ == "__main__":
     unittest.main()
