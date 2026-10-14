@@ -1351,6 +1351,38 @@ def repair_kin_item_article(text: str, owned: list[str]) -> tuple[str, list[dict
     return "".join(parts), changes
 
 
+def repair_inverted_debt(text: str, backstory: str, player_name: str) -> tuple[str, list[dict[str, Any]]]:
+    """'The tallyman owes you' when the backstory says the player owes the tallyman: turned back around.
+
+    8B runs 19, 24 (and 7B before): "Isk owes the guild's tallyman for a
+    winter of credit" came back as "the guild's tallyman still owes you a
+    winter's credit". A narrow repair of that one shape, outside speech.
+    """
+    first = (str(player_name or "").split() or [""])[0]
+    if not first or not str(text or "").strip():
+        return str(text or ""), []
+    owed = re.search(rf"\b{re.escape(first)}\s+owes\s+(?P<who>(?:the\s+)?[\w'’ -]{{3,40}}?)\s+(?:for|a|an|some|\d|money|coin|gold)\b",
+                     str(backstory or ""), re.I)
+    if not owed:
+        return str(text), []
+    head = owed.group("who").split()[-1]
+    changes: list[dict[str, Any]] = []
+    pattern = re.compile(
+        rf"(?P<np>\b[Tt]he\s+(?:[\w'’-]+\s+){{0,3}}?{re.escape(head)}|\b{re.escape(head)})\s+(?P<still>still\s+)?owes\s+you\b"
+    )
+    parts = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", str(text))
+    for i in range(0, len(parts), 2):
+        def fix(m: re.Match[str]) -> str:
+            np = m.group("np")
+            at_start = not parts[i][: m.start()].strip() or bool(re.search(r"[.!?]\s*$", parts[i][: m.start()]))
+            np_low = np[0].lower() + np[1:] if np[:3].lower() == "the" else np
+            out = f"you {m.group('still') or ''}owe {np_low}"
+            changes.append({"why": "inverted_debt", "was": m.group(0)})
+            return out[0].upper() + out[1:] if at_start else out
+        parts[i] = pattern.sub(fix, parts[i])
+    return "".join(parts), changes
+
+
 def repair_unowned_weapon(text: str, owned: list[str], player_input: str = "") -> tuple[str, list[dict[str, Any]]]:
     """Drop the clause that gives the player a weapon their inventory does not hold.
 

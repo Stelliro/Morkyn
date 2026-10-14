@@ -20316,6 +20316,11 @@ def _reconcile_prose_with_state(
         text, kin_fixes = prose_state.repair_kin_item_article(text, owned)
         for entry in kin_fixes:
             turn_ledger.note("prose", "kin_item_article_repaired", **entry)
+        me = conn.execute("SELECT name, backstory FROM player WHERE id = 1").fetchone()
+        if me is not None:
+            text, debt_fixes = prose_state.repair_inverted_debt(text, str(me["backstory"] or ""), str(me["name"] or ""))
+            for entry in debt_fixes:
+                turn_ledger.note("prose", "inverted_debt_repaired", **entry)
     except Exception:
         pass
     # A calm sea or clear sky in the narration while the engine has a storm,

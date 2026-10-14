@@ -559,6 +559,30 @@ class ATakeThatSlipsIsNoGain(unittest.TestCase):
         self.assertEqual(world._prose_item_outcome(t, "key", ["key"]), "gain")
 
 
+class TheDebtRunsTheWayTheBackstorySays(unittest.TestCase):
+    """8B runs 19 and 24: "the guild's tallyman owes you a winter of credit"; Isk owes the tallyman."""
+
+    BACK = ("Her mother went out on the flats six years ago and never came back. Isk owes the guild's tallyman for a "
+            "winter of credit and carries her mother's brass tide-reckoner.")
+
+    def test_turned_around(self):
+        from app import prose_state
+
+        text = "The salvage guild’s tallyman owes you a winter of credit, and you carry their debt like a weight."
+        fixed, changes = prose_state.repair_inverted_debt(text, self.BACK, "Isk Tarrow")
+        self.assertTrue(fixed.startswith("You owe the salvage guild’s tallyman a winter of credit"), fixed)
+        self.assertEqual(len(changes), 1)
+        fixed, _ = prose_state.repair_inverted_debt("But the guild's tallyman still owes you a winter's credit.",
+                                                    self.BACK, "Isk Tarrow")
+        self.assertIn("you still owe the guild's tallyman", fixed)
+
+    def test_speech_and_other_debts_stay(self):
+        from app import prose_state
+
+        text = "\"The tallyman owes you nothing,\" Hal says. The baker owes you two coppers."
+        self.assertEqual(prose_state.repair_inverted_debt(text, self.BACK, "Isk Tarrow")[0], text)
+
+
 class _ConnStub:
     """No one known yet."""
 
