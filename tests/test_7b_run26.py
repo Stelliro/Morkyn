@@ -1002,6 +1002,18 @@ class Run42BlackWheel(unittest.TestCase):
         self.assertEqual(_invented_unit_family(sentence, self.LINE, self.LINE), "movement")
 
 
+class BareNameParagraph(unittest.TestCase):
+    """Run 43 T0: the scene closed on a paragraph that was only "The Pear's Rest." (also run 5 T18, T19, T27)."""
+
+    def test_dropped_unless_a_label(self):
+        from app.prose_state import drop_bare_name_paragraph
+
+        text = "Una calls out, spotting you. \"You're out early today.\"\n\nThe Pear's Rest."
+        self.assertEqual(drop_bare_name_paragraph(text)[0], "Una calls out, spotting you. \"You're out early today.\"")
+        label = "You wait by the door.\n\nRoger [[A]]\n\n\"You owe the guild.\""
+        self.assertEqual(drop_bare_name_paragraph(label)[0], label)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

@@ -135,6 +135,20 @@ Pattern across runs 30-42: each run now gets 2-7 turns before a state fault (gol
 jobs) forces a restart; the prose faults left are mostly model drift (people swapped, scenes
 replayed) that the engine cannot repair without limiting the model.
 
-## Next
+- Run 43 (7d12629), stopped after T0 at Stell's ask (end of session): the opening closed on a
+  stray paragraph "The Pear's Rest." (fixed in the final commit; also run 5 T18, T19, T27).
 
-Run 43 on d8352f8 or later.
+## Where to pick up (session ended 2026-10-14)
+
+- Main is clean; every fix above is committed and passed the full suite (15 known failures).
+  Nothing is pushed.
+- Saves, traces, per-turn notes and helper scripts for runs 4-43 are archived at
+  `D:\STELLIROS_WORKSHOP\Morkyn-playtest-archive\2026-10-14-7b-runs\` (README there explains the
+  helpers and how to resume).
+- Next: run 44 on the latest main. No run is clean yet; each lasts 2-7 turns before a state fault.
+- Noted, not fixed (model drift or Stell's call): persuasion rolled on plain questions (#88); people
+  swapped mid-conversation (Rohese -> "Tannery keeper"); scenes replayed (a second loaf); invented
+  thoughts; a suggestion stored as a fact ("Look for work on the flats or in town"); a venue
+  described open while the engine has it closed.
+- Left for Stell: `D:\morkyn-probe` (a few MB of my probe data; the safety check refused my
+  cleanup). The live `data/world.db` had startup migrations run on it once by my slip (13:29).
