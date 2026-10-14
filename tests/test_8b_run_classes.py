@@ -610,6 +610,16 @@ class AMoveToHereWithAWalk(unittest.TestCase):
         self.assertEqual(got, "map walk")
 
 
+class WorthTheHaulAsksForIt(unittest.TestCase):
+    """8B run 24, T3: "... attached to anything worth the haul" refused the iron box the prose has her carry."""
+
+    def test_the_article_changes_nothing(self):
+        from app.llm import player_take_intent
+
+        self.assertTrue(player_take_intent("I check whether the chain is still attached to anything worth the haul."))
+        self.assertFalse(player_take_intent("I wonder if the trip out is worth the risk."))
+
+
 class _ConnStub:
     """No one known yet."""
 

@@ -13781,7 +13781,8 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     # Searching for something to carry off asks for what turns up (7B run 7,
     # T6): "dig at the mud ... looking for anything metal worth hauling back"
     # refused the rusty tool handle the dig found (also run 5, T57).
-    r"worth\s+(?:haul|tak|keep|sell|salvag|carr|pocket|bring)\w*\b"
+    # "anything worth the haul" asks the same (8B run 24, T3).
+    r"worth\s+(?:the\s+)?(?:haul|tak|keep|sell|salvag|carr|pocket|bring)\w*\b"
     r"(?!\s+(?:a\s+|the\s+)?(?:risk|chance|time|trouble|look|trip|walk|wait)s?\b)|"
     # 7B run 9, T2: "probing the mud ... looking for anything solid worth
     # digging out" was read as no take, and the finds were cut as decisions.
