@@ -6432,7 +6432,9 @@ _FOLLOW_TO_SPOT_RE = re.compile(
     r"(?:after\s+)?(?:(?:[\w'’-]+|\[\[[A-Z0-9]+\]\])\s+){0,4}?(?:over\s+|across\s+|back\s+)?(?:to|toward|towards|up\s+to)\s+"
     r"(?:the|his|her|their|its|my|your)\s+(?:[\w'’-]+\s+)?"
     r"(?:door|doorway|threshold|counter|table|desk|bench|window|hearth|fire|fireplace|corner|stall|"
-    r"workbench|pile|heap|shelf|shelves|rack|crate|crates|barrel|cart|board|ledger)s?\b"
+    r"workbench|pile|heap|shelf|shelves|rack|crate|crates|barrel|cart|board|ledger|"
+    # "I walk over to the field fence where Elsabet is milking" (7B run 42, T1).
+    r"fence|railing|rail|trough|pen|post|stile|hedge|wheel|kiln|loom|vat|vats|nets?)s?\b"
     rf"|{_WALK_TO_PERSON}",
     re.IGNORECASE,
 )
