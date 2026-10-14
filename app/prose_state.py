@@ -1309,6 +1309,11 @@ def repair_fair_weather(text: str, kind: str) -> tuple[str, list[dict[str, Any]]
 # A weapon the prose puts in the player's hand that the player does not own:
 # "one hand resting near the hilt of your knife" with no knife (7B run 30,
 # T12; run 5 T35, T79). Only that clause goes; speech is left alone.
+_WITH_A_TOOL_RE = re.compile(
+    r"\s+with\s+(?:a|an)\s+(?:[\w'’-]+\s+){0,2}?(?P<w>knife|dagger|sword|blade|axe|hatchet|spear|club|cudgel|"
+    r"lantern|torch|lamp|crowbar|pry\s+bar|shovel|spade|pickaxe|grapnel|hook)\b",
+    re.I,
+)
 _YOUR_WEAPON_RE = re.compile(
     r"\byour\s+(?:[\w'’-]+\s+){0,2}?(?P<w>knife|knives|dagger|daggers|sword|swords|blade|blades|axe|hatchet|spear|"
     r"club|cudgel|mace|crossbow|pistol|bow|"
@@ -1395,6 +1400,16 @@ def repair_unowned_weapon(text: str, owned: list[str], player_input: str = "") -
     out = source
     for start, end, sentence in reversed(sentence_spans(source)):
         if re.search(r"[\"“”]", sentence):
+            continue
+        # "You pry at the links with a crowbar" with no crowbar (8B run 24, T3):
+        # in the player's own sentence the tool phrase goes, the act stays.
+        w = _WITH_A_TOOL_RE.search(sentence) if re.match(r"\W*you\b", sentence, re.I) else None
+        if w and not re.search(rf"\b{_WEAPON_STEMS.get(w.group('w').lower(), w.group('w').lower())}", have) and not (
+            w.group("w").lower() in _LIGHT_WORDS and any(re.search(rf"\b{x}", have) for x in _LIGHT_WORDS)
+        ):
+            new = (sentence[: w.start()] + sentence[w.end():]).replace(" ,", ",")
+            out = out[:start] + new + out[end:]
+            fixes.append({"why": "unowned_tool_phrase", "weapon": w.group("w").lower(), "text": sentence[:160]})
             continue
         m = _YOUR_WEAPON_RE.search(sentence)
         if not m:

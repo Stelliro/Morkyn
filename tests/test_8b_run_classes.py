@@ -620,6 +620,26 @@ class WorthTheHaulAsksForIt(unittest.TestCase):
         self.assertFalse(player_take_intent("I wonder if the trip out is worth the risk."))
 
 
+class ACrowbarFromNowhere(unittest.TestCase):
+    """8B run 24, T3: "You pry at the links with a crowbar" with no crowbar."""
+
+    def test_the_tool_phrase_goes(self):
+        from app import prose_state
+
+        text = ("The chain is stiff with salt. You pry at the links with a crowbar, feeling the resistance of something "
+                "still holding. A creak echoes as the last link gives way, revealing a small iron box.")
+        fixed, fixes = prose_state.repair_unowned_weapon(text, ["worn boots"], "I check the chain.")
+        self.assertIn("You pry at the links, feeling the resistance", fixed)
+        self.assertEqual(fixes[0]["why"], "unowned_tool_phrase")
+
+    def test_someone_elses_knife_stays(self):
+        from app import prose_state
+
+        text = ("The chain is stiff with salt. A man with a knife watches you from the wreck. You keep your distance "
+                "from him and the water.")
+        self.assertEqual(prose_state.repair_unowned_weapon(text, ["worn boots"], "I check the chain.")[0], text)
+
+
 class _ConnStub:
     """No one known yet."""
 
