@@ -2099,7 +2099,9 @@ def _said_line(quotes: list[str]) -> str:
     for index, quote in enumerate(quotes):
         q = quote.strip()
         if index == 0:
-            verb = "ask" if "?" in "".join(quotes) else "say"
+            # The tag goes with the line it follows: '"I owe the guild, not you
+            # or Colm," you ask.' took "ask" from the question after it (8B run 2, T4-T10).
+            verb = "ask" if "?" in q else "say"
             body = q if q[-1:] in "?!," else _SAID_SOFT_END_RE.sub("", q) + ","
             parts.append(f"“{body}” you {verb}.")
         else:

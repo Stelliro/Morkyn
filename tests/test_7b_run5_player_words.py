@@ -55,8 +55,9 @@ class TheQuoteIsSaid(unittest.TestCase):
 
     def test_a_question_is_asked_and_two_lines_stay_in_order(self):
         out, _ = _keep("The fog presses in.", '"I\'m Isk, not Warin." I nod. "Morning, then. Gate at first light?"')
+        # The tag goes with the line it follows: "I'm Isk, not Warin" is said, not asked (8B run 2).
         self.assertTrue(
-            out.startswith("“I'm Isk, not Warin,” you ask. “Morning, then. Gate at first light?”"),
+            out.startswith("“I'm Isk, not Warin,” you say. “Morning, then. Gate at first light?”"),
             out,
         )
 

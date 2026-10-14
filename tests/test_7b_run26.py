@@ -1014,6 +1014,44 @@ class BareNameParagraph(unittest.TestCase):
         self.assertEqual(drop_bare_name_paragraph(label)[0], label)
 
 
+class InventedInnerLife(unittest.TestCase):
+    """8B run 2 (T1-T7): resolve, memories and feelings the player never gave; perception and touch stay."""
+
+    LINE = '"I know what I owe. I am asking what you want from me this morning, Colm. Work, or a warning?"'
+
+    def test_dropped_and_kept(self):
+        from app.llm import _strip_player_acts_from_sentence as strip
+
+        for gone in ("But today, you're not here to beg.", "You're not ready to let the guild dictate your life any longer.",
+                     "You could feel the weight of his words, the unspoken threat lurking beneath them.",
+                     "A part of you knows this is true, but the weight of it is undeniable.",
+                     "You've been careful not to draw their attention."):
+            self.assertEqual(strip(gone, self.LINE, self.LINE)[0], "", gone)
+        for kept in ("You feel the cold wind on your face.", "You feel the weight of the coins in your palm.",
+                     "You've heard that the ship's captain frequents the salvage yard.",
+                     "As you climb, you can feel the weight of your injuries from the previous day.",
+                     "You're in the warehouse now.", "You see the ledger on the desk."):
+            self.assertEqual(strip(kept, self.LINE, self.LINE)[0], kept, kept)
+
+
+class AMisspelledNameIsTheSamePerson(unittest.TestCase):
+    """8B run 2 T7: NPC_NEW 'Harbour Reevec' beside the known 'Harbour Reeve' made a second person."""
+
+    def test_near_names(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            loc = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            conn.execute("DELETE FROM npcs")
+            for code, name in (("A", "Harbour Reeve"), ("B", "Mara")):
+                conn.execute("INSERT INTO npcs (code, location_id, name, role) VALUES (?, ?, ?, 'local')", (code, loc, name))
+            self.assertEqual([r["name"] for r in world._near_name_matches(conn, "Harbour Reevec")], ["Harbour Reeve"])
+            self.assertEqual(world._near_name_matches(conn, "Maria"), [])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

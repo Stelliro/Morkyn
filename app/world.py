@@ -13103,6 +13103,36 @@ def _is_player_title_word(conn, role: str) -> bool:
     return bool(title_words) and words <= title_words
 
 
+def _one_letter_apart(a: str, b: str) -> bool:
+    """One letter added, dropped or changed (case ignored)."""
+    a, b = a.lower(), b.lower()
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        return sum(x != y for x, y in zip(a, b)) == 1
+    short, long_ = (a, b) if len(a) < len(b) else (b, a)
+    return any(long_[:i] + long_[i + 1:] == short for i in range(len(long_)))
+
+
+def _near_name_matches(conn, name: str) -> list[Any]:
+    """Known people whose name has the same words as ``name``, one word (of four letters or more) a letter off."""
+    words = str(name or "").split()
+    if not words:
+        return []
+    out = []
+    for row in conn.execute("SELECT * FROM npcs").fetchall():
+        other = str(row["name"] or "").split()
+        if len(other) != len(words):
+            continue
+        diffs = [(w, o) for w, o in zip(words, other) if w.lower() != o.lower()]
+        # A lone short name is too easily someone else ("Mara", "Maria"); the
+        # rest of a full name or six letters makes a misspelling plain.
+        floor = 4 if len(words) > 1 else 6
+        if len(diffs) == 1 and min(len(diffs[0][0]), len(diffs[0][1])) >= floor and _one_letter_apart(*diffs[0]):
+            out.append(row)
+    return out
+
+
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     if not isinstance(npc, dict):
         return None
@@ -13211,6 +13241,17 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
             ).fetchall()
             if len(first) == 1:
                 existing = first[0]
+                role = str(existing["role"] or role)
+        if existing is None and name.strip():
+            # The model's misspelling of a name it already used (8B run 2, T7:
+            # "Harbour Reevec" beside "Harbour Reeve") is that person: the same
+            # words, one of them off by a letter. Exactly one such person only.
+            near = _near_name_matches(conn, name)
+            if len(near) == 1:
+                existing = near[0]
+                turn_ledger.note("npc", "near_name_is_the_same_person", name=name, matched=str(existing["name"] or ""))
+                name = str(existing["name"] or name)
+                npc["name"] = name
                 role = str(existing["role"] or role)
         if existing is not None and int(existing["location_id"] or 0) != int(location_id or 0):
             try:
