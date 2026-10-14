@@ -1145,6 +1145,22 @@ class NamedOnlyInSomeonesLine(unittest.TestCase):
         self.assertIn("Hargrave", kept)
 
 
+class ThePlayersDebtIsNoOffer(unittest.TestCase):
+    """8B run 2 T1: 'And if you don't pay your share, they don't let you walk away' made the job 'Collect the Debt'."""
+
+    def test_refused_and_a_real_offer_still_passes(self):
+        from app.quest_parser import judge_offer
+
+        colm = {"code": "A", "name": "Colm Woodall", "role": "tallyman"}
+        warning = ('Colm leans back. "Funny how the debt works, isn\'t it? You owe them a month\'s wages. And if you '
+                   'don\'t pay your share, they don\'t let you walk away," Colm says.')
+        self.assertFalse(judge_offer("Funny how the debt works, isn't it?", warning, '"Watching me for the guild?"',
+                                     giver=colm, giver_ref="A", npcs=[colm])["ok"])
+        offer = 'Colm taps the ledger. "There\'s a cargo to haul to the north wharf. The guild pays two coppers," Colm says.'
+        self.assertTrue(judge_offer("There's a cargo to haul to the north wharf.", offer, '"Any work?"',
+                                    giver=colm, giver_ref="A", npcs=[colm])["ok"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

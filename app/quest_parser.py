@@ -677,6 +677,14 @@ def _giver_sentences(narration: str, player_input: str, giver: dict[str, Any] | 
     return [re.sub(r"\s+", " ", s).strip() for s in out if str(s or "").strip()]
 
 
+_PLAYER_OWES_RE = re.compile(
+    r"\b(?:if\s+)?you\s+(?:\w+\s+){0,2}?(?:pay|paid|pays|owe|owes|owed)\b[^.!?]{0,40}"
+    r"|\bpay\s+(?:your|what\s+you\s+owe|the\s+guild|it\s+back|us\s+back|them\s+back|back\s+what)\b[^.!?]{0,30}"
+    r"|\b(?:your|the)\s+debts?\b[^.!?]{0,30}",
+    re.I,
+)
+
+
 def _players_words_only(evidence: str, offer_line: str, player_input: str) -> bool:
     """The parser's quote and offer line are the player's own words, or the prose retelling them ("You ...")."""
     own = _ws(str(player_input or "")).lower()
@@ -738,7 +746,9 @@ def judge_offer(
                 return {"ok": True, "why": "offer_line", "checked": sentence[:240]}
     giver_lines = all_giver
     for sentence in giver_lines:
-        if _JOB_RE.search(sentence):
+        # The player's own debt is not work offered: "And if you don't pay your
+        # share, they don't let you walk away" made a job (8B run 2, T1).
+        if _JOB_RE.search(_PLAYER_OWES_RE.sub(" ", sentence)):
             return {"ok": True, "why": "giver_offers", "checked": sentence[:240]}
     if player_asks_for_work(player_input):
         for sentence in giver_lines:
