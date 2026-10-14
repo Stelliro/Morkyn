@@ -224,5 +224,50 @@ class AWeighingIsThePlayers(unittest.TestCase):
         self.assertFalse(llm._PLAYER_INNER_SUBJECT_RE.match("The thought of the storm makes his hands shake."))
 
 
+class TheWomanIsTheOneShownAsAWoman(unittest.TestCase):
+    """8B run 11, T5: "I turn to the woman" went to no one; the prose never named Eleanor."""
+
+    LINE = ("I turn to the woman and lower the key. \"More than a key. Like what? And what would it cost me "
+            "for you to show me these old locks?\"")
+
+    def _context(self, eleanor="she", eldric="he"):
+        npcs = [{"id": 1, "code": "A", "name": "Eldric Thorne", "role": "fisherman", "pronouns": eldric},
+                {"id": 2, "code": "B", "name": "Eleanor Vane", "role": "apprentice", "pronouns": eleanor}]
+        return {"settings": {}, "current_location": {"id": 1, "code": "L1"},
+                "locations": [{"id": 1, "code": "L1", "npcs": npcs}]}
+
+    def test_the_woman_is_eleanor(self):
+        from app import conversation
+
+        self.assertEqual(conversation.resolve(self._context(), self.LINE)["addressed"], ["B"])
+
+    def test_two_women_name_nobody(self):
+        from app import conversation
+
+        self.assertNotEqual(conversation.resolve(self._context(eldric="she"), self.LINE)["addressed"], ["B"])
+
+    def test_a_woman_bound_to_a_name_gets_her_pronouns(self):
+        from app import world
+
+        npcs = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Eleanor Vane", "role": "apprentice"}],
+                                          "A flicker of movement catches your eye: a woman with a weathered face "
+                                          "leans in. \"I know where the old locks are,\" she says.")
+        self.assertEqual(npcs[0].get("_figure_pronouns"), "she")
+
+
+class _ConnStub:
+    """No one known yet."""
+
+    def execute(self, *_a, **_k):
+        class _Rows:
+            def fetchone(self):
+                return None
+
+            def fetchall(self):
+                return []
+
+        return _Rows()
+
+
 if __name__ == "__main__":
     unittest.main()
