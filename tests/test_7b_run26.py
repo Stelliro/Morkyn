@@ -1219,6 +1219,21 @@ class ReportedQuestionTheyNeverAsked(unittest.TestCase):
         self.assertEqual(strip(kept, own, own)[0], kept)
 
 
+class UnfinishedTail(unittest.TestCase):
+    """8B run 4 T5: the scene ended mid-sentence: '... You're not here for the bones, are you? He'."""
+
+    def test_cut_back(self):
+        from app.prose_state import drop_unfinished_tail
+
+        text = ("He steps forward, revealing a weathered face, half-hidden by a tattered cloak. His gaze is steady and "
+                "calculating. You're not here for the bones, are you? He")
+        out, fixes = drop_unfinished_tail(text)
+        self.assertTrue(out.endswith("are you?"))
+        self.assertEqual(fixes[0]["text"], "He")
+        done = 'She nods. "Good luck, Isk.\''
+        self.assertEqual(drop_unfinished_tail(done)[0], done)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

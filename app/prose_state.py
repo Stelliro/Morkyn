@@ -1413,6 +1413,22 @@ _SPEECH_LEAD_RE = re.compile(
 )
 
 
+def drop_unfinished_tail(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Cut a scene that stops mid-sentence back to its last finished sentence.
+
+    8B run 4, T5 ended "... You're not here for the bones, are you? He": the
+    reply ran out of tokens. Nothing is cut when that would leave too little.
+    """
+    source = str(text or "").rstrip()
+    if not source or re.search(r"[.!?…\"”’')\]*]\s*$", source):
+        return str(text or ""), []
+    ends = [m.end() for m in re.finditer(r"[.!?…][\"”’']?(?=\s)", source)]
+    if not ends or ends[-1] < 80:
+        return str(text or ""), []
+    cut = ends[-1]
+    return source[:cut].rstrip(), [{"why": "unfinished_tail", "text": source[cut:].strip()[:80]}]
+
+
 def drop_bare_name_paragraph(text: str) -> tuple[str, list[dict[str, Any]]]:
     """Drop a paragraph that is nothing but a name: "The Pear's Rest." closing the scene (7B run 43, T0)."""
     paragraphs = re.split(r"(\n\s*\n)", str(text or ""))
