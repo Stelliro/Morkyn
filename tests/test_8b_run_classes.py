@@ -170,5 +170,24 @@ class SaidOnceIsSaid(unittest.TestCase):
         self.assertTrue(dropped)
 
 
+class TheKeptHalfIsAClause(unittest.TestCase):
+    """8B run 11, T0: a cut feeling left the sentence "The knowledge that soon, the flats will flood again." """
+
+    def test_no_object_left_standing(self):
+        from app import llm
+
+        text = ("The air is thick with brine and the silence is broken only by a gull. You feel the pull of the "
+                "water in your bones, the way it calls to you, and the knowledge that soon, the flats will flood again.")
+        kept, dropped = llm.drop_invented_player_acts_text(text, "__opening__")
+        self.assertNotIn("The knowledge that", kept)
+
+    def test_a_world_clause_still_stays(self):
+        from app import llm
+
+        self.assertTrue(llm._tail_is_clause("he gestures toward the shelves, where the jars stand"))
+        self.assertTrue(llm._tail_is_clause("the ground beneath your feet shudders"))
+        self.assertFalse(llm._tail_is_clause("the knowledge that soon, the flats will flood again"))
+
+
 if __name__ == "__main__":
     unittest.main()

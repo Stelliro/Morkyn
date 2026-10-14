@@ -14177,6 +14177,22 @@ def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -
     return ""
 
 
+def _tail_is_clause(tail: str) -> bool:
+    """The world's half has its own subject and verb, not one more object of the
+    player's cut verb: "You feel the pull of the water ..., and the knowledge
+    that soon, the flats will flood again" left the sentence "The knowledge
+    that soon, the flats will flood again." (8B run 11, T0)."""
+    if re.match(r"(?:he|she|they|it)\b", tail, re.I):
+        return True
+    head = re.split(r"\b(?:that|which|who|whom|whose|where|of)\b", tail, maxsplit=1, flags=re.I)[0]
+    words = re.findall(r"[A-Za-z'’-]+", head)[1:]
+    return any(
+        w.lower() in {"is", "are", "was", "were", "has", "have", "had", "will", "would", "can", "could", "does", "did"}
+        or re.search(r"(?:s|ed)$", w.lower())
+        for w in words
+    )
+
+
 def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str) -> tuple[str, str]:
     """(kept text, dropped text) for one sentence. Quoted sentences are never touched."""
     if re.search(r'["\u201c\u201d]', sentence):
@@ -14205,7 +14221,7 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
         # "You nod, and he gestures toward the shelves, where ..." : the
         # player's half goes, the world's answer stays.
         tail = _WORLD_TAIL_RE.search(sentence)
-        if tail and len(tail.group("tail")) >= 25:
+        if tail and len(tail.group("tail")) >= 25 and _tail_is_clause(tail.group("tail")):
             kept = tail.group("tail")
             return kept[0].upper() + kept[1:], sentence[: tail.start()].strip()
         seen = _PERCEPTION_TAIL_RE.search(sentence)
