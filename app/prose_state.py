@@ -324,6 +324,29 @@ def coin_handed_to_player(text: str) -> dict[str, Any] | None:
     return None
 
 
+# A purse handed over whose contents the prose never names: "He hands you a
+# small pouch. 'This should cover it.'" (7B run 30, T5). Read only when the
+# turn's own GRANT says the thing is coin; a pouch alone could hold anything.
+_PURSE_HANDED_RE = re.compile(r"\b(?:purse|pouch|coin[\s-]?purse|money[\s-]?bag|bag|sack|packet)\b", re.I)
+
+
+def purse_handed_to_player(text: str) -> dict[str, Any] | None:
+    """A purse or pouch the narration shows handed to the player, outside quotes: {"span", "band"} or None."""
+    plain = _QUOTE_RE.sub(" ", str(text or ""))
+    for match in _COIN_HANDED_RE.finditer(plain):
+        before = plain[max(0, match.start() - 24):match.start()]
+        if re.search(r"\byou\s+(?:\w+ly\s+)?$", before, re.I):
+            continue
+        if match.group("verb").lower().endswith("ing") and _nearest_doer(plain[:match.start()]) == "you":
+            continue
+        rest = match.group("rest")
+        thing = _PURSE_HANDED_RE.search(rest)
+        if not thing or not _FOR_YOU_RE.search(rest):
+            continue
+        return {"span": (match.group("verb") + " " + rest)[:120], "band": _band_word(rest[: thing.end() + 1])}
+    return None
+
+
 def _nearest_doer(before: str) -> str:
     """"you", "other" or "" for the last subject in the sentence before a participle."""
     sentence = re.split(r"[.!?\n]", before)[-1]
