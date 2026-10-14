@@ -153,8 +153,9 @@ class TestAutomaticLimits(unittest.TestCase):
 
     def test_a_big_model_on_a_small_card_gets_what_the_cache_allows(self):
         # 32B weights at 18 GB on a 24 GB card: ~4.3 GB left for cache at 160 KB per token.
+        # (The model keeps GPU_HEADROOM_BYTES free for the desktop since 2026-10-14, so the card is emptier here.)
         facts = self._facts(params_b=32.0, kv_bytes_per_token=163840, file_bytes=18 * GIB, n_ctx_train=131072)
-        context, why = model_limits.auto_context_tokens(facts, {"total_bytes": 24 * GIB, "free_bytes": 20 * GIB})
+        context, why = model_limits.auto_context_tokens(facts, {"total_bytes": 24 * GIB, "free_bytes": 22 * GIB})
         self.assertGreaterEqual(context, model_limits.MIN_CONTEXT_TOKENS)
         self.assertLess(context, 32768)
         self.assertEqual(context % model_limits.CONTEXT_STEP, 0)

@@ -76,6 +76,9 @@ DEFAULT_RESPONSE_CAPS = (1500, 2000)
 RUNTIME_OVERHEAD_BYTES = 512 * 1024 * 1024
 COMPUTE_BYTES_PER_TOKEN = 32 * 1024
 GPU_USABLE_FRACTION = 0.92
+# Kept free beside the model for other programs' memory to grow into (a fixed
+# amount: the desktop's growth does not scale with the card).
+GPU_HEADROOM_BYTES = 1536 * 1024 * 1024
 # Past this the cache costs memory and prompt time and buys nothing: the turn
 # contract needs about 12-16k. Applies to the GPU fit; env and custom win.
 AUTO_CONTEXT_CEILING = 24576
@@ -349,7 +352,11 @@ def _gpu_budget_bytes(gpu: dict[str, int]) -> int:
     free = gpu.get("free_bytes")
     if free is None:
         return cap
-    return min(cap, int(free) + max(0, int(gpu.get("held_bytes") or 0)))
+    # Room for the rest of the desktop to grow after the load: Qwen3 8B sized
+    # to 22,528 tokens with ~0.6 GB to spare, browsers and a screen recorder
+    # took the rest, the cache spilled into shared memory and the opening took
+    # 891 s instead of 33 s (2026-10-14).
+    return max(0, min(cap, int(free) + max(0, int(gpu.get("held_bytes") or 0))) - GPU_HEADROOM_BYTES)
 
 
 def turn_minimum_context() -> int:

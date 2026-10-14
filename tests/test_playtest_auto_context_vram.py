@@ -42,7 +42,8 @@ class AutoContextFitsWhatIsFree(unittest.TestCase):
             self.assertLess(plan, free * MiB, f"free={free} MiB ctx={ctx}")
 
     def test_less_free_memory_means_a_smaller_window(self):
-        roomy, tight, cramped = self.ctx(10895), self.ctx(7000), self.ctx(6000)
+        # 1.5 GB stays free for the desktop since 2026-10-14, so "tight" starts higher.
+        roomy, tight, cramped = self.ctx(10895), self.ctx(8800), self.ctx(7800)
         self.assertGreater(roomy, tight)
         self.assertGreater(tight, cramped)
         # The floor is what a turn needs (8B #62: 4096 broke every turn on a shared card).
