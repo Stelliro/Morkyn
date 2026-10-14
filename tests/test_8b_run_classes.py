@@ -377,6 +377,33 @@ class WaterIsNoAnimal(unittest.TestCase):
         self.assertEqual(infer_check_from_action("I calm the horse and saddle it.", {})["skill_code"], "animal_handling")
 
 
+class ARestoredSplitLineIsSaidOnce(unittest.TestCase):
+    """8B run 15, T5: the first piece was restored to the whole line, and the second piece stayed beside it."""
+
+    LINE = ("\"Since the last storm.\" I stand and wipe my hands on my tunic. \"Has anyone told the harbour reeve? "
+            "If the town's water is going bad, someone should know.\"")
+
+    def test_the_second_piece_goes(self):
+        from app.narration_pipeline import keep_player_words
+
+        prose = ("“Since the last storm,” you say. Mira watches you.\n\n"
+                 "“Has anyone told the harbour reeve?” you ask again, your own words more pointed now. "
+                 "“If the town’s waters are going bad, someone should know.”\n\n"
+                 "Mira exhales slowly. “The reeve doesn’t care about the well,” she says.")
+        fixed, _ = keep_player_words(prose, self.LINE)
+        self.assertEqual(fixed.count("someone should know"), 1)
+        self.assertIn("Has anyone told the harbour reeve? If the town's water is going bad, someone should know", fixed)
+
+    def test_an_answer_echoing_a_piece_stays(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = "I sit, but I keep my hands on the table. \"Show me, then. Line by line.\""
+        prose = ("“Show me, then. Line by line,” you say. He taps the ledger. “Debt's a ledger. Line by line, "
+                 "I'll show you what's owed,” he says.")
+        fixed, _ = keep_player_words(prose, line)
+        self.assertIn("I'll show you what's owed", fixed)
+
+
 class _ConnStub:
     """No one known yet."""
 

@@ -2671,6 +2671,39 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         if n and inner.rstrip(".!?,") in new_body:
             body = new_body
             changes.append({"action": "repeated_piece_of_line_dropped", "text": first[:80]})
+    # Any sentence of it, in a quotation of its own, tagged or not: the 8B
+    # split "Has anyone told the harbour reeve? If the town's water is going
+    # bad, someone should know." over two quotes, the first was restored to the
+    # whole line, and '"If the town's waters are going bad, someone should
+    # know."' stayed beside it (8B run 15, T5).
+    for q in quotes:
+        inner = str(q or "").strip()
+        pieces = [p for p in re.split(r"(?<=[.!?])\s+", inner) if len(p.split()) >= 3]
+        whole = inner.rstrip(".!?,")
+        if len(pieces) < 2 or whole not in body:
+            continue
+        whole_at = body.find(whole)
+        spans = spans_of(body)
+        for index, span in enumerate(spans):
+            if span["inner_start"] <= whole_at < span["inner_start"] + len(span["inner"]) + 1:
+                continue
+            # Only the player's: tagged as theirs, or run straight on from the
+            # whole line. An answer that echoes a few of their words ('"Line by
+            # line, I'll show you what's owed"') is the other person's.
+            prev = spans[index - 1] if index else None
+            after_whole = bool(
+                prev and span["chained"] and prev["inner_start"] <= whole_at < prev["inner_start"] + len(prev["inner"]) + 1
+            )
+            if not (span["speaker"] == "player" or after_whole):
+                continue
+            if not any(_quote_matches(span["inner"], p) in ("exact", "near") for p in pieces):
+                continue
+            tail = re.match(r"\s*,?\s*you\s+(?:\w+ly\s+)?(?:say|said|ask|asked|add|added|reply|replied)\b[^.!?\"“”]*[.!?]?",
+                            body[span["end"]:])
+            end = span["end"] + (tail.end() if tail else 0)
+            body = (body[: span["start"]].rstrip(" ") + " " + body[end:].lstrip(" ")).strip()
+            changes.append({"action": "repeated_piece_of_line_dropped", "text": span["inner"][:80]})
+            break
     # The player's typed line with no tag, right before someone else's name,
     # reads as that person's (7B run 35/36, T2: '"Do you know who is taking a
     # boat out ...?" Emrys Slade ponders for a moment'). It gets its tag.
