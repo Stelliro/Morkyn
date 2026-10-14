@@ -13583,6 +13583,8 @@ _PLAYER_COGNITION_RE = re.compile(
     # Being watched is in the world: "You feel the weight of unseen eyes" (#302).
     r"(?:unseen\s+|his\s+|her\s+|their\s+|watching\s+)?(?:eyes|gaze|stares?|glances?))\b)|"
     r"(?:have|had)\s+(?:been\s+careful|always\s+known)|"
+    # "You can feel it in your bones: the pull of the flats" (8B run 7, T0).
+    r"(?:could\s+|can\s+)?(?:feel|felt|sense|sensed|know|knew)\s+(?:it\s+)?in\s+your\s+(?:bones|gut|chest|heart|blood)\b|"
     # The narrator planning the player's next steps: "you'll need to tread
     # carefully", "you have to focus on the immediate task", "you might be able
     # to get ahead of the game" (8B run 4, T3).
