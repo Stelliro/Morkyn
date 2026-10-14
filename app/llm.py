@@ -13519,8 +13519,14 @@ _DECISION_STOPWORDS = {
 # sentence or after a coordinator, and only these verb families. Perception
 # ("you see", "you hear", "you feel the cold") and anything someone else does
 # to the player ("she hands you") never match.
-_PLAYER_CLAUSE_LEAD = r"(?:(?:and|but|so|then|yet|still|now|instead|finally|slowly|for\s+now|for\s+a\s+moment)\s*,?\s+)*"
-_PLAYER_CLAUSE_START_RE = re.compile(rf"^\s*{_PLAYER_CLAUSE_LEAD}you\s+", re.I)
+_PLAYER_CLAUSE_LEAD = (
+    r"(?:(?:and|but|so|then|yet|still|now|instead|finally|slowly|for\s+now|for\s+a\s+moment|"
+    # "But today, you're not here to beg." (8B run 2, T2)
+    r"today|tonight|this\s+time|for\s+once|again|already|right\s+now|deep\s+down)\s*,?\s+)*"
+)
+# A contracted "you" starts a clause too: "You've heard the stories", "you're
+# not ready to give in" (8B run 2, T2) were never read.
+_PLAYER_CLAUSE_START_RE = re.compile(rf"^\s*{_PLAYER_CLAUSE_LEAD}you(?:\s+|(?=['’](?:ve|re|d|ll)\b))", re.I)
 _PLAYER_CLAUSE_COORD_RE = re.compile(
     r"(?:,|;|\u2014|\u2013|\s-)\s*(?:(?:and|but|yet|so|then)\s+)?(?:[^,.;:!?\u2014\u201c\u201d\"]{0,30},\s*)?you\s+"
     # "The scent of bread wafts from the bakery as you make your way to the
@@ -13545,8 +13551,34 @@ _PLAYER_COGNITION_RE = re.compile(
     r"weigh(?:s|ed)?\s+(?:your|the|his|her|their|its)\s+(?:options|choices|offer|words|decision|chances)|"
     r"feel\s+(?:a\s+(?:pang|sense|surge|wave|flicker|twinge|rush|stab|knot|flash)\s+of|that|as\s+if|as\s+though|"
     r"sympathy|pity|relief|hope|dread|uneasy|uncertain|guilty|sure|certain)|"
-    r"have\s+no\s+choice\s+but|had\s+no\s+choice\s+but|make\s+a\s+mental\s+note"
+    r"have\s+no\s+choice\s+but|had\s+no\s+choice\s+but|make\s+a\s+mental\s+note|"
+    # Inner life the player never gave (8B run 2, T1-T7): a feeling as a
+    # weight or a pull, not a touch ("You feel the weight of the debt", "You
+    # could feel the weight of his words"); a memory ("You've heard the
+    # stories", "You've been careful not to draw their attention"); a state
+    # of mind ("you're not ready to give in", "you're not here to beg").
+    # A weight held is a touch, not a feeling: "You feel the weight of the
+    # coins in your palm", "of the crates as you lift them" stay. "You've
+    # heard that the captain ... frequents the yard" is world news and stays.
+    r"(?:could\s+|can\s+)?(?:feel|felt|sense|sensed)\s+(?:the\s+|a\s+)?(?:weight|burden|pull|pressure|gravity|urgency|"
+    r"sting|knot|chill\s+of\s+(?:fear|dread)|truth|fear|dread|resolve|anger|guilt|shame|hope|doubt)\b"
+    r"(?![^.;!?]*\b(?:in\s+your\s+(?:hand|hands|palm|palms|arms|grip|pocket|pack|tunic|satchel|lap|muscles)|"
+    r"as\s+you\s+(?:lift|carry|haul|heft|pick|hold|set)|"
+    # The body the engine keeps: "the weight of your injuries from the previous day".
+    r"(?:your\s+)?(?:injur\w*|wounds?|ribs?|bruises?|hurts?)|"
+    # Being watched is in the world: "You feel the weight of unseen eyes" (#302).
+    r"(?:unseen\s+|his\s+|her\s+|their\s+|watching\s+)?(?:eyes|gaze|stares?|glances?))\b)|"
+    r"(?:have|had)\s+(?:been\s+careful|always\s+known)|"
+    r"(?:are|were)\s+(?:not\s+|no\s+longer\s+)?(?:ready|here\s+to|determined|resolved|sure|certain|afraid|careful|"
+    r"tired\s+of|done\s+with|no\s+stranger|unwilling|willing|going\s+to)"
     r")\b",
+    re.I,
+)
+# The player's inner voice with another subject: "A part of you knows this is
+# true" (8B run 2, T7).
+_PLAYER_INNER_SUBJECT_RE = re.compile(
+    r"^\W*(?:but\s+|and\s+)?(?:a\s+part\s+of\s+you|something\s+(?:in|inside|deep\s+in)\s+you|your\s+(?:mind|heart|gut|instinct|"
+    r"instincts|thoughts?)\s+(?:tells?|says?|knows?|races?|is\s+already|already|whispers?|screams?|insists?))\b",
     re.I,
 )
 _PLAYER_GESTURE_RE = re.compile(
@@ -13987,6 +14019,9 @@ def _walk_asked(rest: str, own: str) -> bool:
 
 
 def _player_clause_family(rest: str, clause: str, own: str, player_input: str) -> str:
+    # "You've heard", "you're not ready": the contraction read as its words.
+    rest = re.sub(r"^['’](ve|re|d|ll)\b", lambda m: {"ve": "have", "re": "are", "d": "would", "ll": "will"}[m.group(1).lower()],
+                  rest, flags=re.I).lstrip()
     m = _PLAYER_COGNITION_RE.match(rest)
     if m:
         verb = m.group("v")
@@ -14063,6 +14098,8 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
     """(kept text, dropped text) for one sentence. Quoted sentences are never touched."""
     if re.search(r'["\u201c\u201d]', sentence):
         return sentence, ""
+    if _PLAYER_INNER_SUBJECT_RE.match(sentence):
+        return "", sentence
     start = _PLAYER_CLAUSE_START_RE.match(sentence)
     family = _player_clause_invented(sentence[start.end():], sentence, own, player_input) if start else ""
     if not family and start and _invented_thanks(sentence[start.end():], own):
