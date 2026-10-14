@@ -868,6 +868,33 @@ class AMarkOnAQuestionIsNoJob(unittest.TestCase):
         self.assertIn("mark_on_a_question", rejected[0]["reasons"])
 
 
+class AMarkWithNoOfferAndNoGiverIsNoJob(unittest.TestCase):
+    """8B run 44, T1: QUEST GIVER "A" (Tilda, left in town) on "You're late, Flat-runner" became a job."""
+
+    NARRATION = ("At the far end, behind a desk cluttered with ledgers, a man in a soot-stained coat looks up. "
+                 "“You’re late, Flat-runner,” he says. “The tide’s already turned.”")
+    NPCS = [{"id": 1, "code": "A", "name": "Tilda", "role": "watcher"},
+            {"id": 2, "code": "B", "name": "Eldrin Vane", "role": "tallyman"}]
+
+    def _check(self, narration, evidence):
+        from app import quest_parser
+
+        reply = {"new": [{"title": "Salvage Contract", "giver": "A", "difficulty": "normal",
+                          "steps": [{"title": "Discuss work against debt", "location": "L1"}],
+                          "evidence": evidence, "_from_mark": True}]}
+        return quest_parser.validate_quest_changes(reply, narration=narration, npcs=self.NPCS)
+
+    def test_a_greeting_is_no_job(self):
+        accepted, rejected = self._check(self.NARRATION, "You’re late, Flat-runner")
+        self.assertEqual(accepted.get("new") or [], [])
+        self.assertIn("mark_with_no_offer_or_giver", rejected[0]["reasons"])
+
+    def test_an_offer_in_the_words_stands(self):
+        narration = self.NARRATION + " “There’s a job hauling wreck-iron, if you want the work.”"
+        accepted, _rejected = self._check(narration, "There’s a job hauling wreck-iron, if you want the work.")
+        self.assertEqual(len(accepted.get("new") or []), 1)
+
+
 class HerTunicIsNotYours(unittest.TestCase):
     """8B run 36, T0: "a woman in a patched tunic [[I2]]" linked her tunic to the player's."""
 

@@ -16527,6 +16527,21 @@ def _apply_conversations(
             continue
         if is_slot_token(convo.get("topic")):
             convo = {**convo, "topic": ""}
+        # A line no one says: TALK "You're late, Flat-runner." on an opening with
+        # no speech in it was logged as the watcher's, and the next scene put it
+        # in the tallyman's mouth as something already said (8B run 44, T0-T1).
+        # A topic ("work against my debt") is kept; a spoken sentence needs the
+        # prose to have someone speaking.
+        if narration and not re.search(r"[\"“”]", str(narration)) and re.search(r"[.!?]\s*$", summary):
+            from app.narration_pipeline import content_stems
+
+            said = content_stems(summary)
+            unshown = bool(said) and len(said & content_stems(str(narration))) * 2 < len(said)
+        else:
+            unshown = False
+        if unshown:
+            turn_ledger.note("conversation", "talk_line_not_in_prose", line=summary[:160])
+            continue
         npc_id = _npc_id_by_ref(conn, convo.get("npc_code") or convo.get("npc"))
         owner = _talk_line_owner(summary, prose_lines) if prose_lines else None
         if owner is not None:

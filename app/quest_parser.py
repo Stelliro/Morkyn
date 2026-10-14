@@ -1136,6 +1136,9 @@ def validate_quest_changes(
                 "quest", "giver_not_in_scene", title=title, parser_giver=giver_ref, speaker=stranger,
             )
             giver, giver_ref = None, stranger
+            giver_absent = True
+        else:
+            giver_absent = False
         # A job read off a board is the board's, or its poster's (7B run 11,
         # T2: "You read the details aloud: 'Lifting supplies to the upper
         # levels of the market hall'" was filed under Iseult, who only said
@@ -1158,6 +1161,14 @@ def validate_quest_changes(
             # the job "Salvage Contract" (8B run 35, T1). A question back to the
             # player offers nothing yet.
             reasons.append("mark_on_a_question")
+        elif raw.get("_from_mark") and giver_absent and not giver_ref and not judge_offer(
+            evidence, narration, player_input, offer_line=offer_line, giver=None, giver_ref="", npcs=npcs
+        )["ok"]:
+            # The mark's giver is not here, no one else speaks an offer, and the
+            # words offer nothing: GIVER "A" pointed at someone left behind, and
+            # "You're late, Flat-runner" became the job "Salvage Contract" (8B
+            # run 44, T1). A mark with no giver named is still trusted.
+            reasons.append("mark_with_no_offer_or_giver")
         elif not raw.get("_from_mark"):
             # Grounded is not enough: the exchange has to offer or ask for
             # work. Qwen3 8B turned "the shipment is in the cellar" (said right

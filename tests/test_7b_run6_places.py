@@ -237,6 +237,34 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class ALineNoOneSaysIsNotLogged(unittest.TestCase):
+    """8B run 44, T0: TALK "You're late, Flat-runner." on a silent opening was logged as said, then echoed."""
+
+    PROSE = ("You stand at the edge of the flats. The first thing you see is a figure standing at the far end of "
+             "the flats, watching you.")
+
+    def _logged(self, summary, prose=PROSE):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            conn.execute("DELETE FROM conversations")
+            world._upsert_npc(conn, {"name": "Tilda", "location": "L1", "role": "watcher"})
+            world._apply_conversations(conn, [{"npc_code": "Tilda", "summary": summary}], 1, prose, "")
+            return [r[0] for r in conn.execute("SELECT summary FROM conversations").fetchall()]
+
+    def test_the_unsaid_line_is_not_logged(self):
+        self.assertEqual(self._logged("You're late, Flat-runner."), [])
+
+    def test_a_topic_the_scene_shows_is_logged(self):
+        self.assertEqual(self._logged("The figure watching you at the flats."), ["The figure watching you at the flats."])
+
+    def test_a_said_line_is_logged(self):
+        prose = self.PROSE + " “You're late, Flat-runner,” Tilda says."
+        self.assertEqual(self._logged("You're late, Flat-runner.", prose), ["You're late, Flat-runner."])
+
+
 class SomeoneTalkedToIsInTheScene(unittest.TestCase):
     """8B run 12, T1: the potter's LOC "Saltmarrow Stables" minted stables while she talked in the street."""
 
