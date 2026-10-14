@@ -242,6 +242,12 @@ def follow_target(player_input: str) -> str:
     verb = found["doing"].split(" ", 1)[0]
     if verb.startswith(("look", "search", "investigat", "hunt")):
         return ""
+    # A way is walked, not a person followed: "I follow the narrow path down
+    # into the drowned district" logged following "the narrow path" (8B run 7, T1).
+    if re.search(r"\b(?:path|paths|road|roads|track|trail|lane|street|alley|way|stair|stairs|steps|shore|shoreline|"
+                 r"stream|river|creek|channel|line|wall|seawall|ridge|ridges|edge|tracks|footprints|signs|markers)\b",
+                 str(found["target"] or ""), re.I):
+        return ""
     return found["target"]
 
 
