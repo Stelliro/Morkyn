@@ -9596,8 +9596,15 @@ def _prose_reaches(dest: str, code: str, narration: str) -> bool:
 
 
 def _place_words(name: str) -> list[str]:
-    words = re.findall(r"[a-z]+", re.sub(r"['’]s\b", " ", humanize_place_name(name).lower()))
-    return [w for w in words if w not in _PLACE_FILLER_WORDS and len(w) > 2]
+    low = re.sub(r"['’]s\b", " ", humanize_place_name(name).lower())
+    # "The Boar at Saltmarrow" is the Boar; Saltmarrow is where it stands. Its
+    # head word was "saltmarrow", so an opening that named the town "showed"
+    # a MOVE into an inn the prose never mentions (8B run 9, T0).
+    head = re.split(r"\s(?:at|in|by|on|near|beside|outside)\s", low, maxsplit=1)[0]
+    words =[w for w in re.findall(r"[a-z]+", head) if w not in _PLACE_FILLER_WORDS and len(w) > 2]
+    if not words:
+        words = [w for w in re.findall(r"[a-z]+", low) if w not in _PLACE_FILLER_WORDS and len(w) > 2]
+    return words
 
 
 def _line_names_place(line: str, words: list[str]) -> bool:
