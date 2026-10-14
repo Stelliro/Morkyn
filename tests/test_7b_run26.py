@@ -726,6 +726,20 @@ class OrphanSpeechLead(unittest.TestCase):
         self.assertEqual(drop_orphan_speech_lead(kept)[0], kept)
 
 
+class CheckAgainstTheOneAddressed(unittest.TestCase):
+    """Run 36 T6: 'not Emrys. "Tobin, what is under the tarpaulin?"' rolled persuasion vs Emrys."""
+
+    CTX = {"npcs": [{"code": "A", "name": "Emrys Slade", "rank": "F"}], "conversation_turn": {"addressed": ["A"]}}
+
+    def test_turned_away_and_stranger(self):
+        from app.skill_checks import _check_with_opposition
+
+        line = 'I keep my eyes on the man in the skiff, not Emrys. "I asked him. Tobin, what is under the tarpaulin?"'
+        self.assertIsNone(_check_with_opposition("persuasion", line, self.CTX)["opposition"])
+        self.assertEqual(_check_with_opposition("persuasion", '"Emrys, what is under it?"', self.CTX)["opposition"]["name"],
+                         "Emrys Slade")
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
