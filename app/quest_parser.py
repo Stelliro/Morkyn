@@ -115,7 +115,12 @@ _ASKS_WORK_RE = re.compile(
     r"\b(?:hire|employ) me\b|\bhiring\b|\bapprentic\w*|\b(?:teach|train) me\b|\bshow me how\b|"
     r"\blearn (?:to|how to|your (?:trade|craft)|the (?:trade|craft))\b|"
     r"\bearn (?:some |a |my )?(?:coin|money|gold|silver|keep|living|wage)\b|\bwork for (?:you|coin|pay|food)\b|"
-    r"\blooking for (?:work|a job|employment)\b",
+    r"\blooking for (?:work|a job|employment)\b|"
+    # "... to ask the tallyman what work he'll take against my debt" (8B run 32,
+    # T1): the offer that answered it was never parsed.
+    r"\b(?:what|which|whatever) (?:work|jobs?|tasks?|errands?)\b|"
+    r"\b(?:ask\w*|enquir\w*|inquir\w*)\s+(?:\w+\s+){0,3}?(?:about|for|after)\s+(?:work|a job|jobs|employment)\b|"
+    r"\bwork (?:it|this|that|my debt|the debt) off\b",
     re.I,
 )
 # A giver saying yes to what the player asked for. Counts as an offer only
