@@ -691,6 +691,26 @@ class PlayerLineTagged(unittest.TestCase):
         self.assertIn('"I will take my gold now, Jehane," you say. Jehane looks up.', out)
 
 
+class ThanksNeverGiven(unittest.TestCase):
+    """Run 36 T2: 'You thank Emrys for the information and continue to observe the boat' after a question."""
+
+    LINE = '"Not trouble. Work." I keep my eyes on the boat. "Do you know who is taking a boat out this early?"'
+
+    def test_only_the_thanks_goes(self):
+        from app.llm import _strip_player_acts_from_sentence as strip
+
+        self.assertEqual(strip("You thank Emrys for the information and continue to observe the boat.", self.LINE, self.LINE)[0],
+                         "You continue to observe the boat.")
+        self.assertEqual(strip("You thank Rosamund and Percival, feeling relief.", self.LINE, self.LINE)[0], "")
+
+    def test_kept_when_the_player_thanked(self):
+        from app.llm import _strip_player_acts_from_sentence as strip
+
+        line = '"Thanks, Emrys." I keep watching the boat.'
+        sentence = "You thank Emrys and keep watching the boat."
+        self.assertEqual(strip(sentence, line, line)[0], sentence)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

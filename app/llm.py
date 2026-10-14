@@ -13899,6 +13899,17 @@ def _works_what_player_named(rest: str, verb: str, own: str) -> bool:
     return bool(words & own_words)
 
 
+def _invented_thanks(rest: str, own: str) -> bool:
+    """Thanks the player never gave, at the start of ``rest``: words put in their mouth.
+
+    7B run 36, T2: "You thank Emrys for the information and continue to observe
+    the boat" after a question.
+    """
+    return bool(re.match(r"^(?:\w+ly\s+)?thank(?:s|ed)?\s+(?!you\b)", rest, re.I)) and not re.search(
+        r"\bthank|\bthanks\b|\bcheers\b|\bobliged\b|\bgrateful\b", str(own or ""), re.I
+    )
+
+
 def _player_clause_invented(rest: str, clause: str, own: str, player_input: str) -> str:
     """The family of an invented player act at the start of `rest`, or ""."""
     family = _player_clause_family(rest, clause, own, player_input)
@@ -14045,6 +14056,18 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
         return sentence, ""
     start = _PLAYER_CLAUSE_START_RE.match(sentence)
     family = _player_clause_invented(sentence[start.end():], sentence, own, player_input) if start else ""
+    if not family and start and _invented_thanks(sentence[start.end():], own):
+        family = "speech"
+    if family == "speech":
+        # Only the thanks goes: "You thank her and note the details: Madoc is
+        # offering 50 copper" keeps the details (7B run 8, T3).
+        # "and Percival" is a second person thanked, not a second act (run 13).
+        joined = re.match(r"^(?:\w+ly\s+)?thank\w*\s+[^,;:]+?\s+and\s+(?:then\s+)?(?P<rest>(?-i:[a-z])[^\s]*\s.+)$",
+                          sentence[start.end():], re.I | re.S)
+        if joined:
+            kept, gone = _strip_player_acts_from_sentence("You " + joined.group("rest"), own, player_input)
+            return kept, (sentence[: start.end() + joined.start("rest")].strip() + " " + gone).strip()
+        return "", sentence
     if family == "manipulation":
         # The world's half is what the invented press set off ("and the ground
         # beneath shudders"); it is not an answer to anything the player did.
@@ -15464,6 +15487,8 @@ def _invented_unit_family(sentence: str, own: str, player_input: str) -> str:
             family = _player_clause_invented(sentence[start.end() + joint.end():], sentence, own, player_input)
             if family in _SCENE_CUT_FAMILIES:
                 return family
+        if _invented_thanks(sentence[start.end():], own):
+            return "speech"
     for coord in _PLAYER_CLAUSE_COORD_RE.finditer(sentence):
         clause = sentence[coord.start():].lstrip(",;\u2014\u2013- ")
         family = _player_clause_invented(sentence[coord.end():], clause, own, player_input)
