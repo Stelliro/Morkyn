@@ -863,6 +863,19 @@ class AMarkOnAQuestionIsNoJob(unittest.TestCase):
         self.assertIn("mark_on_a_question", rejected[0]["reasons"])
 
 
+class HerTunicIsNotYours(unittest.TestCase):
+    """8B run 36, T0: "a woman in a patched tunic [[I2]]" linked her tunic to the player's."""
+
+    def test_no_code_on_what_another_wears(self):
+        from app.llm import _inject_entity_codes_for_known_names as inject
+
+        out = inject("A woman in a patched tunic pauses at the edge of the square. You pick up a rusty key.",
+                     {"I2": "patched tunic", "I5": "rusty key"})
+        self.assertIn("a woman in a patched tunic pauses", out.lower())
+        self.assertNotIn("tunic [[I2]]", out)
+        self.assertIn("rusty key [[I5]]", out)
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
