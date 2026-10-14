@@ -1234,6 +1234,20 @@ class UnfinishedTail(unittest.TestCase):
         self.assertEqual(drop_unfinished_tail(done)[0], done)
 
 
+class APieceOfTheLineSaidTwice(unittest.TestCase):
+    """8B run 5 T1: '"Morning," you say, your voice carrying ... "Morning. You look like ..." you ask.'"""
+
+    def test_piece_goes(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = 'I walk up to the porter. "Morning. You look like you are waiting for somebody. Anyone need a load carried?"'
+        text = ('You walk up to Brida. "Morning," you say, your voice quiet. "Morning. You look like you are waiting for '
+                'somebody. Anyone need a load carried?" you ask.\n\nBrida looks up.')
+        out, _ = keep_player_words(text, line)
+        self.assertEqual(out.count("Morning"), 1)
+        self.assertIn('"Morning. You look like you are waiting', out)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
