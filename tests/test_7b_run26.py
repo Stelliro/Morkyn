@@ -322,6 +322,42 @@ class PeriodBeforeTag(unittest.TestCase):
         self.assertEqual(repair_meta_leaks(same)[0], same)
 
 
+class RoleKeptOnRedeclare(unittest.TestCase):
+    """Run 30: Dunstan the mole catcher became 'runner' (Isk's Flat-runner) and then 'local' (no role given)."""
+
+    def test_kept(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            conn.execute("UPDATE player SET title = 'Flat-runner'")
+            loc = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            conn.execute("DELETE FROM npcs")
+            conn.execute("INSERT INTO npcs (code, location_id, name, role) VALUES ('A', ?, 'Dunstan', 'mole catcher')", (loc,))
+            for given in ("runner", "", "local"):
+                world._upsert_npc(conn, {"code": "A", "name": "Dunstan", "role": given, "location": loc})
+                self.assertEqual(conn.execute("SELECT role FROM npcs WHERE code = 'A'").fetchone()[0], "mole catcher")
+            world._upsert_npc(conn, {"code": "A", "name": "Dunstan", "role": "harbour reeve", "location": loc})
+            self.assertEqual(conn.execute("SELECT role FROM npcs WHERE code = 'A'").fetchone()[0], "harbour reeve")
+
+
+class UnownedWeapon(unittest.TestCase):
+    """Run 30 T12: 'one hand resting near the hilt of your knife' with no knife owned."""
+
+    def test_clause_dropped_unless_owned_or_typed(self):
+        from app.prose_state import repair_unowned_weapon
+
+        text = ("The floor creaks under your boots as you move quietly, one hand resting near the hilt of your knife. "
+                "The ground trembles slightly, and you lean in closer, straining to hear.")
+        out, fixes = repair_unowned_weapon(text, ["worn boots"])
+        self.assertNotIn("knife", out)
+        self.assertIn("The floor creaks under your boots as you move quietly.", out)
+        self.assertEqual(repair_unowned_weapon(text, ["worn boots", "gutting knife"])[1], [])
+        self.assertEqual(repair_unowned_weapon(text, [], "I pry the lid off with my knife.")[1], [])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

@@ -13000,6 +13000,27 @@ def _known_person_place(conn, code: str, name: str, loc_ref: Any) -> int:
     return int(row["location_id"] or 0) if row is not None else 0
 
 
+_PLACEHOLDER_ROLES = frozenset({
+    "local", "locals", "villager", "townsfolk", "townsperson", "resident", "citizen", "stranger", "figure",
+    "person", "someone", "man", "woman", "passerby", "onlooker", "bystander", "informant", "npc", "",
+})
+
+
+def _is_player_title_word(conn, role: str) -> bool:
+    """A role that is only the player's own title or a word of it ("runner" from Flat-runner)."""
+    words = set(re.findall(r"[a-z]+", str(role or "").lower()))
+    if not words:
+        return False
+    try:
+        row = conn.execute("SELECT title, public_name FROM player").fetchone()
+    except Exception:
+        return False
+    if row is None:
+        return False
+    title_words = set(re.findall(r"[a-z]+", " ".join(str(v or "") for v in tuple(row)).lower()))
+    return bool(title_words) and words <= title_words
+
+
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     if not isinstance(npc, dict):
         return None
@@ -13157,6 +13178,14 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         if known_fact and known_fact not in facts:
             facts.append(known_fact[:350])
         merged_summary = _merge_text(existing["summary"] or "", summary, 1400)
+        # A re-declared person keeps their job against a placeholder or the
+        # player's own title: Dunstan the mole catcher became "runner" (from
+        # Isk's Flat-runner) and then "local" (the default for no role) (7B run 30).
+        stored_role = str(existing["role"] or "").strip()
+        if stored_role and stored_role.lower() not in _PLACEHOLDER_ROLES and role.lower() != stored_role.lower():
+            if role.lower() in _PLACEHOLDER_ROLES or _is_player_title_word(conn, role):
+                turn_ledger.note("npc", "role_kept", name=str(existing["name"] or ""), kept=stored_role, given=role)
+                role = stored_role
         conn.execute(
             """
             UPDATE npcs
@@ -19437,6 +19466,7 @@ def _reconcile_prose_with_state(
     movement_report: Any,
     gold_note: dict[str, Any] | None,
     purse_note: dict[str, Any] | None,
+    player_input: str = "",
 ) -> dict[str, Any]:
     """
     One step after the gates: the prose shows what the state holds (#55, #75, #76).
@@ -19601,6 +19631,19 @@ def _reconcile_prose_with_state(
             for entry in clock_fixes:
                 report["trimmed"].append(entry)
                 turn_ledger.note("prose", "clock_word_repaired", **entry)
+    except Exception:
+        pass
+    # A weapon the prose puts in the player's hand that they do not own (7B run
+    # 30, T12: "the hilt of your knife" with no knife): that clause goes.
+    try:
+        owned = [
+            f"{r[0]} {r[1]}"
+            for r in conn.execute("SELECT name, description FROM inventory WHERE quantity > 0").fetchall()
+        ]
+        text, unowned = prose_state.repair_unowned_weapon(text, owned, player_input)
+        for entry in unowned:
+            report["trimmed"].append(entry)
+            turn_ledger.note("prose", "unowned_weapon_dropped", **entry)
     except Exception:
         pass
     # A calm sea or clear sky in the narration while the engine has a storm,
@@ -20145,6 +20188,7 @@ def apply_turn(
                 movement_report=movement_report,
                 gold_note=gold_note,
                 purse_note=purse_note,
+                player_input=player_input,
             )
             narration = _narration_text(result)
         except Exception as exc:
