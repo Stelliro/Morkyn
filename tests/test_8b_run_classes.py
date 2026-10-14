@@ -951,6 +951,51 @@ class ASharedPhraseIsNoRepeat(unittest.TestCase):
                                              "bring it back, the debt is yours."))
 
 
+class TheProseNamesTheNewPerson(unittest.TestCase):
+    """8B run 39, T2: NPC_NEW "Isolde Frome" stored the tallyman the prose called Odo Kettle."""
+
+    PROSE = ("Behind the counter sits a thin-faced man with ink on his fingers. His name was Odo Kettle, "
+             "and he keeps the guild's tallies. \"Work against a debt?\" he asks.")
+
+    def test_the_prose_name_wins(self):
+        from app import world
+
+        npcs = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Isolde Frome", "role": "tallyman"}], self.PROSE)
+        self.assertEqual([n["name"] for n in npcs], ["Odo Kettle"])
+
+    def test_two_told_names_leave_the_op_alone(self):
+        from app import world
+
+        prose = self.PROSE + " Her name is Mara Sedge, says the clerk beside him."
+        npcs = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Isolde Frome", "role": "tallyman"}], prose)
+        self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
+
+
+class TheBeatGoesWithTheCutLine(unittest.TestCase):
+    """8B run 39, T2: "You leaned forward." stood alone once its invented line was cut."""
+
+    PARAS = ["\"You want to work it off? You'll have to do it well,\" he says.",
+             "You leaned forward. \"What kind of job?\"",
+             "He glanced at the ledger. \"The guild needs someone at the docks.\""]
+    LINE = ("\"Isk Tarrow. I owe the guild a winter's credit.\" I stop in front of his desk. \"I want to work it "
+            "off. What job have you got that pays against the ledger?\"")
+
+    def test_the_lone_beat_goes(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        kept, dropped = drop_invented_player_speech(self.PARAS, self.LINE)
+        self.assertEqual(dropped, ["\"What kind of job?\""])
+        self.assertEqual(kept[1], "")
+
+    def test_an_act_with_substance_stays(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        paras = list(self.PARAS)
+        paras[1] = ("You set the dripping crate of salvage on the counter between you. \"What kind of job?\"")
+        kept, _dropped = drop_invented_player_speech(paras, self.LINE)
+        self.assertTrue(kept[1].startswith("You set the dripping crate"))
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
