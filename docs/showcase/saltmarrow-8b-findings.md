@@ -65,6 +65,35 @@ turns, comparing against the committed code.
 - **Verifier**: the naming rule is for other people; the player needs no name (d3ac66c, 47 s lost
   once in 450 replies).
 
+### Runs 14-24 (2026-10-15)
+
+Same picture: each run finds a new shape by T0-T3, the save goes wrong, and the run restarts.
+Turns stay fast (10-40 s).
+
+- **My own slip, found in run 15**: the left-behind and stranger-call rules from runs 5 and 7B 36
+  never worked in play. They read names by their capital, the real caller lowercases the line,
+  and the tests called the inner function with the cased line. Fixed (5ab1109); the replay shows
+  exactly those three cases changing.
+- **People**: a figure asked about ("Is it a person?") seeds no one (7f5cb1c); "the kind of person"
+  is no one new (d0bc4b0); "They are a lean man" is the figure just seen (f92d658); someone shown
+  in the scene stands in it (e092a35); a figure bound to a name this turn can give the job it
+  offers (f941391).
+- **Player's words and acts**: the player's own question is not narrated (7f5cb1c); a restored
+  split line is said once (e06b3be); a cut leaves no pronoun stranded (2b6f036); a look at oneself
+  is a gesture (b31657a).
+- **Items**: stowing is taking, and a second verb on the same "you" is read (a7298db); "handed it
+  to you" and "bit into it" (e092a35); a take that slips from your grip is no gain (c8d0ca9);
+  "worth the haul" asks for it (a506a17); a tool from nowhere in the player's sentence goes
+  (1f95eef); "the mother's reckoner" is your mother's (e5b96cd).
+- **Places and moves**: what the line leaves is no destination (5ab1109); speech never asks to go
+  (1fdf0e2); a MOVE to here is no refused trip on the town path, or beside a WALK (8a8f7ab,
+  e97a4e5); filler words between a place's words (e2a69fb); picking your way down is a walk
+  (727ba2d); the place crossed and the steps outside are no destination for the stayed-put Note
+  (7a7c428, 4941bf6); a dropped WALK reads as a map walk (8f76a4c).
+- **Checks**: water is no animal (1118358).
+- **Records**: a fact the scene never shows is no record (e97a4e5); the debt runs the way the
+  backstory says (f69e9ed, a narrow repair: the 8B inverted it in three openings).
+
 ## Logged, not fixed
 
 - C9 voice: a turn in past tense (r2 T3); NPC lines without quote marks (r4 T4).
@@ -77,8 +106,13 @@ turns, comparing against the committed code.
   risk is worth it", "you've made your name there", "the weight of the offer settling in your
   chest" (r10 T3, r13 T2-T3). Outcome-reader candidates, like invented memories.
 - XP from the model's own op on plain talk (r12 T1: 14 XP for a question).
-- A "travel action ... stayed put" system note on short walks inside a place (noise).
+- Coins in copper or silver are not converted ("I set two coppers on the step" paid nothing); the
+  economy counts gold. Stell's call whether to add a conversion.
+- Past tense turns (C9) and scene drift (C10: a stall gains a keeper, a window becomes a well).
+- Invented memories stay the largest open class ("You've seen him before", "You remember the
+  warnings from the dockworkers"); the batch 6 review keeps true memories as a look's payoff, so
+  a pattern cannot cut them. The outcome reader in prompt-review-2026-10-14.md is the candidate.
 
 ## Next
 
-Run 14 on d661a9b or later; keep logging by class.
+Run 25 on 1f95eef or later; keep logging by class.
