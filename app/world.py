@@ -6486,6 +6486,10 @@ def _travel_scoring_text(player_input: str) -> str:
     when the player is the one going ("Can I go in?", "Shall we head out?").
     """
     kept: list[str] = []
+    # "pick my way down into the drowned lower district" is a walk (8B run 17, T1).
+    player_input = re.sub(r"\b(?:pick|picks|picking|picked|make|makes|making|made|wend|wends|feel|feels|felt|thread|threads)"
+                          r"\s+(?:my|our|her|his|their)\s+way\b(?=\s+(?:down|up|out|over|across|along|back|into|onto|to|"
+                          r"toward|towards|past|around|between|home)\b)", "walk", str(player_input or ""), flags=re.I)
     # Speech about someone else's comings and goings is not the player going
     # (Saltmarrow #112): '"Which channel did Tam take, and when did he
     # leave?"' and '"Fetch the reeve"' made talk turns travel turns. Quoted
