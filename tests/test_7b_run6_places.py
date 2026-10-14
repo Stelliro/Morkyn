@@ -117,6 +117,23 @@ class AShedStandsInTheTown(unittest.TestCase):
                     self.assertEqual(int(row(conn, name)["parent_id"]), 0)
 
 
+class AMoveToWhereYouStandIsNoTrip(unittest.TestCase):
+    """8B run 10, T0: "MOVE to Saltmarrow dropped" while the player stood in Saltmarrow."""
+
+    def test_no_drop_note(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        prose = "You stand on the edge of the flats. A narrow path leads toward the town of Saltmarrow [[L1]]."
+        with connect() as conn:
+            result = {"player": {"move_to_location": "Saltmarrow"}, "narration": prose}
+            report = world.resolve_movement(conn, result, "", intent="opening", narration=prose)
+            here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0]
+        self.assertNotEqual(report.get("status"), "dropped_unshown")
+        self.assertEqual(int(here), 1)
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
