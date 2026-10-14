@@ -21039,6 +21039,17 @@ def apply_turn(
             # T15: "Saltmarrow" minted as "Salammar"): it is that place, and the
             # prose is spelt the way the player and the map spell it.
             if _match_location_by_name(conn, loc_name) is None:
+                # Another spelling of a place already made is that place: LOC_NEW
+                # "The Salvage Tally House" while standing in "The Salvage
+                # Guild's Tally House" minted a second one (8B run 50, T4).
+                try:
+                    same = next((r for r in conn.execute("SELECT id, name FROM locations").fetchall()
+                                 if _same_place_name(loc_name, str(r["name"] or ""))), None)
+                except Exception:
+                    same = None
+                if same is not None:
+                    turn_ledger.note("place", "other_spelling_of_known_place", name=loc_name, known=str(same["name"] or ""))
+                    continue
                 misspelt = _known_place_misspelt(conn, loc_name, player_input)
                 if misspelt is not None:
                     known_name = str(misspelt["name"] or "")
