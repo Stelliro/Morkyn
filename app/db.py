@@ -785,6 +785,16 @@ def _migrate_columns(conn: sqlite3.Connection) -> None:
     ):
         if column not in npc_columns:
             conn.execute(f"ALTER TABLE npcs ADD COLUMN {column} {definition}")
+            # A save made before the column: its companions of many turns know
+            # the name (playtest #78). Once, here; a person who only follows
+            # the player through a scene has not been told it (7B run 30, T6).
+            if column == "knows_player_name":
+                try:
+                    conn.execute(
+                        "UPDATE npcs SET knows_player_name = 1 WHERE id IN (SELECT npc_id FROM party_members)"
+                    )
+                except Exception:
+                    pass
 
     player_columns = table_columns["player"]
     if "karma" not in player_columns:

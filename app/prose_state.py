@@ -1003,6 +1003,12 @@ _SNAKE_RE = re.compile(r"\b[a-z]+(?:_[a-z]+)+\b")
 _MD_BOLD_RE = re.compile(r"\*\*([^*\n]+?)\*\*")
 _MD_STAR_RE = re.compile(r"(?<![\w*])\*([^*\s][^*\n]*?)\*(?![\w*])")
 _MD_UNDER_RE = re.compile(r"(?<![\w])_([^_\s][^_\n]*?)_(?![\w])")
+# A play-script speaker label: 'Dunstan [[A]]: "I'll fetch a few more."' (7B
+# run 30, T6; run 5 T14, T47, T90). It becomes 'Dunstan [[A]] says, "..."'.
+_SCRIPT_LABEL_RE = re.compile(
+    r"(?m)^(?P<lead>[ \t]*)(?P<who>(?!You\b)[A-Z][\w'’-]+(?:[ \t]+[A-Z][\w'’-]+){0,2}(?:[ \t]*\[\[[A-Z][A-Z0-9]{0,4}\]\])?)"
+    r"[ \t]*:[ \t]*(?P<q>[\"“])"
+)
 # One underscore glued to the front of a plain word: "Is the _hull worth patching" (7B run 29).
 _STRAY_UNDERSCORE_RE = re.compile(r"(?<![\w\[_])_([A-Za-z][a-z]+)\b(?!_)")
 # An attitude label pasted as an adjective: "gives you a Dismissive look".
@@ -1064,6 +1070,10 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
         if found:
             out = pattern.sub(r"\1", out)
             fixes.append({"why": why, "text": ", ".join(found[:4])[:160]})
+    scripted = [m.group("who") for m in _SCRIPT_LABEL_RE.finditer(out)]
+    if scripted:
+        out = _SCRIPT_LABEL_RE.sub(lambda m: f"{m.group('lead')}{m.group('who')} says, {m.group('q')}", out)
+        fixes.append({"why": "script_label", "text": ", ".join(scripted[:4])[:160]})
     stray = [m.group(0) for m in _STRAY_UNDERSCORE_RE.finditer(out)]
     if stray:
         out = _STRAY_UNDERSCORE_RE.sub(r"\1", out)
