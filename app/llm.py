@@ -14271,6 +14271,58 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
     return sentence, ""
 
 
+_KIN_NP_RE = re.compile(
+    r"\byour\s+(?P<kin>mother|father|mum|mam|ma|da|dad|sister|brother|wife|husband|aunt|uncle|grandmother|grandfather|"
+    r"daughter|son)\b",
+    re.I,
+)
+_KIN_SHE = {"mother", "mum", "mam", "ma", "sister", "wife", "aunt", "grandmother", "daughter"}
+_STRANDED_PRONOUN_RE = re.compile(r"\b(?P<p>she|he|her|him|his)\b(?P<after>\s+\S+)?", re.I)
+_NOT_POSSESSED = {"as", "to", "and", "or", "in", "on", "at", "with", "for", "from", "into", "a", "an", "the", "away",
+                  "back", "out", "up", "down", "off", "over", "that", "if", "again", "too", "alone"}
+
+
+def _person_in_cut(cut: str) -> str:
+    """The one person a wholly cut sentence held, "Name|she" style, or ""."""
+    kin = _KIN_NP_RE.search(cut)
+    if kin:
+        word = kin.group("kin").lower()
+        return f"your {word}|{'she' if word in _KIN_SHE else 'he'}"
+    names = [m.group(0) for m in re.finditer(r"(?<![.!?]\s)(?<!^)\b[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?\b", cut)
+             if m.group(0).split()[0].lower() not in {"you", "your", "the", "saltmarrow"}]
+    return f"{names[0]}|" if len(set(names)) == 1 else ""
+
+
+def _restore_stranded_referent(sentence: str, stranded: str) -> str:
+    """The first he/she/her/him/his of the next kept sentence is the person the cut sentence held.
+
+    8B run 15, T0: "You remember ... when your mother left ... and never
+    returned" went as a thought, and "The salvage guild marked her as lost"
+    was left pointing at no one (also run 4: "You turn back to Avelina ..."
+    cut, then "... she says").
+    """
+    who, _, gender = stranded.partition("|")
+    if not who or re.search(r"[\"“”]", sentence.split(" ", 1)[0]):
+        return sentence
+    m = _STRANDED_PRONOUN_RE.search(sentence)
+    if not m:
+        return sentence
+    word = m.group("p").lower()
+    if gender and ((gender == "she") != (word in {"she", "her"})):
+        return sentence
+    head = sentence[: m.start()]
+    if re.search(r"[\"“]", head) and head.count('"') % 2 == 1:
+        return sentence  # inside someone's line
+    after = (m.group("after") or "").strip().lower().strip(",.;:!?")
+    if word == "his" or (word == "her" and after and after not in _NOT_POSSESSED):
+        new = f"{who}'s"
+    else:
+        new = who
+    if m.start() == 0 or re.search(r"[.!?]\s*$", head):
+        new = new[0].upper() + new[1:]
+    return sentence[: m.start()] + new + sentence[m.end("p"):]
+
+
 def drop_invented_player_acts_text(text: str, player_input: str) -> tuple[str, list[str]]:
     """Remove unquoted clauses where "you" acts, thinks or decides beyond player_line."""
     own = player_line_of(player_input)
@@ -14281,6 +14333,7 @@ def drop_invented_player_acts_text(text: str, player_input: str) -> tuple[str, l
         sentences = _ACT_SENTENCE_SPLIT_RE.split(para.strip())
         dropped_before = len(dropped)
         kept: list[str] = []
+        stranded = ""  # the person a wholly cut sentence held
         for sentence in sentences:
             if not sentence.strip():
                 continue
@@ -14288,7 +14341,10 @@ def drop_invented_player_acts_text(text: str, player_input: str) -> tuple[str, l
             if gone:
                 dropped.append(gone)
             if keep.strip():
-                kept.append(keep.strip())
+                kept.append(_restore_stranded_referent(keep.strip(), stranded) if stranded else keep.strip())
+                stranded = ""
+            elif gone:
+                stranded = _person_in_cut(gone)
         # An untouched paragraph keeps its own spacing.
         out.append(" ".join(kept) if len(dropped) > dropped_before else para.strip())
     return "\n\n".join(p for p in out if p.strip()), dropped

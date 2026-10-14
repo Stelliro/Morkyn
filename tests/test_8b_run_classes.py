@@ -314,6 +314,26 @@ class TheOwnQuestionIsNotNarrated(unittest.TestCase):
         self.assertTrue(world._figure_hints("A woman approaches and asks, \"Need help?\""))
 
 
+class ACutLeavesNoPronounStranded(unittest.TestCase):
+    """8B run 15, T0: the mother's sentence went as a thought and "marked her as lost" pointed at no one."""
+
+    def test_the_person_comes_back(self):
+        from app import llm
+
+        text = ("The town is quiet. You remember the last time you ventured this way, six years ago, when your "
+                "mother left to gather salvage and never returned. The salvage guild marked her as lost and took "
+                "her share, leaving you with a debt.")
+        kept, dropped = llm.drop_invented_player_acts_text(text, "__opening__")
+        self.assertIn("marked your mother as lost", kept)
+        self.assertTrue(dropped)
+
+    def test_a_cut_with_no_one_in_it_changes_nothing(self):
+        from app import llm
+
+        self.assertEqual(llm._restore_stranded_referent("He gestures toward the shipyard.", ""),
+                         "He gestures toward the shipyard.")
+
+
 class _ConnStub:
     """No one known yet."""
 
