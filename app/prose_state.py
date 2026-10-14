@@ -1271,6 +1271,57 @@ def repair_fair_weather(text: str, kind: str) -> tuple[str, list[dict[str, Any]]
     return out, [{"why": "fair_weather", "kind": str(kind).lower(), "text": s[:160]} for s in dropped]
 
 
+# A weapon the prose puts in the player's hand that the player does not own:
+# "one hand resting near the hilt of your knife" with no knife (7B run 30,
+# T12; run 5 T35, T79). Only that clause goes; speech is left alone.
+_YOUR_WEAPON_RE = re.compile(
+    r"\byour\s+(?:[\w'’-]+\s+){0,2}?(?P<w>knife|knives|dagger|daggers|sword|swords|blade|blades|axe|hatchet|spear|"
+    r"club|cudgel|mace|crossbow|pistol|bow)\b",
+    re.I,
+)
+_WEAPON_STEMS = {"knives": "knife", "daggers": "dagger", "swords": "sword", "blades": "blade"}
+
+
+def repair_unowned_weapon(text: str, owned: list[str], player_input: str = "") -> tuple[str, list[dict[str, Any]]]:
+    """Drop the clause that gives the player a weapon their inventory does not hold.
+
+    A weapon the player's own line names is theirs to describe ("I pry the lid
+    off with my knife", run 5 T79): the prose keeps it.
+    """
+    source = str(text or "")
+    have = " ".join(str(o or "").lower() for o in [*(owned or ()), player_input])
+    fixes: list[dict[str, Any]] = []
+    out = source
+    for start, end, sentence in reversed(sentence_spans(source)):
+        if re.search(r"[\"“”]", sentence):
+            continue
+        m = _YOUR_WEAPON_RE.search(sentence)
+        if not m:
+            continue
+        word = m.group("w").lower()
+        stem = _WEAPON_STEMS.get(word, word)
+        if re.search(rf"\b{stem}", have):
+            continue
+        parts = re.split(r"(,\s+)", sentence)
+        clauses = parts[0::2]
+        hit = next((i for i, c in enumerate(clauses) if _YOUR_WEAPON_RE.search(c)), -1)
+        if hit > 0:
+            kept = [c for i, c in enumerate(clauses) if i != hit]
+            new = ", ".join(kept).rstrip(",; ")
+            if not re.search(r"[.!?]$", new):
+                new += sentence.rstrip()[-1] if sentence.rstrip()[-1:] in ".!?" else "."
+        else:
+            new = ""
+        out = out[:start] + new + out[end:]
+        fixes.append({"why": "unowned_weapon", "weapon": word, "text": sentence[:160]})
+    if fixes:
+        out = re.sub(r"[ \t]{2,}", " ", out)
+        out = re.sub(r" +\n", "\n", out).strip()
+        if len(out) < 80:
+            return source, []
+    return out, fixes
+
+
 def _match_case(old: str, new: str) -> str:
     return new.capitalize() if old[:1].isupper() else new
 
