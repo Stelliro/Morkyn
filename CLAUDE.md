@@ -98,8 +98,11 @@ belong to, with the date).
 - **Evidence lives in model traces** (`data/model_traces/turn-*.json`): read them before the code.
   The model side is in `model_trace`; what the engine did is in `engine.ledger` (`delta` first,
   then `writes[i].at` for the code, `swallowed` for hidden failures).
-- **Running the suite:** `.venv\Scripts\python.exe -m unittest discover -s tests` (tests/ has no
-  `__init__.py`, so a bare `-m unittest` from the root finds 0 tests).
+- **Running the suite:** `.venv\Scripts\python.exe tools\run_suite.py [--out FILE]` (2026-10-14).
+  It runs `unittest discover` in tests/ (no `__init__.py`, so a bare `-m unittest` from the root
+  finds 0 tests) with TEMP pointed at `<drive>:\morkyn-suite-tmp` and deletes that folder after.
+  Test modules never remove their `mkdtemp` dirs; in C:\%TEMP% they reached 14,000+ folders and
+  about 20 GB and filled C: mid-run. Stell OK'd clearing old `morkyn-*` test dirs from %TEMP%.
 
 ## Environment rules that have bitten before
 
