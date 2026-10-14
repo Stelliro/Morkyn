@@ -133,6 +133,16 @@ class AMoveToWhereYouStandIsNoTrip(unittest.TestCase):
         self.assertNotEqual(report.get("status"), "dropped_unshown")
         self.assertEqual(int(here), 1)
 
+    def test_the_shared_check_both_paths_use(self):
+        # 8B run 17, T0: the town path calls the same check and still wrote the note.
+        from app import world
+
+        patch = {"move_to_location": "Saltmarrow"}
+        rows = [{"id": 1, "code": "L1", "name": "Saltmarrow", "parent_id": 0, "kind": ""}]
+        got = world._unasked_unshown_move({"player": patch}, patch, rows, "", intent="opening",
+                                          narration="You stand on the edge of the flats.", current_name="Saltmarrow")
+        self.assertEqual(got, "")
+
 
 class SomeoneMetAtTheEndOfAWalk(unittest.TestCase):
     """8B run 11, T3: the fisherman asked at the docks was stored at the district the player left."""

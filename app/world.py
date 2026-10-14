@@ -9471,10 +9471,15 @@ def _unasked_unshown_move(
     *,
     intent: str,
     narration: str,
+    current_name: str = "",
 ) -> str:
     """
     The destination of a move the player did not ask for and the final prose
     does not show, or "" when the move stands.
+
+    A MOVE to where the player already is goes nowhere and is no refused trip
+    ("MOVE to Saltmarrow dropped" while in Saltmarrow, 8B run 10 T0; the town
+    path too, run 17 T0); each caller deals with it in its own way.
 
     Playtest #6c: "i say ..." to a stranger in The Back Lane came back from the
     draft with WALK northeast and MOVE Plains2 ("Perhaps we should continue,"
@@ -9488,6 +9493,8 @@ def _unasked_unshown_move(
     walk = result.get("map_walk")
     if not (code or name or walk):
         return ""
+    if current_name and not walk and not code and name.lower() == current_name.strip().lower():
+        return ""  # the legacy rules reject it as same_place_name and repair from the line
     # A place named only inside the player's own quoted question is not a
     # walk request (7B run 20, T4: "Where do I find this Thaddeus, then - the
     # harbour office?" kept a MOVE to a new Harbour Office the prose walked to).
@@ -9754,13 +9761,8 @@ def resolve_movement(
     rows = conn.execute("SELECT id, code, name, parent_id, kind FROM locations ORDER BY id").fetchall()
     known_codes = {str(row["code"] or "").upper() for row in rows if row["code"]}
 
-    unasked = _unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration)
-    if unasked and current_name and unasked.strip().lower() == current_name.strip().lower() and not result.get("map_walk"):
-        # A MOVE to where the player already is goes nowhere; it is no refused
-        # trip ("MOVE to Saltmarrow dropped" while in Saltmarrow, 8B run 10, T0).
-        player_patch["move_to_location"] = None
-        player_patch["move_to_location_code"] = None
-        unasked = ""
+    unasked = _unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration,
+                                    current_name=current_name)
     if unasked:
         player_patch["move_to_location"] = None
         player_patch["move_to_location_code"] = None

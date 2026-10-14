@@ -2350,10 +2350,16 @@ def resolve_town_movement(conn, result: dict[str, Any], player_input: str, *, in
         # Playtest #6c holds in town: a move the player did not ask for and the
         # prose does not show does not happen.
         rows = conn.execute("SELECT id, code, name, parent_id, kind FROM locations ORDER BY id").fetchall()
-        unasked = W._unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration)
+        unasked = W._unasked_unshown_move(result, player_patch, rows, player_input, intent=intent, narration=narration,
+                                          current_name=str((current or {}).get("name") or ""))
         if unasked:
             clear_moves()
             explicit_name = explicit_code = ""
+        elif explicit_name and not explicit_code and not result.get("map_walk") and \
+                explicit_name.strip().lower() == str(current.get("name") or "").strip().lower():
+            # A MOVE to where the player stands goes nowhere (8B run 17, T0).
+            clear_moves()
+            explicit_name = ""
 
     if explicit_name or explicit_code:
         name = explicit_name
