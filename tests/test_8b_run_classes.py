@@ -821,6 +821,25 @@ class TheRestraintStands(unittest.TestCase):
         self.assertEqual(prose_state.repair_restraint_undone(text, "I leave the tavern and head home.")[0], text)
 
 
+class TheTallymanIsAJobNotAName(unittest.TestCase):
+    """8B run 34, T1: NPC_NEW NAME "Tallyman" ROLE "Salvage Guild Tallyman" stored a person called Tallyman,
+    and "Inside, the tallyman is a grizzled man" made "Inside" the job's giver."""
+
+    def test_role_word_as_name(self):
+        from app import world
+
+        self.assertEqual(world._role_phrase("Tallyman", "Salvage Guild Tallyman"), "tallyman")
+        self.assertEqual(world._role_phrase("Hugh", "smith"), "")
+
+    def test_inside_is_no_speaker(self):
+        from app import quest_parser
+
+        narration = ("You pass a few fishmongers. Inside, the tallyman is a grizzled man with a ledger. \"You're "
+                     "late,\" he says. \"The guild needs a runner for the old docks.\"")
+        self.assertEqual(quest_parser._unknown_offer_speaker(narration, "The guild needs a runner for the old docks.",
+                                                             []), "")
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
