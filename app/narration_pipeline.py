@@ -2613,6 +2613,23 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 body = body[: span["end"]] + " you" + tail[4:]
         body = body[: prev["end"]] + between.rstrip() + "\n\n" + body[span["start"]:]
         changes.append({"action": "player_line_given_own_paragraph", "quote": span["inner"][:200]})
+    # A piece of a typed line said again on its own, beside the whole line:
+    # '"Morning," you say, your voice carrying ... "Morning. You look like you
+    # are waiting for somebody ..." you ask.' (8B run 5, T1). The piece and its
+    # tag go; the whole line stays.
+    for q in quotes:
+        inner = str(q or "").strip()
+        first = re.split(r"(?<=[.!?])\s+", inner)[0].rstrip(".!?,").strip()
+        if not first or first == inner.rstrip(".!?,").strip() or inner.rstrip(".!?,") not in body:
+            continue
+        piece_re = re.compile(
+            rf"[\"“]{re.escape(first)}[.,!?]?[\"”]\s*,?\s*you\s+(?:say|said|ask|asked|reply|replied|call|called)"
+            r"(?:,[^.!?\"“”]*)?[.!?]\s*"
+        )
+        new_body, n = piece_re.subn("", body, count=1)
+        if n and inner.rstrip(".!?,") in new_body:
+            body = new_body
+            changes.append({"action": "repeated_piece_of_line_dropped", "text": first[:80]})
     # The player's typed line with no tag, right before someone else's name,
     # reads as that person's (7B run 35/36, T2: '"Do you know who is taking a
     # boat out ...?" Emrys Slade ponders for a moment'). It gets its tag.
