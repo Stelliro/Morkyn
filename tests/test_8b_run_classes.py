@@ -1045,6 +1045,50 @@ class OneLineVoicesTheRequest(unittest.TestCase):
         self.assertNotIn("whatever it takes", " ".join(kept))
 
 
+class TheVoicingIsOneLineEvenAfterANarratorBeat(unittest.TestCase):
+    """8B run 49, T1: "I need to work ..." and "I'll do it." stood after a narrator sentence led the paragraph."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+
+    def test_only_the_first_line_stays(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        paras = ["“You’re late,” he says.",
+                 "You step forward. “I need to know what work you’ll take against my debt.”",
+                 "The tallyman looks up. “Debt?” he says.",
+                 "The guild is not known for its generosity. You step closer, your voice low. "
+                 "“I need to work. I need to pay what I owe.”",
+                 "“There’s work,” he says at last.",
+                 "The guild’s work is never easy. You step back, your hands clenched. “I’ll do it.”"]
+        kept, dropped = drop_invented_player_speech(paras, self.LINE)
+        self.assertIn("I need to know what work", kept[1])
+        self.assertEqual(len(dropped), 2)
+
+    def test_someone_elses_line_after_your_act_stays(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        paras = ["“What have you got?” the captain asks.",
+                 "You hand over the rope, and the captain inspects it closely. “This is a quality piece.”"]
+        kept, dropped = drop_invented_player_speech(paras, "I ask the captain what he'd pay for the rope.")
+        self.assertIn("quality piece", kept[1])
+
+
+class LeavingWhereTheWalkWentIsANewMove(unittest.TestCase):
+    """8B run 49, T1: the line walked to the tally house; "You leave the tally house" walked Isk out again."""
+
+    def test_the_leave_goes_and_a_leave_on_the_way_stays(self):
+        from app import llm
+
+        line = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman "
+                "what work he'll take against my debt.")
+        kept, dropped = llm.drop_invented_player_acts_text(
+            "The tallyman nods. \"Meet at the dock.\" You leave the tally house, the weight of the debt heavy on "
+            "your shoulders. The town is quiet.", line)
+        self.assertNotIn("You leave the tally house", kept)
+        self.assertTrue(llm._walk_asked("leave the Salvage Yard and head north", "I leave the yard and walk north to the cottage."))
+
+
 class ANameToldIsAPerson(unittest.TestCase):
     """8B run 48, T1: "His name is Reinald Strand, a sedan bearer by trade" stored no one."""
 

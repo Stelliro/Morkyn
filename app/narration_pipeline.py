@@ -1822,6 +1822,17 @@ def _drop_invented_spans(unit: str, keep) -> tuple[str, list[str]]:
 SILENT_TURN_PREFIXES = ("__opening_scene_request__", "__continue_scene_request__", "__wait_request__")
 
 
+def _names_someone(unit: str) -> bool:
+    """The sentence brings in a person other than the player: a he/she/they or a name past its first word."""
+    text = str(unit or "").strip()
+    return bool(
+        re.search(r"\b(?:he|she|they|him|his|her|them|someone|somebody)\b|\b(?:a|the)\s+voice\b", text, re.I)
+        or re.search(r"(?<!^)(?<![.!?]\s)\b[A-Z][a-z]+", text)
+        # "You hand over the rope, and the captain inspects it" (7B run 5, T21).
+        or re.search(r"[,;]\s*(?:and|as|while|but)\s+(?:the|a|an)\s+[a-z]+(?:\s+[a-z]+)?\s+[a-z]+s\b", text)
+    )
+
+
 def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tuple[list[str], list[str]]:
     """
     Remove quotations the narration gives the player when the player did not
@@ -1878,7 +1889,20 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             lead = 0
             while lead < len(units) and not quoted_spans(units[lead]) and re.match(r"^you\b", units[lead], re.I):
                 lead += 1
+            if not lead:
+                # A narrator sentence that brings in no one else may come first:
+                # 'The guild is not known for its generosity ... You step closer,
+                # your voice low. "I need to work."' (8B run 48, T1).
+                first_quote = next((i for i, u in enumerate(units) if quoted_spans(u)), -1)
+                back = first_quote
+                while back > 0 and re.match(r"^you\b", units[back - 1], re.I) and not quoted_spans(units[back - 1]):
+                    back -= 1
+                if 0 < back < first_quote and not any(_names_someone(u) for u in units[:first_quote]):
+                    lead = first_quote
             players_block = other_spoke and 0 < lead < len(units) and all(bare[lead:])
+            # No one but the player in the sentences before the line: theirs even
+            # for a voiced request, where the paragraph guess is otherwise off.
+            alone = players_block and not any(_names_someone(u) for u in units[:lead])
             # On a turn the player has not acted in, "You approach Millicent,
             # your purpose clear. 'Millicent, I need to know when the tide will
             # turn.'" is the player speaking: a line after their own action that
@@ -1981,7 +2005,7 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                         and name.lower() not in _GREETING_WORDS
                         and re.search(rf"\b{re.escape(name)}\b", _outside_quotes(" ".join(str(p) for p in paragraphs)))
                     )
-                if tagged or gesture_player or (bare[index] and (player_turn or (players_block and not voiced))):
+                if tagged or gesture_player or (bare[index] and (player_turn or (players_block and (not voiced or alone)))):
                     player_turn = True
                     stems = content_stems(" ".join(spans))
                     if stems and said_by_player and len(stems & said_by_player) >= 0.8 * len(stems):
@@ -1992,6 +2016,8 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                     elif all(_words_from_player(span, own, quotes) for span in spans):
                         kept_units.append(unit)
                         said_by_player.update(stems)
+                        # With no words typed, this line is the voicing (8B run 49, T1).
+                        voicing_kept = voicing_kept or voiced
                     elif tagged and quotes and len(spans) > 1 and any(_is_player_line(s, quotes) for s in spans):
                         # The player's own line with an invented half after the tag
                         # (7B run 9, T2: '"Thanks, Hal," you call back, "I'll be
