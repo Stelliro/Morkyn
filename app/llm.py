@@ -13642,7 +13642,12 @@ _PLAYER_INNER_SUBJECT_RE = re.compile(
     # A thought as the subject: "The thought of leaving this place feels like
     # leaving a part of yourself behind" (8B run 4, T0).
     r"|^\W*(?:but\s+|and\s+)?the\s+(?:thought|idea|memory|knowledge|realization|realisation|prospect)\s+(?:of|that)\b"
-    r"(?=[^.!?]*\b(?:you|your|yourself)\b)",
+    r"(?=[^.!?]*\b(?:you|your|yourself)\b)"
+    # A weighing or a want with no one else's mind in it is the player's: "The
+    # idea of dealing with them is both tempting and dangerous, but the need
+    # for answers is stronger" (8B run 11, T3) decided for the player.
+    r"|^\W*(?:but\s+|and\s+)?the\s+(?:(?:thought|idea|prospect)\s+of\s+\w+ing|(?:need|urge|temptation|desire|longing|pull)\s+"
+    r"(?:for|to))\b(?![^.!?]*\b(?:he|she|they|his|their|for\s+(?:him|her|them))\b)",
     re.I,
 )
 _PLAYER_GESTURE_RE = re.compile(

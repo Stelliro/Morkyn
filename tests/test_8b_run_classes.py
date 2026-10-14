@@ -207,5 +207,22 @@ class ACollectionIsNoCollecting(unittest.TestCase):
         self.assertEqual([kind for _, kind, _ in events], ["gain"])
 
 
+class AWeighingIsThePlayers(unittest.TestCase):
+    """8B run 11, T3: "The idea of dealing with them is both tempting and dangerous, but the need for answers is stronger." """
+
+    def test_the_weighing_goes(self):
+        from app import llm
+
+        self.assertTrue(llm._PLAYER_INNER_SUBJECT_RE.match(
+            "The idea of dealing with them is both tempting and dangerous, but the need for answers is stronger."))
+        self.assertTrue(llm._PLAYER_INNER_SUBJECT_RE.match("The need for answers is stronger than the fear."))
+
+    def test_someone_elses_mind_stays(self):
+        from app import llm
+
+        self.assertFalse(llm._PLAYER_INNER_SUBJECT_RE.match("The idea of losing the boat is too much for him."))
+        self.assertFalse(llm._PLAYER_INNER_SUBJECT_RE.match("The thought of the storm makes his hands shake."))
+
+
 if __name__ == "__main__":
     unittest.main()
