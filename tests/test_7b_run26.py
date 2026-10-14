@@ -1182,6 +1182,29 @@ class Run4Opening(unittest.TestCase):
         self.assertEqual(strip(kept, "I wait.", "I wait.")[0], kept)
 
 
+class Run4RetoldAndPlanned(unittest.TestCase):
+    """8B run 4 T3: the player's line retold as narration with a motive; the narrator planning the next steps."""
+
+    LINE = ('"I am here for salvage, same as every dry tide." I shrug. "But if the guild is hauling out of the lower '
+            'district, I want to know where they are digging, so I do not waste my night."')
+
+    def test_retold_line_goes(self):
+        from app.narration_pipeline import keep_player_words
+
+        text = ('"I am here for salvage, same as every dry tide," you say. Avelina watches you. You\'re here for salvage, '
+                "just like every other dry tide, but the guild's hauls have piqued your interest. The bell rings.")
+        out, _ = keep_player_words(text, self.LINE)
+        self.assertNotIn("piqued", out)
+        self.assertIn("The bell rings.", out)
+
+    def test_planning_goes(self):
+        from app.llm import _strip_player_acts_from_sentence as strip
+
+        for gone in ("But for now, you have to focus on the immediate task at hand.",
+                     "If you can find out where they're digging, you might be able to get ahead of the game."):
+            self.assertEqual(strip(gone, self.LINE, self.LINE)[0], "", gone)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

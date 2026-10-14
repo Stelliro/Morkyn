@@ -2222,6 +2222,28 @@ def narrator_voice_to_second_person(text: str, player_input: str) -> tuple[str, 
     return "".join(paragraphs), changed
 
 
+def _retold_quote(sentence: str, quotes: list[str], body: str) -> bool:
+    """An unquoted "you" sentence that retells a typed line the prose already has the player say.
+
+    8B run 4, T3: '"I am here for salvage, same as every dry tide," you say.'
+    then "You're here for salvage, just like every other dry tide, but the
+    guild's hauls from the lower district have piqued your interest." Four or
+    more of the line's content words, and most of them, are in the sentence.
+    """
+    if not re.match(r"^\W*(?:but\s+|and\s+|so\s+)?you\b", sentence, re.I):
+        return False
+    words = content_stems(sentence)
+    for quote in quotes:
+        q = quote.strip()
+        if len(q.split()) < 5 or q.rstrip(".!?,") not in body:
+            continue
+        stems = content_stems(q)
+        shared = words & stems
+        if len(shared) >= 4 and len(shared) * 5 >= len(stems) * 3:
+            return True
+    return False
+
+
 def _paraphrased_quote(sentence: str, quotes: list[str]) -> bool:
     """An unquoted sentence ending in a typed quote's closing vocative and sharing two more of its words."""
     tail = re.search(r",\s*([A-Za-z][\w'’-]*(?:\s+[A-Za-z][\w'’-]*){0,2})\s*[.!?]$", sentence.strip())
@@ -2452,7 +2474,7 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         # "You have not shared your name, mole catcher." for '"I have not
         # told you my name, mole catcher."'): the narrator never ends a
         # sentence by calling someone, so it is the player's line again.
-        if _paraphrased_quote(bare, quotes):
+        if _paraphrased_quote(bare, quotes) or _retold_quote(bare, quotes, body):
             changes.append({"action": "echoed_quote_paraphrase_dropped", "text": bare})
             return ""
         return sentence
