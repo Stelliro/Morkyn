@@ -13290,7 +13290,10 @@ def _trim_option_list(narration: str, *, floor: int = MENU_TRIM_FLOOR_CHARS) -> 
     # Drop the sentence(s) that set the list up; a colon-terminated sentence
     # immediately above a bullet list is always the lead-in.
     for _ in range(2):
-        sentences = re.split(r"(?<=[.!?:])\s+", head.strip())
+        # After a closing quote too: '... anything interesting today?"\n\nYou
+        # could:' was one "sentence", and the question went with the lead-in,
+        # leaving the line unclosed (7B run 38, T0).
+        sentences = re.split(r"(?<=[.!?:])\s+|(?<=[.!?][\"”])\s+", head.strip())
         if len(sentences) < 2:
             break
         last = sentences[-1].strip()
