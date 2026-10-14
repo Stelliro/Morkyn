@@ -16237,6 +16237,24 @@ def _asked_destination_words(acts: str) -> set[str]:
     return words
 
 
+def _asked_destination_heads(acts: str) -> set[str]:
+    """The head word of each place the line walks to: "house" of "the salvage guild's tally house".
+
+    8B run 25, T1: "You reach the salvage yard" matched "salvage" and read as
+    arriving at the tally house, so the scene was cut before "You step inside".
+    """
+    heads: set[str] = set()
+    for m in _ASKED_DEST_RE.finditer(acts):
+        # "town to the salvage guild's tally house to ask the tallyman": the
+        # purpose ("to ask ...") is not a place, and the last place is where it ends.
+        place = re.split(r"\s+to\s+(?!(?:the|a|an|my|his|her|their|its)\b)", m.group("d").lower())[0]
+        place = re.split(r"\s+(?:to|into|toward|towards)\s+", place)[-1]
+        words = [w for w in re.findall(r"[a-z][a-z'’-]+", place) if w not in _DEST_STOPWORDS]
+        if words and len(words[-1]) >= 4:
+            heads.add(words[-1][:6])
+    return heads
+
+
 def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None:
     """Where a scene that ran on past the player's requested trip ends, or None."""
     from app.prose_state import sentence_spans
@@ -16256,6 +16274,7 @@ def _completion_cut_point(text: str, player_input: str) -> dict[str, Any] | None
     dest = _asked_destination_words(acts) if travelling else set()
     if not travelling or not dest:
         return _after_act_cut_point(spans, own, acts, player_input, travelling=travelling)
+    dest = _asked_destination_heads(acts) or dest
     arrived_at = -1
     for index, (_start, _end, sentence) in enumerate(spans):
         if re.search(r'["“”]', sentence):

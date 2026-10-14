@@ -640,6 +640,25 @@ class ACrowbarFromNowhere(unittest.TestCase):
         self.assertEqual(prose_state.repair_unowned_weapon(text, ["worn boots"], "I check the chain.")[0], text)
 
 
+class TheYardIsNotTheTallyHouse(unittest.TestCase):
+    """8B run 25, T1: "You reach the salvage yard" read as arriving at the guild's tally house; "You step inside" was cut."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+
+    def test_the_head_word(self):
+        from app import llm
+
+        self.assertEqual(llm._asked_destination_heads(self.LINE), {"house"})
+
+    def test_no_cut_before_the_door(self):
+        from app import llm
+
+        prose = ("You walk through the narrow streets. You reach the salvage yard, where the air smells of rust. The "
+                 "tally house is a squat building at the edge of the yard. You step inside, and the air is colder.")
+        self.assertIsNone(llm._completion_cut_point(prose, self.LINE))
+
+
 class _ConnStub:
     """No one known yet."""
 
