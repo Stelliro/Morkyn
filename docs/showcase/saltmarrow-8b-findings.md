@@ -41,6 +41,30 @@ dice-audit flake tripped twice and passed alone). Nothing is pushed.
 - **Text** (C5): item codes only on the player's things (2210435); a scene that stops mid-sentence
   is cut back (9abda50).
 
+### Runs 6-13 (2026-10-15)
+
+No run has gone past T5 clean yet; each restart came when the save went wrong. All fixes have a
+test in tests/test_8b_run_classes.py or tests/test_7b_run6_places.py and a replay over the saved
+turns, comparing against the committed code.
+
+- **Words and acts the player did not write**: a reason clause ("that might fetch a price") is not
+  the act (f9f8ebe); the player's line said once is said, a reworded copy goes (b82b39f); the half
+  kept after a cut must be a clause, not "The knowledge that ..." (1bb06e1, a710633); a weighing
+  with no one else's mind in it ("the idea of dealing with them is tempting") is the player's
+  (ab3821a); an invented "As you turn to leave," lead goes and the world's half stays (f9af7d5).
+- **Items and gold**: a partial verifier patch keeps the draft entries the prose shows (9820835);
+  "a strange collection of items" is no collecting (a9359c7); money promised or wanted ("will pay
+  handsomely", "itch for a coin") backs no gain (b82b39f); "do you ever buy ...?" is the other side
+  buying (477d5e2).
+- **People**: no blunder line with no one to offend (f9f8ebe); someone met at the end of a walk
+  stands there (67b1594); a name bound to "a woman" pins she, and "the woman" resolves to her
+  (67b1594); someone talked to whose LOC is no known place is in the scene (477d5e2).
+- **Places**: no pursuit of a path or road (88cb9ff, ad2f2c8); "The Boar at Saltmarrow" is the
+  Boar, not the town (d3ac66c); a MOVE to where the player stands is no refused trip (1bc0cca); a
+  walk a few words before "toward the old docks" reaches them (d661a9b).
+- **Verifier**: the naming rule is for other people; the player needs no name (d3ac66c, 47 s lost
+  once in 450 replies).
+
 ## Logged, not fixed
 
 - C9 voice: a turn in past tense (r2 T3); NPC lines without quote marks (r4 T4).
@@ -49,7 +73,12 @@ dice-audit flake tripped twice and passed alone). Nothing is pushed.
 - Invented memories of the player's past: a pattern cannot tell them from true backstory; candidate
   for the outcome reader in docs/showcase/prompt-review-2026-10-14.md.
 - #88: persuasion still rolls on plain questions (Stell's call).
+- Judgements and feelings for the player with no clause shape to read: "The coin's real, and the
+  risk is worth it", "you've made your name there", "the weight of the offer settling in your
+  chest" (r10 T3, r13 T2-T3). Outcome-reader candidates, like invented memories.
+- XP from the model's own op on plain talk (r12 T1: 14 XP for a question).
+- A "travel action ... stayed put" system note on short walks inside a place (noise).
 
 ## Next
 
-Run 6 on 0099f7a or later; keep logging by class.
+Run 14 on d661a9b or later; keep logging by class.
