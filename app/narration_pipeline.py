@@ -2602,6 +2602,12 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         tag = " you ask." if inner.endswith("?") else " you say."
 
         def _tag(m: re.Match[str]) -> str:
+            # Already the player's: '"... high," you reply. "Moles out on the
+            # flats? ..."' needs no second tag (7B run 38, T1).
+            if re.search(r"[\"”]\s*,?\s*you\s+(?:\w+ly\s+)?(?:say|ask|reply|add|answer|continue|call|tell|explain)\w*"
+                         r"(?:,[^.!?\"“”\n]{0,40})?[.,]?[ \t]*$",
+                         m.string[max(0, m.start() - 80):m.start()], re.I):
+                return m.group(0)
             changes.append({"action": "player_line_tagged", "quote": inner[:200]})
             said = inner[:-1] + "," if inner.endswith(".") else inner
             return f"{m.group(1)}{said}{m.group(2)}{tag}{m.group(3)}"
