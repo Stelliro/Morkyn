@@ -17179,6 +17179,28 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
     unshown = [npc for npc in npcs if not known(npc) and not shown(norm_name(str(npc.get("name") or "")))]
     if not unshown:
         return npcs
+    # The prose names the one new person itself: NPC_NEW "Isolde Frome" for
+    # "a thin-faced man ... His name was Odo Kettle" stored the tallyman as
+    # Isolde (8B run 39, T2). The prose's name wins.
+    if len(unshown) == 1:
+        try:
+            known_all = {str(r[0] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
+            places = {str(r[0] or "").lower() for r in conn.execute("SELECT name FROM locations").fetchall()}
+        except Exception:
+            known_all, places = set(), set()
+        given = {n.lower() for n in (str(x.get("name") or "") for x in npcs) if n}
+        told = {
+            m.group("n") for m in re.finditer(
+                r"\b(?:[Hh]is|[Hh]er|[Tt]heir)\s+name\s+(?:is|was)\s+(?P<n>[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)", unspoken
+            )
+        }
+        told = {n for n in told if n.lower() not in known_all and n.lower() not in places and n.lower() not in given}
+        if len(told) == 1:
+            npc = unshown[0]
+            prose_name = next(iter(told))
+            turn_ledger.note("npc", "name_from_prose", model_name=str(npc.get("name") or ""), prose_name=prose_name)
+            npc["name"] = prose_name
+            return npcs
     try:
         known_names = [str(r[0] or "") for r in conn.execute("SELECT name FROM npcs").fetchall()]
     except Exception:

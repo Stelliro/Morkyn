@@ -1930,6 +1930,7 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             prev_last_quote = (quoted_spans(units[-1]) or [""])[-1] if prev_spoke else ""
             kept_units: list[str] = []
             player_turn = False
+            dropped_here = len(dropped)
             for index, unit in enumerate(units):
                 spans = quoted_spans(unit)
                 if not spans or _quote_marks(unit) % 2:
@@ -2014,6 +2015,31 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
             # one put to them (7B run 17, T5: Madoc's "I've got a few" answered
             # the player's own "Any leads on a job around here?").
             prev_by_player = player_turn
+            # The beat that only led into a cut line goes with it: 'You leaned
+            # forward. "What kind of job?"' left "You leaned forward." standing
+            # alone as a paragraph (8B run 39, T2).
+            if (
+                len(dropped) > dropped_here
+                and kept_units
+                and kept_units == units[: len(kept_units)]
+                and len(kept_units) <= lead
+                and all(len(u.split()) <= 8 for u in kept_units)
+                # Only the player's own gesture: a beat where someone else acts
+                # ("and he gestures toward the water") or something changes hands
+                # ("You take the coin and thank Emrys") carries the scene.
+                and not any(
+                    re.search(r"\b(?:he|she|they|it|him|her|them)\b|\s[A-Z][a-z]", u[1:])
+                    or re.search(r"\b(?:take|took|accept|pocket|hand|give|gave|pay|paid|grab|stow)\w*\b", u, re.I)
+                    for u in kept_units
+                )
+            ):
+                try:
+                    from app import turn_ledger
+
+                    turn_ledger.note("player_words", "lead_in_beat_dropped", beat=" ".join(kept_units)[:160])
+                except Exception:
+                    pass
+                kept_units = []
             block_text = " ".join(kept_units).strip()
             if block_text:
                 kept_blocks.append(block_text)
