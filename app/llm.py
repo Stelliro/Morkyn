@@ -14223,16 +14223,20 @@ def _tail_is_clause(tail: str) -> bool:
     if re.match(r"(?:he|she|they|it)\b", tail, re.I):
         return True
     head = re.split(r"\b(?:that|which|who|whom|whose|where|of)\b", tail, maxsplit=1, flags=re.I)[0]
+    # A relative clause without "that" ends the head for a guessed -s/-ed verb:
+    # "the promise you made to the tides" has no verb of its own (8B run 40,
+    # T1), while "The salvage you need to recover is deep" does.
+    short = re.split(r"\b(?:you|we|I)\b", head, maxsplit=1, flags=re.I)[0]
     # "the brass tide-reckoner at your belt, its face never quite right" read
     # "its" as a verb (8B run 13, T0): function words ending in -s are not.
     not_verbs = {"its", "his", "hers", "this", "us", "as", "across", "perhaps", "towards", "always", "less", "unless",
                  "plus", "yes", "thus", "whereas", "besides", "afterwards", "sometimes"}
     words = re.findall(r"[A-Za-z'’-]+", head)[1:]
+    guessed = re.findall(r"[A-Za-z'’-]+", short)[1:]
     return any(
         w.lower() in {"is", "are", "was", "were", "has", "have", "had", "will", "would", "can", "could", "does", "did"}
-        or (re.search(r"(?:[^s]s|ed)$", w.lower()) and w.lower() not in not_verbs)
         for w in words
-    )
+    ) or any(re.search(r"(?:[^s]s|ed)$", w.lower()) and w.lower() not in not_verbs for w in guessed)
 
 
 def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str) -> tuple[str, str]:
