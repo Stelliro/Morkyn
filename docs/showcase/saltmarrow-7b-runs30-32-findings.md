@@ -104,6 +104,37 @@ failures (the dice-audit flake tripped once and passed alone).
 - Process: a probe cleanup was refused by the safety check; `D:\morkyn-probe` (a few MB of my
   probe data dirs) is left for Stell to delete. Probes now use a scratchpad folder.
 
+## Runs 38-42 (2026-10-14)
+
+- Run 38 (aa2a2e6), stopped T3:
+  - T0: a closing option list took the quoted question before it, leaving an unclosed quote (96aa195).
+  - T1: a second tag on a line already tagged (c44b481). T2: the travel Note from a spoken plan (b27e935).
+  - T3 (MAJOR): moved into The Lantern and Fiddle because its code sat in a sentence about its
+    lantern seen from the chapel (887acbb; also fixes run 5 T86).
+  - Model drift noted: the mole catcher became an apothecary herbalist.
+- Run 39 (887acbb), stopped T2:
+  - T1: animal handling rolled on a question naming a horse, a critical failure (89985f7).
+  - T2: "stable mare x1" put in the pack on a price question; "patting her" (the mare) became
+    "patting his" (4790d0c).
+- Run 40 (4790d0c), stopped T2:
+  - T0: "It is morning, 08:00." clock leak (ea8b74d).
+  - T1: the trip guard skipped the cut, so Rohese's answer to Isk's dropped invented line stayed (acb9677).
+  - T2 (MAJOR): "a small coin" / "You take the coin" rolled +10 gold (6fe6e37).
+  - Model drift noted: Rohese replaced by a new burly "Tannery keeper" mid-conversation.
+- Run 41 (6fe6e37), stopped T4:
+  - T1: bread handed with no price ("Enjoy your breakfast") was refused as an open sale (b11f8f7).
+  - T3: the trip ran on past the arrival into an abandoned building (2af72d6).
+  - T4: "small x1" for "a small, rusted iron key"; "The Wren" beside "The Wren at Saltmarrow" (a370ee8).
+- Run 42 (a370ee8), stopped T2:
+  - T0: a menu written as an act, "You approach X, or continue towards Y" (e5ab631).
+  - T1: streetwise rolled on "field fence" (c918e0b).
+  - T2 (MAJOR): GOLD 5 rolled to +10 with no coin in the prose; a job made from Isk's own "I will
+    mind the tides"; an invented walk into the forge (d8352f8).
+
+Pattern across runs 30-42: each run now gets 2-7 turns before a state fault (gold, items, places,
+jobs) forces a restart; the prose faults left are mostly model drift (people swapped, scenes
+replayed) that the engine cannot repair without limiting the model.
+
 ## Next
 
-Run 38 on fc19b26 or later.
+Run 43 on d8352f8 or later.
