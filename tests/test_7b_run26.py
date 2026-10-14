@@ -382,6 +382,20 @@ class RefusedFindFollowOn(unittest.TestCase):
         self.assertIn("Ermengarde watches you", text)
 
 
+class OneWordEcho(unittest.TestCase):
+    """Run 31 T2: 'Morning. You stop at the edge of the path and ask, "Morning. Whose grave is that ..."'."""
+
+    def test_dropped_when_the_line_is_there(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = 'I stop at the edge of the path. "Morning. Whose grave is that, out here on the flats?"'
+        text = ('Morning. You stop at the edge of the path and ask, "Morning. Whose grave is that, out here on the '
+                'flats?" Ermengarde looks up from her work.')
+        out, _changes = keep_player_words(text, line)
+        self.assertTrue(out.startswith("You stop at the edge of the path"))
+        self.assertIn('"Morning. Whose grave is that', out)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

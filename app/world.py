@@ -20510,10 +20510,16 @@ def apply_turn(
                 )[:1400]
             else:
                 unresolved_note = "Travel action with no MOVE op and no resolvable destination; player stayed put."
-            conn.execute(
-                "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
-                (turn, "system", unresolved_note),
-            )
+            # A line that only touches on moving ("kneel to help her, pushing the
+            # earth into the grave", 7B run 31 T4) wrote this Note into the
+            # player's history every turn; it goes there only when going
+            # somewhere was the line's point. The ledger keeps it either way.
+            turn_ledger.note("movement", "travel_unresolved", note=unresolved_note)
+            if _turn_intent(player_input)[0] == "travel" or int(map_report.get("steps_taken") or 0) or movement_report.get("follow"):
+                conn.execute(
+                    "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
+                    (turn, "system", unresolved_note),
+                )
         if map_report.get("journal"):
             conn.execute(
                 "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
