@@ -19511,12 +19511,17 @@ def _turn_outcomes(
         outcomes.append("check")
     if (quest_attempt and (quest_attempt.get("done") or quest_attempt.get("completes_quest"))) or finishing:
         outcomes.append("quest")
-    if isinstance(result.get("quest_changes"), dict) and (result["quest_changes"].get("updates") or result["quest_changes"].get("new")):
+    # A job offered is talk, not progress: the parser's proposed "new" counted
+    # and kept the model's XP 17 for a question (8B run 33, T3). Steps count.
+    if isinstance(result.get("quest_changes"), dict) and result["quest_changes"].get("updates"):
         outcomes.append("quest_change")
     if any(isinstance(c, dict) and int(_float(c.get("quantity_delta"), 0)) > 0 for c in inv_changes or []):
         outcomes.append("find")
     combat = result.get("_deterministic_combat")
-    if isinstance(combat, dict) and combat and str(combat.get("status") or "").lower() not in {"", "none", "idle"}:
+    # "not_combat" is no fight (same turn: every peaceful turn counted as one).
+    if isinstance(combat, dict) and combat and str(combat.get("status") or "").lower() not in {
+        "", "none", "idle", "not_combat", "no_combat", "skipped", "not_started"
+    }:
         outcomes.append("fight")
     # A new place counts when the player went looking for it: their line names
     # it or explores. Walking over to someone (run 9 T1, "I walk over to the rag
