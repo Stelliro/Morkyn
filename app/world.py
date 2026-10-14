@@ -17281,8 +17281,28 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
     # A figure phrase already bound to someone here is that person (#74): it
     # is not free for a second name.
     taken = _figure_aliases_here(conn)
+    # A figure in apposition to the job of someone here is that person: "The
+    # tallyman, a man with a sharp eye" bound NPC_NEW "Ralf Wadley" to the
+    # tallyman Eldrin Vane already stood for (8B run 45, T2).
+    try:
+        prow = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        here_roles = {
+            w for r in conn.execute("SELECT role FROM npcs WHERE location_id = ?", (int(prow[0]),)).fetchall()
+            for w in re.findall(r"[a-z]+", str(r[0] or "").lower()) if len(w) >= 4
+        } if prow else set()
+    except Exception:
+        here_roles = set()
+    here_roles |= {w for n in npcs if n not in unshown for w in re.findall(r"[a-z]+", str(n.get("role") or "").lower())
+                   if len(w) >= 4}
+
+    def _is_someone_heres_job(hint: str) -> bool:
+        at = text.find(hint)
+        lead = re.search(r"\b[Tt]he\s+(?:[a-z][a-z'-]+\s+)?([a-z][a-z'-]+)\s*,\s*$", text[:at]) if at >= 0 else None
+        return bool(lead and lead.group(1).lower() in here_roles)
+
     figures = [h for h in _figure_hints(text, known_names)
-               if h.split()[0].lower() in {"a", "an", "the"} and _figure_alias(h) not in taken]
+               if h.split()[0].lower() in {"a", "an", "the"} and _figure_alias(h) not in taken
+               and not _is_someone_heres_job(h)]
     free = list(figures)
     keep_ids = {id(npc) for npc in npcs if npc not in unshown}
     bound: dict[int, str] = {}
@@ -20093,6 +20113,11 @@ _PROMISED_MONEY_RE = re.compile(
 
 # Money changing hands, not wanted or talked of: "your hands itch for a blade,
 # or for a coin" backed the same gain (8B run 10, T3).
+_ASKED_CLAUSE_RE = re.compile(
+    r"\b(?:ask|asks|asked|asking|wonder\w*|inquir\w*|enquir\w*)\s+(?:[\w'’]+\s+){0,3}?"
+    r"(?:what|how|whether|if|which|who|where|about)\b[^,.;!?]*",
+    re.I,
+)
 _MONEY_MOVES_RE = re.compile(
     r"\b(?:pays?|paid|paying|sells?|sold|selling|(?<!your\s)(?<!his\s)(?<!her\s)(?<!their\s)(?<!my\s)(?<!the\s)(?<!both\s)hands?|handed|gives?|gave|given|toss\w*|press\w*|slides?|slid|"
     r"drops?|dropped|counts?|counted|pockets?|pocketed|earn\w*|receiv\w*|collect\w*|tak(?:e|es|en)|took|"
@@ -20201,6 +20226,8 @@ def _settle_stated_gold(
         # for the right kind of risk" backed GOLD 50 (+29) on a job offer
         # nobody paid out (8B run 10, T3). A sentence that only says what
         # would, will or could be paid backs nothing.
+        # A question asked moves nothing: "You ask what kind of work pays
+        # against the ledger" backed GOLD 50 (+37) on a job offer (8B run 45, T2).
         money_words = any(
             re.search(
                 r"\b(?:coins?|gold\s+(?:coins?|pieces?)|\d+\s+gold|silver\s+(?:coins?|pieces?)|copper\s+(?:coins?|pieces?|pennies)|"
@@ -20209,7 +20236,7 @@ def _settle_stated_gold(
             )
             and _MONEY_MOVES_RE.search(sentence)
             and not _PROMISED_MONEY_RE.search(sentence)
-            for _, _, sentence in prose_state.sentence_spans(plain)
+            for sentence in (_ASKED_CLAUSE_RE.sub(" ", s) for _, _, s in prose_state.sentence_spans(plain))
         )
         # A sum said in someone's speech is an offer or a promise: '"Fifteen
         # gold," he says, "but that's only if you finish the job"' paid GOLD
