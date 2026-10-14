@@ -549,6 +549,36 @@ class NewPlaceOnlyInTheCutPart(unittest.TestCase):
         self.assertEqual([p["name"] for p in turn["locations"]], ["The Bell's Rest"])
 
 
+class ATripWithWorkAtItsEnd(unittest.TestCase):
+    """Run 33 T2: the wreckage was worked, then the prose walked Isk back to the trading post and moved her."""
+
+    LINE = ("I head down into the lower district along the old sea wall, watching the water line, and start working "
+            "through the wreckage of the first drowned house for wood or metal worth hauling back.")
+    TEXT = ("You head down into the old sea wall, the wind whipping at your clothes. The first house you enter is a "
+            "shadow of its former self. You work through the wreckage, your hands searching for wood or metal.\n\n"
+            "Sarra Tolley, the keeper of the Salt Edge Trading Post, watches from the wall. \"Good work,\" she calls.\n\n"
+            "With a final piece in hand, you step back out onto the sea wall and make your way back to the trading "
+            "post.\n\nSarra is still there. \"You've done well this morning.\"")
+
+    def test_cut_and_move_dropped(self):
+        from app import llm
+
+        point = llm._completion_cut_point(self.TEXT, self.LINE)
+        self.assertTrue(point and point["trigger"].startswith("With a final piece"))
+        turn = {"player": {"move_to_location": "Salt Edge Trading Post"}}
+        llm._drop_ops_of_cut_tail(turn, self.TEXT[:point["cut"]], self.TEXT[point["cut"]:], self.LINE)
+        self.assertIsNone(turn["player"]["move_to_location"])
+
+    def test_a_plain_trip_is_still_left_to_its_arrival(self):
+        from app import llm
+
+        text = ("You walk along the sea wall towards the lower district. The wind is steady. You reach the first "
+                "drowned house. With the tide low, you step down into the mud and head for the second house.")
+        self.assertIsNone(llm._after_act_cut_point(
+            __import__("app.prose_state", fromlist=["x"]).sentence_spans(text), "I walk to the lower district.",
+            "I walk to the lower district.", "I walk to the lower district.", travelling=True))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
