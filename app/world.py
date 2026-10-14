@@ -19543,6 +19543,23 @@ def _settle_stated_gold(
     if coin_grants:
         turn_ledger.note("gold", "coin_grant_dropped", why="the turn already moves gold by its GOLD op or a payment",
                          grants=[c.get("name") for c in coin_grants])
+    if (band or raw) and not losing and not quest_pays:
+        # A gain the prose shows nothing behind: no coin handed over or
+        # received, no sum, no pay or sale (7B run 42, T2: GOLD 5 rolled to +10
+        # on a scene where nobody paid anybody).
+        plain = venues.strip_speech(narration)
+        money_words = re.search(
+            r"\b(?:coins?|gold\s+(?:coins?|pieces?)|\d+\s+gold|silver\s+(?:coins?|pieces?)|copper\s+(?:coins?|pieces?|pennies)|"
+            r"pennies|pays?|paid|payment|sells?|sold|purse|pouch|wages?|fee|reward)\b",
+            plain, re.I,
+        )
+        if not (said["received"] or mentioned or money_words or prose_state.coin_handed_to_player(narration)):
+            player.pop("gold_delta", None)
+            player.pop("gold_band", None)
+            result["player"] = player
+            turn_ledger.note("gold", "gain_without_coin_dropped", stated=raw or band,
+                             why="the prose shows no coin reaching the player")
+            return {"source": "gain_without_coin_dropped", "gold_delta": 0, "offer": None}
     if (band or raw) and not losing:
         # Rewards keep the band roll: the 8B inflates the sums it names
         # ("mints 250, then 400"). A modest number the op and the prose agree

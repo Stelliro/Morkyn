@@ -677,6 +677,17 @@ def _giver_sentences(narration: str, player_input: str, giver: dict[str, Any] | 
     return [re.sub(r"\s+", " ", s).strip() for s in out if str(s or "").strip()]
 
 
+def _players_words_only(evidence: str, offer_line: str, player_input: str) -> bool:
+    """The parser's quote and offer line are the player's own words, or the prose retelling them ("You ...")."""
+    own = _ws(str(player_input or "")).lower()
+
+    def _players(text: str) -> bool:
+        flat = _ws(str(text or "")).strip(" \"'“”.,;:!?").lower()
+        return not flat or flat in own or bool(re.match(r"^\W*you\b", flat))
+
+    return _players(evidence) and _players(offer_line)
+
+
 def judge_offer(
     evidence: str,
     narration: str = "",
@@ -1115,6 +1126,15 @@ def validate_quest_changes(
             checked = verdict["checked"]
             if not verdict["ok"]:
                 reasons.append("evidence_is_not_an_offer")
+            elif verdict.get("why") == "giver_offers" and _players_words_only(evidence, offer_line, player_input):
+                # The job is the player's own words ("I will mind the tides",
+                # retold "You decide to mind the tides"), and the giver's job
+                # sentence is about something else ("Keep an eye on my herd"):
+                # no one offered it (7B run 42, T2).
+                title_stems = {_stem(w) for w in _title_words(title)}
+                giver_stems = {_stem(w) for w in re.findall(r"[a-z]{4,}", str(verdict.get("checked") or "").lower())}
+                if not title_stems & giver_stems:
+                    reasons.append("players_own_words_not_an_offer")
         if not reasons and points_elsewhere_for_work(title, offer_line, evidence):
             from app import turn_ledger
 

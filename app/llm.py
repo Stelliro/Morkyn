@@ -15505,7 +15505,23 @@ def _invented_unit_family(sentence: str, own: str, player_input: str) -> str:
         family = _player_clause_invented(sentence[coord.end():], clause, own, player_input)
         if family:
             return family
+    # Going into a building the line never asked to enter: "You step closer to
+    # The Black Wheel, the door creaking slightly as you push it open" (7B run
+    # 42, T2: the prose then put Isk to work inside).
+    if _ENTERS_BUILDING_RE.search(sentence) and not re.search(
+        r"\b(?:inside|into|enter\w*|go\s+in|step\s+in|push\s+(?:it|the\s+door)\s+open|open\s+the\s+door)\b",
+        _SCENE_QUOTE_RE.sub(" ", str(own or "")), re.I,
+    ):
+        return "movement"
     return ""
+
+
+_ENTERS_BUILDING_RE = re.compile(
+    r"\byou\s+(?:\w+\s+){0,3}?(?:push|pushes|pushed|pull|pulled|ease|eased|swing|swung)\s+(?:it|the\s+(?:door|gate))\s+open"
+    r"|\byou\s+(?:\w+ly\s+)?(?:step|stepped|duck|ducked|slip|slipped|walk|walked|head|headed)\s+(?:inside|into\s+the\s+(?:forge|shop|"
+    r"tavern|inn|hall|house|office|store|cellar|building|workshop|room))\b",
+    re.I,
+)
 
 
 def _scene_cut_point(text: str, player_input: str, earlier: list[str] | None = None) -> dict[str, Any] | None:
