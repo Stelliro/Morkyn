@@ -891,6 +891,13 @@ def _swap(word: str, target: str, text: str, end: int) -> str:
     return new[:1].upper() + new[1:] if word[:1].isupper() else new
 
 
+_GENDERED_THING_RE = re.compile(
+    r"\b(?:mare|mares|filly|cow|cows|ewe|hen|sow|doe|nanny|stallion|colt|gelding|bull|ram|boar|buck|horse|horses|"
+    r"pony|mule|donkey|dog|hound|bitch|cat|goat|ship|boat|skiff|vessel|barge|sloop|cutter|ketch)\b",
+    re.I,
+)
+
+
 def repair_pinned_pronouns(
     text: str, cast: list[dict[str, Any]], *, not_people: tuple[str, ...] | list[str] = ()
 ) -> tuple[str, list[dict[str, Any]]]:
@@ -939,7 +946,9 @@ def repair_pinned_pronouns(
         named = [p for p in people if p["re"].search(plain)]
         stripped = plain.lstrip()
         lead = len(plain) - len(stripped)
-        stranger = bool(_PERSON_NOUN_RE.search(plain))
+        # An animal or a boat can be the "her": "Odo finishes grooming the mare
+        # and steps back, patting her gently" became "patting his" (7B run 39, T2).
+        stranger = bool(_PERSON_NOUN_RE.search(plain) or _GENDERED_THING_RE.search(plain))
         if not stranger:
             # A code tag is not a second person: "She gestures towards the inn,
             # The Gilded Heron [[L2]]" (7B run 20, T1) kept the wrong "She".

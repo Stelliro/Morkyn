@@ -842,6 +842,23 @@ class AHorseNamedIsNoHandling(unittest.TestCase):
                          "animal_handling")
 
 
+class TheStableMare(unittest.TestCase):
+    """Run 39 T2: the mare granted on a price question; 'patting her gently' (the mare) became 'patting his'."""
+
+    def test_price_asked_is_for_sale(self):
+        from app.world import _for_sale_context
+
+        self.assertTrue(_for_sale_context("", '"The stable mare will do. What do you want for her for the afternoon?"'))
+        self.assertFalse(_for_sale_context("", '"The stable mare will do."'))
+
+    def test_pronoun_of_the_mare_kept(self):
+        from app.prose_state import repair_pinned_pronouns
+
+        cast = [{"names": ["Odo Wick", "Odo"], "key": "he"}]
+        text = "Odo finishes grooming the mare and steps back, patting her gently."
+        self.assertEqual(repair_pinned_pronouns(text, cast)[0], text)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
