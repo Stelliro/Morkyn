@@ -358,6 +358,30 @@ class UnownedWeapon(unittest.TestCase):
         self.assertEqual(repair_unowned_weapon(text, [], "I pry the lid off with my knife.")[1], [])
 
 
+class RefusedFindFollowOn(unittest.TestCase):
+    """Run 31 T1: "It's a small piece, but it might be useful." stayed after the refused find went."""
+
+    def test_follow_on_goes(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You walk out along the driftwood path, the mud still damp and cold beneath your boots, and look over "
+                 "what the last tide left.\n\nThe tide's marks are faint, but you can make out the ripple patterns. "
+                 "You find a piece of wood half-buried in the mud. It's a small piece, but it might be useful.\n\n"
+                 "Ermengarde watches you for a moment before returning to her work.")
+        result = {"narration": prose, "narration_segments": [{"label": "paragraph", "text": p} for p in prose.split("\n\n")]}
+        with connect() as conn:
+            world._reconcile_prose_with_state(
+                conn, result, rejected=[{"name": "piece of wood", "tokens": ["piece", "wood"], "outcome": "gain"}],
+                movement_report={}, gold_note=None, purse_note=None,
+            )
+        text = world._narration_text(result)
+        self.assertNotIn("piece", text)
+        self.assertIn("Ermengarde watches you", text)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

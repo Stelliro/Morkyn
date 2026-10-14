@@ -19567,6 +19567,11 @@ def _reconcile_prose_with_state(
                 return True
             carry["on"] = about
             arrives = any(kind == "gain" for _pos, kind, _player in _sentence_item_events_detail(sentence, name_l, tokens, owned=False))
+            if about and not arrives and carry["dropped"] and re.match(r"\W*(?:it|it's|its|this|that)\b", lower):
+                # Its next beat names it again: "You find a piece of wood ...
+                # It's a small piece, but it might be useful." (7B run 31, T1).
+                turn_ledger.note("prose", "refused_gain_follow_on_trimmed", item=name_l, sentence=sentence[:160])
+                return True
             # Later in the scene the refused thing goes into the pack ("You
             # return the tool to your inventory"): it is not in the pack.
             stashed = about and carry["any_dropped"] and bool(_REFUSED_STASH_RE.search(lower))
