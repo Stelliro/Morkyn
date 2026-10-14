@@ -505,6 +505,17 @@ class AKindOfPersonIsNoOneNew(unittest.TestCase):
         self.assertEqual(world._figure_hints(text), ["A woman"])
 
 
+class TheyAreTheFigure(unittest.TestCase):
+    """8B run 21, T0: "a figure stands ... watching you. They are a lean man in a weathered coat" made two people."""
+
+    def test_one_man(self):
+        from app import world
+
+        text = ("A few steps away, a figure stands at the edge of the flats, watching you. They are a lean man in a "
+                "weathered coat, his face half-hidden by a scarf.")
+        self.assertEqual(world._figure_hints(text), ["a lean man"])
+
+
 class _ConnStub:
     """No one known yet."""
 
