@@ -2012,7 +2012,24 @@ def advance_paid(job: dict[str, Any] | None) -> int:
     return sum(int(x) for x in found)
 
 
-def job_paid_in_advance(conn, *, narration: str, coin_in: int, skip_ids: set[int] | None = None) -> dict[str, Any] | None:
+def job_for_unsummed_coin(conn, *, narration: str) -> dict[str, Any] | None:
+    """The one open job whose giver hands coin over in this scene, when the prose names no sum.
+
+    7B run 30, T5: Dunstan, whose mole job pays 11, "hands you a small pouch.
+    'This should cover it.'" and the GM wrote GRANT "11 gold". The pouch is
+    that job's pay. Only a job with a pay, not already paid ahead, whose giver
+    the scene names; two such jobs are nobody's.
+    """
+    jobs = [
+        q for q in _open_jobs(conn)
+        if int(q.get("reward_gold") or 0) > 0 and not advance_paid(q)
+        and _named_in(narration, {"name": q.get("giver_name"), "code": q.get("giver_code")})
+    ]
+    return jobs[0] if len(jobs) == 1 else None
+
+
+def job_paid_in_advance(conn, *, narration: str, coin_in: int, skip_ids: set[int] | None = None,
+                        accepted_now: set[str] | None = None) -> dict[str, Any] | None:
     """The open job the coin handed over this turn pays for ahead of the work, or None.
 
     An offered job: its giver is in the scene (or it is a board's job the
@@ -2033,7 +2050,9 @@ def job_paid_in_advance(conn, *, narration: str, coin_in: int, skip_ids: set[int
         if int(q["id"]) in skip or advance_paid(q):
             continue
         status = str(q.get("status") or "")
-        if status == "active" and not advance_words:
+        # Taken in this very scene, the work is still ahead: coin handed over
+        # with the yes is pay up front (7B run 30, T5), as for an offered job.
+        if status == "active" and not advance_words and str(q.get("code") or "") not in (accepted_now or set()):
             continue
         named = len((_stems(q.get("title")) - _QUEST_STOP_STEMS) & narr_stems)
         giver_here = _named_in(narration, {"name": q.get("giver_name"), "code": q.get("giver_code")})

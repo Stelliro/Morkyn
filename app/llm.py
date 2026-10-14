@@ -10074,6 +10074,8 @@ WORLD_STATE_DROP_ORDER: tuple[str, ...] = (
     "open_offers",
     "open_leads",
     "active_quests",
+    # The one job sum the player asked for this turn (7B run 30, T5); tiny.
+    "pay_asked",
     "narrative_voice",
     "skill_check_context",
     "map_space",
