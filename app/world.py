@@ -6846,6 +6846,25 @@ def venue_entry_check(conn, player_location_id: int, venue_row, *, world_minute:
     return {"ok": True, "reason": ""}
 
 
+def _setup_names_kind(conn, kind: str) -> bool:
+    """The playthrough's own setup text (world, style, factions, backstory) names this kind of venue."""
+    try:
+        row = conn.execute("SELECT value FROM settings WHERE key = 'playthrough_options'").fetchone()
+        text = str(row[0] or "") if row else ""
+    except Exception:
+        return False
+    if not text:
+        return False
+    low = text.lower()
+    label = venues.kind_label(kind).lower()
+    head = label.split()[0] if label else ""
+    words = {label, *(venues._KIND_WORDS.get(kind) or ())}
+    # "guild" for a guild hall; not a common first word ("general store").
+    if head and head not in {"general", "market", "counting", "public", "repair", "salvage"}:
+        words.add(head)
+    return any(w and len(w) >= 4 and re.search(rf"\b{re.escape(w)}\b", low) for w in words)
+
+
 def venue_plausibility(conn, parent_id: int, kind: str) -> dict[str, Any]:
     """Could a venue of this kind open here at all?
 
@@ -6856,6 +6875,13 @@ def venue_plausibility(conn, parent_id: int, kind: str) -> dict[str, Any]:
         return {"ok": True, "reason": ""}
     parent = _location_row(conn, parent_id)
     size = settlement_size_for(conn, parent)
+    if not venues.kind_allowed(normalized, size) and _setup_names_kind(conn, normalized):
+        # The world the player set up names it: "the salvage guild and the
+        # harbour reeve" as the factions, and "Salvage Guild Hall was not
+        # found: a village has no guild hall" left Isk outside while the prose
+        # had her at the clerk's desk (8B run 5, T5).
+        turn_ledger.note("place", "setup_names_this_kind", kind=normalized, size=size)
+        return {"ok": True, "reason": "named_by_setup", "size": size}
     if not venues.kind_allowed(normalized, size):
         return {
             "ok": False,

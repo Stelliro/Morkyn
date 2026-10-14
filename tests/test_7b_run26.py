@@ -1264,6 +1264,25 @@ class NoXpForARoutineSocialRoll(unittest.TestCase):
             self.assertIn("check", world._turn_outcomes(conn, {"skill_checks": [labor], "player": {}}))
 
 
+class TheSetupNamesTheGuild(unittest.TestCase):
+    """8B run 5 T5: 'Salvage Guild Hall was not found: a village has no guild hall' in a world built on the salvage guild."""
+
+    def test_plausible_by_setup(self):
+        import json
+        from pathlib import Path
+
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        setup = json.loads((Path(__file__).resolve().parent.parent / "docs" / "showcase" / "saltmarrow-setup.json").read_text(encoding="utf-8"))
+        world.start_playthrough(setup)
+        with connect() as conn:
+            here = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            self.assertTrue(world.venue_plausibility(conn, here, "guild_hall")["ok"])
+            self.assertFalse(world.venue_plausibility(conn, here, "jeweller")["ok"])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
