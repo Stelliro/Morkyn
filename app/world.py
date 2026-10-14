@@ -16920,6 +16920,11 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     for match in _FIGURE_HINT_RE.finditer(str(text or "")):
         if re.search(r"\b(?:like|as|than|as\s+if|as\s+though)\s*$", str(text)[: match.start()], re.I):
             continue  # a simile: "like a man waiting for a trap to spring"
+        # A kind of person is a description: "She is the kind of person who
+        # knows what to look for" seeded Ellen the baker beside the woman it
+        # describes (8B run 20, T0).
+        if re.search(r"\b(?:kind|sort|type|manner)\s+of\b", match.group(0), re.I):
+            continue
         # A figure asked about is not one shown: "Is it a person, and how long
         # has it been there?" seeded Ivo the roofer (8B run 14, T1).
         if re.match(r"[^.!?\"“”]*\?", str(text)[match.end():]) and not re.search(r"[\"“][^\"”]*$", str(text)[: match.start()]):
