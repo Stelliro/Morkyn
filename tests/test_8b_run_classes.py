@@ -583,6 +583,33 @@ class TheDebtRunsTheWayTheBackstorySays(unittest.TestCase):
         self.assertEqual(prose_state.repair_inverted_debt(text, self.BACK, "Isk Tarrow")[0], text)
 
 
+class AFactTheSceneNeverShows(unittest.TestCase):
+    """8B run 24, T2: "The tallow chandler is suspicious of the player's intentions" with no chandler in the scene."""
+
+    PROSE = "You pick up the broken lantern. The brass fittings still hold, and you tuck it into your pack."
+
+    def test_dropped_and_kept(self):
+        from app import world
+
+        self.assertFalse(world._fact_shown("The tallow chandler is suspicious of the player's intentions.", self.PROSE, ""))
+        self.assertTrue(world._fact_shown("The lantern's brass fittings still hold.", self.PROSE, ""))
+        self.assertTrue(world._fact_shown("Esme sells pies at The Heron.", "Esme Everly pushes the tray closer.", ""))
+
+
+class AMoveToHereWithAWalk(unittest.TestCase):
+    """8B run 24, T2: MOVE to the district the player stood in, with a WALK, wrote "MOVE to Drowned Lower District dropped"."""
+
+    def test_only_the_walk_is_judged(self):
+        from app import world
+
+        patch = {"move_to_location": "Drowned Lower District"}
+        rows = [{"id": 2, "code": "L2", "name": "Drowned Lower District", "parent_id": 1, "kind": ""}]
+        got = world._unasked_unshown_move({"player": patch, "map_walk": {"direction": "north", "steps": 1}}, patch, rows,
+                                          "I pick up the broken lantern.", intent="investigation",
+                                          narration="You pick up the broken lantern.", current_name="Drowned Lower District")
+        self.assertEqual(got, "map walk")
+
+
 class _ConnStub:
     """No one known yet."""
 
