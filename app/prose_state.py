@@ -1093,6 +1093,25 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
     out = re.sub(r"\n{3,}", "\n\n", "\n".join(kept_lines)).strip()
     if not out:
         return source, []
+    # The engine's clock and duty shifts, outside speech: "It is morning,
+    # 08:00." (7B run 40, T0), "the sun high in the clear sky at 08:30" (run
+    # 29), "on duty from 08:00 to 18:00" and "(on duty (shift 08:00-18:00))"
+    # (run 5, T12). The words around them stay.
+    clock_pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", out)
+    for index in range(0, len(clock_pieces), 2):
+        piece = clock_pieces[index]
+        for pattern in (
+            r"\s*\((?:on|off)\s+duty\b[^()]*(?:\([^()]*\))?[^()]*\)",
+            r",?\s+(?:on|off)\s+duty\s+from\s+\d{1,2}:\d{2}\s+(?:to|until|-)\s+\d{1,2}:\d{2}",
+            r",\s*\d{1,2}:\d{2}(?=[.!?,;])",
+            r"\s+at\s+\d{1,2}:\d{2}(?=[.!?,;])",
+        ):
+            new, n = re.subn(pattern, "", piece, flags=re.I)
+            if n:
+                fixes.append({"why": "engine_clock", "count": n})
+                piece = new
+        clock_pieces[index] = piece
+    out = "".join(clock_pieces)
 
     def _meta_sentence(sentence: str) -> bool:
         return bool(_STAGE_SENTENCE_RE.match(sentence) or _STATUS_SENTENCE_RE.search(sentence))
