@@ -9282,8 +9282,19 @@ def _destination_text(player_input: str) -> str:
             if _ASKS_TO_GO_RE.search(piece):
                 kept.append(piece)
             continue
-        kept.append(_DENIED_PLACE_RE.sub(" ", piece))
+        kept.append(_LEFT_PLACE_RE.sub(" ", _DENIED_PLACE_RE.sub(" ", piece)))
     return " ".join(kept)
+
+
+# Where the player leaves someone or something, or the place left, is not
+# where they go: "I leave Mira at the well and walk up to the harbour reeve's
+# office" moved the player to a new "Saltmarrow Well" (8B run 15, T6).
+_LEFT_PLACE_RE = re.compile(
+    r"\b(?:leave|leaves|leaving|left)\s+(?:[\w'’-]+\s+){0,3}?(?:at|in|by|on|beside|outside)\s+the\s+[\w'’-]+(?:\s+[\w'’-]+)?"
+    r"(?=\s+(?:and|then|to|,)|[,.;!?]|$)"
+    r"|\b(?:leave|leaves|leaving|left|out\s+of|away\s+from)\s+the\s+[\w'’-]+(?:\s+[\w'’-]+)?(?=\s+(?:and|then|,)|[,.;!?]|$)",
+    re.I,
+)
 
 
 def _places_denied_in(rows: list[Any], player_input: str) -> set[int]:
