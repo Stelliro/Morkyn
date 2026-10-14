@@ -1031,6 +1031,17 @@ def points_elsewhere_for_work(title: str, offer_line: str = "", evidence: str = 
     return bool(_POINTER_LINE_RE.search(said) or _SEEK_WORK_TITLE_RE.search(str(title or "").strip()))
 
 
+def _offer_is_spoken(line: str, narration: str) -> bool:
+    """The offer's words stand inside someone's quotation in the scene (the parser keeps them without marks)."""
+    probe = re.sub(r"\s+", " ", str(line or "")).strip().lower()[:40]
+    if len(probe) < 8:
+        return False
+    for a, b in re.findall(r"\"([^\"]*)\"|“([^”]*)”", str(narration or "")):
+        if probe in re.sub(r"\s+", " ", (a or b)).lower():
+            return True
+    return False
+
+
 def validate_quest_changes(
     changes: dict[str, Any],
     *,
@@ -1141,6 +1152,14 @@ def validate_quest_changes(
             checked = verdict["checked"]
             if not verdict["ok"]:
                 reasons.append("evidence_is_not_an_offer")
+            elif (giver is None and not re.search(r"[\"“”]", evidence)
+                  and not _offer_is_spoken(offer_line or evidence, narration)
+                  and not _READ_POSTING_RE.search(evidence) and not re.search(r"\b(?:notice|board|posting|bill)\b", evidence, re.I)):
+                # No one in the scene offered it: "The promise you made to your
+                # mother to bring back something from the flats" became a job
+                # from "mother" (8B run 29, T0). An offer is spoken, posted, or
+                # made by someone the world holds.
+                reasons.append("no_one_offered_it")
             elif verdict.get("why") == "giver_offers" and _players_words_only(evidence, offer_line, player_input):
                 # The job is the player's own words ("I will mind the tides",
                 # retold "You decide to mind the tides"), and the giver's job

@@ -120,6 +120,18 @@ class RoleNameDrift(unittest.TestCase):
         self.assertNotIn("Tolley", fixed)
         self.assertEqual(changes[0]["why"], "role_name_drift")
 
+    def test_a_sentence_word_or_a_possessive_is_no_drift(self):
+        """8B run 29, T1: "Inside, the tallyman's office" became "Tobin Garner, the tallyman's office"."""
+        from app import world
+        from app.db import connect
+
+        text = ("The door creaks open. Inside, the reeve's office is dimly lit. Here, the reeve keeps the ledgers. "
+                "Inside, the air smells of oil.")
+        with connect() as conn:
+            fixed, changes = world._repair_role_name_drift(conn, text)
+        self.assertEqual(fixed, text)
+        self.assertEqual(changes, [])
+
     def test_title_on_the_wrong_person_goes(self):
         """T3: 'Reeve Percival Oakes' / 'Reeve Oakes' for the miller."""
         from app import world
