@@ -10617,7 +10617,10 @@ def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str)
     if head not in unspoken or _prose_stops_walk(head, narration):
         return ""
     if not (_player_departs(narration) or _prose_goes_toward(place, narration) or _prose_reaches(place, "", narration)
-            or re.search(r"\byou\s+(?:\w+ly\s+)?(?:step|walk|go|push)\w*\s+(?:open\s+the\s+door\s+and\s+step\s+)?(?:inside|in)\b", unspoken)):
+            or re.search(r"\byou\s+(?:\w+ly\s+)?(?:step|walk|go|push)\w*\s+(?:open\s+the\s+door\s+and\s+step\s+)?(?:inside|in)\b", unspoken)
+            # "The salvage guild's tally house looms ahead ... Inside, the scent
+            # of oil ..." is the entry (8B run 28, T1).
+            or re.search(rf"\b{re.escape(head)}\b[^.!?]*[.!?]\s+(?:[^.!?]*[.!?]\s+)?inside\b", unspoken)):
         return ""
     name = "The " + " ".join(w[:1].upper() + w[1:] for w in place.split())
     if not is_plausible_place_name(name):

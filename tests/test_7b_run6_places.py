@@ -306,6 +306,19 @@ class TheGuildsTallyHouseIsNoSalvageYard(unittest.TestCase):
                                             narration=self.PROSE)
         self.assertEqual(report.get("destination"), "The Salvage Guild's Tally House")
 
+    def test_inside_after_it_is_the_entry(self):
+        # 8B run 28, T1: "The salvage guild's tally house looms ahead ... Inside, the scent of oil ..."
+        from app import world
+        from app.db import connect
+
+        seed()
+        prose = ("You step off the cobbled path. The salvage guild's tally house looms ahead, its weathered sign "
+                 "creaking in the breeze. Inside, the scent of oil and damp wood mixes with the tang of seaweed.")
+        with connect() as conn:
+            report = world.resolve_movement(conn, {"player": {}, "narration": prose}, self.LINE, intent="travel",
+                                            narration=prose)
+        self.assertEqual(report.get("destination"), "The Salvage Guild's Tally House")
+
     def test_the_heads(self):
         from app import llm
 
