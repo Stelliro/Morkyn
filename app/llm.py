@@ -15976,6 +15976,21 @@ def _after_act_cut_point(
             if lead and verbs and _verb_in_input(lead.group("v"), acts) and not _AFTER_ACT_MOVE_RE.match(sentence):
                 done_at = index
                 break
+    if done_at < 0 and sought and not travelling:
+        # A search the prose never "finds" still has its act shown done: "I read
+        # the salvage notices ..., looking for the pay and who posted them" was
+        # read, then the prose walked into the reeve's office (7B run 31, T7).
+        seek_verb = re.compile(r"^(?:look|search|hunt|seek)", re.I)
+        for index, (_start, _end, sentence) in enumerate(spans):
+            if re.search(r'["“”]', sentence):
+                continue
+            lead = _YOU_LEAD_RE.match(sentence)
+            if (
+                lead and verbs and not seek_verb.match(lead.group("v"))
+                and _verb_in_input(lead.group("v"), acts) and not _AFTER_ACT_MOVE_RE.match(sentence)
+            ):
+                done_at = index
+                break
     if done_at < 0:
         return None
     own_words = _cut_words(acts)
