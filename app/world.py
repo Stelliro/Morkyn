@@ -9565,7 +9565,7 @@ def _unasked_unshown_move(
         return ""
     # "As Jocosa poles us out toward the tower": the player's own line heads there.
     if dest_words and (
-        re.search(rf"\b(?:to|toward|towards|for|into|onto)\s+(?:the\s+)?(?:[\w'’-]+\s+)?{re.escape(dest_words[-1])}", line_low)
+        re.search(rf"\b(?:to|toward|towards|for|into|onto)\s+(?:the\s+)?(?:[\w'’-]+\s+){{0,3}}{re.escape(dest_words[-1])}", line_low)
         or (_CARRIED_RE.search(line_low) and re.search(rf"\b{re.escape(dest_words[-1])}", line_low))
     ):
         return ""
@@ -9656,7 +9656,10 @@ def _line_names_place(line: str, words: list[str]) -> bool:
         return False
     if len(words) == 1:
         return bool(re.search(rf"\b{re.escape(words[0])}", line))
-    pair = rf"\b{re.escape(words[-2])}(?:['’]s)?[\s-]+{re.escape(words[-1])}"
+    # Filler words between them still name it: "the drowned lower district"
+    # for "Drowned Lower District", whose words skip "lower" (8B run 17, T1).
+    filler = "|".join(sorted(_PLACE_FILLER_WORDS, key=len, reverse=True))
+    pair = rf"\b{re.escape(words[-2])}(?:['’]s)?[\s-]+(?:(?:{filler})[\s-]+){{0,2}}{re.escape(words[-1])}"
     return bool(re.search(pair, line))
 
 
