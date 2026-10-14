@@ -1283,6 +1283,19 @@ class TheSetupNamesTheGuild(unittest.TestCase):
             self.assertFalse(world.venue_plausibility(conn, here, "jeweller")["ok"])
 
 
+class NotTheOneLeftBehind(unittest.TestCase):
+    """8B run 5 T5: 'I leave Brida at the gate ... ask the clerk about the boats' rolled persuasion vs Brida."""
+
+    def test_opponent(self):
+        from app.skill_checks import _check_with_opposition
+
+        ctx = {"npcs": [{"code": "A", "name": "Brida Rooke", "role": "porter"}], "conversation_turn": {"addressed": ["A"]}}
+        left = "I leave Brida at the gate and walk to the salvage guild hall and ask the clerk about the boats."
+        self.assertIsNone(_check_with_opposition("persuasion", left, ctx)["opposition"])
+        self.assertEqual(_check_with_opposition("persuasion", "I ask the porter who owns the boats.", ctx)["opposition"]["name"],
+                         "Brida Rooke")
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
