@@ -1296,6 +1296,27 @@ class NotTheOneLeftBehind(unittest.TestCase):
                          "Brida Rooke")
 
 
+class Run6TheBoardNote(unittest.TestCase):
+    """8B run 6 T2: 'Lower District, 20 coins for a flat-runner's work' paid GOLD 20; a dash aside got a place name."""
+
+    def test_offered_sum_not_paid(self):
+        from app import world
+
+        prose = 'You lean over the table. A new note reads: "Lower District, 20 coins for a flat-runner\'s work."'
+        result = {"narration": prose, "player": {"gold_delta": 20}}
+        self.assertEqual(world._settle_stated_gold(result, "I read the notes.")["source"], "offered_sum_not_received")
+        handed = {"narration": "Silas counts out the coins and hands you 20 coins for the work.", "player": {"gold_delta": 20}}
+        self.assertEqual(world._settle_stated_gold(handed, "I finish the job.")["gold_delta"], 20)
+
+    def test_dash_aside_is_no_hole(self):
+        from app.llm import _repair_prose_entity_labels as repair
+
+        cm = {"A": "Silas", "L2": "Salvage Guild Hall"}
+        aside = "The usual demands, anything that might be worth a coin—are there, but something feels off."
+        self.assertEqual(repair(aside, cm), aside)
+        self.assertIn("Silas leans", repair("The bell rings. — leans against the wall.", cm))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
