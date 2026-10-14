@@ -659,6 +659,29 @@ class TheYardIsNotTheTallyHouse(unittest.TestCase):
         self.assertIsNone(llm._completion_cut_point(prose, self.LINE))
 
 
+class TheJobTakenByItsSubject(unittest.TestCase):
+    """8B run 27, T3: "I'll take the Stormborn." left "Salvage the Wreck of the Stormborn" offered; and the
+    short '"The Stormborn," he said' was cut from Eldrin as the player's line."""
+
+    ROWS = [{"title": "Salvage the Wreck of the Stormborn", "giver": "Eldrin Vane"}]
+
+    def test_accepts(self):
+        from app import local_intel
+
+        self.assertIsNotNone(local_intel.typed_offer_choice(self.ROWS, "\"I'll take the Stormborn.\" I hold his eye."))
+        self.assertIsNone(local_intel.typed_offer_choice(self.ROWS, "\"I'll take the rope, and the lamp.\""))
+
+    def test_a_short_span_is_not_the_players_line(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = ("\"I'll take the Stormborn.\" I hold his eye. \"How much comes off the ledger if I bring back what's "
+                "left, and where in the harbour is she lying?\"")
+        body = ("Eldrin's fingers drummed the desk. \"The Stormborn,\" he said, voice low, \"is a wreck that sank in "
+                "the mudflats.\"")
+        fixed, _ = keep_player_words(body, line)
+        self.assertIn("\"The Stormborn,\" he said", fixed)
+
+
 class _ConnStub:
     """No one known yet."""
 
