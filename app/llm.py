@@ -15787,6 +15787,19 @@ def _drop_ops_of_cut_tail(turn: dict[str, Any], head: str, tail: str, player_inp
             player.pop("gold_band", None)
             player.pop("gold_delta", None)
             dropped.append("GOLD (paid only in the cut part)")
+        # Coin handed to the player only in the cut part (7B run 36, T7: "Emrys
+        # Slade hands you a silver coin" came after the cut at his line, and
+        # the purse still went 12 -> 16).
+        gaining = gold > 0 or (bool(band) and not band.startswith("-") and not gold)
+        received = re.compile(
+            r"\b(?:hands?|gives?|passes|presses|tosses|pays?|counts?\s+out|drops?)\s+(?:you\s+)?(?:[\w'’-]+\s+){0,4}?"
+            r"(?:coins?|gold|silver|copper|crowns?|pennies|purse|pay|payment|wage)\b|\byou\s+(?:take|pocket)\s+the\s+coins?\b",
+            re.I,
+        )
+        if gaining and received.search(tail) and not received.search(head):
+            player.pop("gold_band", None)
+            player.pop("gold_delta", None)
+            dropped.append("GOLD (received only in the cut part)")
         dest = str(player.get("move_to_location") or player.get("move_to_location_code") or "").strip()
         dest_l = dest.lower()
         named_tail = bool(dest) and dest_l in tail_l and dest_l not in head_l
