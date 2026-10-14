@@ -9253,9 +9253,20 @@ def _movement_destination_from_narration(
         low = value.lower()
         return any(low == name or (len(name) > 3 and (low in name or name in low)) for name in blocked)
 
+    def _players_move(start: int) -> bool:
+        # The one going there is the player: "the sound of waves ... echoes
+        # through the hollow alleys" made a place "Hollow" and moved Isk into
+        # it (8B run 43, T1). The clause before the preposition says "you".
+        head = re.split(r"[.!?;\n]|,\s+(?:and|but|while|as)\s+", tail[:start])[-1]
+        if re.search(r"\byou\b", head, re.I):
+            return True
+        # "Stepping out onto the driftwood path, you follow ..." (7B run 31, T1).
+        rest = re.split(r"[.!?;\n]", tail[start:], maxsplit=1)[0]
+        return bool(re.match(r"\s*\w+ing\b", head) and re.search(r",\s*you\b", rest, re.I))
+
     for match in reversed(list(_ARRIVAL_PROPER_RE.finditer(tail))):
         candidate = norm_name(match.group(1))
-        if not candidate or _blocked(candidate):
+        if not candidate or _blocked(candidate) or not _players_move(match.start()):
             continue
         if candidate.lower() in _NAME_FUNCTION_WORDS:
             continue
@@ -9263,6 +9274,8 @@ def _movement_destination_from_narration(
             return candidate
 
     for match in reversed(list(_ARRIVAL_HEAD_RE.finditer(tail))):
+        if not _players_move(match.start()):
+            continue
         modifier = (match.group(1) or "").strip()
         noun = match.group(2).strip()
         if modifier.lower() in _WEAK_PLACE_MODIFIERS:
@@ -13089,8 +13102,12 @@ def _role_phrase(name: str, role: str = "") -> str:
     # The name is a word of the person's own job: NPC_NEW NAME "Tallyman" ROLE
     # "Salvage Guild Tallyman" stored a person called Tallyman (8B run 34, T1).
     role_words = {w.lower() for w in re.findall(r"[A-Za-z]+", str(role or "")) if len(w) >= 4}
-    if role_words and re.fullmatch(r"[A-Za-z][a-z'-]+", raw) and raw.lower() in role_words:
-        return raw.lower()
+    # Or that word with a job ending: NAME "Tallyman" ROLE "Salvage Tally" (8B run 43, T1).
+    low = raw.lower()
+    if role_words and re.fullmatch(r"[A-Za-z][a-z'-]+", raw) and (
+        low in role_words or any(low == w + end for w in role_words for end in ("man", "er", "master", "keeper"))
+    ):
+        return low
     article = bool(re.match(r"(?:the|a|an)\s+", raw, re.I))
     words = re.sub(r"^(?:the|a|an)\s+", "", raw, flags=re.I).split()
     if not words or any(not re.fullmatch(r"[A-Za-z][a-z'-]*", w) for w in words):

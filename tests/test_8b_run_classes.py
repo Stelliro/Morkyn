@@ -832,6 +832,8 @@ class TheTallymanIsAJobNotAName(unittest.TestCase):
         from app import world
 
         self.assertEqual(world._role_phrase("Tallyman", "Salvage Guild Tallyman"), "tallyman")
+        # 8B run 43, T1: ROLE "Salvage Tally".
+        self.assertEqual(world._role_phrase("Tallyman", "Salvage Tally"), "tallyman")
         self.assertEqual(world._role_phrase("Hugh", "smith"), "")
 
     def test_inside_is_no_speaker(self):
@@ -972,6 +974,27 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         prose = self.PROSE + " Her name is Mara Sedge, says the clerk beside him."
         npcs = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Isolde Frome", "role": "tallyman"}], prose)
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
+
+
+class TheSoundIsNotThePlayerGoing(unittest.TestCase):
+    """8B run 43, T1: "the sound of waves ... echoes through the hollow alleys" moved Isk into "Hollow"."""
+
+    KW = dict(known_names={"Saltmarrow"}, person_names=set(), current_name="Saltmarrow")
+
+    def test_the_sound_goes_nowhere(self):
+        from app import world
+
+        text = ("The scent of brine clings to the damp stones, and the sound of waves lapping against the wharf "
+                "echoes through the hollow alleys.")
+        self.assertEqual(world._movement_destination_from_narration(text, **self.KW), "")
+
+    def test_the_player_still_goes(self):
+        from app import world
+
+        self.assertEqual(world._movement_destination_from_narration(
+            "You push through the reeds into a clearing.", **self.KW), "Clearing")
+        self.assertEqual(world._movement_destination_from_narration(
+            "Stepping out onto the driftwood path, you follow the last tide's trace.", **self.KW), "Driftwood Path")
 
 
 class TheRoleNamesTheFigure(unittest.TestCase):
