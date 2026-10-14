@@ -10470,6 +10470,20 @@ def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -
                 break
     area = " ".join(match.group("area").split())
     head = area.split()[-1].lower()
+    # The way is not the end: "head out along the shore path toward the Hollow
+    # Reach" made "The Shore" and stood Isk on it (8B run 51, T4).
+    route = re.search(r"\b(?:along|across)\s+(?:the\s+)?$", (wanted or "")[match.start():match.start("area")], re.I)
+    if route and match is matches[0] and re.search(
+        r"\b(?:toward|towards)\s+|\b(?:to|for)\s+the\s+", (wanted or "")[match.end():], re.I
+    ) and not any(m is not match for m in matches):
+        onward = re.search(r"\b(?:toward|towards|to|for)\s+(?:the\s+)?(?P<name>[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+){0,2})",
+                           (wanted or "")[match.end():])
+        turn_ledger.note("movement", "route_is_not_the_destination", route=area,
+                         destination=onward.group("name") if onward else "")
+        if not onward:
+            return ""
+        area = onward.group("name")
+        head = area.split()[-1].lower()
     rows = conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(parent_id),)).fetchall()
     for row in rows:
         words = re.findall(r"[a-z]+", humanize_place_name(str(row["name"] or "")).lower())
@@ -20535,6 +20549,17 @@ def _reconcile_prose_with_state(
         def shows_arrival(sentence: str, name_l: str = name_l, tokens: list[str] = tokens, carry: dict = carry,
                           shared: list[str] = shared, spoken: set = spoken) -> bool:
             if sentence in spoken or sentence.strip() in spoken:
+                carry["on"] = carry["dropped"] = False
+                return False
+            # Only the narration in it is read: the player's own "Whose debt do I
+            # collect first ...?" went as the refused "Runner's Task" arriving
+            # (8B run 51, T3), and the fisherman's '"You're here to collect the
+            # debt," he says' as a debt note (T4). "He says, handing you the key"
+            # still shows the key arriving, its narration saying "it".
+            told = venues.strip_speech(sentence).lower()
+            if not (_sentence_mentions_item(told, name_l, tokens)
+                    or any(len(t) > 3 and re.search(rf"\b{re.escape(t)}", told) for t in tokens)
+                    or re.search(r"\b(?:it|them|this|that|one)\b", told)):
                 carry["on"] = carry["dropped"] = False
                 return False
             lower = sentence.lower()

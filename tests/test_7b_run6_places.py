@@ -237,6 +237,23 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class TheWayIsNotTheEnd(unittest.TestCase):
+    """8B run 51, T4: "along the shore path toward the Hollow Reach" made "The Shore" and stood Isk on it."""
+
+    def test_the_walk_ends_at_the_hollow_reach(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        line = ("I nod to the captain, tuck my hands into my sleeves against the cold, and head out along the shore "
+                "path toward the Hollow Reach to find the fisherfolk.")
+        prose = ("The wind bites at your sleeves as you step onto the shore path. The morning mist turns the Hollow "
+                 "Reach into a grey smear on the horizon. You reach the edge of the settlement.")
+        with connect() as conn:
+            name = world._outdoor_area_requested(conn, 1, line, prose)
+        self.assertEqual(name, "The Hollow Reach")
+
+
 class AnotherSpellingIsNoNewPlace(unittest.TestCase):
     """8B run 50, T4: LOC_NEW "The Salvage Tally House" in "The Salvage Guild's Tally House" minted a second place."""
 
