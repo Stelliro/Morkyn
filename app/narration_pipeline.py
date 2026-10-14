@@ -2273,6 +2273,39 @@ def _paraphrased_quote(sentence: str, quotes: list[str]) -> bool:
     return False
 
 
+def drop_echoed_own_questions(text: str, player_input: str) -> tuple[str, list[dict[str, Any]]]:
+    """The player's own unquoted question, copied into the prose as narration, goes.
+
+    8B run 14, T1: "... without touching anything yet. Is it a person, and how
+    long has it been there?" came back as the prose's first lines, the
+    player's wondering read out by the narrator. The scene answers it; it
+    does not repeat it.
+    """
+    line = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0]
+    bare_line = _QUOTE_SPAN_RE.sub(" ", line)
+    asked = {
+        re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
+        for s in re.split(r"(?<=[.!?])\s+", bare_line)
+        if s.strip().endswith("?") and len(s.split()) >= 3
+    }
+    if not asked or not str(text or "").strip():
+        return str(text or ""), []
+    changes: list[dict[str, Any]] = []
+
+    def unit_out(match: re.Match[str]) -> str:
+        sentence = match.group(0)
+        if re.search(r"[\"“”]", sentence):
+            return sentence
+        if re.sub(r"[^a-z0-9 ]", "", sentence.lower()).strip() in asked:
+            changes.append({"action": "own_question_echo_dropped", "text": sentence.strip()[:200]})
+            return ""
+        return sentence
+
+    fixed = re.sub(r"[^.!?\n]*\?\s*", unit_out, str(text))
+    fixed = re.sub(r"[ \t]{2,}", " ", fixed).strip()
+    return (fixed, changes) if changes else (str(text), [])
+
+
 def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str, Any]]]:
     """
     The player's quoted words are said by the player, as typed (7B run 5, #123).
