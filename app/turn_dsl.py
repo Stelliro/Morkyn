@@ -1405,7 +1405,30 @@ def ops_to_turn(narration: str, ops: list[dict[str, Any]], player_input: str = "
     return turn
 
 
+_GLUED_THE_RE = re.compile(r"\b([Tt])he([a-z]{4,})\b")
+
+
+def unglue_the(text: str, also: str = "") -> str:
+    """Split "the" glued to the next word when that word also stands alone in the text.
+
+    7B run 32 wrote "theflats" from T1 on; the engine stored a place "Theflats"
+    and a fact about it, and both came back in every prompt. "Theobald" stays:
+    "obald" never stands alone.
+    """
+    source = str(text or "")
+    if not _GLUED_THE_RE.search(source):
+        return source
+    alone = {w.lower() for w in re.findall(r"\b[a-z]{4,}\b", f"{source} {also}", re.I)}
+
+    def _split(match: re.Match[str]) -> str:
+        rest = match.group(2)
+        return f"{match.group(1)}he {rest}" if rest in alone else match.group(0)
+
+    return _GLUED_THE_RE.sub(_split, source)
+
+
 def parse_dsl_turn(text: str, player_input: str = "") -> dict[str, Any]:
+    text = unglue_the(text, player_input)
     narration, ops_block = split_nar_ops(text)
     ops, skipped = parse_ops_detailed(ops_block)
     turn = ops_to_turn(narration, ops, player_input=player_input)
