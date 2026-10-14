@@ -740,6 +740,27 @@ class CheckAgainstTheOneAddressed(unittest.TestCase):
                          "Emrys Slade")
 
 
+class CoinOnlyInTheCutPart(unittest.TestCase):
+    """Run 36 T7: 'Emrys Slade hands you a silver coin' was cut, and the purse still went 12 -> 16."""
+
+    def test_gain_dropped(self):
+        from app import llm
+
+        head = '"What would you pay me?" Emrys watches you. "Tobin, that is a serious matter."'
+        tail = '"Agreed. I will give you a coin." Emrys Slade hands you a silver coin. You take the coin.'
+        turn = {"player": {"gold_delta": 1}}
+        self.assertIn("GOLD (received only in the cut part)", llm._drop_ops_of_cut_tail(turn, head, tail, "Pay me?"))
+        self.assertNotIn("gold_delta", turn["player"])
+
+    def test_bare_tag_dropped(self):
+        from app.prose_state import drop_orphan_speech_lead
+
+        out, _ = drop_orphan_speech_lead("Emrys watches you. Emrys asks, his tone shifting subtly.\n\nTobin shifts.")
+        self.assertNotIn("asks", out)
+        kept = '"Go," Emrys says. Emrys asks, his tone low. "Now?"'
+        self.assertEqual(drop_orphan_speech_lead(kept)[0], kept)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

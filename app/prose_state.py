@@ -1364,7 +1364,11 @@ _CUT_WORD_IN_QUOTE_RE = re.compile(r"(?:\s+(?:the|a|an))?\s+(?<![\w'’])[b-hj-z
 _SPEECH_LEAD_RE = re.compile(
     r"^\W*(?:[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2}(?:\s*\[\[[A-Z0-9]+\]\])?(?:['’]s)?|(?:his|her|their|a)\s*)\s+"
     r"(?:voice\s+(?:cuts|breaks|rings|carries|comes|calls)\s*(?:through|out|across|over)?(?:\s+the\s+\w+)?"
-    r"|(?:speaks|calls)\s+(?:up|out)|clears\s+(?:his|her|their)\s+throat)\s*[.!]?\s*$",
+    r"|(?:speaks|calls)\s+(?:up|out)|clears\s+(?:his|her|their)\s+throat"
+    # A bare speech tag whose line was dropped: "Emrys asks, his tone shifting
+    # subtly." (7B run 36, T7).
+    r"|(?:asks|says|adds|replies|continues|mutters|murmurs|whispers)(?:,\s+(?:his|her|their)\s+[^.!?\"“”]{0,50})?)"
+    r"\s*[.!]?\s*$",
 )
 
 
@@ -1382,6 +1386,9 @@ def drop_orphan_speech_lead(text: str) -> tuple[str, list[dict[str, Any]]]:
         # Its line follows in the same paragraph, or opens the next one.
         nxt = re.match(r"\s*(\n\s*\n)?\s*(.)", after)
         if nxt and nxt.group(2) in "\"“":
+            continue
+        # A tag right after its line ('"Go." Emrys says.') is that line's.
+        if re.search(r"[\"”]\s*$", source[:start]):
             continue
         out = out[:start] + out[end:]
         fixes.append({"why": "orphan_speech_lead", "text": sentence[:160]})
