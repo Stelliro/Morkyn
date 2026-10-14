@@ -903,6 +903,16 @@ class TheCoinIsOneCoin(unittest.TestCase):
         self.assertIsNone(counted_coins("You take the silver coin"))
 
 
+class AFreeHandover(unittest.TestCase):
+    """Run 41 T1: 'What would a heel of bread cost me?' and 'Here you go. Enjoy your breakfast.' with no price."""
+
+    def test_reads_as_given(self):
+        from app.world import _FREE_HANDOVER_RE
+
+        self.assertTrue(_FREE_HANDOVER_RE.search('Margery hands you a heel of bread. "Here you go. Enjoy your breakfast."'))
+        self.assertFalse(_FREE_HANDOVER_RE.search('Margery hands you a heel of bread. "That will be two coppers."'))
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

@@ -14480,6 +14480,13 @@ _GIFT_WORDS_RE = re.compile(
 )
 
 
+_FREE_HANDOVER_RE = re.compile(
+    r"\benjoy\s+(?:your|the|it|them)\b(?:\s+(?:breakfast|meal|supper|dinner|bread|food|loaf|bite))?"
+    r"|\b(?:have|take)\s+(?:it|this|one|a\s+bite)\s+(?:for\s+the\s+road|with\s+you)\b",
+    re.I,
+)
+
+
 _COIN_SET_DOWN_RE = re.compile(
     r"\b(?:put|puts|set|sets|lay|lays|laid|place[sd]?|slide|slides|slid|pay|pays|paid|count(?:s|ed)?\s+out|"
     r"hand(?:s|ed)?\s+over)\s+(?:down\s+)?(?:the|your|my|some|a\s+few|her|his)?\s*(?:[\w-]+\s+){0,2}"
@@ -14709,10 +14716,21 @@ def _filter_inventory_changes(
         # not theirs until bought (7B run 25, T1: "I ... look over what she has
         # for sale" and the chandler "hands you a bundle of rope" put rope in
         # the pack, unpaid). A gift said as one, or coin paid, still stands.
+        # Handed over with no price named anywhere and words of giving: "Here
+        # you go. Enjoy your breakfast." after "What would a heel of bread cost
+        # me?" is a gift, not a sale left open (7B run 41, T1).
+        from app.prose_state import coin_mentions as _coin_mentions
+
+        free_handover = bool(
+            _FREE_HANDOVER_RE.search(final_text)
+            and not _coin_mentions(final_text)
+            and not re.search(r"\b(?:coins?|gold|silver|copper|price|cost|pay|owe)\b", venues.strip_speech(final_text), re.I)
+        )
         shown_for_sale = bool(
             grounded and not existing and handed and not acts_take
             and _for_sale_context(final_text, player_input)
             and not _GIFT_WORDS_RE.search(final_text)
+            and not free_handover
             and not _payment_shown(final_text, player_input)
         )
         if shown_for_sale:
