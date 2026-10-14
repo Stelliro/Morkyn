@@ -800,6 +800,27 @@ class TalkEarnsNoXp(unittest.TestCase):
         self.assertIn("quest_change", world._turn_outcomes(_OutcomeConn(), result, player_input="I haul the crate up."))
 
 
+class TheRestraintStands(unittest.TestCase):
+    """8B run 33, T3: "I keep my hands off the coin" then "His eyes flick to the coin in your palm"."""
+
+    def test_the_undoing_sentence_goes(self):
+        from app import prose_state
+
+        line = "\"Prove it how?\" I keep my hands off the coin. \"Name the job, Gregory.\""
+        text = ("Gregory leans back, fingers steepled, and the weight of the moment settles on his face. \"A job,\" he "
+                "says. His eyes flick to the coin in your palm, then back to you. \"The guild needs a runner,\" he says, "
+                "\"someone to fetch things from the old docks before the tide swallows them.\"")
+        fixed, changes = prose_state.repair_restraint_undone(text, line)
+        self.assertNotIn("coin in your palm", fixed)
+        self.assertEqual(changes[0]["why"], "restraint_undone")
+
+    def test_leaving_a_place_is_no_restraint(self):
+        from app import prose_state
+
+        text = "You walk out of the tavern and take the lamp from its hook in your hand, the night cold on your face."
+        self.assertEqual(prose_state.repair_restraint_undone(text, "I leave the tavern and head home.")[0], text)
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
