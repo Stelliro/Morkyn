@@ -250,6 +250,33 @@ class TheLineNamesTheDrownedLowerDistrict(unittest.TestCase):
         self.assertFalse(world.travel_intent("I make my way through the ledger page by page, looking for her name."))
 
 
+class StowingItIsTakingIt(unittest.TestCase):
+    """8B run 18, T3: "I coil the chain section and stow it in my pack" kept nothing; the draft wrote no GRANT."""
+
+    def test_the_chain_reaches_the_pack(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        line = ("I coil the chain section and stow it in my pack, then trace one of the etched symbols with my thumb. "
+                "Do I know this mark?")
+        prose = ("The wind tugs at your pack as you coil the chain and tuck it away. Your thumb traces the etched "
+                 "symbol, its lines rough and uneven. You don't recognize it.")
+        with connect() as conn:
+            changes = world._grant_shown_takes(conn, [], prose, line)
+        self.assertTrue(any("chain" in str(c.get("name") or "") for c in changes), changes)
+
+    def test_putting_it_on_the_table_is_no_take(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            changes = world._grant_shown_takes(conn, [], "You set the lamp down and put it on the table.",
+                                               "I put the lamp on the table.")
+        self.assertEqual(changes, [])
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
