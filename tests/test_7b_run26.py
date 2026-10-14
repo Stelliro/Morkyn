@@ -310,6 +310,18 @@ class ScriptLabel(unittest.TestCase):
         self.assertEqual(repair_meta_leaks('You read the sign: "Closed".')[0], 'You read the sign: "Closed".')
 
 
+class PeriodBeforeTag(unittest.TestCase):
+    """Run 30 T8: '...before noon." you ask Dunstan' kept its full stop before a lowercase tag."""
+
+    def test_comma(self):
+        from app.prose_state import repair_meta_leaks
+
+        out = repair_meta_leaks('"How many are left? I can cover the rest before noon." you ask Dunstan.')[0]
+        self.assertIn('before noon," you ask Dunstan.', out)
+        same = '"Fine." You turn away.'
+        self.assertEqual(repair_meta_leaks(same)[0], same)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
