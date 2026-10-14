@@ -99,5 +99,35 @@ class APartialPatchKeepsWhatTheProseShows(unittest.TestCase):
         self.assertNotIn("silver locket", names)
 
 
+class ThePlaceIsWhatStandsThere(unittest.TestCase):
+    """8B run 9, T0: an opening naming Saltmarrow "showed" a MOVE into The Boar at Saltmarrow."""
+
+    def test_the_head_is_before_at(self):
+        from app import world
+
+        self.assertEqual(world._place_words("The Boar at Saltmarrow"), ["boar"])
+        self.assertEqual(world._place_words("Candle at Saltmarrow Forge"), ["candle"])
+        self.assertEqual(world._place_words("Hollow Maw Path"), ["hollow", "maw", "path"])
+
+    def test_an_opening_that_never_names_the_inn_does_not_enter_it(self):
+        from app import world
+
+        prose = ("You stand at the edge of the flats. The town of Saltmarrow [[L1]] is behind you, and ahead "
+                 "the flats stretch out. A rag picker named Ellen Birtle looks up as you pass.")
+        rows = [{"id": 1, "code": "L1", "name": "Saltmarrow", "parent_id": None, "kind": ""}]
+        patch = {"move_to_location": "The Boar at Saltmarrow"}
+        got = world._unasked_unshown_move({"player": patch}, patch, rows, "", intent="opening", narration=prose)
+        self.assertEqual(got, "The Boar at Saltmarrow")
+
+
+class ThePlayerNeedsNoName(unittest.TestCase):
+    """8B run 9, T0: the verifier failed the opening for not naming the player (47 s)."""
+
+    def test_the_naming_rule_says_it_is_for_other_people(self):
+        from app import prompts
+
+        self.assertIn('the player is "you" and needs no name', prompts.VERIFY_PROMPT)
+
+
 if __name__ == "__main__":
     unittest.main()
