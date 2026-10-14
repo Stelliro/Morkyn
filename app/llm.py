@@ -13767,6 +13767,10 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
     r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)(?<![“\x22])(?<!of\s)(?<!some\s)(?<!any\s)(?<!no\s)salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
     r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b|"
+    # Putting a thing away in one's own pack is taking it (8B run 18, T3: "I
+    # coil the chain section and stow it in my pack" kept nothing).
+    r"stow(?:s|ed|ing)?\b|(?:tuck|slip|put|place|drop|shove|stuff)(?:s|ed|ped|ing)?\s+(?:[\w'’-]+\s+){1,4}?"
+    r"(?:in|into|inside)\s+my\s+(?:pack|bag|satchel|pouch|pocket|sack|coat|belt|tunic)\b|"
     # Holding a hand out for something is asking to be given it (7B run 32,
     # T3: "I hold out my hand for the tally sticks" and Maud "hands you the
     # sticks"; nothing reached the pack).

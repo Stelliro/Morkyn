@@ -14200,8 +14200,12 @@ def _coins_to_gold(
 _SHOWN_TAKE_RE = re.compile(
     # "You find yourself with a leather-bound book and some scrolls" and "You
     # keep the piece you pulled out of the mud" are takes too (7B run 5, T12, T58).
-    r"\byou\s+(?:\w+ly\s+)?(?P<verb>pick\s+(?P<pro>it|them|both|one)\s+up|take|pick\s+up|pocket|grab|collect|"
-    r"gather\s+up|scoop\s+up|snatch\s+up|stow|help\s+yourself\s+to|find\s+yourself\s+(?:with|holding)|keep)\b"
+    # A second verb on the same "you" counts, and putting a thing away is taking
+    # it: "as you coil the chain and tuck it away" (8B run 18, T3).
+    r"\byou\s+(?:\w+ly\s+)?(?:[a-z]+\s+[^.;!?\n\"“”]{0,60}?\band\s+(?:then\s+)?)??"
+    r"(?P<verb>pick\s+(?P<pro>it|them|both|one)\s+up|take|pick\s+up|pocket|grab|collect|"
+    r"gather\s+up|scoop\s+up|snatch\s+up|stow|help\s+yourself\s+to|find\s+yourself\s+(?:with|holding)|keep|"
+    r"(?:tuck|slip|put|stash)(?=[^.;!?\n]{0,40}\b(?:away|in(?:to)?\s+your|inside\s+your)\b))\b"
     r"(?P<obj>[^.;!?\n]*)",
     re.I,
 )
@@ -14440,7 +14444,7 @@ def _grant_shown_takes(
             items: list[tuple[str, int]] = []
             first = obj.strip()
             if match.group("pro") or re.match(r"(?:it|them|both|one|the\s+lot)\b", first, re.I):
-                before = " ".join(sentences[max(0, index - 1):index]) + " " + sentence[: match.start()]
+                before = " ".join(sentences[max(0, index - 1):index]) + " " + sentence[: match.start("verb")]
                 phrase, qty = _last_new_thing(before.lower())
                 if phrase:
                     items.append((phrase, qty))
