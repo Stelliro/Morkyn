@@ -2432,8 +2432,11 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
         # One word is the typed line's first sentence only when the whole line
         # is already in the prose, quoted (7B run 31, T2: 'Morning. You stop at
         # the edge of the path and ask, "Morning. Whose grave is that ..."').
+        # The line may end on a comma before its tag ('... turns," you ask.
+        # Morning.', run 37 T1), so its last mark is not compared.
         if len(bare.split()) == 1 and any(
-            re.split(r"(?<=[.!?])\s+", q.strip())[0] == bare and len(q.split()) > 1 and q.strip() in body
+            re.split(r"(?<=[.!?])\s+", q.strip())[0] == bare and len(q.split()) > 1
+            and q.strip().rstrip(".!?,") in body
             for q in quotes
         ):
             changes.append({"action": "echoed_quote_piece_dropped", "text": bare})

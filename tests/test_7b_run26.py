@@ -761,6 +761,19 @@ class CoinOnlyInTheCutPart(unittest.TestCase):
         self.assertEqual(drop_orphan_speech_lead(kept)[0], kept)
 
 
+class OneWordEchoAfterTheTag(unittest.TestCase):
+    """Run 37 T1: '... before the water turns," you ask. Morning. Delphine looks up'."""
+
+    def test_dropped(self):
+        from app.narration_pipeline import keep_player_words
+
+        line = 'I go over to Delphine. "Morning. Need any old timber pulled out? I can haul it back before the water turns."'
+        text = ('“Morning. Need any old timber pulled out? I can haul it back before the water turns,” you ask. '
+                "Morning. Delphine looks up from her workbench.")
+        out, _ = keep_player_words(text, line)
+        self.assertIn("you ask. Delphine looks up", out)
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
