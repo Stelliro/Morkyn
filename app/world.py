@@ -18691,7 +18691,21 @@ def _settle_story_terms_and_pay(
     # Coin handed over for a job before the work (7B run 29, T3: the ship job's
     # 11 gold, "There's the payment", while it was only offered) is that job's
     # pay: recorded against it, so finishing it later pays no gold again.
-    ahead = job_paid_in_advance(conn, narration=narration, coin_in=coin_in, skip_ids=set(skip_ids))
+    # Jobs taken this turn, by any path (the parser, a typed accept, the
+    # button): every accept journals "Quest accepted: <title>" (quests.accept_offered).
+    accepted_now: set[str] = set()
+    try:
+        for q in conn.execute("SELECT code, title FROM quests WHERE status = 'active'").fetchall():
+            hit = conn.execute(
+                "SELECT 1 FROM journal WHERE turn = ? AND content LIKE ? LIMIT 1",
+                (int(turn), f"Quest accepted: {q['title']}%"),
+            ).fetchone()
+            if hit:
+                accepted_now.add(str(q["code"] or ""))
+    except Exception:
+        accepted_now = set()
+    ahead = job_paid_in_advance(conn, narration=narration, coin_in=coin_in, skip_ids=set(skip_ids),
+                                accepted_now=accepted_now)
     if ahead:
         row = record_advance_pay(conn, ahead, coin_in=coin_in, turn=turn)
         turn_ledger.note("quest", "paid_in_advance", quest=ahead.get("code"), gold=coin_in,
@@ -18934,13 +18948,23 @@ def _take_coin_grants(result: dict[str, Any]) -> list[dict[str, Any]]:
     coins: list[dict[str, Any]] = []
     kept: list[dict[str, Any]] = []
     for change in changes:
-        if isinstance(change, dict) and int(_float(change.get("quantity_delta"), 0)) > 0 and _is_coin_item(change):
+        if isinstance(change, dict) and _is_gain(change) and _is_coin_item(change):
             coins.append(change)
         else:
             kept.append(change)
     if coins:
         result["inventory_changes"] = kept
     return coins
+
+
+def _is_gain(change: dict[str, Any]) -> bool:
+    """A positive count, or a size band not yet rolled: GRANT "11 gold" "moderate"
+    is settled before the band roller runs, so it carries no count yet (7B run 30,
+    T5: missed here, rolled to 2 and refused as "11 gold x2")."""
+    if "quantity_delta" in change and change.get("quantity_delta") not in (None, ""):
+        return int(_float(change.get("quantity_delta"), 0)) > 0
+    band = str(change.get("quantity_band") or "").strip().lower()
+    return bool(band) and not band.startswith(("-", "lose"))
 
 
 def _is_coin_item(change: dict[str, Any]) -> bool:
@@ -19046,6 +19070,13 @@ def _settle_unopped_coin(
             turn_ledger.note("gold", "received_left_to_quest_payout", grants=[c.get("name") for c in coin_grants])
         return None
     handed = prose_state.coin_handed_to_player(narration)
+    if not handed and coin_grants:
+        # The op says coin, the prose shows a pouch handed over with no word of
+        # what is in it (7B run 30, T5): together they are coin reaching the player.
+        handed = prose_state.purse_handed_to_player(narration)
+        if handed:
+            turn_ledger.note("gold", "purse_is_the_coin_grant", span=handed.get("span"),
+                             grants=[c.get("name") for c in coin_grants])
     if restated is not None and handed and str(handed.get("span") or "").lower().startswith("you"):
         handed = None  # "You pocket the two gold": the player's own putting away
     received = [m for m in said["received"] if m > 0]
@@ -19066,6 +19097,23 @@ def _settle_unopped_coin(
         if counted:
             turn_ledger.note("gold", "received_coin_counted", amount=counted, span=handed.get("span"))
             amount = counted
+    if amount is None and handed and conn is not None:
+        # Coin with no sum from the giver of the one open job in the scene is
+        # that job's pay (7B run 30, T5: Dunstan's pouch for the 11-gold mole
+        # job, GRANT "11 gold"). A coin GRANT naming a different sum is left
+        # to the GRANT, below.
+        try:
+            from app.quest_parser import job_for_unsummed_coin
+
+            job = job_for_unsummed_coin(conn, narration=narration)
+        except Exception:
+            job = None
+        grant_sum = _coin_grant_count(coin_grants)
+        if job and (grant_sum is None or grant_sum == int(job.get("reward_gold") or 0)):
+            amount = int(job.get("reward_gold") or 0)
+            turn_ledger.note("gold", "received_coin_is_job_pay", quest=job.get("code"), amount=amount,
+                             span=handed.get("span"))
+            return _set_settled_gold(result, player, amount, "prose_received_job_pay")
     if amount is None and not (handed or {}).get("band"):
         amount = _coin_grant_count(coin_grants)
     if amount and amount <= STATED_GAIN_CAP:

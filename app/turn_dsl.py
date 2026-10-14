@@ -1736,6 +1736,18 @@ def build_dsl_user_prompt(context: dict[str, Any], player_input: str) -> str:
             "so nobody treats it as already asked. "
             "The story may offer other work that fits this scene and quest_style, but not a pile of offers at once."
         )
+    # The player asks what a job pays (7B run 30, T5): the answer is the job's sum.
+    try:
+        from app.prompts import asked_job_pay
+
+        pay = asked_job_pay(context, player_input) if isinstance(context, dict) else None
+    except Exception:
+        pay = None
+    if pay:
+        instructions.append(
+            "pay_asked: the player asks what that job pays. pay_asked.giver answers with the sum in pay_asked.pays, "
+            "in their own words, not a vaguer phrase."
+        )
     leads = context.get("open_leads") if isinstance(context, dict) else None
     if isinstance(leads, list) and leads:
         instructions.append(
