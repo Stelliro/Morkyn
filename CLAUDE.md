@@ -58,6 +58,10 @@ belong to, with the date).
   wait, engine, gap since the last turn) and `requests.jsonl` (every POST, setup page included)
   sit beside the traces and are never pruned; `tools/timing_report.py <trace dir>` summarises
   them. New engine code that refuses or drops something calls `turn_ledger.note(...)`.
+- **Test on both the 7B and the 8B, 8B first** (2026-10-14): Qwen3 8B is the target; the 7B
+  runs 30-43 were the wrong model to lead with. Next: a long 8B run logging faults by class instead
+  of restarting on each one. The prompt review to act on next is
+  docs/showcase/prompt-review-2026-10-14.md.
 - **Baseline runs:** a 100-turn 7B run "with no issues" becomes the baseline. Run 5 (2026-10-14,
   docs/showcase/saltmarrow-7b-run5-findings.md) was not one.
 - **Iterate until the playtest is complete** (2026-10-14): when a test run turns up issues, keep
