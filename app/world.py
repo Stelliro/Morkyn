@@ -19592,6 +19592,24 @@ _OFFERED_SUM_RE = re.compile(
 )
 
 
+_PROMISED_MONEY_RE = re.compile(
+    r"\b(?:will|would|could|might|may|shall|'ll|’ll)\s+(?:\w+\s+)?(?:pay|reward|buy|give|fetch)\b"
+    r"|\b(?:if|once|when|whoever|anyone\s+who)\s+(?:you\s+)?(?:find|bring|return|deliver|finish|complete)\w*\b"
+    r"|\bpromis\w*\b",
+    re.I,
+)
+
+
+# Money changing hands, not wanted or talked of: "your hands itch for a blade,
+# or for a coin" backed the same gain (8B run 10, T3).
+_MONEY_MOVES_RE = re.compile(
+    r"\b(?:pays?|paid|paying|sells?|sold|selling|(?<!your\s)(?<!his\s)(?<!her\s)(?<!their\s)(?<!my\s)(?<!the\s)(?<!both\s)hands?|handed|gives?|gave|given|toss\w*|press\w*|slides?|slid|"
+    r"drops?|dropped|counts?|counted|pockets?|pocketed|earn\w*|receiv\w*|collect\w*|tak(?:e|es|en)|took|"
+    r"rewards?|rewarded|fills?|filled|clinks?|jingl\w*|weighs?)\b",
+    re.I,
+)
+
+
 def _settle_stated_gold(
     result: dict[str, Any], player_input: str, *, conn=None, quest_pays: bool = False
 ) -> dict[str, Any] | None:
@@ -19688,10 +19706,19 @@ def _settle_stated_gold(
         # received, no sum, no pay or sale (7B run 42, T2: GOLD 5 rolled to +10
         # on a scene where nobody paid anybody).
         plain = venues.strip_speech(narration)
-        money_words = re.search(
-            r"\b(?:coins?|gold\s+(?:coins?|pieces?)|\d+\s+gold|silver\s+(?:coins?|pieces?)|copper\s+(?:coins?|pieces?|pennies)|"
-            r"pennies|pays?|paid|payment|sells?|sold|purse|pouch|wages?|fee|reward)\b",
-            plain, re.I,
+        # Money promised is not money moved: "the guild will pay handsomely
+        # for the right kind of risk" backed GOLD 50 (+29) on a job offer
+        # nobody paid out (8B run 10, T3). A sentence that only says what
+        # would, will or could be paid backs nothing.
+        money_words = any(
+            re.search(
+                r"\b(?:coins?|gold\s+(?:coins?|pieces?)|\d+\s+gold|silver\s+(?:coins?|pieces?)|copper\s+(?:coins?|pieces?|pennies)|"
+                r"pennies|pays?|paid|payment|sells?|sold|purse|pouch|wages?|fee|reward)\b",
+                sentence, re.I,
+            )
+            and _MONEY_MOVES_RE.search(sentence)
+            and not _PROMISED_MONEY_RE.search(sentence)
+            for _, _, sentence in prose_state.sentence_spans(plain)
         )
         if not (said["received"] or mentioned or money_words or prose_state.coin_handed_to_player(narration)):
             player.pop("gold_delta", None)

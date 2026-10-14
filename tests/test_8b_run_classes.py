@@ -129,5 +129,46 @@ class ThePlayerNeedsNoName(unittest.TestCase):
         self.assertIn('the player is "you" and needs no name', prompts.VERIFY_PROMPT)
 
 
+class MoneyPromisedIsNotMoneyMoved(unittest.TestCase):
+    """8B run 10, T3: GOLD 50 (+29) on a job offer; the prose only said the guild "will pay"."""
+
+    def _settle(self, prose):
+        from app import world
+
+        result = {"narration": prose, "player": {"gold_delta": 50}}
+        world._settle_stated_gold(result, "\"Then tell me what the guild wants found, and what it pays.\"")
+        return result["player"].get("gold_delta")
+
+    def test_a_promise_and_a_want_pay_nothing(self):
+        prose = ("You've heard the ones that say the guild will pay handsomely for the right kind of risk. "
+                 "The kind of weight that makes your hands itch for a blade, or for a coin.")
+        self.assertIn(self._settle(prose), (None, 0))
+
+    def test_a_handover_still_backs_the_gain(self):
+        self.assertEqual(self._settle("Petronel hands you the pouch, and it is heavier than you thought."), 50)
+
+
+class SaidOnceIsSaid(unittest.TestCase):
+    """8B run 10, T3: the typed line given in full, then a reworded copy as the player's again."""
+
+    LINE = ("\"Something with value.\" I let go of the bolts and wipe my hands on my breeches. \"Then tell me what "
+            "the guild wants found, and what it pays, and I'll tell you if the flats have it.\"")
+
+    def test_the_reworded_copy_goes(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        paragraphs = [
+            "“Something with value,” you say. “Then tell me what the guild wants found, and what it pays, and "
+            "I'll tell you if the flats have it.” You let go of the bolts.",
+            "\"You're not here for the usual scraps,\" he says. \"The guild wants a piece of the old shipwreck.\"",
+            "You cross your arms, the movement deliberate. \"Then tell me what it is, and what it pays,\" you say. "
+            "\"And I'll tell you if the flat has it.\"",
+        ]
+        out, dropped = drop_invented_player_speech(paragraphs, self.LINE)
+        self.assertIn("Then tell me what the guild wants found", out[0])
+        self.assertNotIn("what it is, and what it pays", " ".join(out))
+        self.assertTrue(dropped)
+
+
 if __name__ == "__main__":
     unittest.main()
