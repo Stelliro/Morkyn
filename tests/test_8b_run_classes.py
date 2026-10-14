@@ -780,6 +780,35 @@ class TheOtherHalfStaysASentence(unittest.TestCase):
         self.assertNotIn("\"that's the price", fixed)
 
 
+class TalkEarnsNoXp(unittest.TestCase):
+    """8B run 33, T3: XP 17 for a question, kept on outcomes "fight" (status not_combat) and a proposed new job."""
+
+    def test_no_outcome_from_peace_or_an_offer(self):
+        from app import world
+
+        result = {"_deterministic_combat": {"status": "not_combat"},
+                  "quest_changes": {"new": [{"title": "Salvage Runner"}], "updates": []}, "player": {}}
+        outcomes = world._turn_outcomes(_OutcomeConn(), result, player_input="\"Name the job, Gregory.\"")
+        self.assertNotIn("fight", outcomes)
+        self.assertNotIn("quest_change", outcomes)
+
+    def test_a_step_still_counts(self):
+        from app import world
+
+        result = {"_deterministic_combat": {"status": "not_combat"},
+                  "quest_changes": {"new": [], "updates": [{"action": "step_done"}]}, "player": {}}
+        self.assertIn("quest_change", world._turn_outcomes(_OutcomeConn(), result, player_input="I haul the crate up."))
+
+
+class _OutcomeConn:
+    def execute(self, *_a, **_k):
+        class _Row:
+            def fetchone(self):
+                return (0,)
+
+        return _Row()
+
+
 class _ConnStub:
     """No one known yet."""
 
