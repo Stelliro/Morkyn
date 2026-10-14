@@ -708,7 +708,8 @@ class RepairTests(unittest.TestCase):
         turn, binding = self._bound("Mara [[A]] nods. [[I3]] says 'Go.' " + _LONG)
         _v, plan = self._plan(turn, binding)
         self.assertEqual(plan["mode"], "cut")
-        self.assertEqual(plan["cut_sentences"], ["[[I3]] says 'Go.'"])
+        # Single-quoted dialogue reads as double quotes since 7B run 35 (T1).
+        self.assertEqual(plan["cut_sentences"], ['[[I3]] says "Go."'])
         turn, binding = self._bound("Mara [[A]] nods. Rope's voice hums and the rope's hand twitches. " + _LONG)
         _v, plan = self._plan(turn, binding)
         self.assertEqual(sorted(r["to"] for r in plan["replacements"]), ["Its voice", "its strap"])  # sentence start keeps its capital
