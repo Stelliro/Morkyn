@@ -185,7 +185,8 @@ def roster(context: dict[str, Any]) -> list[dict[str, Any]]:
             if not here and int(npc.get("id") or 0) not in party_ids:
                 continue
             seen.add(code)
-            row = {"code": code, "name": name, "aliases": [], "role": str(npc.get("role") or "").strip()}
+            row = {"code": code, "name": name, "aliases": [], "role": str(npc.get("role") or "").strip(),
+                   "pronouns": str(npc.get("pronouns") or "").strip().lower()}
             # The keeper of the venue the player stands in (playtest #73 review).
             if here and cid is not None and int(npc.get("workplace_id") or 0) == int(cid or 0) and int(cid or 0):
                 row["keeper"] = True
@@ -542,6 +543,13 @@ def _mentions(text: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             extra.append(
                 (row["code"], re.compile(r"\bthe\s+(?:[\w'’-]+\s+){0,2}?" + re.escape(word) + r"s?\b", re.IGNORECASE))
             )
+    # "I turn to the woman" names the one person here the prose showed as a
+    # woman (8B run 11, T5: the line went to no one). Two of them name nobody.
+    for nouns, key in ((r"woman|lady|girl", "she"), (r"man|fellow|boy", "he")):
+        holders = [row for row in rows if (row.get("pronouns") or "").split("/")[0] == key]
+        if len(holders) == 1:
+            extra.append((holders[0]["code"], re.compile(
+                r"\bthe\s+(?:[\w'’-]+\s+){0,2}?(?:" + nouns + r")\b", re.IGNORECASE)))
     for code, pattern in extra:
         for match in pattern.finditer(text):
             if any(s < match.end() and match.start() < e for s, e in taken):

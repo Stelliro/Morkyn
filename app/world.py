@@ -13172,6 +13172,51 @@ def _near_name_matches(conn, name: str) -> list[Any]:
     return out
 
 
+_WALK_WORD_RE = re.compile(
+    r"\b(?:head|heads|go|goes|walk|walks|make\s+my\s+way|climb|climbs|cross|crosses|return|returns|wade|wades)\b", re.I
+)
+_TALK_WORD_RE = re.compile(r"\b(?:ask|asks|talk|talks|speak|speaks|greet|greets|call\s+to|tell|tells)\b|[\"“]", re.I)
+
+
+def _place_new_people_at_arrival(
+    conn, npcs: list[dict[str, Any]], result: dict[str, Any], player_input: str
+) -> None:
+    """A new person the player walks to and then talks to stands where the walk ends.
+
+    8B run 11, T3: "I head back up toward the docks ... and ask the nearest
+    one" moved the player to Saltmarrow, but the fisherman they asked was
+    stored at the Drowned District they left, because the model wrote the LOC
+    it was shown before the walk. Only when the player's own line walks first
+    and talks after, and the walk goes to a known place.
+    """
+    player = result.get("player") if isinstance(result.get("player"), dict) else {}
+    dest_code = str(player.get("move_to_location_code") or "").strip()
+    dest_name = str(player.get("move_to_location") or "").strip()
+    if not (dest_code or dest_name) or not npcs:
+        return
+    rows = conn.execute("SELECT id, code, name FROM locations").fetchall()
+    dest = next((r for r in rows if dest_code and str(r["code"] or "").upper() == dest_code.upper()), None) or next(
+        (r for r in rows if dest_name and str(r["name"] or "").lower() == dest_name.lower()), None
+    )
+    here = conn.execute(
+        "SELECT l.id, l.code, l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+    ).fetchone()
+    if dest is None or here is None or int(dest["id"]) == int(here["id"]):
+        return
+    line = _player_line(player_input)
+    walk, talk = _WALK_WORD_RE.search(line), _TALK_WORD_RE.search(line)
+    if not (walk and talk and walk.start() < talk.start()):
+        return
+    left = {str(here["code"] or "").lower(), str(here["name"] or "").lower(), ""}
+    known = {str(r[0] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
+    for npc in npcs:
+        if not isinstance(npc, dict) or str(npc.get("name") or "").strip().lower() in known:
+            continue
+        if str(npc.get("location") or "").strip().lower() in left:
+            npc["location"] = str(dest["code"] or dest["name"])
+            turn_ledger.note("npc", "placed_at_arrival", name=str(npc.get("name") or ""), place=str(dest["name"] or ""))
+
+
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     if not isinstance(npc, dict):
         return None
@@ -16905,6 +16950,13 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
             alias = _figure_alias(hint)
             if alias:
                 npc["_figure_alias"] = alias
+            # "a woman" says who she is when no sentence names her: without
+            # it "I turn to the woman" found no one (8B run 11, T5).
+            noun = (hint.split() or [""])[-1]
+            if _HINT_FEMALE_RE.fullmatch(noun) and not _HINT_MALE_RE.fullmatch(noun):
+                npc["_figure_pronouns"] = "she"
+            elif _HINT_MALE_RE.fullmatch(noun):
+                npc["_figure_pronouns"] = "he"
         out.append(npc)
     return out
 
@@ -17020,6 +17072,14 @@ def _store_figure_aliases(conn, npc: dict[str, Any], npc_id: int | None) -> None
     somewhere else passes to the one bound here (#74), so the first hooded
     figure of the game does not own the phrase in every town.
     """
+    pronouns = str(npc.get("_figure_pronouns") or "").strip() if isinstance(npc, dict) else ""
+    if pronouns and npc_id:
+        try:
+            conn.execute(
+                "UPDATE npcs SET pronouns = ? WHERE id = ? AND COALESCE(pronouns, '') = ''", (pronouns, int(npc_id))
+            )
+        except Exception:
+            pass
     alias = str(npc.get("_figure_alias") or "").strip() if isinstance(npc, dict) else ""
     if not alias or not npc_id:
         return
@@ -20527,6 +20587,10 @@ def apply_turn(
         except Exception:
             pass
         result["npcs"] = collected_npcs
+        try:
+            _place_new_people_at_arrival(conn, collected_npcs, result, player_input)
+        except Exception:
+            pass
         for npc in collected_npcs:
             _store_figure_aliases(conn, npc, _upsert_npc(conn, npc))
 

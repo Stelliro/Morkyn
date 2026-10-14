@@ -134,6 +134,31 @@ class AMoveToWhereYouStandIsNoTrip(unittest.TestCase):
         self.assertEqual(int(here), 1)
 
 
+class SomeoneMetAtTheEndOfAWalk(unittest.TestCase):
+    """8B run 11, T3: the fisherman asked at the docks was stored at the district the player left."""
+
+    LINE = ("I head back up toward the docks where the fishermen are readying their nets, and ask the nearest one "
+            "whether anyone in Saltmarrow buys old jars or opens locks.")
+
+    def _place(self, line):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            district = world._upsert_location(conn, "Drowned District", "")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (district,))
+            npcs = [{"name": "Eldric Thorne", "location": "L2", "role": "fisherman"}]
+            world._place_new_people_at_arrival(conn, npcs, {"player": {"move_to_location_code": "L1"}}, line)
+        return npcs[0]["location"]
+
+    def test_the_one_asked_after_the_walk_is_at_the_end(self):
+        self.assertEqual(self._place(self.LINE), "L1")
+
+    def test_someone_asked_before_the_walk_stays(self):
+        self.assertEqual(self._place("I ask the fisherman about the jar, then head back up to the docks."), "L2")
+
+
 class FollowingToTheDoorIsNoJourney(unittest.TestCase):
     """T9: 'I follow Oldfield to the shed door' counted as travel, so a MOVE out to Saltmarrow stood."""
 
