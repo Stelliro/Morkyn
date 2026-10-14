@@ -13039,9 +13039,14 @@ def _different_people(stored: str, given: str) -> bool:
     return not (words(stored) & words(given))
 
 
-def _role_phrase(name: str) -> str:
+def _role_phrase(name: str, role: str = "") -> str:
     """The job a "name" really is ("Harbour reeve", "the miller"), lowercased; "" for a person's name."""
     raw = str(name or "").strip()
+    # The name is a word of the person's own job: NPC_NEW NAME "Tallyman" ROLE
+    # "Salvage Guild Tallyman" stored a person called Tallyman (8B run 34, T1).
+    role_words = {w.lower() for w in re.findall(r"[A-Za-z]+", str(role or "")) if len(w) >= 4}
+    if role_words and re.fullmatch(r"[A-Za-z][a-z'-]+", raw) and raw.lower() in role_words:
+        return raw.lower()
     article = bool(re.match(r"(?:the|a|an)\s+", raw, re.I))
     words = re.sub(r"^(?:the|a|an)\s+", "", raw, flags=re.I).split()
     if not words or any(not re.fullmatch(r"[A-Za-z][a-z'-]*", w) for w in words):
@@ -13435,7 +13440,7 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
     # with E Rosamund Colley, the town's harbour reeve) is the one person who
     # holds that job here; with nobody holding it, a person is drawn for the
     # job. A role is never stored as somebody's name.
-    phrase = _role_phrase(name)
+    phrase = _role_phrase(name, str(npc.get("role") or ""))
     if phrase:
         holders = _role_holders(conn, phrase, location_id)
         by_code = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone() if code else None

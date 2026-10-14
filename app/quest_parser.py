@@ -910,6 +910,10 @@ def _named_in(narration: str, npc: dict[str, Any]) -> bool:
 _NOT_A_SPEAKER = frozenset({
     "You", "Your", "He", "She", "They", "It", "His", "Her", "Their", "The", "A", "An", "I", "Is", "Was", "This",
     "That", "There", "Then", "But", "And", "As", "When", "With", "Over", "In", "On", "At",
+    # Sentence words, not names: "Inside, the tallyman is a grizzled man" made
+    # "Inside" the job's giver (8B run 34, T1).
+    "Inside", "Outside", "Behind", "Beyond", "Here", "Now", "Still", "Again", "Today", "Tonight", "Meanwhile",
+    "Instead", "Above", "Below", "Nearby", "Later", "Soon", "Finally", "Once", "Yes", "No", "Well", "Ahead",
 })
 
 
