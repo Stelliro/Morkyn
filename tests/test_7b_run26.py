@@ -517,6 +517,24 @@ class TheStorehouseThePlayerNamed(unittest.TestCase):
         self.assertEqual(shown["name"], "Northernmost Storehouse")
 
 
+class HandedWhatThePlayerHeldOutAHandFor(unittest.TestCase):
+    """Run 32 T3: 'I hold out my hand for the tally sticks' and 'Maud nods and hands you the sticks'; nothing granted."""
+
+    def test_granted_with_the_players_name(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        line = '"I will take both tallies, the storehouse first." I hold out my hand for the tally sticks.'
+        prose = ('"I will take both tallies, the storehouse first," you say. You hold out your hand for the tally '
+                 "sticks. Maud Venn, the tallyman, nods and hands you the sticks.")
+        with connect() as conn:
+            added = world._grant_shown_takes(conn, [], prose, line)
+            self.assertEqual([a["name"] for a in added], ["tally sticks"])
+            self.assertEqual(world._grant_shown_takes(conn, [], "She hands you a nod and the sticks.", "I wait by the door."), [])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

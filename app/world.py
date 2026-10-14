@@ -13920,6 +13920,14 @@ _SHOWN_TAKE_RE = re.compile(
     r"(?P<obj>[^.;!?\n]*)",
     re.I,
 )
+# Handed to the player who asked for it (7B run 32, T3: "I hold out my hand for
+# the tally sticks" and "Maud nods and hands you the sticks"; the draft wrote no
+# GRANT and the sticks never reached the pack). Same groups as _SHOWN_TAKE_RE.
+_SHOWN_HANDED_RE = re.compile(
+    r"\b(?P<verb>hands|gives|passes|tosses|offers)\s+you(?P<pro>(?!x)x)?(?P<obj>(?!\s+(?:a\s+)?(?:nod|look|glance|smile|"
+    r"shrug|wink|grin|hand|moment|chance|word|warning|nudge)\b)[^.;!?\n]*)",
+    re.I,
+)
 # Working a thing free (7B run 13, T5): "You tug at a rusted piece of iron,
 # pulling it free", "you prise a brass hinge loose", "you dig out an old lamp".
 _FREE_VERBS = (
@@ -14105,6 +14113,13 @@ def _grant_shown_takes(
         return changes
     line_l = line.lower()
     takes_any = bool(_LINE_TAKES_ANY_RE.search(line_l))
+    # Only a line that asks to be handed something reads "she hands you ..." as
+    # its answer; a purchase still goes through the grant gate's payment rules.
+    asks_given = bool(re.search(
+        r"\b(?:hold|holds|holding|held|put|puts|stretch\w*|reach\w*)\s+out\s+(?:my|a|an|both)\s+(?:hand|hands|palm)\s+for\b"
+        r"|\b(?:give|hand|pass|toss)\s+(?:me|them\s+to\s+me|it\s+to\s+me)\b",
+        venues.strip_speech(line_l) + " " + line_l,
+    ))
     plain = venues.strip_speech(str(narration or ""))
     sentences = [s for s in re.split(r"(?<=[.!?])\s+|\n+", plain) if s.strip()]
     owned = [str(r["name"] or "").lower() for r in conn.execute("SELECT name FROM inventory").fetchall()]
@@ -14122,7 +14137,8 @@ def _grant_shown_takes(
 
     added: list[dict[str, Any]] = []
     for index, sentence in enumerate(sentences):
-        for match in _SHOWN_TAKE_RE.finditer(sentence):
+        handed = list(_SHOWN_HANDED_RE.finditer(sentence)) if asks_given else []
+        for match in [*_SHOWN_TAKE_RE.finditer(sentence), *handed]:
             obj = match.group("obj") or ""
             if match.group("verb").lower().startswith("take") and re.match(rf"\s+{_TAKE_NOT_ACQUIRE_TAIL}\b", obj, re.I):
                 continue
@@ -14187,11 +14203,20 @@ def _grant_shown_takes(
                         break
                 if gone:
                     continue
+                name = _prose_named_thing(phrase, narration)
+                if match.re is _SHOWN_HANDED_RE and len(name.split()) == 1:
+                    # The player's fuller name for it: "the tally sticks" for "the sticks".
+                    fuller = re.search(
+                        rf"\b(?:the|a|an|some|my)\s+((?:[a-z][a-z'’-]+\s+){{1,2}}{re.escape(name.lower())})\b", line_l
+                    )
+                    if fuller:
+                        name = fuller.group(1)
                 added.append({
-                    "name": _prose_named_thing(phrase, narration),
+                    "name": name,
                     "quantity_delta": qty,
-                    "reason": "taken in the prose, as the player asked",
-                    "source": "shown_take",
+                    "reason": "handed over in the prose, as the player asked" if match.re is _SHOWN_HANDED_RE
+                    else "taken in the prose, as the player asked",
+                    "source": "shown_handed" if match.re is _SHOWN_HANDED_RE else "shown_take",
                 })
     # A search for something to haul, answered by working a thing free: "You tug
     # at a rusted piece of iron, pulling it free" (7B run 13, T5) is the find,

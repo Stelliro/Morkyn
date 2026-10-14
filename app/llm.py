@@ -13643,6 +13643,10 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
     r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)(?<![“\x22])(?<!of\s)(?<!some\s)(?<!any\s)(?<!no\s)salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
     r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b|"
+    # Holding a hand out for something is asking to be given it (7B run 32,
+    # T3: "I hold out my hand for the tally sticks" and Maud "hands you the
+    # sticks"; nothing reached the pack).
+    r"(?:hold|holds|holding|held|put|puts|putting|stretch\w*|reach\w*)\s+out\s+(?:my|a|an|both)\s+(?:hand|hands|palm)\s+for\b|"
     # Asking to buy (playtest #96): "ask Finnian if he'd sell me a whetstone.
     # I'll pay 2 gold for it" asked for the whetstone, and the gain was refused.
     r"sell(?:s|ing)?\s+(?:me|us)\b|pay(?:s|ing)?\s+(?:[\w']+\s+){0,4}for\b|"
