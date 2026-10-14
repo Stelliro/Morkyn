@@ -750,6 +750,19 @@ class GoingInIsPartOfTheErrand(unittest.TestCase):
         self.assertIsNotNone(point)
 
 
+class WhatWorkAsksForWork(unittest.TestCase):
+    """8B run 32, T1: "... to ask the tallyman what work he'll take against my debt" never opened the job parser."""
+
+    def test_the_asks(self):
+        from app import quest_parser as qp
+
+        for line in ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman "
+                     "what work he'll take against my debt.",
+                     "I ask about work.", "\"I want to work it off.\""):
+            self.assertTrue(qp.player_asks_for_work(line), line)
+        self.assertFalse(qp.player_asks_for_work("I ask her what the weather will do."))
+
+
 class _ConnStub:
     """No one known yet."""
 
