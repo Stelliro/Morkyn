@@ -117,8 +117,40 @@ acceptance, a walk to the flats, digging, the shells carried back.
   stands (ab64cc8); the walk ends at the last place named (dc25fd5); other spellings of here are
   here (88693cd, 300bdf3).
 
+### Runs 38-52 (2026-10-15)
+
+All fifteen were stopped at T1-T4 on a state fault and restarted on the fix. Runs 47 and 51 got
+furthest (job offered, taken, walked toward). Each fix was replayed over the saved drafts first.
+
+- **People**: the name the prose tells wins over the op's (9c5dae1), and a name told as "his name
+  is ..." is stored at all (3dcebcc); a figure named by the op's role ("the tallyman") is that
+  person (4bcca47), but a figure in apposition to the job of someone already here is them, not a
+  new face (d6e8b17); someone met where the walk ends is there even if met before (f103cb0); a
+  named person keeps their own pronoun after a cut (f5078ab); "Tallyman" is a job with any role
+  (de33522).
+- **Talk**: a TALK line the prose never shows is not logged; the openings' unsaid "You're late,
+  Flat-runner" was being echoed word for word in later scenes (05653b4, 38 of 356 saved lines);
+  one line voices an indirect request, even after a narrator beat (3dcebcc, 0745269); the beat
+  that only led into a cut line goes with it (9c5dae1); a repeat is the other person's (da707f3).
+- **Places**: only the player's going makes a place ("the sound ... echoes through the hollow
+  alleys" made "Hollow", de33522); the way is not the end ("along the shore path toward the Hollow
+  Reach", 359a78c); another spelling of a known place is that place (514fb1b); the player's own
+  three-word name for a building holds (4bcca47); leaving where the walk went is a new move
+  (0745269).
+- **Money, items, rewards**: a question asked pays nothing (d6e8b17); asking where a thing is does
+  not take it, and a spoken "I'll take it" agrees (c6fd3b1); an errand in town is no discovery,
+  and a revisit reads the real visit count (e0e0cd0); a spoken line, tagged or not, shows nothing
+  arriving (f5078ab, 359a78c); a mark whose giver is elsewhere needs an offer (05653b4), and a
+  giver shown by their job is in the scene (da707f3).
+- **Prose**: a relative clause gives a kept tail no verb ("The promise you made to the tides",
+  aff3328).
+
 ## Logged, not fixed
 
+- C10, repeated in runs 40-51: at T2 the tallyman met at T1 is replaced at his desk by a new face
+  (a woodseller, a "Captain Veyra"). The state stays right; the prose drifts.
+- A job picked from a list offered the turn before ("The rusted tools, then") reads as no offer
+  in its own turn (r52 T3).
 - C9 voice: a turn in past tense (r2 T3); NPC lines without quote marks (r4 T4).
 - C10 model continuity: people renamed or swapped mid-scene (the shadow man Gregory -> Osric),
   stock dodges ("You're not here for the tide, are you?") instead of answers, scene drift.
@@ -142,4 +174,4 @@ acceptance, a walk to the flats, digging, the shells carried back.
 
 ## Next
 
-Run 38 on 1ba5b53 or later; keep logging by class.
+Run 53 on da707f3 or later; keep logging by class. No clean run yet.
