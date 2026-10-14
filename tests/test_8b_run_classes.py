@@ -923,6 +923,18 @@ class TheWalkEndsAtTheLastPlace(unittest.TestCase):
         self.assertEqual(infer("I creep along the wall toward the guard.", {})["skill_code"], "stealth")
 
 
+class APlaceholderIsNoPlace(unittest.TestCase):
+    """8B run 38, T1: "Tide reckoner's Last Known Location" was stored as a place."""
+
+    def test_names(self):
+        from app import world
+
+        self.assertFalse(world.is_plausible_place_name("Tide reckoner's Last Known Location"))
+        self.assertFalse(world.is_plausible_place_name("Unknown Location"))
+        self.assertTrue(world.is_plausible_place_name("The Location Office"))
+        self.assertTrue(world.is_plausible_place_name("Hollow Maw Path"))
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:

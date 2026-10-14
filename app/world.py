@@ -682,6 +682,11 @@ def is_plausible_place_name(name: str) -> bool:
         return False
     if re.search(r"\b(in exchange|offering|retrieving|help with|appears?,)\b", n, re.I):
         return False
+    # A placeholder, not a toponym: "Tide reckoner's Last Known Location" was
+    # stored as a place (8B run 38, T1).
+    if re.search(r"\b(?:location|whereabouts)\s*$|\b(?:last\s+known|unknown|next|current|previous)\s+"
+                 r"(?:location|place|position|spot)\b", n, re.I):
+        return False
     if n.lower().startswith("system "):
         return False
     # Bare props / furniture / "first window" are not place names
