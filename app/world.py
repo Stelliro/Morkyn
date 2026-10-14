@@ -16904,7 +16904,10 @@ _APPOSITIVE_NAME_RE = re.compile(
 _VAGUE_FIGURES = frozenset({"figure", "shape", "silhouette", "form", "person", "someone", "stranger"})
 # Between the vague shape and the description: the prose naming what it is.
 _SAME_FIGURE_RE = re.compile(
-    r"(?:\b(?:it|this|that|the\s+(?:figure|shape|silhouette|form|stranger))\s*(?:'s|’s|\s+is|\s+was|\s+turns\s+out\s+to\s+be)"
+    # "a figure stands at the edge of the flats ... They are a lean man in a
+    # weathered coat" seeded Sibyl and Giles from one man (8B run 21, T0).
+    r"(?:\b(?:it|this|that|they|he|she|the\s+(?:figure|shape|silhouette|form|stranger))\s*(?:'s|’s|\s+is|\s+was|\s+are|\s+were|"
+    r"\s+turns\s+out\s+to\s+be)"
     r"|\b(?:resolves|becomes)\s+into|^\s*[,:—–-]\s*$)",
     re.I,
 )
