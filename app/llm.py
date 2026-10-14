@@ -13353,7 +13353,12 @@ _MENU_TWO_WAY_RE = re.compile(
     r"^(?:you\s+have\s+a\s+choice\s*[:,]\s*)?(?:or,?\s+)?you\s+(?:could|can|might|may)\s+(?:either\s+)?"
     r"(?!hear|see|smell|feel|taste|sense|tell|make\s+out|swear|imagine|almost|just|well|barely|still|only|no\s+longer)"
     r"[^.?!\"“”]{2,200}?,?\s+or\s+[^.?!\"“”]{2,200}[.?!]$"
-    r"|^you\s+have\s+a\s+choice\b[^.?!\"“”]{0,200}[.?!]$",
+    r"|^you\s+have\s+a\s+choice\b[^.?!\"“”]{0,200}[.?!]$"
+    # A closer that tells the player to act: "It's time to make a move." (7B
+    # run 30, T7). The whole sentence only; "time to make a move on the
+    # tide tables" says what, and stays.
+    r"|^(?:now\s+)?(?:it['’]?s|it\s+is|now\s+is)\s+(?:the\s+)?time\s+(?:for\s+you\s+)?to\s+"
+    r"(?:make\s+(?:a|your)\s+move|act|decide|choose)\s*[.!]$",
     re.I,
 )
 # Stock deliberation hung on the player's act: "You step back, pondering your
@@ -15177,6 +15182,7 @@ def _drop_player_overreach(
     give, it ends on that line, and the ops that only the cut part supported
     go with it. An opening ends before the first line it gives the player.
     """
+    turn = _narrator_voice_to_second_person(turn, player_input, phase, trace)
     turn = _end_silent_scene_before_player(turn, player_input, trace)
     cut_before = turn.get("_scene_cut") if isinstance(turn, dict) else None
     turn = _cut_scene_at_invented_request(turn, player_input, earlier=_earlier_lines(context))
@@ -15228,6 +15234,37 @@ def _drop_player_overreach(
     else:
         acted.pop("_act_handed_off", None)
     return _keep_player_words(acted, player_input, phase, trace)
+
+
+def _narrator_voice_to_second_person(
+    turn: dict[str, Any], player_input: str, phase: str, trace: list[dict[str, Any]] | None
+) -> dict[str, Any]:
+    """The narrator's first-person slip turned to "you" first, so the drops after it can judge the act."""
+    from app.narration_pipeline import narrator_voice_to_second_person
+
+    if not isinstance(turn, dict) or str(player_input or "").startswith("__"):
+        return turn
+    segments = turn.get("narration_segments")
+    changed: list[str] = []
+    if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
+        new_segments = []
+        for seg in segments:
+            text, done = narrator_voice_to_second_person(str(seg.get("text") or ""), player_input)
+            changed.extend(done)
+            new_segments.append({**seg, "text": text})
+        if changed:
+            turn["narration_segments"] = new_segments
+            turn["narration"] = "\n\n".join(s["text"] for s in new_segments if str(s["text"]).strip())
+    else:
+        text, changed = narrator_voice_to_second_person(str(turn.get("narration") or ""), player_input)
+        if changed:
+            turn["narration"] = text
+    if changed:
+        _append_trace(trace, {"phase": phase, "event": "narrator_voice_to_second_person", "sentences": [s[:160] for s in changed[:6]]})
+        from app import turn_ledger
+
+        turn_ledger.note("player_words", "narrator_voice_to_second_person", phase=phase, sentences=[s[:160] for s in changed[:6]])
+    return turn
 
 
 def _earlier_lines(context: dict[str, Any] | None) -> list[str]:
@@ -15365,7 +15402,10 @@ _TAIL_PAY_RE = re.compile(
 _SHOWN_GOING_RE = re.compile(
     r"\byou\s+(?:\w+ly\s+)?(?:walk|walked|head|headed|go|went|make\s+your\s+way|made\s+your\s+way|step|stepped|"
     r"cross|crossed|set\s+off|arrive|arrived|enter|entered|return|returned|follow|followed|climb|climbed|"
-    r"wander|wandered|stride|strode|hurry|hurried)\b",
+    r"wander|wandered|stride|strode|hurry|hurried|approach|approached)\b"
+    # "You give it a while longer, then make your way to the first of the
+    # traps" (7B run 30, T14): the going after "then".
+    r"|\bthen\s+(?:\w+ly\s+)?(?:walk|head|go|make\s+your\s+way|step|cross|set\s+off|climb|wander|stride|hurry)\b",
     re.I,
 )
 _TAIL_EXIT_RE = re.compile(

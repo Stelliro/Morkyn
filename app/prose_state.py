@@ -1322,6 +1322,49 @@ def repair_unowned_weapon(text: str, owned: list[str], player_input: str = "") -
     return out, fixes
 
 
+# An animal's body on the player (7B run 30, T7: a degenerate draft about
+# moles wrote "You dig at the earth with your claws" for a human). Only the
+# part right after "your", only in the narrator's sentences, and only for a
+# people the setup gives no such parts.
+_PLAYER_ANIMAL_PART_RE = re.compile(
+    r"\byour\s+(?:claws?|snouts?|paws?|fur|tails?|whiskers|wings?|feathers|scales|hooves|talons|muzzle|antennae|fangs)\b",
+    re.I,
+)
+_PLAIN_BODIED_RACES = frozenset({
+    "", "human", "humans", "elf", "elves", "half-elf", "dwarf", "dwarves", "halfling", "halflings", "gnome", "gnomes",
+    "orc", "orcs", "half-orc",
+})
+
+
+def repair_player_body(text: str, race: str) -> tuple[str, list[dict[str, Any]]]:
+    """Drop narrator sentences that give a plain-bodied player claws, a snout or a tail."""
+    source = str(text or "")
+    if str(race or "").strip().lower() not in _PLAIN_BODIED_RACES:
+        return source, []
+
+    def _clash(sentence: str) -> bool:
+        return not re.search(r"[\"“”]", sentence) and bool(_PLAYER_ANIMAL_PART_RE.search(sentence))
+
+    out, dropped = drop_sentences(source, _clash)
+    return out, [{"why": "player_body", "race": str(race or "").lower(), "text": s[:160]} for s in dropped]
+
+
+# A spoken line cut off inside its last word: '"...they'll start eating
+# through the t."' (7B run 30, T7). One stray lowercase letter (not "a" or
+# "i"; "Plan B." is a name) right before the closing mark goes, with the
+# article in front of it.
+_CUT_WORD_IN_QUOTE_RE = re.compile(r"(?:\s+(?:the|a|an))?\s+(?<![\w'’])[b-hj-z](?=\s*[.!?…]+[\"”])")
+
+
+def repair_cut_word_in_quote(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """Take a one-letter fragment off the end of a spoken line."""
+    source = str(text or "")
+    found = [m.group(0).strip() for m in _CUT_WORD_IN_QUOTE_RE.finditer(source)]
+    if not found:
+        return source, []
+    return _CUT_WORD_IN_QUOTE_RE.sub("", source), [{"why": "cut_word_in_quote", "text": ", ".join(found[:4])}]
+
+
 def _match_case(old: str, new: str) -> str:
     return new.capitalize() if old[:1].isupper() else new
 

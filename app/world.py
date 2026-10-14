@@ -19693,6 +19693,18 @@ def _reconcile_prose_with_state(
             turn_ledger.note("prose", "fair_weather_dropped", **entry)
     except Exception:
         pass
+    # Claws or a snout on a human player (7B run 30, T7, a draft about moles):
+    # that narrator sentence goes. A spoken line cut off at one letter ("eating
+    # through the t.") loses the fragment.
+    try:
+        row = conn.execute("SELECT race FROM player LIMIT 1").fetchone()
+        text, body = prose_state.repair_player_body(text, str(row[0] or "") if row else "")
+        text, cut = prose_state.repair_cut_word_in_quote(text)
+        for entry in body + cut:
+            report["trimmed"].append(entry)
+            turn_ledger.note("prose", str(entry["why"]) + "_repaired", **entry)
+    except Exception:
+        pass
     # A closing sentence with no verb ("The pressure of the day settling in.",
     # 7B run 8 T0) gets its "is"; nothing else about it changes.
     try:
