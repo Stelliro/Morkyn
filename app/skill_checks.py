@@ -1601,7 +1601,7 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(intimidate|threaten|scare)\b", "intimidation"),
     (r"\b(disguise|costume|impersonat[a-z]*|pretend to be)\b", "disguise"),
     (r"\b(gambl[a-z]*|bet|wager|cards|dice game)\b", "gambling"),
-    (r"\b(symbol|rune|glyph|sigil|etch)\b", "symbol_lore"),
+    (r"\b(symbols?|runes?|glyphs?|sigils?|etch\w*)\b", "symbol_lore"),
     # Before bare "read": "read him/her/them/the room" is insight; "read the letter" is not.
     (r"\b(insight|read (him|her|them|the room)|sense motive)\b", "insight"),
     (r"\b(read|inspect|examine|study|analyze)\b", "investigation"),
@@ -1750,6 +1750,8 @@ def _trigger_text_variants(text: str) -> list[str]:
 _SPOKEN_RE = re.compile(r"\"[^\"]*\"|“[^”]*”")
 # Skills a line of speech can call for by itself.
 _SPEECH_SKILLS = frozenset({"persuasion", "deception", "intimidation", "insight", "etiquette", "performance", "streetwise"})
+# Skills whose triggers are nouns, matched with their plurals as typed.
+_NOUN_TRIGGER_SKILLS = frozenset({"symbol_lore"})
 # A social verb whose subject is someone else: "they all lie", "the merchants
 # cheat", "he threatened me". Only the player's own lie or threat is a check.
 _OTHERS_DO_SOCIAL_RE = re.compile(
@@ -1850,6 +1852,10 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
             continue
         try:
             reads = social_variants if code in _SPEECH_SKILLS else acted_variants
+            # Noun triggers read the line as typed: "which way the tunnel runs"
+            # de-inflected to "rune" and rolled symbol lore (7B run 30, T3).
+            if code in _NOUN_TRIGGER_SKILLS:
+                reads = reads[:1]
             if any(re.search(pattern, variant) for variant in reads):
                 skill = code
                 from_pack = index < len(pack_list)

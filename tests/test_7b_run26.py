@@ -257,6 +257,59 @@ class HooksSentence(unittest.TestCase):
         self.assertNotIn("hooks", world.OPENING_SCENE_INPUT)
 
 
+class RunsIsNotARune(unittest.TestCase):
+    """Run 30 T3: 'feel which way the tunnel runs' de-inflected to 'rune' and rolled symbol lore."""
+
+    def test_noun_triggers_as_typed(self):
+        from app.skill_checks import infer_check_from_action
+
+        def code(line):
+            return (infer_check_from_action(line, {}) or {}).get("skill_code")
+
+        self.assertNotEqual(code("I push my arm into the soft earth to feel which way the tunnel runs."), "symbol_lore")
+        self.assertEqual(code("I study the runes carved over the door."), "symbol_lore")
+        self.assertEqual(code("I trace the etched sigil with a finger."), "symbol_lore")
+
+
+class AFollowerIsNotToldTheName(unittest.TestCase):
+    """Run 30 T6: Dunstan, a scene companion since T2, said "Good thinking, Isk." and NPC_NOTE wrote knows_your_name."""
+
+    def test_companion_and_packet_note(self):
+        from app import world
+        from app.db import connect, init_db
+        from app.party import sync_scene_companions
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            loc = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            conn.execute("DELETE FROM npcs")
+            conn.execute("INSERT INTO npcs (code, location_id, name, role, known_facts) VALUES ('A', ?, 'Dunstan', 'mole catcher', '[]')", (loc,))
+            sync_scene_companions(conn, [{"code": "A", "name": "Dunstan"}], "Dunstan follows you to the old pits.", 2)
+            world._apply_index_updates(conn, [{"entity_type": "npc", "code": "A", "summary_append": "knows_your_name",
+                                               "known_fact": "knows_your_name"}])
+            row = conn.execute("SELECT summary, known_facts FROM npcs WHERE code = 'A'").fetchone()
+        self.assertNotIn("knows_your_name", str(row[0]) + str(row[1]))
+        state = world.get_state()
+        flags = [n.get("knows_player_name") for loc_ in state.get("locations") or [] for n in loc_.get("npcs") or []
+                 if n.get("code") == "A"]
+        self.assertTrue(flags)
+        self.assertFalse(any(int(f or 0) for f in flags))
+
+
+class ScriptLabel(unittest.TestCase):
+    """Run 30 T6: 'Dunstan [[A]]: "I'll fetch a few more from the storeroom."' shipped as a script line."""
+
+    def test_tagged(self):
+        from app.prose_state import repair_meta_leaks
+
+        text = 'You keep at it.\n\nDunstan [[A]]: "I\'ll fetch a few more from the storeroom."\n\nAbel Hollis: "Rest."'
+        out, fixes = repair_meta_leaks(text)
+        self.assertIn('Dunstan [[A]] says, "I\'ll fetch a few more from the storeroom."', out)
+        self.assertIn('Abel Hollis says, "Rest."', out)
+        self.assertEqual(repair_meta_leaks('You read the sign: "Closed".')[0], 'You read the sign: "Closed".')
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

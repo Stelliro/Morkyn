@@ -4578,15 +4578,10 @@ def get_state(include_hidden: bool = False) -> dict[str, Any]:
         state["party"] = get_party(conn=conn)
     except Exception:
         state["party"] = []
-    # A companion travelling with the player knows their name (playtest #78):
-    # saves made before knows_player_name existed start every row at 0, and
-    # a companion of many turns would otherwise never use it again.
-    party_ids = {int(m.get("npc_id") or 0) for m in state.get("party") or [] if isinstance(m, dict)}
-    if party_ids:
-        for location in state.get("locations") or []:
-            for npc in (location.get("npcs") or []) if isinstance(location, dict) else []:
-                if isinstance(npc, dict) and int(npc.get("id") or 0) in party_ids:
-                    npc["knows_player_name"] = 1
+    # Companions of a save made before knows_player_name existed are marked
+    # once by the db migration (playtest #78). Following the player through a
+    # scene is not being told the name (7B run 30, T6: Dunstan, a scene
+    # companion since T2, said "Good thinking, Isk." unasked).
     # Who the player is talking to, for the "Talking to" chip (app/conversation.py).
     try:
         from app.conversation import view as conversation_view
@@ -17278,6 +17273,9 @@ def _merge_text(existing: str, addition: str, limit: int) -> str:
     return f"{head}{sep}{addition}"[:limit]
 
 
+_PACKET_KEY_ONLY_RE = re.compile(r"[a-z]+(?:_[a-z]+)+")
+
+
 def _apply_index_updates(conn, updates: list[dict[str, Any]]) -> None:
     for update in updates:
         entity_type = str(update.get("entity_type") or "").lower()
@@ -17285,6 +17283,14 @@ def _apply_index_updates(conn, updates: list[dict[str, Any]]) -> None:
         summary_append = str(update.get("summary_append") or "")[:1000]
         if not entity_type or not code:
             continue
+        # A bare packet key is the engine's word, not a fact: NPC_NOTE wrote
+        # "knows_your_name" into Dunstan's facts and summary (7B run 30, T6).
+        if _PACKET_KEY_ONLY_RE.fullmatch(summary_append.strip().rstrip(".")):
+            turn_ledger.note("npc", "packet_key_note_dropped", code=code, text=summary_append[:80])
+            summary_append = ""
+        if _PACKET_KEY_ONLY_RE.fullmatch(str(update.get("known_fact") or "").strip().rstrip(".")):
+            turn_ledger.note("npc", "packet_key_note_dropped", code=code, text=str(update.get("known_fact"))[:80])
+            update = {**update, "known_fact": ""}
 
         if entity_type == "npc":
             npc = conn.execute("SELECT * FROM npcs WHERE code = ?", (code,)).fetchone()
