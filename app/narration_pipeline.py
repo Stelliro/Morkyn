@@ -1567,7 +1567,11 @@ _PLAYER_SPEECH_VERB_RE = re.compile(
     r"retort|retorted|declare|declared|state|stated|insist|insisted|repeat|repeated|"
     r"press|pressed|begin|began|start|started|finish|finished|let|bark|barked|hiss|hissed|"
     r"suggest|suggested|offer|offered|explain|explained|murmur|murmured|counter|countered)\b"
-    r"|\byour\s+(?:words|voice|question|retort|reply|threat|remark)\b",
+    r"|\byour\s+(?:words|voice|question|retort|reply|threat|remark)\b"
+    # A gesture as the tag, right before the line: 'You nod, "Just a few things
+    # to attend to. Thanks for the offer, Kit."' (7B run 31, T5).
+    r"|\byou(?:\s+\w+ly)?\s+(?:nod|nodded|smile|smiled|shrug|shrugged|grin|grinned|laugh|laughed|sigh|sighed|"
+    r"chuckle|chuckled|wave|waved)(?:\s+[\w'’]+){0,3}?,(?=\s*(?:[\"“]|$))",
     re.IGNORECASE,
 )
 
@@ -1638,7 +1642,11 @@ _YOU_SAID_RE = re.compile(
     r"decide|decided|resolve|resolved|agree|agreed|promise|promised|announce|announced|vow|vowed|"
     r"call\s+back|called\s+back|"
     # 7B run 11, T2: 'You read the details aloud: "Lifting supplies ..."' chose a job for the player.
-    r"read\s+(?:[\w'’]+\s+){0,3}?(?:aloud|out\s+loud)|read\s+out)\b",
+    r"read\s+(?:[\w'’]+\s+){0,3}?(?:aloud|out\s+loud)|read\s+out)\b"
+    # A gesture as the tag right before the line: 'You nod, "Just a few things
+    # to attend to. Thanks for the offer, Kit."' (7B run 31, T5).
+    r"|\byou(?:\s+\w+ly)?\s+(?:nod|nodded|smile|smiled|shrug|shrugged|grin|grinned|laugh|laughed|sigh|sighed|"
+    r"chuckle|chuckled|wave|waved)(?:\s+[\w'’]+){0,3}?,(?=\s*(?:[\"“]|$))",
     re.IGNORECASE,
 )
 # Someone else's speech tag in the same unit: the line is theirs.

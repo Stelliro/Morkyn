@@ -396,6 +396,32 @@ class OneWordEcho(unittest.TestCase):
         self.assertIn('"Morning. Whose grave is that', out)
 
 
+class ThenYouWalkAndAGestureTag(unittest.TestCase):
+    """Run 31 T5: ', then you turn and walk back towards the town' ran on, and 'You nod, "..."' was kept."""
+
+    LINE = ('"I will. And if you hear of salvage work, or anyone who needs a runner, send them my way." '
+            'I stand and brush the earth from my knees.')
+
+    def test_cut_mid_sentence_walk(self):
+        from app import llm
+
+        text = ("You stand and brush the earth from your knees, the morning sun casting a warm glow over the graveyard. "
+                "Ermengarde pauses and looks at you, her weathered face a mix of surprise and a hint of a smile.\n\n"
+                "Ermengarde nods in response before she returns to her task. You watch for a moment, the morning breeze "
+                "carrying the scent of salt and earth, then you turn and walk back towards the town.\n\n"
+                "The town square is bustling with activity.")
+        turn = {"narration": text, "narration_segments": [{"label": "paragraph", "text": x} for x in text.split("\n\n")]}
+        out = llm._cut_scene_after_completed_act(turn, self.LINE)
+        self.assertNotIn("walk back", out["narration"])
+
+    def test_gesture_tag_is_the_player(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        paras = ['"Back so soon?" she asks.', 'You nod, "Just a few things to attend to. Thanks for the offer, Kit."']
+        self.assertEqual(len(drop_invented_player_speech(paras, self.LINE)[1]), 1)
+        self.assertEqual(drop_invented_player_speech(['You nod, and she says, "Fine."'], self.LINE)[1], [])
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
