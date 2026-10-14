@@ -22,6 +22,12 @@ belong to, with the date).
      text, the player's agency, facts that contradict the state). Never a gate on style or ideas.
 - Do not shrink what the model may do to make a bug go away: no banning new places, people,
   items or events because some were bad. Fix how they are matched and recorded.
+- **Fix by class, not by phrasing** (2026-10-14): "we should already be fixing by class rather
+  than phrasing ... i do not want to bloat the prompting." Name the fault class and fix it at the
+  one place it is decided (state change vs prose evidence; where a scene ends; whose words and acts
+  are whose; what triggers a check; engine text in prose). A regex for the one phrasing a run
+  produced is a last resort and must be called that. Keep prompt additions minimal. Runs 30-43
+  added ~35 phrase-level rules that should be folded into these mechanisms.
 - The player's own words and choices are theirs. The model must not act, speak or decide for the
   player, but it may describe the world reacting freely.
 
