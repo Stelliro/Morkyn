@@ -830,6 +830,18 @@ class OptionListAfterAQuote(unittest.TestCase):
         self.assertGreater(removed, 0)
 
 
+class AHorseNamedIsNoHandling(unittest.TestCase):
+    """Run 39 T1: 'Is that horse going anywhere near the guild today?' rolled animal handling, a critical failure."""
+
+    def test_trigger(self):
+        from app.skill_checks import infer_check_from_action
+
+        line = 'I go over to Odo and the horse. "Morning, Odo. Is that horse going anywhere near the guild today?"'
+        self.assertNotEqual((infer_check_from_action(line) or {}).get("skill_code"), "animal_handling")
+        self.assertEqual((infer_check_from_action("I try to calm the horse before it bolts.") or {}).get("skill_code"),
+                         "animal_handling")
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 
