@@ -14194,10 +14194,14 @@ def _tail_is_clause(tail: str) -> bool:
     if re.match(r"(?:he|she|they|it)\b", tail, re.I):
         return True
     head = re.split(r"\b(?:that|which|who|whom|whose|where|of)\b", tail, maxsplit=1, flags=re.I)[0]
+    # "the brass tide-reckoner at your belt, its face never quite right" read
+    # "its" as a verb (8B run 13, T0): function words ending in -s are not.
+    not_verbs = {"its", "his", "hers", "this", "us", "as", "across", "perhaps", "towards", "always", "less", "unless",
+                 "plus", "yes", "thus", "whereas", "besides", "afterwards", "sometimes"}
     words = re.findall(r"[A-Za-z'’-]+", head)[1:]
     return any(
         w.lower() in {"is", "are", "was", "were", "has", "have", "had", "will", "would", "can", "could", "does", "did"}
-        or re.search(r"(?:s|ed)$", w.lower())
+        or (re.search(r"(?:[^s]s|ed)$", w.lower()) and w.lower() not in not_verbs)
         for w in words
     )
 

@@ -187,6 +187,8 @@ class TheKeptHalfIsAClause(unittest.TestCase):
         self.assertTrue(llm._tail_is_clause("he gestures toward the shelves, where the jars stand"))
         self.assertTrue(llm._tail_is_clause("the ground beneath your feet shudders"))
         self.assertFalse(llm._tail_is_clause("the knowledge that soon, the flats will flood again"))
+        # 8B run 13, T0: "its" is no verb.
+        self.assertFalse(llm._tail_is_clause("the brass tide-reckoner at your belt, its face never quite right"))
 
 
 class ACollectionIsNoCollecting(unittest.TestCase):
