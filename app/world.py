@@ -20703,7 +20703,10 @@ def apply_turn(
             # player's history every turn; it goes there only when going
             # somewhere was the line's point. The ledger keeps it either way.
             turn_ledger.note("movement", "travel_unresolved", note=unresolved_note)
-            if _turn_intent(player_input)[0] == "travel" or int(map_report.get("steps_taken") or 0) or movement_report.get("follow"):
+            # Speech never asks to go ('"If the water drops by noon I am going out
+            # to the drowned chapel roof"', 7B run 38, T2).
+            unspoken = re.sub(r"[\"“][^\"”]*[\"”]", " ", _player_line(player_input))
+            if _turn_intent(unspoken)[0] == "travel" or int(map_report.get("steps_taken") or 0) or movement_report.get("follow"):
                 conn.execute(
                     "INSERT INTO journal (turn, kind, content) VALUES (?, ?, ?)",
                     (turn, "system", unresolved_note),
