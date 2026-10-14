@@ -958,6 +958,21 @@ class AMenuWrittenAsAnAct(unittest.TestCase):
         self.assertFalse(_MENU_TWO_WAY_RE.match("You approach the bakehouse, its red door bright in the light."))
 
 
+class TheFieldFence(unittest.TestCase):
+    """Run 42 T1: 'I walk over to the field fence where Elsabet is milking' rolled streetwise and read as travel."""
+
+    LINE = 'I walk over to the field fence where Elsabet is milking. "Morning. Any of your cows wander out lately?"'
+
+    def test_no_streetwise_no_travel(self):
+        from app.skill_checks import infer_check_from_action
+        from app.world import travel_intent
+
+        self.assertNotEqual((infer_check_from_action(self.LINE) or {}).get("skill_code"), "streetwise")
+        self.assertFalse(travel_intent(self.LINE))
+        self.assertEqual((infer_check_from_action("I try to fence the goods down at the docks.") or {}).get("skill_code"),
+                         "streetwise")
+
+
 class AWaitMovesNobody(unittest.TestCase):
     """Run 27 T4: a Wait described the inn's empty inside through an open door and put the player in it."""
 

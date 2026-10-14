@@ -1661,7 +1661,10 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(arcana|magic theory|ward|spell residue)\b", "arcana"),
     (r"\b(performance|sing|song|act|storytell[a-z]*)\b", "performance"),
     (r"\b(etiquette|court manners|protocol|formal address)\b", "etiquette"),
-    (r"\b(streetwise|fence|underworld|gang rumor)\b", "streetwise"),
+    # The trade, not the field fence: "I walk over to the field fence where
+    # Elsabet is milking" rolled streetwise, a mishap and a blunder (7B run 42, T1).
+    (r"\b(streetwise|underworld|gang\s+rumou?r|(?:a|any|local|the\s+local|a\s+good)\s+fence\b(?!\s+(?:post|rail|line|gate|board))|"
+     r"fence\s+(?:it|them|these|those|stolen|the\s+goods|goods|loot|the\s+loot))\b", "streetwise"),
     (r"\b(acrobatics|balance|tumble|tightrope)\b", "acrobatics"),
     # "palm" the verb, not the hand: "I count the coins in my palm" rolled
     # sleight of hand (7B run 10, T8).
