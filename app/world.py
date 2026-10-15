@@ -9654,8 +9654,11 @@ def _unasked_unshown_move(
         words = _place_words(named_dest) if named_dest else []
         prose_low = _unspoken(str(narration or "")).lower()
         line_low = _player_line(player_input).lower()
+        # Not the place stood in: "hauling them from the wharf up to the guild's
+        # storehouse" on the wharf kept a MOVE to the tally house (8B run 79, T5).
         line_names_known = any(
-            _line_names_place(line_low, _place_words(str(r["name"] or ""))) for r in rows if str(r["name"] or "").strip()
+            _line_names_place(line_low, _place_words(str(r["name"] or ""))) for r in rows
+            if str(r["name"] or "").strip() and not (current_name and _same_place_name(str(r["name"] or ""), current_name))
         )
         # Only a short walk over to someone; setting off on a journey ("I walk
         # on", "I leave and take the track") keeps the model's destination.
