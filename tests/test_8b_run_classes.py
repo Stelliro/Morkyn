@@ -1079,6 +1079,18 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class SomeoneTalkedAboutIsNotShown(unittest.TestCase):
+    """8B run 69, T3: "He's not a man who likes delays" bound the foreman at the docks to "a man"."""
+
+    def test_a_figure_in_speech_binds_no_one(self):
+        from app import world
+
+        prose = ("Brida points to a shed on the map. \"That's where the goods are. The guild's foreman will check the "
+                 "work. He's not a man who likes delays.\"")
+        npcs = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Garrik", "role": "foreman"}], prose)
+        self.assertEqual(npcs, [])
+
+
 class ThePlayerIsYou(unittest.TestCase):
     """8B run 68, T2: "pushed a stack of papers toward the player", "the player's patched tunic"."""
 

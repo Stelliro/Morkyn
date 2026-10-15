@@ -17444,7 +17444,10 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         lead = re.search(r"\b[Tt]he\s+(?:[a-z][a-z'-]+\s+)?([a-z][a-z'-]+)\s*,\s*$", text[:at]) if at >= 0 else None
         return bool(lead and lead.group(1).lower() in here_roles)
 
-    figures = [h for h in _figure_hints(text, known_names)
+    # Only the narration shows people: "He's not a man who likes delays", said
+    # of the foreman at the docks, bound NPC_NEW "Garrik" to "a man" and stood
+    # him in the tally house (8B run 69, T3).
+    figures = [h for h in _figure_hints(unspoken, known_names)
                if h.split()[0].lower() in {"a", "an", "the"} and _figure_alias(h) not in taken
                and not _is_someone_heres_job(h)]
     free = list(figures)
