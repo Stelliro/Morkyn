@@ -251,6 +251,16 @@ def player_takes_job(
     for match in re.finditer(r"\bi(?:['’]ll|\s+will)\s+(?:take|do|handle|run|walk)\s+(?:the|this|that|your)\s+([a-z]+)", own, re.I):
         if match.group(1).lower() in title_words:
             return True
+    # The job's own verb on its own subject: "I'll clear the Stormbreaker" for
+    # "Clear the Wreckage", the wreckage "from the Stormbreaker" (8B run 56, T3).
+    lead = re.findall(r"[a-z][a-z']+", str(quest.get("title") or "").lower())
+    job_verb = _stem(lead[0]) if lead else ""
+    about = title_words | {w for w in re.findall(r"[a-z][a-z']+", str(quest.get("description") or "").lower()) if len(w) >= 4}
+    if job_verb and job_verb not in _QUEST_STOP_STEMS:
+        for match in re.finditer(r"\bi(?:['’]ll|\s+will)\s+([a-z]+)\s+(?:the|this|that|your|her|it)\b\s*([a-z]*)", own, re.I):
+            obj = match.group(2).lower()
+            if _stem(match.group(1)) == job_verb and (not obj or obj in about or match.group(0).lower().endswith(" it")):
+                return True
     if _STARTS_WORK_RE.search(own):
         return True
     # The player names the price and the giver agrees (7B run 6, T6: "Two gold

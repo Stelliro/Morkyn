@@ -1215,6 +1215,20 @@ def typed_offer_choice(rows: list[Any], text: str) -> Any | None:
                                  r"(?P<obj>[\w'’ -]{3,40})", low)
             if _offer_words(row) & set(re.findall(r"[a-z]{4,}", m.group("obj")))
         ]
+        # Or by the job's own verb on its subject: "I'll clear the Stormbreaker."
+        # for "Clear the Wreckage", the wreck "from the Stormbreaker" (8B run 56, T3).
+        for row in rows:
+            title_words = re.findall(r"[a-z]+", str(row["title"] or "").lower())
+            try:
+                described = str(row["description"] or "")
+            except (KeyError, IndexError):
+                described = ""
+            about = _offer_words(row) | set(re.findall(r"[a-z]{4,}", described.lower()))
+            if title_words and len(title_words[0]) >= 3 and any(
+                about & set(re.findall(r"[a-z]{4,}", m.group("obj")))
+                for m in re.finditer(rf"\bi(?:['’]ll|\s+will)\s+{re.escape(title_words[0])}\s+(?:the\s+)?(?P<obj>[\w'’ -]{{3,40}})", low)
+            ):
+                named.append(row)
         unique = {id(r): r for r in named}
         return next(iter(unique.values())) if len(unique) == 1 else None
     for row in rows:
@@ -1252,7 +1266,7 @@ def typed_offer_choice(rows: list[Any], text: str) -> Any | None:
 def accept_offered_quest(conn, text: str, turn: int | None = None) -> dict[str, Any] | None:
     try:
         rows = conn.execute(
-            "SELECT q.id, q.title, COALESCE(n.name, '') AS giver FROM quests q "
+            "SELECT q.id, q.title, q.description, COALESCE(n.name, '') AS giver FROM quests q "
             "LEFT JOIN npcs n ON n.id = q.giver_npc_id WHERE q.status = 'offered' ORDER BY q.id DESC"
         ).fetchall()
     except Exception:

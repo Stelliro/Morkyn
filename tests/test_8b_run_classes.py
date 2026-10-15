@@ -1051,6 +1051,21 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class TheJobsOwnVerbTakesIt(unittest.TestCase):
+    """8B run 56, T3: "I'll clear the Stormbreaker." took no job; the offer was "Clear the Wreckage"."""
+
+    def test_clear_the_stormbreaker(self):
+        from app import local_intel as li
+        from app import quest_parser as qp
+
+        quest = {"id": 1, "code": "Q1", "title": "Clear the Wreckage", "status": "offered",
+                 "description": "Clear the wreckage from the *Stormbreaker* to pay off a debt.", "giver": "Osbert"}
+        line = "\"I'll clear the Stormbreaker.\" I set both hands flat on the desk. \"Which berth is she at?\""
+        self.assertTrue(qp.player_takes_job(quest, line, [quest]))
+        self.assertIsNotNone(li.typed_offer_choice([quest], line))
+        self.assertIsNone(li.typed_offer_choice([quest], "\"I'll clear my throat.\""))
+
+
 class TheSameNamedJobIsTheJobTaken(unittest.TestCase):
     """8B run 55, T6: "Investigate the Iron Tide's Raids" beside the active "Work for the Iron Tide"."""
 
