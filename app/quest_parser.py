@@ -1101,11 +1101,16 @@ def points_elsewhere_for_work(title: str, offer_line: str = "", evidence: str = 
 
 def _offer_is_spoken(line: str, narration: str) -> bool:
     """The offer's words stand inside someone's quotation in the scene (the parser keeps them without marks)."""
-    probe = re.sub(r"\s+", " ", str(line or "")).strip().lower()[:40]
+    # Apostrophes either way: the parser's "You'll get a fair share" is the
+    # prose's "You’ll get a fair share" (8B run 66, T1).
+    def flat(text: str) -> str:
+        return re.sub(r"\s+", " ", str(text or "").replace("’", "'").replace("‘", "'")).strip().lower()
+
+    probe = flat(line)[:40]
     if len(probe) < 8:
         return False
     for a, b in re.findall(r"\"([^\"]*)\"|“([^”]*)”", str(narration or "")):
-        if probe in re.sub(r"\s+", " ", (a or b)).lower():
+        if probe in flat(a or b):
             return True
     return False
 

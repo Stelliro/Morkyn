@@ -13544,7 +13544,8 @@ def _apply_menu_trim(turn: dict[str, Any]) -> dict[str, Any]:
 # so the closing sentence goes; anything earlier in the scene is left alone.
 _DECIDED_FOR_PLAYER_RE = re.compile(
     r"\byou\s+(?:\w+\s+){0,2}?"
-    r"(?:decide[sd]?|choose|chose|opt(?:s|ed)?|resolve[sd]?|elect(?:s|ed)?|determine[sd]?)"
+    # "You agree to take the job" (8B run 66, T2) closed the scene on a yes.
+    r"(?:decide[sd]?|choose|chose|opt(?:s|ed)?|resolve[sd]?|elect(?:s|ed)?|determine[sd]?|agree[sd]?)"
     r"\s+(?:to|that|against|not\s+to|instead)\b"
     # Playtest #77 (T12): "You consider for a moment, then decide to help out."
     # A longer run of the player's own clause, joined by then/and, still makes
