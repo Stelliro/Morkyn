@@ -1465,7 +1465,9 @@ _INTENT_ONLY_RE = re.compile(
 _DONE_WORDS_RE = re.compile(
     r"\b(?:found|find\s+(?:it|them|the)|finds|done|finish\w*|complet\w*|deliver\w*|hand(?:s|ed)?\s+(?:over|it|them)|"
     r"return(?:s|ed)|brought|bring(?:s)?\s+(?:it|them)|sign(?:s|ed)|paid|pays|recover\w*|retriev\w*|haul(?:s|ed)?\s+(?:it|them)\s+(?:up|out|in)|"
-    r"rescu\w*|fix\w*|mend\w*|repair\w*|rang|ring(?:s)?\s+(?:it|the))\b",
+    r"rescu\w*|fix\w*|mend\w*|repair\w*|rang|ring(?:s)?\s+(?:it|the)|"
+    # The work ran out: "That was the last of the hold" (8B run 54, T6).
+    r"(?:was|is|'s)\s+the\s+last\s+(?:of|one))\b",
     re.I,
 )
 
@@ -1570,7 +1572,10 @@ def _shows_outcome(text: str) -> bool:
 
 
 def _travel_only(evidence: str) -> bool:
-    text = str(evidence or "")
+    # Leave to go is no going: "That was the last of the hold. You're clear to
+    # go." held back the finished dock job as travel (8B run 54, T6).
+    text = re.sub(r"\b(?:clear|free|good|fit)\s+to\s+go\b|\b(?:you|ye)\s+(?:can|may)\s+go\b", " ",
+                  str(evidence or ""), flags=re.I)
     return bool(_TRAVEL_RE.search(text)) and not _shows_result(text)
 
 

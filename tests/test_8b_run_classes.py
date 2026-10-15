@@ -1051,6 +1051,30 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class TheEndOfACrateIsNoThing(unittest.TestCase):
+    """8B run 54, T5: "I take the end of the nearest crate" put "end x1" in the pack."""
+
+    def test_a_part_held_is_not_taken(self):
+        from app import world
+
+        self.assertEqual(world._taken_phrase("the end of the nearest crate with the laborers"), ("", 0))
+        self.assertEqual(world._taken_phrase("the rusty key from the drawer"), ("rusty key", 1))
+
+
+class TheLastOfTheHoldIsDone(unittest.TestCase):
+    """8B run 54, T6: "That was the last of the hold. You're clear to go." held the dock job back as travel."""
+
+    def test_the_finished_work_counts(self):
+        from app import quest_parser as qp
+
+        ev = "That was the last of the hold. You're clear to go."
+        quest = {"id": 1, "code": "Q1", "title": "Unload Cargo at the Docks", "status": "active",
+                 "current_step": 1, "total_steps": 1}
+        self.assertFalse(qp._travel_only(ev))
+        self.assertEqual(qp.done_check(ev, quest), [])
+        self.assertTrue(qp._travel_only("You head down to the docks to find the damaged ship."))
+
+
 class ARepeatIsTheirs(unittest.TestCase):
     """8B run 52, T3: '"The rusted tools," he repeats' was cut from 'the word "tools."' on, breaking the quote."""
 

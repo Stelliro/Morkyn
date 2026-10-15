@@ -255,6 +255,30 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class ANewPlaceWalkedToIsInTown(unittest.TestCase):
+    """8B run 54, T4-T7: "Berth Three" had no parent, so the walk back to the tally house ended in the street."""
+
+    def _adopt(self, line):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            top = int(conn.execute("SELECT MAX(id) FROM locations").fetchone()[0])
+            berth = world._upsert_location(conn, "Berth Three", "")
+            conn.execute("UPDATE locations SET parent_id = 0 WHERE id = ?", (berth,))
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (berth,))
+            world._adopt_new_place_into_town(conn, house, top, line)
+            return int(conn.execute("SELECT parent_id FROM locations WHERE id = ?", (berth,)).fetchone()[0] or 0)
+
+    def test_walked_to_is_in_town(self):
+        self.assertEqual(self._adopt("I walk down to the docks to find berth three and the foreman Harlow."), 1)
+
+    def test_sailed_to_is_not(self):
+        self.assertEqual(self._adopt("I sail out across the bay to find berth three."), 0)
+
+
 class TheWayIsNotTheEnd(unittest.TestCase):
     """8B run 51, T4: "along the shore path toward the Hollow Reach" made "The Shore" and stood Isk on it."""
 
