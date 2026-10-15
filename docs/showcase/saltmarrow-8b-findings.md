@@ -145,8 +145,47 @@ furthest (job offered, taken, walked toward). Each fix was replayed over the sav
 - **Prose**: a relative clause gives a kept tail no verb ("The promise you made to the tides",
   aff3328).
 
+### Runs 53-72 (2026-10-15)
+
+Runs now reach T7-T11 with state intact: run 54 took a dock job, worked it, finished it and was
+paid (T7); run 72 went to T11 at the shoals with nothing wrong in the save after T9.
+
+- **People**: someone reached by code alone, or shown after the arrival with no op at all, goes
+  where the walk ends (f96eda3, 068f7ad), which is likely behind the "new face at the desk" drift
+  of runs 40-51; a drawn name fits the sex the figure was shown with (98b7087); a merchant ship
+  is no merchant (3dd75fe); someone talked about is not shown (1f4730c); a vague figure is the
+  one the scene names later (79ab772).
+- **Jobs**: the job's own verb takes it ("I'll clear the Stormbreaker", e56e7c2); a quote
+  written inside the reward is the job's (19434d1); a refusal is no offer ("I don't deal in
+  charity" had read as "Deal.", 7d40e79); an offer is spoken whichever way its apostrophes lean
+  (44a8485); the same named job is the job taken (5a71d7c); no markdown in a job's name
+  (68e3a79); the last of the hold is done (c0307a1).
+- **Rewards and money**: the face met on an errand is no find, and taking a job or a step with no
+  result earns no XP (3dd75fe, 9f6339d, 748ccd3); a job that pays, or a promise ("you'll be
+  paid"), is no coin (748ccd3, 749e760).
+- **Items**: a part held ("the end of the crate") is no thing (c0307a1); lifting it out takes it
+  (68e3a79); a spoken "I'll haul the beams" takes nothing the prose does not show (749e760).
+- **Places**: a new place walked to is in town (c0307a1); a room of the building one stands in
+  is a place to go (4c3cd73); a clause with its own subject is not the player going (f6f0d08); a
+  place passed is not the one entered (755df01); the walk's end is a place, not a thing looked
+  for (3740e0a).
+- **Words**: "and you do", "you choose the first", "you agree to", "you accept the offer" are the
+  player's to say (5a71d7c, 068f7ad, 44a8485, b6d610a); a shorter saying of a typed line is that
+  line, in its place (3ff0604); "the player" is "you" (98b7087); a code that names nothing goes
+  (f6f0d08).
+
 ## Logged, not fixed
 
+- Now the largest class by far: the player's inner life and past invented by the prose ("your
+  heart pounding", "You had been here before", "The realization hits you", "a reminder of the
+  choices you've made"). Several per run. Waiting on the outcome-reader decision in
+  docs/showcase/prompt-review-2026-10-14.md; a pattern cannot tell these from true backstory.
+- C9 past tense on whole turns, most runs at least once.
+- C10 scene drift: r72 T10 put the channel-side talk inside Edith's "cramped shop".
+- r55 T5: "He gestures for you to follow him, and you do" stays when the player's own line had a
+  walk in it (the walk rule lets the follow ride on it).
+- r63 T5: "the flats runner" became "The Flats [[L3]] runner" (a place name used as a modifier
+  got its code).
 - C10, repeated in runs 40-51: at T2 the tallyman met at T1 is replaced at his desk by a new face
   (a woodseller, a "Captain Veyra"). The state stays right; the prose drifts.
 - A job picked from a list offered the turn before ("The rusted tools, then") reads as no offer
@@ -174,4 +213,5 @@ furthest (job offered, taken, walked toward). Each fix was replayed over the sav
 
 ## Next
 
-Run 53 on da707f3 or later; keep logging by class. No clean run yet.
+Run 73 on 79ab772 or later; keep logging by class. No clean run yet: state faults are now rare
+(about one per run, found in T1-T7), while the prose classes above remain in every run.
