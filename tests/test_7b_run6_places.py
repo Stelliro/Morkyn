@@ -200,6 +200,24 @@ class SomeoneMetAtTheEndOfAWalk(unittest.TestCase):
     def test_someone_known_not_shown_stays(self):
         self.assertEqual(self._place_known("At the docks a fisherman looks up from his nets."), "L2")
 
+    def test_no_op_at_all_but_shown_after_arrival(self):
+        # 8B run 60, T1: Milo [[A]] at the tally house, his only op cut with the tail.
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            district = world._upsert_location(conn, "Drowned District", "")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (district,))
+            world._upsert_npc(conn, {"name": "Eldric Thorne", "location": "Drowned District", "role": "fisherman"})
+            code = conn.execute("SELECT code FROM npcs WHERE name = 'Eldric Thorne'").fetchone()[0]
+            world._place_new_people_at_arrival(
+                conn, [], {"player": {"move_to_location_code": "L1"}}, self.LINE,
+                f"You climb back up to Saltmarrow. By the nets, Eldric Thorne [[{code}]] looks up.")
+            where = conn.execute("SELECT l.code FROM npcs n JOIN locations l ON l.id = n.location_id "
+                                 "WHERE n.name = 'Eldric Thorne'").fetchone()[0]
+        self.assertEqual(where, "L1")
+
     def test_a_code_only_talk_moves_the_one_shown(self):
         # 8B run 53, T1: TALK "A" alone, and Elsabet [[A]] behind the counter stayed in town.
         from app import world

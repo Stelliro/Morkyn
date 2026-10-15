@@ -13419,8 +13419,9 @@ def _place_new_people_at_arrival(
     player = result.get("player") if isinstance(result.get("player"), dict) else {}
     dest_code = str(player.get("move_to_location_code") or "").strip()
     dest_name = str(player.get("move_to_location") or "").strip()
-    if not (dest_code or dest_name) or not npcs:
+    if not (dest_code or dest_name):
         return
+    npcs = npcs or []
     rows = conn.execute("SELECT id, code, name FROM locations").fetchall()
     dest = next((r for r in rows if dest_code and str(r["code"] or "").upper() == dest_code.upper()), None) or next(
         (r for r in rows if dest_name and str(r["name"] or "").lower() == dest_name.lower()), None
@@ -13465,9 +13466,26 @@ def _place_new_people_at_arrival(
         if str(npc.get("location") or "").strip().lower() in left:
             npc["location"] = str(dest["code"] or dest["name"])
             turn_ledger.note("npc", "placed_at_arrival", name=str(npc.get("name") or ""), place=str(dest["name"] or ""))
+    # Someone with no op this turn, shown after the arrival: "reach the salvage
+    # guild's tally house ... Inside, Milo [[A]] is hunched over a ledger" kept
+    # Milo in town, his TALK cut with the tail (8B run 60, T1).
+    words = [w for w in _place_words(str(dest["name"] or "")) if len(w) >= 4]
+    at = str(narration or "").lower().find(words[-1]) if words else -1
+    if at < 0:
+        return
+    after = venues.strip_speech(str(narration or "")[at:])
+    listed = {str(n.get("code") or "").upper() for n in npcs if isinstance(n, dict)} | {
+        str(n.get("name") or "").lower() for n in npcs if isinstance(n, dict)}
+    for row in conn.execute("SELECT id, code, name FROM npcs WHERE location_id = ?", (int(here["id"]),)).fetchall():
+        code, name = str(row["code"] or "").upper(), str(row["name"] or "")
+        if (code and code in listed) or name.lower() in listed:
+            continue
+        if (code and f"[[{code}]]" in after) or (name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", after)):
+            conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(dest["id"]), int(row["id"])))
+            turn_ledger.note("npc", "placed_at_arrival", name=name, place=str(dest["name"] or ""), via="shown_after_arrival")
 
 
-_FACT_FILLER = {"player", "players", "scene", "turn", "the", "about", "their", "there", "with", "from", "that", "this"}
+_FACT_FILLER ={"player", "players", "scene", "turn", "the", "about", "their", "there", "with", "from", "that", "this"}
 
 
 def _fact_shown(content: str, narration: str, player_input: str) -> bool:
