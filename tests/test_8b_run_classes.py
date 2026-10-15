@@ -1135,6 +1135,11 @@ class TheDebtIsNoJobButATaskIs(unittest.TestCase):
         line = "“You've got a debt, and debts aren't paid with promises. You'll need to work it off. What's your skill?”"
         self.assertFalse(self._judge(line, "What job have you got that pays against the ledger?")["ok"])
 
+    def test_telling_back_the_ask_is_no_offer(self):
+        # 8B run 76, T2: the player's own question as offer line, then "You're looking for work to pay it off".
+        line = "“That's quite a debt. You're looking for work to pay it off, I assume.”"
+        self.assertFalse(self._judge(line, "What job have you got that pays against the ledger?")["ok"])
+
     def test_a_task_set_is_a_job(self):
         line = "“You'll need to clear a full load—something worth at least ten silver.”"
         self.assertTrue(self._judge(line, line.strip("“”"))["ok"])
