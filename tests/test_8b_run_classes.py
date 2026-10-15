@@ -1051,6 +1051,31 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class TheSameNamedJobIsTheJobTaken(unittest.TestCase):
+    """8B run 55, T6: "Investigate the Iron Tide's Raids" beside the active "Work for the Iron Tide"."""
+
+    def test_same_subject_is_a_duplicate_but_an_employer_is_not(self):
+        from app import quest_parser as qp
+
+        ex = [{"id": 1, "title": "Work for the Iron Tide", "status": "active", "giver_npc_id": 1}]
+        self.assertIsNotNone(qp._is_duplicate({"title": "Investigate the Iron Tide's Raids"}, ex, 2, ""))
+        guild = [{"id": 1, "title": "Haul Iron for the Salvage Guild", "status": "active", "giver_npc_id": 1}]
+        self.assertIsNone(qp._is_duplicate({"title": "Sort Nets for the Salvage Guild"}, guild, 2, ""))
+
+
+class AndYouDoIsTheActAsked(unittest.TestCase):
+    """8B run 55, T5: "He gestures for you to follow him, and you do" had the player follow."""
+
+    def test_the_follow_goes_unless_the_line_follows(self):
+        from app import llm
+
+        text = "His expression is unreadable. He gestures for you to follow him, and you do, your steps quickening."
+        kept, dropped = llm.drop_invented_player_acts_text(text, "\"Where is Captain Veyra?\" I ask the scarred man.")
+        self.assertNotIn("and you do", kept)
+        kept2, _ = llm.drop_invented_player_acts_text(text, "I follow him wherever he goes.")
+        self.assertIn("and you do", kept2)
+
+
 class TheEndOfACrateIsNoThing(unittest.TestCase):
     """8B run 54, T5: "I take the end of the nearest crate" put "end x1" in the pack."""
 

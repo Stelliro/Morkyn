@@ -991,10 +991,26 @@ def _lead_verb(title: str) -> str:
 
 def _is_duplicate(item: dict[str, Any], existing: list[dict[str, Any]] | None, giver_id: Any, first_place: str) -> dict[str, Any] | None:
     title = _norm(item.get("title"))
+
+    def named(text: str) -> set[str]:
+        """Word pairs of proper names in a title: "the Iron Tide's Raids" -> {"iron tide", "tide raids"}."""
+        pairs: set[str] = set()
+        for m in re.finditer(r"\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)+\b", re.sub(r"['’]s\b", "", str(text or ""))):
+            words = [w.lower() for w in m.group(0).split() if w not in {"The", "A", "An"}]
+            pairs |= {f"{a} {b}" for a, b in zip(words, words[1:])}
+        # An employer gives many jobs: "the Salvage Guild" is no one job's subject.
+        return {p for p in pairs if not re.search(
+            r"\b(?:guild|house|company|office|council|watch|hall|crew|reeve|harbour|harbor|town)\b", p)}
+
     for quest in existing or []:
         status = str(quest.get("status") or "active")
         if status not in {"active", "offered", "declined", "completed"}:
             continue
+        # The job already taken, about the same named thing: "Investigate the
+        # Iron Tide's Raids" was offered beside the active "Work for the Iron
+        # Tide" when the man it sent the player to gave directions (8B run 55, T6).
+        if status == "active" and named(str(item.get("title") or "")) & named(str(quest.get("title") or "")):
+            return quest
         ratio = SequenceMatcher(None, title, _norm(quest.get("title"))).ratio()
         # Another giver asking for another thing is another job (Saltmarrow
         # #117): Mara's "Ring the customs bell" was filed as a duplicate of the
