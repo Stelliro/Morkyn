@@ -1090,6 +1090,14 @@ class AnOfferSpokenWithCurlyApostrophes(unittest.TestCase):
             "He nods. “I’ve got a job for you. You’ll get a fair share of the salvage, and the debt’ll be "
             "cleared.”"))
 
+    def test_you_accept_the_offer_is_a_decision(self):
+        # 8B run 67, T1: "You accept the offer. Lowen Thatcher gives you a map".
+        from app import llm
+
+        line = "I walk to the tally house to ask the tallyman what work he'll take against my debt."
+        self.assertTrue(llm._decided_for_player("You accept the offer.", line))
+        self.assertFalse(llm._decided_for_player("You accept the offer.", "\"I'll take it.\""))
+
     def test_you_agree_is_a_decision(self):
         from app import llm
 
