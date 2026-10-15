@@ -1079,6 +1079,24 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class AnOfferSpokenWithCurlyApostrophes(unittest.TestCase):
+    """8B run 66, T1: "You'll get a fair share" did not match the prose's "You’ll", so no one offered it."""
+
+    def test_spoken_either_way(self):
+        from app import quest_parser
+
+        self.assertTrue(quest_parser._offer_is_spoken(
+            "You'll get a fair share of the salvage, and the debt'll be cleared.",
+            "He nods. “I’ve got a job for you. You’ll get a fair share of the salvage, and the debt’ll be "
+            "cleared.”"))
+
+    def test_you_agree_is_a_decision(self):
+        from app import llm
+
+        self.assertTrue(llm._decided_for_player("You agree to take the job, and he gives you a small nod.",
+                                                "\"What job have you got?\""))
+
+
 class WorkOthersAskForIsNoOffer(unittest.TestCase):
     """8B run 65, T1: "You're not the first to come asking for work" became a job."""
 
