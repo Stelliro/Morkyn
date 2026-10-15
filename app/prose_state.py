@@ -1158,6 +1158,22 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
     if labels:
         out = _ATTITUDE_LABEL_RE.sub(lambda m: m.group(1) + m.group(2).lower() + m.group(3), out)
         fixes.append({"why": "attitude_label", "text": ", ".join(labels[:4])})
+    # The packet's word for the reader, outside speech: "pushed a stack of papers
+    # toward the player", "the player's patched tunic" (8B run 68, T2).
+    pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", out)
+    named_player = False
+    for index in range(0, len(pieces), 2):
+        piece = pieces[index]
+        new = re.sub(r"\bthe player['’]s\b", "your", piece)
+        new = re.sub(r"\bThe player['’]s\b", "Your", new)
+        new = re.sub(r"\bthe player\b", "you", new)
+        new = re.sub(r"\bThe player\b", "You", new)
+        if new != piece:
+            named_player = True
+            pieces[index] = new
+    if named_player:
+        out = "".join(pieces)
+        fixes.append({"why": "the_player", "text": "the player -> you"})
     return out, fixes
 
 

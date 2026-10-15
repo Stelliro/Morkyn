@@ -1079,6 +1079,20 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class ThePlayerIsYou(unittest.TestCase):
+    """8B run 68, T2: "pushed a stack of papers toward the player", "the player's patched tunic"."""
+
+    def test_the_word_goes_outside_speech(self):
+        from app import prose_state
+
+        out, fixes = prose_state.repair_meta_leaks(
+            "She pushed a stack of papers toward the player. Her gaze lingered on the player's patched tunic. "
+            "\"The player is new,\" she says.")
+        self.assertIn("toward you.", out)
+        self.assertIn("on your patched tunic", out)
+        self.assertIn("\"The player is new,\"", out)
+
+
 class AnOfferSpokenWithCurlyApostrophes(unittest.TestCase):
     """8B run 66, T1: "You'll get a fair share" did not match the prose's "You’ll", so no one offered it."""
 
