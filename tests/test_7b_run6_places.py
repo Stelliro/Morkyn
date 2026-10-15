@@ -292,6 +292,33 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class ARoomOfTheBuilding(unittest.TestCase):
+    """8B run 64, T4: "go down to the lower vault" in the tally house left the player upstairs."""
+
+    def test_the_vault_is_made_inside(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        prose = "The vault door groans as you descend the narrow stairwell. The lower vault is dimly lit by a lamp."
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            here = world._location_row(conn, house)
+            name = world._room_requested(conn, here, "I nod and go down to the lower vault to search the records.", prose)
+            row = conn.execute("SELECT parent_id FROM locations WHERE name = ?", (name,)).fetchone()
+        self.assertEqual(name, "The Lower Vault")
+        self.assertEqual(int(row[0]), house)
+
+    def test_not_from_the_open_town(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            here = world._location_row(conn, 1)
+            self.assertEqual(world._room_requested(conn, here, "I go down to the cellar.", "You go down to the cellar."), "")
+
+
 class ANewPlaceWalkedToIsInTown(unittest.TestCase):
     """8B run 54, T4-T7: "Berth Three" had no parent, so the walk back to the tally house ended in the street."""
 

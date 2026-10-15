@@ -10418,6 +10418,11 @@ def _venue_requested_and_reached(conn, player_input: str, narration: str, curren
         area = _outdoor_area_requested(conn, parent_id, wanted, narration)
         if area:
             return area
+        # A room of the building the player stands in ("go down to the lower
+        # vault" in the tally house, 8B run 64, T4).
+        room = _room_requested(conn, here, wanted, narration)
+        if room:
+            return room
         # A common town building ("I walk to the town hall", 7B run 28 T4).
         return _civic_building_requested(conn, parent_id, wanted, narration)
     labels = venues.kind_family_labels(kind) or [venues.kind_label(kind)]
@@ -10698,6 +10703,47 @@ _CIVIC_BUILDING_WORDS = (
     "customs house", "counting house", "tally house", "tally-house", "tallyhouse", "chapel", "church", "temple", "shrine", "tower", "clock tower", "lighthouse",
     "library", "schoolhouse", "school", "gaol", "jail", "barracks", "watchhouse", "granary", "bathhouse", "mill",
 )
+
+
+_ROOM_WORDS = ("vault", "cellar", "basement", "back room", "storeroom", "store room", "loft", "attic", "archive",
+               "archives", "strongroom", "counting room", "kitchen")
+
+
+def _room_requested(conn, here, wanted: str, narration: str) -> str:
+    """A room of the building the player is in, which the line goes to and the prose enters, or "".
+
+    8B run 64, T4: "I go down to the lower vault to search the old records"
+    in the tally house, and the prose went down the stairwell into it, but
+    nothing could be resolved and the player stayed upstairs. The room is made
+    as the building's child.
+    """
+    if here is None or not int(venues._field(here, "parent_id", 0) or 0):
+        return ""  # only inside a building
+    match = re.search(
+        r"\b(?:go|goes|going|head\w*|walk\w*|climb\w*|step\w*|make\s+my\s+way)\s+(?:(?:back|down|up|over|through)\s+){0,2}"
+        r"(?:to|into|in\s+to)\s+the\s+(?P<room>(?:[a-z'’-]+\s+){0,1}?(?:"
+        + "|".join(re.escape(w) for w in sorted(_ROOM_WORDS, key=len, reverse=True)) + r"))\b",
+        wanted or "", re.I,
+    )
+    if not match:
+        return ""
+    room = " ".join(match.group("room").split())
+    head = room.split()[-1].lower()
+    unspoken = _unspoken(narration).lower()
+    if head not in unspoken or _prose_stops_walk(head, narration):
+        return ""
+    for row in conn.execute("SELECT * FROM locations WHERE parent_id = ? ORDER BY id", (int(here["id"]),)).fetchall():
+        if humanize_place_name(str(row["name"] or "")).lower().endswith(room.lower()):
+            return str(row["name"] or "")
+    name = "The " + " ".join(w[:1].upper() + w[1:] for w in room.split())
+    if not is_plausible_place_name(name):
+        return ""
+    new_id = _upsert_location(conn, name, "", parent_id=int(here["id"]), kind="")
+    if not new_id or int(new_id) == int(here["id"]):
+        return ""
+    conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (int(here["id"]), int(new_id)))
+    turn_ledger.note("movement", "room_requested", place=name, building=str(here["name"] or ""))
+    return name
 
 
 def _civic_building_requested(conn, parent_id: int, wanted: str, narration: str) -> str:
