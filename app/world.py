@@ -18075,6 +18075,11 @@ def _ensure_npcs_from_narration(
             if at >= 0 and at in seen_at:
                 continue
             near = " ".join(flat_sentences[at:at + 2]) if at >= 0 else ""
+            # A vague shape and the turn's one listed person named later in the
+            # scene are the same (8B run 72, T9: "A figure, crouched low" then
+            # "Her name is Edith Skinner" seeded a drawn "Osbert").
+            if len(listed) == 1 and h.lower().split()[-1] in _VAGUE_FIGURES and at >= 0:
+                near = " ".join(flat_sentences[at:])
             if listed and any(
                 re.search(rf"\b{re.escape(name.split()[0])}\b", near) for name in listed if name.split()
             ):
@@ -18092,6 +18097,14 @@ def _ensure_npcs_from_narration(
         # before an introduction is that person; any other hint is someone else.
         intro_ats = [_sentence_index(text, p["name"]) for p in introduced_all]
         hints = [h for h in hints if not any(0 <= at - _sentence_index(text, h) <= 1 for at in intro_ats)]
+        # A vague shape the scene later names as its one new person is that
+        # person, however far apart: "A figure, crouched low, slips ... into the
+        # reeds" then "The speaker emerges ... Her name is Edith Skinner" seeded
+        # a second, drawn "Osbert" (8B run 72, T9).
+        if len(introduced_all) == 1:
+            hints = [h for h in hints if not (
+                h.lower().split()[-1] in _VAGUE_FIGURES and intro_ats[0] > _sentence_index(text, h)
+            )]
         # A speaker tag with a name from an introduced person is that person:
         # '"Morning, flat-runner," Dunstan calls out' after "A mole catcher
         # named Dunstan Wadley" stored a second, bare "Dunstan" (7B run 30, T0).

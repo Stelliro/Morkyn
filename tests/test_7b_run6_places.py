@@ -292,6 +292,26 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class AVagueFigureIsTheOneNamedLater(unittest.TestCase):
+    """8B run 72, T9: "A figure, crouched low" then "Her name is Edith Skinner" seeded a second, drawn person."""
+
+    PROSE = ("The shadow moves again. A figure, crouched low, slips from the shallows and vanishes into the reeds. "
+             "You wait, the air thick with brine.\n\nA voice cuts through the silence. “You’re not the first to "
+             "watch that spot,” she says. The speaker emerges from the reeds, a woman with a weathered face. Her "
+             "name is Edith Skinner, and she is the bonesetter of the town.")
+
+    def test_no_second_person(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            world._upsert_npc(conn, {"name": "Edith Skinner", "role": "bonesetter", "location": "Saltmarrow"})
+            seeded = world._ensure_npcs_from_narration(
+                conn, {"npcs": [{"name": "Edith Skinner", "role": "bonesetter"}]}, self.PROSE, 1)
+        self.assertEqual(seeded, [])
+
+
 class APromiseIsNoPayAndNoHaul(unittest.TestCase):
     """8B run 71, T4: "you'll be paid thirty gold" paid 30, and "I'll haul the beams" put beams in the pack."""
 
