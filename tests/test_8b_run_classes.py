@@ -847,8 +847,28 @@ class TalkEarnsNoXp(unittest.TestCase):
         from app import world
 
         result = {"_deterministic_combat": {"status": "not_combat"},
-                  "quest_changes": {"new": [], "updates": [{"action": "step_done"}]}, "player": {}}
+                  "quest_changes": {"new": [], "updates": [{"action": "step_done",
+                                                             "evidence": "You haul the last crate up; the hold is done."}]},
+                  "player": {}}
         self.assertIn("quest_change", world._turn_outcomes(_OutcomeConn(), result, player_input="I haul the crate up."))
+
+    def test_a_step_with_no_result_is_talk(self):
+        # 8B run 63, T6: a step proposed on "I owe the guild a winter's credit" kept XP 7.
+        from app import world
+
+        result = {"_deterministic_combat": {"status": "not_combat"}, "player": {},
+                  "quest_changes": {"new": [], "updates": [
+                      {"quest": "Q1", "action": "step_done", "evidence": "I owe the guild a winter's credit."}]}}
+        self.assertNotIn("quest_change", world._turn_outcomes(_OutcomeConn(), result, player_input="\"What is it?\""))
+
+    def test_a_job_that_pays_moves_no_coin(self):
+        from app import world
+
+        prose = ("Tamsin leans on her ropes. The mention of a job that pays off debts is a thread you can't ignore. "
+                 "The wind tugs at your coat.")
+        result = {"narration": prose, "player": {"gold_delta": 10}}
+        note = world._settle_stated_gold(result, "\"Elias says you've a salvage job that pays against it.\"")
+        self.assertEqual(note["source"], "gain_without_coin_dropped")
 
     def test_an_accept_is_talk(self):
         # 8B run 62, T2: a proposed (and refused) accept kept the model's XP 12.

@@ -19841,8 +19841,14 @@ def _turn_outcomes(
     # and kept the model's XP 17 for a question (8B run 33, T3). Steps count.
     # Taking a job is talk too: a proposed "accept" (refused, at that) kept the
     # model's XP 12 for asking what work there was (8B run 62, T2).
+    # A step only counts when its quote shows a result: the gate runs before the
+    # quest pass, which refused "I owe the guild a winter's credit" as a step
+    # done, but the model's XP 7 had already stood on it (8B run 63, T6).
+    from app.quest_parser import _shows_result
+
     if isinstance(result.get("quest_changes"), dict) and any(
         isinstance(u, dict) and str(u.get("action") or "").lower() in {"step_done", "complete", "progress"}
+        and _shows_result(str(u.get("evidence") or ""))
         for u in result["quest_changes"].get("updates") or []
     ):
         outcomes.append("quest_change")
@@ -20240,7 +20246,10 @@ _PROMISED_MONEY_RE = re.compile(
 # or for a coin" backed the same gain (8B run 10, T3).
 _ASKED_CLAUSE_RE = re.compile(
     r"\b(?:ask|asks|asked|asking|wonder\w*|inquir\w*|enquir\w*)\s+(?:[\w'’]+\s+){0,3}?"
-    r"(?:what|how|whether|if|which|who|where|about)\b[^,.;!?]*",
+    r"(?:what|how|whether|if|which|who|where|about)\b[^,.;!?]*"
+    # A job told by what it pays moves nothing: "the mention of a job that pays
+    # off debts" backed GOLD 10 (+8) (8B run 63, T6).
+    r"|\b(?:job|jobs|work|task|contract|run|haul|salvage)\s+(?:that|which)\s+pays?\b[^,.;!?]*",
     re.I,
 )
 _MONEY_MOVES_RE = re.compile(
