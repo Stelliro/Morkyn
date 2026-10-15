@@ -1105,6 +1105,17 @@ class ThePlayerIsYou(unittest.TestCase):
         self.assertIn("\"The player is new,\"", out)
 
 
+class AFigureInAnotherTrade(unittest.TestCase):
+    """8B run 75, T1: the tallyman was bound to the woman at the weaver's stall and pinned "she"."""
+
+    def test_the_weaver_is_not_the_tallyman(self):
+        from app import world
+
+        prose = ("You pass a tinker's cart and a weaver's stall where a woman in a soot-stained apron is mending a hem. "
+                 "You reach the tally house, and the door creaks open on a dim interior.")
+        self.assertEqual(world._npcs_shown_in_prose(_ConnStub(), [{"name": "Elias Vane", "role": "tallyman"}], prose), [])
+
+
 class TheDebtIsNoJobButATaskIs(unittest.TestCase):
     """8B run 74, T2: "You'll need to work it off" and the player's own question became two jobs;
     run 47, T2: "You'll need to clear a full load" is a job."""
