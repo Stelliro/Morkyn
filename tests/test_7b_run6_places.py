@@ -292,6 +292,22 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class TheAskedPlaceBeforeTheLane(unittest.TestCase):
+    """8B run 75, T1: "you step into the narrow lane leading to the salvage guild's tally house" made "Narrow Lane"."""
+
+    def test_the_tally_house_is_reached(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        line = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+                "work he'll take against my debt.")
+        prose = ("You step into the narrow lane leading to the salvage guild's tally house. You pass a tinker's cart. "
+                 "You reach the tally house, a squat structure with a crooked roof. The door creaks open as you approach.")
+        with connect() as conn:
+            self.assertEqual(world._venue_requested_and_reached(conn, line, prose, "L1"), "The Salvage Guild's Tally House")
+
+
 class TheBerthAfterTheWreck(unittest.TestCase):
     """8B run 73, T6: lifting the core "out of the hull" walked Isk off; "no one pays you much mind" paid +35;
     "The Salvage Union's Tally House" made a second tally house."""

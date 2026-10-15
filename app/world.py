@@ -10276,6 +10276,16 @@ def resolve_movement(
     # without this the first journey out of the starting location can never
     # happen and the map stays one tile wide forever.
     if arrived and note == "invented_code":
+        # The place the player asked for, which the prose reaches, comes first:
+        # "you step into the narrow lane leading to the salvage guild's tally
+        # house ... You reach the tally house" made "Narrow Lane" (8B run 75, T1).
+        try:
+            requested = _venue_requested_and_reached(conn, player_input, narration, current_code)
+        except Exception:
+            requested = ""
+        if requested:
+            player_patch["move_to_location"] = requested[:120]
+            return {"status": "repaired", "rule": "venue_requested", "from": current_code, "destination": requested}
         person_names = {
             str(row["name"] or "")
             for row in conn.execute("SELECT name FROM npcs").fetchall()
@@ -17477,7 +17487,13 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         # "The trader at the post, a woman with a sharp gaze": the role is in the figure's sentence.
         match = next((h for h in free if role_words & set(re.findall(r"[a-z]+", _hint_sentence(text, h).lower()))), None)
         if match is None and len(unshown) == 1 and len(free) == 1:
-            match = free[0]
+            # Not a figure in another trade: "a weaver's stall where a woman in a
+            # soot-stained apron is mending" was bound to the tallyman, who was
+            # then pinned "she" (8B run 75, T1).
+            other_trade = re.search(r"\b([a-z]+)['’]s\s+(?:stall|cart|shop|forge|bench|booth|barrow|boat|yard)\b",
+                                    _hint_sentence(text, free[0]).lower())
+            if not (other_trade and other_trade.group(1) not in role_words):
+                match = free[0]
         if match is None:
             # The prose calls them by the op's own role: NPC_NEW "Tobin Yates"
             # ROLE "tallyman" for "Inside, the tallyman sits behind a desk" was
