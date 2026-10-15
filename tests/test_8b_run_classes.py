@@ -1382,6 +1382,18 @@ class NoMarkdownInAJobsName(unittest.TestCase):
         accepted, _rejected = quest_parser.validate_quest_changes(reply, narration=narration, npcs=npcs)
         self.assertEqual([q["title"] for q in accepted.get("new") or []], ["Salvage the Iron Widow"])
 
+    def test_no_code_either(self):
+        # 8B run 82, T2: "Debt Settlement: Tam Brooke [A]".
+        from app import quest_parser
+
+        narration = "“I'll pay you for the work if you haul the Iron Widow's cargo,” Fulk says."
+        reply = {"new": [{"title": "Haul Cargo: Fulk Dimmock [A]", "giver": "Fulk Dimmock", "difficulty": "normal",
+                          "steps": [{"title": "Haul the cargo"}],
+                          "evidence": "I'll pay you for the work if you haul the Iron Widow's cargo"}]}
+        npcs = [{"id": 1, "code": "A", "name": "Fulk Dimmock", "role": "tallyman"}]
+        accepted, _rejected = quest_parser.validate_quest_changes(reply, narration=narration, npcs=npcs)
+        self.assertEqual([q["title"] for q in accepted.get("new") or []], ["Haul Cargo: Fulk Dimmock"])
+
 
 class TheJobsOwnVerbTakesIt(unittest.TestCase):
     """8B run 56, T3: "I'll clear the Stormbreaker." took no job; the offer was "Clear the Wreckage"."""
@@ -1630,6 +1642,23 @@ class TheBeatGoesWithTheCutLine(unittest.TestCase):
         paras[1] = ("You set the dripping crate of salvage on the counter between you. \"What kind of job?\"")
         kept, _dropped = drop_invented_player_speech(paras, self.LINE)
         self.assertTrue(kept[1].startswith("You set the dripping crate"))
+
+
+class OutOfAnotherVerbIsNoExit(unittest.TestCase):
+    """8B run 82, T5: "I walk along the warped planks and call out" left the wharf."""
+
+    def test_calling_out_stays(self):
+        from app.world import venue_move_intent
+
+        line = ('I walk along the warped planks and call out to anyone near the moored skiffs. '
+                '"Anyone hiring out a boat for the day?"')
+        self.assertEqual(venue_move_intent(line), "")
+
+    def test_the_way_out_still_leaves(self):
+        from app.world import venue_move_intent
+
+        self.assertEqual(venue_move_intent("I head to the door and out onto the street."), "exit")
+        self.assertEqual(venue_move_intent("I finish my drink and walk out."), "exit")
 
 
 class _OutcomeConn:

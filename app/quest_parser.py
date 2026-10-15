@@ -1189,6 +1189,8 @@ def validate_quest_changes(
         for key in ("title", "summary", "description"):
             if isinstance(raw.get(key), str):
                 raw[key] = re.sub(r"(?<!\w)[*_]{1,2}([^*_\n]+?)[*_]{1,2}(?!\w)", r"\1", raw[key])
+                # Nor is an entity code: "Debt Settlement: Tam Brooke [A]" (8B run 82, T2).
+                raw[key] = re.sub(r"\s*\[\[?[A-Z]{1,3}\d{0,3}\]\]?", "", raw[key]).strip()
         for step in raw.get("steps") or []:
             if isinstance(step, dict):
                 for key in ("title", "description"):
