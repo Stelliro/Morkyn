@@ -978,6 +978,8 @@ _NOT_A_SPEAKER = frozenset({
     # "Inside" the job's giver (8B run 34, T1).
     "Inside", "Outside", "Behind", "Beyond", "Here", "Now", "Still", "Again", "Today", "Tonight", "Meanwhile",
     "Instead", "Above", "Below", "Nearby", "Later", "Soon", "Finally", "Once", "Yes", "No", "Well", "Ahead",
+    # "Morning light filters through dusty windows" made "Morning" a job's giver (8B run 81, T2).
+    "Morning", "Evening", "Night", "Dawn", "Dusk", "Noon", "Midday", "Afternoon", "Sunlight", "Light", "Silence",
 })
 
 
