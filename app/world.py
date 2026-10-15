@@ -9257,7 +9257,9 @@ def _movement_destination_from_narration(
         # The one going there is the player: "the sound of waves ... echoes
         # through the hollow alleys" made a place "Hollow" and moved Isk into
         # it (8B run 43, T1). The clause before the preposition says "you".
-        head = re.split(r"[.!?;\n]|,\s+(?:and|but|while|as)\s+", tail[:start])[-1]
+        # A clause with its own subject splits too: "You reach the edge of the
+        # town, where the buildings give way to the ruins" made "Ruins" (8B run 61, T1).
+        head = re.split(r"[.!?;\n]|,\s+(?:and|but|while|as|where|which|whose|when)\s+", tail[:start])[-1]
         if re.search(r"\byou\b", head, re.I):
             return True
         # "Stepping out onto the driftwood path, you follow ..." (7B run 31, T1).
@@ -20756,6 +20758,24 @@ def _reconcile_prose_with_state(
         for entry in leaks:
             report["trimmed"].append(entry)
             turn_ledger.note("prose", "meta_leak_repaired", **entry)
+    except Exception:
+        pass
+    # A code that names nothing is a leak: "the guild's tallyman [[TALLYMAN]]"
+    # (8B run 61, T1). Codes of people, places and items stay for the page.
+    try:
+        # Only shapes the engine never writes: its codes are 1-3 capitals or
+        # L/I/E/Q and a number.
+        stray = [c for c in re.findall(r"\[\[([A-Za-z0-9_]+)\]\]", text)
+                 if not re.fullmatch(r"[A-Z]{1,3}|[LIEQ]\d+", c)]
+        if stray:
+            text = re.sub(r"\s*\[\[(" + "|".join(map(re.escape, set(stray))) + r")\]\]", "", text)
+            report["trimmed"].append({"why": "unknown_code", "codes": sorted(set(stray))})
+            turn_ledger.note("prose", "meta_leak_repaired", why="unknown_code", codes=sorted(set(stray)))
+        # A name in code brackets is the name: "A man, [[Bertram Yates]], a sexton".
+        named = re.findall(r"\[\[([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)+)\]\]", text)
+        if named:
+            text = re.sub(r"\[\[([A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*)+)\]\]", r"\1", text)
+            turn_ledger.note("prose", "meta_leak_repaired", why="bracketed_name", names=named[:4])
     except Exception:
         pass
 
