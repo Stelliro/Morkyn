@@ -19839,7 +19839,12 @@ def _turn_outcomes(
         outcomes.append("quest")
     # A job offered is talk, not progress: the parser's proposed "new" counted
     # and kept the model's XP 17 for a question (8B run 33, T3). Steps count.
-    if isinstance(result.get("quest_changes"), dict) and result["quest_changes"].get("updates"):
+    # Taking a job is talk too: a proposed "accept" (refused, at that) kept the
+    # model's XP 12 for asking what work there was (8B run 62, T2).
+    if isinstance(result.get("quest_changes"), dict) and any(
+        isinstance(u, dict) and str(u.get("action") or "").lower() in {"step_done", "complete", "progress"}
+        for u in result["quest_changes"].get("updates") or []
+    ):
         outcomes.append("quest_change")
     if any(isinstance(c, dict) and int(_float(c.get("quantity_delta"), 0)) > 0 for c in inv_changes or []):
         outcomes.append("find")

@@ -850,6 +850,14 @@ class TalkEarnsNoXp(unittest.TestCase):
                   "quest_changes": {"new": [], "updates": [{"action": "step_done"}]}, "player": {}}
         self.assertIn("quest_change", world._turn_outcomes(_OutcomeConn(), result, player_input="I haul the crate up."))
 
+    def test_an_accept_is_talk(self):
+        # 8B run 62, T2: a proposed (and refused) accept kept the model's XP 12.
+        from app import world
+
+        result = {"_deterministic_combat": {"status": "not_combat"},
+                  "quest_changes": {"new": [], "updates": [{"quest": "Q1", "action": "accept"}]}, "player": {}}
+        self.assertNotIn("quest_change", world._turn_outcomes(_OutcomeConn(), result, player_input="\"What job?\""))
+
 
 class TheRestraintStands(unittest.TestCase):
     """8B run 33, T3: "I keep my hands off the coin" then "His eyes flick to the coin in your palm"."""
