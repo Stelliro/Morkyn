@@ -292,6 +292,31 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class APromiseIsNoPayAndNoHaul(unittest.TestCase):
+    """8B run 71, T4: "you'll be paid thirty gold" paid 30, and "I'll haul the beams" put beams in the pack."""
+
+    LINE = "\"I'll haul the beams off the east pier wreck.\" I nod at the ledger. \"Put my name down. Isk Tarrow, flat-runner.\""
+    PROSE = ("The wreck off the east pier is your new task. You'll haul iron beams from the wreckage, and for that, "
+             "you'll be paid thirty gold. The tallyman offers no more than that.")
+
+    def test_no_coin(self):
+        from app import world
+
+        result = {"narration": self.PROSE, "player": {"gold_delta": 30}}
+        note = world._settle_stated_gold(result, self.LINE)
+        self.assertEqual(note["source"], "gain_without_coin_dropped")
+
+    def test_no_beams(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            kept = world._filter_inventory_changes(conn, [{"name": "Iron beams", "quantity_delta": 1}],
+                                                   narration=self.PROSE, player_input=self.LINE, draft_narration=self.PROSE)
+        self.assertEqual(kept, [])
+
+
 class APlacePassedIsNotEntered(unittest.TestCase):
     """8B run 70, T1: "You pass Millicent's Bakery ... continue toward the tally house" entered the bakery."""
 
