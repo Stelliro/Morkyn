@@ -10518,8 +10518,12 @@ def _outdoor_area_requested(conn, parent_id: int, wanted: str, narration: str) -
     if route and match is matches[0] and re.search(
         r"\b(?:toward|towards)\s+|\b(?:to|for)\s+the\s+", (wanted or "")[match.end():], re.I
     ) and not any(m is not match for m in matches):
-        onward = re.search(r"\b(?:toward|towards|to|for)\s+(?:the\s+)?(?P<name>[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+){0,2})",
+        # Toward a place, not for a thing: "watching the water for the Black
+        # Maw's broken mast" is no destination (8B run 72, T5).
+        onward = re.search(r"\b(?:toward|towards|to)\s+(?:the\s+)?(?P<name>[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+){0,2})(?!['’]s)\b",
                            (wanted or "")[match.end():])
+        if onward and re.search(r"['’]s$", onward.group("name")):
+            onward = None
         turn_ledger.note("movement", "route_is_not_the_destination", route=area,
                          destination=onward.group("name") if onward else "")
         if not onward:
