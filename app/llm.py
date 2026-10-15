@@ -14293,7 +14293,8 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
         return "", sentence
     for coord in _PLAYER_CLAUSE_COORD_RE.finditer(sentence):
         clause = sentence[coord.start():].lstrip(",;\u2014\u2013- ")
-        if not _player_clause_invented(sentence[coord.end():], clause, own, player_input):
+        rest = _pro_verb_as_asked(sentence[: coord.start()], sentence[coord.end():])
+        if not _player_clause_invented(rest, clause, own, player_input):
             continue
         head = sentence[: coord.start()].rstrip(" ,;\u2014\u2013-")
         if len(head) < 20 or _SUBORDINATE_HEAD_RE.match(head):
@@ -14301,6 +14302,20 @@ def _strip_player_acts_from_sentence(sentence: str, own: str, player_input: str)
         end = sentence.rstrip()[-1:]
         return head + (end if end in ".!?" else "."), sentence[coord.start():].strip()
     return sentence, ""
+
+
+def _pro_verb_as_asked(head: str, rest: str) -> str:
+    """ "and you do" read as the act it stands for: "He gestures for you to follow him, and
+    you do" is the player following, which nobody asked for (8B run 55, T5)."""
+    if not re.match(r"(?:do|did|comply|complied|obey|obeyed)\b", rest, re.I):
+        return rest
+    asked = re.search(r"\b(?:for|asks?|asked|tells?|told|motions?|motioned|beckons?|beckoned|waves?|waved|urges?|urged)"
+                      r"\s+you\s+to\s+(?P<act>[a-z]+(?:\s+(?:him|her|them|me|it|the\s+\w+|inside|in|out|along|closer))?)",
+                      head, re.I)
+    if not asked:
+        return rest
+    tail = re.sub(r"^(?:do|did|comply|complied|obey|obeyed)\b", "", rest, flags=re.I)
+    return asked.group("act") + tail
 
 
 _KIN_NP_RE = re.compile(
