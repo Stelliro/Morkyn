@@ -1051,6 +1051,16 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class AMerchantShipIsNoMerchant(unittest.TestCase):
+    """8B run 58, T3: "a wreck of a merchant ship" bound NPC_NEW "Gervase Grisham" to "a merchant"."""
+
+    def test_the_modifier_is_no_figure(self):
+        from app import world
+
+        self.assertEqual(world._figure_hints("A wreck of a merchant ship, found half-sunk in the shallows.", []), [])
+        self.assertEqual(world._figure_hints("A merchant waves from his stall.", []), ["A merchant"])
+
+
 class NoMarkdownInAJobsName(unittest.TestCase):
     """8B run 57, T4: the job "Salvage the *Iron Widow*" kept the prose's markdown."""
 
