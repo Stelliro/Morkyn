@@ -315,6 +315,23 @@ class AnotherSpellingIsNoNewPlace(unittest.TestCase):
         self.assertNotIn("The Salvage Tally House", names)
 
 
+class LiftingItOutTakesIt(unittest.TestCase):
+    """8B run 57, T7: "lift out whatever is glinting" and "You lift the glinting object" refused the ring."""
+
+    def test_the_ring_is_kept(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        line = "I reach into the hollow and lift out whatever is glinting down there, and turn it over in the grey light."
+        prose = ("You lift the glinting object from the hollow, turning it in the grey light. It's a small, tarnished "
+                 "ring with a jagged edge, like it was torn from a chain.")
+        with connect() as conn:
+            kept = world._filter_inventory_changes(conn, [{"name": "tarnished ring", "quantity_delta": 1}],
+                                                   narration=prose, player_input=line, draft_narration=prose)
+        self.assertEqual([k["name"] for k in kept], ["tarnished ring"])
+
+
 class AskingWhereIsNoTaking(unittest.TestCase):
     """8B run 47, T3: "I'll take it" (the job) and "Where do the guild's carts wait?" put two carts in the pack."""
 

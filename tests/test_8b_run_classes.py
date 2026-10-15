@@ -1051,6 +1051,22 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class NoMarkdownInAJobsName(unittest.TestCase):
+    """8B run 57, T4: the job "Salvage the *Iron Widow*" kept the prose's markdown."""
+
+    def test_the_stars_go(self):
+        from app import quest_parser
+
+        narration = ("“The salvagers are looking for a lost ship, the *Iron Widow*. If you find it, I'll pay you "
+                     "for the work and the debt gets paid in full,” Fulk says.")
+        reply = {"new": [{"title": "Salvage the *Iron Widow*", "giver": "Fulk Dimmock", "summary": "Find the *Iron Widow*.",
+                          "steps": [{"title": "Find the *Iron Widow*"}], "difficulty": "normal",
+                          "evidence": "If you find it, I'll pay you for the work and the debt gets paid in full"}]}
+        npcs = [{"id": 1, "code": "A", "name": "Fulk Dimmock", "role": "tallyman"}]
+        accepted, _rejected = quest_parser.validate_quest_changes(reply, narration=narration, npcs=npcs)
+        self.assertEqual([q["title"] for q in accepted.get("new") or []], ["Salvage the Iron Widow"])
+
+
 class TheJobsOwnVerbTakesIt(unittest.TestCase):
     """8B run 56, T3: "I'll clear the Stormbreaker." took no job; the offer was "Clear the Wreckage"."""
 
