@@ -640,6 +640,10 @@ def _ws(text: Any) -> str:
 # for work" made "Settle Debt with Gregory Cropper" (8B run 65, T1).
 _ASKED_FOR_WORK_RE = re.compile(
     r"\b(?:ask\w*|com\w*\s+(?:in\s+)?ask\w*)\s+(?:for|after)\s+(?:work|a\s+job|jobs)\b"
+    # The giver telling back what the player wants: "You're looking for work to
+    # pay it off, I assume" (8B run 76, T2).
+    r"|\byou(?:['’]re|\s+are|['’]ve\s+come\s+to|\s+came\s+to|\s+want\s+to)\s+(?:\w+\s+)?look\w*\s+for\s+(?:work|a\s+job|jobs)\b[^,.;!?]*"
+    r"|\bpay\s+(?:it|that|the\s+debt|your\s+debt)\s+off\b"
     # ... and work said not to be given: "I don't take on just anyone" (same turn).
     r"|\b(?:don['’]?t|do\s+not|won['’]?t|will\s+not|never)\s+(?:\w+\s+){0,2}?(?:take\s+on|hire|give\s+work|hand\s+out\s+work)\b[^,.;!?]*",
     re.I,
@@ -778,6 +782,9 @@ def judge_offer(
             return {"ok": True, "why": "quote", "checked": sentence[:240]}
     if offer_line and evidence_found(offer_line, narration, player_input):
         for sentence in _quote_sentences(offer_line, narration) or [offer_line]:
+            # The player's own question is no offer line either (8B run 76, T2).
+            if bare(sentence) and bare(sentence) in own_flat:
+                continue
             if not _NO_WORK_RE.search(sentence) and (
                 _JOB_RE.search(_offer_text(sentence)) or _ACCEPTS_WORK_RE.search(sentence)
             ):
