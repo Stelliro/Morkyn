@@ -1105,6 +1105,18 @@ class ThePlayerIsYou(unittest.TestCase):
         self.assertIn("\"The player is new,\"", out)
 
 
+class APlaceSaidIsNoPlaceGoneTo(unittest.TestCase):
+    """8B run 77, T6: '"The tally house sent me about the dredge sites."' took Isk back to the tally house."""
+
+    def test_speech_names_no_destination(self):
+        from app import world
+
+        line = ('I stop a few paces off, where the figure can see my empty hands. "You there. Are you Jorin, the '
+                'foreman? The tally house sent me about the dredge sites."')
+        self.assertNotIn("tally house", world._destination_text(line).lower())
+        self.assertIn("docks", world._destination_text('"Take me to the docks," I tell him.').lower())
+
+
 class TheForemanJorinIsNamedNotCalled(unittest.TestCase):
     """8B run 77, T3: "you'll report to the foreman, Jorin." stored Jorin as one spoken to in the scene."""
 

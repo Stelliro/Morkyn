@@ -9324,6 +9324,10 @@ def _destination_text(player_input: str) -> str:
     not destinations.
     """
     line = _player_line(player_input)
+    # Said, a place is named, not gone to: '"The tally house sent me about the
+    # dredge sites."' took Isk back to the tally house (8B run 77, T6). Speech
+    # that asks to go ("Take me to the docks") still counts.
+    line = re.sub(r"\"[^\"\n]*\"|“[^”\n]*”", lambda m: m.group(0) if _ASKS_TO_GO_RE.search(m.group(0)) else " ", line)
     pieces = re.split(r"(?<=[.!?])[\"”']?\s+|(?<=[.!?][\"”])", line)
     kept = []
     for piece in pieces:
