@@ -1051,6 +1051,26 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class ACodeThatNamesNothingGoes(unittest.TestCase):
+    """8B run 61, T1: "the guild's tallyman [[TALLYMAN]]"; older runs had "[[N1]]", "[[Bertram Yates]]"."""
+
+    def test_stray_codes_go_and_real_ones_stay(self):
+        from app import world
+
+        prose = ("You walk on, knowing the guild's tallyman [[TALLYMAN]] will be out soon. Elsabet Millward [[N1]], a "
+                 "dairy hand, tends her pails. A man, [[Bertram Yates]], a sexton, nods. Mira [[A]] waves from "
+                 "Saltmarrow [[L1]].")
+        result = {"narration": prose}
+        world._reconcile_prose_with_state(None, result, rejected=[], movement_report=None, gold_note=None,
+                                          purse_note=None)
+        out = world._narration_text(result)
+        self.assertNotIn("[[TALLYMAN]]", out)
+        self.assertNotIn("[[N1]]", out)
+        self.assertIn("A man, Bertram Yates, a sexton", out)
+        self.assertIn("Mira [[A]]", out)
+        self.assertIn("Saltmarrow [[L1]]", out)
+
+
 class ChoosingTheFirstIsTheirs(unittest.TestCase):
     """8B run 60, T2: "You choose the first, the one that offers the most chance" chose for the player."""
 
@@ -1281,6 +1301,13 @@ class TheSoundIsNotThePlayerGoing(unittest.TestCase):
 
         text = ("The scent of brine clings to the damp stones, and the sound of waves lapping against the wharf "
                 "echoes through the hollow alleys.")
+        self.assertEqual(world._movement_destination_from_narration(text, **self.KW), "")
+
+    def test_a_where_clause_is_not_the_player(self):
+        # 8B run 61, T1: "where the buildings give way to the ruins" made "Ruins".
+        from app import world
+
+        text = "You reach the edge of the town, where the buildings give way to the ruins of the old harbour."
         self.assertEqual(world._movement_destination_from_narration(text, **self.KW), "")
 
     def test_the_player_still_goes(self):
