@@ -17454,6 +17454,33 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         parts = [p for p in re.findall(r"[A-Za-z][A-Za-z'-]+", name) if len(p) >= 3 and p.lower() not in _NOT_A_NAME]
         return any(p[:1].isupper() and re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", unspoken) for p in parts)
 
+    # Someone known who is elsewhere and whom the prose never names stays where
+    # they are, in their own job: NPC_NEW "Mara" ROLE "tide watcher" LOC "Eastern
+    # Bay" for an unnamed hooded woman on a wreck walked the guild's leader out of
+    # Saltmarrow and made her a watcher (8B run 83, T6). The notes still land.
+    try:
+        prow = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        here_id = int(prow[0] or 0) if prow else 0
+    except Exception:
+        here_id = 0
+    for npc in npcs:
+        name = norm_name(str(npc.get("name") or ""))
+        if not name or not here_id or shown(name):
+            continue
+        try:
+            row = conn.execute(
+                "SELECT n.role, n.location_id, l.code FROM npcs n LEFT JOIN locations l ON l.id = n.location_id "
+                "WHERE n.name = ? COLLATE NOCASE LIMIT 1", (name,)
+            ).fetchone()
+        except Exception:
+            row = None
+        if row is None or not int(row["location_id"] or 0) or int(row["location_id"]) == here_id or not row["code"]:
+            continue
+        turn_ledger.note("npc", "unshown_known_person_stays", name=name, place=str(row["code"]))
+        for key in ("location_code", "place"):
+            npc.pop(key, None)
+        npc["location"] = str(row["code"])
+        npc["role"] = str(row["role"] or npc.get("role") or "")
     unshown = [npc for npc in npcs if not known(npc) and not shown(norm_name(str(npc.get("name") or "")))]
     # A job written as the name ("Tallyman") with "a man in a soot-streaked
     # coat" behind the desk: the name drawn for it took no sex and came out
