@@ -17413,11 +17413,17 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
             return True
         # Spoken to is here: '"Not yet, Hargrave,"' addresses him (7B run 3).
         first = (name.split() or [""])[0]
-        if first and len(first) >= 3 and re.search(
-            r"(?:[\"“]\s*|,\s*)" + re.escape(name if " " in name else first) + r"\s*[,.!?]|(?:[\"“]\s*|,\s*)" + re.escape(first) + r"\s*[,.!?]",
-            text,
-        ):
-            return True
+        # Not after "the <job>,": "you'll report to the foreman, Jorin." names
+        # someone at the docks; it addresses no one here (8B run 77, T3).
+        if first and len(first) >= 3:
+            for called in re.finditer(
+                r"(?:[\"“]\s*|,\s*)" + re.escape(name if " " in name else first) + r"\s*[,.!?]"
+                r"|(?:[\"“]\s*|,\s*)" + re.escape(first) + r"\s*[,.!?]",
+                text,
+            ):
+                if called.group(0).startswith(",") and re.search(r"\bthe\s+[a-z]+\s*$", text[: called.start()], re.I):
+                    continue
+                return True
         parts = [p for p in re.findall(r"[A-Za-z][A-Za-z'-]+", name) if len(p) >= 3 and p.lower() not in _NOT_A_NAME]
         return any(p[:1].isupper() and re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", unspoken) for p in parts)
 
