@@ -292,6 +292,24 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class APlacePassedIsNotEntered(unittest.TestCase):
+    """8B run 70, T1: "You pass Millicent's Bakery ... continue toward the tally house" entered the bakery."""
+
+    def test_the_bakery_is_passed(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        line = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman "
+                "what work he'll take against my debt.")
+        prose = ("You pass Millicent's Bakery, where the scent of fresh loaves lingers, and continue toward the "
+                 "salvage guild's tally house. The door is heavy. Inside, the air is thick with old parchment.")
+        with connect() as conn:
+            world._upsert_location(conn, "Millicent's Bakery", "", parent_id=1, kind="bakery")
+            self.assertIsNone(world._venue_named_in(conn, 1, line, prose))
+            self.assertIsNotNone(world._venue_named_in(conn, 1, "I go into Millicent's Bakery.", "You step inside."))
+
+
 class ADrawnNameFitsTheOneShown(unittest.TestCase):
     """8B run 68, T1-T2: "a man in a soot-stained coat" got the drawn name "Gunilda"."""
 

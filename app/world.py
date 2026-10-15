@@ -7189,7 +7189,12 @@ def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
         return None
     if not rows:
         return None
-    text = f"{player_input or ''} {str(narration or '')[-600:]}".lower()
+    # A place passed on the way is not the one entered: "You pass Millicent's
+    # Bakery ... and continue toward the salvage guild's tally house" stood
+    # Isk in the bakery (8B run 70, T1).
+    prose = re.sub(r"\b(?:pass(?:es|ed|ing)?|past|beyond|beside|by)\s+(?:the\s+)?[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,3}",
+                   " ", str(narration or "")[-600:])
+    text = f"{player_input or ''} {prose}".lower()
     for row in rows:
         if _venue_name_in_text(str(row["name"] or ""), text):
             return row
