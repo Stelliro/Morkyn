@@ -13553,7 +13553,12 @@ _DECIDED_FOR_PLAYER_RE = re.compile(
     r"|\byou\s+(?:(?!(?:he|she|they|we|it)\b)[\w'\u2019]+,?\s+){1,6}?(?:then\s+|and\s+(?:then\s+)?)"
     r"(?:decide|decided|choose|chose|opt|opted|resolve|resolved|agree|agreed|settle\s+on|settled\s+on)"
     r"\s+(?:to|that|against|not\s+to|instead|on)\b"
-    r"|\byou\s+make\s+up\s+your\s+mind\b",
+    r"|\byou\s+make\s+up\s+your\s+mind\b"
+    # Picking one of the choices laid out: "You choose the first, the one that
+    # offers the most chance to prove your worth." (8B run 60, T2).
+    r"|\byou\s+(?:\w+ly\s+)?(?:choose|chose|select|selected|settle\s+on|settled\s+on)\s+"
+    r"(?:the\s+(?:first|second|third|last|other|one)|one|this|that|it)\b"
+    r"|\byou\s+(?:\w+ly\s+)?(?:pick|picked)\s+(?:the\s+(?:first|second|third|last|other|one)|one|this|that)\b(?!\s+up\b)",
     re.I,
 )
 # "Whatever you decide to do" is the situation, not a decision.

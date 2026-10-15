@@ -1051,6 +1051,18 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class ChoosingTheFirstIsTheirs(unittest.TestCase):
+    """8B run 60, T2: "You choose the first, the one that offers the most chance" chose for the player."""
+
+    def test_the_choice_goes(self):
+        from app import llm
+
+        line = "\"I owe the guild a winter's credit.\" I stop in front of the desk. \"What job have you got?\""
+        self.assertTrue(llm._decided_for_player("You choose the first, the one that offers the most chance.", line))
+        self.assertFalse(llm._decided_for_player("You choose the first, the salvage contract.",
+                                                 "I choose the first, the salvage contract."))
+
+
 class AQuoteInTheRewardIsTheJobs(unittest.TestCase):
     """8B run 59, T3: the parser nested "offer_line" and "evidence" in the reward, and the job had no quote."""
 
