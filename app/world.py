@@ -13415,6 +13415,19 @@ def _place_new_people_at_arrival(
         if not isinstance(npc, dict):
             continue
         name = str(npc.get("name") or "").strip()
+        code = str(npc.get("code") or "").strip()
+        if not name and code:
+            # TALK "A" alone is a code-only entry, which the upsert only looks up:
+            # Elsabet, "behind the counter" of the tally house, stayed in town
+            # and the next turn sat a new captain at her desk (8B run 53, T1).
+            row = conn.execute("SELECT id, name, location_id FROM npcs WHERE code = ?", (code,)).fetchone()
+            if row is not None and int(row["location_id"] or 0) == int(here["id"]) and (
+                f"[[{code.upper()}]]" in str(narration or "")
+                or (row["name"] and re.search(r"(?<!\w)" + re.escape(str(row["name"])) + r"(?!\w)", unspoken, re.I))
+            ):
+                conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(dest["id"]), int(row["id"])))
+                turn_ledger.note("npc", "placed_at_arrival", name=str(row["name"] or ""), place=str(dest["name"] or ""))
+            continue
         if name.lower() in known and not (
             name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", unspoken, re.I)
         ):
