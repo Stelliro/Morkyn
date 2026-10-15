@@ -13838,6 +13838,10 @@ _IT_TAKES_RE = re.compile(
     r"\b(?i:it|he|she|they|that|this|which|each|one)\s+(?:\w+ly\s+)?"
     r"(?i:takes|took|buys|bought|steals|stole|grabs|grabbed|pockets|pocketed|collects|collected|gathers|gathered|"
     r"receives|received|accepts|accepted|trades|traded|claims|claimed)\b"
+    # "what work he'll take against my debt" is the tallyman's taking (8B run
+    # 81, T1: it read as the player's, and a second reckoner went in the pack).
+    r"|\b(?i:he|she|they|you|it)(?:['’]ll|['’]d|\s+will|\s+would|\s+might|\s+may|\s+can|\s+could)\s+"
+    r"(?i:take|buy|accept|claim|trade|collect)\b"
 )
 
 

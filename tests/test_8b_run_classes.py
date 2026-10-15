@@ -1105,6 +1105,23 @@ class ThePlayerIsYou(unittest.TestCase):
         self.assertIn("\"The player is new,\"", out)
 
 
+class WhatHellTakeIsHisTaking(unittest.TestCase):
+    """8B run 81, T1: "what work he'll take against my debt" read as the player taking; a second reckoner went in."""
+
+    def test_his_taking_is_not_mine(self):
+        from app.llm import player_take_intent
+
+        self.assertFalse(player_take_intent(
+            "Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt."))
+        self.assertTrue(player_take_intent("I'll take the rope."))
+
+    def test_morning_is_no_speaker(self):
+        from app import quest_parser
+
+        self.assertIn("Morning", quest_parser._NOT_A_SPEAKER)
+
+
 class HaulingFromTheWharfIsNoAskForTheTallyHouse(unittest.TestCase):
     """8B run 79, T5: "from the wharf up to the guild's storehouse" kept MOVE "The Salvage GUILD's TALLY HOUSE"."""
 
