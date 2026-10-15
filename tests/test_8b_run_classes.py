@@ -1105,6 +1105,30 @@ class ThePlayerIsYou(unittest.TestCase):
         self.assertIn("\"The player is new,\"", out)
 
 
+class TheDebtIsNoJobButATaskIs(unittest.TestCase):
+    """8B run 74, T2: "You'll need to work it off" and the player's own question became two jobs;
+    run 47, T2: "You'll need to clear a full load" is a job."""
+
+    LINE = "\"I owe the guild a winter's credit and I want to work it off.\" I stop. \"What job have you got that pays against the ledger?\""
+
+    def _judge(self, giver_line, evidence):
+        from app import quest_parser
+
+        clerk = {"id": 1, "code": "A", "name": "Ulric Hooper", "role": "clerk"}
+        narration = ("“I owe the guild a winter's credit and I want to work it off,” you say. “What job have "
+                     "you got that pays against the ledger?” Ulric Hooper looks up. " + giver_line)
+        return quest_parser.judge_offer(evidence, narration, self.LINE, offer_line=giver_line, giver=clerk,
+                                        giver_ref="Ulric Hooper", npcs=[clerk])
+
+    def test_working_off_ones_debt_is_no_job(self):
+        line = "“You've got a debt, and debts aren't paid with promises. You'll need to work it off. What's your skill?”"
+        self.assertFalse(self._judge(line, "What job have you got that pays against the ledger?")["ok"])
+
+    def test_a_task_set_is_a_job(self):
+        line = "“You'll need to clear a full load—something worth at least ten silver.”"
+        self.assertTrue(self._judge(line, line.strip("“”"))["ok"])
+
+
 class AnOfferSpokenWithCurlyApostrophes(unittest.TestCase):
     """8B run 66, T1: "You'll get a fair share" did not match the prose's "You’ll", so no one offered it."""
 
