@@ -13559,7 +13559,11 @@ _DECIDED_FOR_PLAYER_RE = re.compile(
     # offers the most chance to prove your worth." (8B run 60, T2).
     r"|\byou\s+(?:\w+ly\s+)?(?:choose|chose|select|selected|settle\s+on|settled\s+on)\s+"
     r"(?:the\s+(?:first|second|third|last|other|one)|one|this|that|it)\b"
-    r"|\byou\s+(?:\w+ly\s+)?(?:pick|picked)\s+(?:the\s+(?:first|second|third|last|other|one)|one|this|that)\b(?!\s+up\b)",
+    r"|\byou\s+(?:\w+ly\s+)?(?:pick|picked)\s+(?:the\s+(?:first|second|third|last|other|one)|one|this|that)\b(?!\s+up\b)"
+    # Taking the offer: "You accept the offer. Lowen Thatcher gives you a map"
+    # (8B run 66, T1) said yes for a player who had only asked what work there was.
+    r"|(?P<accept>\byou\s+(?:\w+ly\s+)?(?:accept|accepted|take|took)\s+(?:the|his|her|their)\s+"
+    r"(?:offer|job|deal|terms|work|contract|task|bargain)\b)",
     re.I,
 )
 # "Whatever you decide to do" is the situation, not a decision.
@@ -14473,6 +14477,14 @@ def _decided_for_player(sentence: str, player_input: str) -> bool:
     own = re.split(r"\n\s*\n", str(player_input or ""), maxsplit=1)[0]
     if str(player_input or "").startswith("__"):
         own = ""
+    if match.groupdict().get("accept"):
+        # The player's own yes is theirs to see told: "I'll take it." then "You accept the offer."
+        try:
+            from app.quest_parser import player_accepts
+
+            return not player_accepts(own)
+        except Exception:
+            return True
     chosen = _decision_words(sentence[match.end():])
     if not chosen:
         return True
