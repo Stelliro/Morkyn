@@ -174,6 +174,26 @@ paid (T7); run 72 went to T11 at the shoals with nothing wrong in the save after
   line, in its place (3ff0604); "the player" is "you" (98b7087); a code that names nothing goes
   (f6f0d08).
 
+### Runs 73-80 (2026-10-15)
+
+Run 79 took a hauling job, did it and was paid at T5; runs 73 and 80 reached T6-T7. Each run
+still turned up one state fault, now mostly in movement and job offers:
+
+- **Movement**: the place asked for comes before a lane on the way (30183a3); a thing lifted out
+  is no exit (6638623); the place stood in is no destination asked for (8f8064e); a place said,
+  or a job named, in speech is no walk to it (72b3afe, 8df1ad5); a room of the building one stands
+  in can be gone to (4c3cd73).
+- **Offers**: a debt is no job, a task set is one (94aaf08); the player's own question, and the
+  giver telling it back, offer nothing (184dd08). Both were judged against each run's stored
+  people; one real notice-board job in 7B run 29 is lost, as it had stood only on a wrong quote.
+- **Money and items**: paying mind is no pay, and one word off a known place is that place
+  (6638623); a promise is no pay and a spoken "I'll haul" takes nothing (749e760); a job at the
+  yard is a job, not a yard (8498223).
+- **People**: a figure in another trade is not the one sought, and a job-named person takes the
+  sex shown (30183a3, 8498223); a name after "the <job>," names, it does not call (038b0a6).
+- **Prose**: "the player" is "you", the 8B's glued bracket ("the(guild's") is mended (98b7087,
+  8f8064e).
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
@@ -213,5 +233,7 @@ paid (T7); run 72 went to T11 at the shoals with nothing wrong in the save after
 
 ## Next
 
-Run 73 on 79ab772 or later; keep logging by class. No clean run yet: state faults are now rare
+Run 81 on 8df1ad5 or later; keep logging by class. Stock lines repeat across turns too ("You're
+late" from the tallyman in most runs, NPCs echoing the player's question back), alongside the
+prose classes above. No clean run yet: state faults are now rare
 (about one per run, found in T1-T7), while the prose classes above remain in every run.
