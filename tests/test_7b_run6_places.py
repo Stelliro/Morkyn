@@ -585,6 +585,45 @@ class TheJobsFigureIsTheOneHere(unittest.TestCase):
         self.assertEqual(npcs, [])
 
 
+class AnUnshownKnownPersonStaysPut(unittest.TestCase):
+    """8B run 83, T6: NPC_NEW "Mara" for an unnamed woman on a wreck moved the guild's leader to the bay."""
+
+    def test_the_leader_stays_in_town_in_her_job(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            world._upsert_npc(conn, {"name": "Mara", "location": "Saltmarrow", "role": "Salvage Guild Leader"})
+            bay = world._upsert_location(conn, "Eastern Bay", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (bay,))
+            prose = ("A moment later, the hooded figure steps down from the wreckage, revealing a woman with a scar. "
+                     "\"You're not the first to come for it,\" she says.")
+            npcs = world._npcs_shown_in_prose(
+                conn, [{"name": "Mara", "role": "tide watcher", "location": "Eastern Bay"}], prose
+            )
+            for npc in npcs:
+                world._upsert_npc(conn, npc)
+            mara = conn.execute("SELECT location_id, role FROM npcs WHERE name = 'Mara'").fetchone()
+        self.assertEqual(int(mara["location_id"]), 1)
+        self.assertEqual(mara["role"], "Salvage Guild Leader")
+
+    def test_named_in_the_prose_she_comes(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            world._upsert_npc(conn, {"name": "Mara", "location": "Saltmarrow", "role": "Salvage Guild Leader"})
+            bay = world._upsert_location(conn, "Eastern Bay", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (bay,))
+            prose = "Mara steps down from the wreckage and looks you over."
+            for npc in world._npcs_shown_in_prose(conn, [{"name": "Mara", "location": "Eastern Bay"}], prose):
+                world._upsert_npc(conn, npc)
+            mara = conn.execute("SELECT location_id FROM npcs WHERE name = 'Mara'").fetchone()
+        self.assertEqual(int(mara["location_id"]), int(bay))
+
+
 class ALineNoOneSaysIsNotLogged(unittest.TestCase):
     """8B run 44, T0: TALK "You're late, Flat-runner." on a silent opening was logged as said, then echoed."""
 
