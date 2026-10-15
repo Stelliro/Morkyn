@@ -9410,6 +9410,36 @@ def _movement_destination_from_input(rows: list[Any], player_input: str, current
     return max((f for f in found if f[0] >= last_at - 1 or f[0] == last_at), key=lambda f: f[1])[2]
 
 
+def _adopt_new_place_into_town(conn, from_id: int, max_place_before: int, player_input: str = "") -> None:
+    """A place made this turn and reached on foot from inside a town is part of that town.
+
+    8B run 54, T4-T7: "walk down to the docks to find berth three" made "Berth
+    Three" from the foreman's LOC with no parent, so walking back to the tally
+    house was a journey between places and ended outside it, in the town. A
+    place only named (not reached), or reached from outside any town, is left.
+    """
+    line = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input))
+    if not _OUTDOOR_WALK_VERB_RE.search(line) or re.search(
+        r"\b(?:sail\w*|ride|rode|riding|row(?:s|ed|ing)?\s+(?:out|across|over)|voyage|journey\w*|travel\w*|"
+        r"set(?:s|ting)?\s+(?:off|out)\s+for|days?|leagues?|miles?)\b", line, re.I
+    ):
+        return
+    row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+    now_id = int(row[0] or 0) if row else 0
+    if not now_id or now_id == int(from_id or 0) or now_id <= int(max_place_before or 0):
+        return
+    new = _location_row(conn, now_id)
+    if new is None or int(venues._field(new, "parent_id", 0) or 0) or str(venues._field(new, "kind", "") or ""):
+        return
+    town = _location_row(conn, int(from_id or 0))
+    if town is not None and int(venues._field(town, "parent_id", 0) or 0):
+        town = _location_row(conn, int(venues._field(town, "parent_id", 0) or 0))
+    if town is None or int(venues._field(town, "parent_id", 0) or 0) or int(town["id"]) == now_id:
+        return
+    conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (int(town["id"]), now_id))
+    turn_ledger.note("place", "new_place_in_town", place=str(new["name"] or ""), town=str(town["name"] or ""))
+
+
 def gate_venue_move(conn, from_location_id: int, to_location_id: int, *, via: int = 0) -> dict[str, Any]:
     """Decide whether a move into a venue is allowed, and where it lands instead.
 
@@ -14473,6 +14503,9 @@ _NOT_A_TAKEN_THING = frozenset({
     "position", "cover", "shelter", "point", "advice", "side", "word", "words", "opportunity", "liberty", "stairs",
     "ladder", "door", "sip", "bite", "drink", "swig", "mouthful", "hold", "grip", "lot", "rim", "edge", "floor",
     "ground", "wall", "water", "air", "view", "scene", "sight", "silence", "dark", "light",
+    # A part of something held, not a thing taken: "I take the end of the nearest
+    # crate" put "end x1" in the pack (8B run 54, T5).
+    "end", "ends", "corner", "corners", "top", "bottom", "front", "back", "middle", "weight", "strain",
 })
 # The any-word must be what the take verb takes: "I pocket whatever is under it",
 # not "Anything on there that'll keep the time?" (7B run 4, T1).
@@ -21290,7 +21323,15 @@ def apply_turn(
             )
         except Exception:
             pass
+        try:
+            here_before = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0] or 0)
+        except Exception:
+            here_before = 0
         _apply_player(conn, result.get("player") or {})
+        try:
+            _adopt_new_place_into_town(conn, here_before, max_place_before, player_input)
+        except Exception:
+            pass
         movement_report = _reconcile_movement_report(movement_report, result.get("player"))
         # The gates above refused what they refused; the prose now matches
         # (#55, #75, #76). Before the cast seeding below reads the prose.
