@@ -1133,6 +1133,13 @@ def validate_quest_changes(
         if not isinstance(raw, dict):
             continue
         reasons: list[str] = []
+        # Fields written inside the reward belong to the job: the 8B closed the
+        # reward late and "offer_line" and "evidence" fell into it, so "Gut the
+        # Drowned Mariner" had no quote at all (8B run 59, T3).
+        nested = raw.get("reward") if isinstance(raw.get("reward"), dict) else {}
+        for key in ("evidence", "offer_line", "difficulty", "timer_turns", "giver"):
+            if not raw.get(key) and nested.get(key):
+                raw[key] = nested.pop(key)
         # Markdown is no part of a name: "Salvage the *Iron Widow*" (8B run 57, T4).
         for key in ("title", "summary", "description"):
             if isinstance(raw.get(key), str):
