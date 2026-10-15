@@ -1051,6 +1051,22 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class AQuoteInTheRewardIsTheJobs(unittest.TestCase):
+    """8B run 59, T3: the parser nested "offer_line" and "evidence" in the reward, and the job had no quote."""
+
+    def test_the_quote_is_lifted(self):
+        from app import quest_parser
+
+        narration = ("\"The Drowned Mariner,\" he said. \"Her hold's still packed with iron, good coin for a gut job.\"")
+        reply = {"new": [{"title": "Gut the Drowned Mariner", "giver": "Everard Tolley", "difficulty": "normal",
+                          "steps": [{"title": "Gut the wreck"}],
+                          "reward": {"text": "", "offer_line": "Her hold's still packed with iron, good coin for a gut job.",
+                                     "evidence": "Her hold's still packed with iron, good coin for a gut job."}}]}
+        npcs = [{"id": 1, "code": "A", "name": "Everard Tolley", "role": "tallyman"}]
+        accepted, rejected = quest_parser.validate_quest_changes(reply, narration=narration, npcs=npcs)
+        self.assertEqual([q["title"] for q in accepted.get("new") or []], ["Gut the Drowned Mariner"], rejected)
+
+
 class AMerchantShipIsNoMerchant(unittest.TestCase):
     """8B run 58, T3: "a wreck of a merchant ship" bound NPC_NEW "Gervase Grisham" to "a merchant"."""
 
