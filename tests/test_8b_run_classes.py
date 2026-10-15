@@ -1059,6 +1059,28 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class AShorterSayingIsTheLine(unittest.TestCase):
+    """8B run 63, T3: '"Whatever pays most," you said ... "Name it."' kept, then the typed lines said again."""
+
+    def test_said_once_in_place(self):
+        from app import narration_pipeline as npl
+
+        line = '"Salvage. Out on the flats, whatever pays most against the ledger." I meet his eyes. "Name it and I\'ll go."'
+        draft = ("Elias studies you. \"What kind of salvage?\"\n\nYou don't flinch. “Whatever pays most,” you "
+                 "said, the words steady. “Name it.”\n\nHe exhales.")
+        out, _changes = npl.keep_player_words(draft, line)
+        self.assertEqual(out.count("whatever pays most"), 1)
+        self.assertEqual(out.count("Name it"), 1)
+
+    def test_a_signs_words_are_no_line(self):
+        from app import narration_pipeline as npl
+
+        line = '"Where do I find this Thaddeus, then - the harbour office?"'
+        draft = "\"Over there,\" he says, nodding at a building with a sign that reads \"Harbour Office.\""
+        out, _changes = npl.keep_player_words(draft, line)
+        self.assertIn("reads \"Harbour Office.\"", out)
+
+
 class ACodeThatNamesNothingGoes(unittest.TestCase):
     """8B run 61, T1: "the guild's tallyman [[TALLYMAN]]"; older runs had "[[N1]]", "[[Bertram Yates]]"."""
 

@@ -2673,6 +2673,58 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             changes.append({"action": "player_act_given_back", "text": sentence})
     body = "".join(pieces)
 
+    # 3f. A shorter saying of a missing line is that line, in its place: '"Whatever
+    # pays most," you said ... "Name it."' for '"Salvage. Out on the flats,
+    # whatever pays most against the ledger." ... "Name it and I'll go."' was
+    # kept, then the typed lines were said again at the start (8B run 63, T3).
+    if missing:
+        found_spans = spans_of(body)
+        said_tag = re.compile(r"\s*,?\s*you\s+(?:\w+ly\s+)?(?:say|said|ask|asked|reply|replied|add|added|answer|answered|"
+                              r"murmur|murmured|call|called)\b", re.I)
+
+        def tagged(i: int) -> bool:
+            # The player's own tag after it, or the line it continues had one; a
+            # sign's '"Harbour Office."' is no line of theirs (7B run 20, T5).
+            span = found_spans[i]
+            if said_tag.match(body[span["end"]:]):
+                return True
+            return bool(span.get("chained") and i > 0 and said_tag.match(body[found_spans[i - 1]["end"]:]))
+
+        def owner_of(i: int) -> str | None:
+            span = found_spans[i]
+            if span["speaker"] != "player" or not tagged(i):
+                return None
+            words = _speech_key(span["inner"]).split()
+            if not words or (len(words) < 2 and not span.get("chained")):
+                return None
+            return next((q for q in missing if set(words) <= set(_speech_key(q).split())), None)
+
+        owners = [owner_of(i) for i in range(len(found_spans))]
+        index = len(found_spans) - 1
+        while index >= 0:
+            owner = owners[index]
+            if owner is None or owner not in missing:
+                index -= 1
+                continue
+            span = found_spans[index]
+            start = span["inner_start"]
+            # Two halves of one typed line around its tag ('"A name," you say,
+            # "or I ask at the guild."', 8B run 5, T5) are said as the one line.
+            if index > 0 and span.get("chained") and owners[index - 1] == owner:
+                start = found_spans[index - 1]["inner_start"]
+                index -= 1
+            end = span["inner_start"] + len(span["inner"])
+            inner = body[start:end]
+            fixed = owner.strip()
+            if span["inner"].rstrip().endswith(",") and fixed[-1:] == ".":
+                fixed = fixed[:-1] + ","
+            # Joined halves lose the tag between them; the line's own tag is
+            # put back below (player_line_tagged).
+            body = body[:start] + fixed + body[end:]
+            missing.remove(owner)
+            changes.append({"action": "shortened_line_restored", "quote": owner, "was": inner[:200]})
+            index -= 1
+
     # 4. Still missing: the player says it as the scene opens, or right after
     # the line they typed before it, so their lines keep their order (7B run
     # 11, T1: "Heading out, yes ..." was put before "Morning. Not a traveller").
