@@ -1151,6 +1151,19 @@ class AJobAtTheYardIsAJob(unittest.TestCase):
 class APlaceSaidIsNoPlaceGoneTo(unittest.TestCase):
     """8B run 77, T6: '"The tally house sent me about the dredge sites."' took Isk back to the tally house."""
 
+    def test_a_job_named_in_speech_is_no_walk(self):
+        # 8B run 80, T5: '"I'll clear the drowned shipyard."' at the desk kept MOVE "The Drowned Shipyard".
+        from app import world
+
+        rows = [{"id": 1, "code": "L1", "name": "Saltmarrow", "parent_id": 0, "kind": ""},
+                {"id": 2, "code": "L2", "name": "The Salvage Guild's Tally House", "parent_id": 1, "kind": ""}]
+        line = "\"I'll clear the drowned shipyard.\" I meet his eyes. \"Where is it sealed?\""
+        prose = "Dorian leans back in his chair. \"The shipyard lies at the edge of the drowned Reach,\" he says."
+        patch = {"move_to_location": "The Drowned Shipyard"}
+        got = world._unasked_unshown_move({"player": patch}, patch, rows, line, intent="conversation", narration=prose,
+                                          current_name="The Salvage Guild's Tally House")
+        self.assertEqual(got, "The Drowned Shipyard")
+
     def test_speech_names_no_destination(self):
         from app import world
 
