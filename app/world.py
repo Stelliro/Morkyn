@@ -6925,6 +6925,19 @@ _VENUE_EXIT_RE = re.compile(
 )
 
 
+_EXIT_MOTION_WORDS = frozenset(
+    "step steps stepping walk walks walking go goes going head heads heading come comes coming "
+    "back leave leaves leaving exit exits exiting out outside straight right the".split()
+)
+
+
+def _out_of_another_verb(span: str) -> bool:
+    """The "out" belongs to a later verb: "walk along the planks and call out"
+    calls, it does not leave (8B run 82, T5, walked the player off the wharf)."""
+    joins = list(re.finditer(r"\b(?:and|then|to)\s+([a-z']+)", span, re.I))
+    return bool(joins) and joins[-1].group(1).lower() not in _EXIT_MOTION_WORDS
+
+
 def venue_move_intent(text: str) -> str:
     """"enter", "exit" or "" for a line that walks the player through a doorway.
 
@@ -6939,7 +6952,7 @@ def venue_move_intent(text: str) -> str:
     # freed iron core out of the hull" walked Isk off the berth (8B run 73, T6).
     exit_at = max((m.end() for m in _VENUE_EXIT_RE.finditer(line) if not re.search(
         r"\b(?:lift|pull|take|took|haul|drag|carr(?:y|ies|ied)|fish|draw|hoist|pr[iy]\w*|work|ease|wrench|tug)\w*\b",
-        m.group(0), re.I)), default=-1)
+        m.group(0), re.I) and not _out_of_another_verb(m.group(0))), default=-1)
     # "step back out into the street" is still the way out.
     enter_at = max(
         (
