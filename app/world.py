@@ -6935,7 +6935,11 @@ def venue_move_intent(text: str) -> str:
     comings and goings moves nobody.
     """
     line = _travel_scoring_text(text)
-    exit_at = max((m.end() for m in _VENUE_EXIT_RE.finditer(line)), default=-1)
+    # A thing lifted out is not the player going out: "go back and lift the
+    # freed iron core out of the hull" walked Isk off the berth (8B run 73, T6).
+    exit_at = max((m.end() for m in _VENUE_EXIT_RE.finditer(line) if not re.search(
+        r"\b(?:lift|pull|take|took|haul|drag|carr(?:y|ies|ied)|fish|draw|hoist|pr[iy]\w*|work|ease|wrench|tug)\w*\b",
+        m.group(0), re.I)), default=-1)
     # "step back out into the street" is still the way out.
     enter_at = max(
         (
@@ -20334,7 +20338,10 @@ _ASKED_CLAUSE_RE = re.compile(
     r"(?:what|how|whether|if|which|who|where|about)\b[^,.;!?]*"
     # A job told by what it pays moves nothing: "the mention of a job that pays
     # off debts" backed GOLD 10 (+8) (8B run 63, T6).
-    r"|\b(?:job|jobs|work|task|contract|run|haul|salvage)\s+(?:that|which)\s+pays?\b[^,.;!?]*",
+    r"|\b(?:job|jobs|work|task|contract|run|haul|salvage)\s+(?:that|which)\s+pays?\b[^,.;!?]*"
+    # Paying heed is no paying: "no one pays you much mind" backed GOLD 20
+    # (+35) after a salvage nobody paid for (8B run 73, T6).
+    r"|\b(?:pay|pays|paid|paying)\s+(?:\w+\s+){0,2}?(?:mind|heed|attention|respects?|a\s+visit|court|tribute\s+to)\b",
     re.I,
 )
 _MONEY_MOVES_RE = re.compile(
@@ -21275,9 +21282,17 @@ def apply_turn(
                 # Another spelling of a place already made is that place: LOC_NEW
                 # "The Salvage Tally House" while standing in "The Salvage
                 # Guild's Tally House" minted a second one (8B run 50, T4).
+                def one_word_off(a: str, b: str) -> bool:
+                    # "The Salvage Union's Tally House" for "The Salvage Guild's
+                    # Tally House" minted a second tally house (8B run 73, T6).
+                    wa, wb = _place_words(a), _place_words(b)
+                    return (len(wa) == len(wb) >= 3 and wa[0] == wb[0] and wa[-2:] == wb[-2:]
+                            and sum(1 for x, y in zip(wa, wb) if x != y) == 1)
+
                 try:
                     same = next((r for r in conn.execute("SELECT id, name FROM locations").fetchall()
-                                 if _same_place_name(loc_name, str(r["name"] or ""))), None)
+                                 if _same_place_name(loc_name, str(r["name"] or ""))
+                                 or one_word_off(loc_name, str(r["name"] or ""))), None)
                 except Exception:
                     same = None
                 if same is not None:
