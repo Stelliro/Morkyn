@@ -1105,6 +1105,18 @@ class ThePlayerIsYou(unittest.TestCase):
         self.assertIn("\"The player is new,\"", out)
 
 
+class TheForemanJorinIsNamedNotCalled(unittest.TestCase):
+    """8B run 77, T3: "you'll report to the foreman, Jorin." stored Jorin as one spoken to in the scene."""
+
+    def test_apposition_is_not_address(self):
+        from app import world
+
+        prose = "Marion taps the counter. \"You'll report to the foreman, Jorin. He's strict.\""
+        self.assertEqual(world._npcs_shown_in_prose(_ConnStub(), [{"name": "Jorin", "role": "foreman"}], prose), [])
+        called = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Jorin", "role": "foreman"}], "\"Not yet, Jorin,\" you say.")
+        self.assertEqual([n["name"] for n in called], ["Jorin"])
+
+
 class AFigureInAnotherTrade(unittest.TestCase):
     """8B run 75, T1: the tallyman was bound to the woman at the weaver's stall and pinned "she"."""
 
