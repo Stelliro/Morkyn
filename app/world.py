@@ -9701,7 +9701,9 @@ def _unasked_unshown_move(
         or (code and f"[[{code.lower()}]]" in low)
         or (dest and _place_words(dest) and re.search(rf"\b{re.escape(_place_words(dest)[-1])}", low))
     )
-    line_low = _player_line(player_input).lower()
+    # The line's acts, and speech only where it asks to go: '"I'll clear the
+    # drowned shipyard"' at the desk kept a MOVE to the shipyard (8B run 80, T5).
+    line_low = _destination_text(player_input).lower()
     dest_words = _place_words(dest) if dest else []
     if dest_words and _line_names_place(line_low, dest_words):
         return ""
