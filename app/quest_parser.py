@@ -708,7 +708,9 @@ def _giver_sentences(narration: str, player_input: str, giver: dict[str, Any] | 
 _PLAYER_OWES_RE = re.compile(
     r"\b(?:if\s+)?you\s+(?:\w+\s+){0,2}?(?:pay|paid|pays|owe|owes|owed)\b[^.!?]{0,40}"
     r"|\bpay\s+(?:your|what\s+you\s+owe|the\s+guild|it\s+back|us\s+back|them\s+back|back\s+what)\b[^.!?]{0,30}"
-    r"|\b(?:your|the)\s+debts?\b[^.!?]{0,30}",
+    r"|\b(?:your|the|a|any|old|such)?\s*debts?\b[^.!?]{0,30}"
+    # "You'll need to work it off" is the player's own debt, not a job (8B run 74, T2).
+    r"|\bwork\s+(?:it|that|this|them|the\s+debt|your\s+debt|the\s+rest)\s+off\b",
     re.I,
 )
 
@@ -763,9 +765,15 @@ def judge_offer(
     # The player's own words, or the prose retelling them ("You ask ..."), are
     # the ask, never the offer: job words count only in someone else's
     # sentence. The player taking a job on ("I'll take the job") still counts.
-    own_flat = re.sub(r"\s+", " ", str(player_input or "")).strip().lower()
+    # Quote marks and apostrophes either way: the prose's “What job have you
+    # got ...?” is the player's typed "What job have you got ...?" (8B run 74, T2).
+    def bare(text: str) -> str:
+        text = str(text or "").replace("’", "'").replace("‘", "'")
+        return re.sub(r"\s+", " ", re.sub(r"[\"“”]", "", text)).strip().lower()
+
+    own_flat = bare(player_input)
     for sentence in pool:
-        players = sentence.lower() in own_flat or re.match(r"^\W*you\b", sentence, re.I)
+        players = bare(sentence) in own_flat or re.match(r"^\W*you\b", sentence, re.I)
         if _ACCEPTS_WORK_RE.search(sentence) or (not players and _JOB_RE.search(_offer_text(sentence))):
             return {"ok": True, "why": "quote", "checked": sentence[:240]}
     if offer_line and evidence_found(offer_line, narration, player_input):
@@ -784,6 +792,12 @@ def judge_offer(
         for sentence in giver_lines:
             if _AGREES_RE.search(sentence):
                 return {"ok": True, "why": "giver_agrees_to_ask", "checked": sentence[:240]}
+            # The task set for one who asked: "You'll need to clear a full load,
+            # something worth at least ten silver" (8B run 47, T2); working off
+            # one's own debt is no task set (run 74, T2).
+            if re.search(r"\byou['’]ll\s+(?:need|have)\s+to\s+(?!work\s+(?:it|that|this|the\s+debt|your\s+debt)\s+off)"
+                         r"(?!pay\b|wait\b|be\s+careful|prove)[a-z]+", _offer_text(sentence), re.I):
+                return {"ok": True, "why": "giver_sets_the_task", "checked": sentence[:240]}
     return {"ok": False, "why": "no_offer_in_exchange", "checked": pool[0][:240]}
 
 
