@@ -292,6 +292,43 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class TheBerthAfterTheWreck(unittest.TestCase):
+    """8B run 73, T6: lifting the core "out of the hull" walked Isk off; "no one pays you much mind" paid +35;
+    "The Salvage Union's Tally House" made a second tally house."""
+
+    def test_lifting_out_is_no_exit(self):
+        from app import world
+
+        self.assertEqual(world.venue_move_intent(
+            "I tuck the logbook inside my tunic, go back and lift the freed iron core out of the hull, and carry "
+            "it up onto the berth."), "")
+        self.assertEqual(world.venue_move_intent("I step back out into the street."), "exit")
+
+    def test_paying_mind_is_no_coin(self):
+        from app import world
+
+        prose = ("You set the iron core down on the planks. A few workers move about, but no one pays you much mind. "
+                 "The logbook feels like a small victory.")
+        result = {"narration": prose, "player": {"gold_delta": 20}}
+        note = world._settle_stated_gold(result, "I carry the core up onto the berth.")
+        self.assertEqual(note["source"], "gain_without_coin_dropped")
+
+    def test_one_word_off_is_the_same_house(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+        world.apply_turn({"narration": "You set the core down. The tally house stands beyond the berth.",
+                          "locations": [{"name": "The Salvage Union's Tally House", "summary": "a weathered building"}]},
+                         player_input="I carry the core up onto the berth.")
+        with connect() as conn:
+            names = [r[0] for r in conn.execute("SELECT name FROM locations").fetchall()]
+        self.assertNotIn("The Salvage Union's Tally House", names)
+
+
 class AVagueFigureIsTheOneNamedLater(unittest.TestCase):
     """8B run 72, T9: "A figure, crouched low" then "Her name is Edith Skinner" seeded a second, drawn person."""
 
