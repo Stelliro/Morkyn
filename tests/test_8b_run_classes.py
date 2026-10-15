@@ -1105,6 +1105,24 @@ class ThePlayerIsYou(unittest.TestCase):
         self.assertIn("\"The player is new,\"", out)
 
 
+class AJobAtTheYardIsAJob(unittest.TestCase):
+    """8B run 78, T1: "a job at the salvage yard x1" went into the pack; the tallyman, "a man", was named Gunilda."""
+
+    def test_the_head_is_before_the_place(self):
+        from app import world
+
+        self.assertTrue(world._abstract_grant(world._item_name_tokens("a job at the salvage yard"), "a job at the salvage yard"))
+        self.assertFalse(world._abstract_grant(world._item_name_tokens("jar of salt"), "jar of salt"))
+
+    def test_a_job_named_person_takes_the_sex_shown(self):
+        from app import world
+
+        prose = ("Inside, a man in a soot-streaked coat is hunched over a ledger. He is the tallyman, a man known for "
+                 "his exacting nature.")
+        npcs = world._npcs_shown_in_prose(_ConnStub(), [{"name": "Tallyman", "role": "tallyman"}], prose)
+        self.assertEqual(npcs[0].get("_figure_pronouns"), "he")
+
+
 class APlaceSaidIsNoPlaceGoneTo(unittest.TestCase):
     """8B run 77, T6: '"The tally house sent me about the dredge sites."' took Isk back to the tally house."""
 

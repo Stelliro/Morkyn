@@ -15046,10 +15046,15 @@ _ABSTRACT_GRANT_HEADS = frozenset({
 })
 
 
-def _abstract_grant(tokens: list[str]) -> bool:
+def _abstract_grant(tokens: list[str], name: str = "") -> bool:
     """The granted thing's head noun is a job, a wage, a deal or news, not an object."""
     head = str(tokens[-1] if tokens else "").lower()
-    return head in _ABSTRACT_GRANT_HEADS or head.rstrip("s") in _ABSTRACT_GRANT_HEADS
+    # The head comes before its place: "a job at the salvage yard" is a job, not
+    # a yard (8B run 78, T1: it went into the pack).
+    lead = re.split(r"\s+(?:at|of|from|in|on|for|with|by|near)\s+", str(name or "").lower(), maxsplit=1)[0]
+    lead_words = re.findall(r"[a-z]+", lead)
+    heads = {head} | ({lead_words[-1]} if lead_words and lead != str(name or "").lower() else set())
+    return any(h in _ABSTRACT_GRANT_HEADS or h.rstrip("s") in _ABSTRACT_GRANT_HEADS for h in heads)
 
 
 # The player's own line browses goods: "look over what she has for sale".
@@ -15303,7 +15308,7 @@ def _filter_inventory_changes(
         # "deck work" put "deck work x1" in the pack). Only the head noun is
         # read, and a thing the prose shows handed over still stands ("a work
         # order", "a share of the haul" passed across the table).
-        if grounded and _abstract_grant(tokens) and not _prose_item_handed_over(
+        if grounded and _abstract_grant(tokens, name) and not _prose_item_handed_over(
             final_text, name_l, tokens, owned=bool(existing)
         ):
             grounded = False
@@ -17432,6 +17437,17 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         return any(p[:1].isupper() and re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", unspoken) for p in parts)
 
     unshown = [npc for npc in npcs if not known(npc) and not shown(norm_name(str(npc.get("name") or "")))]
+    # A job written as the name ("Tallyman") with "a man in a soot-streaked
+    # coat" behind the desk: the name drawn for it took no sex and came out
+    # "Gunilda" (8B run 78, T1). When every figure shown is one sex, that is it.
+    gendered = [h.split()[-1] for h in _figure_hints(unspoken, [])]
+    shown_sexes = {"she" if _HINT_FEMALE_RE.fullmatch(w) else "he" for w in gendered
+                   if _HINT_FEMALE_RE.fullmatch(w) or _HINT_MALE_RE.fullmatch(w)}
+    if len(shown_sexes) == 1:
+        for npc in npcs:
+            if (npc not in unshown and not known(npc) and not npc.get("_figure_pronouns")
+                    and _role_phrase(str(npc.get("name") or ""), str(npc.get("role") or ""))):
+                npc["_figure_pronouns"] = next(iter(shown_sexes))
     if not unshown:
         return npcs
     # The prose names the one new person itself: NPC_NEW "Isolde Frome" for
