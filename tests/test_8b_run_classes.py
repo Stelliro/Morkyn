@@ -1105,6 +1105,31 @@ class ThePlayerIsYou(unittest.TestCase):
         self.assertIn("\"The player is new,\"", out)
 
 
+class HaulingFromTheWharfIsNoAskForTheTallyHouse(unittest.TestCase):
+    """8B run 79, T5: "from the wharf up to the guild's storehouse" kept MOVE "The Salvage GUILD's TALLY HOUSE"."""
+
+    def test_the_move_goes(self):
+        from app import world
+
+        rows = [{"id": 1, "code": "L1", "name": "Saltmarrow", "parent_id": 0, "kind": ""},
+                {"id": 2, "code": "L2", "name": "The Salvage Guild's Tally House", "parent_id": 1, "kind": ""},
+                {"id": 3, "code": "L3", "name": "The Old Wharf", "parent_id": 1, "kind": ""}]
+        line = ("I don't waste words. I shoulder the first crate and start hauling them from the wharf up to the "
+                "guild's storehouse, one after another, until the stack on the wharf is gone.")
+        prose = "You shoulder the first crate. Malrik watches from the edge of the dock as the stack goes down."
+        patch = {"move_to_location": "The Salvage GUILD's TALLY HOUSE"}
+        got = world._unasked_unshown_move({"player": patch}, patch, rows, line, intent="travel", narration=prose,
+                                          current_name="The Old Wharf")
+        self.assertEqual(got, "The Salvage GUILD's TALLY HOUSE")
+
+    def test_glued_bracket(self):
+        from app import prose_state
+
+        out, _ = prose_state.repair_meta_leaks("You haul them up to the(guild's storehouse. A crate (heavy) waits.")
+        self.assertIn("to the guild's storehouse", out)
+        self.assertIn("(heavy)", out)
+
+
 class AJobAtTheYardIsAJob(unittest.TestCase):
     """8B run 78, T1: "a job at the salvage yard x1" went into the pack; the tallyman, "a man", was named Gunilda."""
 

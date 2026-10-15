@@ -1158,6 +1158,12 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
     if labels:
         out = _ATTITUDE_LABEL_RE.sub(lambda m: m.group(1) + m.group(2).lower() + m.group(3), out)
         fixes.append({"why": "attitude_label", "text": ", ".join(labels[:4])})
+    # A bracket glued to a word: "up to the(guild's storehouse", "I owe the(guild)
+    # a winter's credit" (8B runs 63 and 79).
+    glued = [m.group(0) for m in re.finditer(r"\b(?:the|a|an|your|his|her|their|my|our)\((?=[a-z])", out)]
+    if glued:
+        out = re.sub(r"\b(the|a|an|your|his|her|their|my|our)\(([a-z][\w'’-]*)\)?", r"\1 \2", out)
+        fixes.append({"why": "glued_bracket", "text": ", ".join(glued[:4])})
     # The packet's word for the reader, outside speech: "pushed a stack of papers
     # toward the player", "the player's patched tunic" (8B run 68, T2).
     pieces = re.split(r"(\"[^\"\n]*\"|“[^”\n]*”)", out)
