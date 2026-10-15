@@ -15271,7 +15271,11 @@ def _filter_inventory_changes(
             _LINE_TAKES_ANY_RE.search(venues.strip_speech(own_l)) or _SEARCH_FOR_ANY_RE.search(own_l)
             or re.search(r"\b(?:anything|something|whatever)\b[^.!?]{0,40}\bworth\b", own_l)
         )
-        arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and acquire_intent and line_names_it)
+        # With the prose silent on the item, only the player's narrated act takes
+        # it: the spoken "I'll haul the beams off the east pier wreck" (the job,
+        # promised) put "Iron beams" in the pack (8B run 71, T4).
+        narrated_take = player_take_intent(venues.strip_speech(str(player_input or "")))
+        arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and narrated_take and line_names_it)
         grounded = named and arrived
         # A job, a wage or a deal is not a thing to carry (7B run 7, T2: GRANT
         # "deck work" put "deck work x1" in the pack). Only the head noun is
@@ -15290,7 +15294,9 @@ def _filter_inventory_changes(
         same_as_owned = ""
         # The act, not the talk: "The reckoner isn't for trade" is no request to take one.
         acts_take = player_take_intent(venues.strip_speech(str(player_input or "")))
-        if grounded and not existing and not acts_take and not handed:
+        # Whether or not the gain stood: a refused grant that names her own
+        # thing is no gain to trim from the prose either.
+        if named and not existing and not acts_take and not handed:
             same_as_owned = _owned_item_named(conn, tokens)
             if same_as_owned:
                 grounded = False
@@ -20296,6 +20302,8 @@ _OFFERED_SUM_RE = re.compile(
 
 _PROMISED_MONEY_RE = re.compile(
     r"\b(?:will|would|could|might|may|shall|'ll|’ll)\s+(?:\w+\s+)?(?:pay|reward|buy|give|fetch)\b"
+    # "for that, you'll be paid thirty gold" (8B run 71, T4).
+    r"|\b(?:will|would|shall|'ll|’ll)\s+(?:\w+\s+)?be\s+paid\b"
     r"|\b(?:if|once|when|whoever|anyone\s+who)\s+(?:you\s+)?(?:find|bring|return|deliver|finish|complete)\w*\b"
     r"|\bpromis\w*\b",
     re.I,
@@ -20436,7 +20444,11 @@ def _settle_stated_gold(
         # gold," he says, "but that's only if you finish the job"' paid GOLD
         # 15 at once and marked the job paid ahead (8B run 30, T3). The
         # narrator's own mention, a hand-over or a receipt backs a gain.
-        narrated = prose_state.coin_mentions(plain)
+        # A sum the narrator only promises is no coin either: "for that, you'll
+        # be paid thirty gold" paid 30 at the job's acceptance (8B run 71, T4).
+        narrated = prose_state.coin_mentions(" ".join(
+            s for _, _, s in prose_state.sentence_spans(plain) if not _PROMISED_MONEY_RE.search(s)
+        ))
         if not (said["received"] or narrated or money_words or prose_state.coin_handed_to_player(narration)):
             player.pop("gold_delta", None)
             player.pop("gold_band", None)
@@ -20449,7 +20461,9 @@ def _settle_stated_gold(
         # ("mints 250, then 400"). A modest number the op and the prose agree
         # on is the scene's, though: a purse of "Nine coins" handed back with
         # GOLD 9 paid +14 when rolled (Saltmarrow run, T94).
-        narrated = prose_state.coin_mentions(venues.strip_speech(narration))
+        narrated = prose_state.coin_mentions(" ".join(
+            s for _, _, s in prose_state.sentence_spans(venues.strip_speech(narration)) if not _PROMISED_MONEY_RE.search(s)
+        ))
         backed = raw in narrated or raw in said["received"] or bool(prose_state.coin_handed_to_player(narration))
         if raw > 0 and raw <= STATED_GAIN_CAP and raw in mentioned and backed:
             value, source = raw, "stated_gain"
