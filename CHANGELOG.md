@@ -25,6 +25,7 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Fixed
 
+- [CLAUDE] A place passed is not the one entered (8B run 70, T1). "You pass Millicent's Bakery ... and continue toward the salvage guild's tally house" stood Isk in the bakery: the doorway rule matched any known venue named in the last of the prose. A name after "pass/past/beyond/beside/by" is left out of that match. - `app/world.py`
 - [CLAUDE] Someone talked about is not shown (8B run 69, T3). Brida's "He's not a man who likes delays", said of the foreman at the docks, gave the figure "a man"; NPC_NEW "Garrik" was bound to it and stood in the tally house. Figures a new person can be bound to come from the narration outside speech only. Over 266 saved turns with new people, one more binding goes (7B Saltmarrow, "Kendra" bound to "a girl named Mara" in a rumour). - `app/world.py`
 - [CLAUDE] The player is "you" (8B run 68, T2). The prose leaked the packet's word: "pushed a stack of papers toward the player", "the player's patched tunic". Outside speech, "the player" becomes "you" and "the player's" becomes "your". Two of 769 saved narrations had it. - `app/prose_state.py`
 - [CLAUDE] A drawn name fits the one shown (8B run 68, T1-T2). "A man in a soot-stained coat", the tallyman, was given the drawn name "Gunilda"; the next scene wrote "she" and the pronoun pin mixed him and her. A name drawn for a job or a figure now takes the sex the figure was shown with. - `app/world.py`
