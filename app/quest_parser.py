@@ -636,6 +636,19 @@ def _ws(text: Any) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip().lower()
 
 
+# Work others ask for is not work offered: "You're not the first to come asking
+# for work" made "Settle Debt with Gregory Cropper" (8B run 65, T1).
+_ASKED_FOR_WORK_RE = re.compile(
+    r"\b(?:ask\w*|com\w*\s+(?:in\s+)?ask\w*)\s+(?:for|after)\s+(?:work|a\s+job|jobs)\b"
+    # ... and work said not to be given: "I don't take on just anyone" (same turn).
+    r"|\b(?:don['’]?t|do\s+not|won['’]?t|will\s+not|never)\s+(?:\w+\s+){0,2}?(?:take\s+on|hire|give\s+work|hand\s+out\s+work)\b[^,.;!?]*",
+    re.I,
+)
+
+
+def _offer_text(sentence: str) -> str:
+    """The sentence with what offers no work taken out: work others ask for, work refused, the player's own debt."""
+    return _PLAYER_OWES_RE.sub(" ", _ASKED_FOR_WORK_RE.sub(" ", str(sentence or "")))
 _NO_WORK_RE = re.compile(
     r"\b(?:no one|nobody|no-one|none)(?:'s| is| are)? (?:hiring|paying|needs? (?:help|hands|anyone))\b|"
     r"\bno (?:work|jobs?|hiring|coin to spare)\b|\bnot hiring\b|\bnothing (?:for you|to do)\b|"
@@ -753,17 +766,19 @@ def judge_offer(
     own_flat = re.sub(r"\s+", " ", str(player_input or "")).strip().lower()
     for sentence in pool:
         players = sentence.lower() in own_flat or re.match(r"^\W*you\b", sentence, re.I)
-        if _ACCEPTS_WORK_RE.search(sentence) or (not players and _JOB_RE.search(sentence)):
+        if _ACCEPTS_WORK_RE.search(sentence) or (not players and _JOB_RE.search(_offer_text(sentence))):
             return {"ok": True, "why": "quote", "checked": sentence[:240]}
     if offer_line and evidence_found(offer_line, narration, player_input):
         for sentence in _quote_sentences(offer_line, narration) or [offer_line]:
-            if not _NO_WORK_RE.search(sentence) and (_JOB_RE.search(sentence) or _ACCEPTS_WORK_RE.search(sentence)):
+            if not _NO_WORK_RE.search(sentence) and (
+                _JOB_RE.search(_offer_text(sentence)) or _ACCEPTS_WORK_RE.search(sentence)
+            ):
                 return {"ok": True, "why": "offer_line", "checked": sentence[:240]}
     giver_lines = all_giver
     for sentence in giver_lines:
         # The player's own debt is not work offered: "And if you don't pay your
         # share, they don't let you walk away" made a job (8B run 2, T1).
-        if _JOB_RE.search(_PLAYER_OWES_RE.sub(" ", sentence)):
+        if _JOB_RE.search(_offer_text(sentence)):
             return {"ok": True, "why": "giver_offers", "checked": sentence[:240]}
     if player_asks_for_work(player_input):
         for sentence in giver_lines:
@@ -799,7 +814,9 @@ def evidence_offers_work(
 
 
 _ACCEPTS_WORK_RE = re.compile(
-    r"\b(?:i'?ll (?:take|do) (?:it|the job|the work|this)|i accept|deal\b|you'?re hired|it'?s yours|take the job)\b",
+    # "Deal." agrees; "I don't deal in charity" does not (8B run 65, T1).
+    r"\b(?:i'?ll (?:take|do) (?:it|the job|the work|this)|i accept|(?<!n't )(?<!not )deal(?=\s*[.!?,\"”'’]|\s*$)|"
+    r"you'?re hired|it'?s yours|take the job)\b",
     re.I,
 )
 

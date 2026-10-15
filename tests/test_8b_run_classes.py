@@ -1079,6 +1079,25 @@ class TheProseNamesTheNewPerson(unittest.TestCase):
         self.assertNotIn("Odo Kettle", [n.get("name") for n in npcs])
 
 
+class WorkOthersAskForIsNoOffer(unittest.TestCase):
+    """8B run 65, T1: "You're not the first to come asking for work" became a job."""
+
+    def test_no_offer(self):
+        from app import quest_parser
+
+        narration = ("Gregory Cropper looks up. “You’re late,” he says.\n\n“I need to know what work "
+                     "you’ll take against my debt.”\n\nGregory leans back. “You’re not the first to come "
+                     "asking for work,” he says. “But I don’t take on just anyone.”")
+        gregory = {"id": 1, "code": "A", "name": "Gregory Cropper", "role": "tallyman"}
+        offer = ("Gregory Cropper [[A]] says: 'You're not the first to come asking for work, but I don't take on just "
+                 "anyone. You've got a debt to the guild, and I don't deal in charity.'")
+        verdict = quest_parser.judge_offer("You need to know what work you'll take against my debt.", narration,
+                                           "I walk to the tally house to ask the tallyman what work he'll take.",
+                                           offer_line=offer, giver=gregory, giver_ref="Gregory Cropper", npcs=[gregory])
+        self.assertFalse(verdict["ok"], verdict)
+        self.assertTrue(quest_parser._ACCEPTS_WORK_RE.search("\"Deal,\" she says."))
+
+
 class AShorterSayingIsTheLine(unittest.TestCase):
     """8B run 63, T3: '"Whatever pays most," you said ... "Name it."' kept, then the typed lines said again."""
 
