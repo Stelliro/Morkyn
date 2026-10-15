@@ -14510,7 +14510,8 @@ _NOT_A_TAKEN_THING = frozenset({
 # The any-word must be what the take verb takes: "I pocket whatever is under it",
 # not "Anything on there that'll keep the time?" (7B run 4, T1).
 _LINE_TAKES_ANY_RE = re.compile(
-    r"\b(?:take|takes|grab|pocket|pick\s+up|collect|keep|gather|scoop\s+up|stow|help\s+myself\s+to)\s+"
+    r"\b(?:take|takes|grab|pocket|pick\s+up|collect|keep|gather|scoop\s+up|stow|help\s+myself\s+to|"
+    r"lift\s+out|lift\s+up|fish\s+out|pull\s+out|draw\s+out)\s+"
     r"(?:up\s+)?(?:whatever|anything|everything|something|it|them|what(?:'s|\s+is)|the\s+lot|all\s+of\s+it)\b",
     re.I,
 )

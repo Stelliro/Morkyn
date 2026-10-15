@@ -1133,6 +1133,15 @@ def validate_quest_changes(
         if not isinstance(raw, dict):
             continue
         reasons: list[str] = []
+        # Markdown is no part of a name: "Salvage the *Iron Widow*" (8B run 57, T4).
+        for key in ("title", "summary", "description"):
+            if isinstance(raw.get(key), str):
+                raw[key] = re.sub(r"(?<!\w)[*_]{1,2}([^*_\n]+?)[*_]{1,2}(?!\w)", r"\1", raw[key])
+        for step in raw.get("steps") or []:
+            if isinstance(step, dict):
+                for key in ("title", "description"):
+                    if isinstance(step.get(key), str):
+                        step[key] = re.sub(r"(?<!\w)[*_]{1,2}([^*_\n]+?)[*_]{1,2}(?!\w)", r"\1", step[key])
         title = re.sub(r"\s+", " ", str(raw.get("title") or "")).strip(" .\"'")
         if not (3 <= len(title) <= 80):
             reasons.append("title_length")

@@ -13769,6 +13769,10 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
     r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)(?<![“\x22])(?<!of\s)(?<!some\s)(?<!any\s)(?<!no\s)salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
     r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b|"
+    # Lifting a thing out of where it lies: "I reach into the hollow and lift
+    # out whatever is glinting" refused the ring it lifted (8B run 57, T7).
+    r"lift(?:s|ed|ing)?\s+(?:[\w'’-]+\s+){0,3}?out\b|fish(?:es|ed|ing)?\s+(?:[\w'’-]+\s+){0,3}?out\b|"
+    r"pull(?:s|ed|ing)?\s+(?!(?:myself|me|ourselves|us)\b)(?:[\w'’-]+\s+){1,3}?(?:out|free)\s+(?:of|from)\b|"
     # Putting a thing away in one's own pack is taking it (8B run 18, T3: "I
     # coil the chain section and stow it in my pack" kept nothing).
     r"stow(?:s|ed|ing)?\b|(?:tuck|slip|put|place|drop|shove|stuff)(?:s|ed|ped|ing)?\s+(?:[\w'’-]+\s+){1,4}?"
