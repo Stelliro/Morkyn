@@ -242,6 +242,25 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
     def test_a_named_place_that_is_no_building_counts(self):
         self.assertIn("new_place", self._outcomes("The Sunken Causeway", "I wade out to the sunken causeway."))
 
+    def test_the_tallyman_met_there_is_no_find(self):
+        # 8B run 58, T1.
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            conn.execute("UPDATE locations SET visit_count = 1 WHERE id = ?", (house,))
+            before = int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0])
+            world._upsert_npc(conn, {"name": "Elias Vane", "location": "The Salvage Guild's Tally House", "role": "tallyman"})
+            outcomes = world._turn_outcomes(conn, {"player": {}}, player_input="I walk up to the tally house.",
+                                            max_npc_before=before)
+            self.assertNotIn("new_person", outcomes)
+            world._upsert_npc(conn, {"name": "Rook", "location": "Saltmarrow", "role": "beachcomber"})
+            outcomes = world._turn_outcomes(conn, {"player": {}}, player_input="I walk the flats.",
+                                            max_npc_before=before)
+            self.assertIn("new_person", outcomes)
+
     def test_a_place_visited_before_is_no_find(self):
         from app import world
         from app.db import connect

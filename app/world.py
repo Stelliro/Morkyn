@@ -17138,7 +17138,11 @@ _FIGURE_HINT_RE = re.compile(
     # A titled speaker: the innkeeper asks
     r"(?:the\s+)?(?:innkeeper|bartender|barkeep|guard|merchant|stranger|keeper|"
     r"server|barmaid|barman|captain|clerk)\s+(?:says?|asks?|mutters?|whispers?|calls?|snorts?|grunts?)"
-    r")\b(?!['’]s)",
+    r")\b(?!['’]s)"
+    # The noun as a modifier is no person: "a wreck of a merchant ship" bound
+    # NPC_NEW "Gervase Grisham" to "a merchant" (8B run 58, T3).
+    r"(?!\s+(?:ship|ships|vessel|boat|barge|cog|house|hall|post|tower|road|row|quarter|stall|stalls|cart|wagon|"
+    r"caravan|guild|district|lane|street|camp|goods|trade|class|families|family|quarters|barracks|uniform|ledger)\b)",
     re.I,
 )
 # A named speaker: "Mara says". Case-sensitive: compiled with re.I this read
@@ -19847,7 +19851,21 @@ def _turn_outcomes(
             if named or _EXPLORE_RE.search(line):
                 outcomes.append("new_place")
     try:
-        if int(conn.execute("SELECT COALESCE(MAX(id), 0) FROM npcs").fetchone()[0] or 0) > int(max_npc_before or 0):
+        # Someone met inside a building in town is the errand's own face, not a
+        # find: the tallyman of the tally house kept the model's XP 13 for the
+        # walk to ask him for work (8B run 58, T1). Exploring still counts.
+        met = conn.execute(
+            "SELECT n.location_id FROM npcs n WHERE n.id > ?", (int(max_npc_before or 0),)
+        ).fetchall()
+        line = _QUOTED_SPEECH_RE.sub(" ", _player_line(player_input)).lower()
+
+        def in_town_building(location_id: int) -> bool:
+            row = _location_row(conn, int(location_id or 0))
+            return bool(row is not None and int(venues._field(row, "parent_id", 0) or 0) and (
+                str(venues._field(row, "kind", "") or "") or _BUILDING_HEAD_RE.search(str(row["name"] or ""))
+            ))
+
+        if met and (_EXPLORE_RE.search(line) or not all(in_town_building(r[0]) for r in met)):
             outcomes.append("new_person")
     except Exception:
         pass
