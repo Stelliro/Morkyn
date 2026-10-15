@@ -292,6 +292,26 @@ class AnErrandInTownIsNoDiscovery(unittest.TestCase):
         self.assertNotIn("new_place", outcomes)
 
 
+class ADrawnNameFitsTheOneShown(unittest.TestCase):
+    """8B run 68, T1-T2: "a man in a soot-stained coat" got the drawn name "Gunilda"."""
+
+    def test_a_man_gets_a_mans_name(self):
+        from app import world
+        from app.db import connect
+        from app.example_pools import draw_names, world_context, world_options
+
+        seed()
+        with connect() as conn:
+            ctx = world_context(world_options(conn), sex="female")
+            women = {n.split()[0].lower() for n in draw_names(ctx, 200, __import__("random").Random(1), set(), sex="female")}
+            for i in range(6):
+                npc_id = world._upsert_npc(conn, {"name": "Tallyman", "role": "tallyman", "code": f"Z{i}",
+                                                  "location": "Saltmarrow", "_figure_pronouns": "he"})
+                name = conn.execute("SELECT name FROM npcs WHERE id = ?", (npc_id,)).fetchone()[0]
+                conn.execute("DELETE FROM npcs WHERE id = ?", (npc_id,))
+                self.assertNotIn(name.split()[0].lower(), women, name)
+
+
 class ARoomOfTheBuilding(unittest.TestCase):
     """8B run 64, T4: "go down to the lower vault" in the tally house left the player upstairs."""
 

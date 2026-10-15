@@ -13631,7 +13631,9 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         return None
     # Event titles / system job lines must not become people ("System pings a local job")
     if not is_plausible_person_name(name):
-        name = unique_person_name(conn, name_seed(code, name, npc.get("role") or ""))
+        shown_as = str(npc.get("_figure_pronouns") or npc.get("pronouns") or "").lower()
+        name = unique_person_name(conn, name_seed(code, name, npc.get("role") or ""),
+                                  sex={"he": "male", "she": "female"}.get(shown_as, ""))
         npc["name"] = name
 
     # Prefer named place; if model stuffed location_code=L1, resolve that place — do not invent a person from L1
@@ -13658,7 +13660,11 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
             npc["role"] = str(holder["role"] or phrase)
             location_id = location_id or int(holder["location_id"] or 0) or None
         elif not holders:
-            drawn = unique_person_name(conn, name_seed(code, name, phrase))
+            # A name that fits the one shown: "a man in a soot-stained coat" drew
+            # "Gunilda", and the prose turned to "she" (8B run 68, T1-T2).
+            shown_as = str(npc.get("_figure_pronouns") or npc.get("pronouns") or "").lower()
+            sex = {"he": "male", "she": "female"}.get(shown_as, "")
+            drawn = unique_person_name(conn, name_seed(code, name, phrase), sex=sex)
             turn_ledger.note("npc", "role_name_drawn", role=phrase, name=drawn)
             npc["role"] = npc.get("role") if _role_matches(str(npc.get("role") or ""), phrase) else phrase
             name = drawn
