@@ -17443,10 +17443,19 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     return hints
 
 
+_EMPLOYER_WORDS = frozenset({
+    "guild", "guilds", "company", "council", "crew", "house", "order", "league", "union", "brotherhood", "sisterhood",
+    "church", "temple", "crown", "court", "navy", "army", "watch", "town", "city", "harbour", "harbor", "salvage",
+})
+
+
 def _role_figure(conn, unspoken: str, role_words: set[str], taken: Any) -> str | None:
     """'the tallyman' in the narration, for an op whose role is tallyman; None
     when no such phrase stands there, or someone here already has that job."""
-    words = sorted(w for w in role_words if len(w) >= 4 and w not in _NOT_A_JOB and w not in _NOT_A_NAME)
+    # The employer in a job is no one standing there: ROLE "salvage guild scout"
+    # bound NPC_NEW "Elias" to "the guild" in "something the guild wants" (8B run 95, T3).
+    words = sorted(w for w in role_words if len(w) >= 4 and w not in _NOT_A_JOB and w not in _NOT_A_NAME
+                   and w not in _EMPLOYER_WORDS)
     if not words:
         return None
     m = re.search(
@@ -20497,6 +20506,10 @@ _PROMISED_MONEY_RE = re.compile(
     r"\b(?:will|would|could|might|may|shall|'ll|’ll)\s+(?:\w+\s+)?(?:pay|reward|buy|give|fetch)\b"
     # "for that, you'll be paid thirty gold" (8B run 71, T4).
     r"|\b(?:will|would|shall|'ll|’ll)\s+(?:\w+\s+)?be\s+paid\b"
+    # A readiness to pay: "they're willing to pay for it" backed GOLD 15 (+11)
+    # while Mira only described the job (8B run 95, T3).
+    r"|\b(?:willing|ready|prepared|eager|happy|able|want|wants|wanted|mean|means|intend\w*|plan\w*|offer\w*)\s+"
+    r"to\s+(?:\w+\s+)?(?:pay|reward|buy|give)\b"
     r"|\b(?:if|once|when|whoever|anyone\s+who)\s+(?:you\s+)?(?:find|bring|return|deliver|finish|complete)\w*\b"
     r"|\bpromis\w*\b",
     re.I,
