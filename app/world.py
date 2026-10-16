@@ -20690,6 +20690,9 @@ _PROMISED_MONEY_RE = re.compile(
     # while Mira only described the job (8B run 95, T3).
     r"|\b(?:willing|ready|prepared|eager|happy|able|want|wants|wanted|mean|means|intend\w*|plan\w*|offer\w*)\s+"
     r"to\s+(?:\w+\s+)?(?:pay|reward|buy|give)\b"
+    # A purpose or a chance to pay is no payment: "each one a chance to pay down
+    # what you owe" backed GOLD 15 (+12) on a job offer (8B run 113, T2).
+    r"|\bto\s+pay\s+(?:it\s+|them\s+|that\s+)?(?:down|off|back)\b|\b(?:chance|way|means|work|need|needs)\s+to\s+pay\b"
     r"|\b(?:if|once|when|whoever|anyone\s+who)\s+(?:you\s+)?(?:find|bring|return|deliver|finish|complete)\w*\b"
     r"|\bpromis\w*\b",
     re.I,
