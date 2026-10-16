@@ -1448,6 +1448,14 @@ def validate_quest_changes(
         # and the parser proposed the job but quoted "Jehane Tully takes a deep
         # breath" as its evidence, so it was refused as no offer. When the giver
         # is in the scene and the two sides agree a sum, the agreement grounds it.
+        # A service the player buys is no job for them: "What would you want for
+        # taking me out there and back?" answered "you're paying for the risk"
+        # filed "Row with Emmot Bexley" as Emmot's job (8B run 106, T7).
+        if not reasons and (
+            _ASKS_A_PRICE_RE.search(_player_own_line(player_input))
+            or (_PLAYER_PAYS_RE.search(offer_line or evidence) and not _PAYS_THE_PLAYER_RE.search(offer_line or evidence))
+        ):
+            reasons.append("player_pays_for_a_service")
         deal_gold = None
         quote_reasons = {"evidence_is_not_an_offer", "evidence_not_in_text"}
         # The giver's own offer sentence grounds the job when the parser quoted
@@ -1835,6 +1843,19 @@ _WORK_ACT_RE = re.compile(
 )
 
 
+_ASKS_A_PRICE_RE = re.compile(
+    r"\b(?:what\s+(?:would|will|do|does)\s+(?:you|it)\s+(?:want|charge|take|cost)\s+(?:me\s+)?(?:for|to)\b|"
+    # Not a bare "how much for": "How much for the salvage run?" asks what a job pays.
+    r"how\s+much\s+(?:would|will|do)\s+you\s+(?:want|charge|take)\b|what(?:['’]s|\s+is)\s+your\s+(?:price|fee|rate)\b|"
+    r"what\s+do\s+(?:i|we)\s+owe\s+you\b)",
+    re.I,
+)
+_PLAYER_PAYS_RE = re.compile(
+    r"\byou(?:['’]re|\s+are|['’]ll|\s+will|['’]d|\s+would)?\s+(?:be\s+)?pay(?:s|ing)?\s+(?!you\b)|\bcosts?\s+you\b|"
+    r"\bit['’]ll\s+cost\b|\byour\s+(?:fare|passage)\b",
+    re.I,
+)
+_PAYS_THE_PLAYER_RE = re.compile(r"\b(?:pay|pays|paying|paid)\s+you\b|\byou['’]ll\s+be\s+paid\b|\byou\s+get\s+paid\b", re.I)
 _GIVER_OFFERS_JOB_RE = re.compile(
     r"\b(?:there['’]?s|there\s+is|i['’]?ve\s+got|i\s+have|i\s+got|we['’]?ve\s+got|we\s+have|got)\s+"
     r"(?:a|one|some)\s+(?:\w+\s+)?(?:job|work|task|errand|contract)\b(?!\s+(?:for\s+)?(?:nobody|no\s+one))",
