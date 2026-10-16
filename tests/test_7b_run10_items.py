@@ -170,6 +170,25 @@ class TheGiversStock(unittest.TestCase):
 
 
 
+class TheGrantNamesHerOwnThing(unittest.TestCase):
+    """8B run 116, T1: GRANT "tide-reckoner" QTY small DESC "mother's brass tide-reckoner" made a second one."""
+
+    def test_no_second_reckoner(self):
+        _pack(("mother's brass tide-reckoner", 1))
+        prose = ("The tallyman's eyes flicker to the brass tide-reckoner on your wrist, the one your mother gave you "
+                 "before she vanished.")
+        kept, _ = _filter([{"name": "tide-reckoner", "quantity_band": "small",
+                            "description": "mother's brass tide-reckoner"}], prose,
+                          "I walk up into town to ask the tallyman what work he'll take against my debt.")
+        self.assertEqual(kept, [])
+
+    def test_a_band_alone_is_still_judged(self):
+        _pack()
+        kept, _ = _filter([{"name": "silver bell", "quantity_band": "small"}], "The wind picks up off the flats.",
+                          "I look around.")
+        self.assertEqual(kept, [])
+
+
 class APlaceIsNoThingToCarry(unittest.TestCase):
     """8B run 110, T3: "I will take the docks" (the job) put "docks x1" in the pack."""
 
