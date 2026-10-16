@@ -720,6 +720,23 @@ class TalkedToAndShownHereIsHere(unittest.TestCase):
         self.assertEqual(int(at), int(house))
 
 
+class ThePlayersNameIsNoOneElses(unittest.TestCase):
+    """8B run 117, T1: NPC_NEW NAME "Isk Tarrow" ROLE "salvage guild tallyman" stored the tallyman as the player."""
+
+    def test_the_tallyman_gets_his_own_name(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            conn.execute("UPDATE player SET name = 'Isk Tarrow' WHERE id = 1")
+            world._upsert_npc(conn, {"name": "Isk Tarrow", "role": "salvage guild tallyman", "location": "Saltmarrow"})
+            rows = [tuple(r) for r in conn.execute("SELECT name, role FROM npcs")]
+        self.assertEqual(len(rows), 1)
+        self.assertNotIn(rows[0][0].lower(), {"isk tarrow", "isk"})
+        self.assertEqual(rows[0][1], "salvage guild tallyman")
+
+
 class TheJobIsNoPartOfTheName(unittest.TestCase):
     """8B run 104, T1: NAME "Tallyman Darrick" ROLE "Salvage Guild Tallyman" stored "Tallyman Darrick"."""
 
