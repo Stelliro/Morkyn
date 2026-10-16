@@ -516,6 +516,29 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AJobJustTakenIsNotTwoJobs(unittest.TestCase):
+    """8B run 115, T3: "Report to Oswin Bellamy" came as a second job in the turn his job was taken."""
+
+    def test_no_second_job(self):
+        from app import quest_parser
+
+        narration = ("“I am sure. I will take it,” you say. Oswin leans back. “The captain’s name’s "
+                     "Godfrey Stockwell,” he says. “He’s got a ship moored at the eastern dock. You’ll "
+                     "find him there at dawn.”")
+        reply = {"new": [{"title": "Report to Oswin Bellamy", "giver": "Oswin Bellamy", "difficulty": "normal",
+                          "summary": "Inform Oswin about the mission.", "steps": [{"title": "Return to the tally house"}],
+                          "reward": {"gold": 0, "xp": 0, "items": [], "text": ""},
+                          "offer_line": "You'll find him there at dawn.", "evidence": "You'll find him there at dawn.",
+                          "_from_mark": True}], "updates": []}
+        npcs = [{"id": 2, "code": "B", "name": "Oswin Bellamy", "role": "tallyman"}]
+        existing = [{"id": 1, "code": "Q1", "title": "Salvage mission on the docks", "status": "active",
+                     "giver_npc_id": 2, "current_step": 1, "first_step_location": ""}]
+        accepted, _ = quest_parser.validate_quest_changes(
+            reply, narration=narration, player_input='"I am sure. I will take it."', npcs=npcs, existing=existing)
+        self.assertEqual(accepted["new"], [])
+        self.assertFalse(accepted.get("retold"))
+
+
 class ALineSaidIsNotAlsoRetold(unittest.TestCase):
     """8B run 114, T3: the lines were said at the opening and the draft's telling of them stayed below."""
 

@@ -1426,9 +1426,11 @@ def validate_quest_changes(
         if dup is None and same_offer is None and giver is not None and not _MORE_WORK_RE.search(f"{offer_line} {evidence}"):
             # The one job this giver has offered and the player has not taken,
             # told now under another name, is that job (8B run 103, T3).
+            # Or the one just taken and not begun: "Report to Oswin Bellamy" came
+            # as a second job in the turn his salvage job was taken (8B run 115, T3).
             open_from_giver = [
                 q for q in existing or []
-                if str(q.get("status") or "") == "offered" and q.get("giver_npc_id") == giver.get("id")
+                if str(q.get("status") or "") in {"offered", "active"} and q.get("giver_npc_id") == giver.get("id")
                 and int(q.get("current_step") or 1) == 1
             ]
             if len(open_from_giver) == 1:
@@ -1491,7 +1493,8 @@ def validate_quest_changes(
             if (len(reasons) == 1 and reasons[0].startswith("duplicate_of:") and dup is not None
                     and str(dup.get("status") or "") == "offered" and int(dup.get("current_step") or 1) == 1
                     and giver is not None and dup.get("giver_npc_id") == giver.get("id") and steps
-                    and isinstance(dup.get("id"), int)):
+                    and isinstance(dup.get("id"), int)
+                    and not any(r.get("quest_id") == dup["id"] for r in accepted.get("retold") or [])):
                 accepted.setdefault("retold", []).append({
                     "quest_id": int(dup["id"]), "code": dup.get("code"), "title": title,
                     "summary": re.sub(r"\s+", " ", str(raw.get("summary") or title)).strip()[:400], "steps": steps,
