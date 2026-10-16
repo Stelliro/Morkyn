@@ -634,6 +634,21 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class TheJobIsNoPartOfTheName(unittest.TestCase):
+    """8B run 104, T1: NAME "Tallyman Darrick" ROLE "Salvage Guild Tallyman" stored "Tallyman Darrick"."""
+
+    def test_the_title_goes(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            world._upsert_npc(conn, {"name": "Tallyman Darrick", "role": "Salvage Guild Tallyman", "location": "Saltmarrow"})
+            world._upsert_npc(conn, {"name": "Smith Harrow", "role": "fisher", "location": "Saltmarrow"})
+            names = sorted(r[0] for r in conn.execute("SELECT name FROM npcs"))
+        self.assertEqual(names, ["Darrick", "Smith Harrow"])
+
+
 class AJobToldAgainTakesTheTelling(unittest.TestCase):
     """8B run 103, T3: the card said "Clear the Guild's Sheds"; Garrick then said salvage from the docks."""
 

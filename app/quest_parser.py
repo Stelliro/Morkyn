@@ -1450,6 +1450,22 @@ def validate_quest_changes(
         # is in the scene and the two sides agree a sum, the agreement grounds it.
         deal_gold = None
         quote_reasons = {"evidence_is_not_an_offer", "evidence_not_in_text"}
+        # The giver's own offer sentence grounds the job when the parser quoted
+        # around it: it cited the player's question and "You're looking for
+        # something that's been lost in the flood" while the tallyman had said
+        # "there's a job that might interest you" (8B run 104, T2).
+        if reasons and set(reasons) <= quote_reasons and giver is not None and (
+            _named_in(narration, giver) or _shown_by_role(narration, giver, npcs)
+        ):
+            spoken = " ".join(a or b for a, b in re.findall(r"\"([^\"]*)\"|“([^”]*)”", str(narration or "")))
+            offered = next((s for s in _SENTENCE_SPLIT.split(spoken) if _GIVER_OFFERS_JOB_RE.search(s)), "")
+            if offered and not _GIVER_OFFERS_JOB_RE.search(_player_own_line(player_input)):
+                from app import turn_ledger
+
+                turn_ledger.note("quest", "givers_offer_sentence", title=title, sentence=offered[:200],
+                                 dropped_reasons=list(reasons))
+                reasons = []
+                evidence = offered.strip()[:300]
         if reasons and set(reasons) <= quote_reasons and giver is not None and _named_in(narration, giver):
             deal_gold, how = agreed_job_price(narration, player_input)
             if deal_gold is not None:
@@ -1819,6 +1835,11 @@ _WORK_ACT_RE = re.compile(
 )
 
 
+_GIVER_OFFERS_JOB_RE = re.compile(
+    r"\b(?:there['’]?s|there\s+is|i['’]?ve\s+got|i\s+have|i\s+got|we['’]?ve\s+got|we\s+have|got)\s+"
+    r"(?:a|one|some)\s+(?:\w+\s+)?(?:job|work|task|errand|contract)\b(?!\s+(?:for\s+)?(?:nobody|no\s+one))",
+    re.I,
+)
 _MORE_WORK_RE = re.compile(
     r"\b(?:another|also|second|different|besides|as\s+well|other\s+(?:job|work|task)|more\s+work|one\s+more|too)\b", re.I
 )

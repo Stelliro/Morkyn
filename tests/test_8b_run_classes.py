@@ -516,6 +516,42 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class TheGiversOfferSentenceGroundsTheJob(unittest.TestCase):
+    """8B run 104, T2: "there's a job that might interest you" went uncited; the job was refused."""
+
+    LINE = '"I owe the guild a winter\'s credit and I want to work it off." I stop in front of the desk. "What job have you got that pays against the ledger?"'
+    NARRATION = (  # the run's shipped prose
+        "“I owe the guild a winter's credit and I want to work it off,” you say. “What job have you got that "
+        "pays against the ledger?” The tallyman, a burly man with a scar running from his temple to his jaw, lifts "
+        "his head from the ledger. \"You're looking at the wrong kind of work,\" he says, finally. He pushes his chair "
+        "back. \"But,\" he adds, \"there's a job that might interest you. It's out on the docks, where the tide's too "
+        "high for anyone else to reach.\" He leans forward. \"You're looking for something that's been lost in the "
+        "flood. Something valuable.\"")
+    REPLY = {"new": [{"title": "Retrieve the Lost Relic from the Flooded Docks", "giver": "Tallyman Darrick",
+                      "summary": "Find and recover a valuable item lost in the flood.", "difficulty": "normal",
+                      "steps": [{"title": "Locate the Docks", "description": "Go to the docks.", "location": "L2"}],
+                      "reward": {"gold": 0, "xp": 0, "items": [], "text": ""},
+                      "offer_line": "You're looking for something that's been lost in the flood. Something valuable.",
+                      "evidence": "What job have you got that pays against the ledger?"}], "updates": []}
+
+    def test_his_offer_grounds_it(self):
+        from app import quest_parser
+
+        npcs = [{"id": 1, "code": "A", "name": "Tallyman Darrick", "role": "Salvage Guild Tallyman"}]
+        accepted, rejected = quest_parser.validate_quest_changes(
+            json.loads(json.dumps(self.REPLY)), narration=self.NARRATION, player_input=self.LINE, npcs=npcs)
+        self.assertEqual([q["giver_npc_id"] for q in accepted["new"]], [1], rejected)
+
+    def test_without_his_offer_nothing(self):
+        from app import quest_parser
+
+        npcs = [{"id": 1, "code": "A", "name": "Tallyman Darrick", "role": "Salvage Guild Tallyman"}]
+        prose = self.NARRATION.replace("there's a job that might interest you. ", "")
+        accepted, _ = quest_parser.validate_quest_changes(
+            json.loads(json.dumps(self.REPLY)), narration=prose, player_input=self.LINE, npcs=npcs)
+        self.assertEqual(accepted["new"], [])
+
+
 class TheParserGetsOnlyThePlayersLine(unittest.TestCase):
     """8B run 103, T3: the parser quoted the engine's "Resolved player references" note as its evidence."""
 
