@@ -516,6 +516,31 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class TheGiverSettingTheWorkIsTheOffer(unittest.TestCase):
+    """8B run 121, T2: "It's a salvage run. You'll be heading out to the docks" went uncited; the card stayed vague."""
+
+    def test_the_card_takes_the_salvage_run(self):
+        from app import quest_parser
+
+        narration = ("“What job have you got that pays against the ledger?” Gideon [[B]], the tallyman, looks "
+                     "up. \"It’s a salvage run. You’ll be heading out to the docks and retrieving a shipment "
+                     "that’s been lost at sea.\"")
+        reply = {"new": [{"title": "Salvage Run", "giver": "B", "difficulty": "normal",
+                          "summary": "Retrieve a shipment lost at sea.",
+                          "steps": [{"title": "Retrieve a shipment lost at sea", "location": "L2"}],
+                          "reward": {"gold": 0, "xp": 0, "items": [], "text": ""},
+                          "offer_line": "What job have you got that pays against the ledger?",
+                          "evidence": "What job have you got that pays against the ledger?", "_from_mark": True}],
+                 "updates": []}
+        npcs = [{"id": 2, "code": "B", "name": "Gideon", "role": "tallyman"}]
+        existing = [{"id": 1, "code": "Q1", "title": "Work Against My Debt", "status": "offered", "giver_npc_id": 2,
+                     "current_step": 1, "first_step_location": ""}]
+        accepted, _ = quest_parser.validate_quest_changes(
+            reply, narration=narration, player_input='"What job have you got that pays against the ledger?"',
+            npcs=npcs, existing=existing)
+        self.assertEqual([r["title"] for r in accepted.get("retold") or []], ["Salvage Run"])
+
+
 class AskingWhatWorkSetsNone(unittest.TestCase):
     """8B run 120, T2: "You'll need to prove your worth. What kind of job are you looking for?" filed a job."""
 
