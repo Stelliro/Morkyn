@@ -170,6 +170,32 @@ class TheGiversStock(unittest.TestCase):
 
 
 
+class ThePlayersOwnPickupStands(unittest.TestCase):
+    """8B run 107, T3: "I pick up the contract and read it" refused the contract and cut the player's words."""
+
+    LINE = 'I pick up the contract and read it. "I will take it. What is the artifact, and where on the docks do I look?"'
+    NARRATION = ('You pick up the contract and read it. "I will take it. What is the artifact, and where on the docks '
+                 'do I look?"\n\nGareth leans back, his fingers steepled. "A broken compass. You\'ll find it in the old '
+                 'shipyard."')
+
+    def test_the_contract_is_a_thing_picked_up(self):
+        _pack()
+        kept, rejected = _filter([{"name": "contract", "quantity_delta": 1}], self.NARRATION, self.LINE)
+        self.assertEqual([c["name"] for c in kept], ["contract"], rejected)
+
+    def test_a_refused_gain_never_cuts_the_players_line(self):
+        from app import world
+        from app.db import connect
+
+        _pack()
+        result = {"narration": self.NARRATION, "narration_segments": [{"label": "scene", "text": self.NARRATION}]}
+        with connect() as conn:
+            world._reconcile_prose_with_state(
+                conn, result, rejected=[{"name": "contract", "tokens": ["contract"], "outcome": "gain"}],
+                movement_report={}, gold_note=None, purse_note=None, player_input=self.LINE)
+        self.assertTrue(world._narration_text(result).startswith("You pick up the contract and read it."))
+
+
 class HandedOverUnderAnotherNoun(unittest.TestCase):
     """8B run 90, T2: "holds up a slip of parchment. 'This is a salvage contract.' ... hands you the slip"."""
 
