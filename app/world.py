@@ -15207,6 +15207,10 @@ _ABSTRACT_GRANT_HEADS = frozenset({
     "deal", "terms", "help", "news", "word", "rumour", "rumor", "gossip", "advice", "information", "info", "offer",
     "service", "favour", "favor", "permission", "debt", "lesson", "training", "knowledge", "idea", "plan",
     "opportunity", "chance", "agreement", "bargain", "promise", "trust", "respect", "time", "rest",
+    # A place is no thing to carry: "I will take the docks" (the job) put
+    # "docks x1" in the pack (8B run 110, T3).
+    "docks", "dock", "harbour", "harbor", "wharf", "pier", "quay", "yard", "flats", "market", "square", "street",
+    "lane", "shore", "beach", "district", "quarter", "ward", "town", "village",
 })
 
 
@@ -15217,7 +15221,9 @@ def _abstract_grant(tokens: list[str], name: str = "") -> bool:
     # a yard (8B run 78, T1: it went into the pack).
     lead = re.split(r"\s+(?:at|of|from|in|on|for|with|by|near)\s+", str(name or "").lower(), maxsplit=1)[0]
     lead_words = re.findall(r"[a-z]+", lead)
-    heads = {head} | ({lead_words[-1]} if lead_words and lead != str(name or "").lower() else set())
+    # Split at its preposition, the head is the word before it only: "a map of
+    # the docks" is a map (8B run 110, T3: places joined the heads).
+    heads = {lead_words[-1]} if lead_words and lead != str(name or "").lower() else {head}
     return any(h in _ABSTRACT_GRANT_HEADS or h.rstrip("s") in _ABSTRACT_GRANT_HEADS for h in heads)
 
 

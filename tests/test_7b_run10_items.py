@@ -170,6 +170,23 @@ class TheGiversStock(unittest.TestCase):
 
 
 
+class APlaceIsNoThingToCarry(unittest.TestCase):
+    """8B run 110, T3: "I will take the docks" (the job) put "docks x1" in the pack."""
+
+    def test_no_docks_in_the_pack(self):
+        _pack()
+        line = '"Rough work suits me. I will take the docks." I look over the line in the ledger.'
+        prose = ('“Rough work suits me. I will take the docks,” you say. Thorne leans back. "Fifteen gold a day," '
+                 'he says.')
+        kept, _ = _filter([{"name": "docks", "quantity_delta": 1}], prose, line)
+        self.assertEqual(kept, [])
+
+    def test_a_map_of_the_docks_is_a_thing(self):
+        from app.world import _abstract_grant
+
+        self.assertFalse(_abstract_grant(["map", "of", "the", "docks"], "a map of the docks"))
+
+
 class ThePlayersOwnPickupStands(unittest.TestCase):
     """8B run 107, T3: "I pick up the contract and read it" refused the contract and cut the player's words."""
 
