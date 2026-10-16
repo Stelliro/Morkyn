@@ -1470,7 +1470,8 @@ def validate_quest_changes(
         # around it: it cited the player's question and "You're looking for
         # something that's been lost in the flood" while the tallyman had said
         # "there's a job that might interest you" (8B run 104, T2).
-        if reasons and set(reasons) <= quote_reasons and giver is not None and (
+        quoted_around = [r for r in reasons if not r.startswith("duplicate_of:")]
+        if quoted_around and set(quoted_around) <= quote_reasons | {"mark_on_a_question"} and giver is not None and (
             _named_in(narration, giver) or _shown_by_role(narration, giver, npcs)
         ):
             spoken = " ".join(a or b for a, b in re.findall(r"\"([^\"]*)\"|“([^”]*)”", str(narration or "")))
@@ -1479,8 +1480,8 @@ def validate_quest_changes(
                 from app import turn_ledger
 
                 turn_ledger.note("quest", "givers_offer_sentence", title=title, sentence=offered[:200],
-                                 dropped_reasons=list(reasons))
-                reasons = []
+                                 dropped_reasons=list(quoted_around))
+                reasons = [r for r in reasons if r.startswith("duplicate_of:")]
                 evidence = offered.strip()[:300]
         if reasons and set(reasons) <= quote_reasons and giver is not None and _named_in(narration, giver):
             deal_gold, how = agreed_job_price(narration, player_input)
@@ -1871,7 +1872,11 @@ _PLAYER_PAYS_RE = re.compile(
 _PAYS_THE_PLAYER_RE = re.compile(r"\b(?:pay|pays|paying|paid)\s+you\b|\byou['’]ll\s+be\s+paid\b|\byou\s+get\s+paid\b", re.I)
 _GIVER_OFFERS_JOB_RE = re.compile(
     r"\b(?:there['’]?s|there\s+is|i['’]?ve\s+got|i\s+have|i\s+got|we['’]?ve\s+got|we\s+have|got)\s+"
-    r"(?:a|one|some)\s+(?:\w+\s+)?(?:job|work|task|errand|contract)\b(?!\s+(?:for\s+)?(?:nobody|no\s+one))",
+    r"(?:a|one|some)\s+(?:\w+\s+)?(?:job|work|task|errand|contract)\b(?!\s+(?:for\s+)?(?:nobody|no\s+one))"
+    # Or names it, or sets it: "It's a salvage run. You'll be heading out to the
+    # docks and retrieving a shipment" (8B run 121, T2).
+    r"|\bit['’]s\s+a\s+(?:\w+\s+)?(?:run|haul|job|task|errand|contract)\b"
+    r"|\byou['’]ll\s+be\s+(?!(?:lucky|sorry|fine|safe|alone|late|right|first)\b)\w+ing\b",
     re.I,
 )
 _MORE_WORK_RE = re.compile(
