@@ -720,6 +720,28 @@ class TalkedToAndShownHereIsHere(unittest.TestCase):
         self.assertEqual(int(at), int(house))
 
 
+class APlaceholderIsNoPlace(unittest.TestCase):
+    """8B run 118, T3: LOC "Unknown" for Captain Veyra minted a place called Unknown; her role was "captain of the"."""
+
+    def test_unknown_is_the_town(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+            self.assertEqual(world._find_location_id(conn, "Unknown"), 1)
+            names = [r[0] for r in conn.execute("SELECT name FROM locations")]
+        self.assertNotIn("Unknown", names)
+
+    def test_a_cut_role_loses_its_dangling_words(self):
+        from app import world
+
+        self.assertEqual(world._sanitize_npc_role("captain of the"), "captain")
+        self.assertEqual(world._sanitize_npc_role("keeper of the light"), "keeper of the light")
+
+
 class ThePlayersNameIsNoOneElses(unittest.TestCase):
     """8B run 117, T1: NPC_NEW NAME "Isk Tarrow" ROLE "salvage guild tallyman" stored the tallyman as the player."""
 
