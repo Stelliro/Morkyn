@@ -1507,6 +1507,26 @@ def validate_quest_changes(
         open_offers = [q for q in existing or [] if str(q.get("status") or "") == "offered"] + [pseudo]
         if player_takes_job(pseudo, player_input, open_offers, narration):
             item["status"] = "active"
+            # Taken from the one giver whose offer is still open: that offer,
+            # told again with its details. "Then I will take the wreck" minted
+            # "Salvage the Wreck at Marrow's End" beside Elias's open "salvage
+            # contract" for the same wreck, and left that one offered (8B run 94, T3).
+            same_giver = [
+                q for q in existing or []
+                if str(q.get("status") or "") == "offered" and item.get("giver_npc_id")
+                and q.get("giver_npc_id") == item.get("giver_npc_id")
+            ]
+            if len(same_giver) == 1:
+                from app import turn_ledger
+
+                prior = same_giver[0]
+                accepted["new"].pop()
+                rejected.append({"kind": "new", "item": item, "reasons": [f"retold_offer_of:{prior.get('code') or prior.get('id')}"],
+                                 "checked": str(item.get("evidence") or "")[:240]})
+                accepted["updates"].append({"quest_id": prior.get("id"), "code": prior.get("code"), "title": prior.get("title"),
+                                            "action": "accept", "evidence": _player_own_line(player_input)[:300]})
+                turn_ledger.note("quest", "retold_offer_taken", quest=str(prior.get("code") or prior.get("id")),
+                                 retold_as=str(item.get("title") or ""))
 
     for raw in list((changes or {}).get("updates") or [])[: MAX_UPDATES_PER_TURN * 2]:
         if not isinstance(raw, dict):
