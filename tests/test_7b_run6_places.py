@@ -634,6 +634,45 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class TalkedToAndShownHereIsHere(unittest.TestCase):
+    """8B run 109, T5: TALK "C" and "Thaddeus Grimes [[C]], the tallyman, steps out" at the reeve's; he stayed away."""
+
+    def test_he_is_here(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            office = world._upsert_location(conn, "The reeve's office", "", parent_id=1)
+            world._upsert_npc(conn, {"name": "Thaddeus Grimes", "role": "tallyman", "location": "The Salvage Guild's Tally House"})
+            code = conn.execute("SELECT code FROM npcs WHERE name = 'Thaddeus Grimes'").fetchone()[0]
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (office,))
+            prose = (f"The reeve's door creaks open. Thaddeus Grimes [[{code}]], the tallyman, steps out, his face a "
+                     "map of exhaustion.")
+            result = {"narration": prose, "player": {}, "conversations": [{"npc_code": code, "topic": "the contract"}]}
+            world._place_talked_to_in_scene(conn, [], result)
+            at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Thaddeus Grimes'").fetchone()[0]
+        self.assertEqual(int(at), int(office))
+
+    def test_only_talked_about_he_stays(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            office = world._upsert_location(conn, "The reeve's office", "", parent_id=1)
+            world._upsert_npc(conn, {"name": "Thaddeus Grimes", "role": "tallyman", "location": "The Salvage Guild's Tally House"})
+            code = conn.execute("SELECT code FROM npcs WHERE name = 'Thaddeus Grimes'").fetchone()[0]
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (office,))
+            prose = f"“Thaddeus Grimes [[{code}]] sent me,” you say. The reeve looks up."
+            result = {"narration": prose, "player": {}, "conversations": [{"npc_code": code, "topic": "the contract"}]}
+            world._place_talked_to_in_scene(conn, [], result)
+            at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Thaddeus Grimes'").fetchone()[0]
+        self.assertEqual(int(at), int(house))
+
+
 class TheJobIsNoPartOfTheName(unittest.TestCase):
     """8B run 104, T1: NAME "Tallyman Darrick" ROLE "Salvage Guild Tallyman" stored "Tallyman Darrick"."""
 

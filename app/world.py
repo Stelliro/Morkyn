@@ -13701,10 +13701,11 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
     } - {""}
     # Shown in the scene counts too: the man leaning on a post, bound to
     # Roger Treloar, came with LOC "Saltmarrow Stables" (8B run 22, T2).
-    talked |= {re.sub(r"[^a-z]", "", str(n.get("name") or "").lower()) for n in npcs
+    talked |= {re.sub(r"[^a-z]", "", str(n.get("name") or "").lower()) for n in npcs or []
                if isinstance(n, dict) and n.get("_bound_hint")} - {""}
-    if not talked or not npcs:
+    if not talked:
         return
+    npcs = npcs or []
     player = result.get("player") if isinstance(result.get("player"), dict) else {}
     here = conn.execute(
         "SELECT l.code, l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
@@ -13741,6 +13742,22 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
             continue
         npc["location"] = scene
         turn_ledger.note("npc", "placed_in_scene", name=name, unknown_place=loc, place=scene)
+    # Someone known the turn talks with, whom the narration shows here, is here:
+    # TALK "C" with "Thaddeus Grimes [[C]], the tallyman, steps out" at the
+    # reeve's door kept him at the tally house (8B run 109, T5). A turn that
+    # stays put only; the narration, not speech, has to show them by code.
+    if moving_to or str(player.get("move_to_location_code") or "").strip() or not here:
+        return
+    here_row = conn.execute("SELECT id FROM locations WHERE code = ?", (str(here["code"] or ""),)).fetchone()
+    unspoken = venues.strip_speech(_narration_text(result))
+    for code in talked:
+        row = conn.execute("SELECT id, code, name, location_id FROM npcs WHERE lower(code) = ?", (code,)).fetchone()
+        if row is None or here_row is None or int(row["location_id"] or 0) == int(here_row["id"]):
+            continue
+        if f"[[{str(row['code'] or '').upper()}]]" not in unspoken:
+            continue
+        conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(here_row["id"]), int(row["id"])))
+        turn_ledger.note("npc", "talked_to_and_shown_here", name=str(row["name"] or ""), place=str(here["code"] or ""))
 
 
 def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
