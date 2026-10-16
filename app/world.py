@@ -17785,6 +17785,18 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
                                     _hint_sentence(text, free[0]).lower())
             if not (other_trade and other_trade.group(1) not in role_words):
                 match = free[0]
+        if match is None and len(unshown) == 1 and len(free) > 1:
+            # Of several, the one shown once the player is inside: NPC_NEW "Lars"
+            # ROLE "tallyman" for "push inside. Inside, ... A man in a soot-stained
+            # coat is at the counter", with a rope maker's man passed on the way,
+            # drew a "cooper" for the counter (8B run 112, T1).
+            # The first going-in: "He looks up as you enter" comes after the man.
+            entry = re.search(r"\b(?:inside|you\s+(?:step|push|walk|go|duck)\s+(?:in|inside|through)|you\s+enter)\b",
+                              text, re.I)
+            if entry is not None:
+                inside = [h for h in free if text.find(h) >= entry.start()]
+                if len(inside) == 1:
+                    match = inside[0]
         if match is None:
             # The prose calls them by the op's own role: NPC_NEW "Tobin Yates"
             # ROLE "tallyman" for "Inside, the tallyman sits behind a desk" was
