@@ -634,6 +634,23 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class TheOneInsideIsTheOpsPerson(unittest.TestCase):
+    """8B run 112, T1: Lars the tallyman, with a rope maker's man passed outside, became a drawn "cooper"."""
+
+    PROSE = ("You pass a rope maker’s stall where a man in a soot-stained tunic is hunched over his work. You reach "
+             "the salvage guild’s tally house and push inside. Inside, the air is thick with the smell of oil. A man "
+             "in a soot-stained coat is at the counter, his fingers stained with ink. He looks up as you enter.")
+
+    def test_lars_is_the_man_at_the_counter(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            npcs = world._npcs_shown_in_prose(conn, [{"name": "Lars", "role": "tallyman", "location": "L1"}], self.PROSE)
+        self.assertEqual([(n["name"], n.get("_bound_hint")) for n in npcs], [("Lars", "A man")])
+
+
 class TalkedToAndShownHereIsHere(unittest.TestCase):
     """8B run 109, T5: TALK "C" and "Thaddeus Grimes [[C]], the tallyman, steps out" at the reeve's; he stayed away."""
 
