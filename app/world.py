@@ -13753,6 +13753,14 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         return int(existing["id"]) if existing else None
     if not name:
         return None
+    # The job is no part of the name: NAME "Tallyman Darrick" ROLE "Salvage
+    # Guild Tallyman" stored a person called Tallyman Darrick (8B run 104, T1).
+    role_words_here = {w.lower() for w in re.findall(r"[A-Za-z]+", str(npc.get("role") or "")) if len(w) >= 4}
+    parts = name.split()
+    if len(parts) >= 2 and parts[0].lower() in role_words_here and parts[0].lower() not in _NOT_A_JOB:
+        name = " ".join(parts[1:])
+        npc["name"] = name
+        turn_ledger.note("npc", "job_dropped_from_name", name=name, job=parts[0])
     # Event titles / system job lines must not become people ("System pings a local job")
     if not is_plausible_person_name(name):
         shown_as = str(npc.get("_figure_pronouns") or npc.get("pronouns") or "").lower()
