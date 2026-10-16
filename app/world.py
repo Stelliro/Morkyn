@@ -13039,10 +13039,16 @@ def _find_location_id(conn, name_or_code: str | None, *, refusal: dict[str, Any]
         # for the tallyman (8B run 102, T1).
         tail = re.findall(r"[a-z]+", re.sub(r"^(?:the|a|an)\s+", "", value.lower()))
         if len(tail) >= 2:
-            ends = [
-                r for r in conn.execute("SELECT id, name FROM locations").fetchall()
-                if re.findall(r"[a-z]+", str(r["name"] or "").lower())[-len(tail):] == tail
-            ]
+            def _in_order(short: list[str], full: list[str]) -> bool:
+                it = iter(full)
+                return all(w in it for w in short)
+
+            rows_all = conn.execute("SELECT id, name FROM locations").fetchall()
+            ends = [r for r in rows_all if re.findall(r"[a-z]+", str(r["name"] or "").lower())[-len(tail):] == tail]
+            # Or a word left out: "The Salvage Tally House" for "The Salvage
+            # Guild's Tally House" minted a second one (8B run 111, T4).
+            if not ends and len(tail) >= 3:
+                ends = [r for r in rows_all if _in_order(tail, re.findall(r"[a-z]+", str(r["name"] or "").lower()))]
             if len(ends) == 1:
                 turn_ledger.note("place", "short_name_of_known_place", name=value, known=str(ends[0]["name"] or ""))
                 return int(ends[0]["id"])
@@ -17620,6 +17626,15 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
             ):
                 if called.group(0).startswith(",") and re.search(r"\bthe\s+[a-z]+\s*$", text[: called.start()], re.I):
                     continue
+                # Saying the name is not calling her: '"Ellen Croft," he repeats'
+                # and the player's own '"Ellen Croft."' stored the hooded woman who
+                # said "She's not here" as Ellen (8B run 111, T4).
+                rest = text[called.end():]
+                if re.match(r"\s*[\"”]", rest) and (
+                    called.group(0).lstrip().startswith(("\"", "“"))
+                    or re.match(r"\s*[\"”]\s*(?:\w+\s+){0,2}(?:repeats?|repeated|echoes|echoed|says\s+again)\b", rest, re.I)
+                ):
+                    continue
                 return True
         parts = [p for p in re.findall(r"[A-Za-z][A-Za-z'-]+", name) if len(p) >= 3 and p.lower() not in _NOT_A_NAME]
         return any(p[:1].isupper() and re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", unspoken) for p in parts)
@@ -17748,6 +17763,17 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
     keep_ids = {id(npc) for npc in npcs if npc not in unshown}
     bound: dict[int, str] = {}
     for npc in unshown:
+        # A name the scene only speaks of is someone talked about, not the
+        # figure: '"Ellen Croft," he repeats' and the hooded woman's "She's not
+        # here" stored her as Ellen (8B run 111, T4). Saying it of oneself
+        # ("I'm Ellen Croft") still names the speaker.
+        npc_name = norm_name(str(npc.get("name") or ""))
+        if npc_name and re.search(r"(?<!\w)" + re.escape(npc_name) + r"(?!\w)", text, re.I) and not re.search(
+            r"\b(?:i['’]m|i\s+am|my\s+name['’]?s|my\s+name\s+is|call\s+me|they\s+call\s+me)\s+" + re.escape(npc_name),
+            text, re.I,
+        ):
+            turn_ledger.note("npc", "name_only_spoken_of", name=npc_name)
+            continue
         role_words = {w for w in re.findall(r"[a-z]+", str(npc.get("role") or "").lower()) if len(w) >= 3}
         # "The trader at the post, a woman with a sharp gaze": the role is in the figure's sentence.
         match = next((h for h in free if role_words & set(re.findall(r"[a-z]+", _hint_sentence(text, h).lower()))), None)

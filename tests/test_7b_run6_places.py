@@ -742,6 +742,31 @@ class AShortNameIsTheKnownPlace(unittest.TestCase):
             count = conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0]
         self.assertEqual(count, 2)
 
+    def test_a_word_left_out_is_the_same_place(self):
+        # 8B run 111, T4: "The Salvage Tally House" for "The Salvage Guild's Tally House".
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            self.assertEqual(world._find_location_id(conn, "The Salvage Tally House"), int(house))
+
+    def test_a_name_only_spoken_of_is_not_the_figure(self):
+        # 8B run 111, T4: '"Ellen Croft," he repeats' and the hooded woman's "She's not here".
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            prose = ("“Ellen Croft,” he repeats. A figure steps inside, her cloak damp with brine. The "
+                     "woman tilts her head. “She’s not here,” she says.")
+            npcs = world._npcs_shown_in_prose(conn, [{"name": "Ellen Croft", "role": "mysterious figure"}], prose)
+            self.assertEqual(npcs, [])
+            intro = "A figure steps inside. “I’m Ellen Croft,” she says."
+            named = world._npcs_shown_in_prose(conn, [{"name": "Ellen Croft", "role": "mysterious figure"}], intro)
+        self.assertEqual([n["name"] for n in named], ["Ellen Croft"])
+
     def test_two_such_places_mint_nothing_by_guess(self):
         from app import world
         from app.db import connect
