@@ -1625,7 +1625,8 @@ _INTENT_ONLY_RE = re.compile(
 _DONE_WORDS_RE = re.compile(
     r"\b(?:found|find\s+(?:it|them|the)|finds|done|finish\w*|complet\w*|deliver\w*|hand(?:s|ed)?\s+(?:over|it|them)|"
     r"return(?:s|ed)|brought|bring(?:s)?\s+(?:it|them)|sign(?:s|ed)|paid|pays|recover\w*|retriev\w*|haul(?:s|ed)?\s+(?:it|them)\s+(?:up|out|in)|"
-    r"rescu\w*|fix\w*|mend\w*|repair\w*|rang|ring(?:s)?\s+(?:it|the)|"
+    # "your gaze fixed on the distant shipwreck" is looking, not mending (8B run 99, T4).
+    r"rescu\w*|fix\w*(?!\s+(?:on|upon)\b)|mend\w*|repair\w*|rang|ring(?:s)?\s+(?:it|the)|"
     # The work ran out: "That was the last of the hold" (8B run 54, T6).
     r"(?:was|is|'s)\s+the\s+last\s+(?:of|one))\b",
     re.I,
@@ -1773,6 +1774,20 @@ def _quote_names_the_job(evidence: str, quest: dict[str, Any] | None) -> bool:
     return bool(job & (_stems(evidence) - _QUEST_STOP_STEMS))
 
 
+_LOOK_ONLY_RE = re.compile(
+    r"\b(?:gaze|gazes|gazing|gazed|look|looks|looking|looked|watch\w*|stare\w*|staring|glanc\w*|eye(?:s|d|ing)?|"
+    r"scan\w*|peer\w*|nod|nods|nodded|nodding|survey\w*|study|studies|studied|studying)\b",
+    re.I,
+)
+# Hands on the work: any of these in the quote and it is not only a look.
+_WORK_ACT_RE = re.compile(
+    r"\b(?:haul\w*|lift\w*|carr(?:y|ies|ied|ying)|drag\w*|sort\w*|stack\w*|load\w*|unload\w*|dig\w*|dug|pull\w*|"
+    r"pri(?:es|ed)|pry\w*|cut\w*|scrub\w*|clean\w*|sweep\w*|swept|mend\w*|patch\w*|tie\w*|knot\w*|row\w*|dive\w*|"
+    r"dove|swim\w*|swam|climb\w*|catch\w*|caught|net\w*|gather\w*|collect\w*|pick\w*|fill\w*|empt\w*|work\w*)\b",
+    re.I,
+)
+
+
 def done_check(evidence: str, quest: dict[str, Any] | None, *, passive: bool = False) -> list[str]:
     """Why a quote does not show a step done; empty when it does (7B run 5 #130).
 
@@ -1797,6 +1812,15 @@ def done_check(evidence: str, quest: dict[str, Any] | None, *, passive: bool = F
         return []
     if not (result or about):
         return ["evidence_not_about_this_job"]
+    # A look at the job is no work: "You nod, your gaze fixed on the distant
+    # shipwreck" finished and paid "Dive into the old shipwreck" (8B run 99, T4).
+    # With no result shown, a quote whose act is only a look or a gesture needs
+    # the job's own verb.
+    lead = _lead_verb(str((quest or {}).get("title") or ""))
+    if not result and _LOOK_ONLY_RE.search(text) and not _WORK_ACT_RE.search(text) and not (
+        lead and _stem(lead) in _stems(text)
+    ):
+        return ["evidence_is_a_look"]
     if _IN_PROGRESS_RE.search(text) and not result:
         # Work under way is not work done (7B run 6, T5 and T7: "You start
         # sorting the goods", "You continue sorting").

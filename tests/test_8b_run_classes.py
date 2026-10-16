@@ -516,6 +516,23 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class ALookAtTheJobIsNoWorkDone(unittest.TestCase):
+    """8B run 99, T4: "You nod, your gaze fixed on the distant shipwreck" finished and paid the dive."""
+
+    Q = {"id": 1, "code": "Q1", "title": "Dive into the old shipwreck", "status": "active"}
+
+    def test_a_glance_finishes_nothing(self):
+        from app.quest_parser import done_check
+
+        self.assertTrue(done_check("You nod, your gaze fixed on the distant shipwreck.", self.Q))
+
+    def test_the_dive_itself_still_counts(self):
+        from app.quest_parser import done_check
+
+        self.assertEqual(done_check("You dive down into the old shipwreck and come up with a bronze bell.", self.Q), [])
+        self.assertEqual(done_check("You fixed the net and hand it back.", {"title": "Mend the nets"}), [])
+
+
 class ACutSceneLeavesTheStateWhereItStops(unittest.TestCase):
     """8B run 98, T4: the scene stopped in the tally house; a boat, a reef and -2 gold came from the cut part."""
 
@@ -572,6 +589,13 @@ class SomeoneLeftBehindIsNoOtherSide(unittest.TestCase):
                 'to ask the boat owners who would take me out.')
         check = infer_check_from_action(line, self.CTX) or {}
         self.assertNotEqual(((check.get("opposition") or {}).get("name")), "Thorne")
+
+    def test_walking_away_from_him(self):
+        # 8B run 99, T4.
+        ctx = {"current_location": {"id": 2, "npcs": [{"code": "A", "name": "Veyne", "role": "tallyman", "rank": "F"}]}}
+        line = "I thank Veyne with a nod and walk down to the docks, looking for the divers near the old mooring posts."
+        check = infer_check_from_action(line, ctx) or {}
+        self.assertNotEqual(((check.get("opposition") or {}).get("name")), "Veyne")
 
     def test_named_after_the_leaving_still_counts(self):
         line = "I leave the tally house and find Thorne at the docks to persuade him to lend me a boat."

@@ -2051,7 +2051,12 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         # Named, then left behind: "I nod to Thorne and leave the tally house,
         # heading down to the harbour to ask the boat owners" rolled against
         # Thorne at his desk (8B run 96, T4). Only a mention after the leaving counts.
-        left_at = re.search(r"\b(?:leave|leaves|leaving|walk\s+out\s+of|step\s+out\s+of|head\s+out\s+of)\s+the\b", named_text, re.I)
+        # A walk away does the same: "I thank Veyne with a nod and walk down to the docks" (8B run 99, T4).
+        left_at = re.search(
+            r"\b(?:leave|leaves|leaving|walk\s+out\s+of|step\s+out\s+of|head\s+out\s+of)\s+the\b"
+            r"|\band\s+(?:then\s+)?(?:walk|head|go|make\s+my\s+way|set\s+off|move\s+on|turn\s+away)\b",
+            named_text, re.I,
+        )
         for npc in ([] if stranger_called else pool[:12]):
             if left_at and _line_names_npc(named_text, npc) and not _line_names_npc(named_text[left_at.end():], npc):
                 continue
