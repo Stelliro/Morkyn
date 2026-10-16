@@ -194,6 +194,42 @@ still turned up one state fault, now mostly in movement and job offers:
 - **Prose**: "the player" is "you", the 8B's glued bracket ("the(guild's") is mended (98b7087,
   8f8064e).
 
+### Runs 81-112 (2026-10-15 to 2026-10-17)
+
+Goal set by Stell on 2026-10-17: 100 turns on the 8B with no issues. Runs still end in T2-T7 on
+one state fault each; run 106 reached T7. From run 97 a run is stopped only for a state fault or
+a new class, not for the logged prose classes below, which appear in every run.
+
+- **Movement**: an "out" of another verb ("call out") is no exit (6abb010); a walk toward a place
+  is no arrival, "Inside," is (7240412); a scene cut where it stops keeps the player there, and a
+  place only said in speech is not reached (f72b3f8).
+- **People**: a known person elsewhere whom the prose never names keeps their place and job, but
+  one shown by their job is shown (5056d74, addeea2); a common-noun name ("Tallyman") is a job
+  (173c2f0); a figure inside a description ("the kind of scent that clings to a man") is no one
+  (e9d758f); an employer word in a role ("guild") is no figure (cd5681e); a figure named after a
+  dash ("a figure at the bow, Captain Miren") is that person, and other figures beside named ones
+  are more people (70c84ab); a job word is no part of a name ("Tallyman Darrick", 82762f7); a
+  name only spoken of is not the hooded figure (8990e01); of several figures the one inside is
+  the ops' person (75cdb85); people the walk meets at a place made this turn, new or known, stand
+  there (addeea2, b1e5c2f); someone the turn talks with and shows by code is here (6329e81); a
+  name in the player's line for someone elsewhere is marked "not here" in the note (45cfbc1).
+- **Places**: a short name, or one word left out, of a known place is that place (04397c6,
+  8990e01).
+- **Jobs**: a "You ..." line spoken to the player is an offer (d726d8c); a giver named by job
+  resolves to its one holder (28aa8f8); the parser shape's own wording is no value (d56f3cc); an
+  open offer told again is that offer, and its card takes the telling (ef031c9, 704edda); "I'll
+  take that one" takes it, a hedge does not (e6ad5ae); a look at the job finishes nothing
+  (1635ab3); the giver's own offer sentence grounds a job (82762f7); a service the player buys is
+  no job (1d56760); the parser gets only the player's line (704edda).
+- **Money and items**: readiness to pay moves no coin (cd5681e); someone else counting out coin is
+  no payment (f72b3f8); a thing handed over under another noun ("the slip") is the item
+  (28aa8f8); accepting a job is no ask to take things (f72b3f8); a contract picked up is a thing,
+  a place is not (0b0a4fd, 40a5c02).
+- **Checks**: someone left behind or walked away from is no opponent (fe77a4f, 1635ab3).
+- **Verifier and prose**: a verifier patch cut by its token cap keeps the draft's prose
+  (515ff81); a speech lead with no line after it goes (73ff3cf); both halves of a line taken back
+  from another speaker go (24d33e5); a refused gain never cuts the player's own words (0b0a4fd).
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
@@ -233,7 +269,9 @@ still turned up one state fault, now mostly in movement and job offers:
 
 ## Next
 
-Run 81 on 8df1ad5 or later; keep logging by class. Stock lines repeat across turns too ("You're
-late" from the tallyman in most runs, NPCs echoing the player's question back), alongside the
-prose classes above. No clean run yet: state faults are now rare
-(about one per run, found in T1-T7), while the prose classes above remain in every run.
+Run 113 on 75cdb85 or later, toward the 100-turn goal. Stock lines repeat across turns too
+("You're late" from the tallyman in most runs, NPCs echoing the player's question back), alongside
+the prose classes above. No clean run yet: about one state fault per run, found in T1-T7. The
+prose classes above (inner life and acts for the player, past tense, scene drift) are in every
+run and cannot reach zero without the outcome-reader decision in
+docs/showcase/prompt-review-2026-10-14.md, which is Stell's call.
