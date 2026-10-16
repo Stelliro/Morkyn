@@ -13793,6 +13793,21 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
         return int(existing["id"]) if existing else None
     if not name:
         return None
+    # The player's name is no one else's: NPC_NEW NAME "Isk Tarrow" ROLE "salvage
+    # guild tallyman" stored the tallyman as the player (8B run 117, T1). The
+    # person stays, under their job, and is drawn a name for it.
+    try:
+        prow = conn.execute("SELECT name FROM player WHERE id = 1").fetchone()
+        player_names = {str(prow[0] or "").strip().lower()} if prow else set()
+    except Exception:
+        player_names = set()
+    player_names |= {n.split()[0] for n in list(player_names) if n.split()}
+    player_names.discard("")
+    if name.lower() in player_names or (name.split() and name.split()[0].lower() in player_names and not code):
+        job = (re.findall(r"[A-Za-z]+", str(npc.get("role") or "")) or ["stranger"])[-1].lower()
+        turn_ledger.note("npc", "players_name_refused", name=name, role=str(npc.get("role") or ""))
+        name = f"the {job}"
+        npc["name"] = name
     # The job is no part of the name: NAME "Tallyman Darrick" ROLE "Salvage
     # Guild Tallyman" stored a person called Tallyman Darrick (8B run 104, T1).
     role_words_here = {w.lower() for w in re.findall(r"[A-Za-z]+", str(npc.get("role") or "")) if len(w) >= 4}
