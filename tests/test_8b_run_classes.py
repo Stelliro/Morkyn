@@ -515,6 +515,24 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AGiverNamedByJob(unittest.TestCase):
+    """8B run 90, T2: giver "clerk" for Elias Vane, the clerk, left the job with no giver."""
+
+    def test_the_one_holder_is_the_giver(self):
+        from app.quest_parser import _resolve_npc
+
+        npcs = [{"id": 1, "code": "A", "name": "Gregory Furlong", "role": "stablehand"},
+                {"id": 2, "code": "B", "name": "Elias Vane", "role": "clerk"}]
+        self.assertEqual(_resolve_npc("clerk", npcs)["id"], 2)
+        self.assertEqual(_resolve_npc("the clerk", npcs)["id"], 2)
+
+    def test_two_holders_is_no_one(self):
+        from app.quest_parser import _resolve_npc
+
+        npcs = [{"id": 1, "name": "Ada Pell", "role": "clerk"}, {"id": 2, "name": "Elias Vane", "role": "clerk"}]
+        self.assertIsNone(_resolve_npc("clerk", npcs))
+
+
 class AJobToldToYouIsAnOffer(unittest.TestCase):
     """8B run 89, T3: "You haul the things that sink," she said, read as the player's own act; no job."""
 

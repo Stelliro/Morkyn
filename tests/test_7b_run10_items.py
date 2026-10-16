@@ -169,5 +169,30 @@ class TheGiversStock(unittest.TestCase):
         self.assertEqual([c["name"] for c in kept], ["mended net"])
 
 
+
+class HandedOverUnderAnotherNoun(unittest.TestCase):
+    """8B run 90, T2: "holds up a slip of parchment. 'This is a salvage contract.' ... hands you the slip"."""
+
+    LINE = ('"I owe the guild a winter\'s credit and I want to work it off." I stop in front of the desk. '
+            '"What job have you got that pays against the ledger?"')
+    NARRATION = (
+        "The clerk behind the desk looks up. He flips through the pages, then holds up a slip of parchment. "
+        "\"This is a salvage contract. You'll be working the docks.\"\n\nThe man watches you for a moment, "
+        "then hands you the slip."
+    )
+
+    def test_the_slip_is_the_contract(self):
+        _pack()
+        kept, rejected = _filter([{"name": "salvage contract", "quantity_delta": 1}], self.NARRATION, self.LINE)
+        self.assertEqual([c["name"] for c in kept], ["salvage contract"], rejected)
+
+    def test_another_thing_handed_is_not_it(self):
+        _pack()
+        prose = ("He mentions a salvage contract and shrugs. Later, by the door, a girl hands you the lantern "
+                 "and leaves.")
+        kept, _ = _filter([{"name": "salvage contract", "quantity_delta": 1}], prose, self.LINE)
+        self.assertEqual(kept, [])
+
+
 if __name__ == "__main__":
     unittest.main()
