@@ -166,6 +166,8 @@ def _accept_re() -> re.Pattern[str]:
 # Plain acceptance a player types back to an offer ("I'll do it", "deal").
 _SIMPLE_ACCEPT_RE = re.compile(
     r"\b(?:i(?:'ll| will) (?:do it|take it|help|go)|deal|you have a deal|i accept|count me in|agreed|"
+    # "I will take that one" for the job offered when the player came in (8B run 97, T3).
+    r"i(?:['’]ll| will) (?:take|do) (?:that|this) (?:one|job|work|offer)|"
     r"i(?:'ll| will) (?:escort|deliver|find|bring|fetch|carry)|accept(?:s|ed)? the)\b",
     re.I,
 )
@@ -190,7 +192,9 @@ _QUOTED_RE = re.compile(r'"[^"]*"|“[^”]*”')
 # "No deal, Oriel. I'll take my chances on the flats."
 _HOLDS_OFF_RE = re.compile(
     r"\b(?:(?:haven['’]?t|have\s+not|didn['’]?t|did\s+not|never)\s+(?:said|say|agreed?|accepted?|taken|took)\b|"
-    r"not\s+(?:yet|so\s+fast)\b|hold\s+on\b)",
+    r"not\s+(?:yet|so\s+fast)\b|hold\s+on\b|"
+    # A hedge is no yes: "I'm not sure I'll take that one", "I might take it".
+    r"not\s+sure\b|(?:might|maybe|perhaps)\s+(?:i\s+)?(?:take|do|accept)\b)",
     re.I,
 )
 _REFUSES_RE = re.compile(
