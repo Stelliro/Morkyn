@@ -903,6 +903,18 @@ def _resolve_npc(ref: Any, npcs: list[dict[str, Any]] | None) -> dict[str, Any] 
         first = name.split()[0] if name else ""
         if first and len(first) >= 3 and (low == first or low.split()[0] == first):
             return npc
+    # A job for a name: giver "clerk" for Elias Vane, the clerk behind the desk,
+    # left the job with no giver (8B run 90, T2). The one person holding it;
+    # two or more is no one.
+    job = re.sub(r"^(?:the|a|an)\s+", "", low).strip()
+    if job and re.fullmatch(r"[a-z][a-z' -]{2,40}", job):
+        holders = [
+            npc for npc in npcs or []
+            if str(npc.get("role") or "").strip().lower() in (job, job + "s")
+            or str(npc.get("role") or "").strip().lower().split()[-1:] == job.split()[-1:]
+        ]
+        if len(holders) == 1:
+            return holders[0]
     return None
 
 

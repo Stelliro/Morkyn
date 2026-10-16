@@ -14250,6 +14250,37 @@ def _prose_item_outcome_detail(
     return state, by_player
 
 
+_HANDED_NOUN_RE = re.compile(
+    r"\b(?:hands?|handed|gives?|gave|pass(?:es|ed)?|slides?|slid|press(?:es|ed)?|tosses|tossed)\s+you\s+"
+    r"(?:the|a|an|his|her|their)\s+(?P<noun>[a-z][a-z'-]{2,})\b",
+    re.I,
+)
+
+
+def _handed_under_another_noun(text: str, name_l: str) -> str:
+    """The prose with a hand-over of the item's other noun read as the item.
+
+    "He ... holds up a slip of parchment. 'This is a salvage contract.' ... then
+    hands you the slip" refused GRANT "salvage contract": the hand-over never
+    named it (8B run 90, T2). The noun counts when it stands just before the
+    item's own name in the prose.
+    """
+    body = str(text or "")
+    name = str(name_l or "").strip().lower()
+    if not name or name not in body.lower():
+        return body
+    low = body.lower()
+    for match in _HANDED_NOUN_RE.finditer(body):
+        noun = match.group("noun").lower()
+        if noun in name.split():
+            continue
+        named_at = [m.start() for m in re.finditer(re.escape(name), low[: match.start()])]
+        if any(re.search(rf"\b{re.escape(noun)}\b", low[max(0, at - 160):at]) for at in named_at):
+            start = match.start("noun")
+            return body[:start] + name + body[match.end("noun"):]
+    return body
+
+
 def _prose_item_handed_over(text: str, name_l: str, tokens: list[str], *, owned: bool = False) -> bool:
     """True when someone other than the player gives the item to the player somewhere in the prose.
 
@@ -15319,6 +15350,7 @@ def _filter_inventory_changes(
         # or a bite eaten on the spot, there is no gain whatever the draft said
         # (issue #9). The draft only falls in when there is no final text.
         final_text = str(narration or "") if str(narration or "").strip() else str(draft_narration or "")
+        final_text = _handed_under_another_noun(final_text, name_l)
         outcome, by_player = _prose_item_outcome_detail(final_text, name_l, tokens, owned=bool(existing))
         # Playtest #42: the narration is model-written, so "You pick it up ...
         # You pocket it" after "I examine the ground" is the model taking for
