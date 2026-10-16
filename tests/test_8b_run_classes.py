@@ -516,6 +516,25 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class TakingThatOneIsTakingIt(unittest.TestCase):
+    """8B run 97, T3: "I will take that one" left the shipwreck job offered."""
+
+    Q = {"id": 1, "code": "Q1", "title": "Haul Salvage from the Sea", "status": "offered", "giver_npc_id": 2}
+
+    def test_that_one_takes_it(self):
+        from app.quest_parser import player_takes_job
+
+        line = ('"You offered me the shipwreck when I came in. Hauling salvage near the old wreck in the east." I put my '
+                'hand flat on the desk. "I will take that one. How much comes off per load?"')
+        self.assertTrue(player_takes_job(self.Q, line, [self.Q], ""))
+
+    def test_a_hedge_takes_nothing(self):
+        from app.quest_parser import player_takes_job
+
+        self.assertFalse(player_takes_job(self.Q, '"I am not sure I will take that one."', [self.Q], ""))
+        self.assertFalse(player_takes_job(self.Q, '"I might take it, if the pay is right."', [self.Q], ""))
+
+
 class SomeoneLeftBehindIsNoOtherSide(unittest.TestCase):
     """8B run 96, T4: "I nod to Thorne and leave the tally house ... to ask the boat owners" rolled vs Thorne."""
 
