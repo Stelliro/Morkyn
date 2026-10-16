@@ -1552,9 +1552,13 @@ _CUT_WORD_IN_QUOTE_RE = re.compile(r"(?:\s+(?:the|a|an))?\s+(?<![\w'’])[b-hj-z
 # voice cuts through the silence." (7B run 36, T3: the line itself, a repeat of
 # his T1 line, was dropped and the lead stayed).
 _SPEECH_LEAD_RE = re.compile(
-    r"^\W*(?:[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2}(?:\s*\[\[[A-Z0-9]+\]\])?(?:['’]s)?|(?:his|her|their|a)\s*)\s+"
+    # An opening clause may come first: "Then, with a slow exhale, he speaks."
+    # ended a scene with no line after it (8B run 91, T3).
+    r"^\W*(?:[^.!?\"“”,]{1,40},\s*(?:[^.!?\"“”,]{1,40},\s*)?)?"
+    r"(?:[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,2}(?:\s*\[\[[A-Z0-9]+\]\])?(?:['’]s)?|(?:his|her|their|a)\s*|he|she|they)\s+"
     r"(?:voice\s+(?:cuts|breaks|rings|carries|comes|calls)\s*(?:through|out|across|over)?(?:\s+the\s+\w+)?"
     r"|(?:speaks|calls)\s+(?:up|out)|clears\s+(?:his|her|their)\s+throat"
+    r"|(?:finally\s+)?(?:speaks|answers|begins(?:\s+to\s+speak)?)"
     # A bare speech tag whose line was dropped: "Emrys asks, his tone shifting
     # subtly." (7B run 36, T7).
     r"|(?:asks|says|adds|replies|continues|mutters|murmurs|whispers)(?:,\s+(?:his|her|their)\s+[^.!?\"“”]{0,50})?)"
