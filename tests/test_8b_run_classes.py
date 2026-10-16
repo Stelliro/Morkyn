@@ -516,6 +516,17 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class TakingTheWreckTakesTheWreckedShip(unittest.TestCase):
+    """8B run 119, T3: "I will take the wreck" left "Salvage the Wrecked Ship" offered."""
+
+    def test_by_stem(self):
+        from app.quest_parser import player_takes_job
+
+        q = {"id": 1, "code": "Q1", "title": "Salvage the Wrecked Ship", "status": "offered", "giver_npc_id": 1}
+        line = '"Risk is the trade. I will take the wreck." I tap the ledger. "Which dock does the boat leave from?"'
+        self.assertTrue(player_takes_job(q, line, [q], ""))
+
+
 class AJobJustTakenIsNotTwoJobs(unittest.TestCase):
     """8B run 115, T3: "Report to Oswin Bellamy" came as a second job in the turn his job was taken."""
 

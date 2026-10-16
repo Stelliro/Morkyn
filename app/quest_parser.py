@@ -253,7 +253,8 @@ def player_takes_job(
     # taking the job by a word of its own title.
     title_words = _title_words(str(quest.get("title") or ""))
     for match in re.finditer(r"\bi(?:['’]ll|\s+will)\s+(?:take|do|handle|run|walk)\s+(?:the|this|that|your)\s+([a-z]+)", own, re.I):
-        if match.group(1).lower() in title_words:
+        # By stem: "I will take the wreck" for "Salvage the Wrecked Ship" (8B run 119, T3).
+        if match.group(1).lower() in title_words or _stem(match.group(1).lower()) in {_stem(w) for w in title_words}:
             return True
     # The job's own verb on its own subject: "I'll clear the Stormbreaker" for
     # "Clear the Wreckage", the wreckage "from the Stormbreaker" (8B run 56, T3).
