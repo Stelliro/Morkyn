@@ -1451,6 +1451,11 @@ def validate_quest_changes(
         # and the parser proposed the job but quoted "Jehane Tully takes a deep
         # breath" as its evidence, so it was refused as no offer. When the giver
         # is in the scene and the two sides agree a sum, the agreement grounds it.
+        # The giver asking what work the player wants has set none yet: "You'll
+        # need to prove your worth. What kind of job are you looking for?" filed
+        # "Prove worth through work" (8B run 120, T2).
+        if not reasons and _ASKS_WHICH_WORK_RE.search(offer_line or "") and not _GIVER_OFFERS_JOB_RE.search(offer_line or ""):
+            reasons.append("giver_asks_what_work")
         # A service the player buys is no job for them: "What would you want for
         # taking me out there and back?" answered "you're paying for the risk"
         # filed "Row with Emmot Bexley" as Emmot's job (8B run 106, T7).
@@ -1847,6 +1852,10 @@ _WORK_ACT_RE = re.compile(
 )
 
 
+_ASKS_WHICH_WORK_RE = re.compile(
+    r"\b(?:what|which)\s+(?:kind|sort|type)?\s*(?:of\s+)?(?:job|work|task|trade|skills?)s?\s+(?:are|do|would|can|did)\s+you\b[^.!?]*\?",
+    re.I,
+)
 _ASKS_A_PRICE_RE = re.compile(
     r"\b(?:what\s+(?:would|will|do|does)\s+(?:you|it)\s+(?:want|charge|take|cost)\s+(?:me\s+)?(?:for|to)\b|"
     # Not a bare "how much for": "How much for the salvage run?" asks what a job pays.

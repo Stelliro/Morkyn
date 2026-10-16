@@ -516,6 +516,27 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AskingWhatWorkSetsNone(unittest.TestCase):
+    """8B run 120, T2: "You'll need to prove your worth. What kind of job are you looking for?" filed a job."""
+
+    def test_no_job_yet(self):
+        from app import quest_parser
+
+        narration = ("“I owe the guild a winter's credit and I want to work it off,” you say. Eldric Grimsby "
+                     "[[C]] looks up. \"You'll need to prove your worth. What kind of job are you looking for?\"")
+        reply = {"new": [{"title": "Prove worth through work", "giver": "Eldric Grimsby", "difficulty": "normal",
+                          "summary": "Prove worth.", "steps": [{"title": "Complete a task"}],
+                          "reward": {"gold": 0, "xp": 0, "items": [], "text": ""},
+                          "offer_line": "You'll need to prove your worth. What kind of job are you looking for?",
+                          "evidence": "I owe the guild a winter's credit and I want to work it off."}], "updates": []}
+        npcs = [{"id": 3, "code": "C", "name": "Eldric Grimsby", "role": "tallyman"}]
+        accepted, rejected = quest_parser.validate_quest_changes(
+            reply, narration=narration, player_input='"I owe the guild a winter\'s credit and I want to work it off."',
+            npcs=npcs)
+        self.assertEqual(accepted["new"], [])
+        self.assertIn("giver_asks_what_work", rejected[0]["reasons"])
+
+
 class TakingTheWreckTakesTheWreckedShip(unittest.TestCase):
     """8B run 119, T3: "I will take the wreck" left "Salvage the Wrecked Ship" offered."""
 
