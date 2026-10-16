@@ -248,7 +248,11 @@ _UNPRICED_PAYMENT_RE = re.compile(
     r"(?:price|sum|fee|amount|cost|toll|rate|coin|coins|gold|money|due)\b"
     r"|\byou\s+(?:\w+ly\s+)?(?:pay|paid)\s+(?:him|her|them|(?-i:[A-Z][\w'’-]*))\s*(?=[,.;!?]|\s+(?:and|for|then)\b)"
     r"|\byou\s+(?:\w+ly\s+)?(?:pay|paid)\s+for\s+(?:it|them|the\s+\w+|your\s+\w+)"
-    r"|\b(?:you\s+(?:\w+ly\s+)?count(?:ed)?|counting)\s+out\s+(?:the|what|his|her|their)\b[^.!?\n]{0,40}?"
+    # "Counting out" is the player's only in a clause of theirs: "Alditha's
+    # fingers tap the counter, counting out the twenty-two gold coins she'd
+    # promised" took 2 gold from the player (8B run 98, T4).
+    r"|\b(?:you\s+(?:\w+ly\s+)?count(?:ed)?|you\b(?:(?!\b(?:he|she|they|his|her|their)\b)[^.!?\n]){0,60}?,\s*counting)"
+    r"\s+out\s+(?:the|what|his|her|their)\b[^.!?\n]{0,40}?"
     r"\b(?:asks?|asked|owed?|price|gold|coins?|pieces|fee|due)\b",
     re.I,
 )
