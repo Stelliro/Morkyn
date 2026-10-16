@@ -20,6 +20,44 @@ Mørkyn turns that around. **The model only narrates. The engine decides.**
 
 It is pre-1.0 software, but it is a playable prototype with enough systems under it for long playthroughs. The claims above are tested behaviours, not lines in a prompt.
 
+## Features
+
+What you can actually do in a game today. Items marked *in progress* exist but are not finished.
+
+**Make a world and a character**
+- Describe any setting in your own words, or pick a theme (17 themes, such as Deep Caverns). The world gets its own races, factions, customs and lore, stored as facts the game looks up as you play.
+- Build a character with a name, sex, race, appearance, backstory and custom skills. Starting gear is one card per item, with stats rolled by the game and named to fit the world.
+- Set your own rules at setup (for example a rarity ladder: common, rare, legendary...). The save keeps them for the whole game.
+
+**Play by typing what you do**
+- Type any action or line of speech. You are never limited to a menu of choices, and the narrator never acts, speaks or decides for you.
+- Talk to anyone in the scene. The game tracks who you are addressing (by name, by @tag, or "everyone"), and you can change it from a chip above the input.
+- Skill checks roll real dice on the server, with your attributes, skills and a difficulty. Every roll is shown and kept in an audit table.
+- Fights track who is in them and what happened. NPCs have combat profiles, and fights can break out nearby while you wait or rest.
+- Health 0 ends the run. **Ironman** mode makes death permanent.
+
+**A world that remembers**
+- Places, people, items, gold and quests live in a database, not in the model's memory, so late turns still know who you met on turn 3.
+- Walk anywhere: a seeded wilderness map of over 16,000 cells, and towns with real streets, wards and shops you walk to. Say "go to the bakery" or click a shop on the map.
+- Walk into a shop, inn or forge and it becomes a place in town, with its keeper. Tradespeople keep jobs, workplaces and shifts.
+- Every NPC tracks how they feel about you on three scales: affinity, fear and respect. They also keep hidden feelings, agendas and family ties that only the narrator sees.
+- Pick up work: the narrator offers jobs, and the game records them as quests with steps, rewards, optional timers and hidden sub-tasks. You can also write your own quests in the UI.
+- Abilities grow by use, at rates the game computes. There are 204 hand-written ability templates, and new powers the model invents are checked, stored and offered in later games.
+
+**Control over the story**
+- **Rewind** any turn. The same dice fall again, and nothing the discarded turn wrote survives.
+- Several campaign save slots, and a save editor for viewing and fixing any table cell by cell (with a backup first).
+- A World Bible, scene history, an in-game clock and day, and a context-health panel showing what the model was given.
+
+**Runs your way**
+- Runs on your own PC with a local 7B-8B model (GGUF, in-process). Nothing leaves your machine.
+- Or connect a cloud model: xAI Grok, OpenAI, or any OpenAI-compatible gateway. An agent bridge lets any outside agent answer the game's calls (the 100-turn Claude run below used it).
+- Its own app window on Windows, or any browser. Play from your phone over your LAN or a trusted VPN.
+- Optional local character portraits (Forge / A1111; ComfyUI is wired but unverified).
+- Optional read-aloud narration, on a local voice (Piper, CPU only) or a speech API.
+
+*In progress:* earnable titles with stat bonuses; a party system with companions and morale.
+
 ## Download
 
 This drop is **[`v0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12)**. One file, empty folder, run it. The launcher clones the repo, builds a private `.venv`, installs dependencies, and starts the game.
