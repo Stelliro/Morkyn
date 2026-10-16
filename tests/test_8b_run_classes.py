@@ -515,6 +515,48 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AJobToldToYouIsAnOffer(unittest.TestCase):
+    """8B run 89, T3: "You haul the things that sink," she said, read as the player's own act; no job."""
+
+    LINE = ('"Hauling from the docks. I know the tide hours, so I can work around the water." I set both hands on '
+            'the desk. "What do I haul, and how much comes off per load?"')
+    NARRATION = (  # the run's shipped prose
+        "“Hauling from the docks. I know the tide hours, so I can work around the water,” you say. Gunilda [[A]]’s "
+        "fingers drummed the wood of the desk as she leaned back in her chair.\n\n“You haul the things that sink,” "
+        "she said, voice low and measured. “Broken crates, rusted tools, anything that’s been tossed into the tide and "
+        "come back. The reeve’s men take the worth of what’s salvageable, and the rest—well, it’s yours to claim.” Her "
+        "gaze flicked to the ledger, then back to you.\n\n“What do I haul, and how much comes off per load?” you ask."
+        "\n\nShe tapped the ledger. “A third of the value of what you haul. But the reeve’s men are picky. And if you "
+        "bring back something worth more than a third, you get the rest.” Her lips curved into a thin smile. “But "
+        "that’s not the only way to earn your way out of debt. The warehouse’s got work for those who’re willing to "
+        "risk a little more.”")
+    NPCS = [{"id": 1, "code": "A", "name": "Gunilda", "role": "tallyman"}]
+
+    def test_her_words_are_the_offer(self):
+        from app import quest_parser
+
+        reply = {"new": [{
+            "title": "Haul Salvage from Docks", "giver": "Gunilda", "difficulty": "normal",
+            "summary": "Collect broken crates and rusted tools from the tide to reduce debt",
+            "steps": [{"title": "Haul the salvage", "description": "Collect items tossed into the tide", "location": "L2"}],
+            "reward": {"gold": 0, "xp": 0, "items": [], "text": "A third of the value of what you haul."},
+            "offer_line": "You haul the things that sink, broken crates, rusted tools, anything that's been tossed "
+                          "into the tide and come back.",
+            "evidence": "You haul the things that sink, broken crates, rusted tools, anything that's been tossed "
+                        "into the tide and come back.",
+        }]}
+        accepted, rejected = quest_parser.validate_quest_changes(reply, narration=self.NARRATION,
+                                                                 player_input=self.LINE, npcs=self.NPCS)
+        self.assertEqual([q["title"] for q in accepted.get("new") or []], ["Haul Salvage from Docks"], rejected)
+
+    def test_the_prose_retelling_the_player_is_still_theirs(self):
+        from app import quest_parser
+
+        self.assertTrue(quest_parser._players_words_only(
+            "You decide to mind the tides", "You decide to mind the tides", "I will mind the tides",
+            "You decide to mind the tides. Hesk nods."))
+
+
 class AFigureBoundThisTurnIsInTheScene(unittest.TestCase):
     """8B run 19, T0: the masked figure bound to Bertha Radley offered the job; it was filed with no giver."""
 

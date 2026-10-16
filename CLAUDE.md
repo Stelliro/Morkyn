@@ -71,6 +71,8 @@ belong to, with the date).
   Stell (same day, going to sleep): "go on for as long as it takes for no issues to occur ...
   go past 100 turns": runs may go longer than 100 turns, and the fix/re-run loop continues
   unattended. Still no push, tag or release without an explicit ask.
+  Stell (2026-10-17): "keep going, dont stop until we hit 100 turns with the 8b model with no
+  issues". The 8B loop does not pause for a report; it ends at a clean 100-turn 8B run.
 - **Roadmap:** stable 0.10 first, then 1.0 as an exe or package. Test saves can pile up until
   then; the cleanup and template saves happen at 1.0.
 
