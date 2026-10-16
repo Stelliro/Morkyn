@@ -516,6 +516,33 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class ACutSceneLeavesTheStateWhereItStops(unittest.TestCase):
+    """8B run 98, T4: the scene stopped in the tally house; a boat, a reef and -2 gold came from the cut part."""
+
+    LINE = ('"Half is fair. I accept the salvage run." I straighten up. "I will go down to the harbour and find a '
+            'boat out to the eastern reef."')
+    PROSE = ('You straighten up, your voice firm as the wind off the reef. "Half is fair. I accept the salvage run." '
+             '“I will go down to the harbour and find a boat out to the eastern reef,” you say. Alditha Saxby [[B]]’s '
+             'fingers tap the counter, counting out the twenty-two gold coins she’d promised.')
+
+    def test_accepting_the_run_takes_nothing(self):
+        from app.world import player_take_intent
+
+        self.assertFalse(player_take_intent(self.LINE))
+        self.assertTrue(player_take_intent("I accept the coil of rope she holds out."))
+
+    def test_a_place_only_said_is_not_reached(self):
+        from app.world import _new_place_reached
+
+        self.assertFalse(_new_place_reached("eastern reef", self.PROSE, self.LINE))
+
+    def test_her_counting_out_is_no_payment(self):
+        from app.prose_state import shows_unpriced_payment
+
+        self.assertFalse(shows_unpriced_payment(self.PROSE))
+        self.assertTrue(shows_unpriced_payment("You lean on the bar, counting out the coins he asked for."))
+
+
 class TakingThatOneIsTakingIt(unittest.TestCase):
     """8B run 97, T3: "I will take that one" left the shipwreck job offered."""
 

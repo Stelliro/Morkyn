@@ -9833,7 +9833,10 @@ def _new_place_reached(name: str, narration: str, player_input: str) -> bool:
     if not words:
         return True
     line = _player_line(player_input).lower()
-    if _line_names_place(line, words):
+    # Said, not done: '"I will go down to the harbour and find a boat out to
+    # the eastern reef."' stood the player on the reef while the scene ended in
+    # the tally house (8B run 98, T4). Speech never asks to go.
+    if _line_names_place(re.sub(r'"[^"\n]*"|“[^”\n]*”', " ", line), words):
         return True
     head = words[-1]
     named = False

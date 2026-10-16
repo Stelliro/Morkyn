@@ -13844,7 +13844,18 @@ def player_take_intent(player_text: str) -> bool:
     text = _NEGATED_PAY_RE.sub(" ", _TAKE_PERCEPTION_RE.sub(" ", str(player_text or "")))
     text = _SOMEONE_ELSE_TAKES_RE.sub(" ", text)
     text = _IT_TAKES_RE.sub(" ", text)
+    text = _ACCEPTS_AN_OFFER_RE.sub(" ", text)
     return bool(_PLAYER_TAKE_INTENT_RE.search(text))
+
+
+# Agreeing to work is no take of things: "I accept the salvage run" read as
+# asking to take, and a boat from the cut part of the scene went in the pack
+# (8B run 98, T4).
+_ACCEPTS_AN_OFFER_RE = re.compile(
+    r"\b(?:accept|accepts|accepted|agree\s+to|take\s+on|took\s+on|taking\s+on)\s+(?:the|this|that|your|a|an)\s+"
+    r"(?:[\w'’-]+\s+){0,3}?(?:job|work|run|offer|deal|terms|contract|task|errand|haul|bargain|price)s?\b",
+    re.I,
+)
 
 
 # A thing or another person doing the verb is not the player taking (7B run 10,
