@@ -516,6 +516,39 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AServiceThePlayerBuysIsNoJob(unittest.TestCase):
+    """8B run 106, T7: asking the boatman his price filed "Row with Emmot Bexley" as his job for the player."""
+
+    NARRATION = ("“Rowing suits me,” you say. “Is it your boat? What would you want for taking me out there "
+                 "and back?” Emmot Bexley [[B]] looks up. \"This boat's mine, and I've been out past Blackreach a "
+                 "few times. But the price isn't just in coin. You're not just paying for the row—you're paying "
+                 "for the risk.\"")
+    LINE = '"Rowing suits me." I step closer to the man with the ropes. "Is it your boat? What would you want for taking me out there and back?"'
+
+    def _reply(self):
+        return {"new": [{"title": "Row with Emmot Bexley", "giver": "Emmot Bexley", "difficulty": "normal",
+                         "summary": "Row out past Blackreach.", "steps": [{"title": "Row out", "location": ""}],
+                         "reward": {"gold": 0, "xp": 0, "items": [], "text": ""},
+                         "offer_line": "You're not just paying for the row—you're paying for the risk.",
+                         "evidence": "Is it your boat? What would you want for taking me out there and back?"}],
+                "updates": []}
+
+    def test_no_job(self):
+        from app import quest_parser
+
+        npcs = [{"id": 2, "code": "B", "name": "Emmot Bexley", "role": "lighterman"}]
+        accepted, rejected = quest_parser.validate_quest_changes(self._reply(), narration=self.NARRATION,
+                                                                 player_input=self.LINE, npcs=npcs)
+        self.assertEqual(accepted["new"], [])
+        self.assertIn("player_pays_for_a_service", rejected[0]["reasons"])
+
+    def test_asking_what_a_job_pays_is_not_buying(self):
+        from app.quest_parser import _ASKS_A_PRICE_RE
+
+        self.assertIsNone(_ASKS_A_PRICE_RE.search("How much for the salvage run?"))
+        self.assertTrue(_ASKS_A_PRICE_RE.search("What would you want for taking me out there?"))
+
+
 class SomeoneNamedButAwayIsMarkedAway(unittest.TestCase):
     """8B run 105, T5: "Hugh sent me" at the docks; the note said only "Hugh = Hugh (A, NPC)"."""
 
