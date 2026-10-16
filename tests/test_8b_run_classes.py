@@ -516,6 +516,19 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class TheParserGetsOnlyThePlayersLine(unittest.TestCase):
+    """8B run 103, T3: the parser quoted the engine's "Resolved player references" note as its evidence."""
+
+    def test_engine_notes_stay_out(self):
+        from app.quest_parser import build_parser_prompt
+
+        line = ('"I am up for it." I rest my hands on the counter.\n\nResolved player references: Conversation '
+                '(engine decided) - the player is talking to Garrick Thorne [[A]].')
+        _system, user = build_parser_prompt("Garrick looks up.", line)
+        self.assertNotIn("Resolved player references", json.loads(user)["player_input"])
+        self.assertIn("I am up for it.", json.loads(user)["player_input"])
+
+
 class ALookAtTheJobIsNoWorkDone(unittest.TestCase):
     """8B run 99, T4: "You nod, your gaze fixed on the distant shipwreck" finished and paid the dive."""
 
