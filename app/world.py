@@ -17388,6 +17388,12 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
         # describes (8B run 20, T0).
         if re.search(r"\b(?:kind|sort|type|manner)\s+of\b", match.group(0), re.I):
             continue
+        # Or earlier in its sentence: "the kind of scent that clings to the
+        # edges of a man who's seen too many things sink" stored Cassian, a
+        # diver no one saw (8B run 93, T2).
+        clause = re.split(r"[.!?\"“”]", str(text)[: match.start()])[-1]
+        if re.search(r"\b(?:the|a|that)\s+(?:kind|sort|type)\s+of\b", clause, re.I):
+            continue
         # A figure asked about is not one shown: "Is it a person, and how long
         # has it been there?" seeded Ivo the roofer (8B run 14, T1).
         if re.match(r"[^.!?\"“”]*\?", str(text)[match.end():]) and not re.search(r"[\"“][^\"”]*$", str(text)[: match.start()]):
