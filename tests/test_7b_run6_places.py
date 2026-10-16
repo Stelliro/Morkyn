@@ -634,6 +634,32 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class AShortNameIsTheKnownPlace(unittest.TestCase):
+    """8B run 102, T1: LOC "tally house" beside "The Salvage Guild's Tally House" minted a second one."""
+
+    def test_the_tail_of_one_place_is_that_place(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            self.assertEqual(world._find_location_id(conn, "tally house"), int(house))
+            count = conn.execute("SELECT COUNT(*) FROM locations").fetchone()[0]
+        self.assertEqual(count, 2)
+
+    def test_two_such_places_mint_nothing_by_guess(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            a = world._upsert_location(conn, "The North Tally House", "", parent_id=1)
+            b = world._upsert_location(conn, "The South Tally House", "", parent_id=1)
+            got = world._find_location_id(conn, "tally house")
+        self.assertNotIn(got, (int(a), int(b)))
+
+
 class ANamedFigureAndAnotherAreTwoPeople(unittest.TestCase):
     """8B run 101, T4: "a figure standing at the bow—Captain Miren" and "a man with a weathered face"
     stored only a drawn dock hand."""

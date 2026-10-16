@@ -13034,6 +13034,18 @@ def _find_location_id(conn, name_or_code: str | None, *, refusal: dict[str, Any]
         row = _match_location_by_name(conn, value)
         if row:
             return int(row["id"])
+        # The end of one known place's name is that place: LOC "tally house"
+        # beside "The Salvage Guild's Tally House" minted a second tally house
+        # for the tallyman (8B run 102, T1).
+        tail = re.findall(r"[a-z]+", re.sub(r"^(?:the|a|an)\s+", "", value.lower()))
+        if len(tail) >= 2:
+            ends = [
+                r for r in conn.execute("SELECT id, name FROM locations").fetchall()
+                if re.findall(r"[a-z]+", str(r["name"] or "").lower())[-len(tail):] == tail
+            ]
+            if len(ends) == 1:
+                turn_ledger.note("place", "short_name_of_known_place", name=value, known=str(ends[0]["name"] or ""))
+                return int(ends[0]["id"])
         # Codes like L1 should not invent a place named "L1" if already current
         if re.fullmatch(r"L\d+", value, flags=re.I):
             player = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
