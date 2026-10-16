@@ -13563,7 +13563,7 @@ def _place_new_people_at_arrival(
     # guild's tally house ... Inside, Milo [[A]] is hunched over a ledger" kept
     # Milo in town, his TALK cut with the tail (8B run 60, T1).
     words = [w for w in _place_words(str(dest["name"] or "")) if len(w) >= 4]
-    at = str(narration or "").lower().find(words[-1]) if words else -1
+    at = _arrival_at(str(narration or ""), words[-1]) if words else -1
     if at < 0:
         return
     after = venues.strip_speech(str(narration or "")[at:])
@@ -13576,6 +13576,38 @@ def _place_new_people_at_arrival(
         if (code and f"[[{code}]]" in after) or (name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", after)):
             conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(dest["id"]), int(row["id"])))
             turn_ledger.note("npc", "placed_at_arrival", name=name, place=str(dest["name"] or ""), via="shown_after_arrival")
+
+
+_ON_THE_WAY_RE = re.compile(
+    r"\b(?:toward|towards|make\s+your\s+way|making\s+your\s+way|head(?:ing)?\s+for|ahead|in\s+the\s+distance|"
+    r"(?:is|was)\s+your\s+destination|you\s+(?:walk|head|go|set\s+off)\s+to)\b", re.I
+)
+
+
+def _arrival_at(narration: str, word: str) -> int:
+    """Where the walk ends in the prose: the first naming of the place that is no
+    approach to it, or a sentence opening "Inside," after the place is named.
+    -1 when neither is there.
+
+    "You make your way toward the salvage yard, where the guild's tally house
+    stands" names the house on the way; the rag picker at the yard's edge, before
+    "Inside, the air is thick", was stood behind the tally desk (8B run 87, T1).
+    """
+    low = narration.lower()
+    named = False
+    for match in re.finditer(r"[^.!?]*[.!?\"”]*", narration):
+        sentence = match.group(0)
+        if not sentence.strip():
+            continue
+        if named and re.match(r"\s*inside\b", sentence, re.I):
+            return match.start()
+        at = low.find(word, match.start(), match.end())
+        if at < 0:
+            continue
+        named = True
+        if not _ON_THE_WAY_RE.search(sentence):
+            return at
+    return -1
 
 
 _FACT_FILLER ={"player", "players", "scene", "turn", "the", "about", "their", "there", "with", "from", "that", "this"}
