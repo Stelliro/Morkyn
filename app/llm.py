@@ -9359,6 +9359,8 @@ def _extract_json(text: str) -> dict[str, Any]:
             return json.loads(first_object)
         closed = _close_truncated_json(stripped)
         if closed is not None:
+            # Marked, so a reader can tell the last value it holds was cut.
+            closed["_cut_by_cap"] = True
             return closed
         raise
 
@@ -12624,9 +12626,20 @@ def _merge_verifier_verdict(
     ignored: list[str] = []
     kept_from_draft: list[dict[str, str]] = []
     narration_replaced = False
+    # A reply its token cap cut off ends in a half-written value, and the prose
+    # is the long one: a patch cut at "Emrys lifts his hat slightly, revealing"
+    # replaced a 4,500-character draft with its first paragraph and the answer
+    # to the player was lost (8B run 86, T3). The draft's prose stays.
+    cut_by_cap = bool(verdict_object.get("_cut_by_cap"))
     for key, value in patch.items():
         if key not in TURN_SHAPE_KEYS or key == "self_check":
             ignored.append(key)
+            continue
+        if cut_by_cap and key in {"narration", "narration_segments"}:
+            ignored.append(key)
+            from app import turn_ledger
+
+            turn_ledger.note("verify", "cut_patch_prose_not_taken", key=key)
             continue
         if key == "narration":
             text = _narration_value_text(value)
@@ -12745,7 +12758,10 @@ def _resolve_verified_turn(
     kind = _verify_reply_kind(verified)
     _append_trace(trace, {"phase": phase, "event": "verifier_reply", "kind": kind})
     if kind == "verdict":
-        return _merge_verifier_verdict(_unwrap_verifier_verdict(verified) or {}, draft, context, trace, phase)
+        verdict_object = dict(_unwrap_verifier_verdict(verified) or {})
+        if isinstance(verified, dict) and verified.get("_cut_by_cap"):
+            verdict_object["_cut_by_cap"] = True
+        return _merge_verifier_verdict(verdict_object, draft, context, trace, phase)
     try:
         resolved = _normalize_turn(verified, context)
     except LlmError as exc:
