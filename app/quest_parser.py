@@ -719,13 +719,22 @@ _PLAYER_OWES_RE = re.compile(
 )
 
 
-def _players_words_only(evidence: str, offer_line: str, player_input: str) -> bool:
+def _players_words_only(evidence: str, offer_line: str, player_input: str, narration: str = "") -> bool:
     """The parser's quote and offer line are the player's own words, or the prose retelling them ("You ...")."""
     own = _ws(str(player_input or "")).lower()
+    prose = _ws(str(narration or "")).lower()
+
+    def _spoken_to_player(flat: str) -> bool:
+        # "You haul the things that sink," she said: someone telling the player
+        # the job, not the prose retelling the player's act (8B run 89, T3).
+        # The parser joins and re-punctuates the line; its opening clause is what the prose holds.
+        head = re.split(r"[,.;:!?—–-]", flat, maxsplit=1)[0].strip()
+        at = prose.find(head) if len(head) >= 12 else -1
+        return at >= 0 and sum(prose[:at].count(mark) for mark in ('"', "“", "”")) % 2 == 1
 
     def _players(text: str) -> bool:
         flat = _ws(str(text or "")).strip(" \"'“”.,;:!?").lower()
-        return not flat or flat in own or bool(re.match(r"^\W*you\b", flat))
+        return not flat or flat in own or (bool(re.match(r"^\W*you\b", flat)) and not _spoken_to_player(flat))
 
     return _players(evidence) and _players(offer_line)
 
@@ -1293,7 +1302,7 @@ def validate_quest_changes(
                 # from "mother" (8B run 29, T0). An offer is spoken, posted, or
                 # made by someone the world holds.
                 reasons.append("no_one_offered_it")
-            elif verdict.get("why") == "giver_offers" and _players_words_only(evidence, offer_line, player_input):
+            elif verdict.get("why") == "giver_offers" and _players_words_only(evidence, offer_line, player_input, narration):
                 # The job is the player's own words ("I will mind the tides",
                 # retold "You decide to mind the tides"), and the giver's job
                 # sentence is about something else ("Keep an eye on my herd"):
