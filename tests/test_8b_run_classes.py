@@ -1644,6 +1644,24 @@ class TheBeatGoesWithTheCutLine(unittest.TestCase):
         self.assertTrue(kept[1].startswith("You set the dripping crate"))
 
 
+class BothHalvesOfATakenLineGo(unittest.TestCase):
+    """8B run 88, T7: the player's line in the stranger's mouth, split by a tag, left its second half alone."""
+
+    LINE = ('"Late for what? I do not know you." I stay where I am, crouched by the post. '
+            '"I am sorting the docks for the guild. What are you carrying there?"')
+
+    def test_no_half_is_left(self):
+        from app.narration_pipeline import keep_player_words
+
+        prose = ('"Late for what? I do not know you," you say. You stay where you are, crouched by the post.\n\n'
+                 '"I am sorting the docks for the guild," the stranger replies, their gaze flicking to the bundle. '
+                 '"What are you carrying there?"\n\nThe wind picks up off the water.')
+        fixed, _ = keep_player_words(prose, self.LINE)
+        self.assertEqual(fixed.count("What are you carrying there?"), 1)
+        self.assertNotIn("the stranger replies", fixed)
+        self.assertIn("The wind picks up", fixed)
+
+
 class TheWayThereIsNoArrival(unittest.TestCase):
     """8B run 87, T1: the rag picker at the yard's edge, before "Inside,", was stood behind the tally desk."""
 

@@ -2478,6 +2478,7 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             continue
         found = spans_of(body)
         index = len(found)
+        cut_later = False
         while index > 0:
             index -= 1
             span = found[index]
@@ -2497,6 +2498,13 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 tail = body[end:]
                 tag = re.match(r"[^.!?\n\"“]*[.!?]?", tail)
                 end += tag.end() if tag and _OTHER_SPEAKER_TAG_RE.search(tag.group(0)) else 0
+                # And the half after that tag: '"I am sorting the docks for the
+                # guild," the stranger replies, ... "What are you carrying
+                # there?"' left the second half standing alone (8B run 88, T7).
+                # Only while nothing after this span has been cut yet.
+                if (not cut_later and index + 1 < len(found) and not body[end:found[index + 1]["start"]].strip()
+                        and _quote_part(found[index + 1]["inner"], quote)):
+                    end = found[index + 1]["end"]
                 # The player's line split over two quotations by the other
                 # speaker's tag goes whole (7B run 6, T2: '"Salvagers, Isk," he
                 # says, his voice a low tone. "From where? Not ours, then."'
@@ -2522,6 +2530,7 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 # left '"that's the price ...' (8B run 33, T2).
                 rest = re.sub(r'^([“"])([a-z])', lambda m: m.group(1) + m.group(2).upper(), rest)
                 body = (head_part + " " + rest).strip(" ")
+                cut_later = True
                 changes.append({"action": "line_taken_from_other_speaker", "quote": quote})
 
     # 3. One invented line given to the player, while one of theirs is missing.
