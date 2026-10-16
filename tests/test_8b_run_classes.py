@@ -515,6 +515,20 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class TheShapesWordingIsNoValue(unittest.TestCase):
+    """8B run 92, T2: the step's description was stored as "what doing it means", the shape's own words."""
+
+    def test_placeholder_fields_are_empty(self):
+        from app.quest_parser import parse_reply
+
+        reply = parse_reply({"new": [{"title": "Salvage the shipwreck", "steps": [
+            {"title": "recover a valuable item", "description": "what doing it means", "location": "L2"}]}]})
+        step = reply["new"][0]["steps"][0]
+        self.assertEqual(step["description"], "")
+        self.assertEqual(step["title"], "recover a valuable item")
+        self.assertEqual(reply["new"][0]["title"], "Salvage the shipwreck")
+
+
 class ASpeechLeadWithNoLineGoes(unittest.TestCase):
     """8B run 91, T3: the scene ended "Then, with a slow exhale, he speaks." and no line came."""
 
