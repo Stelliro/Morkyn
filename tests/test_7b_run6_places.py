@@ -644,6 +644,26 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class APlacePassedIsNoMove(unittest.TestCase):
+    """8B run 116, T1: MOVE "Saltmarrow Stables" for "You pass the Saltmarrow Stables [[L2]]" on the way in."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+    PROSE = ("You head toward the salvage guild’s tally house. You pass the Saltmarrow Stables [[L2]], where a "
+             "wiry man is sharpening a blade.\n\nInside the tally house, the air is thick with the smell of ink.")
+
+    def test_the_walk_ends_at_the_tally_house(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            world._upsert_location(conn, "Saltmarrow Stables", "", parent_id=1)
+            result = {"player": {"move_to_location": "Saltmarrow Stables"}, "narration": self.PROSE}
+            report = world.resolve_movement(conn, result, self.LINE, intent="travel", narration=self.PROSE)
+        self.assertIn("tally house", str(report.get("destination") or "").lower(), report)
+
+
 class TheOneInsideIsTheOpsPerson(unittest.TestCase):
     """8B run 112, T1: Lars the tallyman, with a rope maker's man passed outside, became a drawn "cooper"."""
 

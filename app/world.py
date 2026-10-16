@@ -10067,7 +10067,13 @@ def resolve_movement(
             except Exception:
                 pass
             # Flag, as the code path does, a named move the prose never names.
-            prose = _unspoken(narration).lower()
+            # A place passed on the way is not named as where one is: MOVE
+            # "Saltmarrow Stables" for "You pass the Saltmarrow Stables [[L2]]"
+            # on the way to the tally house stood the player in the stables
+            # (8B run 116, T1).
+            prose = re.sub(
+                r"\b(?:pass(?:es|ed|ing)?|past|beyond|by)\s+(?:the\s+)?[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,3}(?:\s*\[\[[A-Z0-9]+\]\])?",
+                " ", _unspoken(narration)).lower()
             dest_name = str(report.get("destination") or explicit_name)
             if prose.strip() and dest_name.lower() not in prose and not venues.entry_in_prose(narration):
                 report["prose_mismatch"] = dest_name
@@ -15354,6 +15360,12 @@ def _filter_inventory_changes(
         if delta > 99:
             change["quantity_delta"] = 99
             delta = 99
+        # A size band is an amount, judged like one: GRANT "tide-reckoner" QTY
+        # "small" passed as a metadata edit and put a second reckoner in the
+        # pack beside her mother's (8B run 116, T1). The band still sets the size.
+        band = str(change.get("quantity_band") or "").strip().lower()
+        if delta == 0 and band and band not in {"none", "zero", "0"}:
+            delta = -1 if band.startswith("-") else 1
         existing = conn.execute("SELECT id, quantity FROM inventory WHERE name = ?", (name,)).fetchone()
 
         def _strip_unearned_dimensional(entry: dict[str, Any]) -> dict[str, Any]:
@@ -15502,7 +15514,18 @@ def _filter_inventory_changes(
         acts_take = player_take_intent(venues.strip_speech(str(player_input or "")))
         # Whether or not the gain stood: a refused grant that names her own
         # thing is no gain to trim from the prose either.
-        if named and not existing and not acts_take and not handed:
+        # The grant's own words name a thing she owns: GRANT "tide-reckoner" DESC
+        # "mother's brass tide-reckoner" for "the one your mother gave you before
+        # she vanished" (a past gift, read as a hand-over) put a second one in
+        # the pack (8B run 116, T1).
+        desc_l = re.sub(r"\s+", " ", str(change.get("description") or "")).strip().lower()
+        if not existing and desc_l and not acts_take:
+            owned_row = conn.execute("SELECT name FROM inventory WHERE lower(name) = ? AND quantity > 0", (desc_l,)).fetchone()
+            if owned_row is not None and str(owned_row[0]).lower() != name_l:
+                same_as_owned = str(owned_row[0])
+                grounded = False
+                turn_ledger.note("inventory", "owned_item_not_new", item=name, owned=same_as_owned, by="description")
+        if named and not existing and not acts_take and not handed and not same_as_owned:
             same_as_owned = _owned_item_named(conn, tokens)
             if same_as_owned:
                 grounded = False
