@@ -624,6 +624,39 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class ACommonNounNameIsAJob(unittest.TestCase):
+    """8B run 85, T1: NAME "Tallyman" for "They are the tallyman" stored a person called Tallyman."""
+
+    def test_the_tallyman_gets_a_name(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "Salvage Guild Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+            prose = ("A single figure sits behind a counter, fingers stained with ink. They are the tallyman, the one "
+                     "who keeps track of debts and salvage work.")
+            npcs = world._npcs_shown_in_prose(
+                conn, [{"name": "Tallyman", "role": "Salvage Guild Ledger Clerk", "location": "Salvage Guild Tally House"}],
+                prose,
+            )
+            for npc in npcs:
+                world._upsert_npc(conn, npc)
+            names = [r[0] for r in conn.execute("SELECT name FROM npcs").fetchall()]
+        self.assertEqual(len(names), 1)
+        self.assertNotIn(names[0].lower(), {"tallyman", "the tallyman"})
+
+    def test_a_name_the_prose_writes_as_a_name_stays(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            npcs = world._npcs_shown_in_prose(conn, [{"name": "Wren", "role": "netmaker"}], "Wren looks up from her nets.")
+        self.assertEqual(npcs[0]["name"], "Wren")
+
+
 class ALineNoOneSaysIsNotLogged(unittest.TestCase):
     """8B run 44, T0: TALK "You're late, Flat-runner." on a silent opening was logged as said, then echoed."""
 

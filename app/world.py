@@ -17481,6 +17481,21 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
             npc.pop(key, None)
         npc["location"] = str(row["code"])
         npc["role"] = str(row["role"] or npc.get("role") or "")
+    # A one-word name the prose only ever uses as a common noun is a job: NAME
+    # "Tallyman" ROLE "Salvage Guild Ledger Clerk" for "They are the tallyman"
+    # stored a person called Tallyman (8B run 85, T1). Written "the tallyman",
+    # it goes through the job-as-name rules and a person is drawn for the job.
+    for npc in npcs:
+        word = norm_name(str(npc.get("name") or ""))
+        if known(npc) or not re.fullmatch(r"[A-Z][a-z'-]{3,}", word):
+            continue
+        uses = list(re.finditer(r"(?<![\w'])" + re.escape(word) + r"(?![\w'])", text, re.I))
+        if uses and all(
+            m.group(0)[0].islower() or re.search(r"\b(?:the|a|an)\s+$", text[max(0, m.start() - 5):m.start()], re.I)
+            for m in uses
+        ):
+            turn_ledger.note("npc", "common_noun_name_is_a_job", name=word)
+            npc["name"] = "the " + word.lower()
     unshown = [npc for npc in npcs if not known(npc) and not shown(norm_name(str(npc.get("name") or "")))]
     # A job written as the name ("Tallyman") with "a man in a soot-streaked
     # coat" behind the desk: the name drawn for it took no sex and came out
