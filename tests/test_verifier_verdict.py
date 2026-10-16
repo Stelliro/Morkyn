@@ -503,5 +503,28 @@ class TestCompactVerifyRetryAndTheBreaker(unittest.TestCase):
         self.assertEqual(llm.verifier_breaker_status()["failure_streak"], 1)
 
 
+
+class ACutPatchKeepsTheDraftsProse(unittest.TestCase):
+    """8B run 86, T3: a verifier patch cut by its cap mid-sentence replaced the whole draft prose."""
+
+    def test_cut_prose_is_not_taken(self):
+        draft = _draft()
+        raw = ('{"verdict": "revise", "issues": ["Too long."], "patch": {"scene_focus": "conversation", '
+               '"narration_segments": [{"label": "paragraph", "text": "The tally house is quiet."}, '
+               '{"label": "paragraph", "text": "Emrys lifts his hat slightly, revealing')
+        reply = llm._extract_json(raw)
+        self.assertTrue(reply.get("_cut_by_cap"))
+        result = llm._resolve_verified_turn(reply, draft, {}, [])
+        self.assertEqual(result["narration_segments"], draft["narration_segments"])
+        self.assertEqual(result["scene_focus"], "conversation")
+
+    def test_a_whole_patch_still_replaces_it(self):
+        draft = _draft()
+        raw = ('{"verdict": "revise", "issues": ["x"], "patch": {"narration_segments": '
+               '[{"label": "scene", "text": "The tally house is quiet, and Emrys looks up."}]}}')
+        result = llm._resolve_verified_turn(llm._extract_json(raw), draft, {}, [])
+        self.assertIn("Emrys looks up", llm._narration_value_text(result["narration_segments"]))
+
+
 if __name__ == "__main__":
     unittest.main()
