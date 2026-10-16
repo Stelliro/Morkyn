@@ -515,6 +515,23 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AFigureInADescriptionIsNoOne(unittest.TestCase):
+    """8B run 93, T2: "the kind of scent that clings to the edges of a man who's seen ..." stored a diver."""
+
+    def test_the_kind_of_clause(self):
+        from app.world import _figure_hints
+
+        prose = ("The air smells of salt and rust, the kind of scent that clings to the edges of a man who’s "
+                 "seen too many things sink.")
+        self.assertEqual(_figure_hints(prose, []), [])
+
+    def test_a_man_in_the_scene_still_counts(self):
+        from app.world import _figure_hints
+
+        prose = "The air smells of salt and rust. A man in a tarred coat watches you from the door."
+        self.assertTrue(_figure_hints(prose, []))
+
+
 class TheShapesWordingIsNoValue(unittest.TestCase):
     """8B run 92, T2: the step's description was stored as "what doing it means", the shape's own words."""
 
