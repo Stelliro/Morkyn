@@ -19367,8 +19367,14 @@ _BARE_NAME_SKIP = {
 }
 
 
-def _bare_name_notes(text: str, rows: list[dict[str, str]], scene: dict[str, Any]) -> list[str]:
-    """Match a bare first name or item name. Scene members win when several rows share it."""
+def _bare_name_notes(
+    text: str, rows: list[dict[str, str]], scene: dict[str, Any], *,
+    here_codes: set[str] | None = None, elsewhere: dict[str, str] | None = None,
+) -> list[str]:
+    """Match a bare first name or item name. Scene members win when several rows share it.
+
+    A person named who is not here is marked as talked about, with where they are.
+    """
     masked = re.sub(r"@[A-Za-z0-9_]+", " ", text)
     scene_codes = set(scene.get("present") or []) | set(scene.get("interacting") or [])
     notes: list[str] = []
@@ -19390,7 +19396,11 @@ def _bare_name_notes(text: str, rows: list[dict[str, str]], scene: dict[str, Any
             continue
         hit = chosen[0]
         seen.add(key)
-        notes.append(f"{word} = {hit['name']} (@{hit['kind']}{hit['slug']}, {hit['code'] or 'no code'}, {hit['label']})")
+        away = ""
+        if (hit.get("kind") == "C" and here_codes is not None and hit.get("code") and hit["code"] not in here_codes
+                and hit["code"] not in scene_codes and (elsewhere or {}).get(hit["code"])):
+            away = f"; talked about, not here: at {elsewhere[hit['code']]}"
+        notes.append(f"{word} = {hit['name']} (@{hit['kind']}{hit['slug']}, {hit['code'] or 'no code'}, {hit['label']}{away})")
     return notes
 
 
@@ -19433,7 +19443,17 @@ def _expand_input_references(context: dict[str, Any], player_input: str) -> str:
         speaker = _scene_speaker_note(rows, scene)
     if speaker:
         resolved_notes.append(speaker)
-    resolved_notes.extend(_bare_name_notes(text, rows, scene))
+    # Who is here, and where the others are: "Hugh sent me" at the docks read
+    # as Hugh being there, and "help him haul" became the tallyman hauling
+    # crates on the pier (8B run 105, T5).
+    current = context.get("current_location") if isinstance(context.get("current_location"), dict) else {}
+    here_codes = {str(n.get("code") or "") for n in current.get("npcs") or [] if isinstance(n, dict)}
+    elsewhere = {
+        str(n.get("code") or ""): str(loc.get("name") or "")
+        for loc in context.get("locations") or [] if isinstance(loc, dict) and loc.get("code") != current.get("code")
+        for n in loc.get("npcs") or [] if isinstance(n, dict) and n.get("code")
+    }
+    resolved_notes.extend(_bare_name_notes(text, rows, scene, here_codes=here_codes, elsewhere=elsewhere))
     legacy_at = _legacy_at_tokens(context)
 
     def replace_mention(match: re.Match[str]) -> str:
