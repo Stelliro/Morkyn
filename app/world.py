@@ -13570,6 +13570,17 @@ def _place_new_people_at_arrival(
             and str(n.get("name") or "").lower() not in known_now
             and str(n.get("location") or "").strip().lower() in left_now
         ]
+        # Someone known shown there after the walk comes too: "Elias Vane [[B]]
+        # watches from a distance" at the new Eastern Dock kept him at his desk
+        # (8B run 108, T4). Shown after the place's name, by code or by name.
+        words = [w for w in _place_words(dest_name) if len(w) >= 4]
+        at = _arrival_at(str(narration or ""), words[-1]) if words else -1
+        if at >= 0:
+            after = venues.strip_speech(str(narration or "")[at:])
+            for row in conn.execute("SELECT code, name FROM npcs WHERE location_id = ?", (int(here["id"]),)).fetchall():
+                code, name = str(row["code"] or "").upper(), str(row["name"] or "")
+                if name and ((code and f"[[{code}]]" in after) or re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", after)):
+                    result["_arrive_with_player"].append(name)
         return
     if dest is None or here is None or int(dest["id"]) == int(here["id"]):
         return

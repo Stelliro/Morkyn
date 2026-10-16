@@ -762,6 +762,28 @@ class TheTallymanStandsWhereTheWalkEnds(unittest.TestCase):
             at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Veyra Drowned'").fetchone()[0]
         self.assertEqual(int(at), int(house))
 
+    def test_someone_known_shown_at_the_new_place_comes(self):
+        # 8B run 108, T4: "Elias Vane [[B]] watches from a distance" at the new Eastern Dock.
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+            world._upsert_npc(conn, {"name": "Elias Vane", "code": "B", "role": "tallyman",
+                                     "location": "The Salvage Guild's Tally House"})
+            prose = ("You step out of the tally house and make your way east. The merchant ship is half-buried in the "
+                     "muck by the Eastern Dock. You crouch down. Elias Vane watches from a distance.")
+            result = {"player": {"move_to_location": "Eastern Dock"}}
+            line = "I leave the tally house and walk down to the eastern dock, looking for the ship. I ask about it."
+            world._place_new_people_at_arrival(conn, [], result, line, prose)
+            dock = world._upsert_location(conn, "Eastern Dock", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (dock,))
+            world._stand_new_people_at_arrival(conn, result, int(house))
+            at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Elias Vane'").fetchone()[0]
+        self.assertEqual(int(at), int(dock))
+
     def test_shown_by_job_he_may_come(self):
         from app import world
         from app.db import connect
