@@ -566,6 +566,16 @@ class AQuestionAskedPaysNothing(unittest.TestCase):
         self.assertEqual(note["source"], "gain_without_coin_dropped")
         self.assertNotIn("gold_delta", result["player"])
 
+    def test_willing_to_pay_is_no_payment(self):
+        # 8B run 95, T3: "they're willing to pay for it" backed GOLD 15 (+11).
+        from app import world
+
+        result = {"player": {"gold_delta": 15}, "narration": (
+            "Mira straightens. “That’s where you come in.” This is something the guild wants, and "
+            "they’re willing to pay for it.")}
+        note = world._settle_stated_gold(result, "\"Why is old kelp worth a winter of credit?\"")
+        self.assertEqual(note["source"], "gain_without_coin_dropped")
+
 
 class TheJobsFigureIsTheOneHere(unittest.TestCase):
     """8B run 45, T2: "The tallyman, a man with a sharp eye" bound NPC_NEW "Ralf Wadley" to the tallyman."""
@@ -622,6 +632,23 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
                 world._upsert_npc(conn, npc)
             mara = conn.execute("SELECT location_id FROM npcs WHERE name = 'Mara'").fetchone()
         self.assertEqual(int(mara["location_id"]), int(bay))
+
+
+class TheEmployerIsNoOneThere(unittest.TestCase):
+    """8B run 95, T3: ROLE "salvage guild scout" bound NPC_NEW "Elias" to "the guild" in the prose."""
+
+    def test_the_guild_is_no_figure(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "Salvage Guild Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+            prose = ("Mira straightens. This is something the guild wants, and they’re willing to pay for it. "
+                     "The words settle like stones in your chest.")
+            npcs = world._npcs_shown_in_prose(conn, [{"name": "Elias", "role": "salvage guild scout"}], prose)
+        self.assertEqual(npcs, [])
 
 
 class ACommonNounNameIsAJob(unittest.TestCase):
