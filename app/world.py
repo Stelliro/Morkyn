@@ -13501,6 +13501,24 @@ _WALK_WORD_RE = re.compile(
 _TALK_WORD_RE = re.compile(r"\b(?:ask|asks|talk|talks|speak|speaks|greet|greets|call\s+to|tell|tells)\b|[\"“]", re.I)
 
 
+def _stand_new_people_at_arrival(conn, result: dict[str, Any], here_before: int) -> None:
+    """After the move: the people _place_new_people_at_arrival held back for a
+    place the turn made stand where the player now is, if they are still at
+    the place the player left."""
+    names = [n for n in (result.get("_arrive_with_player") or []) if n]
+    if not names or not here_before:
+        return
+    now = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0] or 0)
+    if not now or now == here_before:
+        return
+    for name in names:
+        moved = conn.execute(
+            "UPDATE npcs SET location_id = ? WHERE name = ? COLLATE NOCASE AND location_id = ?", (now, name, here_before)
+        ).rowcount
+        if moved:
+            turn_ledger.note("npc", "placed_at_arrival", name=name, via="place_made_this_turn")
+
+
 def _place_new_people_at_arrival(
     conn, npcs: list[dict[str, Any]], result: dict[str, Any], player_input: str, narration: str = ""
 ) -> None:
@@ -13525,10 +13543,24 @@ def _place_new_people_at_arrival(
     here = conn.execute(
         "SELECT l.id, l.code, l.name FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
     ).fetchone()
-    if dest is None or here is None or int(dest["id"]) == int(here["id"]):
-        return
     line = _player_line(player_input)
     walk, talk = _WALK_WORD_RE.search(line), _TALK_WORD_RE.search(line)
+    if dest is None and here is not None and dest_name and walk and talk and walk.start() < talk.start():
+        # The walk ends in a place this turn makes, after people are stored:
+        # NPC_NEW "Veyra Drowned" LOC "L1" for "Inside, the tallyman ..." stayed
+        # in town (8B run 100, T1). Who the ops left behind, new this turn, is
+        # stood at the arrival once the move is made (_arrive_with_player).
+        left_now = {str(here["code"] or "").lower(), str(here["name"] or "").lower(), ""}
+        known_now = {str(r[0] or "").lower() for r in conn.execute("SELECT name FROM npcs").fetchall()}
+        result["_arrive_with_player"] = [
+            str(n.get("name") or "") for n in npcs
+            if isinstance(n, dict) and str(n.get("name") or "").strip()
+            and str(n.get("name") or "").lower() not in known_now
+            and str(n.get("location") or "").strip().lower() in left_now
+        ]
+        return
+    if dest is None or here is None or int(dest["id"]) == int(here["id"]):
+        return
     if not (walk and talk and walk.start() < talk.start()):
         return
     left = {str(here["code"] or "").lower(), str(here["name"] or "").lower(), ""}
@@ -17557,6 +17589,15 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         except Exception:
             row = None
         if row is None or not int(row["location_id"] or 0) or int(row["location_id"]) == here_id or not row["code"]:
+            continue
+        # Shown by their job is shown: "The guild's clerk ... looks up from his
+        # ledger" for Veyra Drowned, the tallyman, NPC_NEW ROLE "guild clerk"
+        # (8B run 100, T2: kept in town, his job dropped as given by no one here).
+        job_words = {
+            w for w in re.findall(r"[a-z]+", f"{npc.get('role') or ''} {row['role'] or ''}".lower())
+            if len(w) >= 4 and w not in _NOT_A_JOB and w not in _EMPLOYER_WORDS
+        }
+        if any(re.search(rf"\b{re.escape(w)}\b", unspoken, re.I) for w in job_words):
             continue
         turn_ledger.note("npc", "unshown_known_person_stays", name=name, place=str(row["code"]))
         for key in ("location_code", "place"):
@@ -21695,6 +21736,10 @@ def apply_turn(
         _apply_player(conn, result.get("player") or {})
         try:
             _adopt_new_place_into_town(conn, here_before, max_place_before, player_input)
+        except Exception:
+            pass
+        try:
+            _stand_new_people_at_arrival(conn, result, here_before)
         except Exception:
             pass
         movement_report = _reconcile_movement_report(movement_report, result.get("player"))

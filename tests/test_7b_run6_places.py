@@ -634,6 +634,48 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class TheTallymanStandsWhereTheWalkEnds(unittest.TestCase):
+    """8B run 100: the tallyman, LOC "L1" for "Inside, the tallyman ...", stayed in town; then his move was refused."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+
+    def test_a_place_made_this_turn_gets_its_people(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            npcs = [{"name": "Veyra Drowned", "role": "tallyman", "location": "L1"}]
+            result = {"player": {"move_to_location": "Salvage Guild Tally House"}}
+            world._place_new_people_at_arrival(conn, npcs, result, self.LINE, "Inside, the tallyman looks up.")
+            self.assertEqual(result.get("_arrive_with_player"), ["Veyra Drowned"])
+            for npc in npcs:
+                world._upsert_npc(conn, npc)
+            house = world._upsert_location(conn, "Salvage Guild Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+            world._stand_new_people_at_arrival(conn, result, 1)
+            at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Veyra Drowned'").fetchone()[0]
+        self.assertEqual(int(at), int(house))
+
+    def test_shown_by_job_he_may_come(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            world._upsert_npc(conn, {"name": "Veyra Drowned", "location": "Saltmarrow", "role": "tallyman"})
+            house = world._upsert_location(conn, "Salvage Guild Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+            prose = "The guild’s clerk, a man with a face like weathered leather, looks up from his ledger."
+            for npc in world._npcs_shown_in_prose(
+                conn, [{"name": "Veyra Drowned", "role": "guild clerk", "location": "Salvage Guild Tally House"}], prose
+            ):
+                world._upsert_npc(conn, npc)
+            at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Veyra Drowned'").fetchone()[0]
+        self.assertEqual(int(at), int(house))
+
+
 class TheEmployerIsNoOneThere(unittest.TestCase):
     """8B run 95, T3: ROLE "salvage guild scout" bound NPC_NEW "Elias" to "the guild" in the prose."""
 
