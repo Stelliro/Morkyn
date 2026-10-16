@@ -516,6 +516,23 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class ALineSaidIsNotAlsoRetold(unittest.TestCase):
+    """8B run 114, T3: the lines were said at the opening and the draft's telling of them stayed below."""
+
+    LINE = '"I can dive." I square my shoulders. "I will take the reef job. What am I bringing up, and how far out is the wreck?"'
+    DRAFT = ("You can dive. You square your shoulders and say you'll take the reef job. Cassian Vane, the guild clerk, "
+             "looks up from his ledger. \"The wreck is three leagues out,\" he says.")
+
+    def test_the_telling_goes(self):
+        from app.narration_pipeline import keep_player_words
+
+        out, _ = keep_player_words(self.DRAFT, self.LINE)
+        self.assertNotIn("You can dive.", out)
+        self.assertNotIn("say you'll take the reef job", out)
+        self.assertIn("“I can dive,” you say.", out)
+        self.assertIn("Cassian Vane, the guild clerk, looks up", out)
+
+
 class AServiceThePlayerBuysIsNoJob(unittest.TestCase):
     """8B run 106, T7: asking the boatman his price filed "Row with Emmot Bexley" as his job for the player."""
 

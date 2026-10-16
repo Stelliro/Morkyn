@@ -2167,6 +2167,43 @@ def _speaker_of(text: str, start: int, end: int, prev_end: int) -> str:
     return ""
 
 
+_RETELL_SPEECH_RE = re.compile(r"\byou\s+(?:\w+\s+){0,6}?(?:say|says|said|ask|asks|asked|tell|tells|told|reply|replies|answer|answers)\b", re.I)
+_PERSON_SWAP = {"i": "you", "me": "you", "my": "your", "mine": "yours", "i'm": "you're", "i'll": "you'll", "i've": "you've"}
+
+
+def _drop_retold_lines(body: str, quotes: list[str], own_line: str = "") -> tuple[str, list[str]]:
+    """Drop the unquoted "you" sentences that only tell one of these lines: its
+    words are the line's (I -> you), or it reports speech with most of its
+    words from the player's line."""
+    def key_of(text: str) -> set[str]:
+        words = [_PERSON_SWAP.get(w, w) for w in re.findall(r"[a-z']+", text.lower().replace("’", "'"))]
+        words += [w.replace("i'll", "you'll") for w in words]
+        return {w for w in words if len(w) >= 3 or w == "you"} | ({"you'll"} if "will" in words else set())
+
+    keys = [key_of(quote) for quote in quotes]
+    whole = key_of(own_line) if own_line else set()
+    dropped: list[str] = []
+    out: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+", body):
+        low = sentence.lower().replace("’", "'")
+        if re.search(r"[\"“”]", sentence) or not re.match(r"\W*you\b", low):
+            out.append(sentence)
+            continue
+        words = {w for w in re.findall(r"[a-z']+", low) if len(w) >= 3 or w == "you"} - {"you", "your", "the", "and"}
+        if not words:
+            out.append(sentence)
+            continue
+        hit = any(len(words & key) == len(words) for key in keys)
+        if not hit and _RETELL_SPEECH_RE.search(sentence) and any(len(words & key) >= 2 for key in keys):
+            told = len(words & (whole | set().union(*keys)))
+            hit = told * 5 >= len(words) * 3
+        if hit:
+            dropped.append(sentence[:160])
+        else:
+            out.append(sentence)
+    return " ".join(out), dropped
+
+
 def _said_line(quotes: list[str]) -> str:
     """'"Words," you say.' for the player's quotes, in order."""
     parts: list[str] = []
@@ -2746,7 +2783,13 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 continue
             body = body[:at].rstrip(" ") + " " + _said_line([quote]) + " " + body[at:].lstrip(" ")
         if opening:
+            # The draft's own telling of those lines goes once they are said:
+            # "You can dive. You square your shoulders and say you'll take the
+            # reef job." stood under the quoted lines (8B run 114, T3).
+            body, retold = _drop_retold_lines(body, opening, player_own_line(player_input))
             body = _said_line(opening) + " " + body.lstrip()
+            if retold:
+                changes.append({"action": "retold_line_dropped", "sentences": retold})
         changes.append({"action": "missing_line_said", "quotes": missing})
 
     # 5. The player's line carries no entity code: they said a name, not a tag
