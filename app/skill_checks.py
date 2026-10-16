@@ -2048,7 +2048,13 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         ]
         known_first = {str(n.get("name") or "").split()[0].lower() for n in pool if str(n.get("name") or "").strip()}
         stranger_called = bool(called) and all(c.lower() not in known_first for c in called)
+        # Named, then left behind: "I nod to Thorne and leave the tally house,
+        # heading down to the harbour to ask the boat owners" rolled against
+        # Thorne at his desk (8B run 96, T4). Only a mention after the leaving counts.
+        left_at = re.search(r"\b(?:leave|leaves|leaving|walk\s+out\s+of|step\s+out\s+of|head\s+out\s+of)\s+the\b", named_text, re.I)
         for npc in ([] if stranger_called else pool[:12]):
+            if left_at and _line_names_npc(named_text, npc) and not _line_names_npc(named_text[left_at.end():], npc):
+                continue
             if _line_names_npc(named_text, npc):
                 matched_npc = npc
                 opposition = {

@@ -516,6 +516,24 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class SomeoneLeftBehindIsNoOtherSide(unittest.TestCase):
+    """8B run 96, T4: "I nod to Thorne and leave the tally house ... to ask the boat owners" rolled vs Thorne."""
+
+    CTX = {"current_location": {"id": 2, "npcs": [{"code": "A", "name": "Thorne", "role": "tallyman", "rank": "F"}]}}
+
+    def test_thorne_is_not_the_other_side(self):
+        line = ('"Then I will find a captain." I nod to Thorne and leave the tally house, heading down to the harbour '
+                'to ask the boat owners who would take me out.')
+        check = infer_check_from_action(line, self.CTX) or {}
+        self.assertNotEqual(((check.get("opposition") or {}).get("name")), "Thorne")
+
+    def test_named_after_the_leaving_still_counts(self):
+        line = "I leave the tally house and find Thorne at the docks to persuade him to lend me a boat."
+        check = infer_check_from_action(line, self.CTX) or {}
+        if check.get("opposition"):
+            self.assertEqual(check["opposition"]["name"], "Thorne")
+
+
 class AnOpenOfferToldAgainIsThatOffer(unittest.TestCase):
     """8B run 94, T3: "Then I will take the wreck" minted a second wreck job beside Elias's open offer."""
 
