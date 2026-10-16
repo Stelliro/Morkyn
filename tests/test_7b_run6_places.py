@@ -1012,6 +1012,21 @@ class ACommonNounNameIsAJob(unittest.TestCase):
         self.assertEqual(len(names), 1)
         self.assertNotIn(names[0].lower(), {"tallyman", "the tallyman"})
 
+    def test_a_signs_possessive_is_no_name(self):
+        # 8B run 123, T1: "a sign that reads Tallyman's Ledger" for NAME "Tallyman".
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            npcs = world._npcs_shown_in_prose(
+                conn, [{"name": "Tallyman", "role": "Salvage Ledger Clerk"}],
+                "The tally house has a rusted iron door and a sign that reads Tallyman’s Ledger in chipped letters.")
+            pub = world._npcs_shown_in_prose(conn, [{"name": "Wren", "role": "innkeeper"}],
+                                             "Wren’s Rest leans over the harbour. Wren looks up from the bar.")
+        self.assertNotIn("Tallyman", [n.get("name") for n in npcs])
+        self.assertEqual([n["name"] for n in pub], ["Wren"])
+
     def test_a_name_the_prose_writes_as_a_name_stays(self):
         from app import world
         from app.db import connect
