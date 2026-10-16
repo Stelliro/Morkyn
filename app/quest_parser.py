@@ -497,7 +497,9 @@ def build_parser_prompt(
             "Read this turn. List quests the story offers to the player, quests the player takes, and changes to "
             "the open quests listed below. Most turns have none: then return empty lists."
         ),
-        "player_input": str(player_input or "")[:600],
+        # The player's own line only: the engine's notes below it ("Resolved
+        # player references: ...") were quoted back as the evidence (8B run 103, T3).
+        "player_input": _player_own_line(str(player_input or ""))[:600],
         "narration": str(narration or "")[:3200],
         "narrator_marks": list(marks or [])[:4],
         "known_npcs": _slim(npcs, ("code", "name", "role"), 12),
@@ -1421,6 +1423,16 @@ def validate_quest_changes(
             if offer_line and not prior_item["reward"]["text"] and _norm(offer_line) != _norm(prior_item["evidence"]):
                 prior_item["reward"]["text"] = offer_line[:200]
         dup = _is_duplicate({"title": title}, list(existing or []) + taken_this_turn, giver.get("id") if giver else None, first_place)
+        if dup is None and same_offer is None and giver is not None and not _MORE_WORK_RE.search(f"{offer_line} {evidence}"):
+            # The one job this giver has offered and the player has not taken,
+            # told now under another name, is that job (8B run 103, T3).
+            open_from_giver = [
+                q for q in existing or []
+                if str(q.get("status") or "") == "offered" and q.get("giver_npc_id") == giver.get("id")
+                and int(q.get("current_step") or 1) == 1
+            ]
+            if len(open_from_giver) == 1:
+                dup = open_from_giver[0]
         if dup is not None and same_offer is None:
             ref = dup.get("code") or dup.get("id")
             # A job the player turned down is not offered again (TODO n20), nor
@@ -1448,6 +1460,25 @@ def validate_quest_changes(
                 reasons = []
                 evidence = _player_line_text(player_input) or evidence
         if reasons:
+            # The same giver telling a job still only offered is that job, told
+            # with its details: the card said "Clear the Guild's Sheds" from the
+            # first turn's ops while Garrick then said "You'll be fetching
+            # salvage from the docks" (8B run 103, T3). The card takes the telling.
+            if (len(reasons) == 1 and reasons[0].startswith("duplicate_of:") and dup is not None
+                    and str(dup.get("status") or "") == "offered" and int(dup.get("current_step") or 1) == 1
+                    and giver is not None and dup.get("giver_npc_id") == giver.get("id") and steps
+                    and isinstance(dup.get("id"), int)):
+                accepted.setdefault("retold", []).append({
+                    "quest_id": int(dup["id"]), "code": dup.get("code"), "title": title,
+                    "summary": re.sub(r"\s+", " ", str(raw.get("summary") or title)).strip()[:400], "steps": steps,
+                })
+                # Taken in the same line ("Then I will take the wreck", 8B run 94, T3): that job is taken.
+                pseudo = {"id": dup["id"], "title": title, "status": "offered"}
+                if player_takes_job(pseudo, player_input, [pseudo], narration) and not any(
+                    u.get("quest_id") == dup["id"] and u.get("action") == "accept" for u in accepted["updates"]
+                ):
+                    accepted["updates"].append({"quest_id": dup["id"], "code": dup.get("code"), "title": dup.get("title"),
+                                                "action": "accept", "evidence": _player_own_line(player_input)[:300]})
             rejected.append({"kind": "new", "item": raw, "reasons": reasons, "checked": checked})
             continue
         reward = raw.get("reward") if isinstance(raw.get("reward"), dict) else {}
@@ -1788,6 +1819,11 @@ _WORK_ACT_RE = re.compile(
 )
 
 
+_MORE_WORK_RE = re.compile(
+    r"\b(?:another|also|second|different|besides|as\s+well|other\s+(?:job|work|task)|more\s+work|one\s+more|too)\b", re.I
+)
+
+
 def done_check(evidence: str, quest: dict[str, Any] | None, *, passive: bool = False) -> list[str]:
     """Why a quote does not show a step done; empty when it does (7B run 5 #130).
 
@@ -2007,6 +2043,23 @@ def apply_quest_changes(
                         "AND notes LIKE 'clock:%' AND notes NOT LIKE '%voiced%'",
                         (ref, ref),
                     )
+        for told in accepted.get("retold") or []:
+            # Only a job not yet taken or begun is rewritten.
+            if not conn.execute("SELECT 1 FROM quests WHERE id = ? AND status = 'offered' AND COALESCE(current_step, 1) = 1",
+                                (told["quest_id"],)).fetchone():
+                continue
+            conn.execute("UPDATE quests SET title = ?, description = ?, total_steps = ? WHERE id = ?",
+                         (told["title"], told["summary"], len(told["steps"]), told["quest_id"]))
+            conn.execute("DELETE FROM quest_steps WHERE quest_id = ?", (told["quest_id"],))
+            for i, step in enumerate(told["steps"][:6], 1):
+                conn.execute(
+                    "INSERT INTO quest_steps (quest_id, step_number, title, description, location_code, location_name, "
+                    "location_coords, status, hidden, revealed_at_step, notes) VALUES (?, ?, ?, ?, ?, ?, '', ?, 0, 0, '')",
+                    (told["quest_id"], i, str(step.get("title") or f"Step {i}"), str(step.get("description") or ""),
+                     str(step.get("location_code") or ""), str(step.get("location_name") or ""),
+                     "active" if i == 1 else "pending"),
+                )
+            turn_ledger.note("quest", "offer_retold", quest=str(told.get("code") or told["quest_id"]), title=told["title"])
         for item in accepted["new"]:
             target_id = None
             first_code = item["steps"][0].get("location_code") if item["steps"] else ""

@@ -634,6 +634,46 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class AJobToldAgainTakesTheTelling(unittest.TestCase):
+    """8B run 103, T3: the card said "Clear the Guild's Sheds"; Garrick then said salvage from the docks."""
+
+    PROSE = ("“I am up for it,” you say. “What is the job, and how much does it take off the ledger?” "
+             "Garrick Thorne [[A]]’s fingers drum a slow rhythm on the counter. “A job,” he says. "
+             "“You’ll be fetching salvage from the docks. The storm’s left a mess—ships grounded, cargo "
+             "spilled. You’ll be paid in coin, but the real reward is the ledger.”")
+
+    def test_the_card_matches_what_he_said(self):
+        from app import quest_parser, world
+        from app.db import connect
+        from app.quests import create_quest
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (house,))
+            world._upsert_npc(conn, {"name": "Garrick Thorne", "code": "A", "role": "tallyman",
+                                     "location": "The Salvage Guild's Tally House"})
+            gid = conn.execute("SELECT id FROM npcs WHERE code = 'A'").fetchone()[0]
+            qid = create_quest(conn, title="Clear the Guild's Sheds", steps=[{"title": "Gather tools from the storage room"}],
+                               giver_npc_id=gid, status="offered", created_turn=2)
+            reply = {"new": [{
+                "title": "Fetch Salvage from the Docks", "giver": "Garrick Thorne", "difficulty": "normal",
+                "summary": "Fetch salvage from the docks to reduce the ledger.",
+                "steps": [{"title": "Fetch salvage from the docks", "description": "Collect what the storm left.",
+                           "location": ""}],
+                "reward": {"gold": 0, "xp": 0, "items": [], "text": "the real reward is the ledger"},
+                "offer_line": "You’ll be fetching salvage from the docks.",
+                "evidence": "You’ll be fetching salvage from the docks.", "_from_mark": True}], "updates": []}
+            quest_parser.apply_quest_changes(conn, reply, narration=self.PROSE,
+                                             player_input='"I am up for it." I rest my hands on the counter. "What is the job?"',
+                                             turn=3)
+            rows = [tuple(r) for r in conn.execute("SELECT id, title, status FROM quests")]
+            step = conn.execute("SELECT title FROM quest_steps WHERE quest_id = ?", (qid,)).fetchone()[0]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(rows[0][1], "Fetch Salvage from the Docks")
+        self.assertEqual(step, "Fetch salvage from the docks")
+
+
 class AShortNameIsTheKnownPlace(unittest.TestCase):
     """8B run 102, T1: LOC "tally house" beside "The Salvage Guild's Tally House" minted a second one."""
 
