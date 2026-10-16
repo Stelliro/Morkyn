@@ -1644,6 +1644,28 @@ class TheBeatGoesWithTheCutLine(unittest.TestCase):
         self.assertTrue(kept[1].startswith("You set the dripping crate"))
 
 
+class TheWayThereIsNoArrival(unittest.TestCase):
+    """8B run 87, T1: the rag picker at the yard's edge, before "Inside,", was stood behind the tally desk."""
+
+    PROSE = ("You make your way toward the salvage yard, where the guild's tally house stands like a fortress. "
+             "Everard Cobb [[A]] watches you from the edge of the yard. You don't stop for him. The guild's tally "
+             "house is your destination.\n\nInside, the air is thick with the scent of oil. At the center stands "
+             "the tallyman.")
+
+    def test_inside_is_where_the_walk_ends(self):
+        from app.world import _arrival_at
+
+        at = _arrival_at(self.PROSE, "house")
+        self.assertGreater(at, self.PROSE.index("Everard"))
+        self.assertEqual(self.PROSE[at:].lstrip()[:6], "Inside")
+
+    def test_reaching_it_is_arriving(self):
+        from app.world import _arrival_at
+
+        prose = "You reach the salvage guild's tally house. Inside, Milo [[A]] is hunched over a ledger."
+        self.assertLess(_arrival_at(prose, "house"), prose.index("Milo"))
+
+
 class OutOfAnotherVerbIsNoExit(unittest.TestCase):
     """8B run 82, T5: "I walk along the warped planks and call out" left the wharf."""
 
