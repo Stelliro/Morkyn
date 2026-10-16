@@ -18170,6 +18170,16 @@ _NOT_A_NAME_START = frozenset({
 })
 
 
+# A figure the prose names after a dash: "a figure standing at the bow—Captain
+# Miren, her silhouette sharp" drew "Sarra" for the figure (8B run 101, T4).
+_FIGURE_DASH_NAME_RE = re.compile(
+    r"\b(?:a|an|the)\s+(?:[a-z'-]+\s+){0,3}?(?:figure|man|woman|person|shape|silhouette|stranger)\b"
+    r"[^.!?\n\"“”—–]{0,60}?\s*[—–]\s*"
+    r"(?:(?P<title>Captain|Master|Mistress|Mother|Father|Sister|Brother|Lady|Lord|Sir|Old|Widow|Granny)\s+)?"
+    r"(?P<name>[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b(?!\s+(?:Street|Lane|Road|Quay|Wharf|Pier|Dock|Docks|House|Hall))"
+)
+
+
 def _introduced_people(
     text: str, known_names: list[str], not_people: set[str] | frozenset[str] = frozenset()
 ) -> list[dict[str, str]]:
@@ -18199,11 +18209,18 @@ def _introduced_person_first(
     known = {str(n or "").strip().lower() for n in known_names if str(n or "").strip()}
     matches = sorted(
         list(_INTRODUCED_PERSON_RE.finditer(plain)) + list(_NAMED_JOB_PERSON_RE.finditer(plain))
-        + list(_JOB_THEN_NAME_RE.finditer(plain)) + list(_NAME_TOLD_RE.finditer(plain)),
+        + list(_JOB_THEN_NAME_RE.finditer(plain)) + list(_NAME_TOLD_RE.finditer(plain))
+        + list(_FIGURE_DASH_NAME_RE.finditer(plain)),
         key=lambda m: m.start(),
     )
     for match in matches:
         name = match.group("name").strip()
+        if match.re is _FIGURE_DASH_NAME_RE:
+            if name.lower() in known or any(name.lower().split()[0] == k.split()[0] for k in known if k):
+                continue
+            if name.split()[0] in _NOT_A_NAME_START or is_fragment_place_name(name) or name.lower() in blocked:
+                continue
+            return {"name": name, "role": (match.group("title") or "").lower()}
         if match.re is _NAME_TOLD_RE:
             if name.lower() in known or any(name.lower().split()[0] == k.split()[0] for k in known if k):
                 continue
@@ -18344,8 +18361,9 @@ def _ensure_npcs_from_narration(
             return bool(speaker) and all(w.lower() in intro_words for w in speaker.group(1).split())
 
         hints = [h for h in hints if not _names_introduced(h)]
-        if hints:
-            introduced_all = []
+        # Other figures beside the named one are more people, not a reason to
+        # drop the name: "a figure standing at the bow—Captain Miren" and "a man
+        # with a weathered face" stored only a drawn dock hand (8B run 101, T4).
     created_intro: list[dict[str, Any]] = []
     for index, introduced in enumerate(introduced_all):
         try:
@@ -18370,7 +18388,8 @@ def _ensure_npcs_from_narration(
             })
     if created_intro:
         result["npcs"] = [n for n in (result.get("npcs") or []) if isinstance(n, dict)] + created_intro
-        return created_intro
+        if not hints:
+            return created_intro
     # Dialogue without a listed speaker still implies at least one face, but
     # only dialogue nobody known speaks (playtest #73: '"Understood," Juliana
     # says' minted Bertram at the street the player had just walked out to).
@@ -18396,12 +18415,15 @@ def _ensure_npcs_from_narration(
     )
     target = min(3, max(len(hints), 1 if has_dialogue and not existing and db_count == 0 else 0))
     if target <= 0:
-        return []
+        return created_intro
     need = max(0, target - max(len(existing), db_count))
+    if created_intro and hints:
+        # The named ones are not these figures (see above): each hint is one more.
+        need = min(3, len(hints))
     if need <= 0 and existing:
-        return []
+        return created_intro
     if need <= 0 and db_count > 0:
-        return []
+        return created_intro
     # If model listed none but hints exist, seed from hint count
     if not existing and db_count == 0:
         need = min(3, max(len(hints), 1 if has_dialogue else 0))
@@ -18466,7 +18488,7 @@ def _ensure_npcs_from_narration(
         existing.append(entry)
     if created:
         result["npcs"] = existing
-    return created
+    return created_intro + created
 
 
 def _apply_response_drafts(conn, drafts: list[dict[str, Any]], turn: int) -> None:

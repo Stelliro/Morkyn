@@ -634,6 +634,29 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class ANamedFigureAndAnotherAreTwoPeople(unittest.TestCase):
+    """8B run 101, T4: "a figure standing at the bow—Captain Miren" and "a man with a weathered face"
+    stored only a drawn dock hand."""
+
+    PROSE = ("You scan the area, your gaze settling on a ship with a blackened mast and a figure standing at the "
+             "bow—Captain Miren, her silhouette sharp against the early light.\n\nA creak of wood draws your "
+             "attention. A figure steps from the shadows, their boots scuffing the planks. It’s a man with a "
+             "weathered face and a coat patched with tar.")
+
+    def test_both_are_stored(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            docks = world._upsert_location(conn, "The Docks", "", parent_id=1)
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (docks,))
+            world._ensure_npcs_from_narration(conn, {"narration": self.PROSE, "npcs": []}, self.PROSE, docks)
+            rows = [tuple(r) for r in conn.execute("SELECT name, role FROM npcs ORDER BY id")]
+        self.assertEqual(len(rows), 2, rows)
+        self.assertEqual(rows[0], ("Miren", "captain"))
+
+
 class TheTallymanStandsWhereTheWalkEnds(unittest.TestCase):
     """8B run 100: the tallyman, LOC "L1" for "Inside, the tallyman ...", stayed in town; then his move was refused."""
 
