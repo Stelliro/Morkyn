@@ -516,6 +516,26 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class SomeoneNamedButAwayIsMarkedAway(unittest.TestCase):
+    """8B run 105, T5: "Hugh sent me" at the docks; the note said only "Hugh = Hugh (A, NPC)"."""
+
+    def test_the_note_says_where_he_is(self):
+        from app.world import _expand_input_references
+
+        ctx = {
+            "current_location": {"code": "L3", "name": "East Docks",
+                                 "npcs": [{"code": "C", "name": "Eldric", "role": "fisherman"}]},
+            "locations": [
+                {"code": "L2", "name": "The Salvage Guild's Tally House", "npcs": [{"code": "A", "name": "Hugh"}]},
+                {"code": "L3", "name": "East Docks", "npcs": [{"code": "C", "name": "Eldric"}]},
+            ],
+        }
+        out = _expand_input_references(ctx, '"Hugh sent me. Twenty crates." I help him haul it up onto the pier.')
+        self.assertIn("talked about, not here: at The Salvage Guild's Tally House", out)
+        here = _expand_input_references(ctx, '"Eldric, give me a hand."')
+        self.assertNotIn("not here", here)
+
+
 class TheGiversOfferSentenceGroundsTheJob(unittest.TestCase):
     """8B run 104, T2: "there's a job that might interest you" went uncited; the job was refused."""
 
