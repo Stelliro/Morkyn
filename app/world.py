@@ -15445,9 +15445,11 @@ def _filter_inventory_changes(
         # "deck work" put "deck work x1" in the pack). Only the head noun is
         # read, and a thing the prose shows handed over still stands ("a work
         # order", "a share of the haul" passed across the table).
+        # Picked up in the player's own line is a thing too: "I pick up the
+        # contract and read it" (8B run 107, T3).
         if grounded and _abstract_grant(tokens, name) and not _prose_item_handed_over(
             final_text, name_l, tokens, owned=bool(existing)
-        ):
+        ) and not (narrated_take and line_names_it):
             grounded = False
             turn_ledger.note("inventory", "not_a_thing", item=name, why="the grant names a job, wage or deal")
         handed = _prose_item_handed_over(final_text, name_l, tokens, owned=bool(existing))
@@ -20975,6 +20977,23 @@ def _pinned_cast(conn) -> tuple[list[dict[str, Any]], list[str]]:
     return cast, [t for t in things if t]
 
 
+def _retells_players_line(sentence: str, own_line: str) -> bool:
+    """The sentence is the player's own line told back: their quoted words, or
+    their act in "you" (most of its words from the line)."""
+    own = str(own_line or "").lower()
+    if not own.strip():
+        return False
+    said = [s.strip().lower() for pair in re.findall(r"\"([^\"]+)\"|“([^”]+)”", own) for s in pair if s.strip()]
+    low = re.sub(r"\s+", " ", str(sentence or "").lower()).strip(" \"“”")
+    if low and any(low[:40] in s or s[:40] in low for s in said if len(s) >= 6):
+        return True
+    words = [w for w in re.findall(r"[a-z']{3,}", low) if w not in {"you", "your", "the", "and", "into", "with"}]
+    if len(words) < 3 or not re.match(r"\W*you\b", low):
+        return False
+    own_words = set(re.findall(r"[a-z']{3,}", own))
+    return sum(1 for w in words if w in own_words) * 4 >= len(words) * 3
+
+
 def _reconcile_prose_with_state(
     conn,
     result: dict[str, Any],
@@ -21013,6 +21032,7 @@ def _reconcile_prose_with_state(
             if kept_l:
                 kept_items.append((kept_l, _item_name_tokens(kept_l)))
     gold_in = int(_float((gold_note or {}).get("gold_delta"), 0)) > 0 if isinstance(gold_note, dict) else False
+    own_line = _player_line(player_input) if player_input else ""
     for item in rejected or []:
         if not isinstance(item, dict) or item.get("outcome") != "gain":
             continue
@@ -21037,6 +21057,12 @@ def _reconcile_prose_with_state(
         def shows_arrival(sentence: str, name_l: str = name_l, tokens: list[str] = tokens, carry: dict = carry,
                           shared: list[str] = shared, spoken: set = spoken) -> bool:
             if sentence in spoken or sentence.strip() in spoken:
+                carry["on"] = carry["dropped"] = False
+                return False
+            # The player's own act or words, retold, are theirs: "You pick up the
+            # contract and read it." and '"I will take it.' were cut as the
+            # refused contract arriving, and the scene opened mid-quote (8B run 107, T3).
+            if _retells_players_line(sentence, own_line):
                 carry["on"] = carry["dropped"] = False
                 return False
             # Only the narration in it is read: the player's own "Whose debt do I
