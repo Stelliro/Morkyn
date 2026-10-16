@@ -644,6 +644,26 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class APassedSignIsNotTheDoorGoneIn(unittest.TestCase):
+    """8B run 122, T1: the sign of The Lame Wheel Smithy, passed, opened the smithy as the place walked into."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+    PROSE = ("You pass a few shuttered shops and a weathered sign that reads The Lame Wheel Smithy—a place where "
+             "the air smells of iron. The salvage guild’s tally house is just ahead, its door marked with the "
+             "guild’s sigil. You step inside, the scent of oil and old parchment hitting you like a wave.")
+
+    def test_the_smithy_is_not_entered(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            result = {"locations": [{"name": "The Lame Wheel Smithy"}], "narration": self.PROSE}
+            told, _row = world._told_venue_name(conn, result, self.PROSE)
+        self.assertNotEqual(told, "The Lame Wheel Smithy")
+
+
 class APlacePassedIsNoMove(unittest.TestCase):
     """8B run 116, T1: MOVE "Saltmarrow Stables" for "You pass the Saltmarrow Stables [[L2]]" on the way in."""
 

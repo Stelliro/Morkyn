@@ -7148,6 +7148,14 @@ def _told_venue_name(conn, result: dict[str, Any], narration: str) -> tuple[str,
         name = norm_name(str(location.get("name") or ""))
         if not name or _is_place_or_item_code(name) or _match_location_by_name(conn, name) is not None:
             continue
+        # A place passed is not the one walked into: "You pass a few shuttered
+        # shops and a weathered sign that reads The Lame Wheel Smithy ... The
+        # salvage guild's tally house is just ahead ... You step inside" opened
+        # the smithy (8B run 122, T1).
+        sentence = next((s for s in re.split(r"(?<=[.!?])\s+", str(narration or "")) if name.lower() in s.lower()), "")
+        if sentence and re.search(r"\b(?:pass(?:es|ed|ing)?|past|walk\s+by|go\s+by|went\s+by)\b",
+                                  sentence[: sentence.lower().find(name.lower())], re.I):
+            continue
         if (shown and name.lower() == shown.lower()) or venues.venue_kind_from_name(name):
             return name, location
     if shown and _match_location_by_name(conn, shown) is None:
