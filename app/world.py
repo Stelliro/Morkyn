@@ -13040,6 +13040,21 @@ def _find_location_id(conn, name_or_code: str | None, *, refusal: dict[str, Any]
         row = _match_location_by_name(conn, value)
         if row:
             return int(row["id"])
+        # A placeholder is no place: LOC "Unknown" for Captain Veyra, only spoken
+        # of, minted a place called Unknown (8B run 118, T3). Someone whose place
+        # is not known is filed in the town the player is in.
+        if re.fullmatch(r"(?:the\s+)?(?:unknown|unknown\s+(?:location|place)|none|n/?a|nowhere|elsewhere|somewhere|"
+                        r"offstage|off\s+screen|not\s+here|\?+)", value.strip().lower()):
+            player = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+            here = int(player["current_location_id"] or 0) if player else 0
+            top = here
+            for _ in range(6):
+                parent = conn.execute("SELECT parent_id FROM locations WHERE id = ?", (top,)).fetchone()
+                if parent is None or not int(parent[0] or 0):
+                    break
+                top = int(parent[0])
+            turn_ledger.note("place", "placeholder_place_is_the_town", name=value)
+            return top or here
         # The end of one known place's name is that place: LOC "tally house"
         # beside "The Salvage Guild's Tally House" minted a second tally house
         # for the tallyman (8B run 102, T1).
@@ -13234,6 +13249,9 @@ def _sanitize_npc_role(role: Any) -> str:
 
     # One chokepoint for list punctuation (playtest #74: ", woodward ,").
     text = clean_role_text(role)
+    # A role cut off before its object loses the dangling words: "captain of
+    # the" (8B run 118, T3), from "captain of the Iron Tides".
+    text = re.sub(r"(?:\s+(?:of|at|for|from|in|on|with|the|a|an))+\s*$", "", text or "", flags=re.I).strip()
     if not text:
         return "local"
     key = re.sub(r"\s+", " ", text.lower())
