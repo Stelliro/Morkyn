@@ -17748,10 +17748,15 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         if known(npc) or not re.fullmatch(r"[A-Z][a-z'-]{3,}", word):
             continue
         uses = list(re.finditer(r"(?<![\w'])" + re.escape(word) + r"(?![\w'])", text, re.I))
-        if uses and all(
+        # A sign's possessive is no use of a name: "a sign that reads
+        # Tallyman's Ledger" for NAME "Tallyman" (8B run 123, T1).
+        as_name = [m for m in uses if not re.match(r"['’]s\s+[A-Z]", text[m.end():m.end() + 4])]
+        compound_job = bool(re.search(r"[a-z]{3,}(?:man|woman|master|mistress|keeper|wright|monger|maker|smith)$",
+                                      word.lower()))
+        if (uses and all(
             m.group(0)[0].islower() or re.search(r"\b(?:the|a|an)\s+$", text[max(0, m.start() - 5):m.start()], re.I)
             for m in uses
-        ):
+        )) or (not as_name and compound_job):
             turn_ledger.note("npc", "common_noun_name_is_a_job", name=word)
             npc["name"] = "the " + word.lower()
     unshown = [npc for npc in npcs if not known(npc) and not shown(norm_name(str(npc.get("name") or "")))]
