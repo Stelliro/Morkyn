@@ -515,6 +515,31 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class ASpeechLeadWithNoLineGoes(unittest.TestCase):
+    """8B run 91, T3: the scene ended "Then, with a slow exhale, he speaks." and no line came."""
+
+    def test_the_dangling_lead_goes(self):
+        from app.prose_state import drop_orphan_speech_lead
+
+        prose = ('"Tell me who runs that crew," you say. Elias pauses, the silence stretching between you like a '
+                 'taut rope. Then, with a slow exhale, he speaks.')
+        out, fixes = drop_orphan_speech_lead(prose)
+        self.assertTrue(out.endswith("like a taut rope."), out)
+        self.assertTrue(fixes)
+
+    def test_a_lead_with_its_line_stays(self):
+        from app.prose_state import drop_orphan_speech_lead
+
+        prose = 'Elias pauses. Then, with a slow exhale, he speaks. "Gorran runs them."'
+        self.assertEqual(drop_orphan_speech_lead(prose)[0], prose)
+
+    def test_a_plain_act_is_no_lead(self):
+        from app.prose_state import drop_orphan_speech_lead
+
+        prose = "Elias pauses, then turns back to the ledger and begins to write."
+        self.assertEqual(drop_orphan_speech_lead(prose)[0], prose)
+
+
 class AGiverNamedByJob(unittest.TestCase):
     """8B run 90, T2: giver "clerk" for Elias Vane, the clerk, left the job with no giver."""
 
