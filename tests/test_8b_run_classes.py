@@ -1,6 +1,7 @@
 """8B run classes (runs 7+): one test per fixed class."""
 from __future__ import annotations
 
+import json
 import random
 import sys
 import unittest
@@ -513,6 +514,48 @@ class TheMothersReckonerIsYours(unittest.TestCase):
 
         text = "The mother's grave lies past the seawall."
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
+
+
+class AnOpenOfferToldAgainIsThatOffer(unittest.TestCase):
+    """8B run 94, T3: "Then I will take the wreck" minted a second wreck job beside Elias's open offer."""
+
+    LINE = '"Then I will take the wreck." I tap the edge of the ledger. "Which pier is it off, and who do I report to when I get there?"'
+    NARRATION = (  # the run's shipped prose
+        "“Then I will take the wreck,” you say. “Which pier is it off, and who do I report to when I get there?” You "
+        "tap the edge of the tally’s worn wood, and Elias Varn [[A]]’s fingers twitch, ink smudging the page. He leans "
+        "back, eyes narrowing as if measuring you against the weight of the wreck. “It’s the third pier from the "
+        "east,” he says, voice rough with the rasp of sea wind. “You’ll find a sign with the name Marrow’s End—it’s "
+        "the only one that still stands. Report to Captain Dain. He’s the one who found the wreck, and he’s not the "
+        "kind to waste time on talk.”")
+    REPLY = {"new": [{"title": "Salvage the Wreck at Marrow's End", "giver": "Elias Varn [[A]]", "difficulty": "normal",
+                      "summary": "Salvage the wreck at Marrow's End and report to Captain Dain.",
+                      "steps": [{"title": "Report to Captain Dain at the pier", "description": "Find the sign.",
+                                 "location": "Marrow's End"}],
+                      "reward": {"gold": 0, "xp": 0, "items": [], "text": "salvage credits"},
+                      "offer_line": "It’s the third pier from the east... Report to Captain Dain.",
+                      "evidence": "Then I will take the wreck. Which pier is it off, and who do I report to when I get there?",
+                      "_from_mark": True}],
+             "updates": []}
+    NPCS = [{"id": 1, "code": "A", "name": "Elias Varn", "role": "tallyman"}]
+    EXISTING = [{"id": 1, "code": "Q1", "title": "salvage contract", "status": "offered", "giver_npc_id": 1,
+                 "first_step_location": "docks"}]
+
+    def test_the_open_offer_is_taken(self):
+        from app import quest_parser
+
+        accepted, rejected = quest_parser.validate_quest_changes(
+            json.loads(json.dumps(self.REPLY)), narration=self.NARRATION, player_input=self.LINE,
+            npcs=self.NPCS, existing=self.EXISTING)
+        self.assertEqual(accepted["new"], [], rejected)
+        self.assertEqual([(u["code"], u["action"]) for u in accepted["updates"]], [("Q1", "accept")])
+
+    def test_with_no_open_offer_it_is_new(self):
+        from app import quest_parser
+
+        accepted, _ = quest_parser.validate_quest_changes(
+            json.loads(json.dumps(self.REPLY)), narration=self.NARRATION, player_input=self.LINE,
+            npcs=self.NPCS, existing=[])
+        self.assertEqual([q["status"] for q in accepted["new"]], ["active"])
 
 
 class AFigureInADescriptionIsNoOne(unittest.TestCase):
