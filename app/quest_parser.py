@@ -420,6 +420,49 @@ def _slim(rows: list[dict[str, Any]] | None, keys: tuple[str, ...], cap: int) ->
     return out
 
 
+_RETURN_SHAPE: dict[str, Any] = {
+    "new": [
+        {
+            "title": "short name of the job, 3-8 words",
+            "summary": "one sentence: what is asked and why",
+            "giver": "known_npcs code or name of whoever offers it; empty for a notice or board",
+            "steps": [{"title": "concrete action", "description": "what doing it means", "location": "known_places code or the place name the story gives, else empty"}],
+            "reward": {"gold": "number only if the story names an amount, else 0", "xp": 0, "items": ["only items the story promises"], "text": "the promise in the story's words"},
+            "difficulty": "easy, normal, hard or deadly",
+            "timer_turns": "0 unless the story sets a deadline",
+            "offer_line": "the giver's own words, or the sentence where the giver offers or agrees to the work, copied word for word",
+            "evidence": "a phrase copied word for word from narration or player_input",
+        }
+    ],
+    "updates": [
+        {"quest": "open_quests code", "action": "accept, decline, step_done, complete, fail or abandon", "evidence": "a phrase copied word for word"}
+    ],
+}
+
+
+def _shape_strings(node: Any) -> set[str]:
+    if isinstance(node, dict):
+        return set().union(*(_shape_strings(v) for v in node.values())) if node else set()
+    if isinstance(node, list):
+        return set().union(*(_shape_strings(v) for v in node)) if node else set()
+    return {str(node).strip().lower()} if isinstance(node, str) and len(str(node)) > 8 else set()
+
+
+_SHAPE_PLACEHOLDERS = _shape_strings(_RETURN_SHAPE)
+
+
+def _drop_placeholders(node: Any) -> Any:
+    """A field the 8B filled with the shape's own wording is empty: step "description":
+    "what doing it means" was stored as the job's step (8B run 92, T2)."""
+    if isinstance(node, dict):
+        return {k: _drop_placeholders(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_drop_placeholders(v) for v in node]
+    if isinstance(node, str) and node.strip().lower() in _SHAPE_PLACEHOLDERS:
+        return ""
+    return node
+
+
 def build_parser_prompt(
     narration: str,
     player_input: str = "",
@@ -456,24 +499,7 @@ def build_parser_prompt(
         "known_npcs": _slim(npcs, ("code", "name", "role"), 12),
         "known_places": _slim(locations, ("code", "name"), 12),
         "open_quests": open_rows[:8],
-        "return_shape": {
-            "new": [
-                {
-                    "title": "short name of the job, 3-8 words",
-                    "summary": "one sentence: what is asked and why",
-                    "giver": "known_npcs code or name of whoever offers it; empty for a notice or board",
-                    "steps": [{"title": "concrete action", "description": "what doing it means", "location": "known_places code or the place name the story gives, else empty"}],
-                    "reward": {"gold": "number only if the story names an amount, else 0", "xp": 0, "items": ["only items the story promises"], "text": "the promise in the story's words"},
-                    "difficulty": "easy, normal, hard or deadly",
-                    "timer_turns": "0 unless the story sets a deadline",
-                    "offer_line": "the giver's own words, or the sentence where the giver offers or agrees to the work, copied word for word",
-                    "evidence": "a phrase copied word for word from narration or player_input",
-                }
-            ],
-            "updates": [
-                {"quest": "open_quests code", "action": "accept, decline, step_done, complete, fail or abandon", "evidence": "a phrase copied word for word"}
-            ],
-        },
+        "return_shape": _RETURN_SHAPE,
         "rules": [
             "Only record work the story actually offers or the player actually takes. Scenery, rumours with no ask, and the player's own idle plans are not quests.",
             "evidence and offer_line must be copied word for word from narration or player_input.",
@@ -558,8 +584,8 @@ def parse_reply(raw: Any) -> dict[str, Any]:
         if updates is None:
             updates = data.get("quest_updates", data.get("changes"))
         return {
-            "new": _as_list(new)[:MAX_NEW_PER_TURN],
-            "updates": _as_list(updates)[:MAX_UPDATES_PER_TURN],
+            "new": _drop_placeholders(_as_list(new)[:MAX_NEW_PER_TURN]),
+            "updates": _drop_placeholders(_as_list(updates)[:MAX_UPDATES_PER_TURN]),
         }
     except Exception:
         return {"new": [], "updates": []}
