@@ -13658,6 +13658,22 @@ def _place_new_people_at_arrival(
     # at the town the player had left, and the next turn was told he was not
     # there (8B run 40, T1-T2).
     unspoken = venues.strip_speech(str(narration or ""))
+    # Someone met who is the one the turn talks with comes too when the walk
+    # ends with an unnamed speaker and no one known is shown there: TALK "A"
+    # with "A man sits behind the counter ... 'You're late,' he says" kept the
+    # man in town, and the next turn sat a new clerk at his desk (8B run 138,
+    # T1). The ops name who the speaker is; the prose names no one else.
+    talked = {
+        re.sub(r"[^a-z]", "", str(c.get("npc_code") or c.get("npc") or "").lower())
+        for c in result.get("conversations") or []
+        if isinstance(c, dict)
+    } - {""}
+    anyone_named = any(
+        (row["code"] and f"[[{str(row['code']).upper()}]]" in str(narration or ""))
+        or (row["name"] and re.search(r"(?<!\w)" + re.escape(str(row["name"])) + r"(?!\w)", unspoken, re.I))
+        for row in conn.execute("SELECT code, name FROM npcs").fetchall()
+    )
+    unnamed_speaker = bool(talked) and not anyone_named and bool(re.search(r"[\"“]", str(narration or "")))
     for npc in npcs:
         if not isinstance(npc, dict):
             continue
@@ -13678,7 +13694,14 @@ def _place_new_people_at_arrival(
         if name.lower() in known and not (
             name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", unspoken, re.I)
         ):
-            continue
+            row = conn.execute(
+                "SELECT code, location_id FROM npcs WHERE name = ? COLLATE NOCASE", (name,)
+            ).fetchone()
+            keys = {re.sub(r"[^a-z]", "", name.lower()), re.sub(r"[^a-z]", "", str((row["code"] if row else "") or code).lower())} - {""}
+            if not (
+                unnamed_speaker and keys & talked and row is not None and int(row["location_id"] or 0) == int(here["id"])
+            ):
+                continue
         if str(npc.get("location") or "").strip().lower() in left:
             npc["location"] = str(dest["code"] or dest["name"])
             turn_ledger.note("npc", "placed_at_arrival", name=str(npc.get("name") or ""), place=str(dest["name"] or ""))

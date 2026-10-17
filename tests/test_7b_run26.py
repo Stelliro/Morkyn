@@ -834,6 +834,41 @@ class APlacePassedIsNotEntered(unittest.TestCase):
         self.assertTrue(shown is None or shown.get("name") != "Collapsed Market Stall")
 
 
+class TheOneTalkedToComesAlong(unittest.TestCase):
+    """8B run 138 T1: TALK "A" with an unnamed man behind the tally house counter kept A in town."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman "
+            "what work he'll take against my debt.")
+
+    def _run(self, prose, talk="A"):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            here = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            world._upsert_npc(conn, {"name": "Leofric Gilchrist", "role": "tide tracker", "location": "Saltmarrow"})
+            world._upsert_location(conn, "Salvage Guild's Tally House", "", parent_id=here, kind="salvage_yard")
+            npcs = [{"name": "Leofric Gilchrist", "role": "tide tracker", "location": "L1"}]
+            result = {"player": {"move_to_location": "Salvage Guild's Tally House"},
+                      "conversations": [{"npc_code": talk}], "npcs": npcs}
+            code = conn.execute("SELECT code FROM npcs WHERE name = 'Leofric Gilchrist'").fetchone()[0]
+            if talk == "A":
+                result["conversations"] = [{"npc_code": code}]
+            world._place_new_people_at_arrival(conn, npcs, result, self.LINE, prose)
+        return npcs[0]["location"]
+
+    def test_unnamed_speaker_is_the_one_talked_to(self):
+        prose = ("You step inside the tally house. A man sits behind the counter, his hands stained with ink. "
+                 "He looks up as you approach. “You’re late,” he says.")
+        self.assertEqual(self._run(prose), "L2")
+
+    def test_no_talk_stays(self):
+        prose = "You step inside the tally house. A man sits behind the counter. “You’re late,” he says."
+        self.assertEqual(self._run(prose, talk="Z"), "L1")
+
+
 class OptionListAfterAQuote(unittest.TestCase):
     """Run 38 T0: the list's lead-in took the question before it, and the line was left unclosed."""
 
