@@ -279,6 +279,15 @@ Six turns on 8ddb63d plus the fixes below, watching `quest_fill` / `quest_check`
   has accepted a salvage contract" while the job was only offered (state claim without evidence;
   the engine ignored it, the fact row stands).
 
+Run 143 (2026-10-18) stopped at T2 on one state fault: "The guild has a list of tasks ... You'll
+need to choose one that fits your skills" with the options in narration (dockside salvage,
+warehouse inventory, harbor watch) was filed as the job "Choose a Task" with the steps "Choose
+dockside salvage", ...; the check said specific: yes. Fixed in code at both ends: a line that asks
+the player to choose one is dropped before the fill (`asks_to_choose`), and a card whose steps are
+all choosing is no task named yet. The job is the one the player picks, offered when the giver
+names it. Prose: a "He looks up" with no one introduced (T1); the tallyman of T1 became "Alys, the
+guard" at the ledger (T2, C10).
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
