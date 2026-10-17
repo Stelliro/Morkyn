@@ -516,6 +516,22 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class InventedSpeechInAOneSegmentScene(unittest.TestCase):
+    """8B run 133, T2: '"What do I need to do?"' given to the player stayed: the scene was one segment."""
+
+    def test_the_line_goes(self):
+        from app.llm import _drop_invented_player_speech
+
+        line = ('"I owe the guild a winter\'s credit and I want to work it off." I stop in front of the desk. "What job '
+                'have you got that pays against the ledger?"')
+        text = ('You step up to the desk. Percival lifts his gaze. "The guild has a job for you," he says.\n\nYou turn '
+                'to Percival [[A]], your voice firm. “What do I need to do?”\n\nPercival stops drumming.')
+        turn = {"narration": text, "narration_segments": [{"label": "scene", "text": text}]}
+        out = _drop_invented_player_speech(turn, line)
+        self.assertNotIn("What do I need to do?", out["narration"])
+        self.assertIn('"The guild has a job for you," he says.', out["narration"])
+
+
 class AStartWishedForIsNoStart(unittest.TestCase):
     """8B run 129, T3: "Give me a job I can start today" took the job offered in answer."""
 

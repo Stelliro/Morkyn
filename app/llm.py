@@ -16698,10 +16698,19 @@ def _drop_invented_player_speech(turn: dict[str, Any], player_input: str) -> dic
 
     segments = turn.get("narration_segments")
     if isinstance(segments, list) and segments and all(isinstance(seg, dict) for seg in segments):
+        # Each segment read as its paragraphs: a segment holding the whole scene
+        # hid 'You turn to Percival, your voice firm. "What do I need to do?"'
+        # from the dialogue-paragraph reading (8B run 133, T2).
         texts = [str(seg.get("text") or "") for seg in segments]
-        kept, dropped = drop_invented_player_speech(texts, player_input)
+        split = [re.split(r"\n\s*\n", t) for t in texts]
+        flat = [p for parts in split for p in parts]
+        kept_flat, dropped = drop_invented_player_speech(flat, player_input)
         if not dropped:
             return turn
+        kept, at = [], 0
+        for parts in split:
+            kept.append("\n\n".join(p for p in kept_flat[at:at + len(parts)] if p.strip()))
+            at += len(parts)
         new_segments = [{**seg, "text": kept[i]} for i, seg in enumerate(segments) if kept[i].strip()]
         joined = "\n\n".join(seg["text"] for seg in new_segments).strip()
         if not joined:
