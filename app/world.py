@@ -9560,6 +9560,20 @@ _POINTED_AT_RE = re.compile(
 )
 
 
+def _move_only_pointed_at(prose_low: str, dest_name: str, player_input: str, narration: str) -> bool:
+    """The MOVE's place is in the prose only as where a path leads, and the player's line never asks for it."""
+    words = _place_words(dest_name)
+    low = str(dest_name or "").lower()
+    if not words or not prose_low.strip() or low not in prose_low:
+        return False
+    if not _place_only_pointed_at(prose_low, low):
+        return False
+    line_low = _destination_text(player_input).lower()
+    if _line_names_place(line_low, words) or any(len(w) >= 5 and re.search(rf"\b{re.escape(w)}", line_low) for w in words):
+        return False
+    return not venues.entry_in_prose(narration)
+
+
 def _place_only_pointed_at(text: str, needle: str) -> bool:
     """Every mention of the place is where something leads or points, never where the player is."""
     hits = [m for m in re.finditer(re.escape(needle), text)]
@@ -10310,6 +10324,13 @@ def resolve_movement(
             tail = str(narration or "")[-900:].lower()
             if dest_name and dest_name.lower() not in tail and explicit_code.lower() not in tail:
                 report["prose_mismatch"] = dest_name
+            if dest_name and _move_only_pointed_at(_unspoken(narration).lower(), dest_name, player_input, narration):
+                turn_ledger.note("movement", "unshown_named_move_dropped", destination=dest_name, why="prose_only_points_at_it")
+                player_patch["move_to_location"] = None
+                player_patch["move_to_location_code"] = None
+                result["map_walk"] = None
+                return {"status": "dropped_unshown", "from": current_code, "destination": dest_name, "intent": intent,
+                        "rule": "prose_only_points_at_it"}
                 mine = _player_place_over_unshown_move(conn, player_patch, player_input, narration, current_code, dest_name)
                 if mine:
                     return mine
@@ -10356,6 +10377,18 @@ def resolve_movement(
             dest_name = str(report.get("destination") or explicit_name)
             if prose.strip() and dest_name.lower() not in prose and not venues.entry_in_prose(narration):
                 report["prose_mismatch"] = dest_name
+            # Named in the prose only as where a path leads ("The path to The
+            # Drowned Claim [[L5]] is uncertain" after a question about the
+            # walk; 8B run 147, T98): not reached, so the unshown-move rules
+            # below get their say.
+            only_pointed = _move_only_pointed_at(prose, dest_name, player_input, narration)
+            if only_pointed:
+                turn_ledger.note("movement", "unshown_named_move_dropped", destination=dest_name, why="prose_only_points_at_it")
+                player_patch["move_to_location"] = None
+                player_patch["move_to_location_code"] = None
+                result["map_walk"] = None
+                return {"status": "dropped_unshown", "from": current_code, "destination": dest_name, "intent": intent,
+                        "rule": "prose_only_points_at_it"}
             if prose.strip() and dest_name.lower() not in prose:
                 mine = _player_place_over_unshown_move(conn, player_patch, player_input, narration, current_code, dest_name)
                 if mine:
@@ -10404,6 +10437,28 @@ def resolve_movement(
                     and not (dest_words and _line_names_place(line_low, dest_words))
                     and not loosely_named
                 )
+                # Named only as where a path leads: "The path to The Drowned
+                # Claim [[L5]] is uncertain" after "you step into the rain" kept
+                # MOVE "The Drowned Claim" on a line that only asked whether the
+                # storm had passed (8B run 147, T98). A pointed-at place is not
+                # reached, whatever the departure words.
+                pointed_only = bool(
+                    dest_words
+                    and re.search(rf"\b{re.escape(dest_words[-1])}", prose)
+                    and _place_only_pointed_at(prose, dest_words[-1])
+                    and not journey
+                    and not loosely_named
+                    and not _line_names_place(line_low, dest_words)
+                    and not venues.entry_in_prose(narration)
+                )
+                if pointed_only:
+                    turn_ledger.note("movement", "unshown_named_move_dropped", destination=dest_name, line=line_low[:160],
+                                     why="prose_only_points_at_it")
+                    player_patch["move_to_location"] = None
+                    player_patch["move_to_location_code"] = None
+                    result["map_walk"] = None
+                    return {"status": "dropped_unshown", "from": current_code, "destination": dest_name, "intent": intent,
+                            "rule": "prose_only_points_at_it"}
                 if stays_here:
                     turn_ledger.note("movement", "unshown_named_move_dropped", destination=dest_name, line=line_low[:160],
                                      why="prose_stays_here")

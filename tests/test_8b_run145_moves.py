@@ -203,6 +203,22 @@ class ASpokenRequestIsNotAWalk(unittest.TestCase):
             self.assertIsNone(result["player"].get("move_to_location"), report)
             conn.rollback()
 
+    def test_a_question_about_the_walk_with_the_path_only_pointed_at_moves_nobody(self):
+        # 8B run 147, T98: asking whether the storm had passed enough to walk to the Claim moved the player there.
+        world, connect = self._rows()
+        line = "\"He owes, not me, Abel.\" I finish the ale and ask whether the storm has passed enough to walk to the Drowned Claim."
+        with connect() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0])
+            inn = world._upsert_location(conn, "The Stag and Heron", "", parent_id=town, kind="inn")
+            claim = world._upsert_location(conn, "The Drowned Claim", "Ruins the sea left.")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(inn),))
+            prose = ("You finish the ale and fix Abel with a glare. \"The sea's still in a mood,\" he says. The thought lingers as "
+                     f"you step into the rain, the cold biting through your wool tunic. The path to The Drowned Claim [[L{int(claim)}]] is uncertain.")
+            result = {"narration": prose, "player": {"move_to_location": "The Drowned Claim"}}
+            report = world.resolve_movement(conn, result, line, intent="travel", narration=prose)
+            self.assertIsNone(result["player"].get("move_to_location"), report)
+            conn.rollback()
+
     def test_a_request_the_prose_carries_out_still_moves(self):
         world, connect = self._rows()
         line = "I climb into the skiff. \"Out to the wreck, Wulfstan.\""
