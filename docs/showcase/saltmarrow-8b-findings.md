@@ -7,7 +7,7 @@ Testing order (Stell): 8B until no issues, then the 7B. Mode: play long, log fau
 the one place it is decided, replay every saved 7B and 8B turn before committing.
 
 Every fix below has a test and passed the full suite with only the 15 known failures (the
-dice-audit flake tripped twice and passed alone). Nothing is pushed.
+dice-audit flake tripped twice and passed alone). Runs 1-141 shipped in `0.10.0-dev.13`.
 
 ## Infrastructure
 
@@ -230,6 +230,29 @@ a new class, not for the logged prose classes below, which appear in every run.
   (515ff81); a speech lead with no line after it goes (73ff3cf); both halves of a line taken back
   from another speaker go (24d33e5); a refused gain never cuts the player's own words (0b0a4fd).
 
+### Runs 113-141 (2026-10-17)
+
+Still one state fault per run, found in T1-T7. 12 of the 29 fixes are in the quest parser.
+
+- **Jobs**: a job just taken is not two (ecbbb22); taking by a word of the title goes by stem
+  (64bc0fa); a giver asking what work is wanted, or demanding proof, has set none (3a8b1d6,
+  61767ce); the giver naming the work is the offer (1a1f795); one apostrophe for a job told to you
+  (e406f59); a start wished for is no start (2171b56); a job with no task, or only work in
+  general, is no job yet (3fd98c2, 2b36e60); a plain title from another giver is no duplicate
+  unless the steps agree (2d14984); a line the prose gives the player is no offer (5bdf0c9).
+- **Movement and places**: a size band is an amount, a place passed is no move (7b3a862); a sign
+  passed is not the door gone in (76693ed); a placeholder is no place (cda643f); a replaced move
+  leaves no place behind (61767ce); a place named in passing joins the town (d595ee0); a place
+  passed on the way in is not the venue entered (f70e230).
+- **People**: the player's name is no one else's (334b641); a sign's possessive is no use of a name
+  (b71ae56); the ops' name fits the sex the prose shows (af58b2c); someone said not to be there is
+  not there (bdd4846); the one talked to comes along to an unnamed speaker (fc0e5d4).
+- **Money**: a chance to pay moves no coin (9fe15f9); coins lying in the scene move nothing
+  (8ef2e8c).
+- **Player's words**: a line said is not also retold (3e33570); a sentence inside someone's quote is
+  theirs (cf8b9c1); an echo of the player's line goes (770f673); speech and acceptances given to the
+  player go (1604fb7, 83a28a6); the engine's clock after a dash goes (40beefa).
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
@@ -272,7 +295,13 @@ a new class, not for the logged prose classes below, which appear in every run.
 
 ## Next
 
-Run 113 on 75cdb85 or later, toward the 100-turn goal. Stock lines repeat across turns too
+Paused at run 141 (2026-10-17, Stell). Before more runs: Stell's rule that a task the model keeps
+failing should be made simpler (CLAUDE.md). The quest parser is that task: it reads a whole turn
+and must decide offer, giver, steps, takes and duplicates at once, and a rule was added after it
+almost every run. Split it into smaller asks (did someone offer work, in which line; what is the
+task) and let the engine decide giver, duplicates and takes.
+
+Earlier: run 113 on 75cdb85 or later, toward the 100-turn goal. Stock lines repeat across turns too
 ("You're late" from the tallyman in most runs, NPCs echoing the player's question back), alongside
 the prose classes above. No clean run yet: about one state fault per run, found in T1-T7. The
 prose classes above (inner life and acts for the player, past tense, scene drift) are in every
