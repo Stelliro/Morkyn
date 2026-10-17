@@ -1461,6 +1461,19 @@ def validate_quest_changes(
         # and the parser proposed the job but quoted "Jehane Tully takes a deep
         # breath" as its evidence, so it was refused as no offer. When the giver
         # is in the scene and the two sides agree a sum, the agreement grounds it.
+        # A job whose only steps are asking about it names no task yet: "the
+        # guild has jobs, and jobs pay debts" filed "Work Off Winter's Credit"
+        # with the one step "Ask for the job details" (8B run 131, T2).
+        step_titles = [str((s or {}).get("title") or "") for s in (raw.get("steps") or []) if isinstance(s, dict)]
+        if not reasons and step_titles and all(
+            (re.match(r"\s*(?:ask|inquire|enquire|find\s+out|learn|speak|talk)\b", t, re.I)
+             and re.search(r"\b(?:job|work|task|details?|terms)\b", t, re.I))
+            # Or only says to do it: "Complete the assigned task".
+            or re.fullmatch(r"\s*(?:complete|do|carry\s+out|perform|finish|accept|take|start)\s+(?:the|a|an|your)?\s*"
+                            r"(?:assigned|given|specific|guild(?:'s)?|first|next)?\s*(?:task|job|work|assignment)s?\W*", t, re.I)
+            for t in step_titles
+        ):
+            reasons.append("no_task_named_yet")
         # The giver asking what work the player wants has set none yet: "You'll
         # need to prove your worth. What kind of job are you looking for?" filed
         # "Prove worth through work" (8B run 120, T2).

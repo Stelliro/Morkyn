@@ -612,6 +612,29 @@ class TheGiverSettingTheWorkIsTheOffer(unittest.TestCase):
         self.assertEqual([r["title"] for r in accepted.get("retold") or []], ["Salvage Run"])
 
 
+class AJobWithNoTaskIsNoJobYet(unittest.TestCase):
+    """8B run 131, T2: "the guild has jobs, and jobs pay debts" filed jobs whose steps named no work."""
+
+    def _reply(self, step):
+        return {"new": [{"title": "Work Off Winter's Credit", "giver": "Dorian Vane", "difficulty": "normal",
+                         "summary": "Pay the debt.", "steps": [{"title": step, "location": "L2"}],
+                         "reward": {"gold": 0, "xp": 0, "items": [], "text": ""},
+                         "offer_line": "That's a heavy burden. But the guild has jobs, and jobs pay debts.",
+                         "evidence": "That's a heavy burden. But the guild has jobs, and jobs pay debts."}], "updates": []}
+
+    def test_no_task_named(self):
+        from app import quest_parser
+
+        narration = ("A man sits behind the desk. \"You owe the guild a winter's credit,\" he says. \"That's a heavy "
+                     "burden. But the guild has jobs, and jobs pay debts.\"")
+        npcs = [{"id": 2, "code": "B", "name": "Dorian Vane", "role": "Guild Clerk"}]
+        for step in ("Ask for the job details", "Complete the assigned task"):
+            accepted, rejected = quest_parser.validate_quest_changes(
+                self._reply(step), narration=narration, player_input='"What job have you got?"', npcs=npcs)
+            self.assertEqual(accepted["new"], [], step)
+            self.assertIn("no_task_named_yet", rejected[0]["reasons"], step)
+
+
 class AskingWhatWorkSetsNone(unittest.TestCase):
     """8B run 120, T2: "You'll need to prove your worth. What kind of job are you looking for?" filed a job."""
 
@@ -630,7 +653,7 @@ class AskingWhatWorkSetsNone(unittest.TestCase):
             reply, narration=narration, player_input='"I owe the guild a winter\'s credit and I want to work it off."',
             npcs=npcs)
         self.assertEqual(accepted["new"], [])
-        self.assertIn("giver_asks_what_work", rejected[0]["reasons"])
+        self.assertTrue({"giver_asks_what_work", "no_task_named_yet"} & set(rejected[0]["reasons"]))
 
 
 class TakingTheWreckTakesTheWreckedShip(unittest.TestCase):
