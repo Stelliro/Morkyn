@@ -22454,9 +22454,19 @@ def apply_turn(
                 from app.quest_parser import apply_quest_changes, merge_marks
 
                 changes = dict(quest_changes or {"new": [], "updates": []})
-                if quest_marks:
+                # In checked mode (app/quest_offers.py) a QUEST mark was already
+                # read as a hint to a spoken line and is never a card on its own;
+                # only the done/update marks still merge here (8B run 142, T2).
+                try:
+                    from app.llm import _quest_parser_mode
+                    from app.quest_offers import marks_to_merge
+
+                    marks_now = marks_to_merge(quest_marks, _quest_parser_mode())
+                except Exception:
+                    marks_now = list(quest_marks or [])
+                if marks_now:
                     source_before = changes.get("source")
-                    changes = merge_marks({**changes, "_parser_ran": bool(quest_changes), "source": source_before or "parser"}, quest_marks)
+                    changes = merge_marks({**changes, "_parser_ran": bool(quest_changes), "source": source_before or "parser"}, marks_now)
                 # Judged against the text the player reads: a job whose giver and
                 # quote were cut from the scene was still offered (8B run 4, T6:
                 # "Clear the Rat Infestation in the East" from a Nesta the shipped

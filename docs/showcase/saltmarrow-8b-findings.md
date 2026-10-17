@@ -253,6 +253,32 @@ Still one state fault per run, found in T1-T7. 12 of the 29 fixes are in the que
   theirs (cf8b9c1); an echo of the player's line goes (770f673); speech and acceptances given to the
   player go (1604fb7, 83a28a6); the engine's clock after a dash goes (40beefa).
 
+### Run 142 (2026-10-18): the engine-first offer pass, live
+
+Six turns on 8ddb63d plus the fixes below, watching `quest_fill` / `quest_check` in the traces.
+
+- T2: the tallywoman's "there's always the dredging ... If you find something worth salvaging, you
+  get a third of the value ... Just bring it back" was the one candidate (speaker unknown: she was
+  minted this turn). Fill 7.2 s, check 2.9 s, both yes; "Dredging the Drowned Town" offered. The
+  keyword judge alone would have refused it (`no_offer_in_exchange`). The narrator's bare
+  "Salvage Contract" mark still reached the apply step through world.py's own mark merge and was
+  refused only for want of a quote: closed, both merge points now use `quest_offers.marks_to_merge`.
+- T3: typed acceptance taken by the engine; no candidate in Veyra's answer; 0 asks.
+- T4: the player worked the step and the gate stayed shut: it read the title ("Dredging the
+  Drowned Town"), not the step ("Locate the drowned town's wreckage along the coast"). Fixed:
+  `open_quest_step_named`.
+- T5: the fill said yes to "You bring it to me, and I will decide its worth" and the check said
+  `specific: no`; nothing filed. That is the two-stage behaviour the split was for. The progress
+  check rightly said the step was not shown finished. 3 asks, 9.3 s.
+- T6: a question about the player's mother; no job words, 0 asks.
+- Other faults, by class: a forklift in the opening (anachronism, prose); the coast is no place,
+  so working the wreckage moved the player back to town (movement); "I carry the rusted compass"
+  rolled navigation and hurt the player (#102, fixed: the noun-only craft triggers want the
+  thing used); Veyra became "the
+  barkeep, Emery Kemp" at the tally house (C10 person swap, open); a FACT op wrote "The player
+  has accepted a salvage contract" while the job was only offered (state claim without evidence;
+  the engine ignored it, the fact row stands).
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your

@@ -29,6 +29,9 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Fixed
 
+- [CLAUDE] The craft noun alone is not the craft (#102 class, 8B run 142 T5). "I carry the rusted compass and the weathered ledger back up to the tally house" rolled navigation on the word compass, failed on a 2, and hurt the player's leg. The four noun-only craft triggers (navigation, cartography, farming, tinkering) now want the thing used: the skill's own verb, or a using verb on the thing. A compass carried, a map pocketed, a farm walked across or a mechanism looked at rolls nothing; "take a bearing with the compass", "sketch a map", "plow the field", "fix the mechanism" still do, and a trap carried and then set is still set. - `app/skill_checks.py`
+- [CLAUDE] The quest gate reads the current step, not only the title (8B run 142 T4). The player worked "Locate the drowned town's wreckage along the coast" while the prose never said "Dredging the Drowned Town", so the gate stayed shut and the progress check never ran. - `app/quest_parser.py`
+- [CLAUDE] A bare narrator QUEST mark no longer reaches the engine through the apply step in checked mode (8B run 142 T2). The offer pass had already read the mark as a hint; world.apply_turn merged it again on its own. Both merge points now use one rule. - `app/world.py`, `app/llm.py`, `app/quest_offers.py`
 - [CLAUDE] A check's opponent is someone the engine places in the scene (#89, reopened twice). The stale opponent was patched three times by phrasing (left behind, walked away from, asked past) and came back each run with a new one. The roll's other side is now drawn from the engine's own record of who is here this turn (`conversation.resolve`: present and addressed); a partner left at the gate, someone asked after who is elsewhere, or the companion when the line asks someone else is never the one rolled against. With no scene record the location's roster stands in as before. - `app/skill_checks.py`
 
 

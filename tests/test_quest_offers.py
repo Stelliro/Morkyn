@@ -312,6 +312,15 @@ class ProgressIsCheckedTheSameWay(unittest.TestCase):
         self.assertEqual(report["updates"][0]["quest"], "Q3")
         self.assertEqual(report["updates"][0]["action"], "step_done")
 
+    def test_the_gate_opens_on_the_current_steps_words(self):
+        # 8B run 142, T4: the title "Dredging the Drowned Town" was nowhere in
+        # the prose, the step "Locate the drowned town's wreckage along the coast" was.
+        prose = "You step over splintered planks and pull at the remnants of what was once a ship. The wreckage is scattered along the coast."
+        active = [{"code": "Q1", "title": "Dredging the Drowned Town", "status": "active",
+                   "current_objective": "Locate the drowned town's wreckage along the coast"}]
+        self.assertEqual(qp.quest_parse_gate(prose, "I work the wreckage.", active_quests=active), "open_quest_step_named")
+        self.assertEqual(qp.quest_parse_gate("Rain runs off the slate roofs.", "I wait.", active_quests=active), "")
+
     def test_setting_out_is_no_candidate(self):
         prose = "You head down to the docks to unload the salted fish before the tide turns."
         report = qo.run_progress_pass(prose, "I go to the docks.", active=self.ACTIVE, ask=_fake_ask()[0])
@@ -323,6 +332,35 @@ class ProgressIsCheckedTheSameWay(unittest.TestCase):
         ask, _ = _fake_ask(progress={"finished": "no", "why": "still hauling"})
         report = qo.run_progress_pass(prose, "I stack the last crates.", active=self.ACTIVE, ask=ask)
         self.assertEqual(report["updates"], [])
+
+
+class MarksAreHintsInCheckedMode(unittest.TestCase):
+    MARKS = [
+        {"op": "QUEST", "title": "Salvage Contract", "giver": "A", "step": "x"},
+        {"op": "QUEST_DONE", "quest": "Q1", "action": "step_done", "evidence": "the last crate is stacked"},
+    ]
+
+    def test_checked_mode_keeps_only_done_marks_for_both_merge_points(self):
+        # 8B run 142, T2: world.apply_turn merged a bare "Salvage Contract" mark
+        # after the offer pass had already decided. One rule for both places.
+        kept = qo.marks_to_merge(self.MARKS, "checked")
+        self.assertEqual([m["op"] for m in kept], ["QUEST_DONE"])
+
+    def test_legacy_and_off_modes_keep_every_mark(self):
+        self.assertEqual(len(qo.marks_to_merge(self.MARKS, "legacy")), 2)
+        self.assertEqual(len(qo.marks_to_merge(self.MARKS, "off")), 2)
+
+    def test_the_apply_step_drops_a_bare_mark_in_checked_mode(self):
+        from app import db, world
+
+        db.init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Tally House", "special_ability_origin": "none"})
+        result = {"narration": LATE, "quest_marks": [{"op": "QUEST", "title": "Salvage Contract", "giver": "Tilda", "step": "Discuss work"}]}
+        with mock.patch.dict(os.environ, {"AI_RPG_QUEST_PARSER": "checked"}):
+            world.apply_turn(result, "I walk in.")
+        with db.connect() as conn:
+            rows = conn.execute("SELECT title FROM quests").fetchall()
+        self.assertEqual([r["title"] for r in rows], [])
 
 
 class TheHookRunsTheCheckedFlow(unittest.TestCase):

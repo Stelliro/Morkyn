@@ -15,6 +15,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -271,11 +272,20 @@ class TestApplyThroughTheTurn(unittest.TestCase):
         with db.connect() as conn:
             self.assertEqual(conn.execute("SELECT COUNT(*) AS c FROM quests WHERE notes LIKE 'parser:%'").fetchone()["c"], 0)
 
-    def test_a_narrator_mark_alone_creates_the_quest(self):
+    def test_a_narrator_mark_alone_creates_the_quest_only_in_legacy_mode(self):
         marks = [{"op": "QUEST", "title": "Escort the silk west", "giver": "Carter", "step": "Escort the silk", "evidence": "escorting a shipment of silk"}]
-        state = world.apply_turn(_turn(SILK, quest_marks=marks), "Talk to the carter")
+        with mock.patch.dict(os.environ, {"AI_RPG_QUEST_PARSER": "legacy"}):
+            state = world.apply_turn(_turn(SILK, quest_marks=marks), "Talk to the carter")
         self.assertEqual(state["quest_report"]["source"], "marks")
         self.assertEqual(len(state["quest_report"]["created"]), 1)
+
+    def test_in_checked_mode_a_bare_mark_is_only_a_hint(self):
+        # The mark points the offer pass at the giver's line (app/quest_offers.py);
+        # with no checked card behind it, nothing is created at apply time.
+        marks = [{"op": "QUEST", "title": "Escort the silk west", "giver": "Carter", "step": "Escort the silk", "evidence": "escorting a shipment of silk"}]
+        with mock.patch.dict(os.environ, {"AI_RPG_QUEST_PARSER": "checked"}):
+            state = world.apply_turn(_turn(SILK, quest_marks=marks), "Talk to the carter")
+        self.assertEqual(state["quest_report"]["created"], [])
 
     def test_quests_off_means_nothing_is_created(self):
         with db.connect() as conn:
