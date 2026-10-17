@@ -478,6 +478,16 @@ _PUTS_AWAY_COIN_RE = re.compile(
 )
 
 
+# The sum alone, no coin word: "I pocket the fifteen and turn to Gunilda" the
+# turn after fifteen gold were counted into the player's hand paid them again
+# (8B run 147, T83).
+_PUTS_AWAY_SUM_RE = re.compile(
+    r"(?:^|[.;!]\s*|\band\s+|\bthen\s+)i\s+(?:\w+ly\s+)?(?:pocket|stow|tuck(?:\s+away)?|put\s+away|slip|stash|bag|keep)\s+"
+    r"(?:the|my|those|these)\s+" + _AMOUNT + r"\b(?!\s+(?:[\w-]+\s+)?(?:of|from)\b)",
+    re.I,
+)
+
+
 def player_puts_away_coin(own_line: str) -> int | None:
     """The player's line (outside their quoted speech) only puts coin already in hand away.
 
@@ -485,7 +495,7 @@ def player_puts_away_coin(own_line: str) -> int | None:
     or None when the line does not do that.
     """
     text = _QUOTE_RE.sub(" ", str(own_line or ""))
-    match = _PUTS_AWAY_COIN_RE.search(text)
+    match = _PUTS_AWAY_COIN_RE.search(text) or _PUTS_AWAY_SUM_RE.search(text)
     if not match:
         return None
     return _match_number(match) or 0

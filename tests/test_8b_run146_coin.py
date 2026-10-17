@@ -128,6 +128,16 @@ class ALossIsTheItems(unittest.TestCase):
         self.assertTrue(_loss_shown("Lantern", "You drop the lantern into the water."))
 
 
+class CoinPutAwayIsCoinAlreadyCounted(unittest.TestCase):
+    def test_the_sum_alone_is_read(self):
+        # 8B run 147, T83: "I pocket the fifteen" the turn after the pay paid it again.
+        self.assertEqual(prose_state.player_puts_away_coin("I pocket the fifteen and turn to Gunilda."), 15)
+        self.assertEqual(prose_state.player_puts_away_coin("I pocket the two gold and nod."), 2)
+        self.assertEqual(prose_state.player_puts_away_coin("I pocket the coins."), 0)
+        self.assertIsNone(prose_state.player_puts_away_coin("I pocket the fifteen gold from the till."))
+        self.assertIsNone(prose_state.player_puts_away_coin("I walk down to the dock."))
+
+
 class AFixtureUsedIsNoThingTaken(unittest.TestCase):
     def test_a_bed_a_room_and_a_meal_are_not_taken_things(self):
         # 8B run 147, T64: "I take the bed Abel showed me" put "bed x1" in the pack.
