@@ -953,6 +953,17 @@ class AJobToldToYouIsAnOffer(unittest.TestCase):
                                                                  player_input=self.LINE, npcs=self.NPCS)
         self.assertEqual([q["title"] for q in accepted.get("new") or []], ["Haul Salvage from Docks"], rejected)
 
+    def test_curly_apostrophes_still_match(self):
+        # 8B run 124, T2: the prose's "You’ll work it off" against the parser's "You'll work it off".
+        from app import quest_parser
+
+        self.assertFalse(quest_parser._players_words_only(
+            "You'll work it off by hauling the last load of iron from the docks.",
+            "You'll work it off by hauling the last load of iron from the docks.",
+            '"What job have you got that pays against the ledger?"',
+            "Garrick looks up. “A winter’s credit,” he says. “You’ll work it off by hauling the last "
+            "load of iron from the docks—before the tide swallows it.”"))
+
     def test_the_prose_retelling_the_player_is_still_theirs(self):
         from app import quest_parser
 
