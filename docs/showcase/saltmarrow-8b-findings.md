@@ -357,6 +357,46 @@ refused the non-tasks; typed accepts worked; invented player speech was cut in m
 model gold, xp and karma gains with nothing behind them were dropped at nearly every turn;
 every abstract or unshown grant after T43 was refused.
 
+### Run 147 (2026-10-18): the first run on the run-146 fixes
+
+Run 147 reached T100 (same setup, 8B, 16k context, 13-65 s a turn) on the code as of commit
+bc1f658, with later fixes committed while it ran (the server kept its start code). Against run
+146 the state faults roughly halved: about one every three turns, and most were new classes
+rather than repeats. The run-146 fixes held: no abstract grant entered the pack, no absent
+person was minted from a name, the owned tide-reckoner was bound at T13, "I leave the flats"
+and "ask what a chart would cost" moved nobody, the typed yes to the posted wreck job took it
+at T2, invented player speech was cut most turns, and every model gold, xp and karma gain
+with nothing behind it was dropped.
+
+Fixed by class this run (each with the live line as a test):
+
+- Coin: a fee paid into someone's hand is no purchase of the turn's grants (T15); a buy with no
+  price, coins tossed into a palm, and the player's own "pay it" roll the small spend (T20, T21);
+  a gain op on the player's own purchase is a spend (T62); taking a job costs nothing (T67); coin
+  counted or heard backs no gain (T48); a sum only mentioned backs no stated gain (T92); coin put
+  away under its sum alone is coin already counted (T83).
+- Things: a coil of rope is the rope (T28 dedupe of a measure); the same gain twice is one gain,
+  also when a TAKE is flipped to a gain (T27, T50); a like-named thing found here is new (T28); a
+  thing's provenance is no hand-over (T23); a loss is the item's own (T30); a bed taken is slept
+  in (T64).
+- People: a title and a surname name the known person (T45); the role figure here is the known
+  person (T2, T50); a full name beside a known bare first name is that person (T83).
+- Places and moves: a possessive part is the place (T45); a known place reached under its common
+  noun is that place (T40); a place asked for only in speech is a request (T26, T32); a walk the
+  prose keeps in the current place goes nowhere else (T75); a destination the prose only points at
+  is not reached (T98); an origin word marks only the place it governs (T96).
+- Checks: a boat's bow is no weapon (T7); a leave-taking is not an address (T54); the debtor named
+  in a question is no opponent (T89); a craft with no tool breaks no bones (T81).
+- Jobs: a suggestion is no assignment (T29); a filled card without the offers_work flag still
+  reaches the check (T36); a giver confirming pay the player asked about is an offer (T89).
+
+Logged, not fixed (fault log F74-F85 and continuations): the companion who sets out with the
+player stays behind; the storekeeper of a place just entered is absent to the scene record;
+the quest progress check cannot see a step done when the model renames the thing (chest, box,
+case, crate); a tale about a dead person filed as a job (F1 cont. 2); one typed yes accepted two
+offers (F84); the figure the prose then names as a known person still gets a new name (F26 cont.
+10, 11); a TAKE of a thing set down read as a gain (F82).
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
