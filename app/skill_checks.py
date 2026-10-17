@@ -1621,7 +1621,11 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     # Getting into a boat, a cart or a bed is not a feat (playtest #102).
     # Stairs are walked: "I climb the seawall steps" (8B run 37, T6).
     (r"\b(climb(?!\s+(?:in|into|onto|aboard|out of|down from|back into)\s+(?:the\s+|a\s+|my\s+|his\s+|her\s+)?(?:\w+\s+)?(?:skiff|boat|cart|wagon|bed|saddle|bunk|hammock|carriage|barge|punt|coracle))"
-     r"(?!\s+(?:up\s+|down\s+)?(?:the\s+|a\s+|some\s+)?(?:[\w'’-]+\s+){0,2}?(?:step\w*|stair\w*)\b)|jump|swim|lift|force|break|bash)\b", "athletics"),
+     r"(?!\s+(?:up\s+|down\s+)?(?:the\s+|a\s+|some\s+)?(?:[\w'’-]+\s+){0,2}?(?:step\w*|stair\w*)\b)|jump|swim|lift|force|break|bash|"
+     # A dive done, not a dive named: "dive on the wreck", "dive down for it"
+     # roll; "The dive. I'll take it." does not (8B run 145, T3 and T9: the
+     # dive on the wreck rolled nothing).
+     r"(?:dive|dives|dived|dove|diving)\s+(?:on|onto|into|in|down|for|off|to|under|beneath|after|through)|go(?:es)?\s+over\s+the\s+side)\b", "athletics"),
     (r"\b(lock|pick the|unlock)\b", "lockpicking"),
     (r"\b(heal|bandage|medicine|first aid|triage|splint)\b", "healing"),
     (r"\b(rally|cover (me|them|him|her)|support (ally|friend)|buff)\b", "support"),

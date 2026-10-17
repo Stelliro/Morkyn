@@ -693,7 +693,11 @@ _ASKED_FOR_WORK_RE = re.compile(
     r"|\byou(?:['’]re|\s+are|['’]ve\s+come\s+to|\s+came\s+to|\s+want\s+to)\s+(?:\w+\s+)?look\w*\s+for\s+(?:work|a\s+job|jobs)\b[^,.;!?]*"
     r"|\bpay\s+(?:it|that|the\s+debt|your\s+debt)\s+off\b"
     # ... and work said not to be given: "I don't take on just anyone" (same turn).
-    r"|\b(?:don['’]?t|do\s+not|won['’]?t|will\s+not|never)\s+(?:\w+\s+){0,2}?(?:take\s+on|hire|give\s+work|hand\s+out\s+work)\b[^,.;!?]*",
+    r"|\b(?:don['’]?t|do\s+not|won['’]?t|will\s+not|never)\s+(?:\w+\s+){0,2}?(?:take\s+on|hire|give\s+work|hand\s+out\s+work)\b[^,.;!?]*"
+    # The player needing help is no work offered to the player: "That's a lot
+    # to carry. You'll need help getting it up the steps" filed "Carry the Crate
+    # Upstairs" (8B run 145, T11).
+    r"|\byou(?:['’]ll|\s+will|['’]d|\s+would|\s+might|\s+may)?\s+(?:need|want|could\s+use)\s+(?:some\s+|a\s+|an\s+extra\s+)?(?:help|a\s+hand|hands?)\b[^,.;!?]*",
     re.I,
 )
 

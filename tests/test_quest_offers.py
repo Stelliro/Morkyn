@@ -170,6 +170,13 @@ class TheEngineFindsTheLine(unittest.TestCase):
         _accepted, rejected = qp.validate_quest_changes({"new": [item]}, narration=prose, player_input=FISH_INPUT, npcs=[{"id": 1, **alys[0]}])
         self.assertIn("no_task_named_yet", rejected[0]["reasons"])
 
+    def test_the_player_needing_help_is_no_offer(self):
+        # 8B run 145, T11: filed "Carry the Crate Upstairs" from a crewman's remark.
+        prose = ("The crew ties off the rowing craft, and one of them, a man with a scar, nods at you. \"You’re late,\" "
+                 "he says. You lift the crate. \"That’s a lot to carry,\" he mutters. \"You’ll need help getting it up the steps.\"")
+        cands, _dropped = qo.find_offer_candidates(prose, "I carry the chest up to the tally house.", npcs=[])
+        self.assertEqual(cands, [], cands)
+
     def test_one_speakers_lines_in_one_paragraph_are_one_offer(self):
         cands, _ = qo.find_offer_candidates(SHEDS, "\"I am up for it.\"", npcs=GARRICK)
         self.assertEqual(len(cands), 1, cands)

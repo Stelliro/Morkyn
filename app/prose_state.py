@@ -568,6 +568,8 @@ _ACT_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("cook", ("cook", "bake", "brew", "roast", "knead")),
     ("make", ("craft", "build", "carve", "sew", "stitch", "weave", "whittle", "assemble", "fletch")),
     ("labour", ("dig", "chop", "haul", "split", "scrub", "sweep", "clean", "unload", "stack")),
+    # A dive on a wreck rolled nothing and finished no step (8B run 145, T9).
+    ("swim", ("swim", "dive")),
     ("treat", ("bandage", "treat", "splint")),
     ("perform", ("sing", "dance", "perform", "recite")),
 )
@@ -708,6 +710,7 @@ ACT_FAMILY_RULES: dict[str, dict[str, Any]] = {
     "cook": {"skill": "cooking", "kind": "general", "minutes": 20},
     "make": {"skill": "craft", "kind": "physical", "minutes": 30},
     "labour": {"skill": "athletics", "kind": "physical", "minutes": 25},
+    "swim": {"skill": "athletics", "kind": "physical", "minutes": 20},
     "treat": {"skill": "healing", "kind": "general", "minutes": 10},
     "perform": {"skill": "performance", "kind": "talk", "minutes": 10},
 }

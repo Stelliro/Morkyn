@@ -7857,7 +7857,10 @@ def _venue_for_named_move(
 
     Returns report fields ({} when neither applies).
     """
-    doorway = venue_move_intent(player_input)
+    # Speech is no doorway: '"Anything missing, Captain, or are we good to go
+    # out?"' read as an exit and stood the player in the street (8B run 145,
+    # T7). Only the narrated part of the line, and speech that asks to go.
+    doorway = venue_move_intent(_destination_text(player_input))
     shown = venues.entry_in_prose(narration) or {}
     if doorway != "enter" and not shown:
         return {}
@@ -10116,12 +10119,51 @@ def resolve_movement(
                 mine = _player_place_over_unshown_move(conn, player_patch, player_input, narration, current_code, dest_name)
                 if mine:
                     return mine
+                # A named move the prose never shows, that the player's own
+                # line never asks for, does not happen (8B run 145, T6: "I go
+                # aboard, check the dive lines" at the dock came back with MOVE
+                # "Salvage Guild's Tally House" and the save walked the player
+                # back there). Only a line that sets off on a journey keeps a
+                # destination the prose has not reached; it used to be flagged
+                # ("prose_mismatch") and applied all the same.
+                line_low = _destination_text(player_input).lower()
+                journey = re.search(
+                    r"\b(?:leave|leaves|left|depart\w*|set\s+off|walk\s+on|journey\w*|travel\w*|head\s+out|move\s+on|"
+                    r"make\s+(?:my|our)\s+way|push\s+on|ride\s+out|sail\s+out|row\s+out)\b", line_low,
+                )
+                dest_words = _place_words(dest_name)
+                # A walk the prose shows leaving on, a map walk beside the
+                # move, or a direction in the line is a move the prose shows
+                # even when it never says the place's name.
+                leaves = bool(result.get("map_walk")) or _player_departs(narration) or bool(
+                    re.search(r"\b(?:north|south|east|west|northeast|northwest|southeast|southwest|upstream|downstream|inland|seaward)\b", line_low)
+                )
+                # Any word of the place in the line ("go after the farmer" for
+                # "The Farmer's Field") is the player asking for it, loosely.
+                loosely_named = any(len(w) >= 5 and re.search(rf"\b{re.escape(w)}", line_low) for w in dest_words)
+                if (
+                    not journey
+                    and not leaves
+                    and not loosely_named
+                    and not venues.entry_in_prose(narration)
+                    and not (dest_words and _line_names_place(line_low, dest_words))
+                    and not (dest_words and re.search(rf"\b{re.escape(dest_words[-1])}", prose))
+                ):
+                    turn_ledger.note("movement", "unshown_named_move_dropped", destination=dest_name, line=line_low[:160])
+                    player_patch["move_to_location"] = None
+                    player_patch["move_to_location_code"] = None
+                    result["map_walk"] = None
+                    return {"status": "dropped_unshown", "from": current_code, "destination": dest_name, "intent": intent,
+                            "rule": "prose_never_names_it"}
             return report
 
     # A doorway is a move the model reliably narrates and reliably fails to record.
     # Resolve it from state rather than hoping: the venues here are known, and so
     # is the way out of the one the player is standing in.
-    doorway = venue_move_intent(player_input)
+    # Speech is no doorway: '"Anything missing, Captain, or are we good to go
+    # out?"' read as an exit and stood the player in the street (8B run 145,
+    # T7). Only the narrated part of the line, and speech that asks to go.
+    doorway = venue_move_intent(_destination_text(player_input))
     if doorway:
         here_row = conn.execute(
             "SELECT l.* FROM player p JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
@@ -15587,7 +15629,8 @@ def _filter_inventory_changes(
         ) or bool(
             # Said, "I'll take it" agrees to an offer; the act takes things.
             _LINE_TAKES_ANY_RE.search(venues.strip_speech(own_l)) or _SEARCH_FOR_ANY_RE.search(own_l)
-            or re.search(r"\b(?:anything|something|whatever)\b[^.!?]{0,40}\bworth\b", own_l)
+            # "bring up anything of value" asks for the chest it brings up (8B run 145, T9).
+            or re.search(r"\b(?:anything|something|whatever)\b[^.!?]{0,40}\b(?:worth|of\s+(?:value|use|worth)|valuable|useful|salvageable)\b", own_l)
         )
         # With the prose silent on the item, only the player's narrated act takes
         # it: the spoken "I'll haul the beams off the east pier wreck" (the job,
