@@ -21593,6 +21593,25 @@ def _settle_stated_gold(
     if coin_grants:
         turn_ledger.note("gold", "coin_grant_dropped", why="the turn already moves gold by its GOLD op or a payment",
                          grants=[c.get("name") for c in coin_grants])
+    # A gain op on the player's own purchase has its sign wrong: "go into the
+    # Stag and Heron to buy a hot meal and a bed" with GOLD +small grew the
+    # purse by 8 while "your stay is paid for" (8B run 147, T62). With nothing
+    # reaching the player, the sum the model sized is the spend.
+    own_acts = venues.strip_speech(own)
+    if (
+        (band or raw) and not losing and not quest_pays
+        and (_BUY_VERB_RE.search(own_acts) or _OWN_UNPRICED_PAY_RE.search(own_acts) or _PLAYER_PAYS_SUM_RE.search(own_acts))
+        and not said["received"] and not prose_state.coin_handed_to_player(narration)
+    ):
+        if raw:
+            player["gold_delta"] = -abs(raw)
+            player.pop("gold_band", None)
+        else:
+            player["gold_band"] = "-" + band.lstrip("+")
+            player.pop("gold_delta", None)
+        result["player"] = player
+        turn_ledger.note("gold", "gain_op_on_a_purchase_flipped", stated=raw or band)
+        return {"source": "purchase_gain_flipped", "band": player.get("gold_band"), "gold_delta": player.get("gold_delta"), "offer": offer}
     if (band or raw) and not losing and not quest_pays and paid_once is not None and not prose_state.coin_handed_to_player(narration):
         # The prose shows the player paying while the op says gain: "You count
         # forty-six gold out of your purse into Veyra's palm" came with GOLD

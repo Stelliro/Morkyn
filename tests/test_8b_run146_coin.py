@@ -95,6 +95,14 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
         _settle_stated_gold(result, "I ask the stallholder who sold me the lantern and rope what I owe, and pay it from my purse.")
         self.assertEqual(result["player"].get("gold_band"), "-small")
 
+    def test_a_gain_op_on_the_players_own_purchase_is_a_spend(self):
+        # 8B run 147, T62: GOLD +small on buying a meal and a bed grew the purse by 8.
+        prose = ("You make your way to the counter. He slides a mug of ale towards you. He returns with a plate of stew and a "
+                 "loaf of bread. The barkeep nods, signaling that your stay is paid for, and you rise from your chair.")
+        result = {"narration": prose, "player": {"gold_band": "small"}}
+        note = _settle_stated_gold(result, "I walk back into Saltmarrow and go into the Stag and Heron to buy a hot meal and a bed for the night.")
+        self.assertEqual(result["player"].get("gold_band"), "-small", note)
+
     def test_looking_at_goods_for_sale_costs_nothing(self):
         prose = "The stall holds lanterns and coils of rope. You look them over and move on."
         result = {"narration": prose, "player": {}, "inventory_changes": [{"name": "Lantern", "quantity_band": "small"}]}
