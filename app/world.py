@@ -20547,6 +20547,12 @@ def _gain_names(changes: Any) -> list[str]:
     return names
 
 
+# The player's own line pays a person: "into Wulfstan's hand", "pay him", "hand her the fare".
+_PAYS_PERSON_RE = re.compile(
+    r"\b(?:into|in)\s+(?:the\s+)?[\w'’-]+(?:\s+[\w'’-]+)?\s+(?:hand|hands|palm|palms|fist|purse|pouch|pocket)\b"
+    r"|\bpay(?:s|ing)?\s+(?:him|her|them|[A-Z][\w'’-]+)\b"
+    r"|\bhand(?:s|ed|ing)?\s+(?:him|her|them|[A-Z][\w'’-]+)\s+(?:the\s+|his\s+|her\s+)?(?:\w+\s+)?(?:coin|coins|crown|crowns|gold|sum|fare|fee|price|wage|pay)\b",
+)
 _PLAYER_PAYS_SUM_RE = re.compile(
     r"\b(?:count(?:s|ed)?(?:\s+out)?|hand(?:s|ed)?(?:\s+over)?|pay(?:s|ed)?|pays?\s+out|give(?:s)?|gave|press(?:es|ed)?|"
     r"slide(?:s|d)?|put(?:s)?(?:\s+down)?|set(?:s)?(?:\s+down)?|lay(?:s)?|laid|place(?:s|d)?|toss(?:es|ed)?|push(?:es|ed)?|drop(?:s|ped)?)"
@@ -20596,8 +20602,14 @@ def _void_unbought_spend(
     # The player's own counted-out sum stands when the other side takes it; a
     # sum set down and refused ("You'll pay for it", the coins left on the
     # counter, 8B run 146 T16) is still the player's.
-    if _PLAYER_PAYS_SUM_RE.search(venues.strip_speech(_player_line(player_input))) and _COIN_TAKEN_RE.search(
-        venues.strip_speech(str(narration or ""))
+    own_acts = venues.strip_speech(_player_line(player_input))
+    if _PLAYER_PAYS_SUM_RE.search(own_acts) and (
+        _COIN_TAKEN_RE.search(venues.strip_speech(str(narration or "")))
+        # Paid into someone's hand is paid: "count one crown from my purse into
+        # Wulfstan's hand as agreed" for the row was voided as a purchase of a
+        # refused GRANT "share of the haul" (8B run 147, T15). A fee the
+        # player's own line pays a person is no purchase of that turn's grants.
+        or _PAYS_PERSON_RE.search(own_acts)
     ):
         return False
     dsl = result.get("_dsl") if isinstance(result.get("_dsl"), dict) else {}

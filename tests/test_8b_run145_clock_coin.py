@@ -119,6 +119,19 @@ class ThePlayersOwnPaymentStands(unittest.TestCase):
         self.assertTrue(voided)
         self.assertEqual(result["player"]["gold_delta"], 0)
 
+    def test_a_fare_paid_into_someones_hand_is_no_purchase_of_the_turns_grants(self):
+        # 8B run 147, T15: the crown for the row was voided as a purchase of a refused "share of the haul".
+        from app import world
+
+        result = {"player": {"gold_delta": -1}, "_dsl": {"grants": ["share of the haul"]}}
+        line = ("At the harbour dock I step out of the skiff, count one crown from my purse into Wulfstan's hand as agreed, "
+                "and ask him where I find the Harbour Reeve.")
+        prose = ("He nods, the transaction final, and you ask him where to find the Reeve. His fingers trace the edge of the "
+                 "coin. Instead, he slips it into his tunic.")
+        voided = world._void_unbought_spend(result, ["share of the haul"], [], {}, line, prose)
+        self.assertFalse(voided)
+        self.assertEqual(result["player"]["gold_delta"], -1)
+
     def test_a_price_named_across_a_full_stop_in_speech_is_a_bargain(self):
         from app.skill_checks import infer_check_from_action
 
