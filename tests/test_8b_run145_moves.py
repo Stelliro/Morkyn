@@ -203,6 +203,34 @@ class ASpokenRequestIsNotAWalk(unittest.TestCase):
             conn.rollback()
 
 
+class AKnownPlaceUnderItsCommonNoun(unittest.TestCase):
+    """8B run 147, T40: "When we reach the wreck I set the anchor" named no destination; the save stayed at the harbour."""
+
+    ROWS = [
+        {"id": 1, "code": "L1", "name": "Saltmarrow", "parent_id": None, "kind": ""},
+        {"id": 3, "code": "L3", "name": "The Harbour", "parent_id": 1, "kind": ""},
+        {"id": 6, "code": "L6", "name": "The Wrecked Skiff", "parent_id": None, "kind": ""},
+        {"id": 7, "code": "L7", "name": "Tally House", "parent_id": 1, "kind": ""},
+        {"id": 8, "code": "L8", "name": "Reeve's House", "parent_id": 1, "kind": ""},
+    ]
+
+    def test_the_wreck_is_the_wrecked_skiff(self):
+        from app.world import _movement_destination_from_input
+
+        row = _movement_destination_from_input(self.ROWS, "When we reach the wreck I set the anchor into the mud beside the hull.", "The Harbour")
+        self.assertEqual(row["name"], "The Wrecked Skiff")
+
+    def test_an_ambiguous_noun_names_nothing(self):
+        from app.world import _movement_destination_from_input
+
+        self.assertIsNone(_movement_destination_from_input(self.ROWS, "I walk over to the house and knock.", "Saltmarrow"))
+
+    def test_a_noun_left_behind_names_nothing(self):
+        from app.world import _movement_destination_from_input
+
+        self.assertIsNone(_movement_destination_from_input(self.ROWS, "I leave the wreck and sit in the skiff.", "The Wrecked Skiff"))
+
+
 class ThePlaceLeftIsNotTheDestination(unittest.TestCase):
     """8B run 146, T49: "I leave the flats ... and set off north" moved the player into The Flats."""
 
