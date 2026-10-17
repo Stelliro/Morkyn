@@ -1545,6 +1545,15 @@ def validate_quest_changes(
             for t in step_titles
         ):
             reasons.append("no_task_named_yet")
+        # Arranging the work is not the work: "Confirm salvage rights", "Discuss
+        # salvage work", "Agree to work terms" for "only if you're willing to
+        # work for it" (8B run 145, T36). When the giver's own line names a job
+        # ("There's a job hauling wreck-iron"), the job stands whatever the
+        # steps say; the engine's work step covers it.
+        if not reasons and step_titles and all(
+            re.match(r"\s*(?:confirm|discuss|agree|negotiate|arrange|accept|settle)\b", t, re.I) for t in step_titles
+        ) and not _GIVER_OFFERS_JOB_RE.search(str(offer_line or evidence or "")):
+            reasons.append("no_task_named_yet")
         # The giver asking what work the player wants has set none yet: "You'll
         # need to prove your worth. What kind of job are you looking for?" filed
         # "Prove worth through work" (8B run 120, T2).

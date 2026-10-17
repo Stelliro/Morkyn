@@ -13794,7 +13794,11 @@ _PLAYER_TAKE_INTENT_RE = re.compile(
     r"take|takes|taking|taken|took|steal|steals|stealing|stole|stolen|"
     r"craft\w*|forag\w*|harvest\w*|receiv\w*|accept\w*|gift\w*|reward\w*|claim\w*|trad(?:e|es|ed|ing)|"
     r"grab\w*|pocket\w*|gather\w*|collect\w*|scaveng\w*|(?<!the\s)(?<!['’]s\s)(?<![“\x22])(?<!of\s)(?<!some\s)(?<!any\s)(?<!no\s)salvag(?:e|es|ed|ing)\b(?![.!?])(?!\s+(?:guild|yard|crew|rights|contracts?|jobs?|work|boats?|hooks?|debts?|shares?|board|tally\w*|master|men|rats?))|snatch\w*|"
-    r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b|"
+    # Keeping a duty or a state is no take: "I keep the lookout" let a GRANT
+    # through as asked for (8B run 145, T41).
+    r"keep(?:s|ing)?\s+(?:it|them|the|this|that|these|those)\b"
+    r"(?!\s+(?:lookout|watch|guard|vigil|post|peace|faith|pace|time|course|distance|silence|calm|company|counsel|"
+    r"word|promise|eye|eyes|head|quiet|temper|balance|footing|bearing|line\s+tight|rope\s+tight)\b)|"
     # Lifting a thing out of where it lies: "I reach into the hollow and lift
     # out whatever is glinting" refused the ring it lifted (8B run 57, T7).
     r"lift(?:s|ed|ing)?\s+(?:[\w'’-]+\s+){0,3}?out\b|fish(?:es|ed|ing)?\s+(?:[\w'’-]+\s+){0,3}?out\b|"

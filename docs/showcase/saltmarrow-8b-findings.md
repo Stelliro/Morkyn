@@ -288,6 +288,38 @@ all choosing is no task named yet. The job is the one the player picks, offered 
 names it. Prose: a "He looks up" with no one introduced (T1); the tallyman of T1 became "Alys, the
 guard" at the ledger (T2, C10).
 
+### Runs 144-145 (2026-10-18): the long run under the new rule
+
+Run 144 never left setup (the auto context window spilled to shared memory; see the fault log,
+F13); run 145 was started with `AI_RPG_CONTEXT_TOKENS=16384` and went 51 turns under Stell's new
+rule (a recurring fault no longer stops the run; everything goes in
+docs/showcase/run-fault-log-2026-10-18.md with severity, attempts, what worked, what did not,
+what could). The run's process kept the code it started with, so fixes made during the run show
+only from run 146.
+
+- The offer pass: the real dive job filed at T2 (fill + check) and the second candidate ("you'll
+  be working off your credit") refused by the check; the same job retold at T37 refused as a
+  duplicate; a pointer ("you'll have to go to the Bay Mouth yourself") refused by the check at
+  T16. Three cards got through that should not have: "Carry the Crate Upstairs" from "You'll
+  need help getting it up the steps" (T11), "Salvage Rights Claim" with the steps Confirm /
+  Discuss / Agree (T36), and the step "Join a team" finished on the player's own echoed words
+  (T38). Each is an engine rule now (fault log F1 cont., F38).
+- State faults fixed by class during the run (from run 146): a named MOVE the prose never shows
+  dropped (T6); speech is no doorway (T7); a dive is an act and the job's site act matches its
+  step (T9); "anything of value" asks for its find (T9); a wait lasts until its hour (T17); a
+  fighting verb with a direction is motion (T24); only a contest has another side (T24); the one
+  left behind does not answer for someone called on elsewhere (T28); the player's own stated
+  payment is never voided (T21); a price named is a bargain (T19); lore nouns as typed (T34); a
+  duty kept is no take (T41).
+- Logged, not fixed this round (fault log F6, F7, F15, F16, F18, F19, F23, F24, F26, F27 done, F31,
+  F32, F35, F36, F40, F42, F43, F44): places made twice or in the wrong tier (the coast, the wreck
+  site in town, "Bay Mouth Wreck Site" beside "Wreck Site at Bay Mouth"), a job with no giver when
+  the giver is shown only by job, purchases with no sum named, a bed as an item, a figure minted
+  three times, a walk inside a non-travel line never resolved, a venue entered from outside town
+  stopping at the town, a repair that put full stops into the player's echoed line.
+- Cost: a turn with a candidate line made 2 asks (about 7 s + 3 s); the fill once echoed the
+  request shape back (13 s, nothing filed).
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your

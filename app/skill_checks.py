@@ -1599,6 +1599,12 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(sneak|hide|stealth)\b|\bi\s+(?:\w+\s+)?creep\b|\bcreep(?:s|ing)?\s+(?:up|along|toward|towards|past|around|closer|"
      r"forward|into|behind|through)\b(?<!water creep)", "stealth"),
     (r"\b(persuade|convince|negotiate)\b", "persuasion"),
+    # A price named to someone is a bargain: '"Six gold, there and back, and I
+    # pull my own weight on the oars. Do we have a deal?"' rolled nothing (8B
+    # run 145, T19). The sum plus a dealing word, in speech or out of it.
+    (r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|fifty|a\s+hundred)\s+"
+     r"(?:gold|silver|coppers?|coins?|crowns?)\b[^.!?]{0,80}\b(?:deal|offer|take\s+it|or\s+nothing|and\s+no\s+more|"
+     r"there\s+and\s+back|final|and\s+not\s+a\s+\w+\s+more|or\s+I\s+walk)\b", "persuasion"),
     # "worth" alone is feeling ("no cart's worth you", playtest #102); a
     # price question still asks what something is worth.
     (r"\b(bargain|haggle|price|appraise|value of|what'?s? (?:is )?\w+(?: \w+)? worth|worth (?:anything|much|it\?))(?:\b|(?<=\?))", "appraise"),
@@ -1809,7 +1815,9 @@ _SPOKEN_RE = re.compile(r"\"[^\"]*\"|“[^”]*”")
 # Skills a line of speech can call for by itself.
 _SPEECH_SKILLS = frozenset({"persuasion", "deception", "intimidation", "insight", "etiquette", "performance", "streetwise"})
 # Skills whose triggers are nouns, matched with their plurals as typed.
-_NOUN_TRIGGER_SKILLS = frozenset({"symbol_lore"})
+# Lore skills trigger on their nouns as typed, never on a de-inflected verb:
+# "feet planted in the mud" became "plant" and rolled nature (8B run 145, T34).
+_NOUN_TRIGGER_SKILLS = frozenset({"symbol_lore", "nature", "history", "religion", "arcana"})
 # A social verb whose subject is someone else: "they all lie", "the merchants
 # cheat", "he threatened me". Only the player's own lie or threat is a check.
 _OTHERS_DO_SOCIAL_RE = re.compile(
@@ -1974,10 +1982,20 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # check against the NPC's power every turn, and the misses were read as
     # mishaps. Routine: two easier, and only a natural 1 can go badly. A line
     # that pushes (convince, demand, haggle, plead) keeps the full roll.
-    if skill == "persuasion" and not any(_PERSUADE_RE.search(variant) for variant in variants):
+    if skill == "persuasion" and not any(_PERSUADE_RE.search(variant) or _PRICE_OFFER_RE.search(variant) for variant in variants):
         check["routine"] = True
         check["plain_talk"] = True
     return check
+
+
+# A sum named with a dealing word: the player is bargaining, so the roll is the
+# full one, not a routine greeting (8B run 145, T19).
+_PRICE_OFFER_RE = re.compile(
+    r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|fifty|a\s+hundred)\s+"
+    r"(?:gold|silver|coppers?|coins?|crowns?)\b[^.!?]{0,80}\b(?:deal|offer|take\s+it|or\s+nothing|and\s+no\s+more|"
+    r"there\s+and\s+back|final|or\s+i\s+walk)\b",
+    re.I,
+)
 
 
 _PLAIN_READ_RE = re.compile(
@@ -2025,6 +2043,13 @@ def _line_names_npc(text: str, npc: dict[str, Any]) -> bool:
     return bool(code) and f"[[{code}]]" in text
 
 
+# Skills rolled against someone: the social set and the sneaking hand.
+_CONTESTED_SKILLS = frozenset({
+    "persuasion", "deception", "intimidation", "insight", "etiquette", "performance", "streetwise",
+    "stealth", "sleight_of_hand", "pickpocket", "disguise", "grapple", "wrestling",
+})
+
+
 def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None, cased: str = "") -> dict[str, Any]:
     """One inferred check for ``skill``: the opposing NPC or foe the line names, and the tool."""
     opposition: dict[str, Any] = {}
@@ -2060,12 +2085,23 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
             scene_here = {str(c).upper() for c in conv.get("present") or [] if c}
             scene_here |= {str(c).upper() for c in conv.get("addressed") or [] if c}
         names_absent = False
+        # Someone the line calls on who is known elsewhere (not at this place at
+        # all) is not here either: "go down to the dock to find Orme and ask"
+        # from the inn rolled against Hilde the innkeeper, the one person in the
+        # scene record (8B run 145, T28).
+        here_codes = {str(n.get("code") or "").upper() for n in pool}
+        for location in ctx.get("locations") or []:
+            if not isinstance(location, dict):
+                continue
+            for npc in location.get("npcs") or []:
+                if isinstance(npc, dict) and str(npc.get("code") or "").upper() not in here_codes and _line_names_npc((cased or text).lower(), npc):
+                    names_absent = True
         if scene_here:
             absent = [n for n in pool if str(n.get("code") or "").upper() not in scene_here]
             if absent:
                 # A line that calls on someone who is not here rolls against
                 # nobody, not against whoever happens to be the one person left.
-                names_absent = any(_line_names_npc((cased or text).lower(), n) for n in absent)
+                names_absent = names_absent or any(_line_names_npc((cased or text).lower(), n) for n in absent)
                 try:
                     from app import turn_ledger
 
@@ -2108,7 +2144,11 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
             r"|\band\s+(?:then\s+)?(?:walk|head|go|make\s+my\s+way|set\s+off|move\s+on|turn\s+away)\b",
             named_text, re.I,
         )
-        for npc in ([] if stranger_called else pool[:12]):
+        # Only a contest has another side: a bystander named in the line is no
+        # opponent to a search or a craft ("kick back up to Bennet's boat"
+        # rolled perception vs Bennet, 8B run 145 T24).
+        contested = skill in _CONTESTED_SKILLS
+        for npc in ([] if (stranger_called or not contested) else pool[:12]):
             if left_at and _line_names_npc(named_text, npc) and not _line_names_npc(named_text[left_at.end():], npc):
                 continue
             if _line_names_npc(named_text, npc):
