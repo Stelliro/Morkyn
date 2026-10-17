@@ -15889,6 +15889,14 @@ def _payment_shown(narration: str, player_input: str) -> bool:
     return False
 
 
+# The player's line hauls a load somewhere for the work: cargo, not a take.
+_CARGO_HAUL_RE = re.compile(
+    r"\b(?:haul|hauls|hauling|carry|carries|carrying|load|loads|loading|unload\w*|shoulder\w*|heave|heaves|heaving|drag\w*|lug\w*|"
+    r"bring|brings|bringing|stack\w*)\b[^.!?]{0,80}?\b(?:to|onto|into|up\s+to|down\s+to|across\s+to|aboard|over\s+to)\s+"
+    r"(?:the\s+|a\s+|his\s+|her\s+|their\s+)?(?:cart|carts|wharf|dock|docks|wagon|boat|skiff|barge|hold|warehouse|shore|quay|pier|deck|"
+    r"gangplank|store|storehouse|yard|counter|stall|pile|heap)\b",
+    re.I,
+)
 # Containers and measures that name an amount of a thing, not a thing of their own.
 _MEASURE_NOUNS = frozenset({
     "coil", "coils", "flask", "bundle", "length", "roll", "sack", "bag", "pouch", "bottle", "jar", "skein", "spool",
@@ -16131,6 +16139,13 @@ def _filter_inventory_changes(
         if grounded and existing and outcome != "gain" and not acquire_intent:
             grounded = False
             turn_ledger.note("inventory", "owned_item_handled_not_gained", item=name)
+        # Cargo hauled to a cart, a wharf or a hold for the work is not the
+        # player's: "shoulder the first bundle of fish ... carry it down the
+        # gangplank to the wharf" put "cod fillets x1" in the pack (8B run 148,
+        # T11; 8B run 145 T8 rope, F18). Only a stash in the prose keeps it.
+        if grounded and _CARGO_HAUL_RE.search(venues.strip_speech(str(player_input or ""))) and not _REFUSED_STASH_RE.search(final_text):
+            grounded = False
+            turn_ledger.note("inventory", "cargo_hauled_not_kept", item=name)
         # A job, a wage or a deal is not a thing to carry (7B run 7, T2: GRANT
         # "deck work" put "deck work x1" in the pack). Only the head noun is
         # read, and a thing the prose shows handed over still stands ("a work
