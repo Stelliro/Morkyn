@@ -1509,12 +1509,15 @@ def validate_quest_changes(
             str(offer_line or evidence or ""), re.I,
         ):
             reasons.append("no_task_named_yet")
+        # Or every step is only work in general, for an employer, against a
+        # debt: "Complete the assigned task", "Work for the Guild" filed beside
+        # the shipment job its giver named next (8B run 141, T2). The giver's
+        # own name and job words are no task either.
+        giver_words = _stems(f"{(giver or {}).get('name') or ''} {(giver or {}).get('role') or ''}")
         if not reasons and step_titles and all(
             (re.match(r"\s*(?:ask|inquire|enquire|find\s+out|learn|speak|talk)\b", t, re.I)
              and re.search(r"\b(?:job|work|task|details?|terms)\b", t, re.I))
-            # Or only says to do it: "Complete the assigned task".
-            or re.fullmatch(r"\s*(?:complete|do|carry\s+out|perform|finish|accept|take|start)\s+(?:the|a|an|your)?\s*"
-                            r"(?:assigned|given|specific|guild(?:'s)?|first|next)?\s*(?:task|job|work|assignment)s?\W*", t, re.I)
+            or not (_stems(t) - _GENERIC_JOB_STEMS - giver_words)
             for t in step_titles
         ):
             reasons.append("no_task_named_yet")
@@ -2003,6 +2006,17 @@ def _stem(word: str) -> str:
                 w = w[:-1]  # "running" -> "run", "shipped" -> "ship"
             break
     return w[:5]
+
+
+_GENERIC_JOB_STEMS = {
+    _stem(w) for w in (
+        "work", "job", "task", "assignment", "duty", "chore", "errand", "complete", "do", "carry", "perform",
+        "finish", "accept", "take", "start", "begin", "assigned", "given", "specific", "first", "next", "some",
+        "guild", "house", "company", "crew", "hall", "office", "council", "employer", "boss", "master",
+        "debt", "credit", "owe", "owed", "pay", "off", "reduce", "clear", "earn", "help", "serve", "winter",
+        "ledger", "worth", "prove", "yourself", "own",
+    )
+}
 
 
 def _stems(text: Any) -> set[str]:

@@ -2351,6 +2351,36 @@ class ALineGivenThePlayerIsNoOffer(unittest.TestCase):
         self.assertFalse(qp._said_by_player(ev, prose))
 
 
+class WorkInGeneralIsNoTask(unittest.TestCase):
+    """8B run 141 T2: 'But the guild has work.' filed "Work Off the Winter's Credit" beside the shipment job."""
+
+    NARR = ("The tallyman, Hugh [[C]], looks up from his ledger. \"You owe the guild a winter's credit,\" he says. "
+            "\"That's a heavy debt. But the guild has work.\" He taps the ledger. \"You could help recover a shipment "
+            "from the docks. It's risky, but the reward is good.\"")
+    LINE = "\"I owe the guild a winter's credit and I want to work it off.\" \"What job have you got that pays against the ledger?\""
+
+    def _job(self, title, step, ev):
+        return {"title": title, "summary": title, "giver": "Hugh",
+                "steps": [{"title": step, "description": "", "location": ""}],
+                "reward": {"gold": 0, "xp": 0, "items": [], "text": ""}, "difficulty": "normal", "timer_turns": 0,
+                "offer_line": ev, "evidence": ev}
+
+    def test_only_the_named_task_is_filed(self):
+        from app import quest_parser as qp
+
+        npcs = [{"id": 3, "code": "C", "name": "Hugh", "role": "tallyman"}]
+        prop = {"new": [
+            self._job("Recover the Shipment from the Docks", "Recover the shipment from the docks",
+                      "You could help recover a shipment from the docks. It's risky, but the reward is good."),
+            self._job("Work Off the Winter's Credit", "Work for the Guild",
+                      "You owe the guild a winter's credit. That's a heavy debt. But the guild has work."),
+        ], "updates": []}
+        acc, rej = qp.validate_quest_changes(prop, narration=self.NARR, player_input=self.LINE, npcs=npcs,
+                                             locations=[], existing=[])
+        self.assertEqual([q["title"] for q in acc["new"]], ["Recover the Shipment from the Docks"])
+        self.assertIn("no_task_named_yet", [r for x in rej for r in x["reasons"]])
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:

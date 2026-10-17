@@ -28,6 +28,11 @@ belong to, with the date).
   are whose; what triggers a check; engine text in prose). A regex for the one phrasing a run
   produced is a last resort and must be called that. Keep prompt additions minimal. Runs 30-43
   added ~35 phrase-level rules that should be folded into these mechanisms.
+- **A task the model keeps failing is too hard: make that task simpler** (2026-10-17): "usually a
+  task for an ai to commit that its having an issue with means that we need that specific task to
+  be simpler." When the same call fails run after run (a field it fills wrong, a judgment it keeps
+  getting backwards), split it, narrow what it is asked, or move the hard part to the engine,
+  instead of adding another rule that catches its output afterwards.
 - The player's own words and choices are theirs. The model must not act, speak or decide for the
   player, but it may describe the world reacting freely.
 
