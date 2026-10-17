@@ -131,7 +131,29 @@ def _code_veto(line: str, *, asked_for_work: bool) -> str:
     without_pointer = _FIND_POINTER_RE.sub(" ", cleaned)
     if _FIND_POINTER_RE.search(cleaned) and not qp._JOB_RE.search(without_pointer) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned):
         return "pointer_to_someone"
+    # A suggestion is no assignment: "Now, let's see if there's anything else
+    # worth salvaging ... You might find the name board in there" from the
+    # ferryman filed a second wreck job (8B run 147, T29). Nobody who says
+    # "let's" or "you might" is handing out work unless they also name pay.
+    if _SUGGESTION_RE.search(cleaned) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned) and not _names_pay(cleaned):
+        return "suggestion_not_task"
     return ""
+
+
+def _names_pay(text: str) -> bool:
+    """The line pays the player or names a sum of coin."""
+    if qp._PAYS_THE_PLAYER_RE.search(text):
+        return True
+    from app import prose_state
+
+    return bool(prose_state.coin_mentions(text))
+
+
+_SUGGESTION_RE = re.compile(
+    r"\b(?:let['’]s|let\s+us|we\s+could|we\s+might|you\s+might|you\s+could|maybe|perhaps|why\s+don['’]t\s+(?:we|you)|"
+    r"shall\s+we|how\s+about)\b",
+    re.I,
+)
 
 
 def _carries_offer(line: str, *, asked_for_work: bool) -> str:

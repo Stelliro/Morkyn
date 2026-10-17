@@ -161,6 +161,48 @@ FLAT_ROWS = [
 ]
 
 
+class ASpokenRequestIsNotAWalk(unittest.TestCase):
+    """8B run 147, T26 and T32: "Row me out to the wreck now" moved the player while the prose stayed on the dock."""
+
+    def _rows(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        return world, connect
+
+    def test_a_request_the_prose_answers_with_talk_moves_nobody(self):
+        world, connect = self._rows()
+        line = "I thank Eda and go back to Wulfstan at the end of the dock. \"The water's near its lowest by my reckoner. Row me out to the wreck now.\""
+        prose = ("You make your way toward Wulfstan Orme [[C]]'s stall at the end of the dock. Wulfstan's brow furrows. "
+                 "\"Aye, the tides are right. But you'll need a rowing pole, and the current's strong.\"")
+        with connect() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0])
+            harbour = world._upsert_location(conn, "The Harbour", "", parent_id=town, kind="")
+            wreck = world._upsert_location(conn, "The Wrecked Skiff", "A half-sunken ship in the mudflats.")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(harbour),))
+            result = {"narration": prose, "player": {"move_to_location": "The Wrecked Skiff"}}
+            world.resolve_movement(conn, result, line, intent="travel", narration=prose)
+            self.assertNotEqual(result["player"].get("move_to_location"), "The Wrecked Skiff")
+            self.assertNotEqual(str(result["player"].get("move_to_location_code") or ""), f"L{int(wreck)}")
+            conn.rollback()
+
+    def test_a_request_the_prose_carries_out_still_moves(self):
+        world, connect = self._rows()
+        line = "I climb into the skiff. \"Out to the wreck, Wulfstan.\""
+        prose = "You climb into the skiff and Wulfstan pushes off. The current pulls you out across the flats to the wreck's broken hull."
+        with connect() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0])
+            harbour = world._upsert_location(conn, "The Harbour", "", parent_id=town, kind="")
+            world._upsert_location(conn, "The Wrecked Skiff", "A half-sunken ship in the mudflats.")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(harbour),))
+            result = {"narration": prose, "player": {"move_to_location": "The Wrecked Skiff"}}
+            report = world.resolve_movement(conn, result, line, intent="travel", narration=prose)
+            self.assertIn("Wrecked Skiff", str(report.get("destination") or result["player"].get("move_to_location") or ""), report)
+            conn.rollback()
+
+
 class ThePlaceLeftIsNotTheDestination(unittest.TestCase):
     """8B run 146, T49: "I leave the flats ... and set off north" moved the player into The Flats."""
 

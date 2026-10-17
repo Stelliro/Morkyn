@@ -9522,6 +9522,31 @@ def _code_is_origin(text: str, start: int, end: int) -> bool:
     return bool(_ORIGIN_AFTER_RE.search(text[end: end + 60]))
 
 
+def _asked_only_in_speech(player_input: str, name: str) -> bool:
+    """The line names the place inside quotes and nowhere else."""
+    words = _place_words(name)
+    if not words:
+        return False
+    line = _player_line(player_input).lower()
+    if not _line_names_place(line, words):
+        return False
+    return not _line_names_place(venues.strip_speech(line), words)
+
+
+def _prose_shows_journey(narration: str, name: str, code: str) -> bool:
+    """The narration (not speech) sets the player off or brings them to the place."""
+    unspoken = _unspoken(narration)
+    if _prose_reaches(name, code, narration) or _prose_goes_toward(name, narration):
+        return True
+    if _player_departs(unspoken):
+        return True
+    return bool(re.search(
+        r"\byou\s+(?:\w+\s+){0,3}?(?:row|rows|rowed|sail|sails|sailed|push(?:es|ed)?\s+off|cast\s+off|set\s+(?:off|out)|"
+        r"climb(?:s|ed)?\s+(?:into|aboard)|step(?:s|ped)?\s+(?:into|aboard)|arrive[sd]?|reach(?:es|ed)?|land(?:s|ed)?)\b",
+        unspoken, re.I,
+    ))
+
+
 _POINTED_AT_RE = re.compile(
     r"\b(?:leads?|leading|led|runs?|running|winds?|winding|points?|pointing|heads?|heading|way|path|road|passage|"
     r"trail|track|stairs?|door|gate|steps?|toward|towards|bound\s+for|on\s+to|off\s+to)\s+(?:that\s+)?(?:[\w'’-]+\s+){0,6}?"
@@ -10154,6 +10179,16 @@ def resolve_movement(
     # The player's own words come first (7B run 5 #127): a known place their
     # line goes to, and the places it says they are not going.
     asked = _movement_destination_from_input(rows, player_input, current_name)
+    # A place asked for only in speech is a request, not a walk: '"Row me out
+    # to the wreck now."' moved the player to the wreck while the prose kept
+    # them on the dock talking (8B run 147, T26), and '"Row us back to the
+    # dock"' sent them to town while Wulfstan still hesitated in the skiff
+    # (T32). The move stands when the prose shows them set off or arrive.
+    if asked is not None and _asked_only_in_speech(player_input, str(asked["name"] or "")) and not _prose_shows_journey(
+        narration, str(asked["name"] or ""), str(asked["code"] or "")
+    ):
+        turn_ledger.note("movement", "spoken_request_not_shown", destination=str(asked["name"] or ""))
+        asked = None
     denied = _places_denied_in(rows, player_input)
     explicit_row = None
     if explicit_code:
@@ -14757,6 +14792,20 @@ def _prose_item_handed_over(text: str, name_l: str, tokens: list[str], *, owned:
 
 # A relative clause on a thing's origin: "the reckoner your mother gave you",
 # "a knife that Tam had handed you years ago".
+# A thing found or dug out where the player is, this turn.
+_FOUND_HERE_RE = re.compile(
+    r"\byou\s+(?:\w+ly\s+)?(?:find|found|spot|spotted|discover|discovered|uncover|uncovered|dig|dug|pull|pulled|haul|hauled|"
+    r"pry|pried|fish|fished|turn|turned)\b|\b(?:among|amid|half-buried|lying|strewn|tangled|wedged)\b",
+    re.I,
+)
+
+
+def prose_state_sentence_spans(text: str):
+    from app import prose_state
+
+    return prose_state.sentence_spans(text)
+
+
 _PROVENANCE_CLAUSE_RE = re.compile(
     r"\b(?:a|an|the|this|that)\s+(?:[\w'’-]+\s+){0,4}?(?:that|which|your|his|her|their)\s+(?:late\s+|own\s+|old\s+)?[\w'’-]+\s+"
     r"(?:once\s+|had\s+|['’]d\s+|first\s+|long\s+ago\s+)?(?:gave|handed|left|passed|bequeathed)\s+(?:to\s+)?you\b",
@@ -15580,8 +15629,18 @@ def _loss_shown(name: str, text: str) -> bool:
     plain = venues.strip_speech(str(text or ""))
     for sentence in re.split(r"(?<=[.!?])\s+|\n+", plain):
         low = sentence.lower()
-        if any(re.search(rf"\b{re.escape(t)}", low) for t in tokens if t) and _LOSS_VERB_RE.search(low):
-            return True
+        hits = [m for t in tokens if t for m in re.finditer(rf"\b{re.escape(t)}", low)]
+        if not hits:
+            continue
+        # The loss has to be the item's, not a word elsewhere in the sentence:
+        # "Your lantern flickers, casting long shadows across the broken beams"
+        # took the lantern out of the pack on "broken" (8B run 147, T30). The
+        # verb and the item stand within a few words of each other.
+        for verb in _LOSS_VERB_RE.finditer(low):
+            for hit in hits:
+                lo, hi = sorted((verb.start(), hit.start()))
+                if len(low[lo:hi].split()) <= 6:
+                    return True
     return False
 
 
@@ -15723,12 +15782,27 @@ def _filter_inventory_changes(
     # the two can never disagree about whether the player asked to take.
     acquire_intent = player_take_intent(str(player_input or ""))
     kept: list[dict[str, Any]] = []
+    # The same gain written twice in one turn is one gain: two GRANT "Rowing
+    # pole" lines put "Rowing pole x2" in the pack (8B run 147, T27). The first
+    # line stands; a repeat under the same name is the model repeating itself.
+    seen_gains: set[str] = set()
     for change in changes:
         if not isinstance(change, dict):
             continue
         name = _sanitize_item_name(str(change.get("name", "")))
         if not name:
             continue
+        gain_key = name.lower()
+        is_gain = _float(change.get("quantity_delta"), 0) > 0 or (
+            _float(change.get("quantity_delta"), 0) == 0
+            and str(change.get("quantity_band") or "").strip().lower() not in {"", "none", "zero", "0"}
+            and not str(change.get("quantity_band") or "").strip().startswith("-")
+        )
+        if is_gain:
+            if gain_key in seen_gains:
+                turn_ledger.note("inventory", "repeated_grant_dropped", item=name)
+                continue
+            seen_gains.add(gain_key)
         # A measure of another grant is not a second thing: GRANT "rope" and
         # GRANT "coil" for "a coil of rope" put "coil x1" beside the rope
         # (8B run 146, T88). The coil, flask or bundle of a thing granted this
@@ -15936,7 +16010,14 @@ def _filter_inventory_changes(
         # GRANT "ledger" beside the owned "Captain's Ledger" put "ledger x2" in
         # the pack (8B run 146, T22); every word of the grant in one owned
         # item's name is that item.
-        if named and not existing and not handed and not same_as_owned:
+        # Found here is a new one, whatever the pack holds under that name:
+        # "You find a bundle of tarred ropes ... You pocket the ropes" on the
+        # wreck was bound to the rope bought in town (8B run 147, T28).
+        found_here = any(
+            _sentence_mentions_item(s.lower(), name_l, tokens) and _FOUND_HERE_RE.search(s)
+            for _, _, s in prose_state_sentence_spans(venues.strip_speech(final_text))
+        )
+        if named and not existing and not handed and not same_as_owned and not found_here:
             same_as_owned = _owned_item_named(conn, tokens)
             if same_as_owned:
                 grounded = False

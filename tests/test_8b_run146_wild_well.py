@@ -117,6 +117,46 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertEqual(kept, [])
             conn.rollback()
 
+    def test_the_same_grant_twice_is_one_gain(self):
+        # 8B run 147, T27: two GRANT "Rowing pole" lines put "Rowing pole x2" in the pack.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = "You take the rowing pole from Wulfstan Orme's hand and lower yourself into the skiff. You grip the pole tightly."
+        line = "I take the rowing pole he offers and climb into the skiff."
+        with connect() as conn:
+            kept = world._filter_inventory_changes(
+                conn, [{"name": "Rowing pole", "quantity_band": "small"}, {"name": "Rowing pole", "quantity_band": "small"}],
+                narration=prose, player_input=line,
+            )
+            self.assertEqual([c["name"] for c in kept], ["Rowing pole"])
+            conn.rollback()
+
+    def test_ropes_found_on_the_wreck_are_new_beside_the_rope_bought_in_town(self):
+        # 8B run 147, T28: GRANT "Ropes" for the tarred ropes found aboard was bound to the owned "Rope".
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You find a bundle of tarred ropes, their ends frayed but intact, and a rusted iron anchor, its chain tangled "
+                 "with seaweed. You pocket the ropes and anchor, feeling the weight of them in your hands.")
+        line = "I search the wreck's deck and hull for anything the guild would count as salvage."
+        with connect() as conn:
+            conn.execute("DELETE FROM inventory")
+            conn.execute("INSERT INTO inventory (code, name, quantity) VALUES ('I92', 'Rope', 1)")
+            kept = world._filter_inventory_changes(conn, [{"name": "Ropes", "quantity_band": "moderate"}], narration=prose, player_input=line)
+            self.assertEqual([c["name"] for c in kept], ["Ropes"])
+            # Taking one's own thing back is still the owned one (8B run 146, T22).
+            conn.execute("INSERT INTO inventory (code, name, quantity) VALUES ('I93', 'Captain''s Ledger', 1)")
+            back = "You take the ledger back out of Wulfstan's hands and tuck it into your shirt."
+            kept = world._filter_inventory_changes(conn, [{"name": "ledger", "quantity_band": "small"}], narration=back,
+                                                    player_input="I take the ledger back out of Wulfstan's hands.")
+            self.assertEqual(kept, [])
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db
