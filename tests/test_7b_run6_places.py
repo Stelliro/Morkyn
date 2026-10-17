@@ -654,6 +654,39 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class ThePlaceNamedInPassingJoinsTheTown(unittest.TestCase):
+    """8B run 134, T3-T4: the Northern Trade Docks, named at T3 and walked to at T4, stayed outside the town."""
+
+    def test_the_docks_join_the_town(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            docks = world._upsert_location(conn, "Northern Trade Docks", "")
+            conn.execute("UPDATE locations SET visit_count = 1 WHERE id = ?", (docks,))
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (docks,))
+            world._adopt_new_place_into_town(conn, int(house), int(docks),
+                                             "I leave the tally house and walk down to the Northern Trade Docks.")
+            parent = conn.execute("SELECT parent_id FROM locations WHERE id = ?", (docks,)).fetchone()[0]
+        self.assertEqual(int(parent), 1)
+
+    def test_someone_passed_stands_in_the_town(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            docks = world._upsert_location(conn, "Northern Trade Docks", "")
+            conn.execute("UPDATE locations SET parent_id = 1 WHERE id = ?", (docks,))
+            prose = ("You walk toward the docks. You pass a water carrier named Tam Radley, his cart loaded with "
+                     "barrels. You reach the docks.")
+            world._ensure_npcs_from_narration(conn, {"narration": prose, "npcs": []}, prose, docks)
+            at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Tam Radley'").fetchone()[0]
+        self.assertEqual(int(at), 1)
+
+
 class AReplacedMoveLeavesNoPlaceBehind(unittest.TestCase):
     """8B run 132, T1: MOVE "Talleyman's Office" was replaced by the tally house; the office was still made."""
 
