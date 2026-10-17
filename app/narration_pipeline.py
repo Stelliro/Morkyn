@@ -1719,7 +1719,9 @@ def _words_from_player(span: str, own: str, quotes: list[str]) -> bool:
         # With typed quotes one shared word is not enough: '"Flat-runner. My
         # name is Isk. But what's in it for me?"' shared only "name" with
         # "...what's your name?" (7B run 28, T6).
-        if quotes and shared < 2 and len(str(span or "").split()) > 3:
+        # Short lines too: '"I'll take it."' shared only "take" with "how much
+        # does it take off?" and stood as the player's acceptance (8B run 136, T3).
+        if quotes and shared < 2:
             return False
         return shared * 2 >= len(stems)
     words = set(_speech_key(span).split())
@@ -1898,6 +1900,16 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                 while back > 0 and re.match(r"^you\b", units[back - 1], re.I) and not quoted_spans(units[back - 1]):
                     back -= 1
                 if 0 < back < first_quote and not any(_names_someone(u) for u in units[:first_quote]):
+                    lead = first_quote
+                # The player's own thoughts, then a bare line: 'The offer hangs
+                # between you ... You know the Wrecked Reach ... "I'll take it."'
+                # (8B run 136, T3). No he/she/they before it: only the player is there.
+                elif first_quote > 0 and all(bare[first_quote:]) and any(
+                    re.search(r"\byou\b", u, re.I) for u in units[:first_quote]
+                ) and not any(
+                    re.search(r"\b(?:he|she|they|his|her|their|him|them)\b", _outside_quotes(u), re.I)
+                    for u in units[:first_quote]
+                ):
                     lead = first_quote
             players_block = other_spoke and 0 < lead < len(units) and all(bare[lead:])
             # No one but the player in the sentences before the line: theirs even
