@@ -7268,6 +7268,16 @@ def _asked_building_phrase(player_input: str, narration: str) -> str:
     return " ".join(w[:1].upper() + w[1:] for w in phrase.split())
 
 
+_PASSED_PLACE_RE = re.compile(
+    r"\b(?:pass(?:es|ed|ing)?|past|beyond|by)\s+(?:the\s+)?[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,3}(?:\s*\[\[[A-Z0-9]+\]\])?"
+)
+
+
+def _without_passed_places(text: str) -> str:
+    """The text with each place only passed on the way ("past the Stall [[L2]]") blanked."""
+    return _PASSED_PLACE_RE.sub(" ", str(text or ""))
+
+
 def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=None, player_input: str = "") -> dict[str, Any] | None:
     """The building the prose walked the player into with no MOVE, made a real venue.
 
@@ -7314,7 +7324,10 @@ def _venue_shown_in_prose(conn, result: dict[str, Any], narration: str, here=Non
         if re.search(r"\b(?:into|inside|enter\w*|through\s+to|(?:to|into)\s+the\s+back\s+of|step\w*\s+in)\b", s, re.I)
         and re.search(r"\byou\b", s, re.I)
     ]
-    entry_text = " ".join(entry_sentences)
+    # A place passed on the way in is not the one entered: "You step past the
+    # Collapsed Market Stall [[L2]] and into the salvage yard" stood the player
+    # in the stall (8B run 137, T1).
+    entry_text = _without_passed_places(" ".join(entry_sentences))
     named_here = [
         row for row in rows
         if (row["code"] and f"[[{str(row['code']).upper()}]]" in entry_text)
@@ -10073,9 +10086,7 @@ def resolve_movement(
             # MOVE "Talleyman's Office" was replaced by the tally house asked for,
             # but the venue rules had already made the office, left empty
             # (8B run 132, T1).
-            shown_prose = re.sub(
-                r"\b(?:pass(?:es|ed|ing)?|past|beyond|by)\s+(?:the\s+)?[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,3}(?:\s*\[\[[A-Z0-9]+\]\])?",
-                " ", _unspoken(narration)).lower()
+            shown_prose = _without_passed_places(_unspoken(narration)).lower()
             if resolved is None and shown_prose.strip() and humanize_place_name(explicit_name).lower() not in shown_prose:
                 early = _player_place_over_unshown_move(conn, player_patch, player_input, narration, current_code, explicit_name)
                 if early:
@@ -10097,9 +10108,7 @@ def resolve_movement(
             # "Saltmarrow Stables" for "You pass the Saltmarrow Stables [[L2]]"
             # on the way to the tally house stood the player in the stables
             # (8B run 116, T1).
-            prose = re.sub(
-                r"\b(?:pass(?:es|ed|ing)?|past|beyond|by)\s+(?:the\s+)?[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,3}(?:\s*\[\[[A-Z0-9]+\]\])?",
-                " ", _unspoken(narration)).lower()
+            prose = _without_passed_places(_unspoken(narration)).lower()
             dest_name = str(report.get("destination") or explicit_name)
             if prose.strip() and dest_name.lower() not in prose and not venues.entry_in_prose(narration):
                 report["prose_mismatch"] = dest_name

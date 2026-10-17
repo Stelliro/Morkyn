@@ -815,6 +815,25 @@ class Run37Planks(unittest.TestCase):
         self.assertFalse(shown["minted"])
 
 
+class APlacePassedIsNotEntered(unittest.TestCase):
+    """8B run 137 T1: 'You step past the Collapsed Market Stall [[L2]] and into the salvage yard' stood the player in the stall."""
+
+    def test_passed_stall_is_not_the_venue(self):
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            here = conn.execute("SELECT current_location_id FROM player").fetchone()[0]
+            stall = world._upsert_location(conn, "Collapsed Market Stall", "", parent_id=here, kind="market_stall")
+            code = conn.execute("SELECT code FROM locations WHERE id = ?", (stall,)).fetchone()[0]
+            prose = (f"You step past the Collapsed Market Stall [[{code}]] and into the salvage yard. "
+                     "You make your way toward the tally house. Inside, the tally house is dim and cramped.")
+            shown = world._venue_shown_in_prose(conn, {"npcs": []}, prose, player_input="I walk to the tally house.")
+        self.assertTrue(shown is None or shown.get("name") != "Collapsed Market Stall")
+
+
 class OptionListAfterAQuote(unittest.TestCase):
     """Run 38 T0: the list's lead-in took the question before it, and the line was left unclosed."""
 
