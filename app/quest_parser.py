@@ -383,6 +383,14 @@ def quest_parse_gate(
             words = _title_words(str(quest.get("title") or ""))
             if words and sum(1 for w in words if w in low) >= max(1, min(2, len(words))):
                 return "open_quest_named"
+            # The step the player is on, not only the title: "Dredging the
+            # Drowned Town" was being worked ("pull at the remnants of what was
+            # once a ship ... the wreckage is scattered") and the gate stayed
+            # shut, so the progress check never ran (8B run 142, T4).
+            step = str(quest.get("current_objective") or quest.get("current_step_title") or "")
+            step_words = {w for w in _title_words(step) if len(w) >= 5}
+            if step_words and sum(1 for w in step_words if w in low) >= min(2, len(step_words)):
+                return "open_quest_step_named"
     return ""
 
 

@@ -17506,7 +17506,7 @@ def _run_quest_parser(
             # QUEST marks were read as hints above; only the narrator's
             # QUEST_DONE / QUEST_UPDATE marks still merge, and validate_quest_changes
             # holds them to the same evidence as any other update.
-            done_marks = [m for m in marks if str(m.get("op") or "").upper() != "QUEST"]
+            done_marks = qo.marks_to_merge(marks, mode)
             changes = qp.merge_marks({**parsed, "_parser_ran": True, "source": "checked"}, done_marks)
         elif mode == "checked":
             changes = dict(parsed, source="checked")

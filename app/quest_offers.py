@@ -465,6 +465,23 @@ def run_offer_pass(
     return report
 
 
+def marks_to_merge(marks: list[dict[str, Any]] | None, mode: str) -> list[dict[str, Any]]:
+    """
+    The narrator marks the engine may still fold in after the offer pass.
+
+    In checked mode a QUEST mark was already read as a hint to a spoken line
+    (find_offer_candidates) and never becomes a card on its own, so only the
+    QUEST_DONE / QUEST_UPDATE marks remain to merge, and validate_quest_changes
+    holds those to the same evidence as any other update. The 8B run 142 T2
+    showed the apply step merging a bare "Salvage Contract" mark after the
+    offer pass had already decided; both merge points use this one rule.
+    """
+    rows = [m for m in marks or [] if isinstance(m, dict)]
+    if str(mode or "") != "checked":
+        return rows
+    return [m for m in rows if str(m.get("op") or "").upper() != "QUEST"]
+
+
 # ---------------------------------------------------------------------------
 # Progress: a step of an active job shown finished in the prose
 # ---------------------------------------------------------------------------

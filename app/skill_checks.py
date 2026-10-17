@@ -1661,7 +1661,13 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
      r"handling|break|breaking)"
      r"\s+(?:\w+\s+){0,2}?(?:animal|animals|horse|horses|mare|mule|mules|pony|ponies|donkey|ox|oxen|goat|goats|sheep|"
      r"cow|cows|cattle|hound|hounds|dog|dogs|flock|beast|beasts|mounts))\b", "animal_handling"),
-    (r"\b(farm|crop|harvest|plow|soil)\b", "farming"),
+    # The craft nouns alone are not the craft (#102 class, 8B run 142 T5: "I
+    # carry the rusted compass ... back up to the tally house" rolled
+    # navigation and hurt the player). A farm walked across, a map pocketed, a
+    # compass carried, a mechanism looked at name a thing; the check wants the
+    # thing used: the skill's own verb, or a using verb on the thing.
+    (r"\b(?:farm(?:s|ing|ed)\s+(?:the|a|this|our|my|his|her)\b|(?:plow|plough|till|sow|reap|harvest|weed|hoe)(?:s|ing|ed)?\b|"
+     r"(?:tend|tending|tends|work|working|works|turn|turning|turns)\s+(?:the|a|this|our|my)\s+(?:\w+\s+)?(?:fields?|crops?|soil|furrows?|rows?|beds?))\b", "farming"),
     # "mine" is usually the possessive ("round Tam's waist, then round mine",
     # playtest #102): only the verb with an object, or the word alone, is mining.
     # A tunnel named is not one dug: "feel which way the tunnel runs" rolled
@@ -1670,9 +1676,19 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
      r"\btunnel(?:s|ing|led|ling)?\s+(?:through|into|under|out)\b|"
      r"\b(?:dig|digs|digging|shore|shores|shoring|brace|braces|bracing|cut|cuts|cutting|widen|widens|widening)\s+"
      r"(?:up\s+)?(?:the|a|an|this|that|our|my)\s+(?:\w+\s+)?tunnels?\b)", "mining"),
-    (r"\b(map|chart|survey|cartograph[a-z]*)\b", "cartography"),
-    (r"\b(navigat[a-z]*|stars|compass|bearing|dead reckon)\b", "navigation"),
-    (r"\b(tinker|gadget|mechanism|jury[- ]?rig)\b", "tinkering"),
+    (r"\b(?:cartograph[a-z]*|survey(?:s|ing|ed)?\s+(?:the|a|this|that|our)\b|"
+     r"(?:draw|draws|drawing|drew|sketch(?:es|ing|ed)?|make|makes|making|made|update|updates|updating|copy|copies|copying|"
+     r"correct|corrects|correcting|mark|marks|marking|redraw|redraws|redrawing)\s+(?:\w+\s+){0,2}?(?:maps?|charts?)\b|"
+     r"(?:map|maps|mapping|mapped|chart|charts|charting|charted)\s+(?:out\s+)?(?:the|a|this|these|our|every|each)\b)", "cartography"),
+    (r"\b(?:navigat[a-z]*|dead[ -]reckon[a-z]*|tak(?:e|es|ing)\s+(?:a|the|our|my)\s+bearings?|"
+     r"(?:read|reads|reading|use|uses|using|check|checks|checking|consult|consults|consulting|follow|follows|following|"
+     r"steer|steers|steering|by)\s+(?:\w+\s+){0,2}?(?:compass|stars)\b|"
+     r"(?:plot|plots|plotting|chart|charts|charting|find|finds|finding|work(?:s|ing)?\s+out|fix|fixes|fixing)\s+(?:\w+\s+){0,2}?"
+     r"(?:course|route|heading|position|bearings?)\b)", "navigation"),
+    (r"\b(?:tinker[a-z]*|jury[- ]?rig[a-z]*|"
+     r"(?:fix|fixes|fixing|mend|mends|mending|repair|repairs|repairing|rig|rigs|rigging|open|opens|opening|take|takes|taking|"
+     r"pull|pulls|pulling|build|builds|building|wind|winds|winding|adjust|adjusts|adjusting)\s+(?:\w+\s+){0,2}?"
+     r"(?:gadget|gadgets|mechanism|mechanisms|device|devices|clockwork|gears?|springs?|cogs?|contraption)\b)", "tinkering"),
     (r"\b(drive|pilot|steer|sail)\b", "vehicles"),
     (r"\b(history|lineage|old war|who ruled)\b", "history"),
     (r"\b(nature|plant|beast ecology|weather pattern)\b", "nature"),
