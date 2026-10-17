@@ -192,6 +192,30 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertNotIn("Mira Venn", [n["name"] for n in kept])
             conn.rollback()
 
+    def test_taking_a_posted_job_costs_nothing(self):
+        # 8B run 147, T67: "I'll take it" had the prose hand the giver the job's own fifteen gold.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You hand over fifteen gold to Mira Venn, and she nods, a thin smile playing at her lips. \"The contract is "
+                 "for a wrecked boat near the mudflats,\" she says.")
+        line = "\"Fifteen gold for the mudflats contract. I'll take it.\" I ask Mira what exactly is to be salvaged."
+        with connect() as conn:
+            conn.execute(
+                "INSERT INTO quests (code, title, status, reward_gold) VALUES ('Q4', 'Salvage Contract Near Mudflats', 'offered', 15)"
+            )
+            result = {"narration": prose, "player": {}}
+            note = world._settle_stated_gold(result, line, conn=conn)
+            self.assertEqual((note or {}).get("source"), "accept_is_no_payment", note)
+            self.assertNotIn("gold_delta", result["player"])
+            # A real purchase of another sum still pays.
+            result = {"narration": "You hand over three gold to Mira Venn for the chart.", "player": {}}
+            note = world._settle_stated_gold(result, "I pay Mira three gold for the chart.", conn=conn)
+            self.assertEqual(result["player"].get("gold_delta"), -3, note)
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db

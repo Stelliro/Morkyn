@@ -21516,6 +21516,19 @@ def _money_moves_in(sentence: str) -> bool:
     return False
 
 
+def _accept_pays_nothing(conn, own: str, paid: int) -> bool:
+    """The player's line says yes to a job, and the sum paid is what some open job pays."""
+    try:
+        from app.quest_parser import player_accepts
+
+        if not player_accepts(own):
+            return False
+        rows = conn.execute("SELECT reward_gold FROM quests WHERE status IN ('offered', 'active')").fetchall()
+    except Exception:
+        return False
+    return any(int(_float(r[0], 0)) == int(paid) for r in rows if r is not None)
+
+
 def _settle_stated_gold(
     result: dict[str, Any], player_input: str, *, conn=None, quest_pays: bool = False
 ) -> dict[str, Any] | None:
@@ -21583,6 +21596,17 @@ def _settle_stated_gold(
     offer = prose_state.player_trade_offer(own)
     paid_once = said["paid"][0] if len(said["paid"]) == 1 and not said["received"] else None
     mentioned = prose_state.coin_mentions(narration)
+    # Taking a job costs nothing: '"Fifteen gold for the mudflats contract. I'll
+    # take it."' had the prose write "You hand over fifteen gold to Mira Venn"
+    # and the purse lost the job's own reward on the accept (8B run 147, T67).
+    # A payment to the giver of the sum a job offers, on a line that says yes,
+    # is the model inverting who pays.
+    if paid_once is not None and conn is not None and _accept_pays_nothing(conn, own, paid_once):
+        player.pop("gold_delta", None)
+        player.pop("gold_band", None)
+        result["player"] = player
+        turn_ledger.note("gold", "accept_is_no_payment", stated=paid_once)
+        return {"source": "accept_is_no_payment", "gold_delta": 0, "offer": None}
     value: int | None = None
     source = ""
     if not (band or raw) and offer is None and paid_once is None:
