@@ -2326,6 +2326,31 @@ class APlainTitleIsNoOneJob(unittest.TestCase):
         self.assertIsNotNone(qp._is_duplicate(docks, ex, 1, ""))
 
 
+class ALineGivenThePlayerIsNoOffer(unittest.TestCase):
+    """8B run 140 T1: 'You say, "I need to speak with the tallyman about work to pay my debt."' became a job."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman "
+            "what work he'll take against my debt.")
+    PROSE = ("You make your way toward the tally house. A man with a grizzled beard sits behind a desk, his fingers "
+             "tapping a ledger. You step forward, your voice steady despite the weight of your debt. You say, "
+             "\"I need to speak with the tallyman about work to pay my debt.\"")
+
+    def test_players_line_is_no_offer(self):
+        from app import quest_parser as qp
+
+        ev = "I need to speak with the tallyman about work to pay my debt."
+        npc = {"id": 1, "code": "A", "name": "Thorne", "role": "Tallyman"}
+        self.assertTrue(qp._said_by_player(ev, self.PROSE))
+        self.assertFalse(qp.judge_offer(ev, self.PROSE, self.LINE, offer_line=ev, giver=npc, npcs=[npc])["ok"])
+
+    def test_the_givers_line_still_offers(self):
+        from app import quest_parser as qp
+
+        prose = self.PROSE + " \"I need someone to haul the nets off the old pier,\" he says. \"Two coppers a load.\""
+        ev = "I need someone to haul the nets off the old pier."
+        self.assertFalse(qp._said_by_player(ev, prose))
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:

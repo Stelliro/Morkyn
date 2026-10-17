@@ -759,6 +759,27 @@ _PLAYER_OWES_RE = re.compile(
 )
 
 
+def _said_by_player(quote: str, narration: str) -> bool:
+    """The prose gives this line to the player: 'You say, "I need to speak with
+    the tallyman about work to pay my debt."' became the tallyman's job offer
+    (8B run 140, T1). The quote may come with its tag ('You say, "..."')."""
+    from app.narration_pipeline import _QUOTE_SPAN_RE, _speaker_of
+
+    text = str(narration or "")
+    spoken = [m.group(1) or m.group(2) or "" for m in _QUOTE_SPAN_RE.finditer(str(quote or ""))] or [str(quote or "")]
+    flat = _ws(spoken[0]).strip(" \"'“”.,;:!?").lower().replace("’", "'")
+    head = re.split(r"[,.;:!?—–-]", flat, maxsplit=1)[0].strip()
+    if len(head) < 12:
+        return False
+    prev_end = 0
+    for m in _QUOTE_SPAN_RE.finditer(text):
+        inner = _ws(m.group(1) or m.group(2) or "").lower().replace("’", "'")
+        if head in inner and _speaker_of(text, m.start(), m.end(), prev_end) == "player":
+            return True
+        prev_end = m.end()
+    return False
+
+
 def _players_words_only(evidence: str, offer_line: str, player_input: str, narration: str = "") -> bool:
     """The parser's quote and offer line are the player's own words, or the prose retelling them ("You ...")."""
     own = _ws(str(player_input or "")).lower()
@@ -777,7 +798,10 @@ def _players_words_only(evidence: str, offer_line: str, player_input: str, narra
 
     def _players(text: str) -> bool:
         flat = _ws(str(text or "")).strip(" \"'“”.,;:!?").lower()
-        return not flat or flat in own or (bool(re.match(r"^\W*you\b", flat)) and not _spoken_to_player(flat))
+        return (
+            not flat or flat in own or (bool(re.match(r"^\W*you\b", flat)) and not _spoken_to_player(flat))
+            or _said_by_player(flat, narration)
+        )
 
     return _players(evidence) and _players(offer_line)
 
@@ -835,7 +859,7 @@ def judge_offer(
     if offer_line and evidence_found(offer_line, narration, player_input):
         for sentence in _quote_sentences(offer_line, narration) or [offer_line]:
             # The player's own question is no offer line either (8B run 76, T2).
-            if bare(sentence) and bare(sentence) in own_flat:
+            if bare(sentence) and (bare(sentence) in own_flat or _said_by_player(sentence, narration)):
                 continue
             if not _NO_WORK_RE.search(sentence) and (
                 _JOB_RE.search(_offer_text(sentence)) or _ACCEPTS_WORK_RE.search(sentence)
