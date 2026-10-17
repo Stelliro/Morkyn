@@ -21777,6 +21777,21 @@ def _reconcile_prose_with_state(
     # person are mended; anything shared with someone else stays as written.
     try:
         cast, not_people = _pinned_cast(conn)
+        # A pin the story keeps contradicting flips to the story: two or more
+        # named sentences this turn in the other set and none in the pinned one
+        # (Elara Veyne, pinned "he" from one mixed sentence, mended to "his" in
+        # every scene; 8B run 146, T76-T83). Reconcile the state to the prose.
+        for person in cast:
+            evidence = prose_state.pronoun_evidence(text, person["names"])
+            other = "she" if person["key"] == "he" else "he"
+            if evidence.get(other, 0) >= 2 and evidence.get(person["key"], 0) == 0:
+                try:
+                    conn.execute("UPDATE npcs SET pronouns = ? WHERE name = ?", (other, person["names"][0]))
+                except Exception:
+                    continue
+                person["key"] = other
+                turn_ledger.note("npc", "pronoun_pin_flipped_to_prose", name=person["names"][0], pronouns=other,
+                                 evidence=evidence)
         text, mended = prose_state.repair_pinned_pronouns(text, cast, not_people=not_people)
         for entry in mended:
             report["trimmed"].append({"why": "pronouns_kept", **entry})
