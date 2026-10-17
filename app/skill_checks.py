@@ -1386,11 +1386,13 @@ def resolve_check(
             # mud (8B run 8, T1). It stays a bad miss, with no blunder.
             mishap = False
             degree = "bad_nothing" if not fumble else degree
-        elif str(skill.get("category") or "") == "mental" and not tool:
+        elif str(skill.get("category") or "") in {"mental", "craft"} and not tool:
             # Looking, searching and recalling break no bones: "Botched
             # Perception: you hurt your leg" for sweeping the dust around a well
             # for footprints (8B run 146, T57). A bad miss finds nothing; only a
-            # tool in hand (a lockpick, a lens) can hurt its user.
+            # tool in hand (a lockpick, a lens) can hurt its user. The same for a
+            # craft with no tool named: "Botched Cartography: you hurt your side"
+            # for laying a marked map on a desk (8B run 147, T81).
             mishap = False
             degree = "bad_nothing" if not fumble else degree
         elif social:
