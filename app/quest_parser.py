@@ -1465,6 +1465,14 @@ def validate_quest_changes(
         # guild has jobs, and jobs pay debts" filed "Work Off Winter's Credit"
         # with the one step "Ask for the job details" (8B run 131, T2).
         step_titles = [str((s or {}).get("title") or "") for s in (raw.get("steps") or []) if isinstance(s, dict)]
+        # Or the offer is only a demand to prove oneself: "You'll have to prove
+        # yourself." filed "Prove Yourself to the Guild" (8B run 132, T2).
+        if not reasons and re.fullmatch(
+            r"\W*(?:but\s+)?you(?:['’]ll|\s+will|['’]d|\s+would)?\s+(?:have|need|got)\s+to\s+(?:prove|show)\s+"
+            r"(?:yourself|your\s+worth|your\s+mettle|you(?:['’]re|\s+are)\s+worth\s+it)(?:\s+first)?\W*",
+            str(offer_line or evidence or ""), re.I,
+        ):
+            reasons.append("no_task_named_yet")
         if not reasons and step_titles and all(
             (re.match(r"\s*(?:ask|inquire|enquire|find\s+out|learn|speak|talk)\b", t, re.I)
              and re.search(r"\b(?:job|work|task|details?|terms)\b", t, re.I))

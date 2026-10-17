@@ -654,6 +654,28 @@ class AnUnshownKnownPersonStaysPut(unittest.TestCase):
         self.assertEqual(int(mara["location_id"]), int(bay))
 
 
+class AReplacedMoveLeavesNoPlaceBehind(unittest.TestCase):
+    """8B run 132, T1: MOVE "Talleyman's Office" was replaced by the tally house; the office was still made."""
+
+    LINE = ("Before the tide turns I walk up into town to the salvage guild's tally house to ask the tallyman what "
+            "work he'll take against my debt.")
+    PROSE = ("You push through the mudflats until the edge of the drowned town comes into view. The salvage guild’s "
+             "tally house stands at the heart of it. You step inside, the door groaning as it gives way.\n\nInside, "
+             "the tallyman is a man with a face like weathered leather.")
+
+    def test_no_office(self):
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            result = {"player": {"move_to_location": "Talleyman's Office"}, "narration": self.PROSE}
+            report = world.resolve_movement(conn, result, self.LINE, intent="travel", narration=self.PROSE)
+            names = [r[0] for r in conn.execute("SELECT name FROM locations")]
+        self.assertIn("tally house", str(report.get("destination") or "").lower(), report)
+        self.assertNotIn("Talleyman's Office", names)
+
+
 class APassedSignIsNotTheDoorGoneIn(unittest.TestCase):
     """8B run 122, T1: the sign of The Lame Wheel Smithy, passed, opened the smithy as the place walked into."""
 
