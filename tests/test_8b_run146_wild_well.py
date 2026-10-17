@@ -77,6 +77,28 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertEqual(sorted(c["name"] for c in kept), ["lamp oil", "rope"])
             conn.rollback()
 
+    def test_holding_up_an_owned_thing_takes_no_second_one(self):
+        # 8B run 146, T98: GRANT "Captain's Ledger" while the player held up their own made it x2.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You lower the spike and hold up the Captain's Ledger in the flickering light of the oil lamp. The paper is "
+                 "brittle, its edges curled with age, but the ink remains legible.")
+        line = "I lower the spike and hold up the Captain's Ledger in the lantern light. \"I am no scavenger.\""
+        with connect() as conn:
+            conn.execute("INSERT INTO inventory (code, name, quantity) VALUES ('I9', 'Captain''s Ledger', 1)")
+            kept = world._filter_inventory_changes(conn, [{"name": "Captain's Ledger", "quantity_band": "small"}],
+                                                    narration=prose, player_input=line)
+            self.assertEqual(kept, [])
+            # Another one handed over still arrives.
+            handed = "Rolf hands you a second ledger, its cover stamped with the Captain's mark. You take the ledger."
+            kept = world._filter_inventory_changes(conn, [{"name": "ledger", "quantity_band": "small"}],
+                                                    narration=handed, player_input="I take it.")
+            self.assertEqual([c["name"] for c in kept], ["ledger"])
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db

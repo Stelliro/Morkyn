@@ -15881,6 +15881,13 @@ def _filter_inventory_changes(
         narrated_take = player_take_intent(venues.strip_speech(str(player_input or "")))
         arrived = (outcome == "gain" and not taken_unasked) or (outcome is None and narrated_take and line_names_it)
         grounded = named and arrived
+        # A thing already owned grows only when the prose shows another one
+        # arrive: "hold up the Captain's Ledger in the lantern light" with GRANT
+        # "Captain's Ledger" made it x2 (8B run 146, T98). Handling, showing or
+        # holding what is already in the pack takes nothing.
+        if grounded and existing and outcome != "gain":
+            grounded = False
+            turn_ledger.note("inventory", "owned_item_handled_not_gained", item=name)
         # A job, a wage or a deal is not a thing to carry (7B run 7, T2: GRANT
         # "deck work" put "deck work x1" in the pack). Only the head noun is
         # read, and a thing the prose shows handed over still stands ("a work
