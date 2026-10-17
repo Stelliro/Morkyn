@@ -516,6 +516,27 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AnEchoGoesAnAnswerStays(unittest.TestCase):
+    """8B run 128, T3: a bare "The docks." echo stayed; the answer "The docks are under the Reeve." could go."""
+
+    LINE = '"The docks, then. I will take it." I watch his tapping fingers. "Who do I report to there, and what does a day take off my debt?"'
+
+    def test_the_echo_goes(self):
+        from app.narration_pipeline import keep_player_words
+
+        draft = ("The docks. You take it. You ask who you report to there, and what a day takes off your debt. "
+                 "Eldric Vane taps the desk.")
+        out, _ = keep_player_words(draft, self.LINE)
+        self.assertNotIn("The docks. ", out.split("you ask.")[-1])
+        self.assertIn("Eldric Vane taps the desk.", out)
+
+    def test_the_answer_stays(self):
+        from app.narration_pipeline import keep_player_words
+
+        out, _ = keep_player_words('Eldric Vane taps the desk. "The docks are under the Reeve."', self.LINE)
+        self.assertIn('"The docks are under the Reeve."', out)
+
+
 class ASentenceInsideAQuoteIsSpeech(unittest.TestCase):
     """8B run 127, T2: the middle sentence of the tallyman's quote was cut as the player acting."""
 

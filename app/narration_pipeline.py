@@ -2186,8 +2186,17 @@ def _drop_retold_lines(body: str, quotes: list[str], own_line: str = "") -> tupl
     out: list[str] = []
     for sentence in re.split(r"(?<=[.!?])\s+", body):
         low = sentence.lower().replace("’", "'")
-        if re.search(r"[\"“”]", sentence) or not re.match(r"\W*you\b", low):
+        if re.search(r"[\"“”]", sentence):
             out.append(sentence)
+            continue
+        if not re.match(r"\W*you\b", low):
+            # A bare echo of a line: "The docks." after '"The docks, then. I will
+            # take it," you say.' (8B run 128, T3).
+            bits = {w for w in re.findall(r"[a-z']+", low) if len(w) >= 3} - {"the", "and"}
+            if bits and len(re.findall(r"[a-z']+", low)) <= 3 and any(bits <= key for key in keys):
+                dropped.append(sentence[:160])
+            else:
+                out.append(sentence)
             continue
         words = {w for w in re.findall(r"[a-z']+", low) if len(w) >= 3 or w == "you"} - {"you", "your", "the", "and"}
         if not words:
@@ -2885,7 +2894,14 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
             )
             if not (span["speaker"] == "player" or after_whole):
                 continue
-            if not any(_quote_matches(span["inner"], p) in ("exact", "near") for p in pieces):
+            # A near match is a repeat only at about the piece's length: "The docks
+            # are under the Reeve." answers "The docks, then." (8B run 128, T3).
+            span_words = len(_speech_key(span["inner"]).split())
+            if not any(
+                _quote_matches(span["inner"], p) == "exact"
+                or (_quote_matches(span["inner"], p) == "near" and span_words <= len(_speech_key(p).split()) + 2)
+                for p in pieces
+            ):
                 continue
             tail = re.match(r"\s*,?\s*you\s+(?:\w+ly\s+)?(?:say|said|ask|asked|add|added|reply|replied)\b[^.!?\"“”]*[.!?]?",
                             body[span["end"]:])
