@@ -108,6 +108,16 @@ class AKickUpwardIsNoBlow(unittest.TestCase):
         self.assertNotEqual(world._turn_intent(line)[0], "combat")
         self.assertNotEqual(action_kind_from_text(line), "combat")
 
+    def test_the_blade_striking_mud_is_no_blow(self):
+        # 8B run 146, T11: "until the blade strikes something solid" rolled melee vs the crewman.
+        from app import world
+        from app.skill_checks import infer_check_from_action
+
+        line = "I work the hollow with the oar until the blade strikes something solid, then kneel and dig it out of the silt with my hands."
+        self.assertNotEqual(world._turn_intent(line)[0], "combat")
+        check = infer_check_from_action(line, {})
+        self.assertNotEqual((check or {}).get("skill_code"), "melee")
+
     def test_kicking_a_man_still_is(self):
         from app import world
         from app.player_resources import action_kind_from_text

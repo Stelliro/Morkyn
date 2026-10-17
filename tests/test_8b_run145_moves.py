@@ -18,9 +18,26 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+sys.path.insert(0, str(ROOT / "tools"))
+from playtest_setup_presets import isolated_data_env  # noqa: E402
+
 _TMP = Path(tempfile.mkdtemp(prefix="morkyn-run145-moves-"))
-os.environ.setdefault("AI_RPG_DB", str(_TMP / "world.db"))
-os.environ.setdefault("AI_RPG_CAMPAIGN_SLOTS", str(_TMP / "slots"))
+_ENV = isolated_data_env(str(_TMP))
+_SAVED_ENV: dict[str, str | None] = {}
+
+
+def setUpModule():
+    _SAVED_ENV.update({key: os.environ.get(key) for key in _ENV})
+    os.environ.update(_ENV)
+
+
+def tearDownModule():
+    for key, value in _SAVED_ENV.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
 
 from app.world import _unasked_unshown_move  # noqa: E402
 
@@ -75,6 +92,25 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
             report = world.resolve_movement(conn, result, line, intent="conversation", narration=prose)
             self.assertNotEqual((report or {}).get("rule"), "venue_exit", report)
             self.assertFalse(result["player"].get("move_to_location"), report)
+            conn.rollback()
+
+    def test_a_walk_inside_a_trade_line_still_resolves(self):
+        # T45: "We row back to the dock ... carry the box up through town to the tally house and set it on the desk"
+        # was a trade turn by its words and the walk was never resolved.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        line = ("We row back to the dock with the box and the day's salvage. I carry the box up through town to the tally house "
+                "and set it on the desk before Hugh to be counted and marked to my credit.")
+        with connect() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player").fetchone()[0])
+            world._upsert_location(conn, "Salvage Guild's Tally House", "", parent_id=town, kind="")
+            wreck = world._upsert_location(conn, "Wreck Site at Bay Mouth", "", parent_id=town, kind="")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(wreck),))
+            self.assertNotEqual(world._turn_intent(line)[0], "travel")
+            self.assertEqual(world._movement_intent(conn, line), "travel")
             conn.rollback()
 
     def test_a_journey_keeps_the_models_destination(self):
