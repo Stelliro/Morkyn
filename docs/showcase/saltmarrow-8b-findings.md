@@ -320,6 +320,43 @@ only from run 146.
 - Cost: a turn with a candidate line made 2 asks (about 7 s + 3 s); the fill once echoed the
   request shape back (13 s, nothing filed).
 
+### Run 146 (2026-10-18): the first 100-turn 8B run, under the skip-and-log rule
+
+Run 146 reached T100 (Saltmarrow setup, Qwen3 8B, 16k context, 13-65 s a turn) without a
+restart. It is not the clean run: about one state fault every two turns on the code it started
+with, each logged in docs/showcase/run-fault-log-2026-10-18.md (F62-F74 and continuations) and
+most fixed by class in commits a018619, 8483794, 6fd9c77, 4ad3bf7, 5000d4a, bc1f658 while the
+run went on. The server kept the code it started with, so faults seen after each fix on this
+run are expected and prove nothing either way; run 147 is the check.
+
+Fixed by class this run (each with the live line as a test):
+
+- Movement: the place left is no destination ("I leave the flats"); a plan for later is no walk
+  ("meet me at the Old Wharf at first light"); a question told names no destination ("ask what a
+  chart of the Mire's Breath would cost"); a place only pointed at is not reached ("a passage that
+  leads to the Edge of the Flats"); a new place the turn never shows is not stored; a venue opens
+  only in a settlement (the clearing's well); a wild place has no parts.
+- Checks: another's verb rolls nothing ("the tide covers them"), blows still roll whoever strikes;
+  looking breaks no bones; the one addressed rolls first; a name asked after is no opponent.
+- People: a name said of someone absent makes no person ("no sign of Rolf Joliffe"); a
+  sentence-opening conjunction is no name ("And Veyra"); a pronoun before a name used as an
+  object is not pinned to it; a pin the story keeps contradicting flips to the story (Elara).
+- Coin and things: compound sums are one number ("forty-six"); a payment shown beats a gain op;
+  the player's own coin backs no gain; a coil of rope is the rope; a thing already owned grows
+  only when another arrives; abstract grants refused; a promise to pay backs no gain.
+- Jobs: a yes that waits on terms is no yes; a "convince X" step needs X's yes before the
+  progress check is asked; a card from the player's own words is dropped.
+
+Logged, not fixed (see the fault log): the companion who sets out with the player stays behind
+in the save (F74); the storekeeper of a place just entered is absent to the scene record (F2
+cont. 3); a figure noun as addressee ("the woman"); a chart bought and stowed never enters the
+pack and nothing says why (F23 cont.); the Elara pin should come from the roster at mint.
+
+What the engine did right all run: the offer pass filed two real jobs (Elara's at T83) and
+refused the non-tasks; typed accepts worked; invented player speech was cut in most turns;
+model gold, xp and karma gains with nothing behind them were dropped at nearly every turn;
+every abstract or unshown grant after T43 was refused.
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
