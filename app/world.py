@@ -9608,12 +9608,15 @@ def _movement_destination_from_input(rows: list[Any], player_input: str, current
         # I set the anchor" left the player at the harbour while the prose worked
         # at The Wrecked Skiff (8B run 147, T39-T40). The noun's stem has to sit
         # in exactly one known place's name, after a reaching word.
-        for m in re.finditer(r"\b(?:reach(?:es|ed|ing)?|at|to|into|onto|aboard|beside|under|alongside)\s+the\s+([a-z]{4,})\b", lowered):
-            stem = m.group(1)[:5]
+        # Reached, not headed for: "head back to the ford" names the ford as the
+        # aim, and the same-place test on the model's MOVE still has to run.
+        for m in re.finditer(r"\b(?:reach(?:es|ed|ing)?|arriv\w*\s+at|at|into|onto|aboard|beside|under|alongside)\s+the\s+([a-z]{4,})\b", lowered):
+            noun = m.group(1)
+            forms = {noun, noun + "s", noun + "ed", noun.rstrip("s"), noun.rstrip("s") + "ed"}
             homes = [
                 row for row in rows
                 if str(row["name"] or "").strip() and str(row["name"] or "") != current_name
-                and any(w.startswith(stem) for w in _place_words(str(row["name"] or "")))
+                and any(w in forms for w in _place_words(str(row["name"] or "")))
             ]
             if len(homes) == 1 and not _code_is_origin(lowered, m.start(1), m.end(1)):
                 turn_ledger.note("movement", "common_noun_names_known_place", noun=m.group(1), place=str(homes[0]["name"] or ""))
