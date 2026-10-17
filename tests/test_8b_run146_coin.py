@@ -62,6 +62,14 @@ class APaymentShownBeatsAGainOp(unittest.TestCase):
             self.assertEqual((note or {}).get("source"), "gain_without_coin_dropped", prose)
             self.assertNotIn("gold_band", result["player"])
 
+    def test_coin_counted_the_turn_after_the_pay_backs_no_second_gain(self):
+        # 8B run 147, T48: counting the silver already paid backed GOLD +30.
+        prose = ("You count the silver pieces in Reeve Dunmere's open palms, the weight of forty-five a stark reminder of the "
+                 "debts you carry. You name the number aloud, the clink of coin echoing between the ruins.")
+        result = {"narration": prose, "player": {"gold_band": "moderate"}}
+        note = _settle_stated_gold(result, "I count what he put in my palm and say the number aloud.")
+        self.assertEqual((note or {}).get("source"), "gain_without_coin_dropped", note)
+
     def test_coin_handed_to_the_player_still_gains(self):
         prose = "He counts out twenty gold into your palm. “For the warning,” he says."
         result = {"narration": prose, "player": {"gold_delta": 20}}

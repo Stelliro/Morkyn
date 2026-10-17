@@ -9793,6 +9793,15 @@ def _same_place_name(a: str, b: str) -> bool:
         return False
     if key(a) == key(b):
         return True
+    # A part of a place under the place's own name: "the Drowned Claim's ruins"
+    # beside "The Drowned Claim" made a second place and moved the player into
+    # it (8B run 147, T45). The possessive part is the place.
+    part = re.compile(r"^(.*\S)['’]s\s+(?:ruins?|edge|edges|docks?|gates?|square|shore|shores|well|steps|yard|walls?|"
+                      r"outskirts|heart|mouth|end|rim|banks?|quay|pier|wharf|market|green|common|street|lane|road|path)$")
+    for x, y in ((a, b), (b, a)):
+        m = part.match(key(x))
+        if m and m.group(1).strip() == key(y):
+            return True
     # A shorter spelling: "The Salvage Tally House" for "The Salvage Guild's
     # Tally House" (8B run 37, T2).
     la, lb = _place_words(a), _place_words(b)
@@ -13862,7 +13871,26 @@ def _near_name_matches(conn, name: str) -> list[Any]:
         floor = 4 if len(words) > 1 else 6
         if len(diffs) == 1 and min(len(diffs[0][0]), len(diffs[0][1])) >= floor and _one_letter_apart(*diffs[0]):
             out.append(row)
+    if not out and len(words) == 2 and words[0].lower().strip(".,") in _TITLE_WORDS:
+        # A title in place of the given name: "Reeve Dunmore" beside Gregory
+        # Dunmore, the Harbour Reeve, minted a second person (8B run 147, T45).
+        # One known person wearing that surname is that person.
+        surname = words[1].lower()
+        wearers = [
+            row for row in conn.execute("SELECT * FROM npcs").fetchall()
+            if str(row["name"] or "").split() and str(row["name"] or "").split()[-1].lower() == surname
+        ]
+        if len(wearers) == 1:
+            out.append(wearers[0])
     return out
+
+
+_TITLE_WORDS = frozenset({
+    "reeve", "captain", "master", "mistress", "tallyman", "keeper", "warden", "sergeant", "constable", "elder",
+    "father", "mother", "brother", "sister", "sir", "lord", "lady", "dame", "goodman", "goodwife", "skipper", "bosun",
+    "doctor", "mayor", "bailiff", "sheriff", "abbot", "abbess", "prior", "steward", "alderman", "magistrate", "widow",
+    "old", "young", "uncle", "aunt", "madam", "mister", "mrs", "mr", "ms",
+})
 
 
 _WALK_WORD_RE = re.compile(
@@ -15894,6 +15922,12 @@ def _filter_inventory_changes(
             delta = -delta
             change = {**change, "quantity_delta": delta}
             change.pop("quantity_band", None)
+            # Read as a gain, it is one gain: GRANT "ledger" and TAKE "ledger"
+            # in one turn made ledger x4 (8B run 147, T50).
+            if gain_key in seen_gains:
+                turn_ledger.note("inventory", "repeated_grant_dropped", item=name, via="take_read_as_gain")
+                continue
+            seen_gains.add(gain_key)
             turn_ledger.note("inventory", "take_of_unowned_read_as_gain", item=name, quantity=delta)
         if delta < 0:
             if _loss_shown(name, f"{narration}\n{player_input}"):
@@ -18144,6 +18178,31 @@ def _named_as_present(text: str, pattern: str, *, flags: int = 0) -> bool:
     return False
 
 
+def _known_here_in_role(conn, role_words: set[str], text: str, new_name: str = "") -> Any:
+    """The one known person at the player's place whose job shares a word with ``role_words``, unless the prose names them apart."""
+    words = {w for w in role_words if len(w) >= 4}
+    if not words:
+        return None
+    try:
+        here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
+        rows = conn.execute("SELECT * FROM npcs WHERE location_id = ?", (int(here[0] or 0),)).fetchall() if here else []
+    except Exception:
+        return None
+    twins = []
+    for row in rows:
+        job = {w for w in re.findall(r"[a-z]+", str(row["role"] or "").lower()) if len(w) >= 4}
+        if not (job & words):
+            continue
+        name = str(row["name"] or "").strip()
+        if not name or name.lower() == str(new_name or "").strip().lower():
+            continue
+        # Named apart in the same prose: the figure is someone else beside them.
+        if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", text, re.I):
+            continue
+        twins.append(row)
+    return twins[0] if len(twins) == 1 else None
+
+
 def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
     """Keep a new person only if the prose shows them.
 
@@ -18347,6 +18406,20 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
             turn_ledger.note("npc", "name_only_spoken_of", name=npc_name)
             continue
         role_words = {w for w in re.findall(r"[a-z]+", str(npc.get("role") or "").lower()) if len(w) >= 3}
+        # The figure in a known person's trade, here, is that person: "A clerk
+        # steps in" at the tally house, with Mira Venn the clerk already filed
+        # there, minted "Elias" (8B run 147, T50; "Silas Gage" at T2 the same
+        # way). One known person here in that role, not named apart in the
+        # prose, is who the figure is; the new name is theirs.
+        if role_words and any(re.search(rf"\b{re.escape(w)}", unspoken, re.I) for w in role_words if len(w) >= 4):
+            twin = _known_here_in_role(conn, role_words, text, npc_name)
+            if twin is not None:
+                turn_ledger.note("npc", "role_figure_is_known_person", name=npc_name, known=str(twin["name"] or ""))
+                npc["name"] = str(twin["name"] or npc_name)
+                if str(twin["code"] or "").strip():
+                    npc["code"] = str(twin["code"])
+                keep_ids.add(id(npc))
+                continue
         # "The trader at the post, a woman with a sharp gaze": the role is in the figure's sentence.
         match = next((h for h in free if role_words & set(re.findall(r"[a-z]+", _hint_sentence(text, h).lower()))), None)
         if match is None and len(unshown) == 1 and len(free) == 1:
@@ -21408,7 +21481,12 @@ _OWN_COIN_RE = re.compile(
     r"\b(?:you\s+(?:\w+\s+){0,2}?(?:spent|spend|paid|pay|gave|give|handed|hand|counted|count|parted)|"
     r"(?:coins?|gold|crowns?)\s+(?:you\s+)?(?:spent|paid|handed|gave|lost|parted\s+with)|"
     r"spent\s+on|memory\s+of\s+(?:the\s+)?(?:\w+\s+){0,3}?(?:coins?|gold)|"
-    r"count\w*\s+(?:the\s+|your\s+)?(?:coins?|gold)|(?:coins?|gold)\s+in\s+your)\b",
+    # Counting coin already in hand: "You count the silver pieces in Reeve
+    # Dunmere's open palms" backed GOLD +30 the turn after the pay (8B run 147, T48).
+    r"count\w*\s+(?:the\s+|your\s+|what\s+)?(?:[\w'’-]+\s+){0,3}?(?:coins?|gold|silver|coppers?|pieces|crowns?)|"
+    r"(?:coins?|gold|silver|pieces|crowns?)\s+in\s+your\s+(?:palms?|hands?|fist|grip)|"
+    # The sound of coin is not coin moving.
+    r"(?:clink\w*|jingl\w*|chim\w*|ring\w*)\s+of\s+(?:coins?|gold|silver|metal|crowns?))\b",
     re.I,
 )
 

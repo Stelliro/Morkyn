@@ -182,8 +182,17 @@ _CONDITIONAL_CLAUSE_RE = re.compile(
 )
 
 
+# "as agreed", "as we arranged": a deal already made, not a yes to an open offer
+# ("carry the box up to the Reeve, unopened, as agreed" accepted the one
+# offered job, 8B run 147, T45).
+_PRIOR_AGREEMENT_RE = re.compile(
+    r"\bas\s+(?:we\s+|you\s+|was\s+|had\s+been\s+|we['’]d\s+)?(?:agreed|arranged|settled|promised|planned|discussed)\b",
+    re.I,
+)
+
+
 def player_accepts(player_input: str) -> bool:
-    text = _CONDITIONAL_CLAUSE_RE.sub(" ", str(player_input or ""))
+    text = _PRIOR_AGREEMENT_RE.sub(" ", _CONDITIONAL_CLAUSE_RE.sub(" ", str(player_input or "")))
     if _accept_re().search(text) or _SIMPLE_ACCEPT_RE.search(text):
         return True
     try:

@@ -231,6 +231,22 @@ class AKnownPlaceUnderItsCommonNoun(unittest.TestCase):
         self.assertIsNone(_movement_destination_from_input(self.ROWS, "I leave the wreck and sit in the skiff.", "The Wrecked Skiff"))
 
 
+class APossessivePartIsThePlace(unittest.TestCase):
+    """8B run 147, T45: "the Drowned Claim's ruins" was made beside "The Drowned Claim"."""
+
+    def test_the_claims_ruins_are_the_claim(self):
+        from app.world import _same_place_name
+
+        self.assertTrue(_same_place_name("the Drowned Claim's ruins", "The Drowned Claim"))
+        self.assertTrue(_same_place_name("The Harbour", "the Harbour’s edge"))
+
+    def test_another_places_part_is_not_this_one(self):
+        from app.world import _same_place_name
+
+        self.assertFalse(_same_place_name("the Drowned Claim's ruins", "The Harbour"))
+        self.assertFalse(_same_place_name("the Drowned District Chapel", "The Drowned District"))
+
+
 class ThePlaceLeftIsNotTheDestination(unittest.TestCase):
     """8B run 146, T49: "I leave the flats ... and set off north" moved the player into The Flats."""
 
