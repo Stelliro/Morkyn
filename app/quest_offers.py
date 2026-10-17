@@ -211,13 +211,22 @@ def find_offer_candidates(
     # One speaker's lines in one paragraph are one offer: Garrick's '"A job,"
     # ... "You'll be fetching salvage from the docks ..."' is read together, and
     # the longest piece is the quote the engine grounds (8B run 103, T4).
+    # A known speaker's lines across the whole turn are one candidate too: the
+    # tallyman's "You'll need to work it off ..." and, a paragraph on, "There's
+    # the salvage contracts ..." cost two fills and two checks (8B run 146, T2).
+    # Lines with no known speaker stay per paragraph, since two strangers may speak.
     groups: list[dict[str, Any]] = []
     for entry in spoken:
         line = str(entry.get("line") or "")
         code = str(entry.get("code") or "")
         paragraph = _paragraph_of(text, line)
-        if groups and groups[-1]["code"] == code and groups[-1]["paragraph"] == paragraph:
-            groups[-1]["lines"].append(line)
+        same = next(
+            (g for g in groups if g["code"] == code and (code or g["paragraph"] == paragraph)), None
+        ) if code else (groups[-1] if groups and groups[-1]["code"] == code and groups[-1]["paragraph"] == paragraph else None)
+        if same is not None:
+            same["lines"].append(line)
+            if paragraph not in same["paragraph"]:
+                same["paragraph"] = f"{same['paragraph']}\n\n{paragraph}"
         else:
             groups.append({"code": code, "paragraph": paragraph, "lines": [line]})
     for group in groups:

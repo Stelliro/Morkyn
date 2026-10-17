@@ -198,6 +198,18 @@ class TheEngineFindsTheLine(unittest.TestCase):
         self.assertTrue(qp.evidence_found(cands[0]["quote"], SHEDS))
         self.assertIn("fetching salvage", cands[0]["quote"])
 
+    def test_a_known_speakers_lines_across_the_turn_are_one_candidate(self):
+        # 8B run 146, T2: two paragraphs by the tallyman cost two fills and two checks.
+        prose = ("Wulfstan [[B]] sits behind the desk. \"You'll need to work it off, and the guild has jobs that pay against the ledger.\"\n\n"
+                 "\"What job have you got?\" you ask.\n\n"
+                 "Wulfstan [[B]] leans back. \"There's the salvage contracts. They pay well if you're lucky. You'll be out on the water, working with the crew.\"")
+        wulf = [{"code": "B", "name": "Wulfstan", "role": "guard"}]
+        cands, _ = qo.find_offer_candidates(prose, FISH_INPUT, npcs=wulf, asked_for_work=True)
+        self.assertEqual(len(cands), 1, cands)
+        self.assertIn("work it off", cands[0]["line"])
+        self.assertIn("salvage contracts", cands[0]["line"])
+        self.assertTrue(qp.evidence_found(cands[0]["quote"], prose))
+
     def test_a_mark_whose_giver_said_nothing_is_dropped(self):
         prose = "Tilda [[A]] looks up from the ledger and says nothing. The tide is already turning."
         marks = [{"op": "QUEST", "title": "Salvage Contract", "giver": "A", "step": "Discuss work against debt"}]

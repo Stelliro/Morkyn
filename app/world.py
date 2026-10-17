@@ -6624,7 +6624,9 @@ def _turn_intent(player_input: str) -> tuple[str, list[str]]:
     # A fighting verb with a direction is motion, not a blow: "kick back up to
     # Bennet's boat for air" resolved as an unarmed hit on Bennet (8B run 145,
     # T24). The blow needs its object; the particle takes the verb's object slot.
-    tokens = _intent_tokens(_MOTION_NOT_COMBAT_RE.sub(" ", player_input))
+    from app.skill_checks import _THING_STRIKES_RE
+
+    tokens = _intent_tokens(_THING_STRIKES_RE.sub(" ", _MOTION_NOT_COMBAT_RE.sub(" ", player_input)))
     travel_tokens = _intent_tokens(_travel_scoring_text(player_input))
     scores: list[tuple[str, int]] = []
     lowered = str(player_input or "").lower()
@@ -9951,6 +9953,43 @@ def _is_building(name: str, row: Any = None) -> bool:
     return bool(venues.venue_kind_from_name(name))
 
 
+def _movement_intent(conn, player_input: str) -> str:
+    """The intent movement resolution reads: the line's main intent, or "travel" when a walk rides inside another.
+
+    "We row back to the dock ... I carry the box up through town to the tally
+    house and set it on the desk" was a trade turn by its words, so the walk
+    was never resolved: the player stayed at the wreck site while the prose
+    arrived at the tally house, and the next turn stood the tallyman at the
+    wreck (8B run 145, T45-T46). A line that names a known place as where it
+    goes, with travel among its intents, resolves its movement whatever leads.
+    """
+    primary, _secondary = _turn_intent(player_input)
+    if primary == "travel" or _turn_kind(player_input) != "player_action":
+        return primary
+    try:
+        rows = conn.execute("SELECT id, code, name, parent_id, kind FROM locations ORDER BY id").fetchall()
+        here = conn.execute(
+            "SELECT COALESCE(l.name, '') AS name FROM player p LEFT JOIN locations l ON l.id = p.current_location_id WHERE p.id = 1"
+        ).fetchone()
+        current_name = str((here["name"] if here else "") or "")
+        dest = _movement_destination_from_input(rows, player_input, current_name)
+        if dest is None:
+            return primary
+        # Named as where the line goes ("to the tally house", "back to the
+        # dock"), not merely named ("the tally house's ledger says").
+        words = _place_words(str(dest["name"] or ""))
+        line_low = _destination_text(player_input).lower()
+        if words and re.search(
+            rf"\b(?:to|into|toward|towards|onto|up\s+to|down\s+to|back\s+to|over\s+to)\s+(?:the\s+)?(?:[\w'’-]+\s+){{0,3}}?{re.escape(words[-1])}",
+            line_low,
+        ):
+            turn_ledger.note("movement", "walk_inside_another_intent", primary=primary, destination=str(dest["name"] or ""))
+            return "travel"
+    except Exception:
+        pass
+    return primary
+
+
 def resolve_movement(
     conn,
     result: dict[str, Any],
@@ -10189,7 +10228,11 @@ def resolve_movement(
                 # A walk the prose shows leaving on, a map walk beside the
                 # move, or a direction in the line is a move the prose shows
                 # even when it never says the place's name.
-                leaves = bool(result.get("map_walk")) or _player_departs(narration) or bool(
+                # The prose leaving on foot shows a move to a place made this
+                # turn, not a move to a known place it never names: probing the
+                # flats with an oar ("You press deeper into the mire") stood the
+                # player back at the Aegir's Wake (8B run 146, T10).
+                leaves = bool(result.get("map_walk")) or (resolved is None and _player_departs(narration)) or bool(
                     re.search(r"\b(?:north|south|east|west|northeast|northwest|southeast|southwest|upstream|downstream|inland|seaward)\b", line_low)
                 )
                 # Any word of the place in the line ("go after the farmer" for
@@ -21768,7 +21811,7 @@ def apply_turn(
                 conn,
                 result,
                 player_input,
-                intent=_turn_intent(player_input)[0],
+                intent=_movement_intent(conn, player_input),
                 narration=_narration_text(result),
             )
         except Exception as exc:

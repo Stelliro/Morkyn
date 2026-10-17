@@ -1851,6 +1851,15 @@ _OTHERS_DOING_RE = re.compile(
 )
 
 # Verb forms only: "stab" must not catch "the stable" a player is mucking out.
+# The subject of the blow is a thing, not the player: "the blade strikes
+# something solid", "the oar hits a plank", "a wave strikes the hull".
+_THING_STRIKES_RE = re.compile(
+    r"\b(?:the|its|my|his|her|their|an?|that|this)\s+(?:[\w'’-]+\s+)?(?:blade|oar|tip|edge|hull|wave|waves|wind|rain|"
+    r"spade|pole|staff|hook|line|rope|wheel|keel|bow|stern|hammer|pick|probe|point|boot|heel)\s+"
+    r"(?:strikes|struck|striking|hits|hit|hitting|knocks|knocked|catches|caught)\s+(?:on\s+|against\s+)?"
+    r"(?:something|a|an|the|some|solid|hard|stone|rock|wood|metal|iron|bone)\b[^.!?,;]*",
+    re.IGNORECASE,
+)
 _COMBAT_LINE_RE = re.compile(
     r"\b(?:(?:attack|fight|slash|stab|punch|kick|shoot)(?:s|es|ed|ing|bed|bing)?"
     r"|(?:strikes?|striking|struck)\b(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance)\b))\b",
@@ -1888,6 +1897,12 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # the mole catcher is digging" rolled athletics (7B run 19, T1).
     own_acts = _OTHERS_DOING_RE.sub(" ", own_acts)
     acted = _OTHERS_DOING_RE.sub(" ", acted)
+    # A thing striking a thing is no blow of the player's: "work the hollow
+    # with the oar until the blade strikes something solid" rolled melee vs the
+    # scarred crewman (8B run 146, T11).
+    own_acts = _THING_STRIKES_RE.sub(" ", own_acts)
+    acted = _THING_STRIKES_RE.sub(" ", acted)
+    text = _THING_STRIKES_RE.sub(" ", text)
     act = None
     if not _COMBAT_LINE_RE.search(own_acts):
         try:
