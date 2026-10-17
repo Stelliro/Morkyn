@@ -4,7 +4,7 @@
   <img src="Media/morkyn-cover.png" alt="Mørkyn: the model narrates, the game decides what is true" width="72%" />
 </p>
 
-**Version `0.10.0-dev.12`** · pre-release builds on the way to `0.10.0`, not stable (see [CHANGELOG](CHANGELOG.md) for each `dev.N`). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
+**Version `0.10.0-dev.13`** · pre-release builds on the way to `0.10.0`, not stable (see [CHANGELOG](CHANGELOG.md) for each `dev.N`). Last stable: [`0.9.12`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.12). Previous stable: [`0.9.0`](https://github.com/Stelliro/Morkyn/releases/tag/v0.9.0).
 
 ## This is not the usual AI RPG
 
@@ -372,8 +372,9 @@ Further reading: [docs/NarrationPipeline.md](docs/NarrationPipeline.md) · [docs
 
 ### Latest
 
+- **0.10.0-dev.13:** 184 test runs with a local model as the narrator (43 on Qwen2.5 7B, 141 on Qwen3 8B) and 377 fixes, so the save follows the story: places, people, jobs, gold and items change only when the scene shows it, and lines written for you are removed.
 - **0.10.0 dev builds:** Mørkyn's own window, abilities whose growth the engine computes, a theme ability library that learns new powers, death and Ironman, towns with streets, read-aloud narration. Full notes: [changelogs/0.10.0-dev.md](changelogs/0.10.0-dev.md).
-- **Newest devlog:** [Its own window, and powers that grow](changelogs/devlogs/itch-0.10.0-dev.9.md).
+- **Newest devlog:** [The save follows the story](changelogs/devlogs/itch-0.10.0-dev.13.md).
 
 Every version, every devlog and the full change log: **[CHANGELOGS.md](CHANGELOGS.md)**.
 
@@ -460,7 +461,7 @@ The full `AI_RPG_TTS_*` list (preset, voice, model, base URL, speed, chunk size,
 
 ## Local turn times
 
-Two measurements so far, both through MLE (the in-process engine) on the same 12 GB GPU with the launcher's `auto` context. A full timed playtest of `0.10.0-dev.7` has not been run yet; the numbers below are what has actually been measured.
+Three measurements so far, all through MLE (the in-process engine) on the same 12 GB GPU with the launcher's `auto` context. A full timed playtest of `0.10.0-dev.7` has not been run yet; the numbers below are what has actually been measured.
 
 **Qwen2.5 7B Instruct (Q4_K_M), the default launcher setup.** A real hand-played game on `0.10.0-dev.7`, 7 October 2026: an opening and 12 player turns, paragraph writer off (the default). Times are from the first to the last step in each turn's trace (`data/model_traces`), so the browser round trip is not included.
 
@@ -482,6 +483,13 @@ The launcher's default model name is `qwen3:8b`; when `data/mle-models` holds a 
 | Dual-role 100-turn backend (no LLM) | ~**5 s** total | |
 
 A blind score of the same games found 3 restated sentences with the writer off against 18 with it on, and better readability; the writer is kept as a launcher toggle. Turns where the fact-check runs take longer (up to ~50 s).
+
+**Qwen3 8B (Q4_K_M) on `0.10.0-dev.13`.** The Saltmarrow test runs 120-141, 17 October 2026: 22 openings and 58 player turns, context `auto` (16-18k tokens with the 1.5 GB the budget now keeps free), paragraph writer off. Besides the draft and the fact-check, a turn may also run the quest reader and a prose repair pass.
+
+| Step | Median | Range |
+| --- | ---: | ---: |
+| Opening scene | **27 s** | 23-63 s |
+| Player turn | **26 s** | 11-85 s (most 16-43 s) |
 
 Full tables: [`docs/turn-metrics/`](docs/turn-metrics/). Re-run:
 
@@ -528,7 +536,7 @@ Playtest findings and their status are tracked in [`docs/PLAYTEST_ISSUES.md`](do
 | Field | Value |
 | --- | --- |
 | Product | **Mørkyn** |
-| Version | **0.10.0-dev.12** |
+| Version | **0.10.0-dev.13** |
 | GitHub | https://github.com/Stelliro/Morkyn |
 
 Formerly published as AI RPG Consistency Prototype (`ai-rpg-consistency-prototype`).

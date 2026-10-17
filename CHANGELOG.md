@@ -23,6 +23,11 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+
+## [0.10.0-dev.13] - 2026-10-17
+
+> Pre-release on the way to `0.10.0`. The rest of the Saltmarrow fixes (#100-#122), then Saltmarrow replayed with a local model as the narrator, 43 runs on Qwen2.5 7B and 141 on Qwen3 8B, fixing each fault by class: 377 fixes in all. Places reached, passed or only mentioned are told apart. People stand where the prose shows them, keep their names, jobs and sex, and come along when you walk. Jobs are filed only when someone offers a real task, once per offer, from the person who offered it. Gold and items move only on evidence in the scene. Lines and acts the narrator writes for you are removed. The README gains a Features section. Not yet clean: about one state fault per run in the first seven turns, and the narrator still writes your feelings and past.
+
 ### Fixed
 
 - [CLAUDE] Work in general is no task (8B run 141, T2). The tallyman restated the player's debt ("But the guild has work.") and then named the job ("You could help recover a shipment from the docks"), and both were filed: the shipment and "Work Off the Winter's Credit", whose one step was "Work for the Guild". The phrase lists for steps that name no task are now one rule: a job whose steps hold only work, employer and debt words (and the giver's own name and job) names no task yet. - `app/quest_parser.py`

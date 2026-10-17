@@ -19,7 +19,8 @@ The longer write-ups, newest first:
 
 | Devlog | Where it was posted |
 | --- | --- |
-| [Its own window, and powers that grow](changelogs/devlogs/itch-0.10.0-dev.9.md) (dev.7 to the next build) | itch.io |
+| [The save follows the story](changelogs/devlogs/itch-0.10.0-dev.13.md) (dev.10 to dev.13) | itch.io |
+| [Its own window, and powers that grow](changelogs/devlogs/itch-0.10.0-dev.9.md) (dev.7 to dev.9) | itch.io |
 | [0.10.0-wip release notes](changelogs/devlogs/0.10.0-wip-release-notes.md) (October 2026, still extended) | GitHub |
 | [The narrator stops playing your character](changelogs/devlogs/itch-0.10.0-dev.6.md) (dev.1 to dev.6) | itch.io |
 
