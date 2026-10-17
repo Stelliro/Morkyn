@@ -404,6 +404,18 @@ class ProgressIsCheckedTheSameWay(unittest.TestCase):
         self.assertEqual(report["updates"], [])
 
 
+class ASuggestionIsNoAssignment(unittest.TestCase):
+    def test_lets_see_what_else_is_worth_salvaging_offers_no_job(self):
+        # 8B run 147, T29: the ferryman's suggestion filed a second wreck job.
+        line = ("This'll be a pain to get in, Now, let's see if there's anything else worth salvaging, You might find the "
+                "name board or some mark of ownership in there. But be careful—these old wrecks can hide more than you expect.")
+        self.assertEqual(qo._code_veto(line, asked_for_work=False), "suggestion_not_task")
+
+    def test_a_suggestion_with_pay_named_is_still_an_offer(self):
+        line = "You might take the nets job if you want it. Twenty gold for a day's hauling, paid at dusk."
+        self.assertEqual(qo._code_veto(line, asked_for_work=False), "")
+
+
 class TypedAcceptsStillReachTheEngine(unittest.TestCase):
     OFFERS = [{"id": 2, "code": "Q2", "title": "Retrieve the Captain's Ledger", "status": "offered"}]
 

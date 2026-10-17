@@ -94,6 +94,24 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
         self.assertNotIn("gold_band", result["player"])
 
 
+class ALossIsTheItems(unittest.TestCase):
+    """8B run 147, T30: "casting long shadows across the broken beams" took the lantern out of the pack."""
+
+    def test_a_loss_word_elsewhere_in_the_sentence_is_no_loss(self):
+        from app.world import _loss_shown
+
+        prose = ("You step inside, lantern light cutting through the murky air. Your lantern flickers, casting long shadows "
+                 "across the broken beams and scattered debris.")
+        self.assertFalse(_loss_shown("Lantern", prose + "\nI go into the wreck's interior with the lantern lit."))
+
+    def test_a_loss_of_the_item_still_counts(self):
+        from app.world import _loss_shown
+
+        self.assertTrue(_loss_shown("Lantern", "The lantern slips from your grip and shatters on the planks."))
+        self.assertTrue(_loss_shown("Lantern", "You hand the lantern over to Wulfstan."))
+        self.assertTrue(_loss_shown("Lantern", "You drop the lantern into the water."))
+
+
 class AConjunctionIsNoName(unittest.TestCase):
     def test_and_veyra_is_not_a_new_person(self):
         prose = "Rolf is watching, his grip tight on his pack. And Veyra, the spymaster, is watching you just as closely."
