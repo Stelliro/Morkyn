@@ -70,6 +70,14 @@ class APaymentShownBeatsAGainOp(unittest.TestCase):
         note = _settle_stated_gold(result, "I count what he put in my palm and say the number aloud.")
         self.assertEqual((note or {}).get("source"), "gain_without_coin_dropped", note)
 
+    def test_a_sum_only_mentioned_backs_no_stated_gain(self):
+        # 8B run 147, T92: "the weight of the eleven gold coins hangs in the damp morning" backed GOLD 11.
+        prose = ("Mira Venn stands at the board, her fingers tracing the names of those who owe the guild. The guild has "
+                 "posted your name, and the weight of the eleven gold coins hangs in the damp morning. You hold your ground.")
+        result = {"narration": prose, "player": {"gold_delta": 11}}
+        _settle_stated_gold(result, "\"Eleven gold, now, into my hand.\"")
+        self.assertNotEqual(result["player"].get("gold_delta"), 11)
+
     def test_coin_handed_to_the_player_still_gains(self):
         prose = "He counts out twenty gold into your palm. “For the warning,” he says."
         result = {"narration": prose, "player": {"gold_delta": 20}}
