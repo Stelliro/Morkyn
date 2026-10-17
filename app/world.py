@@ -21746,8 +21746,12 @@ def _settle_stated_gold(
         # ("mints 250, then 400"). A modest number the op and the prose agree
         # on is the scene's, though: a purse of "Nine coins" handed back with
         # GOLD 9 paid +14 when rolled (Saltmarrow run, T94).
+        # The number has to sit in a sentence where coin moves: "the weight of
+        # the eleven gold coins hangs in the damp morning" backed GOLD 11 as a
+        # stated gain while nobody paid (8B run 147, T92).
         narrated = prose_state.coin_mentions(" ".join(
-            s for _, _, s in prose_state.sentence_spans(venues.strip_speech(narration)) if not _PROMISED_MONEY_RE.search(s)
+            s for _, _, s in prose_state.sentence_spans(venues.strip_speech(narration))
+            if not _PROMISED_MONEY_RE.search(s) and not _OWN_COIN_RE.search(s) and _money_moves_in(s)
         ))
         backed = raw in narrated or raw in said["received"] or bool(prose_state.coin_handed_to_player(narration))
         if raw > 0 and raw <= STATED_GAIN_CAP and raw in mentioned and backed:
