@@ -99,6 +99,24 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertEqual([c["name"] for c in kept], ["ledger"])
             conn.rollback()
 
+    def test_a_things_provenance_is_no_hand_over(self):
+        # 8B run 147, T23: "a brass instrument your mother gave you" put a second tide-reckoner in the pack.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You flick the wick of your lamp. The tide-reckoner, a brass instrument your mother gave you, hums softly "
+                 "as you adjust its gears. It's been a while since you last calibrated it.")
+        line = "I sit on the dock edge, light the lantern, and read the tide-reckoner to see how long until low water."
+        with connect() as conn:
+            conn.execute("DELETE FROM inventory")
+            conn.execute("INSERT INTO inventory (code, name, quantity) VALUES ('I91', 'mother''s brass tide-reckoner', 1)")
+            kept = world._filter_inventory_changes(conn, [{"name": "Tide-reckoner", "quantity_band": "small"}],
+                                                    narration=prose, player_input=line)
+            self.assertEqual(kept, [])
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db

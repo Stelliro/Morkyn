@@ -69,6 +69,31 @@ class APaymentShownBeatsAGainOp(unittest.TestCase):
         self.assertEqual(result["player"].get("gold_delta"), 20)
 
 
+class APurchaseWithNoPriceStillCosts(unittest.TestCase):
+    """8B run 147, T20 and T21: goods bought and coins tossed into a palm moved no gold."""
+
+    def test_goods_bought_with_no_sum_roll_a_small_spend(self):
+        prose = ("You arrive at the market square. The lantern you bought is heavy in your satchel, and the rope is coiled "
+                 "tightly, ready for the task ahead.")
+        result = {"narration": prose, "player": {},
+                  "inventory_changes": [{"name": "Lantern", "quantity_band": "small"}, {"name": "Rope", "quantity_band": "small"}]}
+        note = _settle_stated_gold(result, "I walk back up into Saltmarrow to buy a lantern and a length of rope before the tide.")
+        self.assertEqual(result["player"].get("gold_band"), "-small", note)
+
+    def test_coins_tossed_into_a_palm_are_a_payment(self):
+        prose = ("He rummages through a pouch. When he finally pulls out a handful of silver, he mutters about the tides. "
+                 "You count the coins, then toss them into his palm. He nods, grumbling about debts.")
+        result = {"narration": prose, "player": {}}
+        _settle_stated_gold(result, "I ask the stallholder who sold me the lantern and rope what I owe, and pay it from my purse.")
+        self.assertEqual(result["player"].get("gold_band"), "-small")
+
+    def test_looking_at_goods_for_sale_costs_nothing(self):
+        prose = "The stall holds lanterns and coils of rope. You look them over and move on."
+        result = {"narration": prose, "player": {}, "inventory_changes": [{"name": "Lantern", "quantity_band": "small"}]}
+        self.assertIsNone(_settle_stated_gold(result, "I look over what the stall has for sale."))
+        self.assertNotIn("gold_band", result["player"])
+
+
 class AConjunctionIsNoName(unittest.TestCase):
     def test_and_veyra_is_not_a_new_person(self):
         prose = "Rolf is watching, his grip tight on his pack. And Veyra, the spymaster, is watching you just as closely."
