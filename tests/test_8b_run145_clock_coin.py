@@ -136,6 +136,20 @@ class ThePlayersOwnPaymentStands(unittest.TestCase):
         self.assertEqual(result["player"]["gold_delta"], 0)
 
 
+class CoinTheProseNeverHandsOver(unittest.TestCase):
+    def test_the_player_having_to_pay_later_backs_no_gain(self):
+        # 8B run 146, T34: GOLD +34 stood on "the deeper you go, the more you'll have to pay".
+        from app import world
+
+        prose = ("Hamon exhales. \"I'll take you out. But know this: once we're out there, there's no turning back.\" "
+                 "The wreck is a place of secrets, and the deeper you go, the more you'll have to pay. "
+                 "But the promise of what lies hidden in the ruins is worth the cost.")
+        result = {"narration": prose, "player": {"gold_delta": 45}}
+        note = world._settle_stated_gold(result, "\"Take me out to the wreck, Captain.\"", conn=None, quest_pays=False)
+        self.assertEqual((note or {}).get("source"), "gain_without_coin_dropped")
+        self.assertNotIn("gold_delta", result["player"])
+
+
 class AKickUpwardIsNoBlow(unittest.TestCase):
     def test_kicking_back_up_to_the_boat_is_not_combat(self):
         from app import world

@@ -265,6 +265,19 @@ class TheAsksFillAndCheck(unittest.TestCase):
         self.assertTrue(item["_checked"])
         self.assertEqual([s["title"] for s in item["steps"]], ["Go to the docks", "Unload the shipment"])
 
+    def test_a_card_whose_task_is_the_players_own_words_is_dropped(self):
+        # 8B run 146, T34: the fill took the task from the player's quoted line in the passage.
+        line = "I turn to Hamon at the wheel. \"Then take me out to the wreck and show me what is buried, Captain. Whatever it costs, I will pay it out of what I bring up.\""
+        prose = ("\"Then take me out to the wreck and show me what is buried, Captain. Whatever it costs, I will pay it out of what I bring up,\" you say. "
+                 "Hamon Lockwood [[I]] smiles. \"You're not the kind of flat-runner I'm used to. Most of them would've asked for a cut of the salvage, not paid for the privilege.\"")
+        hamon = [{"code": "I", "name": "Hamon Lockwood", "role": "ferry captain"}]
+        ask, calls = _fake_ask(fill={"offers_work": True, "task": "Take me out to the wreck and show me what is buried", "title": "Show Me the Wreck",
+                                     "steps": ["Head to the wreck"], "place": "Aegir's Wake", "pay": "", "gold": 0})
+        report = qo.run_offer_pass(prose, line, npcs=hamon, ask=ask)
+        self.assertEqual(report["new"], [])
+        self.assertEqual([c["phase"] for c in calls], [qo.FILL_PHASE])
+        self.assertEqual(report["fills"][0].get("dropped"), "task_is_the_players_words")
+
     def test_a_fill_that_sees_no_work_asks_no_check(self):
         ask, calls = _fake_ask(fill={"offers_work": False, "task": "", "title": ""})
         report = qo.run_offer_pass(FISH, FISH_INPUT, npcs=VEYRA, asked_for_work=True, ask=ask)

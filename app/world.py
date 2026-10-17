@@ -15024,6 +15024,15 @@ _TAKE_STOP_WORDS = frozenset({
     "winks", "waits", "is", "was", "are", "were", "hangs", "shines", "catches", "it", "them", "you", "your",
     "carefully", "gently", "quickly", "slowly",
 })
+# A GRANT whose head noun is something known, said or seen, not a thing.
+_ABSTRACT_ITEM_RE = re.compile(
+    r"^(?:(?:a|an|the|some|my|your)\s+)?(?:information|knowledge|clues?|secrets?|rumou?rs?|answers?|truth|leads?|hints?|"
+    r"tips?|warnings?|advice|promises?|news|stor(?:y|ies)|tales?|directions?|look|glance|response|reply|trust|favou?rs?|"
+    r"permission|reputation|insight|memory|memories|understanding|idea|ideas|word|words|lesson|lessons|blessing|curse|"
+    r"ferry\s+ride|ride|passage|service|lookout|watch|audience|meeting|introduction|chance|opportunity)\b"
+    r"(?:\s+(?:about|of|on|into|inside|from|regarding|to|with|for|at|in|beneath|under|behind|across|along|over)\b.*|\s*:.*)?$",
+    re.IGNORECASE,
+)
 _NOT_A_TAKEN_THING = frozenset({
     "look", "glance", "breath", "breaths", "step", "steps", "seat", "moment", "chance", "turn", "care", "aim",
     "note", "lead", "rest", "place", "stock", "heart", "courage", "offer", "deal", "job", "work", "path", "road",
@@ -15606,6 +15615,13 @@ def _filter_inventory_changes(
             continue
         name = _sanitize_item_name(str(change.get("name", "")))
         if not name:
+            continue
+        # A thing known, said or seen is no thing carried: GRANT "information
+        # about the Drowned Hand" entered the pack (8B run 146, T43), after
+        # "knowledge of the Aegir's Wake", "clue about Elara Veyne" and "a look
+        # inside the hold" were refused only for want of a take in the prose.
+        if _ABSTRACT_ITEM_RE.match(name):
+            turn_ledger.note("inventory", "abstract_not_an_item", item=name)
             continue
         change = dict(change)
         change["name"] = name
@@ -21048,6 +21064,9 @@ _PROMISED_MONEY_RE = re.compile(
     # A purpose or a chance to pay is no payment: "each one a chance to pay down
     # what you owe" backed GOLD 15 (+12) on a job offer (8B run 113, T2).
     r"|\bto\s+pay\s+(?:it\s+|them\s+|that\s+)?(?:down|off|back)\b|\b(?:chance|way|means|work|need|needs)\s+to\s+pay\b"
+    # The player paying, later or in general, is no coin reaching them: "the
+    # deeper you go, the more you'll have to pay" backed GOLD +34 (8B run 146, T34).
+    r"|\b(?:you['’]ll|you\s+will|you['’]d|you\s+would|you\s+must|you\s+have\s+to|have\s+to|the\s+more\s+you)\s+(?:\w+\s+){0,2}?pay\b"
     r"|\b(?:if|once|when|whoever|anyone\s+who)\s+(?:you\s+)?(?:find|bring|return|deliver|finish|complete)\w*\b"
     r"|\bpromis\w*\b",
     re.I,
