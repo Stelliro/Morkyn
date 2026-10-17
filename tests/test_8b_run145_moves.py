@@ -113,6 +113,27 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
             self.assertEqual(world._movement_intent(conn, line), "travel")
             conn.rollback()
 
+    def test_leaving_coin_on_a_counter_is_no_journey(self):
+        # 8B run 146, T17: "I leave the six gold on his counter ... I turn for the door" kept a MOVE to the wreck.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        line = ("I leave the six gold on his counter and pick up the hooded lamp and the flask of oil. "
+                "\"Six is what they are worth, Theobald. Take it or leave it.\" I turn for the door.")
+        prose = ("You leave the six gold on his counter and pick up the hooded lantern. Theobald Garner [[F]] watches you go. "
+                 "You step out into the narrow street outside the Saltmarrow General Store [[L5]].")
+        with connect() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player").fetchone()[0])
+            store = world._upsert_location(conn, "Saltmarrow General Store", "", parent_id=town, kind="general_store")
+            world._upsert_location(conn, "Aegir's Wake", "", parent_id=town, kind="")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(store),))
+            result = {"narration": prose, "player": {"move_to_location": "Aegir's Wake"}}
+            report = world.resolve_movement(conn, result, line, intent="travel", narration=prose)
+            self.assertNotEqual(result["player"].get("move_to_location"), "Aegir's Wake", report)
+            conn.rollback()
+
     def test_a_journey_keeps_the_models_destination(self):
         line = "I leave the dock and head out along the shore road before the tide turns."
         prose = "You leave the dock behind, the shore road rising ahead of you between the salt grass."

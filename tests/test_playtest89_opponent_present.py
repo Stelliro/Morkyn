@@ -93,6 +93,21 @@ class TheOtherSideIsSomeoneHere(unittest.TestCase):
         self.assertIsNotNone(check)
         self.assertIsNone(check.get("opposition"))
 
+    def test_someone_named_in_full_whom_the_engine_does_not_hold_is_not_answered_for(self):
+        # 8B run 146, T28: "look for Oswin Goodwin ... and ask him" from the wharf rolled vs Emery, the one present.
+        emery = {"id": 4, "code": "D", "name": "Emery Sadler", "role": "reeve", "stat_profile": {"charisma": 10}}
+        ctx = {
+            "current_location": {"id": 3, "code": "L3", "name": "The Old Wharf", "npcs": [emery]},
+            "locations": [{"id": 3, "code": "L3", "name": "The Old Wharf", "npcs": [emery]},
+                          {"id": 6, "code": "L6", "name": "Saltmarrow Inn", "npcs": []}],
+            "conversation_turn": {"addressed": [], "present": ["D"], "listening": ["D"], "rule": "none"},
+            "settings": {"playthrough_options": {}},
+        }
+        line = "I walk back up to the Saltmarrow Inn, look for Oswin Goodwin at the end of the row, and ask him what he remembers."
+        check = infer_check_from_action(line, ctx)
+        self.assertIsNotNone(check)
+        self.assertIsNone(check.get("opposition"))
+
     def test_without_a_scene_record_the_roster_stands_in(self):
         line = "I try to convince Warin to let me past"
         check = infer_check_from_action(line, _context(present=None, record=False))

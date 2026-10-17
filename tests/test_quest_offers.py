@@ -391,6 +391,25 @@ class ProgressIsCheckedTheSameWay(unittest.TestCase):
         self.assertEqual(report["updates"], [])
 
 
+class TypedAcceptsStillReachTheEngine(unittest.TestCase):
+    OFFERS = [{"id": 2, "code": "Q2", "title": "Retrieve the Captain's Ledger", "status": "offered"}]
+
+    def test_ill_find_it_accepts_the_one_open_offer(self):
+        # 8B run 146, T14: the checked flow proposed no updates, so the typed yes was lost.
+        line = "\"The captain's ledger from the Aegir's Wake, then. I'll find it.\" I ask Emery where the cabin lay."
+        updates = qo.typed_accepts(line, self.OFFERS)
+        self.assertEqual([(u["quest"], u["action"]) for u in updates], [("Q2", "accept")])
+
+    def test_two_open_offers_need_the_line_to_name_one(self):
+        offers = self.OFFERS + [{"id": 3, "code": "Q3", "title": "Haul the nets", "status": "offered"}]
+        self.assertEqual(qo.typed_accepts("\"I'll do it.\"", offers), [])
+        self.assertEqual([u["quest"] for u in qo.typed_accepts("\"I'll take the nets job.\"", offers)], ["Q3"])
+
+    def test_a_refusal_or_a_plain_line_proposes_nothing(self):
+        self.assertEqual(qo.typed_accepts("\"No deal.\"", self.OFFERS), [])
+        self.assertEqual(qo.typed_accepts("I walk down to the dock.", self.OFFERS), [])
+
+
 class MarksAreHintsInCheckedMode(unittest.TestCase):
     MARKS = [
         {"op": "QUEST", "title": "Salvage Contract", "giver": "A", "step": "x"},

@@ -1603,11 +1603,15 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     # pull my own weight on the oars. Do we have a deal?"' rolled nothing (8B
     # run 145, T19). The sum plus a dealing word, in speech or out of it.
     (r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|fifty|a\s+hundred)\s+"
-     r"(?:gold|silver|coppers?|coins?|crowns?)\b[^.!?]{0,80}\b(?:deal|offer|take\s+it|or\s+nothing|and\s+no\s+more|"
-     r"there\s+and\s+back|final|and\s+not\s+a\s+\w+\s+more|or\s+I\s+walk)\b", "persuasion"),
+     r"(?:gold|silver|coppers?|coins?|crowns?)\b[\s\S]{0,120}?\b(?:deal|offer|take\s+it|or\s+nothing|and\s+no\s+more|"
+     r"there\s+and\s+back|final|last\s+offer|and\s+not\s+a\s+\w+\s+more|or\s+(?:i|we)\s+walk|for\s+(?:both|the\s+lot|all\s+of\s+it)|"
+     r"take\s+it\s+or\s+leave\s+it)\b", "persuasion"),
     # "worth" alone is feeling ("no cart's worth you", playtest #102); a
     # price question still asks what something is worth.
-    (r"\b(bargain|haggle|price|appraise|value of|what'?s? (?:is )?\w+(?: \w+)? worth|worth (?:anything|much|it\?))(?:\b|(?<=\?))", "appraise"),
+    # The noun is not the act: "hold him to the Drowned Hand's side of the
+    # bargain" rolled appraise and fumbled it (8B run 146, T24); "I haggle over
+    # the pelt" still does.
+    (r"\b((?<!\bthe\s)(?<!\ba\s)(?<!\bour\s)(?<!\bhis\s)(?<!\bher\s)(?<!\btheir\s)(?<!\bthis\s)(?<!\bthat\s)bargain|haggle|price|appraise|value of|what'?s? (?:is )?\w+(?: \w+)? worth|worth (?:anything|much|it\?))(?:\b|(?<=\?))", "appraise"),
     # Opening speech / ask / talk → charisma-backed persuasion
     (r"\b(talk|speak|ask|greet|address|approach .+ (and )?(talk|ask|speak)|say (hello|hi)|introduce)\b", "persuasion"),
     # Reclining "lie down/back/low/still/awake/asleep" is rest, not a bluff.
@@ -2006,9 +2010,11 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
 # A sum named with a dealing word: the player is bargaining, so the roll is the
 # full one, not a routine greeting (8B run 145, T19).
 _PRICE_OFFER_RE = re.compile(
+    # Within the same breath of speech, across a full stop: '"... I set six
+    # gold coins on his counter. Six for both, or I walk."' (8B run 146, T16).
     r"\b(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|fifty|a\s+hundred)\s+"
-    r"(?:gold|silver|coppers?|coins?|crowns?)\b[^.!?]{0,80}\b(?:deal|offer|take\s+it|or\s+nothing|and\s+no\s+more|"
-    r"there\s+and\s+back|final|or\s+i\s+walk)\b",
+    r"(?:gold|silver|coppers?|coins?|crowns?)\b[\s\S]{0,120}?\b(?:deal|offer|take\s+it|or\s+nothing|and\s+no\s+more|"
+    r"there\s+and\s+back|final|last\s+offer|or\s+(?:i|we)\s+walk|for\s+(?:both|the\s+lot|all\s+of\s+it)|take\s+it\s+or\s+leave\s+it)\b",
     re.I,
 )
 
@@ -2063,6 +2069,36 @@ _CONTESTED_SKILLS = frozenset({
     "persuasion", "deception", "intimidation", "insight", "etiquette", "performance", "streetwise",
     "stealth", "sleight_of_hand", "pickpocket", "disguise", "grapple", "wrestling",
 })
+
+
+_NOT_A_PERSON_WORD = frozenset({
+    "The", "A", "An", "At", "In", "On", "To", "By", "For", "Of", "And", "But", "Then", "When", "While", "After",
+    "Before", "Inn", "Hall", "House", "Wharf", "Dock", "Docks", "Harbour", "Harbor", "Street", "Road", "Lane", "Square",
+    "Market", "Gate", "Bay", "Mouth", "Wake", "Flats", "Shore", "Town", "Guild", "Captain", "Drowned", "Old", "New",
+    "Salvage", "Tally", "Store", "Shop", "Yard", "Bridge", "Tower", "Keep", "Church", "Chapel",
+})
+
+
+def _names_unknown_person(src: str, pool: list[dict[str, Any]], ctx: dict[str, Any]) -> bool:
+    """The line names someone in full whom the engine does not hold (two capitalised words, no place word)."""
+    known: set[str] = set()
+    for npc in pool:
+        known.update(w.lower() for w in str(npc.get("name") or "").split())
+    for location in ctx.get("locations") or []:
+        if isinstance(location, dict):
+            for npc in location.get("npcs") or []:
+                if isinstance(npc, dict):
+                    known.update(w.lower() for w in str(npc.get("name") or "").split())
+            known.update(w.lower() for w in str(location.get("name") or "").split())
+    current = ctx.get("current_location") if isinstance(ctx.get("current_location"), dict) else {}
+    known.update(w.lower() for w in str(current.get("name") or "").split())
+    for first, last in re.findall(r"\b([A-Z][a-z]{2,})\s+([A-Z][a-z]{2,})\b", str(src or "")):
+        if first in _NOT_A_PERSON_WORD or last in _NOT_A_PERSON_WORD:
+            continue
+        if first.lower() in known or last.lower() in known:
+            continue
+        return True
+    return False
 
 
 def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None, cased: str = "") -> dict[str, Any]:
@@ -2189,7 +2225,10 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
                 # The engine resolved who the line is said to; a name left
                 # behind earlier in the line changes nothing.
                 matched_npc = by_code[addressed[0]]
-            elif not addressed and not names_absent and len(pool) == 1:
+            elif not addressed and not names_absent and len(pool) == 1 and not _names_unknown_person(src, pool, ctx):
+                # Someone the engine does not know yet, named in full ("look for
+                # Oswin Goodwin ... and ask him"), is the other side, not the one
+                # person left in the scene record (8B run 146, T28: vs Emery).
                 matched_npc = pool[0]
             # The line asks someone by their job ("ask the clerk about the
             # boats"): a stale partner with another job is not the other side.

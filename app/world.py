@@ -1331,6 +1331,13 @@ _WAIT_UNTIL_RE = re.compile(
     r"(?:\s+tide)?\b",
     re.I,
 )
+# A line that opens on a time of day skips to it: "In the morning I take the
+# ledger down to Emery" at the inn in the evening (8B run 146, T24).
+_OPENS_AT_TIME_RE = re.compile(
+    r"^\s*(?:in|at|by|come|at\s+first|with\s+the)\s+(?:the\s+)?(?:next\s+)?"
+    r"(midnight|dawn|first\s+light|sunrise|daybreak|morning|midday|noon|afternoon|evening|sunset|dusk|nightfall|night)\b",
+    re.I,
+)
 _WAIT_FOR_TIDE_RE = re.compile(
     r"\b(?:wait|waits|waiting|rest|rests|resting|stay|stays|bide)\b[^.!?]{0,60}?\b(?:until|till|for)\s+(?:the\s+)?"
     r"(?:next\s+tide|tide\s+(?:to\s+)?turns?|turn\s+of\s+the\s+tide)\b",
@@ -1346,7 +1353,7 @@ def _wait_until_minutes(conn, player_line: str) -> int:
     of the line only: a wait said in speech asks nothing of the clock.
     """
     text = venues.strip_speech(_player_line(player_line))
-    match = _WAIT_UNTIL_RE.search(text)
+    match = _WAIT_UNTIL_RE.search(text) or _OPENS_AT_TIME_RE.match(text)
     target = None
     if match:
         target = _TIME_OF_DAY_MINUTES.get(re.sub(r"\s+", " ", match.group(1).lower()))
@@ -10220,8 +10227,13 @@ def resolve_movement(
                 # destination the prose has not reached; it used to be flagged
                 # ("prose_mismatch") and applied all the same.
                 line_low = _destination_text(player_input).lower()
+                # Leaving a place, not leaving a thing: "I leave the six gold
+                # on his counter ... I turn for the door" kept a MOVE to the
+                # wreck (8B run 146, T17).
                 journey = re.search(
-                    r"\b(?:leave|leaves|left|depart\w*|set\s+off|walk\s+on|journey\w*|travel\w*|head\s+out|move\s+on|"
+                    r"\b(?:(?:leave|leaves|left)\s+(?:the\s+|this\s+)?(?:town|village|city|port|harbou?r|docks?|wharf|quay|shop|store|"
+                    r"house|hall|inn|tavern|room|yard|flats|shore|beach|place|here|behind)\b|"
+                    r"depart\w*|set\s+off|walk\s+on|journey\w*|travel\w*|head\s+out|move\s+on|"
                     r"make\s+(?:my|our)\s+way|push\s+on|ride\s+out|sail\s+out|row\s+out)\b", line_low,
                 )
                 dest_words = _place_words(dest_name)
@@ -15771,7 +15783,11 @@ def _filter_inventory_changes(
                 same_as_owned = str(owned_row[0])
                 grounded = False
                 turn_ledger.note("inventory", "owned_item_not_new", item=name, owned=same_as_owned, by="description")
-        if named and not existing and not acts_take and not handed and not same_as_owned:
+        # Take or no take: "I take the ledger back out of Wulfstan's hands" with
+        # GRANT "ledger" beside the owned "Captain's Ledger" put "ledger x2" in
+        # the pack (8B run 146, T22); every word of the grant in one owned
+        # item's name is that item.
+        if named and not existing and not handed and not same_as_owned:
             same_as_owned = _owned_item_named(conn, tokens)
             if same_as_owned:
                 grounded = False
@@ -20355,9 +20371,18 @@ def _gain_names(changes: Any) -> list[str]:
 
 _PLAYER_PAYS_SUM_RE = re.compile(
     r"\b(?:count(?:s|ed)?(?:\s+out)?|hand(?:s|ed)?(?:\s+over)?|pay(?:s|ed)?|pays?\s+out|give(?:s)?|gave|press(?:es|ed)?|"
-    r"slide(?:s|d)?|put(?:s)?\s+down|set(?:s)?\s+down|drop(?:s|ped)?)\s+(?:[\w'’-]+\s+){0,3}?"
+    r"slide(?:s|d)?|put(?:s)?(?:\s+down)?|set(?:s)?(?:\s+down)?|lay(?:s)?|laid|place(?:s|d)?|toss(?:es|ed)?|push(?:es|ed)?|drop(?:s|ped)?)"
+    r"\s+(?:[\w'’-]+\s+){0,3}?"
     r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|fifty)\s+"
     r"(?:gold|silver|coppers?|coins?|crowns?)\b",
+    re.I,
+)
+# The other side taking the coin: "his fingers close around them", "she pockets
+# the coins", "he sweeps the gold into his apron", "counts them and nods".
+_COIN_TAKEN_RE = re.compile(
+    r"\b(?:pockets?|pocketed|takes?|took|taking|sweeps?|swept|counts?|counted|scoops?|scooped|accepts?|accepted|palms?|palmed|"
+    r"snatch(?:es|ed)?|gathers?|gathered|close[sd]?\s+(?:around|over|on))\b[^.!?]{0,40}?\b(?:coins?|gold|silver|coppers?|money|"
+    r"payment|sum|them|it)\b",
     re.I,
 )
 
@@ -20368,6 +20393,7 @@ def _void_unbought_spend(
     kept_changes: list[dict[str, Any]],
     band_report: dict[str, Any] | None,
     player_input: str = "",
+    narration: str = "",
 ) -> bool:
     """
     A GOLD loss paid for GRANTs. When every one of them was removed (the
@@ -20389,7 +20415,12 @@ def _void_unbought_spend(
         return False
     if gold >= 0:
         return False
-    if _PLAYER_PAYS_SUM_RE.search(venues.strip_speech(_player_line(player_input))):
+    # The player's own counted-out sum stands when the other side takes it; a
+    # sum set down and refused ("You'll pay for it", the coins left on the
+    # counter, 8B run 146 T16) is still the player's.
+    if _PLAYER_PAYS_SUM_RE.search(venues.strip_speech(_player_line(player_input))) and _COIN_TAKEN_RE.search(
+        venues.strip_speech(str(narration or ""))
+    ):
         return False
     dsl = result.get("_dsl") if isinstance(result.get("_dsl"), dict) else {}
     bought = [str(name) for name in dsl.get("grants") or [] if str(name or "").strip()]
@@ -22145,7 +22176,7 @@ def apply_turn(
                 inv_changes = _remove_shown_gives(conn, inv_changes, narration, player_input)
             except Exception:
                 pass
-        voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report, player_input)
+        voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report, player_input, narration)
         purse_note = None
         try:
             inv_changes, purse_note = _settle_purse(conn, result, inv_changes, band_report, inv_rejected,
