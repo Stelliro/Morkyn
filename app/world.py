@@ -14744,12 +14744,24 @@ def _prose_item_handed_over(text: str, name_l: str, tokens: list[str], *, owned:
         plain = _PS_QUOTE_RE.sub(" ", sentence)
         if not _HANDOVER_VERB_RE.search(plain):
             continue
+        # Where a thing came from is not a hand-over now: "a brass instrument
+        # your mother gave you" put a second tide-reckoner in the pack beside
+        # the owned one (8B run 147, T23; 8B run 116, T1 by its DESC).
+        if _PROVENANCE_CLAUSE_RE.search(plain):
+            continue
         for _pos, kind, player in _sentence_item_events_detail(plain, name_l, tokens, owned=owned):
             if kind == "gain" and player is False:
                 return True
     return False
 
 
+# A relative clause on a thing's origin: "the reckoner your mother gave you",
+# "a knife that Tam had handed you years ago".
+_PROVENANCE_CLAUSE_RE = re.compile(
+    r"\b(?:a|an|the|this|that)\s+(?:[\w'’-]+\s+){0,4}?(?:that|which|your|his|her|their)\s+(?:late\s+|own\s+|old\s+)?[\w'’-]+\s+"
+    r"(?:once\s+|had\s+|['’]d\s+|first\s+|long\s+ago\s+)?(?:gave|handed|left|passed|bequeathed)\s+(?:to\s+)?you\b",
+    re.I,
+)
 _HANDOVER_VERB_RE = re.compile(
     r"\b(?:hands?|handed|handing|gives?|gave|giving|passes|passed|presses|pressed|slides|slid|tosses|tossed|"
     r"places|placed|sets|drops|dropped|returns|returned|lends|lent)\b",
@@ -21115,6 +21127,16 @@ def _unpriced_payment_amount(conn, result: dict[str, Any], narration: str) -> tu
     return None, ""
 
 
+# The player's own line paying with no sum named: "pay it from my purse", "pay what I owe", "settle up".
+_OWN_UNPRICED_PAY_RE = re.compile(
+    r"\b(?:pay|pays|paid)\s+(?:it|him|her|them|what\s+(?:i|we)\s+owe|the\s+(?:price|fee|fare|cost|rest|balance|bill|man|woman|keeper|"
+    r"stallholder|shopkeeper|merchant|trader|ferryman|bargeman|boatman))\b|\bsettle\s+(?:up|the\s+(?:bill|debt|account))\b",
+    re.I,
+)
+# Buying, in the player's line or the narration.
+_BUY_VERB_RE = re.compile(r"\b(?:buy|buys|bought|buying|purchase|purchases|purchased|purchasing)\b", re.I)
+
+
 def _settle_unopped_coin(
     conn,
     result: dict[str, Any],
@@ -21133,7 +21155,18 @@ def _settle_unopped_coin(
     """
     from app import prose_state
 
-    if prose_state.shows_unpriced_payment(narration):
+    own_acts = venues.strip_speech(str(own or ""))
+    goods = [
+        c for c in (result.get("inventory_changes") or []) if isinstance(c, dict)
+        and (_float(c.get("quantity_delta"), 0) > 0 or str(c.get("quantity_band") or "").strip() not in {"", "none", "0"})
+    ]
+    # The player's own line pays with no sum ("pay it from my purse", "pay
+    # what I owe"), or buys goods the turn grants ("walk up into Saltmarrow to
+    # buy a lantern and a length of rope" put both in the pack for nothing):
+    # a payment with no price (8B run 147, T20, T21).
+    own_pays = bool(_OWN_UNPRICED_PAY_RE.search(own_acts)) and not prose_state.coin_mentions(own_acts)
+    bought = bool(goods) and bool(_BUY_VERB_RE.search(own_acts) or _BUY_VERB_RE.search(venues.strip_speech(narration)))
+    if prose_state.shows_unpriced_payment(narration) or own_pays or bought:
         amount, how = _unpriced_payment_amount(conn, result, narration)
         if not amount:
             # Nothing names the price: the engine rolls a small spend, as for

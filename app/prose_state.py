@@ -267,7 +267,12 @@ _UNPRICED_PAYMENT_RE = re.compile(
     # promised" took 2 gold from the player (8B run 98, T4).
     r"|\b(?:you\s+(?:\w+ly\s+)?count(?:ed)?|you\b(?:(?!\b(?:he|she|they|his|her|their)\b)[^.!?\n]){0,60}?,\s*counting)"
     r"\s+out\s+(?:the|what|his|her|their)\b[^.!?\n]{0,40}?"
-    r"\b(?:asks?|asked|owed?|price|gold|coins?|pieces|fee|due)\b",
+    r"\b(?:asks?|asked|owed?|price|gold|coins?|pieces|fee|due)\b"
+    # Coins the player puts into someone's hand: "You count the coins, then
+    # toss them into his palm" moved no gold (8B run 147, T21).
+    r"|\byou\s+(?:\w+ly\s+)?(?:toss|tossed|count|counted|drop|dropped|press|pressed|put|place|placed|slide|slid|tip|tipped)\s+"
+    r"(?:the\s+|a\s+few\s+|some\s+|your\s+)?(?:coins?|silver|coppers?|gold|crowns?|them)\b[^.!?\n]{0,40}?"
+    r"\binto\s+(?:his|her|their)\s+(?:open\s+|waiting\s+|outstretched\s+)?(?:palm|hand|hands|pouch|purse|apron)\b",
     re.I,
 )
 
