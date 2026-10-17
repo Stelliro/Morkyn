@@ -924,6 +924,33 @@ _GENDERED_THING_RE = re.compile(
 )
 
 
+def pronoun_evidence(text: str, names: list[str]) -> dict[str, int]:
+    """How many narration sentences naming this person use only he-words, only she-words.
+
+    The pin's own evidence check: Elara Veyne, pinned "he" from one early mixed
+    sentence, had "her fingers", "her face", "she says" mended to "his" and "he"
+    in every scene (8B run 146, T76-T83). A turn whose named sentences all use
+    the other set is the story correcting the pin, not the pin correcting the story.
+    """
+    source = str(text or "")
+    clean = [str(n).strip() for n in names or [] if str(n or "").strip()]
+    if not source or not clean:
+        return {"he": 0, "she": 0}
+    name_re = re.compile(r"\b(?:" + "|".join(re.escape(n) for n in sorted(clean, key=len, reverse=True)) + r")\b")
+    masked = _mask_speech(source)
+    counts = {"he": 0, "she": 0}
+    for sentence in re.split(r"(?<=[.!?])[\"”’)]*[ \t]+|\n+", masked):
+        if not name_re.search(sentence):
+            continue
+        plain = re.sub(r"\[\[[^\]]*\]\]", " ", sentence)
+        has_he = bool(_WORDS_OF["he"].search(plain))
+        has_she = bool(_WORDS_OF["she"].search(plain))
+        if has_he == has_she:
+            continue
+        counts["he" if has_he else "she"] += 1
+    return counts
+
+
 def repair_pinned_pronouns(
     text: str, cast: list[dict[str, Any]], *, not_people: tuple[str, ...] | list[str] = ()
 ) -> tuple[str, list[dict[str, Any]]]:
