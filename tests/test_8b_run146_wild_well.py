@@ -216,6 +216,30 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertEqual(result["player"].get("gold_delta"), -3, note)
             conn.rollback()
 
+    def test_cargo_hauled_to_the_wharf_is_not_kept(self):
+        # 8B run 148, T11: hauling the Mistral's fish to the wharf put "cod fillets x1" in the pack.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("You shoulder the first bundle of fresh-caught cod from the holds. You carry it down the gangplank to the wharf, "
+                 "where Roderic is waiting with a cart. You drop it onto the cart, and he grunts.")
+        line = "I start hauling: I shoulder the first bundle of fish up out of the hold and carry it down the gangplank to the wharf, then go back for the next."
+        with connect() as conn:
+            conn.execute("DELETE FROM inventory")
+            kept = world._filter_inventory_changes(
+                conn, [{"name": "cod fillets", "quantity_delta": -1}, {"name": "cod fillets", "quantity_band": "small"}],
+                narration=prose, player_input=line,
+            )
+            self.assertEqual(kept, [])
+            # A thing carried and pocketed is kept.
+            pocketed = "You pick up the brass key and carry it over to the lamp, then slip it into your pack."
+            kept = world._filter_inventory_changes(conn, [{"name": "brass key", "quantity_band": "small"}], narration=pocketed,
+                                                    player_input="I pick up the brass key and carry it over to the lamp to look at it.")
+            self.assertEqual([c["name"] for c in kept], ["brass key"])
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db
