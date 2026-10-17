@@ -469,6 +469,16 @@ def run_offer_pass(
         report["fills"].append({"line": candidate["line"][:120], "card": card})
         if card is None:
             continue
+        # The task has to be the giver's, not the player's own words said back:
+        # Hamon's "Most of them would've asked for a cut" filled a card whose
+        # task was the player's "Take me out to the wreck and show me what is
+        # buried" (8B run 146, T34).
+        own = qp._player_own_line(str(player_input or ""))
+        if (card.get("task") and qp.evidence_found(card["task"], own)) or (
+            card.get("title") and len(card["title"]) >= 12 and qp.evidence_found(card["title"], own)
+        ):
+            report["fills"][-1]["dropped"] = "task_is_the_players_words"
+            continue
         system, user = build_check_prompt(candidate, card, player_input)
         try:
             raw = ask(system, user, max_tokens=CHECK_MAX_TOKENS, phase=CHECK_PHASE)
@@ -562,6 +572,9 @@ def find_progress_candidates(
             if not flat or flat.endswith("?"):
                 continue
             if any(q[:40] in flat.lower() for q in own_quotes):
+                continue
+            # A sentence tagged as the player's speech is theirs however it was split.
+            if re.search(r"\byou\s+(?:say|said|ask|asked|reply|replied|add|added|mutter|muttered|call|called|tell|told)\b", flat, re.I):
                 continue
             # A result word that is not a purpose ("to find the ship" finds
             # nothing), or the parser's own progress vocabulary ("counts out",

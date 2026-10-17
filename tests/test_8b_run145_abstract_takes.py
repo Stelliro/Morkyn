@@ -16,7 +16,19 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from app.llm import player_take_intent  # noqa: E402
-from app.world import _NOT_A_TAKEN_THING  # noqa: E402
+from app.world import _ABSTRACT_ITEM_RE, _NOT_A_TAKEN_THING  # noqa: E402
+
+
+class AThingKnownIsNoThingCarried(unittest.TestCase):
+    def test_abstract_grants_are_refused_by_head_noun(self):
+        # 8B run 146, T43: "information about the Drowned Hand x1" entered the pack.
+        for name in ("information about the Drowned Hand", "knowledge of the Aegir's Wake", "clue about Elara Veyne",
+                     "a look inside the hold", "Ferry ride to the wreck", "lookout", "permission to dive"):
+            self.assertIsNotNone(_ABSTRACT_ITEM_RE.match(name), name)
+
+    def test_things_are_still_things(self):
+        for name in ("rope", "hooded lamp", "Captain's Ledger", "flask of oil", "rusted compass", "bundle of letters"):
+            self.assertIsNone(_ABSTRACT_ITEM_RE.match(name), name)
 
 
 class ADutyKeptIsNoTake(unittest.TestCase):

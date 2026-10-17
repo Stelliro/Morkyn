@@ -29,6 +29,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ### Fixed
 
+- [CLAUDE] The player having to pay later backs no gain (8B run 146, T34). "The deeper you go, the more you'll have to pay" let a model GOLD +34 through while nothing reached the player; a future or conditional "you'll have to pay" is a promise, not coin moving. - `app/world.py`
+- [CLAUDE] A thing known, said or seen is no thing carried (8B run 146, T43). GRANT "information about the Drowned Hand" entered the pack; a grant whose head noun is information, knowledge, a clue, a secret, a look, a ride or a service is refused before the arrival test. - `app/world.py`
+- [CLAUDE] A card whose task is the player's own words is dropped (8B run 146, T34). The fill took "Take me out to the wreck and show me what is buried" from the player's quoted line and the check said yes; the task or title found in the player's line ends the card before the check. - `app/quest_offers.py`
+- [CLAUDE] A sentence tagged as the player's speech is no progress evidence however the prose splits it (8B run 146, T42). - `app/quest_offers.py`
 - [CLAUDE] Typed acceptances reach the engine in checked mode (8B run 146, T3 and T14). "I'll take one" and "The captain's ledger, then. I'll find it" left the one open offer standing: the one-shot parser used to propose these accepts, the checked flow proposed none. The engine now proposes the accept of the one offer the line can mean; the player's-own-words check still applies. - `app/quest_offers.py`, `app/llm.py`
 - [CLAUDE] A line that opens on a time of day skips the clock to it (8B run 146, T24). "In the morning I take the ledger down to Emery" at the inn in the evening left the clock where it was. - `app/world.py`
 - [CLAUDE] A bargain is read across the whole speech (8B run 146, T16). '"... I have twelve to my name." I set six gold coins on his counter. "Six for both, or I walk."' rolled nothing because the sum and the dealing word were in different sentences. - `app/skill_checks.py`
