@@ -9462,10 +9462,17 @@ def _adopt_new_place_into_town(conn, from_id: int, max_place_before: int, player
         return
     row = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
     now_id = int(row[0] or 0) if row else 0
-    if not now_id or now_id == int(from_id or 0) or now_id <= int(max_place_before or 0):
+    if not now_id or now_id == int(from_id or 0):
         return
     new = _location_row(conn, now_id)
     if new is None or int(venues._field(new, "parent_id", 0) or 0) or str(venues._field(new, "kind", "") or ""):
+        return
+    # Or one named in passing an earlier turn and reached now for the first time:
+    # "Northern Trade Docks", named by the tallyman at T3, walked to at T4,
+    # stayed a place of its own outside the town (8B run 134, T4).
+    if now_id <= int(max_place_before or 0) and (
+        str(venues._field(new, "settlement_size", "") or "").strip() or int(venues._field(new, "visit_count", 0) or 0) > 1
+    ):
         return
     town = _location_row(conn, int(from_id or 0))
     if town is not None and int(venues._field(town, "parent_id", 0) or 0):
@@ -18564,10 +18571,21 @@ def _ensure_npcs_from_narration(
         # with a weathered face" stored only a drawn dock hand (8B run 101, T4).
     created_intro: list[dict[str, Any]] = []
     for index, introduced in enumerate(introduced_all):
+        # Someone passed on the way stands in the town, not where the walk ends:
+        # "You pass a water carrier named Tam Radley ... You reach the docks"
+        # stood him on the docks (8B run 134, T4).
+        intro_at = int(location_id)
+        sentence = next((s for s in re.split(r"(?<=[.!?])\s+", text) if introduced["name"] in s), "")
+        if sentence and re.search(r"\b(?:pass(?:es|ed|ing)?|past|walk\s+by|go\s+by)\b",
+                                  sentence[: sentence.find(introduced["name"])], re.I):
+            here_row = _location_row(conn, int(location_id))
+            parent = int(venues._field(here_row, "parent_id", 0) or 0) if here_row is not None else 0
+            if parent:
+                intro_at = parent
         try:
             shell = create_shell_npc(
                 conn,
-                int(location_id),
+                intro_at,
                 presence="event_worthy",
                 power_rank=8 + index * 2,
                 role=introduced["role"],
