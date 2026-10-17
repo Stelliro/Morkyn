@@ -2214,6 +2214,11 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         src = cased or text
         named_text = re.sub(r"\b(?:not|instead\s+of|rather\s+than|ignoring|leave|leaving|left|away\s+from)\s+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+",
                             " ", src)
+        # Asked after is not asked: "ask the nearest dockhand where Elara Veyne
+        # can be found" rolled against Elara, who was not there (8B run 146,
+        # T77). The person a question is about is not its other side.
+        named_text = re.sub(r"\b(?:where|whereabouts\s+of|find\w*|about|after|looking\s+for|search\w*\s+for|news\s+of|word\s+of)"
+                            r"\s+(?:the\s+)?[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?", " ", named_text)
         if cased:
             named_text = named_text.lower()
         called = [
