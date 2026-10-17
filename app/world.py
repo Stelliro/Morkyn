@@ -14342,6 +14342,23 @@ def _upsert_npc(conn, npc: dict[str, Any]) -> int | None:
             if len(first) == 1:
                 existing = first[0]
                 role = str(existing["role"] or role)
+        if existing is None and name.strip() and " " in name.strip():
+            # The other way round: NPC_NEW "Gunilda Croft" beside the known bare
+            # "Gunilda" minted a second person (8B run 147, T83). One known
+            # person wearing only that first name is this person, now named in
+            # full.
+            given = name.strip().split()[0]
+            bare = conn.execute(
+                "SELECT * FROM npcs WHERE name = ? COLLATE NOCASE LIMIT 2", (given,)
+            ).fetchall()
+            if len(bare) == 1 and len(given) >= 3:
+                existing = bare[0]
+                try:
+                    conn.execute("UPDATE npcs SET name = ? WHERE id = ?", (name.strip(), int(existing["id"])))
+                    turn_ledger.note("npc", "bare_name_filled_in", name=given, full=name.strip())
+                except Exception:
+                    pass
+                role = str(existing["role"] or role)
         if existing is None and name.strip():
             # The model's misspelling of a name it already used (8B run 2, T7:
             # "Harbour Reevec" beside "Harbour Reeve") is that person: the same
