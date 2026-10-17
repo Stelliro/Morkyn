@@ -566,6 +566,16 @@ class AQuestionAskedPaysNothing(unittest.TestCase):
         self.assertEqual(note["source"], "gain_without_coin_dropped")
         self.assertNotIn("gold_delta", result["player"])
 
+    def test_coins_on_a_desk_move_nothing(self):
+        # 8B run 130, T2: "a desk cluttered with ledgers and loose coins ... as he takes in your words".
+        from app import world
+
+        result = {"player": {"gold_delta": 15}, "narration": (
+            "Garrick, the tallyman, sits behind a desk cluttered with ledgers and loose coins, his sharp eyes "
+            "narrowing as he takes in your words. “The guild has a few options.”")}
+        note = world._settle_stated_gold(result, "\"What job have you got that pays against the ledger?\"")
+        self.assertEqual(note["source"], "gain_without_coin_dropped")
+
     def test_a_chance_to_pay_down_is_no_payment(self):
         # 8B run 113, T2: "each one a chance to pay down what you owe" backed GOLD 15 (+12).
         from app import world
