@@ -295,6 +295,15 @@ Still one state fault per run, found in T1-T7. 12 of the 29 fixes are in the que
 
 ## Next
 
+2026-10-18: the quest parser split below is done (app/quest_offers.py; CHANGELOG [Unreleased]).
+The engine finds the offer line and its speaker, one small ask fills the card from that line,
+a second checks it against the passage, and the engine keeps giver, duplicates and acceptance.
+Replayed over the 360 archived turns the old parser was called on: the wrong jobs (the player's
+own words, debt talk, bare marks) reach no model or are dropped in code; the real offers are
+found. The check opponent (#89) now comes from the engine's scene record. Next run: 8B from run
+142 on this code, watching `quest_fill` / `quest_check` in the traces for the fill saying yes to
+no work and the check saying no to a real offer.
+
 Paused at run 141 (2026-10-17, Stell). Before more runs: Stell's rule that a task the model keeps
 failing should be made simpler (CLAUDE.md). The quest parser is that task: it reads a whole turn
 and must decide offer, giver, steps, takes and duplicates at once, and a rule was added after it

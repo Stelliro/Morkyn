@@ -17295,9 +17295,25 @@ def generate_turn(context: dict[str, Any], player_input: str) -> dict[str, Any]:
         raise
 
 
+def _quest_parser_mode() -> str:
+    """
+    "checked" (default): the engine finds offer lines, one small ask fills the
+    card, a second checks it (app/quest_offers.py). "legacy": the one-shot parser
+    that read the whole turn. "off": no model call; narrator marks still flow
+    only in legacy mode, since checked mode trusts no unverified mark.
+    AI_RPG_QUEST_PARSER=0|off|legacy|checked.
+    """
+    raw = str(os.environ.get("AI_RPG_QUEST_PARSER", "") or "").strip().lower()
+    if raw in {"0", "false", "no", "off"}:
+        return "off"
+    if raw == "legacy":
+        return "legacy"
+    return "checked"
+
+
 def _quest_parser_enabled() -> bool:
-    """AI_RPG_QUEST_PARSER=0 turns the parser call off; narrator marks still flow."""
-    return _env_bool("AI_RPG_QUEST_PARSER", True)
+    """AI_RPG_QUEST_PARSER=0 turns the model calls off; see _quest_parser_mode."""
+    return _quest_parser_mode() != "off"
 
 
 def _load_active_quests_snapshot() -> list[dict[str, Any]]:
@@ -17393,12 +17409,14 @@ def _run_quest_parser(
     """
     Read the final narration for quest material and attach turn["quest_changes"].
 
-    The narrator offers work in prose (and may mark it with QUEST / QUEST_DONE).
-    When ``quest_parser.needs_quest_parse`` says the turn may hold quest material,
-    one small parser call proposes quests and updates; ``merge_marks`` folds in
-    the narrator's marks. world.apply_turn validates and instates the result.
-    Nothing here may break a turn: any failure is traced and the turn goes on,
-    with the narrator's marks alone when they can still be merged.
+    Checked mode (default, 2026-10-18): the engine finds the spoken lines that
+    could offer work (app/quest_offers.find_offer_candidates), one small ask
+    fills a card from each line, a second small ask checks the card against
+    the passage, and a progress check does the same for a step of an active
+    job shown done. The narrator's QUEST marks are hints to look at a line,
+    never a card on their own. Legacy mode keeps the one-shot parser.
+    world.apply_turn validates and instates the result either way. Nothing
+    here may break a turn: any failure is traced and the turn goes on.
     """
     if not isinstance(turn, dict):
         return turn
@@ -17409,11 +17427,13 @@ def _run_quest_parser(
         narration = "\n\n".join(
             str(s.get("text") or "") for s in (turn.get("narration_segments") or []) if isinstance(s, dict)
         )
+    mode = _quest_parser_mode()
     record: dict[str, Any] = {
         "phase": "quest_parser",
         "event": "skipped",
         "marks": len(marks),
-        "enabled": _quest_parser_enabled(),
+        "enabled": mode != "off",
+        "mode": mode,
     }
     empty = {"new": [], "updates": []}
     try:
@@ -17421,6 +17441,7 @@ def _run_quest_parser(
 
         record["phase"] = qp.PARSER_PHASE
         inputs = _quest_parser_inputs(context)
+        memory = _quest_gate_memory(context)
         # Which branch opened the gate, or "" when it stayed shut, so a turn
         # review can see why an offer was or was not read (playtest #81).
         gate_reason = qp.quest_parse_gate(
@@ -17429,13 +17450,13 @@ def _run_quest_parser(
             marks=marks,
             active_quests=inputs["active_quests"],
             open_offers=inputs["open_offers"],
-            **_quest_gate_memory(context),
+            **memory,
         )
         gate = bool(gate_reason)
         record["gate"] = gate
         record["gate_reason"] = gate_reason
         parsed: dict[str, Any] = dict(empty)
-        if gate and use_model and record["enabled"]:
+        if gate and use_model and mode == "legacy":
             system, user = qp.build_parser_prompt(narration, player_input, marks=marks, **inputs)
             record["prompt_chars"] = len(system) + len(user)
             raw: Any = None
@@ -17455,11 +17476,46 @@ def _run_quest_parser(
                 record["event"] = "model_failed"
                 record["error"] = _trim_text(str(exc) or exc.__class__.__name__, 400)
             record["raw_reply"] = raw
-        changes = qp.merge_marks(parsed, marks)
+            changes = qp.merge_marks(parsed, marks)
+        elif gate and use_model and mode == "checked":
+            from app import quest_offers as qo
+
+            def ask(system: str, user: str, *, max_tokens: int, phase: str) -> Any:
+                return _chat_json(
+                    system, user, timeout=timeout, usage=usage, phase=phase, max_tokens=max_tokens, trace=trace
+                )
+
+            asked = qp.player_asks_for_work(player_input) or (
+                bool(memory.get("talking_to_someone")) and qp.player_asks_for_work(memory.get("previous_input") or "")
+            )
+            offers = qo.run_offer_pass(
+                narration,
+                player_input,
+                npcs=inputs["npcs"],
+                locations=inputs["locations"],
+                marks=marks,
+                asked_for_work=asked,
+                ask=ask,
+            )
+            progress = qo.run_progress_pass(narration, player_input, active=inputs["active_quests"], ask=ask)
+            parsed = {"new": offers["new"], "updates": progress["updates"]}
+            record["offers"] = {k: offers.get(k) for k in ("candidates", "dropped", "fills", "checks")}
+            record["progress"] = {k: progress.get(k) for k in ("candidates", "checks")}
+            record["asks"] = len(offers["fills"]) + len(offers["checks"]) + len(progress["checks"])
+            record["event"] = "checked" if (offers["candidates"] or progress["candidates"]) else "no_candidates"
+            # QUEST marks were read as hints above; only the narrator's
+            # QUEST_DONE / QUEST_UPDATE marks still merge, and validate_quest_changes
+            # holds them to the same evidence as any other update.
+            done_marks = [m for m in marks if str(m.get("op") or "").upper() != "QUEST"]
+            changes = qp.merge_marks({**parsed, "_parser_ran": True, "source": "checked"}, done_marks)
+        elif mode == "checked":
+            changes = dict(parsed, source="checked")
+        else:
+            changes = qp.merge_marks(parsed, marks)
         if isinstance(changes, dict) and (changes.get("new") or changes.get("updates")):
             turn["quest_changes"] = changes
         record["proposal"] = changes
-        if record["event"] == "skipped" and marks:
+        if record["event"] == "skipped" and marks and mode != "checked":
             record["event"] = "marks_only"
     except Exception as exc:  # the contract module is not ready, or it raised
         record["event"] = "error"
@@ -17467,7 +17523,6 @@ def _run_quest_parser(
     record["seconds"] = round(time.time() - started, 3)
     _append_trace(trace, record)
     return turn
-
 
 def _generate_turn_body(
     context: dict[str, Any],

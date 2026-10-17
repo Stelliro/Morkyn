@@ -2026,6 +2026,37 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         }
     else:
         pool = _npc_pool_from_context(ctx)
+        # The engine's own record of who is in the scene this turn
+        # (conversation.resolve: "present" is the scene's members here, plus
+        # whoever the line addresses). Someone the engine does not place here
+        # is never the other side of a roll: the partner left at the gate, the
+        # person asked after who is elsewhere, the companion when the line asks
+        # someone else (playtest #89, reopened twice; 7B run 5: Bryony, Warin,
+        # Verity, Abel absent). With no scene record yet (a fresh game, a
+        # harness without one) the location's roster stands in.
+        conv = ctx.get("conversation_turn") if isinstance(ctx.get("conversation_turn"), dict) else None
+        scene_here: set[str] | None = None
+        if conv is not None and isinstance(conv.get("present"), list):
+            scene_here = {str(c).upper() for c in conv.get("present") or [] if c}
+            scene_here |= {str(c).upper() for c in conv.get("addressed") or [] if c}
+        names_absent = False
+        if scene_here:
+            absent = [n for n in pool if str(n.get("code") or "").upper() not in scene_here]
+            if absent:
+                # A line that calls on someone who is not here rolls against
+                # nobody, not against whoever happens to be the one person left.
+                names_absent = any(_line_names_npc((cased or text).lower(), n) for n in absent)
+                try:
+                    from app import turn_ledger
+
+                    turn_ledger.note(
+                        "check", "absent_not_an_opponent",
+                        names=[str(n.get("name") or n.get("code") or "") for n in absent][:6],
+                        named_in_line=names_absent,
+                    )
+                except Exception:
+                    pass
+            pool = [n for n in pool if str(n.get("code") or "").upper() in scene_here]
         # "I keep my eyes on the man in the skiff, not Emrys. 'I asked him.
         # Tobin, what is under the tarpaulin?'" rolled persuasion vs Emrys (7B
         # run 36, T6). A name the line turns away from is not the other side,
@@ -2080,8 +2111,10 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
             addressed = [str(c).upper() for c in conv.get("addressed") or []]
             by_code = {str(n.get("code") or "").upper(): n for n in pool if n.get("code")}
             if addressed and addressed[0] in by_code:
+                # The engine resolved who the line is said to; a name left
+                # behind earlier in the line changes nothing.
                 matched_npc = by_code[addressed[0]]
-            elif not addressed and len(pool) == 1:
+            elif not addressed and not names_absent and len(pool) == 1:
                 matched_npc = pool[0]
             # The line asks someone by their job ("ask the clerk about the
             # boats"): a stale partner with another job is not the other side.

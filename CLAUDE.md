@@ -33,6 +33,15 @@ belong to, with the date).
   be simpler." When the same call fails run after run (a field it fills wrong, a judgment it keeps
   getting backwards), split it, narrow what it is asked, or move the hard part to the engine,
   instead of adding another rule that catches its output afterwards.
+- **Engine first; checkers, not narrator prompt lines** (2026-10-18): "fixes should be made with
+  the game engine as a priority ... it's better to add more checkers or checkers with better rules
+  that pass on instruction than editing the narrator's prompting as doing that dulls the responses
+  on a small scale that could add up in the end." When a fact has to be decided (a job offered,
+  a person present, a price agreed), the engine finds the candidate with keywords and its own
+  records, one small model ask fills in the parameters from the one line found, and a second
+  small ask checks the result against the turn's text (does this appear in the context, does it
+  make sense to hand to the player). Only then does the engine act. The narrator's prompt stays
+  as it is.
 - The player's own words and choices are theirs. The model must not act, speak or decide for the
   player, but it may describe the world reacting freely.
 
@@ -106,10 +115,14 @@ belong to, with the date).
 - **Typical model faults** (handle them with the guiding rule above): acting or speaking for the
   player, prose and ops disagreeing (moves, places, people, items, gold), stock phrases, codes
   or op text in the prose, voice slipping to first or third person, retry prompts echoed back.
-- **The full test suite** (`python -m unittest` in .venv) has 15 known failures as of
-  2026-10-14 (batch5 x2, live_smoke_places, prompt_context_reachability cited keys, quest_live,
-  quest_parser x2, quest_pipeline, skill_roster, town_ui x4, and the test_bare_assert_files and
-  test_tts loader errors). Anything beyond those is new, except the known flake
+- **The full test suite** (`tools/run_suite.py` in .venv) has 14 known failures as of
+  2026-10-18 (3593 tests): batch5 x2 (unshown name bound to the one figure, role in the figure
+  sentence), prompt_context_reachability x2 (cited world_state keys, packet keys), quest_live
+  (paid request and assignment), quest_parser x2 (unknown giver vs board, accept then complete
+  pays), op_list asks for a code or quoted name, layout and look stay in their files, town_ui x3
+  (cell walk-out x2, arrow with no road), and the test_bare_assert_files and test_tts loader
+  errors (httpx not installed). quest_pipeline's unready-parser test passes again since the
+  hook rewrite. Anything beyond those is new, except the known flake
   `test_dice_rolls_mirror_applied_turns.test_the_check_is_in_the_dice_audit_for_its_turn`, which
   sometimes fails in the full run and passes alone (seen 2026-10-14 twice).
 - **Evidence lives in model traces** (`data/model_traces/turn-*.json`): read them before the code.
@@ -125,11 +138,14 @@ belong to, with the date).
 
 - **Never touch the live `data/`** from tests, probes or servers. There is no single data-dir
   setting; use `tools/playtest_setup_presets.isolated_data_env(dir)` with absolute paths.
-- **Line endings are mixed.** CHANGELOG.md, README.md, docs/PLAYTEST_ISSUES.md, app/world.py,
-  app/skill_checks.py, app/conversation.py, app/turn_dsl.py, app/prompts.py,
-  app/player_resources.py, app/quest_parser.py and static/styles.css are CRLF; app/llm.py,
-  app/main.py, static/app.js and most tests are LF. Edit with the Edit tool or a byte-level,
-  EOL-preserving script. Never sed, and never `git stash` (autocrlf rewrites files).
+- **Line endings are mixed.** CHANGELOG.md, README.md, docs/PLAYTEST_ISSUES.md, docs/TODO_NEXT.md,
+  app/world.py, app/llm.py, app/main.py, app/skill_checks.py, app/conversation.py,
+  app/narration_pipeline.py, app/turn_dsl.py, app/prompts.py, app/player_resources.py,
+  app/quest_parser.py, static/styles.css and static/index.html are CRLF (checked 2026-10-18);
+  static/app.js, CLAUDE.md, the showcase docs and most tests are LF. Check with `file` before a
+  scripted edit; a file can have changed sides since this list was written. Edit with the Edit
+  tool or a byte-level, EOL-preserving script that reads bytes and keeps the file's own EOL.
+  Never sed, and never `git stash` (autocrlf rewrites files).
 - **No heredocs into python**, and nothing backgrounded that reads stdin; they hang or mangle
   backslashes. Write scripts to a file first. After a scripted edit, check for stray control
   bytes.

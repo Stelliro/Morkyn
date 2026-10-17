@@ -23,6 +23,14 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 > New entries go here. When a batch is pushed this section becomes the next `0.10.0-dev.N`.
 
+### Changed
+
+- [CLAUDE] Job offers are found by the engine and checked by two small asks instead of one parser reading the whole turn (standing rule 2026-10-18: engine first, checkers rather than narrator prompt lines). Over the 141 8B runs the one-shot quest parser proposed a job in 355 of its 360 calls, 112 were created, and a rule was added after it almost every run; the wrong ones came from the player's own words, debt talk and bare narrator marks. Now `app/quest_offers.py` finds the spoken lines that carry job words and who speaks them (the parser's own vocabulary, one speaker's lines in a paragraph read together), drops the known hard shapes in code (a question back about what work is wanted, a demand to prove oneself, the player paying for a service, directions to a person), asks the model to fill one card from that one line, asks it again whether the giver offers that task to the player in the passage, and only then runs the engine's own validation (giver, duplicates, retold offers, reward caps, the player's acceptance). A step of an active job shown done is checked the same way. Narrator QUEST marks only point at a giver's line; a mark with no spoken line behind it makes nothing. Replayed on the 360 archived turns, every wrong job has no candidate or is dropped before the model, and the real offers are found. `AI_RPG_QUEST_PARSER=legacy` keeps the old one-shot parser; `0` turns the asks off. Each ask is traced under `quest_fill`, `quest_check` and `quest_progress_check`. - `app/quest_offers.py`, `app/llm.py`, `app/quest_parser.py`
+
+### Fixed
+
+- [CLAUDE] A check's opponent is someone the engine places in the scene (#89, reopened twice). The stale opponent was patched three times by phrasing (left behind, walked away from, asked past) and came back each run with a new one. The roll's other side is now drawn from the engine's own record of who is here this turn (`conversation.resolve`: present and addressed); a partner left at the gate, someone asked after who is elsewhere, or the companion when the line asks someone else is never the one rolled against. With no scene record the location's roster stands in as before. - `app/skill_checks.py`
+
 
 ## [0.10.0-dev.13] - 2026-10-17
 
