@@ -9568,7 +9568,8 @@ _PLACEISH_RE = re.compile(
     r"\b(?:docks?|wharf|quay|pier|jetty|harbou?r|house|hall|office|inn|tavern|shop|store|yard|tower|church|chapel|temple|"
     r"shrine|bridge|gate|gates|road|street|lane|square|market|wreck|ship|boat|skiff|camp|village|town|city|port|mill|farm|"
     r"forge|smithy|stables?|barracks|keep|castle|fort|cave|mine|well|warehouse|granary|bakehouse|brewery|tannery|flats|"
-    r"marsh|beach|shore|cove|bay|island|ruins?|claim|cabin|hut|cottage|manor|palace|library|archive|vault|cellar|crypt)\b",
+    r"marsh|beach|shore|cove|bay|island|ruins?|claim|cabin|hut|cottage|manor|palace|library|archive|vault|cellar|crypt|"
+    r"hull|deck|wreckage|holds?|rigging|mast|bow|stern|cabin|gangplank)\b",
     re.I,
 )
 
