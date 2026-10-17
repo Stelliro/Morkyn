@@ -9404,6 +9404,20 @@ def _movement_destination_from_narration(
     return ""
 
 
+# "ask what a chart of the Mire's Breath would cost", "wonder where the reeve
+# is": a question in the player's own narration, to the end of its clause.
+_NARRATED_QUESTION_RE = re.compile(
+    r"\b(?:ask\w*|wonder\w*|enquir\w*|inquir\w*|question\w*)\s+(?:[\w'’-]+\s+){0,3}?"
+    r"(?:what|where|who|whom|whose|whether|if|how|which|why|when)\b[^.!?;\"“”]*",
+    re.I,
+)
+# A later time or a meeting arranged in speech: a plan, not a move this turn.
+_FUTURE_PLAN_RE = re.compile(
+    r"\b(?:meet\s+(?:me|us)|tomorrow|tonight|at\s+first\s+light|at\s+dawn|at\s+dusk|at\s+sundown|at\s+sunrise|at\s+noon|"
+    r"at\s+(?:the\s+)?next\s+(?:low\s+|high\s+)?tide|when\s+the\s+tide|in\s+the\s+morning|this\s+evening|later|"
+    r"next\s+(?:day|morning|week|tide)|after\s+(?:dark|nightfall)|before\s+(?:dawn|nightfall|dark))\b",
+    re.I,
+)
 # A question that asks to go somewhere ("can we go to the mill?", "will you
 # take me to Riverford?") is a request; any other question names a place
 # without going there.
@@ -9431,10 +9445,24 @@ def _destination_text(player_input: str) -> str:
     not destinations.
     """
     line = _player_line(player_input)
+    # A question told, not typed with its "?", names no destination either:
+    # "ask what a tide chart of the Mire's Breath would cost" walked the player
+    # out of the store to the Mire's Breath (8B run 146, T89).
+    line = _NARRATED_QUESTION_RE.sub(" ", line)
     # Said, a place is named, not gone to: '"The tally house sent me about the
     # dredge sites."' took Isk back to the tally house (8B run 77, T6). Speech
     # that asks to go ("Take me to the docks") still counts.
-    line = re.sub(r"\"[^\"\n]*\"|“[^”\n]*”", lambda m: m.group(0) if _ASKS_TO_GO_RE.search(m.group(0)) else " ", line)
+    # A plan for later is not a walk now: '"We go at the next low tide. Meet me
+    # at the Old Wharf at first light."' moved the player to the wharf (8B run
+    # 146, T85). Sentences of speech with a meeting or a later time go.
+    def _keep_speech(m: re.Match[str]) -> str:
+        quote = m.group(0)
+        if not _ASKS_TO_GO_RE.search(quote):
+            return " "
+        kept_parts = [p for p in re.split(r"(?<=[.!?;])\s+", quote) if p.strip() and not _FUTURE_PLAN_RE.search(p)]
+        return " ".join(kept_parts) if kept_parts else " "
+
+    line = re.sub(r"\"[^\"\n]*\"|“[^”\n]*”", _keep_speech, line)
     pieces = re.split(r"(?<=[.!?])[\"”']?\s+|(?<=[.!?][\"”])", line)
     kept = []
     for piece in pieces:
@@ -15639,6 +15667,14 @@ def _payment_shown(narration: str, player_input: str) -> bool:
     return False
 
 
+# Containers and measures that name an amount of a thing, not a thing of their own.
+_MEASURE_NOUNS = frozenset({
+    "coil", "coils", "flask", "bundle", "length", "roll", "sack", "bag", "pouch", "bottle", "jar", "skein", "spool",
+    "hank", "cask", "keg", "barrel", "crate", "box", "handful", "pile", "stack", "heap", "sheaf", "bale", "jug",
+    "cup", "bowl", "plate", "loaf", "slab", "strip", "sheet", "pair", "set", "piece", "bit", "scrap", "lump",
+})
+
+
 def _filter_inventory_changes(
     conn,
     changes: list[dict[str, Any]],
@@ -15681,6 +15717,19 @@ def _filter_inventory_changes(
         name = _sanitize_item_name(str(change.get("name", "")))
         if not name:
             continue
+        # A measure of another grant is not a second thing: GRANT "rope" and
+        # GRANT "coil" for "a coil of rope" put "coil x1" beside the rope
+        # (8B run 146, T88). The coil, flask or bundle of a thing granted this
+        # turn is that thing.
+        own_tokens = _item_name_tokens(name.lower())
+        if len(own_tokens) == 1 and own_tokens[0] in _MEASURE_NOUNS:
+            heads = [
+                (_item_name_tokens(str(o.get("name") or "").lower()) or [""])[-1]
+                for o in changes if isinstance(o, dict) and o is not change
+            ]
+            if any(h and re.search(rf"\b{re.escape(own_tokens[0])}s?\s+of\s+(?:[\w'’-]+\s+){{0,2}}?{re.escape(h)}", text) for h in heads):
+                turn_ledger.note("inventory", "measure_of_another_grant", item=name)
+                continue
         # A thing known, said or seen is no thing carried: GRANT "information
         # about the Drowned Hand" entered the pack (8B run 146, T43), after
         # "knowledge of the Aegir's Wake", "clue about Elara Veyne" and "a look
@@ -21212,7 +21261,6 @@ _OWN_COIN_RE = re.compile(
     r"\b(?:you\s+(?:\w+\s+){0,2}?(?:spent|spend|paid|pay|gave|give|handed|hand|counted|count|parted)|"
     r"(?:coins?|gold|crowns?)\s+(?:you\s+)?(?:spent|paid|handed|gave|lost|parted\s+with)|"
     r"spent\s+on|memory\s+of\s+(?:the\s+)?(?:\w+\s+){0,3}?(?:coins?|gold)|"
-    r"(?:your|the)\s+(?:own\s+)?(?:purse|pouch|pocket)|in\s+your\s+(?:hand|hands|palm|fist)|"
     r"count\w*\s+(?:the\s+|your\s+)?(?:coins?|gold)|(?:coins?|gold)\s+in\s+your)\b",
     re.I,
 )

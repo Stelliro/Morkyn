@@ -57,6 +57,26 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertEqual(world._venue_requested_and_reached(conn, LINE, PROSE, "L%d" % int(clearing)), "")
             conn.rollback()
 
+    def test_a_coil_of_rope_is_the_rope(self):
+        # 8B run 146, T88: GRANT "rope" and GRANT "coil" for "a coil of rope" put "coil x1" beside the rope.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("Elara gestures toward a shelf where coils of rope hang in neat bundles. You pick up a coil, its texture "
+                 "rough under your fingers. You buy a flask of lamp oil, its glass clear and unmarked.")
+        line = "I walk with Elara to the general store to buy a coil of rope and a flask of lamp oil."
+        changes = [
+            {"name": "rope", "quantity_band": "small"},
+            {"name": "lamp oil", "quantity_band": "small"},
+            {"name": "coil", "quantity_band": "trivial"},
+        ]
+        with connect() as conn:
+            kept = world._filter_inventory_changes(conn, changes, narration=prose, player_input=line)
+            self.assertEqual(sorted(c["name"] for c in kept), ["lamp oil", "rope"])
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db

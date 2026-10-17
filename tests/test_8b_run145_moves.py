@@ -177,6 +177,26 @@ class ThePlaceLeftIsNotTheDestination(unittest.TestCase):
         row = _movement_destination_from_input(FLAT_ROWS, "I leave the flats and walk back to the Old Wharf.", "Edge of the Flats")
         self.assertEqual(row["name"], "The Old Wharf")
 
+    def test_a_meeting_arranged_for_later_is_no_walk_now(self):
+        # 8B run 146, T85: '"We go at the next low tide. Meet me at the Old Wharf at first light."' moved the player there.
+        from app.world import _movement_destination_from_input
+
+        line = "\"Then come with me yourself, Elara. We go at the next low tide. Meet me at the Old Wharf at first light.\""
+        self.assertIsNone(_movement_destination_from_input(FLAT_ROWS, line, "Edge of the Flats"))
+        # Asking to go now still walks.
+        row = _movement_destination_from_input(FLAT_ROWS, "\"We go to the Old Wharf now, Elara.\"", "Edge of the Flats")
+        self.assertEqual(row["name"], "The Old Wharf")
+
+    def test_a_question_told_names_no_destination(self):
+        # 8B run 146, T89: "ask what a tide chart of the Mire's Breath would cost" walked the player out of the store.
+        from app.world import _movement_destination_from_input
+
+        rows = FLAT_ROWS + [{"id": 9, "code": "L9", "name": "The Mire's Breath", "parent_id": None, "kind": ""}]
+        line = "I pay the storekeeper for the rope and the oil, and ask what a tide chart of the Mire's Breath would cost."
+        self.assertIsNone(_movement_destination_from_input(rows, line, "Saltmarrow General Store"))
+        row = _movement_destination_from_input(rows, "I ask Theobald the price, then set out for the Mire's Breath.", "Saltmarrow General Store")
+        self.assertEqual(row["name"], "The Mire's Breath")
+
     def test_from_one_place_to_another_goes_to_the_second(self):
         from app.world import _movement_destination_from_input
 
