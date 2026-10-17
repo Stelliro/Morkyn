@@ -17904,6 +17904,30 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
                 npc["_figure_pronouns"] = "she"
             elif _HINT_MALE_RE.fullmatch(noun):
                 npc["_figure_pronouns"] = "he"
+            # The name the ops gave fits the sex the prose shows: NPC_NEW "Elsabet
+            # Hollis" for "a figure ... The man's eyes narrow" (8B run 126, T5).
+            shown_sex = {"she": "female", "he": "male"}.get(str(npc.get("_figure_pronouns") or ""), "")
+            if not shown_sex:
+                at = text.find(hint)
+                after = " ".join(re.split(r"(?<=[.!?])\s+", text[at:])[:3]) if at >= 0 else ""
+                said_male = re.search(r"\b(?:the\s+man|he|his|him)\b", after, re.I)
+                said_female = re.search(r"\b(?:the\s+woman|she|her|hers)\b", after, re.I)
+                if said_male and not said_female:
+                    shown_sex = "male"
+                elif said_female and not said_male:
+                    shown_sex = "female"
+            try:
+                from app.setup_coherence import name_sex
+
+                given_sex = name_sex(str(npc.get("name") or ""))
+            except Exception:
+                given_sex = ""
+            if shown_sex and given_sex and given_sex != shown_sex:
+                drawn = unique_person_name(conn, name_seed("sex_fit", npc.get("name"), npc.get("role")), sex=shown_sex)
+                turn_ledger.note("npc", "name_fits_the_sex_shown", given=str(npc.get("name") or ""), drawn=drawn,
+                                 shown=shown_sex)
+                npc["name"] = drawn
+                npc["_figure_pronouns"] = "he" if shown_sex == "male" else "she"
         out.append(npc)
     return out
 

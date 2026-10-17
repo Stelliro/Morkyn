@@ -885,6 +885,24 @@ class AShortNameIsTheKnownPlace(unittest.TestCase):
         self.assertNotIn(got, (int(a), int(b)))
 
 
+class TheOpsNameFitsTheSexShown(unittest.TestCase):
+    """8B run 126, T5: NPC_NEW "Elsabet Hollis" for "a figure watching ... The man's eyes narrow"."""
+
+    def test_a_mans_name_for_the_man(self):
+        from app import world
+        from app.db import connect
+        from app.setup_coherence import name_sex
+
+        seed()
+        with connect() as conn:
+            prose = ("A shadow falls across the wreck. You look up to see a figure watching from the edge of the dock, "
+                     "arms crossed. The man’s eyes narrow as he takes in your efforts.")
+            npcs = world._npcs_shown_in_prose(conn, [{"name": "Elsabet Hollis", "role": "fish gutter"}], prose)
+        self.assertEqual(len(npcs), 1)
+        self.assertNotEqual(name_sex(npcs[0]["name"]), "female")
+        self.assertEqual(npcs[0]["_figure_pronouns"], "he")
+
+
 class ANamedFigureAndAnotherAreTwoPeople(unittest.TestCase):
     """8B run 101, T4: "a figure standing at the bow—Captain Miren" and "a man with a weathered face"
     stored only a drawn dock hand."""
