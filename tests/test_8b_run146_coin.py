@@ -78,6 +78,16 @@ class APaymentShownBeatsAGainOp(unittest.TestCase):
         _settle_stated_gold(result, "\"Eleven gold, now, into my hand.\"")
         self.assertNotEqual(result["player"].get("gold_delta"), 11)
 
+    def test_the_players_own_ask_told_back_backs_no_gain(self):
+        # 8B run 148, T34: "ask him to ... pay the forty-five gold" in the narration backed GOLD 45 while Roderic refused.
+        prose = ("You tell him the salvage from the Stormbreaker is on the carts, fittings, chain, and planks, and ask him to mark "
+                 "the job as complete and pay the forty-five gold. He exhales sharply. \"The salvage crew's already taken what they "
+                 "wanted. The rest is for the reeve's men.\"")
+        line = "I tell Roderic the Stormbreaker's salvage is on the carts and ask him to mark the guild's job done and pay the forty-five gold."
+        result = {"narration": prose, "player": {"gold_delta": 45}}
+        _settle_stated_gold(result, line)
+        self.assertNotEqual(result["player"].get("gold_delta"), 45)
+
     def test_coin_handed_to_the_player_still_gains(self):
         prose = "He counts out twenty gold into your palm. “For the warning,” he says."
         result = {"narration": prose, "player": {"gold_delta": 20}}

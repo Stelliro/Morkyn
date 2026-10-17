@@ -21697,6 +21697,10 @@ _ASKED_CLAUSE_RE = re.compile(
     r"(?:what|how|whether|if|which|who|where|about)\b[^,.;!?]*"
     # A job told by what it pays moves nothing: "the mention of a job that pays
     # off debts" backed GOLD 10 (+8) (8B run 63, T6).
+    # A request that someone pay is no payment: "ask him to mark the job as
+    # complete and pay the forty-five gold" backed GOLD 45 (8B run 148, T34).
+    r"|\b(?:ask|asks|asked|asking|tell|tells|told|telling|demand\w*|insist\w*|press\w*|urge\w*)\s+"
+    r"(?:him|her|them|the\s+\w+|[A-Z][\w'’-]+)\s+(?:plainly\s+|again\s+)?to\s+[^.;!?]*"
     r"|\b(?:job|jobs|work|task|contract|run|haul|salvage)\s+(?:that|which)\s+pays?\b[^,.;!?]*"
     # Paying heed is no paying: "no one pays you much mind" backed GOLD 20
     # (+35) after a salvage nobody paid for (8B run 73, T6).
@@ -21950,6 +21954,11 @@ def _settle_stated_gold(
         moving: list[str] = []
         for i, s in enumerate(spans):
             if _PROMISED_MONEY_RE.search(s) or _OWN_COIN_RE.search(s):
+                continue
+            # The player's own line told back is no coin moving: "You tell him
+            # the salvage is on the carts and ask him to pay the forty-five
+            # gold" backed GOLD 45 while Roderic refused (8B run 148, T34).
+            if _retells_players_line(s, own) or _ASKED_CLAUSE_RE.search(s):
                 continue
             prev = spans[i - 1] if i else ""
             # Coin moves in this sentence, or the one before hands it over and
