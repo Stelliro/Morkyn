@@ -143,9 +143,12 @@ class TestTheParserHook(unittest.TestCase):
         return mock.patch.multiple(quest_parser, **calls), calls
 
     def test_the_hook_sets_quest_changes_and_traces_the_call(self):
+        # Legacy mode: the one-shot parser. The checked flow (default) is
+        # covered in tests/test_quest_offers.py.
         patcher, calls = self._patched()
         trace: list = []
-        with patcher, mock.patch.object(llm, "_chat_json", return_value={"new": []}) as chat:
+        with patcher, mock.patch.dict(os.environ, {"AI_RPG_QUEST_PARSER": "legacy"}), \
+                mock.patch.object(llm, "_chat_json", return_value={"new": []}) as chat:
             turn = llm._run_quest_parser(self._turn(), {"active_quests": []}, "I agree", trace=trace)
         self.assertEqual(turn["quest_changes"]["source"], "parser+marks")
         self.assertEqual(turn["quest_changes"]["new"][0]["title"], "Escort the silk")
@@ -169,14 +172,24 @@ class TestTheParserHook(unittest.TestCase):
         merged = {"new": [{"title": "Escort the silk"}], "updates": [], "source": "marks"}
         patcher, calls = self._patched(merge_marks=mock.Mock(return_value=merged))
         trace: list = []
-        with patcher, mock.patch.object(llm, "_chat_json", side_effect=llm.LlmError("timed out")):
+        with patcher, mock.patch.dict(os.environ, {"AI_RPG_QUEST_PARSER": "legacy"}), \
+                mock.patch.object(llm, "_chat_json", side_effect=llm.LlmError("timed out")):
             turn = llm._run_quest_parser(self._turn(), {}, "I agree", trace=trace)
         self.assertEqual(turn["quest_changes"], merged)
         self.assertEqual(calls["merge_marks"].call_args.args[0], {"new": [], "updates": []})
         self.assertEqual(trace[-1]["event"], "model_failed")
 
+    def test_a_failing_ask_in_checked_mode_keeps_no_bare_mark(self):
+        trace: list = []
+        with mock.patch.dict(os.environ, {"AI_RPG_QUEST_PARSER": "checked"}), \
+                mock.patch.object(llm, "_chat_json", side_effect=llm.LlmError("timed out")):
+            turn = llm._run_quest_parser(self._turn(), {}, "I agree", trace=trace)
+        self.assertNotIn("quest_changes", turn)
+        self.assertEqual(trace[-1]["event"], "checked")
+        self.assertIn("error", trace[-1]["offers"]["fills"][0])
+
     def test_an_unready_parser_never_breaks_the_turn(self):
-        patcher, _calls = self._patched(needs_quest_parse=mock.Mock(side_effect=NotImplementedError))
+        patcher, _calls = self._patched(quest_parse_gate=mock.Mock(side_effect=NotImplementedError))
         trace: list = []
         with patcher, mock.patch.object(llm, "_chat_json") as chat:
             turn = llm._run_quest_parser(self._turn(), {}, "I agree", trace=trace)

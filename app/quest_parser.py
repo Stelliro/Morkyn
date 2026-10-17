@@ -1380,7 +1380,16 @@ def validate_quest_changes(
                 evidence, narration, player_input, offer_line=offer_line, giver=giver, giver_ref=giver_ref, npcs=npcs
             )
             checked = verdict["checked"]
-            if not verdict["ok"]:
+            if not verdict["ok"] and raw.get("_checked") and verdict.get("why") not in {"refusal", "giver_refuses"}:
+                # A card the engine found by its job words, the fill ask read
+                # as work offered, and the check ask confirmed against the
+                # passage (app/quest_offers.py). The keyword judge is a veto
+                # on refusals only; its positive vocabulary no longer has to
+                # name every phrasing an offer can take.
+                from app import turn_ledger
+
+                turn_ledger.note("quest", "checked_offer_kept", title=title, keyword_verdict=verdict.get("why"))
+            elif not verdict["ok"]:
                 reasons.append("evidence_is_not_an_offer")
             elif (giver is None and not re.search(r"[\"“”]", evidence)
                   and not _offer_is_spoken(offer_line or evidence, narration)

@@ -1,0 +1,565 @@
+"""
+Quest offers, engine first: the engine finds the line, one small ask fills the
+card, a second small ask checks it, and the engine decides the rest.
+
+Why this exists (2026-10-18)
+----------------------------
+The one-shot quest parser read a whole turn and had to decide, in one JSON
+reply, whether work was offered, by whom, what the task was, its steps, its pay,
+whether the player took it, and whether it duplicated an open job. Over 141 8B
+runs it proposed a job in 355 of 360 calls; 112 were created and a rule was
+added after it almost every run (docs/showcase/saltmarrow-8b-findings.md). That
+is the shape of a task too hard for the model (CLAUDE.md: simplify the failing
+task; engine first, checkers not narrator prompt lines).
+
+The split
+---------
+1. ``find_offer_candidates``: the engine, with no model, finds the spoken lines
+   that could offer work: someone other than the player speaks them
+   (``conversation.spoken_lines``), they carry job language (the parser's own
+   ``_JOB_RE`` / ``_GIVER_OFFERS_JOB_RE`` vocabulary), they are not a refusal,
+   and the known hard shapes (a question back about what work is wanted, a
+   bare demand to prove oneself) are dropped here. The speaker is the giver.
+2. ``build_fill_prompt``: one small ask per candidate line fills the card from
+   *that line alone*: does it offer work, what is the task, a title, steps,
+   the place and pay the line names. It never sees the roster, the open quests
+   or the player's acceptance; those are the engine's.
+3. ``build_check_prompt``: a second small ask answers three yes/no questions
+   against the paragraph: is this task offered to the player by the giver, is
+   it a specific piece of work, is it in the text. Any "no" drops the card.
+4. The surviving cards go to ``quest_parser.validate_quest_changes`` in the
+   legacy proposal shape with ``_checked`` set: grounding, giver resolution,
+   duplicates, retold offers, reward caps and the player's own acceptance stay
+   where they were.
+
+``run_offer_pass`` and ``run_progress_pass`` take an ``ask(system, user,
+max_tokens, phase)`` callable so this module never talks to the model itself;
+app/llm.py supplies ``_chat_json``.
+"""
+from __future__ import annotations
+
+import re
+from typing import Any, Callable
+
+from app import quest_parser as qp
+
+FILL_PHASE = "quest_fill"
+CHECK_PHASE = "quest_check"
+PROGRESS_PHASE = "quest_progress_check"
+FILL_MAX_TOKENS = 260
+CHECK_MAX_TOKENS = 90
+CANDIDATE_CAP = 3
+PROGRESS_CAP = 2
+
+Ask = Callable[..., Any]
+
+# The giver setting the task for one who asked: "You'll need to clear a full
+# load" (8B run 47, T2). Working off one's own debt, paying, waiting and proving
+# oneself set no task (runs 74, 132).
+_SETS_TASK_RE = re.compile(
+    r"\byou['’]ll\s+(?:need|have)\s+to\s+(?!work\s+(?:it|that|this|the\s+debt|your\s+debt)\s+off)"
+    r"(?!pay\b|wait\b|be\s+careful|prove|show)[a-z]+",
+    re.I,
+)
+# A bare demand to prove oneself names no task (8B run 132, T2).
+_PROVE_ONLY_RE = re.compile(
+    r"\byou(?:['’]ll|\s+will|['’]d|\s+would)?\s+(?:have|need|got)\s+to\s+(?:prove|show)\s+"
+    r"(?:yourself|your\s+worth|your\s+mettle|you(?:['’]re|\s+are)\s+worth\s+it)\b",
+    re.I,
+)
+_YES_RE = re.compile(r"^\s*(?:y|yes|true|1)\b", re.I)
+
+
+def _yes(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value >= 1
+    return bool(_YES_RE.match(str(value or "")))
+
+
+def _paragraph_of(narration: str, line: str) -> str:
+    """The paragraph that holds the spoken line; the whole text when none does."""
+    probe = qp._ws(line)[:40]
+    for paragraph in re.split(r"\n\s*\n", str(narration or "")):
+        if probe and probe in qp._ws(paragraph):
+            return re.sub(r"\s+", " ", paragraph).strip()
+    return re.sub(r"\s+", " ", str(narration or "")).strip()
+
+
+def _npc_label(npc: dict[str, Any] | None, stranger: str = "", kind: str = "spoken") -> str:
+    if kind == "posted":
+        return "a posted notice"
+    if npc:
+        name = str(npc.get("name") or "").strip()
+        role = str(npc.get("role") or "").strip()
+        return f"{name} ({role})" if role else name or "someone"
+    return stranger or "someone the engine does not know yet"
+
+
+# "You'll find her where the wreckage still floats", "You'll find them at the
+# docks": directions to a person or thing, not work (8B runs 111, 48, 55, 99).
+_FIND_POINTER_RE = re.compile(
+    r"\byou(?:['’]ll|\s+will|\s+might|\s+may|\s+can|\s+should)\s+find\s+(?:him|her|them|it)\b", re.I
+)
+
+
+def _code_veto(line: str, *, asked_for_work: bool) -> str:
+    """Why a job-worded line still offers nothing, decided in code; "" when it may."""
+    cleaned = qp._offer_text(line)
+    if qp._NO_WORK_RE.search(line):
+        return "refusal"
+    if qp._ASKS_WHICH_WORK_RE.search(line) and not qp._GIVER_OFFERS_JOB_RE.search(line):
+        return "asks_what_work"
+    if _PROVE_ONLY_RE.search(line) and not qp._GIVER_OFFERS_JOB_RE.search(line) and not qp._JOB_RE.search(cleaned):
+        return "prove_only"
+    # The player paying for a service is no job for them (8B run 106, T7:
+    # "you're paying for the risk"; runs 82, 96: "if you're willing to pay").
+    if qp._PLAYER_PAYS_RE.search(line) and not qp._PAYS_THE_PLAYER_RE.search(line) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned):
+        return "player_pays"
+    without_pointer = _FIND_POINTER_RE.sub(" ", cleaned)
+    if _FIND_POINTER_RE.search(cleaned) and not qp._JOB_RE.search(without_pointer) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned):
+        return "pointer_to_someone"
+    return ""
+
+
+def _carries_offer(line: str, *, asked_for_work: bool) -> str:
+    """The job language the line carries, as the reason it is a candidate; "" when none."""
+    cleaned = qp._offer_text(line)
+    if qp._GIVER_OFFERS_JOB_RE.search(cleaned):
+        return "giver_offers_job"
+    if qp._JOB_RE.search(cleaned):
+        return "job_words"
+    if asked_for_work:
+        if qp._AGREES_RE.search(line):
+            return "agrees_to_ask"
+        if _SETS_TASK_RE.search(cleaned):
+            return "sets_the_task"
+    return ""
+
+
+def find_offer_candidates(
+    narration: str,
+    player_input: str = "",
+    *,
+    npcs: list[dict[str, Any]] | None = None,
+    locations: list[dict[str, Any]] | None = None,
+    marks: list[dict[str, Any]] | None = None,
+    asked_for_work: bool = False,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """
+    (candidates, dropped). Each candidate: {"line", "speaker", "stranger", "kind",
+    "paragraph", "why"}; each dropped row: {"line", "why"}. No model.
+
+    A candidate is one speaker's quoted speech in one unit of the prose; the
+    unit keeps a quotation spanning several sentences together, so "There's a
+    job at the docks. A shipment of salted fish needs unloading." is one line.
+    """
+    text = str(narration or "")
+    rows = [n for n in npcs or [] if isinstance(n, dict) and str(n.get("code") or "").strip()]
+    by_code = {str(n.get("code") or "").strip(): n for n in rows}
+    place_names = [str(p.get("name") or "") for p in locations or [] if isinstance(p, dict)]
+    candidates: list[dict[str, Any]] = []
+    dropped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    def _add(line: str, *, code: str, kind: str, why: str, quote: str = "") -> None:
+        flat = re.sub(r"\s+", " ", str(line or "")).strip()
+        quote = re.sub(r"\s+", " ", str(quote or flat)).strip()
+        key = qp._norm(flat)[:80]
+        if not flat or key in seen:
+            return
+        veto = _code_veto(flat, asked_for_work=asked_for_work)
+        if veto:
+            seen.add(key)
+            dropped.append({"line": flat[:240], "why": veto})
+            return
+        speaker = by_code.get(code) if code else None
+        stranger = ""
+        if speaker is None and kind != "posted":
+            stranger = qp._unknown_offer_speaker(text, quote, rows, place_names)
+        seen.add(key)
+        candidates.append(
+            {
+                "line": flat,
+                "quote": quote,
+                "speaker": speaker,
+                "stranger": stranger,
+                "kind": kind,
+                "paragraph": _paragraph_of(text, quote),
+                "why": why,
+            }
+        )
+
+    try:
+        from app.conversation import spoken_lines
+
+        spoken = spoken_lines(text, rows, player_input)
+    except Exception:
+        spoken = []
+    # One speaker's lines in one paragraph are one offer: Garrick's '"A job,"
+    # ... "You'll be fetching salvage from the docks ..."' is read together, and
+    # the longest piece is the quote the engine grounds (8B run 103, T4).
+    groups: list[dict[str, Any]] = []
+    for entry in spoken:
+        line = str(entry.get("line") or "")
+        code = str(entry.get("code") or "")
+        paragraph = _paragraph_of(text, line)
+        if groups and groups[-1]["code"] == code and groups[-1]["paragraph"] == paragraph:
+            groups[-1]["lines"].append(line)
+        else:
+            groups.append({"code": code, "paragraph": paragraph, "lines": [line]})
+    for group in groups:
+        joined = " ".join(group["lines"])
+        why = _carries_offer(joined, asked_for_work=asked_for_work)
+        if why:
+            _add(joined, code=group["code"], kind="spoken", why=why, quote=max(group["lines"], key=len))
+    # A posting read aloud: "You read the details aloud: 'Lifting supplies ...'"
+    for sentence in qp._SENTENCE_SPLIT.split(text):
+        if qp._READ_POSTING_RE.search(sentence) and qp._JOB_RE.search(qp._offer_text(sentence)):
+            _add(sentence, code="", kind="posted", why="posting_read")
+    # The narrator's own QUEST marks are hints to look at a line, never a card
+    # on their own (they carry no quote: 0 of 95 in the 8B runs). The mark's
+    # giver's spoken lines, when no candidate is theirs yet, go through the
+    # same fill and check as any other line; a mark with no spoken line behind
+    # it is dropped, which is where "Salvage Contract" from "You're late,
+    # Flat-runner" came from (8B run 44, T1).
+    for mark in marks or []:
+        if not isinstance(mark, dict) or str(mark.get("op") or "").upper() != "QUEST":
+            continue
+        giver = qp._resolve_npc(str(mark.get("giver") or ""), rows)
+        code = str((giver or {}).get("code") or "")
+        if code and any((c.get("speaker") or {}).get("code") == code for c in candidates):
+            continue
+        if not code and candidates:
+            # A giver met this turn is not in the roster yet; their spoken
+            # offer is already a candidate under an unknown speaker.
+            continue
+        theirs = [g for g in groups if code and g["code"] == code]
+        if not theirs:
+            dropped.append({"line": str(mark.get("title") or "")[:80], "why": "mark_without_a_spoken_line"})
+            continue
+        group = max(theirs, key=lambda g: len(" ".join(g["lines"])))
+        _add(" ".join(group["lines"]), code=code, kind="mark", why="narrator_mark", quote=max(group["lines"], key=len))
+    return candidates[:CANDIDATE_CAP], dropped
+
+
+_FILL_SYSTEM = (
+    "You fill in one job card for a role-playing game engine from one spoken line. "
+    "Return JSON only, one object. Copy words from the line; never add work the line does not name."
+)
+_CHECK_SYSTEM = (
+    "You check one job card against a passage of story for a game engine. "
+    "Answer each question yes or no from the passage alone. Return JSON only, one object."
+)
+_PROGRESS_SYSTEM = (
+    "You check whether a passage of story shows a piece of work finished, for a game engine. "
+    "Answer yes or no from the passage alone. Return JSON only, one object."
+)
+
+FILL_SHAPE: dict[str, Any] = {
+    "offers_work": "true only when the speaker asks the player to do a specific piece of work, or agrees to the player doing one",
+    "task": "the work itself, in the speaker's own words",
+    "title": "three to eight words naming the work",
+    "steps": ["one to four concrete actions, in order"],
+    "place": "where the work is, when the line says; else empty",
+    "pay": "what is promised for it, in the line's words; else empty",
+    "gold": "a number only when the line names an amount of coin, else 0",
+}
+
+
+_FILL_PLACEHOLDERS = qp._shape_strings(FILL_SHAPE)
+
+
+def _drop_fill_placeholders(node: Any) -> Any:
+    """A field filled with the shape's own wording is empty (the 8B pastes shapes back; 8B run 92, T2)."""
+    if isinstance(node, dict):
+        return {k: _drop_fill_placeholders(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_drop_fill_placeholders(v) for v in node]
+    if isinstance(node, str) and node.strip().lower() in _FILL_PLACEHOLDERS:
+        return ""
+    return node
+
+
+def build_fill_prompt(
+    candidate: dict[str, Any], player_input: str = "", *, locations: list[dict[str, Any]] | None = None
+) -> tuple[str, str]:
+    """(system, user) for the fill ask: one line, one card."""
+    import json
+
+    speaker = _npc_label(candidate.get("speaker"), candidate.get("stranger") or "", candidate.get("kind") or "spoken")
+    places = [str(p.get("name") or "") for p in locations or [] if isinstance(p, dict) and p.get("name")][:8]
+    payload = {
+        "speaker": speaker,
+        "line": str(candidate.get("line") or "")[:600],
+        "around": str(candidate.get("paragraph") or "")[:700],
+        "player_said": qp._player_own_line(str(player_input or ""))[:300],
+        "known_places": places,
+        "return": FILL_SHAPE,
+        "rules": [
+            "offers_work is false for a question about what work the player wants, a demand to prove oneself, "
+            "talk about the player's debt, and the player's own plans or wishes.",
+            "Read only the line and what is around it.",
+        ],
+    }
+    return _FILL_SYSTEM, json.dumps(payload, ensure_ascii=True)
+
+
+def parse_fill(raw: Any) -> dict[str, Any] | None:
+    """The filled card, or None when the line offers no work or the reply is unusable."""
+    data = raw if isinstance(raw, dict) else None
+    if data is None:
+        try:
+            data = qp._loads_loose(str(raw or ""))
+        except Exception:
+            data = None
+    if not isinstance(data, dict):
+        return None
+    data = _drop_fill_placeholders(qp._drop_placeholders(data))
+    if not _yes(data.get("offers_work")):
+        return None
+    task = re.sub(r"\s+", " ", str(data.get("task") or "")).strip()
+    title = re.sub(r"\s+", " ", str(data.get("title") or "")).strip(" .\"'")
+    if not task and not title:
+        return None
+    steps = data.get("steps")
+    if isinstance(steps, str):
+        steps = [steps]
+    step_titles = []
+    for step in steps or []:
+        if isinstance(step, dict):
+            step = step.get("title") or step.get("description") or ""
+        step = re.sub(r"\s+", " ", str(step or "")).strip()
+        if step:
+            step_titles.append(step[:120])
+    gold = qp._int(data.get("gold"), 0)
+    return {
+        "task": task[:400],
+        "title": (title or task)[:80],
+        "steps": step_titles[:4] or [(task or title)[:120]],
+        "place": re.sub(r"\s+", " ", str(data.get("place") or "")).strip()[:100],
+        "pay": re.sub(r"\s+", " ", str(data.get("pay") or "")).strip()[:200],
+        "gold": max(0, gold),
+    }
+
+
+def build_check_prompt(candidate: dict[str, Any], card: dict[str, Any], player_input: str = "") -> tuple[str, str]:
+    """(system, user) for the check ask: three yes/no questions against the paragraph."""
+    import json
+
+    giver = _npc_label(candidate.get("speaker"), candidate.get("stranger") or "", candidate.get("kind") or "spoken")
+    passage = str(candidate.get("paragraph") or candidate.get("line") or "")[:900]
+    own = qp._player_own_line(str(player_input or ""))[:300]
+    payload = {
+        "passage": passage,
+        "player_said": own,
+        "card": {"giver": giver, "title": card.get("title"), "task": card.get("task")},
+        "questions": {
+            "offered": f"Does {giver}, not the player, offer or assign this task to the player in the passage?",
+            "specific": "Is the task a specific piece of work the player could go and do, rather than a demand to prove "
+                        "oneself, a question about what work the player wants, or talk about the player's debt?",
+            "in_text": "Is this task stated in the passage, not added to it?",
+        },
+        "return": {"offered": "yes or no", "specific": "yes or no", "in_text": "yes or no", "why": "one short sentence"},
+    }
+    return _CHECK_SYSTEM, json.dumps(payload, ensure_ascii=True)
+
+
+def parse_check(raw: Any) -> dict[str, Any]:
+    """{"ok": bool, "offered", "specific", "in_text", "why"}; an unusable reply is not ok."""
+    data = raw if isinstance(raw, dict) else None
+    if data is None:
+        try:
+            data = qp._loads_loose(str(raw or ""))
+        except Exception:
+            data = None
+    if not isinstance(data, dict):
+        return {"ok": False, "offered": False, "specific": False, "in_text": False, "why": "unusable reply"}
+    verdict = {key: _yes(data.get(key)) for key in ("offered", "specific", "in_text")}
+    return {"ok": all(verdict.values()), **verdict, "why": str(data.get("why") or "")[:200]}
+
+
+def card_to_proposal(candidate: dict[str, Any], card: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
+    """The legacy proposal shape validate_quest_changes reads, marked as checked."""
+    speaker = candidate.get("speaker") if isinstance(candidate.get("speaker"), dict) else None
+    if candidate.get("kind") == "posted":
+        giver = "the notice board"
+    elif speaker:
+        giver = str(speaker.get("code") or speaker.get("name") or "")
+    else:
+        giver = str(candidate.get("stranger") or "")
+    quote = str(candidate.get("quote") or candidate.get("line") or "")
+    return {
+        "title": card["title"],
+        "summary": card["task"] or card["title"],
+        "giver": giver,
+        "status": "offered",
+        "steps": [{"title": s, "description": s, "location": card.get("place") or ""} for s in card["steps"]],
+        "reward": {"gold": card.get("gold") or 0, "xp": 0, "items": [], "text": card.get("pay") or ""},
+        "difficulty": "normal",
+        "timer_turns": 0,
+        "offer_line": quote[:300],
+        "evidence": quote[:300],
+        "_checked": {"why": check.get("why") or "", "found_by": candidate.get("why") or "", "kind": candidate.get("kind")},
+    }
+
+
+def run_offer_pass(
+    narration: str,
+    player_input: str = "",
+    *,
+    npcs: list[dict[str, Any]] | None = None,
+    locations: list[dict[str, Any]] | None = None,
+    marks: list[dict[str, Any]] | None = None,
+    asked_for_work: bool = False,
+    ask: Ask | None = None,
+) -> dict[str, Any]:
+    """
+    Find, fill, check. Returns {"new": [proposals], "candidates", "dropped", "fills", "checks"}.
+
+    ``ask(system, user, max_tokens=..., phase=...)`` returns the model's JSON
+    (a dict) or raises. With no ``ask`` nothing is proposed: the engine never
+    guesses a card from keywords alone.
+    """
+    candidates, dropped = find_offer_candidates(
+        narration, player_input, npcs=npcs, locations=locations, marks=marks, asked_for_work=asked_for_work
+    )
+    report: dict[str, Any] = {
+        "new": [],
+        "candidates": [
+            {"line": c["line"][:240], "speaker": str((c.get("speaker") or {}).get("name") or c.get("stranger") or ""),
+             "kind": c["kind"], "why": c["why"]}
+            for c in candidates
+        ],
+        "dropped": dropped,
+        "fills": [],
+        "checks": [],
+    }
+    if not candidates or ask is None:
+        return report
+    for candidate in candidates:
+        system, user = build_fill_prompt(candidate, player_input, locations=locations)
+        try:
+            raw = ask(system, user, max_tokens=FILL_MAX_TOKENS, phase=FILL_PHASE)
+        except Exception as exc:
+            report["fills"].append({"line": candidate["line"][:120], "error": f"{exc.__class__.__name__}: {exc}"[:200]})
+            continue
+        card = parse_fill(raw)
+        report["fills"].append({"line": candidate["line"][:120], "card": card})
+        if card is None:
+            continue
+        system, user = build_check_prompt(candidate, card, player_input)
+        try:
+            raw = ask(system, user, max_tokens=CHECK_MAX_TOKENS, phase=CHECK_PHASE)
+        except Exception as exc:
+            report["checks"].append({"title": card["title"], "error": f"{exc.__class__.__name__}: {exc}"[:200]})
+            continue
+        check = parse_check(raw)
+        report["checks"].append({"title": card["title"], **check})
+        if not check["ok"]:
+            continue
+        report["new"].append(card_to_proposal(candidate, card, check))
+        if len(report["new"]) >= qp.MAX_NEW_PER_TURN:
+            break
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Progress: a step of an active job shown finished in the prose
+# ---------------------------------------------------------------------------
+def find_progress_candidates(
+    narration: str, player_input: str = "", *, active: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    """
+    Sentences that may show a step of an active job done: a result word that is
+    not a purpose or a promise (quest_parser._shows_result) in a sentence that
+    shares a word with the job's title or its current step. No model.
+    """
+    out: list[dict[str, Any]] = []
+    text = str(narration or "")
+    for quest in active or []:
+        if not isinstance(quest, dict) or str(quest.get("status") or "active") != "active":
+            continue
+        title = str(quest.get("title") or "")
+        step = str(quest.get("current_objective") or quest.get("current_step_title") or "")
+        words = qp._title_words(title) | {w for w in qp._stems(step) if len(w) >= 4}
+        if not words:
+            continue
+        for sentence in qp._SENTENCE_SPLIT.split(text):
+            flat = re.sub(r"\s+", " ", sentence).strip()
+            if not flat or flat.endswith("?"):
+                continue
+            # A result word that is not a purpose ("to find the ship" finds
+            # nothing), or the parser's own progress vocabulary ("counts out",
+            # "handed over", "pays you").
+            if not (qp._shows_result(flat) or qp._PROGRESS_RE.search(flat)):
+                continue
+            stems = qp._stems(flat) | set(re.findall(r"[a-z]{4,}", flat.lower()))
+            if not (words & stems) and not any(w in flat.lower() for w in words if len(w) >= 5):
+                continue
+            out.append({"quest": quest, "sentence": flat[:400], "step": step, "title": title})
+            break
+        if len(out) >= PROGRESS_CAP:
+            break
+    return out
+
+
+def build_progress_prompt(candidate: dict[str, Any], narration: str, player_input: str = "") -> tuple[str, str]:
+    import json
+
+    payload = {
+        "passage": _paragraph_of(narration, candidate["sentence"])[:900],
+        "player_did": qp._player_own_line(str(player_input or ""))[:300],
+        "job": {"title": candidate["title"], "current_step": candidate["step"] or candidate["title"]},
+        "question": "Does the passage show this step finished, with its result, by the player? "
+                    "Setting out, planning, being told about the work, or work still going on is no.",
+        "return": {"finished": "yes or no", "why": "one short sentence"},
+    }
+    return _PROGRESS_SYSTEM, json.dumps(payload, ensure_ascii=True)
+
+
+def run_progress_pass(
+    narration: str,
+    player_input: str = "",
+    *,
+    active: list[dict[str, Any]] | None = None,
+    ask: Ask | None = None,
+) -> dict[str, Any]:
+    """Find, check. Returns {"updates": [{"quest", "action": "step_done", "evidence"}], "candidates", "checks"}."""
+    candidates = find_progress_candidates(narration, player_input, active=active)
+    report: dict[str, Any] = {
+        "updates": [],
+        "candidates": [{"title": c["title"], "sentence": c["sentence"][:240]} for c in candidates],
+        "checks": [],
+    }
+    if not candidates or ask is None:
+        return report
+    for candidate in candidates:
+        system, user = build_progress_prompt(candidate, narration, player_input)
+        try:
+            raw = ask(system, user, max_tokens=CHECK_MAX_TOKENS, phase=PROGRESS_PHASE)
+        except Exception as exc:
+            report["checks"].append({"title": candidate["title"], "error": f"{exc.__class__.__name__}: {exc}"[:200]})
+            continue
+        data = raw if isinstance(raw, dict) else None
+        if data is None:
+            try:
+                data = qp._loads_loose(str(raw or ""))
+            except Exception:
+                data = None
+        finished = isinstance(data, dict) and _yes(data.get("finished"))
+        why = str((data or {}).get("why") or "")[:200] if isinstance(data, dict) else "unusable reply"
+        report["checks"].append({"title": candidate["title"], "finished": bool(finished), "why": why})
+        if not finished:
+            continue
+        quest = candidate["quest"]
+        report["updates"].append(
+            {
+                "quest": str(quest.get("code") or (f"Q{quest['id']}" if quest.get("id") else candidate["title"])),
+                "action": "step_done",
+                "evidence": candidate["sentence"][:300],
+                "_checked": {"why": why},
+            }
+        )
+    return report
