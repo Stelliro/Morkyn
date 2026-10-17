@@ -111,6 +111,24 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
         note = _settle_stated_gold(result, "I walk back into Saltmarrow and go into the Stag and Heron to buy a hot meal and a bed for the night.")
         self.assertEqual(result["player"].get("gold_band"), "-small", note)
 
+    def test_asking_who_pays_is_no_payment_by_the_player(self):
+        # 8B run 148, T9: "how much coin the load pays and who pays it" flipped a model gain into a spend.
+        prose = ("You ask how much the load pays and who pays it. \"Thirty gold,\" he says, \"from the Harbour Reeve. He's the "
+                 "one who wants the fish.\" You turn toward the wharf.")
+        result = {"narration": prose, "player": {"gold_delta": 30}}
+        note = _settle_stated_gold(result, "I ask Roderic how much coin the load pays and who pays it, then go to find the Mistral.")
+        self.assertNotEqual((note or {}).get("source"), "purchase_gain_flipped", note)
+        self.assertNotEqual(result["player"].get("gold_delta"), -30)
+        self.assertNotEqual(result["player"].get("gold_delta"), 30)
+
+    def test_a_jobs_pay_described_backs_no_gain(self):
+        # 8B run 148, T8: "it's not much, but it pays in coin" let GOLD +small stand on the offer.
+        prose = ("\"There's a load of fish in the hold of the Mistral,\" he says. \"It's not much, but it pays in coin. You'll "
+                 "have to haul it yourself, though.\" He sighs, the sound heavy with the weight of the day's toil.")
+        result = {"narration": prose, "player": {"gold_band": "small"}}
+        note = _settle_stated_gold(result, "I ask whether there is a day's hauling on these boats that pays coin tonight.")
+        self.assertEqual((note or {}).get("source"), "gain_without_coin_dropped", note)
+
     def test_looking_at_goods_for_sale_costs_nothing(self):
         prose = "The stall holds lanterns and coils of rope. You look them over and move on."
         result = {"narration": prose, "player": {}, "inventory_changes": [{"name": "Lantern", "quantity_band": "small"}]}
