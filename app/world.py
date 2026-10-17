@@ -13810,7 +13810,18 @@ def _place_talked_to_in_scene(conn, npcs: list[dict[str, Any]], result: dict[str
         row = conn.execute("SELECT id, code, name, location_id FROM npcs WHERE lower(code) = ?", (code,)).fetchone()
         if row is None or here_row is None or int(row["location_id"] or 0) == int(here_row["id"]):
             continue
-        if f"[[{str(row['code'] or '').upper()}]]" not in unspoken:
+        tag = f"[[{str(row['code'] or '').upper()}]]"
+        if tag not in unspoken:
+            continue
+        # Shown, not mentioned: "She's not Elias [[A]], but she knows him well"
+        # moved Elias to the docks (8B run 135, T7).
+        name = re.escape(str(row["name"] or ""))
+        shown_here = any(
+            not re.search(r"\b(?:not|like|than|of|about|for|with|knows?|knew|remember\w*|mentions?)\s+(?:\w+\s+)?$",
+                          unspoken[max(0, m.start() - 40):m.start()], re.I)
+            for m in re.finditer((name + r"\s*" if name else "") + re.escape(tag), unspoken)
+        )
+        if not shown_here:
             continue
         conn.execute("UPDATE npcs SET location_id = ? WHERE id = ?", (int(here_row["id"]), int(row["id"])))
         turn_ledger.note("npc", "talked_to_and_shown_here", name=str(row["name"] or ""), place=str(here["code"] or ""))

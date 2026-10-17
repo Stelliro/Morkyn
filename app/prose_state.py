@@ -969,6 +969,16 @@ def repair_pinned_pronouns(
                     continue
                 stranger = True
                 break
+        # Both sets of pronouns in one sentence: a second person is in it. "She's
+        # not Elias [[A]], but she knows him well" set the focus on Elias, and
+        # the woman's next "she says, her voice" became "he says, his voice"
+        # (8B run 135, T7).
+        if len(named) == 1 and not stranger:
+            has_he = bool(re.search(r"\b(?:he|him|his|himself)\b", plain, re.I))
+            has_she = bool(re.search(r"\b(?:she|her|hers|herself)\b", plain, re.I))
+            if has_he and has_she:
+                focus = None
+                continue
         if len(named) == 1 and not stranger:
             focus, carried, person = named[0], 0, named[0]
         elif not named and not stranger and focus is not None and carried < 1:

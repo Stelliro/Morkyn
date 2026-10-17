@@ -787,6 +787,25 @@ class TalkedToAndShownHereIsHere(unittest.TestCase):
             at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Thaddeus Grimes'").fetchone()[0]
         self.assertEqual(int(at), int(office))
 
+    def test_said_not_to_be_him_he_stays(self):
+        # 8B run 135, T7: "She's not Elias [[A]], but she knows him well".
+        from app import world
+        from app.db import connect
+
+        seed()
+        with connect() as conn:
+            house = world._upsert_location(conn, "The Salvage Guild's Tally House", "", parent_id=1)
+            docks = world._upsert_location(conn, "The Docks", "")
+            conn.execute("UPDATE locations SET parent_id = 1 WHERE id = ?", (docks,))
+            world._upsert_npc(conn, {"name": "Elias", "role": "guard", "location": "The Salvage Guild's Tally House"})
+            code = conn.execute("SELECT code FROM npcs WHERE name = 'Elias'").fetchone()[0]
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (docks,))
+            prose = f"A woman stands by the wall. She’s not Elias [[{code}]], but she knows him well."
+            result = {"narration": prose, "player": {}, "conversations": [{"npc_code": code, "topic": "the sailor"}]}
+            world._place_talked_to_in_scene(conn, [], result)
+            at = conn.execute("SELECT location_id FROM npcs WHERE name = 'Elias'").fetchone()[0]
+        self.assertEqual(int(at), int(house))
+
     def test_only_talked_about_he_stays(self):
         from app import world
         from app.db import connect
