@@ -1531,9 +1531,12 @@ def validate_quest_changes(
         # the shipment job its giver named next (8B run 141, T2). The giver's
         # own name and job words are no task either.
         giver_words = _stems(f"{(giver or {}).get('name') or ''} {(giver or {}).get('role') or ''}")
+        # Or every step is only choosing which job to take: "Choose dockside
+        # salvage", "Choose warehouse inventory" filed "Choose a Task" (8B run 143, T2).
         if not reasons and step_titles and all(
             (re.match(r"\s*(?:ask|inquire|enquire|find\s+out|learn|speak|talk)\b", t, re.I)
              and re.search(r"\b(?:job|work|task|details?|terms)\b", t, re.I))
+            or re.match(r"\s*(?:choose|pick|select|decide)\b", t, re.I)
             or not (_stems(t) - _GENERIC_JOB_STEMS - giver_words)
             for t in step_titles
         ):

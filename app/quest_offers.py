@@ -58,7 +58,16 @@ Ask = Callable[..., Any]
 # oneself set no task (runs 74, 132).
 _SETS_TASK_RE = re.compile(
     r"\byou['’]ll\s+(?:need|have)\s+to\s+(?!work\s+(?:it|that|this|the\s+debt|your\s+debt)\s+off)"
-    r"(?!pay\b|wait\b|be\s+careful|prove|show)[a-z]+",
+    r"(?!pay\b|wait\b|be\s+careful|prove|show|choose|pick|select|decide)[a-z]+",
+    re.I,
+)
+# A list to choose from is not a task yet: "The guild has a list of tasks.
+# You'll need to choose one that fits your skills" filed "Choose a Task" with
+# the steps "Choose dockside salvage", "Choose warehouse inventory" (8B run
+# 143, T2). The job is the one the player picks, offered when the giver names it.
+_CHOOSE_ONE_RE = re.compile(
+    r"\b(?:choose|pick|select|decide\s+on|take\s+your\s+pick)\s+(?:one|which|whichever|the\s+one|a\s+task|a\s+job|"
+    r"from|between|among|what\s+suits|one\s+that)\b",
     re.I,
 )
 # A bare demand to prove oneself names no task (8B run 132, T2).
@@ -113,6 +122,8 @@ def _code_veto(line: str, *, asked_for_work: bool) -> str:
         return "asks_what_work"
     if _PROVE_ONLY_RE.search(line) and not qp._GIVER_OFFERS_JOB_RE.search(line) and not qp._JOB_RE.search(cleaned):
         return "prove_only"
+    if _CHOOSE_ONE_RE.search(line) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned):
+        return "asks_to_choose"
     # The player paying for a service is no job for them (8B run 106, T7:
     # "you're paying for the risk"; runs 82, 96: "if you're willing to pay").
     if qp._PLAYER_PAYS_RE.search(line) and not qp._PAYS_THE_PLAYER_RE.search(line) and not qp._GIVER_OFFERS_JOB_RE.search(cleaned):

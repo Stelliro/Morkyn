@@ -153,6 +153,23 @@ class TheEngineFindsTheLine(unittest.TestCase):
         self.assertEqual(cands, [])
         self.assertIn("pointer_to_someone", [d["why"] for d in dropped])
 
+    def test_a_list_to_choose_from_is_no_task_yet(self):
+        # 8B run 143, T2: filed "Choose a Task" with the steps "Choose dockside salvage", ...
+        prose = ("Alys [[A]], the guard, looks up from her ledger. \"The guild has a list of tasks,\" her finger tapping the "
+                 "paper. \"You’ll need to choose one that fits your skills.\" She lists the options—dockside salvage, "
+                 "warehouse inventory, or harbor watch—each with its own risk and reward.")
+        alys = [{"code": "A", "name": "Alys", "role": "guard"}]
+        cands, dropped = qo.find_offer_candidates(prose, FISH_INPUT, npcs=alys, asked_for_work=True)
+        self.assertEqual(cands, [], cands)
+        self.assertIn("asks_to_choose", [d["why"] for d in dropped])
+        # And a card of choosing steps is refused by the engine either way.
+        item = {"title": "Choose a Task", "summary": "You'll need to choose one that fits your skills.", "giver": "A",
+                "steps": [{"title": "Choose dockside salvage"}, {"title": "Choose warehouse inventory"}],
+                "reward": {}, "offer_line": "You’ll need to choose one that fits your skills.",
+                "evidence": "You’ll need to choose one that fits your skills.", "_checked": {"why": "yes"}}
+        _accepted, rejected = qp.validate_quest_changes({"new": [item]}, narration=prose, player_input=FISH_INPUT, npcs=[{"id": 1, **alys[0]}])
+        self.assertIn("no_task_named_yet", rejected[0]["reasons"])
+
     def test_one_speakers_lines_in_one_paragraph_are_one_offer(self):
         cands, _ = qo.find_offer_candidates(SHEDS, "\"I am up for it.\"", npcs=GARRICK)
         self.assertEqual(len(cands), 1, cands)
