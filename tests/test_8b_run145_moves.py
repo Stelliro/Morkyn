@@ -219,6 +219,23 @@ class ASpokenRequestIsNotAWalk(unittest.TestCase):
             self.assertIsNone(result["player"].get("move_to_location"), report)
             conn.rollback()
 
+    def test_a_code_move_to_a_place_the_line_does_not_head_for_drops(self):
+        # 8B run 148, T21: "walk out along the wharf to the northern dock" came back as MOVE L6, the inn.
+        world, connect = self._rows()
+        line = "I check the seal on the permit, tuck it safe inside my shirt, and walk out along the wharf to the northern dock to find the Stormbreaker's wreck."
+        with connect() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0])
+            harbour = world._upsert_location(conn, "The Harbour", "", parent_id=town, kind="")
+            mistral = world._upsert_location(conn, "The Mistral", "A worn ship.", parent_id=int(harbour), kind="")
+            inn = world._upsert_location(conn, "The Stag and Heron", "", parent_id=town, kind="inn")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(mistral),))
+            prose = ("The permit's seal is unbroken. You walk north, the sea breeze carrying the brine of the morning. The northern dock "
+                     "is a place of ghosts. You find the Stormbreaker's wreck, its hull splintered and half-submerged.")
+            result = {"narration": prose, "player": {"move_to_location_code": f"L{int(inn)}"}}
+            report = world.resolve_movement(conn, result, line, intent="travel", narration=prose)
+            self.assertIsNone(result["player"].get("move_to_location_code"), report)
+            conn.rollback()
+
     def test_a_request_the_prose_carries_out_still_moves(self):
         world, connect = self._rows()
         line = "I climb into the skiff. \"Out to the wreck, Wulfstan.\""

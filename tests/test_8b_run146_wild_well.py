@@ -254,6 +254,22 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertEqual(kept, [])
             conn.rollback()
 
+    def test_a_permit_handed_over_as_a_parchment_arrives(self):
+        # 8B run 148, T20: the permit came as "a folded parchment, handing it to you" and was refused.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("Roderic leans forward, his brow furrowed as he examines the coins. He mutters a word under his breath, then "
+                 "reaches for a folded parchment, handing it to you with a gruff nod. The paper is crisp, its edges sealed with "
+                 "a wax stamp bearing the reeve's insignia. You fold it carefully and tuck it into your pouch.")
+        line = "\"Then the permit for the northern docks, Reeve. Twenty silver.\" I count the twenty silver onto his desk and ask for the paper."
+        with connect() as conn:
+            kept = world._filter_inventory_changes(conn, [{"name": "reeve's permit", "quantity_band": "small"}], narration=prose, player_input=line)
+            self.assertEqual([c["name"] for c in kept], ["reeve's permit"])
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db

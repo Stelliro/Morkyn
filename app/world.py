@@ -9564,6 +9564,35 @@ _POINTED_AT_RE = re.compile(
 )
 
 
+_PLACEISH_RE = re.compile(
+    r"\b(?:docks?|wharf|quay|pier|jetty|harbou?r|house|hall|office|inn|tavern|shop|store|yard|tower|church|chapel|temple|"
+    r"shrine|bridge|gate|gates|road|street|lane|square|market|wreck|ship|boat|skiff|camp|village|town|city|port|mill|farm|"
+    r"forge|smithy|stables?|barracks|keep|castle|fort|cave|mine|well|warehouse|granary|bakehouse|brewery|tannery|flats|"
+    r"marsh|beach|shore|cove|bay|island|ruins?|claim|cabin|hut|cottage|manor|palace|library|archive|vault|cellar|crypt)\b",
+    re.I,
+)
+
+
+def _line_heads_elsewhere(line_low: str, dest_words: list[str]) -> bool:
+    """The player's line goes to a place that shares no word with the MOVE's destination."""
+    if not dest_words:
+        return False
+    for m in re.finditer(r"\b(?:to|toward|towards|into|onto|for|up\s+to|down\s+to|out\s+to|back\s+to)\s+(?:the\s+|a\s+|an\s+)?"
+                         r"([a-z][\w'’-]*(?:\s+[a-z][\w'’-]*)?)", line_low):
+        words = [w for w in re.findall(r"[a-z][\w'’-]*", m.group(1)) if len(w) >= 3 and w not in _PLACE_FILLER_WORDS]
+        if not words or any(w in {"him", "her", "them", "you", "me", "us", "it", "that", "this", "see", "find", "ask", "get"} for w in words[:1]):
+            continue
+        # A place-like aim only: "toward the water" describes a walk the engine
+        # cannot place and leaves the model's move flagged, as before; "to the
+        # northern dock" names where the player went.
+        if not _PLACEISH_RE.search(m.group(1)):
+            continue
+        if any(w.rstrip("s") in {d.rstrip("s") for d in dest_words} or any(d.startswith(w[:5]) for d in dest_words) for w in words):
+            return False
+        return True
+    return False
+
+
 def _move_only_pointed_at(prose_low: str, dest_name: str, player_input: str, narration: str) -> bool:
     """The MOVE's place is in the prose only as where a path leads, and the player's line never asks for it."""
     words = _place_words(dest_name)
@@ -10347,6 +10376,16 @@ def resolve_movement(
                 result["map_walk"] = None
                 return {"status": "dropped_unshown", "from": current_code, "destination": dest_name, "intent": intent,
                         "rule": "prose_only_points_at_it"}
+            # The line heads somewhere else: "walk out along the wharf to the
+            # northern dock" came back as MOVE L6, the inn, which the prose
+            # never named, and the save put the player to bed (8B run 148, T21).
+            if report.get("prose_mismatch") and _line_heads_elsewhere(_destination_text(player_input).lower(), _place_words(dest_name)):
+                turn_ledger.note("movement", "unshown_named_move_dropped", destination=dest_name, why="line_heads_elsewhere")
+                player_patch["move_to_location"] = None
+                player_patch["move_to_location_code"] = None
+                result["map_walk"] = None
+                return {"status": "dropped_unshown", "from": current_code, "destination": dest_name, "intent": intent,
+                        "rule": "line_heads_elsewhere"}
                 mine = _player_place_over_unshown_move(conn, player_patch, player_input, narration, current_code, dest_name)
                 if mine:
                     return mine
@@ -10483,9 +10522,9 @@ def resolve_movement(
                     result["map_walk"] = None
                     return {"status": "dropped_unshown", "from": current_code, "destination": dest_name, "intent": intent,
                             "rule": "prose_stays_here"}
+                heads_elsewhere = _line_heads_elsewhere(line_low, dest_words)
                 if (
-                    not journey
-                    and not leaves
+                    ((not journey and not leaves) or heads_elsewhere)
                     and not loosely_named
                     and not venues.entry_in_prose(narration)
                     and not (dest_words and _line_names_place(line_low, dest_words))
@@ -14902,7 +14941,21 @@ def _handed_under_another_noun(text: str, name_l: str) -> str:
     """
     body = str(text or "")
     name = str(name_l or "").strip().lower()
-    if not name or name not in body.lower():
+    if not name:
+        return body
+    head = name.split()[-1] if name.split() else name
+    if name not in body.lower():
+        # The item's own words never appear; only the paper family can still
+        # say it was handed over ("a folded parchment, handing it to you").
+        if head in _DOC_WORDS:
+            m = re.search(r"\b(?:a|an|the|his|her|their)\s+(?:[a-z-]+\s+){0,2}?(" + "|".join(sorted(_DOC_WORDS)) + r")\b[^.!?]{0,60}?"
+                          r"\b(?:hand(?:s|ed|ing)?|giv(?:es|ing)|gave|pass(?:es|ed|ing)?)\s+(?:it|them)\s+(?:over\s+)?to\s+you\b", body, re.I)
+            if m and m.group(1).lower() != head:
+                return body[:m.start(1)] + name + body[m.end(1):]
+            m = re.search(r"\b(?:hands?|handed|gives?|gave|pass(?:es|ed)?|slides?|slid)\s+you\s+(?:the|a|an|his|her|their)\s+"
+                          r"(?:[a-z-]+\s+){0,2}?(" + "|".join(sorted(_DOC_WORDS)) + r")\b", body, re.I)
+            if m and m.group(1).lower() != head:
+                return body[:m.start(1)] + name + body[m.end(1):]
         return body
     low = body.lower()
     for match in _HANDED_NOUN_RE.finditer(body):
@@ -14913,7 +14966,27 @@ def _handed_under_another_noun(text: str, name_l: str) -> str:
         if any(re.search(rf"\b{re.escape(noun)}\b", low[max(0, at - 160):at]) for at in named_at):
             start = match.start("noun")
             return body[:start] + name + body[match.end("noun"):]
+        # One paper is another: "reaches for a folded parchment, handing it to
+        # you" for GRANT "reeve's permit" was refused for want of the word
+        # (8B run 148, T20). Document words are one family.
+        if noun in _DOC_WORDS and head in _DOC_WORDS:
+            start = match.start("noun")
+            return body[:start] + name + body[match.end("noun"):]
+    # The hand-over of "it" right after the other paper is named: "reaches for
+    # a folded parchment, handing it to you".
+    if head in _DOC_WORDS:
+        m = re.search(r"\b(?:a|an|the|his|her|their)\s+(?:[a-z-]+\s+){0,2}?(" + "|".join(sorted(_DOC_WORDS)) + r")\b[^.!?]{0,60}?"
+                      r"\b(?:hand(?:s|ed|ing)?|giv(?:es|ing)|gave|pass(?:es|ed|ing)?)\s+(?:it|them)\s+(?:over\s+)?to\s+you\b", body, re.I)
+        if m and m.group(1).lower() != head:
+            return body[:m.start(1)] + name + body[m.end(1):]
     return body
+
+
+_DOC_WORDS = frozenset({
+    "permit", "pass", "writ", "licence", "license", "contract", "letter", "note", "receipt", "deed", "warrant", "chit",
+    "ticket", "paper", "papers", "parchment", "scroll", "document", "sheet", "slip", "voucher", "token", "map", "chart",
+    "ledger", "page", "pages", "form",
+})
 
 
 def _prose_item_handed_over(text: str, name_l: str, tokens: list[str], *, owned: bool = False) -> bool:
