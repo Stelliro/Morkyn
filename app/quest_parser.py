@@ -266,7 +266,14 @@ def player_takes_job(
             obj = match.group(2).lower()
             if _stem(match.group(1)) == job_verb and (not obj or obj in about or match.group(0).lower().endswith(" it")):
                 return True
-    if _STARTS_WORK_RE.search(own):
+    # A start wished for in the work asked for is no start: "Give me a job I can
+    # start today" took the job offered in answer (8B run 129, T3).
+    asked_start = re.sub(
+        r"\b(?:job|work|task|errand|something|anything)\s+(?:that\s+)?(?:i|we)\s+(?:can|could|might|may|would)\s+"
+        r"(?:start|begin)\b|\?[^.!?]*$", " ", own, flags=re.I)
+    asked_start = re.sub(r"[^.!?]*\b(?:can|could|might|may)\s+(?:i|we)\s+(?:start|begin)\b[^.!?]*\?", " ", asked_start, flags=re.I)
+    if _STARTS_WORK_RE.search(asked_start) and not re.search(r"\b(?:i|we)\s+(?:could|might|may)\s+(?:start|begin)\b[^.!?]*\?",
+                                                             own, re.I):
         return True
     # The player names the price and the giver agrees (7B run 6, T6: "Two gold
     # for the whole pile, sorted by noon. Yes or no?" - "the gold is yours"):
