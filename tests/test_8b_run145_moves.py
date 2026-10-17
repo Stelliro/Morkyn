@@ -272,6 +272,14 @@ class ThePlaceLeftIsNotTheDestination(unittest.TestCase):
                 "to find the well-keeper Rolf Joliffe.")
         self.assertIsNone(_movement_destination_from_input(FLAT_ROWS, line, "Edge of the Flats"))
 
+    def test_shelter_from_the_storm_in_a_place_goes_there(self):
+        # 8B run 147, T96: "take shelter from the storm in the Stag and Heron" read the inn as the origin.
+        from app.world import _movement_destination_from_input
+
+        rows = FLAT_ROWS + [{"id": 9, "code": "L9", "name": "The Stag and Heron", "parent_id": 1, "kind": "inn"}]
+        row = _movement_destination_from_input(rows, "I take shelter from the storm in the Stag and Heron and wait it out by the fire.", "The Flats")
+        self.assertEqual(row["name"], "The Stag and Heron")
+
     def test_the_place_walked_to_after_leaving_one_is_the_destination(self):
         from app.world import _movement_destination_from_input
 
