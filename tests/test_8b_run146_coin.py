@@ -128,6 +128,15 @@ class ALossIsTheItems(unittest.TestCase):
         self.assertTrue(_loss_shown("Lantern", "You drop the lantern into the water."))
 
 
+class AFixtureUsedIsNoThingTaken(unittest.TestCase):
+    def test_a_bed_a_room_and_a_meal_are_not_taken_things(self):
+        # 8B run 147, T64: "I take the bed Abel showed me" put "bed x1" in the pack.
+        from app.world import _NOT_A_TAKEN_THING
+
+        for word in ("bed", "room", "meal", "chair", "ferry"):
+            self.assertIn(word, _NOT_A_TAKEN_THING, word)
+
+
 class AConjunctionIsNoName(unittest.TestCase):
     def test_and_veyra_is_not_a_new_person(self):
         prose = "Rolf is watching, his grip tight on his pack. And Veyra, the spymaster, is watching you just as closely."

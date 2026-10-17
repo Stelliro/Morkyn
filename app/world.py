@@ -15242,6 +15242,10 @@ _NOT_A_TAKEN_THING = frozenset({
     # A duty or a state kept, not a thing: "I keep the lookout" put "lookout x1"
     # in the pack (8B run 145, T41).
     "lookout", "watch", "guard", "vigil", "post", "promise", "pace", "course", "faith", "distance", "eye", "eyes",
+    # A fixture used or a meal eaten, not a thing carried off: "I take the bed
+    # Abel showed me" put "bed x1" in the pack (8B run 147, T64; 8B run 146 F31).
+    "bed", "beds", "room", "rooms", "bunk", "cot", "berth", "lodging", "lodgings", "chair", "table", "bench", "stool",
+    "counter", "hearth", "ferry", "passage", "night", "meal", "meals", "supper", "breakfast", "dinner", "bath", "nap",
     "head", "calm", "company", "counsel", "peace", "quiet", "temper", "balance", "footing", "bearing",
 })
 # The any-word must be what the take verb takes: "I pocket whatever is under it",
