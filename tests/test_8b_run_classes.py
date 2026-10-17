@@ -516,6 +516,25 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AStartWishedForIsNoStart(unittest.TestCase):
+    """8B run 129, T3: "Give me a job I can start today" took the job offered in answer."""
+
+    Q = {"id": 1, "code": "Q1", "title": "Salvage the Lost Cargo", "status": "offered"}
+
+    def test_asking_takes_nothing(self):
+        from app.quest_parser import player_takes_job
+
+        line = ('"Salvage, then. I know the flats." I lean in to hear him. "Give me a job I can start today, and tell '
+                'me what it takes off the ledger."')
+        self.assertFalse(player_takes_job(self.Q, line, [self.Q], ""))
+        self.assertFalse(player_takes_job(self.Q, "Is there work I could begin tomorrow?", [self.Q], ""))
+
+    def test_starting_still_takes_it(self):
+        from app.quest_parser import player_takes_job
+
+        self.assertTrue(player_takes_job(self.Q, '"Right, I start now." I grab a crate.', [self.Q], ""))
+
+
 class AnEchoGoesAnAnswerStays(unittest.TestCase):
     """8B run 128, T3: a bare "The docks." echo stayed; the answer "The docks are under the Reeve." could go."""
 
