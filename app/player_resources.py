@@ -1322,7 +1322,14 @@ def action_kind_from_text(player_input: str) -> str:
     text = (player_input or "").lower().strip()
     if not text or text.startswith("__"):
         return "none"
-    if re.search(r"\b(attack|fight|combat|chase|flee|strike|slash|punch|kick)\b", text):
+    # A fighting verb with a direction is motion ("kick back up to the boat",
+    # 8B run 145 T24), costed like the rest of the line.
+    swung = re.sub(
+        r"\b(?:kick|strike|punch|shove|push|shoot)(?:s|es|ed|ing)?\s+"
+        r"(?:back|up|off|away|out|free|loose|down|forward|on|ahead|through|past|across|along|over|clear|open|shut)\b",
+        " ", text,
+    )
+    if re.search(r"\b(attack|fight|combat|chase|flee|strike|slash|punch|kick)\b", swung):
         return "combat"
     if _ABILITY_WORD_RE.search(text):
         return "ability"

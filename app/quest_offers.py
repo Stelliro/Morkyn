@@ -506,6 +506,14 @@ def find_progress_candidates(
     """
     out: list[dict[str, Any]] = []
     text = str(narration or "")
+    # The player's own words said back by the prose are no result: '"Forty-five
+    # gold for the deep dive ... Done," you say' finished "Join a team for a
+    # deep dive" (8B run 145, T38). Only what the world shows counts.
+    own_quotes = [
+        re.sub(r"\s+", " ", (a or b)).strip().lower()
+        for a, b in re.findall(r"\"([^\"]+)\"|“([^”]+)”", qp._player_own_line(str(player_input or "")))
+        if len((a or b).strip()) >= 12
+    ]
     for quest in active or []:
         if not isinstance(quest, dict) or str(quest.get("status") or "active") != "active":
             continue
@@ -517,6 +525,8 @@ def find_progress_candidates(
         for sentence in qp._SENTENCE_SPLIT.split(text):
             flat = re.sub(r"\s+", " ", sentence).strip()
             if not flat or flat.endswith("?"):
+                continue
+            if any(q[:40] in flat.lower() for q in own_quotes):
                 continue
             # A result word that is not a purpose ("to find the ship" finds
             # nothing), or the parser's own progress vocabulary ("counts out",

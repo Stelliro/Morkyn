@@ -75,6 +75,24 @@ class TheOtherSideIsSomeoneHere(unittest.TestCase):
         check = infer_check_from_action(line, _context(present=["B", "C"], addressed=["C"]))
         self.assertEqual((check.get("opposition") or {}).get("name"), "Warin Hale")
 
+    def test_someone_known_at_another_place_is_not_answered_for_by_the_one_here(self):
+        # 8B run 145, T28: from the inn, "go down to the dock to find Orme and ask ..." rolled vs Hilde the innkeeper.
+        hilde = {"id": 9, "code": "I", "name": "Hilde", "role": "innkeeper", "stat_profile": {"charisma": 10}}
+        orme = {"id": 3, "code": "C", "name": "Orme", "role": "captain", "stat_profile": {"charisma": 12}}
+        ctx = {
+            "current_location": {"id": 7, "code": "L7", "name": "Inn", "npcs": [hilde]},
+            "locations": [
+                {"id": 7, "code": "L7", "name": "Inn", "npcs": [hilde]},
+                {"id": 4, "code": "L4", "name": "Harbour Dock", "npcs": [orme]},
+            ],
+            "conversation_turn": {"addressed": [], "present": ["I"], "listening": ["I"], "rule": "none"},
+            "settings": {"playthrough_options": {}},
+        }
+        line = "I wake at first light and go down to the dock to find Orme and ask when the chest will be counted."
+        check = infer_check_from_action(line, ctx)
+        self.assertIsNotNone(check)
+        self.assertIsNone(check.get("opposition"))
+
     def test_without_a_scene_record_the_roster_stands_in(self):
         line = "I try to convince Warin to let me past"
         check = infer_check_from_action(line, _context(present=None, record=False))

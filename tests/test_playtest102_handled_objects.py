@@ -46,6 +46,15 @@ class TheNounAloneIsNotTheCraft(unittest.TestCase):
         self.assertNotEqual(_skill("I look at the mechanism above the door."), "tinkering")
 
 
+class LoreSkillsReadTheLineAsTyped(unittest.TestCase):
+    def test_feet_planted_in_the_mud_is_no_nature_lore(self):
+        # 8B run 145, T34: "planted" de-inflected to "plant" and rolled nature.
+        self.assertNotEqual(_skill("I keep my hands open and my feet planted in the mud, and I do not step back."), "nature")
+
+    def test_asking_about_a_plant_still_is(self):
+        self.assertEqual(_skill("What kind of plant is that on the wall?"), "nature")
+
+
 class UsingTheThingStillRolls(unittest.TestCase):
     def test_a_bearing_with_the_compass(self):
         self.assertEqual(_skill("I take a bearing with the compass and plot our route along the coast."), "navigation")

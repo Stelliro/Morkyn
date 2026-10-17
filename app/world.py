@@ -1319,6 +1319,48 @@ def weather_event_chance_delta(weather: dict[str, Any] | None = None) -> float:
     return d * (0.5 + 0.5 * strength)
 
 
+_TIME_OF_DAY_MINUTES = {
+    "midnight": 0, "dawn": 360, "first light": 360, "sunrise": 360, "daybreak": 360, "morning": 480,
+    "midday": 720, "noon": 720, "afternoon": 900, "evening": 1080, "sunset": 1140, "dusk": 1140,
+    "nightfall": 1200, "night": 1260,
+}
+_WAIT_UNTIL_RE = re.compile(
+    r"\b(?:wait|waits|waiting|rest|rests|resting|sit|sits|sitting|stay|stays|staying|sleep|sleeps|sleeping|bide|linger\w*)"
+    r"\b[^.!?]{0,60}?\b(?:until|till|til|for)\s+(?:the\s+)?(?:next\s+)?"
+    r"(midnight|dawn|first\s+light|sunrise|daybreak|morning|midday|noon|afternoon|evening|sunset|dusk|nightfall|night)"
+    r"(?:\s+tide)?\b",
+    re.I,
+)
+_WAIT_FOR_TIDE_RE = re.compile(
+    r"\b(?:wait|waits|waiting|rest|rests|resting|stay|stays|bide)\b[^.!?]{0,60}?\b(?:until|till|for)\s+(?:the\s+)?"
+    r"(?:next\s+tide|tide\s+(?:to\s+)?turns?|turn\s+of\s+the\s+tide)\b",
+    re.I,
+)
+
+
+def _wait_until_minutes(conn, player_line: str) -> int:
+    """Minutes from the world clock to the time of day a wait, rest or sleep in the player's line ends at; 0 when none.
+
+    "until the evening tide" at 11:00 is 7 hours; a time already past today is
+    tomorrow's. A tide with no time named is a quarter day. The narrated part
+    of the line only: a wait said in speech asks nothing of the clock.
+    """
+    text = venues.strip_speech(_player_line(player_line))
+    match = _WAIT_UNTIL_RE.search(text)
+    target = None
+    if match:
+        target = _TIME_OF_DAY_MINUTES.get(re.sub(r"\s+", " ", match.group(1).lower()))
+    if target is None:
+        return 360 if _WAIT_FOR_TIDE_RE.search(text) else 0
+    now = get_world_time(conn)
+    minute = int(now.get("minute") or 0)
+    day_length = int(now.get("day_length_minutes") or WORLD_DAY_LENGTH_MINUTES)
+    target = int(target) % day_length
+    ahead = (target - minute) % day_length
+    # Within the hour counts as now; otherwise the next time that hour comes.
+    return 0 if ahead < 60 else int(ahead)
+
+
 def estimate_action_minutes(player_input: str) -> int:
     """Rough in-world minutes for a free-text player action (not walk/wait)."""
     text = (player_input or "").lower().strip()
@@ -6560,6 +6602,15 @@ _MOVE_IDIOM_RE = re.compile(
 )
 
 
+_MOTION_NOT_COMBAT_RE = re.compile(
+    r"\b(?:kick|kicks|kicked|kicking|strike|strikes|struck|striking|punch|punches|punched|punching|shove|shoves|shoved|"
+    r"shoving|push|pushes|pushed|pushing|shoot|shoots|shot|shooting)\s+"
+    r"(?:back|up|upward|upwards|off|away|out|free|loose|down|downward|downwards|forward|forwards|on|ahead|through|past|"
+    r"across|along|over|clear|the\s+door\s+open|open|shut|closed)\b",
+    re.IGNORECASE,
+)
+
+
 def _turn_intent(player_input: str) -> tuple[str, list[str]]:
     kind = _turn_kind(player_input)
     if kind != "player_action":
@@ -6570,7 +6621,10 @@ def _turn_intent(player_input: str) -> tuple[str, list[str]]:
     # every turn a conversation, crouching and following included, which
     # forced the verifier and conversation-sized context on all of them.
     player_input = _player_line(player_input)
-    tokens = _intent_tokens(player_input)
+    # A fighting verb with a direction is motion, not a blow: "kick back up to
+    # Bennet's boat for air" resolved as an unarmed hit on Bennet (8B run 145,
+    # T24). The blow needs its object; the particle takes the verb's object slot.
+    tokens = _intent_tokens(_MOTION_NOT_COMBAT_RE.sub(" ", player_input))
     travel_tokens = _intent_tokens(_travel_scoring_text(player_input))
     scores: list[tuple[str, int]] = []
     lowered = str(player_input or "").lower()
@@ -14925,6 +14979,10 @@ _NOT_A_TAKEN_THING = frozenset({
     # A part of something held, not a thing taken: "I take the end of the nearest
     # crate" put "end x1" in the pack (8B run 54, T5).
     "end", "ends", "corner", "corners", "top", "bottom", "front", "back", "middle", "weight", "strain",
+    # A duty or a state kept, not a thing: "I keep the lookout" put "lookout x1"
+    # in the pack (8B run 145, T41).
+    "lookout", "watch", "guard", "vigil", "post", "promise", "pace", "course", "faith", "distance", "eye", "eyes",
+    "head", "calm", "company", "counsel", "peace", "quiet", "temper", "balance", "footing", "bearing",
 })
 # The any-word must be what the take verb takes: "I pocket whatever is under it",
 # not "Anything on there that'll keep the time?" (7B run 4, T1).
@@ -20252,11 +20310,21 @@ def _gain_names(changes: Any) -> list[str]:
     return names
 
 
+_PLAYER_PAYS_SUM_RE = re.compile(
+    r"\b(?:count(?:s|ed)?(?:\s+out)?|hand(?:s|ed)?(?:\s+over)?|pay(?:s|ed)?|pays?\s+out|give(?:s)?|gave|press(?:es|ed)?|"
+    r"slide(?:s|d)?|put(?:s)?\s+down|set(?:s)?\s+down|drop(?:s|ped)?)\s+(?:[\w'’-]+\s+){0,3}?"
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|twelve|fifteen|twenty|thirty|fifty)\s+"
+    r"(?:gold|silver|coppers?|coins?|crowns?)\b",
+    re.I,
+)
+
+
 def _void_unbought_spend(
     result: dict[str, Any],
     proposed_gains: list[str],
     kept_changes: list[dict[str, Any]],
     band_report: dict[str, Any] | None,
+    player_input: str = "",
 ) -> bool:
     """
     A GOLD loss paid for GRANTs. When every one of them was removed (the
@@ -20265,6 +20333,9 @@ def _void_unbought_spend(
     never received). Structural: a purchase with nothing purchased.
 
     A loss on a turn that granted nothing (a toll, a bribe, a fine) is left alone.
+    So is a sum the player's own line counts out: "I count six gold coins
+    into the bargeman's hand" paid for a passage beside a refused GRANT
+    "crate", and the 6 gold stayed in the purse (8B run 145, T21).
     """
     player = result.get("player") if isinstance(result, dict) else None
     if not isinstance(player, dict):
@@ -20274,6 +20345,8 @@ def _void_unbought_spend(
     except (TypeError, ValueError):
         return False
     if gold >= 0:
+        return False
+    if _PLAYER_PAYS_SUM_RE.search(venues.strip_speech(_player_line(player_input))):
         return False
     dsl = result.get("_dsl") if isinstance(result.get("_dsl"), dict) else {}
     bought = [str(name) for name in dsl.get("grants") or [] if str(name or "").strip()]
@@ -22029,7 +22102,7 @@ def apply_turn(
                 inv_changes = _remove_shown_gives(conn, inv_changes, narration, player_input)
             except Exception:
                 pass
-        voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report)
+        voided = _void_unbought_spend(result, proposed_gains, inv_changes, band_report, player_input)
         purse_note = None
         try:
             inv_changes, purse_note = _settle_purse(conn, result, inv_changes, band_report, inv_rejected,
@@ -23584,6 +23657,15 @@ def play_turn(
         try:
             # The player's line only, like _turn_intent (playtest #80, the #43 leak).
             spent = estimate_action_minutes(player_line)
+            with connect() as c_time:
+                # A wait "until the evening tide" lasts until the evening: the
+                # clock stayed at noon through a wait, a row out and a dive, and
+                # the prose's evening was rewritten to morning (8B run 145,
+                # T17-T22). The clock decides the hour; the prose is told it.
+                until = _wait_until_minutes(c_time, player_line)
+                if until > spent:
+                    turn_ledger.note("time", "waited_until", minutes=until, line=player_line[:120])
+                    spent = until
             if spent > 0:
                 with connect() as c_time:
                     ticked = advance_world_time(c_time, spent)

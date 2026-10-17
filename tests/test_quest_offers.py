@@ -177,6 +177,18 @@ class TheEngineFindsTheLine(unittest.TestCase):
         cands, _dropped = qo.find_offer_candidates(prose, "I carry the chest up to the tally house.", npcs=[])
         self.assertEqual(cands, [], cands)
 
+    def test_arranging_the_work_is_not_the_work(self):
+        # 8B run 145, T36: "The guild holds the salvage rights, but only if you're willing to work for it"
+        # filed "Salvage Rights Claim" with the steps Confirm / Discuss / Agree.
+        prose = ("Captain Veyra [[B]] looks up. \"The guild holds the salvage rights, but only if you're willing to work for it.\"")
+        item = {"title": "Salvage Rights Claim", "summary": "x", "giver": "B",
+                "steps": [{"title": "Confirm salvage rights"}, {"title": "Discuss salvage work"}, {"title": "Agree to work terms"}],
+                "reward": {}, "offer_line": "The guild holds the salvage rights, but only if you're willing to work for it.",
+                "evidence": "The guild holds the salvage rights, but only if you're willing to work for it.", "_checked": {"why": "yes"}}
+        _accepted, rejected = qp.validate_quest_changes({"new": [item]}, narration=prose, player_input="Is she here or not?",
+                                                        npcs=[{"id": 2, "code": "B", "name": "Veyra", "role": "captain"}])
+        self.assertIn("no_task_named_yet", rejected[0]["reasons"])
+
     def test_one_speakers_lines_in_one_paragraph_are_one_offer(self):
         cands, _ = qo.find_offer_candidates(SHEDS, "\"I am up for it.\"", npcs=GARRICK)
         self.assertEqual(len(cands), 1, cands)
@@ -344,6 +356,15 @@ class ProgressIsCheckedTheSameWay(unittest.TestCase):
                    "current_objective": "Locate the drowned town's wreckage along the coast"}]
         self.assertEqual(qp.quest_parse_gate(prose, "I work the wreckage.", active_quests=active), "open_quest_step_named")
         self.assertEqual(qp.quest_parse_gate("Rain runs off the slate roofs.", "I wait.", active_quests=active), "")
+
+    def test_the_players_own_words_said_back_are_no_result(self):
+        # 8B run 145, T38: the prose echoed the player's "Done" line and the step was finished on it.
+        line = "\"Forty-five gold for the deep dive, paid on the guild's count, and the chest's share settled first. Done.\" I hold out my hand."
+        prose = ("“Forty-five gold for the deep dive, paid on the guild's count, and the chest's share settled first. Done,” you say. "
+                 "Veyra [[B]] stares at your palm. \"The team goes down at dawn.\"")
+        active = [{"code": "Q1", "title": "Deep Site Salvage Dive", "status": "active", "current_objective": "Join a team for a deep dive"}]
+        report = qo.run_progress_pass(prose, line, active=active, ask=_fake_ask()[0])
+        self.assertEqual(report["candidates"], [])
 
     def test_setting_out_is_no_candidate(self):
         prose = "You head down to the docks to unload the salted fish before the tide turns."
