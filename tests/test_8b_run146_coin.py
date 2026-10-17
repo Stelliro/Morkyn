@@ -198,6 +198,19 @@ class ANameAskedAfterIsNoOpponent(unittest.TestCase):
         check = infer_check_from_action("I thank Mira for the receipt and ask her what the guild pays for rope.", ctx)
         self.assertEqual(((check or {}).get("opposition") or {}).get("name"), "Mira Venn")
 
+    def test_the_debtor_named_in_a_question_to_someone_else_is_no_opponent(self):
+        # 8B run 147, T89-T90: "ask Mira whether ... collected from Dunmore" and "a bonus for Dunmore" rolled against Dunmore.
+        ctx = {
+            "npcs": [{"code": "A", "name": "Mira Venn"}, {"code": "D", "name": "Gregory Dunmore"}],
+            "conversation_turn": {"present": ["A", "D"], "addressed": ["A"]},
+        }
+        for line in (
+            "I go back inside and ask Mira whether the guild wants that bread debt collected from Dunmore, and what it pays.",
+            "\"A silver a coin and a bonus for Dunmore. I'll collect the bread debt.\" I ask Mira where Dunmore is to be found.",
+        ):
+            check = infer_check_from_action(line, ctx)
+            self.assertEqual(((check or {}).get("opposition") or {}).get("name"), "Mira Venn", line)
+
     def test_asking_someone_present_still_rolls_against_them(self):
         ctx = {
             "npcs": [{"code": "J", "name": "Elara Veyne"}, {"code": "R", "name": "Gareth Radley"}],

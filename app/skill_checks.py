@@ -2226,7 +2226,12 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         # Asked after is not asked: "ask the nearest dockhand where Elara Veyne
         # can be found" rolled against Elara, who was not there (8B run 146,
         # T77). The person a question is about is not its other side.
-        named_text = re.sub(r"\b(?:where|whereabouts\s+of|find\w*|about|after|looking\s+for|search\w*\s+for|news\s+of|word\s+of)"
+        named_text = re.sub(r"\b(?:where|whereabouts\s+of|find\w*|about|after|looking\s+for|search\w*\s+for|news\s+of|word\s+of|"
+                            # The debtor named in a question put to someone else: "ask Mira whether
+                            # the guild wants that bread debt collected from Dunmore" rolled against
+                            # Dunmore (8B run 147, T89).
+                            r"(?:collect\w*|owed|owes|owing|debt|due|payment|money|coin)\s+(?:by|from|of|to)|"
+                            r"(?:bonus|reward|price|fee|pay|warrant)\s+for|against)"
                             r"\s+(?:the\s+)?[A-Z][\w'’-]+(?:\s+[A-Z][\w'’-]+)?", " ", named_text)
         if cased:
             named_text = named_text.lower()
