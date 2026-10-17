@@ -9856,9 +9856,17 @@ def _same_place_name(a: str, b: str) -> bool:
     def key(text: str) -> str:
         text = str(text or "").strip().lower().replace("’", "'").replace("‘", "'")
         return re.sub(r"^the\s+", "", re.sub(r"\s+", " ", text))
+
+    def owner_key(text: str) -> str:
+        # "Reeves' Office", "the Reeve's Office" and "Reeves Office" are one
+        # building (8B run 148, T30): possessives and a plural s fall away.
+        words = re.findall(r"[a-z]+", re.sub(r"['’]s?\b", "", key(text)))
+        return " ".join(w[:-1] if len(w) >= 5 and w.endswith("s") and not w.endswith("ss") else w for w in words)
     if not key(a):
         return False
     if key(a) == key(b):
+        return True
+    if owner_key(a) and owner_key(a) == owner_key(b):
         return True
     # A part of a place under the place's own name: "the Drowned Claim's ruins"
     # beside "The Drowned Claim" made a second place and moved the player into

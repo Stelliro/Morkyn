@@ -288,6 +288,14 @@ class APossessivePartIsThePlace(unittest.TestCase):
         self.assertTrue(_same_place_name("the Drowned Claim's ruins", "The Drowned Claim"))
         self.assertTrue(_same_place_name("The Harbour", "the Harbour’s edge"))
 
+    def test_possessive_spellings_of_one_owner_are_one_place(self):
+        # 8B run 148, T30: "Reeves’ Office" was recorded beside "The Reeve's Office".
+        from app.world import _same_place_name
+
+        self.assertTrue(_same_place_name("Reeves’ Office", "The Reeve's Office"))
+        self.assertTrue(_same_place_name("Salvage Guild Tally House", "The Salvage Guild's Tally House"))
+        self.assertFalse(_same_place_name("The Reeve's Office", "The Reeve's House"))
+
     def test_another_places_part_is_not_this_one(self):
         from app.world import _same_place_name
 
