@@ -500,9 +500,14 @@ def run_offer_pass(
         # task was the player's "Take me out to the wreck and show me what is
         # buried" (8B run 146, T34).
         own = qp._player_own_line(str(player_input or ""))
-        if (card.get("task") and qp.evidence_found(card["task"], own)) or (
-            card.get("title") and len(card["title"]) >= 12 and qp.evidence_found(card["title"], own)
-        ):
+        # Unless the giver's own line names the pay: the player asking "whether
+        # the guild wants that bread debt collected from Dunmore, and what it
+        # pays" and Mira answering "a silver for every coin you bring in, plus
+        # a bonus" is a real offer in the player's words (8B run 147, T89).
+        if (
+            (card.get("task") and qp.evidence_found(card["task"], own))
+            or (card.get("title") and len(card["title"]) >= 12 and qp.evidence_found(card["title"], own))
+        ) and not _names_pay(str(candidate.get("line") or "")):
             report["fills"][-1]["dropped"] = "task_is_the_players_words"
             continue
         system, user = build_check_prompt(candidate, card, player_input)
