@@ -129,6 +129,14 @@ class APurchaseWithNoPriceStillCosts(unittest.TestCase):
         note = _settle_stated_gold(result, "I ask whether there is a day's hauling on these boats that pays coin tonight.")
         self.assertEqual((note or {}).get("source"), "gain_without_coin_dropped", note)
 
+    def test_paying_for_a_bed_with_a_gain_op_is_a_spend(self):
+        # 8B run 148, T17: "pay for a bed, and sleep" with GOLD 30 left the purse unchanged.
+        prose = ("The innkeeper nods at your request. You pay with a handful of coins, the sound of them clinking in the wooden "
+                 "bowl a reminder of your dwindling funds. You are given a small bed.")
+        result = {"narration": prose, "player": {"gold_delta": 30}}
+        note = _settle_stated_gold(result, "I am dead on my feet; I go to the Stag and Heron, pay for a bed, and sleep until morning.")
+        self.assertLess(result["player"].get("gold_delta", 0), 0, note)
+
     def test_looking_at_goods_for_sale_costs_nothing(self):
         prose = "The stall holds lanterns and coils of rope. You look them over and move on."
         result = {"narration": prose, "player": {}, "inventory_changes": [{"name": "Lantern", "quantity_band": "small"}]}

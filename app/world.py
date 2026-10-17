@@ -9606,6 +9606,18 @@ def _movement_destination_from_input(rows: list[Any], player_input: str, current
         if len(name) < 4 or name == current_name:
             continue
         m = re.search(rf"(?<!\w){re.escape(name.lower())}(?!\w)", lowered)
+        # A place as a possessive is a thing's owner, not a destination: "tell
+        # the Reeve that the Mistral's hold is emptied" moved the player from
+        # the Reeve's office back to the Mistral (8B run 148, T16).
+        if m is not None and re.match(r"['’]s\b", lowered[m.end():]):
+            m = None
+        # A place as a modifier of a thing or a job ("the Mistral haul", "the
+        # Stormbreaker wreck") is not where the player goes (8B run 148, T18).
+        if m is not None and re.match(
+            r"\s+(?:haul|hauls|job|jobs|wreck|wrecks|cargo|work|salvage|contract|debt|load|crew|fish|catch|posting|business|"
+            r"affair|matter|boat|ship|men|folk|people|road|path|gate|debts|pay|wage|wages)\b", lowered[m.end():]
+        ):
+            m = None
         if m is not None:
             exact_spans.append(m.span())
             # The place left is where the player comes from, not where they go:
@@ -15804,6 +15816,10 @@ _ABSTRACT_GRANT_HEADS = frozenset({
     # "docks x1" in the pack (8B run 110, T3).
     "docks", "dock", "harbour", "harbor", "wharf", "pier", "quay", "yard", "flats", "market", "square", "street",
     "lane", "shore", "beach", "district", "quarter", "ward", "town", "village",
+    # A fixture used or a meal eaten: GRANT "bed" for "You are given a small
+    # bed" put "bed x1" in the pack (8B run 148, T17; 8B run 146 F31).
+    "bed", "beds", "room", "rooms", "bunk", "cot", "berth", "lodging", "lodgings", "meal", "meals", "supper", "breakfast",
+    "dinner", "bath", "passage", "ferry", "night", "nights", "stay", "seat", "table", "chair", "stool", "bench", "hearth",
 })
 
 
@@ -15889,6 +15905,11 @@ def _payment_shown(narration: str, player_input: str) -> bool:
     return False
 
 
+# Fixtures used and meals eaten: never a thing in the pack, handed over or not.
+_FIXTURE_HEADS = frozenset({
+    "bed", "beds", "room", "rooms", "bunk", "cot", "berth", "lodging", "lodgings", "meal", "meals", "supper", "breakfast",
+    "dinner", "bath", "passage", "ferry", "night", "nights", "stay", "seat", "table", "chair", "stool", "bench", "hearth",
+})
 # The player's line hauls a load somewhere for the work: cargo, not a take.
 _CARGO_HAUL_RE = re.compile(
     r"\b(?:haul|hauls|hauling|carry|carries|carrying|load|loads|loading|unload\w*|shoulder\w*|heave|heaves|heaving|drag\w*|lug\w*|"
@@ -16157,6 +16178,11 @@ def _filter_inventory_changes(
         ) and not (narrated_take and line_names_it):
             grounded = False
             turn_ledger.note("inventory", "not_a_thing", item=name, why="the grant names a job, wage or deal")
+        # A fixture or a meal is no thing to carry even when "given": "You are
+        # given a small bed" put "bed x1" in the pack (8B run 148, T17).
+        if grounded and (tokens[-1] if tokens else name_l) in _FIXTURE_HEADS:
+            grounded = False
+            turn_ledger.note("inventory", "not_a_thing", item=name, why="a fixture used or a meal eaten")
         handed = _prose_item_handed_over(final_text, name_l, tokens, owned=bool(existing))
         # The player's own thing under a shorter name is that thing (7B run 10,
         # T1: "You reach into your shirt, pulling out the small, worn reckoner"
@@ -21425,7 +21451,10 @@ _OWN_UNPRICED_PAY_RE = re.compile(
     # about a job's pay flipped a model gain into a spend (8B run 148, T9).
     r"(?:^|[.;!,]\s*|\band\s+|\bthen\s+)i\s+(?:\w+ly\s+)?(?:pay|settle)\s+"
     r"(?:it|him|her|them|what\s+(?:i|we)\s+owe|up|the\s+(?:price|fee|fare|cost|rest|balance|bill|debt|account|man|woman|keeper|"
-    r"stallholder|shopkeeper|barkeep|innkeeper|merchant|trader|ferryman|bargeman|boatman))\b",
+    r"stallholder|shopkeeper|barkeep|innkeeper|merchant|trader|ferryman|bargeman|boatman))\b"
+    # Paying for a thing, the subject understood: "I go to the Stag and Heron,
+    # pay for a bed, and sleep" (8B run 148, T17).
+    r"|\bpay(?:s|ing)?\s+for\s+(?:a|an|the|my|our|another|one)\s+[\w'’-]+",
     re.I,
 )
 # Buying, in the player's line or the narration.

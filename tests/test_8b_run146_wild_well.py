@@ -240,6 +240,20 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertEqual([c["name"] for c in kept], ["brass key"])
             conn.rollback()
 
+    def test_a_bed_given_for_the_night_is_no_thing_in_the_pack(self):
+        # 8B run 148, T17: GRANT "bed" for "You are given a small bed" put "bed x1" in the pack.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = "You pay with a handful of coins. You are given a small bed, and as you lay down, the world fades into sleep."
+        with connect() as conn:
+            kept = world._filter_inventory_changes(conn, [{"name": "bed", "quantity_band": "small"}], narration=prose,
+                                                    player_input="I go to the Stag and Heron, pay for a bed, and sleep until morning.")
+            self.assertEqual(kept, [])
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db

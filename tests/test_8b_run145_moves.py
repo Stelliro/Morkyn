@@ -296,6 +296,19 @@ class ThePlaceLeftIsNotTheDestination(unittest.TestCase):
         row = _movement_destination_from_input(rows, "I take shelter from the storm in the Stag and Heron and wait it out by the fire.", "The Flats")
         self.assertEqual(row["name"], "The Stag and Heron")
 
+    def test_a_place_as_a_possessive_is_no_destination(self):
+        # 8B run 148, T16: "the Mistral's hold is emptied" moved the player back aboard the Mistral.
+        from app.world import _movement_destination_from_input
+
+        rows = FLAT_ROWS + [{"id": 5, "code": "L5", "name": "The Mistral", "parent_id": 3, "kind": ""}]
+        line = "I tell the Reeve plainly that the Mistral's hold is emptied onto the cart and ask for the thirty gold for the haul."
+        self.assertIsNone(_movement_destination_from_input(rows, line, "The Harbour"))
+        row = _movement_destination_from_input(rows, "I walk back to the Mistral to check the hold.", "The Harbour")
+        self.assertEqual(row["name"], "The Mistral")
+        # 8B run 148, T18: "the thirty gold for the Mistral haul" moved the player aboard the Mistral.
+        line = "In the morning I find Roderic at the harbour and walk with him to the Reeve's office to collect the thirty gold for the Mistral haul."
+        self.assertIsNone(_movement_destination_from_input(rows, line, "The Stag and Heron"))
+
     def test_the_place_walked_to_after_leaving_one_is_the_destination(self):
         from app.world import _movement_destination_from_input
 
