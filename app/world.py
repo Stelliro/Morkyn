@@ -9520,8 +9520,12 @@ def _code_is_origin(text: str, start: int, end: int) -> bool:
     # The origin word has to govern the place itself: "shelter from the storm
     # in the Stag and Heron" read the inn as where the player came from (8B
     # run 147, T96). Only an article may stand between them.
+    # Between them only an article and the place's own words, never another
+    # preposition's phrase ("from the storm in ..."). A code span sits after
+    # the name, so "from the Saltmarrow Salvage Yard [[L2]]" still counts.
     if origins and not _GOING_WORD_RE.search(before[origins[-1].end():]) and re.fullmatch(
-        r"\s*(?:the|this|that|a|an|my|our|your|his|her|their)?\s*", before[origins[-1].end():]
+        r"\s*(?:(?!(?:in|at|to|into|on|onto|by|with|for|of|from|and|then|but|while|as|under|over|through|across)\b)[\w'’-]+\s+){0,6}",
+        before[origins[-1].end():],
     ):
         return True
     return bool(_ORIGIN_AFTER_RE.search(text[end: end + 60]))
