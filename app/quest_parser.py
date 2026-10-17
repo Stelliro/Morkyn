@@ -1134,6 +1134,15 @@ def _is_duplicate(item: dict[str, Any], existing: list[dict[str, Any]] | None, g
         other_giver = bool(giver_id) and quest.get("giver_npc_id") != giver_id
         if other_giver and ratio < 0.9 and _lead_verb(title) != _lead_verb(str(quest.get("title") or "")):
             ratio = 0.0
+        # A plain title is no one job: the tallyman's "Salvage Job" on the
+        # docks wreck was filed as a duplicate of the "Salvage Job" a chandler
+        # had offered in the drowned district (8B run 139, T2). From another
+        # giver, the first steps must share a word too.
+        mine, theirs = str(item.get("step_text") or ""), str(quest.get("current_step_text") or "")
+        if other_giver and ratio >= 0.6 and mine.strip() and theirs.strip() and not (
+            _stems(mine) & _stems(theirs)
+        ):
+            ratio = 0.0
         if ratio >= 0.6:
             return quest
         if status == "declined" and giver_id and quest.get("giver_npc_id") == giver_id and ratio >= 0.4:
@@ -1433,7 +1442,10 @@ def validate_quest_changes(
             prior_item = same_offer["item"]
             if offer_line and not prior_item["reward"]["text"] and _norm(offer_line) != _norm(prior_item["evidence"]):
                 prior_item["reward"]["text"] = offer_line[:200]
-        dup = _is_duplicate({"title": title}, list(existing or []) + taken_this_turn, giver.get("id") if giver else None, first_place)
+        dup = _is_duplicate(
+            {"title": title, "step_text": " ".join(f"{s['title']} {s.get('description') or ''}" for s in steps[:1])},
+            list(existing or []) + taken_this_turn, giver.get("id") if giver else None, first_place,
+        )
         if dup is None and same_offer is None and giver is not None and not _MORE_WORK_RE.search(f"{offer_line} {evidence}"):
             # The one job this giver has offered and the player has not taken,
             # told now under another name, is that job (8B run 103, T3).

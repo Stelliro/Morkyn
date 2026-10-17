@@ -2311,6 +2311,21 @@ class OutOfAnotherVerbIsNoExit(unittest.TestCase):
         self.assertEqual(venue_move_intent("I finish my drink and walk out."), "exit")
 
 
+class APlainTitleIsNoOneJob(unittest.TestCase):
+    """8B run 139 T2: the tallyman's "Salvage Job" on the docks was a duplicate of a chandler's "Salvage Job"."""
+
+    def test_other_giver_other_step_is_new(self):
+        from app import quest_parser as qp
+
+        ex = [{"id": 1, "code": "Q1", "title": "Salvage Job", "status": "offered", "giver_npc_id": 1,
+               "current_step_text": "Collect salvage from the drowned lower district You need to gather items before the water returns."}]
+        docks = {"title": "Salvage Job", "step_text": "Work the docks Sorting through the wreckage of the Storm's Breath"}
+        self.assertIsNone(qp._is_duplicate(docks, ex, 2, ""))
+        same = {"title": "Salvage Job", "step_text": "Gather salvage in the drowned lower district"}
+        self.assertIsNotNone(qp._is_duplicate(same, ex, 2, ""))
+        self.assertIsNotNone(qp._is_duplicate(docks, ex, 1, ""))
+
+
 class _OutcomeConn:
     def execute(self, *_a, **_k):
         class _Row:
