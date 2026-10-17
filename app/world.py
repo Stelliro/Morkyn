@@ -10386,6 +10386,27 @@ def resolve_movement(
                 # Any word of the place in the line ("go after the farmer" for
                 # "The Farmer's Field") is the player asking for it, loosely.
                 loosely_named = any(len(w) >= 5 and re.search(rf"\b{re.escape(w)}", line_low) for w in dest_words)
+                # The prose keeps the player where they are: "You walk east
+                # along The Flats [[L8]]" with MOVE "The Drowned Claim" (never
+                # named) stood on the direction word alone (8B run 147, T75).
+                # A walk the prose places in the current place, with no word of
+                # the destination, goes nowhere else.
+                stays_here = (
+                    bool(current_code)
+                    and f"[[{str(current_code).lower()}]]" in prose
+                    and not (dest_words and re.search(rf"\b{re.escape(dest_words[-1])}", prose))
+                    and not venues.entry_in_prose(narration)
+                    and not (dest_words and _line_names_place(line_low, dest_words))
+                    and not loosely_named
+                )
+                if stays_here:
+                    turn_ledger.note("movement", "unshown_named_move_dropped", destination=dest_name, line=line_low[:160],
+                                     why="prose_stays_here")
+                    player_patch["move_to_location"] = None
+                    player_patch["move_to_location_code"] = None
+                    result["map_walk"] = None
+                    return {"status": "dropped_unshown", "from": current_code, "destination": dest_name, "intent": intent,
+                            "rule": "prose_stays_here"}
                 if (
                     not journey
                     and not leaves
