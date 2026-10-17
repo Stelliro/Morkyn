@@ -1386,6 +1386,13 @@ def resolve_check(
             # mud (8B run 8, T1). It stays a bad miss, with no blunder.
             mishap = False
             degree = "bad_nothing" if not fumble else degree
+        elif str(skill.get("category") or "") == "mental" and not tool:
+            # Looking, searching and recalling break no bones: "Botched
+            # Perception: you hurt your leg" for sweeping the dust around a well
+            # for footprints (8B run 146, T57). A bad miss finds nothing; only a
+            # tool in hand (a lockpick, a lens) can hurt its user.
+            mishap = False
+            degree = "bad_nothing" if not fumble else degree
         elif social:
             # Words do not break bones (playtest #88: "Botched Persuasion:
             # you hurt your leg" 28 times). A social fumble is a blunder the
@@ -1786,7 +1793,7 @@ def _word_stems(word: str) -> list[str]:
     return seen
 
 
-def _trigger_text_variants(text: str) -> list[str]:
+def _trigger_text_variants(text: str, *, protect_others: bool = True) -> list[str]:
     """The sentence, plus de-inflected rewrites of it.
 
     Each variant is a whole coherent sentence rather than the original with
@@ -1802,9 +1809,16 @@ def _trigger_text_variants(text: str) -> list[str]:
     stems = {word: _word_stems(word) for word in set(_TRIGGER_WORD_RE.findall(text))}
     if not any(stems.values()):
         return variants
+    # A verb someone or something else does stays as typed: "before the tide
+    # covers them" de-inflected to "cover them" and rolled support (8B run 146,
+    # T49). The "-s" after "the <noun>" or "he/she/it/they" is a third-person
+    # verb (or a plural noun), never the player's own act.
+    others = {m.start(1) for m in _OTHERS_VERB_RE.finditer(text)} if protect_others else set()
     for depth in range(3):
 
         def _pick(match: re.Match[str], _d: int = depth) -> str:
+            if match.start() in others:
+                return match.group(0)
             options = stems.get(match.group(0)) or []
             return options[_d] if _d < len(options) else match.group(0)
 
@@ -1814,6 +1828,17 @@ def _trigger_text_variants(text: str) -> list[str]:
     return variants
 
 
+# A word ending in -s right after "the/a/this/his... <word>" or a third-person
+# pronoun: another's verb or a plural noun, not the player's act (see
+# _trigger_text_variants).
+_OTHERS_VERB_RE = re.compile(
+    r"\b(?:(?:the|a|an|this|that|these|those|his|her|their|its|our|my|your|some|every|each|no)\s+[a-z]+|he|she|it|they|who|which|that)\s+"
+    r"(?:all\s+|always\s+|just\s+|only\s+|still\s+|often\s+|never\s+|soon\s+)?([a-z]{3,}s)\b",
+    re.I,
+)
+# Skills whose trigger is a blow: rolled whoever strikes, so they read the
+# de-inflected line without the others-verb protection.
+_COMBAT_TRIGGER_SKILLS = frozenset({"melee", "ranged", "defense", "tactics", "weapon_art"})
 # A quoted span in the player's line ("..." or “...”).
 _SPOKEN_RE = re.compile(r"\"[^\"]*\"|“[^”]*”")
 # Skills a line of speech can call for by itself.
@@ -1933,6 +1958,7 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # matched the sentence as typed.
     variants = _trigger_text_variants(text)
     acted_variants = _trigger_text_variants(acted) if acted != text else variants
+    combat_variants = _trigger_text_variants(acted, protect_others=False)
     # Others lying is not the player deceiving (7B run 11, T2: "there are three
     # in this town and they all lie" rolled deception, a critical failure).
     social = _OTHERS_DO_SOCIAL_RE.sub(" ", text)
@@ -1943,6 +1969,10 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
             continue
         try:
             reads = social_variants if code in _SPEECH_SKILLS else acted_variants
+            # A blow is a check whoever strikes ("he strikes at the guard"
+            # starts the fight); other acts are the player's own only.
+            if code in _COMBAT_TRIGGER_SKILLS:
+                reads = combat_variants
             # Noun triggers read the line as typed: "which way the tunnel runs"
             # de-inflected to "rune" and rolled symbol lore (7B run 30, T3).
             if code in _NOUN_TRIGGER_SKILLS:
@@ -2164,6 +2194,12 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
                 except Exception:
                     pass
             pool = [n for n in pool if str(n.get("code") or "").upper() in scene_here]
+            # Two people named, one addressed: '"Forty-six for what, Veyra? ...
+            # what I read in Rolf's book"' rolled against Rolf, first in the
+            # roster (8B run 146, T72). The one the line speaks to comes first.
+            addressed = {str(c).upper() for c in conv.get("addressed") or [] if c} if conv is not None else set()
+            if addressed:
+                pool.sort(key=lambda n: str(n.get("code") or "").upper() not in addressed)
         # "I keep my eyes on the man in the skiff, not Emrys. 'I asked him.
         # Tobin, what is under the tarpaulin?'" rolled persuasion vs Emrys (7B
         # run 36, T6). A name the line turns away from is not the other side,

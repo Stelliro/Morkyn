@@ -982,6 +982,21 @@ def repair_pinned_pronouns(
             if has_he and has_she:
                 focus = None
                 continue
+            # The name as an object after a pronoun subject is someone else's
+            # sentence: "Her gaze flicks to Rolf, then to you" and "He nods ...
+            # then turns his attention to Veyra" were pinned to the one named
+            # and had their pronouns flipped (8B run 146, T70, T72).
+            name_at = named[0]["re"].search(plain)
+            first_pronoun = re.search(r"\b(?:he|him|his|she|her|hers)\b", plain, re.I)
+            if (
+                name_at is not None
+                and first_pronoun is not None
+                and first_pronoun.start() < name_at.start()
+                and re.search(r"\b(?:to|at|toward|towards|with|from|for|beside|behind|past|on|of|against|between|near|"
+                              r"after|before|over|under|like|than|about)\s+(?:the\s+)?(?:\w+\s+)?$", plain[:name_at.start()], re.I)
+            ):
+                focus = None
+                continue
         if len(named) == 1 and not stranger:
             focus, carried, person = named[0], 0, named[0]
         elif not named and not stranger and focus is not None and carried < 1:

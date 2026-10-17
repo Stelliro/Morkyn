@@ -108,6 +108,26 @@ class ContestedDcIsAroundTheSkillBase(unittest.TestCase):
         self.assertGreater(sum(dcs) / len(dcs), 16)
 
 
+class LookingBreaksNoBones(unittest.TestCase):
+    """8B run 146, T57: a bad perception miss took a hit point ("you hurt your leg")."""
+
+    def test_a_bad_perception_miss_has_no_injury(self):
+        check = _first("perception", lambda c: c["outcome"] in {"failure", "critical_failure"} and c["margin"] <= -7)
+        self.assertIsNone(check["injury"])
+        self.assertIsNone(check["blunder"])
+
+    def test_a_perception_fumble_is_a_critical_failure_without_a_wound(self):
+        check = _first("perception", lambda c: c["natural"] == 1)
+        self.assertEqual(check["outcome"], "critical_failure")
+        self.assertIsNone(check["injury"])
+        turn = apply_check_to_turn({}, check)
+        self.assertNotIn("health_delta", turn.get("player") or {})
+
+    def test_a_physical_fumble_still_wounds(self):
+        check = _first("athletics", lambda c: c["natural"] == 1)
+        self.assertIsNotNone(check["injury"])
+
+
 class MishapsAreForTheNaturalOne(unittest.TestCase):
     def test_a_miss_by_four_is_a_plain_failure(self):
         check = _first("persuasion", lambda c: c["natural"] != 1 and -6 <= c["margin"] <= -4, opposition=AVERAGE)

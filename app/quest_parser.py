@@ -173,8 +173,17 @@ _SIMPLE_ACCEPT_RE = re.compile(
 )
 
 
+# A yes that waits on something is no yes: "I will hear your terms before I
+# agree to any of them" accepted Elara's job (8B run 146, T62). The clause
+# after before/until/unless/if/whether/once is a condition, not the answer.
+_CONDITIONAL_CLAUSE_RE = re.compile(
+    r"\b(?:before|until|unless|if|whether|once|should)\s+(?:i|we)\b[^.!?;]*",
+    re.I,
+)
+
+
 def player_accepts(player_input: str) -> bool:
-    text = str(player_input or "")
+    text = _CONDITIONAL_CLAUSE_RE.sub(" ", str(player_input or ""))
     if _accept_re().search(text) or _SIMPLE_ACCEPT_RE.search(text):
         return True
     try:

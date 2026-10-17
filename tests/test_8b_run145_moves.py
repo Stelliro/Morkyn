@@ -153,5 +153,36 @@ class AnUnshownMoveOnATravelLine(unittest.TestCase):
         self.assertEqual(_unasked_unshown_move({}, patch, ROWS, line, intent="travel", narration=prose, current_name="Salvage Guild's Tally House"), "")
 
 
+FLAT_ROWS = [
+    {"id": 1, "code": "L1", "name": "Saltmarrow", "parent_id": None, "kind": ""},
+    {"id": 3, "code": "L3", "name": "The Old Wharf", "parent_id": 1, "kind": ""},
+    {"id": 7, "code": "L7", "name": "The Flats", "parent_id": None, "kind": ""},
+    {"id": 8, "code": "L8", "name": "Edge of the Flats", "parent_id": None, "kind": ""},
+]
+
+
+class ThePlaceLeftIsNotTheDestination(unittest.TestCase):
+    """8B run 146, T49: "I leave the flats ... and set off north" moved the player into The Flats."""
+
+    def test_leaving_the_flats_names_no_destination(self):
+        from app.world import _movement_destination_from_input
+
+        line = ("I leave the flats before the tide covers them and set off north out of town along the road, "
+                "to find the well-keeper Rolf Joliffe.")
+        self.assertIsNone(_movement_destination_from_input(FLAT_ROWS, line, "Edge of the Flats"))
+
+    def test_the_place_walked_to_after_leaving_one_is_the_destination(self):
+        from app.world import _movement_destination_from_input
+
+        row = _movement_destination_from_input(FLAT_ROWS, "I leave the flats and walk back to the Old Wharf.", "Edge of the Flats")
+        self.assertEqual(row["name"], "The Old Wharf")
+
+    def test_from_one_place_to_another_goes_to_the_second(self):
+        from app.world import _movement_destination_from_input
+
+        row = _movement_destination_from_input(FLAT_ROWS, "I walk from the Old Wharf out to the flats.", "Saltmarrow")
+        self.assertEqual(row["name"], "The Flats")
+
+
 if __name__ == "__main__":
     unittest.main()
