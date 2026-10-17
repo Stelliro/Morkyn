@@ -21406,8 +21406,11 @@ def _unpriced_payment_amount(conn, result: dict[str, Any], narration: str) -> tu
 
 # The player's own line paying with no sum named: "pay it from my purse", "pay what I owe", "settle up".
 _OWN_UNPRICED_PAY_RE = re.compile(
-    r"\b(?:pay|pays|paid)\s+(?:it|him|her|them|what\s+(?:i|we)\s+owe|the\s+(?:price|fee|fare|cost|rest|balance|bill|man|woman|keeper|"
-    r"stallholder|shopkeeper|merchant|trader|ferryman|bargeman|boatman))\b|\bsettle\s+(?:up|the\s+(?:bill|debt|account))\b",
+    # The player's own deed, in the first person: "who pays it" in a question
+    # about a job's pay flipped a model gain into a spend (8B run 148, T9).
+    r"(?:^|[.;!,]\s*|\band\s+|\bthen\s+)i\s+(?:\w+ly\s+)?(?:pay|settle)\s+"
+    r"(?:it|him|her|them|what\s+(?:i|we)\s+owe|up|the\s+(?:price|fee|fare|cost|rest|balance|bill|debt|account|man|woman|keeper|"
+    r"stallholder|shopkeeper|barkeep|innkeeper|merchant|trader|ferryman|bargeman|boatman))\b",
     re.I,
 )
 # Buying, in the player's line or the narration.
@@ -21551,6 +21554,10 @@ _PROMISED_MONEY_RE = re.compile(
     # The player paying, later or in general, is no coin reaching them: "the
     # deeper you go, the more you'll have to pay" backed GOLD +34 (8B run 146, T34).
     r"|\b(?:you['’]ll|you\s+will|you['’]d|you\s+would|you\s+must|you\s+have\s+to|have\s+to|the\s+more\s+you)\s+(?:\w+\s+){0,2}?pay\b"
+    # A job's terms: "it's not much, but it pays in coin" backed GOLD +small on
+    # the offer turn (8B run 148, T8).
+    r"|\b(?:it|that|this|which|work|job|haul|load|run|contract)\s+pays\s+(?:in|well|good|poorly|badly|coin|silver|gold|enough|"
+    r"the\s+same|double|more|less)\b"
     r"|\b(?:if|once|when|whoever|anyone\s+who)\s+(?:you\s+)?(?:find|bring|return|deliver|finish|complete)\w*\b"
     r"|\bpromis\w*\b",
     re.I,
