@@ -188,6 +188,21 @@ class ASpokenRequestIsNotAWalk(unittest.TestCase):
             self.assertNotEqual(str(result["player"].get("move_to_location_code") or ""), f"L{int(wreck)}")
             conn.rollback()
 
+    def test_a_walk_the_prose_keeps_in_the_current_place_goes_nowhere_else(self):
+        # 8B run 147, T75: "walk east along the flats" with MOVE "The Drowned Claim" moved the player off the flats.
+        world, connect = self._rows()
+        line = "I walk east along the flats toward the line of sand and brine she pointed at, watching the mud for the prow of a half-sunk wreck."
+        with connect() as conn:
+            flats = world._upsert_location(conn, "The Flats", "Mud and salt to the horizon.")
+            world._upsert_location(conn, "The Drowned Claim", "Ruins the sea left.")
+            conn.execute("UPDATE player SET current_location_id = ? WHERE id = 1", (int(flats),))
+            prose = (f"You walk east along The Flats [[L{int(flats)}]], the sand and brine she pointed at now a line of soft, wet earth. "
+                     "You watch the muddy ground closely, hoping to spot the prow of a wrecked ship.")
+            result = {"narration": prose, "player": {"move_to_location": "The Drowned Claim"}}
+            report = world.resolve_movement(conn, result, line, intent="travel", narration=prose)
+            self.assertIsNone(result["player"].get("move_to_location"), report)
+            conn.rollback()
+
     def test_a_request_the_prose_carries_out_still_moves(self):
         world, connect = self._rows()
         line = "I climb into the skiff. \"Out to the wreck, Wulfstan.\""
