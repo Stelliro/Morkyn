@@ -545,6 +545,10 @@ def _overlap(player_words: list[set[str]], forms: set[str]) -> list[str]:
     return [sorted(w)[0] for w in player_words if w & forms]
 
 
+# Act families done at a place, not to a thing: the line's object is the site.
+_SITE_ACT_FAMILIES = frozenset({"swim"})
+
+
 def match_quest_step(
     own_line: str,
     quests: list[dict[str, Any]],
@@ -628,8 +632,13 @@ def match_quest_step(
         hits = _overlap(words, text_forms)
         object_hits = _overlap([w for w in words if not (w & all_verb_forms)], text_forms)
         verb_hit = bool(verb_forms & text_forms) or bool(family_verbs & text_forms)
-        # The verb plus something it is done to, or two such words.
-        if not ((verb_hit and object_hits) or len(set(object_hits)) >= 2):
+        # The verb plus something it is done to, or two such words. An act done
+        # at a site rather than to a thing (a dive, a swim) is the job when the
+        # job's own title names that act: "dive on the wreck" for "Deep Site
+        # Salvage Dive" (8B run 145, T9); "polish my boots" still does not
+        # finish "Polish swords" (#85 review).
+        title_verb = act["family"] in _SITE_ACT_FAMILIES and (bool(verb_forms & title_forms) or bool(family_verbs & title_forms))
+        if not ((verb_hit and object_hits) or len(set(object_hits)) >= 2 or title_verb):
             continue
         candidates.append(int(quest.get("id") or 0))
         score = (len(set(hits)) + (1 if verb_hit else 0), len(set(_overlap(words, title_forms))), -int(quest.get("id") or 0))
