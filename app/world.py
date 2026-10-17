@@ -9494,6 +9494,26 @@ def _code_is_origin(text: str, start: int, end: int) -> bool:
     return bool(_ORIGIN_AFTER_RE.search(text[end: end + 60]))
 
 
+_POINTED_AT_RE = re.compile(
+    r"\b(?:leads?|leading|led|runs?|running|winds?|winding|points?|pointing|heads?|heading|way|path|road|passage|"
+    r"trail|track|stairs?|door|gate|steps?|toward|towards|bound\s+for|on\s+to|off\s+to)\s+(?:that\s+)?(?:[\w'’-]+\s+){0,6}?"
+    r"(?:to|toward|towards|for|into|onto|at)?\s*(?:the\s+)?$",
+    re.I,
+)
+
+
+def _place_only_pointed_at(text: str, needle: str) -> bool:
+    """Every mention of the place is where something leads or points, never where the player is."""
+    hits = [m for m in re.finditer(re.escape(needle), text)]
+    if not hits:
+        return False
+    for m in hits:
+        before = re.split(r"[.!?;]", text[max(0, m.start() - 70): m.start()])[-1]
+        if not _POINTED_AT_RE.search(before):
+            return False
+    return True
+
+
 def _movement_destination_from_input(rows: list[Any], player_input: str, current_name: str) -> Any:
     """Match a known place named in the player's own words. Exact word-boundary only — no fuzzy guessing."""
     lowered = f" {_destination_text(player_input).lower()} "
@@ -10140,10 +10160,17 @@ def resolve_movement(
         target = explicit_label.lower()
         asked_words = _place_words(str(asked["name"] or ""))
         inside_asked = explicit_row is not None and int(venues._field(explicit_row, "parent_id", 0) or 0) == int(asked["id"])
+        # Named only as where a path leads is not reached: "a narrow passage
+        # that leads to the Edge of the Flats [[L8]]" kept MOVE "Edge of the
+        # Flats" while the player had walked into the Old Wharf (8B run 146, T76).
+        shown_target = target in prose_low and not _place_only_pointed_at(prose_low, target)
+        shown_code = bool(explicit_code) and f"[[{explicit_code.lower()}]]" in prose_low and not _place_only_pointed_at(
+            prose_low, f"[[{explicit_code.lower()}]]"
+        )
         if (
             target
-            and target not in prose_low
-            and (not explicit_code or f"[[{explicit_code.lower()}]]" not in prose_low)
+            and not shown_target
+            and not shown_code
             and not inside_asked
             and not (asked_words and all(w in _place_words(explicit_label) for w in asked_words))
             and not venues.entry_in_prose(narration)
@@ -18667,6 +18694,9 @@ _NOT_A_NAME_START = frozenset({
     "Overhead", "Underfoot", "Later", "Soon", "Now", "Then", "Still", "Yet", "Already", "Meanwhile", "Instead",
     "Again", "Elsewhere", "Beside", "Around", "Across", "Along", "Down", "Up", "Out", "In", "Once", "Finally",
     "Suddenly", "Slowly", "Quietly", "Eventually", "Meantime", "Afterwards", "Beneath", "Within", "Without",
+    # A sentence-opening conjunction glued to a name: "And Veyra [[P]], the
+    # spymaster, is watching you" minted "And Veyra" beside Veyra (8B run 146, T73).
+    "And", "But", "Or", "Nor", "So", "Though", "Although", "Even", "Because", "While", "Whereas",
 })
 
 
@@ -21177,6 +21207,17 @@ _MONEY_WORD_RE = re.compile(
 )
 
 
+# The player's own coin, spent, paid, counted or carried (see _settle_stated_gold).
+_OWN_COIN_RE = re.compile(
+    r"\b(?:you\s+(?:\w+\s+){0,2}?(?:spent|spend|paid|pay|gave|give|handed|hand|counted|count|parted)|"
+    r"(?:coins?|gold|crowns?)\s+(?:you\s+)?(?:spent|paid|handed|gave|lost|parted\s+with)|"
+    r"spent\s+on|memory\s+of\s+(?:the\s+)?(?:\w+\s+){0,3}?(?:coins?|gold)|"
+    r"(?:your|the)\s+(?:own\s+)?(?:purse|pouch|pocket)|in\s+your\s+(?:hand|hands|palm|fist)|"
+    r"count\w*\s+(?:the\s+|your\s+)?(?:coins?|gold)|(?:coins?|gold)\s+in\s+your)\b",
+    re.I,
+)
+
+
 def _money_moves_in(sentence: str) -> bool:
     """Money and a verb moving it, close together in one sentence.
 
@@ -21314,8 +21355,12 @@ def _settle_stated_gold(
         # would, will or could be paid backs nothing.
         # A question asked moves nothing: "You ask what kind of work pays
         # against the ledger" backed GOLD 50 (+37) on a job offer (8B run 45, T2).
+        # The player's own coin is no income: "counting the gold in your purse"
+        # (T71) and "the memory of forty-six gold coins spent on a walk back"
+        # (T79) backed GOLD gains of 36 and 37 (8B run 146). Coin spent, paid,
+        # counted or carried by the player reaches nobody.
         money_words = any(
-            _money_moves_in(sentence) and not _PROMISED_MONEY_RE.search(sentence)
+            _money_moves_in(sentence) and not _PROMISED_MONEY_RE.search(sentence) and not _OWN_COIN_RE.search(sentence)
             for sentence in (_ASKED_CLAUSE_RE.sub(" ", s) for _, _, s in prose_state.sentence_spans(plain))
         )
         # A sum said in someone's speech is an offer or a promise: '"Fifteen
@@ -21325,7 +21370,8 @@ def _settle_stated_gold(
         # A sum the narrator only promises is no coin either: "for that, you'll
         # be paid thirty gold" paid 30 at the job's acceptance (8B run 71, T4).
         narrated = prose_state.coin_mentions(" ".join(
-            s for _, _, s in prose_state.sentence_spans(plain) if not _PROMISED_MONEY_RE.search(s)
+            s for _, _, s in prose_state.sentence_spans(plain)
+            if not _PROMISED_MONEY_RE.search(s) and not _OWN_COIN_RE.search(s)
         ))
         if not (said["received"] or narrated or money_words or prose_state.coin_handed_to_player(narration)):
             player.pop("gold_delta", None)
