@@ -485,6 +485,32 @@ def run_offer_pass(
     return report
 
 
+def typed_accepts(player_input: str, open_offers: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    """
+    The player's own typed yes to the one offer it can mean, as an update for
+    validate_quest_changes (which still checks player_takes_job).
+
+    In legacy mode the one-shot parser proposed these; the checked flow
+    proposes no updates of its own, so '"The captain's ledger, then. I'll find
+    it."' left the offer standing (8B run 146, T14). A refusal is the engine's
+    already (quest_parser.settle_player_answer).
+    """
+    line = qp._player_own_line(str(player_input or ""))
+    offers = [o for o in open_offers or [] if isinstance(o, dict) and str(o.get("status") or "offered") == "offered"]
+    if not offers or not qp.player_accepts(line) or qp.player_refuses(line):
+        return []
+    picked = None
+    if len(offers) == 1:
+        picked = offers[0]
+    else:
+        named = [o for o in offers if qp._means_this_offer(o, offers, line)]
+        picked = named[0] if len(named) == 1 else None
+    if picked is None:
+        return []
+    code = str(picked.get("code") or (f"Q{picked['id']}" if picked.get("id") else picked.get("title") or ""))
+    return [{"quest": code, "action": "accept", "evidence": line[:300], "_typed": True}]
+
+
 def marks_to_merge(marks: list[dict[str, Any]] | None, mode: str) -> list[dict[str, Any]]:
     """
     The narrator marks the engine may still fold in after the offer pass.

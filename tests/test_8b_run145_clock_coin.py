@@ -72,6 +72,23 @@ class AWaitLastsUntilItsHour(unittest.TestCase):
         with connect() as conn:
             self.assertEqual(world._wait_until_minutes(conn, "\"I'll wait until evening if I must.\" I keep walking to the dock."), 0)
 
+    def test_a_line_that_opens_on_a_time_of_day_skips_to_it(self):
+        # 8B run 146, T24: "In the morning I take the ledger down to Emery" at the inn in the evening.
+        from app.db import connect
+
+        world = self._at(20 * 60)
+        with connect() as conn:
+            self.assertEqual(world._wait_until_minutes(conn, "In the morning I take the ledger down to Emery at the old wharf."), 12 * 60)
+            self.assertEqual(world._wait_until_minutes(conn, "At first light I walk down to the wharf."), 10 * 60)
+
+    def test_the_noun_bargain_is_not_the_act_of_haggling(self):
+        from app.skill_checks import infer_check_from_action
+
+        check = infer_check_from_action("I hold him to the Drowned Hand's side of the bargain.", {})
+        self.assertNotEqual((check or {}).get("skill_code"), "appraise")
+        check = infer_check_from_action("I haggle over the pelt.", {})
+        self.assertEqual((check or {}).get("skill_code"), "appraise")
+
     def test_a_tide_with_no_hour_is_a_quarter_day(self):
         from app.db import connect
 
@@ -86,9 +103,29 @@ class ThePlayersOwnPaymentStands(unittest.TestCase):
 
         result = {"player": {"gold_delta": -6}, "_dsl": {"grants": ["crate"]}}
         line = "\"Six gold, there and back.\" I count six gold coins into the bargeman's hand and keep the rest of my purse closed."
-        voided = world._void_unbought_spend(result, ["crate"], [], {}, line)
+        prose = "You count out the coins. Bennet Harrow [[H]]'s fingers close around them like a vice, and he nods."
+        voided = world._void_unbought_spend(result, ["crate"], [], {}, line, prose)
         self.assertFalse(voided)
         self.assertEqual(result["player"]["gold_delta"], -6)
+
+    def test_coin_set_down_and_refused_is_still_the_players(self):
+        # 8B run 146, T16: six gold set on the counter, the chandler refused the deal.
+        from app import world
+
+        result = {"player": {"gold_delta": -6}, "_dsl": {"grants": ["flask of oils"]}}
+        line = "\"Forty-five gold for a lamp? I have twelve.\" I set six gold coins on his counter. \"Six for both, or I walk.\""
+        prose = "Theobald Garner [[F]] eyes the six gold coins. \"You think you're getting a deal,\" he mutters. \"You want a flask? You'll pay for it.\""
+        voided = world._void_unbought_spend(result, ["flask of oils"], [], {}, line, prose)
+        self.assertTrue(voided)
+        self.assertEqual(result["player"]["gold_delta"], 0)
+
+    def test_a_price_named_across_a_full_stop_in_speech_is_a_bargain(self):
+        from app.skill_checks import infer_check_from_action
+
+        line = "\"Forty-five gold for a lamp and a flask? I have twelve to my name.\" I set six gold coins on his counter. \"Six for both, or I walk.\""
+        check = infer_check_from_action(line, {})
+        self.assertEqual((check or {}).get("skill_code"), "persuasion")
+        self.assertFalse((check or {}).get("routine"))
 
     def test_a_model_spend_for_refused_goods_is_still_voided(self):
         from app import world

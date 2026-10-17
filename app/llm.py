@@ -17502,7 +17502,8 @@ def _run_quest_parser(
                 ask=ask,
             )
             progress = qo.run_progress_pass(narration, player_input, active=inputs["active_quests"], ask=ask)
-            parsed = {"new": offers["new"], "updates": progress["updates"]}
+            typed = qo.typed_accepts(player_input, inputs["open_offers"])
+            parsed = {"new": offers["new"], "updates": [*typed, *progress["updates"]]}
             record["offers"] = {k: offers.get(k) for k in ("candidates", "dropped", "fills", "checks")}
             record["progress"] = {k: progress.get(k) for k in ("candidates", "checks")}
             record["asks"] = len(offers["fills"]) + len(offers["checks"]) + len(progress["checks"])
