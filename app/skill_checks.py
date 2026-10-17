@@ -1599,8 +1599,12 @@ SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     (r"\b(shoot|(?<!the )(?<!by )(?<!a )(?<!of )fire (?:at|on|upon|into|a|an|the|my|arrows?|bolts?|shots?|again)|"
      r"(?<!the )(?<!ship's )(?<!boat's )(?<!her )bow(?!\s+(?:to|before|my|your|his|her|their|deeply|low|out|politely|slightly|in|"
      r"line|lines|rope|ropes|cleat|rail|oar|deck|post|of))|"
+     # A boat's bow after the verb is the boat: "take the bow seat" in a skiff
+     # rolled ranged and fumbled, "Unskilled with bow" (8B run 147, T7).
      r"(?:draws?|nocks?|aims?|raises?|strings?|readies|ready|lifts?|grabs?|takes?|fires?|loose[sd]?|bends?|unslings?)\s+"
-     r"(?:the|my|a|his|her|their)\s+bow\b|(?:the|her)\s+bow\s+(?:and\s+(?:aim|draw|loose|fire)|at|string|drawn|ready)\b|gun|throw)\b", "ranged"),
+     r"(?:the|my|a|his|her|their)\s+bow\b(?!\s+(?:seat|line|lines|rope|ropes|cleat|rail|oar|deck|post|thwart|section|end|wave|"
+     r"of\s+the|of\s+(?:his|her|their|our)))|"
+     r"(?:the|her)\s+bow\s+(?:and\s+(?:aim|draw|loose|fire)|at|string|drawn|ready)\b|gun|throw)\b", "ranged"),
     # The player creeping, not the water: "With the water starting to creep back"
     # rolled stealth and a critical failure (8B run 37, T6).
     (r"\b(sneak|hide|stealth)\b|\bi\s+(?:\w+\s+)?creep\b|\bcreep(?:s|ing)?\s+(?:up|along|toward|towards|past|around|closer|"

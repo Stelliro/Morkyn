@@ -46,5 +46,17 @@ class AnothersVerbIsNotTheirAct(unittest.TestCase):
         self.assertEqual(check["skill_code"], "support")
 
 
+class ABoatsBowIsNoWeapon(unittest.TestCase):
+    """8B run 147, T7: "take the bow seat" in a skiff rolled ranged and fumbled."""
+
+    def test_the_bow_seat_rolls_no_ranged_check(self):
+        check = infer_check_from_action("I climb into the skiff, take the bow seat, and tell Wulfstan to put us out for the eastern bay.", {})
+        self.assertNotEqual(((check or {}).get("skill_code")), "ranged")
+
+    def test_taking_up_a_bow_still_rolls(self):
+        check = infer_check_from_action("I take the bow and loose an arrow at the gull.", {})
+        self.assertEqual((check or {}).get("skill_code"), "ranged")
+
+
 if __name__ == "__main__":
     unittest.main()
