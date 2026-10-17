@@ -20813,6 +20813,34 @@ _MONEY_MOVES_RE = re.compile(
 )
 
 
+_MONEY_WORD_RE = re.compile(
+    r"\b(?:coins?|gold\s+(?:coins?|pieces?)|\d+\s+gold|silver\s+(?:coins?|pieces?)|copper\s+(?:coins?|pieces?|pennies)|"
+    r"pennies|pays?|paid|payment|sells?|sold|purse|pouch|wages?|fee|reward)\b",
+    re.I,
+)
+
+
+def _money_moves_in(sentence: str) -> bool:
+    """Money and a verb moving it, close together in one sentence.
+
+    Coins lying in the scene move nothing: "a desk cluttered with ledgers and
+    loose coins, his sharp eyes narrowing as he takes in your words" backed GOLD
+    15 (+10) (8B run 130, T2). Taking in, taking note or a look is no take.
+    """
+    text = re.sub(r"\btak(?:e|es|en|ing)\s+(?:in|note|stock|a\s+(?:look|breath|step|seat|moment))\b", " ", str(sentence or ""),
+                  flags=re.I)
+    money = [m.start() for m in _MONEY_WORD_RE.finditer(text)]
+    moves = [m.start() for m in _MONEY_MOVES_RE.finditer(text)]
+    if not money or not moves:
+        return False
+    for a in money:
+        for b in moves:
+            lo, hi = sorted((a, b))
+            if len(text[lo:hi].split()) <= 6:
+                return True
+    return False
+
+
 def _settle_stated_gold(
     result: dict[str, Any], player_input: str, *, conn=None, quest_pays: bool = False
 ) -> dict[str, Any] | None:
@@ -20916,13 +20944,7 @@ def _settle_stated_gold(
         # A question asked moves nothing: "You ask what kind of work pays
         # against the ledger" backed GOLD 50 (+37) on a job offer (8B run 45, T2).
         money_words = any(
-            re.search(
-                r"\b(?:coins?|gold\s+(?:coins?|pieces?)|\d+\s+gold|silver\s+(?:coins?|pieces?)|copper\s+(?:coins?|pieces?|pennies)|"
-                r"pennies|pays?|paid|payment|sells?|sold|purse|pouch|wages?|fee|reward)\b",
-                sentence, re.I,
-            )
-            and _MONEY_MOVES_RE.search(sentence)
-            and not _PROMISED_MONEY_RE.search(sentence)
+            _money_moves_in(sentence) and not _PROMISED_MONEY_RE.search(sentence)
             for sentence in (_ASKED_CLAUSE_RE.sub(" ", s) for _, _, s in prose_state.sentence_spans(plain))
         )
         # A sum said in someone's speech is an offer or a promise: '"Fifteen
