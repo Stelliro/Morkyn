@@ -14434,8 +14434,20 @@ def drop_invented_player_acts_text(text: str, player_input: str) -> tuple[str, l
         dropped_before = len(dropped)
         kept: list[str] = []
         stranded = ""  # the person a wholly cut sentence held
+        # Inside someone's quotation across sentences: '"There's a job in the
+        # docks. You'll need to recover a shipment ... The guild needs it by
+        # midday."' lost its middle sentence as the player acting (8B run 127, T2).
+        quote_open = False
         for sentence in sentences:
             if not sentence.strip():
+                continue
+            started_inside = quote_open
+            marks = sentence.count('"') + sentence.count("“") + sentence.count("”")
+            if marks % 2:
+                quote_open = not quote_open
+            if started_inside and not re.search(r'["“”]', sentence):
+                kept.append(sentence.strip())
+                stranded = ""
                 continue
             keep, gone = _strip_player_acts_from_sentence(sentence, own, player_input)
             if gone:

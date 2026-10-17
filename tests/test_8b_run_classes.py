@@ -516,6 +516,20 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class ASentenceInsideAQuoteIsSpeech(unittest.TestCase):
+    """8B run 127, T2: the middle sentence of the tallyman's quote was cut as the player acting."""
+
+    def test_the_middle_sentence_stays(self):
+        from app.llm import drop_invented_player_acts_text
+
+        prose = ("He pushes a stack of papers toward you. \"There's a job in the docks. You'll need to recover a "
+                 "shipment of salted fish that's been lost to the tide. The guild needs it by midday.\" You take the "
+                 "papers and nod.")
+        out, gone = drop_invented_player_acts_text(prose, '"What job have you got?"')
+        self.assertIn("You'll need to recover a shipment of salted fish", out)
+        self.assertEqual(gone, ["You take the papers and nod."])
+
+
 class TheClockAfterADashGoes(unittest.TestCase):
     """8B run 125, T3: "A distant bell rings, marking the hour—08:17." put the engine's clock in the prose."""
 
