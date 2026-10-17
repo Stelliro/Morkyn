@@ -359,7 +359,11 @@ def parse_fill(raw: Any) -> dict[str, Any] | None:
     if not isinstance(data, dict):
         return None
     data = _drop_fill_placeholders(qp._drop_placeholders(data))
-    if not _yes(data.get("offers_work")):
+    # Only an explicit no ends the card. A reply that filled every field and
+    # left the flag out lost a real job (the Reeve's chest for forty-five gold,
+    # 8B run 147, T36); the check ask still has to say yes to it.
+    flag = data.get("offers_work")
+    if flag is not None and str(flag).strip() != "" and not _yes(flag):
         return None
     task = re.sub(r"\s+", " ", str(data.get("task") or "")).strip()
     title = re.sub(r"\s+", " ", str(data.get("title") or "")).strip(" .\"'")

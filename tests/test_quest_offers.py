@@ -404,6 +404,22 @@ class ProgressIsCheckedTheSameWay(unittest.TestCase):
         self.assertEqual(report["updates"], [])
 
 
+class AFilledCardWithoutTheFlagStillReachesTheCheck(unittest.TestCase):
+    CARD = {"title": "Retrieve the Buried Chest", "task": "The guild wants it for its archives, but I need someone who knows the tides.",
+            "steps": ["Locate the wreckage site", "Dig through the mud to find the chest"], "place": "The Wrecked Skiff",
+            "pay": "forty-five gold", "gold": 45}
+
+    def test_a_missing_flag_does_not_end_the_card(self):
+        # 8B run 147, T36: the fill filled every field, left offers_work out, and the job was lost.
+        card = qo.parse_fill(dict(self.CARD))
+        self.assertIsNotNone(card)
+        self.assertEqual(card["gold"], 45)
+
+    def test_an_explicit_no_still_ends_it(self):
+        self.assertIsNone(qo.parse_fill({**self.CARD, "offers_work": False}))
+        self.assertIsNone(qo.parse_fill({**self.CARD, "offers_work": "no"}))
+
+
 class ASuggestionIsNoAssignment(unittest.TestCase):
     def test_lets_see_what_else_is_worth_salvaging_offers_no_job(self):
         # 8B run 147, T29: the ferryman's suggestion filed a second wreck job.
