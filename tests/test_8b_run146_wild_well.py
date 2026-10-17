@@ -157,6 +157,41 @@ class AWellInTheWoodsIsNoVenue(unittest.TestCase):
             self.assertEqual(kept, [])
             conn.rollback()
 
+    def test_a_title_and_surname_is_the_known_person(self):
+        # 8B run 147, T45: "Reeve Dunmore" minted beside Gregory Dunmore, the Harbour Reeve.
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        with connect() as conn:
+            town = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0])
+            conn.execute("INSERT INTO npcs (code, name, role, location_id) VALUES ('X', 'Gregory Dunmore', 'harbour reeve', ?)", (town,))
+            matches = world._near_name_matches(conn, "Reeve Dunmore")
+            self.assertEqual([str(r["name"]) for r in matches], ["Gregory Dunmore"])
+            self.assertEqual(world._near_name_matches(conn, "Reeve Hatcher"), [])
+            conn.rollback()
+
+    def test_the_clerk_who_steps_in_is_the_known_clerk(self):
+        # 8B run 147, T50: "A clerk steps in" at the tally house, where Mira Venn the clerk was filed, minted "Elias".
+        from app import world
+        from app.db import connect, init_db
+
+        init_db()
+        world.start_playthrough({"player_name": "Isk", "start_location": "Saltmarrow", "special_ability_origin": "none"})
+        prose = ("The door creaks open again. A clerk steps in, their face pale with worry. \"The guild's share is due,\" "
+                 "they mutter. \"The ledger needs to be marked. Now.\"")
+        with connect() as conn:
+            here = int(conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()[0])
+            conn.execute("INSERT INTO npcs (code, name, role, location_id) VALUES ('A', 'Mira Venn', 'tally clerk', ?)", (here,))
+            kept = world._npcs_shown_in_prose(conn, [{"name": "Elias", "role": "clerk", "code": "H"}], prose)
+            self.assertEqual([n["name"] for n in kept], ["Mira Venn"])
+            # Named apart, the figure is someone else.
+            apart = prose + " Mira Venn watches from her own desk, saying nothing."
+            kept = world._npcs_shown_in_prose(conn, [{"name": "Elias", "role": "clerk", "code": "H"}], apart)
+            self.assertNotIn("Mira Venn", [n["name"] for n in kept])
+            conn.rollback()
+
     def test_a_town_well_still_opens(self):
         from app import world
         from app.db import connect, init_db

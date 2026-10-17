@@ -450,6 +450,11 @@ class TypedAcceptsStillReachTheEngine(unittest.TestCase):
         self.assertEqual(qo.typed_accepts("\"No deal.\"", self.OFFERS), [])
         self.assertEqual(qo.typed_accepts("I walk down to the dock.", self.OFFERS), [])
 
+    def test_as_agreed_is_a_deal_already_made_not_a_new_yes(self):
+        # 8B run 147, T45: "carry the box up to the Reeve, unopened, as agreed" accepted the one offered job.
+        line = "I count one crown into Wulfstan's hand, then ask him to help me carry the box up to Reeve Dunmore, unopened, as agreed."
+        self.assertEqual(qo.typed_accepts(line, self.OFFERS), [])
+
     def test_a_yes_that_waits_on_terms_is_no_yes(self):
         # 8B run 146, T62: "before I agree to any of them" accepted Elara's job.
         line = ("\"Then say the risk plainly, Rolf. I came this far on Elara's word and my own two feet. "
