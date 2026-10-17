@@ -516,6 +516,23 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class AnAcceptanceGivenToThePlayerGoes(unittest.TestCase):
+    """8B run 136, T3: the player's thoughts, then '"I'll take it."', stood as the player taking the job."""
+
+    def test_the_line_goes(self):
+        from app.narration_pipeline import drop_invented_player_speech
+
+        line = ('"A month, then." I look at my name at the bottom of the list. "What work have you got for me, and how '
+                'much does it take off?"')
+        paras = ['Morgan pauses. “A salvage job,” they say at last. “The Wrecked Reach.”',
+                 'The offer hangs between you like a weight. You know the Wrecked Reach—haunted, dangerous. But '
+                 'the guild doesn’t offer work without reason. “I’ll take it.”',
+                 'Morgan nods.']
+        kept, dropped = drop_invented_player_speech(paras, line)
+        self.assertEqual(dropped, ["“I’ll take it.”"])
+        self.assertIn("The offer hangs between you like a weight.", kept[1])
+
+
 class SomeoneSaidNotToBeThereIsNotThere(unittest.TestCase):
     """8B run 135, T7: "She's not Elias [[A]], but she knows him well" moved Elias and gave her his pronouns."""
 
