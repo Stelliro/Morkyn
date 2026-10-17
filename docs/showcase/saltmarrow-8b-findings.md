@@ -236,6 +236,9 @@ a new class, not for the logged prose classes below, which appear in every run.
   heart pounding", "You had been here before", "The realization hits you", "a reminder of the
   choices you've made"). Several per run. Waiting on the outcome-reader decision in
   docs/showcase/prompt-review-2026-10-14.md; a pattern cannot tell these from true backstory.
+- Rolls narrated against: r126 T5 was told `athletics failure, the work is not done` and wrote
+  "you pull free a bundle of rope ... it's worth hauling back". The state stayed right (no rope),
+  the prose did not. Same outcome-reader decision as the class above.
 - C9 past tense on whole turns, most runs at least once.
 - C10 scene drift: r72 T10 put the channel-side talk inside Edith's "cramped shop".
 - r55 T5: "He gestures for you to follow him, and you do" stays when the player's own line had a
