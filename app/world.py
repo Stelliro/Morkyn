@@ -9517,7 +9517,12 @@ def _code_is_origin(text: str, start: int, end: int) -> bool:
     """
     before = re.split(r"[.!?]", text[max(0, start - 80): start])[-1]
     origins = list(_ORIGIN_WORD_RE.finditer(before))
-    if origins and not _GOING_WORD_RE.search(before[origins[-1].end():]):
+    # The origin word has to govern the place itself: "shelter from the storm
+    # in the Stag and Heron" read the inn as where the player came from (8B
+    # run 147, T96). Only an article may stand between them.
+    if origins and not _GOING_WORD_RE.search(before[origins[-1].end():]) and re.fullmatch(
+        r"\s*(?:the|this|that|a|an|my|our|your|his|her|their)?\s*", before[origins[-1].end():]
+    ):
         return True
     return bool(_ORIGIN_AFTER_RE.search(text[end: end + 60]))
 
