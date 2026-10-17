@@ -516,6 +516,23 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class TheClockAfterADashGoes(unittest.TestCase):
+    """8B run 125, T3: "A distant bell rings, marking the hour—08:17." put the engine's clock in the prose."""
+
+    def test_the_clock_goes(self):
+        from app.prose_state import repair_meta_leaks
+
+        out, fixes = repair_meta_leaks("His eyes narrow. A distant bell rings, marking the hour—08:17.")
+        self.assertTrue(out.endswith("marking the hour."), out)
+        self.assertTrue(any(f["why"] == "engine_clock" for f in fixes))
+
+    def test_a_clock_in_speech_stays(self):
+        from app.prose_state import repair_meta_leaks
+
+        line = "“Meet me at the pier—08:17 sharp,” he says."
+        self.assertIn("08:17", repair_meta_leaks(line)[0])
+
+
 class TheGiverSettingTheWorkIsTheOffer(unittest.TestCase):
     """8B run 121, T2: "It's a salvage run. You'll be heading out to the docks" went uncited; the card stayed vague."""
 

@@ -1114,6 +1114,8 @@ def repair_meta_leaks(text: str) -> tuple[str, list[dict[str, Any]]]:
             r",?\s+(?:on|off)\s+duty\s+from\s+\d{1,2}:\d{2}\s+(?:to|until|-)\s+\d{1,2}:\d{2}",
             r",\s*\d{1,2}:\d{2}(?=[.!?,;])",
             r"\s+at\s+\d{1,2}:\d{2}(?=[.!?,;])",
+            # After a dash or "of": "A distant bell rings, marking the hour—08:17." (8B run 125, T3).
+            r"\s*(?:[—–]|\s-|:|\bof\b|\bis\b)\s*\d{1,2}:\d{2}(?=[.!?,;])",
         ):
             new, n = re.subn(pattern, "", piece, flags=re.I)
             if n:
