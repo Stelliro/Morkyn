@@ -755,9 +755,12 @@ _PLAYER_OWES_RE = re.compile(
 def _players_words_only(evidence: str, offer_line: str, player_input: str, narration: str = "") -> bool:
     """The parser's quote and offer line are the player's own words, or the prose retelling them ("You ...")."""
     own = _ws(str(player_input or "")).lower()
-    prose = _ws(str(narration or "")).lower()
+    # One apostrophe: the prose's "You’ll work it off" against the parser's
+    # "You'll work it off" (8B run 124, T2).
+    prose = _ws(str(narration or "")).lower().replace("’", "'").replace("‘", "'")
 
     def _spoken_to_player(flat: str) -> bool:
+        flat = flat.replace("’", "'").replace("‘", "'")
         # "You haul the things that sink," she said: someone telling the player
         # the job, not the prose retelling the player's act (8B run 89, T3).
         # The parser joins and re-punctuates the line; its opening clause is what the prose holds.
