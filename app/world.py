@@ -10062,6 +10062,17 @@ def resolve_movement(
             note = note or "same_place_name"
         else:
             report = {"status": "model", "from": current_code, "destination": explicit_name[:120]}
+            # The player's place first when the prose never shows the model's:
+            # MOVE "Talleyman's Office" was replaced by the tally house asked for,
+            # but the venue rules had already made the office, left empty
+            # (8B run 132, T1).
+            shown_prose = re.sub(
+                r"\b(?:pass(?:es|ed|ing)?|past|beyond|by)\s+(?:the\s+)?[A-Z][\w'’-]*(?:\s+[A-Z][\w'’-]*){0,3}(?:\s*\[\[[A-Z0-9]+\]\])?",
+                " ", _unspoken(narration)).lower()
+            if resolved is None and shown_prose.strip() and humanize_place_name(explicit_name).lower() not in shown_prose:
+                early = _player_place_over_unshown_move(conn, player_patch, player_input, narration, current_code, explicit_name)
+                if early:
+                    return early
             # Going indoors runs the venue rules even when the MOVE is explicit
             # (playtest #33, live).
             try:

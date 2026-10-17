@@ -622,6 +622,18 @@ class AJobWithNoTaskIsNoJobYet(unittest.TestCase):
                          "offer_line": "That's a heavy burden. But the guild has jobs, and jobs pay debts.",
                          "evidence": "That's a heavy burden. But the guild has jobs, and jobs pay debts."}], "updates": []}
 
+    def test_prove_yourself_is_no_task(self):
+        # 8B run 132, T2: "You'll have to prove yourself." filed "Prove Yourself to the Guild".
+        from app import quest_parser
+
+        reply = self._reply("Locate the Valuable Item")
+        reply["new"][0]["offer_line"] = reply["new"][0]["evidence"] = "You'll have to prove yourself."
+        narration = "Godfrey leans back. \"The guild has work. But it won't be easy. You'll have to prove yourself.\""
+        accepted, rejected = quest_parser.validate_quest_changes(
+            reply, narration=narration, player_input='"What job have you got?"',
+            npcs=[{"id": 2, "code": "B", "name": "Dorian Vane", "role": "Guild Clerk"}])
+        self.assertEqual(accepted["new"], [])
+
     def test_no_task_named(self):
         from app import quest_parser
 
