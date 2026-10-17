@@ -21749,10 +21749,18 @@ def _settle_stated_gold(
         # The number has to sit in a sentence where coin moves: "the weight of
         # the eleven gold coins hangs in the damp morning" backed GOLD 11 as a
         # stated gain while nobody paid (8B run 147, T92).
-        narrated = prose_state.coin_mentions(" ".join(
-            s for _, _, s in prose_state.sentence_spans(venues.strip_speech(narration))
-            if not _PROMISED_MONEY_RE.search(s) and not _OWN_COIN_RE.search(s) and _money_moves_in(s)
-        ))
+        spans = [s for _, _, s in prose_state.sentence_spans(venues.strip_speech(narration))]
+        moving: list[str] = []
+        for i, s in enumerate(spans):
+            if _PROMISED_MONEY_RE.search(s) or _OWN_COIN_RE.search(s):
+                continue
+            prev = spans[i - 1] if i else ""
+            # Coin moves in this sentence, or the one before hands it over and
+            # this one counts it ("Tam holds out your own purse. It clinks. Nine
+            # coins."), or it is a bare count.
+            if _money_moves_in(s) or len(s.split()) <= 4 or (prev and (_money_moves_in(prev) or _HANDOVER_VERB_RE.search(prev))):
+                moving.append(s)
+        narrated = prose_state.coin_mentions(" ".join(moving))
         backed = raw in narrated or raw in said["received"] or bool(prose_state.coin_handed_to_player(narration))
         if raw > 0 and raw <= STATED_GAIN_CAP and raw in mentioned and backed:
             value, source = raw, "stated_gain"
