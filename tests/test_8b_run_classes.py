@@ -516,6 +516,20 @@ class TheMothersReckonerIsYours(unittest.TestCase):
         self.assertEqual(prose_state.repair_kin_item_article(text, ["worn boots"])[0], text)
 
 
+class SomeoneSaidNotToBeThereIsNotThere(unittest.TestCase):
+    """8B run 135, T7: "She's not Elias [[A]], but she knows him well" moved Elias and gave her his pronouns."""
+
+    PROSE = ("A woman stands by the building. She’s not Elias [[A]], but she knows him well. “He was last "
+             "seen heading east,” she says, her voice low.")
+
+    def test_her_pronouns_stay(self):
+        from app.prose_state import repair_pinned_pronouns
+
+        out, fixes = repair_pinned_pronouns(self.PROSE, [{"names": ["Elias"], "key": "he"}])
+        self.assertEqual(out, self.PROSE)
+        self.assertEqual(fixes, [])
+
+
 class InventedSpeechInAOneSegmentScene(unittest.TestCase):
     """8B run 133, T2: '"What do I need to do?"' given to the player stayed: the scene was one segment."""
 
