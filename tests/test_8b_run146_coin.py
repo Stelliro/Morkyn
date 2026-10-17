@@ -156,6 +156,21 @@ class ANameAskedAfterIsNoOpponent(unittest.TestCase):
         self.assertIsNotNone(check)
         self.assertNotEqual(((check or {}).get("opposition") or {}).get("name"), "Elara Veyne")
 
+    def test_a_leave_taking_then_a_walk_to_someone_else_is_no_roll_against_the_first(self):
+        # 8B run 147, T54: "thank Mira, and go out to find Eda Jessop ... to ask" rolled against Mira.
+        ctx = {
+            "npcs": [{"code": "A", "name": "Mira Venn"}, {"code": "E", "name": "Eda Jessop"}],
+            "locations": [{"code": "L3", "name": "The Harbour", "npcs": [{"code": "E", "name": "Eda Jessop"}]}],
+            "conversation_turn": {"present": ["A"], "addressed": ["A"]},
+        }
+        line = ("I fold the sketch into my tunic, thank Mira, and go out to find Eda Jessop at her fish stall to ask "
+                "whether a split-hulled boat was ever brought in.")
+        check = infer_check_from_action(line, ctx)
+        self.assertNotEqual(((check or {}).get("opposition") or {}).get("name"), "Mira Venn")
+        # Thanked and then asked, she is still the other side.
+        check = infer_check_from_action("I thank Mira for the receipt and ask her what the guild pays for rope.", ctx)
+        self.assertEqual(((check or {}).get("opposition") or {}).get("name"), "Mira Venn")
+
     def test_asking_someone_present_still_rolls_against_them(self):
         ctx = {
             "npcs": [{"code": "J", "name": "Elara Veyne"}, {"code": "R", "name": "Gareth Radley"}],

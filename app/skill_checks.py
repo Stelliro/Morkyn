@@ -2216,7 +2216,10 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
         # "I leave Mira at the well and walk up to the reeve's office" still
         # rolled against Mira (8B run 15, T6; the run 5 test passed the cased line).
         src = cased or text
-        named_text = re.sub(r"\b(?:not|instead\s+of|rather\s+than|ignoring|leave|leaving|left|away\s+from)\s+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+",
+        # A leave-taking is not an address: "thank Mira, and go out to find Eda
+        # Jessop ... to ask" rolled against Mira (8B run 147, T54).
+        named_text = re.sub(r"\b(?:not|instead\s+of|rather\s+than|ignoring|leave|leaving|left|away\s+from|thank|thanks|thanking|"
+                            r"nod(?:s|ded|ding)?\s+to|wav(?:e|es|ed|ing)\s+to|bid(?:s|ding)?|bow(?:s|ed|ing)?\s+to)\s+(?:at\s+|to\s+|on\s+)?[A-Z][\w'’-]+",
                             " ", src)
         # Asked after is not asked: "ask the nearest dockhand where Elara Veyne
         # can be found" rolled against Elara, who was not there (8B run 146,
@@ -2266,9 +2269,15 @@ def _check_with_opposition(skill: str, text: str, context: dict[str, Any] | None
             conv = ctx.get("conversation_turn") if isinstance(ctx.get("conversation_turn"), dict) else {}
             addressed = [str(c).upper() for c in conv.get("addressed") or []]
             by_code = {str(n.get("code") or "").upper(): n for n in pool if n.get("code")}
-            if addressed and addressed[0] in by_code:
+            if addressed and addressed[0] in by_code and not (
+                left_at
+                and _line_names_npc((cased or text).lower(), by_code[addressed[0]])
+                and not _line_names_npc(named_text[left_at.end():], by_code[addressed[0]])
+            ):
                 # The engine resolved who the line is said to; a name left
-                # behind earlier in the line changes nothing.
+                # behind earlier in the line changes nothing. Unless the line
+                # then leaves: "thank Mira, and go out to find Eda Jessop ... to
+                # ask" is said to nobody here (8B run 147, T54).
                 matched_npc = by_code[addressed[0]]
             elif not addressed and not names_absent and len(pool) == 1 and not _names_unknown_person(src, pool, ctx):
                 # Someone the engine does not know yet, named in full ("look for
