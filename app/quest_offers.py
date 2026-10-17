@@ -541,6 +541,45 @@ def marks_to_merge(marks: list[dict[str, Any]] | None, mode: str) -> list[dict[s
 # ---------------------------------------------------------------------------
 # Progress: a step of an active job shown finished in the prose
 # ---------------------------------------------------------------------------
+# A step whose result is another's agreement.
+_CONSENT_STEP_RE = re.compile(
+    r"\b(?:convinc\w*|persuad\w*|talk\s+(?:\w+\s+){0,3}?into|get\s+(?:\w+\s+){0,3}?to\s+(?:agree|let|allow|give|hand|part)|"
+    r"win\s+(?:\w+\s+){0,2}?over|bargain\w*|negotiat\w*|make\s+(?:\w+\s+){0,3}?agree|secure\s+(?:\w+\s+){0,2}?(?:agreement|consent|blessing|leave))\b",
+    re.I,
+)
+# Someone other than the player saying yes, in speech or in the narration.
+_CONSENT_SHOWN_RE = re.compile(
+    r"\b(?:agree[sd]?|agreed|very\s+well|all\s+right|alright|so\s+be\s+it|you\s+may|you\s+can\s+(?:have|take)|"
+    r"take\s+it(?:,|\.|\s+then)|it['’]s\s+yours|(?:we|you)\s+have\s+a\s+deal|deal\b|done\b|"
+    r"i['’]ll\s+(?:allow|let|permit)|(?:nods|nodding)\s+(?:once|slowly|his|her|their)?\s*(?:assent|agreement|yes)?|"
+    r"relent\w*|gives?\s+(?:in|way)|consent\w*|yes\b)",
+    re.I,
+)
+
+
+def _others_consent(narration: str, player_input: str = "") -> bool:
+    """Does anyone but the player say or show yes in this passage?"""
+    text = str(narration or "")
+    own = [re.sub(r"\s+", " ", (a or b)).strip().lower()
+           for a, b in re.findall(r"\"([^\"]+)\"|“([^”]+)”", qp._player_own_line(str(player_input or "")))]
+    for match in re.finditer(r"\"([^\"]+)\"|“([^”]+)”", text):
+        quote = (match.group(1) or match.group(2) or "").strip()
+        if any(q[:40] in quote.lower() for q in own):
+            continue
+        tail = text[match.end(): match.end() + 60]
+        if re.match(r"\s*,?\s*you\s+(?:say|said|ask|reply|add|answer|offer|tell)\b", tail, re.I):
+            continue
+        if _CONSENT_SHOWN_RE.search(quote):
+            return True
+    unspoken = re.sub(r"\"[^\"]*\"|“[^”]*”", " ", text)
+    for sentence in qp._SENTENCE_SPLIT.split(unspoken):
+        if re.search(r"\byou\b", sentence, re.I) and not re.search(r"\b(?:he|she|they)\b", sentence, re.I):
+            continue
+        if re.search(r"\b(?:agrees?|agreed|relents?|relented|consents?|consented|nods\s+(?:his|her|their)\s+assent|gives\s+(?:in|way)|hands\s+(?:it|them)\s+over)\b", sentence, re.I):
+            return True
+    return False
+
+
 def find_progress_candidates(
     narration: str, player_input: str = "", *, active: list[dict[str, Any]] | None = None
 ) -> list[dict[str, Any]]:
@@ -584,6 +623,15 @@ def find_progress_candidates(
             stems = qp._stems(flat) | set(re.findall(r"[a-z]{4,}", flat.lower()))
             if not (words & stems) and not any(w in flat.lower() for w in words if len(w) >= 5):
                 continue
+            # A step that needs someone's yes is done only when they give it:
+            # "Convince the Drowned Hand to let you take it" was finished on
+            # "You hand the journal over to Rolf" while Veyra had said "Not
+            # without a price" (8B run 146, T70). The check is not asked.
+            if _CONSENT_STEP_RE.search(step or title) and not _others_consent(text, player_input):
+                from app import turn_ledger
+
+                turn_ledger.note("quest", "consent_step_without_a_yes", title=title, step=step)
+                break
             out.append({"quest": quest, "sentence": flat[:400], "step": step, "title": title})
             break
         if len(out) >= PROGRESS_CAP:

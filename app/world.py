@@ -7092,6 +7092,13 @@ def _mint_venue_from_request(conn, parent_id: int, player_input: str, narration:
     parent = _location_row(conn, parent_id)
     if parent is None:
         return ""
+    # Venues open in settlements. A well in a clearing in the woods is a thing
+    # in that place, not a town well: "walk to the well" at "The clearing"
+    # opened a venue "The clearing Well" and moved the player into it (8B run
+    # 146, T56). The clearing's features stay features; the player stays put.
+    if not _is_settlement(conn, parent):
+        turn_ledger.note("movement", "venue_needs_a_settlement", place=str(parent["name"] or ""))
+        return ""
     # A place in the room is not a building: "ask whoever is behind the bar"
     # inside the Twice-Blessed Hound opened a closed "Saltmarrow Bar" (7B run 27, T5).
     text = _IN_ROOM_PLACE_RE.sub(" ", str(player_input or "").lower())
@@ -9504,15 +9511,23 @@ def _movement_destination_from_input(rows: list[Any], player_input: str, current
             continue
         m = re.search(rf"(?<!\w){re.escape(name.lower())}(?!\w)", lowered)
         if m is not None:
-            found.append((m.start(), len(name), row))
             exact_spans.append(m.span())
+            # The place left is where the player comes from, not where they go:
+            # "I leave the flats before the tide covers them and set off north"
+            # moved the player into The Flats (8B run 146, T49). Same reading as
+            # a place code in the prose: an origin word before it ("leave",
+            # "from", "out of") with no going word between.
+            if _code_is_origin(lowered, m.start(), m.end()):
+                turn_ledger.note("movement", "place_left_not_destination", place=name)
+                continue
+            found.append((m.start(), len(name), row))
             continue
         # By its last two words, when they name only this place: "back to the
         # tally house" for "The Salvage Guild's Tally House" (8B run 37, T6).
         words = _place_words(name)
         if len(words) >= 3 and tails.get((words[-2], words[-1])) == 1:
             m = re.search(rf"\b{re.escape(words[-2])}[\s-]+{re.escape(words[-1])}\b", lowered)
-            if m is not None:
+            if m is not None and not _code_is_origin(lowered, m.start(), m.end()):
                 partial.append((m.start(), len(name), row))
     found += [p for p in partial if not any(s <= p[0] < e for s, e in exact_spans)]
     if not found:
@@ -9557,6 +9572,11 @@ def _adopt_new_place_into_town(conn, from_id: int, max_place_before: int, player
     if town is not None and int(venues._field(town, "parent_id", 0) or 0):
         town = _location_row(conn, int(venues._field(town, "parent_id", 0) or 0))
     if town is None or int(venues._field(town, "parent_id", 0) or 0) or int(town["id"]) == now_id:
+        return
+    # Only a settlement has parts: a road walked from a clearing in the woods
+    # is not "in" the clearing ("The road to the Old Wharf" filed under "The
+    # clearing", 8B run 146, T74).
+    if not _is_settlement(conn, town):
         return
     conn.execute("UPDATE locations SET parent_id = ? WHERE id = ?", (int(town["id"]), now_id))
     turn_ledger.note("place", "new_place_in_town", place=str(new["name"] or ""), town=str(town["name"] or ""))
@@ -13172,6 +13192,24 @@ _FAR_SUMMARY_RE = re.compile(
     r"across\s+the\s+(?:water|bay|sea|river|flats)|days?['’]?\s+(?:walk|ride|journey))\b",
     re.IGNORECASE,
 )
+
+
+def _new_place_shown(
+    name: str, narration: str, player_input: str, result: dict[str, Any], movement_report: dict[str, Any] | None
+) -> bool:
+    """The prose or the player's line names this new place, or the turn's move goes there."""
+    words = _place_words(name)
+    if not words:
+        return True
+    text = re.sub(r"\s*\[\[[A-Z0-9]+\]\]", "", str(narration or "")).lower()
+    if _line_names_place(text, words) or _line_names_place(_player_line(player_input).lower(), words):
+        return True
+    wanted = humanize_place_name(name).lower()
+    patch = result.get("player") if isinstance(result.get("player"), dict) else {}
+    if humanize_place_name(str(patch.get("move_to_location") or "")).lower() == wanted:
+        return True
+    report = movement_report if isinstance(movement_report, dict) else {}
+    return humanize_place_name(str(report.get("destination") or "")).lower() == wanted
 
 
 def _settle_place_named_in_passing(
@@ -17878,6 +17916,44 @@ def _role_figure(conn, unspoken: str, role_words: set[str], taken: Any) -> str |
     return hint
 
 
+# A name said of someone who is not here: "There is no sign of Rolf Joliffe",
+# "you call out for Rolf", "Rolf Joliffe is nowhere", "Rolf isn't here".
+_ABSENT_BEFORE_RE = re.compile(
+    r"\b(?:no\s+(?:sign|trace|sight|word|answer|hint)\s+(?:of|from)|not|never|nowhere\s+near|without|"
+    r"instead\s+of|(?:look\w*|search\w*|hunt\w*|ask\w*|wait\w*|hop\w*|listen\w*)\s+for|"
+    r"(?:call\w*|shout\w*|cry|cries|cried|crying|yell\w*)(?:\s+out)?\s+(?:for|to|after)|"
+    r"(?:expect\w*|await\w*|seek\w*|find\w*|miss\w*)|(?:some|any)\s+(?:sign|trace|word)\s+of|"
+    r"(?:the\s+)?name\s+of|(?:about|of|mentioned|spoke\s+of|speaks\s+of|heard\s+of|known\s+as))\s+(?:the\s+)?(?:[\w'’-]+\s+){0,2}$",
+    re.I,
+)
+_ABSENT_AFTER_RE = re.compile(
+    r"^\s*(?:is|was|are|were|has|had)\s+(?:not\s+|n['’]t\s+)?(?:nowhere|gone|absent|elsewhere|long\s+gone|far\s+away|"
+    r"nowhere\s+to\s+be\s+(?:seen|found)|not\s+(?:here|there|present|among|in\s+sight|to\s+be\s+(?:seen|found)))\b"
+    r"|^\s*(?:isn['’]t|wasn['’]t|aren['’]t|weren['’]t)\s+(?:here|there|anywhere|present|among|in\s+sight|to\s+be\s+(?:seen|found))\b"
+    r"|^\s*(?:does|did|do)\s*(?:not|n['’]t)\s+(?:answer|come|appear|show|reply|respond)\b"
+    r"|^\s*(?:doesn['’]t|didn['’]t|never)\s+(?:answer|come|came|appear|show|reply|respond)\w*\b",
+    re.I,
+)
+
+
+def _named_as_present(text: str, pattern: str, *, flags: int = 0) -> bool:
+    """Does any mention of the name stand for someone here, not someone absent?
+
+    "There is no sign of Rolf Joliffe" and "you call out for Rolf Joliffe"
+    minted Rolf at the stream nobody answered from (8B run 146, T53). A name
+    with an absence before it (no sign of, looking for, not) or after it (is
+    not here, isn't) is said of someone who is not in the scene.
+    """
+    for match in re.finditer(pattern, text, flags):
+        before = re.split(r"[.!?;]", text[max(0, match.start() - 60): match.start()])[-1]
+        if _ABSENT_BEFORE_RE.search(before):
+            continue
+        if _ABSENT_AFTER_RE.search(text[match.end(): match.end() + 40]):
+            continue
+        return True
+    return False
+
+
 def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> list[dict[str, Any]]:
     """Keep a new person only if the prose shows them.
 
@@ -17913,7 +17989,7 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
     unspoken = venues.strip_speech(text)
 
     def shown(name: str) -> bool:
-        if name and re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", unspoken, re.I):
+        if name and _named_as_present(unspoken, r"(?<!\w)" + re.escape(name) + r"(?!\w)", flags=re.I):
             return True
         # Spoken to is here: '"Not yet, Hargrave,"' addresses him (7B run 3).
         first = (name.split() or [""])[0]
@@ -17938,7 +18014,7 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
                     continue
                 return True
         parts = [p for p in re.findall(r"[A-Za-z][A-Za-z'-]+", name) if len(p) >= 3 and p.lower() not in _NOT_A_NAME]
-        return any(p[:1].isupper() and re.search(r"(?<!\w)" + re.escape(p) + r"(?!\w)", unspoken) for p in parts)
+        return any(p[:1].isupper() and _named_as_present(unspoken, r"(?<!\w)" + re.escape(p) + r"(?!\w)") for p in parts)
 
     # Someone known who is elsewhere and whom the prose never names stays where
     # they are, in their own job: NPC_NEW "Mara" ROLE "tide watcher" LOC "Eastern
@@ -21203,6 +21279,20 @@ def _settle_stated_gold(
     if coin_grants:
         turn_ledger.note("gold", "coin_grant_dropped", why="the turn already moves gold by its GOLD op or a payment",
                          grants=[c.get("name") for c in coin_grants])
+    if (band or raw) and not losing and not quest_pays and paid_once is not None and not prose_state.coin_handed_to_player(narration):
+        # The prose shows the player paying while the op says gain: "You count
+        # forty-six gold out of your purse into Veyra's palm" came with GOLD
+        # +moderate and the purse grew by 38 (8B run 146, T73). The payment
+        # the narration shows is the coin that moves.
+        player["gold_delta"] = -paid_once
+        player.pop("gold_band", None)
+        result["player"] = player
+        authored = [str(p) for p in (result.get("_server_authored") or [])]
+        if "player.gold_delta" not in authored:
+            authored.append("player.gold_delta")
+        result["_server_authored"] = authored
+        turn_ledger.note("gold", "payment_shown_over_gain_op", paid=paid_once, stated=raw or band)
+        return {"source": "prose_paid_over_gain", "gold_delta": -paid_once, "offer": offer, "model": raw or band or None}
     if (band or raw) and not losing and not quest_pays and not said["received"] and not prose_state.coin_handed_to_player(narration) \
             and _OFFERED_SUM_RE.search(narration):
         # A sum posted or offered is not coin received: '"Lower District, 20
@@ -22063,6 +22153,16 @@ def apply_turn(
                 continue
             if location.get("_venue_consumed"):
                 continue  # already opened as the venue the player went into (playtest #50)
+            # A new place neither the prose nor the player names, and the turn
+            # does not travel to, is not stored (8B run 146, T51: LOC_NEW "The
+            # Bridge at the Hollow" while the prose walked a muddy trail and the
+            # move went elsewhere). The same reading as a new person the prose
+            # never shows (#34). Known places are always kept.
+            if _match_location_by_name(conn, loc_name) is None and not _new_place_shown(
+                loc_name, narration, player_input, result, movement_report
+            ):
+                turn_ledger.note("place", "new_place_not_shown", name=loc_name)
+                continue
             # The player named a known place and the draft misspelt it (7B run 5
             # T15: "Saltmarrow" minted as "Salammar"): it is that place, and the
             # prose is spelt the way the player and the map spell it.
