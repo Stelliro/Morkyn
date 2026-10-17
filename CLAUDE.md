@@ -87,6 +87,16 @@ belong to, with the date).
   unattended. Still no push, tag or release without an explicit ask.
   Stell (2026-10-17): "keep going, dont stop until we hit 100 turns with the 8b model with no
   issues". The 8B loop does not pause for a report; it ends at a clean 100-turn 8B run.
+  Stell (2026-10-18): "if something fails after it has continuously failed, skip it and continue
+  the playthrough, skip smaller issues, but note them, and list them in severities and log what
+  you done to attempt to fix them, we need to find out what worked, what did not work and what
+  we could possibly do to fix or mitigate the issue". So: a fault class that has come back after
+  repeated fixes no longer stops or restarts the run; smaller faults are logged, not fixed
+  mid-run; every fault goes in the run fault log (docs/showcase/run-fault-log-2026-10-18.md)
+  with a severity (state / player's agency / prose), the attempts so far, what worked, what did
+  not, and what could still fix or mitigate it, including building something new for it
+  (Stell's example: a dedicated new mechanism such as "the neural welding rig") rather than
+  another rule.
 - **Roadmap:** stable 0.10 first, then 1.0 as an exe or package. Test saves can pile up until
   then; the cleanup and template saves happen at 1.0.
 
