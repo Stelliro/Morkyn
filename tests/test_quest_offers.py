@@ -431,6 +431,22 @@ class ASuggestionIsNoAssignment(unittest.TestCase):
         line = "You might take the nets job if you want it. Twenty gold for a day's hauling, paid at dusk."
         self.assertEqual(qo._code_veto(line, asked_for_work=False), "")
 
+    def test_you_should_speak_to_him_is_advice(self):
+        # 8B run 148, T59: "You should speak to the guildmaster" filed a one-step job.
+        line = "It's valuable, but it's not clear if it'll clear your credit. You should speak to the guildmaster. He'll know the details."
+        self.assertEqual(qo._code_veto(line, asked_for_work=False), "suggestion_not_task")
+
+
+class ADebtReadOutIsNoJob(unittest.TestCase):
+    def test_the_guild_owes_the_reeve_is_a_fact(self):
+        # 8B run 148, T75: the clerk's ledger entry filed "Record the Guild's Debt".
+        line = "The guild owes the reeve a sum of thirty gold for the work done on the wreck."
+        self.assertEqual(qo._code_veto(line, asked_for_work=True), "debt_statement")
+
+    def test_an_errand_on_a_debt_is_work(self):
+        line = "Dunmore owes the guild four silver for bread. Collect it and bring it here, and a silver of it is yours."
+        self.assertEqual(qo._code_veto(line, asked_for_work=True), "")
+
 
 class TypedAcceptsStillReachTheEngine(unittest.TestCase):
     OFFERS = [{"id": 2, "code": "Q2", "title": "Retrieve the Captain's Ledger", "status": "offered"}]

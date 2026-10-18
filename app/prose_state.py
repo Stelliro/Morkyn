@@ -636,6 +636,9 @@ _ACT_FAMILIES: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("swim", ("swim", "dive")),
     ("treat", ("bandage", "treat", "splint")),
     ("perform", ("sing", "dance", "perform", "recite")),
+    # Shoring a hull rolled nothing and left "Secure the wreck" open (8B run
+    # 148, T70, T73): lashing, bracing and fastening are work too.
+    ("secure", ("secure", "lash", "shore", "brace", "moor", "fasten", "batten", "wedge", "tether", "rig")),
 )
 
 
@@ -791,6 +794,7 @@ ACT_FAMILY_RULES: dict[str, dict[str, Any]] = {
     "swim": {"skill": "athletics", "kind": "physical", "minutes": 20},
     "treat": {"skill": "healing", "kind": "general", "minutes": 10},
     "perform": {"skill": "performance", "kind": "talk", "minutes": 10},
+    "secure": {"skill": "craft", "kind": "physical", "minutes": 25},
 }
 
 # Work on metal is smithing, whatever the verb: polishing a blade at an armory

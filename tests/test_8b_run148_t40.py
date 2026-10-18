@@ -80,6 +80,22 @@ class TheActsOwnClause(unittest.TestCase):
         self.assertIsNotNone(match)
         self.assertEqual(match["code"], "Q2")
 
+    def test_lashing_the_hull_secures_the_wreck(self):
+        # T73: "drive the last wedge ... and lash the final line tight so the wreck is secured" rolled no step.
+        from app.prose_state import act_rules
+        from app.quests import match_quest_step
+
+        line = ("I drive the last wedge into the hull with the mallet and lash the final line tight so the wreck is secured "
+                "against the tide.")
+        act = act_rules(line)
+        self.assertIsNotNone(act)
+        self.assertEqual(act["family"], "secure")
+        quest = {**QUEST, "current_step": 3, "steps": QUEST["steps"] + [
+            {"step_number": 3, "title": "Secure the wreck to prevent further damage.", "description": ""}]}
+        match = match_quest_step(line, [quest], location_code="L8")
+        self.assertIsNotNone(match)
+        self.assertEqual(match["step_number"], 3)
+
     def test_an_act_in_a_later_clause_keeps_its_own_words(self):
         from app.quests import _act_clause
 
