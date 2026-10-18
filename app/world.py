@@ -9950,6 +9950,26 @@ _AT_PLACE_RE = re.compile(
 )
 
 
+_INVITE_TO_RE = re.compile(
+    r"\b(?:come|follow|walk|go)\s+(?:along\s+)?with\s+me\s+(?:back\s+)?(?:to|into|up\s+to|down\s+to|over\s+to)\s+(?:the\s+)?"
+    r"(?P<place>[A-Z][\w'’-]*(?:\s+(?:of\s+the\s+|of\s+)?[A-Z][\w'’-]*){0,4})",
+)
+
+
+def _invites_to_place(player_input: str, rows: list[Any], current_name: str = "") -> bool:
+    """The player's own words, spoken or not, ask others to come with them to a known place that is not here."""
+    text = _player_line(str(player_input or ""))
+    for m in _INVITE_TO_RE.finditer(text):
+        place = m.group("place").strip()
+        if current_name and _same_place_name(place, current_name):
+            continue
+        for row in rows or []:
+            stored = str(row["name"] or "")
+            if stored and (_same_place_name(stored, place) or _same_place_name(stored, f"The {place}")):
+                return True
+    return False
+
+
 def _acts_at_known_place(acts: str, rows: list[Any], current_name: str = "") -> bool:
     """The narrated line does its business at a known place that is not here: "report to Ulric at the Reeves' Office"."""
     text = str(acts or "")
@@ -10024,6 +10044,10 @@ def _unasked_unshown_move(
         # Ulric at the Reeves' Office" left the player at the wreck talking to
         # a man two places away (8B run 148, T74).
         or _acts_at_known_place(acts, rows, current_name)
+        # An invitation to come along is the player going: '"Katerine, Ulric:
+        # come with me to the Tally House"' kept the player in the square while
+        # the prose laid the ledgers out inside (8B run 149, T94).
+        or _invites_to_place(player_input, rows, current_name)
     ):
         # A walk asks to go somewhere, not anywhere: "I walk over to where the
         # mole catcher is digging" came back with MOVE "Seventh Pike Stables",

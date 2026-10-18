@@ -262,6 +262,33 @@ class OutOfHidingIsNoExit(unittest.TestCase):
         self.assertEqual(venue_move_intent("I step out of the inn."), "exit")
 
 
+class ComeWithMeIsGoing(unittest.TestCase):
+    """8B run 149, T94: '"Katerine, Ulric: come with me to the Tally House"' kept the player in the square while the prose sat inside."""
+
+    LINE = "\"Then we find out together. Katerine, Ulric: come with me to the Tally House and we'll put the ledgers side by side.\""
+    PROSE = ("You step between Katerine and Ulric, your words sharp as a blade. The two of them exchange a glance, then nod. "
+             "Ulric tucks his tools into a satchel and follows you. Inside the Tally House, the room is dim, the flickering of a "
+             "single lantern casting long shadows across the worn wooden tables. You pull out a stack of ledgers and lay them beside Katerine’s.")
+
+    def test_the_invitation_asks_to_go(self):
+        from app import world
+
+        rows = [{"name": "Tally House", "code": "L6"}, {"name": "Saltmarrow", "code": "L1"}]
+        self.assertTrue(world._invites_to_place(self.LINE, rows, "Saltmarrow"))
+        self.assertFalse(world._invites_to_place("\"Come with me to the end of the world,\" she laughs.", rows, "Saltmarrow"))
+
+    def test_the_move_to_the_tally_house_stands(self):
+        from app import world
+        from app.db import connect
+
+        town = _world("The Reeve's Office")
+        with connect() as conn:
+            conn.execute("INSERT INTO locations (code, name, summary, parent_id) VALUES ('L94', 'Tally House', '', ?)", (town,))
+            result = {"narration": self.PROSE, "player": {"move_to_location": "Tally House"}}
+            report = world.resolve_movement(conn, result, self.LINE, intent="conversation", narration=self.PROSE)
+        self.assertNotIn(report.get("status"), {"dropped_unshown", "dropped"}, report)
+
+
 class TheOfficeUnderAnotherSpelling(unittest.TestCase):
     """T66: "go into the Reeves' Office" made a third office beside "The Reeve's Office" and "Reeves’ Office"."""
 
