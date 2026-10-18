@@ -194,7 +194,24 @@ def player_trade_offer(own_line: str) -> int | None:
         value = _match_number(match)
         if value:
             return value
+    # A bare sum in a line that talks in coin: '"Ten gold is steep for a bed.
+    # I'll pay five, and my name stays mine"' offered five (8B run 148, T47).
+    if re.search(r"\b" + _COIN + r"\b", text, re.I):
+        for match in _BARE_OFFER_RE.finditer(text):
+            clause_start = max(text.rfind(mark, 0, match.start()) for mark in (",", ".", ";", "!", "?", "\n"))
+            if _NEGATION_RE.search(text[clause_start + 1: match.start()]):
+                continue
+            value = _match_number(match)
+            if value:
+                return value
     return None
+
+
+_BARE_OFFER_RE = re.compile(
+    r"\b(?:give|pay|offer|hand(?:\s+over)?|put\s+down|count\s+out)\s+(?:(?:you|him|her|them|[A-Z][\w'’-]*)\s+)?"
+    + _AMOUNT + r"(?=\s*(?:[,.;!?]|\s+(?:and|for|if|but|or)\b))",
+    re.I,
+)
 
 
 _QUOTE_RE = re.compile(r'"([^"]*)"|\u201c([^\u201d]*)\u201d')
@@ -231,9 +248,15 @@ def offer_answer(narration: str, own_line: str = "") -> str:
     """
     text = str(narration or "")
     own_words = set(re.findall(r"[a-z']+", str(own_line or "").lower()))
+    offered = player_trade_offer(own_line) if own_line else None
 
     def echo(span: str) -> bool:
         words = set(re.findall(r"[a-z']+", span.lower()))
+        # The deal said back to the player is the other party's answer, not an
+        # echo: "I'll pay five, and my name stays mine" answered "Five gold,
+        # and your name stays yours" shares most of its words (8B run 148, T47).
+        if offered and offered in coin_mentions(span) and re.search(r"\b(?:you|your|yours)\b", span, re.I):
+            return False
         return bool(words) and len(words & own_words) * 2 >= len(words)
 
     answers = [m.group(1) or m.group(2) or "" for m in _QUOTE_RE.finditer(text)]
@@ -244,6 +267,13 @@ def offer_answer(narration: str, own_line: str = "") -> str:
     if answers and _ACCEPT_WORDS_RE.search(answers[0]):
         return "accepted"
     if _ACCEPT_ACT_RE.search(_QUOTE_RE.sub(" ", text)):
+        return "accepted"
+    # The other party saying the offered sum back, with no refusal, takes it:
+    # "I'll pay five" answered '"Five gold, and your name stays yours"' moved
+    # no coin (8B run 148, T47).
+    if offered and answers and offered in coin_mentions(answers[0]) and not re.search(
+        r"\?|\b(?:no|not|never|too\s+little|more\s+than\s+that|at\s+least)\b", answers[0], re.I
+    ):
         return "accepted"
     return ""
 
@@ -658,6 +688,14 @@ _HANDED_OFF_BEFORE_RE = re.compile(
 _FRESH_PLAYER_SUBJECT_RE = re.compile(
     r"\b(?:i|we)\b(?!['\u2019](?:ll|d)\b|\s+(?:will|shall|would|could|might|can|may)\b)", re.I
 )
+# The content of a report, not an act: "report that the wreck has been picked clean".
+_REPORTED_CLAUSE_RE = re.compile(
+    r"\b(?:report|tell|say|explain|warn|mention|insist|claim|complain|swear|admit|announce|declare|confirm|"
+    r"hear|learn|know|think|believe|suspect|guess|reckon|fear|hope)\w*\s+(?:[\w'’-]+\s+){0,3}(?:that|whether|if|how|why)\b",
+    re.I,
+)
+# A passive right before the word: "has been picked clean", "was swept clean", "got wiped clean".
+_PASSIVE_BEFORE_RE = re.compile(r"\b(?:been|was|were|is|are|be|being|get|gets|got|getting)\s+[\w'-]+(?:ed|en|t)\s*$", re.I)
 # Someone else as the subject right before the verb: "as Finnian forges", "while he polishes".
 _OTHER_DOER_BEFORE_RE = re.compile(r"\b(?:he|she|they)\s+(?:\w+ly\s+)?$|\b([A-Z][\w'\u2019-]*)\s+(?:\w+ly\s+)?$")
 # Work put off to later in the same sentence: "I'll polish them after lunch".
@@ -684,6 +722,12 @@ def _act_is_players_now(text: str, match: re.Match, clause: str) -> bool:
     if not clause_end and after.rstrip().endswith("?"):
         return False
     lead = re.split(r"\s+(?:and|then|but)\s+", clause)[-1]
+    # What is reported is not done: "walk to the tally house to report that the
+    # wreck has been picked clean" rolled athletics for "clean" and finished
+    # "Salvage the wreck" (8B run 148, T40). Nor is the word after a passive
+    # ("has been picked clean", "was swept clean") the player's act.
+    if _REPORTED_CLAUSE_RE.search(lead) or _PASSIVE_BEFORE_RE.search(lead):
+        return False
     handed = None
     for handed in _HANDED_OFF_BEFORE_RE.finditer(lead):
         pass

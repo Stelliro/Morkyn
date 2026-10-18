@@ -7941,12 +7941,15 @@ def _venue_for_named_move(
             # The prose walks into this very shop (8B #76, Saltmarrow T7/T73/T88):
             # from a place with no parent (an old save's tally house) the gate
             # ended the walk outside while the scene played inside. The state
-            # follows the prose: one turn, through the shop's own parent.
+            # follows the prose: one turn, through the shop's own parent. From
+            # a part of another place too (F43): the walk from The Docks, under
+            # the harbour, to the tally house under the town ended in the town
+            # square while the prose was inside at the table (8B run 148, T40).
+            # Only a settlement itself keeps the two-step journey.
             if (
                 venue_parent
                 and venue_parent != current_id
                 and current is not None
-                and not int(venues._field(current, "parent_id", 0) or 0)
                 and not str(venues._field(current, "settlement_size", "") or "")
                 and _prose_enters_row(shown, resolved, narration)
             ):
@@ -15987,6 +15990,36 @@ def _payment_shown(narration: str, player_input: str) -> bool:
     return False
 
 
+_EAT_DRINK_RE = re.compile(
+    r"\b(?:eat|eats|ate|eating|drink|drinks|drank|drinking|sip\w*|swallow\w*|sup|sups|supped|dine|dines|dined|dining|"
+    r"wash(?:es|ed)?\s+(?:it\s+|them\s+)?down|tuck\w*\s+into|finish\w*\s+(?:off\s+)?(?:my|the|a)\s+)\b",
+    re.I,
+)
+_ORDER_RE = re.compile(r"\b(?:order|orders|ordered|ordering|call\w*\s+for|ask\w*\s+for)\b", re.I)
+_SERVING_RE = re.compile(
+    r"\b(?:mug|mugs|cup|cups|tankard|flagon|pint|pints|plate|plates|bowl|bowls|portion|helping|hot|meal|supper|"
+    r"breakfast|dinner|stew|broth|round|drink|drinks|ale|wine|beer|mead|cider)\b",
+    re.I,
+)
+_CARRY_AWAY_RE = re.compile(r"\b(?:take\s+away|for\s+the\s+road|for\s+the\s+journey|to\s+carry|to\s+go|wrap\w*|pack\w*|provisions?|stores|supplies)\b", re.I)
+
+
+def _consumed_in_line(player_input: str, tokens: list[str]) -> bool:
+    """The player's own line orders, eats or drinks this thing at the table."""
+    head = (tokens[-1] if tokens else "").lower()
+    if not head:
+        return False
+    own = venues.strip_speech(_player_line(player_input))
+    for clause in re.split(r"[.;!?]", own):
+        if not re.search(rf"\b{re.escape(head)}(?:s|es)?\b", clause, re.I) or _CARRY_AWAY_RE.search(clause):
+            continue
+        if _EAT_DRINK_RE.search(clause):
+            return True
+        if _ORDER_RE.search(clause) and _SERVING_RE.search(clause):
+            return True
+    return False
+
+
 # Fixtures used and meals eaten: never a thing in the pack, handed over or not.
 _FIXTURE_HEADS = frozenset({
     "bed", "beds", "room", "rooms", "bunk", "cot", "berth", "lodging", "lodgings", "meal", "meals", "supper", "breakfast",
@@ -16101,7 +16134,7 @@ def _filter_inventory_changes(
         band = str(change.get("quantity_band") or "").strip().lower()
         if delta == 0 and band and band not in {"none", "zero", "0"}:
             delta = -1 if band.startswith("-") else 1
-        existing = conn.execute("SELECT id, quantity FROM inventory WHERE name = ?", (name,)).fetchone()
+        existing = _inventory_row_named(conn, name)
 
         def _strip_unearned_dimensional(entry: dict[str, Any]) -> dict[str, Any]:
             """A promotion to dimensional storage needs prose, on any path."""
@@ -16265,6 +16298,12 @@ def _filter_inventory_changes(
         if grounded and (tokens[-1] if tokens else name_l) in _FIXTURE_HEADS:
             grounded = False
             turn_ledger.note("inventory", "not_a_thing", item=name, why="a fixture used or a meal eaten")
+        # Ordered and eaten or drunk at the table is consumed, not carried:
+        # GRANT "ale" and "fish" for "I order the fish and a mug of ale, pay
+        # Eldric for them" put both in the pack (8B run 148, T45).
+        if grounded and _consumed_in_line(str(player_input or ""), tokens):
+            grounded = False
+            turn_ledger.note("inventory", "not_a_thing", item=name, why="ordered and eaten or drunk")
         handed = _prose_item_handed_over(final_text, name_l, tokens, owned=bool(existing))
         # The player's own thing under a shorter name is that thing (7B run 10,
         # T1: "You reach into your shirt, pulling out the small, worn reckoner"
@@ -16518,6 +16557,30 @@ def _derive_item_links(
     return stat_links, power_codes[:12], roll_profile
 
 
+# The pack holds things, not phrases: a leading article is no part of a name.
+_ITEM_ARTICLE_RE = re.compile(r"^(?:a|an|the|some|one)\s+", re.I)
+
+
+def _bare_item_name(name: str) -> str:
+    return re.sub(r"\s+", " ", _ITEM_ARTICLE_RE.sub("", str(name or "").strip())).strip().lower()
+
+
+def _inventory_row_named(conn, name: str):
+    """The pack's row for this name: exact, else the same words under another
+    article or case. GRANT "a rusted iron key" went in beside the "rusted iron
+    key" already carried (8B run 148, T39)."""
+    row = conn.execute("SELECT * FROM inventory WHERE name = ?", (name,)).fetchone()
+    if row is not None:
+        return row
+    bare = _bare_item_name(name)
+    if not bare:
+        return None
+    for cand in conn.execute("SELECT * FROM inventory").fetchall():
+        if _bare_item_name(str(cand["name"] or "")) == bare:
+            return cand
+    return None
+
+
 def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
     if not _play_system_enabled(conn, "items_enabled", True):
         return
@@ -16525,6 +16588,9 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
         name = _sanitize_item_name(str(change.get("name", "")))
         if not name:
             continue
+        bare = _ITEM_ARTICLE_RE.sub("", name).strip()
+        if len(bare) >= 2:
+            name = bare
         change = {**change, "name": name}
         delta = int(change.get("quantity_delta") or 0)
         description = str(change.get("description") or "")[:700]
@@ -16570,7 +16636,7 @@ def _apply_inventory(conn, changes: list[dict[str, Any]]) -> None:
             change=change,
         )
         has_links = bool(has_stat_modifiers or has_granted_abilities or change.get("roll_profile") or change.get("power_codes"))
-        existing = conn.execute("SELECT * FROM inventory WHERE name = ?", (name,)).fetchone()
+        existing = _inventory_row_named(conn, name)
         if existing:
             quantity = max(0, int(existing["quantity"]) + delta)
             merged_description = existing["description"]
@@ -18265,6 +18331,14 @@ _SAME_FIGURE_RE = re.compile(
 )
 
 
+_QUALITY_OF_RE = re.compile(
+    r"\b(?:weight|look|air|eyes?|gaze|face|voice|bearing|manner|patience|calm|stillness|grace|strength|hands?|way|"
+    r"smile|frown|expression|posture|stance|shoulders|tone|ease|confidence|caution|wariness|weariness|look|build|"
+    r"habit|certainty|authority|steadiness)\s+of\s+(?:(?:a|an|some)\s+)?$",
+    re.I,
+)
+
+
 def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     """People the prose shows who might be new: described strangers and named
     speakers. A later "the <...> <noun>" with the noun of an earlier hint is the
@@ -18275,6 +18349,11 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
     for match in _FIGURE_HINT_RE.finditer(str(text or "")):
         if re.search(r"\b(?:like|as|than|as\s+if|as\s+though)\s*$", str(text)[: match.start()], re.I):
             continue  # a simile: "like a man waiting for a trap to spring"
+        # A quality measured by a figure is a description of someone here:
+        # "Eldric eyes you with the weight of a man who has seen too many
+        # travelers" minted Aldous at the inn (8B run 148, T46).
+        if _QUALITY_OF_RE.search(str(text)[: match.start()]):
+            continue
         # A kind of person is a description: "She is the kind of person who
         # knows what to look for" seeded Ellen the baker beside the woman it
         # describes (8B run 20, T0).
@@ -18410,14 +18489,26 @@ def _named_as_present(text: str, pattern: str, *, flags: int = 0) -> bool:
     return False
 
 
-def _known_here_in_role(conn, role_words: set[str], text: str, new_name: str = "") -> Any:
-    """The one known person at the player's place whose job shares a word with ``role_words``, unless the prose names them apart."""
+def _known_here_in_role(conn, role_words: set[str], text: str, new_name: str = "", place: Any = None) -> Any:
+    """The one known person at the player's place, or at ``place`` (the op's own LOC), whose job shares a word with ``role_words``, unless the prose names them apart.
+
+    The op's place counts because people are filed before the move lands:
+    NPC_NEW "Gideon" ROLE "Salvage Guild clerk" LOC the tally house, on the
+    turn that walked there from the docks, minted a second clerk beside
+    Griselda Kemp, the clerk filed at the tally house (8B run 148, T40).
+    """
     words = {w for w in role_words if len(w) >= 4}
     if not words:
         return None
     try:
         here = conn.execute("SELECT current_location_id FROM player WHERE id = 1").fetchone()
-        rows = conn.execute("SELECT * FROM npcs WHERE location_id = ?", (int(here[0] or 0),)).fetchall() if here else []
+        places = {int(here[0] or 0)} if here else set()
+        if str(place or "").strip():
+            told = _find_location_id(conn, str(place))
+            if told:
+                places.add(int(told))
+        marks = ",".join("?" for _ in places)
+        rows = conn.execute(f"SELECT * FROM npcs WHERE location_id IN ({marks})", tuple(places)).fetchall() if places else []
     except Exception:
         return None
     twins = []
@@ -18619,9 +18710,12 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
     # Only the narration shows people: "He's not a man who likes delays", said
     # of the foreman at the docks, bound NPC_NEW "Garrik" to "a man" and stood
     # him in the tally house (8B run 69, T3).
+    # A figure the prose shows gone is no one to bind: "the hooded figure has
+    # vanished. No trace of them" at the shore gave its alias to the clerk
+    # minted at the tally house (8B run 148, T40).
     figures = [h for h in _figure_hints(unspoken, known_names)
                if h.split()[0].lower() in {"a", "an", "the"} and _figure_alias(h) not in taken
-               and not _is_someone_heres_job(h)]
+               and not _is_someone_heres_job(h) and not _figure_gone(unspoken, h)]
     free = list(figures)
     keep_ids = {id(npc) for npc in npcs if npc not in unshown}
     bound: dict[int, str] = {}
@@ -18644,7 +18738,7 @@ def _npcs_shown_in_prose(conn, npcs: list[dict[str, Any]], narration: str) -> li
         # way). One known person here in that role, not named apart in the
         # prose, is who the figure is; the new name is theirs.
         if role_words and any(re.search(rf"\b{re.escape(w)}", unspoken, re.I) for w in role_words if len(w) >= 4):
-            twin = _known_here_in_role(conn, role_words, text, npc_name)
+            twin = _known_here_in_role(conn, role_words, text, npc_name, place=npc.get("location"))
             if twin is not None:
                 turn_ledger.note("npc", "role_figure_is_known_person", name=npc_name, known=str(twin["name"] or ""))
                 npc["name"] = str(twin["name"] or npc_name)
@@ -18912,6 +19006,23 @@ def _figure_aliases_here(conn) -> set[str]:
     except Exception:
         return set()
     return {str(r["alias"] or "").strip().lower() for r in rows if str(r["alias"] or "").strip()}
+
+
+_FIGURE_GONE_RE = re.compile(
+    r"^\W*(?:has|have|had|is|was|are|were)?\s*(?:already\s+|long\s+)?(?:vanish\w*|disappear\w*|gone|"
+    r"slip\w*\s+(?:away|off|out\s+of\s+sight)|melt\w*\s+(?:into|away)|nowhere(?:\s+to\s+be\s+seen)?|"
+    r"no\s+longer\s+(?:there|here|in\s+sight)|out\s+of\s+sight)\b",
+    re.I,
+)
+
+
+def _figure_gone(text: str, hint: str) -> bool:
+    """The figure's own sentence says they are gone: "the hooded figure has vanished"."""
+    at = str(text or "").find(hint)
+    if at < 0:
+        return False
+    rest = re.split(r"[.!?]", str(text)[at + len(hint):], maxsplit=1)[0]
+    return bool(_FIGURE_GONE_RE.match(rest))
 
 
 def _hint_sentence(text: str, hint: str) -> str:
@@ -21771,6 +21882,14 @@ def _accept_pays_nothing(conn, own: str, paid: int) -> bool:
     return any(int(_float(r[0], 0)) == int(paid) for r in rows if r is not None)
 
 
+# The player paying a person: "I pay him", "pay Eldric for them" (8B run 148,
+# T45). Narrower than _PAYS_PERSON_RE, which also reads coin put into a palm.
+_PLAYER_PAYS_PERSON_RE = re.compile(
+    r"\b(?:i|we)\s+(?:\w+\s+)?pay\s+(?:him|her|them|(?-i:[A-Z][\w'’-]+))\b|\bpay(?:s|ing)?\s+(?:him|her|them|(?-i:[A-Z][\w'’-]+))\s+for\b",
+    re.I,
+)
+
+
 def _settle_stated_gold(
     result: dict[str, Any], player_input: str, *, conn=None, quest_pays: bool = False
 ) -> dict[str, Any] | None:
@@ -21869,15 +21988,28 @@ def _settle_stated_gold(
     # reaching the player, the sum the model sized is the spend.
     own_acts = venues.strip_speech(own)
     if (
-        (band or raw) and not losing and not quest_pays
-        and (_BUY_VERB_RE.search(own_acts) or _OWN_UNPRICED_PAY_RE.search(own_acts) or _PLAYER_PAYS_SUM_RE.search(own_acts))
+        (band or raw) and not losing and not quest_pays and paid_once is None
+        and (_BUY_VERB_RE.search(own_acts) or _OWN_UNPRICED_PAY_RE.search(own_acts) or _PLAYER_PAYS_SUM_RE.search(own_acts)
+             or _PLAYER_PAYS_PERSON_RE.search(_ASKED_CLAUSE_RE.sub(" ", own_acts)))
         and not said["received"] and not prose_state.coin_handed_to_player(narration)
     ):
-        if raw:
+        # The sum is the price only when the scene names it; the model's own
+        # number on an unpriced purchase is a size hint, and the engine rolls
+        # it: "pay Eldric for them" (fish and ale) with GOLD 30 would have
+        # cost thirty (8B run 148, T45).
+        priced = said["priced"][0] if len(said["priced"]) == 1 else None
+        if raw and (raw in mentioned or raw == priced):
             player["gold_delta"] = -abs(raw)
             player.pop("gold_band", None)
+        elif priced:
+            player["gold_delta"] = -abs(priced)
+            player.pop("gold_band", None)
+            authored = [str(p) for p in (result.get("_server_authored") or [])]
+            if "player.gold_delta" not in authored:
+                authored.append("player.gold_delta")
+            result["_server_authored"] = authored
         else:
-            player["gold_band"] = "-" + band.lstrip("+")
+            player["gold_band"] = "-" + (band.lstrip("+") if band else "small")
             player.pop("gold_delta", None)
         result["player"] = player
         turn_ledger.note("gold", "gain_op_on_a_purchase_flipped", stated=raw or band)
