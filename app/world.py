@@ -7334,7 +7334,10 @@ def _venue_named_in(conn, parent_id: int, player_input: str, narration: str):
     # only when it takes "you" inside it. "open the far door and step through"
     # in the sump passage moved the player to the Velvet Ferret Mill because
     # the prose led "toward the mill's shadow" (8B run 149, T14).
-    line_text = str(player_input or "").lower()
+    # The narrated part of the line, and speech that asks to go: '"... from a
+    # hidden passage under the Hold"' said at Nell's desk walked the player
+    # into the Hold (8B run 150, T91).
+    line_text = (_destination_text(player_input) or "").lower()
     prose_text = prose.lower()
     try:
         shown = venues.entry_in_prose(str(narration or "")) or None

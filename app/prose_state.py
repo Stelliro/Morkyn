@@ -622,11 +622,18 @@ def drop_sentences(text: str, should_drop: Callable[[str], bool], *, floor: int 
     paragraphs: list[str] = []
     for para in re.split(r"\n\s*\n", body):
         kept: list[str] = []
+        # A dropped sentence that opens a quote takes the rest of the quote with
+        # it: 'You unfold it, revealing a single line: "The reeve's ledger is
+        # missing.' went, and 'Find it before the tide comes in."' stayed as an
+        # orphan (8B run 150, T87).
+        open_quote = 0
         for piece in _SENTENCE_SPLIT_RE.split(para.strip()):
             if not piece.strip():
                 continue
-            if should_drop(piece):
+            if open_quote > 0 or should_drop(piece):
                 dropped.append(piece.strip())
+                open_quote += piece.count("“") - piece.count("”") + (piece.count('"') % 2)
+                open_quote = max(0, open_quote)
             else:
                 kept.append(piece.strip())
         if kept:

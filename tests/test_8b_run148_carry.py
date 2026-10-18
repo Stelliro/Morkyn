@@ -347,6 +347,21 @@ class TheOfficeUnderAnotherSpelling(unittest.TestCase):
         self.assertEqual(name, "The Reeve's Office")
         self.assertEqual(before, after)
 
+    def test_a_venue_named_only_in_speech_is_not_entered(self):
+        """8B run 150, T91: '"... from a hidden passage under the Hold"' said at Nell's desk walked the player into the Hold."""
+        from app import world
+        from app.db import connect
+
+        _world("The Reeve's Office")
+        line = "I go inside and set the rusted box on Nell's desk. \"The guild's missing goods, from under the Reeve's Office.\""
+        prose = "You go inside and set the rusted crate on Nell's desk. The guildmaster's eyes narrow as she opens the crate."
+        with connect() as conn:
+            harbour = int(conn.execute("SELECT id FROM locations WHERE code = 'L90'").fetchone()[0])
+            self.assertIsNone(world._venue_named_in(conn, harbour, line, prose))
+            spoken_walk = "\"Take me into the Reeve's Office.\" I follow the clerk inside."
+            row = world._venue_named_in(conn, harbour, spoken_walk, "You follow the clerk into the Reeve's Office.")
+            self.assertIsNotNone(row)
+
     def test_a_building_named_through_its_door_is_entered(self):
         """8B run 150, T62: "I knock on the reeve's office door and go in" resolved no destination."""
         from app import world

@@ -1594,6 +1594,14 @@ def social_attitude_from_check(
     return "Dismissive"
 
 
+# "the rusted key in the box's lock", "my key into the lock", "unlock it with the key".
+_KEY_IN_LOCK_RE = re.compile(
+    r"\b(?:the|my|a|an|this|that|its|his|her)\s+(?:[\w'’-]+\s+){0,2}?keys?\s+(?:in|into|to)\s+"
+    r"(?:the\s+|a\s+|its\s+|[\w'’-]+['’]s\s+)?(?:[\w'’-]+\s+){0,2}?locks?\b"
+    r"|\bunlock\w*\s+(?:it|them|the\s+[\w'’-]+)\s+with\s+(?:the|my|a|this|that|its)\s+(?:[\w'’-]+\s+){0,2}?keys?\b",
+    re.I,
+)
+
 SKILL_TRIGGER_PATTERNS: list[tuple[str, str]] = [
     # Striking a flint, a match or a bargain is not a blow (playtest #102).
     (r"\b(attack|strike(?!\s+(?:the\s+|a\s+|an\s+|my\s+|his\s+|her\s+)?(?:flint|match|light|steel|tinder|spark|bell|deal|bargain|camp|tent|sail|chord|note|pose|balance|entry|entries|name|names|line|lines|record|records|word|words|debt|sum|figure|charge|clause|it\s+(?:from|out|off|through)|that\s+(?:entry|name|line|out)|them\s+(?:from|out|off)|(?:[\w'’-]+\s+){0,4}?(?:from|out\s+of|off)\s+(?:the\s+|a\s+|my\s+|his\s+|her\s+|[\w'’-]+['’]s\s+)?(?:[\w'’-]+\s+){0,2}?(?:ledger|books?|records?|tally|roll|list|register|page|slate))\b)|slash|stab|swing|fight|melee)\b", "melee"),
@@ -1944,6 +1952,10 @@ def infer_check_from_action(player_input: str, context: dict[str, Any] | None = 
     # the mole catcher is digging" rolled athletics (7B run 19, T1).
     own_acts = _OTHERS_DOING_RE.sub(" ", own_acts)
     acted = _OTHERS_DOING_RE.sub(" ", acted)
+    # A key in a lock is no picking: "I try the rusted key in the box's lock"
+    # rolled lockpicking (8B run 150, T87).
+    own_acts = _KEY_IN_LOCK_RE.sub(" ", own_acts)
+    acted = _KEY_IN_LOCK_RE.sub(" ", acted)
     # A thing striking a thing is no blow of the player's: "work the hollow
     # with the oar until the blade strikes something solid" rolled melee vs the
     # scarred crewman (8B run 146, T11).

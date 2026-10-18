@@ -1915,7 +1915,21 @@ def drop_invented_player_speech(paragraphs: list[str], player_input: str) -> tup
                     for u in units[:first_quote]
                 ):
                     lead = first_quote
-            players_block = other_spoke and 0 < lead < len(units) and all(bare[lead:])
+            # A paragraph opening on a bare first-person quote after another's
+            # line, whose only narration is the player's own beat ('"I found a
+            # few things ..." You pause, the weight of the words settling.
+            # "It wasn't the guild's name."'), is the player answering (8B run
+            # 150, T91: a whole invented answer stood and the scene ran on).
+            opens_on_quote = bool(
+                other_spoke and prev_spoke and not prev_by_player and not voiced and len(units) > 1
+                and quoted_spans(units[0]) and bare[0]
+                and all(bare[i] for i, u in enumerate(units) if quoted_spans(u))
+                and any(not quoted_spans(u) for u in units)
+                and all(re.match(r"^you\b", u, re.I) for u in units if not quoted_spans(u))
+                and not any(_names_someone(u) for u in units if not quoted_spans(u))
+                and _FIRST_PERSON_RE.search(" ".join(quoted_spans(units[0])))
+            )
+            players_block = (other_spoke and 0 < lead < len(units) and all(bare[lead:])) or opens_on_quote
             # No one but the player in the sentences before the line: theirs even
             # for a voiced request, where the paragraph guess is otherwise off.
             alone = players_block and not any(_names_someone(u) for u in units[:lead])
@@ -2919,9 +2933,17 @@ def keep_player_words(text: str, player_input: str) -> tuple[str, list[dict[str,
                 for p in pieces
             ):
                 continue
-            tail = re.match(r"\s*,?\s*you\s+(?:\w+ly\s+)?(?:say|said|ask|asked|add|added|reply|replied)\b[^.!?\"“”]*[.!?]?",
-                            body[span["end"]:])
-            end = span["end"] + (tail.end() if tail else 0)
+            # The tag goes with the quote, whatever its verb: '"I'd hear what I'm
+            # owed," you repeat, the weight of the unspoken debt pressing' left
+            # "you repeat, the weight ..." standing alone (8B run 150, T98).
+            rest = body[span["end"]:]
+            lead_ws = re.match(r"\s*,?\s*", rest).end()
+            tag = _YOU_SAID_RE.match(rest[lead_ws:])
+            if tag:
+                clause = re.match(r"[^.!?\"“”]*[.!?]?", rest[lead_ws + tag.end():])
+                end = span["end"] + lead_ws + tag.end() + (clause.end() if clause else 0)
+            else:
+                end = span["end"]
             body = (body[: span["start"]].rstrip(" ") + " " + body[end:].lstrip(" ")).strip()
             changes.append({"action": "repeated_piece_of_line_dropped", "text": span["inner"][:80]})
             break

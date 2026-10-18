@@ -468,6 +468,50 @@ find on a failed roll, a declared take with no op, the inn refused as closed on 
 line, "I'm going to" said aloud, the clock's digits and the act-outcome text in the prose.
 Run 150 starts on this code.
 
+### Run 150 (2026-10-18): the second 100-turn run, on the run-149 fixes
+
+Run 150 reached T100 (same setup, 8B, 16k context, 11-54 s a turn) on the code as of dcac870
+(the run-149 fixes), with every fault fixed by class on main as the run went, or logged.
+Commits 0df725b through the run-150 close, all tested module by module (the full suite is not
+run beside a live model any more: the harness holds about 11 GB and leaks about 25 MB and 70
+handles a turn, and the suite's temp databases beside it ran the machine dry). Not a clean run:
+about one state fault every two turns in T1-T60, fewer after, and three faults the engine
+itself made (a fragment shipped for a scene, a quote's tail left as an orphan, a tag left
+without its quote), all three fixed.
+
+Fixed by class this run:
+
+- Items: catching a loose thing is taking it; the take is of the thing in its own clause (a
+  ledger named two clauses later is not taken); picking one's own thing back up is no new one,
+  and a terse prose still lets an asked take through; the player's own put-down stands unless
+  the prose hands the thing back.
+- Coin: a single or a lone gold piece is one, so the stated sum caps the roll.
+- People: a pronoun points back to the person just named (no drawn stranger for "he's a man
+  who ..."); a person said to be absent is not pulled into the scene.
+- Places and moves: a civic building named through its door and gone into is the destination;
+  a venue named only in speech is not entered.
+- Words and acts: a strike said aloud is no fight, and a strike on a ledger, record or sum is
+  no blow; a pick-up is no lock, a key in a lock is no picking; speech costs no energy; a line
+  the player "starts" is theirs; an answer opening on the quote after another's line is the
+  player's, and the scene ends on the question; an attribution tail is no ask.
+- Quests: a conditional yes is no yes on the typed accept; a job about another thing is another
+  job (the giver's one open job folds in only a reworded or abstract one); praise of work under
+  way is no job; a quest's steps are the giver's words, not the player's.
+- Prose repairs: a word in another script is dropped; a verifier patch may not shrink the scene
+  to a fragment; a dropped sentence takes its quote along; a repeated piece takes its tag along.
+
+Logged only (docs/showcase/run-fault-log-2026-10-18.md, F140 to F174 and the continued rows):
+the plain question rolled as persuasion (17 recurrences, two of them critical outcomes), the
+duplicate waterfront place (The Wharf beside The Dock, The Docks beside both) that absorbed
+moves for sixty turns, a role spoken of as elsewhere minted here under the wrong sex, a figure
+seeded then named as a known person, a pronoun pin rewriting the other person's sentence, the
+small check saying "specific: yes" to a bare offer of work, a job done and paid in the prose
+with the quest untouched (four times: no sum the engine could read, or the finish said in a
+line it trimmed), a pouch or satchel of coin handed with no number, a plan told to someone read
+as a walk, "toward" read as arrival, energy at zero after a morning's errands, and the
+harness's per-turn leak. The open rows name what could still fix each.
+Run 151 starts on this code.
+
 ## Logged, not fixed
 
 - Now the largest class by far: the player's inner life and past invented by the prose ("your
