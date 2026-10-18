@@ -161,6 +161,92 @@ class OpenGroundHasNoDoor(unittest.TestCase):
             self.assertEqual(world.venue_entry_check(conn, town, office).get("reason"), "unreachable")
 
 
+class AVenueSeenIsNotEntered(unittest.TestCase):
+    """8B run 149, T14: "open the far door and step through" moved the player to the mill the prose only led toward."""
+
+    LINE = "I open the far door and step through into whatever lies beyond."
+    PROSE = ("The farthest gate creaks open as you step through. The Dredges stretch before you, a labyrinth of rusted pipes. "
+             "A narrow path winds through the wreckage, leading toward the mill’s shadow. A figure stands at the edge of the "
+             "mill, wrapped in a tattered cloak.")
+
+    def _town_with_mill(self):
+        from app.db import connect
+
+        town = _world("The Reeve's Office")
+        with connect() as conn:
+            conn.execute("INSERT INTO locations (code, name, summary, parent_id, kind) VALUES ('L93', 'Velvet Ferret Mill', '', ?, 'mill')", (town,))
+        return town
+
+    def test_a_mill_led_toward_is_not_entered(self):
+        from app import world
+        from app.db import connect
+
+        town = self._town_with_mill()
+        with connect() as conn:
+            self.assertIsNone(world._venue_named_in(conn, town, self.LINE, self.PROSE))
+
+    def test_a_mill_the_prose_goes_into_is(self):
+        from app import world
+        from app.db import connect
+
+        town = self._town_with_mill()
+        prose = "You push through the mill's door. Inside, the Velvet Ferret Mill is dim and smells of wet grain."
+        with connect() as conn:
+            row = world._venue_named_in(conn, town, self.LINE, prose)
+        self.assertIsNotNone(row)
+        self.assertEqual(str(row["name"]), "Velvet Ferret Mill")
+
+    def test_a_mill_the_line_names_is(self):
+        from app import world
+        from app.db import connect
+
+        town = self._town_with_mill()
+        with connect() as conn:
+            row = world._venue_named_in(conn, town, "I go into the mill.", "You walk over. The miller looks up.")
+        self.assertIsNotNone(row)
+
+
+class TalkedToButShownElsewhere(unittest.TestCase):
+    """8B run 149, T17: "Hugh Fairweather [[G]] stands at the edge of the Velvet Ferret Mill [[L2]]" moved Hugh to the tally house."""
+
+    def test_hugh_stays_at_the_mill(self):
+        from app import world
+        from app.db import connect
+
+        town = _world("The Reeve's Office")
+        with connect() as conn:
+            conn.execute("INSERT INTO locations (code, name, summary, parent_id, kind) VALUES ('L93', 'Velvet Ferret Mill', '', ?, 'mill')", (town,))
+            mill = int(conn.execute("SELECT id FROM locations WHERE code = 'L93'").fetchone()[0])
+            conn.execute(
+                "INSERT INTO npcs (code, location_id, name, race, role, summary, attitude) VALUES ('G', ?, 'Hugh Fairweather', 'human', 'lock keeper', '', 'neutral')",
+                (mill,),
+            )
+            prose = ("You ask. Lettice Garner [[B]] listens from the shadows. Hugh Fairweather [[G]], wrapped in a tattered cloak, "
+                     "stands at the edge of the Velvet Ferret Mill [[L93]], his face obscured by a scarf.")
+            result = {"narration": prose, "conversations": [{"npc_code": "G"}], "player": {}}
+            world._place_talked_to_in_scene(conn, [], result)
+            now = int(conn.execute("SELECT location_id FROM npcs WHERE code = 'G'").fetchone()[0])
+        self.assertEqual(now, mill)
+
+    def test_someone_shown_here_comes(self):
+        from app import world
+        from app.db import connect
+
+        town = _world("The Reeve's Office")
+        with connect() as conn:
+            conn.execute("INSERT INTO locations (code, name, summary, parent_id, kind) VALUES ('L93', 'Velvet Ferret Mill', '', ?, 'mill')", (town,))
+            mill = int(conn.execute("SELECT id FROM locations WHERE code = 'L93'").fetchone()[0])
+            conn.execute(
+                "INSERT INTO npcs (code, location_id, name, race, role, summary, attitude) VALUES ('G', ?, 'Hugh Fairweather', 'human', 'lock keeper', '', 'neutral')",
+                (mill,),
+            )
+            prose = "Hugh Fairweather [[G]] steps out from behind the counter and sets a lock on the ledger. \"Ask,\" he says."
+            result = {"narration": prose, "conversations": [{"npc_code": "G"}], "player": {}}
+            world._place_talked_to_in_scene(conn, [], result)
+            now = int(conn.execute("SELECT location_id FROM npcs WHERE code = 'G'").fetchone()[0])
+        self.assertEqual(now, town)
+
+
 class TheOfficeUnderAnotherSpelling(unittest.TestCase):
     """T66: "go into the Reeves' Office" made a third office beside "The Reeve's Office" and "Reeves’ Office"."""
 
