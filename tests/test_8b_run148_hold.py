@@ -270,6 +270,65 @@ class ALidRevealsAFind(unittest.TestCase):
         self.assertEqual(_sanitize_item_name("coil of rope"), "coil of rope")
 
 
+class CarryingIsNotGaining(unittest.TestCase):
+    """8B run 149, T51: "The guild's key, the one you've been carrying, feels heavier" with GRANT "guild key" QTY moderate made it x6."""
+
+    LINE = "\"I've no debt to the reeve. I'm asking about the box the tide took. Where was it stored?\""
+    PROSE = ("Lettice hesitates again. \"You'll need a key to enter that area.\" You glance at the keys in your inventory, your "
+             "thoughts already turning to the possibilities. The guild's key, the one you've been carrying, feels heavier than before.")
+
+    def test_the_carried_key_does_not_grow(self):
+        _pack(("guild key", 4))
+        kept, rejected = _filter([{"name": "guild key", "quantity_band": "moderate"}], self.PROSE, self.LINE)
+        self.assertEqual(kept, [], rejected)
+
+
+class CoinsGivenAwayAreNotKeptAsAsked(unittest.TestCase):
+    """8B run 149, T48: "You pick up the scattered coins ... and hand them to Hugh" put "scattered coins x1" in the pack after the judge read the hand-over."""
+
+    LINE = "I gather the scattered coins from the floor and ask Hugh which tide took the box."
+    PROSE = ("You pick up the scattered coins, their edges dull with age, and hand them to Hugh. He takes them with a grunt. "
+             "\"The wrong hour,\" he says.")
+
+    def test_scattered_coins_are_coin(self):
+        from app.world import _coin_name_match
+
+        self.assertTrue(_coin_name_match("scattered coins"))
+        self.assertTrue(_coin_name_match("old coins"))
+        self.assertFalse(_coin_name_match("gold ring"))
+
+    def test_the_repair_adds_no_coins(self):
+        from app import world
+        from app.db import connect
+
+        _pack()
+        with connect() as conn:
+            added = world._grant_shown_takes(
+                conn, [], self.PROSE, self.LINE,
+                rejected=[{"name": "scattered coins", "tokens": ["scattered", "coin"], "outcome": "loss", "taken_unasked": False}],
+            )
+        self.assertEqual([c["name"] for c in added], [], added)
+
+
+class TheChestIsTheSource(unittest.TestCase):
+    """8B run 149, T56: "I take the weathered ledger from the chest" with TAKE "chest" put a chest in the pack."""
+
+    LINE = "I take the weathered ledger from the chest and read the list of names."
+    PROSE = ("The ledger's pages are brittle, the ink faded, but the names are clear. You trace each entry. You flip through "
+             "the pages, hoping to find a clue, but the list ends abruptly. You close it.")
+
+    def test_the_chest_is_not_taken(self):
+        _pack()
+        kept, rejected = _filter([{"name": "ledger", "quantity_delta": 1}, {"name": "chest", "quantity_delta": -1}], self.PROSE, self.LINE)
+        self.assertEqual([c["name"] for c in kept], ["ledger"], (kept, rejected))
+
+    def test_a_chest_carried_off_is_taken(self):
+        from app.world import _named_only_as_source
+
+        self.assertFalse(_named_only_as_source("I lift the chest and carry it out of the yard.", "chest"))
+        self.assertTrue(_named_only_as_source("I take the ledger from the chest.", "chest"))
+
+
 class APaperFoundUnderAnotherName(unittest.TestCase):
     def test_the_damp_paper_retrieved_is_the_ledger(self):
         from app.world import _handed_under_another_noun

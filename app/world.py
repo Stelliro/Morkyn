@@ -15439,7 +15439,12 @@ def _coin_name_head(name: str) -> str:
 
 
 def _coin_name_match(name: str) -> bool:
-    return bool(_COIN_ITEM_RE.match(str(name or "").strip()) or _COIN_ITEM_RE.match(_coin_name_head(name)))
+    if _COIN_ITEM_RE.match(str(name or "").strip()) or _COIN_ITEM_RE.match(_coin_name_head(name)):
+        return True
+    # "scattered coins", "old coins": a short name headed by a coin word is
+    # coin whatever describes it (8B run 149, T48).
+    words = re.findall(r"[a-z]+", str(name or "").lower())
+    return 0 < len(words) <= 3 and words[-1] in {"coin", "coins", "gold", "silver", "silvers", "copper", "coppers", "crowns", "crown"}
 
 
 def _coins_to_gold(
@@ -15789,6 +15794,12 @@ def _grant_shown_takes(
                     continue
                 if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "gain"]):
                     continue
+                # Given away in the same prose, or coin, is not kept: "You pick
+                # up the scattered coins ... and hand them to Hugh" (8B run 149, T48).
+                if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "loss"]):
+                    continue
+                if _is_coin_item({"name": phrase}):
+                    continue
                 if any(_sentence_mentions_item(o, phrase, tokens) for o in owned) and "another" not in obj.lower():
                     continue
                 # Put back, handed on, or eaten after the take: not kept. A
@@ -15880,6 +15891,13 @@ def _grant_shown_takes(
             if covered(phrase, tokens, [c for c in changes + added if int(_float((c or {}).get("quantity_delta"), 0)) > 0]):
                 continue
             if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "gain"]):
+                continue
+            # Given away in the same prose, or coin: "You pick up the scattered
+            # coins ... and hand them to Hugh" put "scattered coins x1" in the
+            # pack after the judge had read the hand-over (8B run 149, T48).
+            if covered(phrase, tokens, [r for r in rejected or [] if (r or {}).get("outcome") == "loss"]):
+                continue
+            if _is_coin_item({"name": phrase}):
                 continue
             if any(_sentence_mentions_item(o, phrase, tokens) for o in owned):
                 continue
@@ -16194,6 +16212,25 @@ def _another_of_named(text: str, name_l: str, tokens: list[str]) -> bool:
     return False
 
 
+_SOURCE_PREP_RE = re.compile(
+    r"\b(?:from|out\s+of|off|inside|within|in|under|beneath|behind|atop|on\s+top\s+of)\s+(?:the|a|an|my|its|their|his|her|that|this)\s+"
+    r"(?:[\w'’-]+\s+){0,2}?$",
+    re.I,
+)
+
+
+def _named_only_as_source(player_input: str, name_l: str) -> bool:
+    """Every mention of the thing in the player's own narrated line sits after a source preposition ("from the chest")."""
+    own = venues.strip_speech(_player_line(player_input)).lower()
+    head = (_item_name_tokens(name_l) or [name_l.split()[-1] if name_l.split() else ""])[-1]
+    if not head:
+        return False
+    hits = [m for m in re.finditer(rf"\b{re.escape(head)}s?\b", own)]
+    if not hits:
+        return False
+    return all(_SOURCE_PREP_RE.search(own[max(0, m.start() - 40): m.start()]) for m in hits)
+
+
 def _consumed_in_line(player_input: str, tokens: list[str]) -> bool:
     """The player's own line orders, eats or drinks this thing at the table."""
     head = (tokens[-1] if tokens else "").lower()
@@ -16358,6 +16395,13 @@ def _filter_inventory_changes(
             continue
         # Coin is not this: TAKE "Five gold coins" is the player paying (7B run 5).
         if delta < 0 and not existing and not _is_coin_item(change):
+            # The container a thing came out of is not taken: "I take the
+            # weathered ledger from the chest" with TAKE "chest" put a chest in
+            # the pack (8B run 149, T56). A thing the line names only after
+            # from, out of or off is the source.
+            if _named_only_as_source(str(player_input or ""), name.lower()):
+                turn_ledger.note("inventory", "source_not_taken", item=name)
+                continue
             # A loss of something the player does not have is the op word read
             # as English: TAKE "fragments of lock mechanism" for what the
             # player pried free (8B run 3, T7). It is a gain claim, and the
@@ -16462,7 +16506,13 @@ def _filter_inventory_changes(
         # arrive: "hold up the Captain's Ledger in the lantern light" with GRANT
         # "Captain's Ledger" made it x2 (8B run 146, T98). Handling, showing or
         # holding what is already in the pack takes nothing.
-        if grounded and existing and outcome != "gain" and not acquire_intent:
+        # A possession phrase is handling too: "The guild's key, the one you've
+        # been carrying, feels heavier" with GRANT "guild key" QTY moderate made
+        # it x6 (8B run 149, T51). Only a take, find or hand-over in the item's
+        # own sentences is another one arriving.
+        if grounded and existing and not acquire_intent and (
+            outcome != "gain" or not _arrives_in_item_sentences(final_text, name_l, tokens)
+        ) and not _prose_item_handed_over(final_text, name_l, tokens, owned=True):
             grounded = False
             turn_ledger.note("inventory", "owned_item_handled_not_gained", item=name)
         # A thing in the player's hand under a new name is the thing held: GRANT
@@ -18624,6 +18674,10 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
         # diver no one saw (8B run 93, T2).
         clause = re.split(r"[.!?\"“”]", str(text)[: match.start()])[-1]
         if re.search(r"\b(?:the|a|that)\s+(?:kind|sort|type)\s+of\b", clause, re.I):
+            continue
+        # A figure in a memory is not here: "the memory of a man you once saw
+        # in the Docks" minted Elias Vane at the yard (8B run 149, T56).
+        if re.search(r"\b(?:memory|memories|remember\w*|recall\w*|dream\w*\s+of|thought\s+of|once\s+(?:saw|met|knew))\b", clause, re.I):
             continue
         # A figure asked about is not one shown: "Is it a person, and how long
         # has it been there?" seeded Ivo the roofer (8B run 14, T1).
