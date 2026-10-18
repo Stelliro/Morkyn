@@ -30,8 +30,8 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
-BUILTIN_DIR = ROOT / "content" / "ability_templates"
+from app.paths import APP_DIR, ROOT  # ROOT: the home (data/); APP_DIR: this version's files
+BUILTIN_DIR = APP_DIR / "content" / "ability_templates"
 MAX_LEARNED = 1500
 DEFAULT_THEME = "fantasy"
 _LOCK = threading.Lock()

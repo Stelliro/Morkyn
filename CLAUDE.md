@@ -104,6 +104,15 @@ belong to, with the date).
   pauses at run 151 T14; packaging is the work now: a Windows exe and the Linux/Mac equivalents,
   from the real launch path (Morkyn.bat / start.sh / morkyn_app.py), with the local model and the
   data folder outside the bundle.
+  Stell (2026-10-19): "could we make the exe seperate from its dependancies so we dont ship them
+  together? also, we will need a new method for updating, but we should probbaly make it so the
+  user can select a version, this is a future proofing method i want to use." So: (1) the app
+  build is small (Python, the game, the web files); heavy dependencies (llama-cpp-python CUDA /
+  CPU, later others) are **runtime packs** downloaded from the releases into `runtime/` beside
+  the exe and put on the path at start; (2) updates are a **version picker**: the app lists the
+  releases, the user chooses one (newer or older), it downloads into `versions/<tag>/` beside
+  the exe, and the exe hands over to the chosen version at start (`data/active_version.json`);
+  `data/` and `runtime/` are shared by every version. docs/Packaging.md has the design.
 
 ## Design decisions
 

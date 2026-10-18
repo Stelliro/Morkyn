@@ -23631,18 +23631,16 @@ function renderUpdatesPanel(status, check) {
   const events = Array.isArray(s.recent_events) ? s.recent_events : [];
   const lkg = s.last_known_good || null;
   if (s.packaged) {
-    // A packaged build (the exe) has no checkout to pull: say where the next build is.
-    const releases = s.release_url || "https://github.com/Stelliro/Morkyn/releases";
+    // A packaged build (the exe): the player picks a version (app/versions.py)
+    // and an engine pack (app/runtime_packs.py); no checkout to pull.
     return `
       <div class="updatesPanel">
         <p class="empty">${escapeHtml(s.note || "This is a packaged build.")}</p>
-        ${c.message ? `<p class="${c.update_available ? "good" : "empty"}">${escapeHtml(c.message)}</p>` : ""}
-        ${c.latest_release?.tag ? `<p class="empty">Latest GitHub release: <strong>${escapeHtml(c.latest_release.tag)}</strong> ${c.latest_release.url ? `<a href="${escapeHtml(c.latest_release.url)}" target="_blank" rel="noopener">open</a>` : ""}</p>` : ""}
-        <div class="modelButtonRow">
-          <button type="button" class="secondaryButton" data-update-check>Check the latest release</button>
-          <a class="secondaryButton" href="${escapeHtml(releases)}" target="_blank" rel="noopener">Releases page</a>
-        </div>
-        <p class="empty">Your saves, settings and voices are in the <code>data/</code> folder beside the program. Copy it into the next build and your games come with it.</p>
+        <h3>Versions</h3>
+        <div data-versions-panel><p class="empty">Loading the releases…</p></div>
+        <h3>Local engine</h3>
+        <div data-engine-panel><p class="empty">Reading the hardware…</p></div>
+        <p class="empty">Your saves, settings and voices are in the <code>data/</code> folder beside the program; every version and engine pack shares it.</p>
         <div data-update-log class="updateLog"></div>
       </div>
     `;
@@ -23672,6 +23670,128 @@ function renderUpdatesPanel(status, check) {
   `;
 }
 
+function fmtBytes(n) {
+  const v = Number(n) || 0;
+  if (v >= 1 << 30) return `${(v / (1 << 30)).toFixed(1)} GB`;
+  if (v >= 1 << 20) return `${Math.round(v / (1 << 20))} MB`;
+  return `${Math.round(v / 1024)} KB`;
+}
+
+function renderVersionsList(v) {
+  const rows = Array.isArray(v.releases) ? v.releases : [];
+  if (!rows.length) return `<p class="empty">${escapeHtml(v.error || "No releases found.")}</p>`;
+  return `
+    ${v.error ? `<p class="bad">${escapeHtml(v.error)}</p>` : ""}
+    <p class="empty">Running <strong>${escapeHtml(v.running || "?")}</strong>${v.active ? ` · next start: <strong>${escapeHtml(v.active)}</strong>` : " · next start: this build"}. Pick any version, newer or older; it downloads beside the program and starts next time.</p>
+    <table class="versionsTable">
+      ${rows.map((r) => {
+        const p = r.progress || {};
+        const busy = p.state === "downloading" || p.state === "unpacking";
+        const progress = busy ? ` <span class="muted">${p.state}${p.total ? ` ${Math.round((100 * (p.bytes || 0)) / p.total)}%` : ""}</span>` : p.state === "failed" ? ` <span class="bad">${escapeHtml(p.error || "failed")}</span>` : "";
+        const label = `${escapeHtml(r.tag)}${r.prerelease ? " <span class='muted'>pre-release</span>" : ""}${r.running ? " <span class='muted'>running</span>" : ""}${r.active ? " <span class='good'>next start</span>" : ""}`;
+        let action = "";
+        if (r.installed || r.running) {
+          action = r.active || (r.running && !v.active) ? "" : `<button type="button" class="secondaryButton" data-version-use="${escapeHtml(r.tag)}">${r.running ? "Use this build" : "Use"}</button>`;
+          if (r.installed && !r.running) action += ` <button type="button" class="secondaryButton" data-version-remove="${escapeHtml(r.tag)}">Remove</button>`;
+        } else if (r.asset?.url) {
+          action = busy ? "" : `<button type="button" class="secondaryButton" data-version-install="${escapeHtml(r.tag)}">Install (${fmtBytes(r.asset.size)})</button>`;
+        } else {
+          action = `<span class="muted">no build for this system</span>`;
+        }
+        return `<tr><td>${label}${progress}</td><td>${r.published_at ? escapeHtml(String(r.published_at).slice(0, 10)) : ""}</td><td>${action}</td></tr>`;
+      }).join("")}
+    </table>
+  `;
+}
+
+function renderEnginePanel(e) {
+  const hw = e.hardware || {};
+  const choice = e.choice || {};
+  const packs = Array.isArray(e.packs) ? e.packs : [];
+  const gpus = (hw.gpus || []).map((g) => escapeHtml(g.name)).join(", ") || "none found";
+  const options = [
+    ["auto", `Automatic (${escapeHtml(hw.recommended || "cpu")})`],
+    ...packs.map((p) => [p.id, escapeHtml(p.title)]),
+    ["custom", "Custom build (a folder or zip of llama-cpp-python)"],
+    ["none", "No local engine (cloud APIs only)"],
+  ];
+  const mode = choice.mode === "pack" ? choice.pack : choice.mode || "auto";
+  return `
+    <p class="empty">GPU: ${gpus}. ${escapeHtml(hw.why || "")} ${e.llama_cpp ? "<span class='good'>The engine is loaded.</span>" : "<span class='bad'>No engine loaded yet.</span>"}</p>
+    <div class="modelButtonRow">
+      <label class="muted">Engine
+        <select data-engine-mode>${options.map(([v, t]) => `<option value="${escapeHtml(v)}" ${v === mode ? "selected" : ""}>${t}</option>`).join("")}</select>
+      </label>
+      <input type="text" data-engine-custom placeholder="Folder or .zip of your own build" value="${escapeHtml(choice.custom || "")}" ${mode === "custom" ? "" : "hidden"} />
+      <button type="button" class="secondaryButton" data-engine-save>Use</button>
+    </div>
+    <table class="versionsTable">
+      ${packs.map((p) => {
+        const pr = p.progress || {};
+        const busy = pr.state === "downloading" || pr.state === "unpacking";
+        const state = p.installed ? "<span class='good'>installed</span>" : busy ? `<span class='muted'>${pr.state}${pr.total ? ` ${Math.round((100 * (pr.bytes || 0)) / pr.total)}%` : ""}</span>` : pr.state === "failed" ? `<span class='bad'>${escapeHtml(pr.error || "failed")}</span>` : p.available ? `<span class='muted'>${fmtBytes(p.available.size)}</span>` : "<span class='muted'>not on the release yet</span>";
+        const action = p.installed ? `<button type="button" class="secondaryButton" data-pack-remove="${escapeHtml(p.id)}">Remove</button>` : busy || !p.available ? "" : `<button type="button" class="secondaryButton" data-pack-install="${escapeHtml(p.id)}">Install</button>`;
+        return `<tr><td><strong>${escapeHtml(p.title)}</strong><br><span class="muted">${escapeHtml(p.summary || "")}</span></td><td>${state}</td><td>${action}</td></tr>`;
+      }).join("")}
+    </table>
+    <p class="empty">Packs come from the <a href="${escapeHtml(e.release || "#")}" target="_blank" rel="noopener">runtime-packs release</a>; a changed engine loads at the next start.</p>
+  `;
+}
+
+async function refreshVersionsAndEngine(root, online) {
+  const versionsBox = root.querySelector("[data-versions-panel]");
+  const engineBox = root.querySelector("[data-engine-panel]");
+  if (!versionsBox && !engineBox) return;
+  try {
+    const [v, e] = await Promise.all([
+      fetch(`/api/versions?online=${online ? "true" : "false"}`).then((r) => r.json()),
+      fetch(`/api/runtime/packs?online=${online ? "true" : "false"}`).then((r) => r.json()),
+    ]);
+    if (versionsBox) versionsBox.innerHTML = renderVersionsList(v);
+    if (engineBox) engineBox.innerHTML = renderEnginePanel(e);
+    const busy = [...(v.releases || []), ...(e.packs || [])].some((r) => ["downloading", "unpacking"].includes(r.progress?.state));
+    if (busy) setTimeout(() => refreshVersionsAndEngine(root, false), 2000);
+  } catch (error) {
+    if (versionsBox) versionsBox.innerHTML = `<p class="bad">${escapeHtml(error.message || String(error))}</p>`;
+  }
+}
+
+function wireVersionsAndEngine(root, setLog) {
+  if (!root.querySelector("[data-versions-panel]")) return;
+  refreshVersionsAndEngine(root, true);
+  const post = async (url, body, okText) => {
+    try {
+      const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || data.error || res.statusText);
+      setLog(`<p class="good">${escapeHtml(data.note || okText)}</p>`);
+      refreshVersionsAndEngine(root, false);
+    } catch (error) {
+      setLog(`<p class="bad">${escapeHtml(error.message || String(error))}</p>`);
+    }
+  };
+  root.addEventListener("click", (event) => {
+    const t = event.target.closest("button");
+    if (!t) return;
+    if (t.dataset.versionInstall) post("/api/versions/install", { tag: t.dataset.versionInstall }, "Downloading…");
+    else if (t.dataset.versionUse) post("/api/versions/activate", { tag: t.dataset.versionUse === "this" ? "" : t.dataset.versionUse }, "Chosen.");
+    else if (t.dataset.versionRemove) post("/api/versions/remove", { tag: t.dataset.versionRemove }, "Removed.");
+    else if (t.dataset.packInstall) post("/api/runtime/packs/install", { id: t.dataset.packInstall }, "Downloading…");
+    else if (t.dataset.packRemove) post("/api/runtime/packs/remove", { id: t.dataset.packRemove }, "Removed.");
+    else if (t.hasAttribute("data-engine-save")) {
+      const mode = root.querySelector("[data-engine-mode]")?.value || "auto";
+      const custom = root.querySelector("[data-engine-custom]")?.value || "";
+      post("/api/runtime/engine", { mode, custom }, "Engine chosen.");
+    }
+  });
+  root.addEventListener("change", (event) => {
+    if (event.target.matches("[data-engine-mode]")) {
+      const custom = root.querySelector("[data-engine-custom]");
+      if (custom) custom.hidden = event.target.value !== "custom";
+    }
+  });
+}
+
 function wireUpdatesPanel() {
   const root = legalModalContent;
   if (!root) return;
@@ -23679,6 +23799,7 @@ function wireUpdatesPanel() {
   const setLog = (html) => {
     if (log) log.innerHTML = html;
   };
+  wireVersionsAndEngine(root, setLog);
   root.querySelector("[data-update-check]")?.addEventListener("click", async () => {
     setLog(`<p class="empty">Contacting GitHub / git remote…</p>`);
     try {

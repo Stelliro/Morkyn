@@ -14,9 +14,12 @@ run in the terminal), `lan` / `vpn` / a port number (reach and port for this sta
 Everything you make lives in `data/` beside the executable: saves, settings, logs, portraits and
 downloaded voices. Back that folder up, or move it to a new build, and your games come with it.
 
-A local model (a `.gguf` file) is **not** in this package. Put yours anywhere and point the
-Model settings at it, or use a cloud API from the same screen. The first start with a local
-model takes a while to load it.
+**The local engine** (llama.cpp) is not in this package either: the first start looks at your
+GPU and downloads the engine pack that fits it (NVIDIA: CUDA; Apple Silicon: Metal; AMD or
+Intel: Vulkan; otherwise CPU) into `runtime/` beside the program. Settings → Updates (the
+"Versions & engine" panel) shows what was picked; there you can choose another pack, point at a
+build of your own, or run without a local engine and use a cloud API. A model (a `.gguf` file)
+is not included: put yours anywhere and point the Model settings at it.
 
-Updates: download the next build and copy your `data/` folder across. The in-game updater only
-works from a git checkout.
+**Versions:** the same panel lists every release. Install any one, newer or older, and choose
+it; it starts next time. Every version shares your `data/` folder and the engine packs.

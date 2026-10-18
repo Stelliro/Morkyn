@@ -65,7 +65,17 @@ def default_prefs() -> dict[str, Any]:
         # Kept for the PowerShell Gatehouse, which only knows this switch.
         "open_browser": True,
         "ui_theme": "dusk",
+        # The llama.cpp engine pack (app/runtime_packs.py): "auto" installs the
+        # one that fits the hardware, a pack id picks one, "custom" uses the
+        # folder or zip in engine_pack_custom, "none" leaves the engine out.
+        "engine_pack": "auto",
+        "engine_pack_custom": "",
     }
+
+
+ENGINE_PACK_CHOICES = frozenset({
+    "auto", "none", "custom", "llama-cpp-cuda", "llama-cpp-cpu", "llama-cpp-metal", "llama-cpp-vulkan",
+})
 
 
 # Changing these only takes effect when the server (and a managed llama.cpp
@@ -163,6 +173,9 @@ def normalize_prefs(prefs: dict[str, Any]) -> dict[str, Any]:
     out["draft_mode"] = draft if draft in {"dsl", "json"} else "dsl"
     window = str(out.get("window_mode") or "app").strip().lower()
     out["window_mode"] = window if window in WINDOW_MODES else "app"
+    pack = str(out.get("engine_pack") or "auto").strip().lower()
+    out["engine_pack"] = pack if pack in ENGINE_PACK_CHOICES else "auto"
+    out["engine_pack_custom"] = str(out.get("engine_pack_custom") or "").strip()
     for key in ("mle_model", "gguf_model_path", "api_base_url", "api_model", "api_preset", "ui_theme"):
         out[key] = str(out.get(key) or "").strip()
     if not out["mle_model"]:

@@ -532,12 +532,30 @@ def main(argv: list[str]) -> int:
                 stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
+    # The downloaded dependency packs (llama-cpp-python and the like) go on the
+    # path before anything imports them; every process of the app runs this.
+    try:
+        from app.runtime_packs import activate
+
+        activate()
+    except Exception:
+        pass
     if len(argv) >= 3 and argv[0] == "--serve":
         return serve(argv[1], argv[2])
     if len(argv) >= 2 and argv[0] == "--run-module":
         return run_module(argv[1], argv[2:])
     if len(argv) >= 2 and argv[0] == "--run-code":
         return run_code(argv[1])
+    # The version the player chose runs instead of this build (app.versions):
+    # a packaged build only, and never for the internal subcommands above.
+    try:
+        from app.versions import hand_over
+
+        handed = hand_over(argv)
+    except Exception:
+        handed = None
+    if handed is not None:
+        return handed
     opts = parse_args(argv)
     from app.launcher_prefs import load_prefs
 

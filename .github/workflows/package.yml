@@ -1,17 +1,24 @@
 name: Package
 
-# Builds the packaged folder for Windows, Linux and macOS on every v* tag (and
-# on request), and attaches the archives to that tag's GitHub release.
+# Builds the app folder for Windows, Linux and macOS on every v* tag (and on
+# request) and attaches the archives to that tag's GitHub release. The app does
+# not ship llama-cpp-python: the "packs" job builds it per accelerator and
+# attaches those to the standing "runtime-packs" release (app/runtime_packs.py).
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      packs:
+        description: "Also rebuild the runtime packs"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
-  build:
+  app:
     strategy:
       fail-fast: false
       matrix:
@@ -28,14 +35,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Install requirements (Windows, CUDA wheel index as in requirements.txt)
-        if: matrix.name == 'windows'
-        run: python -m pip install -r requirements.txt
-      - name: Install requirements (Linux/macOS, CPU wheels for llama-cpp-python)
-        if: matrix.name != 'windows'
+      - name: Install the app's requirements (no llama-cpp-python: it is a runtime pack)
+        shell: bash
         run: |
           python -m pip install --upgrade pip
-          python -m pip install --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu -r requirements.txt
+          grep -v -i "llama-cpp-python\|extra-index-url" requirements.txt > /tmp/req.txt
+          python -m pip install -r /tmp/req.txt
       - name: Install the macOS window
         if: matrix.name == 'macos'
         run: python -m pip install "pywebview>=6.2"
@@ -59,3 +64,42 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: gh release upload "${GITHUB_REF_NAME}" dist/*.zip dist/*.tar.gz --clobber 2>/dev/null || gh release upload "${GITHUB_REF_NAME}" dist/* --clobber
+
+  packs:
+    if: github.event_name == 'workflow_dispatch' && inputs.packs
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            acc: cuda
+          - os: windows-latest
+            acc: cpu
+          - os: ubuntu-22.04
+            acc: cuda
+          - os: ubuntu-22.04
+            acc: cpu
+          - os: macos-14
+            acc: metal
+          - os: macos-13
+            acc: cpu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build the pack
+        run: python packaging/build_packs.py ${{ matrix.acc }} --out dist/packs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pack-${{ matrix.acc }}-${{ matrix.os }}
+          path: dist/packs/*.zip
+          if-no-files-found: error
+      - name: Attach to the runtime-packs release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release view runtime-packs >/dev/null 2>&1 || gh release create runtime-packs --title "Runtime packs" --notes "The llama.cpp engine packs Mørkyn downloads for your hardware (Versions & engine in the game). One per accelerator, platform and Python tag; the app picks the one that fits." --prerelease
+          gh release upload runtime-packs dist/packs/*.zip --clobber

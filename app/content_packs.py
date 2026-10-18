@@ -42,8 +42,8 @@ from app.rng import (
 )
 
 PACK_FORMAT = "morkyn-content-pack-v1"
-from app.paths import ROOT  # the repo root, or the folder beside the packaged exe
-BUILTIN_PACK_DIR = ROOT / "content" / "packs"
+from app.paths import APP_DIR, ROOT  # ROOT: the home (data/); APP_DIR: this version's files
+BUILTIN_PACK_DIR = APP_DIR / "content" / "packs"
 
 SECTIONS = ("skills", "powers", "items", "encounter_tables", "magnitude_tables")
 """The five content buckets a pack may define.
