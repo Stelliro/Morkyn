@@ -1336,13 +1336,26 @@ def action_kind_from_text(player_input: str) -> str:
     recovery = recovery_kind(player_input)
     if recovery:
         return recovery
+    # Words inside the player's quotes are speech, not work: '"Coin for the
+    # loading, and the three gold struck from the book." I keep my hands at my
+    # sides' was costed as hauling and left the player at 1 energy before a
+    # crate was touched (8B run 150, T42). Acts are read from the narrated part.
+    try:
+        from app import venues
+
+        narrated = venues.strip_speech(str(player_input or ""))
+    except Exception:
+        narrated = str(player_input or "")
+    if not narrated.strip() and re.search(r"[\"“]", text):
+        return "talk"
+    text = narrated.lower().strip() or text
     # A declared act is costed by the same reading that rolls its check
     # (playtest #85a: "i polish the blades" was "general", 0.4 energy, like a
     # glance, because polish was in the act table and not in this one).
     try:
         from app.prose_state import act_rules
 
-        act = act_rules(player_input)
+        act = act_rules(narrated)
     except Exception:
         act = None
     if act:

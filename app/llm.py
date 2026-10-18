@@ -15952,7 +15952,9 @@ _ARRIVED_RE = re.compile(
 # A quotation tagged as the player's: '"A half then," you say'.
 _PLAYER_TAG_AFTER_RE = re.compile(r'^[\s,.!?]*(?:you|You)\s+(?:\w+ly\s+)?(?:say|said|ask|asked|reply|replied|answer|answered|'
                                   r'add|added|call|called|tell|told|murmur|murmured|mutter|muttered|offer|offered|'
-                                  r'decide|decided|agree|agreed|promise|promised|announce|announced)\b')
+                                  r'decide|decided|agree|agreed|promise|promised|announce|announced|'
+                                  r'start|started|begin|began|manage|managed|blurt|blurted|stammer|stammered|'
+                                  r'falter|faltered|protest|protested|plead|pleaded|breathe|breathed)\b')
 # The second half of a line the player was given: '"Thanks, Hal," you call
 # back, "I'll be careful."' (7B run 9, T2: the cut ended the scene on it).
 _PLAYER_TAG_BEFORE_RE = re.compile(

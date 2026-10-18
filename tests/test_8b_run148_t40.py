@@ -264,6 +264,33 @@ class AStrikeInSpeechIsNoBlow(unittest.TestCase):
         self.assertEqual(_turn_intent("I strike the guard across the jaw with my fist.")[0], "combat")
 
 
+class ALineThePlayerStartsIsTheirs(unittest.TestCase):
+    """8B run 150, T32: '"I didn't mean to," you start, but Mabel cuts you off' went unread as the player's line."""
+
+    LINE = "\"Three gold for what? Read me the entry, word for word.\" I lean over the ledger to see the line myself."
+    PROSE = ("You lean over the ledger. Mabel's eyes flick to Rafe, who stands stiff-backed behind the counter.\n\n"
+             "Rafe steps forward. “You think you can outrun the tides of the harbour?” His eyes narrow.\n\n"
+             "You shift, the weight of the ledger pressing against your palms. “I didn’t mean to,” you start, "
+             "but Mabel cuts you off with a sharp shake of her head.\n\n"
+             "“Intent doesn’t matter,” she says, her jaw set.")
+
+    def test_the_started_line_is_invented_speech(self):
+        import re
+
+        from app.narration_pipeline import drop_invented_player_speech
+
+        _kept, spoken = drop_invented_player_speech(re.split(r"\n\s*\n", self.PROSE), self.LINE)
+        self.assertEqual(len(spoken), 1, spoken)
+        self.assertIn("I didn’t mean to", spoken[0])
+
+    def test_the_scene_ends_on_rafes_question(self):
+        from app.llm import _scene_cut_point
+
+        point = _scene_cut_point(self.PROSE, self.LINE)
+        self.assertIsNotNone(point)
+        self.assertIn("outrun the tides", point["npc_line"])
+
+
 class TheScarredManIsBertram(unittest.TestCase):
     """T69-T70: "the scarred man" minted Garret, then Kael, beside Bertram Northcott, "a burly man with a scar across his brow"."""
 

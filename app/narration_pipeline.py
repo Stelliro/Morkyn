@@ -1651,6 +1651,10 @@ _YOU_SAID_RE = re.compile(
     # '"Thanks, Hal," you call back, "I'll be careful."' (T2).
     r"decide|decided|resolve|resolved|agree|agreed|promise|promised|announce|announced|vow|vowed|"
     r"call\s+back|called\s+back|"
+    # 8B run 150, T32: '"I didn't mean to," you start, but Mabel cuts you off'
+    # went unread, and the scene ran on past the player's invented line.
+    r"start|started|begin|began|manage|managed|blurt|blurted|stammer|stammered|falter|faltered|"
+    r"protest|protested|plead|pleaded|breathe|breathed|cut\s+in|interject|interjected|"
     # 7B run 11, T2: 'You read the details aloud: "Lifting supplies ..."' chose a job for the player.
     r"read\s+(?:[\w'’]+\s+){0,3}?(?:aloud|out\s+loud)|read\s+out)\b"
     # A gesture as the tag right before the line: 'You nod, "Just a few things
