@@ -15174,6 +15174,10 @@ _DOC_WORDS = frozenset({
     "permit", "pass", "writ", "licence", "license", "contract", "letter", "note", "receipt", "deed", "warrant", "chit",
     "ticket", "paper", "papers", "parchment", "scroll", "document", "sheet", "slip", "voucher", "token", "map", "chart",
     "ledger", "page", "pages", "form",
+    # A list of jobs on parchment is the parchment (8B run 150, T3: GRANT
+    # "Salvage Job Proposal" for "the parchment in your hands is a list of
+    # salvage jobs" was refused and the sentence cut).
+    "list", "proposal", "notice", "bill", "manifest", "roster", "tally", "record", "records", "note", "notes",
 })
 
 
@@ -18743,6 +18747,12 @@ def _figure_hints(text: str, known_names: Any = ()) -> list[str]:
         # A figure in a memory is not here: "the memory of a man you once saw
         # in the Docks" minted Elias Vane at the yard (8B run 149, T56).
         if re.search(r"\b(?:memory|memories|remember\w*|recall\w*|dream\w*\s+of|thought\s+of|once\s+(?:saw|met|knew))\b", clause, re.I):
+            continue
+        # People passed on the way are not met: "You pass a cobbler repairing
+        # a boot, a fisherman mending a net, and a woman with a brass
+        # tide-reckoner in her belt" bound NPC_NEW to the woman as Mabel (8B
+        # run 150, T1).
+        if re.search(r"\byou\s+(?:\w+ly\s+)?(?:pass|passes|passed|walk\s+past|hurry\s+past|brush\s+past)\b", clause, re.I):
             continue
         # A figure asked about is not one shown: "Is it a person, and how long
         # has it been there?" seeded Ivo the roofer (8B run 14, T1).

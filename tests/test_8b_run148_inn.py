@@ -13,6 +13,7 @@ Run:  .venv\\Scripts\\python -m unittest tests.test_8b_run148_inn
 """
 from __future__ import annotations
 
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -132,6 +133,14 @@ class AQualityOfAMan(unittest.TestCase):
         prose = ("A name catches your eye—Elias Vane—and the memory of a man you once saw in the Docks flickers to life. "
                  "You flip through the pages.")
         self.assertEqual([h for h in _figure_hints(prose, []) if "man" in h.lower()], [])
+
+    def test_people_passed_on_the_way_are_not_met(self):
+        # 8B run 150, T1: a woman the player walked past in the yard was bound to NPC_NEW and stored as Mabel.
+        from app.world import _figure_hints
+
+        prose = ("You pass a cobbler repairing a boot, a fisherman mending a net, and a woman with a brass tide-reckoner in "
+                 "her belt. You stop at the door, which is slightly ajar, and push it open.")
+        self.assertEqual([h for h in _figure_hints(prose, []) if re.search(r"woman|cobbler|fisherman", h)], [])
 
     def test_a_man_who_acts_is_still_shown(self):
         from app.world import _figure_hints
