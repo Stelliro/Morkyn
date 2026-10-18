@@ -16391,15 +16391,25 @@ def _filter_inventory_changes(
         # guild mark'" put a third key beside the tarnished key just pocketed
         # (8B run 149, T7). Same head noun as a thing owned, and nothing in the
         # prose arrives, is handed over or found: the grant renames, not adds.
-        if grounded and not existing and tokens and not acquire_intent and not _prose_says_it_arrived(final_text, name_l, tokens):
+        if grounded and not existing and tokens and not _prose_says_it_arrived(final_text, name_l, tokens) and not (
+            _prose_item_handed_over(final_text, name_l, tokens, owned=False)
+        ):
             head = tokens[-1]
             owned_heads = [
                 str(r[0]) for r in conn.execute("SELECT name FROM inventory WHERE quantity > 0").fetchall()
                 if (_item_name_tokens(str(r[0]).lower()) or [""])[-1] == head
             ]
-            if owned_heads and not _prose_item_handed_over(final_text, name_l, tokens, owned=False):
+            if owned_heads and not acquire_intent:
                 grounded = False
                 turn_ledger.note("inventory", "owned_item_not_new", item=name, owned=owned_heads[0], by="head")
+            # Held is not gained: "the guild's lockpicking tools clutched in your
+            # hands" with GRANT "brass lockpick" put two picks nobody gave or
+            # found in the pack (8B run 149, T11). A new thing the prose only
+            # shows in the player's hands, with no take, find or hand-over,
+            # came from nowhere.
+            elif not owned_heads and not (narrated_take and line_names_it):
+                grounded = False
+                turn_ledger.note("inventory", "held_not_gained", item=name)
         # Cargo hauled to a cart, a wharf or a hold for the work is not the
         # player's: "shoulder the first bundle of fish ... carry it down the
         # gangplank to the wharf" put "cod fillets x1" in the pack (8B run 148,
